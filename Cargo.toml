@@ -1,0 +1,18 @@
+[package]
+name = "mistterm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Terminal UI - 使用兼容版本
+tui = { version = "0.19", default-features = false, features = ["crossterm"] }
+crossterm = "0.26"
+# Command parsing - 使用兼容版本
+clap = { version = "3.2", features = ["derive"] }
+# Logging - 使用兼容版本
+env_logger = "0.9"
+log = "0.4"
+# Error handling
+anyhow = "1.0"
+# Async runtime - 使用较新版本
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
