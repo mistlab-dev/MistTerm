@@ -6,6 +6,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Session configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,12 +48,26 @@ impl SshSession {
     }
 
     fn connect_with_password(&mut self, password: &str) -> Result<(), String> {
-        let tcp = std::net::TcpStream::connect(format!("{}:{}", self.config.host, self.config.port))
+        let addr = format!("{}:{}", self.config.host, self.config.port)
+            .parse::<std::net::SocketAddr>()
+            .map_err(|e| format!("Invalid address: {}", e))?;
+
+        let tcp = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(10))
             .map_err(|e| format!("Failed to connect: {}", e))?;
 
         let mut session = Session::new().unwrap();
         session.set_tcp_stream(tcp);
-        session.handshake().map_err(|e| format!("SSH handshake failed: {}", e))?;
+        
+        let handshake_start = std::time::Instant::now();
+        loop {
+            match session.handshake() {
+                Ok(_) => break,
+                Err(_) if handshake_start.elapsed() > Duration::from_secs(10) => {
+                    return Err("SSH handshake timeout".to_string());
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(100)),
+            }
+        }
 
         // Try agent authentication first
         if session.userauth_agent(&self.config.username).is_ok() {
@@ -96,22 +111,25 @@ impl SshSession {
         }
     }
 
-    fn read(&mut self) -> Result<(), String> {
+    fn read(&mut self) {
         if let Some(ref mut channel) = self.channel {
             let mut buf = [0u8; 4096];
             match channel.read(&mut buf) {
-                Ok(0) => Ok(()),
+                Ok(0) => {}
                 Ok(n) => {
                     if let Ok(text) = std::str::from_utf8(&buf[..n]) {
                         self.output.push_str(text);
+                        // Keep output size manageable
+                        if self.output.len() > 100000 {
+                            let mid = self.output.len() / 2;
+                            if let Some(pos) = self.output[mid..].find('\n') {
+                                self.output = self.output[mid + pos + 1..].to_string();
+                            }
+                        }
                     }
-                    Ok(())
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(()),
-                Err(e) => Err(format!("Read failed: {}", e)),
+                Err(_) => {} // WouldBlock or other, ignore
             }
-        } else {
-            Ok(())
         }
     }
 }
@@ -229,6 +247,13 @@ impl MistTermApp {
 
 impl eframe::App for MistTermApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Poll data from all sessions (non-blocking)
+        for session in &self.sessions {
+            let mut session_locked = session.lock();
+            session_locked.read();
+            drop(session_locked);
+        }
+
         // Top bar
         egui::TopBottomPanel::top("top_panel").show(ctx, |ui| {
             egui::menu::bar(ui, |ui| {
@@ -248,7 +273,7 @@ impl eframe::App for MistTermApp {
             });
         });
 
-        // Connect dialog
+        // New session dialog
         if self.show_connect_dialog {
             egui::Window::new("New Session").show(ctx, |ui| {
                 ui.horizontal(|ui| {
@@ -403,7 +428,6 @@ impl eframe::App for MistTermApp {
                                     let cmd = &input[1..];
                                     if cmd == "connect" || cmd == "c" {
                                         let mut session_locked = session_arc.lock();
-                                        // Check if we need password
                                         session_locked.needs_password = true;
                                         drop(session_locked);
                                         
