@@ -26,5 +26,4 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 anyhow = "1.0"
 
 # Misc
-rpassword = "5.0"
 parking_lot = "0.12"

@@ -30,6 +30,7 @@ struct SshSession {
     channel: Option<ssh2::Channel>,
     output: String,
     error: Option<String>,
+    needs_password: bool,
 }
 
 impl SshSession {
@@ -41,10 +42,11 @@ impl SshSession {
             channel: None,
             output: String::new(),
             error: None,
+            needs_password: false,
         }
     }
 
-    fn connect(&mut self) -> Result<(), String> {
+    fn connect_with_password(&mut self, password: &str) -> Result<(), String> {
         let tcp = std::net::TcpStream::connect(format!("{}:{}", self.config.host, self.config.port))
             .map_err(|e| format!("Failed to connect: {}", e))?;
 
@@ -57,9 +59,7 @@ impl SshSession {
             // Success with agent
         } else {
             // Try password
-            eprint!("Password for {}: ", self.config.username);
-            let password = rpassword::read_password().map_err(|e| format!("Failed to read password: {}", e))?;
-            session.userauth_password(&self.config.username, &password)
+            session.userauth_password(&self.config.username, password)
                 .map_err(|e| format!("Authentication failed: {}", e))?;
         }
 
@@ -70,6 +70,7 @@ impl SshSession {
         self.channel = Some(channel);
         self.connected = true;
         self.error = None;
+        self.needs_password = false;
         self.output.push_str("Connected!\r\n");
 
         Ok(())
@@ -122,10 +123,12 @@ struct MistTermApp {
     input_buffer: String,
     config_path: PathBuf,
     show_connect_dialog: bool,
+    show_password_dialog: bool,
     new_session_name: String,
     new_session_host: String,
     new_session_user: String,
     new_session_port: u16,
+    password_input: String,
     message: String,
 }
 
@@ -156,10 +159,12 @@ impl Default for MistTermApp {
             input_buffer: String::new(),
             config_path,
             show_connect_dialog: false,
+            show_password_dialog: false,
             new_session_name: String::new(),
             new_session_host: String::new(),
             new_session_user: String::new(),
             new_session_port: 22,
+            password_input: String::new(),
             message: "Welcome to MistTerm GUI".to_string(),
         }
     }
@@ -273,6 +278,52 @@ impl eframe::App for MistTermApp {
             });
         }
 
+        // Password dialog
+        if self.show_password_dialog {
+            egui::Window::new("Enter Password").show(ctx, |ui| {
+                ui.label(format!("Password for {}@{}:", 
+                    self.sessions[self.active_idx].lock().config.username,
+                    self.sessions[self.active_idx].lock().config.host
+                ));
+                ui.horizontal(|ui| {
+                    ui.label("Password:");
+                    ui.add(egui::TextEdit::singleline(&mut self.password_input)
+                        .password(true)
+                        .desired_width(200.0));
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Connect").clicked() {
+                        let session = self.active_session();
+                        if let Some(session_arc) = session {
+                            let mut session_locked = session_arc.lock();
+                            match session_locked.connect_with_password(&self.password_input) {
+                                Ok(_) => {
+                                    self.message = format!("Connected to {}", session_locked.config.host);
+                                }
+                                Err(e) => {
+                                    session_locked.error = Some(e.clone());
+                                    self.message = format!("Connection failed: {}", e);
+                                }
+                            }
+                            drop(session_locked);
+                        }
+                        self.password_input.clear();
+                        self.show_password_dialog = false;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        let session = self.active_session();
+                        if let Some(session_arc) = session {
+                            let mut session_locked = session_arc.lock();
+                            session_locked.needs_password = false;
+                            drop(session_locked);
+                        }
+                        self.password_input.clear();
+                        self.show_password_dialog = false;
+                    }
+                });
+            });
+        }
+
         // Main terminal panel
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.sessions.is_empty() {
@@ -352,16 +403,12 @@ impl eframe::App for MistTermApp {
                                     let cmd = &input[1..];
                                     if cmd == "connect" || cmd == "c" {
                                         let mut session_locked = session_arc.lock();
-                                        match session_locked.connect() {
-                                            Ok(_) => {
-                                                self.message = format!("Connected to {}", session_locked.config.host);
-                                            }
-                                            Err(e) => {
-                                                session_locked.error = Some(e.clone());
-                                                self.message = format!("Connection failed: {}", e);
-                                            }
-                                        }
+                                        // Check if we need password
+                                        session_locked.needs_password = true;
                                         drop(session_locked);
+                                        
+                                        self.show_password_dialog = true;
+                                        self.message = "Enter password to connect".to_string();
                                     } else if cmd == "disconnect" || cmd == "d" {
                                         let mut session_locked = session_arc.lock();
                                         session_locked.disconnect();
