@@ -1,114 +1,148 @@
 # 🌫️ MistTerm
 
-> A sleek Rust terminal emulator with seamless rzsz file transfer integration
+> 异步 SSH 终端 - 现代 Rust 实现的终端模拟器
 
-Inspired by iTerm2, built with Rust. MistTerm brings modern terminal experience with integrated file transfer capabilities.
+基于 Rust 构建的现代化 SSH 终端，支持异步连接、多会话管理和交互式 shell。
 
-## ✨ Features
+## ✨ 核心功能
 
-- 🚀 **Pure Rust** implementation for performance and safety
-- 📁 **Integrated rzsz** (ZMODEM) file transfer
-  - `rz` - Receive files from remote
-  - `sz <file>` - Send files to remote
-- 🎨 **Modern TUI** with customizable themes
-- ⌨️ **Full keyboard support** with intuitive shortcuts
-- 🔌 **Multi-connection support** (SSH, Serial)
-- 🛠️ **Command palette** for quick actions
-- 📱 **Tab-based interface** for session management
+- 🚀 **纯 Rust 实现** - 性能与安全兼备
+- 🔐 **SSH 连接** - 密码/密钥双认证支持
+- 🔄 **异步架构** - 基于 tokio + ssh2，非阻塞操作
+- 🖥️ **GUI 界面** - eframe/egui 现代化终端界面
+- 📂 **多会话管理** - 支持同时管理多个 SSH 会话
+- 💾 **配置持久化** - 会话配置自动保存到 `sessions.json`
+- ⌨️ **完整键盘支持** - Enter 发送命令，支持所有终端操作
 
-## 🚀 Quick Start
+## 🚀 快速开始
 
-```bash
-# Install from source
-cargo install --path .
-
-# Or install from crates.io (when published)
-cargo install mistterm
-
-# Run MistTerm
-mistterm
-
-# Connect via SSH
-mistterm --host example.com --user admin
-
-# Connect to serial device
-mistterm --device /dev/ttyUSB0 --baud 115200
-```
-
-## 📖 Usage
-
-### Keyboard Shortcuts
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+Q` | Quit MistTerm |
-| `Ctrl+T` | Open command palette |
-| `Tab` | Switch between views |
-| `Enter` | Execute command |
-
-### Commands
-
-Type these in the input bar:
+### 构建与运行
 
 ```bash
-rz           # Receive file (ZMODEM)
-sz <file>    # Send file (ZMODEM)
-clear        # Clear screen
-help         # Show help
-quit         # Exit
-```
-
-### File Transfer Example
-
-1. Connect to remote server: `mistterm --host server.com`
-2. Type `rz` to receive files from remote
-3. On remote server, type: `sz filename.txt`
-4. File automatically saves to current directory
-
-## 🛠️ Building from Source
-
-```bash
-# Clone repository
+# 克隆仓库
 git clone https://github.com/c-wind/MistTerm.git
 cd MistTerm
 
-# Build release binary
+# 构建 release 版本
 cargo build --release
 
-# Run
+# 运行
 ./target/release/mistterm
 ```
 
-## 📝 Dependencies
+### 使用流程
 
-- [tui-rs](https://github.com/fdehau/tui-rs) - Terminal UI
-- [crossterm](https://github.com/crossterm-rs/crossterm) - Cross-platform terminal
-- [clap](https://github.com/clap-rs/clap) - CLI argument parsing
-- [tokio](https://github.com/tokio-rs/tokio) - Async runtime
+1. **启动程序** - 运行 `./target/release/mistterm`
+2. **连接服务器** - 点击 "Connect" 按钮
+3. **填写信息** - 输入主机、端口、用户名、密码
+4. **开始使用** - 连接成功后在输入框输入命令
 
-## 🐛 Development Status
+### 会话管理
 
-🚧 **Early Development** - Core terminal framework is working. rzsz integration in progress.
+- **保存会话** - 点击 "Save Sessions" 手动保存
+- **自动保存** - 创建会话时自动保存到 `sessions.json`
+- **加载会话** - 程序启动时自动加载已保存的会话
+- **删除会话** - 连接状态下点击会话后的 "X" 按钮
 
-### Roadmap
+## 📖 功能说明
 
-- [x] Basic TUI framework
-- [x] Command palette
-- [ ] Full rzsz integration
-- [ ] SSH connection support
-- [ ] Serial port support
-- [ ] Configuration file
-- [ ] Plugin system
-- [ ] Windows support
+### 连接对话框
 
-## 🤝 Contributing
+| 字段 | 说明 | 示例 |
+|------|------|------|
+| Name | 会话名称 | My Server |
+| Host | 服务器地址 | 192.168.1.100 |
+| Port | SSH 端口 | 22 |
+| Username | 用户名 | ubuntu |
+| Password | 密码 | your_password |
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+### 键盘操作
 
-## 📄 License
+| 按键 | 功能 |
+|------|------|
+| `Enter` | 发送命令 |
+| `Ctrl+C` | 中断当前命令 |
+| `Ctrl+D` | 发送 EOF |
 
-MIT License - see [LICENSE](LICENSE) for details
+### 终端显示
+
+- **绿色等宽字体** - 清晰的代码显示
+- **黑色背景** - 减少视觉疲劳
+- **自动滚动** - 输出自动滚动到底部
+- **状态指示** - 连接状态实时显示（连接中/已连接/错误）
+
+## 🛠️ 技术架构
+
+### 核心组件
+
+```
+MistTerm/
+├── src/
+│   ├── main.rs          # GUI 主界面 (eframe/egui)
+│   └── ssh.rs           # SSH 模块 (异步连接、认证、会话管理)
+├── examples/
+│   ├── ssh_test.rs      # 单会话测试
+│   └── ssh_multi_session.rs  # 多会话并发测试
+└── Cargo.toml           # 项目配置
+```
+
+### 依赖库
+
+- **[eframe](https://github.com/emilk/egui)** - GUI 框架
+- **[egui](https://github.com/emilk/egui)** - 即时模式 GUI
+- **[tokio](https://github.com/tokio-rs/tokio)** - 异步运行时
+- **[ssh2](https://github.com/alexcrichton/ssh2-rs)** - SSH 协议实现
+- **[serde](https://github.com/serde-rs/serde)** - 序列化/反序列化
+- **[parking_lot](https://github.com/Amanieu/parking_lot)** - 线程同步
+
+## 📊 性能测试
+
+### 多会话并发测试
+
+```
+测试配置：10 个并发 SSH 会话
+每个会话执行：5 条命令
+总命令数：50 条
+
+结果:
+✅ 成功：50
+❌ 失败：0
+📈 成功率：100%
+```
+
+每个会话独立执行，无连接冲突或数据混乱。
+
+## 🚧 开发状态
+
+### 已完成
+
+- [x] SSH 异步连接架构
+- [x] 密码/密钥认证
+- [x] 交互式 shell 启动
+- [x] 命令执行 (exec)
+- [x] 多会话并发管理
+- [x] GUI 界面
+- [x] 会话配置持久化
+- [x] 单元测试
+
+### 待完善
+
+- [ ] ANSI 转义码解析
+- [ ] 终端渲染优化
+- [ ] 复制/粘贴支持
+- [ ] 会话配置编辑
+- [ ] 快捷键自定义
+- [ ] 主题切换
+- [ ] 文件传输 (SFTP)
+
+## 🤝 贡献
+
+欢迎提交 Issue 和 Pull Request！
+
+## 📄 许可证
+
+MIT License - 详见 [LICENSE](LICENSE)
 
 ---
 
-Made with ☕ and 🦀
+Made with 🦀 and ☕
