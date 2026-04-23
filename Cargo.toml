@@ -1,29 +1,50 @@
 [package]
 name = "mistterm"
-version = "0.3.0"
+version = "0.1.0"
 edition = "2021"
-description = "A native GUI SSH terminal emulator with multi-session support"
+description = "A modern SSH terminal with async architecture"
 
 [dependencies]
-# GUI
-eframe = "0.23"
+# GUI - eframe with wgpu for GPU acceleration
+eframe = { version = "0.23", features = ["wgpu"] }
 egui = "0.23"
 
-# SSH
-ssh2 = "0.9.4"
+# Async runtime - tokio with full features
+tokio = { version = "1", features = ["full"] }
 
-# Terminal emulation
+# SSH - Pure Rust implementation
+# russh = "0.44"
+# russh-keys = "0.44"
+ssh2 = "0.9"
+
+# Terminal emulation - vte for ANSI parsing
 vte = "0.11"
+
+# Clipboard - Pure Rust
+arboard = "3.3"
 
 # Config
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# Async
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-
 # Error handling
 anyhow = "1.0"
 
+# Encryption for password storage
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.21"
+
 # Misc
 parking_lot = "0.12"
+shellexpand = "3.1"
+log = "0.4"
+env_logger = "0.10"
+dirs = "5.0"
+chrono = "0.4"
+
+# Font support
+ab_glyph = "0.2"
+
+# Lazy static for global runtime
+lazy_static = "1.4"
