@@ -1,9 +1,11 @@
 [
   {
-    "name": "New Session",
+    "name": "tcc",
     "host": "124.220.224.223",
     "port": 22,
     "username": "ubuntu",
-    "password": "Tian1234"
+    "password": "",
+    "encrypted_password": "XPjXWEgXwdUD9C6RhJKcBOpCEP2I7SKwBQ==",
+    "password_nonce": "Wir4MZNPy1D9IynC"
   }
 ]
