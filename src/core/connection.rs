@@ -22,6 +22,8 @@ pub struct SshSessionState {
     pub terminal: Terminal,
     pub handle: Option<crate::ssh::SshSessionHandle>,
     pub ssh_session_id: Option<usize>,
+    /// 已向 SSH 层同步的 PTY 尺寸，与 `terminal` 网格一致
+    pub notified_pty: Option<(u32, u32)>,
 }
 
 impl SshSessionState {
@@ -30,9 +32,10 @@ impl SshSessionState {
         Self {
             config,
             state: ConnectionState::Disconnected,
-            terminal: Terminal::new(80, 24),
+            terminal: Terminal::new(160, 48),
             handle: None,
             ssh_session_id: None,
+            notified_pty: None,
         }
     }
 
@@ -176,6 +179,7 @@ impl ConnectionManager {
                         let mut sess = session.lock();
                         sess.state = ConnectionState::Disconnected;
                         sess.handle = None;
+                        sess.notified_pty = None;
                     }
                 }
             }

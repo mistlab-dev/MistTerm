@@ -18,6 +18,8 @@ pub struct MistTermApp {
     showing_connect_dialog: bool,
     /// 新连接配置
     new_config: SessionConfig,
+    /// 上一帧视口大小，用于窗口缩放时立刻重绘并同步 PTY
+    last_screen_size: egui::Vec2,
 }
 
 impl Default for MistTermApp {
@@ -32,6 +34,7 @@ impl Default for MistTermApp {
             selected_session: None,
             showing_connect_dialog: false,
             new_config: SessionConfig::default(),
+            last_screen_size: egui::Vec2::ZERO,
         };
         
         // 从 SessionManager 加载的会话创建连接状态
@@ -83,6 +86,17 @@ impl MistTermApp {
         if let Some(session) = conn_mgr.get_session(idx) {
             let sess = session.lock();
             if let Some(h) = &sess.handle {
+                if let Some(ssh_id) = sess.ssh_session_id {
+                    if ssh_id != h.session_id {
+                        log::warn!(
+                            "[UI-INPUT] Drop input due to stale handle: ui_session={}, ssh_session_id={}, handle_session_id={}",
+                            idx,
+                            ssh_id,
+                            h.session_id
+                        );
+                        return;
+                    }
+                }
                 if let Err(e) = h.send_input(data) {
                     log::error!("[UI-INPUT] Failed to queue direct input: {}", e);
                 }
@@ -148,9 +162,7 @@ impl MistTermApp {
         if self.showing_connect_dialog {
             return;
         }
-        if ctx.wants_keyboard_input() {
-            return;
-        }
+        // 不可根据 wants_keyboard_input 提前返回：ScrollArea 等会抢占该标志，导致 vim 方向键失效
         let Some(idx) = self.selected_session else {
             return;
         };
@@ -198,10 +210,6 @@ impl MistTermApp {
                     modifiers,
                     ..
                 } => {
-                    log::info!(
-                        "[UI-INPUT] key event: {:?}, shift={}, ctrl={}, alt={}",
-                        key, modifiers.shift, modifiers.ctrl, modifiers.alt
-                    );
                     if modifiers.command || modifiers.mac_cmd {
                         continue;
                     }
@@ -219,7 +227,7 @@ impl MistTermApp {
                         }
                     }
                     match key {
-                        egui::Key::Enter => self.send_bytes_to_session(idx, b"\r\n"),
+                        egui::Key::Enter => self.send_bytes_to_session(idx, b"\r"),
                         egui::Key::Tab => self.send_bytes_to_session(idx, b"\t"),
                         egui::Key::Backspace => self.send_bytes_to_session(idx, b"\x7f"),
                         egui::Key::ArrowUp => self.send_bytes_to_session(idx, b"\x1b[A"),
@@ -258,6 +266,7 @@ impl MistTermApp {
             // 开始新连接前清理旧句柄，避免输入仍发往旧 SSH 会话
             sess.handle = None;
             sess.ssh_session_id = None;
+            sess.notified_pty = None;
         }
 
         let mut ssh_manager = conn_mgr.get_ssh_manager().clone();
@@ -287,7 +296,7 @@ impl MistTermApp {
                     std::thread::sleep(std::time::Duration::from_millis(1000));
                     
                     // 启动 shell 时必须使用 SSH 层 session_id，避免开到错误连接
-                    match ssh_manager.start_interactive_shell(ssh_session_id) {
+                    match ssh_manager.start_interactive_shell(ssh_session_id, 160, 48) {
                         Ok(handle) => {
                             let mut sess = session.lock();
                             sess.handle = Some(handle);
@@ -346,6 +355,13 @@ impl eframe::App for MistTermApp {
         style.visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 140, 200));
         
         ctx.set_style(style);
+
+        let screen_sz = ctx.screen_rect().size();
+        let ds = screen_sz - self.last_screen_size;
+        if ds.x.abs() > 0.5 || ds.y.abs() > 0.5 {
+            self.last_screen_size = screen_sz;
+            ctx.request_repaint();
+        }
         
         // 处理 SSH 消息
         if let Some(ref rx) = self.message_rx {
@@ -359,13 +375,22 @@ impl eframe::App for MistTermApp {
         // 直接终端键盘输入（类似 iTerm）
         self.handle_direct_terminal_input(ctx);
         
-        // 主界面
+        // 主界面：头部与会话列表按内容高度，其余空间全部交给终端（否则终端区会按内容收缩，无法随窗口变高变宽）
         egui::CentralPanel::default()
             .frame(egui::Frame::none().fill(egui::Color32::from_rgb(30, 30, 30)))
             .show(ctx, |ui| {
                 self.render_header(ui);
                 self.render_session_list(ui);
-                self.render_terminal(ui);
+                let rest = ui.available_size();
+                if rest.x > 0.0 && rest.y > 0.0 {
+                    ui.allocate_ui_with_layout(
+                        rest,
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            self.render_terminal(ui);
+                        },
+                    );
+                }
             });
         
         // 连接对话框
@@ -458,8 +483,8 @@ impl MistTermApp {
 
         if let Some(idx) = self.selected_session {
             if let Some(session) = conn_mgr.get_session(idx) {
-                let sess = session.lock();
-                
+                let mut sess = session.lock();
+
                 ui.horizontal(|ui| {
                     ui.label(format!("{}@{}:{}", sess.config.username, sess.config.host, sess.config.port));
                     
@@ -478,19 +503,46 @@ impl MistTermApp {
                 });
                 
                 ui.add_space(10.0);
+
+                // 在状态栏之后测量，PTY 行数与 ScrollArea 高度一致
+                let avail_w = ui.available_width();
+                let terminal_height = ui.available_height().max(120.0);
+                let monospace = egui::TextStyle::Monospace;
+                let row_h = ui.text_style_height(&monospace).max(1.0);
+                let font_id = monospace.resolve(ui.style());
+                let col_w = ui.fonts(|f| f.glyph_width(&font_id, 'M')).max(4.0);
+                let cols_u = (((avail_w - 20.0).max(0.0)) / col_w).floor() as u32;
+                let cols_u = cols_u.clamp(40, 512);
+                let rows_u = (((terminal_height - 8.0).max(0.0)) / row_h).floor() as u32;
+                let rows_u = rows_u.clamp(8, 256);
                 
-                // 终端输出区域
-                let terminal_height = ui.available_height().max(200.0);
+                if matches!(sess.state, ConnectionState::Connected) {
+                    if sess.notified_pty != Some((cols_u, rows_u)) {
+                        sess.terminal.resize(cols_u as usize, rows_u as usize);
+                        if let Some(ref h) = sess.handle {
+                            let _ = h.resize_pty(cols_u, rows_u);
+                        }
+                        sess.notified_pty = Some((cols_u, rows_u));
+                    }
+                }
+
+                let output = sess.terminal.get_formatted_output();
+
+                // 占满剩余区域：ScrollArea 最小视口与窗口一致，内容区拉满宽度避免文字挤在左上角
                 egui::ScrollArea::vertical()
                     .stick_to_bottom(true)
                     .auto_shrink([false, false])
                     .max_height(terminal_height)
+                    .min_scrolled_height(terminal_height)
+                    .min_scrolled_width(avail_w.max(64.0))
                     .show(ui, |ui| {
-                        ui.set_min_height((terminal_height - 8.0).max(120.0));
-                        let output = sess.terminal.get_formatted_output();
-                        ui.label(egui::RichText::new(&output)
-                            .family(egui::FontFamily::Monospace)
-                            .color(egui::Color32::from_rgb(230, 235, 230)));
+                        ui.set_min_width(ui.max_rect().width());
+                        ui.set_min_height((terminal_height - 4.0).max(120.0));
+                        ui.label(
+                            egui::RichText::new(&output)
+                                .family(egui::FontFamily::Monospace)
+                                .color(egui::Color32::from_rgb(230, 235, 230)),
+                        );
                     });
             }
         } else {

@@ -78,8 +78,8 @@ impl SshClient {
         Ok(())
     }
 
-    /// 打开交互式 shell 通道
-    pub fn open_shell(&mut self) -> Result<ssh2::Channel, String> {
+    /// 打开交互式 shell 通道（`cols`/`rows` 为字符网格，需与本地终端模拟器一致）
+    pub fn open_shell(&mut self, cols: u32, rows: u32) -> Result<ssh2::Channel, String> {
         let session = self.session.as_mut()
             .ok_or("Not connected")?;
 
@@ -94,8 +94,17 @@ impl SshClient {
             }
         };
 
-        // 请求 PTY
-        if let Err(e) = channel.request_pty("xterm-256color", None, Some((80, 24, 800, 600))) {
+        let cols = cols.clamp(20, 512);
+        let rows = rows.clamp(5, 256);
+        let px_w = cols.saturating_mul(9);
+        let px_h = rows.saturating_mul(16);
+
+        // 请求 PTY（尺寸错误会导致远端按 80 列换行、vim 只开一行等）
+        if let Err(e) = channel.request_pty(
+            "xterm-256color",
+            None,
+            Some((cols, rows, px_w, px_h)),
+        ) {
             session.set_blocking(false);
             return Err(format!("Failed to request PTY: {}", e));
         }
@@ -124,6 +133,13 @@ impl SshClient {
             .map_err(|e| format!("Write failed: {}", e))?;
         
         Ok(data.len())
+    }
+
+    /// 与 libssh2 非阻塞 I/O 配合：写卡住时可短暂切阻塞再切回。
+    pub fn set_blocking(&mut self, blocking: bool) -> Result<(), String> {
+        let s = self.session.as_mut().ok_or("Not connected")?;
+        s.set_blocking(blocking);
+        Ok(())
     }
 
     /// 检查是否已连接

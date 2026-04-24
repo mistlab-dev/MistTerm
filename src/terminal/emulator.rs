@@ -41,14 +41,18 @@ pub enum AnsiState {
     Osc,
 }
 
-/// 终端模拟器
+/// 终端模拟器（可见区为 `height`×`width` 字符网格；`lines` 为滚出顶部的历史）
 #[derive(Debug)]
 pub struct Terminal {
-    /// 终端行缓冲
+    /// 滚出屏幕顶部的历史行
     pub lines: VecDeque<Vec<Cell>>,
-    /// 当前行
-    pub current_line: Vec<Cell>,
-    /// 当前光标位置
+    /// 备用屏幕模式下进入前保存的 `lines`
+    saved_scrollback: VecDeque<Vec<Cell>>,
+    /// 当前可见字符网格，行 `0..height`
+    screen: Vec<Vec<Cell>>,
+    /// 是否在 DEC 备用屏幕（vim 全屏等）
+    alt_screen: bool,
+    /// 当前光标位置（网格坐标）
     pub cursor_x: usize,
     pub cursor_y: usize,
     /// 终端尺寸
@@ -60,7 +64,7 @@ pub struct Terminal {
     ansi_state: AnsiState,
     /// CSI 参数缓冲
     csi_params: String,
-    /// 最大行数
+    /// 最大滚出行数
     max_lines: usize,
 }
 
@@ -71,10 +75,19 @@ impl Default for Terminal {
 }
 
 impl Terminal {
+    fn fresh_row(width: usize) -> Vec<Cell> {
+        vec![Cell::default(); width]
+    }
+
     pub fn new(width: usize, height: usize) -> Self {
+        let width = width.max(20).min(512);
+        let height = height.max(5).min(256);
+        let screen = (0..height).map(|_| Self::fresh_row(width)).collect();
         Self {
-            lines: VecDeque::with_capacity(height),
-            current_line: Vec::with_capacity(width),
+            lines: VecDeque::new(),
+            saved_scrollback: VecDeque::new(),
+            screen,
+            alt_screen: false,
             cursor_x: 0,
             cursor_y: 0,
             width,
@@ -86,11 +99,99 @@ impl Terminal {
         }
     }
 
+    /// 与远端 PTY 同步字符网格尺寸
+    pub fn resize(&mut self, width: usize, height: usize) {
+        let width = width.clamp(20, 512);
+        let height = height.clamp(5, 256);
+        if width == self.width && height == self.height {
+            return;
+        }
+        self.width = width;
+        self.height = height;
+        for row in &mut self.screen {
+            row.resize(width, Cell::default());
+            if row.len() > width {
+                row.truncate(width);
+            }
+        }
+        while self.screen.len() < height {
+            self.screen.push(Self::fresh_row(width));
+        }
+        while self.screen.len() > height {
+            self.screen.pop();
+        }
+        for line in &mut self.lines {
+            if line.len() > width {
+                line.truncate(width);
+            }
+        }
+        self.cursor_x = self.cursor_x.min(self.width.saturating_sub(1));
+        self.cursor_y = self.cursor_y.min(self.height.saturating_sub(1));
+    }
+
     /// 处理输入数据
     pub fn feed(&mut self, data: &[u8]) {
         for &byte in data {
             self.process_byte(byte);
         }
+    }
+
+    fn scroll_up(&mut self) {
+        if self.height == 0 {
+            return;
+        }
+        let top = self.screen.remove(0);
+        self.lines.push_back(top);
+        while self.lines.len() > self.max_lines {
+            self.lines.pop_front();
+        }
+        self.screen.push(Self::fresh_row(self.width));
+    }
+
+    fn wrap_advance_line(&mut self) {
+        if self.cursor_y < self.height.saturating_sub(1) {
+            self.cursor_y += 1;
+            self.cursor_x = 0;
+        } else {
+            self.scroll_up();
+            self.cursor_x = 0;
+            self.cursor_y = self.height.saturating_sub(1);
+        }
+    }
+
+    fn line_feed(&mut self) {
+        if self.cursor_y < self.height.saturating_sub(1) {
+            self.cursor_y += 1;
+        } else {
+            self.scroll_up();
+        }
+        self.cursor_x = 0;
+    }
+
+    fn enter_alt_screen(&mut self) {
+        if self.alt_screen {
+            return;
+        }
+        self.alt_screen = true;
+        self.saved_scrollback = std::mem::take(&mut self.lines);
+        for row in &mut self.screen {
+            *row = Self::fresh_row(self.width);
+        }
+        self.cursor_x = 0;
+        self.cursor_y = 0;
+    }
+
+    fn leave_alt_screen(&mut self) {
+        if !self.alt_screen {
+            return;
+        }
+        self.alt_screen = false;
+        self.lines = std::mem::take(&mut self.saved_scrollback);
+        for row in &mut self.screen {
+            *row = Self::fresh_row(self.width);
+        }
+        self.cursor_x = 0;
+        self.cursor_y = 0;
     }
 
     /// 处理单个字节
@@ -102,11 +203,10 @@ impl Terminal {
                         self.ansi_state = AnsiState::Escape;
                     }
                     0x0D => {
-                        // CR: 回到行首，不换行（配合后续字符覆盖当前行）
                         self.cursor_x = 0;
                     }
                     0x0A => {
-                        self.newline();
+                        self.line_feed();
                     }
                     0x08 => {
                         if self.cursor_x > 0 {
@@ -117,7 +217,7 @@ impl Terminal {
                     0x09 => {
                         self.cursor_x = (self.cursor_x + 8) & !7;
                         if self.cursor_x >= self.width {
-                            self.cursor_x = self.width - 1;
+                            self.cursor_x = self.width.saturating_sub(1);
                         }
                     }
                     _ if byte >= 0x20 && byte < 0x7F => {
@@ -133,7 +233,6 @@ impl Terminal {
                         self.csi_params.clear();
                     }
                     b']' => {
-                        // OSC 序列（如设置终端标题），跳过到 BEL/ESC 结束
                         self.ansi_state = AnsiState::Osc;
                     }
                     _ => {
@@ -157,7 +256,6 @@ impl Terminal {
                 self.ansi_state = AnsiState::Normal;
             }
             AnsiState::Osc => {
-                // OSC 常见结束符: BEL(\x07) 或 ESC
                 if byte == 0x07 || byte == 0x1B {
                     self.ansi_state = AnsiState::Normal;
                 }
@@ -165,42 +263,30 @@ impl Terminal {
         }
     }
 
-    /// 写入字符
     fn write_char(&mut self, ch: char) {
         let cell = Cell {
             ch,
             style: self.current_style.clone(),
         };
-
         if self.cursor_x >= self.width {
-            self.newline();
+            self.wrap_advance_line();
         }
-
-        if self.cursor_x < self.current_line.len() {
-            self.current_line[self.cursor_x] = cell;
-        } else {
-            self.current_line.push(cell);
+        if self.height == 0 || self.width == 0 {
+            return;
         }
+        self.screen[self.cursor_y][self.cursor_x] = cell;
         self.cursor_x += 1;
-    }
-
-    /// 换行
-    fn newline(&mut self) {
-        if !self.current_line.is_empty() || self.cursor_x > 0 {
-            self.lines.push_back(std::mem::take(&mut self.current_line));
-            self.current_line = Vec::with_capacity(self.width);
-        }
-
-        self.cursor_x = 0;
-        self.cursor_y += 1;
-
-        while self.lines.len() > self.max_lines {
-            self.lines.pop_front();
+        if self.cursor_x >= self.width {
+            self.wrap_advance_line();
         }
     }
 
-    /// 执行 CSI 命令
+    /// 执行 CSI（含 `CSI ? … h/l` 备用屏）
     fn execute_csi(&mut self, cmd: char) {
+        if self.csi_params.starts_with('?') {
+            self.execute_private_csi(cmd);
+            return;
+        }
         let params: Vec<usize> = self
             .csi_params
             .split(';')
@@ -216,7 +302,32 @@ impl Terminal {
             'B' => self.cursor_down(&params),
             'C' => self.cursor_forward(&params),
             'D' => self.cursor_back(&params),
-            'l' | 'h' => {}
+            _ => {}
+        }
+    }
+
+    fn execute_private_csi(&mut self, cmd: char) {
+        let rest = self.csi_params.strip_prefix('?').unwrap_or("");
+        let modes: Vec<usize> = rest
+            .split(';')
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse().ok())
+            .collect();
+        match cmd {
+            'h' => {
+                for m in modes {
+                    if m == 1049 {
+                        self.enter_alt_screen();
+                    }
+                }
+            }
+            'l' => {
+                for m in modes {
+                    if m == 1049 {
+                        self.leave_alt_screen();
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -267,7 +378,6 @@ impl Terminal {
         }
     }
 
-    /// 获取标准颜色
     fn get_color(&self, param: usize, is_bg: bool) -> Color32 {
         if is_bg {
             match param {
@@ -296,7 +406,6 @@ impl Terminal {
         }
     }
 
-    /// 获取 256 色
     fn get_256_color(&self, color_idx: usize) -> Color32 {
         if color_idx < 16 {
             self.get_color(30 + color_idx, false)
@@ -318,7 +427,6 @@ impl Terminal {
         }
     }
 
-    /// 光标位置
     fn cursor_home(&mut self, params: &[usize]) {
         let row = if params.is_empty() || params[0] == 0 {
             0
@@ -335,21 +443,33 @@ impl Terminal {
         self.cursor_x = col.min(self.width.saturating_sub(1));
     }
 
-    /// 清除显示
     fn erase_display(&mut self, params: &[usize]) {
-        match params.first().copied().unwrap_or(0) {
+        let mode = params.first().copied().unwrap_or(0);
+        match mode {
             0 => {
-                self.current_line.truncate(self.cursor_x);
-                self.lines.clear();
+                for c in self.cursor_x..self.width {
+                    if self.cursor_y < self.height {
+                        self.screen[self.cursor_y][c] = Cell::default();
+                    }
+                }
+                for r in (self.cursor_y + 1)..self.height {
+                    self.screen[r] = Self::fresh_row(self.width);
+                }
             }
             1 => {
-                self.lines.clear();
-                self.current_line.clear();
-                self.cursor_x = 0;
+                for r in 0..self.cursor_y {
+                    self.screen[r] = Self::fresh_row(self.width);
+                }
+                if self.cursor_y < self.height {
+                    for c in 0..=self.cursor_x.min(self.width.saturating_sub(1)) {
+                        self.screen[self.cursor_y][c] = Cell::default();
+                    }
+                }
             }
             2 => {
-                self.lines.clear();
-                self.current_line.clear();
+                for row in &mut self.screen {
+                    *row = Self::fresh_row(self.width);
+                }
                 self.cursor_x = 0;
                 self.cursor_y = 0;
             }
@@ -357,46 +477,49 @@ impl Terminal {
         }
     }
 
-    /// 清除行
     fn erase_line(&mut self, params: &[usize]) {
+        if self.cursor_y >= self.height {
+            return;
+        }
+        let row = &mut self.screen[self.cursor_y];
         match params.first().copied().unwrap_or(0) {
-            0 => self.current_line.truncate(self.cursor_x),
-            1 => {
-                self.current_line.drain(0..self.cursor_x.min(self.current_line.len()));
-                self.cursor_x = 0;
+            0 => {
+                for c in self.cursor_x..self.width {
+                    row[c] = Cell::default();
+                }
             }
-            2 => self.current_line.clear(),
+            1 => {
+                for c in 0..=self.cursor_x.min(self.width.saturating_sub(1)) {
+                    row[c] = Cell::default();
+                }
+            }
+            2 => {
+                *row = Self::fresh_row(self.width);
+            }
             _ => {}
         }
     }
 
-    /// 光标上移
     fn cursor_up(&mut self, params: &[usize]) {
         let n = params.first().copied().unwrap_or(1).max(1);
-        if n > 0 && self.cursor_y > 0 {
-            self.cursor_y = self.cursor_y.saturating_sub(n);
-        }
+        self.cursor_y = self.cursor_y.saturating_sub(n);
     }
 
-    /// 光标下移
     fn cursor_down(&mut self, params: &[usize]) {
         let n = params.first().copied().unwrap_or(1).max(1);
         self.cursor_y = (self.cursor_y + n).min(self.height.saturating_sub(1));
     }
 
-    /// 光标前移
     fn cursor_forward(&mut self, params: &[usize]) {
         let n = params.first().copied().unwrap_or(1).max(1);
         self.cursor_x = (self.cursor_x + n).min(self.width.saturating_sub(1));
     }
 
-    /// 光标后移
     fn cursor_back(&mut self, params: &[usize]) {
         let n = params.first().copied().unwrap_or(1).max(1);
         self.cursor_x = self.cursor_x.saturating_sub(n);
     }
 
-    /// 获取纯文本输出
     pub fn to_plain_text(&self) -> String {
         let mut result = String::new();
         for line in &self.lines {
@@ -407,23 +530,66 @@ impl Terminal {
             }
             result.push('\n');
         }
+        for row in &self.screen {
+            for cell in row {
+                if cell.ch != ' ' {
+                    result.push(cell.ch);
+                }
+            }
+            result.push('\n');
+        }
         result
     }
 
-    /// 获取带样式的输出
+    fn row_to_string_trim_end(row: &[Cell]) -> String {
+        let mut end = row.len();
+        while end > 0 && row[end - 1].ch == ' ' {
+            end -= 1;
+        }
+        row[..end].iter().map(|c| c.ch).collect()
+    }
+
+    fn append_row_with_cursor(
+        &self,
+        out: &mut String,
+        row: &[Cell],
+        row_idx: usize,
+        insert_cursor: bool,
+    ) {
+        let mut s = Self::row_to_string_trim_end(row);
+        if insert_cursor && row_idx == self.cursor_y {
+            let cx = self.cursor_x.min(self.width);
+            while s.chars().count() < cx {
+                s.push(' ');
+            }
+            let pos = s
+                .char_indices()
+                .nth(cx)
+                .map(|(i, _)| i)
+                .unwrap_or(s.len());
+            s.insert(pos, '▌');
+        }
+        out.push_str(&s);
+        out.push('\n');
+    }
+
+    /// 供 UI 显示的纯文本（滚出历史 + 当前屏幕网格；备用屏仅显示网格）
     pub fn get_formatted_output(&self) -> String {
         let mut result = String::new();
-        for line in &self.lines {
-            for cell in line {
+        if self.alt_screen {
+            for (i, row) in self.screen.iter().enumerate() {
+                self.append_row_with_cursor(&mut result, row, i, true);
+            }
+            return result;
+        }
+        for row in &self.lines {
+            for cell in row {
                 result.push(cell.ch);
             }
             result.push('\n');
         }
-
-        if !self.current_line.is_empty() {
-            for cell in &self.current_line {
-                result.push(cell.ch);
-            }
+        for (i, row) in self.screen.iter().enumerate() {
+            self.append_row_with_cursor(&mut result, row, i, true);
         }
         result
     }
@@ -437,20 +603,44 @@ mod tests {
     fn test_basic_output() {
         let mut term = Terminal::new(80, 24);
         term.feed(b"Hello, World!\n");
-        assert_eq!(term.lines.len(), 1);
+        let out = term.get_formatted_output();
+        assert!(out.contains("Hello"));
     }
 
     #[test]
     fn test_ansi_color() {
         let mut term = Terminal::new(80, 24);
         term.feed(b"\x1b[31mRed\x1b[0m\n");
-        assert_eq!(term.lines.len(), 1);
+        assert!(term.get_formatted_output().contains("Red"));
     }
 
     #[test]
     fn test_cursor_movement() {
         let mut term = Terminal::new(80, 24);
         term.feed(b"AB\x1b[D\x1b[DCD");
-        assert_eq!(term.current_line.len(), 4);
+        assert_eq!(term.screen[0][0].ch, 'C');
+        assert_eq!(term.screen[0][1].ch, 'D');
+    }
+
+    #[test]
+    fn test_cup_writes_to_grid() {
+        let mut term = Terminal::new(40, 12);
+        term.feed(b"\x1b[5;10H");
+        term.feed(b"X");
+        assert_eq!(term.screen[4][9].ch, 'X');
+    }
+
+    #[test]
+    fn test_alt_screen_toggle() {
+        let mut term = Terminal::new(40, 8);
+        term.feed(b"a\nb\n");
+        assert!(!term.alt_screen);
+        term.feed(b"\x1b[?1049h");
+        assert!(term.alt_screen);
+        term.feed(b"\x1b[2;2H");
+        term.feed(b"V");
+        assert_eq!(term.screen[1][1].ch, 'V');
+        term.feed(b"\x1b[?1049l");
+        assert!(!term.alt_screen);
     }
 }
