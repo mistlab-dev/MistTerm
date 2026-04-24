@@ -38,3 +38,8 @@ dist/
 build/
 *.dmg
 *.pkg
+
+# Rust
+/target
+Cargo.lock
+sessions.json

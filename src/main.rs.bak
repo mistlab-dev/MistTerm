@@ -1,0 +1,947 @@
+//! MistTerm - 三层异步 SSH 终端
+//! 
+//! 架构：
+//! 1. UI 渲染层 (View) - egui 主线程
+//! 2. 逻辑中转层 (Controller) - tokio 任务
+//! 3. SSH IO 层 (Driver) - russh 异步回调
+
+use anyhow::Result;
+use eframe::egui;
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::io::Write;
+use std::thread;
+use std::time::Duration;
+use std::sync::mpsc as sync_mpsc;
+
+/// VTE 终端状态
+pub struct VteState {
+    pub lines: Vec<String>,
+    pub current_line: String,
+    pub cursor_x: usize,
+    pub cursor_y: usize,
+    pub height: usize,
+    pub width: usize,
+}
+
+impl Default for VteState {
+    fn default() -> Self {
+        Self {
+            lines: Vec::new(),
+            current_line: String::new(),
+            cursor_x: 0,
+            cursor_y: 0,
+            height: 24,
+            width: 80,
+        }
+    }
+}
+
+impl VteState {
+    fn clear(&mut self) {
+        self.lines.clear();
+        self.current_line.clear();
+        self.cursor_x = 0;
+        self.cursor_y = 0;
+    }
+    
+    fn push_line(&mut self) {
+        self.lines.push(std::mem::take(&mut self.current_line));
+        self.current_line.clear();
+        self.cursor_x = 0;
+        self.cursor_y = (self.cursor_y + 1).min(self.height.saturating_sub(1));
+    }
+}
+
+/// VTE 处理器
+pub struct VteHandler {
+    pub state: VteState,
+}
+
+impl Default for VteHandler {
+    fn default() -> Self {
+        Self {
+            state: VteState::default(),
+        }
+    }
+}
+
+impl VteHandler {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    
+    pub fn get_output(&self) -> String {
+        let mut output = String::new();
+        for line in &self.state.lines {
+            output.push_str(line);
+            output.push('\n');
+        }
+        output.push_str(&self.state.current_line);
+        output
+    }
+    
+    pub fn get_styled_output(&self) -> Vec<(String, Style)> {
+        let mut result = Vec::new();
+        let default_style = Style::default();
+        
+        for line in &self.state.lines {
+            result.push((line.clone(), default_style.clone()));
+        }
+        if !self.state.current_line.is_empty() {
+            result.push((self.state.current_line.clone(), default_style));
+        }
+        
+        result
+    }
+}
+
+#[derive(Debug, Clone)]
+struct Style {
+    fg_color: Color,
+    bg_color: Color,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+}
+
+impl Default for Style {
+    fn default() -> Self {
+        Self {
+            fg_color: Color::Default,
+            bg_color: Color::Default,
+            bold: false,
+            italic: false,
+            underline: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Color {
+    Default,
+    Black,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+    White,
+    BrightBlack,
+    BrightRed,
+    BrightGreen,
+    BrightYellow,
+    BrightBlue,
+    BrightMagenta,
+    BrightCyan,
+    BrightWhite,
+    Custom(u8, u8, u8),
+}
+
+impl Color {
+    fn to_egui_color(&self) -> egui::Color32 {
+        match self {
+            Color::Default => egui::Color32::LIGHT_GREEN,
+            Color::Black => egui::Color32::BLACK,
+            Color::Red => egui::Color32::RED,
+            Color::Green => egui::Color32::GREEN,
+            Color::Yellow => egui::Color32::YELLOW,
+            Color::Blue => egui::Color32::BLUE,
+            Color::Magenta => egui::Color32::from_rgb(255, 0, 255),
+            Color::Cyan => egui::Color32::from_rgb(0, 255, 255),
+            Color::White => egui::Color32::WHITE,
+            Color::BrightBlack => egui::Color32::from_rgb(128, 128, 128),
+            Color::BrightRed => egui::Color32::from_rgb(255, 0, 0),
+            Color::BrightGreen => egui::Color32::from_rgb(0, 255, 0),
+            Color::BrightYellow => egui::Color32::from_rgb(255, 255, 0),
+            Color::BrightBlue => egui::Color32::from_rgb(0, 0, 255),
+            Color::BrightMagenta => egui::Color32::from_rgb(255, 0, 255),
+            Color::BrightCyan => egui::Color32::from_rgb(0, 255, 255),
+            Color::BrightWhite => egui::Color32::from_rgb(255, 255, 255),
+            Color::Custom(r, g, b) => egui::Color32::from_rgb(*r, *g, *b),
+        }
+    }
+}
+
+use vte::{Parser, Perform};
+
+impl Perform for VteHandler {
+    fn print(&mut self, c: char) {
+        self.state.current_line.push(c);
+        self.state.cursor_x += 1;
+    }
+
+    fn execute(&mut self, byte: u8) {
+        match byte {
+            b'\n' | b'\r' | b'\x0c' => {
+                self.state.push_line();
+            }
+            b'\x08' => {
+                if !self.state.current_line.is_empty() {
+                    self.state.current_line.pop();
+                    self.state.cursor_x = self.state.current_line.len();
+                }
+            }
+            b'\t' => {
+                let next_tab = ((self.state.cursor_x / 8) + 1) * 8;
+                while self.state.cursor_x < next_tab {
+                    self.state.current_line.push(' ');
+                    self.state.cursor_x += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn hook(&mut self, _params: &vte::Params, _intermediates: &[u8], _ignore: bool, _action: char) {
+        let _ = (_params, _intermediates, _ignore, _action);
+    }
+
+    fn put(&mut self, _byte: u8) {}
+
+    fn unhook(&mut self) {}
+    
+    fn csi_dispatch(&mut self, params: &vte::Params, _intermediates: &[u8], _ignore: bool, action: char) {
+        let _ = (_intermediates, _ignore);
+        
+        // 提取第一个参数
+        let param: u32 = params.iter().next().map(|p| p.first().copied().unwrap_or(0) as u32).unwrap_or(0);
+        
+        match action {
+            'J' => {
+                if param == 2 {
+                    self.state.clear();
+                }
+            }
+            'K' => {
+                match param {
+                    0 => {
+                        self.state.current_line.truncate(self.state.cursor_x);
+                    }
+                    2 => {
+                        self.state.current_line.clear();
+                        self.state.cursor_x = 0;
+                    }
+                    _ => {}
+                }
+            }
+            'A' => {
+                let count = (param as usize).max(1);
+                self.state.cursor_y = self.state.cursor_y.saturating_sub(count);
+            }
+            'B' => {
+                let count = (param as usize).max(1);
+                self.state.cursor_y = (self.state.cursor_y + count).min(self.state.height.saturating_sub(1));
+            }
+            'C' => {
+                let count = (param as usize).max(1);
+                self.state.cursor_x = (self.state.cursor_x + count).min(self.state.width.saturating_sub(1));
+            }
+            'D' => {
+                let count = (param as usize).max(1);
+                self.state.cursor_x = self.state.cursor_x.saturating_sub(count);
+            }
+            _ => {}
+        }
+    }
+}
+
+pub struct VteTerminal {
+    pub parser: Parser,
+    pub handler: VteHandler,
+}
+
+impl Default for VteTerminal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl VteTerminal {
+    pub fn new() -> Self {
+        Self {
+            parser: Parser::new(),
+            handler: VteHandler::new(),
+        }
+    }
+    
+    pub fn input(&mut self, byte: u8) {
+        self.parser.advance(&mut self.handler, byte);
+    }
+    
+    pub fn get_output(&self) -> String {
+        self.handler.get_output()
+    }
+    
+    pub fn get_styled_output(&self) -> Vec<(String, Style)> {
+        self.handler.get_styled_output()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum UiMessage {
+    Input(Vec<u8>),
+    Connect {
+        host: String,
+        port: u16,
+        username: String,
+        password: String,
+    },
+    Disconnect,
+    SendCommand(String),
+    WindowResize { width: usize, height: usize },
+}
+
+#[derive(Debug, Clone)]
+pub enum ControllerMessage {
+    Output(Vec<u8>),
+    Connected,
+    Error(String),
+    Disconnected,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionConfig {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AppConfig {
+    pub sessions: Vec<SessionConfig>,
+}
+
+impl AppConfig {
+    fn load() -> Self {
+        let path = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("mistterm")
+            .join("sessions.json");
+        
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            if let Ok(config) = serde_json::from_str(&content) {
+                return config;
+            }
+        }
+        Self::default()
+    }
+    
+    fn save(&self) -> anyhow::Result<()> {
+        let config_dir = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("mistterm");
+        
+        std::fs::create_dir_all(&config_dir)?;
+        let path = config_dir.join("sessions.json");
+        
+        let content = serde_json::to_string_pretty(self)?;
+        std::fs::write(&path, content)?;
+        Ok(())
+    }
+}
+
+pub struct SshSession {
+    pub config: SessionConfig,
+    pub connected: bool,
+    pub connecting: bool,
+    pub error: Option<String>,
+    pub cmd_tx: Option<sync_mpsc::Sender<UiMessage>>,
+    pub output_rx: Option<sync_mpsc::Receiver<ControllerMessage>>,
+    terminal: Arc<Mutex<VteTerminal>>,
+}
+
+impl SshSession {
+    pub fn new(config: SessionConfig) -> Self {
+        Self {
+            config,
+            connected: false,
+            connecting: false,
+            error: None,
+            cmd_tx: None,
+            output_rx: None,
+            terminal: Arc::new(Mutex::new(VteTerminal::new())),
+        }
+    }
+}
+
+fn run_ssh_session(
+    config: SessionConfig,
+    mut cmd_rx: sync_mpsc::Receiver<UiMessage>,
+    output_tx: sync_mpsc::Sender<ControllerMessage>,
+    _ctx: egui::Context,
+) -> anyhow::Result<()> {
+    eprintln!("[SSH] Starting SSH: {}@{}:{}", config.username, config.host, config.port);
+    log::info!("Starting SSH: {}@{}:{}", config.username, config.host, config.port);
+    
+    let (channel_tx, channel_rx) = std::sync::mpsc::channel::<Result<ssh2::Channel, anyhow::Error>>();
+    
+    log::info!("Creating TCP connection to {}:{}", config.host, config.port);
+    let tcp = std::net::TcpStream::connect(format!("{}:{}", config.host, config.port))?;
+    log::info!("TCP connected");
+    
+    log::info!("Creating SSH session");
+    let mut sess = ssh2::Session::new()?;
+    
+    sess.set_tcp_stream(tcp);
+    log::info!("Performing SSH handshake");
+    sess.handshake()?;
+    log::info!("SSH handshake done");
+    
+    log::info!("Authenticating as {}", config.username);
+    sess.userauth_password(&config.username, config.password.as_deref().unwrap_or(""))?;
+    log::info!("Authentication successful");
+    
+    log::info!("Opening channel session");
+    let mut channel = sess.channel_session()?;
+    log::info!("Channel opened");
+    
+    log::info!("Requesting PTY: xterm-256color");
+    channel.request_pty("xterm-256color", None, Some((80, 24, 800, 600)))?;
+    
+    log::info!("Starting shell");
+    channel.shell()?;
+    log::info!("Shell started");
+    
+    log::info!("Sending Connected message");
+    let _ = output_tx.send(ControllerMessage::Connected);
+    log::info!("Connected message sent, waiting for shell output...");
+    
+    let mut read_buf = [0u8; 4096];
+    let mut input_count = 0;
+    let mut output_count = 0;
+    let mut loop_count = 0;
+    
+    log::info!("Entering main SSH loop...");
+    
+    loop {
+        loop_count += 1;
+        if loop_count % 100 == 0 {
+            log::debug!("[SSH-LOOP] Loop {} - checking for data", loop_count);
+        }
+        
+        while let Ok(cmd) = cmd_rx.try_recv() {
+            log::info!("[SSH-LOOP] Received UI command");
+            match cmd {
+                UiMessage::Input(data) => {
+                    input_count += 1;
+                    let input_str = String::from_utf8_lossy(&data);
+                    log::info!("[INPUT #{}] Raw bytes: {:?}, String: {:?}", input_count, data, input_str.trim());
+                    eprintln!("[INPUT #{}] Raw bytes: {:?}, String: {:?}", input_count, data, input_str.trim());
+                    
+                    log::info!("[INPUT #{}] Writing {} bytes to SSH channel", input_count, data.len());
+                    match channel.write_all(&data) {
+                        Ok(_) => {
+                            log::info!("[INPUT #{}] Successfully wrote {} bytes to SSH channel", input_count, data.len());
+                            if let Err(e) = channel.flush() {
+                                log::warn!("[INPUT #{}] Flush failed: {}", input_count, e);
+                            } else {
+                                log::info!("[INPUT #{}] Flushed SSH channel", input_count);
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("[INPUT #{}] Failed to write to channel: {}", input_count, e);
+                            eprintln!("[ERROR] Failed to write to channel: {}", e);
+                        }
+                    }
+                    let _ = output_tx.send(ControllerMessage::Output(data));
+                }
+                UiMessage::Disconnect => {
+                    log::info!("Received Disconnect command, breaking loop");
+                    break;
+                }
+                UiMessage::WindowResize { width, height } => {
+                    log::info!("[RESIZE] Window size: {}x{}", width, height);
+                    let _ = channel.request_pty("xterm-256color", None, Some((width as u32, height as u32, (width * 10) as u32, (height * 20) as u32)));
+                }
+                _ => {}
+            }
+        }
+        
+        // 尝试读取 SSH 输出
+        log::debug!("[SSH-READ] Attempting to read from channel...");
+        
+        // 使用 read 来避免阻塞（ssh2 Channel 默认是非阻塞的）
+        use std::io::Read;
+        match channel.read(&mut read_buf) {
+            Ok(0) => {
+                // 没有数据可读
+                log::debug!("[SSH-READ] No data available (EOF), sleeping...");
+            }
+            Ok(n) => {
+                output_count += 1;
+                let data = &read_buf[..n];
+                let output_str = String::from_utf8_lossy(data);
+                log::info!("[OUTPUT #{}] Received {} bytes: {:?}", output_count, n, output_str.trim());
+                eprintln!("[OUTPUT #{}] Received {} bytes: {:?}", output_count, n, output_str.trim());
+                
+                let _ = output_tx.send(ControllerMessage::Output(data.to_vec()));
+            }
+            Err(e) => {
+                log::debug!("[SSH-READ] Read error/kind: {:?}", e.kind());
+                if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut {
+                    log::debug!("[SSH-READ] No data available, sleeping...");
+                } else if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                    log::info!("Channel closed (UnexpectedEof), breaking loop");
+                    eprintln!("[SSH] Channel closed");
+                    break;
+                } else {
+                    log::error!("Read error: {}", e);
+                }
+            }
+        }
+        
+        thread::sleep(Duration::from_millis(10));
+    }
+    
+    log::info!("SSH main loop exited");
+    let _ = output_tx.send(ControllerMessage::Disconnected);
+    Ok(())
+}
+
+pub struct MistTermApp {
+    pub sessions: Vec<Arc<Mutex<SshSession>>>,
+    pub showing_connect_dialog: bool,
+    pub new_host: String,
+    pub new_port: u16,
+    pub new_username: String,
+    pub new_password: String,
+    pub selected_session: Option<usize>,
+    pub total_bytes_rx: u64,
+    pub total_bytes_tx: u64,
+}
+
+impl Default for MistTermApp {
+    fn default() -> Self {
+        Self {
+            sessions: Vec::new(),
+            showing_connect_dialog: false,
+            new_host: "localhost".to_string(),
+            new_port: 22,
+            new_username: String::new(),
+            new_password: String::new(),
+            selected_session: None,
+            total_bytes_rx: 0,
+            total_bytes_tx: 0,
+        }
+    }
+}
+
+impl eframe::App for MistTermApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        for session in &self.sessions {
+            let msgs: Vec<ControllerMessage> = {
+                let mut sess = session.lock();
+                if let Some(ref mut rx) = sess.output_rx {
+                    let mut msgs = Vec::new();
+                    while let Ok(msg) = rx.try_recv() {
+                        msgs.push(msg);
+                    }
+                    msgs
+                } else {
+                    Vec::new()
+                }
+            };
+            
+            let mut sess = session.lock();
+            for msg in msgs {
+                match msg {
+                    ControllerMessage::Output(data) => {
+                        self.total_bytes_rx += data.len() as u64;
+                        
+                        log::debug!("[CONTROLLER] Received {} bytes of output", data.len());
+                        
+                        let mut terminal = sess.terminal.lock();
+                        for byte in data {
+                            terminal.input(byte);
+                        }
+                    }
+                    ControllerMessage::Connected => {
+                        log::info!("[CONTROLLER] Session connected");
+                        sess.connected = true;
+                        sess.connecting = false;
+                    }
+                    ControllerMessage::Error(e) => {
+                        log::error!("[CONTROLLER] Session error: {}", e);
+                        sess.error = Some(e);
+                        sess.connecting = false;
+                    }
+                    ControllerMessage::Disconnected => {
+                        log::info!("[CONTROLLER] Session disconnected");
+                        sess.connected = false;
+                    }
+                }
+            }
+        }
+        
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.heading("🖥️ MistTerm - Async SSH Terminal");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("➕ Connect").clicked() {
+                        self.showing_connect_dialog = true;
+                        self.new_host = "localhost".to_string();
+                        self.new_port = 22;
+                        self.new_username = String::new();
+                        self.new_password = String::new();
+                    }
+                });
+            });
+            
+            ui.separator();
+            ui.label("Sessions:");
+            
+            if self.sessions.is_empty() {
+                ui.label("No sessions. Click 'Connect' to add one.");
+            }
+            
+            let mut delete_idx: Option<usize> = None;
+            let mut connect_idx: Option<usize> = None;
+            let mut disconnect_idx: Option<usize> = None;
+            
+            for (idx, session) in self.sessions.iter().enumerate() {
+                let sess = session.lock();
+                let status = if sess.connected {
+                    "✓ Connected"
+                } else if sess.connecting {
+                    "⏳ Connecting..."
+                } else {
+                    "✗ Disconnected"
+                };
+                
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(self.selected_session == Some(idx), 
+                        format!("{} ({}:{}) - {}", sess.config.name, sess.config.host, sess.config.port, status)
+                    ).clicked() {
+                        self.selected_session = Some(idx);
+                    }
+                    
+                    if !sess.connected && !sess.connecting {
+                        if ui.button("Connect").clicked() {
+                            connect_idx = Some(idx);
+                        }
+                    } else if sess.connected {
+                        if ui.button("Disconnect").clicked() {
+                            disconnect_idx = Some(idx);
+                        }
+                    }
+                    
+                    if ui.button("Delete").clicked() {
+                        delete_idx = Some(idx);
+                    }
+                });
+                drop(sess);
+            }
+            
+            if let Some(idx) = connect_idx {
+                self.start_session(idx, ctx.clone());
+            }
+            if let Some(idx) = disconnect_idx {
+                if let Some(session) = self.sessions.get(idx) {
+                    let mut sess = session.lock();
+                    if let Some(ref tx) = sess.cmd_tx {
+                        let _ = tx.send(UiMessage::Disconnect);
+                    }
+                    sess.connected = false;
+                }
+            }
+            if let Some(idx) = delete_idx {
+                self.sessions.remove(idx);
+                if self.selected_session == Some(idx) {
+                    self.selected_session = None;
+                }
+            }
+            
+            ui.separator();
+            
+            let saved_config = AppConfig::load();
+            
+            if !saved_config.sessions.is_empty() {
+                ui.label("📚 Saved Sessions:");
+                ui.horizontal(|ui| {
+                    for (idx, session_config) in saved_config.sessions.iter().enumerate() {
+                        if ui.button(&session_config.name).clicked() {
+                            let config = session_config.clone();
+                            let ssh_config = config.clone();
+                            
+                            let (cmd_tx, cmd_rx) = sync_mpsc::unbounded_channel();
+                            let (output_tx, output_rx) = sync_mpsc::unbounded_channel();
+                            
+                            let mut session = SshSession::new(config);
+                            session.connecting = true;
+                            session.cmd_tx = Some(cmd_tx);
+                            session.output_rx = Some(output_rx);
+                            
+                            let session_idx = self.sessions.len();
+                            self.sessions.push(Arc::new(Mutex::new(session)));
+                            self.selected_session = Some(session_idx);
+                            
+                            let ctx_clone = ctx.clone();
+                            thread::spawn(move || {
+                                let _ = run_ssh_session(
+                                    ssh_config,
+                                    cmd_rx,
+                                    output_tx,
+                                    ctx_clone,
+                                );
+                            });
+                        }
+                        ui.add_space(5.0);
+                    }
+                });
+                ui.separator();
+            }
+            
+            if let Some(idx) = self.selected_session {
+                if let Some(session) = self.sessions.get(idx) {
+                    let (config_info, error_info, connected, connecting) = {
+                        let sess = session.lock();
+                        (
+                            (sess.config.username.clone(), sess.config.host.clone(), sess.config.port),
+                            sess.error.clone(),
+                            sess.connected,
+                            sess.connecting
+                        )
+                    };
+                    
+                    ui.horizontal(|ui| {
+                        ui.label(format!("📡 {}@{}:{}", config_info.0, config_info.1, config_info.2));
+                        if connecting {
+                            ui.label(egui::RichText::new("⏳ Connecting...").color(egui::Color32::from_rgb(255, 200, 0)));
+                        } else if connected {
+                            ui.label(egui::RichText::new("✓ Connected").color(egui::Color32::from_rgb(0, 255, 0)));
+                        } else {
+                            ui.label(egui::RichText::new("✗ Disconnected").color(egui::Color32::from_rgb(255, 0, 0)));
+                        }
+                        if let Some(err) = &error_info {
+                            ui.label(egui::RichText::new(format!("Error: {}", err)).color(egui::Color32::RED));
+                        }
+                    });
+                    
+                    ui.add_space(10.0);
+                    ui.heading("Terminal:");
+                    
+                    let send_tx = {
+                        let sess = session.lock();
+                        sess.cmd_tx.clone()
+                    };
+                    
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_rgb(30, 30, 30))
+                        .inner_margin(egui::Margin::same(10.0))
+                        .show(ui, |ui| {
+                            let styled_output = {
+                                let sess = session.lock();
+                                let terminal = sess.terminal.lock();
+                                terminal.get_styled_output()
+                            };
+                            
+                            let mut full_text = String::new();
+                            for (line, style) in &styled_output {
+                                if line.is_empty() {
+                                    full_text.push('\n');
+                                } else {
+                                    full_text.push_str(line);
+                                    full_text.push('\n');
+                                }
+                            }
+                            
+                            egui::ScrollArea::vertical()
+                                .stick_to_bottom(true)
+                                .show(ui, |ui| {
+                                    egui::ScrollArea::horizontal()
+                                        .auto_shrink([false, false])
+                                        .show(ui, |ui| {
+                                            let text_edit = egui::TextEdit::multiline(&mut full_text)
+                                                .font(egui::TextStyle::Monospace)
+                                                .desired_width(f32::INFINITY)
+                                                .code_editor()
+                                                .desired_rows(100)
+                                                .interactive(false);
+                                            
+                                            ui.add(text_edit);
+                                        });
+                                });
+                        });
+                    
+                    ui.add_space(10.0);
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("➤ ").size(20.0).color(egui::Color32::from_rgb(0, 255, 0)));
+                        
+                        let id = egui::Id::new("terminal_input");
+                        
+                        let mut input: String = ui.memory_mut(|m| {
+                            m.data.get_temp(id).unwrap_or_default()
+                        });
+                        
+                        let text_edit = egui::TextEdit::singleline(&mut input)
+                            .font(egui::TextStyle::Monospace)
+                            .hint_text("Type command and press Enter")
+                            .id(id)
+                            .desired_width(f32::INFINITY)
+                            .min_size(egui::vec2(200.0, 30.0))
+                            .lock_focus(true);
+    
+                        let response = ui.add(text_edit);
+                        
+                        ui.memory_mut(|m| {
+                            m.data.insert_temp(id, input.clone());
+                        });
+                        
+                        ui.memory_mut(|m| {
+                            m.request_focus(id);
+                        });
+                        
+                        if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !input.is_empty() {
+                            log::info!("[UI-INPUT] Sending command: {:?}", input);
+                            eprintln!("[UI-INPUT] Sending command: {:?}", input);
+                            if let Some(ref tx) = send_tx {
+                                let mut cmd = input.clone().into_bytes();
+                                cmd.push(b'\n');
+                                log::info!("[UI-INPUT] Command bytes: {:?}, total {} bytes", cmd, cmd.len());
+                                let _ = tx.send(UiMessage::Input(cmd));
+                            }
+                            ui.memory_mut(|m| {
+                                m.data.insert_temp(id, String::new());
+                            });
+                            input.clear();
+                            ui.memory_mut(|m| {
+                                m.request_focus(id);
+                            });
+                        }
+                    });
+                }
+            } else {
+                ui.label("💡 Select a session or connect to a new one");
+            }
+            
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(format!("📊 RX: {} KB | TX: {} KB", self.total_bytes_rx / 1024, self.total_bytes_tx / 1024));
+            });
+        });
+        
+        if self.showing_connect_dialog {
+            egui::Window::new("Connect to Server")
+                .collapsible(false)
+                .resizable(true)
+                .show(ctx, |ui| {
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label("Host:");
+                            ui.text_edit_singleline(&mut self.new_host);
+                        });
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Port:");
+                            ui.add(egui::DragValue::new(&mut self.new_port));
+                        });
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Username:");
+                            ui.text_edit_singleline(&mut self.new_username);
+                        });
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("Password:");
+                            ui.add(egui::TextEdit::singleline(&mut self.new_password).password(true));
+                        });
+                        
+                        ui.separator();
+                        
+                        ui.horizontal(|ui| {
+                            if ui.button("Connect").clicked() {
+                                if self.new_host.is_empty() || self.new_username.is_empty() {
+                                    eprintln!("Please fill in Host and Username");
+                                    return;
+                                }
+                                
+                                let config = SessionConfig {
+                                    name: format!("{}@{}", self.new_username, self.new_host),
+                                    host: self.new_host.clone(),
+                                    port: self.new_port,
+                                    username: self.new_username.clone(),
+                                    password: Some(self.new_password.clone()),
+                                };
+                                
+                                let mut saved_config = AppConfig::load();
+                                saved_config.sessions.push(config.clone());
+                                let _ = saved_config.save();
+                                
+                                let ssh_config = config.clone();
+                                
+                                let (cmd_tx, cmd_rx) = sync_mpsc::unbounded_channel();
+                                let (output_tx, output_rx) = sync_mpsc::unbounded_channel();
+                                
+                                let mut session = SshSession::new(config);
+                                session.connecting = true;
+                                session.cmd_tx = Some(cmd_tx);
+                                session.output_rx = Some(output_rx);
+                                
+                                let idx = self.sessions.len();
+                                self.sessions.push(Arc::new(Mutex::new(session)));
+                                self.selected_session = Some(idx);
+                                
+                                let ctx_clone = ctx.clone();
+                                std::thread::spawn(move || {
+                                    let _ = run_ssh_session(
+                                        ssh_config,
+                                        cmd_rx,
+                                        output_tx,
+                                        ctx_clone,
+                                    );
+                                });
+                                
+                                self.showing_connect_dialog = false;
+                                self.new_host = "localhost".to_string();
+                                self.new_port = 22;
+                                self.new_username = String::new();
+                                self.new_password = String::new();
+                            }
+                            
+                            if ui.button("Cancel").clicked() {
+                                self.showing_connect_dialog = false;
+                            }
+                        });
+                    });
+                });
+        }
+    }
+}
+
+impl MistTermApp {
+    fn start_session(&mut self, idx: usize, ctx: egui::Context) {
+        let _ = (idx, ctx);
+    }
+}
+
+fn main() -> eframe::Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format(|buf, record| {
+            use std::io::Write;
+            writeln!(
+                buf,
+                "[{}] [{}] {}",
+                chrono::Local::now().format("%H:%M:%S"),
+                record.level(),
+                record.args()
+            )
+        })
+        .init();
+    
+    log::info!("MistTerm starting...");
+    eprintln!("[START] MistTerm starting...");
+    
+    let options = eframe::NativeOptions::default();
+    
+    eframe::run_native(
+        "MistTerm",
+        options,
+        Box::new(|_cc| Box::new(MistTermApp::default())),
+    )
+}
