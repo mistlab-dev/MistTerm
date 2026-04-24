@@ -1,6 +1,6 @@
 //! 核心业务逻辑层
 
-mod session;
+pub mod session;
 mod connection;
 
 pub use session::{SessionConfig, SessionManager};

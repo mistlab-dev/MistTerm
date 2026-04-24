@@ -1,5 +1,10 @@
-//! UI 层 - egui 界面
+//! UI 模块
+//!
+//! 提供跨平台 GUI 界面，基于 egui + eframe
 
-mod app;
+pub mod app;
+pub mod terminal;
+pub mod sidebar;
+pub mod dialogs;
 
 pub use app::MistTermApp;

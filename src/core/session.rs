@@ -14,6 +14,7 @@ use std::process::Command;
 /// 会话配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
+    pub id: String,
     pub name: String,
     pub host: String,
     pub port: u16,
@@ -24,6 +25,7 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
+            id: uuid::Uuid::new_v4().to_string(),
             name: "New Session".to_string(),
             host: "localhost".to_string(),
             port: 22,
@@ -167,6 +169,7 @@ impl SessionManager {
                         String::new()
                     };
                     sessions.push(SessionConfig {
+                        id: uuid::Uuid::new_v4().to_string(),
                         name: cfg.name,
                         host: cfg.host,
                         port: cfg.port,
@@ -225,6 +228,35 @@ impl SessionManager {
     /// 获取所有会话
     pub fn get_sessions(&self) -> &[SessionConfig] {
         &self.sessions
+    }
+
+    /// 获取会话列表（UI 层使用）
+    pub fn list_sessions(&self) -> &[SessionConfig] {
+        &self.sessions
+    }
+
+    /// 根据 ID 获取会话
+    pub fn get_session(&self, id: &str) -> Option<&SessionConfig> {
+        self.sessions.iter().find(|s| s.id == id)
+    }
+
+    /// 创建新会话
+    pub fn create_session(&mut self, name: &str, host: &str, username: &str) -> SessionConfig {
+        let mut config = SessionConfig::default();
+        config.name = name.to_string();
+        config.host = host.to_string();
+        config.username = username.to_string();
+        self.sessions.push(config.clone());
+        self.save();
+        config
+    }
+
+    /// 删除会话
+    pub fn delete_session(&mut self, id: &str) {
+        if let Some(pos) = self.sessions.iter().position(|s| s.id == id) {
+            self.sessions.remove(pos);
+            self.save();
+        }
     }
 
     /// 获取会话数量

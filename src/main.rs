@@ -28,5 +28,5 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     
-    eframe::run_native("MistTerm", options, Box::new(|_cc| Box::new(MistTermApp::default())))
+    eframe::run_native("MistTerm", options, Box::new(|cc| Box::new(MistTermApp::new(cc))))
 }
