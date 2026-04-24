@@ -2,6 +2,8 @@
 
 mod client;
 mod manager;
+mod lrzsz;
 
 pub use client::{SshClient, SshConfig};
 pub use manager::{SshManager, SshMessage, SshSessionId, SshSessionHandle};
+pub use lrzsz::{LrzszTransfer, TransferEvent};

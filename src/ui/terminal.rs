@@ -4,7 +4,7 @@
 
 use eframe::egui;
 use std::sync::mpsc::{Receiver, TryIter};
-use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle};
+use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, LrzszTransfer, TransferEvent};
 
 /// 终端内容缓冲区
 struct TerminalBuffer {
@@ -76,6 +76,15 @@ pub struct TerminalView {
     /// 终端尺寸
     cols: u32,
     rows: u32,
+    
+    /// lrzsz 文件传输器
+    lrzsz: LrzszTransfer,
+    
+    /// 文件传输进度
+    transfer_progress: Option<(String, u64, u64)>,
+    
+    /// 下载目录
+    download_dir: String,
 }
 
 impl TerminalView {
@@ -92,6 +101,11 @@ impl TerminalView {
             input_buffer: String::new(),
             cols: 80,
             rows: 24,
+            lrzsz: LrzszTransfer::new(),
+            transfer_progress: None,
+            download_dir: std::env::temp_dir().join("mistterm_downloads")
+                .to_string_lossy()
+                .to_string(),
         }
     }
 
@@ -134,6 +148,22 @@ impl TerminalView {
                     // 连接状态栏
                     self.show_status_bar(ui);
 
+                    // 文件传输进度
+                    if let Some(ref progress) = self.transfer_progress {
+                        ui.separator();
+                        ui.horizontal(|ui| {
+                            ui.label("📁 文件传输:");
+                            ui.label(&progress.0);
+                        });
+                        
+                        let percent = (progress.1 as f32 / progress.2 as f32 * 100.0).min(100.0);
+                        ui.add(
+                            egui::ProgressBar::new(percent / 100.0)
+                                .text(format!("{:.1}%", percent))
+                                .show_percentage()
+                        );
+                    }
+
                     // 终端内容区
                     egui::ScrollArea::vertical()
                         .stick_to_bottom(true)
@@ -166,6 +196,9 @@ impl TerminalView {
 
         // 处理 SSH 消息
         self.process_ssh_messages();
+        
+        // 处理文件传输事件
+        self.process_transfer_events();
     }
 
     /// 显示状态栏
@@ -197,6 +230,14 @@ impl TerminalView {
             for msg in rx.try_iter() {
                 match msg {
                     SshMessage::Output { data, .. } => {
+                        // 检测 lrzsz 命令
+                        if self.lrzsz.detect_rz_command(&data) && !self.lrzsz.is_active() {
+                            log::info!("检测到 rz 命令，启动文件接收");
+                            if let Err(e) = self.lrzsz.start_receive(&self.download_dir) {
+                                log::error!("启动文件接收失败：{}", e);
+                            }
+                        }
+                        
                         self.buffer.push(&data);
                     }
                     SshMessage::Connected { .. } => {
@@ -225,6 +266,41 @@ impl TerminalView {
                         self.connected = false;
                         self.buffer.data.extend_from_slice(b"\r\nDisconnected\r\n");
                     }
+                }
+            }
+        }
+    }
+
+    /// 处理文件传输事件
+    fn process_transfer_events(&mut self) {
+        while let Some(event) = self.lrzsz.try_recv_event() {
+            match event {
+                TransferEvent::FileStart { filename, size } => {
+                    self.transfer_progress = Some((filename.clone(), 0, size));
+                    self.buffer.data.extend_from_slice(
+                        format!("\r\n📥 开始接收：{} ({})\r\n", filename, 
+                            human_readable_size(size)).as_bytes()
+                    );
+                }
+                TransferEvent::FileProgress { received, total, .. } => {
+                    if let Some(ref mut progress) = self.transfer_progress {
+                        *progress = (progress.0.clone(), received, total);
+                    }
+                }
+                TransferEvent::FileComplete { filename, path } => {
+                    self.transfer_progress = None;
+                    self.buffer.data.extend_from_slice(
+                        format!("\r\n✅ 接收完成：{} -> {}\r\n", filename, path.display()).as_bytes()
+                    );
+                }
+                TransferEvent::FileError { filename, error } => {
+                    self.transfer_progress = None;
+                    self.buffer.data.extend_from_slice(
+                        format!("\r\n❌ 传输失败 {}: {}\r\n", filename, error).as_bytes()
+                    );
+                }
+                TransferEvent::TransferComplete => {
+                    // 传输完成
                 }
             }
         }
@@ -269,6 +345,24 @@ impl TerminalView {
         self.session_id = None;
         self.buffer.clear();
         self.error_message = None;
+        self.transfer_progress = None;
+    }
+}
+
+/// 人类可读的文件大小格式
+fn human_readable_size(size: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * 1024 * 1024;
+    
+    if size >= GB {
+        format!("{:.2} GB", size as f64 / GB as f64)
+    } else if size >= MB {
+        format!("{:.2} MB", size as f64 / MB as f64)
+    } else if size >= KB {
+        format!("{:.2} KB", size as f64 / KB as f64)
+    } else {
+        format!("{} B", size)
     }
 }
 
