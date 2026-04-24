@@ -3,7 +3,7 @@
 //! 包含主窗口、侧边栏、终端区域等
 
 use eframe::egui;
-use crate::core::{SessionManager, SessionConfig};
+use crate::core::{SessionConfig, SessionManager};
 use crate::ui::sidebar::Sidebar;
 use crate::ui::terminal::TerminalView;
 
@@ -23,6 +23,16 @@ pub struct MistTermApp {
     
     /// 状态栏信息
     status_message: String,
+    
+    /// 是否显示新建会话对话框
+    show_new_session_dialog: bool,
+    
+    /// 新建会话表单
+    new_session_name: String,
+    new_session_host: String,
+    new_session_port: u16,
+    new_session_username: String,
+    new_session_password: String,
 }
 
 impl MistTermApp {
@@ -40,11 +50,17 @@ impl MistTermApp {
             sidebar_collapsed: false,
             terminal: None,
             status_message: "就绪".to_string(),
+            show_new_session_dialog: false,
+            new_session_name: String::new(),
+            new_session_host: String::new(),
+            new_session_port: 22,
+            new_session_username: String::new(),
+            new_session_password: String::new(),
         }
     }
 
     /// 获取当前选中的会话
-    pub fn selected_session(&self) -> Option<&crate::core::session::SessionConfig> {
+    pub fn selected_session(&self) -> Option<&SessionConfig> {
         self.selected_session_id
             .as_ref()
             .and_then(|id| self.session_manager.get_session(id))
@@ -56,14 +72,47 @@ impl MistTermApp {
         self.status_message = format!("已选择会话：{}", session_id);
         
         // 初始化终端
-        self.terminal = Some(TerminalView::new(session_id.to_string()));
+        self.terminal = Some(TerminalView::new());
     }
 
-    /// 创建新会话
-    pub fn create_session(&mut self, name: &str, host: &str, username: &str) {
-        let session = self.session_manager.create_session(name, host, username);
-        self.select_session(&session.id);
-        self.status_message = format!("已创建会话：{}", name);
+    /// 创建并连接会话
+    fn create_and_connect_session(&mut self) {
+        if self.new_session_name.is_empty() || self.new_session_host.is_empty() {
+            self.status_message = "请填写会话名称和主机地址".to_string();
+            return;
+        }
+
+        // 创建会话
+        let session = self.session_manager.create_session(
+            &self.new_session_name,
+            &self.new_session_host,
+            &self.new_session_username,
+        );
+
+        // 选择会话
+        self.selected_session_id = Some(session.id.clone());
+        
+        // 创建终端并连接
+        let mut terminal = TerminalView::new();
+        terminal.connect(
+            &self.new_session_host,
+            self.new_session_port,
+            &self.new_session_username,
+            &self.new_session_password,
+        );
+        self.terminal = Some(terminal);
+        
+        self.status_message = format!("正在连接：{}", self.new_session_name);
+        self.reset_new_session_form();
+    }
+
+    /// 重置新建会话表单
+    fn reset_new_session_form(&mut self) {
+        self.new_session_name.clear();
+        self.new_session_host.clear();
+        self.new_session_port = 22;
+        self.new_session_username.clear();
+        self.new_session_password.clear();
     }
 
     /// 删除会话
@@ -85,13 +134,18 @@ impl eframe::App for MistTermApp {
                 // 文件菜单
                 ui.menu_button("文件", |ui| {
                     if ui.button("新建会话 ⌘N").clicked() {
+                        self.show_new_session_dialog = true;
                         ui.close_menu();
                     }
                     if ui.button("删除会话").clicked() {
+                        if let Some(id) = self.selected_session_id.clone() {
+                            self.delete_session(&id);
+                        }
                         ui.close_menu();
                     }
                     ui.separator();
                     if ui.button("退出").clicked() {
+                        // 关闭窗口
                         ui.close_menu();
                     }
                 });
@@ -153,48 +207,56 @@ impl eframe::App for MistTermApp {
                 });
             });
         });
+
+        // 显示新建会话对话框
+        if self.show_new_session_dialog {
+            egui::Window::new("新建会话")
+                .resizable(true)
+                .collapsible(false)
+                .default_width(400.0)
+                .show(ctx, |ui| {
+                    ui.vertical(|ui| {
+                        ui.label("会话名称");
+                        ui.text_edit_singleline(&mut self.new_session_name);
+                        
+                        ui.separator();
+                        
+                        ui.label("主机地址");
+                        ui.text_edit_singleline(&mut self.new_session_host);
+                        
+                        ui.horizontal(|ui| {
+                            ui.label("端口");
+                            ui.add(egui::DragValue::new(&mut self.new_session_port));
+                        });
+                        
+                        ui.separator();
+                        
+                        ui.label("用户名");
+                        ui.text_edit_singleline(&mut self.new_session_username);
+                        
+                        ui.label("密码");
+                        ui.add(egui::TextEdit::singleline(&mut self.new_session_password).password(true));
+                        
+                        ui.separator();
+                        
+                        ui.horizontal(|ui| {
+                            if ui.button("取消").clicked() {
+                                self.show_new_session_dialog = false;
+                                self.reset_new_session_form();
+                            }
+                            
+                            if ui.button("创建并连接").clicked() {
+                                self.create_and_connect_session();
+                                self.show_new_session_dialog = false;
+                            }
+                        });
+                    });
+                });
+        }
     }
 }
 
 impl MistTermApp {
-    /// 显示菜单栏
-    fn show_menu_bar(&mut self, ui: &mut egui::Ui) {
-        egui::TopBottomPanel::top("menu_bar").show(ui.ctx(), |ui| {
-            ui.horizontal(|ui| {
-                // 文件菜单
-                ui.menu_button("文件", |ui| {
-                    if ui.button("新建会话 ⌘N").clicked() {
-                        // TODO: 打开新建会话对话框
-                        ui.close_menu();
-                    }
-                    if ui.button("删除会话").clicked() {
-                        // TODO: 删除当前会话
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui.button("退出").clicked() {
-                        ui.close_menu();
-                    }
-                });
-
-                // 视图菜单
-                ui.menu_button("视图", |ui| {
-                    if ui.button(self.sidebar_collapsed.then(|| "展开侧边栏").unwrap_or("折叠侧边栏")).clicked() {
-                        self.sidebar_collapsed = !self.sidebar_collapsed;
-                        ui.close_menu();
-                    }
-                });
-
-                // 帮助菜单
-                ui.menu_button("帮助", |ui| {
-                    if ui.button("关于").clicked() {
-                        ui.close_menu();
-                    }
-                });
-            });
-        });
-    }
-
     /// 显示欢迎界面
     fn show_welcome(&self, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::TopDown), |ui| {
