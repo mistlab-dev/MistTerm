@@ -2,26 +2,36 @@
 name = "mistterm"
 version = "0.1.0"
 edition = "2021"
-description = "A modern SSH terminal with async architecture"
+description = "A modern SSH terminal with lrzsz support and Git sync"
 
 [dependencies]
 # GUI - eframe with wgpu for GPU acceleration
 eframe = { version = "0.23", features = ["wgpu"] }
 egui = "0.23"
+egui_extras = { version = "0.24", features = ["all_loaders"] }
 
 # Async runtime - tokio with full features
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
 
 # SSH - Pure Rust implementation
-# russh = "0.44"
-# russh-keys = "0.44"
 ssh2 = "0.9"
 
 # Terminal emulation - vte for ANSI parsing
 vte = "0.11"
+unicode-width = "0.1"
 
 # Clipboard - Pure Rust
 arboard = "3.3"
+
+# Git sync
+git2 = "0.18"
+
+# Cross-platform keyring for password storage
+keyring = "2.3"
+
+# File dialogs (cross-platform)
+rfd = "0.12"
 
 # Config
 serde = { version = "1.0", features = ["derive"] }
@@ -29,22 +39,39 @@ serde_json = "1.0"
 
 # Error handling
 anyhow = "1.0"
+thiserror = "1.0"
 
 # Encryption for password storage
 aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.21"
 
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+log = "0.4"
+
 # Misc
 parking_lot = "0.12"
 shellexpand = "3.1"
-log = "0.4"
-env_logger = "0.10"
 dirs = "5.0"
 chrono = "0.4"
 
 # Font support
 ab_glyph = "0.2"
+image = "0.24"
 
-# Lazy static for global runtime
-lazy_static = "1.4"
+[dev-dependencies]
+tempfile = "3.9"
+mockall = "0.12"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winuser"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

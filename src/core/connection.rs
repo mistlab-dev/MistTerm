@@ -196,7 +196,7 @@ impl ConnectionManager {
 
 impl Default for ConnectionManager {
     fn default() -> Self {
-        let (manager, rx) = Self::new();
+        let (manager, _rx) = Self::new();
         manager
     }
 }
