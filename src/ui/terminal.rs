@@ -90,6 +90,9 @@ pub struct TerminalView {
 impl TerminalView {
     /// 创建新的终端视图
     pub fn new() -> Self {
+        let download_dir = std::env::temp_dir().join("mistterm_downloads");
+        let _ = std::fs::create_dir_all(&download_dir);
+        
         Self {
             session_id: None,
             ssh_manager: None,
@@ -101,11 +104,9 @@ impl TerminalView {
             input_buffer: String::new(),
             cols: 80,
             rows: 24,
-            lrzsz: LrzszTransfer::new(),
+            lrzsz: LrzszTransfer::new(&download_dir.to_string_lossy()),
             transfer_progress: None,
-            download_dir: std::env::temp_dir().join("mistterm_downloads")
-                .to_string_lossy()
-                .to_string(),
+            download_dir: download_dir.to_string_lossy().to_string(),
         }
     }
 
@@ -233,7 +234,7 @@ impl TerminalView {
                         // 检测 lrzsz 命令
                         if self.lrzsz.detect_rz_command(&data) && !self.lrzsz.is_active() {
                             log::info!("检测到 rz 命令，启动文件接收");
-                            if let Err(e) = self.lrzsz.start_receive(&self.download_dir) {
+                            if let Err(e) = self.lrzsz.start_receive() {
                                 log::error!("启动文件接收失败：{}", e);
                             }
                         }
