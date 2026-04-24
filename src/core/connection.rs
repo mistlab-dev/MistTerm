@@ -207,6 +207,7 @@ mod tests {
 
     fn make_config(name: &str) -> SessionConfig {
         SessionConfig {
+            id: format!("test-{}", name),
             name: name.to_string(),
             host: "127.0.0.1".to_string(),
             port: 22,

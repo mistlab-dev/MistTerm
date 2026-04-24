@@ -243,6 +243,7 @@ impl SessionManager {
     /// 创建新会话
     pub fn create_session(&mut self, name: &str, host: &str, username: &str) -> SessionConfig {
         let mut config = SessionConfig::default();
+        config.id = uuid::Uuid::new_v4().to_string();
         config.name = name.to_string();
         config.host = host.to_string();
         config.username = username.to_string();

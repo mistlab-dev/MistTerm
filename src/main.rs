@@ -13,7 +13,6 @@ mod core;
 mod ssh;
 mod terminal;
 mod ui;
-mod lrzsz;
 mod sync;
 mod security;
 
