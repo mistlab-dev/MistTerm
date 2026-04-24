@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MistTerm - 主终端界面</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif; background: #f0f0f0; padding: 20px; }
+        .window { background: #1e1e1e; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.4); width: 1400px; height: 800px; margin: 0 auto; display: flex; flex-direction: column; overflow: hidden; }
+        .title-bar { background: #2d2d2d; padding: 8px 12px; display: flex; align-items: center; gap: 12px; }
+        .window-controls { display: flex; gap: 8px; }
+        .window-control { width: 12px; height: 12px; border-radius: 50%; }
+        .window-control.close { background: #ff5f56; }
+        .window-control.minimize { background: #ffbd2e; }
+        .window-control.maximize { background: #27c93f; }
+        .title { flex: 1; color: #999; font-size: 13px; text-align: center; }
+        .main { flex: 1; display: flex; }
+        .sidebar { width: 240px; background: #252526; border-right: 1px solid #3c3c3c; display: flex; flex-direction: column; }
+        .sidebar-header { padding: 12px; border-bottom: 1px solid #3c3c3c; }
+        .search-input { width: 100%; padding: 8px 12px; background: #3c3c3c; border: none; border-radius: 6px; color: #fff; font-size: 13px; }
+        .search-input::placeholder { color: #888; }
+        .sidebar-section { padding: 12px; }
+        .section-title { font-size: 11px; font-weight: 600; color: #888; text-transform: uppercase; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; }
+        .add-btn { background: #667eea; border: none; color: #fff; width: 20px; height: 20px; border-radius: 4px; cursor: pointer; font-size: 14px; }
+        .connection-item { padding: 10px 12px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+        .connection-item:hover { background: #2a2d31; }
+        .connection-item.active { background: #37373d; }
+        .connection-icon { font-size: 16px; }
+        .connection-info { flex: 1; }
+        .connection-name { font-size: 13px; color: #fff; margin-bottom: 2px; }
+        .connection-host { font-size: 11px; color: #888; }
+        .connection-status { width: 6px; height: 6px; border-radius: 50%; }
+        .connection-status.online { background: #4CAF50; }
+        .connection-status.offline { background: #f44336; }
+        .tab-bar { background: #2d2d2d; display: flex; border-bottom: 1px solid #3c3c3c; }
+        .tab { padding: 10px 16px; color: #999; cursor: pointer; display: flex; align-items: center; gap: 8px; border-right: 1px solid #3c3c3c; font-size: 13px; }
+        .tab:hover { background: #3c3c3c; }
+        .tab.active { background: #1e1e1e; color: #fff; }
+        .tab-close { font-size: 14px; opacity: 0.6; }
+        .tab-new { padding: 10px 12px; color: #999; cursor: pointer; }
+        .terminal-area { flex: 1; background: #1e1e1e; display: flex; flex-direction: column; }
+        .terminal { flex: 1; padding: 16px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 14px; color: #d4d4d4; overflow-y: auto; }
+        .terminal-line { margin-bottom: 4px; line-height: 1.5; }
+        .prompt { color: #4CAF50; }
+        .path { color: #667eea; }
+        .command { color: #fff; }
+        .output { color: #888; }
+        .cursor { display: inline-block; width: 8px; height: 16px; background: #d4d4d4; animation: blink 1s infinite; }
+        @keyframes blink { 50% { opacity: 0; } }
+        .status-bar { background: #667eea; padding: 6px 12px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #fff; }
+        .status-item { display: flex; gap: 16px; }
+        .status-badge { background: rgba(255,255,255,0.2); padding: 2px 8px; border-radius: 4px; }
+        .quick-actions { padding: 8px 12px; background: #252526; border-top: 1px solid #3c3c3c; display: flex; gap: 8px; }
+        .action-btn { background: #3c3c3c; border: none; color: #fff; padding: 6px 12px; border-radius: 4px; font-size: 12px; cursor: pointer; }
+        .action-btn:hover { background: #4c4c4c; }
+        .action-btn.primary { background: #667eea; }
+        .context-menu { position: absolute; background: #252526; border: 1px solid #3c3c3c; border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); padding: 4px; z-index: 1000; }
+        .context-item { padding: 8px 12px; color: #fff; font-size: 13px; cursor: pointer; border-radius: 4px; }
+        .context-item:hover { background: #3c3c3c; }
+        .context-divider { height: 1px; background: #3c3c3c; margin: 4px 0; }
+    </style>
+</head>
+<body>
+    <div class="window">
+        <div class="title-bar">
+            <div class="window-controls">
+                <div class="window-control close"></div>
+                <div class="window-control minimize"></div>
+                <div class="window-control maximize"></div>
+            </div>
+            <div class="title">MistTerm - ubuntu@124.220.224.223</div>
+            <div style="width: 60px;"></div>
+        </div>
+        <div class="main">
+            <div class="sidebar">
+                <div class="sidebar-header">
+                    <input type="text" class="search-input" placeholder="🔍 搜索连接...">
+                </div>
+                <div class="sidebar-section">
+                    <div class="section-title">
+                        <span>最近连接</span>
+                        <button class="add-btn">+</button>
+                    </div>
+                    <div class="connection-item active">
+                        <div class="connection-icon">🖥️</div>
+                        <div class="connection-info">
+                            <div class="connection-name">生产服务器</div>
+                            <div class="connection-host">124.220.224.223</div>
+                        </div>
+                        <div class="connection-status online"></div>
+                    </div>
+                    <div class="connection-item">
+                        <div class="connection-icon">🖥️</div>
+                        <div class="connection-info">
+                            <div class="connection-name">测试服务器</div>
+                            <div class="connection-host">192.168.1.100</div>
+                        </div>
+                        <div class="connection-status online"></div>
+                    </div>
+                    <div class="connection-item">
+                        <div class="connection-icon">🖥️</div>
+                        <div class="connection-info">
+                            <div class="connection-name">数据库服务器</div>
+                            <div class="connection-host">10.0.0.50</div>
+                        </div>
+                        <div class="connection-status offline"></div>
+                    </div>
+                </div>
+                <div class="sidebar-section">
+                    <div class="section-title">
+                        <span>命令片段</span>
+                        <button class="add-btn">+</button>
+                    </div>
+                    <div class="connection-item">
+                        <div class="connection-icon">📝</div>
+                        <div class="connection-info">
+                            <div class="connection-name">重启 Nginx</div>
+                            <div class="connection-host">systemctl restart nginx</div>
+                        </div>
+                    </div>
+                    <div class="connection-item">
+                        <div class="connection-icon">📝</div>
+                        <div class="connection-info">
+                            <div class="connection-name">查看日志</div>
+                            <div class="connection-host">tail -f /var/log/nginx</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div style="flex: 1; display: flex; flex-direction: column;">
+                <div class="tab-bar">
+                    <div class="tab active">
+                        <span>🖥️</span>
+                        <span>ubuntu@124.220.224.223</span>
+                        <span class="tab-close">×</span>
+                    </div>
+                    <div class="tab">
+                        <span>🖥️</span>
+                        <span>root@192.168.1.100</span>
+                        <span class="tab-close">×</span>
+                    </div>
+                    <div class="tab-new">+</div>
+                </div>
+                <div class="terminal-area">
+                    <div class="terminal">
+                        <div class="terminal-line">Last login: Thu Apr 24 08:45:32 2026 from 192.168.1.10</div>
+                        <div class="terminal-line">Welcome to Ubuntu 22.04.3 LTS (GNU/Linux 5.15.0-91-generic x86_64)</div>
+                        <div class="terminal-line"></div>
+                        <div class="terminal-line"> * Documentation:  https://help.ubuntu.com</div>
+                        <div class="terminal-line"> * Management:     https://landscape.canonical.com</div>
+                        <div class="terminal-line"> * Support:        https://ubuntu.com/advantage</div>
+                        <div class="terminal-line"></div>
+                        <div class="terminal-line">0 updates can be applied immediately.</div>
+                        <div class="terminal-line"></div>
+                        <div class="terminal-line">The programs included with the Ubuntu system are free software;</div>
+                        <div class="terminal-line">the exact distribution terms for each program are described in the</div>
+                        <div class="terminal-line">individual files in /usr/share/doc/*/copyright.</div>
+                        <div class="terminal-line"></div>
+                        <div class="terminal-line">Ubuntu comes with ABSOLUTELY NO WARRANTY, to the extent permitted by</div>
+                        <div class="terminal-line">applicable law.</div>
+                        <div class="terminal-line"></div>
+                        <div class="terminal-line"></div>
+                        <div class="terminal-line"><span class="prompt">➜</span> <span class="path">~</span> <span class="command">git status</span></div>
+                        <div class="terminal-line output">On branch main</div>
+                        <div class="terminal-line output">Your branch is up to date with 'origin/main'.</div>
+                        <div class="terminal-line output"></div>
+                        <div class="terminal-line output">nothing to commit, working tree clean</div>
+                        <div class="terminal-line"></div>
+                        <div class="terminal-line"><span class="prompt">➜</span> <span class="path">~</span> <span class="cursor"></span></div>
+                    </div>
+                    <div class="quick-actions">
+                        <button class="action-btn primary">📋 命令片段</button>
+                        <button class="action-btn">📤 上传文件</button>
+                        <button class="action-btn">📥 下载文件</button>
+                        <button class="action-btn">🔍 搜索</button>
+                        <button class="action-btn">⚙️ 设置</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="status-bar">
+            <div class="status-item">
+                <span>🖥️ ubuntu@124.220.224.223</span>
+                <span>🔒 SSH-2.0-OpenSSH_8.9</span>
+                <span>🌐 Asia/Shanghai</span>
+            </div>
+            <div class="status-item">
+                <span class="status-badge">UTF-8</span>
+                <span class="status-badge">14px</span>
+                <span class="status-badge">已连接 2h 34m</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

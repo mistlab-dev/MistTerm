@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MistTerm - SFTP 文件传输</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif; background: #f0f0f0; padding: 20px; }
+        .window { background: #fff; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); width: 1200px; height: 700px; margin: 0 auto; display: flex; flex-direction: column; overflow: hidden; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 16px; font-weight: 500; }
+        .main { flex: 1; display: flex; }
+        .panel { flex: 1; display: flex; flex-direction: column; border-right: 1px solid #e0e0e0; }
+        .panel:last-child { border-right: none; }
+        .panel-header { background: #f8f9fa; padding: 12px 16px; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center; }
+        .panel-title { font-size: 13px; font-weight: 600; color: #333; }
+        .panel-actions { display: flex; gap: 8px; }
+        .action-btn { background: #fff; border: 1px solid #ddd; padding: 4px 10px; border-radius: 4px; font-size: 11px; cursor: pointer; }
+        .file-list { flex: 1; overflow-y: auto; padding: 8px; }
+        .file-item { display: flex; align-items: center; padding: 10px 12px; border-radius: 6px; cursor: pointer; }
+        .file-item:hover { background: #f5f5f5; }
+        .file-item.active { background: #e8f0fe; }
+        .file-icon { width: 24px; height: 24px; margin-right: 12px; font-size: 18px; }
+        .file-name { flex: 1; font-size: 13px; color: #333; }
+        .file-meta { font-size: 11px; color: #999; }
+        .toolbar { padding: 12px 16px; background: #f8f9fa; border-top: 1px solid #e0e0e0; display: flex; gap: 8px; flex-wrap: wrap; }
+        .tool-btn { background: #fff; border: 1px solid #ddd; padding: 8px 16px; border-radius: 6px; font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+        .tool-btn.primary { background: #667eea; border-color: #667eea; color: #fff; }
+        .queue-panel { background: #fafafa; border-top: 1px solid #e0e0e0; padding: 12px 16px; }
+        .queue-title { font-size: 12px; font-weight: 600; color: #666; margin-bottom: 8px; }
+        .queue-item { display: flex; align-items: center; padding: 8px; background: #fff; border-radius: 4px; margin-bottom: 6px; }
+        .queue-status { width: 80px; font-size: 11px; }
+        .queue-name { flex: 1; font-size: 12px; }
+        .queue-size { width: 80px; font-size: 11px; color: #999; }
+        .progress-bar { width: 100px; height: 6px; background: #e0e0e0; border-radius: 3px; overflow: hidden; }
+        .progress-fill { height: 100%; background: #4CAF50; }
+        .team-badge { display: inline-block; background: #e6f4ea; color: #137333; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-left: 6px; }
+        .lock-badge { display: inline-block; background: #fce8e6; color: #c5221f; padding: 2px 6px; border-radius: 4px; font-size: 10px; margin-left: 6px; }
+    </style>
+</head>
+<body>
+    <div class="window">
+        <div class="header">
+            <h1>🔄 SFTP 文件传输</h1>
+        </div>
+        <div class="main">
+            <div class="panel">
+                <div class="panel-header">
+                    <span class="panel-title">📁 本地 (Mac)</span>
+                    <div class="panel-actions">
+                        <button class="action-btn">↑ 上级</button>
+                        <button class="action-btn">↻ 刷新</button>
+                    </div>
+                </div>
+                <div class="file-list">
+                    <div class="file-item"><span class="file-icon">📁</span><span class="file-name">Documents</span></div>
+                    <div class="file-item"><span class="file-icon">📁</span><span class="file-name">Projects</span></div>
+                    <div class="file-item"><span class="file-icon">📁</span><span class="file-name">Downloads</span></div>
+                    <div class="file-item"><span class="file-icon">📄</span><span class="file-name">config.yaml</span><span class="file-meta">2.3 KB</span></div>
+                    <div class="file-item"><span class="file-icon">📄</span><span class="file-name">app.log</span><span class="file-meta">1.2 MB</span></div>
+                </div>
+            </div>
+            <div class="panel">
+                <div class="panel-header">
+                    <span class="panel-title">📁 远程 (ubuntu@124.220.224.223)</span>
+                    <div class="panel-actions">
+                        <button class="action-btn">↑ 上级</button>
+                        <button class="action-btn">↻ 刷新</button>
+                    </div>
+                </div>
+                <div class="file-list">
+                    <div class="file-item"><span class="file-icon">📁</span><span class="file-name">nginx</span></div>
+                    <div class="file-item"><span class="file-icon">📁</span><span class="file-name">app</span></div>
+                    <div class="file-item active"><span class="file-icon">📄</span><span class="file-name">nginx.conf</span><span class="team-badge">团队共享</span></div>
+                    <div class="file-item"><span class="file-icon">📄</span><span class="file-name">config.yaml</span><span class="lock-badge">🔐 需权限</span></div>
+                    <div class="file-item"><span class="file-icon">📄</span><span class="file-name">deploy.sh</span><span class="team-badge">团队共享</span></div>
+                </div>
+                <div class="toolbar">
+                    <button class="tool-btn primary">📤 上传</button>
+                    <button class="tool-btn primary">📥 下载</button>
+                    <button class="tool-btn">📤 上传到团队</button>
+                    <button class="tool-btn">💬 评论</button>
+                    <button class="tool-btn">🗑️ 删除</button>
+                    <button class="tool-btn">📁 新建</button>
+                </div>
+            </div>
+        </div>
+        <div class="queue-panel">
+            <div class="queue-title">📊 传输队列 (3 个任务)</div>
+            <div class="queue-item">
+                <span class="queue-name">config.yaml</span>
+                <span class="queue-status">✅ 完成</span>
+                <span class="queue-size">2.3 KB</span>
+            </div>
+            <div class="queue-item">
+                <span class="queue-name">app.log</span>
+                <div class="progress-bar"><div class="progress-fill" style="width: 67%"></div></div>
+                <span class="queue-status">🔄 67%</span>
+                <span class="queue-size">1.2 MB</span>
+            </div>
+            <div class="queue-item">
+                <span class="queue-name">backup.tar.gz</span>
+                <span class="queue-status">⏳ 等待</span>
+                <span class="queue-size">45 MB</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

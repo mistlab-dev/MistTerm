@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MistTerm 2.0 - SFTP 文件传输</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif;
+            background: #f0f0f0;
+            padding: 20px;
+        }
+        .window {
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+            width: 1200px;
+            height: 700px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 16px; font-weight: 500; }
+        .header-actions { display: flex; gap: 12px; }
+        .header-btn { 
+            background: rgba(255,255,255,0.2); 
+            border: none; 
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .main { flex: 1; display: flex; }
+        .panel { 
+            flex: 1; 
+            display: flex;
+            flex-direction: column;
+            border-right: 1px solid #e0e0e0;
+        }
+        .panel:last-child { border-right: none; }
+        .panel-header {
+            background: #f8f9fa;
+            padding: 12px 16px;
+            border-bottom: 1px solid #e0e0e0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .panel-title { font-size: 13px; font-weight: 600; color: #333; }
+        .panel-actions { display: flex; gap: 8px; }
+        .action-btn {
+            background: #fff;
+            border: 1px solid #ddd;
+            padding: 4px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+        .file-list { flex: 1; overflow-y: auto; padding: 8px; }
+        .file-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .file-item:hover { background: #f5f5f5; }
+        .file-item.active { background: #e8f0fe; }
+        .file-icon { width: 24px; height: 24px; margin-right: 12px; font-size: 18px; }
+        .file-name { flex: 1; font-size: 13px; color: #333; }
+        .file-meta { font-size: 11px; color: #999; }
+        .sidebar {
+            width: 180px;
+            background: #fafafa;
+            border-right: 1px solid #e0e0e0;
+            padding: 16px 0;
+        }
+        .sidebar-item {
+            padding: 10px 16px;
+            font-size: 13px;
+            color: #555;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .sidebar-item:hover { background: #f0f0f0; }
+        .sidebar-item.active { background: #e8f0fe; color: #1967d2; }
+        .sidebar-section { margin-top: 20px; }
+        .sidebar-title {
+            padding: 8px 16px;
+            font-size: 11px;
+            font-weight: 600;
+            color: #999;
+            text-transform: uppercase;
+        }
+        .toolbar {
+            padding: 12px 16px;
+            background: #f8f9fa;
+            border-top: 1px solid #e0e0e0;
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .tool-btn {
+            background: #fff;
+            border: 1px solid #ddd;
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .tool-btn.primary { background: #667eea; border-color: #667eea; color: #fff; }
+        .queue-panel {
+            background: #fafafa;
+            border-top: 1px solid #e0e0e0;
+            padding: 12px 16px;
+        }
+        .queue-title { font-size: 12px; font-weight: 600; color: #666; margin-bottom: 8px; }
+        .queue-item {
+            display: flex;
+            align-items: center;
+            padding: 8px;
+            background: #fff;
+            border-radius: 4px;
+            margin-bottom: 6px;
+        }
+        .queue-status { width: 80px; font-size: 11px; }
+        .queue-name { flex: 1; font-size: 12px; }
+        .queue-size { width: 80px; font-size: 11px; color: #999; }
+        .progress-bar {
+            width: 100px;
+            height: 6px;
+            background: #e0e0e0;
+            border-radius: 3px;
+            overflow: hidden;
+        }
+        .progress-fill { height: 100%; background: #4CAF50; }
+        .annotation {
+            position: fixed;
+            background: rgba(255, 193, 7, 0.95);
+            color: #333;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-family: 'SF Mono', monospace;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            max-width: 180px;
+        }
+        .container { position: relative; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="window">
+            <div class="header">
+                <h1>🔄 SFTP 文件传输</h1>
+                <div class="header-actions">
+                    <button class="header-btn">切换方向</button>
+                    <button class="header-btn">关闭</button>
+                </div>
+            </div>
+            <div class="main">
+                <div class="sidebar">
+                    <div class="sidebar-item active">🏠 桌面</div>
+                    <div class="sidebar-item">📁 Documents</div>
+                    <div class="sidebar-item">📁 Downloads</div>
+                    <div class="sidebar-item">📁 Projects</div>
+                    <div class="sidebar-section">
+                        <div class="sidebar-title">团队共享</div>
+                        <div class="sidebar-item">📁 研发一组</div>
+                        <div class="sidebar-item">📁 公共资源</div>
+                    </div>
+                </div>
+                <div class="panel">
+                    <div class="panel-header">
+                        <span class="panel-title">📁 本地 (Mac)</span>
+                        <div class="panel-actions">
+                            <button class="action-btn">↑ 上级</button>
+                            <button class="action-btn">↻ 刷新</button>
+                        </div>
+                    </div>
+                    <div class="file-list">
+                        <div class="file-item"><span class="file-icon">📁</span><span class="file-name">Documents</span></div>
+                        <div class="file-item"><span class="file-icon">📁</span><span class="file-name">Projects</span></div>
+                        <div class="file-item"><span class="file-icon">📄</span><span class="file-name">config.yaml</span><span class="file-meta">2.3 KB</span></div>
+                    </div>
+                </div>
+                <div class="panel">
+                    <div class="panel-header">
+                        <span class="panel-title">📁 远程 (ubuntu@124.220.224.223)</span>
+                        <div class="panel-actions">
+                            <button class="action-btn">↑ 上级</button>
+                            <button class="action-btn">↻ 刷新</button>
+                        </div>
+                    </div>
+                    <div class="file-list">
+                        <div class="file-item"><span class="file-icon">📁</span><span class="file-name">nginx</span></div>
+                        <div class="file-item"><span class="file-icon">📁</span><span class="file-name">app</span></div>
+                        <div class="file-item active"><span class="file-icon">📄</span><span class="file-name">nginx.conf</span><span class="file-meta">🏷️ 团队共享</span></div>
+                        <div class="file-item"><span class="file-icon">📄</span><span class="file-name">config.yaml</span><span class="file-meta">🔐 需权限</span></div>
+                    </div>
+                    <div class="toolbar">
+                        <button class="tool-btn primary">📤 上传</button>
+                        <button class="tool-btn primary">📥 下载</button>
+                        <button class="tool-btn">📤 上传到团队</button>
+                        <button class="tool-btn">💬 评论</button>
+                        <button class="tool-btn">🗑️ 删除</button>
+                        <button class="tool-btn">📁 新建</button>
+                    </div>
+                </div>
+            </div>
+            <div class="queue-panel">
+                <div class="queue-title">📊 传输队列 (3 个任务)</div>
+                <div class="queue-item">
+                    <span class="queue-name">config.yaml</span>
+                    <span class="queue-status">✅ 完成</span>
+                    <span class="queue-size">2.3 KB</span>
+                </div>
+                <div class="queue-item">
+                    <span class="queue-name">app.log</span>
+                    <div class="progress-bar"><div class="progress-fill" style="width: 67%"></div></div>
+                    <span class="queue-status">🔄 67%</span>
+                    <span class="queue-size">1.2 MB</span>
+                </div>
+                <div class="queue-item">
+                    <span class="queue-name">backup.tar.gz</span>
+                    <span class="queue-status">⏳ 等待</span>
+                    <span class="queue-size">45 MB</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 标注 -->
+        <div class="annotation" style="top: 20px; right: -200px;">
+            窗口<br>
+            宽度：1200px<br>
+            高度：700px<br>
+            标题栏：64px 渐变
+        </div>
+        <div class="annotation" style="top: 100px; right: -200px;">
+            侧边栏<br>
+            宽度：180px<br>
+            背景：#fafafa<br>
+            项高度：38px
+        </div>
+        <div class="annotation" style="top: 100px; right: 20px;">
+            文件列表<br>
+            项高度：44px<br>
+            悬停背景：#f5f5f5<br>
+            选中背景：#e8f0fe
+        </div>
+        <div class="annotation" style="top: 500px; right: -200px;">
+            工具栏<br>
+            背景：#f8f9fa<br>
+            按钮：44px 高<br>
+            主按钮：#667eea
+        </div>
+        <div class="annotation" style="top: 600px; right: -200px;">
+            传输队列<br>
+            高度：120px<br>
+            进度条：6px 高<br>
+            背景：#fafafa
+        </div>
+    </div>
+</body>
+</html>

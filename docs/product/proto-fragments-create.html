@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MistTerm 2.0 - 命令片段创建</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+            background: #f5f5f5;
+            padding: 40px;
+        }
+        .modal {
+            background: #fff;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 720px;
+            margin: 0 auto;
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #fff;
+            padding: 24px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 20px; font-weight: 600; }
+        .close-btn { font-size: 24px; cursor: pointer; opacity: 0.8; }
+        .content { padding: 32px; }
+        .form-group { margin-bottom: 24px; }
+        .form-group label { 
+            display: block; 
+            font-size: 13px; 
+            font-weight: 500; 
+            color: #666;
+            margin-bottom: 8px;
+        }
+        .form-row { display: flex; gap: 16px; }
+        .form-row .form-group { flex: 1; }
+        input[type="text"], select, textarea {
+            width: 100%;
+            padding: 12px 16px;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+        input[type="text"]:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        textarea { resize: vertical; min-height: 80px; font-family: 'SF Mono', 'Fira Code', monospace; }
+        .variable-tag {
+            display: inline-block;
+            background: #e8f0fe;
+            color: #1967d2;
+            padding: 4px 12px;
+            border-radius: 16px;
+            font-size: 12px;
+            margin-right: 8px;
+            margin-bottom: 8px;
+        }
+        .add-variable {
+            color: #667eea;
+            font-size: 13px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .share-section {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 24px;
+        }
+        .share-title { font-size: 14px; font-weight: 600; color: #333; margin-bottom: 16px; }
+        .radio-group { display: flex; flex-direction: column; gap: 12px; }
+        .radio-item { display: flex; align-items: center; gap: 8px; }
+        .radio-item input[type="radio"] { width: 16px; height: 16px; }
+        .footer {
+            padding: 20px 32px;
+            border-top: 1px solid #eee;
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+        }
+        .btn {
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+        }
+        .btn-cancel { background: #f5f5f5; color: #666; }
+        .btn-cancel:hover { background: #e8e8e8; }
+        .btn-save { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; }
+        .btn-save:hover { opacity: 0.9; }
+        .btn-share { background: #4CAF50; color: #fff; }
+        .annotation {
+            position: absolute;
+            background: rgba(255, 193, 7, 0.95);
+            color: #333;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-family: 'SF Mono', monospace;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .container { position: relative; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="modal">
+            <div class="header">
+                <h1>➕ 新建命令片段</h1>
+                <span class="close-btn">×</span>
+            </div>
+            <div class="content">
+                <div class="form-group">
+                    <label>片段名称</label>
+                    <input type="text" value="重启 Nginx 服务">
+                </div>
+                <div class="form-group">
+                    <label>命令模板</label>
+                    <textarea>systemctl restart &lt;service&gt;</textarea>
+                </div>
+                <div class="form-group">
+                    <label>变量定义</label>
+                    <div>
+                        <span class="variable-tag">&lt;service&gt; = nginx</span>
+                        <span class="add-variable">+ 添加变量</span>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>分类</label>
+                        <select><option>常用命令</option></select>
+                    </div>
+                    <div class="form-group">
+                        <label>标签</label>
+                        <input type="text" value="nginx, 系统，重启">
+                    </div>
+                </div>
+                <div class="share-section">
+                    <div class="share-title">👥 共享设置</div>
+                    <div class="radio-group">
+                        <label class="radio-item"><input type="radio" name="share"> 仅个人可见</label>
+                        <label class="radio-item"><input type="radio" name="share" checked> 共享到团队：技术部研发一组</label>
+                        <label class="radio-item"><input type="radio" name="share"> 公开到所有团队</label>
+                    </div>
+                </div>
+            </div>
+            <div class="footer">
+                <button class="btn btn-cancel">取消</button>
+                <button class="btn btn-save">保存</button>
+                <button class="btn btn-share">保存并分享</button>
+            </div>
+        </div>
+        
+        <!-- 标注 -->
+        <div class="annotation" style="top: 80px; right: -200px;">
+            标题栏<br>
+            高度：64px<br>
+            背景：#667eea → #764ba2 渐变<br>
+            标题：20px/600
+        </div>
+        <div class="annotation" style="top: 180px; right: -200px;">
+            输入框<br>
+            高度：44px<br>
+            内边距：12px 16px<br>
+            边框：#e0e0e0<br>
+            聚焦边框：#667eea
+        </div>
+        <div class="annotation" style="top: 280px; right: -200px;">
+            文本域<br>
+            最小高度：80px<br>
+            字体：SF Mono/Fira Code<br>
+            字号：14px
+        </div>
+        <div class="annotation" style="top: 420px; right: -200px;">
+            共享区域<br>
+            背景：#f8f9fa<br>
+            圆角：8px<br>
+            内边距：20px
+        </div>
+        <div class="annotation" style="top: 560px; right: -200px;">
+            按钮<br>
+            高度：44px<br>
+            内边距：12px 24px<br>
+            圆角：8px
+        </div>
+    </div>
+</body>
+</html>

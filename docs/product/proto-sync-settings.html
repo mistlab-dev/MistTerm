@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MistTerm - 云端同步</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif; background: #f0f0f0; padding: 20px; }
+        .window { background: #fff; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.25); width: 900px; height: 600px; margin: 0 auto; display: flex; flex-direction: column; overflow: hidden; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; padding: 20px 24px; display: flex; justify-content: space-between; align-items: center; }
+        .header h1 { font-size: 18px; font-weight: 500; }
+        .main { flex: 1; padding: 24px; overflow-y: auto; }
+        .account-card { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 24px; border-radius: 8px; margin-bottom: 24px; color: #fff; display: flex; justify-content: space-between; align-items: center; }
+        .account-info { display: flex; align-items: center; gap: 16px; }
+        .account-avatar { width: 48px; height: 48px; background: rgba(255,255,255,0.2); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 20px; }
+        .account-name { font-size: 16px; font-weight: 600; }
+        .account-email { font-size: 13px; opacity: 0.9; }
+        .storage-info { text-align: right; }
+        .storage-value { font-size: 24px; font-weight: 600; }
+        .storage-label { font-size: 12px; opacity: 0.9; }
+        .sync-section { margin-bottom: 24px; }
+        .section-title { font-size: 14px; font-weight: 600; color: #333; margin-bottom: 12px; }
+        .sync-options { background: #f8f9fa; padding: 16px; border-radius: 8px; }
+        .sync-item { display: flex; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid #e0e0e0; }
+        .sync-item:last-child { border-bottom: none; }
+        .sync-label { display: flex; align-items: center; gap: 12px; font-size: 13px; color: #333; }
+        .sync-count { font-size: 11px; color: #999; background: #e0e0e0; padding: 2px 8px; border-radius: 10px; }
+        .toggle { width: 44px; height: 24px; background: #667eea; border-radius: 12px; position: relative; cursor: pointer; }
+        .toggle::after { content: ''; position: absolute; right: 2px; top: 2px; width: 20px; height: 20px; background: #fff; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
+        .sync-frequency { display: flex; gap: 12px; margin-top: 16px; }
+        .freq-btn { padding: 8px 16px; border: 1px solid #ddd; border-radius: 6px; font-size: 12px; cursor: pointer; background: #fff; }
+        .freq-btn.active { background: #667eea; border-color: #667eea; color: #fff; }
+        .devices-section { margin-bottom: 24px; }
+        .device-list { display: flex; flex-direction: column; gap: 12px; }
+        .device-item { display: flex; justify-content: space-between; align-items: center; padding: 16px; background: #f8f9fa; border-radius: 8px; }
+        .device-info { display: flex; align-items: center; gap: 12px; }
+        .device-icon { font-size: 24px; }
+        .device-name { font-size: 13px; font-weight: 600; color: #333; }
+        .device-time { font-size: 11px; color: #999; }
+        .device-status { font-size: 11px; color: #4CAF50; }
+        .last-sync { background: #e8f0fe; padding: 12px 16px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; font-size: 13px; color: #1967d2; }
+    </style>
+</head>
+<body>
+    <div class="window">
+        <div class="header">
+            <h1>☁️ 云端同步</h1>
+        </div>
+        <div class="main">
+            <div class="account-card">
+                <div class="account-info">
+                    <div class="account-avatar">👤</div>
+                    <div>
+                        <div class="account-name">张三</div>
+                        <div class="account-email">zhangsan@example.com</div>
+                    </div>
+                </div>
+                <div class="storage-info">
+                    <div class="storage-value">23 MB / 100 MB</div>
+                    <div class="storage-label">云端存储</div>
+                </div>
+            </div>
+            <div class="sync-section">
+                <div class="section-title">个人同步内容</div>
+                <div class="sync-options">
+                    <div class="sync-item">
+                        <div class="sync-label">📋 会话配置 <span class="sync-count">156 个</span></div>
+                        <div class="toggle"></div>
+                    </div>
+                    <div class="sync-item">
+                        <div class="sync-label">📝 命令片段 <span class="sync-count">47 个</span></div>
+                        <div class="toggle"></div>
+                    </div>
+                    <div class="sync-item">
+                        <div class="sync-label">🎨 主题配置</div>
+                        <div class="toggle"></div>
+                    </div>
+                    <div class="sync-item">
+                        <div class="sync-label">⌨️ 快捷键配置</div>
+                        <div class="toggle"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="sync-section">
+                <div class="section-title">团队同步内容</div>
+                <div class="sync-options">
+                    <div class="sync-item">
+                        <div class="sync-label">📋 团队会话 <span class="sync-count">23 个</span></div>
+                        <div class="toggle"></div>
+                    </div>
+                    <div class="sync-item">
+                        <div class="sync-label">📝 团队片段 <span class="sync-count">156 个</span></div>
+                        <div class="toggle"></div>
+                    </div>
+                    <div class="sync-item">
+                        <div class="sync-label">🔐 团队凭证 <span class="sync-count">45 个</span></div>
+                        <div class="toggle"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="sync-section">
+                <div class="section-title">同步频率</div>
+                <div class="sync-frequency">
+                    <button class="freq-btn">实时</button>
+                    <button class="freq-btn active">自动 (5 分钟)</button>
+                    <button class="freq-btn">手动</button>
+                </div>
+            </div>
+            <div class="sync-section">
+                <div class="section-title">同步设备</div>
+                <div class="device-list">
+                    <div class="device-item">
+                        <div class="device-info">
+                            <div class="device-icon">💻</div>
+                            <div>
+                                <div class="device-name">MacBook Pro - 主力机</div>
+                                <div class="device-time">最近同步：今天 07:25</div>
+                            </div>
+                        </div>
+                        <div class="device-status">✅ 已同步</div>
+                    </div>
+                    <div class="device-item">
+                        <div class="device-info">
+                            <div class="device-icon">🖥️</div>
+                            <div>
+                                <div class="device-name">Desktop - 办公室</div>
+                                <div class="device-time">最近同步：昨天 18:30</div>
+                            </div>
+                        </div>
+                        <div class="device-status">✅ 已同步</div>
+                    </div>
+                </div>
+            </div>
+            <div class="last-sync">
+                <span>🔄 最近同步：今天 07:25 (个人 + 团队)</span>
+                <button style="padding: 6px 12px; border: none; background: #667eea; color: #fff; border-radius: 6px; font-size: 12px; cursor: pointer;">立即同步</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
