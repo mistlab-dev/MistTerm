@@ -1,4 +1,5 @@
 //! 连接管理 - 管理 SSH 连接状态
+#![allow(dead_code)]
 
 use crate::ssh::{SshManager, SshMessage};
 use crate::terminal::Terminal;

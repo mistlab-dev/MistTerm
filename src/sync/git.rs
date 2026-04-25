@@ -1,10 +1,10 @@
 //! Git 仓库管理
+#![allow(dead_code)]
 //!
 //! 提供 Git 仓库的初始化、克隆、提交、推送、拉取等功能
 
-use git2::{Repository, Signature, Index};
+use git2::{Repository, Signature};
 use std::path::PathBuf;
-use std::fs;
 use thiserror::Error;
 
 /// Git 错误

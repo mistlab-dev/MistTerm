@@ -1,4 +1,5 @@
 //! SSH 客户端 - 单个 SSH 连接的管理
+#![allow(dead_code)]
 
 use ssh2::Session;
 use std::io::Write;

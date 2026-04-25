@@ -1,11 +1,14 @@
 [
   {
+    "id": "81f09214-8bcd-4fe4-8163-bd2bf4b5d8a9",
     "name": "tcc",
+    "group": "默认",
     "host": "124.220.224.223",
     "port": 22,
     "username": "ubuntu",
     "password": "",
-    "encrypted_password": "XPjXWEgXwdUD9C6RhJKcBOpCEP2I7SKwBQ==",
-    "password_nonce": "Wir4MZNPy1D9IynC"
+    "encrypted_password": "fsqYQMDREoroMf00GB5eca9hjUvZfsaZ2w==",
+    "password_nonce": "W67JoLZdZTcOayBp",
+    "last_connected_at": 1777096056
   }
 ]

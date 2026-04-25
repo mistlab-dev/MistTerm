@@ -1,10 +1,12 @@
 //! lrzsz 文件传输协议完整实现
+#![allow(dead_code)]
+#![allow(unused_assignments)]
 //!
 //! 支持 ZMODEM 协议，用于 rz（接收文件）和 sz（发送文件）
 
 use std::fs::{File, create_dir_all};
 use std::io::{Read, Write, BufReader, BufWriter};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{Sender, Receiver, channel};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -271,17 +273,17 @@ impl LrzszTransfer {
         let download_dir = self.download_dir.clone();
 
         thread::spawn(move || {
-            let crc32 = Crc32::new();
+            let _crc32 = Crc32::new();
             let mut output_file: Option<BufWriter<File>> = None;
             let mut expected_filename = String::new();
             let mut expected_size: u64 = 0;
-            let mut file_position: u64 = 0;
-            let mut buffer = vec![0u8; zmodem::BLOCK_SIZE];
-            let mut in_data_phase = false;
+            let _file_position: u64 = 0;
+            let _buffer = vec![0u8; zmodem::BLOCK_SIZE];
+            let mut _in_data_phase = false;
             
             // 发送 ZRINIT 响应
             let zrinit = ZmodemPacket::create_zrinit();
-            let response = zrinit.encode();
+            let _response = zrinit.encode();
             
             // 在实际实现中，这里会通过 SSH 通道发送响应
             // 简化版：只是记录日志
@@ -330,7 +332,7 @@ impl LrzszTransfer {
                     }
                 }
                 
-                in_data_phase = true;
+                _in_data_phase = true;
                 
                 // 3. 接收数据块
                 let mut bytes_received: u64 = 0;
@@ -433,7 +435,7 @@ impl LrzszTransfer {
         *current_filename.lock().unwrap() = filename.clone();
 
         thread::spawn(move || {
-            let crc32 = Crc32::new();
+            let _crc32 = Crc32::new();
             
             // 发送文件开始事件
             let _ = tx.send(TransferEvent::FileStart {

@@ -1,4 +1,5 @@
 //! 终端模拟器 - ANSI 转义码解析和渲染
+#![allow(dead_code)]
 
 use egui::Color32;
 use std::collections::VecDeque;
@@ -39,6 +40,7 @@ pub enum AnsiState {
     Csi,
     CsiParam(String),
     Osc,
+    CharsetDesignate,
 }
 
 /// 终端模拟器（可见区为 `height`×`width` 字符网格；`lines` 为滚出顶部的历史）
@@ -55,6 +57,9 @@ pub struct Terminal {
     /// 当前光标位置（网格坐标）
     pub cursor_x: usize,
     pub cursor_y: usize,
+    saved_cursor_x: usize,
+    saved_cursor_y: usize,
+    cursor_visible: bool,
     /// 终端尺寸
     pub width: usize,
     pub height: usize,
@@ -66,6 +71,8 @@ pub struct Terminal {
     csi_params: String,
     /// 最大滚出行数
     max_lines: usize,
+    /// UTF-8 多字节序列暂存
+    utf8_pending: Vec<u8>,
 }
 
 impl Default for Terminal {
@@ -90,12 +97,16 @@ impl Terminal {
             alt_screen: false,
             cursor_x: 0,
             cursor_y: 0,
+            saved_cursor_x: 0,
+            saved_cursor_y: 0,
+            cursor_visible: true,
             width,
             height,
             current_style: CharStyle::default(),
             ansi_state: AnsiState::Normal,
             csi_params: String::new(),
             max_lines: 1000,
+            utf8_pending: Vec::new(),
         }
     }
 
@@ -165,7 +176,6 @@ impl Terminal {
         } else {
             self.scroll_up();
         }
-        self.cursor_x = 0;
     }
 
     fn enter_alt_screen(&mut self) {
@@ -200,6 +210,7 @@ impl Terminal {
             AnsiState::Normal => {
                 match byte {
                     0x1B => {
+                        self.flush_utf8_pending();
                         self.ansi_state = AnsiState::Escape;
                     }
                     0x0D => {
@@ -221,8 +232,10 @@ impl Terminal {
                         }
                     }
                     _ if byte >= 0x20 && byte < 0x7F => {
+                        self.flush_utf8_pending();
                         self.write_char(byte as char);
                     }
+                    _ if byte >= 0x80 => self.feed_utf8_byte(byte),
                     _ => {}
                 }
             }
@@ -234,6 +247,20 @@ impl Terminal {
                     }
                     b']' => {
                         self.ansi_state = AnsiState::Osc;
+                    }
+                    b'7' => {
+                        self.saved_cursor_x = self.cursor_x;
+                        self.saved_cursor_y = self.cursor_y;
+                        self.ansi_state = AnsiState::Normal;
+                    }
+                    b'8' => {
+                        self.cursor_x = self.saved_cursor_x.min(self.width.saturating_sub(1));
+                        self.cursor_y = self.saved_cursor_y.min(self.height.saturating_sub(1));
+                        self.ansi_state = AnsiState::Normal;
+                    }
+                    b'(' | b')' => {
+                        // 字符集指定（如 ESC(B / ESC(0）；当前先吞掉，保证不会漏残片字符
+                        self.ansi_state = AnsiState::CharsetDesignate;
                     }
                     _ => {
                         self.ansi_state = AnsiState::Normal;
@@ -260,7 +287,39 @@ impl Terminal {
                     self.ansi_state = AnsiState::Normal;
                 }
             }
+            AnsiState::CharsetDesignate => {
+                self.ansi_state = AnsiState::Normal;
+            }
         }
+    }
+
+    fn feed_utf8_byte(&mut self, byte: u8) {
+        self.utf8_pending.push(byte);
+        let decoded = std::str::from_utf8(&self.utf8_pending).ok().map(|s| s.to_string());
+        if let Some(s) = decoded {
+            for ch in s.chars() {
+                self.write_char(ch);
+            }
+            self.utf8_pending.clear();
+            return;
+        }
+        // 若不是前缀匹配，丢弃并重置，避免坏流污染后续渲染
+        if self.utf8_pending.len() >= 4 {
+            self.utf8_pending.clear();
+        }
+    }
+
+    fn flush_utf8_pending(&mut self) {
+        if self.utf8_pending.is_empty() {
+            return;
+        }
+        let decoded = std::str::from_utf8(&self.utf8_pending).ok().map(|s| s.to_string());
+        if let Some(s) = decoded {
+            for ch in s.chars() {
+                self.write_char(ch);
+            }
+        }
+        self.utf8_pending.clear();
     }
 
     fn write_char(&mut self, ch: char) {
@@ -296,12 +355,27 @@ impl Terminal {
         match cmd {
             'm' => self.sgr(&params),
             'H' | 'f' => self.cursor_home(&params),
+            'G' => self.cursor_horizontal_absolute(&params),
+            'd' => self.cursor_vertical_absolute(&params),
             'J' => self.erase_display(&params),
             'K' => self.erase_line(&params),
             'A' => self.cursor_up(&params),
             'B' => self.cursor_down(&params),
             'C' => self.cursor_forward(&params),
             'D' => self.cursor_back(&params),
+            'E' => self.cursor_next_line(&params),
+            'F' => self.cursor_prev_line(&params),
+            'P' => self.delete_chars(&params),
+            '@' => self.insert_blank_chars(&params),
+            'X' => self.erase_chars(&params),
+            's' => {
+                self.saved_cursor_x = self.cursor_x;
+                self.saved_cursor_y = self.cursor_y;
+            }
+            'u' => {
+                self.cursor_x = self.saved_cursor_x.min(self.width.saturating_sub(1));
+                self.cursor_y = self.saved_cursor_y.min(self.height.saturating_sub(1));
+            }
             _ => {}
         }
     }
@@ -318,6 +392,8 @@ impl Terminal {
                 for m in modes {
                     if m == 1049 {
                         self.enter_alt_screen();
+                    } else if m == 25 {
+                        self.cursor_visible = true;
                     }
                 }
             }
@@ -325,6 +401,8 @@ impl Terminal {
                 for m in modes {
                     if m == 1049 {
                         self.leave_alt_screen();
+                    } else if m == 25 {
+                        self.cursor_visible = false;
                     }
                 }
             }
@@ -520,6 +598,67 @@ impl Terminal {
         self.cursor_x = self.cursor_x.saturating_sub(n);
     }
 
+    fn cursor_horizontal_absolute(&mut self, params: &[usize]) {
+        let col = params.first().copied().unwrap_or(1).max(1).saturating_sub(1);
+        self.cursor_x = col.min(self.width.saturating_sub(1));
+    }
+
+    fn cursor_vertical_absolute(&mut self, params: &[usize]) {
+        let row = params.first().copied().unwrap_or(1).max(1).saturating_sub(1);
+        self.cursor_y = row.min(self.height.saturating_sub(1));
+    }
+
+    fn cursor_next_line(&mut self, params: &[usize]) {
+        let n = params.first().copied().unwrap_or(1).max(1);
+        self.cursor_y = (self.cursor_y + n).min(self.height.saturating_sub(1));
+        self.cursor_x = 0;
+    }
+
+    fn cursor_prev_line(&mut self, params: &[usize]) {
+        let n = params.first().copied().unwrap_or(1).max(1);
+        self.cursor_y = self.cursor_y.saturating_sub(n);
+        self.cursor_x = 0;
+    }
+
+    fn delete_chars(&mut self, params: &[usize]) {
+        if self.cursor_y >= self.height || self.cursor_x >= self.width {
+            return;
+        }
+        let n = params.first().copied().unwrap_or(1).max(1).min(self.width - self.cursor_x);
+        let row = &mut self.screen[self.cursor_y];
+        for x in self.cursor_x..(self.width - n) {
+            row[x] = row[x + n].clone();
+        }
+        for x in (self.width - n)..self.width {
+            row[x] = Cell::default();
+        }
+    }
+
+    fn insert_blank_chars(&mut self, params: &[usize]) {
+        if self.cursor_y >= self.height || self.cursor_x >= self.width {
+            return;
+        }
+        let n = params.first().copied().unwrap_or(1).max(1).min(self.width - self.cursor_x);
+        let row = &mut self.screen[self.cursor_y];
+        for x in (self.cursor_x..(self.width - n)).rev() {
+            row[x + n] = row[x].clone();
+        }
+        for x in self.cursor_x..(self.cursor_x + n) {
+            row[x] = Cell::default();
+        }
+    }
+
+    fn erase_chars(&mut self, params: &[usize]) {
+        if self.cursor_y >= self.height || self.cursor_x >= self.width {
+            return;
+        }
+        let n = params.first().copied().unwrap_or(1).max(1).min(self.width - self.cursor_x);
+        let row = &mut self.screen[self.cursor_y];
+        for x in self.cursor_x..(self.cursor_x + n) {
+            row[x] = Cell::default();
+        }
+    }
+
     pub fn to_plain_text(&self) -> String {
         let mut result = String::new();
         for line in &self.lines {
@@ -541,14 +680,6 @@ impl Terminal {
         result
     }
 
-    fn row_to_string_trim_end(row: &[Cell]) -> String {
-        let mut end = row.len();
-        while end > 0 && row[end - 1].ch == ' ' {
-            end -= 1;
-        }
-        row[..end].iter().map(|c| c.ch).collect()
-    }
-
     fn append_row_with_cursor(
         &self,
         out: &mut String,
@@ -556,20 +687,15 @@ impl Terminal {
         row_idx: usize,
         insert_cursor: bool,
     ) {
-        let mut s = Self::row_to_string_trim_end(row);
-        if insert_cursor && row_idx == self.cursor_y {
-            let cx = self.cursor_x.min(self.width);
-            while s.chars().count() < cx {
-                s.push(' ');
-            }
-            let pos = s
-                .char_indices()
-                .nth(cx)
-                .map(|(i, _)| i)
-                .unwrap_or(s.len());
-            s.insert(pos, '▌');
+        // 按固定网格宽度输出，避免裁剪行尾空格导致表格错位
+        let mut chars: Vec<char> = row.iter().map(|c| c.ch).collect();
+        // 光标应覆盖单元格而非插入（插入会把后续列右移，top/htop 会错位）
+        if insert_cursor && row_idx == self.cursor_y && self.cursor_x < chars.len() {
+            chars[self.cursor_x] = '│';
         }
-        out.push_str(&s);
+        for ch in chars {
+            out.push(ch);
+        }
         out.push('\n');
     }
 
@@ -578,7 +704,7 @@ impl Terminal {
         let mut result = String::new();
         if self.alt_screen {
             for (i, row) in self.screen.iter().enumerate() {
-                self.append_row_with_cursor(&mut result, row, i, true);
+                self.append_row_with_cursor(&mut result, row, i, self.cursor_visible);
             }
             return result;
         }
@@ -589,7 +715,7 @@ impl Terminal {
             result.push('\n');
         }
         for (i, row) in self.screen.iter().enumerate() {
-            self.append_row_with_cursor(&mut result, row, i, true);
+            self.append_row_with_cursor(&mut result, row, i, self.cursor_visible);
         }
         result
     }

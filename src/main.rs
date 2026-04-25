@@ -16,6 +16,7 @@ mod ui;
 mod sync;
 mod security;
 
+use eframe::egui;
 use ui::MistTermApp;
 
 fn main() -> eframe::Result<()> {
@@ -27,5 +28,55 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     
-    eframe::run_native("MistTerm", options, Box::new(|cc| Box::new(MistTermApp::new(cc))))
+    eframe::run_native(
+        "MistTerm",
+        options,
+        Box::new(|cc| {
+            configure_fonts(&cc.egui_ctx);
+            Box::new(MistTermApp::new(cc))
+        }),
+    )
+}
+
+fn configure_fonts(ctx: &egui::Context) {
+    let mut fonts = egui::FontDefinitions::default();
+
+    if let Some(cjk_font) = load_cjk_font() {
+        let cjk_name = "mistterm-cjk".to_string();
+        fonts.font_data.insert(cjk_name.clone(), cjk_font);
+
+        // Proportional 可以优先用 CJK，保证中文 UI 不缺字
+        fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default()
+            .insert(0, cjk_name.clone());
+        // Monospace 必须把 CJK 放后面，避免把等宽英文挤成“看起来不等宽”
+        fonts
+            .families
+            .entry(egui::FontFamily::Monospace)
+            .or_default()
+            .push(cjk_name);
+    }
+
+    ctx.set_fonts(fonts);
+}
+
+fn load_cjk_font() -> Option<egui::FontData> {
+    let candidates = [
+        // macOS
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        // Common Linux distributions
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKSC-Regular.otf",
+    ];
+
+    for path in candidates {
+        if let Ok(bytes) = std::fs::read(path) {
+            return Some(egui::FontData::from_owned(bytes));
+        }
+    }
+
+    None
 }

@@ -1,5 +1,5 @@
-//! 终端层 - 终端模拟和 ANSI 转义码解析
+//! 终端层 - 终端模拟与 ANSI/VT100 解析
 
-mod emulator;
+mod alacritty;
 
-pub use emulator::Terminal;
+pub use alacritty::Terminal;

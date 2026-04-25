@@ -1,7 +1,7 @@
 //! SSH 管理器 - 管理多个 SSH 会话
+#![allow(dead_code)]
 
 use super::client::{SshClient, SshConfig};
-use ssh2::Channel;
 use std::collections::HashMap;
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
@@ -9,7 +9,7 @@ use std::io::{Write, Read};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// SSH 会话 ID
 pub type SshSessionId = usize;
@@ -98,6 +98,84 @@ impl SshManager {
             || msg.contains("resource temporarily unavailable")
     }
 
+    /// 非阻塞读：直到 EAGAIN / WouldBlock，把数据发到 UI（libssh2 写之前必须先排空入站）
+    fn pump_channel_reads(
+        channel: &mut ssh2::Channel,
+        read_buffer: &mut [u8],
+        message_tx: &Sender<SshMessage>,
+        session_id: SshSessionId,
+    ) -> Result<(), ()> {
+        loop {
+            match channel.read(read_buffer) {
+                Ok(0) => {
+                    let _ = message_tx.send(SshMessage::Disconnected { session_id });
+                    return Err(());
+                }
+                Ok(n) => {
+                    let _ = message_tx.send(SshMessage::Output {
+                        session_id,
+                        data: read_buffer[..n].to_vec(),
+                    });
+                }
+                Err(e) if Self::is_retryable_read_error(&e) => return Ok(()),
+                Err(e) => {
+                    let _ = message_tx.send(SshMessage::Error {
+                        session_id,
+                        error: format!("Read error: {}", e),
+                    });
+                    return Err(());
+                }
+            }
+        }
+    }
+
+    /// 写入 PTY：遇 “draining incoming flow” 等可恢复错误时先读再写
+    fn write_pty_with_drain(
+        channel: &mut ssh2::Channel,
+        data: &[u8],
+        read_buffer: &mut [u8],
+        message_tx: &Sender<SshMessage>,
+        session_id: SshSessionId,
+    ) -> std::io::Result<()> {
+        let mut rest = data;
+        while !rest.is_empty() {
+            match channel.write(rest) {
+                Ok(0) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "channel write returned 0",
+                    ));
+                }
+                Ok(n) => rest = &rest[n..],
+                Err(e) if Self::is_retryable_write_error(&e) => {
+                    if Self::pump_channel_reads(channel, read_buffer, message_tx, session_id).is_err() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::ConnectionAborted,
+                            "channel closed",
+                        ));
+                    }
+                    continue;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        loop {
+            match channel.flush() {
+                Ok(()) => break,
+                Err(e) if Self::is_retryable_write_error(&e) => {
+                    if Self::pump_channel_reads(channel, read_buffer, message_tx, session_id).is_err() {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::ConnectionAborted,
+                            "channel closed",
+                        ));
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
     /// 创建新的 SSH 管理器
     pub fn new() -> (Self, Receiver<SshMessage>) {
         let (tx, rx) = mpsc::channel();
@@ -168,51 +246,42 @@ impl SshManager {
         };
         
         thread::spawn(move || {
-            let mut read_buffer = [0u8; 4096];
+            let mut read_buffer = [0u8; 16384];
             let mut channel = channel;
-            let mut pty_cols = initial_cols.clamp(20, 512);
-            let mut pty_rows = initial_rows.clamp(5, 256);
-            let mut last_progress = Instant::now();
-
             loop {
                 while let Ok((c, r)) = resize_rx.try_recv() {
-                    pty_cols = c.clamp(20, 512);
-                    pty_rows = r.clamp(5, 256);
+                    let pty_cols = c.clamp(20, 512);
+                    let pty_rows = r.clamp(5, 256);
                     // 简化：暂不实现动态调整 PTY 大小
                     log::debug!("Resize to {}x{}", pty_cols, pty_rows);
                 }
 
-                while let Ok(data) = input_rx.try_recv() {
-                    if let Err(e) = channel.write_all(&data) {
-                        log::error!("Write error: {}", e);
-                    }
-                    let _ = channel.flush();
+                // 先排空入站，再写 stdin（避免 libssh2 非阻塞 “Failure while draining incoming flow”）
+                if Self::pump_channel_reads(
+                    &mut channel,
+                    &mut read_buffer,
+                    &message_tx,
+                    session_id,
+                )
+                .is_err()
+                {
+                    return;
                 }
 
-                match channel.read(&mut read_buffer) {
-                    Ok(0) => {
-                        let _ = message_tx.send(SshMessage::Disconnected { session_id });
-                        return;
-                    }
-                    Ok(n) => {
-                        let _ = message_tx.send(SshMessage::Output {
-                            session_id,
-                            data: read_buffer[..n].to_vec(),
-                        });
-                        last_progress = Instant::now();
-                    }
-                    Err(e) => {
-                        if Self::is_retryable_read_error(&e) {
-                            thread::sleep(Duration::from_millis(16));
-                            continue;
-                        }
-                        let _ = message_tx.send(SshMessage::Error {
-                            session_id,
-                            error: format!("Read error: {}", e),
-                        });
-                        return;
+                while let Ok(data) = input_rx.try_recv() {
+                    if let Err(e) = Self::write_pty_with_drain(
+                        &mut channel,
+                        &data,
+                        &mut read_buffer,
+                        &message_tx,
+                        session_id,
+                    ) {
+                        log::error!("Write error: {}", e);
                     }
                 }
+
+                // 空闲时短暂休眠，避免占满 CPU；有数据时 pump 会立刻返回
+                thread::sleep(Duration::from_millis(8));
             }
         });
         

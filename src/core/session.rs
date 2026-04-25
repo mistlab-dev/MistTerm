@@ -1,4 +1,5 @@
 //! 会话管理 - 保存和加载 SSH 会话配置
+#![allow(dead_code)]
 
 use aes_gcm::aead::Aead;
 use aes_gcm::aead::KeyInit;
@@ -16,10 +17,12 @@ use std::process::Command;
 pub struct SessionConfig {
     pub id: String,
     pub name: String,
+    pub group: String,
     pub host: String,
     pub port: u16,
     pub username: String,
     pub password: String,
+    pub last_connected_at: Option<i64>,
 }
 
 impl Default for SessionConfig {
@@ -27,17 +30,23 @@ impl Default for SessionConfig {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             name: "New Session".to_string(),
+            group: "默认".to_string(),
             host: "localhost".to_string(),
             port: 22,
             username: String::new(),
             password: String::new(),
+            last_connected_at: None,
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredSessionConfig {
+    #[serde(default)]
+    id: String,
     name: String,
+    #[serde(default = "default_group")]
+    group: String,
     host: String,
     port: u16,
     username: String,
@@ -47,6 +56,12 @@ struct StoredSessionConfig {
     encrypted_password: String,
     #[serde(default)]
     password_nonce: String,
+    #[serde(default)]
+    last_connected_at: Option<i64>,
+}
+
+fn default_group() -> String {
+    "默认".to_string()
 }
 
 /// 会话管理器
@@ -169,12 +184,14 @@ impl SessionManager {
                         String::new()
                     };
                     sessions.push(SessionConfig {
-                        id: uuid::Uuid::new_v4().to_string(),
+                        id: if cfg.id.is_empty() { uuid::Uuid::new_v4().to_string() } else { cfg.id },
                         name: cfg.name,
+                        group: cfg.group,
                         host: cfg.host,
                         port: cfg.port,
                         username: cfg.username,
                         password,
+                        last_connected_at: cfg.last_connected_at,
                     });
                 }
                 self.sessions = sessions;
@@ -195,13 +212,16 @@ impl SessionManager {
                 Self::encrypt_password_with_key(&self.device_key, &cfg.password)
                     .unwrap_or((String::new(), String::new()));
             stored.push(StoredSessionConfig {
+                id: cfg.id.clone(),
                 name: cfg.name.clone(),
+                group: cfg.group.clone(),
                 host: cfg.host.clone(),
                 port: cfg.port,
                 username: cfg.username.clone(),
                 password: String::new(),
                 encrypted_password,
                 password_nonce,
+                last_connected_at: cfg.last_connected_at,
             });
         }
 
@@ -241,12 +261,23 @@ impl SessionManager {
     }
 
     /// 创建新会话
-    pub fn create_session(&mut self, name: &str, host: &str, username: &str) -> SessionConfig {
+    pub fn create_session(
+        &mut self,
+        name: &str,
+        host: &str,
+        port: u16,
+        username: &str,
+        password: &str,
+        group: &str,
+    ) -> SessionConfig {
         let mut config = SessionConfig::default();
         config.id = uuid::Uuid::new_v4().to_string();
         config.name = name.to_string();
         config.host = host.to_string();
+        config.port = port;
         config.username = username.to_string();
+        config.password = password.to_string();
+        config.group = if group.trim().is_empty() { "默认".to_string() } else { group.trim().to_string() };
         self.sessions.push(config.clone());
         self.save();
         config
@@ -256,6 +287,37 @@ impl SessionManager {
     pub fn delete_session(&mut self, id: &str) {
         if let Some(pos) = self.sessions.iter().position(|s| s.id == id) {
             self.sessions.remove(pos);
+            self.save();
+        }
+    }
+
+    /// 更新会话
+    pub fn update_session(
+        &mut self,
+        id: &str,
+        name: &str,
+        host: &str,
+        port: u16,
+        username: &str,
+        password: &str,
+        group: &str,
+    ) -> bool {
+        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
+            session.name = name.to_string();
+            session.host = host.to_string();
+            session.port = port;
+            session.username = username.to_string();
+            session.password = password.to_string();
+            session.group = if group.trim().is_empty() { "默认".to_string() } else { group.trim().to_string() };
+            self.save();
+            return true;
+        }
+        false
+    }
+
+    pub fn mark_session_connected(&mut self, id: &str) {
+        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
+            session.last_connected_at = Some(chrono::Utc::now().timestamp());
             self.save();
         }
     }

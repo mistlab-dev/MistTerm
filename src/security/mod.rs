@@ -3,5 +3,3 @@
 //! 提供系统密钥链集成，安全存储密码和敏感信息
 
 mod keyring;
-
-pub use keyring::{CredentialManager, KeyringError};
