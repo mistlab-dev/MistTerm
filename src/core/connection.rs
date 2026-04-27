@@ -210,10 +210,12 @@ mod tests {
         SessionConfig {
             id: format!("test-{}", name),
             name: name.to_string(),
+            group: "默认".to_string(),
             host: "127.0.0.1".to_string(),
             port: 22,
             username: "u".to_string(),
             password: "p".to_string(),
+            last_connected_at: None,
         }
     }
 
