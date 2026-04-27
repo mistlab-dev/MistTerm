@@ -57,7 +57,7 @@ impl SshSessionHandle {
         let rows = rows.clamp(5, 256);
         self.resize_tx
             .send((cols, rows))
-            .map_err(|e| format!("Resize send failed: {}", e))
+            .map_err(|e| format!("Resize failed: {}", e))
     }
 }
 
