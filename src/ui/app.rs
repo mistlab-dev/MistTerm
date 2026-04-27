@@ -39,6 +39,7 @@ pub struct MistTermApp {
     show_edit_session_dialog: bool,
     show_about_dialog: bool,
     show_fragments_dialog: bool,
+    show_fragment_panel: bool,  // 命令片段侧边栏
     
     /// 新建会话表单
     new_session_name: String,
@@ -97,6 +98,7 @@ impl MistTermApp {
             show_edit_session_dialog: false,
             show_about_dialog: false,
             show_fragments_dialog: false,
+            show_fragment_panel: false,
             new_session_name: String::new(),
             new_session_host: String::new(),
             new_session_port: 22,
@@ -266,15 +268,115 @@ impl MistTermApp {
         }
     }
 
-    fn command_fragments() -> [(&'static str, &'static str); 6] {
-        [
-            ("查看磁盘使用", "df -h"),
-            ("查看内存", "free -h"),
-            ("查看进程", "top"),
-            ("重启 Nginx", "sudo systemctl restart nginx"),
-            ("查看 Nginx 日志", "tail -f /var/log/nginx/error.log"),
-            ("查看 Docker 容器", "docker ps -a"),
-        ]
+    /// 显示命令片段面板
+    fn show_fragment_panel(&mut self, ctx: &egui::Context) {
+        egui::SidePanel::right("fragment_panel")
+            .default_width(280.0)
+            .resizable(true)
+            .show(ctx, |ui| {
+                ui.heading("⚡ 命令片段");
+                ui.separator();
+                
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("快速插入:");
+                        ui.add_space(4.0);
+                    });
+                    
+                    ui.add_space(8.0);
+                    
+                    // 系统监控
+                    ui.collapsing("📊 系统监控", |ui| {
+                        if ui.button("磁盘使用").clicked() {
+                            self.insert_fragment_to_active_tab("df -h");
+                        }
+                        if ui.button("内存使用").clicked() {
+                            self.insert_fragment_to_active_tab("free -h");
+                        }
+                        if ui.button("CPU 负载").clicked() {
+                            self.insert_fragment_to_active_tab("uptime");
+                        }
+                        if ui.button("系统信息").clicked() {
+                            self.insert_fragment_to_active_tab("uname -a");
+                        }
+                    });
+                    
+                    ui.add_space(8.0);
+                    
+                    // 进程管理
+                    ui.collapsing("🔄 进程管理", |ui| {
+                        if ui.button("查看进程").clicked() {
+                            self.insert_fragment_to_active_tab("ps aux");
+                        }
+                        if ui.button("top 监控").clicked() {
+                            self.insert_fragment_to_active_tab("top");
+                        }
+                        if ui.button("查找进程").clicked() {
+                            self.insert_fragment_to_active_tab("ps aux | grep ");
+                        }
+                        if ui.button("杀死进程").clicked() {
+                            self.insert_fragment_to_active_tab("kill -9 ");
+                        }
+                    });
+                    
+                    ui.add_space(8.0);
+                    
+                    // 网络
+                    ui.collapsing("🌐 网络", |ui| {
+                        if ui.button("网络连接").clicked() {
+                            self.insert_fragment_to_active_tab("netstat -tulpn");
+                        }
+                        if ui.button("DNS 查询").clicked() {
+                            self.insert_fragment_to_active_tab("dig google.com");
+                        }
+                        if ui.button("Ping 测试").clicked() {
+                            self.insert_fragment_to_active_tab("ping -c 4 google.com");
+                        }
+                    });
+                    
+                    ui.add_space(8.0);
+                    
+                    // Docker
+                    ui.collapsing("🐳 Docker", |ui| {
+                        if ui.button("查看容器").clicked() {
+                            self.insert_fragment_to_active_tab("docker ps -a");
+                        }
+                        if ui.button("容器日志").clicked() {
+                            self.insert_fragment_to_active_tab("docker logs -f ");
+                        }
+                        if ui.button("重启容器").clicked() {
+                            self.insert_fragment_to_active_tab("docker restart ");
+                        }
+                    });
+                    
+                    ui.add_space(8.0);
+                    
+                    // Nginx
+                    ui.collapsing("🌍 Nginx", |ui| {
+                        if ui.button("重启 Nginx").clicked() {
+                            self.insert_fragment_to_active_tab("sudo systemctl restart nginx");
+                        }
+                        if ui.button("状态").clicked() {
+                            self.insert_fragment_to_active_tab("sudo systemctl status nginx");
+                        }
+                        if ui.button("错误日志").clicked() {
+                            self.insert_fragment_to_active_tab("tail -f /var/log/nginx/error.log");
+                        }
+                    });
+                });
+            });
+    }
+
+    /// 向当前标签页插入命令片段
+    fn insert_fragment_to_active_tab(&mut self, command: &str) {
+        if let Some(idx) = self.active_tab {
+            if let Some(tab) = self.tabs.get_mut(idx) {
+                tab.terminal.insert_fragment(command);
+                self.status_message = format!("插入命令：{}", command);
+            }
+        } else {
+            self.status_message = "没有活动的终端标签页".to_string();
+        }
     }
 
     /// README §2.4 状态徽章：rgba(255,255,255,0.2)，内边距 2px 8px，圆角 4px，11px 白字
@@ -341,7 +443,7 @@ impl MistTermApp {
                                 .on_hover_text("⌘J")
                                 .clicked()
                             {
-                                self.show_fragments_dialog = true;
+                                self.show_fragment_panel = !self.show_fragment_panel;
                             }
                             if ui.add(mk("📤 上传", btn_idle, 88.0)).clicked() {
                                 if let Some(terminal) = self.current_terminal_mut() {
@@ -450,7 +552,7 @@ impl eframe::App for MistTermApp {
             self.show_new_session_dialog = true;
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::J)) {
-            self.show_fragments_dialog = true;
+            self.show_fragment_panel = !self.show_fragment_panel;
         }
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::K)) {
             if let Some(terminal) = self.current_terminal_mut() {
@@ -524,6 +626,11 @@ impl eframe::App for MistTermApp {
 
         // 底部快捷栏 + 状态栏：单面板纵向排布，避免两个 bottom 叠绘挡住状态栏
         self.show_bottom_chrome(ctx);
+
+        // 命令片段面板
+        if self.show_fragment_panel {
+            self.show_fragment_panel(ctx);
+        }
 
         // 主内容区：侧边栏 + 终端
         egui::CentralPanel::default()
@@ -872,50 +979,17 @@ impl eframe::App for MistTermApp {
 
         if self.show_fragments_dialog {
             let mut open = self.show_fragments_dialog;
-            let mut should_close = false;
             egui::Window::new("命令片段")
                 .open(&mut open)
                 .resizable(true)
                 .default_width(520.0)
                 .default_height(420.0)
                 .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("搜索");
-                        ui.text_edit_singleline(&mut self.fragment_search_query);
-                    });
-                    ui.separator();
-
-                    let query = self.fragment_search_query.to_lowercase();
-                    for (name, cmd) in Self::command_fragments() {
-                        if !query.is_empty()
-                            && !name.to_lowercase().contains(&query)
-                            && !cmd.to_lowercase().contains(&query)
-                        {
-                            continue;
-                        }
-                        ui.group(|ui| {
-                            ui.horizontal(|ui| {
-                                ui.vertical(|ui| {
-                                    ui.label(name);
-                                    ui.small(cmd);
-                                });
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.button("执行").clicked() {
-                                        if let Some(terminal) = self.current_terminal_mut() {
-                                            terminal.send_command(cmd);
-                                            self.status_message = format!("已执行片段: {}", name);
-                                            should_close = true;
-                                        } else {
-                                            self.status_message = "请先连接会话".to_string();
-                                        }
-                                    }
-                                });
-                            });
-                        });
-                        ui.add_space(4.0);
-                    }
+                    ui.label("提示：点击底部「命令片段」按钮打开侧边栏面板");
+                    ui.add_space(16.0);
+                    ui.label("📋 命令片段侧边栏提供更丰富的命令分类和快捷操作");
                 });
-            self.show_fragments_dialog = open && !should_close;
+            self.show_fragments_dialog = open;
         }
     }
 }

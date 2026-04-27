@@ -577,6 +577,18 @@ impl TerminalView {
         self.connected_at = None;
         self.terminal_focused = false;
     }
+
+    /// 插入命令片段（自动添加回车）
+    pub fn insert_fragment(&mut self, command: &str) {
+        if self.connected {
+            if let Some(ref handle) = self.ssh_handle {
+                let input = format!("{}\r", command);
+                if let Err(e) = handle.send_input(input.as_bytes()) {
+                    log::error!("Failed to send fragment: {}", e);
+                }
+            }
+        }
+    }
 }
 
 /// 人类可读的文件大小格式
