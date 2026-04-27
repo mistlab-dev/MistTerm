@@ -327,7 +327,9 @@ impl TerminalView {
                     );
                 }
                 TransferEvent::TransferComplete => {
-                    // 传输完成
+                    // 传输完成，恢复终端交互状态
+                    self.auto_follow_output = true;
+                    self.terminal.feed(b"\r\n");
                 }
             }
         }

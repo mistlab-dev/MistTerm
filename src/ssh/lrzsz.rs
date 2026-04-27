@@ -239,17 +239,21 @@ impl LrzszTransfer {
         // 检测常见的 rz 触发模式
         let text = String::from_utf8_lossy(data);
         
-        // 文本模式
+        // 文本模式：需要明确的 rz 等待提示
         if text.contains("rz rz rz") || 
-           text.contains("Zrinit") ||
-           text.contains("rz ") ||
-           text.contains("Awaiting rz") {
+           text.contains("Awaiting rz") ||
+           text.contains("rz waiting to receive") {
             return true;
         }
         
-        // 二进制 ZMODEM 模式：*ZRQINIT 或 *ZRINIT
-        if data.len() >= 3 && data[0] == zmodem::ZPAD && data[1] == zmodem::ZPAD {
-            return true;
+        // 二进制 ZMODEM 模式：**ZRQINIT 或 **ZRINIT (ZPAD 是 0x80)
+        // 必须是真正的 ZMODEM 包开始
+        if data.len() >= 4 && data[0] == zmodem::ZPAD && data[1] == zmodem::ZPAD {
+            // 检查是否是 ZRQINIT (0x80 0x80 0x80 0x64) 或 ZRINIT
+            if (data[2] == zmodem::ZDLE && data[3] == 0x64) || // ZRQINIT
+               (data[2] == zmodem::ZDLE && data[3] == 0x62) {  // ZRINIT
+                return true;
+            }
         }
         
         false
@@ -390,11 +394,24 @@ impl LrzszTransfer {
                 };
                 log::info!("传输速度：{:.2} bytes/s", speed);
                 
+                // 重置状态，准备接收下一个文件或退出
+                output_file = None;
+                expected_filename.clear();
+                expected_size = 0;
+                _in_data_phase = false;
+                
+                // 短暂延迟后退出，确保所有事件都已发送
+                thread::sleep(Duration::from_millis(100));
                 break; // 完成一个文件
             }
             
             let _ = tx.send(TransferEvent::TransferComplete);
+            // 重要：确保 is_active 被重置
             is_active.store(false, Ordering::Relaxed);
+            
+            // 清空当前文件名
+            let mut filename = current_filename.lock().unwrap();
+            filename.clear();
         });
         
         Ok(())
