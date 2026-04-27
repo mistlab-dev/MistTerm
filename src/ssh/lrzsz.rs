@@ -277,141 +277,36 @@ impl LrzszTransfer {
         let download_dir = self.download_dir.clone();
 
         thread::spawn(move || {
-            let _crc32 = Crc32::new();
-            let mut output_file: Option<BufWriter<File>> = None;
-            let mut expected_filename = String::new();
-            let mut expected_size: u64 = 0;
-            let _file_position: u64 = 0;
-            let _buffer = vec![0u8; zmodem::BLOCK_SIZE];
-            let mut _in_data_phase = false;
-            
-            // 发送 ZRINIT 响应
+            // 发送 ZRINIT 响应，告诉服务器准备接收
             let zrinit = ZmodemPacket::create_zrinit();
             let _response = zrinit.encode();
             
-            // 在实际实现中，这里会通过 SSH 通道发送响应
-            // 简化版：只是记录日志
             log::info!("发送 ZRINIT 响应，块大小 1024，CRC-32");
             
-            // 模拟接收流程（实际需要从 SSH 通道读取数据）
-            // 这里演示完整的 ZMODEM 接收逻辑框架
-            
             let start_time = Instant::now();
+            let mut idle_count = 0;
+            const MAX_IDLE_COUNT: u32 = 100; // 最多等待 1 秒（100 * 10ms）
             
-            // 主接收循环
+            // 主接收循环 - 等待真正的 ZMODEM 数据
             while is_active.load(Ordering::Relaxed) {
-                // 在实际实现中，这里会从 SSH 通道读取数据
-                // 简化版：模拟接收过程
+                // 在实际实现中，这里会从 SSH 通道读取 ZMODEM 数据包
+                // 当前版本：发送 ZRINIT 后退出，等待完整的 ZMODEM 实现
                 
-                // 1. 等待 ZFILE 包（文件信息）
-                log::debug!("等待 ZFILE 包...");
-                
-                // 模拟：假设接收到文件信息
-                expected_filename = "test_file.txt".to_string();
-                expected_size = 1024 * 1024; // 1MB
-                
-                current_filename.lock().unwrap().clone_from(&expected_filename);
-                
-                let _ = tx.send(TransferEvent::FileStart {
-                    filename: expected_filename.clone(),
-                    size: expected_size,
-                });
-                
-                total_bytes.store(expected_size, Ordering::Relaxed);
-                
-                // 2. 创建输出文件
-                let output_path = download_dir.join(&expected_filename);
-                match File::create(&output_path) {
-                    Ok(f) => {
-                        output_file = Some(BufWriter::new(f));
-                        log::info!("创建文件：{}", output_path.display());
-                    }
-                    Err(e) => {
-                        let _ = tx.send(TransferEvent::FileError {
-                            filename: expected_filename.clone(),
-                            error: format!("无法创建文件：{}", e),
-                        });
-                        is_active.store(false, Ordering::Relaxed);
-                        return;
-                    }
+                idle_count += 1;
+                if idle_count > MAX_IDLE_COUNT {
+                    log::warn!("等待 ZMODEM 数据超时，退出接收模式");
+                    break;
                 }
                 
-                _in_data_phase = true;
-                
-                // 3. 接收数据块
-                let mut bytes_received: u64 = 0;
-                
-                while bytes_received < expected_size && is_active.load(Ordering::Relaxed) {
-                    // 模拟接收数据块
-                    let chunk_size = std::cmp::min(zmodem::BLOCK_SIZE as u64, expected_size - bytes_received);
-                    
-                    // 在实际实现中，这里会：
-                    // - 读取 ZDATA 包
-                    // - 验证 CRC
-                    // - 写入文件
-                    // - 发送 ZACK
-                    
-                    // 简化版：模拟接收
-                    thread::sleep(Duration::from_millis(10));
-                    bytes_received += chunk_size;
-                    received_bytes.store(bytes_received, Ordering::Relaxed);
-                    
-                    let _ = tx.send(TransferEvent::FileProgress {
-                        filename: expected_filename.clone(),
-                        received: bytes_received,
-                        total: expected_size,
-                    });
-                }
-                
-                // 4. 接收 ZEOF 包
-                log::info!("接收完成，验证 CRC...");
-                
-                // 5. 关闭文件
-                if let Some(mut writer) = output_file.take() {
-                    if let Err(e) = writer.flush() {
-                        let _ = tx.send(TransferEvent::FileError {
-                            filename: expected_filename.clone(),
-                            error: format!("刷新文件失败：{}", e),
-                        });
-                        is_active.store(false, Ordering::Relaxed);
-                        return;
-                    }
-                }
-                
-                let _ = tx.send(TransferEvent::FileComplete {
-                    filename: expected_filename.clone(),
-                    path: download_dir.join(&expected_filename),
-                });
-                
-                log::info!("文件接收完成：{} ({} bytes)", 
-                    expected_filename, bytes_received);
-                
-                let elapsed = start_time.elapsed();
-                let speed = if elapsed.as_secs() > 0 {
-                    bytes_received as f64 / elapsed.as_secs() as f64
-                } else {
-                    bytes_received as f64
-                };
-                log::info!("传输速度：{:.2} bytes/s", speed);
-                
-                // 重置状态，准备接收下一个文件或退出
-                output_file = None;
-                expected_filename.clear();
-                expected_size = 0;
-                _in_data_phase = false;
-                
-                // 短暂延迟后退出，确保所有事件都已发送
-                thread::sleep(Duration::from_millis(100));
-                break; // 完成一个文件
+                thread::sleep(Duration::from_millis(10));
             }
             
-            let _ = tx.send(TransferEvent::TransferComplete);
-            // 重要：确保 is_active 被重置
+            // 退出接收模式
             is_active.store(false, Ordering::Relaxed);
-            
-            // 清空当前文件名
             let mut filename = current_filename.lock().unwrap();
             filename.clear();
+            
+            log::info!("文件接收模式已退出");
         });
         
         Ok(())
