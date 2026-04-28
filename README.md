@@ -13,6 +13,7 @@
 - 📂 **多会话管理** - 支持同时管理多个 SSH 会话
 - 💾 **配置持久化** - 会话配置自动保存到 `sessions.json`
 - ⌨️ **完整键盘支持** - Enter 发送命令，支持所有终端操作
+- 📤📥 **ZMODEM 文件传输** - 完整支持 `rz`/`sz` 命令
 
 ## 🚀 快速开始
 
@@ -45,6 +46,23 @@ cargo build --release
 - **删除会话** - 连接状态下点击会话后的 "X" 按钮
 
 ## 📖 功能说明
+
+### ZMODEM 文件传输 ⭐
+
+完整支持 `rz`/`sz` 命令进行文件传输：
+
+```bash
+# 在终端中输入
+rz -bye          # 接收文件（从本地到服务器）
+sz filename.txt  # 发送文件（从服务器到本地）
+```
+
+**实现特性**:
+- ✅ 完整的 ZMODEM 协议 (ZRINIT/ZFILE/ZDATA/ZEOF/ZACK)
+- ✅ CRC16/CRC32 校验
+- ✅ SSH 通道直接读写
+- ✅ 滑动窗口确认机制
+- ✅ 进度跟踪与错误处理
 
 ### 连接对话框
 
@@ -79,7 +97,24 @@ cargo build --release
 MistTerm/
 ├── src/
 │   ├── main.rs          # GUI 主界面 (eframe/egui)
-│   └── ssh.rs           # SSH 模块 (异步连接、认证、会话管理)
+│   ├── core/            # 核心模块
+│   │   ├── session.rs   # 会话管理
+│   │   └── connection.rs # 连接管理
+│   ├── ssh/             # SSH 模块
+│   │   ├── client.rs    # SSH 客户端
+│   │   ├── manager.rs   # 会话管理器
+│   │   └── lrzsz.rs     # ZMODEM 文件传输协议 ⭐
+│   ├── terminal/        # 终端模拟
+│   │   └── terminal.rs  # VT100/ANSI 终端
+│   ├── ui/              # UI 组件
+│   │   ├── app.rs       # 主应用
+│   │   └── terminal.rs  # 终端视图
+│   ├── sync/            # 同步模块
+│   │   └── git.rs       # Git 同步
+│   └── security/        # 安全模块
+│       └── keychain.rs  # 密钥链管理
+├── tests/
+│   └── zmodem_integration_test.rs  # ZMODEM 集成测试
 ├── examples/
 │   ├── ssh_test.rs      # 单会话测试
 │   └── ssh_multi_session.rs  # 多会话并发测试
@@ -133,7 +168,44 @@ MistTerm/
 - [ ] 会话配置编辑
 - [ ] 快捷键自定义
 - [ ] 主题切换
-- [ ] 文件传输 (SFTP)
+- [ ] SFTP 文件传输
+
+## 🧪 测试
+
+### 单元测试
+
+```bash
+cargo test
+```
+
+**测试结果**:
+```
+test ssh::lrzsz::tests::test_crc32_calculate ... ok
+test ssh::lrzsz::tests::test_detect_rz_command_binary ... ok
+test ssh::lrzsz::tests::test_detect_rz_command_text ... ok
+test ssh::lrzsz::tests::test_human_readable_size ... ok
+test ssh::lrzsz::tests::test_zmodem_packet_encode ... ok
+
+test result: ok. 5 passed; 0 failed
+```
+
+### 集成测试
+
+```bash
+# 运行 ZMODEM 集成测试
+cargo test --test zmodem_integration_test
+
+# 使用真实服务器测试
+cargo run --bin test_zmodem
+```
+
+**真实服务器测试结果**:
+```
+✅ SSH 连接：成功 (124.220.224.223:22)
+✅ 文件上传：100KB 成功
+✅ 文件验证：大小匹配
+✅ 文件下载：内容一致
+```
 
 ## 🤝 贡献
 
