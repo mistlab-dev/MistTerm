@@ -3,13 +3,14 @@
 
 use super::client::{SshClient, SshConfig};
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::sync::mpsc::{Sender, Receiver};
 use std::sync::mpsc;
-use std::io::{Write, Read};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
+use ssh2::Channel;
 
 /// SSH 会话 ID
 pub type SshSessionId = usize;
@@ -42,6 +43,8 @@ pub struct SshSessionHandle {
     pub session_id: SshSessionId,
     input_tx: Sender<Vec<u8>>,
     resize_tx: Sender<(u32, u32)>,
+    /// 原始 SSH 通道（用于 ZMODEM 文件传输）
+    channel: Arc<Mutex<Channel>>,
 }
 
 impl SshSessionHandle {
@@ -58,6 +61,11 @@ impl SshSessionHandle {
         self.resize_tx
             .send((cols, rows))
             .map_err(|e| format!("Resize failed: {}", e))
+    }
+
+    /// 获取原始通道（用于 ZMODEM 文件传输）
+    pub fn get_channel(&self) -> Option<Arc<Mutex<Channel>>> {
+        Some(self.channel.clone())
     }
 }
 
@@ -85,22 +93,17 @@ impl SshManager {
 
     fn is_retryable_write_error(err: &std::io::Error) -> bool {
         let msg = err.to_string().to_lowercase();
-        err.kind() == std::io::ErrorKind::WouldBlock
-            || msg.contains("would block")
-            || msg.contains("draining incoming flow")
+        msg.contains("would block") || msg.contains("try again")
     }
 
     fn is_retryable_read_error(err: &std::io::Error) -> bool {
         let msg = err.to_string().to_lowercase();
-        err.kind() == std::io::ErrorKind::WouldBlock
-            || msg.contains("would block")
-            || msg.contains("transport read")
-            || msg.contains("resource temporarily unavailable")
+        msg.contains("would block") || msg.contains("try again")
     }
 
     /// 非阻塞读：直到 EAGAIN / WouldBlock，把数据发到 UI（libssh2 写之前必须先排空入站）
     fn pump_channel_reads(
-        channel: &mut ssh2::Channel,
+        channel: &mut Channel,
         read_buffer: &mut [u8],
         message_tx: &Sender<SshMessage>,
         session_id: SshSessionId,
@@ -129,9 +132,9 @@ impl SshManager {
         }
     }
 
-    /// 写入 PTY：遇 “draining incoming flow” 等可恢复错误时先读再写
+    /// 写入 PTY：遇"draining incoming flow"等可恢复错误时先读再写
     fn write_pty_with_drain(
-        channel: &mut ssh2::Channel,
+        channel: &mut Channel,
         data: &[u8],
         read_buffer: &mut [u8],
         message_tx: &Sender<SshMessage>,
@@ -245,9 +248,12 @@ impl SshManager {
             session.open_shell(initial_cols, initial_rows)?
         };
         
+        let channel_arc = Arc::new(Mutex::new(channel));
+        let channel_for_thread = channel_arc.clone();
+        
         thread::spawn(move || {
             let mut read_buffer = [0u8; 16384];
-            let mut channel = channel;
+            let mut channel = channel_for_thread.lock().unwrap();
             loop {
                 while let Ok((c, r)) = resize_rx.try_recv() {
                     let pty_cols = c.clamp(20, 512);
@@ -256,7 +262,7 @@ impl SshManager {
                     log::debug!("Resize to {}x{}", pty_cols, pty_rows);
                 }
 
-                // 先排空入站，再写 stdin（避免 libssh2 非阻塞 “Failure while draining incoming flow”）
+                // 先排空入站，再写 stdin（避免 libssh2 非阻塞"Failure while draining incoming flow"）
                 if Self::pump_channel_reads(
                     &mut channel,
                     &mut read_buffer,
@@ -289,6 +295,7 @@ impl SshManager {
             session_id,
             input_tx,
             resize_tx,
+            channel: channel_arc,
         })
     }
 

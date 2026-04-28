@@ -252,8 +252,13 @@ impl TerminalView {
                         // 检测 lrzsz 命令
                         if self.lrzsz.detect_rz_command(&data) && !self.lrzsz.is_active() {
                             log::info!("检测到 rz 命令，启动文件接收");
-                            if let Err(e) = self.lrzsz.start_receive() {
-                                log::error!("启动文件接收失败：{}", e);
+                            // 获取 SSH 通道
+                            if let Some(ref handle) = self.ssh_handle {
+                                if let Some(channel) = handle.get_channel() {
+                                    if let Err(e) = self.lrzsz.start_receive(channel) {
+                                        log::error!("启动文件接收失败：{}", e);
+                                    }
+                                }
                             }
                         }
                         
@@ -504,7 +509,12 @@ impl TerminalView {
     }
 
     pub fn start_upload(&mut self, path: &Path) -> Result<(), String> {
-        self.lrzsz.start_send(&path.to_string_lossy())
+        if let Some(ref handle) = self.ssh_handle {
+            if let Some(channel) = handle.get_channel() {
+                return self.lrzsz.start_send(&path.to_string_lossy(), channel);
+            }
+        }
+        Err("没有活动的 SSH 连接".to_string())
     }
 
     pub fn download_dir(&self) -> &str {
