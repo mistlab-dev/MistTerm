@@ -249,6 +249,14 @@ impl TerminalView {
             for msg in rx.try_iter() {
                 match msg {
                     SshMessage::Output { data, .. } => {
+                        // 始终记录输出数据
+                        log::info!("SSH Output: {} bytes, is_active={}", data.len(), self.lrzsz.is_active());
+                        let hex: String = data[..data.len().min(16)].iter()
+                            .map(|b| format!("{:02x}", b))
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        log::info!("数据 hex(前16): {}", hex);
+                        
                         // 如果 lrzsz 正在传输中，数据喂给 lrzsz 而不是终端
                         if self.lrzsz.is_active() {
                             log::info!("lrzsz 激活中，尝试 feed 数据 ({} bytes)", data.len());
