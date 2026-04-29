@@ -9,12 +9,12 @@
 //! - sync 层 (sync/): Git 同步
 //! - security 层 (security/): 密钥链管理
 
-mod core;
-mod ssh;
-mod terminal;
-mod ui;
-mod sync;
-mod security;
+pub mod core;
+pub mod ssh;
+pub mod terminal;
+pub mod ui;
+pub mod sync;
+pub mod security;
 
 use eframe::egui;
 use ui::MistTermApp;

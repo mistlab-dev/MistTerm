@@ -153,6 +153,13 @@ impl SshClient {
         self.session = None;
         log::info!("SSH disconnected");
     }
+
+    /// 获取 SSH 会话（用于文件传输等高级操作）
+    pub fn get_session(&self) -> &Session {
+        &self.session
+            .as_ref()
+            .expect("No active SSH session")
+    }
 }
 
 #[cfg(test)]
