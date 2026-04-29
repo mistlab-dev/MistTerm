@@ -495,22 +495,26 @@ impl LrzszTransfer {
                     total: file_size,
                 });
                 
-                // 等待 ZACK 确认
+                // 等待 ZACK 确认（增加超时时间）
                 let mut ack_received = false;
-                for _ in 0..10 {
+                let start = std::time::Instant::now();
+                let timeout = Duration::from_secs(30);
+                
+                while start.elapsed() < timeout && is_active.load(Ordering::Relaxed) {
                     if let Ok(mut chan) = channel.lock() {
                         if let Ok(n) = chan.read(&mut buffer) {
                             if n > 0 && parse_zack_packet(&buffer[..n]) {
                                 ack_received = true;
+                                log::info!("收到 ZACK 确认，位置：{}", offset);
                                 break;
                             }
                         }
                     }
-                    thread::sleep(Duration::from_millis(10));
+                    thread::sleep(Duration::from_millis(100));
                 }
                 
                 if !ack_received {
-                    log::warn!("数据块 {} 未收到确认", offset);
+                    log::warn!("数据块 {} 未收到确认，继续传输", offset);
                 }
             }
             
@@ -625,15 +629,35 @@ fn receive_file_data(
         .map_err(|e| format!("创建文件失败：{}", e))?;
     
     let mut received: u64 = 0;
-    let mut buffer = [0u8; zmodem::BLOCK_SIZE * 2];
+    let mut buffer = [0u8; 65536]; // 增加缓冲区大小
+    let mut no_data_count = 0;
+    let max_no_data = 100; // 最多 100 次无数据后超时
     
     while received < total_size && is_active.load(Ordering::Relaxed) {
-        if let Ok(mut chan) = channel.lock() {
-            match chan.read(&mut buffer) {
-                Ok(0) => break,
-                Ok(n) => {
-                    // 解析 ZDATA 包并提取数据
-                    if let Some(data) = parse_zdata_packet(&buffer[..n]) {
+        let mut chan = match channel.lock() {
+            Ok(c) => c,
+            Err(_) => {
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+        };
+        
+        match chan.read(&mut buffer) {
+            Ok(0) => {
+                // 没有数据，等待一下
+                no_data_count += 1;
+                if no_data_count > max_no_data {
+                    log::warn!("接收超时：{} bytes", received);
+                    break;
+                }
+                thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            Ok(n) => {
+                no_data_count = 0;
+                // 解析 ZDATA 包并提取数据
+                if let Some(data) = parse_zdata_packet(&buffer[..n]) {
+                    if !data.is_empty() {
                         if file.write_all(&data).is_err() {
                             return Err("写入文件失败".to_string());
                         }
@@ -657,10 +681,10 @@ fn receive_file_data(
                         let _ = chan.flush();
                     }
                 }
-                Err(_) => {
-                    thread::sleep(Duration::from_millis(10));
-                    continue;
-                }
+            }
+            Err(_) => {
+                thread::sleep(Duration::from_millis(10));
+                continue;
             }
         }
     }
@@ -678,36 +702,49 @@ fn receive_file_data(
 /// 解析 ZDATA 包
 fn parse_zdata_packet(data: &[u8]) -> Option<Vec<u8>> {
     // 查找 **ZDLE ZDATA 序列
-    for i in 0..data.len().saturating_sub(3) {
+    let mut i = 0;
+    while i < data.len().saturating_sub(3) {
         if data[i] == zmodem::ZPAD && 
            data[i+1] == zmodem::ZPAD && 
            data[i+2] == zmodem::ZDLE && 
            data[i+3] == zmodem::ZDATA {
-            // 提取数据部分（跳过头部和 CRC）
+            // 找到 ZDATA 包，提取数据
             let mut result = Vec::new();
             let mut j = i + 4;
             
-            // 跳过 4 字节头部
-            for _ in 0..4 {
-                if j < data.len() && data[j] == zmodem::ZDLE && j + 1 < data.len() {
+            // 跳过 4 字节头部（带 ZDLE 转义）
+            let mut header_count = 0;
+            while j < data.len() && header_count < 4 {
+                if data[j] == zmodem::ZDLE && j + 1 < data.len() {
                     j += 2;
+                    header_count += 1;
                 } else {
+                    j += 1;
+                    header_count += 1;
+                }
+            }
+            
+            // 提取数据直到 CRC（ZDLE 后跟 CRC 字节）
+            while j < data.len() {
+                if data[j] == zmodem::ZDLE {
+                    // 检查是否是 CRC 开始（后面跟 2 个字节）
+                    if j + 2 < data.len() && data[j+1] == zmodem::ZDLE {
+                        break; // CRC-16 开始
+                    }
+                    // 数据中的 ZDLE 转义
+                    result.push(data[j]);
+                    j += 1;
+                } else {
+                    result.push(data[j]);
                     j += 1;
                 }
             }
             
-            // 提取数据直到 CRC
-            while j < data.len() {
-                if data[j] == zmodem::ZDLE {
-                    // CRC 开始
-                    break;
-                }
-                result.push(data[j]);
-                j += 1;
+            if !result.is_empty() {
+                return Some(result);
             }
-            
-            return Some(result);
         }
+        i += 1;
     }
     None
 }
