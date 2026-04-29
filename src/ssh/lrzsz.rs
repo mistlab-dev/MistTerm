@@ -269,24 +269,11 @@ impl LrzszTransfer {
         thread::spawn(move || {
             log::info!("开始 ZMODEM 文件接收");
             
-            // 发送 ZRINIT 响应
-            let zrinit = ZmodemPacket::new(
-                zmodem::ZRINIT,
-                [0x40, 0x00, 0x00, 0x00] // 支持 1024 字节块，CRC-32
-            );
-            let zrinit_bytes = zrinit.encode();
-            
-            // 通过 SSH 通道发送
-            if let Ok(mut chan) = channel.lock() {
-                let _ = chan.write_all(&zrinit_bytes);
-                let _ = chan.flush();
-            }
-            log::info!("发送 ZRINIT: {} bytes", zrinit_bytes.len());
-            
-            // 等待并接收 ZFILE 包
+            // 等待并接收 ZRQINIT 包（服务器发送的初始化请求）
             let mut buffer = [0u8; 8192];
             let mut idle_count = 0;
             const MAX_IDLE_COUNT: u32 = 1000; // 最多等待 10 秒
+            let mut zrinit_sent = false;
             
             while is_active.load(Ordering::Relaxed) && idle_count < MAX_IDLE_COUNT {
                 if let Ok(mut chan) = channel.lock() {
@@ -306,42 +293,65 @@ impl LrzszTransfer {
                                 log::debug!("数据：{}", hex);
                             }
                             
-                            // 解析接收到的数据
-                            if let Some((filename, size)) = parse_zfile_packet(&buffer[..n]) {
-                                log::info!("收到文件：{} ({} bytes)", filename, size);
-                                current_filename.lock().unwrap().clone_from(&filename);
-                                total_bytes.store(size, Ordering::Relaxed);
+                            // 检查是否是 ZRQINIT 包
+                            if !zrinit_sent && parse_zrqinit_packet(&buffer[..n]) {
+                                log::info!("收到 ZRQINIT，发送 ZRINIT 响应");
                                 
-                                let _ = tx.send(TransferEvent::FileStart {
-                                    filename: filename.clone(),
-                                    size,
-                                });
+                                // 发送 ZRINIT 响应
+                                let zrinit = ZmodemPacket::new(
+                                    zmodem::ZRINIT,
+                                    [0x40, 0x00, 0x00, 0x00] // 支持 1024 字节块，CRC-32
+                                );
+                                let zrinit_bytes = zrinit.encode();
                                 
-                                // 发送 ZACK 确认
-                                let zack = ZmodemPacket::new(zmodem::ZACK, [0u8; 4]);
-                                let zack_bytes = zack.encode();
-                                let _ = chan.write_all(&zack_bytes);
-                                let _ = chan.flush();
-                                
-                                // 开始接收文件数据
-                                if let Err(e) = receive_file_data(
-                                    &channel,
-                                    &download_dir,
-                                    &filename,
-                                    size,
-                                    &is_active,
-                                    &received_bytes,
-                                    &tx,
-                                ) {
-                                    log::error!("接收文件失败：{}", e);
-                                    let _ = tx.send(TransferEvent::FileError {
-                                        filename,
-                                        error: e,
+                                if let Ok(mut chan) = channel.lock() {
+                                    let _ = chan.write_all(&zrinit_bytes);
+                                    let _ = chan.flush();
+                                }
+                                log::info!("发送 ZRINIT: {} bytes", zrinit_bytes.len());
+                                zrinit_sent = true;
+                                idle_count = 0; // 重置计数器
+                                continue;
+                            }
+                            
+                            // 已发送 ZRINIT 后，等待 ZFILE 包
+                            if zrinit_sent {
+                                if let Some((filename, size)) = parse_zfile_packet(&buffer[..n]) {
+                                    log::info!("收到文件：{} ({} bytes)", filename, size);
+                                    current_filename.lock().unwrap().clone_from(&filename);
+                                    total_bytes.store(size, Ordering::Relaxed);
+                                    
+                                    let _ = tx.send(TransferEvent::FileStart {
+                                        filename: filename.clone(),
+                                        size,
                                     });
+                                    
+                                    // 发送 ZACK 确认
+                                    let zack = ZmodemPacket::new(zmodem::ZACK, [0u8; 4]);
+                                    let zack_bytes = zack.encode();
+                                    let _ = chan.write_all(&zack_bytes);
+                                    let _ = chan.flush();
+                                    
+                                    // 开始接收文件数据
+                                    if let Err(e) = receive_file_data(
+                                        &channel,
+                                        &download_dir,
+                                        &filename,
+                                        size,
+                                        &is_active,
+                                        &received_bytes,
+                                        &tx,
+                                    ) {
+                                        log::error!("接收文件失败：{}", e);
+                                        let _ = tx.send(TransferEvent::FileError {
+                                            filename,
+                                            error: e,
+                                        });
+                                        break;
+                                    }
+                                    
                                     break;
                                 }
-                                
-                                break;
                             }
                         }
                         Err(_) => {
@@ -357,7 +367,7 @@ impl LrzszTransfer {
             }
             
             if idle_count >= MAX_IDLE_COUNT {
-                log::warn!("等待 ZMODEM 数据超时（{}ms）", idle_count * 10);
+                log::warn!("等待 ZMODEM 包超时");
                 let _ = tx.send(TransferEvent::FileError {
                     filename: "unknown".to_string(),
                     error: format!("等待超时（{}ms）", idle_count * 10),
@@ -554,6 +564,33 @@ impl LrzszTransfer {
         
         Ok(())
     }
+}
+
+/// 检测 ZRQINIT 包
+fn parse_zrqinit_packet(data: &[u8]) -> bool {
+    // 查找 ZRQINIT 序列：可能是 |*B0... 或 **ZDLE ZRQINIT
+    for i in 0..data.len().saturating_sub(3) {
+        // 模式 1: **ZDLE ZRQINIT (0x80 0x80 0x18 0x64)
+        if data[i] == zmodem::ZPAD && 
+           data[i+1] == zmodem::ZPAD && 
+           data[i+2] == zmodem::ZDLE && 
+           data[i+3] == zmodem::ZRQINIT {
+            log::info!("检测到 ZRQINIT 包（模式 1）");
+            return true;
+        }
+        
+        // 模式 2: |*B... (ZMODEM 二进制模式起始)
+        // ZRQINIT 通常是 0x80 0x80 0x18 0x64
+        if i + 3 < data.len() &&
+           data[i] == 0x80 && 
+           data[i+1] == 0x80 && 
+           data[i+2] == 0x18 && 
+           data[i+3] == 0x64 {
+            log::info!("检测到 ZRQINIT 包（模式 2）");
+            return true;
+        }
+    }
+    false
 }
 
 /// 解析 ZFILE 包

@@ -16,6 +16,7 @@ path = "src/bin/test_file_transfer.rs"
 name = "test_zmodem"
 path = "src/bin/test_zmodem.rs"
 
+# 临时禁用 test_zmodem_full，等修复后再启用
 # [[bin]]
 # name = "test_zmodem_full"
 # path = "src/bin/test_zmodem_full.rs"
