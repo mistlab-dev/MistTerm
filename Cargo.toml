@@ -5,6 +5,10 @@ edition = "2021"
 description = "A modern SSH terminal with lrzsz support and Git sync"
 
 [[bin]]
+name = "test_file_transfer_md5"
+path = "src/bin/test_file_transfer_md5.rs"
+
+[[bin]]
 name = "test_file_transfer"
 path = "src/bin/test_file_transfer.rs"
 
@@ -13,8 +17,9 @@ name = "test_zmodem"
 path = "src/bin/test_zmodem.rs"
 
 [dependencies]
-# GUI - eframe with wgpu for GPU acceleration
+md5 = "0.7"
 eframe = { version = "0.23", features = ["wgpu"] }
+# GUI - eframe with wgpu for GPU acceleration
 egui = "0.23"
 egui_extras = { version = "0.24", features = ["all_loaders"] }
 
