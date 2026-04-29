@@ -284,9 +284,9 @@ impl LrzszTransfer {
             log::info!("发送 ZRINIT: {} bytes", zrinit_bytes.len());
             
             // 等待并接收 ZFILE 包
-            let mut buffer = [0u8; 4096];
+            let mut buffer = [0u8; 8192];
             let mut idle_count = 0;
-            const MAX_IDLE_COUNT: u32 = 500; // 最多等待 5 秒
+            const MAX_IDLE_COUNT: u32 = 1000; // 最多等待 10 秒
             
             while is_active.load(Ordering::Relaxed) && idle_count < MAX_IDLE_COUNT {
                 if let Ok(mut chan) = channel.lock() {
@@ -296,6 +296,16 @@ impl LrzszTransfer {
                             break;
                         }
                         Ok(n) => {
+                            log::debug!("收到 {} bytes 数据", n);
+                            // 打印前 32 字节用于调试
+                            if n > 0 {
+                                let hex: String = buffer[..n.min(32)].iter()
+                                    .map(|b| format!("{:02x}", b))
+                                    .collect::<Vec<_>>()
+                                    .join(" ");
+                                log::debug!("数据：{}", hex);
+                            }
+                            
                             // 解析接收到的数据
                             if let Some((filename, size)) = parse_zfile_packet(&buffer[..n]) {
                                 log::info!("收到文件：{} ({} bytes)", filename, size);
@@ -549,39 +559,58 @@ impl LrzszTransfer {
 /// 解析 ZFILE 包
 fn parse_zfile_packet(data: &[u8]) -> Option<(String, u64)> {
     // 查找 **ZDLE ZFILE 序列
-    for i in 0..data.len().saturating_sub(3) {
+    let mut i = 0;
+    while i < data.len().saturating_sub(3) {
         if data[i] == zmodem::ZPAD && 
            data[i+1] == zmodem::ZPAD && 
            data[i+2] == zmodem::ZDLE && 
            data[i+3] == zmodem::ZFILE {
-            // 解析头部数据（4 字节，带 ZDLE 转义）
-            if i + 10 <= data.len() {
-                let header_start = i + 4;
-                let mut filename = String::new();
-                let mut size: u64 = 0;
-                
-                // 简单解析：查找 NUL 分隔符
-                for j in header_start..header_start + 4 {
-                    if data[j] == zmodem::ZDLE && j + 1 < data.len() {
-                        let byte = data[j+1] ^ 0x40;
-                        if byte == 0 {
-                            break;
-                        }
-                        if let Some(c) = char::from_u32(byte as u32) {
-                            filename.push(c);
-                        }
-                    }
+            log::info!("找到 ZFILE 包，位置：{}", i);
+            
+            // 解析头部数据（4 字节，带 ZDLE 转义）+ CRC-16（2 字节）
+            let mut j = i + 4;
+            let mut header_bytes = [0u8; 4];
+            let mut header_idx = 0;
+            
+            // 提取 4 字节头部（带 ZDLE 转义）
+            while j < data.len() && header_idx < 4 {
+                if data[j] == zmodem::ZDLE && j + 1 < data.len() {
+                    header_bytes[header_idx] = data[j+1] ^ 0x40;
+                    header_idx += 1;
+                    j += 2;
+                } else {
+                    j += 1;
                 }
-                
-                // 从文件名中获取大小（简化处理）
-                // 实际应该解析完整的 ZFILE 格式
-                if filename.is_empty() {
-                    filename = "received_file".to_string();
-                }
-                
-                return Some((filename, size));
             }
+            
+            if header_idx < 4 {
+                log::warn!("ZFILE 头部不完整：{} bytes", header_idx);
+                i += 1;
+                continue;
+            }
+            
+            // 解析文件名（从 header_bytes 开始，查找 NUL）
+            let mut filename = String::new();
+            for &b in &header_bytes {
+                if b == 0 {
+                    break;
+                }
+                if let Some(c) = char::from_u32(b as u32) {
+                    filename.push(c);
+                }
+            }
+            
+            if filename.is_empty() {
+                filename = "received_file".to_string();
+            }
+            
+            // 文件大小是 0（简化处理，实际应该在 ZFILE 包后面）
+            let size = 0;
+            
+            log::info!("解析 ZFILE: filename={}, size={}", filename, size);
+            return Some((filename, size));
         }
+        i += 1;
     }
     None
 }
