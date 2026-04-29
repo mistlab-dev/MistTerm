@@ -354,6 +354,15 @@ impl LrzszTransfer {
     
     /// 处理接收到的 ZMODEM 数据（由 process_ssh_messages 调用）
     pub fn feed_receive_data(&self, data: &[u8]) -> bool {
+        log::info!("feed_receive_data 被调用，data_len={}, is_active={}", data.len(), self.is_active.load(Ordering::Relaxed));
+        
+        // 打印前 32 字节用于调试
+        let hex: String = data[..data.len().min(32)].iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<Vec<_>>()
+            .join(" ");
+        log::info!("数据 hex: {}", hex);
+        
         // 如果不在活动状态，返回 false（数据仍然传递给终端）
         if !self.is_active.load(Ordering::Relaxed) {
             return false;

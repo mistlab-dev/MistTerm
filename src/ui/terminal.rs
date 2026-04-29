@@ -251,14 +251,19 @@ impl TerminalView {
                     SshMessage::Output { data, .. } => {
                         // 如果 lrzsz 正在传输中，数据喂给 lrzsz 而不是终端
                         if self.lrzsz.is_active() {
-                            if self.lrzsz.feed_receive_data(&data) {
-                                continue; // 数据已被 lrzsz 消费，不喂给终端
+                            log::info!("lrzsz 激活中，尝试 feed 数据 ({} bytes)", data.len());
+                            let consumed = self.lrzsz.feed_receive_data(&data);
+                            if consumed {
+                                log::info!("数据已被 lrzsz 消费");
+                                continue;
+                            } else {
+                                log::info!("lrzsz 未消费数据，传给终端");
                             }
                         }
                         
                         // 检测 lrzsz 命令
                         if self.lrzsz.detect_rz_command(&data) && !self.lrzsz.is_active() {
-                            log::info!("检测到 rz 命令，启动文件接收");
+                            log::info!("检测到 rz 命令，启动文件接收 ({} bytes)", data.len());
                             // 获取 SSH 通道
                             if let Some(ref handle) = self.ssh_handle {
                                 if let Some(channel) = handle.get_channel() {

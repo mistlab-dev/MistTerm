@@ -2,6 +2,7 @@
 name = "mistterm"
 version = "0.1.0"
 edition = "2021"
+autobins = false
 description = "A modern SSH terminal with lrzsz support and Git sync"
 
 [[bin]]
@@ -15,10 +16,6 @@ path = "src/bin/test_file_transfer.rs"
 [[bin]]
 name = "test_zmodem"
 path = "src/bin/test_zmodem.rs"
-
-[[bin]]
-name = "test_zmodem_receive"
-path = "src/bin/test_zmodem_receive.rs"
 
 [dependencies]
 md5 = "0.7"

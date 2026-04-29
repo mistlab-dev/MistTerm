@@ -16,6 +16,7 @@ use std::time::Duration;
 use ssh2::Session;
 
 // 导入 lrzsz 模块的代码（复制过来以便独立测试）
+#[path = "zmodem_impl_mod.rs"]
 mod zmodem_impl;
 
 fn main() {
