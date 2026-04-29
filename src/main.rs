@@ -20,8 +20,14 @@ use eframe::egui;
 use ui::MistTermApp;
 
 fn main() -> eframe::Result<()> {
-    // 初始化日志
-    tracing_subscriber::fmt::init();
+    // 初始化日志 - 输出到控制台，包含 debug 级别
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(true)
+        .with_thread_ids(true)
+        .init();
+    
+    log::info!("MistTerm 启动");
     
     let options = eframe::NativeOptions {
         maximized: true,
