@@ -262,6 +262,8 @@ impl TerminalView {
                         }
                         
                         // 检测 lrzsz 命令
+                        let is_zmodem_binary = data.len() >= 4 && data[0] == 0x80 && data[1] == 0x80 && data[2] == 0x18;
+                        
                         if self.lrzsz.detect_rz_command(&data) && !self.lrzsz.is_active() {
                             log::info!("检测到 rz 命令，启动文件接收 ({} bytes)", data.len());
                             // 获取 SSH 通道
@@ -271,7 +273,11 @@ impl TerminalView {
                                     if let Err(e) = self.lrzsz.start_receive(channel) {
                                         log::error!("启动文件接收失败：{}", e);
                                     } else {
-                                        // 数据已被 lrzsz 消费，不传给终端
+                                        // 如果数据本身就是 ZMODEM 二进制数据，立即 feed 给 lrzsz
+                                        if is_zmodem_binary {
+                                            log::info!("数据包含 ZMODEM 二进制，直接 feed");
+                                            self.lrzsz.feed_receive_data(&data);
+                                        }
                                         continue;
                                     }
                                 }
