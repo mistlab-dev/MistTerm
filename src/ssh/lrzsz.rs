@@ -11,6 +11,17 @@ use std::thread;
 use std::time::Duration;
 use ssh2::Channel;
 
+/// ZMODEM 接收状态
+#[derive(Debug, Clone, PartialEq)]
+enum ReceiveState {
+    Idle,
+    WaitingForZRQINIT,
+    WaitingForZFILE,
+    ReceivingData,
+    Complete,
+    Error(String),
+}
+
 /// ZMODEM 常量
 mod zmodem {
     pub const ZPAD: u8 = 0x80;      // ZMODEM 包填充字符
@@ -181,6 +192,14 @@ pub struct LrzszTransfer {
     total_bytes: Arc<AtomicU64>,
     current_filename: Arc<Mutex<String>>,
     download_dir: PathBuf,
+    // 新增：接收状态
+    receive_state: Arc<Mutex<ReceiveState>>,
+    // 新增：SSH 通道引用
+    channel: Arc<Mutex<Option<Arc<Mutex<Channel>>>>>,
+    // 新增：接收缓冲区（用于跨多次 feed_data 拼包）
+    receive_buffer: Arc<Mutex<Vec<u8>>>,
+    // 新增：当前接收的文件句柄
+    receive_file: Arc<Mutex<Option<File>>>,
 }
 
 impl LrzszTransfer {
@@ -200,6 +219,10 @@ impl LrzszTransfer {
             total_bytes: Arc::new(AtomicU64::new(0)),
             current_filename: Arc::new(Mutex::new(String::new())),
             download_dir: download_path,
+            receive_state: Arc::new(Mutex::new(ReceiveState::Idle)),
+            channel: Arc::new(Mutex::new(None)),
+            receive_buffer: Arc::new(Mutex::new(Vec::new())),
+            receive_file: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -249,7 +272,7 @@ impl LrzszTransfer {
         false
     }
 
-    /// 开始接收文件（rz）
+    /// 开始接收文件（rz） - 不在新线程中 chan.read，而是通过 feed_data 接收数据
     pub fn start_receive(&self, channel: Arc<Mutex<Channel>>) -> Result<(), String> {
         if self.is_active.load(Ordering::Relaxed) {
             return Err("传输已在进行中".to_string());
@@ -259,131 +282,177 @@ impl LrzszTransfer {
         self.received_bytes.store(0, Ordering::Relaxed);
         self.total_bytes.store(0, Ordering::Relaxed);
         
-        let tx = self.tx.clone();
-        let is_active = self.is_active.clone();
-        let received_bytes = self.received_bytes.clone();
-        let total_bytes = self.total_bytes.clone();
-        let current_filename = self.current_filename.clone();
-        let download_dir = self.download_dir.clone();
-
-        thread::spawn(move || {
-            log::info!("开始 ZMODEM 文件接收");
-            
-            // 等待并接收 ZRQINIT 包（服务器发送的初始化请求）
-            let mut buffer = [0u8; 8192];
-            let mut idle_count = 0;
-            const MAX_IDLE_COUNT: u32 = 1000; // 最多等待 10 秒
-            let mut zrinit_sent = false;
-            
-            while is_active.load(Ordering::Relaxed) && idle_count < MAX_IDLE_COUNT {
-                if let Ok(mut chan) = channel.lock() {
-                    match chan.read(&mut buffer) {
-                        Ok(0) => {
-                            log::warn!("通道关闭");
-                            break;
-                        }
-                        Ok(n) => {
-                            log::debug!("收到 {} bytes 数据", n);
-                            // 打印前 32 字节用于调试
-                            if n > 0 {
-                                let hex: String = buffer[..n.min(32)].iter()
-                                    .map(|b| format!("{:02x}", b))
-                                    .collect::<Vec<_>>()
-                                    .join(" ");
-                                log::debug!("数据：{}", hex);
-                            }
-                            
-                            // 检查是否是 ZRQINIT 包
-                            if !zrinit_sent && parse_zrqinit_packet(&buffer[..n]) {
-                                log::info!("收到 ZRQINIT，发送 ZRINIT 响应");
-                                
-                                // 发送 ZRINIT 响应
-                                let zrinit = ZmodemPacket::new(
-                                    zmodem::ZRINIT,
-                                    [0x40, 0x00, 0x00, 0x00] // 支持 1024 字节块，CRC-32
-                                );
-                                let zrinit_bytes = zrinit.encode();
-                                
-                                if let Ok(mut chan) = channel.lock() {
-                                    let _ = chan.write_all(&zrinit_bytes);
-                                    let _ = chan.flush();
-                                }
-                                log::info!("发送 ZRINIT: {} bytes", zrinit_bytes.len());
-                                zrinit_sent = true;
-                                idle_count = 0; // 重置计数器
-                                continue;
-                            }
-                            
-                            // 已发送 ZRINIT 后，等待 ZFILE 包
-                            if zrinit_sent {
-                                if let Some((filename, size)) = parse_zfile_packet(&buffer[..n]) {
-                                    log::info!("收到文件：{} ({} bytes)", filename, size);
-                                    current_filename.lock().unwrap().clone_from(&filename);
-                                    total_bytes.store(size, Ordering::Relaxed);
-                                    
-                                    let _ = tx.send(TransferEvent::FileStart {
-                                        filename: filename.clone(),
-                                        size,
-                                    });
-                                    
-                                    // 发送 ZACK 确认
-                                    let zack = ZmodemPacket::new(zmodem::ZACK, [0u8; 4]);
-                                    let zack_bytes = zack.encode();
-                                    let _ = chan.write_all(&zack_bytes);
-                                    let _ = chan.flush();
-                                    
-                                    // 开始接收文件数据
-                                    if let Err(e) = receive_file_data(
-                                        &channel,
-                                        &download_dir,
-                                        &filename,
-                                        size,
-                                        &is_active,
-                                        &received_bytes,
-                                        &tx,
-                                    ) {
-                                        log::error!("接收文件失败：{}", e);
-                                        let _ = tx.send(TransferEvent::FileError {
-                                            filename,
-                                            error: e,
-                                        });
-                                        break;
-                                    }
-                                    
-                                    break;
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            // 非阻塞读，没有数据时返回错误
-                            idle_count += 1;
-                            thread::sleep(Duration::from_millis(10));
-                            continue;
-                        }
-                    }
-                }
-                idle_count += 1;
-                thread::sleep(Duration::from_millis(10));
-            }
-            
-            if idle_count >= MAX_IDLE_COUNT {
-                log::warn!("等待 ZMODEM 包超时");
-                let _ = tx.send(TransferEvent::FileError {
-                    filename: "unknown".to_string(),
-                    error: format!("等待超时（{}ms）", idle_count * 10),
-                });
-            }
-            
-            // 退出接收模式
-            is_active.store(false, Ordering::Relaxed);
-            let mut filename = current_filename.lock().unwrap();
-            filename.clear();
-            
-            let _ = tx.send(TransferEvent::TransferComplete);
-            log::info!("文件接收模式已退出");
-        });
+        // 保存通道引用
+        *self.channel.lock().unwrap() = Some(channel);
+        
+        // 设置为等待 ZRQINIT 状态
+        log::info!("开始 ZMODEM 文件接收（通过 feed_data）");
+        *self.receive_state.lock().unwrap() = ReceiveState::WaitingForZRQINIT;
+        self.receive_buffer.lock().unwrap().clear();
         
         Ok(())
+    }
+    
+    /// 主动开始接收：先发 ZRINIT，然后等 ZFILE（兼容旧流程）
+    pub fn start_receive_active(&self, channel: Arc<Mutex<Channel>>) -> Result<(), String> {
+        if self.is_active.load(Ordering::Relaxed) {
+            return Err("传输已在进行中".to_string());
+        }
+
+        self.is_active.store(true, Ordering::Relaxed);
+        self.received_bytes.store(0, Ordering::Relaxed);
+        self.total_bytes.store(0, Ordering::Relaxed);
+        
+        // 保存通道引用
+        *self.channel.lock().unwrap() = Some(channel);
+        
+        // 先发送 ZRINIT
+        self.send_zrinit();
+        
+        // 设置为等待 ZFILE 状态
+        log::info!("开始 ZMODEM 文件接收（主动模式）");
+        *self.receive_state.lock().unwrap() = ReceiveState::WaitingForZFILE;
+        self.receive_buffer.lock().unwrap().clear();
+        
+        Ok(())
+    }
+    
+    /// 向 SSH 通道写数据
+    fn write_to_channel(&self, data: &[u8]) {
+        if let Ok(chan_lock) = self.channel.lock() {
+            if let Some(ref chan) = *chan_lock {
+                if let Ok(mut c) = chan.lock() {
+                    let _ = c.write_all(data);
+                    let _ = c.flush();
+                    log::info!("向通道写入 {} bytes 数据", data.len());
+                }
+            }
+        }
+    }
+    
+    /// 发送 ZRINIT
+    fn send_zrinit(&self) {
+        let zrinit = ZmodemPacket::new(
+            zmodem::ZRINIT,
+            [0x40, 0x00, 0x00, 0x00]
+        );
+        let zrinit_bytes = zrinit.encode();
+        self.write_to_channel(&zrinit_bytes);
+        log::info!("发送 ZRINIT: {} bytes", zrinit_bytes.len());
+    }
+    
+    /// 发送 ZACK
+    fn send_zack(&self, position: u64) {
+        let pos_bytes = position.to_be_bytes();
+        let zack = ZmodemPacket::new(
+            zmodem::ZACK,
+            [pos_bytes[4], pos_bytes[5], pos_bytes[6], pos_bytes[7]]
+        );
+        let zack_bytes = zack.encode();
+        self.write_to_channel(&zack_bytes);
+    }
+    
+    /// 处理接收到的 ZMODEM 数据（由 process_ssh_messages 调用）
+    pub fn feed_receive_data(&self, data: &[u8]) -> bool {
+        // 如果不在活动状态，返回 false（数据仍然传递给终端）
+        if !self.is_active.load(Ordering::Relaxed) {
+            return false;
+        }
+        
+        let state = self.receive_state.lock().unwrap().clone();
+        
+        match state {
+            ReceiveState::Idle => {
+                return false;
+            }
+            ReceiveState::WaitingForZRQINIT => {
+                // 检查数据中是否包含 ZRQINIT
+                let mut buf = self.receive_buffer.lock().unwrap();
+                buf.extend_from_slice(data);
+                
+                if parse_zrqinit_packet(&buf) {
+                    log::info!("收到 ZRQINIT，发送 ZRINIT 响应");
+                    // 发送 ZRINIT
+                    self.send_zrinit();
+                    *self.receive_state.lock().unwrap() = ReceiveState::WaitingForZFILE;
+                    buf.clear();
+                } else if buf.len() > 256 {
+                    buf.clear(); // 防止缓冲无限增长
+                }
+                return true; // 已经消费了数据
+            }
+            ReceiveState::WaitingForZFILE => {
+                let mut buf = self.receive_buffer.lock().unwrap();
+                buf.extend_from_slice(data);
+                
+                if let Some((filename, size)) = parse_zfile_packet(&buf) {
+                    log::info!("收到 ZFILE：{} ({} bytes)", filename, size);
+                    
+                    // 更新状态
+                    self.current_filename.lock().unwrap().clone_from(&filename);
+                    self.total_bytes.store(size, Ordering::Relaxed);
+                    let _ = self.tx.send(TransferEvent::FileStart {
+                        filename: filename.clone(),
+                        size,
+                    });
+                    
+                    // 创建文件
+                    let file_path = self.download_dir.join(&filename);
+                    if let Ok(file) = File::create(&file_path) {
+                        *self.receive_file.lock().unwrap() = Some(file);
+                    } else {
+                        log::error!("无法创建文件：{}", file_path.display());
+                    }
+                    
+                    // 发送 ZACK
+                    self.send_zack(0);
+                    
+                    *self.receive_state.lock().unwrap() = ReceiveState::ReceivingData;
+                    buf.clear();
+                } else if buf.len() > 1024 {
+                    buf.clear(); // 防止缓冲无限增长
+                }
+                return true;
+            }
+            ReceiveState::ReceivingData => {
+                // 解析 ZDATA 包并提取数据
+                let mut buf = self.receive_buffer.lock().unwrap();
+                buf.extend_from_slice(data);
+                
+                // 尝试解析 ZDATA
+                if let Some(file_data) = parse_zdata_packet(&buf) {
+                    if !file_data.is_empty() {
+                        // 写入文件
+                        let mut f_lock = self.receive_file.lock().unwrap();
+                        if let Some(ref mut file) = *f_lock {
+                            if file.write_all(&file_data).is_ok() {
+                                let received = self.received_bytes.fetch_add(file_data.len() as u64, Ordering::Relaxed) + file_data.len() as u64;
+                                
+                                let _ = self.tx.send(TransferEvent::FileProgress {
+                                    filename: self.current_filename.lock().unwrap().clone(),
+                                    received,
+                                    total: self.total_bytes.load(Ordering::Relaxed),
+                                });
+                                
+                                // 发送 ZACK
+                                self.send_zack(received);
+                            }
+                        }
+                        
+                        buf.clear();
+                    }
+                }
+                // 缓冲太多时清理
+                if buf.len() > 65536 {
+                    buf.clear();
+                }
+                
+                return true;
+            }
+            ReceiveState::Complete | ReceiveState::Error(_) => {
+                return false;
+            }
+        }
     }
 
     /// 发送文件（sz）
