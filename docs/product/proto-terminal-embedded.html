@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MistTerm - 终端</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background: #0d0d14;
+            padding: 16px;
+            min-height: 100vh;
+        }
+        
+        .window {
+            max-width: 1440px;
+            height: 820px;
+            margin: 0 auto;
+            background: #13131c;
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.06);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+        }
+
+        /* Title */
+        .title-bar {
+            padding: 10px 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        .dots { display: flex; gap: 7px; }
+        .dot { width: 11px; height: 11px; border-radius: 50%; }
+        .dot.close { background: #ff5f56; }
+        .dot.minimize { background: #ffbd2e; }
+        .dot.maximize { background: #27c93f; }
+        .title-text { flex: 1; text-align: center; font-size: 13px; color: rgba(255,255,255,0.3); }
+        .title-right { font-size: 11px; color: rgba(255,255,255,0.2); }
+
+        /* Main Layout */
+        .main { flex: 1; display: flex; overflow: hidden; padding: 8px; gap: 6px; }
+
+        /* ===== Sidebar Panels ===== */
+        .side {
+            background: rgba(255,255,255,0.04);
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.04);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            transition: all 0.2s ease;
+            flex-shrink: 0;
+        }
+        .side-left { width: 200px; min-width: 200px; }
+        .side-right { width: 260px; min-width: 260px; }
+
+        /* ===== Collapsed ===== */
+        .side.collapsed {
+            width: 0 !important;
+            min-width: 0 !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            border: none !important;
+            overflow: hidden !important;
+            opacity: 0;
+        }
+
+        .side-header {
+            padding: 9px 10px;
+            font-size: 10px;
+            font-weight: 600;
+            color: rgba(255,255,255,0.2);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        .side-header .add { cursor: pointer; color: rgba(255,255,255,0.15); font-size: 14px; line-height: 1; }
+        .side-header .add:hover { color: #667eea; }
+
+        .side-body { flex: 1; overflow-y: auto; padding: 0 4px 4px; }
+
+        /* Left panel items */
+        .sess-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 0 0 1px 0;
+            transition: 0.1s;
+        }
+        .sess-item:hover { background: rgba(255,255,255,0.03); }
+        .sess-item.active { background: rgba(102,126,234,0.05); }
+        .sess-icon { font-size: 11px; opacity: 0.35; width: 14px; text-align: center; }
+        .sess-name { font-size: 12px; color: rgba(255,255,255,0.5); flex: 1; }
+        .sess-item:hover .sess-name { color: rgba(255,255,255,0.7); }
+        .sess-item.active .sess-name { color: rgba(255,255,255,0.75); }
+        .sess-meta { font-size: 10px; color: rgba(255,255,255,0.12); white-space: nowrap; }
+        .sess-meta.on { color: rgba(76,175,80,0.25); }
+
+        /* ===== CENTER: Terminal ===== */
+        .center {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            background: #0a0a12;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.06);
+            overflow: hidden;
+            transition: all 0.2s;
+        }
+
+        .term-tabs {
+            display: flex;
+            align-items: center;
+            background: rgba(255,255,255,0.02);
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+            flex-shrink: 0;
+        }
+        .term-tab {
+            padding: 7px 14px;
+            font-size: 11px;
+            color: rgba(255,255,255,0.25);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            border-right: 1px solid rgba(255,255,255,0.03);
+            transition: 0.1s;
+            white-space: nowrap;
+        }
+        .term-tab:hover { color: rgba(255,255,255,0.45); }
+        .term-tab.active { color: rgba(255,255,255,0.8); background: #0a0a12; }
+        .term-tab .dot-s { width: 5px; height: 5px; border-radius: 50%; background: #4CAF50; }
+        .term-tab .close { opacity: 0; margin-left: 2px; font-size: 12px; }
+        .term-tab:hover .close { opacity: 0.3; }
+        .term-tab-new { padding: 7px 10px; color: rgba(255,255,255,0.25); cursor: pointer; }
+
+        .term-content { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .term-scroll {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px 16px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px;
+            line-height: 1.7;
+        }
+        .term-scroll .prompt { color: #4CAF50; }
+        .term-scroll .path { color: #667eea; }
+        .term-scroll .cmd { color: rgba(255,255,255,0.9); }
+        .term-scroll .out { color: rgba(255,255,255,0.4); }
+
+        /* ===== RIGHT: Fragments ===== */
+        .frag-search { padding: 4px 8px 6px; }
+        .frag-search input {
+            width: 100%; padding: 5px 8px;
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.03); border-radius: 4px;
+            font-size: 11px; color: rgba(255,255,255,0.5); outline: none; transition: 0.1s;
+        }
+        .frag-search input:focus { border-color: rgba(102,126,234,0.2); background: rgba(255,255,255,0.05); }
+        .frag-search input::placeholder { color: rgba(255,255,255,0.12); }
+
+        .frag-cats { display: flex; gap: 1px; padding: 0 8px 4px; }
+        .frag-cat {
+            flex: 1; padding: 4px 0; font-size: 10px; color: rgba(255,255,255,0.18);
+            text-align: center; cursor: pointer; border-radius: 3px; transition: 0.1s;
+        }
+        .frag-cat:hover { color: rgba(255,255,255,0.3); }
+        .frag-cat.active { color: rgba(102,126,234,0.5); }
+
+        .frag-list { flex: 1; overflow-y: auto; padding: 0 4px 4px; }
+        .frag-list::-webkit-scrollbar { width: 4px; }
+        .frag-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 2px; }
+
+        .frag-card {
+            padding: 7px 8px; border-radius: 4px; cursor: pointer; margin-bottom: 0; transition: 0.1s;
+        }
+        .frag-card:hover { background: rgba(255,255,255,0.03); }
+        .frag-card .top { display: flex; align-items: center; gap: 5px; margin-bottom: 2px; }
+        .frag-card .title { font-size: 12px; color: rgba(255,255,255,0.5); }
+        .frag-card:hover .title { color: rgba(255,255,255,0.7); }
+        .frag-card .tag { font-size: 9px; padding: 1px 5px; border-radius: 3px; font-weight: 500; }
+        .frag-card .tag.personal { background: rgba(102,126,234,0.05); color: rgba(102,126,234,0.35); }
+        .frag-card .tag.team { background: rgba(76,175,80,0.05); color: rgba(76,175,80,0.35); }
+        .frag-card .tag.market { background: rgba(255,152,0,0.05); color: rgba(255,152,0,0.35); }
+        .frag-card .cmd-text {
+            font-family: 'JetBrains Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.12);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 3px;
+        }
+        .frag-card .stats { display: flex; gap: 10px; font-size: 10px; }
+        .frag-card .stats .s { display: flex; align-items: center; gap: 2px; }
+        .frag-card .stats .n { color: rgba(255,255,255,0.25); }
+        .frag-card .stats .l { color: rgba(255,255,255,0.1); }
+
+        /* Status Bar */
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            padding: 4px 14px;
+            font-size: 11px;
+            background: #13131c;
+            border-top: 1px solid rgba(255,255,255,0.03);
+            color: rgba(255,255,255,0.12);
+            flex-shrink: 0;
+        }
+        .status-group { display: flex; align-items: center; gap: 14px; }
+        .status-group .up { color: rgba(76,175,80,0.3); }
+        .status-btn {
+            background: none; border: none; cursor: pointer;
+            font-size: 12px; padding: 0 3px;
+            color: rgba(255,255,255,0.08);
+            transition: 0.1s;
+            font-family: system-ui;
+            line-height: 1;
+        }
+        .status-btn:hover { color: rgba(255,255,255,0.25); }
+        .restore-btn {
+            font-size: 10px; color: rgba(102,126,234,0.25); cursor: pointer;
+            padding: 1px 5px; border-radius: 3px; transition: 0.1s;
+            white-space: nowrap;
+        }
+        .restore-btn:hover { color: rgba(102,126,234,0.45); background: rgba(102,126,234,0.04); }
+
+        .term-scroll::-webkit-scrollbar { width: 4px; }
+        .term-scroll::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 2px; }
+    </style>
+</head>
+<body>
+    <div class="window">
+        <div class="title-bar">
+            <div class="dots">
+                <div class="dot close"></div>
+                <div class="dot minimize"></div>
+                <div class="dot maximize"></div>
+            </div>
+            <div class="title-text">MistTerm</div>
+            <div class="title-right">SSH · 2h 34m</div>
+        </div>
+
+        <div class="main">
+            <!-- ===== LEFT: Sessions ===== -->
+            <div class="side side-left" id="sideLeft">
+                <div class="side-header">
+                    <span>连接</span>
+                    <span class="add" onclick="toggleLeft()">−</span>
+                </div>
+                <div class="side-body">
+                    <div class="frag-search"><input placeholder="🔍 搜索连接…"></div>
+                    <div class="frag-cats" style="padding:0 8px 4px">
+                        <div class="frag-cat active">全部</div>
+                        <div class="frag-cat">在线</div>
+                        <div class="frag-cat">离线</div>
+                    </div>
+                    <div style="flex:1;overflow-y:auto;padding:0 4px">
+                        <div class="sess-item active">
+                            <span class="sess-icon">🖥</span>
+                            <span class="sess-name">生产服务器</span>
+                            <span class="sess-meta on">2h 34m</span>
+                        </div>
+                        <div class="sess-item">
+                            <span class="sess-icon">🖥</span>
+                            <span class="sess-name">测试服务器</span>
+                            <span class="sess-meta on">45m</span>
+                        </div>
+                        <div class="sess-item">
+                            <span class="sess-icon">🖥</span>
+                            <span class="sess-name">数据库</span>
+                            <span class="sess-meta">离线</span>
+                        </div>
+                        <div class="sess-item">
+                            <span class="sess-icon">🖥</span>
+                            <span class="sess-name">预发布</span>
+                            <span class="sess-meta on">10m</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== CENTER: Terminal ===== -->
+            <div class="center" id="centerPanel">
+                <div class="term-tabs">
+                    <div class="term-tab active">
+                        <div class="dot-s"></div>
+                        ubuntu@prod-server-01
+                        <span class="close">×</span>
+                    </div>
+                    <div class="term-tab">
+                        <div class="dot-s"></div>
+                        root@test-server
+                        <span class="close">×</span>
+                    </div>
+                    <div class="term-tab-new">+</div>
+                </div>
+                <div class="term-content">
+                    <div class="term-scroll" contenteditable="true">
+                        <div class="out">Last login: Wed Apr 29 21:20:34 2026</div>
+                        <div class="out">• Linux prod-server-01 · 5.15.0-91-generic</div>
+                        <div style="height:4px"></div>
+                        <div><span class="prompt">➜</span> <span class="path">~</span> <span class="cmd">systemctl status nginx</span></div>
+                        <div class="out">● nginx.service — A high performance web server</div>
+                        <div class="out">   Loaded: loaded (/lib/systemd/system/nginx.service; enabled)</div>
+                        <div class="out">   Active: active (running) since Wed 21:15:22 CST</div>
+                        <div class="out">   Tasks: 2 (limit: 23456) · Memory: 8.2M</div>
+                        <div style="height:4px"></div>
+                        <div><span class="prompt">➜</span> <span class="path">~</span> <span class="cmd">kubectl █</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ===== RIGHT: Fragments ===== -->
+            <div class="side side-right" id="sideRight">
+                <div class="side-header">
+                    <span>命令片段</span>
+                    <span class="add" onclick="toggleRight()">−</span>
+                </div>
+                <div class="frag-search"><input placeholder="🔍 搜索片段…"></div>
+                <div class="frag-cats">
+                    <div class="frag-cat active">常用</div>
+                    <div class="frag-cat">Docker</div>
+                    <div class="frag-cat">K8s</div>
+                    <div class="frag-cat">全部</div>
+                </div>
+                <div class="frag-list">
+                    <div class="frag-card">
+                        <div class="top"><span class="title">查看 Pod 日志</span><span class="tag team">团队</span></div>
+                        <div class="cmd-text">kubectl logs -f --tail=100 deployment/&lt;svc&gt; -n &lt;ns&gt;</div>
+                        <div class="stats"><span class="s"><span class="n">320</span><span class="l">次</span></span><span class="s"><span class="n">95%</span><span class="l">成功</span></span><span class="s"><span class="n">1.2s</span><span class="l">平均</span></span></div>
+                    </div>
+                    <div class="frag-card">
+                        <div class="top"><span class="title">重启 Nginx</span><span class="tag team">团队</span></div>
+                        <div class="cmd-text">systemctl restart nginx && systemctl status nginx</div>
+                        <div class="stats"><span class="s"><span class="n">500</span><span class="l">次</span></span><span class="s"><span class="n">98%</span><span class="l">成功</span></span><span class="s"><span class="n">0.8s</span><span class="l">平均</span></span></div>
+                    </div>
+                    <div class="frag-card">
+                        <div class="top"><span class="title">访问日志</span><span class="tag personal">个人</span></div>
+                        <div class="cmd-text">tail -f /var/log/nginx/access.log | awk '{print $1}' | …</div>
+                        <div class="stats"><span class="s"><span class="n">156</span><span class="l">次</span></span><span class="s"><span class="n">100%</span><span class="l">成功</span></span><span class="s"><span class="n">0.3s</span><span class="l">平均</span></span></div>
+                    </div>
+                    <div class="frag-card">
+                        <div class="top"><span class="title">Docker 健康检查</span><span class="tag market">模板</span></div>
+                        <div class="cmd-text">docker ps --format "table {{.Names}}\t{{.Status}}"</div>
+                        <div class="stats"><span class="s"><span class="n">1,200</span><span class="l">团队</span></span><span class="s"><span class="n">96%</span><span class="l">成功</span></span><span class="s"><span class="n">0.5s</span><span class="l">平均</span></span></div>
+                    </div>
+                    <div class="frag-card">
+                        <div class="top"><span class="title">Git 快速部署</span><span class="tag personal">个人</span></div>
+                        <div class="cmd-text">git pull origin main && git status && echo "✅"</div>
+                        <div class="stats"><span class="s"><span class="n">120</span><span class="l">次</span></span><span class="s"><span class="n">99%</span><span class="l">成功</span></span><span class="s"><span class="n">1.5s</span><span class="l">平均</span></span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status Bar -->
+        <div class="status-bar" id="statusBar">
+            <div class="status-group" style="gap:8px">
+                <span class="restore-btn" id="restoreLeft" onclick="expandLeft()" style="display:none">▸ 连接 · 3</span>
+                <span>⚡ ubuntu@prod-server-01</span>
+            </div>
+            <div class="status-group" style="gap:4px">
+                <span class="restore-btn" id="restoreRight" onclick="expandRight()" style="display:none">▸ 命令片段 · 5</span>
+                <button class="status-btn" title="复制">📋</button>
+                <span style="color:rgba(255,255,255,0.02)"> </span>
+                <button class="status-btn" title="上传">📤</button>
+                <span style="color:rgba(255,255,255,0.02)"> </span>
+                <button class="status-btn" title="搜索输出">🔍</button>
+                <span style="color:rgba(255,255,255,0.02)"> </span>
+                <button class="status-btn" title="统计">📊</button>
+                <span style="color:rgba(255,255,255,0.04)">·</span>
+                <span style="font-size:10px;color:rgba(255,255,255,0.1)">1,234次</span>
+                <span class="up">↑8%</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function togglePanel(id, restoreId) {
+            const el = document.getElementById(id);
+            el.classList.toggle('collapsed');
+            document.getElementById(restoreId).style.display = el.classList.contains('collapsed') ? 'inline' : 'none';
+        }
+        function expandPanel(id, restoreId) {
+            document.getElementById(id).classList.remove('collapsed');
+            document.getElementById(restoreId).style.display = 'none';
+        }
+        function toggleLeft() { togglePanel('sideLeft', 'restoreLeft'); }
+        function toggleRight() { togglePanel('sideRight', 'restoreRight'); }
+        function expandLeft() { expandPanel('sideLeft', 'restoreLeft'); }
+        function expandRight() { expandPanel('sideRight', 'restoreRight'); }
+    </script>
+</body>
+</html>
