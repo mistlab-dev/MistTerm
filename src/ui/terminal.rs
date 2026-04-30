@@ -257,27 +257,17 @@ impl TerminalView {
             for msg in rx.try_iter() {
                 match msg {
                     SshMessage::Output { data, .. } => {
-                        // 如果 lrzsz 正在传输中，数据喂给 lrzsz
-                        if self.lrzsz.is_active() {
-                            if self.lrzsz.feed_receive_data(&data) {
-                                continue;
-                            }
-                        }
-                        }
+                        // 检测输出中是否包含 rz 命令的提示文本
+                        let text = String::from_utf8_lossy(&data);
+                        let is_rz_prompt = text.contains("rz rz rz") || 
+                                           text.contains("Awaiting rz") ||
+                                           text.contains("rz waiting to receive") ||
+                                           text.contains("B0000");  // ZMODEM ZFILE 包头
                         
-                        // 检测 rz 命令（上传文件到服务器）
-                        if !self.lrzsz.is_active() {
-                            let text = String::from_utf8_lossy(&data);
-                            let is_rz_command = text.contains("rz rz rz") || 
-                                               text.contains("Awaiting rz") ||
-                                               text.contains("rz waiting to receive");
-                            
-                            if is_rz_command {
-                                log::info!("检测到 rz 命令，弹出上传文件选择");
-                                self.pending_rz_upload = true;
-                                // 过滤掉 rz 提示信息，不显示在终端
-                                continue;
-                            }
+                        if is_rz_prompt && !self.pending_rz_upload && self.connected {
+                            log::info!("检测到 rz 命令，弹出上传文件选择");
+                            self.pending_rz_upload = true;
+                            continue;  // 不显示在终端
                         }
                         
                         self.terminal.feed(&data);
