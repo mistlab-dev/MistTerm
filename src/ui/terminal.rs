@@ -41,6 +41,12 @@ pub struct TerminalView {
     /// lrzsz 文件传输器
     lrzsz: LrzszTransfer,
     
+    /// 命令片段面板可见性
+    pub show_fragment_panel: bool,
+    
+    /// 是否需要弹出文件选择对话框（检测到 rz 命令时设置）
+    pub pending_rz_upload: bool,
+    
     /// 文件传输进度
     transfer_progress: Option<(String, u64, u64)>,
     
@@ -70,6 +76,8 @@ impl TerminalView {
             cols: 80,
             rows: 24,
             lrzsz: LrzszTransfer::new(&download_dir.to_string_lossy()),
+            show_fragment_panel: false,
+            pending_rz_upload: false,
             transfer_progress: None,
             download_dir: download_dir.to_string_lossy().to_string(),
             font_size: 14.0,
@@ -249,46 +257,26 @@ impl TerminalView {
             for msg in rx.try_iter() {
                 match msg {
                     SshMessage::Output { data, .. } => {
-                        // 始终记录输出数据
-                        log::info!("SSH Output: {} bytes, is_active={}", data.len(), self.lrzsz.is_active());
-                        let hex: String = data[..data.len().min(16)].iter()
-                            .map(|b| format!("{:02x}", b))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        log::info!("数据 hex(前16): {}", hex);
-                        
-                        // 如果 lrzsz 正在传输中，数据喂给 lrzsz 而不是终端
+                        // 如果 lrzsz 正在传输中，数据喂给 lrzsz
                         if self.lrzsz.is_active() {
-                            log::info!("lrzsz 激活中，尝试 feed 数据 ({} bytes)", data.len());
-                            let consumed = self.lrzsz.feed_receive_data(&data);
-                            if consumed {
-                                log::info!("数据已被 lrzsz 消费");
+                            if self.lrzsz.feed_receive_data(&data) {
                                 continue;
-                            } else {
-                                log::info!("lrzsz 未消费数据，传给终端");
                             }
                         }
+                        }
                         
-                        // 检测 lrzsz 命令
-                        let is_zmodem_binary = data.len() >= 4 && data[0] == 0x80 && data[1] == 0x80 && data[2] == 0x18;
-                        
-                        if self.lrzsz.detect_rz_command(&data) && !self.lrzsz.is_active() {
-                            log::info!("检测到 rz 命令，启动文件接收 ({} bytes)", data.len());
-                            // 获取 SSH 通道
-                            if let Some(ref handle) = self.ssh_handle {
-                                if let Some(channel) = handle.get_channel() {
-                                    // 使用 feed_data 模式启动接收
-                                    if let Err(e) = self.lrzsz.start_receive(channel) {
-                                        log::error!("启动文件接收失败：{}", e);
-                                    } else {
-                                        // 如果数据本身就是 ZMODEM 二进制数据，立即 feed 给 lrzsz
-                                        if is_zmodem_binary {
-                                            log::info!("数据包含 ZMODEM 二进制，直接 feed");
-                                            self.lrzsz.feed_receive_data(&data);
-                                        }
-                                        continue;
-                                    }
-                                }
+                        // 检测 rz 命令（上传文件到服务器）
+                        if !self.lrzsz.is_active() {
+                            let text = String::from_utf8_lossy(&data);
+                            let is_rz_command = text.contains("rz rz rz") || 
+                                               text.contains("Awaiting rz") ||
+                                               text.contains("rz waiting to receive");
+                            
+                            if is_rz_command {
+                                log::info!("检测到 rz 命令，弹出上传文件选择");
+                                self.pending_rz_upload = true;
+                                // 过滤掉 rz 提示信息，不显示在终端
+                                continue;
                             }
                         }
                         
@@ -539,12 +527,52 @@ impl TerminalView {
     }
 
     pub fn start_upload(&mut self, path: &Path) -> Result<(), String> {
-        if let Some(ref handle) = self.ssh_handle {
-            if let Some(channel) = handle.get_channel() {
-                return self.lrzsz.start_send(&path.to_string_lossy(), channel);
-            }
+        // 新方案：直接用 SSH 通道 cat > 上传，不走 ZMODEM
+        let session_id = self.session_id
+            .ok_or_else(|| "没有 SSH 会话".to_string())?;
+        let session = self.ssh_manager.as_ref()
+            .and_then(|m| m.get_session(session_id))
+            .ok_or_else(|| "获取 SSH 会话失败".to_string())?;
+        
+        let file_name = path.file_name()
+            .ok_or_else(|| "无效的文件路径".to_string())?
+            .to_string_lossy()
+            .to_string();
+        
+        // 读取文件
+        let data = std::fs::read(path)
+            .map_err(|e| format!("读取文件失败：{}", e))?;
+        let total_size = data.len();
+        
+        log::info!("开始 SSH cat 方式上传: {} ({} bytes)", file_name, total_size);
+        
+        // 开一个独立的 SSH 通道执行 cat >
+        let mut channel = session.channel_session()
+            .map_err(|e| format!("创建通道失败：{}", e))?;
+        
+        let remote_path = format!("./{}", file_name);
+        channel.exec(&format!("cat > {}", remote_path))
+            .map_err(|e| format!("执行命令失败：{}", e))?;
+        
+        // 分块写入
+        for chunk in data.chunks(8192) {
+            use std::io::Write;
+            channel.write_all(chunk)
+                .map_err(|e| format!("写入数据失败：{}", e))?;
         }
-        Err("没有活动的 SSH 连接".to_string())
+        
+        channel.send_eof()
+            .map_err(|e| format!("发送 EOF 失败：{}", e))?;
+        channel.wait_close()
+            .map_err(|e| format!("等待完成失败：{}", e))?;
+        
+        let exit_code = channel.exit_status().unwrap_or(-1);
+        if exit_code != 0 {
+            return Err(format!("上传失败，退出码: {}", exit_code));
+        }
+        
+        log::info!("上传成功: {} ({} bytes)", remote_path, total_size);
+        Ok(())
     }
 
     pub fn download_dir(&self) -> &str {

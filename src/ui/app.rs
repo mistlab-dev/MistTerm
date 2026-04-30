@@ -545,6 +545,34 @@ impl eframe::App for MistTermApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         Self::apply_design_theme(ctx);
 
+        // 检查是否有终端等待 rz 上传文件
+        if let Some(terminal) = self.current_terminal() {
+            if terminal.pending_rz_upload {
+                // 重置状态，防止重复触发
+                if let Some(t) = self.current_terminal_mut() {
+                    t.pending_rz_upload = false;
+                }
+                if let Some(path) = FileDialog::new()
+                    .set_title("选择要上传的文件")
+                    .pick_file() 
+                {
+                    self.status_message = format!("rz上传: {}", path.display());
+                    if let Some(t) = self.current_terminal_mut() {
+                        match t.start_upload(path.as_path()) {
+                            Ok(_) => {
+                                self.status_message = format!("上传成功: {}", path.display());
+                            }
+                            Err(e) => {
+                                self.status_message = format!("上传失败: {}", e);
+                            }
+                        }
+                    }
+                } else {
+                    self.status_message = "rz上传已取消".to_string();
+                }
+            }
+        }
+        
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::N)) {
             self.show_new_session_dialog = true;
         }

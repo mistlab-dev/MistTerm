@@ -303,4 +303,10 @@ impl SshManager {
     pub fn session_count(&self) -> usize {
         self.sessions.lock().unwrap().len()
     }
+    
+    /// 获取 SSH 会话（用于文件传输）
+    pub fn get_session(&self, session_id: SshSessionId) -> Option<::ssh2::Session> {
+        let sessions = self.sessions.lock().unwrap();
+        sessions.get(&session_id).map(|c| c.get_session().clone())
+    }
 }
