@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MistTerm - 命令分析仪表盘</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', sans-serif; background: #f0f0f0; padding: 20px; }
+        .window { background: #1e1e1e; border-radius: 12px; box-shadow: 0 20px 60px rgba(0,0,0,0.4); width: 1400px; height: 900px; margin: 0 auto; display: flex; flex-direction: column; overflow: hidden; }
+        .title-bar { background: #2d2d2d; padding: 8px 12px; display: flex; align-items: center; gap: 12px; }
+        .window-controls { display: flex; gap: 8px; }
+        .window-control { width: 12px; height: 12px; border-radius: 50%; }
+        .window-control.close { background: #ff5f56; }
+        .window-control.minimize { background: #ffbd2e; }
+        .window-control.maximize { background: #27c93f; }
+        .title { flex: 1; color: #999; font-size: 13px; text-align: center; }
+        .main { flex: 1; display: flex; flex-direction: column; }
+
+        /* Tab Bar */
+        .tab-bar { background: #2d2d2d; display: flex; border-bottom: 1px solid #3c3c3c; align-items: center; }
+        .tab { padding: 10px 16px; color: #999; cursor: pointer; display: flex; align-items: center; gap: 6px; border-right: 1px solid #3c3c3c; font-size: 13px; }
+        .tab:hover { background: #3c3c3c; }
+        .tab.active { background: #1e1e1e; color: #fff; }
+        .tab-close { font-size: 14px; opacity: 0.6; margin-left: 4px; }
+
+        /* Content Area */
+        .content { flex: 1; overflow-y: auto; padding: 24px 32px; }
+
+        /* Page Title */
+        .page-title { font-size: 20px; font-weight: 600; color: #fff; margin-bottom: 4px; display: flex; align-items: center; gap: 10px; }
+        .page-subtitle { font-size: 13px; color: #888; margin-bottom: 24px; }
+        .time-selector { background: #3c3c3c; border: none; color: #ccc; padding: 6px 12px; border-radius: 6px; font-size: 12px; margin-left: auto; }
+
+        /* Stats Cards */
+        .stats-row { display: flex; gap: 16px; margin-bottom: 24px; }
+        .stat-card { flex: 1; background: #252526; border: 1px solid #3c3c3c; border-radius: 10px; padding: 20px; }
+        .stat-card .label { font-size: 12px; color: #888; margin-bottom: 8px; }
+        .stat-card .value { font-size: 32px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+        .stat-card .trend { font-size: 12px; color: #4CAF50; }
+        .stat-card .trend.down { color: #f44336; }
+        .stat-card .sub { font-size: 11px; color: #666; margin-top: 4px; }
+        .stat-card .bar { height: 4px; background: #3c3c3c; border-radius: 2px; margin-top: 12px; overflow: hidden; }
+        .stat-card .bar-fill { height: 100%; border-radius: 2px; }
+        .stat-card .bar-fill.green { background: linear-gradient(90deg, #4CAF50, #81C784); width: 82%; }
+        .stat-card .bar-fill.blue { background: linear-gradient(90deg, #667eea, #764ba2); width: 65%; }
+        .stat-card .bar-fill.orange { background: linear-gradient(90deg, #FF9800, #FFB74D); width: 28%; }
+        .stat-card .bar-label { display: flex; justify-content: space-between; font-size: 11px; color: #666; margin-top: 6px; }
+
+        /* Two Columns */
+        .two-col { display: flex; gap: 16px; margin-bottom: 24px; }
+        .col { flex: 1; background: #252526; border: 1px solid #3c3c3c; border-radius: 10px; padding: 20px; }
+        .col-title { font-size: 14px; font-weight: 600; color: #fff; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+        .col-title .badge { font-size: 11px; color: #999; font-weight: 400; margin-left: auto; }
+
+        /* Command List */
+        .cmd-list { list-style: none; }
+        .cmd-item { display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid #333; }
+        .cmd-item:last-child { border-bottom: none; }
+        .cmd-rank { width: 28px; height: 24px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; margin-right: 12px; }
+        .cmd-rank.gold { background: rgba(255,215,0,0.15); color: #ffd700; }
+        .cmd-rank.silver { background: rgba(192,192,192,0.15); color: #c0c0c0; }
+        .cmd-rank.bronze { background: rgba(205,127,50,0.15); color: #cd7f32; }
+        .cmd-rank.normal { background: #333; color: #888; }
+        .cmd-name { flex: 1; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; color: #d4d4d4; }
+        .cmd-count { font-size: 12px; color: #888; margin-left: 12px; }
+        .cmd-bar { width: 80px; height: 4px; background: #3c3c3c; border-radius: 2px; margin-left: 12px; overflow: hidden; }
+        .cmd-bar-fill { height: 100%; border-radius: 2px; }
+        .cmd-bar-fill.purple { background: #667eea; }
+        .cmd-bar-fill.green { background: #4CAF50; }
+
+        /* Bar Chart */
+        .bar-chart { margin-top: 8px; }
+        .bar-row { display: flex; align-items: center; margin-bottom: 10px; }
+        .bar-label { width: 80px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; color: #d4d4d4; }
+        .bar-track { flex: 1; height: 20px; background: #333; border-radius: 4px; overflow: hidden; position: relative; margin: 0 12px; }
+        .bar-fill-chart { height: 100%; border-radius: 4px; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; font-size: 11px; color: #fff; }
+        .bar-fill-chart.blue { background: linear-gradient(90deg, #667eea, #764ba2); }
+        .bar-fill-chart.green { background: linear-gradient(90deg, #4CAF50, #81C784); }
+        .bar-fill-chart.orange { background: linear-gradient(90deg, #FF9800, #FFB74D); }
+        .bar-fill-chart.red { background: linear-gradient(90deg, #f44336, #e57373); }
+        .bar-value { font-size: 12px; color: #888; width: 50px; text-align: right; }
+
+        /* Smart Recommendations */
+        .recommend-list { list-style: none; }
+        .recommend-item { display: flex; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid #333; gap: 12px; }
+        .recommend-item:last-child { border-bottom: none; }
+        .recommend-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+        .recommend-icon.purple { background: rgba(102,126,234,0.15); }
+        .recommend-icon.green { background: rgba(76,175,80,0.15); }
+        .recommend-icon.orange { background: rgba(255,152,0,0.15); }
+        .recommend-text { flex: 1; }
+        .recommend-title { font-size: 13px; color: #fff; margin-bottom: 2px; }
+        .recommend-desc { font-size: 12px; color: #888; }
+        .recommend-btn { padding: 4px 12px; border-radius: 6px; font-size: 11px; cursor: pointer; border: none; flex-shrink: 0; }
+        .recommend-btn.primary { background: #667eea; color: #fff; }
+        .recommend-btn.outline { background: transparent; border: 1px solid #667eea; color: #667eea; }
+
+        /* Status Bar */
+        .status-bar { background: #667eea; padding: 6px 12px; display: flex; justify-content: space-between; align-items: center; font-size: 11px; color: #fff; }
+        .status-item { display: flex; gap: 16px; }
+        .status-badge { background: rgba(255,255,255,0.2); padding: 2px 8px; border-radius: 4px; }
+
+        /* Scrollbar */
+        .content::-webkit-scrollbar { width: 6px; }
+        .content::-webkit-scrollbar-track { background: transparent; }
+        .content::-webkit-scrollbar-thumb { background: #555; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="window">
+        <div class="title-bar">
+            <div class="window-controls">
+                <div class="window-control close"></div>
+                <div class="window-control minimize"></div>
+                <div class="window-control maximize"></div>
+            </div>
+            <div class="title">MistTerm - 命令分析仪表盘</div>
+            <div style="width: 60px;"></div>
+        </div>
+
+        <!-- Main Navigation -->
+        <div class="tab-bar">
+            <div class="tab"><span>🖥️</span> 终端</div>
+            <div class="tab"><span>📋</span> 片段</div>
+            <div class="tab"><span>📤</span> 传输</div>
+            <div class="tab active"><span>📊</span> 分析</div>
+            <div class="tab"><span>⚙️</span> 设置</div>
+        </div>
+
+        <!-- Content -->
+        <div class="content">
+            <!-- Page Header -->
+            <div style="display: flex; align-items: center; margin-bottom: 24px;">
+                <div>
+                    <div class="page-title">📊 命令分析仪表盘</div>
+                    <div class="page-subtitle">了解命令使用习惯，优化团队效率</div>
+                </div>
+                <select class="time-selector">
+                    <option>今天</option>
+                    <option selected>本周</option>
+                    <option>本月</option>
+                    <option>自定义</option>
+                </select>
+            </div>
+
+            <!-- Stats Cards -->
+            <div class="stats-row">
+                <div class="stat-card">
+                    <div class="label">总执行次数</div>
+                    <div class="value">1,234</div>
+                    <div class="trend">↑ 15% 较上周</div>
+                    <div class="bar">
+                        <div class="bar-fill green"></div>
+                    </div>
+                    <div class="bar-label"><span>效率提升</span><span>+15%</span></div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">平均耗时</div>
+                    <div class="value">2.3s</div>
+                    <div class="trend">↓ 0.5s 较上周</div>
+                    <div class="bar">
+                        <div class="bar-fill blue"></div>
+                    </div>
+                    <div class="bar-label"><span>响应时间</span><span>-0.5s</span></div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">错误率</div>
+                    <div class="value">3.2%</div>
+                    <div class="trend down">↓ 1.2% 较上周</div>
+                    <div class="bar">
+                        <div class="bar-fill orange"></div>
+                    </div>
+                    <div class="bar-label"><span>错误下降</span><span>-1.2%</span></div>
+                </div>
+                <div class="stat-card">
+                    <div class="label">片段使用率</div>
+                    <div class="value">37%</div>
+                    <div class="trend">↑ 8% 较上周</div>
+                    <div class="bar">
+                        <div class="bar-fill" style="background: linear-gradient(90deg, #764ba2, #667eea); width: 37%;"></div>
+                    </div>
+                    <div class="bar-label"><span>目标 50%</span><span>+8%</span></div>
+                </div>
+            </div>
+
+            <!-- Two Columns: Top Commands -->
+            <div class="two-col">
+                <div class="col">
+                    <div class="col-title">🏆 我的 Top 10 命令 <span class="badge">本周</span></div>
+                    <ul class="cmd-list">
+                        <li class="cmd-item">
+                            <span class="cmd-rank gold">1</span>
+                            <span class="cmd-name">docker ps -a | grep nginx</span>
+                            <span class="cmd-count">156 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill purple" style="width:100%"></div></div>
+                        </li>
+                        <li class="cmd-item">
+                            <span class="cmd-rank silver">2</span>
+                            <span class="cmd-name">git pull origin main</span>
+                            <span class="cmd-count">120 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill purple" style="width:77%"></div></div>
+                        </li>
+                        <li class="cmd-item">
+                            <span class="cmd-rank bronze">3</span>
+                            <span class="cmd-name">kubectl logs -f --tail=100</span>
+                            <span class="cmd-count">98 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill purple" style="width:63%"></div></div>
+                        </li>
+                        <li class="cmd-item">
+                            <span class="cmd-rank normal">4</span>
+                            <span class="cmd-name">tail -f /var/log/nginx/access.log</span>
+                            <span class="cmd-count">85 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill purple" style="width:54%"></div></div>
+                        </li>
+                        <li class="cmd-item">
+                            <span class="cmd-rank normal">5</span>
+                            <span class="cmd-name">nginx -s reload</span>
+                            <span class="cmd-count">72 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill purple" style="width:46%"></div></div>
+                        </li>
+                        <li class="cmd-item">
+                            <span class="cmd-rank normal">6</span>
+                            <span class="cmd-name">docker restart -t 30 &lt;container&gt;</span>
+                            <span class="cmd-count">65 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill purple" style="width:42%"></div></div>
+                        </li>
+                        <li class="cmd-item">
+                            <span class="cmd-rank normal">7</span>
+                            <span class="cmd-name">kubectl apply -f deploy.yaml</span>
+                            <span class="cmd-count">58 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill purple" style="width:37%"></div></div>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="col">
+                    <div class="col-title">👥 团队 Top 10 命令 <span class="badge">本周</span></div>
+                    <ul class="cmd-list">
+                        <li class="cmd-item">
+                            <span class="cmd-rank gold">1</span>
+                            <span class="cmd-name">docker restart -t 30 &lt;container&gt;</span>
+                            <span class="cmd-count">500 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill green" style="width:100%"></div></div>
+                        </li>
+                        <li class="cmd-item">
+                            <span class="cmd-rank silver">2</span>
+                            <span class="cmd-name">kubectl apply -f deploy.yaml</span>
+                            <span class="cmd-count">320 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill green" style="width:64%"></div></div>
+                        </li>
+                        <li class="cmd-item">
+                            <span class="cmd-rank bronze">3</span>
+                            <span class="cmd-name">nginx -s reload</span>
+                            <span class="cmd-count">280 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill green" style="width:56%"></div></div>
+                        </li>
+                        <li class="cmd-item">
+                            <span class="cmd-rank normal">4</span>
+                            <span class="cmd-name">git pull origin main</span>
+                            <span class="cmd-count">250 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill green" style="width:50%"></div></div>
+                        </li>
+                        <li class="cmd-item">
+                            <span class="cmd-rank normal">5</span>
+                            <span class="cmd-name">docker ps -a | grep nginx</span>
+                            <span class="cmd-count">200 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill green" style="width:40%"></div></div>
+                        </li>
+                        <li class="cmd-item">
+                            <span class="cmd-rank normal">6</span>
+                            <span class="cmd-name">systemctl restart nginx</span>
+                            <span class="cmd-count">180 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill green" style="width:36%"></div></div>
+                        </li>
+                        <li class="cmd-item">
+                            <span class="cmd-rank normal">7</span>
+                            <span class="cmd-name">kubectl logs -f --tail=100</span>
+                            <span class="cmd-count">160 次</span>
+                            <div class="cmd-bar"><div class="cmd-bar-fill green" style="width:32%"></div></div>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Two Columns: Duration & Error Analysis -->
+            <div class="two-col">
+                <div class="col">
+                    <div class="col-title">⏱️ 耗时分析 <span class="badge">平均耗时</span></div>
+                    <div class="bar-chart">
+                        <div class="bar-row">
+                            <span class="bar-label">docker build</span>
+                            <div class="bar-track">
+                                <div class="bar-fill-chart orange" style="width:90%">45.2s</div>
+                            </div>
+                            <span class="bar-value">120s max</span>
+                        </div>
+                        <div class="bar-row">
+                            <span class="bar-label">git pull</span>
+                            <div class="bar-track">
+                                <div class="bar-fill-chart blue" style="width:6%">3.2s</div>
+                            </div>
+                            <span class="bar-value">10s max</span>
+                        </div>
+                        <div class="bar-row">
+                            <span class="bar-label">kubectl apply</span>
+                            <div class="bar-track">
+                                <div class="bar-fill-chart blue" style="width:6%">2.8s</div>
+                            </div>
+                            <span class="bar-value">8s max</span>
+                        </div>
+                        <div class="bar-row">
+                            <span class="bar-label">ssh connect</span>
+                            <div class="bar-track">
+                                <div class="bar-fill-chart green" style="width:2%">1.2s</div>
+                            </div>
+                            <span class="bar-value">5s max</span>
+                        </div>
+                        <div class="bar-row">
+                            <span class="bar-label">docker ps</span>
+                            <div class="bar-track">
+                                <div class="bar-fill-chart green" style="width:1%">0.5s</div>
+                            </div>
+                            <span class="bar-value">2s max</span>
+                        </div>
+                    </div>
+                    <div style="margin-top: 16px; padding: 10px 14px; background: rgba(255,152,0,0.1); border: 1px solid rgba(255,152,0,0.3); border-radius: 8px; display: flex; gap: 10px; align-items: flex-start;">
+                        <span style="font-size: 14px;">⚠️</span>
+                        <div>
+                            <div style="font-size: 12px; color: #FF9800; font-weight: 500;">检测到慢命令</div>
+                            <div style="font-size: 11px; color: #888; margin-top: 2px;">「docker build」平均 45.2s，建议使用构建缓存</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col">
+                    <div class="col-title">❌ 错误分析 <span class="badge">本周</span></div>
+                    <div class="bar-chart">
+                        <div class="bar-row">
+                            <span class="bar-label">kubectl delete</span>
+                            <div class="bar-track">
+                                <div class="bar-fill-chart red" style="width:75%">15%</div>
+                            </div>
+                            <span class="bar-value">100 次</span>
+                        </div>
+                        <div class="bar-row">
+                            <span class="bar-label">ssh 连接</span>
+                            <div class="bar-track">
+                                <div class="bar-fill-chart orange" style="width:25%">5%</div>
+                            </div>
+                            <span class="bar-value">200 次</span>
+                        </div>
+                        <div class="bar-row">
+                            <span class="bar-label">docker restart</span>
+                            <div class="bar-track">
+                                <div class="bar-fill-chart green" style="width:10%">2%</div>
+                            </div>
+                            <span class="bar-value">150 次</span>
+                        </div>
+                        <div class="bar-row">
+                            <span class="bar-label">git push</span>
+                            <div class="bar-track">
+                                <div class="bar-fill-chart green" style="width:7%">1.5%</div>
+                            </div>
+                            <span class="bar-value">120 次</span>
+                        </div>
+                        <div class="bar-row">
+                            <span class="bar-label">nginx reload</span>
+                            <div class="bar-track">
+                                <div class="bar-fill-chart green" style="width:6%">1.25%</div>
+                            </div>
+                            <span class="bar-value">80 次</span>
+                        </div>
+                    </div>
+                    <div style="margin-top: 16px; padding: 10px 14px; background: rgba(244,67,54,0.1); border: 1px solid rgba(244,67,54,0.3); border-radius: 8px; display: flex; gap: 10px; align-items: flex-start;">
+                        <span style="font-size: 14px;">⚠️</span>
+                        <div>
+                            <div style="font-size: 12px; color: #f44336; font-weight: 500;">「kubectl delete」错误率 15%</div>
+                            <div style="font-size: 11px; color: #888; margin-top: 2px;">常见：资源不存在 40% · 权限不足 30% · 依赖未清理 20%</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Smart Recommendations -->
+            <div class="col" style="margin-bottom: 0;">
+                <div class="col-title">💡 智能推荐 <span class="badge">基于数据分析</span></div>
+                <ul class="recommend-list">
+                    <li class="recommend-item">
+                        <div class="recommend-icon purple">📋</div>
+                        <div class="recommend-text">
+                            <div class="recommend-title">建议将「docker restart」添加到命令片段</div>
+                            <div class="recommend-desc">本周执行 65 次，预计每周节省 10.8 分钟</div>
+                        </div>
+                        <button class="recommend-btn primary">一键添加</button>
+                    </li>
+                    <li class="recommend-item">
+                        <div class="recommend-icon green">🌟</div>
+                        <div class="recommend-text">
+                            <div class="recommend-title">发现高效操作：张三的「deploy.sh」脚本</div>
+                            <div class="recommend-desc">团队使用 50 次，成功率 98%，比手动操作快 3 倍</div>
+                        </div>
+                        <button class="recommend-btn outline">采用</button>
+                    </li>
+                    <li class="recommend-item">
+                        <div class="recommend-icon orange">📈</div>
+                        <div class="recommend-text">
+                            <div class="recommend-title">效率报告：本周已节省约 2.5 小时</div>
+                            <div class="recommend-desc">目标将片段使用率从 37% 提升到 50%，再节省 1 小时</div>
+                        </div>
+                        <button class="recommend-btn outline">查看报告</button>
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Status Bar -->
+        <div class="status-bar">
+            <div class="status-item">
+                <span>📊 命令分析仪表盘</span>
+                <span>👥 3 人活跃</span>
+                <span>📊 1,234 次执行</span>
+            </div>
+            <div class="status-item">
+                <span class="status-badge">数据 3s 前更新</span>
+                <span class="status-badge">本周</span>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

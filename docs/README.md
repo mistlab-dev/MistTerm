@@ -11,6 +11,7 @@ docs/
 ├── README.md                 # 本文档（文档索引）
 ├── product/                  # 产品文档
 │   ├── README.md            # 产品详细设计文档
+│   ├── fragments-analytics.md  # ⭐ 命令片段 + 分析统计（核心功能）
 │   ├── MistTerm-Efficiency-First.md  # 效率优先版（推荐）
 │   ├── MistTerm-2.0-Design*.md      # 历史版本
 │   ├── team-collaboration.md        # 团队协同详细设计
@@ -87,6 +88,8 @@ docs/
 |-----|---------|----------|
 | 主终端界面 | [terminal-main.png](protos/terminal-main.png) | [proto-terminal-main.html](product/proto-terminal-main.html) |
 | 命令片段创建 | [fragments-create.png](protos/fragments-create.png) | [proto-fragments-create.html](product/proto-fragments-create.html) |
+| 命令片段列表 | [fragments-analytics.png](protos/fragments-analytics.png) | [proto-terminal-main.html](product/proto-fragments-analytics.html) |
+| 命令分析仪表盘 | [analytics-dashboard.png](protos/analytics-dashboard.png) | [proto-analytics-dashboard.html](product/proto-analytics-dashboard.html) |
 | 命令片段列表 | [fragments-list.png](protos/fragments-list.png) | [proto-fragments-list.html](product/proto-fragments-list.html) |
 | SFTP 文件传输 | [sftp-main.png](protos/sftp-main.png) | [proto-sftp-main.html](product/proto-sftp-main.html) |
 | 凭证管理 | [credentials-list.png](protos/credentials-list.png) | [proto-credentials-list.html](product/proto-credentials-list.html) |
