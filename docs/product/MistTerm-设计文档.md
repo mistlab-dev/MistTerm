@@ -420,144 +420,320 @@ function expandLeft() {
 
 ## 九、技术实现建议
 
-### 9.1 技术路线
+### 9.1 技术路线（当前代码实际使用）
 
-*（已确认：纯 Rust 实现，无需 Web 技术栈）*
+| 模块 | 实现 | crate / 版本 |
+|---|---|---|
+| GUI 框架 | **egui** + **eframe** (wgpu 后端，原生桌面窗口) | `eframe = "0.23"`, `egui = "0.23"` |
+| 终端引擎 | **alacritty_terminal** — vte ANSI 解析 + grid 屏幕存储 + 光标/滚动/颜色 | `alacritty_terminal = "0.26"` |
+| SSH 连接 | **ssh2** (libssh 纯 Rust 绑定，同步 API) | `ssh2 = "0.9"` |
+| SSH 管理 | 自研 `SshManager`，多会话 + `mpsc` 通道 | 项目内 `src/ssh/manager.rs` |
+| 异步运行时 | **tokio** (full) | `tokio = "1.35"` |
+| 剪贴板 | **arboard** (跨平台) | `arboard = "3.3"` |
+| 文件对话框 | **rfd** (跨平台原生文件选择器) | `rfd = "0.12"` |
+| 密码存储 | **keyring** (系统密钥链) + **aes-gcm** 回退加密 | `keyring = "2.3"`, `aes-gcm = "0.10"` |
+| Git 同步 | **git2** (libgit2 绑定) | `git2 = "0.18"` |
+| 序列化 | **serde** + **serde_json** | `serde = "1.0"` |
+| 字体渲染 | **ab_glyph** (字形加载与栅格化) | `ab_glyph = "0.2"` |
+| 日志 | **tracing** + tracing-subscriber | `tracing = "0.1"` |
+| 文件传输 | ZMODEM (zmodem2) + SCP + cat pipe | 项目内 `src/ssh/lrzsz.rs`, `src/ssh/file_transfer.rs` |
 
-| 模块 | 推荐 Rust 方案 |
-|---|---|
-| GUI 框架 | **egui** / **Druid** / **GPUI**（根据团队技术积累选择） |
-| 终端引擎 | **Portable-pty** (跨平台 pty fork/exec) 或自研 pty 封装 |
-| 终端渲染 | 自研 terminal widget 或基于 alacritty 的 vte 解析 + 自定义渲染 |
-| 状态管理 | Rust 原生 struct + enum 模式 |
-| 主题/样式 | CSS-in-Rust 风格或硬编码颜色常量 |
-| SSH 连接 | **ssh2** crate 或直接封装 libssh |
+### 9.2 目录结构
 
-### 9.2 核心数据结构（Rust）
+```
+src/
+├── main.rs                      // 程序入口
+├── core/
+│   ├── mod.rs                   // 公开 SessionManager
+│   ├── session.rs               // Session 结构体 + SessionManager 增删改查
+│   └── connection.rs            // 连接逻辑
+├── ui/
+│   ├── mod.rs                   // 模块声明
+│   ├── app.rs                   // MistTermApp (主应用，实现 eframe::App trait)
+│   ├── sidebar.rs               // Sidebar (左侧会话列表 + 命令片段快捷区)
+│   ├── terminal.rs              // TerminalView (终端视图组件，含 SSH 生命周期)
+│   └── dialogs.rs               // 弹窗 (新建/编辑/关于)
+├── terminal/
+│   ├── mod.rs                   // 公开 Terminal
+│   └── alacritty.rs             // 基于 alacritty_terminal 的适配层
+├── ssh/
+│   ├── client.rs                // SshClient — 单连接封装
+│   ├── manager.rs               // SshManager — 多会话管理
+│   ├── file_transfer.rs         // SCP 直传
+│   └── lrzsz.rs                 // ZMODEM (lrzsz) 传输
+├── security/
+│   ├── mod.rs
+│   └── keyring.rs               // 密码加密存储
+└── bin/
+    ├── test_file_transfer.rs
+    ├── test_file_transfer_md5.rs
+    ├── test_zmodem.rs
+    ├── test_zmodem_receive.rs
+    ├── test_gui.rs
+    └── zmodem_impl_mod.rs
+```
+
+### 9.3 核心数据结构
 
 ```rust
-// 连接
-#[derive(Debug, Clone)]
-pub struct Connection {
+// ===== 会话管理 (src/core/session.rs) =====
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Session {
     pub id: String,
     pub name: String,
     pub host: String,
-    pub status: ConnectionStatus,
-    pub connected_at: Option<i64>,
-    pub session_id: Option<String>,
+    pub port: u16,
+    pub username: String,
+    pub password: String,           // 加密存储
+    pub group: String,              // 分组（默认 "默认"）
+    pub last_connected_at: i64,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConnectionStatus {
-    Online,
-    Offline,
+pub struct SessionManager {
+    sessions: Vec<Session>,
 }
 
-// 命令片段
-#[derive(Debug, Clone)]
-pub struct Fragment {
-    pub id: String,
-    pub title: String,
-    pub command: String,
-    pub tag: FragmentTag,
-    pub categories: Vec<String>,
-    pub usage_count: u32,
-    pub success_rate: f32,    // 0.0 - 100.0
-    pub avg_time_ms: u32,
+impl SessionManager {
+    pub fn new() -> Self;
+    pub fn list_sessions() -> &[Session];
+    pub fn get_session(&self, id: &str) -> Option<&Session>;
+    pub fn create_session(&mut self, name, host, port, username, password, group);
+    pub fn update_session(&mut self, id, name, host, port, username, password, group) -> bool;
+    pub fn delete_session(&mut self, id: &str);
+    pub fn mark_session_connected(&mut self, id: &str);  // 更新 last_connected_at
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum FragmentTag {
-    Personal,
-    Team,
-    Market,
+// ===== SSH 连接 (src/ssh/client.rs) =====
+pub struct SshConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
 }
 
-// 终端 Tab
-#[derive(Debug, Clone)]
-pub struct TerminalTab {
-    pub id: String,
-    pub title: String,
-    pub session_id: String,
-    pub active: bool,
-    pub connected_at: i64,
+// ===== SSH 管理 (src/ssh/manager.rs) =====
+pub enum SshMessage {
+    Output(Vec<u8>),              // 终端输出字节
+    Disconnected(String),          // 断开连接
 }
 
-// 全局状态
-pub struct AppState {
-    pub panels: PanelState,
-    pub left_category: LeftCategory,
-    pub right_category: RightCategory,
-    pub left_search: String,
-    pub right_search: String,
-    pub tabs: Vec<TerminalTab>,
-    pub active_tab_id: String,
-    pub connections: Vec<Connection>,
-    pub fragments: Vec<Fragment>,
+pub struct SshSessionHandle {
+    pub input_tx: mpsc::Sender<Vec<u8>>,  // 向 SSH 会话发送输入
 }
 
-impl Default for AppState {
-    fn default() -> Self { /* ... */ }
+pub struct SshManager {
+    // 管理多个 SSH 会话
+    pub fn connect(config: SshConfig) -> Result<(SshManager, Receiver<SshMessage>), String>;
+    // ...
+}
+
+// ===== 终端模拟器 (src/terminal/alacritty.rs) =====
+// 基于 alacritty_terminal 的 Term (屏幕状态/grid/滚动) + Processor (VTE 解析)
+pub struct Terminal {
+    term: Term<VoidListener>,    // alacritty 终端核心
+    parser: Processor,           // VTE (VT100/ANSI) 字节流解析器
+    width: usize,
+    height: usize,
+}
+
+impl Terminal {
+    pub fn new(width: usize, height: usize) -> Self;
+    pub fn feed(&mut self, data: &[u8]);                          // 送入 SSH 输出字节
+    pub fn resize(&mut self, width: usize, height: usize);        // 窗口尺寸变化
+    pub fn get_formatted_output(&self) -> String;                  // 纯文本输出
+    pub fn get_layout_job(&self, font_size: f32, default_fg: Color32) -> LayoutJob;  // 带颜色的渲染布局
+}
+
+// ===== 终端视图 (src/ui/terminal.rs) =====
+pub struct TerminalView {
+    session_id: Option<usize>,
+    ssh_manager: Option<SshManager>,
+    ssh_rx: Option<Receiver<SshMessage>>,
+    ssh_handle: Option<SshSessionHandle>,
+    terminal: VtTerminal,           // ← 实际的终端模拟器实例
+    connected: bool,
+    cols: u32, rows: u32,
+    lrzsz: LrzszTransfer,           // ZMODEM 传输器
+    font_size: f32,
+    show_fragment_panel: bool,       // 命令片段面板可见性
+    pending_rz_upload: bool,
+    transfer_progress: Option<(String, u64, u64)>,
+    download_dir: String,
+    connected_at: Option<Instant>,
+    // ...
+}
+
+impl TerminalView {
+    pub fn new() -> Self;
+    pub fn connect(&mut self, host: &str, port: u16, username: &str, password: &str);
+    pub fn show(&mut self, ui: &mut egui::Ui);                     // 在 ui 中渲染
+    pub fn insert_fragment(&mut self, command: &str);               // 插入命令片段
+    pub fn start_upload(&mut self, path: &Path) -> Result<(), String>;
+    pub fn clear_screen(&mut self);
+    pub fn is_connected(&self) -> bool;
+    pub fn font_size(&self) -> f32;
+    pub fn connection_server_text(&self) -> String;
+    pub fn connection_duration_text(&self) -> String;
+    pub fn connection_error_text(&self) -> Option<String>;
+}
+
+// ===== 侧边栏 (src/ui/sidebar.rs) =====
+pub struct Sidebar;
+impl Sidebar {
+    pub fn show(ui, session_manager, selected_id, search_query, connected_sessions) -> SidebarOutput;
+}
+pub struct SidebarOutput {
+    pub response: egui::Response,
+    pub selected_session_id: Option<String>,
+    pub delete_session_id: Option<String>,
+    pub edit_session_id: Option<String>,
+    pub create_session_clicked: bool,
+}
+
+// 侧边栏当前展示的内容：
+// - 会话列表（带搜索过滤，按在线状态 + 上次连接时间排序，分组显示）
+// - 右键菜单：编辑 / 删除
+// - 底部：命令片段快捷区（重启 Nginx / 查看日志 等固定项）
+
+// ===== 主应用 (src/ui/app.rs) =====
+pub struct MistTermApp {
+    session_manager: SessionManager,
+    selected_session_id: Option<String>,
+    sidebar_collapsed: bool,
+    sidebar_width: f32,              // 默认 240.0，可拖拽调整 180~400
+    tabs: Vec<TerminalTab>,          // 多 Tab 终端
+    active_tab: Option<usize>,
+    status_message: String,
+    show_fragment_panel: bool,       // 命令片段弹窗式面板
+    show_new_session_dialog: bool,
+    show_edit_session_dialog: bool,
+    show_about_dialog: bool,
+    sidebar_search_query: String,
+    fragment_search_query: String,
+    // 新建/编辑会话表单字段...
 }
 ```
 
-### 9.3 状态管理
+### 9.4 主题与配色
 
-```
-App
-├── panels: PanelState
-│   ├── left_collapsed: bool
-│   └── right_collapsed: bool
-├── connections: Vec<Connection>    // 连接列表
-├── fragments: Vec<Fragment>        // 片段列表
-├── filter: FilterState
-│   ├── left_category: LeftCategory
-│   ├── right_category: RightCategory
-│   ├── left_query: String
-│   └── right_query: String
-├── tabs: TabManager
-│   ├── tabs: Vec<TerminalTab>
-│   └── active_id: String
-└── stats: StatsState               // 状态栏统计
-    ├── total_commands: u64
-    └── weekly_growth: f32
+当前代码使用 `apply_design_theme()` 设置 egui 主题，定义如下：
+
+```rust
+fn apply_design_theme(ctx: &egui::Context) {
+    let mut style = (*ctx.style()).clone();
+    style.visuals = egui::Visuals::dark();
+    style.visuals.panel_fill =      Color32::from_rgb(37, 37, 38);    // #252526 侧栏底色
+    style.visuals.faint_bg_color =  Color32::from_rgb(45, 45, 45);    // #2d2d2d 标题/Tab栏
+    style.visuals.extreme_bg_color = Color32::from_rgb(30, 30, 30);   // #1e1e1e 激活Tab
+    style.visuals.window_fill =     Color32::from_rgb(37, 37, 38);    // #252526
+    style.visuals.widgets.noninteractive.bg_fill = Color32::from_rgb(60, 60, 60);  // #3c3c3c
+    style.visuals.widgets.inactive.bg_fill =       Color32::from_rgb(60, 60, 60);
+    style.visuals.widgets.hovered.bg_fill =        Color32::from_rgb(76, 76, 76);  // #4c4c4c
+    style.visuals.widgets.active.bg_fill =         Color32::from_rgb(102, 126, 234); // #667eea
+}
 ```
 
-### 9.4 组件树建议
+### 9.5 当前实现与设计文档差异对照
+
+| 功能 | 当前代码实现 | 设计文档要求 | 需调整 |
+|---|---|---|---|
+| **左侧面板宽度** | 240px，可拖拽 180~400px | 固定 200px | ✅ 修改默认值 |
+| **左侧面板折叠** | 折叠后仅剩 ☰ 按钮 | 完全消失，状态栏出现 ▸ 复原按钮 | 🔧 需改还原逻辑 |
+| **右侧面板** | 弹窗式 `egui::SidePanel` (show_fragment_panel) | 固定 260px 右侧面板，与左侧对称折叠 | 🔧 需新增右面板组件 |
+| **连接搜索** | 搜索框已支持实时过滤 | ✅ 满足，需加分类标签 |
+| **连接分类** | 无，仅按在线+时间排序 | 全部 / 在线 / 离线 三个标签 | 🔧 需加分类 tabs |
+| **连接条目** | 名称 + 绿色/红色圆点 + 时长 + 分组 | 名称 + 🖥 图标 + 时长 | ✅ 小改 |
+| **片段面板** | 折叠式列表（系统监控/进程管理/网络/Docker/Nginx）| 搜索 + 分类标签 + 统计卡片 | 🔧 需重构 |
+| **片段卡片** | 纯文本按钮列表 | 标题/tag/命令原文/使用统计 卡片式 | 🔧 需重构 |
+| **快捷栏** | 独立 44px 栏（📋📤📥🔍⚙️）| 合并到状态栏（📋📤🔍📊）| 🔧 合并 |
+| **状态栏** | 28px 紫色底条（连接信息+状态徽章）| 11px 暗色底，分左右两组 | 🔧 配色+布局调整 |
+| **终端 Tab** | 多 Tab + 关闭按钮 + 右键菜单 | 需要前缀状态圆点 + hover 关闭按钮 | ✅ 当前已支持 |
+| **终端输入** | TerminalView::show() 渲染，独立 PTY 输入 | 统一输出+输入区域，contenteditable | 🔧 需调整 |
+| **欢迎页** | 欢迎界面（快速开始指南）| 无此要求，终端区域为空时显示提示 | ✅ 现有可保留 |
+
+### 9.6 状态管理
 
 ```
-App
-├── TitleBar                    // 标题栏（纯静态）
-├── MainLayout (flex row)       // 主区域
-│   ├── SidePanel (左)          // 连接面板
-│   │   ├── PanelHeader         // "连接" + "−" 按钮
-│   │   ├── SearchBox           // 搜索输入框
-│   │   ├── CategoryTabs        // 全部/在线/离线
-│   │   └── ConnectionList      // 连接条目列表
-│   ├── TerminalPanel           // 终端
-│   │   ├── TabBar              // Tab 栏
-│   │   └── TerminalView        // 终端渲染区 (contenteditable)
-│   │       ├── OutputBlock     // 历史输出
-│   │       └── InputLine       // 当前输入行
-│   └── SidePanel (右)          // 片段面板
-│       ├── PanelHeader         // "命令片段" + "−" 按钮
-│       ├── SearchBox           // 搜索输入框
-│       ├── CategoryTabs        // 常用/Docker/K8s/全部
-│       └── FragmentList        // 片段卡片列表
-└── StatusBar                   // 状态栏
-    ├── LeftGroup               // 复原按钮 + 连接信息
-    └── RightGroup              // 复原按钮 + 工具按钮 + 统计
-```
-
----
-
-## 十、组件树结构
-
-### 10.1 完整组件嵌套
-
-```
-App (主窗口)
+MistTermApp (主应用，实现 eframe::App trait，驱动 update 循环)
 │
+├── session_manager: SessionManager    // 会话列表持久化
+│
+├── panels: PanelState
+│   ├── sidebar_collapsed: bool        // 左侧面板折叠状态
+│   └── show_fragment_panel: bool      // 右侧面板显示状态（当前为弹窗，需改侧边栏）
+│
+├── sidebar_search_query: String        // 左侧搜索
+├── fragment_search_query: String      // 右侧搜索
+│
+├── tabs: Vec<TerminalTab>             // 多 Tab 管理
+│   ├── session_id: String
+│   ├── title: String
+│   └── terminal: TerminalView
+│
+├── active_tab: Option<usize>          // 当前激活 Tab 索引
+├── selected_session_id: Option<String>
+├── status_message: String             // 状态栏文字
+│
+└── [弹窗状态]
+    ├── show_new_session_dialog
+    ├── show_edit_session_dialog
+    └── show_about_dialog
+```
+
+### 9.7 egui 渲染树 (update 函数结构)
+
+```
+MistTermApp::update(ctx, frame)
+│
+├── apply_design_theme(ctx)                    // 应用暗色主题
+│
+├── [快捷键处理]                                 // ⌘N/W/T/J/K
+│
+├── TopBottomPanel::top("title_bar", 36px)     // ← 标题栏
+│   ├── 文件 | 视图 | 帮助 菜单
+│   └── 应用名 "MistTerm - server_text"
+│
+├── CentralPanel                                // ← 主内容区
+│   │
+│   ├── [侧边栏区域 — sidebar_collapsed 控制]
+│   │   ├── Sidebar::show() 渲染                  // 搜索 + 列表 + 命令片段
+│   │   └── [拖拽条 — 4px，可调宽度 180~400px]
+│   │
+│   ├── Tab 栏                                    // Button 数组
+│   │   ├── Tab x N (含关闭 × + 右键菜单)
+│   │   └── [+ 新建]
+│   │
+│   └── TerminalView::show(ui)                   // 终端渲染
+│       └── terminal.get_layout_job() 渲染
+│
+├── SidePanel("fragment_panel", 280px, 右侧)     // ← 当前为弹窗，需改固定面板
+│   └── 折叠式分类（系统/进程/网络/Docker/Nginx）
+│
+├── TopBottomPanel::bottom("bottom_chrome", 72px) // ← 快捷栏+状态栏（待合并）
+│   ├── [快捷操作栏 44px] 📋📤📥🔍⚙️
+│   └── [状态栏 28px] 🖥️ server_text | 🔒SSH-2.0 | 🌐Asia/Shanghai | 💊状态徽章
+│
+└── [模态窗口]
+    ├── "新建会话" (TextEdit 表单)
+    ├── "编辑会话" (TextEdit 表单)
+    ├── "关于 MistTerm"
+    └── 文件选择对话框 (rfd::FileDialog)
+```
+
+### 9.8 实施路线
+
+| 优先级 | 内容 | 涉及文件 | 说明 |
+|---|---|---|---|
+| **P0** | 左侧面板折叠/还原状态栏逻辑 | app.rs, sidebar.rs | 点击 `−` 面板完全隐藏，状态栏出现 ▸ 按钮 |
+| **P0** | 右侧面板从弹窗改为固定 260px 面板 | app.rs, 新增 right_panel.rs | 与左侧对称，支持折叠到状态栏 |
+| **P1** | 左侧搜索框 + 分类标签（全部/在线/离线）| sidebar.rs | 当前已有搜索框，加分类 tabs |
+| **P1** | 右侧搜索 + 分类标签（常用/Docker/K8s/全部）| right_panel.rs | 代替当前折叠式列表 |
+| **P1** | 片段卡片组件化（标题 + tag + 命令原文 + 统计）| right_panel.rs | 改用卡片布局，替换按钮列表 |
+| **P2** | 快捷栏合并到状态栏，去除 44px 独立快捷栏 | app.rs (show_bottom_chrome) | 📋📤🔍📊 融入底部状态条 |
+| **P2** | 状态栏配色改为设计稿色彩 | app.rs | 从紫色底改为暗色底 |
+| **P2** | 左侧面板宽度改为 200px | app.rs | sidebar_width 默认 240 → 200 |
+| **P3** | 终端光标样式 | terminal.rs | 输入行光标统一 |
+| **P3** | 片段统计数据持久化 | 新增 core/fragment_stats.rs | 使用次数/成功率/平均耗时 |
 ├── TitleBar (标题栏)
 │   ├── [红绿灯点]           // 窗口控制 (dots/close/min/max)
 │   ├── [应用名] "MistTerm"
