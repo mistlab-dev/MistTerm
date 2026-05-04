@@ -301,7 +301,7 @@ enum TextSize {
 
 **行内语法标注颜色：**
 
-| 元素 | CSS 类 | 色值 |
+| 元素 | 标识名 | 色值 |
 |---|---|---|
 | Prompt (`➜`) | `.prompt` | `#4CAF50` |
 | 路径 (`~`) | `.path` | `#667eea` |
@@ -556,7 +556,7 @@ Hover 复原按钮
 | Tab 关闭按钮显示/隐藏 | 0.1s | ease |
 | 搜索框 focus 边框 | 0.1s | ease |
 
-**折叠 CSS 等效 (egui 实现)：**
+**折叠实现 (egui)：**
 ```rust
 // 折叠时强制覆盖
 if panel_collapsed {

@@ -1,9 +1,9 @@
 # MistTerm — 终端应用设计文档
 
-> 版本：v1.0  
+> 版本：v1.1  
 > 原型地址：`docs/product/proto-terminal-embedded.html`  
-> 技术栈建议：Electron / Tauri + React + xterm.js  
-> 更新日期：2026-04-30
+> 技术栈：egui + alacritty_terminal + ssh2（纯 Rust 实现）  
+> 更新日期：2026-05-05
 
 ---
 
@@ -46,7 +46,7 @@
 
 ### 2.1 基础色板
 
-| 用途 | 色值 | CSS |
+| 用途 | 色值 | 色值 (rgba) |
 |---|---|---|
 | 页面背景 (body) | `#0d0d14` | `background: #0d0d14` |
 | 窗口/面板底色 | `#13131c` | `background: #13131c` |
@@ -357,18 +357,14 @@
 
 ### 6.3 交互逻辑
 
-```javascript
-// 折叠面板
-function toggleLeft() {
-    sideLeft.classList.toggle('collapsed');
-    restoreLeft.style.display = isCollapsed ? 'inline' : 'none';
-}
+```
+点击面板标题栏 `−`
+  → 面板折叠（width: 0, 隐藏）
+  → 状态栏左侧出现 ▸ 按钮（如果左侧面板）或右侧出现 ▸ 按钮（如果右侧面板）
 
-// 展开面板（从状态栏）
-function expandLeft() {
-    sideLeft.classList.remove('collapsed');
-    restoreLeft.style.display = 'none';
-}
+点击状态栏 `▸ 名称 · N`
+  → 面板展开（还原宽度）
+  → ▸ 按钮消失
 ```
 
 ---
@@ -383,18 +379,7 @@ function expandLeft() {
 | 搜索框 focus | border-color, background | 0.1s | ease |
 | 窗口弹入 | box-shadow | — | 无动画 |
 
-面板折叠时使用 `!important` 覆盖保证折叠态不被 flex 布局撑开：
-```css
-.side.collapsed {
-    width: 0 !important;
-    min-width: 0 !important;
-    padding: 0 !important;
-    margin: 0 !important;
-    border: none !important;
-    overflow: hidden !important;
-    opacity: 0;
-}
-```
+面板折叠时 Rust 实现方式参考 `SPECIFICATION_DETAILED.md` 第 12.2 节中的 `show_animated` 方案。
 
 ---
 
@@ -827,7 +812,7 @@ MistTermApp::update(ctx, frame)
 2. **片段收藏/评分/自定义标签** — 用户可增删改分类和标签
 3. **命令执行统计面板** — 点击 📊 在终端区域展开半屏统计视图
 4. **连接分组/文件夹** — 左侧面板支持嵌套分组
-5. **暗色/亮色主题** — 抽离所有颜色为 CSS 变量，一键切换
+5. **暗色/亮色主题** — 抽离所有颜色为 Rust 常量，一键切换
 6. **片段导入/导出** — JSON/YAML 格式批量导入导出
 7. **SSH 连接配置保存** — 连接配置持久化，支持密钥/AWS SSM
 8. **命令输出搜索高亮** — 🔍 激活后终端内搜索关键字并高亮

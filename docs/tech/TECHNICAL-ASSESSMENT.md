@@ -70,7 +70,7 @@
 | 功能 | 技术栈 | 难度 | 工作量 | 状态 |
 |-----|-------|------|--------|------|
 | SSH 连接 | `ssh2` crate | ⭐ | 5 人天 | ✅ 70% |
-| 终端渲染 | `xterm.js` / `vt100` | ⭐⭐ | 5 人天 | ✅ 50% |
+| 终端渲染 | `alacritty_terminal` (vte+grid) | ⭐⭐ | 5 人天 | ✅ 50% |
 | 会话管理 | 本地 JSON | ⭐ | 5 人天 | ✅ 100% |
 | **多标签页** | egui Tab + 会话池 | ⭐⭐⭐ | 15 人天 | ⚠️ 需开发 |
 
@@ -332,7 +332,7 @@ impl CredentialManager {
 | 技术 | 状态 | 说明 |
 |-----|------|------|
 | SSH 连接 | ✅ 已验证 | ssh2 crate |
-| 终端渲染 | ✅ 已验证 | xterm.js/vt100 |
+| 终端渲染 | ✅ 已验证 | alacritty_terminal (vte+grid) |
 | 会话管理 | ✅ 已验证 | 本地 JSON |
 | 系统密钥链 | ✅ 已验证 | keyring crate |
 | Git 操作 | ✅ 已验证 | git2 crate |
