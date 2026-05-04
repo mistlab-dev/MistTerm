@@ -1,5 +1,7 @@
 # ZMODEM 文件传输协议实现
 
+> 最新的 `rz` 兼容性排障结论与操作手册见：[`docs/ZMODEM_RZ_TROUBLESHOOTING.md`](./ZMODEM_RZ_TROUBLESHOOTING.md)
+
 ## 📋 概述
 
 MistTerm 实现了完整的 ZMODEM 文件传输协议，支持 `rz`（接收）和 `sz`（发送）命令。
@@ -77,7 +79,7 @@ pub struct LrzszTransfer {
 impl LrzszTransfer {
     fn detect_rz_command(&self, data: &[u8]) -> bool  // 检测 rz 命令
     fn start_receive(&self, channel) -> Result<()>    // 启动接收
-    fn start_send(&self, file_path, channel) -> Result<()>  // 启动发送
+    fn start_send(&self, file_path, pump_tx) -> Result<()>  // 经 shell 泵队列下发 ZMODEM
 }
 ```
 
@@ -216,20 +218,18 @@ fn calculate(&self, data: &[u8]) -> u32 {
 
 ### 3. SSH 通道共享
 
-为了支持 ZMODEM 直接读写 SSH 通道（绕过 PTY），需要共享通道：
+交互式 shell 的 `ssh2::Channel` **仅由 Tokio shell 泵任务**编排：键盘与 ZMODEM 经 **`tokio::sync::mpsc` 有界队列**入队，泵内 **`spawn_blocking`** 执行阻塞式 `read`/`write`，避免在异步 `.await` 间持有 `Channel` 锁。
 
 ```rust
-pub struct SshSessionHandle {
-    pub session_id: SshSessionId,
-    input_tx: Sender<Vec<u8>>,
-    resize_tx: Sender<(u32, u32)>,
-    channel: Arc<Mutex<ssh2::Channel>>,  // 共享通道
+pub enum ShellPumpCommand {
+    PtyInput(Vec<u8>),
+    ZmodemWrite(Vec<u8>),
 }
 
-impl SshSessionHandle {
-    pub fn get_channel(&self) -> Option<Arc<Mutex<ssh2::Channel>>> {
-        Some(self.channel.clone())
-    }
+pub struct SshSessionHandle {
+    pub session_id: SshSessionId,
+    pump_tx: tokio::sync::mpsc::Sender<ShellPumpCommand>,
+    resize_tx: tokio::sync::mpsc::Sender<(u32, u32)>,
 }
 ```
 
