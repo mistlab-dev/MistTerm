@@ -58,6 +58,18 @@ const fn mistterm_zfile_bin32_enabled() -> bool {
     false
 }
 
+#[cfg(feature = "std")]
+fn mistterm_wait_file_pos_recover_enabled() -> bool {
+    std::env::var("MISTTERM_ZMODEM_WAIT_FILEPOS_RECOVER")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+#[cfg(not(feature = "std"))]
+const fn mistterm_wait_file_pos_recover_enabled() -> bool {
+    false
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ZfileWireMode {
     Bin16DoubleZpad,
@@ -814,9 +826,10 @@ impl Sender {
                 if self.state == SendState::WaitReceiverInit {
                     self.on_zrinit(header)?;
                 } else if self.state == SendState::WaitFilePos {
-                    // lrzsz 在 ZFILE 后仍可能按超时重发 **ZRQINIT**（而非 ZRINIT）；此前整段被忽略，
-                    // 与 `WaitFilePos` 下忽略 ZRINIT 一样会导致长时间无 ZRPOS。
-                    self.recover_wait_file_pos_after_peer_reinvite()?;
+                    // 默认不在 `WaitFilePos` 自动补发，避免同一批邀请积压导致首轮连发多份 ZFILE。
+                    if mistterm_wait_file_pos_recover_enabled() {
+                        self.recover_wait_file_pos_after_peer_reinvite()?;
+                    }
                 }
                 Ok(())
             }
@@ -866,7 +879,9 @@ impl Sender {
                 self.pending_event = Some(SenderEvent::SessionComplete);
             }
             SendState::WaitFilePos => {
-                self.recover_wait_file_pos_after_peer_reinvite()?;
+                if mistterm_wait_file_pos_recover_enabled() {
+                    self.recover_wait_file_pos_after_peer_reinvite()?;
+                }
             }
             _ => {}
         }

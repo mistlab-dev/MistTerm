@@ -87,10 +87,11 @@ fn contains_xymodem_c_fallback(data: &[u8]) -> bool {
     saw
 }
 
-/// 远端重复发 ZHEX 头 `** ZDLE 'B' '0' '1' ...`（ZRINIT）时，常见于 `rz -e` 严格模式下未推进到 ZRPOS。
-fn contains_peer_zrinit_hex_prefix(data: &[u8]) -> bool {
+/// 统计远端 ZHEX `ZRINIT` 前缀 `** ZDLE 'B' '0' '1'` 出现次数。
+fn count_peer_zrinit_hex_prefix(data: &[u8]) -> usize {
     data.windows(6)
-        .any(|w| w == [0x2a, 0x2a, 0x18, b'B', b'0', b'1'])
+        .filter(|w| **w == [0x2a, 0x2a, 0x18, b'B', b'0', b'1'])
+        .count()
 }
 
 /// 将 PTY 字节流粗略清洗为可读文本片段（保留可打印 ASCII），用于错误提示。
@@ -379,6 +380,16 @@ pub(super) fn run_upload_zmodem2(
     let mut ingress = ZmodemPtyIngress::new();
     ingress.pull_from_rx(upload_pty_rx, upload_pty_pull_bytes.as_ref());
     let prep0 = ingress.preprocess_for_phase(UploadIngressPhase::Handshake);
+    const INIT_BACKLOG_KEEP: usize = 96;
+    if ingress.buf.len() > INIT_BACKLOG_KEEP {
+        let drop_n = ingress.buf.len() - INIT_BACKLOG_KEEP;
+        ingress.buf.drain(..drop_n);
+        log::info!(
+            "ZMODEM 预缓冲裁剪：丢弃旧旁路 {} B，仅保留尾部 {} B 参与首轮握手",
+            drop_n,
+            INIT_BACKLOG_KEEP
+        );
+    }
 
     let mut sender = ZmodemSender::new().map_err(|e| format!("ZMODEM Sender::new: {}", e))?;
     // `Sender::new()` 会排队 ZRQINIT（接收端邀请语）；远端 `rz` 已在发 ZRQINIT，本机作为发送端
@@ -489,8 +500,12 @@ pub(super) fn run_upload_zmodem2(
             ingress.on_fed(consumed);
             let pending_out = sender.drain_outgoing().len();
             let slice = &ingress.buf[..consumed];
-            if !file_data_started && contains_peer_zrinit_hex_prefix(slice) {
-                peer_zrinit_reinvite_count = peer_zrinit_reinvite_count.saturating_add(1);
+            if !file_data_started {
+                let zhex_zrinit_cnt = count_peer_zrinit_hex_prefix(slice);
+                if zhex_zrinit_cnt > 0 {
+                    peer_zrinit_reinvite_count = peer_zrinit_reinvite_count
+                        .saturating_add(zhex_zrinit_cnt);
+                }
             }
             if !file_data_started && contains_xymodem_c_fallback(slice) {
                 return Err(
