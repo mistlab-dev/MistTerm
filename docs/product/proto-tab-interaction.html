@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MistTerm - Tab 交互与面板折叠原型</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d0d14;
+    font-family: 'Inter', sans-serif;
+    padding: 30px;
+    color: #fff;
+  }
+
+  .scene-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: rgba(255,255,255,0.15);
+    margin-bottom: 12px;
+    margin-top: 30px;
+  }
+  .scene-title:first-child { margin-top: 0; }
+
+  .scene {
+    background: #13131c;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    overflow: hidden;
+    margin-bottom: 20px;
+  }
+
+  .window-frame {
+    background: #13131c;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    margin-bottom: 24px;
+  }
+
+  /* ===== 标题栏 ===== */
+  .titlebar {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    height: 36px;
+  }
+  .titlebar .dots { display: flex; gap: 7px; }
+  .titlebar .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .titlebar .dot-red { background: #ff5f56; }
+  .titlebar .dot-yellow { background: #ffbd2e; }
+  .titlebar .dot-green { background: #27c93f; }
+  .titlebar .app-name {
+    flex: 1;
+    text-align: center;
+    color: rgba(255,255,255,0.3);
+    font-size: 13px;
+  }
+  .titlebar .right-info {
+    color: rgba(255,255,255,0.2);
+    font-size: 11px;
+  }
+
+  /* ===== 主区域 ===== */
+  .main-area {
+    display: flex;
+    gap: 6px;
+    padding: 8px;
+  }
+
+  /* ===== 左侧面板 ===== */
+  .left-panel {
+    width: 200px;
+    background: #13131c;
+    border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 6px;
+    overflow: hidden;
+    flex-shrink: 0;
+    transition: width 0.2s ease, opacity 0.2s ease;
+  }
+  .left-panel.collapsed {
+    width: 0 !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+    border: none;
+    overflow: hidden;
+    opacity: 0;
+  }
+  .left-panel .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 9px 10px;
+  }
+  .left-panel .header h4 {
+    color: rgba(255,255,255,0.2);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .left-panel .header .close-btn {
+    color: rgba(255,255,255,0.2);
+    font-size: 14px;
+    line-height: 1;
+    cursor: default;
+  }
+
+  /* ===== 终端区域 ===== */
+  .terminal-area {
+    flex: 1;
+    background: #0a0a12;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.04);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .tabbar {
+    display: flex;
+    align-items: center;
+    background: rgba(255,255,255,0.02);
+    padding: 0 4px;
+    min-height: 32px;
+    overflow-x: auto;
+  }
+
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    font-size: 11px;
+    cursor: default;
+    position: relative;
+    border-right: 1px solid rgba(255,255,255,0.03);
+    white-space: nowrap;
+    transition: background 0.1s ease;
+  }
+  .tab.active {
+    background: #0a0a12;
+    color: rgba(255,255,255,0.8);
+  }
+  .tab.inactive {
+    color: rgba(255,255,255,0.25);
+  }
+  .tab.inactive:hover {
+    background: rgba(255,255,255,0.02);
+  }
+
+  .tab .dot-indicator {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .tab .dot-indicator.online { background: #4CAF50; }
+  .tab .dot-indicator.offline { background: rgba(255,255,255,0.15); }
+
+  .tab .tab-close {
+    font-size: 12px;
+    color: rgba(255,255,255,0.3);
+    opacity: 0;
+    margin-left: 2px;
+    transition: opacity 0.1s ease;
+    line-height: 1;
+  }
+  .tab:hover .tab-close {
+    opacity: 1;
+  }
+  .tab .tab-close:hover { color: #fff; }
+
+  .tab-new {
+    padding: 7px 10px;
+    color: rgba(255,255,255,0.25);
+    font-size: 16px;
+    line-height: 1;
+    cursor: default;
+  }
+  .tab-new:hover { color: rgba(255,255,255,0.5); }
+
+  .terminal-content {
+    padding: 10px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    color: rgba(255,255,255,0.4);
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  .terminal-content .prompt { color: #4CAF50; }
+  .terminal-content .path { color: #667eea; }
+  .terminal-content .cmd { color: rgba(255,255,255,0.9); }
+  .terminal-content .out { color: rgba(255,255,255,0.4); }
+  .terminal-content .current-input {
+    display: flex;
+    align-items: center;
+    gap: 0;
+  }
+  .cursor-blink {
+    display: inline-block;
+    width: 2px;
+    height: 16px;
+    background: rgba(255,255,255,0.6);
+    margin-left: 1px;
+    animation: blink 1s step-end infinite;
+  }
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  /* ===== 右侧面板 ===== */
+  .right-panel {
+    width: 260px;
+    background: #13131c;
+    border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 6px;
+    overflow: hidden;
+    flex-shrink: 0;
+    transition: width 0.2s ease, opacity 0.2s ease;
+  }
+  .right-panel.collapsed {
+    width: 0 !important;
+    min-width: 0 !important;
+    padding: 0 !important;
+    border: none;
+    overflow: hidden;
+    opacity: 0;
+  }
+  .right-panel .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 9px 10px;
+  }
+  .right-panel .header h4 {
+    color: rgba(255,255,255,0.2);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .frag-card {
+    padding: 7px 8px;
+    transition: background 0.1s ease;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+  .frag-card:hover {
+    background: rgba(255,255,255,0.03);
+  }
+  .frag-card .frag-title {
+    color: rgba(255,255,255,0.5);
+    font-size: 12px;
+    margin-bottom: 3px;
+  }
+  .frag-card .frag-cmd {
+    color: rgba(255,255,255,0.12);
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .frag-card .frag-stats {
+    font-size: 10px;
+    margin-top: 2px;
+    color: rgba(255,255,255,0.1);
+  }
+  .frag-card .frag-stats .n { color: rgba(255,255,255,0.25); }
+
+  .tag {
+    display: inline-block;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 500;
+    margin-left: 6px;
+  }
+  .tag.team { background: rgba(76,175,80,0.05); color: rgba(76,175,80,0.35); }
+  .tag.personal { background: rgba(102,126,234,0.05); color: rgba(102,126,234,0.35); }
+
+  /* ===== 状态栏 ===== */
+  .statusbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 14px;
+    height: 28px;
+    border-top: 1px solid rgba(255,255,255,0.03);
+    background: #13131c;
+  }
+
+  .statusbar .left-group, .statusbar .right-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .statusbar .right-group { gap: 4px; }
+
+  .statusbar .conn-info {
+    color: rgba(255,255,255,0.12);
+    font-size: 11px;
+  }
+
+  .restore-btn {
+    font-size: 10px;
+    color: rgba(102,126,234,0.25);
+    padding: 1px 5px;
+    border-radius: 3px;
+    cursor: default;
+    transition: all 0.1s ease;
+  }
+  .restore-btn:hover {
+    color: rgba(102,126,234,0.45);
+    background: rgba(102,126,234,0.04);
+  }
+
+  .tool-btn {
+    font-size: 12px;
+    line-height: 1;
+    color: rgba(255,255,255,0.08);
+    padding: 0 3px;
+    cursor: default;
+    transition: color 0.1s ease;
+  }
+  .tool-btn:hover { color: rgba(255,255,255,0.25); }
+
+  .sep {
+    color: rgba(255,255,255,0.04);
+    margin: 0 2px;
+  }
+
+  .stats-num {
+    color: rgba(255,255,255,0.1);
+    font-size: 10px;
+  }
+  .growth {
+    color: rgba(76,175,80,0.3);
+    font-size: 11px;
+  }
+
+  /* ===== 场景控制 ===== */
+  .scenes-grid {
+    display: flex;
+    gap: 30px;
+    align-items: flex-start;
+  }
+
+  .annotation {
+    position: absolute;
+    font-size: 9px;
+    color: rgba(102,126,234,0.3);
+    white-space: nowrap;
+    pointer-events: none;
+  }
+
+  .scene-wrapper {
+    position: relative;
+    background: #13131c;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    flex: 1;
+  }
+  .scene-wrapper .scene-label {
+    position: absolute;
+    top: 6px;
+    right: 10px;
+    font-size: 9px;
+    color: rgba(255,255,255,0.08);
+    letter-spacing: 0.3px;
+    z-index: 10;
+  }
+
+  .empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 400px;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .empty-state .icon {
+    font-size: 32px;
+    opacity: 0.08;
+  }
+  .empty-state .text {
+    color: rgba(255,255,255,0.08);
+    font-size: 12px;
+  }
+  .empty-state .shortcuts {
+    color: rgba(255,255,255,0.05);
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .no-result {
+    color: rgba(255,255,255,0.08);
+    font-size: 10px;
+    padding: 20px;
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+
+<!-- ====== 场景1: 多 Tab + hover 关闭按钮 ====== -->
+<div class="scene-title">场景1: 多 Tab + hover 关闭按钮</div>
+<div class="scene-wrapper" style="margin-bottom:24px;">
+  <div class="scene-label">场景1 · Tab 交互</div>
+  <div class="titlebar">
+    <div class="dots">
+      <div class="dot dot-red"></div>
+      <div class="dot dot-yellow"></div>
+      <div class="dot dot-green"></div>
+    </div>
+    <div class="app-name">MistTerm</div>
+    <div class="right-info">SSH · 2h 34m</div>
+  </div>
+  <div class="main-area">
+    <div class="left-panel" style="height:380px;">
+      <div class="header"><h4>连接</h4><span class="close-btn">−</span></div>
+      <div style="padding:4px 8px 6px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="color:rgba(255,255,255,0.12);font-size:11px;">🔍</span>
+          <span style="color:rgba(255,255,255,0.12);font-size:10px;">搜索连接…</span>
+        </div>
+      </div>
+      <div style="display:flex;border-bottom:1px solid rgba(255,255,255,0.03);">
+        <div style="flex:1;text-align:center;padding:4px 0;color:rgba(102,126,234,0.5);font-size:10px;">全部</div>
+        <div style="flex:1;text-align:center;padding:4px 0;color:rgba(255,255,255,0.18);font-size:10px;">在线</div>
+        <div style="flex:1;text-align:center;padding:4px 0;color:rgba(255,255,255,0.18);font-size:10px;">离线</div>
+      </div>
+      <div style="padding:4px;">
+        <div style="padding:8px 10px;border-radius:4px;background:rgba(102,126,234,0.05);display:flex;align-items:center;gap:8px;">
+          <span style="font-size:11px;opacity:0.35;">🖥</span>
+          <span style="flex:1;color:rgba(255,255,255,0.75);font-size:12px;">生产服务器</span>
+          <span style="color:rgba(76,175,80,0.25);font-size:10px;">2h 34m</span>
+        </div>
+        <div style="padding:8px 10px;border-radius:4px;display:flex;align-items:center;gap:8px;">
+          <span style="font-size:11px;opacity:0.35;">🖥</span>
+          <span style="flex:1;color:rgba(255,255,255,0.5);font-size:12px;">测试服务器</span>
+          <span style="color:rgba(76,175,80,0.25);font-size:10px;">45m</span>
+        </div>
+        <div style="padding:8px 10px;border-radius:4px;display:flex;align-items:center;gap:8px;">
+          <span style="font-size:11px;opacity:0.35;">🖥</span>
+          <span style="flex:1;color:rgba(255,255,255,0.5);font-size:12px;">数据库</span>
+          <span style="color:rgba(255,255,255,0.12);font-size:10px;">离线</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="terminal-area" style="height:380px;">
+      <div class="tabbar">
+        <div class="tab active">
+          <div class="dot-indicator online"></div>
+          ubuntu@prod-server-01
+          <span class="tab-close">×</span>
+        </div>
+        <div class="tab inactive">
+          <div class="dot-indicator online"></div>
+          root@test-server
+          <span class="tab-close">×</span>
+        </div>
+        <div class="tab inactive">
+          <div class="dot-indicator offline"></div>
+          admin@database
+          <span class="tab-close">×</span>
+        </div>
+        <div class="tab inactive">
+          <div class="dot-indicator online"></div>
+          dev@pre-release
+          <span class="tab-close" style="opacity:1;">×</span>
+        </div>
+        <div class="tab-new">+</div>
+      </div>
+      <div class="terminal-content">
+        <div><span class="prompt">➜</span> <span class="path">~</span> <span class="cmd">systemctl status nginx</span></div>
+        <div class="out">● nginx.service — A high performance web server</div>
+        <div class="out">    Loaded: loaded (/lib/systemd/system/nginx.service; enabled)</div>
+        <div class="out">    Active: active (running) since Tue 2026-05-05 06:30:00 CST</div>
+        <div class="out">    Tasks: 2 · Memory: 8.2M</div>
+        <div style="height:8px;"></div>
+        <div class="current-input">
+          <span class="prompt">➜</span>&nbsp;<span class="path">~</span>&nbsp;<span class="cmd">kubectl get pods -n prod</span><span class="cursor-blink"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="right-panel" style="height:380px;">
+      <div class="header"><h4>命令片段</h4><span class="close-btn">−</span></div>
+      <div style="padding:4px 8px 6px;">
+        <div style="color:rgba(255,255,255,0.12);font-size:10px;">🔍 搜索片段…</div>
+      </div>
+      <div style="display:flex;border-bottom:1px solid rgba(255,255,255,0.03);">
+        <div style="flex:1;text-align:center;padding:4px 0;color:rgba(102,126,234,0.5);font-size:10px;">常用</div>
+        <div style="flex:1;text-align:center;padding:4px 0;color:rgba(255,255,255,0.18);font-size:10px;">Docker</div>
+        <div style="flex:1;text-align:center;padding:4px 0;color:rgba(255,255,255,0.18);font-size:10px;">K8s</div>
+        <div style="flex:1;text-align:center;padding:4px 0;color:rgba(255,255,255,0.18);font-size:10px;">全部</div>
+      </div>
+      <div class="frag-card">
+        <div class="frag-title">查看 Pod 日志<span class="tag team">团队</span></div>
+        <div class="frag-cmd">kubectl logs -f --tail=100</div>
+        <div class="frag-stats"><span class="n">320</span>次 · <span class="n">95%</span>成功 · <span class="n">1.2</span>s</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ====== 场景2: 面板折叠态（左侧收起） ====== -->
+<div class="scene-title">场景2: 面板折叠态（左侧收起 → 状态栏显示 ▸ 连接 · 3）</div>
+<div class="scene-wrapper" style="margin-bottom:24px;">
+  <div class="scene-label">场景2 · 折叠</div>
+  <div class="titlebar">
+    <div class="dots">
+      <div class="dot dot-red"></div>
+      <div class="dot dot-yellow"></div>
+      <div class="dot dot-green"></div>
+    </div>
+    <div class="app-name">MistTerm</div>
+    <div class="right-info">SSH · 2h 34m</div>
+  </div>
+  <div class="main-area">
+    <div class="left-panel collapsed"></div>
+    <div class="terminal-area" style="height:380px;">
+      <div class="tabbar">
+        <div class="tab active">
+          <div class="dot-indicator online"></div>
+          ubuntu@prod-server-01
+          <span class="tab-close">×</span>
+        </div>
+        <div class="tab inactive">
+          <div class="dot-indicator online"></div>
+          root@test-server
+          <span class="tab-close">×</span>
+        </div>
+        <div class="tab-new">+</div>
+      </div>
+      <div class="terminal-content">
+        <div><span class="prompt">➜</span> <span class="path">~</span> <span class="cmd">systemctl status nginx</span></div>
+        <div class="out">● nginx.service — A high performance web server</div>
+        <div class="out">    Active: active (running) since Tue 2026-05-05 06:30:00 CST</div>
+      </div>
+    </div>
+    <div class="right-panel" style="height:380px;">
+      <div class="header"><h4>命令片段</h4><span class="close-btn">−</span></div>
+      <div class="frag-card">
+        <div class="frag-title">查看 Pod 日志<span class="tag team">团队</span></div>
+        <div class="frag-cmd">kubectl logs -f --tail=100</div>
+        <div class="frag-stats"><span class="n">320</span>次 · <span class="n">95%</span>成功</div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar">
+    <div class="left-group">
+      <span class="restore-btn">▸ 连接 · 3</span>
+      <span class="conn-info">⚡ ubuntu@prod-server-01</span>
+    </div>
+    <div class="right-group">
+      <span class="tool-btn">📋</span>
+      <span class="tool-btn">📤</span>
+      <span class="tool-btn">🔍</span>
+      <span class="tool-btn">📊</span>
+      <span class="sep">·</span>
+      <span class="stats-num">1,234次</span>
+      <span class="growth">↑8%</span>
+    </div>
+  </div>
+</div>
+
+
+<!-- ====== 场景3: 两侧面板都收起 ====== -->
+<div class="scene-title">场景3: 两侧面板都收起</div>
+<div class="scene-wrapper" style="margin-bottom:24px;">
+  <div class="scene-label">场景3 · 全部折叠</div>
+  <div class="titlebar">
+    <div class="dots">
+      <div class="dot dot-red"></div>
+      <div class="dot dot-yellow"></div>
+      <div class="dot dot-green"></div>
+    </div>
+    <div class="app-name">MistTerm</div>
+    <div class="right-info">SSH · 2h 34m</div>
+  </div>
+  <div class="main-area" style="padding:8px;">
+    <div class="left-panel collapsed"></div>
+    <div class="terminal-area" style="height:380px;">
+      <div class="tabbar">
+        <div class="tab active">
+          <div class="dot-indicator online"></div>
+          ubuntu@prod-server-01
+          <span class="tab-close">×</span>
+        </div>
+        <div class="tab-new">+</div>
+      </div>
+      <div class="terminal-content">
+        <div><span class="prompt">➜</span> <span class="path">~</span> <span class="cmd">systemctl status nginx</span></div>
+        <div class="out">● nginx.service — A high performance web server</div>
+        <div class="out">    Active: active (running) since Tue 2026-05-05 06:30:00 CST</div>
+        <div class="out">    Tasks: 2 · Memory: 8.2M</div>
+      </div>
+    </div>
+    <div class="right-panel collapsed"></div>
+  </div>
+  <div class="statusbar">
+    <div class="left-group">
+      <span class="restore-btn">▸ 连接 · 3</span>
+      <span class="conn-info">⚡ ubuntu@prod-server-01</span>
+    </div>
+    <div class="right-group">
+      <span class="restore-btn">▸ 命令片段 · 5</span>
+      <span class="tool-btn">📋</span>
+      <span class="tool-btn">📤</span>
+      <span class="tool-btn">🔍</span>
+      <span class="tool-btn">📊</span>
+      <span class="sep">·</span>
+      <span class="stats-num">1,234次</span>
+      <span class="growth">↑8%</span>
+    </div>
+  </div>
+</div>
+
+
+<!-- ====== 场景4: 空状态（无会话时） ====== -->
+<div class="scene-title">场景4: 空状态（无会话、无 Tab）</div>
+<div class="scene-wrapper" style="margin-bottom:24px;">
+  <div class="scene-label">场景4 · 空状态</div>
+  <div class="titlebar">
+    <div class="dots">
+      <div class="dot dot-red"></div>
+      <div class="dot dot-yellow"></div>
+      <div class="dot dot-green"></div>
+    </div>
+    <div class="app-name">MistTerm</div>
+    <div class="right-info">SSH · 0m</div>
+  </div>
+  <div class="main-area">
+    <div class="left-panel" style="height:380px;">
+      <div class="header"><h4>连接</h4><span class="close-btn">−</span></div>
+      <div style="padding:4px 8px 6px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="color:rgba(255,255,255,0.12);font-size:11px;">🔍</span>
+          <span style="color:rgba(255,255,255,0.12);font-size:10px;">搜索连接…</span>
+        </div>
+      </div>
+      <div class="no-result" style="padding:30px 20px;">
+        <div style="font-size:24px;opacity:0.1;margin-bottom:8px;">🔌</div>
+        <div style="margin-bottom:12px;">还没有 SSH 连接</div>
+        <div style="color:rgba(102,126,234,0.25);font-size:10px;">⌘N 新建连接</div>
+      </div>
+    </div>
+    <div class="terminal-area" style="height:380px;">
+      <div class="empty-state">
+        <div class="icon">🖥</div>
+        <div class="text">选择一个连接以开始</div>
+        <div class="shortcuts">⌘N 新建 · ⌘J 搜索</div>
+      </div>
+    </div>
+    <div class="right-panel" style="height:380px;">
+      <div class="header"><h4>命令片段</h4><span class="close-btn">−</span></div>
+      <div style="padding:4px 8px 6px;">
+        <div style="color:rgba(255,255,255,0.12);font-size:10px;">🔍 搜索片段…</div>
+      </div>
+      <div class="frag-card">
+        <div class="frag-title">重启 Nginx<span class="tag team">团队</span></div>
+        <div class="frag-cmd">systemctl restart nginx</div>
+        <div class="frag-stats"><span class="n">500</span>次 · <span class="n">98%</span>成功 · <span class="n">0.8</span>s</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ====== 场景5: 搜索无结果 ====== -->
+<div class="scene-title">场景5: 搜索无结果</div>
+<div class="scene-wrapper" style="margin-bottom:24px;">
+  <div class="scene-label">场景5 · 空搜索</div>
+  <div class="titlebar">
+    <div class="dots">
+      <div class="dot dot-red"></div>
+      <div class="dot dot-yellow"></div>
+      <div class="dot dot-green"></div>
+    </div>
+    <div class="app-name">MistTerm</div>
+    <div class="right-info">SSH · 2h 34m</div>
+  </div>
+  <div class="main-area">
+    <div class="left-panel" style="height:380px;">
+      <div class="header"><h4>连接</h4><span class="close-btn">−</span></div>
+      <div style="padding:4px 8px 6px;">
+        <div style="display:flex;align-items:center;gap:8px;background:#13131c;border:1px solid rgba(102,126,234,0.2);border-radius:4px;padding:5px 8px;">
+          <span style="color:rgba(255,255,255,0.3);font-size:10px;">🔍</span>
+          <span style="color:rgba(255,255,255,0.5);font-size:11px;">nonexistent</span>
+        </div>
+      </div>
+      <div class="no-result">
+        <div style="margin-bottom:6px;">没有匹配的连接</div>
+        <div style="color:rgba(255,255,255,0.05);font-size:9px;">尝试其他关键词或 ⌘N 新建</div>
+      </div>
+    </div>
+    <div class="terminal-area" style="height:380px;">
+      <div class="tabbar">
+        <div class="tab active">
+          <div class="dot-indicator online"></div>
+          ubuntu@prod-server-01
+          <span class="tab-close">×</span>
+        </div>
+        <div class="tab-new">+</div>
+      </div>
+      <div class="terminal-content">
+        <div><span class="prompt">➜</span> <span class="path">~</span> <span class="cmd">ls -la</span></div>
+        <div class="out">total 48</div>
+        <div class="out">drwxr-xr-x  10 root root 4096 May  5 06:30 .</div>
+      </div>
+    </div>
+    <div class="right-panel" style="height:380px;">
+      <div class="header"><h4>命令片段</h4><span class="close-btn">−</span></div>
+      <div style="padding:4px 8px 6px;">
+        <div style="display:flex;align-items:center;gap:8px;background:#13131c;border:1px solid rgba(255,255,255,0.03);border-radius:4px;padding:5px 8px;">
+          <span style="color:rgba(255,255,255,0.3);font-size:10px;">🔍</span>
+          <span style="color:rgba(255,255,255,0.5);font-size:11px;">docker exec</span>
+        </div>
+      </div>
+      <div class="frag-card" style="border-bottom:1px solid rgba(255,255,255,0.03);">
+        <div class="frag-title">Docker 健康检查<span class="tag team">团队</span></div>
+        <div class="frag-cmd">docker ps --format ...</div>
+        <div class="frag-stats"><span class="n">1,200</span>次 · <span class="n">96%</span>成功</div>
+      </div>
+      <div class="frag-card">
+        <div class="frag-title">访问日志<span class="tag personal">个人</span></div>
+        <div class="frag-cmd">tail -f /var/log/nginx/access.log</div>
+        <div class="frag-stats"><span class="n">156</span>次 · <span class="n">100%</span>成功</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ====== 场景6: 快捷键一览 (mock 面板) ====== -->
+<div class="scene-title">场景6: 快捷键一览表</div>
+<div style="background:#13131c;border:1px solid rgba(255,255,255,0.06);border-radius:10px;padding:20px;max-width:500px;margin-bottom:24px;">
+  <div style="color:rgba(255,255,255,0.2);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:14px;">键盘快捷键</div>
+  <style>
+    .shortcut-row { display:flex; justify-content:space-between; padding:4px 0; font-size:11px; }
+    .shortcut-row .key { color:rgba(255,255,255,0.5); }
+    .shortcut-row .action { color:rgba(255,255,255,0.15); font-size:10px; }
+    .shortcut-row .key kbd {
+      display:inline-block;
+      padding:1px 5px;
+      background:rgba(255,255,255,0.03);
+      border:1px solid rgba(255,255,255,0.04);
+      border-radius:3px;
+      font-family:'JetBrains Mono',monospace;
+      font-size:10px;
+      color:rgba(255,255,255,0.4);
+    }
+    .shortcut-divider { height:1px; background:rgba(255,255,255,0.03); margin:8px 0; }
+  </style>
+  <div class="shortcut-row"><span class="key"><kbd>⌘N</kbd></span><span class="action">新建会话</span></div>
+  <div class="shortcut-row"><span class="key"><kbd>⌘E</kbd></span><span class="action">编辑选中会话</span></div>
+  <div class="shortcut-divider"></div>
+  <div class="shortcut-row"><span class="key"><kbd>⌘T</kbd></span><span class="action">新建终端 Tab</span></div>
+  <div class="shortcut-row"><span class="key"><kbd>⌘W</kbd></span><span class="action">关闭当前 Tab</span></div>
+  <div class="shortcut-row"><span class="key"><kbd>⌘1</kbd>–<kbd>9</kbd></span><span class="action">切换到第 N 个 Tab</span></div>
+  <div class="shortcut-row"><span class="key"><kbd>⌘Tab</kbd></span><span class="action">下一个 Tab</span></div>
+  <div class="shortcut-divider"></div>
+  <div class="shortcut-row"><span class="key"><kbd>⌘J</kbd></span><span class="action">聚焦连接搜索框</span></div>
+  <div class="shortcut-row"><span class="key"><kbd>⌘K</kbd></span><span class="action">聚焦片段搜索框</span></div>
+  <div class="shortcut-divider"></div>
+  <div class="shortcut-row"><span class="key"><kbd>⌘H</kbd></span><span class="action">关于 MistTerm</span></div>
+  <div class="shortcut-row"><span class="key"><kbd>⌘,</kbd></span><span class="action">偏好设置</span></div>
+</div>
+
+</body>
+</html>

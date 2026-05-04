@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MistTerm - 会话管理弹窗</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d0d14;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    font-family: 'Inter', sans-serif;
+    padding: 40px;
+    gap: 40px;
+    flex-wrap: wrap;
+  }
+
+  .card {
+    background: #13131c;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    width: 380px;
+    overflow: hidden;
+  }
+
+  .card-header {
+    padding: 14px 16px 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+
+  .card-header h3 {
+    color: rgba(255,255,255,0.2);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .card-body {
+    padding: 16px;
+  }
+
+  .field { margin-bottom: 14px; }
+  .field:last-child { margin-bottom: 0; }
+
+  .field label {
+    display: block;
+    color: rgba(255,255,255,0.3);
+    font-size: 10px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    margin-bottom: 6px;
+  }
+
+  .field input, .field select {
+    width: 100%;
+    padding: 7px 10px;
+    background: #13131c;
+    border: 1px solid rgba(255,255,255,0.03);
+    border-radius: 4px;
+    color: rgba(255,255,255,0.7);
+    font-size: 12px;
+    font-family: 'Inter', sans-serif;
+    outline: none;
+    transition: border-color 0.1s ease;
+  }
+
+  .field input:focus {
+    border-color: rgba(102,126,234,0.2);
+  }
+
+  .field input::placeholder {
+    color: rgba(255,255,255,0.12);
+  }
+
+  .field-row {
+    display: flex;
+    gap: 10px;
+  }
+  .field-row .field { flex: 1; }
+
+  .btn-group {
+    display: flex;
+    gap: 8px;
+    margin-top: 20px;
+    justify-content: flex-end;
+  }
+
+  .btn {
+    padding: 6px 16px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-family: 'Inter', sans-serif;
+    border: none;
+    cursor: default;
+    transition: background 0.1s ease;
+  }
+
+  .btn-primary {
+    background: rgba(102,126,234,0.35);
+    color: #667eea;
+  }
+
+  .btn-primary:hover { background: rgba(102,126,234,0.5); }
+
+  .btn-secondary {
+    background: transparent;
+    color: rgba(255,255,255,0.3);
+  }
+
+  .btn-secondary:hover { color: rgba(255,255,255,0.6); }
+
+  .btn-disabled {
+    background: rgba(255,255,255,0.04);
+    color: rgba(255,255,255,0.12);
+    cursor: not-allowed;
+  }
+
+  .group-list {
+    list-style: none;
+    padding: 0;
+  }
+
+  .group-item {
+    display: flex;
+    align-items: center;
+    padding: 8px 10px;
+    border-radius: 4px;
+    transition: background 0.1s ease;
+  }
+
+  .group-item:hover {
+    background: rgba(255,255,255,0.03);
+  }
+
+  .group-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-right: 10px;
+    flex-shrink: 0;
+  }
+
+  .group-dot.online { background: #4CAF50; }
+  .group-dot.offline { background: rgba(255,255,255,0.12); }
+
+  .group-name {
+    flex: 1;
+    color: rgba(255,255,255,0.5);
+    font-size: 12px;
+  }
+
+  .group-meta {
+    color: rgba(255,255,255,0.2);
+    font-size: 10px;
+  }
+
+  .separator {
+    height: 1px;
+    background: rgba(255,255,255,0.03);
+    margin: 8px 0;
+  }
+
+  .group-header {
+    color: rgba(255,255,255,0.2);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 8px 10px 4px;
+  }
+
+  .error-msg {
+    background: rgba(244,67,54,0.08);
+    border: 1px solid rgba(244,67,54,0.2);
+    border-radius: 4px;
+    padding: 8px 10px;
+    color: rgba(244,67,54,0.5);
+    font-size: 11px;
+    margin-bottom: 12px;
+  }
+
+  .confirm-dialog {
+    background: #13131c;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    padding: 20px;
+    max-width: 320px;
+  }
+
+  .confirm-dialog p {
+    color: rgba(255,255,255,0.5);
+    font-size: 12px;
+    line-height: 1.6;
+    margin-bottom: 16px;
+  }
+
+  .label-tag {
+    display: inline-block;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 500;
+  }
+
+  .label-tag.team {
+    background: rgba(76,175,80,0.05);
+    color: rgba(76,175,80,0.35);
+  }
+
+  .label-tag.personal {
+    background: rgba(102,126,234,0.05);
+    color: rgba(102,126,234,0.35);
+  }
+
+  .title-scene { width: 100%; margin-top: 20px; }
+</style>
+</head>
+<body>
+
+  <!-- 场景1: 新建会话 -->
+  <div class="card">
+    <div class="card-header">
+      <h3>新建会话</h3>
+    </div>
+    <div class="card-body">
+      <div class="field">
+        <label>服务器名称</label>
+        <input type="text" placeholder="例: 生产服务器-01" value="生产服务器-01">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>主机地址</label>
+          <input type="text" placeholder="IP 或域名" value="192.168.1.100">
+        </div>
+        <div class="field" style="max-width: 90px;">
+          <label>端口</label>
+          <input type="number" value="22" style="text-align:center;">
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>用户名</label>
+          <input type="text" placeholder="root" value="root">
+        </div>
+        <div class="field">
+          <label>密码</label>
+          <input type="password" value="********">
+        </div>
+      </div>
+      <div class="field">
+        <label>分组</label>
+        <select>
+          <option>默认分组</option>
+          <option selected>生产环境</option>
+          <option>测试环境</option>
+          <option>开发环境</option>
+        </select>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-secondary">取消</button>
+        <button class="btn btn-primary">保存并连接</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 场景2: 编辑会话 -->
+  <div class="card">
+    <div class="card-header">
+      <h3>编辑会话</h3>
+    </div>
+    <div class="card-body">
+      <div class="field">
+        <label>服务器名称</label>
+        <input type="text" value="生产服务器-01">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>主机地址</label>
+          <input type="text" value="192.168.1.100">
+        </div>
+        <div class="field" style="max-width: 90px;">
+          <label>端口</label>
+          <input type="number" value="22" style="text-align:center;">
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>用户名</label>
+          <input type="text" value="root">
+        </div>
+        <div class="field">
+          <label>密码</label>
+          <input type="password" value="********" placeholder="留空保持原密码">
+        </div>
+      </div>
+      <div class="field">
+        <label>分组</label>
+        <select>
+          <option>默认分组</option>
+          <option selected>生产环境</option>
+          <option>测试环境</option>
+        </select>
+      </div>
+      <div style="color:rgba(255,255,255,0.12);font-size:10px;margin-top:4px;">密码留空表示保持原密码不变</div>
+      <div class="btn-group">
+        <button class="btn btn-secondary">取消</button>
+        <button class="btn btn-primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 场景3: 表单校验（空字段） -->
+  <div class="card">
+    <div class="card-header">
+      <h3>新建会话</h3>
+    </div>
+    <div class="card-body">
+      <div class="error-msg">请填写所有必填字段后再提交</div>
+      <div class="field">
+        <label>服务器名称</label>
+        <input type="text" placeholder="例: 生产服务器-01" style="border-color:rgba(244,67,54,0.3);">
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>主机地址</label>
+          <input type="text" placeholder="IP 或域名" value="192.168.1.100">
+        </div>
+        <div class="field" style="max-width: 90px;">
+          <label>端口</label>
+          <input type="number" value="22" style="text-align:center;">
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>用户名</label>
+          <input type="text" value="root">
+        </div>
+        <div class="field">
+          <label>密码</label>
+          <input type="password" placeholder="必填">
+        </div>
+      </div>
+      <div class="field">
+        <label>分组</label>
+        <select><option selected>默认分组</option></select>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-secondary">取消</button>
+        <button class="btn btn-disabled">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 场景4: 删除确认 -->
+  <div class="card">
+    <div class="card-header">
+      <h3>删除会话</h3>
+    </div>
+    <div class="card-body">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding:8px 10px;background:rgba(255,255,255,0.02);border-radius:4px;">
+        <div class="group-dot offline"></div>
+        <div>
+          <div style="color:rgba(255,255,255,0.5);font-size:12px;">生产服务器-01</div>
+          <div style="color:rgba(255,255,255,0.12);font-size:10px;">root@192.168.1.100:22</div>
+        </div>
+      </div>
+      <p style="color:rgba(255,255,255,0.5);font-size:12px;line-height:1.6;margin-bottom:16px;">
+        确认删除该会话配置？<br>
+        <span style="color:rgba(255,255,255,0.12);font-size:11px;">此操作不可恢复，已保存的密码将一并移除。</span>
+      </p>
+      <div class="btn-group">
+        <button class="btn btn-secondary">取消</button>
+        <button class="btn btn-primary" style="background:rgba(244,67,54,0.15);color:rgba(244,67,54,0.5);">删除</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 场景5: 连接错误弹窗 -->
+  <div class="card">
+    <div class="card-header">
+      <h3>连接失败</h3>
+    </div>
+    <div class="card-body">
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:16px;">
+        <div style="font-size:20px;width:28px;text-align:center;color:rgba(244,67,54,0.5);">⚠</div>
+        <div>
+          <div style="color:rgba(255,255,255,0.6);font-size:12px;margin-bottom:4px;">无法连接到 <strong>生产服务器-01</strong></div>
+          <div style="color:rgba(255,255,255,0.12);font-size:11px;line-height:1.6;">
+            ssh: connect to host 192.168.1.100 port 22: Connection refused
+          </div>
+        </div>
+      </div>
+      <div style="padding:8px 10px;background:rgba(255,255,255,0.02);border-radius:4px;margin-bottom:16px;">
+        <div style="color:rgba(255,255,255,0.15);font-size:10px;margin-bottom:4px;">可能的原因</div>
+        <ul style="list-style:none;padding:0;">
+          <li style="color:rgba(255,255,255,0.12);font-size:10px;padding:2px 0;">• SSH 服务未启动</li>
+          <li style="color:rgba(255,255,255,0.12);font-size:10px;padding:2px 0;">• 端口 22 被防火墙屏蔽</li>
+          <li style="color:rgba(255,255,255,0.12);font-size:10px;padding:2px 0;">• 主机地址或端口有误</li>
+        </ul>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-secondary">编辑配置</button>
+        <button class="btn btn-primary">重试</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 场景6: 连接超时弹窗 -->
+  <div class="card">
+    <div class="card-header">
+      <h3>连接超时</h3>
+    </div>
+    <div class="card-body">
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:16px;">
+        <div style="font-size:20px;width:28px;text-align:center;color:rgba(255,152,0,0.5);">⚠</div>
+        <div>
+          <div style="color:rgba(255,255,255,0.6);font-size:12px;margin-bottom:4px;">连接 <strong>测试服务器</strong> 超时</div>
+          <div style="color:rgba(255,255,255,0.12);font-size:11px;line-height:1.6;">
+            ssh: connect to host 10.0.1.50 port 22: Operation timed out<br>
+            (超过 30 秒未响应)
+          </div>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-secondary">取消</button>
+        <button class="btn btn-primary">重试</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 场景7: 凭据错误弹窗 -->
+  <div class="card">
+    <div class="card-header">
+      <h3>认证失败</h3>
+    </div>
+    <div class="card-body">
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:16px;">
+        <div style="font-size:20px;width:28px;text-align:center;color:rgba(244,67,54,0.5);">§</div>
+        <div>
+          <div style="color:rgba(255,255,255,0.6);font-size:12px;margin-bottom:4px;">认证失败 — <strong>生产服务器</strong></div>
+          <div style="color:rgba(255,255,255,0.12);font-size:11px;line-height:1.6;">
+            Permission denied (publickey,password)<br>
+            请检查用户名和密码是否正确
+          </div>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-secondary">下次再说</button>
+        <button class="btn btn-primary">编辑凭据</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 场景8: 密码加密失败 -->
+  <div class="card">
+    <div class="card-header">
+      <h3>密码数据异常</h3>
+    </div>
+    <div class="card-body">
+      <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:16px;">
+        <div style="font-size:20px;width:28px;text-align:center;color:rgba(244,67,54,0.5);">!</div>
+        <div>
+          <div style="color:rgba(255,255,255,0.6);font-size:12px;margin-bottom:4px;">密码数据损坏，无法解密</div>
+          <div style="color:rgba(255,255,255,0.12);font-size:11px;line-height:1.6;">
+            密钥链可能不可用或 AES 密钥文件已丢失。<br>
+            请重新输入密码以修复此会话的凭据。
+          </div>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button class="btn btn-secondary">跳过</button>
+        <button class="btn btn-primary">重新输入密码</button>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

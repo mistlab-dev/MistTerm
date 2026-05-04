@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MistTerm - 文件传输 & 连接 Loading 原型</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d0d14;
+    font-family: 'Inter', sans-serif;
+    padding: 40px;
+    color: #fff;
+  }
+
+  .scene-title {
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: rgba(255,255,255,0.15);
+    margin-bottom: 14px;
+    margin-top: 40px;
+  }
+  .scene-title:first-child { margin-top: 0; }
+
+  .wrapper {
+    background: #13131c;
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    margin-bottom: 30px;
+  }
+
+  .titlebar {
+    display: flex;
+    align-items: center;
+    padding: 10px 16px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    height: 36px;
+    background: #13131c;
+  }
+  .titlebar .dots { display: flex; gap: 7px; }
+  .titlebar .dot { width: 11px; height: 11px; border-radius: 50%; }
+  .titlebar .dot-red { background: #ff5f56; }
+  .titlebar .dot-yellow { background: #ffbd2e; }
+  .titlebar .dot-green { background: #27c93f; }
+  .titlebar .app-name {
+    flex: 1;
+    text-align: center;
+    color: rgba(255,255,255,0.3);
+    font-size: 13px;
+  }
+  .titlebar .right-info { color: rgba(255,255,255,0.2); font-size: 11px; }
+
+  .main-area {
+    display: flex;
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .left-panel, .right-panel {
+    background: #13131c;
+    border: 1px solid rgba(255,255,255,0.04);
+    border-radius: 6px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .left-panel { width: 200px; }
+  .right-panel { width: 260px; }
+
+  .panel-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 9px 10px;
+  }
+  .panel-header h4 {
+    color: rgba(255,255,255,0.2);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .terminal-area {
+    flex: 1;
+    background: #0a0a12;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.04);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .tabbar {
+    display: flex;
+    align-items: center;
+    background: rgba(255,255,255,0.02);
+    padding: 0 4px;
+    min-height: 32px;
+  }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 14px;
+    font-size: 11px;
+    border-right: 1px solid rgba(255,255,255,0.03);
+  }
+  .tab.active { background: #0a0a12; color: rgba(255,255,255,0.8); }
+  .tab.inactive { color: rgba(255,255,255,0.25); }
+  .tab .dot-indicator {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+  }
+  .tab .dot-indicator.online { background: #4CAF50; }
+  .tab .dot-indicator.offline { background: rgba(255,255,255,0.15); }
+  .tab .dot-indicator.connecting {
+    background: #667eea;
+    animation: pulse 1s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+  }
+
+  .statusbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 14px;
+    height: 28px;
+    border-top: 1px solid rgba(255,255,255,0.03);
+    background: #13131c;
+  }
+  .statusbar .left-group, .statusbar .right-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .statusbar .conn-info { color: rgba(255,255,255,0.12); font-size: 11px; }
+  .tool-btn {
+    font-size: 12px; line-height: 1;
+    color: rgba(255,255,255,0.08);
+    padding: 0 3px;
+    cursor: default;
+  }
+  .tool-btn:hover { color: rgba(255,255,255,0.25); }
+  .sep { color: rgba(255,255,255,0.04); margin: 0 2px; }
+
+  /* ====== 进度条组件 ====== */
+  .transfer-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: rgba(10, 10, 18, 0.95);
+    border-top: 1px solid rgba(255,255,255,0.04);
+    padding: 10px 16px;
+    transform: translateY(0);
+    transition: transform 0.2s ease;
+  }
+  .transfer-overlay.hidden { transform: translateY(100%); }
+
+  .transfer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .transfer-header .file-name {
+    color: rgba(255,255,255,0.5);
+    font-size: 11px;
+  }
+  .transfer-header .file-status {
+    color: rgba(255,255,255,0.15);
+    font-size: 10px;
+  }
+
+  .transfer-progress-bar {
+    width: 100%;
+    height: 2px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 1px;
+    overflow: hidden;
+    margin-bottom: 4px;
+  }
+  .transfer-progress-bar .fill {
+    height: 100%;
+    background: #667eea;
+    border-radius: 1px;
+    transition: width 0.3s ease;
+  }
+  .transfer-progress-bar .fill.complete {
+    background: #4CAF50;
+  }
+
+  .transfer-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 9px;
+  }
+  .transfer-meta .left {
+    color: rgba(255,255,255,0.1);
+  }
+  .transfer-meta .right {
+    color: rgba(255,255,255,0.08);
+  }
+
+  /* ====== terminal-content (统一) ====== */
+  .terminal-content {
+    padding: 10px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.7;
+    color: rgba(255,255,255,0.4);
+    flex: 1;
+    overflow-y: auto;
+    position: relative;
+    min-height: 250px;
+  }
+  .prompt { color: #4CAF50; }
+  .path { color: #667eea; }
+  .cmd { color: rgba(255,255,255,0.9); }
+  .out { color: rgba(255,255,255,0.4); }
+  .info-line { color: rgba(102,126,234,0.3); font-size: 11px; }
+
+  /* ====== Loading spinner ====== */
+  .loading-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 12px;
+  }
+  .spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid rgba(102,126,234,0.1);
+    border-top: 2px solid rgba(102,126,234,0.5);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-text { color: rgba(255,255,255,0.08); font-size: 11px; }
+  .loading-detail { color: rgba(255,255,255,0.04); font-size: 9px; }
+
+  /* ====== Tag ====== */
+  .tag {
+    display: inline-block;
+    padding: 2px 5px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: 500;
+    margin-left: 6px;
+  }
+  .tag.team { background: rgba(76,175,80,0.05); color: rgba(76,175,80,0.35); }
+
+  .frag-card {
+    padding: 7px 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+  .frag-card .frag-title { color: rgba(255,255,255,0.5); font-size: 12px; }
+  .frag-card .frag-cmd {
+    color: rgba(255,255,255,0.12);
+    font-size: 10px;
+    font-family: 'JetBrains Mono', monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .frag-card .frag-stats { font-size: 10px; margin-top: 2px; color: rgba(255,255,255,0.1); }
+  .frag-card .frag-stats .n { color: rgba(255,255,255,0.25); }
+
+  .scroll-tip {
+    color: rgba(255,255,255,0.04);
+    font-size: 10px;
+    text-align: center;
+    padding: 4px;
+    background: rgba(255,255,255,0.01);
+    border-top: 1px solid rgba(255,255,255,0.02);
+  }
+</style>
+</head>
+<body>
+
+<!-- ====== 场景1: 文件传输中 + 进度条 ====== -->
+<div class="scene-title">场景1: 文件传输中（ZMODEM 上传，含进度条）</div>
+<div class="wrapper">
+  <div class="titlebar">
+    <div class="dots">
+      <div class="dot dot-red"></div>
+      <div class="dot dot-yellow"></div>
+      <div class="dot dot-green"></div>
+    </div>
+    <div class="app-name">MistTerm</div>
+    <div class="right-info">📤 上传中</div>
+  </div>
+  <div class="main-area">
+    <div class="left-panel" style="height:380px;">
+      <div class="panel-header"><h4>连接</h4><span style="color:rgba(255,255,255,0.2);font-size:14px;">−</span></div>
+      <div style="padding:4px 8px 6px;color:rgba(255,255,255,0.12);font-size:10px;">🔍 搜索连接…</div>
+      <div style="padding:4px;">
+        <div style="padding:8px 10px;border-radius:4px;background:rgba(102,126,234,0.05);display:flex;align-items:center;gap:8px;">
+          <span style="font-size:11px;opacity:0.35;">🖥</span>
+          <span style="flex:1;color:rgba(255,255,255,0.75);font-size:12px;">生产服务器</span>
+          <span style="color:rgba(76,175,80,0.25);font-size:10px;">2h 34m</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="terminal-area" style="height:380px;">
+      <div class="tabbar">
+        <div class="tab active"><div class="dot-indicator online"></div>ubuntu@prod-server-01</div>
+        <div class="tab inactive"><div class="dot-indicator online"></div>root@test-server</div>
+        <div style="padding:7px 10px;color:rgba(255,255,255,0.25);font-size:16px;">+</div>
+      </div>
+      <div class="terminal-content" style="padding-bottom:50px;">
+        <div><span class="prompt">➜</span> <span class="path">~</span> <span class="cmd">ls -la /var/log/</span></div>
+        <div class="out">total 128</div>
+        <div class="out">drwxr-xr-x  8 root root 4096 May 5 06:30 .</div>
+        <div class="out">-rw-r--r--  1 root root  4820 May 5 06:30 deploy-20260505.log</div>
+        <div style="height:8px;"></div>
+        <div><span class="prompt">➜</span> <span class="path">~</span> <span class="cmd"># 开始上传 deploy-20260505.log... (lrzsz)</span></div>
+        <div class="info-line">⏎ ZMODEM: 正在与远程端协商...</div>
+        <div class="info-line">✓ 远程端已确认 (lrzsz v0.12.20)</div>
+        <div class="info-line">⇧ 正在发送: deploy-20260505.log (4.8 MB)</div>
+      </div>
+
+      <!-- 传输进度条浮层 -->
+      <div class="transfer-overlay" style="transform: translateY(0);">
+        <div class="transfer-header">
+          <span class="file-name">📄 deploy-20260505.log</span>
+          <span class="file-status" style="color:rgba(102,126,234,0.5);">传输中…</span>
+        </div>
+        <div class="transfer-progress-bar">
+          <div class="fill" style="width: 62%;"></div>
+        </div>
+        <div class="transfer-meta">
+          <span class="left">62% · 2.9 MB / 4.8 MB</span>
+          <span class="right">1.2 MB/s · 剩余 1.5s</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="right-panel" style="height:380px;">
+      <div class="panel-header"><h4>命令片段</h4><span style="color:rgba(255,255,255,0.2);font-size:14px;">−</span></div>
+      <div style="padding:4px 8px 6px;color:rgba(255,255,255,0.12);font-size:10px;">🔍 搜索片段…</div>
+      <div class="frag-card">
+        <div class="frag-title">查看 Pod 日志<span class="tag team">团队</span></div>
+        <div class="frag-cmd">kubectl logs -f --tail=100</div>
+        <div class="frag-stats"><span class="n">320</span>次</div>
+      </div>
+      <div class="frag-card">
+        <div class="frag-title">Docker 健康检查<span class="tag team">团队</span></div>
+        <div class="frag-cmd">docker ps --format ...</div>
+        <div class="frag-stats"><span class="n">1,200</span>次</div>
+      </div>
+    </div>
+  </div>
+  <div class="statusbar">
+    <div class="left-group">
+      <span class="conn-info">⚡ ubuntu@prod-server-01</span>
+      <span style="color:rgba(102,126,234,0.3);font-size:10px;">📤 62%</span>
+    </div>
+    <div class="right-group">
+      <span class="tool-btn">📋</span>
+      <span class="tool-btn" style="color:rgba(102,126,234,0.5);">📤</span>
+      <span class="tool-btn">🔍</span>
+      <span class="tool-btn">📊</span>
+      <span class="sep">·</span>
+      <span style="color:rgba(255,255,255,0.1);font-size:10px;">1,234次</span>
+      <span style="color:rgba(76,175,80,0.3);font-size:11px;">↑8%</span>
+    </div>
+  </div>
+</div>
+
+
+<!-- ====== 场景2: 文件传输完成 ====== -->
+<div class="scene-title">场景2: 文件传输完成</div>
+<div class="wrapper">
+  <div class="titlebar">
+    <div class="dots"><div class="dot dot-red"></div><div class="dot dot-yellow"></div><div class="dot dot-green"></div></div>
+    <div class="app-name">MistTerm</div>
+    <div class="right-info">传输完成</div>
+  </div>
+  <div class="main-area">
+    <div class="left-panel" style="height:360px;">
+      <div class="panel-header"><h4>连接</h4><span style="color:rgba(255,255,255,0.2);font-size:14px;">−</span></div>
+      <div style="padding:4px;">
+        <div style="padding:8px 10px;border-radius:4px;background:rgba(102,126,234,0.05);display:flex;align-items:center;gap:8px;">
+          <span style="font-size:11px;opacity:0.35;">🖥</span>
+          <span style="flex:1;color:rgba(255,255,255,0.75);font-size:12px;">生产服务器</span>
+          <span style="color:rgba(76,175,80,0.25);font-size:10px;">2h 34m</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="terminal-area" style="height:360px;">
+      <div class="tabbar">
+        <div class="tab active"><div class="dot-indicator online"></div>ubuntu@prod-server-01</div>
+        <div class="tab inactive"><div class="dot-indicator online"></div>root@test-server</div>
+        <div style="padding:7px 10px;color:rgba(255,255,255,0.25);font-size:16px;">+</div>
+      </div>
+      <div class="terminal-content" style="padding-bottom:50px;">
+        <div class="info-line" style="color:rgba(76,175,80,0.3);">✓ ZMODEM 传输完成</div>
+        <div style="color:rgba(76,175,80,0.15);font-size:10px;">   文件名: deploy-20260505.log (4.8 MB)</div>
+        <div style="color:rgba(76,175,80,0.15);font-size:10px;">   耗时: 4.2s · 速率: 1.2 MB/s</div>
+        <div style="height:8px;"></div>
+        <div class="out">已上传到: /var/log/deploy-20260505.log</div>
+        <div style="height:8px;"></div>
+        <div><span class="prompt">➜</span> <span class="path">~</span> <span class="cmd">ls -la /var/log/deploy-20260505.log</span></div>
+        <div class="out">-rw-r--r-- 1 root root 4820 ...</div>
+      </div>
+
+      <div class="transfer-overlay" style="transform: translateY(0);">
+        <div class="transfer-header">
+          <span class="file-name">✓ deploy-20260505.log</span>
+          <span class="file-status" style="color:rgba(76,175,80,0.5);">完成</span>
+        </div>
+        <div class="transfer-progress-bar">
+          <div class="fill complete" style="width: 100%;"></div>
+        </div>
+        <div class="transfer-meta">
+          <span class="left" style="color:rgba(76,175,80,0.2);">4.8 MB · 1.2 MB/s</span>
+          <span class="right" style="color:rgba(76,175,80,0.15);">4.2s</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="right-panel" style="height:360px;">
+      <div class="panel-header"><h4>命令片段</h4><span style="color:rgba(255,255,255,0.2);font-size:14px;">−</span></div>
+      <div style="padding:4px 8px 6px;color:rgba(255,255,255,0.12);font-size:10px;">🔍 搜索片段…</div>
+      <div class="frag-card"><div class="frag-title">查看 Pod 日志<span class="tag team">团队</span></div><div class="frag-cmd">kubectl logs -f --tail=100</div></div>
+    </div>
+  </div>
+  <div class="statusbar">
+    <div class="left-group">
+      <span class="conn-info">⚡ ubuntu@prod-server-01</span>
+      <span style="color:rgba(76,175,80,0.2);font-size:10px;">✓ 传输完成</span>
+    </div>
+    <div class="right-group">
+      <span class="tool-btn">📋</span><span class="tool-btn">📤</span><span class="tool-btn">🔍</span><span class="tool-btn">📊</span>
+      <span class="sep">·</span>
+      <span style="color:rgba(255,255,255,0.1);font-size:10px;">1,234次</span>
+      <span style="color:rgba(76,175,80,0.3);font-size:11px;">↑8%</span>
+    </div>
+  </div>
+</div>
+
+
+<!-- ====== 场景3: 连接中 Loading（多并发） ====== -->
+<div class="scene-title">场景3: 多会话同时连接 Loading</div>
+<div class="wrapper">
+  <div class="titlebar">
+    <div class="dots"><div class="dot dot-red"></div><div class="dot dot-yellow"></div><div class="dot dot-green"></div></div>
+    <div class="app-name">MistTerm</div>
+    <div class="right-info">正在连接…</div>
+  </div>
+  <div class="main-area">
+    <div class="left-panel" style="height:400px;">
+      <div class="panel-header"><h4>连接</h4><span style="color:rgba(255,255,255,0.2);font-size:14px;">−</span></div>
+      <div style="padding:4px;">
+        <!-- 正在连接: 脉冲圆点 -->
+        <div style="padding:8px 10px;border-radius:4px;display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.02);">
+          <div style="width:6px;height:6px;border-radius:50%;background:#667eea;animation:pulse 1s ease-in-out infinite;flex-shrink:0;"></div>
+          <span style="flex:1;color:rgba(255,255,255,0.5);font-size:12px;">生产服务器</span>
+          <span style="color:rgba(102,126,234,0.25);font-size:10px;">连接中…</span>
+        </div>
+        <!-- 正在连接 -->
+        <div style="padding:8px 10px;border-radius:4px;display:flex;align-items:center;gap:8px;">
+          <div style="width:6px;height:6px;border-radius:50%;background:#667eea;animation:pulse 1s ease-in-out infinite 0.3s;flex-shrink:0;"></div>
+          <span style="flex:1;color:rgba(255,255,255,0.5);font-size:12px;">测试服务器</span>
+          <span style="color:rgba(102,126,234,0.25);font-size:10px;">连接中…</span>
+        </div>
+        <!-- 已连接 -->
+        <div style="padding:8px 10px;border-radius:4px;display:flex;align-items:center;gap:8px;">
+          <div style="width:6px;height:6px;border-radius:50%;background:#4CAF50;flex-shrink:0;"></div>
+          <span style="flex:1;color:rgba(255,255,255,0.5);font-size:12px;">数据库</span>
+          <span style="color:rgba(76,175,80,0.25);font-size:10px;">2h 34m</span>
+        </div>
+        <!-- 连接失败 -->
+        <div style="padding:8px 10px;border-radius:4px;display:flex;align-items:center;gap:8px;">
+          <div style="width:6px;height:6px;border-radius:50%;background:rgba(244,67,54,0.5);flex-shrink:0;"></div>
+          <span style="flex:1;color:rgba(255,255,255,0.35);font-size:12px;">预发布</span>
+          <span style="color:rgba(244,67,54,0.3);font-size:10px;">连接失败</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="terminal-area" style="height:400px;">
+      <div class="tabbar">
+        <div class="tab active"><div class="dot-indicator connecting"></div>生产服务器<span style="font-size:10px;color:rgba(102,126,234,0.3);margin-left:4px;">连接中</span></div>
+        <div class="tab inactive"><div class="dot-indicator connecting"></div>测试服务器<span style="font-size:10px;color:rgba(102,126,234,0.3);margin-left:4px;">连接中</span></div>
+        <div class="tab inactive"><div class="dot-indicator online"></div>数据库</div>
+        <div style="padding:7px 10px;color:rgba(255,255,255,0.25);font-size:16px;">+</div>
+      </div>
+      <div class="terminal-content" style="display:flex;flex-direction:column;justify-content:center;align-items:center;height:100%;">
+        <div class="loading-center">
+          <div class="spinner"></div>
+          <div class="loading-text">正在连接 生产服务器…</div>
+          <div class="loading-detail">ssh root@192.168.1.100:22</div>
+          <div style="margin-top:20px;width:200px;">
+            <div class="transfer-progress-bar" style="height:2px;">
+              <div class="fill" style="width:45%;background:rgba(102,126,234,0.3);"></div>
+            </div>
+            <div style="color:rgba(255,255,255,0.04);font-size:9px;text-align:center;margin-top:4px;">认证中 (2/3)…</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="right-panel" style="height:400px;">
+      <div class="panel-header"><h4>命令片段</h4><span style="color:rgba(255,255,255,0.2);font-size:14px;">−</span></div>
+      <div style="padding:4px 8px 6px;color:rgba(255,255,255,0.12);font-size:10px;">🔍 搜索片段…</div>
+      <div class="frag-card"><div class="frag-title">查看 Pod 日志<span class="tag team">团队</span></div><div class="frag-cmd">kubectl logs -f --tail=100</div><div class="frag-stats"><span class="n">320</span>次</div></div>
+      <div class="frag-card"><div class="frag-title">Docker 健康检查<span class="tag team">团队</span></div><div class="frag-cmd">docker ps --format ...</div><div class="frag-stats"><span class="n">1,200</span>次</div></div>
+    </div>
+  </div>
+  <div class="statusbar">
+    <div class="left-group">
+      <span style="color:rgba(102,126,234,0.3);font-size:10px;">⟳ 连接 生产服务器…</span>
+    </div>
+    <div class="right-group">
+      <span class="tool-btn">📋</span><span class="tool-btn">📤</span><span class="tool-btn">🔍</span><span class="tool-btn">📊</span>
+      <span class="sep">·</span>
+      <span style="color:rgba(255,255,255,0.1);font-size:10px;">1,234次</span>
+    </div>
+  </div>
+</div>
+
+
+<!-- ====== 场景4: 连接失败状态（Tab 保留） ====== -->
+<div class="scene-title">场景4: 连接失败后 Tab 保留 + 连接按钮</div>
+<div class="wrapper">
+  <div class="titlebar">
+    <div class="dots"><div class="dot dot-red"></div><div class="dot dot-yellow"></div><div class="dot dot-green"></div></div>
+    <div class="app-name">MistTerm</div>
+    <div class="right-info">连接失败</div>
+  </div>
+  <div class="main-area">
+    <div class="left-panel" style="height:320px;">
+      <div class="panel-header"><h4>连接</h4><span style="color:rgba(255,255,255,0.2);font-size:14px;">−</span></div>
+      <div style="padding:4px;">
+        <div style="padding:8px 10px;border-radius:4px;display:flex;align-items:center;gap:8px;">
+          <div style="width:6px;height:6px;border-radius:50%;background:rgba(244,67,54,0.5);flex-shrink:0;"></div>
+          <span style="flex:1;color:rgba(255,255,255,0.5);font-size:12px;">预发布</span>
+          <span style="color:rgba(244,67,54,0.3);font-size:10px;">连接失败</span>
+        </div>
+        <div style="padding:8px 10px;border-radius:4px;display:flex;align-items:center;gap:8px;">
+          <div style="width:6px;height:6px;border-radius:50%;background:#4CAF50;flex-shrink:0;"></div>
+          <span style="flex:1;color:rgba(255,255,255,0.5);font-size:12px;">生产服务器</span>
+          <span style="color:rgba(76,175,80,0.25);font-size:10px;">2h 34m</span>
+        </div>
+      </div>
+    </div>
+    <div class="terminal-area" style="height:320px;">
+      <div class="tabbar">
+        <div class="tab active"><div class="dot-indicator offline"></div>预发布</div>
+        <div class="tab inactive"><div class="dot-indicator online"></div>生产服务器</div>
+      </div>
+      <div class="terminal-content" style="display:flex;flex-direction:column;justify-content:center;align-items:center;height:100%;">
+        <div style="text-align:center;">
+          <div style="font-size:24px;color:rgba(244,67,54,0.3);margin-bottom:8px;">⛔</div>
+          <div style="color:rgba(255,255,255,0.3);font-size:12px;margin-bottom:4px;">连接失败</div>
+          <div style="color:rgba(255,255,255,0.08);font-size:10px;margin-bottom:16px;font-family:'JetBrains Mono',monospace;">
+            ssh: connect to host 10.0.1.50 port 22: Connection refused
+          </div>
+          <div style="display:flex;gap:8px;justify-content:center;">
+            <div style="padding:5px 14px;background:rgba(102,126,234,0.35);color:#667eea;border-radius:4px;font-size:11px;cursor:default;">重试</div>
+            <div style="padding:5px 14px;background:rgba(255,255,255,0.04);color:rgba(255,255,255,0.2);border-radius:4px;font-size:11px;cursor:default;">编辑配置</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="right-panel" style="height:320px;">
+      <div class="panel-header"><h4>命令片段</h4><span style="color:rgba(255,255,255,0.2);font-size:14px;">−</span></div>
+      <div style="padding:4px 8px 6px;color:rgba(255,255,255,0.12);font-size:10px;">🔍 搜索片段…</div>
+      <div class="frag-card"><div class="frag-title">重启 Nginx<span class="tag team">团队</span></div><div class="frag-cmd">systemctl restart nginx</div></div>
+    </div>
+  </div>
+  <div class="statusbar">
+    <div class="left-group">
+      <span class="conn-info">⚡ ubuntu@prod-server-01</span>
+      <span style="color:rgba(244,67,54,0.2);font-size:10px;">预发布: 连接失败</span>
+    </div>
+    <div class="right-group">
+      <span class="tool-btn">📋</span><span class="tool-btn">📤</span><span class="tool-btn">🔍</span><span class="tool-btn">📊</span>
+      <span class="sep">·</span>
+      <span style="color:rgba(255,255,255,0.1);font-size:10px;">1,234次</span>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
