@@ -420,134 +420,227 @@ function expandLeft() {
 
 ## 九、技术实现建议
 
-### 9.1 技术选型
+### 9.1 技术路线
 
-| 模块 | 推荐方案 | 备选 |
-|---|---|---|
-| 桌面壳 | **Electron** (生态成熟) | Tauri (更轻量) |
-| 终端引擎 | **xterm.js** + node-pty | hterm |
-| UI 框架 | **React** | Vue 3 |
-| 样式方案 | CSS Modules / Tailwind | styled-components |
-| 状态管理 | React Context + useReducer | Zustand |
+*（已确认：纯 Rust 实现，无需 Web 技术栈）*
 
-### 9.2 核心数据结构
+| 模块 | 推荐 Rust 方案 |
+|---|---|
+| GUI 框架 | **egui** / **Druid** / **GPUI**（根据团队技术积累选择） |
+| 终端引擎 | **Portable-pty** (跨平台 pty fork/exec) 或自研 pty 封装 |
+| 终端渲染 | 自研 terminal widget 或基于 alacritty 的 vte 解析 + 自定义渲染 |
+| 状态管理 | Rust 原生 struct + enum 模式 |
+| 主题/样式 | CSS-in-Rust 风格或硬编码颜色常量 |
+| SSH 连接 | **ssh2** crate 或直接封装 libssh |
 
-```typescript
+### 9.2 核心数据结构（Rust）
+
+```rust
 // 连接
-interface Connection {
-  id: string;
-  name: string;
-  host: string;
-  icon?: string;
-  status: 'online' | 'offline';
-  connectedAt?: number;       // 时间戳
-  sessionId?: string;
-  category?: string;          // 分组
+#[derive(Debug, Clone)]
+pub struct Connection {
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    pub status: ConnectionStatus,
+    pub connected_at: Option<i64>,
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConnectionStatus {
+    Online,
+    Offline,
 }
 
 // 命令片段
-interface Fragment {
-  id: string;
-  title: string;
-  command: string;
-  tag: 'personal' | 'team' | 'market';
-  categories: string[];       // ['common', 'docker', 'k8s']
-  usageCount: number;
-  successRate: number;        // 0-100
-  avgTimeMs: number;
+#[derive(Debug, Clone)]
+pub struct Fragment {
+    pub id: String,
+    pub title: String,
+    pub command: String,
+    pub tag: FragmentTag,
+    pub categories: Vec<String>,
+    pub usage_count: u32,
+    pub success_rate: f32,    // 0.0 - 100.0
+    pub avg_time_ms: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum FragmentTag {
+    Personal,
+    Team,
+    Market,
 }
 
 // 终端 Tab
-interface TerminalTab {
-  id: string;
-  title: string;
-  sessionId: string;
-  active: boolean;
-  connectedAt: number;
+#[derive(Debug, Clone)]
+pub struct TerminalTab {
+    pub id: String,
+    pub title: String,
+    pub session_id: String,
+    pub active: bool,
+    pub connected_at: i64,
 }
 
 // 全局状态
-interface AppState {
-  panels: {
-    leftCollapsed: boolean;
-    rightCollapsed: boolean;
-  };
-  activeLeftCategory: string;   // 'all' | 'online' | 'offline'
-  activeRightCategory: string;  // 'common' | 'docker' | 'k8s' | 'all'
-  leftSearchQuery: string;
-  rightSearchQuery: string;
-  tabs: TerminalTab[];
-  activeTabId: string;
-  connections: Connection[];
-  fragments: Fragment[];
+pub struct AppState {
+    pub panels: PanelState,
+    pub left_category: LeftCategory,
+    pub right_category: RightCategory,
+    pub left_search: String,
+    pub right_search: String,
+    pub tabs: Vec<TerminalTab>,
+    pub active_tab_id: String,
+    pub connections: Vec<Connection>,
+    pub fragments: Vec<Fragment>,
+}
+
+impl Default for AppState {
+    fn default() -> Self { /* ... */ }
 }
 ```
 
-### 9.3 CSS 架构要点
+### 9.3 状态管理
 
-```css
-/* 主题变量（建议） */
-:root {
-  --bg-window: #13131c;
-  --bg-terminal: #0a0a12;
-  --bg-page: #0d0d14;
-  --accent: #667eea;
-  --success: #4CAF50;
-  --border-subtle: rgba(255,255,255,0.04);
-  --text-primary: rgba(255,255,255,0.9);
-  --text-secondary: rgba(255,255,255,0.5);
-  --text-muted: rgba(255,255,255,0.12);
-  --text-status: rgba(255,255,255,0.12);
-  --font-ui: 'Inter', sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
-}
+```
+App
+├── panels: PanelState
+│   ├── left_collapsed: bool
+│   └── right_collapsed: bool
+├── connections: Vec<Connection>    // 连接列表
+├── fragments: Vec<Fragment>        // 片段列表
+├── filter: FilterState
+│   ├── left_category: LeftCategory
+│   ├── right_category: RightCategory
+│   ├── left_query: String
+│   └── right_query: String
+├── tabs: TabManager
+│   ├── tabs: Vec<TerminalTab>
+│   └── active_id: String
+└── stats: StatsState               // 状态栏统计
+    ├── total_commands: u64
+    └── weekly_growth: f32
+```
 
-/* 面板折叠动画 */
-.side { transition: all 0.2s ease; }
-.side.collapsed {
-  width: 0 !important;
-  min-width: 0 !important;
-  padding: 0 !important;
-  margin: 0 !important;
-  border: none !important;
-  overflow: hidden !important;
-  opacity: 0;
-}
+### 9.4 组件树建议
+
+```
+App
+├── TitleBar                    // 标题栏（纯静态）
+├── MainLayout (flex row)       // 主区域
+│   ├── SidePanel (左)          // 连接面板
+│   │   ├── PanelHeader         // "连接" + "−" 按钮
+│   │   ├── SearchBox           // 搜索输入框
+│   │   ├── CategoryTabs        // 全部/在线/离线
+│   │   └── ConnectionList      // 连接条目列表
+│   ├── TerminalPanel           // 终端
+│   │   ├── TabBar              // Tab 栏
+│   │   └── TerminalView        // 终端渲染区 (contenteditable)
+│   │       ├── OutputBlock     // 历史输出
+│   │       └── InputLine       // 当前输入行
+│   └── SidePanel (右)          // 片段面板
+│       ├── PanelHeader         // "命令片段" + "−" 按钮
+│       ├── SearchBox           // 搜索输入框
+│       ├── CategoryTabs        // 常用/Docker/K8s/全部
+│       └── FragmentList        // 片段卡片列表
+└── StatusBar                   // 状态栏
+    ├── LeftGroup               // 复原按钮 + 连接信息
+    └── RightGroup              // 复原按钮 + 工具按钮 + 统计
 ```
 
 ---
 
-## 十、页面布局对照 (HTML 结构)
+## 十、组件树结构
+
+### 10.1 完整组件嵌套
 
 ```
-.window                              ← 最外层容器
-├── .title-bar                       ← 标题栏
-│   ├── .dots                        ← 红绿灯点
-│   ├── .title-text                  ← "MistTerm"
-│   └── .title-right                 ← "SSH · 2h 34m"
-├── .main                            ← 主区域 flex row
-│   ├── .side.side-left              ← 左侧面板
-│   │   ├── .side-header             ← "连接" + "−"按钮
-│   │   ├── .side-body               ← 搜索 + 分类 + 列表
-│   │   │   ├── .frag-search         ← 搜索输入框
-│   │   │   ├── .frag-cats           ← 分类标签行
-│   │   │   └── [滚动容器]           ← 连接条目列表
-│   │   │       └── .sess-item       ← 单个连接条目
-│   ├── .center                      ← 终端区域
-│   │   ├── .term-tabs               ← Tab 栏
-│   │   └── .term-content            ← 终端内容
-│   │       └── .term-scroll         ← 滚动输出区 (contenteditable)
-│   │           ├── .out             ← 输出行
-│   │           └── div              ← 输入行 (prompt + path + cmd)
-│   └── .side.side-right             ← 右侧面板
-│       ├── .side-header             ← "命令片段" + "−"按钮
-│       ├── .frag-search             ← 搜索输入框
-│       ├── .frag-cats               ← 分类标签行
-│       └── .frag-list               ← 片段卡片列表
-│           └── .frag-card           ← 单个片段卡片
-└── .status-bar                      ← 状态栏
-    ├── .status-group (左)           ← 复原按钮 + 连接信息
-    └── .status-group (右)           ← 复原按钮 + 工具按钮 + 统计
+App (主窗口)
+│
+├── TitleBar (标题栏)
+│   ├── [红绿灯点]           // 窗口控制 (dots/close/min/max)
+│   ├── [应用名] "MistTerm"
+│   └── [右侧信息] "SSH · 2h 34m"
+│
+├── MainPanel (主区域 — flex row, padding:8px, gap:6px)
+│   │
+│   ├── SidePanel (左 — 连接面板, width:200px)
+│   │   │
+│   │   ├── PanelHeader
+│   │   │   ├── [标题] "连接"
+│   │   │   └── [折叠按钮] "−"
+│   │   │
+│   │   ├── SearchBox "🔍 搜索连接…"
+│   │   │
+│   │   ├── CategoryTabs
+│   │   │   ├── [标签] "全部"
+│   │   │   ├── [标签] "在线"
+│   │   │   └── [标签] "离线"
+│   │   │
+│   │   └── ScrollList "连接列表"
+│   │       ├── ConnectionItem (激活态)
+│   │       │   ├── [图标] 🖥
+│   │       │   ├── [名称] "生产服务器"
+│   │       │   └── [时长] "2h 34m"
+│   │       ├── ConnectionItem
+│   │       ├── ConnectionItem
+│   │       └── ConnectionItem
+│   │
+│   ├── TerminalPanel (终端 — flex:1)
+│   │   │
+│   │   ├── TabBar
+│   │   │   ├── Tab (激活态)
+│   │   │   │   ├── [圆点] ● (连接状态)
+│   │   │   │   ├── [名称] "ubuntu@prod-server-01"
+│   │   │   │   └── [关闭] × (hover 可见)
+│   │   │   ├── Tab (非激活)
+│   │   │   └── [新建] +
+│   │   │
+│   │   └── TerminalView (contenteditable 滚动区)
+│   │       ├── OutputLine "output text"
+│   │       │   ├── [prompt] ➜ 绿色
+│   │       │   ├── [path] ~ 紫色
+│   │       │   ├── [cmd] systemctl status nginx 白色
+│   │       │   └── [output] 灰色
+│   │       ├── OutputLine
+│   │       └── InputLine "当前输入行"
+│   │
+│   └── SidePanel (右 — 片段面板, width:260px)
+│       │
+│       ├── PanelHeader
+│       │   ├── [标题] "命令片段"
+│       │   └── [折叠按钮] "−"
+│       │
+│       ├── SearchBox "🔍 搜索片段…"
+│       │
+│       ├── CategoryTabs
+│       │   ├── [标签] "常用"
+│       │   ├── [标签] "Docker"
+│       │   ├── [标签] "K8s"
+│       │   └── [标签] "全部"
+│       │
+│       └── FragmentList
+│           ├── FragmentCard
+│           │   ├── [标题] "查看 Pod 日志"
+│           │   ├── [Tag] "团队" (绿色)
+│           │   ├── [命令原文] "kubectl logs -f..."
+│           │   └── [统计] "320次 · 95% · 1.2s"
+│           ├── FragmentCard
+│           ├── FragmentCard
+│           ├── FragmentCard
+│           └── FragmentCard
+│
+└── StatusBar (状态栏 — 4px padding)
+    ├── LeftGroup
+    │   ├── [复原按钮] "▸ 连接 · 3" (面板收起时显示)
+    │   └── [连接信息] "⚡ ubuntu@prod-server-01"
+    └── RightGroup
+        ├── [复原按钮] "▸ 命令片段 · 5" (面板收起时显示)
+        ├── [工具] 📋 📤 🔍 📊
+        ├── [分隔] "·"
+        ├── [统计] "1,234次"
+        └── [增长] "↑8%"
 ```
 
 ---
