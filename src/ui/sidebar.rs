@@ -127,7 +127,7 @@ impl Sidebar {
                         for session in &sessions {
                             let is_selected = selected_id.as_ref() == Some(&session.id);
                             let (row_rect, response) = ui.allocate_exact_size(
-                                egui::vec2(ui.available_width(), 44.0),
+                                egui::vec2(ui.available_width(), 36.0),
                                 egui::Sense::click(),
                             );
                             let bg = if is_selected {
@@ -139,6 +139,11 @@ impl Sidebar {
                             };
                             ui.painter().rect_filled(row_rect.shrink2(egui::vec2(0.0, 2.0)), 4.0, bg);
 
+                            let status_text = if connected_sessions.contains(&session.id) {
+                                relative_last_connected(session.last_connected_at)
+                            } else {
+                                "离线".to_string()
+                            };
                             let mut row_ui = ui.child_ui(
                                 row_rect.shrink2(egui::vec2(10.0, 8.0)),
                                 egui::Layout::left_to_right(egui::Align::Center),
@@ -149,26 +154,21 @@ impl Sidebar {
                                     .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 90)),
                             );
                             row_ui.add_space(6.0);
-                            row_ui.vertical(|ui| {
-                                ui.label(
-                                    egui::RichText::new(&session.name)
-                                        .size(12.0)
-                                        .color(if is_selected {
-                                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 191)
-                                        } else {
-                                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)
-                                        }),
-                                );
-                                let status_text = if connected_sessions.contains(&session.id) {
-                                    relative_last_connected(session.last_connected_at)
-                                } else {
-                                    "离线".to_string()
-                                };
+                            row_ui.label(
+                                egui::RichText::new(&session.name)
+                                    .size(12.0)
+                                    .color(if is_selected {
+                                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 191)
+                                    } else {
+                                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)
+                                    }),
+                            );
+                            row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.label(
                                     egui::RichText::new(status_text)
                                         .size(10.0)
                                         .color(if connected_sessions.contains(&session.id) {
-                                            egui::Color32::from_rgba_unmultiplied(76, 175, 80, 140)
+                                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)
                                         } else {
                                             egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)
                                         }),
@@ -190,6 +190,7 @@ impl Sidebar {
                                     ui.close_menu();
                                 }
                             });
+                            ui.add_space(1.0);
                         }
                     }
                 });

@@ -11,6 +11,16 @@ pub struct CommandFragment {
     pub command: String,
     pub tags: Vec<String>,
     pub category: String,
+    #[serde(default)]
+    pub execution_count: u64,
+    #[serde(default)]
+    pub success_count: u64,
+    #[serde(default)]
+    pub failure_count: u64,
+    #[serde(default)]
+    pub total_duration_ms: u64,
+    #[serde(default)]
+    pub last_executed_at: Option<i64>,
 }
 
 impl CommandFragment {
@@ -25,6 +35,11 @@ impl CommandFragment {
             } else {
                 category.trim().to_string()
             },
+            execution_count: 0,
+            success_count: 0,
+            failure_count: 0,
+            total_duration_ms: 0,
+            last_executed_at: None,
         }
     }
 }
@@ -146,6 +161,20 @@ impl FragmentManager {
         categories
     }
 
+    pub fn record_execution(&mut self, fragment_id: &str, success: bool, duration_ms: u64) {
+        if let Some(fragment) = self.fragments.iter_mut().find(|f| f.id == fragment_id) {
+            fragment.execution_count = fragment.execution_count.saturating_add(1);
+            if success {
+                fragment.success_count = fragment.success_count.saturating_add(1);
+            } else {
+                fragment.failure_count = fragment.failure_count.saturating_add(1);
+            }
+            fragment.total_duration_ms = fragment.total_duration_ms.saturating_add(duration_ms);
+            fragment.last_executed_at = Some(now_unix_ts());
+            self.save();
+        }
+    }
+
     pub fn tags(&self) -> Vec<String> {
         let mut tags = self
             .fragments
@@ -237,4 +266,11 @@ impl FragmentManager {
             CommandFragment::new("Docker 容器", "docker ps -a", "Docker", vec!["docker".into()]),
         ]
     }
+}
+
+fn now_unix_ts() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }

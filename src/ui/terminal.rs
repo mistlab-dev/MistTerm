@@ -10,6 +10,7 @@
 
 use eframe::egui;
 use arboard::Clipboard;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -69,6 +70,7 @@ pub struct TerminalView {
     terminal_focused: bool,
     rz_control_mode_until: Option<Instant>,
     upload_result_rx: Option<Receiver<Result<String, String>>>,
+    command_usage: HashMap<String, u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -171,13 +173,14 @@ impl TerminalView {
             transfer_outgoing: false,
             pending_focus_terminal: false,
             download_dir: download_dir.to_string_lossy().to_string(),
-            font_size: 14.0,
+            font_size: 13.0,
             connected_at: None,
             connection_target: None,
             auto_follow_output: true,
             terminal_focused: false,
             rz_control_mode_until: None,
             upload_result_rx: None,
+            command_usage: HashMap::new(),
         }
     }
 
@@ -241,9 +244,9 @@ impl TerminalView {
         );
         self.sync_pty_size_with_ui(ui, pty_sync_size);
         
-        // README §2.4 终端区域：背景 #1e1e1e、内边距 16px（不在终端内再放一条状态栏，由主窗口底栏承担）
+        // 设计稿终端区域：背景 #0a0a12、内边距 16px（状态栏由主窗口统一渲染）
         egui::Frame::none()
-            .fill(egui::Color32::from_rgb(30, 30, 30)) // #1e1e1e
+            .fill(egui::Color32::from_rgb(10, 10, 18)) // #0a0a12
             .inner_margin(egui::Margin::same(16.0))
             .show(ui, |ui| {
                 ui.vertical(|ui| {
@@ -481,9 +484,19 @@ impl TerminalView {
                         self.terminal.feed(b"\r\nDisconnected\r\n");
                         self.auto_follow_output = true;
                     }
+                    SshMessage::UserCommand { command, .. } => {
+                        *self.command_usage.entry(command).or_insert(0) += 1;
+                    }
                 }
             }
         }
+    }
+
+    pub fn command_usage_snapshot(&self) -> Vec<(String, u64)> {
+        self.command_usage
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect()
     }
 
     /// 处理文件传输事件
@@ -774,6 +787,25 @@ impl TerminalView {
 
     pub fn clear_rz_control_mode(&mut self) {
         self.rz_control_mode_until = None;
+    }
+
+    /// 用户在文件选择器中取消 rz 上传后，强制恢复交互态（含 Ctrl+C 终止远端 rz）
+    pub fn cancel_rz_upload_selection(&mut self) {
+        self.pending_rz_upload = false;
+        self.end_rz_handshake_capture();
+        self.clear_rz_control_mode();
+        self.transfer_progress = None;
+        self.transfer_outgoing = false;
+        self.auto_follow_output = true;
+        // 文件对话框关闭后主动抢回终端焦点，避免「取消后不能输入」
+        self.pending_focus_terminal = true;
+        self.terminal_focused = true;
+        if self.lrzsz.is_active() {
+            self.lrzsz.cancel_active_transfer();
+        }
+        if let Some(handle) = self.ssh_handle.as_ref() {
+            let _ = handle.send_input(&[0x03]);
+        }
     }
 
     /// 用户取消 rz 文件选择时关闭 PTY 旁路（与 `app` 里取消 pick 配套）

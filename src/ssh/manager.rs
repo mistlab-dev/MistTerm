@@ -52,6 +52,11 @@ pub enum SshMessage {
     Disconnected {
         session_id: SshSessionId,
     },
+    /// 用户在终端回车提交的一条命令
+    UserCommand {
+        session_id: SshSessionId,
+        command: String,
+    },
 }
 
 /// SSH 会话句柄
@@ -480,6 +485,8 @@ mod shell_pump {
         upload_bypass_slot: Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
     ) {
         let mut read_buffer = [0u8; 16384];
+        let mut input_line_buf: Vec<u8> = Vec::new();
+        let mut esc_state = InputEscState::None;
         loop {
             while let Ok((c, r)) = resize_rx.try_recv() {
                 let pty_cols = c.clamp(20, 512);
@@ -498,16 +505,17 @@ mod shell_pump {
 
             match pump_rx.recv_timeout(Duration::from_millis(8)) {
                 Ok(cmd) => {
-                    let (kind, len) = match &cmd {
-                        ShellPumpCommand::PtyInput(d) => ("PtyInput", d.len()),
-                        ShellPumpCommand::ZmodemWrite(d) => ("ZmodemWrite", d.len()),
-                    };
-                    log::debug!(
-                        "shell 泵 session={} 收到 {} len={}",
-                        session_id,
-                        kind,
-                        len
-                    );
+                    if let ShellPumpCommand::PtyInput(data) = &cmd {
+                        let commands = capture_and_log_user_command(
+                            session_id,
+                            data,
+                            &mut input_line_buf,
+                            &mut esc_state,
+                        );
+                        for command in commands {
+                            let _ = message_tx.send(SshMessage::UserCommand { session_id, command });
+                        }
+                    }
                     if !process_one_command_sync(
                         &channel,
                         &message_tx,
@@ -613,6 +621,92 @@ mod shell_pump {
             }
         }
         true
+    }
+
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    enum InputEscState {
+        None,
+        Esc,
+        Csi,
+        Ss3,
+        Osc,
+        OscEsc,
+    }
+
+    fn capture_and_log_user_command(
+        session_id: SshSessionId,
+        data: &[u8],
+        line_buf: &mut Vec<u8>,
+        esc_state: &mut InputEscState,
+    ) -> Vec<String> {
+        let mut commands = Vec::new();
+        for b in data {
+            match *esc_state {
+                InputEscState::Esc => {
+                    *esc_state = match *b {
+                        b'[' => InputEscState::Csi,
+                        b'O' => InputEscState::Ss3,
+                        b']' => InputEscState::Osc,
+                        _ => InputEscState::None,
+                    };
+                    continue;
+                }
+                InputEscState::Csi => {
+                    // CSI 结束字节范围 0x40..=0x7E，期间全部忽略（方向键、Home/End 等）
+                    if (0x40..=0x7e).contains(b) {
+                        *esc_state = InputEscState::None;
+                    }
+                    continue;
+                }
+                InputEscState::Ss3 => {
+                    // SS3 序列通常只有一个终止字节
+                    *esc_state = InputEscState::None;
+                    continue;
+                }
+                InputEscState::Osc => {
+                    if *b == 0x07 {
+                        *esc_state = InputEscState::None;
+                    } else if *b == 0x1b {
+                        *esc_state = InputEscState::OscEsc;
+                    }
+                    continue;
+                }
+                InputEscState::OscEsc => {
+                    *esc_state = if *b == b'\\' {
+                        InputEscState::None
+                    } else {
+                        InputEscState::Osc
+                    };
+                    continue;
+                }
+                InputEscState::None => {}
+            }
+
+            match *b {
+                0x1b => *esc_state = InputEscState::Esc,
+                b'\r' | b'\n' => {
+                    if !line_buf.is_empty() {
+                        let cmd = String::from_utf8_lossy(line_buf).trim().to_string();
+                        // 过滤残留控制序列碎片，避免把全屏程序内部按键当命令。
+                        if !cmd.is_empty() && !cmd.contains('[') && !cmd.contains('\u{1b}') {
+                            log::info!("shell 输入命令 session={} cmd={}", session_id, cmd);
+                            commands.push(cmd);
+                        }
+                        line_buf.clear();
+                    }
+                }
+                0x08 | 0x7f => {
+                    let _ = line_buf.pop();
+                }
+                b' '..=b'~' => line_buf.push(*b),
+                _ => {}
+            }
+        }
+        if line_buf.len() > 4096 {
+            line_buf.clear();
+            *esc_state = InputEscState::None;
+        }
+        commands
     }
 
     fn process_idle_read_sync(

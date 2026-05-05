@@ -6,7 +6,7 @@
 
 use eframe::egui;
 use rfd::FileDialog;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use crate::core::{FragmentManager, SessionManager};
 use crate::ui::sidebar::Sidebar;
@@ -52,6 +52,7 @@ pub struct MistTermApp {
     show_edit_session_dialog: bool,
     show_about_dialog: bool,
     show_fragments_dialog: bool,
+    show_stats_dialog: bool,
     show_fragment_panel: bool,  // 命令片段侧边栏
     show_sftp_panel: bool,
     
@@ -79,6 +80,7 @@ pub struct MistTermApp {
     new_fragment_tags: String,
     editing_fragment_id: Option<String>,
     show_fragment_vars_dialog: bool,
+    pending_fragment_id: Option<String>,
     pending_fragment_name: String,
     pending_fragment_command: String,
     pending_fragment_vars: Vec<(String, String)>,
@@ -92,7 +94,7 @@ pub struct MistTermApp {
     sftp_selected_remote: Option<String>,
     sftp_tasks: Vec<SftpTask>,
     next_sftp_task_id: u64,
-    pending_fragment_insert: Option<(usize, String)>,
+    pending_fragment_insert: Option<(usize, Option<String>, String)>,
 }
 
 impl MistTermApp {
@@ -137,6 +139,7 @@ impl MistTermApp {
             show_edit_session_dialog: false,
             show_about_dialog: false,
             show_fragments_dialog: false,
+            show_stats_dialog: false,
             show_fragment_panel: false,
             show_sftp_panel: false,
             new_session_name: String::new(),
@@ -161,6 +164,7 @@ impl MistTermApp {
             new_fragment_tags: String::new(),
             editing_fragment_id: None,
             show_fragment_vars_dialog: false,
+            pending_fragment_id: None,
             pending_fragment_name: String::new(),
             pending_fragment_command: String::new(),
             pending_fragment_vars: Vec::new(),
@@ -179,6 +183,52 @@ impl MistTermApp {
             next_sftp_task_id: 1,
             pending_fragment_insert: None,
         }
+    }
+
+    fn modal_window_frame() -> egui::Frame {
+        egui::Frame::none()
+            .fill(egui::Color32::from_rgb(19, 19, 28))
+            .stroke(egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 15),
+            ))
+            .rounding(10.0)
+            .inner_margin(egui::Margin::same(0.0))
+    }
+
+    fn modal_content_frame() -> egui::Frame {
+        egui::Frame::none().inner_margin(egui::Margin::symmetric(16.0, 14.0))
+    }
+
+    fn modal_header(ui: &mut egui::Ui, title: &str, should_close: &mut bool) {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(title)
+                    .size(10.0)
+                    .strong()
+                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 51)),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("×")
+                                .size(18.0)
+                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 76)),
+                        )
+                        .fill(egui::Color32::TRANSPARENT)
+                        .stroke(egui::Stroke::NONE)
+                        .frame(false),
+                    )
+                    .clicked()
+                {
+                    *should_close = true;
+                }
+            });
+        });
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(12.0);
     }
 
     fn extract_fragment_vars(command: &str) -> Vec<String> {
@@ -209,16 +259,17 @@ impl MistTermApp {
         output
     }
 
-    fn trigger_fragment_insert(&mut self, name: &str, command: &str) {
+    fn trigger_fragment_insert(&mut self, fragment_id: &str, name: &str, command: &str) {
         if self.active_tab.is_none() {
             self.status_message = "没有活动的终端标签页".to_string();
             return;
         }
         let vars = Self::extract_fragment_vars(command);
         if vars.is_empty() {
-            self.insert_fragment_to_active_tab(command);
+            self.insert_fragment_to_active_tab(Some(fragment_id), command);
             return;
         }
+        self.pending_fragment_id = Some(fragment_id.to_string());
         self.pending_fragment_name = name.to_string();
         self.pending_fragment_command = command.to_string();
         self.pending_fragment_vars = vars.into_iter().map(|k| (k, String::new())).collect();
@@ -446,7 +497,7 @@ impl MistTermApp {
                             egui::Color32::from_rgba_unmultiplied(255, 255, 255, 46)
                         };
                         let fill = if active {
-                            egui::Color32::from_rgba_unmultiplied(102, 126, 234, 22)
+                            egui::Color32::from_rgba_unmultiplied(102, 126, 234, 128)
                         } else {
                             egui::Color32::TRANSPARENT
                         };
@@ -542,13 +593,40 @@ impl MistTermApp {
                                 .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 31)),
                         );
                         let (n, succ, secs) = Self::fragment_stats(fragment);
-                        row_ui.label(
-                            egui::RichText::new(format!("{}次 · {}%成功 · {:.1}s", n, succ, secs))
-                                .size(10.0)
-                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)),
-                        );
+                        row_ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(3.0, 0.0);
+                            ui.label(
+                                egui::RichText::new(format!("{}次", n))
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)),
+                            );
+                            ui.label(
+                                egui::RichText::new("·")
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 26)),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{}%成功", succ))
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)),
+                            );
+                            ui.label(
+                                egui::RichText::new("·")
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 26)),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{:.1}s", secs))
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)),
+                            );
+                        });
                         if resp.clicked() {
-                            self.trigger_fragment_insert(&fragment.name, &fragment.command);
+                            self.trigger_fragment_insert(
+                                &fragment.id,
+                                &fragment.name,
+                                &fragment.command,
+                            );
                         }
                         resp.context_menu(|ui| {
                             if ui.button("编辑").clicked() {
@@ -561,6 +639,7 @@ impl MistTermApp {
                             }
                         });
                         ui.add_space(1.0);
+                        ui.separator();
                     }
                 });
                 if let Some(id) = pending_delete_id {
@@ -622,30 +701,244 @@ impl MistTermApp {
     }
 
     fn fragment_stats(fragment: &crate::core::fragment::CommandFragment) -> (u32, u8, f32) {
-        let mut h: u64 = 1469598103934665603;
-        for &b in fragment.id.as_bytes() {
-            h ^= b as u64;
-            h = h.wrapping_mul(1099511628211);
-        }
-        let n = 80 + (h % 1600) as u32;
-        let success = 88 + ((h >> 8) % 11) as u8;
-        let secs = 0.3 + (((h >> 16) % 25) as f32) / 10.0;
+        let n = fragment.execution_count as u32;
+        let success = if fragment.execution_count == 0 {
+            100
+        } else {
+            ((fragment.success_count as f32 / fragment.execution_count as f32) * 100.0)
+                .round()
+                .clamp(0.0, 100.0) as u8
+        };
+        let secs = if fragment.execution_count == 0 {
+            0.0
+        } else {
+            (fragment.total_duration_ms as f32 / fragment.execution_count as f32) / 1000.0
+        };
         (n, success, secs)
     }
 
+    fn aggregate_fragment_metrics(&self) -> (u64, u64, u64, u64) {
+        let fragments = self.fragment_manager.list_fragments();
+        let total_exec = fragments.iter().map(|f| f.execution_count).sum::<u64>();
+        let total_success = fragments.iter().map(|f| f.success_count).sum::<u64>();
+        let total_failure = fragments.iter().map(|f| f.failure_count).sum::<u64>();
+        let success_rate = if total_exec == 0 {
+            100
+        } else {
+            ((total_success as f32 / total_exec as f32) * 100.0)
+                .round()
+                .clamp(0.0, 100.0) as u64
+        };
+        (total_exec, total_success, total_failure, success_rate)
+    }
+
+    fn aggregate_terminal_command_usage(&self) -> Vec<(String, u64)> {
+        let mut map: HashMap<String, u64> = HashMap::new();
+        for tab in &self.tabs {
+            for (cmd, count) in tab.terminal.command_usage_snapshot() {
+                *map.entry(cmd).or_insert(0) += count;
+            }
+        }
+        let mut items = map.into_iter().collect::<Vec<_>>();
+        items.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        items
+    }
+
+    fn show_stats_half_panel(&mut self, ui: &mut egui::Ui) {
+        let command_stats = self.aggregate_terminal_command_usage();
+        let total_exec = command_stats.iter().map(|(_, c)| *c).sum::<u64>();
+        let top_n = command_stats.len().min(5);
+
+        ui.painter().rect_filled(
+            ui.max_rect(),
+            0.0,
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 4),
+        );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new("📊 命令分析仪表盘")
+                    .size(11.0)
+                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new("×")
+                                .size(16.0)
+                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)),
+                        )
+                        .fill(egui::Color32::TRANSPARENT)
+                        .stroke(egui::Stroke::NONE)
+                        .frame(false),
+                    )
+                    .clicked()
+                {
+                    self.show_stats_dialog = false;
+                }
+            });
+        });
+        ui.add_space(6.0);
+        ui.separator();
+        ui.add_space(8.0);
+
+        ui.columns(3, |cols| {
+            let card = |ui: &mut egui::Ui, title: &str, value: String, trend: String| {
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 6))
+                    .stroke(egui::Stroke::new(
+                        1.0,
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10),
+                    ))
+                    .rounding(4.0)
+                    .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(title)
+                                .size(10.0)
+                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)),
+                        );
+                        ui.label(
+                            egui::RichText::new(value)
+                                .size(16.0)
+                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 178)),
+                        );
+                        ui.label(
+                            egui::RichText::new(trend)
+                                .size(10.0)
+                                .color(egui::Color32::from_rgba_unmultiplied(76, 175, 80, 76)),
+                        );
+                    });
+            };
+            card(
+                &mut cols[0],
+                "总执行次数",
+                total_exec.to_string(),
+                "来自终端输入".to_string(),
+            );
+            card(
+                &mut cols[1],
+                "平均耗时",
+                "--".to_string(),
+                "待接入命令耗时".to_string(),
+            );
+            card(
+                &mut cols[2],
+                "错误率",
+                "--".to_string(),
+                "待接入退出码".to_string(),
+            );
+        });
+
+        ui.add_space(8.0);
+        let list_height = (ui.available_height() - 22.0).max(80.0);
+        ui.columns(2, |cols| {
+            cols[0].label(
+                egui::RichText::new(format!("🏆 我的 Top {} 片段", top_n))
+                    .size(11.0)
+                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180)),
+            );
+            cols[1].label(
+                egui::RichText::new("💡 建议")
+                    .size(11.0)
+                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 180)),
+            );
+
+            egui::ScrollArea::vertical()
+                .max_height(list_height)
+                .show(&mut cols[0], |ui| {
+                    if command_stats.is_empty() || total_exec == 0 {
+                        ui.label(
+                            egui::RichText::new("暂无执行数据，先点击右侧片段执行几次后查看")
+                                .size(10.0)
+                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
+                        );
+                        return;
+                    }
+                    for (idx, (cmd, n)) in command_stats.iter().take(5).enumerate() {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(3.0, 0.0);
+                            ui.label(
+                                egui::RichText::new(format!("{}. {}", idx + 1, cmd))
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 210)),
+                            );
+                            ui.label(
+                                egui::RichText::new(format!("{}次", n))
+                                    .size(10.0)
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 150)),
+                            );
+                        });
+                        ui.add_space(4.0);
+                    }
+                });
+
+            egui::ScrollArea::vertical()
+                .max_height(list_height)
+                .show(&mut cols[1], |ui| {
+                    if command_stats.is_empty() || total_exec == 0 {
+                        ui.label(
+                            egui::RichText::new("执行后会给出高频片段建议")
+                                .size(10.0)
+                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
+                        );
+                        return;
+                    }
+                    if let Some((top_cmd, top_count)) = command_stats.first() {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "建议将「{}」添加为命令片段（已执行 {} 次）",
+                                top_cmd, top_count
+                            ))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 102)),
+                        );
+                        ui.add_space(6.0);
+                    }
+                    for (cmd, count) in command_stats.iter().take(3) {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "高频命令「{}」出现 {} 次，可沉淀为片段",
+                                cmd, count
+                            ))
+                            .size(10.0)
+                            .color(egui::Color32::from_rgba_unmultiplied(255, 179, 0, 115)),
+                        );
+                        ui.add_space(6.0);
+                    }
+                });
+        });
+    }
+
     /// 向当前标签页插入命令片段
-    fn insert_fragment_to_active_tab(&mut self, command: &str) {
+    fn insert_fragment_to_active_tab(&mut self, fragment_id: Option<&str>, command: &str) {
         if let Some(idx) = self.active_tab {
             if let Some(tab) = self.tabs.get_mut(idx) {
+                let start = std::time::Instant::now();
                 match tab.terminal.insert_fragment(command) {
                     Ok(_) => {
+                        let dur_ms = start.elapsed().as_millis().max(1) as u64;
+                        if let Some(fragment_id) = fragment_id {
+                            self.fragment_manager
+                                .record_execution(fragment_id, true, dur_ms);
+                        }
                         self.status_message = format!("插入命令：{}", command);
                     }
                     Err(e) => {
                         if e == "终端未连接" && tab.terminal.is_connecting() {
-                            self.pending_fragment_insert = Some((idx, command.to_string()));
+                            self.pending_fragment_insert = Some((
+                                idx,
+                                fragment_id.map(|id| id.to_string()),
+                                command.to_string(),
+                            ));
                             self.status_message = "连接建立中，片段将在连接成功后自动发送".to_string();
                         } else {
+                            let dur_ms = start.elapsed().as_millis().max(1) as u64;
+                            if let Some(fragment_id) = fragment_id {
+                                self.fragment_manager
+                                    .record_execution(fragment_id, false, dur_ms);
+                            }
                             self.status_message = format!("插入失败：{}", e);
                         }
                     }
@@ -656,9 +949,9 @@ impl MistTermApp {
         }
     }
 
-    /// 底部状态栏（单层 32px）：左侧连接信息，右侧工具按钮。
+    /// 底部状态栏（单层 28px）：左侧连接信息，右侧工具按钮。
     fn show_bottom_chrome(&mut self, ctx: &egui::Context) {
-        const STATUS_H: f32 = 32.0;
+        const STATUS_H: f32 = 28.0;
 
         egui::TopBottomPanel::bottom("bottom_chrome")
             .exact_height(STATUS_H)
@@ -682,6 +975,8 @@ impl MistTermApp {
                         ui.add_space(14.0);
                         let session_count = self.session_manager.list_sessions().len();
                         let fragment_count = self.fragment_manager.list_fragments().len();
+                        let (total_exec, _total_success, _total_failure, success_rate) =
+                            self.aggregate_fragment_metrics();
                         let server_line = self
                             .current_terminal()
                             .map(|t| format!("⚡ {}", t.connection_server_text()))
@@ -693,7 +988,7 @@ impl MistTermApp {
                                 let restore = egui::Button::new(
                                     egui::RichText::new(format!("▸ 连接 · {}", session_count))
                                         .size(10.0)
-                                        .color(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 180)),
+                                        .color(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 64)),
                                 )
                                 .fill(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 10))
                                 .rounding(3.0)
@@ -706,7 +1001,7 @@ impl MistTermApp {
                                 let restore = egui::Button::new(
                                     egui::RichText::new(format!("▸ 命令片段 · {}", fragment_count))
                                         .size(10.0)
-                                        .color(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 180)),
+                                        .color(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 64)),
                                 )
                                 .fill(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 10))
                                 .rounding(3.0)
@@ -725,14 +1020,15 @@ impl MistTermApp {
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
+                                    ui.spacing_mut().item_spacing = egui::vec2(3.0, 0.0);
                                     ui.add_space(4.0);
                                     ui.label(
-                                        egui::RichText::new("↑8%")
+                                        egui::RichText::new(format!("↑{}%", success_rate))
                                             .size(11.0)
                                             .color(egui::Color32::from_rgba_unmultiplied(76, 175, 80, 76)),
                                     );
                                     ui.label(
-                                        egui::RichText::new("1,234次")
+                                        egui::RichText::new(format!("{}次", total_exec))
                                             .size(10.0)
                                             .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 25)),
                                     );
@@ -744,7 +1040,7 @@ impl MistTermApp {
                                     let mk_status_btn = |label: &str| {
                                         egui::Button::new(
                                             egui::RichText::new(label)
-                                                .size(12.0)
+                                                .size(13.5)
                                                 .color(egui::Color32::from_rgba_unmultiplied(
                                                     255, 255, 255, 20,
                                                 )),
@@ -752,14 +1048,14 @@ impl MistTermApp {
                                         .fill(egui::Color32::TRANSPARENT)
                                         .stroke(egui::Stroke::NONE)
                                         .rounding(3.0)
-                                        .min_size(egui::vec2(18.0, 18.0))
+                                        .min_size(egui::vec2(24.0, 22.0))
                                     };
                                     if ui
                                         .add(mk_status_btn("📊"))
                                         .on_hover_text("统计")
                                         .clicked()
                                     {
-                                        self.status_message = "统计（开发中）".to_string();
+                                        self.show_stats_dialog = !self.show_stats_dialog;
                                     }
                                     if ui
                                         .add(mk_status_btn("🔍"))
@@ -857,9 +1153,28 @@ impl MistTermApp {
             .resizable(true)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.heading("📁 SFTP 文件传输");
+                    ui.label(
+                        egui::RichText::new("文件传输")
+                            .size(10.0)
+                            .strong()
+                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 51)),
+                    );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button("−").clicked() {
+                        if ui
+                            .add(
+                                egui::Button::new(
+                                    egui::RichText::new("−")
+                                        .size(14.0)
+                                        .color(egui::Color32::from_rgba_unmultiplied(
+                                            255, 255, 255, 51,
+                                        )),
+                                )
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(egui::Stroke::NONE)
+                                .frame(false),
+                            )
+                            .clicked()
+                        {
                             self.show_sftp_panel = false;
                         }
                     });
@@ -891,103 +1206,91 @@ impl MistTermApp {
                 });
                 ui.separator();
 
-                let queue_h = 110.0;
                 let actions_h = 34.0;
-                let bottom_panel_h = 180.0;
-                let list_panel_h = (ui.available_height() - bottom_panel_h - 8.0).max(180.0);
-
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), list_panel_h),
-                    egui::Layout::top_down(egui::Align::LEFT),
-                    |ui| {
-                        ui.columns(2, |columns| {
-                            columns[0].label("本地文件");
-                            columns[0].add_space(4.0);
-                            egui::Frame::none()
-                                .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 5))
-                                .stroke(egui::Stroke::new(
-                                    0.5,
-                                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 13),
-                                ))
-                                .rounding(4.0)
-                                .inner_margin(egui::Margin::same(6.0))
-                                .show(&mut columns[0], |ui| {
-                                    ui.set_min_height((list_panel_h - 26.0).max(100.0));
-                                    egui::ScrollArea::vertical()
-                                        .auto_shrink([false, false])
-                                        .show(ui, |ui| {
-                                            for entry in &self.sftp_local_entries {
-                                                let selected =
-                                                    self.sftp_selected_local.as_deref() == Some(entry.as_str());
-                                                if ui.selectable_label(selected, entry).clicked() {
-                                                    self.sftp_selected_local = Some(entry.clone());
-                                                }
-                                            }
-                                        });
-                                });
-
-                            columns[1].label("远程文件");
-                            columns[1].add_space(4.0);
-                            egui::Frame::none()
-                                .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 5))
-                                .stroke(egui::Stroke::new(
-                                    0.5,
-                                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 13),
-                                ))
-                                .rounding(4.0)
-                                .inner_margin(egui::Margin::same(6.0))
-                                .show(&mut columns[1], |ui| {
-                                    ui.set_min_height((list_panel_h - 26.0).max(100.0));
-                                    egui::ScrollArea::vertical()
-                                        .auto_shrink([false, false])
-                                        .show(ui, |ui| {
-                                            let mut pending_remote_enter: Option<String> = None;
-                                            for entry in &self.sftp_remote_entries {
-                                                let label = if entry.is_dir {
-                                                    format!("📁 {}", entry.name)
-                                                } else if let Some(size) = entry.size {
-                                                    format!("📄 {} ({} B)", entry.name, size)
-                                                } else {
-                                                    format!("📄 {}", entry.name)
-                                                };
-                                                let selected = self.sftp_selected_remote.as_deref()
-                                                    == Some(entry.name.as_str());
-                                                let resp = ui.selectable_label(selected, label);
-                                                if resp.clicked() {
-                                                    self.sftp_selected_remote = Some(entry.name.clone());
-                                                }
-                                                if resp.double_clicked() && entry.is_dir {
-                                                    pending_remote_enter = Some(entry.name.clone());
-                                                }
-                                            }
-                                            if let Some(dir_name) = pending_remote_enter {
-                                                self.sftp_remote_dir = format!(
-                                                    "{}/{}",
-                                                    self.sftp_remote_dir.trim_end_matches('/'),
-                                                    dir_name
-                                                );
-                                                self.refresh_sftp_entries();
-                                            }
-                                        });
-                                });
-                        });
-                    },
-                );
-
-                ui.add_space(6.0);
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), bottom_panel_h),
-                    egui::Layout::top_down(egui::Align::LEFT),
-                    |ui| {
+                // 先为底部操作区预留空间，确保上传/下载按钮始终可见可点
+                let footer_reserved_h = 188.0;
+                let list_panel_h = (ui.available_height() - footer_reserved_h).max(120.0);
+                ui.columns(2, |columns| {
+                        columns[0].label("本地文件");
+                        columns[0].add_space(4.0);
                         egui::Frame::none()
-                            .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 2))
+                            .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 5))
                             .stroke(egui::Stroke::new(
                                 0.5,
-                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12),
+                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 13),
                             ))
                             .rounding(4.0)
-                            .inner_margin(egui::Margin::same(8.0))
-                            .show(ui, |ui| {
+                            .inner_margin(egui::Margin::same(6.0))
+                            .show(&mut columns[0], |ui| {
+                                ui.set_min_height((list_panel_h - 24.0).max(120.0));
+                                egui::ScrollArea::vertical()
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        for entry in &self.sftp_local_entries {
+                                            let selected =
+                                                self.sftp_selected_local.as_deref() == Some(entry.as_str());
+                                            if ui.selectable_label(selected, entry).clicked() {
+                                                self.sftp_selected_local = Some(entry.clone());
+                                            }
+                                        }
+                                    });
+                            });
+
+                        columns[1].label("远程文件");
+                        columns[1].add_space(4.0);
+                        egui::Frame::none()
+                            .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 5))
+                            .stroke(egui::Stroke::new(
+                                0.5,
+                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 13),
+                            ))
+                            .rounding(4.0)
+                            .inner_margin(egui::Margin::same(6.0))
+                            .show(&mut columns[1], |ui| {
+                                ui.set_min_height((list_panel_h - 24.0).max(120.0));
+                                egui::ScrollArea::vertical()
+                                    .auto_shrink([false, false])
+                                    .show(ui, |ui| {
+                                        let mut pending_remote_enter: Option<String> = None;
+                                        for entry in &self.sftp_remote_entries {
+                                            let label = if entry.is_dir {
+                                                format!("📁 {}", entry.name)
+                                            } else if let Some(size) = entry.size {
+                                                format!("📄 {} ({} B)", entry.name, size)
+                                            } else {
+                                                format!("📄 {}", entry.name)
+                                            };
+                                            let selected = self.sftp_selected_remote.as_deref()
+                                                == Some(entry.name.as_str());
+                                            let resp = ui.selectable_label(selected, label);
+                                            if resp.clicked() {
+                                                self.sftp_selected_remote = Some(entry.name.clone());
+                                            }
+                                            if resp.double_clicked() && entry.is_dir {
+                                                pending_remote_enter = Some(entry.name.clone());
+                                            }
+                                        }
+                                        if let Some(dir_name) = pending_remote_enter {
+                                            self.sftp_remote_dir = format!(
+                                                "{}/{}",
+                                                self.sftp_remote_dir.trim_end_matches('/'),
+                                                dir_name
+                                            );
+                                            self.refresh_sftp_entries();
+                                        }
+                                    });
+                            });
+                    });
+                ui.add_space(6.0);
+                egui::Frame::none()
+                    .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 2))
+                    .stroke(egui::Stroke::new(
+                        0.5,
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12),
+                    ))
+                    .rounding(4.0)
+                    .inner_margin(egui::Margin::same(8.0))
+                    .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             if ui
                                 .add(egui::Button::new("⬆ 上传选中文件").min_size(egui::vec2(140.0, actions_h)))
@@ -1066,7 +1369,7 @@ impl MistTermApp {
                         let mut retry_upload: Option<String> = None;
                         let mut retry_download: Option<String> = None;
                         egui::ScrollArea::vertical()
-                            .max_height(queue_h)
+                            .max_height(ui.available_height().max(72.0))
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
                                 if self.sftp_tasks.is_empty() {
@@ -1102,8 +1405,6 @@ impl MistTermApp {
                             self.status_message = "已选中失败下载任务文件，请再次点击下载".to_string();
                         }
                     });
-                    },
-                );
             });
     }
 }
@@ -1136,17 +1437,28 @@ impl eframe::App for MistTermApp {
             }
         }
 
-        if let Some((idx, command)) = self.pending_fragment_insert.clone() {
+        if let Some((idx, fragment_id, command)) = self.pending_fragment_insert.clone() {
             let mut clear_pending = true;
             if let Some(tab) = self.tabs.get_mut(idx) {
                 if tab.terminal.is_connecting() {
                     clear_pending = false;
                 } else {
+                    let start = std::time::Instant::now();
                     match tab.terminal.insert_fragment(&command) {
                         Ok(_) => {
+                            let dur_ms = start.elapsed().as_millis().max(1) as u64;
+                            if let Some(fragment_id) = fragment_id.as_deref() {
+                                self.fragment_manager
+                                    .record_execution(fragment_id, true, dur_ms);
+                            }
                             self.status_message = format!("已自动发送片段：{}", command);
                         }
                         Err(e) => {
+                            let dur_ms = start.elapsed().as_millis().max(1) as u64;
+                            if let Some(fragment_id) = fragment_id.as_deref() {
+                                self.fragment_manager
+                                    .record_execution(fragment_id, false, dur_ms);
+                            }
                             self.status_message = format!("自动发送片段失败：{}", e);
                         }
                     }
@@ -1181,9 +1493,7 @@ impl eframe::App for MistTermApp {
                     }
                 } else {
                     if let Some(t) = self.current_terminal_mut() {
-                        t.end_rz_handshake_capture();
-                        let _ = t.send_ctrl_c();
-                        t.clear_rz_control_mode();
+                        t.cancel_rz_upload_selection();
                     }
                     self.status_message = "rz上传已取消".to_string();
                 }
@@ -1326,7 +1636,7 @@ impl eframe::App for MistTermApp {
                                                     egui::Color32::from_rgba_unmultiplied(255, 255, 255, 46)
                                                 };
                                                 let fill = if active {
-                                                    egui::Color32::from_rgba_unmultiplied(102, 126, 234, 22)
+                                                    egui::Color32::from_rgba_unmultiplied(102, 126, 234, 128)
                                                 } else {
                                                     egui::Color32::TRANSPARENT
                                                 };
@@ -1392,10 +1702,10 @@ impl eframe::App for MistTermApp {
                                 ))
                                 .inner_margin(egui::Margin::symmetric(4.0, 0.0))
                                 .show(ui, |ui| {
-                                    ui.set_min_height(32.0);
+                                    ui.set_min_height(36.0);
                                     let prev_padding = ui.spacing().button_padding;
                                     let prev_item_spacing = ui.spacing().item_spacing;
-                                    ui.spacing_mut().button_padding = egui::vec2(8.0, 4.0);
+                                    ui.spacing_mut().button_padding = egui::vec2(14.0, 7.0);
                                     ui.spacing_mut().item_spacing = egui::vec2(3.0, 0.0);
                                     ui.horizontal(|ui| {
                                         let mut to_close = None;
@@ -1416,8 +1726,8 @@ impl eframe::App for MistTermApp {
                                                 };
                                                 let tab_resp = ui.add(
                                                     egui::Button::new(
-                                                        egui::RichText::new(format!("   {}", tab.title))
-                                                            .size(10.0)
+                                                        egui::RichText::new(&tab.title)
+                                                            .size(11.0)
                                                             .color(title_color),
                                                     )
                                                     .fill(tab_fill)
@@ -1426,7 +1736,7 @@ impl eframe::App for MistTermApp {
                                                         egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10),
                                                     ))
                                                     .rounding(4.0)
-                                                    .min_size(egui::vec2(146.0, 24.0)),
+                                                    .min_size(egui::vec2(146.0, 28.0)),
                                                 );
                                                 let dot_color = if tab.terminal.is_connected() {
                                                     egui::Color32::from_rgb(76, 175, 80)
@@ -1434,10 +1744,10 @@ impl eframe::App for MistTermApp {
                                                     egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)
                                                 };
                                                 let dot_pos = egui::pos2(
-                                                    tab_resp.rect.left() + 9.0,
+                                                    tab_resp.rect.left() + 11.0,
                                                     tab_resp.rect.center().y,
                                                 );
-                                                ui.painter().circle_filled(dot_pos, 2.0, dot_color);
+                                                ui.painter().circle_filled(dot_pos, 2.5, dot_color);
                                                 if tab_resp.clicked() {
                                                     self.active_tab = Some(idx);
                                                     self.selected_session_id = Some(tab.session_id.clone());
@@ -1459,7 +1769,7 @@ impl eframe::App for MistTermApp {
                                                         egui::Button::new(
                                                             egui::RichText::new("×")
                                                                 .size(11.0)
-                                                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 90)),
+                                                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 76)),
                                                         )
                                                         .fill(egui::Color32::TRANSPARENT)
                                                         .frame(false),
@@ -1516,17 +1826,41 @@ impl eframe::App for MistTermApp {
                                 });
 
                             let terminal_h = ui.available_height().max(120.0);
-                            ui.allocate_ui_with_layout(
-                                egui::vec2(ui.available_width(), terminal_h),
-                                egui::Layout::top_down(egui::Align::LEFT),
-                                |ui| {
-                                    if let Some(terminal) = self.current_terminal_mut() {
-                                        terminal.show(ui);
-                                    } else {
-                                        self.show_welcome(ui);
-                                    }
-                                },
-                            );
+                            if self.show_stats_dialog {
+                                let stats_h = (terminal_h * 0.5).clamp(180.0, 320.0);
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(ui.available_width(), stats_h),
+                                    egui::Layout::top_down(egui::Align::LEFT),
+                                    |ui| {
+                                        self.show_stats_half_panel(ui);
+                                    },
+                                );
+                                ui.add_space(6.0);
+                                let remain_h = (terminal_h - stats_h - 6.0).max(120.0);
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(ui.available_width(), remain_h),
+                                    egui::Layout::top_down(egui::Align::LEFT),
+                                    |ui| {
+                                        if let Some(terminal) = self.current_terminal_mut() {
+                                            terminal.show(ui);
+                                        } else {
+                                            self.show_welcome(ui);
+                                        }
+                                    },
+                                );
+                            } else {
+                                ui.allocate_ui_with_layout(
+                                    egui::vec2(ui.available_width(), terminal_h),
+                                    egui::Layout::top_down(egui::Align::LEFT),
+                                    |ui| {
+                                        if let Some(terminal) = self.current_terminal_mut() {
+                                            terminal.show(ui);
+                                        } else {
+                                            self.show_welcome(ui);
+                                        }
+                                    },
+                                );
+                            }
 
                         },
                     );
@@ -1544,70 +1878,42 @@ impl eframe::App for MistTermApp {
                 .movable(false)
                 .resizable(false)
                 .collapsible(false)
-                .fixed_size(egui::vec2(820.0, 680.0))
-                .frame(
-                    egui::Frame::none()
-                        .fill(egui::Color32::from_rgb(34, 34, 42))
-                        .stroke(egui::Stroke::new(
-                            1.0,
-                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 28),
-                        ))
-                        .rounding(10.0)
-                        .inner_margin(egui::Margin::same(14.0)),
-                )
+                .fixed_size(egui::vec2(380.0, 412.0))
+                .frame(Self::modal_window_frame())
                 .show(ctx, |ui| {
-                    let label_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77);
+                    let label_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 76);
                     let text_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 179);
                     let input_stroke = egui::Stroke::new(
-                        0.5,
-                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10),
+                        1.0,
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8),
                     );
                     let input_fill = egui::Color32::from_rgb(19, 19, 28);
                     let input_rounding = 4.0;
                     let required_missing =
                         self.new_session_name.trim().is_empty() || self.new_session_host.trim().is_empty();
-
-                    ui.columns(3, |cols| {
-                        cols[1].with_layout(
-                            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                            |ui| {
-                                ui.label(
-                                    egui::RichText::new("新建会话")
-                                        .size(42.0)
-                                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
-                                );
-                            },
-                        );
-                        cols[2].with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new("×")
-                                            .size(30.0)
-                                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
-                                    )
-                                    .frame(false),
-                                )
-                                .clicked()
-                            {
-                                self.reset_new_session_form();
-                                should_close = true;
-                            }
-                        });
-                    });
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(10.0);
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
-
-                        ui.label(egui::RichText::new("会话名称").size(11.0).color(label_color));
+                    let field_label = |ui: &mut egui::Ui, text: &str| {
+                        ui.label(egui::RichText::new(text).size(10.0).strong().color(label_color));
+                    };
+                    let input_frame = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
                         egui::Frame::none()
                             .fill(input_fill)
                             .stroke(input_stroke)
                             .rounding(input_rounding)
                             .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                            .show(ui, |ui| {
+                            .show(ui, |ui| add(ui));
+                    };
+
+                    Self::modal_content_frame().show(ui, |ui| {
+                            let mut close_via_header = false;
+                            Self::modal_header(ui, "新建会话", &mut close_via_header);
+                            if close_via_header {
+                                self.reset_new_session_form();
+                                should_close = true;
+                            }
+
+                            ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
+                            field_label(ui, "会话名称");
+                            input_frame(ui, &mut |ui| {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.new_session_name)
                                         .frame(false)
@@ -1617,17 +1923,12 @@ impl eframe::App for MistTermApp {
                                 );
                             });
 
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 10.0;
-                            ui.vertical(|ui| {
-                                ui.set_width((ui.available_width() - 100.0).max(180.0));
-                                ui.label(egui::RichText::new("主机地址").size(11.0).color(label_color));
-                                egui::Frame::none()
-                                    .fill(input_fill)
-                                    .stroke(input_stroke)
-                                    .rounding(input_rounding)
-                                    .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                                    .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 10.0;
+                                ui.vertical(|ui| {
+                                    ui.set_width((ui.available_width() - 98.0).max(180.0));
+                                    field_label(ui, "主机地址");
+                                    input_frame(ui, &mut |ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(&mut self.new_session_host)
                                                 .frame(false)
@@ -1636,40 +1937,27 @@ impl eframe::App for MistTermApp {
                                                 .desired_width(f32::INFINITY),
                                         );
                                     });
-                            });
-                            ui.vertical(|ui| {
-                                ui.set_width(86.0);
-                                ui.label(egui::RichText::new("端口").size(11.0).color(label_color));
-                                egui::Frame::none()
-                                    .fill(input_fill)
-                                    .stroke(input_stroke)
-                                    .rounding(input_rounding)
-                                    .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                                    .show(ui, |ui| {
+                                });
+                                ui.vertical(|ui| {
+                                    ui.set_width(88.0);
+                                    field_label(ui, "端口");
+                                    input_frame(ui, &mut |ui| {
                                         ui.add_sized(
-                                            [66.0, 18.0],
+                                            [68.0, 20.0],
                                             egui::DragValue::new(&mut self.new_session_port)
                                                 .clamp_range(1..=65535)
                                                 .speed(1.0),
                                         );
                                     });
+                                });
                             });
-                        });
-                        ui.add_space(2.0);
-                        ui.separator();
-                        ui.add_space(2.0);
 
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 10.0;
-                            ui.vertical(|ui| {
-                                ui.set_width(ui.available_width() / 2.0 - 5.0);
-                                ui.label(egui::RichText::new("用户名").size(11.0).color(label_color));
-                                egui::Frame::none()
-                                    .fill(input_fill)
-                                    .stroke(input_stroke)
-                                    .rounding(input_rounding)
-                                    .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                                    .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 10.0;
+                                ui.vertical(|ui| {
+                                    ui.set_width(ui.available_width() / 2.0 - 5.0);
+                                    field_label(ui, "用户名");
+                                    input_frame(ui, &mut |ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(&mut self.new_session_username)
                                                 .frame(false)
@@ -1678,16 +1966,11 @@ impl eframe::App for MistTermApp {
                                                 .desired_width(f32::INFINITY),
                                         );
                                     });
-                            });
-                            ui.vertical(|ui| {
-                                ui.set_width(ui.available_width());
-                                ui.label(egui::RichText::new("密码").size(11.0).color(label_color));
-                                egui::Frame::none()
-                                    .fill(input_fill)
-                                    .stroke(input_stroke)
-                                    .rounding(input_rounding)
-                                    .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                                    .show(ui, |ui| {
+                                });
+                                ui.vertical(|ui| {
+                                    ui.set_width(ui.available_width());
+                                    field_label(ui, "密码");
+                                    input_frame(ui, &mut |ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(&mut self.new_session_password)
                                                 .frame(false)
@@ -1697,16 +1980,11 @@ impl eframe::App for MistTermApp {
                                                 .desired_width(f32::INFINITY),
                                         );
                                     });
+                                });
                             });
-                        });
 
-                        ui.label(egui::RichText::new("分组").size(11.0).color(label_color));
-                        egui::Frame::none()
-                            .fill(input_fill)
-                            .stroke(input_stroke)
-                            .rounding(input_rounding)
-                            .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                            .show(ui, |ui| {
+                            field_label(ui, "分组");
+                            input_frame(ui, &mut |ui| {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.new_session_group)
                                         .frame(false)
@@ -1716,43 +1994,51 @@ impl eframe::App for MistTermApp {
                                 );
                             });
 
-                        ui.add_space(2.0);
-                        ui.separator();
-                        ui.add_space(6.0);
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let save_btn = egui::Button::new("保存并连接")
-                                    .min_size(egui::vec2(110.0, 28.0))
-                                    .fill(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 56))
-                                    .stroke(egui::Stroke::NONE);
-                                if ui.add_enabled(!required_missing, save_btn).clicked() {
-                                    self.create_and_connect_session();
-                                    should_close = true;
-                                }
-                                let cancel_btn = egui::Button::new("取消")
-                                    .min_size(egui::vec2(76.0, 28.0))
+                            if required_missing {
+                                ui.add_space(4.0);
+                                ui.label(
+                                    egui::RichText::new("请先填写会话名称和主机地址")
+                                        .size(11.0)
+                                        .color(egui::Color32::from_rgba_unmultiplied(244, 67, 54, 128)),
+                                );
+                            }
+
+                            ui.add_space(10.0);
+                            ui.horizontal(|ui| {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    let save_btn = egui::Button::new(
+                                        egui::RichText::new("保存并连接")
+                                            .size(12.0)
+                                            .color(egui::Color32::from_rgb(102, 126, 234)),
+                                    )
+                                    .min_size(egui::vec2(104.0, 28.0))
+                                    .fill(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 89))
+                                    .stroke(egui::Stroke::NONE)
+                                    .rounding(4.0);
+                                    if ui.add_enabled(!required_missing, save_btn).clicked() {
+                                        self.create_and_connect_session();
+                                        should_close = true;
+                                    }
+                                    let cancel_btn = egui::Button::new(
+                                        egui::RichText::new("取消")
+                                            .size(12.0)
+                                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
+                                    )
+                                    .min_size(egui::vec2(72.0, 28.0))
                                     .fill(egui::Color32::TRANSPARENT)
-                                    .stroke(egui::Stroke::NONE);
-                                if ui.add(cancel_btn).clicked() {
-                                    self.reset_new_session_form();
-                                    should_close = true;
-                                }
+                                    .stroke(egui::Stroke::NONE)
+                                    .rounding(4.0);
+                                    if ui.add(cancel_btn).clicked() {
+                                        self.reset_new_session_form();
+                                        should_close = true;
+                                    }
+                                });
                             });
-                        });
-                        if required_missing {
-                            ui.add_space(2.0);
-                            ui.label(
-                                egui::RichText::new("请先填写会话名称和主机地址")
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 56)),
-                            );
-                        }
-                        if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !required_missing {
-                            self.create_and_connect_session();
-                            should_close = true;
-                        }
                     });
+                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !required_missing {
+                        self.create_and_connect_session();
+                        should_close = true;
+                    }
                 });
             self.show_new_session_dialog = open && !should_close;
         }
@@ -1767,87 +2053,52 @@ impl eframe::App for MistTermApp {
                 .movable(false)
                 .resizable(false)
                 .collapsible(false)
-                .fixed_size(egui::vec2(520.0, 280.0))
-                .frame(
-                    egui::Frame::none()
-                        .fill(egui::Color32::from_rgb(34, 34, 42))
-                        .stroke(egui::Stroke::new(
-                            1.0,
-                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 28),
-                        ))
-                        .rounding(10.0)
-                        .inner_margin(egui::Margin::same(14.0)),
-                )
+                .fixed_size(egui::vec2(360.0, 220.0))
+                .frame(Self::modal_window_frame())
                 .show(ctx, |ui| {
-                    ui.columns(3, |cols| {
-                        cols[1].with_layout(
-                            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                            |ui| {
-                                ui.label(
-                                    egui::RichText::new("关于")
-                                        .size(32.0)
-                                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
-                                );
-                            },
-                        );
-                        cols[2].with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new("×")
-                                            .size(30.0)
-                                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
-                                    )
-                                    .frame(false),
-                                )
-                                .clicked()
-                            {
-                                should_close = true;
-                            }
-                        });
-                    });
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(10.0);
-                    ui.label(
-                        egui::RichText::new("MistTerm")
-                            .size(18.0)
-                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 210)),
-                    );
-                    ui.label(
-                        egui::RichText::new("一个现代化 SSH 终端工具")
-                            .size(12.0)
-                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 120)),
-                    );
-                    ui.add_space(8.0);
-                    egui::Frame::none()
-                        .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 4))
-                        .stroke(egui::Stroke::new(
-                            0.5,
-                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12),
-                        ))
-                        .rounding(4.0)
-                        .inner_margin(egui::Margin::same(8.0))
-                        .show(ui, |ui| {
+                    Self::modal_content_frame().show(ui, |ui| {
+                            Self::modal_header(ui, "关于", &mut should_close);
                             ui.label(
-                                egui::RichText::new("版本: v0.1.0")
-                                    .size(11.0)
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 153)),
+                                egui::RichText::new("MistTerm")
+                                    .size(16.0)
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 179)),
                             );
-                        });
-                    ui.add_space(10.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new("关闭")
-                                    .min_size(egui::vec2(72.0, 28.0))
-                                    .fill(egui::Color32::TRANSPARENT)
-                                    .stroke(egui::Stroke::NONE),
-                            )
-                            .clicked()
-                        {
-                            should_close = true;
-                        }
+                            ui.label(
+                                egui::RichText::new("一个现代化 SSH 终端工具")
+                                    .size(11.0)
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 102)),
+                            );
+                            ui.add_space(8.0);
+                            egui::Frame::none()
+                                .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 4))
+                                .stroke(egui::Stroke::new(
+                                    1.0,
+                                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10),
+                                ))
+                                .rounding(4.0)
+                                .inner_margin(egui::Margin::symmetric(10.0, 7.0))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new("版本: v0.1.0")
+                                            .size(11.0)
+                                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
+                                    );
+                                });
+                            ui.add_space(10.0);
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let close_btn = egui::Button::new(
+                                    egui::RichText::new("关闭")
+                                        .size(12.0)
+                                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
+                                )
+                                .min_size(egui::vec2(72.0, 28.0))
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(egui::Stroke::NONE)
+                                .rounding(4.0);
+                                if ui.add(close_btn).clicked() {
+                                    should_close = true;
+                                }
+                            });
                     });
                 });
             self.show_about_dialog = open && !should_close;
@@ -1863,69 +2114,37 @@ impl eframe::App for MistTermApp {
                 .movable(false)
                 .resizable(false)
                 .collapsible(false)
-                .fixed_size(egui::vec2(820.0, 680.0))
-                .frame(
-                    egui::Frame::none()
-                        .fill(egui::Color32::from_rgb(34, 34, 42))
-                        .stroke(egui::Stroke::new(
-                            1.0,
-                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 28),
-                        ))
-                        .rounding(10.0)
-                        .inner_margin(egui::Margin::same(14.0)),
-                )
+                .fixed_size(egui::vec2(380.0, 412.0))
+                .frame(Self::modal_window_frame())
                 .show(ctx, |ui| {
-                    let label_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77);
+                    let label_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 76);
                     let text_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 179);
                     let input_stroke = egui::Stroke::new(
-                        0.5,
-                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10),
+                        1.0,
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8),
                     );
                     let input_fill = egui::Color32::from_rgb(19, 19, 28);
                     let input_rounding = 4.0;
                     let required_missing =
                         self.edit_session_name.trim().is_empty() || self.edit_session_host.trim().is_empty();
-
-                    ui.columns(3, |cols| {
-                        cols[1].with_layout(
-                            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                            |ui| {
-                                ui.label(
-                                    egui::RichText::new("编辑会话")
-                                        .size(42.0)
-                                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
-                                );
-                            },
-                        );
-                        cols[2].with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new("×")
-                                            .size(30.0)
-                                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
-                                    )
-                                    .frame(false),
-                                )
-                                .clicked()
-                            {
-                                should_close = true;
-                            }
-                        });
-                    });
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(10.0);
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(10.0, 10.0);
-
-                        ui.label(egui::RichText::new("会话名称").size(11.0).color(label_color));
+                    let field_label = |ui: &mut egui::Ui, text: &str| {
+                        ui.label(egui::RichText::new(text).size(10.0).strong().color(label_color));
+                    };
+                    let input_frame = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
                         egui::Frame::none()
                             .fill(input_fill)
                             .stroke(input_stroke)
                             .rounding(input_rounding)
                             .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                            .show(ui, |ui| {
+                            .show(ui, |ui| add(ui));
+                    };
+
+                    Self::modal_content_frame().show(ui, |ui| {
+                            Self::modal_header(ui, "编辑会话", &mut should_close);
+
+                            ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
+                            field_label(ui, "会话名称");
+                            input_frame(ui, &mut |ui| {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.edit_session_name)
                                         .frame(false)
@@ -1935,17 +2154,12 @@ impl eframe::App for MistTermApp {
                                 );
                             });
 
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 10.0;
-                            ui.vertical(|ui| {
-                                ui.set_width((ui.available_width() - 100.0).max(180.0));
-                                ui.label(egui::RichText::new("主机地址").size(11.0).color(label_color));
-                                egui::Frame::none()
-                                    .fill(input_fill)
-                                    .stroke(input_stroke)
-                                    .rounding(input_rounding)
-                                    .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                                    .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 10.0;
+                                ui.vertical(|ui| {
+                                    ui.set_width((ui.available_width() - 98.0).max(180.0));
+                                    field_label(ui, "主机地址");
+                                    input_frame(ui, &mut |ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(&mut self.edit_session_host)
                                                 .frame(false)
@@ -1954,40 +2168,27 @@ impl eframe::App for MistTermApp {
                                                 .desired_width(f32::INFINITY),
                                         );
                                     });
-                            });
-                            ui.vertical(|ui| {
-                                ui.set_width(86.0);
-                                ui.label(egui::RichText::new("端口").size(11.0).color(label_color));
-                                egui::Frame::none()
-                                    .fill(input_fill)
-                                    .stroke(input_stroke)
-                                    .rounding(input_rounding)
-                                    .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                                    .show(ui, |ui| {
+                                });
+                                ui.vertical(|ui| {
+                                    ui.set_width(88.0);
+                                    field_label(ui, "端口");
+                                    input_frame(ui, &mut |ui| {
                                         ui.add_sized(
-                                            [66.0, 18.0],
+                                            [68.0, 20.0],
                                             egui::DragValue::new(&mut self.edit_session_port)
                                                 .clamp_range(1..=65535)
                                                 .speed(1.0),
                                         );
                                     });
+                                });
                             });
-                        });
-                        ui.add_space(2.0);
-                        ui.separator();
-                        ui.add_space(2.0);
 
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 10.0;
-                            ui.vertical(|ui| {
-                                ui.set_width(ui.available_width() / 2.0 - 5.0);
-                                ui.label(egui::RichText::new("用户名").size(11.0).color(label_color));
-                                egui::Frame::none()
-                                    .fill(input_fill)
-                                    .stroke(input_stroke)
-                                    .rounding(input_rounding)
-                                    .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                                    .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 10.0;
+                                ui.vertical(|ui| {
+                                    ui.set_width(ui.available_width() / 2.0 - 5.0);
+                                    field_label(ui, "用户名");
+                                    input_frame(ui, &mut |ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(&mut self.edit_session_username)
                                                 .frame(false)
@@ -1996,16 +2197,11 @@ impl eframe::App for MistTermApp {
                                                 .desired_width(f32::INFINITY),
                                         );
                                     });
-                            });
-                            ui.vertical(|ui| {
-                                ui.set_width(ui.available_width());
-                                ui.label(egui::RichText::new("密码").size(11.0).color(label_color));
-                                egui::Frame::none()
-                                    .fill(input_fill)
-                                    .stroke(input_stroke)
-                                    .rounding(input_rounding)
-                                    .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                                    .show(ui, |ui| {
+                                });
+                                ui.vertical(|ui| {
+                                    ui.set_width(ui.available_width());
+                                    field_label(ui, "密码");
+                                    input_frame(ui, &mut |ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(&mut self.edit_session_password)
                                                 .frame(false)
@@ -2015,16 +2211,11 @@ impl eframe::App for MistTermApp {
                                                 .desired_width(f32::INFINITY),
                                         );
                                     });
+                                });
                             });
-                        });
 
-                        ui.label(egui::RichText::new("分组").size(11.0).color(label_color));
-                        egui::Frame::none()
-                            .fill(input_fill)
-                            .stroke(input_stroke)
-                            .rounding(input_rounding)
-                            .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                            .show(ui, |ui| {
+                            field_label(ui, "分组");
+                            input_frame(ui, &mut |ui| {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.edit_session_group)
                                         .frame(false)
@@ -2034,46 +2225,50 @@ impl eframe::App for MistTermApp {
                                 );
                             });
 
-                        ui.add_space(2.0);
-                        ui.separator();
-                        ui.add_space(6.0);
-                        ui.add_space(8.0);
-                        ui.horizontal(|ui| {
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let save_btn = egui::Button::new("保存")
-                                    .min_size(egui::vec2(92.0, 28.0))
-                                    .fill(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 56))
-                                    .stroke(egui::Stroke::NONE);
-                                if ui.add_enabled(!required_missing, save_btn).clicked() {
-                                    self.save_edit_session();
-                                    should_close = !self.show_edit_session_dialog;
-                                }
-                                if ui
-                                    .add(
-                                        egui::Button::new("取消")
-                                            .min_size(egui::vec2(76.0, 28.0))
-                                            .fill(egui::Color32::TRANSPARENT)
-                                            .stroke(egui::Stroke::NONE),
+                            if required_missing {
+                                ui.add_space(4.0);
+                                ui.label(
+                                    egui::RichText::new("请先填写会话名称和主机地址")
+                                        .size(11.0)
+                                        .color(egui::Color32::from_rgba_unmultiplied(244, 67, 54, 128)),
+                                );
+                            }
+
+                            ui.add_space(10.0);
+                            ui.horizontal(|ui| {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    let save_btn = egui::Button::new(
+                                        egui::RichText::new("保存")
+                                            .size(12.0)
+                                            .color(egui::Color32::from_rgb(102, 126, 234)),
                                     )
-                                    .clicked()
-                                {
-                                    should_close = true;
-                                }
+                                    .min_size(egui::vec2(84.0, 28.0))
+                                    .fill(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 89))
+                                    .stroke(egui::Stroke::NONE)
+                                    .rounding(4.0);
+                                    if ui.add_enabled(!required_missing, save_btn).clicked() {
+                                        self.save_edit_session();
+                                        should_close = !self.show_edit_session_dialog;
+                                    }
+                                    let cancel_btn = egui::Button::new(
+                                        egui::RichText::new("取消")
+                                            .size(12.0)
+                                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
+                                    )
+                                    .min_size(egui::vec2(72.0, 28.0))
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE)
+                                    .rounding(4.0);
+                                    if ui.add(cancel_btn).clicked() {
+                                        should_close = true;
+                                    }
+                                });
                             });
-                        });
-                        if required_missing {
-                            ui.add_space(2.0);
-                            ui.label(
-                                egui::RichText::new("请先填写会话名称和主机地址")
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 56)),
-                            );
-                        }
-                        if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !required_missing {
-                            self.save_edit_session();
-                            should_close = !self.show_edit_session_dialog;
-                        }
                     });
+                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !required_missing {
+                        self.save_edit_session();
+                        should_close = !self.show_edit_session_dialog;
+                    }
                 });
             self.show_edit_session_dialog = open && !should_close;
         }
@@ -2087,82 +2282,47 @@ impl eframe::App for MistTermApp {
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .movable(false)
                 .resizable(false)
-                .fixed_size(egui::vec2(560.0, 280.0))
-                .frame(
-                    egui::Frame::none()
-                        .fill(egui::Color32::from_rgb(34, 34, 42))
-                        .stroke(egui::Stroke::new(
-                            1.0,
-                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 28),
-                        ))
-                        .rounding(10.0)
-                        .inner_margin(egui::Margin::same(14.0)),
-                )
+                .fixed_size(egui::vec2(380.0, 220.0))
+                .frame(Self::modal_window_frame())
                 .show(ctx, |ui| {
-                    ui.columns(3, |cols| {
-                        cols[1].with_layout(
-                            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                            |ui| {
-                                ui.label(
-                                    egui::RichText::new("命令片段")
-                                        .size(32.0)
-                                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
-                                );
-                            },
-                        );
-                        cols[2].with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new("×")
-                                            .size(30.0)
-                                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
-                                    )
-                                    .frame(false),
-                                )
-                                .clicked()
-                            {
-                                should_close = true;
-                            }
-                        });
-                    });
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(10.0);
-                    ui.label(
-                        egui::RichText::new("提示：点击底部「命令片段」按钮打开侧边栏面板")
-                            .size(12.0)
-                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 153)),
-                    );
-                    ui.add_space(10.0);
-                    egui::Frame::none()
-                        .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 4))
-                        .stroke(egui::Stroke::new(
-                            0.5,
-                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12),
-                        ))
-                        .rounding(4.0)
-                        .inner_margin(egui::Margin::same(8.0))
-                        .show(ui, |ui| {
+                    Self::modal_content_frame().show(ui, |ui| {
+                            Self::modal_header(ui, "命令片段", &mut should_close);
                             ui.label(
-                                egui::RichText::new("📋 命令片段侧边栏提供更丰富的命令分类和快捷操作")
+                                egui::RichText::new("提示：点击底部「命令片段」按钮打开侧边栏面板")
                                     .size(11.0)
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 120)),
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
                             );
-                        });
-                    ui.add_space(10.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new("关闭")
-                                    .min_size(egui::vec2(72.0, 28.0))
-                                    .fill(egui::Color32::TRANSPARENT)
-                                    .stroke(egui::Stroke::NONE),
-                            )
-                            .clicked()
-                        {
-                            should_close = true;
-                        }
+                            ui.add_space(8.0);
+                            egui::Frame::none()
+                                .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 4))
+                                .stroke(egui::Stroke::new(
+                                    1.0,
+                                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10),
+                                ))
+                                .rounding(4.0)
+                                .inner_margin(egui::Margin::symmetric(10.0, 7.0))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new("📋 命令片段侧边栏提供更丰富的命令分类和快捷操作")
+                                            .size(10.0)
+                                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 90)),
+                                    );
+                                });
+                            ui.add_space(10.0);
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let close_btn = egui::Button::new(
+                                    egui::RichText::new("关闭")
+                                        .size(12.0)
+                                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
+                                )
+                                .min_size(egui::vec2(72.0, 28.0))
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(egui::Stroke::NONE)
+                                .rounding(4.0);
+                                if ui.add(close_btn).clicked() {
+                                    should_close = true;
+                                }
+                            });
                     });
                 });
             self.show_fragments_dialog = open && !should_close;
@@ -2178,116 +2338,88 @@ impl eframe::App for MistTermApp {
                 .movable(false)
                 .resizable(false)
                 .collapsible(false)
-                .fixed_size(egui::vec2(640.0, 420.0))
-                .frame(
-                    egui::Frame::none()
-                        .fill(egui::Color32::from_rgb(34, 34, 42))
-                        .stroke(egui::Stroke::new(
-                            1.0,
-                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 28),
-                        ))
-                        .rounding(10.0)
-                        .inner_margin(egui::Margin::same(14.0)),
-                )
+                .fixed_size(egui::vec2(380.0, 320.0))
+                .frame(Self::modal_window_frame())
                 .show(ctx, |ui| {
-                    ui.columns(3, |cols| {
-                        cols[1].with_layout(
-                            egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
-                            |ui| {
-                                ui.label(
-                                    egui::RichText::new("填写片段变量")
-                                        .size(32.0)
-                                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
-                                );
-                            },
-                        );
-                        cols[2].with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new("×")
-                                            .size(30.0)
-                                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
-                                    )
-                                    .frame(false),
-                                )
-                                .clicked()
-                            {
-                                should_close = true;
-                            }
-                        });
-                    });
-                    ui.add_space(10.0);
-                    ui.separator();
-                    ui.add_space(10.0);
-                    ui.label(
-                        egui::RichText::new(format!("片段：{}", self.pending_fragment_name))
-                            .size(12.0)
-                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 153)),
-                    );
-                    ui.add_space(8.0);
-                    for (key, value) in &mut self.pending_fragment_vars {
-                        ui.vertical(|ui| {
+                    let label_color = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 76);
+                    Self::modal_content_frame().show(ui, |ui| {
+                            Self::modal_header(ui, "填写片段变量", &mut should_close);
+                            ui.add_space(-2.0);
                             ui.label(
-                                egui::RichText::new(format!("<{}>", key))
+                                egui::RichText::new(format!("片段：{}", self.pending_fragment_name))
                                     .size(11.0)
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
+                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
                             );
-                            egui::Frame::none()
-                                .fill(egui::Color32::from_rgb(19, 19, 28))
-                                .stroke(egui::Stroke::new(
-                                    0.5,
-                                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10),
-                                ))
-                                .rounding(4.0)
-                                .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                                .show(ui, |ui| {
-                                    ui.add(
-                                        egui::TextEdit::singleline(value)
-                                            .frame(false)
-                                            .desired_width(f32::INFINITY)
-                                            .text_color(egui::Color32::from_rgba_unmultiplied(
-                                                255, 255, 255, 179,
-                                            )),
-                                    );
-                                });
-                        });
-                        ui.add_space(4.0);
-                    }
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .add(
-                                    egui::Button::new("插入命令")
-                                        .min_size(egui::vec2(92.0, 28.0))
-                                        .fill(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 56))
-                                        .stroke(egui::Stroke::NONE),
-                                )
-                                .clicked()
-                            {
-                                let filled = Self::fill_fragment_command(
-                                    &self.pending_fragment_command,
-                                    &self.pending_fragment_vars,
+                            ui.add_space(6.0);
+                            for (key, value) in &mut self.pending_fragment_vars {
+                                ui.label(
+                                    egui::RichText::new(format!("<{}>", key))
+                                        .size(10.0)
+                                        .strong()
+                                        .color(label_color),
                                 );
-                                self.insert_fragment_to_active_tab(&filled);
-                                should_close = true;
+                                egui::Frame::none()
+                                    .fill(egui::Color32::from_rgb(19, 19, 28))
+                                    .stroke(egui::Stroke::new(
+                                        1.0,
+                                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8),
+                                    ))
+                                    .rounding(4.0)
+                                    .inner_margin(egui::Margin::symmetric(10.0, 7.0))
+                                    .show(ui, |ui| {
+                                        ui.add(
+                                            egui::TextEdit::singleline(value)
+                                                .frame(false)
+                                                .desired_width(f32::INFINITY)
+                                                .text_color(egui::Color32::from_rgba_unmultiplied(
+                                                    255, 255, 255, 179,
+                                                )),
+                                        );
+                                    });
+                                ui.add_space(6.0);
                             }
-                            if ui
-                                .add(
-                                    egui::Button::new("取消")
-                                        .min_size(egui::vec2(76.0, 28.0))
-                                        .fill(egui::Color32::TRANSPARENT)
-                                        .stroke(egui::Stroke::NONE),
-                                )
-                                .clicked()
-                            {
-                                should_close = true;
-                            }
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    let insert_btn = egui::Button::new(
+                                        egui::RichText::new("插入命令")
+                                            .size(12.0)
+                                            .color(egui::Color32::from_rgb(102, 126, 234)),
+                                    )
+                                    .min_size(egui::vec2(92.0, 28.0))
+                                    .fill(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 89))
+                                    .stroke(egui::Stroke::NONE)
+                                    .rounding(4.0);
+                                    if ui.add(insert_btn).clicked() {
+                                        let filled = Self::fill_fragment_command(
+                                            &self.pending_fragment_command,
+                                            &self.pending_fragment_vars,
+                                        );
+                                        let fragment_id = self.pending_fragment_id.clone();
+                                        self.insert_fragment_to_active_tab(
+                                            fragment_id.as_deref(),
+                                            &filled,
+                                        );
+                                        should_close = true;
+                                    }
+                                    let cancel_btn = egui::Button::new(
+                                        egui::RichText::new("取消")
+                                            .size(12.0)
+                                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
+                                    )
+                                    .min_size(egui::vec2(72.0, 28.0))
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::NONE)
+                                    .rounding(4.0);
+                                    if ui.add(cancel_btn).clicked() {
+                                        should_close = true;
+                                    }
+                                });
+                            });
                         });
-                    });
                 });
             if should_close {
+                self.pending_fragment_id = None;
                 self.pending_fragment_name.clear();
                 self.pending_fragment_command.clear();
                 self.pending_fragment_vars.clear();

@@ -184,6 +184,9 @@ impl ConnectionManager {
                     }
                 }
             }
+            SshMessage::UserCommand { .. } => {
+                // 命令统计由 UI 层消费，这里无需处理。
+            }
         }
     }
 
