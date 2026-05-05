@@ -79,6 +79,53 @@ pub struct RemotePathEntry {
 }
 
 impl TerminalView {
+    const SFTP_RETRY_ATTEMPTS: usize = 160;
+    const SFTP_RETRY_SLEEP_MS: u64 = 8;
+
+    fn is_would_block_text(msg: &str) -> bool {
+        let msg = msg.to_lowercase();
+        msg.contains("would block")
+            || msg.contains("eagain")
+            || msg.contains("resource temporarily unavailable")
+            || msg.contains("libssh2_error_eagain")
+            || msg.contains("try again")
+    }
+
+    fn is_would_block_like(err: &std::io::Error) -> bool {
+        if err.kind() == std::io::ErrorKind::WouldBlock
+            || err.kind() == std::io::ErrorKind::Interrupted
+        {
+            return true;
+        }
+        Self::is_would_block_text(&err.to_string())
+    }
+
+    fn retry_sftp_op<T, E, F>(mut op: F, context: &str) -> Result<T, String>
+    where
+        F: FnMut() -> Result<T, E>,
+        E: std::fmt::Display,
+    {
+        let mut last_err: Option<E> = None;
+        for _ in 0..Self::SFTP_RETRY_ATTEMPTS {
+            match op() {
+                Ok(v) => return Ok(v),
+                Err(e) => {
+                    let msg = e.to_string();
+                    if Self::is_would_block_text(&msg) {
+                        last_err = Some(e);
+                        thread::sleep(Duration::from_millis(Self::SFTP_RETRY_SLEEP_MS));
+                        continue;
+                    }
+                    return Err(format!("{}：{}", context, msg));
+                }
+            }
+        }
+        if let Some(e) = last_err {
+            return Err(format!("{}：重试超时（最后错误：{}）", context, e));
+        }
+        Err(format!("{}：重试失败", context))
+    }
+
     fn contains_shell_prompt_fragment(text: &str) -> bool {
         text.contains("$ ") || text.contains("# ") || text.contains("> ")
     }
@@ -847,26 +894,28 @@ impl TerminalView {
 
         let data = std::fs::read(local_path)
             .map_err(|e| format!("读取本地文件失败：{}", e))?;
-
-        let mut channel = session.channel_session()
-            .map_err(|e| format!("创建通道失败：{}", e))?;
-
-        let remote_escaped = shell_single_quote(remote_path);
-        channel.exec(&format!("cat > {}", remote_escaped))
-            .map_err(|e| format!("执行远程写入失败：{}", e))?;
+        let sftp = Self::retry_sftp_op(|| session.sftp(), "创建 SFTP 通道失败")?;
+        let mut remote = Self::retry_sftp_op(
+            || sftp.create(Path::new(remote_path)),
+            "创建远端文件失败",
+        )?;
 
         use std::io::Write;
-        channel.write_all(&data)
-            .map_err(|e| format!("上传写入失败：{}", e))?;
-        channel.send_eof()
-            .map_err(|e| format!("发送 EOF 失败：{}", e))?;
-        channel.wait_close()
-            .map_err(|e| format!("等待远端完成失败：{}", e))?;
-
-        let code = channel.exit_status().unwrap_or(-1);
-        if code != 0 {
-            return Err(format!("远端返回非 0 退出码: {}", code));
+        let mut written = 0usize;
+        while written < data.len() {
+            match remote.write(&data[written..]) {
+                Ok(0) => return Err("SFTP 上传中断：远端未继续接收数据".to_string()),
+                Ok(n) => written += n,
+                Err(e) => {
+                    if Self::is_would_block_like(&e) {
+                        thread::sleep(Duration::from_millis(8));
+                        continue;
+                    }
+                    return Err(format!("SFTP 上传写入失败：{}", e));
+                }
+            }
         }
+        Self::retry_sftp_op(|| remote.flush(), "SFTP 上传 flush 失败")?;
         Ok(())
     }
 
@@ -876,25 +925,28 @@ impl TerminalView {
         let session = self.ssh_manager.as_ref()
             .and_then(|m| m.get_session(session_id))
             .ok_or_else(|| "获取 SSH 会话失败".to_string())?;
-
-        let mut channel = session.channel_session()
-            .map_err(|e| format!("创建通道失败：{}", e))?;
-        let remote_escaped = shell_single_quote(remote_path);
-        channel.exec(&format!("cat {}", remote_escaped))
-            .map_err(|e| format!("执行远程读取失败：{}", e))?;
+        let sftp = Self::retry_sftp_op(|| session.sftp(), "创建 SFTP 通道失败")?;
+        let mut remote = Self::retry_sftp_op(
+            || sftp.open(Path::new(remote_path)),
+            "打开远端文件失败",
+        )?;
 
         let mut buf = Vec::new();
         use std::io::Read;
-        channel.read_to_end(&mut buf)
-            .map_err(|e| format!("读取远程文件失败：{}", e))?;
-        channel.wait_close()
-            .map_err(|e| format!("等待远端结束失败：{}", e))?;
-
-        let code = channel.exit_status().unwrap_or(-1);
-        if code != 0 {
-            return Err(format!("远端读取失败，退出码: {}", code));
+        let mut chunk = [0u8; 16 * 1024];
+        loop {
+            match remote.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(e) => {
+                    if Self::is_would_block_like(&e) {
+                        thread::sleep(Duration::from_millis(8));
+                        continue;
+                    }
+                    return Err(format!("SFTP 下载读取失败：{}", e));
+                }
+            }
         }
-
         std::fs::write(local_path, &buf)
             .map_err(|e| format!("保存本地文件失败：{}", e))?;
         Ok(())
@@ -907,9 +959,12 @@ impl TerminalView {
             .and_then(|m| m.get_session(session_id))
             .ok_or_else(|| "获取 SSH 会话失败".to_string())?;
 
-        let sftp = session.sftp().map_err(|e| format!("创建 SFTP 失败：{}", e))?;
+        let sftp = Self::retry_sftp_op(|| session.sftp(), "创建 SFTP 失败")?;
         let path = PathBuf::from(remote_dir);
-        let entries = sftp.readdir(path.as_path()).map_err(|e| format!("读取远端目录失败：{}", e))?;
+        let entries = Self::retry_sftp_op(
+            || sftp.readdir(path.as_path()),
+            "读取远端目录失败",
+        )?;
 
         let mut items = entries
             .into_iter()
@@ -1051,10 +1106,6 @@ impl TerminalView {
             .send_input(input.as_bytes())
             .map_err(|e| format!("发送失败: {}", e))
     }
-}
-
-fn shell_single_quote(input: &str) -> String {
-    format!("'{}'", input.replace('\'', "'\"'\"'"))
 }
 
 /// 人类可读的文件大小格式

@@ -70,6 +70,30 @@ const fn mistterm_wait_file_pos_recover_enabled() -> bool {
     false
 }
 
+#[cfg(feature = "std")]
+fn mistterm_wait_file_pos_rotate_zfile_mode_enabled() -> bool {
+    std::env::var("MISTTERM_ZMODEM_WAIT_FILEPOS_ROTATE_ZFILE_MODE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+#[cfg(not(feature = "std"))]
+const fn mistterm_wait_file_pos_rotate_zfile_mode_enabled() -> bool {
+    false
+}
+
+#[cfg(feature = "std")]
+fn mistterm_wait_file_pos_zsinit_recover_enabled() -> bool {
+    std::env::var("MISTTERM_ZMODEM_WAIT_FILEPOS_ZSINIT")
+        .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("no")))
+        .unwrap_or(false)
+}
+
+#[cfg(not(feature = "std"))]
+const fn mistterm_wait_file_pos_zsinit_recover_enabled() -> bool {
+    false
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ZfileWireMode {
     Bin16DoubleZpad,
@@ -184,6 +208,7 @@ enum SendState {
     WaitReceiverInit,
     ReadyForFile,
     WaitFilePos,
+    WaitZsinitAck,
     NeedFileData,
     WaitFileAck,
     WaitFileDone,
@@ -705,11 +730,19 @@ impl Sender {
         if self.zrinit_extra_zfile_in_wait_file_pos >= MAX_WAIT_FILE_POS_RECOVER_ATTEMPTS {
             return Ok(false);
         }
-        if mistterm_sender_reply_zrinit_enabled() {
-            self.queue_zrinit_reply()?;
+        let via_zsinit = mistterm_wait_file_pos_zsinit_recover_enabled();
+        if via_zsinit {
+            self.queue_zsinit()?;
+            self.state = SendState::WaitZsinitAck;
+        } else {
+            if mistterm_sender_reply_zrinit_enabled() {
+                self.queue_zrinit_reply()?;
+            }
+            if mistterm_wait_file_pos_rotate_zfile_mode_enabled() {
+                self.zfile_wire_mode = self.zfile_wire_mode.next();
+            }
+            self.queue_zfile()?;
         }
-        self.zfile_wire_mode = self.zfile_wire_mode.next();
-        self.queue_zfile()?;
         self.zrinit_extra_zfile_in_wait_file_pos =
             self.zrinit_extra_zfile_in_wait_file_pos.saturating_add(1);
         Ok(true)
@@ -739,6 +772,14 @@ impl Sender {
         let peer_caps = self.peer_cap_byte;
         let mut writer = self.queue_writer()?;
         if write_zrinit_sender_reply(&mut writer, peer_caps)?.is_none() {
+            return Err(Error::OutOfMemory);
+        }
+        Ok(())
+    }
+
+    fn queue_zsinit(&mut self) -> Result<(), Error> {
+        let mut writer = self.queue_writer()?;
+        if write_zsinit(&mut writer)?.is_none() {
             return Err(Error::OutOfMemory);
         }
         Ok(())
@@ -833,7 +874,16 @@ impl Sender {
                 }
                 Ok(())
             }
-            Frame::ZRPOS | Frame::ZACK => self.on_zrpos(header.count()),
+            Frame::ZRPOS => self.on_zrpos(header.count()),
+            Frame::ZACK => {
+                if self.state == SendState::WaitZsinitAck {
+                    self.queue_zfile()?;
+                    self.state = SendState::WaitFilePos;
+                    Ok(())
+                } else {
+                    self.on_zrpos(header.count())
+                }
+            }
             Frame::ZFIN => self.on_zfin(),
             _ => {
                 if self.state == SendState::WaitReceiverInit {
@@ -883,6 +933,11 @@ impl Sender {
                     self.recover_wait_file_pos_after_peer_reinvite()?;
                 }
             }
+            SendState::WaitZsinitAck => {
+                // Peer may re-invite with ZRINIT instead of explicit ZACK after ZSINIT.
+                self.queue_zfile()?;
+                self.state = SendState::WaitFilePos;
+            }
             _ => {}
         }
         Ok(())
@@ -903,11 +958,19 @@ impl Sender {
                 return Ok(());
             }
         }
-        if mistterm_sender_reply_zrinit_enabled() {
-            self.queue_zrinit_reply()?;
+        let via_zsinit = mistterm_wait_file_pos_zsinit_recover_enabled();
+        if via_zsinit {
+            self.queue_zsinit()?;
+            self.state = SendState::WaitZsinitAck;
+        } else {
+            if mistterm_sender_reply_zrinit_enabled() {
+                self.queue_zrinit_reply()?;
+            }
+            if mistterm_wait_file_pos_rotate_zfile_mode_enabled() {
+                self.zfile_wire_mode = self.zfile_wire_mode.next();
+            }
+            self.queue_zfile()?;
         }
-        self.zfile_wire_mode = self.zfile_wire_mode.next();
-        self.queue_zfile()?;
         self.zrinit_extra_zfile_in_wait_file_pos =
             self.zrinit_extra_zfile_in_wait_file_pos.saturating_add(1);
         #[cfg(feature = "std")]
@@ -945,7 +1008,10 @@ impl Sender {
             SendState::WaitReceiverInit => {
                 self.queue_zrqinit()?;
             }
-            SendState::WaitFilePos | SendState::WaitFileAck | SendState::NeedFileData => {
+            SendState::WaitFilePos
+            | SendState::WaitZsinitAck
+            | SendState::WaitFileAck
+            | SendState::NeedFileData => {
                 if offset >= self.file_size {
                     self.queue_zeof(offset)?;
                     self.state = SendState::WaitFileDone;
@@ -1519,6 +1585,20 @@ where
     P: Write + ?Sized,
 {
     write_zrinit_sender_reply(port, 0)
+}
+
+/// Writes `ZSINIT` with an empty attention string; receiver should answer with `ZACK`.
+fn write_zsinit<P>(port: &mut P) -> Result<Option<()>, Error>
+where
+    P: Write + ?Sized,
+{
+    if Header::new(Encoding::ZBIN, Frame::ZSINIT, &[0; 4])
+        .write(port)?
+        .is_none()
+    {
+        return Ok(None);
+    }
+    write_subpacket(port, Encoding::ZBIN, SubpacketType::ZCRCW, b"")
 }
 
 /// Parses a u32 from a slice of ASCII decimal bytes.

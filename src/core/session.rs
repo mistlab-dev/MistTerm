@@ -147,9 +147,14 @@ impl SessionManager {
     pub fn new() -> Self {
         let mut file_path = std::env::current_dir().unwrap_or_default();
         file_path.push("sessions.json");
+        Self::with_sessions_path(file_path)
+    }
+
+    /// 从指定路径加载 `sessions.json`（供集成测试绑定到仓库根目录等场景）
+    pub fn with_sessions_path(file_path: PathBuf) -> Self {
         let fingerprint = Self::build_device_fingerprint();
         let device_key = Self::derive_key_from_fingerprint(&fingerprint);
-        
+
         let mut manager = Self {
             sessions: Vec::new(),
             file_path,

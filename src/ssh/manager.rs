@@ -2,10 +2,10 @@
 #![allow(dead_code)]
 
 use super::client::{SshClient, SshConfig};
+use crate::ssh::lrzsz::UploadPtyBypass;
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::mpsc::{Sender, Receiver};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, sync_channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -14,6 +14,22 @@ use ssh2::Channel;
 
 /// SSH 会话 ID
 pub type SshSessionId = usize;
+
+/// Shell 泵命令（经 `std::sync::mpsc::sync_channel` 入队，**专用 OS 线程**顺序执行 PTY I/O）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShellPumpCommand {
+    /// 用户键盘 → PTY
+    PtyInput(Vec<u8>),
+    /// 本机 ZMODEM 上传（sz→rz）二进制帧 → 同一 PTY
+    ZmodemWrite(Vec<u8>),
+}
+
+/// 有界同步队列发送端（与 [`SHELL_PUMP_QUEUE_CAP`] 一致；任意线程 `send` 阻塞直至泵取走）
+pub type ShellPumpTx = std::sync::mpsc::SyncSender<ShellPumpCommand>;
+
+/// shell 泵命令队列容量（条）
+const SHELL_PUMP_QUEUE_CAP: usize = 512;
+const RESIZE_QUEUE_CAP: usize = 16;
 
 /// SSH 消息类型
 #[derive(Debug, Clone)]
@@ -41,20 +57,31 @@ pub enum SshMessage {
 /// SSH 会话句柄
 pub struct SshSessionHandle {
     pub session_id: SshSessionId,
-    input_tx: Sender<Vec<u8>>,
-    resize_tx: Sender<(u32, u32)>,
-    /// 原始 SSH 通道（用于 ZMODEM 文件传输）
-    channel: Arc<Mutex<Channel>>,
+    pump_tx: ShellPumpTx,
+    resize_tx: std::sync::mpsc::SyncSender<(u32, u32)>,
+    upload_bypass_slot: Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
 }
 
 impl SshSessionHandle {
-    /// 发送输入数据
-    pub fn send_input(&self, data: &[u8]) -> Result<(), String> {
-        self.input_tx.send(data.to_vec())
+    fn pump_send(&self, cmd: ShellPumpCommand) -> Result<(), String> {
+        self.pump_tx
+            .send(cmd)
             .map_err(|e| format!("Send failed: {}", e))
     }
 
-    /// 通知远端 PTY 尺寸变化
+    /// 发送输入数据（与 ZMODEM 写入同一 FIFO，由 shell 泵线程顺序执行）
+    pub fn send_input(&self, data: &[u8]) -> Result<(), String> {
+        self.pump_send(ShellPumpCommand::PtyInput(data.to_vec()))
+    }
+
+    pub fn send_zmodem(&self, data: Vec<u8>) -> Result<(), String> {
+        self.pump_send(ShellPumpCommand::ZmodemWrite(data))
+    }
+
+    pub fn shell_pump_tx(&self) -> ShellPumpTx {
+        self.pump_tx.clone()
+    }
+
     pub fn resize_pty(&self, cols: u32, rows: u32) -> Result<(), String> {
         let cols = cols.clamp(20, 512);
         let rows = rows.clamp(5, 256);
@@ -63,9 +90,11 @@ impl SshSessionHandle {
             .map_err(|e| format!("Resize failed: {}", e))
     }
 
-    /// 获取原始通道（用于 ZMODEM 文件传输）
-    pub fn get_channel(&self) -> Option<Arc<Mutex<Channel>>> {
-        Some(self.channel.clone())
+    /// ZMODEM→`rz` 上传：注册后 shell 泵在每次 `channel.read` 时同步旁路到 `upload_pty_rx`（见 [`crate::ssh::lrzsz::LrzszTransfer`]）。
+    pub fn set_upload_pty_bypass(&self, bypass: Option<Arc<UploadPtyBypass>>) {
+        if let Ok(mut g) = self.upload_bypass_slot.lock() {
+            *g = bypass;
+        }
     }
 }
 
@@ -92,8 +121,20 @@ impl SshManager {
     }
 
     fn is_retryable_write_error(err: &std::io::Error) -> bool {
-        let msg = err.to_string().to_lowercase();
-        msg.contains("would block") || msg.contains("try again")
+        match err.kind() {
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted => true,
+            _ => {
+                let msg = err.to_string().to_lowercase();
+                msg.contains("would block")
+                    || msg.contains("try again")
+                    || msg.contains("eagain")
+                    || msg.contains("resource temporarily unavailable")
+                    // libssh2：远端窗口满时常见，须先读入站再重试写
+                    || msg.contains("unable to send")
+                    || msg.contains("window")
+                    || msg.contains("flow")
+            }
+        }
     }
 
     fn is_retryable_read_error(err: &std::io::Error) -> bool {
@@ -102,11 +143,12 @@ impl SshManager {
     }
 
     /// 非阻塞读：直到 EAGAIN / WouldBlock，把数据发到 UI（libssh2 写之前必须先排空入站）
-    fn pump_channel_reads(
+    pub(crate) fn pump_channel_reads(
         channel: &mut Channel,
         read_buffer: &mut [u8],
         message_tx: &Sender<SshMessage>,
         session_id: SshSessionId,
+        upload_bypass: &Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
     ) -> Result<(), ()> {
         loop {
             match channel.read(read_buffer) {
@@ -115,6 +157,11 @@ impl SshManager {
                     return Err(());
                 }
                 Ok(n) => {
+                    if let Ok(guard) = upload_bypass.lock() {
+                        if let Some(ref b) = *guard {
+                            b.feed_from_shell_pump(&read_buffer[..n]);
+                        }
+                    }
                     let _ = message_tx.send(SshMessage::Output {
                         session_id,
                         data: read_buffer[..n].to_vec(),
@@ -132,46 +179,156 @@ impl SshManager {
         }
     }
 
-    /// 写入 PTY：遇"draining incoming flow"等可恢复错误时先读再写
-    fn write_pty_with_drain(
+    /// 写入 PTY：按 libssh2 **写窗口**分块，遇窗口满 / EAGAIN 时先读入站再短睡，避免 ZMODEM 大包死循环。
+    pub(crate) fn write_pty_with_drain(
         channel: &mut Channel,
         data: &[u8],
         read_buffer: &mut [u8],
         message_tx: &Sender<SshMessage>,
         session_id: SshSessionId,
+        upload_bypass: &Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
     ) -> std::io::Result<()> {
+        const MAX_NO_PROGRESS: usize = 60_000;
+        const CHUNK_CEIL: usize = 256 * 1024;
         let mut rest = data;
+        let mut no_progress = 0usize;
+
         while !rest.is_empty() {
-            match channel.write(rest) {
-                Ok(0) => {
+            let len_before = rest.len();
+
+            let win = channel.write_window().remaining as usize;
+            if win == 0 {
+                if Self::pump_channel_reads(
+                    channel,
+                    read_buffer,
+                    message_tx,
+                    session_id,
+                    upload_bypass,
+                )
+                .is_err()
+                {
                     return Err(std::io::Error::new(
-                        std::io::ErrorKind::WriteZero,
-                        "channel write returned 0",
+                        std::io::ErrorKind::ConnectionAborted,
+                        "channel closed",
                     ));
                 }
-                Ok(n) => rest = &rest[n..],
-                Err(e) if Self::is_retryable_write_error(&e) => {
-                    if Self::pump_channel_reads(channel, read_buffer, message_tx, session_id).is_err() {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::ConnectionAborted,
-                            "channel closed",
-                        ));
+            } else {
+                let chunk = rest.len().min(win).min(CHUNK_CEIL).max(1);
+                let chunk = chunk.min(rest.len());
+
+                match channel.write(&rest[..chunk]) {
+                    Ok(0) => {
+                        if Self::pump_channel_reads(
+                            channel,
+                            read_buffer,
+                            message_tx,
+                            session_id,
+                            upload_bypass,
+                        )
+                        .is_err()
+                        {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::ConnectionAborted,
+                                "channel closed",
+                            ));
+                        }
                     }
-                    continue;
+                    Ok(raw_n) => {
+                        let n = raw_n.min(chunk);
+                        if raw_n > chunk {
+                            log::warn!(
+                                "channel.write 声称写入 {} bytes，本段请求仅 {} bytes，按请求长度截断",
+                                raw_n,
+                                chunk
+                            );
+                        }
+                        if n > 0 {
+                            rest = &rest[n..];
+                            if !rest.is_empty() {
+                                let _ = Self::pump_channel_reads(
+                                    channel,
+                                    read_buffer,
+                                    message_tx,
+                                    session_id,
+                                    upload_bypass,
+                                );
+                            }
+                        } else if Self::pump_channel_reads(
+                            channel,
+                            read_buffer,
+                            message_tx,
+                            session_id,
+                            upload_bypass,
+                        )
+                        .is_err()
+                        {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::ConnectionAborted,
+                                "channel closed",
+                            ));
+                        }
+                    }
+                    Err(e) if Self::is_retryable_write_error(&e) => {
+                        if Self::pump_channel_reads(
+                            channel,
+                            read_buffer,
+                            message_tx,
+                            session_id,
+                            upload_bypass,
+                        )
+                        .is_err()
+                        {
+                            return Err(std::io::Error::new(
+                                std::io::ErrorKind::ConnectionAborted,
+                                "channel closed",
+                            ));
+                        }
+                    }
+                    Err(e) => return Err(e),
                 }
-                Err(e) => return Err(e),
+            }
+
+            if rest.len() < len_before {
+                no_progress = 0;
+            } else {
+                no_progress += 1;
+                if no_progress > MAX_NO_PROGRESS {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        format!(
+                            "write_pty_with_drain: 长时间无进展（写窗口或 write 阻塞），剩 {} bytes",
+                            rest.len()
+                        ),
+                    ));
+                }
+                thread::sleep(Duration::from_micros(150));
             }
         }
+
+        let mut flush_no_progress = 0usize;
         loop {
             match channel.flush() {
                 Ok(()) => break,
                 Err(e) if Self::is_retryable_write_error(&e) => {
-                    if Self::pump_channel_reads(channel, read_buffer, message_tx, session_id).is_err() {
+                    flush_no_progress += 1;
+                    if flush_no_progress > MAX_NO_PROGRESS {
+                        return Err(e);
+                    }
+                    if Self::pump_channel_reads(
+                        channel,
+                        read_buffer,
+                        message_tx,
+                        session_id,
+                        upload_bypass,
+                    )
+                    .is_err()
+                    {
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::ConnectionAborted,
                             "channel closed",
                         ));
                     }
+                    thread::sleep(Duration::from_micros(150));
                 }
                 Err(e) => return Err(e),
             }
@@ -182,26 +339,25 @@ impl SshManager {
     /// 创建新的 SSH 管理器
     pub fn new() -> (Self, Receiver<SshMessage>) {
         let (tx, rx) = mpsc::channel();
-        
         let manager = Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
             message_tx: tx,
             next_session_id: Arc::new(AtomicUsize::new(0)),
         };
-        
+
         (manager, rx)
     }
 
     /// 创建新的 SSH 连接（异步）
     pub fn create_session_async(&self, config: SshConfig) -> Result<SshSessionId, String> {
         let session_id = self.allocate_session_id();
-        
+
         let sessions = self.sessions.clone();
         let message_tx = self.message_tx.clone();
-        
+
         thread::spawn(move || {
             let mut client = SshClient::new(config);
-            
+
             match client.connect() {
                 Ok(_) => {
                     {
@@ -220,11 +376,11 @@ impl SshManager {
                 }
             }
         });
-        
+
         Ok(session_id)
     }
 
-    /// 启动会话的交互式 shell
+    /// 启动交互式 shell：泵在**专用线程**内顺序执行 PTY 读写（`sync_channel` 与 UI/上传线程解耦）。
     pub fn start_interactive_shell(
         &self,
         session_id: SshSessionId,
@@ -233,10 +389,11 @@ impl SshManager {
     ) -> Result<SshSessionHandle, String> {
         let message_tx = self.message_tx.clone();
         let sessions = self.sessions.clone();
-        
-        let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>();
-        let (resize_tx, resize_rx) = mpsc::channel::<(u32, u32)>();
-        
+
+        let (pump_tx, pump_rx) = sync_channel::<ShellPumpCommand>(SHELL_PUMP_QUEUE_CAP);
+        let (resize_tx, resize_rx) = sync_channel::<(u32, u32)>(RESIZE_QUEUE_CAP);
+        let upload_bypass_slot = Arc::new(Mutex::new(None::<Arc<UploadPtyBypass>>));
+
         let channel = {
             let mut sessions = sessions.lock().unwrap();
             let session = sessions
@@ -247,66 +404,289 @@ impl SshManager {
             }
             session.open_shell(initial_cols, initial_rows)?
         };
-        
-        let channel_arc = Arc::new(Mutex::new(channel));
-        let channel_for_thread = channel_arc.clone();
-        
-        thread::spawn(move || {
-            let mut read_buffer = [0u8; 16384];
-            let mut channel = channel_for_thread.lock().unwrap();
-            loop {
-                while let Ok((c, r)) = resize_rx.try_recv() {
-                    let pty_cols = c.clamp(20, 512);
-                    let pty_rows = r.clamp(5, 256);
-                    // 简化：暂不实现动态调整 PTY 大小
-                    log::debug!("Resize to {}x{}", pty_cols, pty_rows);
-                }
 
-                // 先排空入站，再写 stdin（避免 libssh2 非阻塞"Failure while draining incoming flow"）
-                if Self::pump_channel_reads(
-                    &mut channel,
-                    &mut read_buffer,
-                    &message_tx,
-                    session_id,
-                )
-                .is_err()
-                {
-                    return;
-                }
+        shell_pump::spawn_shell_pump(
+            channel,
+            pump_rx,
+            resize_rx,
+            message_tx,
+            session_id,
+            upload_bypass_slot.clone(),
+        );
 
-                while let Ok(data) = input_rx.try_recv() {
-                    if let Err(e) = Self::write_pty_with_drain(
-                        &mut channel,
-                        &data,
-                        &mut read_buffer,
-                        &message_tx,
-                        session_id,
-                    ) {
-                        log::error!("Write error: {}", e);
-                    }
-                }
-
-                // 空闲时短暂休眠，避免占满 CPU；有数据时 pump 会立刻返回
-                thread::sleep(Duration::from_millis(8));
-            }
-        });
-        
         Ok(SshSessionHandle {
             session_id,
-            input_tx,
+            pump_tx,
             resize_tx,
-            channel: channel_arc,
+            upload_bypass_slot,
         })
     }
 
-    /// 获取会话数量
     pub fn session_count(&self) -> usize {
         self.sessions.lock().unwrap().len()
     }
-    
-    /// 获取 SSH 会话（用于文件传输）
+
     pub fn get_session(&self, session_id: SshSessionId) -> Option<::ssh2::Session> {
         let sessions = self.sessions.lock().unwrap();
         sessions.get(&session_id).map(|c| c.get_session().clone())
+    }
+}
+
+/// Shell 泵：专用 OS 线程 + `sync_channel`，避免 Tokio `block_on`/`recv` 与上传线程的调度死锁。
+mod shell_pump {
+    use super::{ShellPumpCommand, SshManager, SshMessage, SshSessionId, UploadPtyBypass};
+    use ssh2::Channel;
+    use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
+
+    pub(super) fn spawn_shell_pump(
+        channel: Channel,
+        pump_rx: Receiver<ShellPumpCommand>,
+        resize_rx: Receiver<(u32, u32)>,
+        message_tx: Sender<SshMessage>,
+        session_id: SshSessionId,
+        upload_bypass_slot: Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
+    ) {
+        let channel = Arc::new(Mutex::new(channel));
+        thread::Builder::new()
+            .name(format!("mistterm-shell-pump-{}", session_id))
+            .spawn(move || {
+                log::info!(
+                    "shell 泵线程启动 session_id={} queue_cap={}",
+                    session_id,
+                    super::SHELL_PUMP_QUEUE_CAP
+                );
+                shell_pump_loop(
+                    channel,
+                    pump_rx,
+                    resize_rx,
+                    message_tx,
+                    session_id,
+                    upload_bypass_slot,
+                );
+                log::warn!("shell 泵线程退出 session_id={}", session_id);
+            })
+            .expect("spawn shell pump thread");
+    }
+
+    fn shell_pump_loop(
+        channel: Arc<Mutex<Channel>>,
+        pump_rx: Receiver<ShellPumpCommand>,
+        resize_rx: Receiver<(u32, u32)>,
+        message_tx: Sender<SshMessage>,
+        session_id: SshSessionId,
+        upload_bypass_slot: Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
+    ) {
+        let mut read_buffer = [0u8; 16384];
+        loop {
+            while let Ok((c, r)) = resize_rx.try_recv() {
+                let pty_cols = c.clamp(20, 512);
+                let pty_rows = r.clamp(5, 256);
+                log::debug!("Resize to {}x{}", pty_cols, pty_rows);
+                if let Ok(mut ch) = channel.lock() {
+                    let px_w = pty_cols.saturating_mul(9);
+                    let px_h = pty_rows.saturating_mul(16);
+                    if let Err(e) =
+                        ch.request_pty_size(pty_cols, pty_rows, Some(px_w), Some(px_h))
+                    {
+                        log::warn!("request_pty_size: {}", e);
+                    }
+                }
+            }
+
+            match pump_rx.recv_timeout(Duration::from_millis(8)) {
+                Ok(cmd) => {
+                    let (kind, len) = match &cmd {
+                        ShellPumpCommand::PtyInput(d) => ("PtyInput", d.len()),
+                        ShellPumpCommand::ZmodemWrite(d) => ("ZmodemWrite", d.len()),
+                    };
+                    log::debug!(
+                        "shell 泵 session={} 收到 {} len={}",
+                        session_id,
+                        kind,
+                        len
+                    );
+                    if !process_one_command_sync(
+                        &channel,
+                        &message_tx,
+                        session_id,
+                        cmd,
+                        &mut read_buffer,
+                        &upload_bypass_slot,
+                    ) {
+                        return;
+                    }
+                    while let Ok(more) = pump_rx.try_recv() {
+                        if !process_one_command_sync(
+                            &channel,
+                            &message_tx,
+                            session_id,
+                            more,
+                            &mut read_buffer,
+                            &upload_bypass_slot,
+                        ) {
+                            return;
+                        }
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    if !process_idle_read_sync(
+                        &channel,
+                        &message_tx,
+                        session_id,
+                        &mut read_buffer,
+                        &upload_bypass_slot,
+                    ) {
+                        return;
+                    }
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    log::warn!(
+                        "shell 泵 session={} pump_rx Disconnected，线程结束",
+                        session_id
+                    );
+                    return;
+                }
+            }
+        }
+    }
+
+    fn process_one_command_sync(
+        channel: &Arc<Mutex<Channel>>,
+        message_tx: &Sender<SshMessage>,
+        session_id: SshSessionId,
+        cmd: ShellPumpCommand,
+        read_buffer: &mut [u8; 16384],
+        upload_bypass: &Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
+    ) -> bool {
+        let mut ch = match channel.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                log::error!("shell pump: channel mutex poisoned: {}", e);
+                return false;
+            }
+        };
+        match cmd {
+            ShellPumpCommand::PtyInput(data) => {
+                if SshManager::pump_channel_reads(
+                    &mut *ch,
+                    read_buffer,
+                    message_tx,
+                    session_id,
+                    upload_bypass,
+                )
+                .is_err()
+                {
+                    return false;
+                }
+                if let Err(e) = SshManager::write_pty_with_drain(
+                    &mut *ch,
+                    &data,
+                    read_buffer,
+                    message_tx,
+                    session_id,
+                    upload_bypass,
+                ) {
+                    log::error!("Write error: {}", e);
+                }
+            }
+            ShellPumpCommand::ZmodemWrite(data) => {
+                let n = data.len();
+                let w = SshManager::write_pty_with_drain(
+                    &mut *ch,
+                    &data,
+                    read_buffer,
+                    message_tx,
+                    session_id,
+                    upload_bypass,
+                );
+                if let Err(e) = w {
+                    log::error!(
+                        "shell 泵 session={} ZmodemWrite 失败 n={} {}",
+                        session_id,
+                        n,
+                        e
+                    );
+                }
+            }
+        }
+        true
+    }
+
+    fn process_idle_read_sync(
+        channel: &Arc<Mutex<Channel>>,
+        message_tx: &Sender<SshMessage>,
+        session_id: SshSessionId,
+        read_buffer: &mut [u8; 16384],
+        upload_bypass: &Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
+    ) -> bool {
+        let mut ch = match channel.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                log::error!("shell pump idle: mutex poisoned: {}", e);
+                return false;
+            }
+        };
+        SshManager::pump_channel_reads(
+            &mut *ch,
+            read_buffer,
+            message_tx,
+            session_id,
+            upload_bypass,
+        )
+        .is_ok()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::super::ShellPumpCommand;
+        use std::sync::mpsc::sync_channel;
+        use std::thread;
+        use std::time::Duration;
+
+        #[test]
+        fn pump_command_queue_fifo_order() {
+            let (tx, rx) = sync_channel::<ShellPumpCommand>(16);
+            tx.send(ShellPumpCommand::PtyInput(vec![0x61])).unwrap();
+            tx.send(ShellPumpCommand::ZmodemWrite(vec![0x2a, 0x2a]))
+                .unwrap();
+            drop(tx);
+            assert_eq!(
+                rx.recv().unwrap(),
+                ShellPumpCommand::PtyInput(vec![0x61])
+            );
+            assert_eq!(
+                rx.recv().unwrap(),
+                ShellPumpCommand::ZmodemWrite(vec![0x2a, 0x2a])
+            );
+            assert!(rx.recv().is_err());
+        }
+
+        #[test]
+        fn bounded_sync_pump_queue_backpressure() {
+            let (tx, rx) = sync_channel::<ShellPumpCommand>(2);
+            tx.send(ShellPumpCommand::PtyInput(vec![1])).unwrap();
+            tx.send(ShellPumpCommand::PtyInput(vec![2])).unwrap();
+            let tx_c = tx.clone();
+            let fill = thread::spawn(move || {
+                tx_c.send(ShellPumpCommand::PtyInput(vec![3])).unwrap();
+            });
+            thread::sleep(Duration::from_millis(20));
+            assert_eq!(rx.recv().unwrap(), ShellPumpCommand::PtyInput(vec![1]));
+            assert_eq!(rx.recv().unwrap(), ShellPumpCommand::PtyInput(vec![2]));
+            fill.join().unwrap();
+            assert_eq!(rx.recv().unwrap(), ShellPumpCommand::PtyInput(vec![3]));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn manager_new_drops_cleanly() {
+        let (mgr, _rx) = super::SshManager::new();
+        drop(mgr);
     }
 }

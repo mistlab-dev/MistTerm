@@ -9,15 +9,8 @@
 //! - sync 层 (sync/): Git 同步
 //! - security 层 (security/): 密钥链管理
 
-pub mod core;
-pub mod ssh;
-pub mod terminal;
-pub mod ui;
-pub mod sync;
-pub mod security;
-
 use eframe::egui;
-use ui::MistTermApp;
+use mistterm::ui::MistTermApp;
 
 fn main() -> eframe::Result<()> {
     // 初始化日志 - 输出到控制台，包含 debug 级别
@@ -28,7 +21,10 @@ fn main() -> eframe::Result<()> {
         .init();
     
     log::info!("MistTerm 启动");
-    
+
+    // macOS：启动时尝试切到「ABC」英文键盘布局（需在系统里启用过该输入源）
+    mistterm::platform::apply_preferred_english_input_source();
+
     let options = eframe::NativeOptions {
         maximized: true,
         ..Default::default()

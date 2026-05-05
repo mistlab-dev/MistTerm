@@ -30,9 +30,15 @@ impl FileTransfer {
     /// 上传文件到远程服务器
     /// 
     /// # 示例
-    /// ```rust
-    /// let transfer = FileTransfer::new(session);
-    /// transfer.upload_file("/local/file.txt", "/remote/file.txt", None)?;
+    /// ```rust,no_run
+    /// use mistterm::ssh::FileTransfer;
+    /// use ssh2::Session;
+    ///
+    /// fn example(session: Session) -> Result<(), String> {
+    ///     let transfer = FileTransfer::new(session);
+    ///     transfer.upload_file("/local/file.txt", "/remote/file.txt", None)?;
+    ///     Ok(())
+    /// }
     /// ```
     pub fn upload_file(
         &self,
@@ -110,9 +116,15 @@ impl FileTransfer {
     /// 下载文件从远程服务器
     /// 
     /// # 示例
-    /// ```rust
-    /// let transfer = FileTransfer::new(session);
-    /// transfer.download_file("/remote/file.txt", "/local/file.txt", None)?;
+    /// ```rust,no_run
+    /// use mistterm::ssh::FileTransfer;
+    /// use ssh2::Session;
+    ///
+    /// fn example(session: Session) -> Result<(), String> {
+    ///     let transfer = FileTransfer::new(session);
+    ///     transfer.download_file("/remote/file.txt", "/local/file.txt", None)?;
+    ///     Ok(())
+    /// }
     /// ```
     pub fn download_file(
         &self,

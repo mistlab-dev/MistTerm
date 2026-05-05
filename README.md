@@ -178,15 +178,13 @@ MistTerm/
 cargo test
 ```
 
-**测试结果**:
+**测试结果**（节选 `lrzsz`）:
 ```
-test ssh::lrzsz::tests::test_crc32_calculate ... ok
 test ssh::lrzsz::tests::test_detect_rz_command_binary ... ok
 test ssh::lrzsz::tests::test_detect_rz_command_text ... ok
-test ssh::lrzsz::tests::test_human_readable_size ... ok
-test ssh::lrzsz::tests::test_zmodem_packet_encode ... ok
+test ssh::lrzsz::tests::test_parse_zrqinit_packet_accepts_star_and_0x80_zpad ... ok
 
-test result: ok. 5 passed; 0 failed
+test result: ok. 3 passed; 0 failed
 ```
 
 ### 集成测试

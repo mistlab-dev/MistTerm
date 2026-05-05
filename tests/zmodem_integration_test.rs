@@ -124,31 +124,34 @@ fn test_crc32() {
 /// 测试 ZMODEM 包编码
 #[test]
 fn test_zmodem_packet() {
-    const ZPAD: u8 = 0x80;
+    const ZPAD: u8 = b'*';
     const ZDLE: u8 = 0x18;
-    const ZRINIT: u8 = 0x62;
-    
-    // 模拟 ZRINIT 包编码
+    const ZBIN16: u8 = 0x41;
+    const ZRINIT: u8 = 0x01;
+
     let packet_type = ZRINIT;
     let header_data = [0x40, 0x00, 0x00, 0x00];
-    
+
     let mut encoded = Vec::new();
     encoded.push(ZPAD);
-    encoded.push(ZPAD);
     encoded.push(ZDLE);
-    encoded.push(packet_type);
-    
+    encoded.push(ZBIN16);
+    // 与 lrzsz 一致：TYPE<0x20 须 ZDLE 转义
+    encoded.push(ZDLE);
+    encoded.push(packet_type ^ 0x40);
+
     for &b in &header_data {
         encoded.push(ZDLE);
         encoded.push(b ^ 0x40);
     }
-    
+
     println!("ZRINIT 包长度：{} bytes", encoded.len());
-    
+
     assert_eq!(encoded[0], ZPAD);
-    assert_eq!(encoded[1], ZPAD);
-    assert_eq!(encoded[2], ZDLE);
-    assert_eq!(encoded[3], ZRINIT);
+    assert_eq!(encoded[1], ZDLE);
+    assert_eq!(encoded[2], ZBIN16);
+    assert_eq!(encoded[3], ZDLE);
+    assert_eq!(encoded[4], ZRINIT ^ 0x40);
 }
 
 /// 测试文件检测逻辑
@@ -164,9 +167,16 @@ fn test_file_detection() {
             return true;
         }
         
-        if data.len() >= 4 && data[0] == 0x80 && data[1] == 0x80 {
-            if data[2] == 0x18 && (data[3] == 0x64 || data[3] == 0x62) {
-                return true;
+        if data.len() >= 5 && (data[0] == 0x2a || data[0] == 0x80) && (data[1] == 0x2a || data[1] == 0x80) {
+            if data[2] == 0x18 && data[3] == 0x41 {
+                let t = if data[4] == 0x18 && data.len() > 5 {
+                    data[5] ^ 0x40
+                } else {
+                    data[4]
+                };
+                if t == 0x00 || t == 0x01 {
+                    return true;
+                }
             }
         }
         
@@ -178,9 +188,9 @@ fn test_file_detection() {
     assert!(detect_rz_command(b"Awaiting rz"));
     assert!(detect_rz_command(b"rz waiting to receive"));
     
-    // 测试二进制检测
-    assert!(detect_rz_command(&[0x80, 0x80, 0x18, 0x64]));
-    assert!(detect_rz_command(&[0x80, 0x80, 0x18, 0x62]));
+    // 测试二进制检测（BIN16：`** ZDLE 'A' TYPE`）
+    assert!(detect_rz_command(&[0x80, 0x80, 0x18, 0x41, 0x00]));
+    assert!(detect_rz_command(&[0x80, 0x80, 0x18, 0x41, 0x01]));
     
     // 测试误报
     assert!(!detect_rz_command(b"ls -la"));

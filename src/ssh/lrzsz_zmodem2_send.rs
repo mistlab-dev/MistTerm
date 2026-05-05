@@ -454,6 +454,10 @@ pub(super) fn run_upload_zmodem2(
     let mut file_data_started = false;
     // 握手期重复看到对端 ZRINIT（ZHEX B01）但始终无 ZRPOS，可判定为严格模式不兼容。
     let mut peer_zrinit_reinvite_count = 0usize;
+    // 是否已主动触发过 WaitFilePos 兼容恢复（含 ZSINIT 路径）。
+    let mut wait_file_pos_recover_attempted = false;
+    // 兼容恢复后的等待窗口：避免同一批 backlog ZRINIT 触发连续补发，给对端留出 ZACK/ZRPOS 响应时间。
+    let mut recover_cooldown_until: Option<Instant> = None;
     // 上次「拉 PTY / feed 消费到字节」时间，用于停滞告警
     let mut last_ingress_activity = Instant::now();
     let mut last_stall_warn: Option<Instant> = None;
@@ -505,11 +509,13 @@ pub(super) fn run_upload_zmodem2(
                 if zhex_zrinit_cnt > 0 {
                     peer_zrinit_reinvite_count = peer_zrinit_reinvite_count
                         .saturating_add(zhex_zrinit_cnt);
+                } else {
+                    recover_cooldown_until = None;
                 }
             }
             if !file_data_started && contains_xymodem_c_fallback(slice) {
                 return Err(
-                    "远端 rz 已切换到 X/YMODEM（收到连续 'C'），本次 ZMODEM 会话已失配；请在远端重新执行 rz 后重试".to_string(),
+                    "远端 rz 已切换到 X/YMODEM（收到连续 'C'），本次 ZMODEM 会话已失配；请在远端重新执行 rz 后重试（建议优先 rz -y）".to_string(),
                 );
             }
             if pending_out == 0 {
@@ -653,6 +659,36 @@ pub(super) fn run_upload_zmodem2(
             if due {
                 last_stall_warn = Some(now);
                 if !file_data_started && peer_zrinit_reinvite_count >= 2 {
+                    let cooldown_active = recover_cooldown_until
+                        .map(|t| Instant::now() < t)
+                        .unwrap_or(false);
+                    if cooldown_active {
+                        continue;
+                    }
+                    let retried = sender
+                        .retry_wait_file_pos_handshake()
+                        .map_err(|e| format!("ZMODEM retry_wait_file_pos_handshake: {}", e))?;
+                    if retried {
+                        wait_file_pos_recover_attempted = true;
+                        peer_zrinit_reinvite_count = 0;
+                        recover_cooldown_until = Some(Instant::now() + Duration::from_millis(900));
+                        log::warn!(
+                            "停滞期检测到重复 ZRINIT，已再次触发兼容重试（等待对端 ZACK/ZRPOS）"
+                        );
+                        flush_sender_out(
+                            &mut sender,
+                            pump_tx,
+                            &mut first_wire_logged,
+                            dump_tx,
+                            &mut tx_dump_buf,
+                        )?;
+                        continue;
+                    }
+                    if wait_file_pos_recover_attempted {
+                        return Err(
+                            "远端重复发送 ZRINIT 且客户端已尝试兼容重试（含 ZSINIT）仍未进入 ZRPOS；当前会话与 rz -e/-bye 严格模式不兼容。建议改用 rz -y，或升级/更换远端 lrzsz 版本".to_string(),
+                        );
+                    }
                     return Err(
                         "远端重复发送 ZRINIT 但未进入 ZRPOS，当前会话与 rz -e/-bye 严格模式不兼容；请改用 rz -y".to_string(),
                     );

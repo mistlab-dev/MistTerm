@@ -3,7 +3,12 @@ name = "mistterm"
 version = "0.1.0"
 edition = "2021"
 autobins = false
+default-run = "mistterm"
 description = "A modern SSH terminal with lrzsz support and Git sync"
+
+[lib]
+name = "mistterm"
+path = "src/lib.rs"
 
 [[bin]]
 name = "test_file_transfer_md5"
@@ -16,6 +21,14 @@ path = "src/bin/test_file_transfer.rs"
 [[bin]]
 name = "test_zmodem"
 path = "src/bin/test_zmodem.rs"
+
+[[bin]]
+name = "rz_upload_smoke"
+path = "src/bin/rz_upload_smoke.rs"
+
+[[bin]]
+name = "mistterm"
+path = "src/main.rs"
 
 [dependencies]
 md5 = "0.7"
@@ -76,6 +89,8 @@ chrono = "0.4"
 ab_glyph = "0.2"
 image = "0.24"
 alacritty_terminal = "0.26.0"
+# ZMODEM 协议（lrzsz 路径专用；与 SFTP / cat 直传无关）
+zmodem2 = { path = "vendor/zmodem2" }
 
 [dev-dependencies]
 tempfile = "3.9"
@@ -86,6 +101,9 @@ serde_json = "1.0"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["winuser"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.9"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
