@@ -15,6 +15,7 @@ pub mod terminal;
 pub mod ui;
 pub mod sync;
 pub mod security;
+pub mod monitor;
 
 use eframe::egui;
 use ui::MistTermApp;

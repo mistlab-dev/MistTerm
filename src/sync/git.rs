@@ -113,6 +113,11 @@ impl GitRepo {
         &self.remote_url
     }
 
+    /// 获取当前分支
+    pub fn branch(&self) -> &str {
+        &self.branch
+    }
+
     /// 添加文件到暂存区
     pub fn add(&self, path: &str) -> Result<(), GitError> {
         let mut index = self.repo.index().map_err(|e| {

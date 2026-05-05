@@ -5,9 +5,12 @@
 use eframe::egui;
 use rfd::FileDialog;
 use std::collections::HashSet;
-use crate::core::SessionManager;
+use std::time::Instant;
+use crate::core::{SessionManager, FragmentManager, FragmentStats, SortBy};
 use crate::ui::sidebar::Sidebar;
 use crate::ui::terminal::TerminalView;
+use crate::ui::git_sync::GitSyncPanel;
+use crate::ui::theme::ThemeManager;
 
 struct TerminalTab {
     session_id: String,
@@ -40,6 +43,8 @@ pub struct MistTermApp {
     show_about_dialog: bool,
     show_fragments_dialog: bool,
     show_fragment_panel: bool,  // 命令片段侧边栏
+    show_git_sync_panel: bool,  // Git 同步面板
+    git_sync_panel: GitSyncPanel,
     
     /// 新建会话表单
     new_session_name: String,
@@ -58,24 +63,22 @@ pub struct MistTermApp {
     edit_session_group: String,
     sidebar_search_query: String,
     fragment_search_query: String,
+    
+    /// 命令片段管理器
+    fragment_manager: FragmentManager,
+    /// 片段排序方式
+    fragment_sort_by: SortBy,
+    /// 片段面板使用统计跟踪：记录插入时的 Instant
+    fragment_pending_ids: Vec<(String, Instant)>,
+
+    /// 主题管理器
+    theme_manager: ThemeManager,
 }
 
 impl MistTermApp {
-    fn apply_design_theme(ctx: &egui::Context) {
-        // 对齐 docs/product/README.md §2.4 主终端界面配色
-        let mut style = (*ctx.style()).clone();
-        style.visuals = egui::Visuals::dark();
-        style.visuals.panel_fill = egui::Color32::from_rgb(37, 37, 38); // #252526 侧栏
-        style.visuals.faint_bg_color = egui::Color32::from_rgb(45, 45, 45); // #2d2d2d 标题/标签栏
-        style.visuals.extreme_bg_color = egui::Color32::from_rgb(30, 30, 30);
-        style.visuals.window_fill = egui::Color32::from_rgb(37, 37, 38);
-        style.visuals.widgets.noninteractive.bg_fill = egui::Color32::from_rgb(60, 60, 60); // #3c3c3c
-        style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(60, 60, 60);
-        style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(76, 76, 76); // #4c4c4c
-        style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(102, 126, 234); // #667eea
-        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-        style.spacing.button_padding = egui::vec2(12.0, 6.0);
-        ctx.set_style(style);
+    /// 应用当前主题（由 ThemeManager 统一管理）
+    fn apply_current_theme(&self, ctx: &egui::Context) {
+        self.theme_manager.apply_theme(ctx);
     }
 
     /// 创建新的应用实例
@@ -99,6 +102,8 @@ impl MistTermApp {
             show_about_dialog: false,
             show_fragments_dialog: false,
             show_fragment_panel: false,
+            show_git_sync_panel: false,
+            git_sync_panel: GitSyncPanel::new(),
             new_session_name: String::new(),
             new_session_host: String::new(),
             new_session_port: 22,
@@ -114,6 +119,11 @@ impl MistTermApp {
             edit_session_group: "默认".to_string(),
             sidebar_search_query: String::new(),
             fragment_search_query: String::new(),
+            fragment_manager: FragmentManager::load(&FragmentManager::default_config_path())
+                .unwrap_or_else(|_| FragmentManager::new()),
+            fragment_sort_by: SortBy::UsageCount,
+            fragment_pending_ids: Vec::new(),
+            theme_manager: ThemeManager::load(),
         }
     }
 
@@ -268,102 +278,135 @@ impl MistTermApp {
         }
     }
 
-    /// 显示命令片段面板
+    /// 显示命令片段面板（带统计信息）
     fn show_fragment_panel(&mut self, ctx: &egui::Context) {
         egui::SidePanel::right("fragment_panel")
-            .default_width(280.0)
+            .default_width(320.0)
             .resizable(true)
             .show(ctx, |ui| {
-                ui.heading("⚡ 命令片段");
-                ui.separator();
-                
-                ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("快速插入:");
-                        ui.add_space(4.0);
-                    });
-                    
-                    ui.add_space(8.0);
-                    
-                    // 系统监控
-                    ui.collapsing("📊 系统监控", |ui| {
-                        if ui.button("磁盘使用").clicked() {
-                            self.insert_fragment_to_active_tab("df -h");
-                        }
-                        if ui.button("内存使用").clicked() {
-                            self.insert_fragment_to_active_tab("free -h");
-                        }
-                        if ui.button("CPU 负载").clicked() {
-                            self.insert_fragment_to_active_tab("uptime");
-                        }
-                        if ui.button("系统信息").clicked() {
-                            self.insert_fragment_to_active_tab("uname -a");
-                        }
-                    });
-                    
-                    ui.add_space(8.0);
-                    
-                    // 进程管理
-                    ui.collapsing("🔄 进程管理", |ui| {
-                        if ui.button("查看进程").clicked() {
-                            self.insert_fragment_to_active_tab("ps aux");
-                        }
-                        if ui.button("top 监控").clicked() {
-                            self.insert_fragment_to_active_tab("top");
-                        }
-                        if ui.button("查找进程").clicked() {
-                            self.insert_fragment_to_active_tab("ps aux | grep ");
-                        }
-                        if ui.button("杀死进程").clicked() {
-                            self.insert_fragment_to_active_tab("kill -9 ");
-                        }
-                    });
-                    
-                    ui.add_space(8.0);
-                    
-                    // 网络
-                    ui.collapsing("🌐 网络", |ui| {
-                        if ui.button("网络连接").clicked() {
-                            self.insert_fragment_to_active_tab("netstat -tulpn");
-                        }
-                        if ui.button("DNS 查询").clicked() {
-                            self.insert_fragment_to_active_tab("dig google.com");
-                        }
-                        if ui.button("Ping 测试").clicked() {
-                            self.insert_fragment_to_active_tab("ping -c 4 google.com");
-                        }
-                    });
-                    
-                    ui.add_space(8.0);
-                    
-                    // Docker
-                    ui.collapsing("🐳 Docker", |ui| {
-                        if ui.button("查看容器").clicked() {
-                            self.insert_fragment_to_active_tab("docker ps -a");
-                        }
-                        if ui.button("容器日志").clicked() {
-                            self.insert_fragment_to_active_tab("docker logs -f ");
-                        }
-                        if ui.button("重启容器").clicked() {
-                            self.insert_fragment_to_active_tab("docker restart ");
-                        }
-                    });
-                    
-                    ui.add_space(8.0);
-                    
-                    // Nginx
-                    ui.collapsing("🌍 Nginx", |ui| {
-                        if ui.button("重启 Nginx").clicked() {
-                            self.insert_fragment_to_active_tab("sudo systemctl restart nginx");
-                        }
-                        if ui.button("状态").clicked() {
-                            self.insert_fragment_to_active_tab("sudo systemctl status nginx");
-                        }
-                        if ui.button("错误日志").clicked() {
-                            self.insert_fragment_to_active_tab("tail -f /var/log/nginx/error.log");
+                ui.horizontal(|ui| {
+                    ui.heading("⚡ 命令片段");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // 排序按钮
+                        let sort_label = match self.fragment_sort_by {
+                            SortBy::UsageCount => "🔢 次数",
+                            SortBy::SuccessRate => "✅ 成功率",
+                            SortBy::LastUsed => "🕐 最近",
+                            SortBy::Name => "🔤 名称",
+                        };
+                        if ui.button(sort_label).clicked() {
+                            // 循环切换排序方式
+                            self.fragment_sort_by = match self.fragment_sort_by {
+                                SortBy::UsageCount => SortBy::SuccessRate,
+                                SortBy::SuccessRate => SortBy::LastUsed,
+                                SortBy::LastUsed => SortBy::Name,
+                                SortBy::Name => SortBy::UsageCount,
+                            };
+                            self.fragment_manager.sort(self.fragment_sort_by);
                         }
                     });
                 });
+                ui.separator();
+                
+                // 搜索框
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.fragment_search_query)
+                        .hint_text("搜索片段...")
+                        .desired_width(f32::INFINITY)
+                );
+                ui.add_space(4.0);
+                
+                ui.vertical(|ui| {
+                    // 根据搜索和分类显示片段
+                    let search_results = if self.fragment_search_query.is_empty() {
+                        self.fragment_manager.get_all().to_vec()
+                    } else {
+                        self.fragment_manager.search(&self.fragment_search_query)
+                            .into_iter().cloned().collect()
+                    };
+                    
+                    let categories = self.fragment_manager.get_categories();
+                    for category in &categories {
+                        let category_fragments: Vec<&FragmentStats> = search_results
+                            .iter()
+                            .filter(|f| f.category == *category)
+                            .collect();
+                        
+                        if category_fragments.is_empty() {
+                            continue;
+                        }
+                        
+                        let category_emoji = match category.as_str() {
+                            "系统监控" => "📊",
+                            "进程管理" => "🔄",
+                            "网络" => "🌐",
+                            "Docker" => "🐳",
+                            "Nginx" => "🌍",
+                            _ => "📁",
+                        };
+                        
+                        ui.collapsing(format!("{} {}", category_emoji, category), |ui| {
+                            for frag in category_fragments {
+                                ui.horizontal(|ui| {
+                                    let button = ui.button(frag.title.as_str());
+                                    if button.clicked() {
+                                        let id = frag.id.clone();
+                                        let command = frag.command.clone();
+                                        self.insert_fragment_with_stats(&id, &command);
+                                    }
+                                    if button.hovered() {
+                                        button.on_hover_text(&frag.command);
+                                    }
+                                });
+                                
+                                // 显示统计信息
+                                if frag.usage_count > 0 {
+                                    let stats_text = frag.human_readable();
+                                    ui.label(
+                                        egui::RichText::new(stats_text)
+                                            .small()
+                                            .color(egui::Color32::from_rgb(153, 153, 153))
+                                    );
+                                }
+                            }
+                        });
+                        
+                        ui.add_space(2.0);
+                    }
+                });
+            });
+    }
+
+    /// 向当前标签页插入命令片段并记录统计
+    fn insert_fragment_with_stats(&mut self, id: &str, command: &str) {
+        if let Some(idx) = self.active_tab {
+            if let Some(tab) = self.tabs.get_mut(idx) {
+                match tab.terminal.insert_fragment(command) {
+                    Ok(_) => {
+                        // 记录成功，耗时估算为 0（实际耗时无法精确测量）
+                        self.fragment_manager.record_usage(id, true, 0);
+                        let _ = self.fragment_manager.save(&FragmentManager::default_config_path());
+                        self.status_message = format!("插入命令：{}", command);
+                    }
+                    Err(e) => {
+                        self.fragment_manager.record_usage(id, false, 0);
+                        let _ = self.fragment_manager.save(&FragmentManager::default_config_path());
+                        self.status_message = format!("插入失败：{}", e);
+                    }
+                }
+            }
+        } else {
+            self.status_message = "没有活动的终端标签页".to_string();
+        }
+    }
+
+    /// 显示 Git 同步面板
+    fn show_git_sync_panel(&mut self, ctx: &egui::Context) {
+        egui::SidePanel::right("git_sync_panel")
+            .default_width(320.0)
+            .resizable(true)
+            .show(ctx, |ui| {
+                self.git_sync_panel.show(ui);
             });
     }
 
@@ -472,6 +515,9 @@ impl MistTermApp {
                             if ui.add(mk("⚙️ 设置", btn_idle, 88.0)).clicked() {
                                 self.status_message = "设置（开发中）".to_string();
                             }
+                            if ui.add(mk("🔀 Git", btn_idle, 88.0)).on_hover_text("Git 同步面板").clicked() {
+                                self.show_git_sync_panel = !self.show_git_sync_panel;
+                            }
                         });
                     },
                 );
@@ -543,7 +589,7 @@ fn truncate_status(s: &str, max_chars: usize) -> String {
 
 impl eframe::App for MistTermApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        Self::apply_design_theme(ctx);
+        self.apply_current_theme(ctx);
 
         // 检查是否有终端等待 rz 上传文件
         if let Some(terminal) = self.current_terminal() {
@@ -629,6 +675,22 @@ impl eframe::App for MistTermApp {
                         self.sidebar_collapsed = !self.sidebar_collapsed;
                         ui.close_menu();
                     }
+                    ui.separator();
+                    ui.menu_button("主题", |ui| {
+                        for (i, theme) in self.theme_manager.list_themes().iter().enumerate() {
+                            let is_current = i == self.theme_manager.current;
+                            let label = if is_current {
+                                format!"✓ {}", theme.name)
+                            } else {
+                                theme.name.clone()
+                            };
+                            if ui.button(label).clicked() {
+                                self.theme_manager.set_theme_index(i);
+                                self.theme_manager.save();
+                                ui.close_menu();
+                            }
+                        }
+                    });
                 });
                 ui.menu_button("帮助", |ui| {
                     if ui.button("关于").clicked() {
@@ -658,6 +720,11 @@ impl eframe::App for MistTermApp {
         // 命令片段面板
         if self.show_fragment_panel {
             self.show_fragment_panel(ctx);
+        }
+
+        // Git 同步面板
+        if self.show_git_sync_panel {
+            self.show_git_sync_panel(ctx);
         }
 
         // 主内容区：侧边栏 + 终端
