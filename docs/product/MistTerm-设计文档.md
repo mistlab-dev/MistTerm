@@ -618,23 +618,74 @@ fn apply_design_theme(ctx: &egui::Context) {
 }
 ```
 
-### 9.5 当前实现与设计文档差异对照（截至 v1.1）
+### 9.5 当前实现与设计文档差异对照
 
-| 功能 | 设计文档要求 | 当前代码实现状态 |
+> ⚠️ **本表基于 2026-05-05 代码审计结果。** 左侧「设计文档要求」列的每一项均可在本文档前文中验证。右侧「代码现状」列描述 `src/` 下的实际实现状态。配色/字号/布局等硬规格尚未按此文档对齐，详见第 12 章实现方案。
+
+#### 配色体系（全部未对齐）
+
+| 设计文档要求 | 代码实际值 | 位置 |
 |---|---|---|
-| **左侧面板宽度** | 固定 200px | ✅ 已修改为默认 200px，可拖拽 180~400px |
-| **左侧面板折叠** | 完全消失，状态栏出现 ▸ 按钮 | ✅ 已实现，折叠动画 + 状态栏复原按钮 |
-| **右侧面板** | 固定 260px 右侧面板，与左侧对称折叠 | ✅ 已实现为固定面板，与左侧对称折叠 |
-| **连接搜索** | 搜索框 + 分类标签（全部/在线/离线）| ✅ 搜索框已适配，分类标签已添加 |
-| **连接分类** | 全部 / 在线 / 离线 三个标签 | ✅ 已实现 |
-| **连接条目** | 名称 + 🖥 图标 + 时长 | ✅ 已实现 |
-| **片段面板** | 搜索 + 分类标签 + 统计卡片 | ✅ 已实现卡片式布局 |
-| **片段卡片** | 标题/tag/命令原文/使用统计 卡片式 | ✅ 已实现 |
-| **快捷栏** | 合并到状态栏（📋📤🔍📊）| ✅ 已合并到状态栏 |
-| **状态栏** | 11px 暗色底，分左右两组 | ✅ 已调整配色和布局 |
-| **终端 Tab** | 前缀状态圆点 + hover 关闭按钮 | ✅ 已支持 |
-| **终端输入** | 统一输出+输入区域 | ✅ 已调整为统一滚动区 |
-| **片段统计数据持久化** | 使用次数/成功率/平均耗时 | ✅ 已实现
+| body 背景 `#0d0d14` | `#2d2d2d`（`Visuals::panel_fill`） | `app.rs::apply_design_theme` |
+| 面板底色 `#13131c` | `#252526`（`Visuals::faint_bg_color`） | same |
+| 终端底色 `#0a0a12` | `#1e1e1e`（`Visuals::extreme_bg_color`） | same |
+| 边框 `rgba(255,255,255,0.04~0.06)` | `#3c3c3c` 硬色 | 各处分隔线/stroke |
+| 文字 90%/50%/12% 透明度白 | 硬编码 `#ffffff`/`#999999`/`#aaaaaa` 等 | 散布在 app.rs/sidebar.rs/terminal.rs |
+| 状态栏底色 暗色（无独立紫色） | 紫色 `#667eea` | `app.rs::show_bottom_chrome` |
+| 终端文字 13px/行高 1.7 | 14px/默认行高 | `TerminalView.font_size` |
+
+#### 标题栏
+
+| 设计文档要求 | 代码现状 |
+|---|---|
+| 红绿灯圆点（11px）+ 应用名居中（13px）+ 右侧信息 | 文件/视图/帮助 菜单栏 + 右侧 `MistTerm - user@host` |
+| 标题栏全高 = 10px padding × 2 | `exact_height(36.0)`，菜单占主要空间 |
+
+#### 左侧面板
+
+| 设计文档要求 | 代码现状 |
+|---|---|
+| 宽度固定 200px | `sidebar_width: 240.0`，可拖拽 180~400px |
+| 分类标签：全部/在线/离线 三个 10px 等分 | 未实现 |
+| 连接条目：🖥 图标 + 名称 12px + 时长 10px | ● 状态圆点 + 名称 + 分组展示 |
+| 折叠时完全消失 → 状态栏出 `▸ 连接 · N` | ☰ 按钮残留在终端区左上角，无复原按钮 |
+| 折叠动画 0.2s ease | `show_animated` 未使用 |
+
+#### 右侧面板
+
+| 设计文档要求 | 代码现状 |
+|---|---|
+| 固定 260px 面板，与左侧对称折叠 | `SidePanel::right("fragment_panel")` 弹窗式（非对称） |
+| 片段卡片：标题 12px + tag 9px + 命令原文 10px + 统计 10px | `collapsing` 分类按钮列表 |
+| 分类标签：常用/Docker/K8s/全部 | 系统监控/进程管理/网络/Docker/Nginx 五个 collapsing |
+| 搜索框 + 分类标签行 | 无搜索框 |
+
+#### 状态栏
+
+| 设计文档要求 | 代码现状 |
+|---|---|
+| 32px 暗色底，左右两组 | 紫色底 `#667eea`，快捷栏 44px + 状态栏 28px 上下叠两层 |
+| 左侧：`▸ 连接 · N`（折叠时）+ `⚡ user@host` | `🖥️ server_text` + `🔒 SSH-2.0` + `🌐 Asia/Shanghai` + 状态徽章 |
+| 右侧：`▸ 命令片段 · N`（折叠时）+ 📋📤🔍📊 + 分隔 + 统计 | 📋📤📥🔍⚙️ 五个按钮（比设计稿多📥少📊），无统计数字 |
+| 工具按钮 hover 颜色 `0.08 → 0.25` | 当前按钮有独立 fill（`btn_primary`/`btn_idle`）而非透明度变化 |
+
+#### 字体与字号
+
+| 设计文档要求 | 代码现状 |
+|---|---|
+| Inter + JetBrains Mono | 未加载，使用 egui 默认字体 |
+| 12 种字号（9~13px） | 零散使用 10/11/12/13/14px，无统一 text_styles 注册 |
+| 字母间距 0.5px（标题） | 未实现 |
+
+#### 其他
+
+| 功能 | 设计文档要求 | 代码现状 |
+|---|---|---|
+| 文件传输进度条 | 终端区底部独立浮层 | 放在 Terminal ScrollArea 底部（随滚动上下移动） |
+| 终端 Tab 前缀 | 绿色 / 灰色圆点 5px | 🖥 emoji |
+| 终端 Tab hover 关闭 × | opacity 0 → 0.3 动画 | 始终可见，无动画 |
+| 窗口圆角 10px / 面板圆角 6px | egui 原生窗口默认圆角 | 未单独配置 |
+| 所有 hover 过渡 0.1s ease | 未实现 | 缺少 |
 
 ### 9.6 状态管理
 
@@ -667,146 +718,83 @@ MistTermApp (主应用，实现 eframe::App trait，驱动 update 循环)
 
 ### 9.7 egui 渲染树 (update 函数结构)
 
-```
-MistTermApp::update(ctx, frame)
-│
-├── apply_design_theme(ctx)                    // 应用暗色主题
-│
-├── [快捷键处理]                                 // ⌘N/W/T/J/K
-│
-├── TopBottomPanel::top("title_bar", 36px)     // ← 标题栏
-│   ├── 文件 | 视图 | 帮助 菜单
-│   └── 应用名 "MistTerm - server_text"
-│
-├── CentralPanel                                // ← 主内容区
-│   │
-│   ├── [侧边栏区域 — sidebar_collapsed 控制]
-│   │   ├── Sidebar::show() 渲染                  // 搜索 + 列表 + 命令片段
-│   │   └── [拖拽条 — 4px，可调宽度 180~400px]
-│   │
-│   ├── Tab 栏                                    // Button 数组
-│   │   ├── Tab x N (含关闭 × + 右键菜单)
-│   │   └── [+ 新建]
-│   │
-│   └── TerminalView::show(ui)                   // 终端渲染
-│       └── terminal.get_layout_job() 渲染
-│
-├── SidePanel("fragment_panel", 280px, 右侧)     // ← 当前为弹窗，需改固定面板
-│   └── 折叠式分类（系统/进程/网络/Docker/Nginx）
-│
-├── TopBottomPanel::bottom("bottom_chrome", 72px) // ← 快捷栏+状态栏（待合并）
-│   ├── [快捷操作栏 44px] 📋📤📥🔍⚙️
-│   └── [状态栏 28px] 🖥️ server_text | 🔒SSH-2.0 | 🌐Asia/Shanghai | 💊状态徽章
-│
-└── [模态窗口]
-    ├── "新建会话" (TextEdit 表单)
-    ├── "编辑会话" (TextEdit 表单)
-    ├── "关于 MistTerm"
-    └── 文件选择对话框 (rfd::FileDialog)
-```
+渲染树结构已在第 9.5 节差异对照表中描述，此处不再重复。核心结构为：
 
-### 9.8 实施路线
-
-| 优先级 | 内容 | 涉及文件 | 说明 |
-|---|---|---|---|
-| **P0** | 左侧面板折叠/还原状态栏逻辑 | app.rs, sidebar.rs | 点击 `−` 面板完全隐藏，状态栏出现 ▸ 按钮 |
-| **P0** | 右侧面板从弹窗改为固定 260px 面板 | app.rs, 新增 right_panel.rs | 与左侧对称，支持折叠到状态栏 |
-| **P1** | 左侧搜索框 + 分类标签（全部/在线/离线）| sidebar.rs | 当前已有搜索框，加分类 tabs |
-| **P1** | 右侧搜索 + 分类标签（常用/Docker/K8s/全部）| right_panel.rs | 代替当前折叠式列表 |
-| **P1** | 片段卡片组件化（标题 + tag + 命令原文 + 统计）| right_panel.rs | 改用卡片布局，替换按钮列表 |
-| **P2** | 快捷栏合并到状态栏，去除 44px 独立快捷栏 | app.rs (show_bottom_chrome) | 📋📤🔍📊 融入底部状态条 |
-| **P2** | 状态栏配色改为设计稿色彩 | app.rs | 从紫色底改为暗色底 |
-| **P2** | 左侧面板宽度改为 200px | app.rs | sidebar_width 默认 240 → 200 |
-| **P3** | 终端光标样式 | terminal.rs | 输入行光标统一 |
-| **P3** | 片段统计数据持久化 | 新增 core/fragment_stats.rs | 使用次数/成功率/平均耗时 |
-├── TitleBar (标题栏)
-│   ├── [红绿灯点]           // 窗口控制 (dots/close/min/max)
-│   ├── [应用名] "MistTerm"
-│   └── [右侧信息] "SSH · 2h 34m"
-│
-├── MainPanel (主区域 — flex row, padding:8px, gap:6px)
-│   │
-│   ├── SidePanel (左 — 连接面板, width:200px)
-│   │   │
-│   │   ├── PanelHeader
-│   │   │   ├── [标题] "连接"
-│   │   │   └── [折叠按钮] "−"
-│   │   │
-│   │   ├── SearchBox "🔍 搜索连接…"
-│   │   │
-│   │   ├── CategoryTabs
-│   │   │   ├── [标签] "全部"
-│   │   │   ├── [标签] "在线"
-│   │   │   └── [标签] "离线"
-│   │   │
-│   │   └── ScrollList "连接列表"
-│   │       ├── ConnectionItem (激活态)
-│   │       │   ├── [图标] 🖥
-│   │       │   ├── [名称] "生产服务器"
-│   │       │   └── [时长] "2h 34m"
-│   │       ├── ConnectionItem
-│   │       ├── ConnectionItem
-│   │       └── ConnectionItem
-│   │
-│   ├── TerminalPanel (终端 — flex:1)
-│   │   │
-│   │   ├── TabBar
-│   │   │   ├── Tab (激活态)
-│   │   │   │   ├── [圆点] ● (连接状态)
-│   │   │   │   ├── [名称] "ubuntu@prod-server-01"
-│   │   │   │   └── [关闭] × (hover 可见)
-│   │   │   ├── Tab (非激活)
-│   │   │   └── [新建] +
-│   │   │
-│   │   └── TerminalView (contenteditable 滚动区)
-│   │       ├── OutputLine "output text"
-│   │       │   ├── [prompt] ➜ 绿色
-│   │       │   ├── [path] ~ 紫色
-│   │       │   ├── [cmd] systemctl status nginx 白色
-│   │       │   └── [output] 灰色
-│   │       ├── OutputLine
-│   │       └── InputLine "当前输入行"
-│   │
-│   └── SidePanel (右 — 片段面板, width:260px)
-│       │
-│       ├── PanelHeader
-│       │   ├── [标题] "命令片段"
-│       │   └── [折叠按钮] "−"
-│       │
-│       ├── SearchBox "🔍 搜索片段…"
-│       │
-│       ├── CategoryTabs
-│       │   ├── [标签] "常用"
-│       │   ├── [标签] "Docker"
-│       │   ├── [标签] "K8s"
-│       │   └── [标签] "全部"
-│       │
-│       └── FragmentList
-│           ├── FragmentCard
-│           │   ├── [标题] "查看 Pod 日志"
-│           │   ├── [Tag] "团队" (绿色)
-│           │   ├── [命令原文] "kubectl logs -f..."
-│           │   └── [统计] "320次 · 95% · 1.2s"
-│           ├── FragmentCard
-│           ├── FragmentCard
-│           ├── FragmentCard
-│           └── FragmentCard
-│
-└── StatusBar (状态栏 — 4px padding)
-    ├── LeftGroup
-    │   ├── [复原按钮] "▸ 连接 · 3" (面板收起时显示)
-    │   └── [连接信息] "⚡ ubuntu@prod-server-01"
-    └── RightGroup
-        ├── [复原按钮] "▸ 命令片段 · 5" (面板收起时显示)
-        ├── [工具] 📋 📤 🔍 📊
-        ├── [分隔] "·"
-        ├── [统计] "1,234次"
-        └── [增长] "↑8%"
+```
+TopBottomPanel::top("title_bar", 36px)
+  → CentralPanel
+    → [左侧面板] [拖拽条] [TabBar + TerminalView] [右侧面板]
+  → TopBottomPanel::bottom("status_bar", 32px)
 ```
 
 ---
 
-## 十一、后续可扩展方向
+## 十一、设计规格差距汇总
+
+下表按视觉优先级汇总所有代码与设计文档的差距，标注实现方案是否采用动态布局（避免分辨率适配问题）。
+
+### 配色（全部对齐才能有设计稿的视觉感）
+
+| # | 设计值 | 当前值 | 实现要点 |
+|---|---|---|---|
+| 1 | body `#0d0d14` | `#2d2d2d` | 直接改 `panel_fill`，无动态考量 |
+| 2 | 面板 `#13131c` | `#252526` | 改 `faint_bg_color` |
+| 3 | 终端 `#0a0a12` | `#1e1e1e` | 改 `extreme_bg_color` |
+| 4 | 边框 `rgba(255,255,255,0.04~0.06)` | `#3c3c3c` | 改用 `Color32::from_rgba_unmultiplied` 半透明 |
+| 5 | 文字层级 rgba(90%/50%/12%) | 零散硬编码 | 集中到 `apply_design_theme` style 中 |
+
+### 标题栏
+
+| # | 设计值 | 当前值 | 实现方案 | 动态考量 |
+|---|---|---|---|---|
+| 6 | 红绿灯 11px + 应用名居中 + 右侧信息 | 菜单栏 | macOS/windows 原生窗口自带红绿灯，标题栏用 `TopBottomPanel::top` 36px：左（空），中 应用名 13px，右 `SSH · 2h 34m` 11px | 窗口 < 600px 时隐藏右侧信息，避免挤到一起 |
+| 7 | 底部边框 `rgba(255,255,255,0.04)` | `#3c3c3c` | `ui.painter().hline()` 画 1px 半透明线 | 无 |
+
+### 左侧面板
+
+| # | 设计值 | 当前值 | 实现方案 | 动态考量 |
+|---|---|---|---|---|
+| 8 | 宽度 200px | 240px 可拖拽 180~400px | 基准 `min(available_width * 0.15, 260)`，clamp 160~280px | 比例值适配不同分辨率，保留拖拽覆盖 |
+| 9 | 分类标签「全部/在线/离线」三列等分 | 未实现 | `selectable_label` + `ui.available_width() / 3.0` | 等比 |
+| 10 | 折叠动画 0.2s | 无 | `ui.show_animated(ctx, 0.2, \|ui\| { ... })` | width 动画自适应 |
+| 11 | 折叠后状态栏「▸ 连接 · N」 | 左上角 ☰ 残留 | 移到 `app.rs::show_bottom_chrome` 左侧组，N = 连接管理器中会话总数 | 文字长度短，无溢出问题 |
+
+### 右侧面板
+
+| # | 设计值 | 当前值 | 实现方案 | 动态考量 |
+|---|---|---|---|---|
+| 12 | 固定 260px，与左对称 | SidePanel 弹窗式 | 对称方案：`ui.horizontal()` 中第三个区域，宽度 `min(available_width * 0.18, 320)`，clamp 180~320px | 比例值适配分辨率 |
+| 13 | 片段卡片：标题/tag/命令/统计 | collapsing 按钮列表 | 新建 `FragmentCard` 结构体 + render 函数，卡片内用 `Frame` + `vertical/horizontal` 组合 | 卡片宽度 100% 跟随父容器 |
+
+### 状态栏
+
+| # | 设计值 | 当前值 | 实现方案 | 动态考量 |
+|---|---|---|---|---|
+| 14 | 暗色底 32px，左右 flex | purple 44+28 双层 | 合并为单行 TopBottomPanel 32px，`left_to_right` + 左右布局 | 高度固定 |
+| 15 | 左侧：复原按钮 + 连接信息 | 满串状态标识 | 用 `ui.add_visible()` 控制复原按钮显隐 | 窗口 < 600px 时隐藏额外 badge |
+| 16 | 右侧：复原 + 📋📤🔍📊 + 统计 | 📋📤📥🔍⚙️ | 工具按钮统一，用 `ui.add_visible()` 控制复原 | 窗口 < 800px 隐藏统计数字，保留按钮 |
+| 17 | 工具按钮 hover 0.08→0.25 opacity | fill 硬色 | `style.visuals.widgets.hovered.bg_fill` 或手动 `Frame` 响应透明 | 无 |
+
+### 字体
+
+| # | 设计值 | 当前值 | 实现方案 | 动态考量 |
+|---|---|---|---|---|
+| 18 | Inter + JetBrains Mono | 默认字体 | 在 `apply_design_theme` 中 `ctx.fonts().font_definitions` 加载 ttf | 字体按需加载，不影响布局动态性 |
+| 19 | 12 档字号 (9~13px) | 零散 size() | `ctx.style().text_styles` 注册 `Tiny(9)`/`Small(10)`/`Medium(11)`/`Body(12)`/`Heading(13)` | 引用 `TextStyle`，全局可调 |
+| 20 | 字母间距 0.5px (大写标题) | 无 | egui 不支持 CSS `letter-spacing`，用加空格模拟或接受等宽 | 视觉降级可接受 |
+
+### 其他
+
+| # | 设计值 | 当前值 | 实现方案 | 动态考量 |
+|---|---|---|---|---|
+| 21 | 传输进度条独立浮层 | 在 ScrollArea 内 | 移到 `Frame::show` 固定底部区域，与 ScrollArea 同级 | 高度固定 72px，计算行列时预先扣减 |
+| 22 | Tab 状态圆点 5px | 🖥 emoji | Tab 标题前加 `CircleShape` 或 `colored_label("●")` | 无 |
+| 23 | Tab 关闭按钮 hover fade | 始终可见 | `Response::hovered()` 时设置透明度，else 设 0 | 无 |
+| 24 | hover 过渡 0.1s | 无跳变 | egui 无 CSS transition，用 `lerp` 颜色过渡或接受即时变化 | 视觉简化可接受 |
+
+---
+
+## 十二、后续可扩展方向
 
 1. **多 Tab 拖拽排序** — 支持终端 Tab 拖拽重排和独立拖出窗口
 2. **片段收藏/评分/自定义标签** — 用户可增删改分类和标签
