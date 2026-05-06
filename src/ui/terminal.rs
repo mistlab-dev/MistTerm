@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
-use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, LrzszTransfer, TransferEvent};
+use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, SshSessionId, LrzszTransfer, TransferEvent};
 use crate::terminal::Terminal as VtTerminal;
 use crate::ui::theme::Theme;
 
@@ -70,13 +70,6 @@ pub struct TerminalView {
     terminal_focused: bool,
     rz_control_mode_until: Option<Instant>,
     upload_result_rx: Option<Receiver<Result<String, String>>>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RemotePathEntry {
-    pub name: String,
-    pub is_dir: bool,
-    pub size: Option<u64>,
 }
 
 impl TerminalView {
@@ -169,6 +162,26 @@ impl TerminalView {
         // 先处理网络与键盘，再绘制，避免输入/输出滞后一帧
         self.process_ssh_messages();
         self.process_transfer_events(ui.ctx());
+
+        // Ctrl + 滚轮：缩放终端字体（不改变 PTY 行列，仅视觉）
+        let wheel = ui.ctx().input(|i| {
+            let z = i.smooth_scroll_delta.y + i.raw_scroll_delta.y;
+            if self.terminal_focused
+                && self.connected
+                && i.modifiers.ctrl
+                && !i.modifiers.shift
+                && z.abs() > 0.5
+            {
+                Some(z)
+            } else {
+                None
+            }
+        });
+        if let Some(z) = wheel {
+            let step = if z > 0.0 { 1.0 } else { -1.0 };
+            self.set_font_size(self.font_size + step);
+        }
+
         self.capture_inline_input(ui);
         if self.connected {
             // ZMODEM 上传时 PTY 回包经 UI 旁路进 lrzsz；须高频重绘以免 `mpsc` 积压导致「等 ZACK」式卡顿。
@@ -641,6 +654,18 @@ impl TerminalView {
                             continue;
                         }
                         match key {
+                            egui::Key::V if modifiers.ctrl && modifiers.shift => {
+                                if let Ok(mut clip) = Clipboard::new() {
+                                    if let Ok(text) = clip.get_text() {
+                                        self.paste_text(&text);
+                                    }
+                                }
+                            }
+                            egui::Key::C if modifiers.ctrl && modifiers.shift => {
+                                if let Ok(mut clip) = Clipboard::new() {
+                                    let _ = clip.set_text(self.terminal.get_formatted_output());
+                                }
+                            }
                             egui::Key::Enter => {
                                 if let Err(e) = handle.send_input(b"\r") {
                                     log::error!("PTY write (enter): {}", e);
@@ -660,7 +685,7 @@ impl TerminalView {
                             egui::Key::Tab => {
                                 // Tab 已在 consume_key 阶段统一发送
                             }
-                            egui::Key::C if modifiers.ctrl => {
+                            egui::Key::C if modifiers.ctrl && !modifiers.shift => {
                                 if self.lrzsz.is_active() {
                                     self.lrzsz.cancel_active_transfer();
                                 }
@@ -751,14 +776,16 @@ impl TerminalView {
             .ssh_handle
             .as_ref()
             .ok_or_else(|| "PTY 未就绪".to_string())?;
-        let pump_tx = handle.shell_pump_tx();
+        let channel = handle
+            .get_channel()
+            .ok_or_else(|| "PTY 通道不可用".to_string())?;
         self.rz_control_mode_until = Some(Instant::now() + Duration::from_secs(90));
         log::info!(
             "start_rz_upload: path={} session_id={:?}",
             path.display(),
             handle.session_id
         );
-        match self.lrzsz.start_send(path_str, pump_tx) {
+        match self.lrzsz.start_send(path_str, channel) {
             Ok(()) => Ok(()),
             Err(e) => {
                 self.lrzsz.end_rz_handshake_capture();
@@ -872,64 +899,14 @@ impl TerminalView {
         Ok(())
     }
 
-    pub fn download_remote_file(&mut self, remote_path: &str, local_path: &Path) -> Result<(), String> {
-        let session_id = self.session_id
-            .ok_or_else(|| "没有 SSH 会话".to_string())?;
-        let session = self.ssh_manager.as_ref()
-            .and_then(|m| m.get_session(session_id))
-            .ok_or_else(|| "获取 SSH 会话失败".to_string())?;
-
-        let mut channel = session.channel_session()
-            .map_err(|e| format!("创建通道失败：{}", e))?;
-        let remote_escaped = shell_single_quote(remote_path);
-        channel.exec(&format!("cat {}", remote_escaped))
-            .map_err(|e| format!("执行远程读取失败：{}", e))?;
-
-        let mut buf = Vec::new();
-        use std::io::Read;
-        channel.read_to_end(&mut buf)
-            .map_err(|e| format!("读取远程文件失败：{}", e))?;
-        channel.wait_close()
-            .map_err(|e| format!("等待远端结束失败：{}", e))?;
-
-        let code = channel.exit_status().unwrap_or(-1);
-        if code != 0 {
-            return Err(format!("远端读取失败，退出码: {}", code));
+    /// SFTP 等：`SshManager` 克隆后与后台线程配合使用（避免阻塞 UI）。
+    pub fn sftp_session_for_ops(&self) -> Option<(SshSessionId, SshManager)> {
+        if !self.connected {
+            return None;
         }
-
-        std::fs::write(local_path, &buf)
-            .map_err(|e| format!("保存本地文件失败：{}", e))?;
-        Ok(())
-    }
-
-    pub fn list_remote_dir(&self, remote_dir: &str) -> Result<Vec<RemotePathEntry>, String> {
-        let session_id = self.session_id
-            .ok_or_else(|| "没有 SSH 会话".to_string())?;
-        let session = self.ssh_manager.as_ref()
-            .and_then(|m| m.get_session(session_id))
-            .ok_or_else(|| "获取 SSH 会话失败".to_string())?;
-
-        let sftp = session.sftp().map_err(|e| format!("创建 SFTP 失败：{}", e))?;
-        let path = PathBuf::from(remote_dir);
-        let entries = sftp.readdir(path.as_path()).map_err(|e| format!("读取远端目录失败：{}", e))?;
-
-        let mut items = entries
-            .into_iter()
-            .filter_map(|(p, stat)| {
-                let name = p.file_name()?.to_string_lossy().to_string();
-                if name == "." || name == ".." {
-                    return None;
-                }
-                let is_dir = stat.is_dir();
-                Some(RemotePathEntry {
-                    name,
-                    is_dir,
-                    size: stat.size,
-                })
-            })
-            .collect::<Vec<_>>();
-        items.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
-        Ok(items)
+        let id = self.session_id?;
+        let mgr = self.ssh_manager.as_ref()?.clone();
+        Some((id, mgr))
     }
 
     pub fn download_dir(&self) -> &str {

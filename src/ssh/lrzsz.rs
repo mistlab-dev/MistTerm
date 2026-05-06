@@ -176,8 +176,17 @@ impl ZmodemPacket {
 /// 传输事件
 #[derive(Debug, Clone)]
 pub enum TransferEvent {
-    FileStart { filename: String, size: u64 },
-    FileProgress { filename: String, received: u64, total: u64 },
+    FileStart {
+        filename: String,
+        size: u64,
+        /// true：本机向远端发送（`sz`/对应 `rz` 场景）；false：本机接收
+        outgoing: bool,
+    },
+    FileProgress {
+        filename: String,
+        received: u64,
+        total: u64,
+    },
     FileComplete { filename: String, path: PathBuf },
     FileError { filename: String, error: String },
     TransferComplete,
@@ -403,6 +412,7 @@ impl LrzszTransfer {
                     let _ = self.tx.send(TransferEvent::FileStart {
                         filename: filename.clone(),
                         size,
+                        outgoing: false,
                     });
                     
                     // 创建文件
@@ -501,6 +511,7 @@ impl LrzszTransfer {
             let _ = tx.send(TransferEvent::FileStart {
                 filename: file_name.clone(),
                 size: file_size,
+                outgoing: true,
             });
             
             total_bytes.store(file_size, Ordering::Relaxed);
@@ -641,6 +652,30 @@ impl LrzszTransfer {
         });
         
         Ok(())
+    }
+
+    /// 旧版 UI 曾通过「壳泵旁路」区分 ZMODEM 与 PTY；当前实现由 `start_send` 线程直接锁 Channel 读写，恒为 false。
+    pub fn is_upload_pty_capture(&self) -> bool {
+        false
+    }
+
+    pub fn begin_rz_handshake_capture(&self) {}
+
+    pub fn end_rz_handshake_capture(&self) {}
+
+    pub fn feed_send_pty_output(&self, _data: &[u8]) {}
+
+    pub fn register_shell_pump_upload_feed(&self, _handle: &crate::ssh::manager::SshSessionHandle) {}
+
+    pub fn unregister_shell_pump_upload_feed(&self, _handle: &crate::ssh::manager::SshSessionHandle) {}
+
+    /// 用户 Ctrl+C 或中止传输时复位状态
+    pub fn cancel_active_transfer(&self) {
+        self.is_active.store(false, Ordering::Relaxed);
+        *self.channel.lock().unwrap() = None;
+        *self.receive_state.lock().unwrap() = ReceiveState::Idle;
+        self.receive_buffer.lock().unwrap().clear();
+        let _ = self.receive_file.lock().unwrap().take();
     }
 }
 
