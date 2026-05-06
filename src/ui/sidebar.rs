@@ -5,6 +5,7 @@
 use eframe::egui;
 use std::collections::HashSet;
 use crate::core::session::SessionManager;
+use crate::ui::theme::Theme;
 
 pub struct SidebarOutput {
     pub response: egui::Response,
@@ -27,6 +28,7 @@ impl Sidebar {
         selected_id: &Option<String>,
         search_query: &str,
         connected_sessions: &HashSet<String>,
+        theme: &Theme,
     ) -> SidebarOutput {
         let width = if ui.available_width() > 250.0 { 200.0 } else { ui.available_width() };
         let mut selected_session_id = None;
@@ -48,7 +50,7 @@ impl Sidebar {
                     });
                 });
                 ui.separator();
-                ui.small(egui::RichText::new("最近连接").color(egui::Color32::from_gray(170)).size(11.0));
+                ui.small(egui::RichText::new("最近连接").color(theme.fg_low_color()).size(11.0));
 
                 // 会话列表
                 ui.vertical(|ui| {
@@ -89,7 +91,11 @@ impl Sidebar {
                             if session.group != current_group {
                                 current_group = session.group.clone();
                                 ui.add_space(6.0);
-                                ui.small(egui::RichText::new(format!("📁 {}", current_group)).size(10.0).color(egui::Color32::from_gray(145)));
+                                ui.small(
+                                    egui::RichText::new(format!("📁 {}", current_group))
+                                        .size(10.0)
+                                        .color(theme.fg_low_color()),
+                                );
                             }
                             let is_selected = selected_id.as_ref() == Some(&session.id);
                             let (row_rect, response) = ui.allocate_exact_size(
@@ -97,9 +103,9 @@ impl Sidebar {
                                 egui::Sense::click(),
                             );
                             let bg = if is_selected {
-                                egui::Color32::from_rgb(55, 55, 61) // #37373d
+                                theme.list_row_selected_bg()
                             } else if response.hovered() {
-                                egui::Color32::from_rgb(42, 45, 49) // #2a2d31
+                                theme.list_row_hover_bg()
                             } else {
                                 egui::Color32::TRANSPARENT
                             };
@@ -109,11 +115,10 @@ impl Sidebar {
                                 row_rect.shrink2(egui::vec2(10.0, 8.0)),
                                 egui::Layout::left_to_right(egui::Align::Center),
                             );
-                            // README §2.4 在线 #4CAF50、离线 #f44336
                             let color = if connected_sessions.contains(&session.id) {
-                                egui::Color32::from_rgb(76, 175, 80)
+                                theme.green_color()
                             } else {
-                                egui::Color32::from_rgb(244, 67, 54)
+                                theme.red_color()
                             };
                             row_ui.colored_label(color, "●");
                             row_ui.add_space(6.0);
@@ -121,9 +126,9 @@ impl Sidebar {
                                 egui::RichText::new(&session.name)
                                     .size(13.0)
                                     .color(if is_selected {
-                                        egui::Color32::WHITE
+                                        theme.fg_high_color()
                                     } else {
-                                        egui::Color32::from_rgb(210, 210, 210)
+                                        theme.fg_medium_color()
                                     }),
                             );
                             
@@ -148,7 +153,7 @@ impl Sidebar {
 
                 ui.add_space(10.0);
                 ui.separator();
-                ui.small(egui::RichText::new("命令片段").color(egui::Color32::from_gray(170)).size(11.0));
+                ui.small(egui::RichText::new("命令片段").color(theme.fg_low_color()).size(11.0));
                 for (name, cmd) in [
                     ("重启 Nginx", "systemctl restart nginx"),
                     ("查看日志", "tail -f /var/log/nginx/error.log"),
@@ -159,7 +164,11 @@ impl Sidebar {
                     } else {
                         cmd.to_string()
                     };
-                    ui.small(egui::RichText::new(compact_cmd).color(egui::Color32::from_gray(150)).size(11.0));
+                    ui.small(
+                        egui::RichText::new(compact_cmd)
+                            .color(theme.fg_low_color())
+                            .size(11.0),
+                    );
                     ui.add_space(6.0);
                 }
             }

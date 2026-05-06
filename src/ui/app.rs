@@ -406,12 +406,12 @@ impl MistTermApp {
     }
 
     /// 显示 Git 同步面板
-    fn show_git_sync_panel(&mut self, ctx: &egui::Context) {
+    fn show_git_sync_panel(&mut self, ctx: &egui::Context, theme: &crate::ui::theme::Theme) {
         egui::SidePanel::right("git_sync_panel")
             .default_width(320.0)
             .resizable(true)
             .show(ctx, |ui| {
-                self.git_sync_panel.show(ui);
+                self.git_sync_panel.show(ui, theme);
             });
     }
 
@@ -526,6 +526,9 @@ impl MistTermApp {
                             }
                             if ui.add(mk("🔀 Git", btn_idle, 88.0)).on_hover_text("Git 同步面板").clicked() {
                                 self.show_git_sync_panel = !self.show_git_sync_panel;
+                            }
+                            if ui.add(mk("📊 监控", btn_idle, 88.0)).on_hover_text("系统监控面板").clicked() {
+                                self.show_monitor_panel = !self.show_monitor_panel;
                             }
                         });
                     },
@@ -734,7 +737,12 @@ impl eframe::App for MistTermApp {
 
         // Git 同步面板
         if self.show_git_sync_panel {
-            self.show_git_sync_panel(ctx);
+            self.show_git_sync_panel(ctx, theme);
+        }
+
+        // 系统监控面板
+        if self.show_monitor_panel {
+            self.show_monitor_panel(ctx);
         }
 
         // 主内容区：侧边栏 + 终端
@@ -782,6 +790,7 @@ impl eframe::App for MistTermApp {
                                             &self.selected_session_id,
                                             &self.sidebar_search_query,
                                             &connected_sessions,
+                                            theme,
                                         );
 
                                         if sidebar_output.create_session_clicked {
@@ -948,7 +957,7 @@ impl eframe::App for MistTermApp {
                                 egui::Layout::top_down(egui::Align::LEFT),
                                 |ui| {
                                     if let Some(terminal) = self.current_terminal_mut() {
-                                        terminal.show(ui);
+                                        terminal.show(ui, theme);
                                     } else {
                                         self.show_welcome(ui);
                                     }

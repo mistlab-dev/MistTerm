@@ -140,6 +140,24 @@ impl Theme {
         Color32::from_rgba_unmultiplied(r, g, b, 60)
     }
 
+    fn mix_rgb(a: Color32, b: Color32, t: f32) -> Color32 {
+        let [ar, ag, ab, _] = a.to_array();
+        let [br, bg, bb, _] = b.to_array();
+        let lerp =
+            |x: u8, y: u8| -> u8 { (x as f32 * (1.0 - t) + y as f32 * t).round() as u8 };
+        Color32::from_rgb(lerp(ar, br), lerp(ag, bg), lerp(ab, bb))
+    }
+
+    /// 侧栏/会话列表等：行悬停底色（介于面板底色与边框色之间）
+    pub fn list_row_hover_bg(&self) -> Color32 {
+        Self::mix_rgb(self.bg_window_color(), self.border_color(), 0.42)
+    }
+
+    /// 侧栏/会话列表等：行选中底色
+    pub fn list_row_selected_bg(&self) -> Color32 {
+        Self::mix_rgb(self.bg_window_color(), self.border_color(), 0.62)
+    }
+
     /// 创建暗夜主题（Dark）- 深色背景高对比度
     pub fn dark() -> Self {
         Self {

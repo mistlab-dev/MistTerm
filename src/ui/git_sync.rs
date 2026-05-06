@@ -5,7 +5,8 @@
 use eframe::egui;
 use std::path::PathBuf;
 
-use crate::sync::git::{GitError, GitRepo, RepoStatus};
+use crate::sync::git::{GitRepo, RepoStatus};
+use crate::ui::theme::Theme;
 
 /// Git 同步面板
 pub struct GitSyncPanel {
@@ -210,7 +211,7 @@ impl GitSyncPanel {
     }
 
     /// 显示 Git 同步面板
-    pub fn show(&mut self, ui: &mut egui::Ui) {
+    pub fn show(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         ui.vertical(|ui| {
             // 标题
             ui.horizontal(|ui| {
@@ -251,18 +252,16 @@ impl GitSyncPanel {
                     ui.horizontal(|ui| {
                         ui.label("分支：");
                         ui.label(
-                            egui::RichText::new(&self.branch)
-                                .color(egui::Color32::from_rgb(102, 126, 234)),
+                            egui::RichText::new(&self.branch).color(theme.accent_color()),
                         );
                     });
                     ui.horizontal(|ui| {
                         ui.label("远程：");
                         if self.remote_url.is_empty() {
-                            ui.label(egui::RichText::new("未配置").color(egui::Color32::GRAY));
+                            ui.label(egui::RichText::new("未配置").color(theme.fg_low_color()));
                         } else {
                             ui.label(
-                                egui::RichText::new(&self.remote_url)
-                                    .color(egui::Color32::from_rgb(100, 200, 100)),
+                                egui::RichText::new(&self.remote_url).color(theme.green_color()),
                             );
                         }
                     });
@@ -274,12 +273,12 @@ impl GitSyncPanel {
                             if status.is_dirty {
                                 ui.label(
                                     egui::RichText::new("● 有更改")
-                                        .color(egui::Color32::from_rgb(255, 200, 100)),
+                                        .color(theme.amber_color()),
                                 );
                             } else {
                                 ui.label(
                                     egui::RichText::new("● 干净")
-                                        .color(egui::Color32::from_rgb(100, 200, 100)),
+                                        .color(theme.green_color()),
                                 );
                             }
                         });
@@ -349,10 +348,10 @@ impl GitSyncPanel {
                         });
                     }
                     OperationStatus::Success(msg) => {
-                        ui.colored_label(egui::Color32::from_rgb(100, 200, 100), format!("✓ {}", msg));
+                        ui.colored_label(theme.green_color(), format!("✓ {}", msg));
                     }
                     OperationStatus::Error(msg) => {
-                        ui.colored_label(egui::Color32::RED, format!("✗ {}", msg));
+                        ui.colored_label(theme.red_color(), format!("✗ {}", msg));
                     }
                 }
 
@@ -360,13 +359,13 @@ impl GitSyncPanel {
                 if !self.status_message.is_empty() {
                     ui.label(
                         egui::RichText::new(&self.status_message)
-                            .color(egui::Color32::from_rgb(153, 153, 153)),
+                            .color(theme.fg_low_color()),
                     );
                 }
 
                 // 错误消息
                 if !self.error_message.is_empty() {
-                    ui.colored_label(egui::Color32::RED, &self.error_message);
+                    ui.colored_label(theme.red_color(), &self.error_message);
                 }
             } else {
                 // 未打开仓库

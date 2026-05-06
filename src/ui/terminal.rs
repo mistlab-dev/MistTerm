@@ -16,6 +16,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, LrzszTransfer, TransferEvent};
 use crate::terminal::Terminal as VtTerminal;
+use crate::ui::theme::Theme;
 
 /// 终端视图组件
 pub struct TerminalView {
@@ -164,7 +165,7 @@ impl TerminalView {
     }
 
     /// 显示终端视图
-    pub fn show(&mut self, ui: &mut egui::Ui) {
+    pub fn show(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         // 先处理网络与键盘，再绘制，避免输入/输出滞后一帧
         self.process_ssh_messages();
         self.process_transfer_events(ui.ctx());
@@ -192,11 +193,11 @@ impl TerminalView {
             available_size.x,
             (available_size.y - progress_reserve_y).max(80.0),
         );
-        self.sync_pty_size_with_ui(ui, pty_sync_size);
+        self.sync_pty_size_with_ui(ui, pty_sync_size, theme);
         
-        // README §2.4 终端区域：背景 #1e1e1e、内边距 16px（不在终端内再放一条状态栏，由主窗口底栏承担）
+        // README §2.4 终端区域：背景随主题、内边距 16px（不在终端内再放一条状态栏，由主窗口底栏承担）
         egui::Frame::none()
-            .fill(egui::Color32::from_rgb(30, 30, 30)) // #1e1e1e
+            .fill(theme.bg_terminal_color())
             .inner_margin(egui::Margin::same(16.0))
             .show(ui, |ui| {
                 ui.vertical(|ui| {
@@ -208,9 +209,9 @@ impl TerminalView {
                     let scroll_h = (ui.available_height() - footer_h).max(80.0);
 
                     // 终端内容区在上，ZMODEM 进度条固定在底部，避免插在命令与 shell 输出之间
-                    let layout_job =
-                        self.terminal
-                            .get_layout_job(self.font_size, egui::Color32::from_rgb(212, 212, 212));
+                    let layout_job = self
+                        .terminal
+                        .get_layout_job(self.font_size, theme.fg_medium_color());
                     let scroll_output = egui::ScrollArea::vertical()
                         .stick_to_bottom(self.auto_follow_output)
                         .auto_shrink([false, false])
@@ -314,7 +315,7 @@ impl TerminalView {
             });
     }
 
-    fn sync_pty_size_with_ui(&mut self, ui: &egui::Ui, available_size: egui::Vec2) {
+    fn sync_pty_size_with_ui(&mut self, ui: &egui::Ui, available_size: egui::Vec2, theme: &Theme) {
         // 预留状态栏、进度条、边距；输入已并入滚动区，不再单独预留一行
         let usable_width = (available_size.x - 32.0).max(120.0);
         // 无终端内状态栏后略减预留（进度条等仍占高）
@@ -323,7 +324,8 @@ impl TerminalView {
         // 用真实字体测量单字符网格尺寸，避免 80x24 误差
         let font_id = egui::FontId::monospace(self.font_size);
         let (cell_w, cell_h) = ui.ctx().fonts(|fonts| {
-            let galley = fonts.layout_no_wrap("W".to_string(), font_id, egui::Color32::WHITE);
+            let galley =
+                fonts.layout_no_wrap("W".to_string(), font_id, theme.fg_high_color());
             (galley.size().x.max(6.0), galley.size().y.max(12.0))
         });
 
