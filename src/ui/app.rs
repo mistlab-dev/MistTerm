@@ -10,6 +10,7 @@ use crate::core::{SessionManager, FragmentManager, FragmentStats, SortBy};
 use crate::ui::sidebar::Sidebar;
 use crate::ui::terminal::TerminalView;
 use crate::ui::git_sync::GitSyncPanel;
+use crate::ui::monitor_panel::MonitorPanel;
 use crate::ui::theme::ThemeManager;
 
 struct TerminalTab {
@@ -369,7 +370,7 @@ impl MistTermApp {
                                     ui.label(
                                         egui::RichText::new(stats_text)
                                             .small()
-                                            .color(egui::Color32::from_rgb(153, 153, 153))
+                                            .color(self.theme_manager.current_theme().fg_low_color())
                                     );
                                 }
                             }
@@ -426,10 +427,13 @@ impl MistTermApp {
         }
     }
 
-    /// README §2.4 状态徽章：rgba(255,255,255,0.2)，内边距 2px 8px，圆角 4px，11px 白字
-    fn status_chip(ui: &mut egui::Ui, text: &str) {
+    /// README §2.4 状态徽章：淡色底，内边距 2px 8px，圆角 4px，11px 高对比字色
+    fn status_chip(ui: &mut egui::Ui, text: &str, theme: &crate::ui::theme::Theme) {
+        let c = theme.fg_high_color();
+        let [r, g, b, _] = c.to_array();
+        let fill = egui::Color32::from_rgba_unmultiplied(r, g, b, 51);
         egui::Frame::none()
-            .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 51))
+            .fill(fill)
             .rounding(egui::Rounding::same(4.0))
             .inner_margin(egui::Margin::symmetric(8.0, 2.0))
             .show(ui, |ui| {
@@ -437,7 +441,7 @@ impl MistTermApp {
                     egui::RichText::new(text)
                         .monospace()
                         .size(11.0)
-                        .color(egui::Color32::WHITE),
+                        .color(theme.fg_high_color()),
                 );
             });
     }
@@ -573,9 +577,9 @@ impl MistTermApp {
                                     .color(theme.fg_high_color()),
                             );
                             ui.add_space(4.0);
-                            Self::status_chip(ui, "UTF-8");
-                            Self::status_chip(ui, &font_px);
-                            Self::status_chip(ui, &duration_chip);
+                            Self::status_chip(ui, "UTF-8", theme);
+                            Self::status_chip(ui, &font_px, theme);
+                            Self::status_chip(ui, &duration_chip, theme);
                         });
                     },
                 );
@@ -686,7 +690,7 @@ impl eframe::App for MistTermApp {
                         for (i, theme) in self.theme_manager.list_themes().iter().enumerate() {
                             let is_current = i == self.theme_manager.current;
                             let label = if is_current {
-                                format!"✓ {}", theme.name)
+                                format!("✓ {}", theme.name)
                             } else {
                                 theme.name.clone()
                             };
@@ -767,7 +771,7 @@ impl eframe::App for MistTermApp {
                                                 ui.add(
                                                     egui::TextEdit::singleline(&mut self.sidebar_search_query)
                                                         .hint_text("搜索连接...")
-                                                        .text_color(egui::Color32::WHITE)
+                                                        .text_color(theme.fg_high_color())
                                                         .desired_width(f32::INFINITY),
                                                 );
                                             });
@@ -883,7 +887,7 @@ impl eframe::App for MistTermApp {
                                                         egui::Button::new(
                                                             egui::RichText::new("×")
                                                                 .size(13.0)
-                                                                .color(egui::Color32::from_rgb(153, 153, 153)),
+                                                                .color(theme.fg_low_color()),
                                                         )
                                                         .fill(egui::Color32::TRANSPARENT)
                                                         .frame(false),
@@ -900,7 +904,7 @@ impl eframe::App for MistTermApp {
                                                 egui::Button::new(
                                                     egui::RichText::new("+")
                                                         .size(14.0)
-                                                        .color(egui::Color32::from_rgb(153, 153, 153)),
+                                                        .color(theme.fg_low_color()),
                                                 )
                                                 .fill(egui::Color32::TRANSPARENT)
                                                 .frame(false),

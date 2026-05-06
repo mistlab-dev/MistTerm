@@ -5,6 +5,7 @@
 use eframe::egui;
 use std::time::Duration;
 use crate::monitor::{Monitor, ServerStats, format_bytes};
+use crate::ui::theme::Theme;
 
 /// 监控面板组件
 pub struct MonitorPanel {
@@ -102,7 +103,7 @@ impl MonitorPanel {
     }
 
     /// 在右侧面板中绘制监控内容
-    pub fn show(&mut self, ctx: &egui::Context) {
+    pub fn show(&mut self, ctx: &egui::Context, theme: &Theme) {
         if !self.visible {
             return;
         }
@@ -112,22 +113,26 @@ impl MonitorPanel {
             .resizable(true)
             .frame(
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(37, 37, 38))
+                    .fill(theme.bg_window_color())
                     .stroke(egui::Stroke::new(
                         1.0,
-                        egui::Color32::from_rgb(60, 60, 60),
+                        theme.border_color(),
                     ))
                     .inner_margin(egui::Margin::same(12.0)),
             )
             .show(ctx, |ui| {
-                self.show_content(ui);
+                self.show_content(ui, theme);
             });
     }
 
-    fn show_content(&mut self, ui: &mut egui::Ui) {
+    fn show_content(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         // 标题栏
         ui.horizontal(|ui| {
-            ui.heading(egui::RichText::new("📊 系统监控").size(16.0));
+            ui.heading(
+                egui::RichText::new("📊 系统监控")
+                    .size(16.0)
+                    .color(theme.fg_high_color()),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.button("×").clicked() {
                     self.visible = false;
@@ -206,31 +211,31 @@ impl MonitorPanel {
             ui.add_space(4.0);
 
             // 系统负载
-            ui.label(egui::RichText::new("📊 系统负载").size(13.0).color(egui::Color32::from_rgb(180, 180, 180)));
+            ui.label(egui::RichText::new("📊 系统负载").size(13.0).color(theme.fg_medium_color()));
             ui.horizontal(|ui| {
                 let (l1, l5, l15) = stats.load_avg;
-                self.load_chip(ui, "1m", l1);
-                self.load_chip(ui, "5m", l5);
-                self.load_chip(ui, "15m", l15);
+                self.load_chip(ui, theme, "1m", l1);
+                self.load_chip(ui, theme, "5m", l5);
+                self.load_chip(ui, theme, "15m", l15);
             });
 
             ui.add_space(8.0);
 
             // 网络流量
-            ui.label(egui::RichText::new("🌐 网络速率").size(13.0).color(egui::Color32::from_rgb(180, 180, 180)));
+            ui.label(egui::RichText::new("🌐 网络速率").size(13.0).color(theme.fg_medium_color()));
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(format!("↓ {}", format_bytes_per_sec(rx_rate)))
                         .monospace()
                         .size(12.0)
-                        .color(egui::Color32::from_rgb(80, 200, 120)),
+                        .color(theme.green_color()),
                 );
                 ui.add_space(16.0);
                 ui.label(
                     egui::RichText::new(format!("↑ {}", format_bytes_per_sec(tx_rate)))
                         .monospace()
                         .size(12.0)
-                        .color(egui::Color32::from_rgb(120, 160, 255)),
+                        .color(theme.accent_color()),
                 );
             });
 
@@ -239,7 +244,7 @@ impl MonitorPanel {
             ui.add_space(4.0);
 
             // 历史图表标题
-            ui.label(egui::RichText::new("📈 历史趋势 (60s)").size(13.0).color(egui::Color32::from_rgb(180, 180, 180)));
+            ui.label(egui::RichText::new("📈 历史趋势 (60s)").size(13.0).color(theme.fg_medium_color()));
             ui.add_space(4.0);
 
             // CPU / 内存折线图
@@ -276,6 +281,7 @@ impl MonitorPanel {
     fn show_metric_bar(
         &self,
         ui: &mut egui::Ui,
+        theme: &Theme,
         label: &str,
         percent: f32,
         value_text: String,
@@ -285,21 +291,21 @@ impl MonitorPanel {
             ui.label(
                 egui::RichText::new(label)
                     .size(13.0)
-                    .color(egui::Color32::from_rgb(180, 180, 180)),
+                    .color(theme.fg_medium_color()),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(&value_text)
                         .monospace()
                         .size(12.0)
-                        .color(egui::Color32::WHITE),
+                        .color(theme.fg_high_color()),
                 );
             });
         });
 
         let bar_height = 8.0;
         let available_width = ui.available_width();
-        let bg_color = egui::Color32::from_rgb(60, 60, 60);
+        let bg_color = theme.border_color();
 
         ui.allocate_ui_with_layout(
             egui::vec2(available_width, bar_height + 2.0),
@@ -327,11 +333,11 @@ impl MonitorPanel {
     }
 
     /// 显示负载标签
-    fn load_chip(&self, ui: &mut egui::Ui, theme: &crate::ui::theme::Theme, label: &str, value: f32) {
+    fn load_chip(&self, ui: &mut egui::Ui, theme: &Theme, label: &str, value: f32) {
         let color = if value < 1.0 {
             theme.green_color()
         } else if value < 4.0 {
-            egui::Color32::from_rgb(255, 200, 50)
+            theme.amber_color()
         } else {
             theme.red_color()
         };
@@ -345,7 +351,7 @@ impl MonitorPanel {
                     ui.label(
                         egui::RichText::new(label)
                             .size(10.0)
-                            .color(egui::Color32::from_rgb(150, 150, 150)),
+                            .color(theme.fg_low_color()),
                     );
                     ui.label(
                         egui::RichText::new(format!("{:.2}", value))
@@ -358,7 +364,7 @@ impl MonitorPanel {
     }
 
     /// 显示历史趋势图（CPU + 内存折线）
-    fn show_history_chart(&self, ui: &mut egui::Ui, theme: &crate::ui::theme::Theme, history: &[ServerStats]) {
+    fn show_history_chart(&self, ui: &mut egui::Ui, theme: &Theme, history: &[ServerStats]) {
         let chart_height = 120.0;
         let width = ui.available_width();
 
@@ -386,7 +392,7 @@ impl MonitorPanel {
             let y = rect.max.y - (pct / 100.0) * rect.height();
             painter.line_segment(
                 [egui::pos2(rect.min.x, y), egui::pos2(rect.max.x, y)],
-                egui::Stroke::new(0.5, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20)),
+                egui::Stroke::new(0.5, theme.subtle_line_color()),
             );
         }
 
@@ -396,45 +402,45 @@ impl MonitorPanel {
             egui::Align2::LEFT_TOP,
             "100%",
             egui::FontId::monospace(9.0),
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 60),
+            theme.subtle_label_color(),
         );
         painter.text(
             egui::pos2(rect.min.x + 4.0, rect.center().y),
             egui::Align2::LEFT_CENTER,
             "50%",
             egui::FontId::monospace(9.0),
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 60),
+            theme.subtle_label_color(),
         );
         painter.text(
             egui::pos2(rect.min.x + 4.0, rect.max.y - 4.0),
             egui::Align2::LEFT_BOTTOM,
             "0%",
             egui::FontId::monospace(9.0),
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 60),
+            theme.subtle_label_color(),
         );
 
         let n = history.len();
         let x_step = rect.width() / (n - 1).max(1) as f32;
 
-        // CPU 折线（绿色）
-        let cpu_color = egui::Color32::from_rgb(80, 200, 120);
+        // CPU 折线（成功/监控主色 — 绿）
+        let cpu_line = theme.green_color();
         let mut cpu_points = Vec::with_capacity(n);
         for (i, stats) in history.iter().enumerate() {
             let x = rect.min.x + i as f32 * x_step;
             let y = rect.max.y - (stats.cpu_percent.clamp(0.0, 100.0) / 100.0) * rect.height();
             cpu_points.push(egui::pos2(x, y));
         }
-        painter.line_series(cpu_points, egui::Stroke::new(1.5, cpu_color));
+        painter.line_series(cpu_points, egui::Stroke::new(1.5, cpu_line));
 
-        // 内存折线（蓝色）
-        let mem_color = egui::Color32::from_rgb(102, 126, 234);
+        // 内存折线（主强调色）
+        let mem_line = theme.accent_color();
         let mut mem_points = Vec::with_capacity(n);
         for (i, stats) in history.iter().enumerate() {
             let x = rect.min.x + i as f32 * x_step;
             let y = rect.max.y - (stats.memory_percent().clamp(0.0, 100.0) / 100.0) * rect.height();
             mem_points.push(egui::pos2(x, y));
         }
-        painter.line_series(mem_points, egui::Stroke::new(1.5, mem_color));
+        painter.line_series(mem_points, egui::Stroke::new(1.5, mem_line));
 
         // 图例
         let legend_x = rect.max.x - 80.0;
@@ -446,14 +452,14 @@ impl MonitorPanel {
                 egui::vec2(6.0, 6.0),
             ),
             2.0,
-            cpu_color,
+            cpu_line,
         );
         painter.text(
             egui::pos2(legend_x + 10.0, legend_y + 3.0),
             egui::Align2::LEFT_CENTER,
             "CPU",
             egui::FontId::monospace(10.0),
-            egui::Color32::from_rgb(180, 180, 180),
+            theme.fg_medium_color(),
         );
 
         painter.rect_filled(
@@ -462,46 +468,46 @@ impl MonitorPanel {
                 egui::vec2(6.0, 6.0),
             ),
             2.0,
-            mem_color,
+            mem_line,
         );
         painter.text(
             egui::pos2(legend_x + 50.0, legend_y + 3.0),
             egui::Align2::LEFT_CENTER,
             "MEM",
             egui::FontId::monospace(10.0),
-            egui::Color32::from_rgb(180, 180, 180),
+            theme.fg_medium_color(),
         );
     }
 }
 
 /// CPU 使用率颜色
-fn cpu_color(pct: f32, theme: &crate::ui::theme::Theme) -> egui::Color32 {
+fn cpu_color(pct: f32, theme: &Theme) -> egui::Color32 {
     if pct < 50.0 {
         theme.green_color()
     } else if pct < 80.0 {
-        egui::Color32::from_rgb(255, 200, 50)
+        theme.amber_color()
     } else {
         theme.red_color()
     }
 }
 
 /// 内存使用率颜色
-fn mem_color(pct: f32, theme: &crate::ui::theme::Theme) -> egui::Color32 {
+fn mem_color(pct: f32, theme: &Theme) -> egui::Color32 {
     if pct < 70.0 {
         theme.accent_color()
     } else if pct < 90.0 {
-        egui::Color32::from_rgb(255, 200, 50)
+        theme.amber_color()
     } else {
         theme.red_color()
     }
 }
 
 /// 磁盘使用率颜色
-fn disk_color(pct: f32, theme: &crate::ui::theme::Theme) -> egui::Color32 {
+fn disk_color(pct: f32, theme: &Theme) -> egui::Color32 {
     if pct < 70.0 {
         theme.accent_color()
     } else if pct < 90.0 {
-        egui::Color32::from_rgb(255, 200, 50)
+        theme.amber_color()
     } else {
         theme.red_color()
     }

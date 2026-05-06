@@ -35,6 +35,13 @@ pub struct Theme {
     pub green: Color32Serializable,
     /// 错误色（离线状态等）
     pub red: Color32Serializable,
+    /// 警告/琥珀色（中等负载、中间档位进度等）
+    #[serde(default = "default_theme_amber")]
+    pub amber: Color32Serializable,
+}
+
+fn default_theme_amber() -> Color32Serializable {
+    Color32Serializable::new(255, 200, 50)
 }
 
 /// 用于 serde 序列化的 Color32 包装
@@ -115,6 +122,24 @@ impl Theme {
         self.red.to_color32()
     }
 
+    pub fn amber_color(&self) -> Color32 {
+        self.amber.to_color32()
+    }
+
+    /// 图表网格线等极淡分隔（随前景色变化，适配明暗主题）
+    pub fn subtle_line_color(&self) -> Color32 {
+        let c = self.fg_high.to_color32();
+        let [r, g, b, _] = c.to_array();
+        Color32::from_rgba_unmultiplied(r, g, b, 20)
+    }
+
+    /// 图表坐标刻度等次要标注
+    pub fn subtle_label_color(&self) -> Color32 {
+        let c = self.fg_high.to_color32();
+        let [r, g, b, _] = c.to_array();
+        Color32::from_rgba_unmultiplied(r, g, b, 60)
+    }
+
     /// 创建暗夜主题（Dark）- 深色背景高对比度
     pub fn dark() -> Self {
         Self {
@@ -131,6 +156,7 @@ impl Theme {
             border: Color32Serializable::new(60, 60, 60),            // #3c3c3c
             green: Color32Serializable::new(76, 175, 80),            // #4CAF50
             red: Color32Serializable::new(244, 67, 54),              // #f44336
+            amber: Color32Serializable::new(255, 200, 50),
         }
     }
 
@@ -150,6 +176,7 @@ impl Theme {
             border: Color32Serializable::new(224, 224, 224),         // #e0e0e0
             green: Color32Serializable::new(76, 175, 80),            // #4CAF50
             red: Color32Serializable::new(244, 67, 54),              // #f44336
+            amber: Color32Serializable::new(245, 124, 0),
         }
     }
 
@@ -169,6 +196,7 @@ impl Theme {
             border: Color32Serializable::new(60, 90, 120),           // #3c5a78
             green: Color32Serializable::new(80, 200, 120),           // teal green
             red: Color32Serializable::new(220, 80, 80),              // coral red
+            amber: Color32Serializable::new(255, 200, 100),
         }
     }
 
@@ -188,6 +216,7 @@ impl Theme {
             border: Color32Serializable::new(60, 90, 70),            // #3c5a46
             green: Color32Serializable::new(100, 200, 120),          // bright forest green
             red: Color32Serializable::new(200, 90, 90),              // muted red
+            amber: Color32Serializable::new(220, 180, 60),
         }
     }
 }
