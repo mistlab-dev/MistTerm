@@ -11,6 +11,7 @@ use crate::ui::sidebar::Sidebar;
 use crate::ui::terminal::TerminalView;
 use crate::ui::git_sync::GitSyncPanel;
 use crate::ui::monitor_panel::MonitorPanel;
+use crate::ui::sftp_panel::SftpPanel;
 use crate::ui::theme::ThemeManager;
 
 struct TerminalTab {
@@ -46,8 +47,12 @@ pub struct MistTermApp {
     show_fragment_panel: bool,  // 命令片段侧边栏
     show_git_sync_panel: bool,  // Git 同步面板
     show_monitor_panel: bool,   // 监控面板
+    show_sftp_panel: bool,       // SFTP 文件浏览器
+    /// 上次已同步 SFTP 列表的终端标签索引（切换标签时重置远端浏览状态）
+    sftp_last_tab: Option<usize>,
     git_sync_panel: GitSyncPanel,
     monitor_panel: MonitorPanel,
+    sftp_panel: SftpPanel,
     
     /// 新建会话表单
     new_session_name: String,
@@ -107,8 +112,11 @@ impl MistTermApp {
             show_fragment_panel: false,
             show_git_sync_panel: false,
             show_monitor_panel: false,
+            show_sftp_panel: false,
+            sftp_last_tab: None,
             git_sync_panel: GitSyncPanel::new(),
             monitor_panel: MonitorPanel::new(),
+            sftp_panel: SftpPanel::new(),
             new_session_name: String::new(),
             new_session_host: String::new(),
             new_session_port: 22,
@@ -512,10 +520,18 @@ impl MistTermApp {
                                     }
                                 }
                             }
-                            if ui.add(mk("📥 下载", btn_idle, 88.0)).clicked() {
+                            if ui.add(mk("📥 下载/SFTP", btn_idle, 120.0))
+                                .on_hover_text("打开 SFTP；ZMODEM 默认目录见侧栏提示")
+                                .clicked()
+                            {
+                                self.show_sftp_panel = true;
+                                self.sftp_last_tab = None;
+                                self.sftp_panel.request_list_on_open();
                                 if let Some(terminal) = self.current_terminal() {
-                                    self.status_message =
-                                        format!("下载目录: {}", terminal.download_dir());
+                                    self.status_message = format!(
+                                        "SFTP 已打开；ZMODEM 下载目录 {}",
+                                        terminal.download_dir()
+                                    );
                                 }
                             }
                             if ui.add(mk("🔍 搜索", btn_idle, 88.0)).clicked() {
@@ -529,6 +545,17 @@ impl MistTermApp {
                             }
                             if ui.add(mk("📊 监控", btn_idle, 88.0)).on_hover_text("系统监控面板").clicked() {
                                 self.show_monitor_panel = !self.show_monitor_panel;
+                            }
+                            if ui
+                                .add(mk("📂 SFTP", btn_idle, 88.0))
+                                .on_hover_text("显示/隐藏远端 SFTP 侧栏")
+                                .clicked()
+                            {
+                                self.show_sftp_panel = !self.show_sftp_panel;
+                                if self.show_sftp_panel {
+                                    self.sftp_last_tab = None;
+                                    self.sftp_panel.request_list_on_open();
+                                }
                             }
                         });
                     },
@@ -604,34 +631,39 @@ impl eframe::App for MistTermApp {
         self.apply_current_theme(ctx);
         let theme = self.theme_manager.current_theme();
 
-        // 检查是否有终端等待 rz 上传文件
+        // 检查是否有终端等待 rz 上传文件（ZMODEM：`start_rz_upload`，非 SCP `start_upload`）
         if let Some(terminal) = self.current_terminal() {
             if terminal.pending_rz_upload {
-                // 重置状态，防止重复触发
                 if let Some(t) = self.current_terminal_mut() {
                     t.pending_rz_upload = false;
                 }
                 if let Some(path) = FileDialog::new()
-                    .set_title("选择要上传的文件")
-                    .pick_file() 
+                    .set_title("选择要上传到远端（rz）的文件")
+                    .pick_file()
                 {
-                    self.status_message = format!("rz上传: {}", path.display());
+                    self.status_message = format!("ZMODEM 上传: {}", path.display());
                     if let Some(t) = self.current_terminal_mut() {
-                        match t.start_upload(path.as_path()) {
-                            Ok(_) => {
-                                self.status_message = format!("上传成功: {}", path.display());
+                        match t.start_rz_upload(path.as_path()) {
+                            Ok(()) => {
+                                self.status_message =
+                                    format!("ZMODEM 已启动: {}", path.display());
                             }
                             Err(e) => {
-                                self.status_message = format!("上传失败: {}", e);
+                                t.end_rz_handshake_capture();
+                                self.status_message = format!("ZMODEM 启动失败: {}", e);
                             }
                         }
                     }
                 } else {
-                    self.status_message = "rz上传已取消".to_string();
+                    self.status_message = "rz 上传已取消".to_string();
+                    if let Some(t) = self.current_terminal_mut() {
+                        t.end_rz_handshake_capture();
+                        t.clear_rz_control_mode();
+                    }
                 }
             }
         }
-        
+
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::N)) {
             self.show_new_session_dialog = true;
         }
@@ -689,6 +721,20 @@ impl eframe::App for MistTermApp {
                         ui.close_menu();
                     }
                     ui.separator();
+                    let sftp_menu = if self.show_sftp_panel {
+                        "✓ SFTP 文件面板"
+                    } else {
+                        "SFTP 文件面板"
+                    };
+                    if ui.button(sftp_menu).clicked() {
+                        self.show_sftp_panel = !self.show_sftp_panel;
+                        if self.show_sftp_panel {
+                            self.sftp_last_tab = None;
+                            self.sftp_panel.request_list_on_open();
+                        }
+                        ui.close_menu();
+                    }
+                    ui.separator();
                     ui.menu_button("主题", |ui| {
                         for (i, theme) in self.theme_manager.list_themes().iter().enumerate() {
                             let is_current = i == self.theme_manager.current;
@@ -738,6 +784,25 @@ impl eframe::App for MistTermApp {
         // Git 同步面板
         if self.show_git_sync_panel {
             self.show_git_sync_panel(ctx, theme);
+        }
+
+        // SFTP（右侧面板；切换终端标签时重置远端路径并重新拉列表）
+        let mut close_sftp_panel = false;
+        if self.show_sftp_panel {
+            if self.sftp_last_tab != self.active_tab {
+                self.sftp_last_tab = self.active_tab;
+                self.sftp_panel.reset();
+                self.sftp_panel.request_list_on_open();
+            }
+            self.sftp_panel.show_side_panel(
+                ctx,
+                theme,
+                self.current_terminal(),
+                &mut close_sftp_panel,
+            );
+        }
+        if close_sftp_panel {
+            self.show_sftp_panel = false;
         }
 
         // 系统监控面板

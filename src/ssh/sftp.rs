@@ -3,9 +3,8 @@
 //! 提供 SFTP 客户端封装，支持文件浏览、上传、下载、删除等操作。
 
 use ssh2::{Session, Sftp};
-use std::path::{Path, PathBuf};
 use std::io::{Read, Write};
-use std::time::SystemTime;
+use std::path::{Path, PathBuf};
 use chrono::{DateTime, Utc, TimeZone};
 
 /// SFTP 文件条目信息
@@ -188,16 +187,23 @@ impl SftpClient {
         let mut local_file = std::fs::File::create(local_path)
             .map_err(|e| format!("Failed to create local file {}: {}", local_path.display(), e))?;
 
-        let mut buffer = Vec::new();
-        remote_file
-            .read_to_end(&mut buffer)
-            .map_err(|e| format!("Failed to read remote file: {}", e))?;
+        const CHUNK: usize = 256 * 1024;
+        let mut buf = [0u8; CHUNK];
+        let mut total = 0u64;
+        loop {
+            let n = remote_file
+                .read(&mut buf)
+                .map_err(|e| format!("Failed to read remote file: {}", e))?;
+            if n == 0 {
+                break;
+            }
+            local_file
+                .write_all(&buf[..n])
+                .map_err(|e| format!("Failed to write local file: {}", e))?;
+            total += n as u64;
+        }
 
-        local_file
-            .write_all(&buffer)
-            .map_err(|e| format!("Failed to write local file: {}", e))?;
-
-        Ok(buffer.len() as u64)
+        Ok(total)
     }
 
     /// 上传文件到远程
@@ -205,22 +211,26 @@ impl SftpClient {
         let mut local_file = std::fs::File::open(local_path)
             .map_err(|e| format!("Failed to open local file {}: {}", local_path.display(), e))?;
 
-        let mut buffer = Vec::new();
-        local_file
-            .read_to_end(&mut buffer)
-            .map_err(|e| format!("Failed to read local file: {}", e))?;
-
-        let file_size = buffer.len() as u64;
-
-        // 使用 SCP 协议发送（更可靠）
         let mut remote_file = self
             .sftp
             .create(remote_path)
             .map_err(|e| format!("Failed to create remote file {}: {}", remote_path.display(), e))?;
 
-        remote_file
-            .write_all(&buffer)
-            .map_err(|e| format!("Failed to write remote file: {}", e))?;
+        const CHUNK: usize = 256 * 1024;
+        let mut buf = [0u8; CHUNK];
+        let mut file_size = 0u64;
+        loop {
+            let n = local_file
+                .read(&mut buf)
+                .map_err(|e| format!("Failed to read local file: {}", e))?;
+            if n == 0 {
+                break;
+            }
+            remote_file
+                .write_all(&buf[..n])
+                .map_err(|e| format!("Failed to write remote file: {}", e))?;
+            file_size += n as u64;
+        }
 
         remote_file
             .send_eof()

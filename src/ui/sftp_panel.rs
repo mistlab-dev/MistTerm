@@ -2,7 +2,7 @@
 //!
 //! 网络与 SFTP 在后台线程执行，通过 `Receiver` 回传结果，避免阻塞 egui。
 
-use crate::ssh::manager::SshSessionId;
+use crate::ssh::SshSessionId;
 use crate::ssh::{SftpClient, SftpEntry, SshManager};
 use crate::ui::terminal::TerminalView;
 use crate::ui::theme::Theme;
@@ -245,21 +245,97 @@ impl SftpPanel {
         });
     }
 
-    /// 右侧 SFTP 侧栏入口
-    pub fn show_side_panel(&mut self, ctx: &egui::Context, theme: &Theme, terminal: Option<&TerminalView>) {
+    fn spawn_upload_many(
+        &mut self,
+        sid: SshSessionId,
+        mgr: SshManager,
+        cwd: PathBuf,
+        locals: Vec<PathBuf>,
+        ctx: &egui::Context,
+    ) {
+        if self.busy || locals.is_empty() {
+            return;
+        }
+        self.busy = true;
+        let (tx, rx) = mpsc::channel();
+        self.rx = Some(rx);
+        let ctx = ctx.clone();
+        thread::spawn(move || {
+            let msg = (|| -> Result<String, String> {
+                let session = mgr.get_session(sid).ok_or_else(|| "SSH 会话不可用".to_string())?;
+                let client = SftpClient::new(&session)?;
+                let mut ok_n = 0usize;
+                let mut total_bytes = 0u64;
+                let mut err_lines = Vec::new();
+                for local in locals {
+                    let fname = local
+                        .file_name()
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| PathBuf::from("upload.bin"));
+                    let remote_path = cwd.join(&fname);
+                    match client.upload(&local, &remote_path) {
+                        Ok(n) => {
+                            ok_n += 1;
+                            total_bytes += n;
+                        }
+                        Err(e) => err_lines.push(format!("{}: {}", local.display(), e)),
+                    }
+                }
+                if ok_n == 0 && !err_lines.is_empty() {
+                    return Err(err_lines.join("\n"));
+                }
+                let mut s = format!(
+                    "已上传 {} 个文件，合计 {} bytes",
+                    ok_n, total_bytes
+                );
+                if !err_lines.is_empty() {
+                    s.push_str("\n部分失败：\n");
+                    s.push_str(&err_lines.join("\n"));
+                }
+                Ok(s)
+            })();
+            let _ = tx.send(SftpJobResult::Msg(msg));
+            ctx.request_repaint();
+        });
+    }
+
+    /// 右侧 SFTP 侧栏入口（`close_panel` 置为 true 时由宿主隐藏侧栏）
+    pub fn show_side_panel(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        terminal: Option<&TerminalView>,
+        close_panel: &mut bool,
+    ) {
         egui::SidePanel::right("sftp_browser_panel")
             .default_width(360.0)
             .resizable(true)
             .show(ctx, |ui| {
-                self.show_content(ui, ctx, theme, terminal);
+                self.show_content(ui, ctx, theme, terminal, close_panel);
             });
     }
 
-    fn show_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, theme: &Theme, terminal: Option<&TerminalView>) {
+    fn show_content(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+        terminal: Option<&TerminalView>,
+        close_panel: &mut bool,
+    ) {
         self.poll_rx();
 
         ui.horizontal(|ui| {
             ui.heading(egui::RichText::new("📂 SFTP").color(theme.fg_high_color()));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("✕")
+                    .on_hover_text("隐藏侧栏 · 也可用底部「📂 SFTP」切换")
+                    .clicked()
+                {
+                    *close_panel = true;
+                }
+            });
         });
         ui.separator();
 
@@ -281,13 +357,17 @@ impl SftpPanel {
             return;
         };
 
-        // 可变操作成功后自动刷新列表
+        // 可变操作成功后自动刷新；否则处理「打开面板时首次加载」
         if self.pending_refresh_after_op && !self.busy && self.rx.is_none() {
             self.pending_refresh_after_op = false;
+            self.spawn_list(sid, mgr.clone(), self.cwd.clone(), ctx);
+        } else if self.pending_auto_list && !self.busy && self.rx.is_none() {
+            self.pending_auto_list = false;
             self.spawn_list(sid, mgr.clone(), self.cwd.clone(), ctx);
         }
 
         let download_dir_hint = t.download_dir().to_string();
+        let download_dir_path = PathBuf::from(&download_dir_hint);
 
         if let Some(ok) = &self.toast_ok {
             ui.label(egui::RichText::new(ok).color(theme.green_color()));
@@ -321,7 +401,7 @@ impl SftpPanel {
             );
             ui.add(
                 egui::TextEdit::singleline(&mut self.path_edit)
-                    .desired_width(ui.available_width() - 148.0)
+                    .desired_width((ui.available_width() - 148.0).max(80.0))
                     .hint_text("/tmp 或 ."),
             );
             if ui.add_enabled(!self.busy, egui::Button::new("前往")).clicked() {
@@ -346,7 +426,7 @@ impl SftpPanel {
                 self.spawn_list(sid, mgr.clone(), parent, ctx);
             }
             if ui
-                .add_enabled(!self.busy && self.selected.is_some(), egui::Button::new("下载选中"))
+                .add_enabled(!self.busy && self.selected.is_some(), egui::Button::new("另存为…"))
                 .clicked()
             {
                 if let Some(rem) = &self.selected {
@@ -360,21 +440,62 @@ impl SftpPanel {
                             return;
                         }
                     }
-                    if let Some(save) =
-                        FileDialog::new().set_file_name(&name).save_file()
+                    if let Some(save) = FileDialog::new()
+                        .set_directory(&download_dir_path)
+                        .set_file_name(&name)
+                        .save_file()
                     {
-                        self.spawn_download(sid, mgr.clone(), rem.clone(), save.clone(), ctx);
+                        self.spawn_download(sid, mgr.clone(), rem.clone(), save, ctx);
                     }
                 }
             }
-            if ui.add_enabled(!self.busy, egui::Button::new("上传…")).clicked() {
-                if let Some(picked) = FileDialog::new().pick_file() {
-                    let fname = picked
+            if ui
+                .add_enabled(!self.busy && self.selected.is_some(), egui::Button::new("下载到默认目录"))
+                .on_hover_text(format!("写入：{}", download_dir_hint))
+                .clicked()
+            {
+                if let Some(rem) = self.selected.clone() {
+                    let name = rem
                         .file_name()
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| PathBuf::from("upload.bin"));
-                    let remote_path = self.cwd.join(fname);
-                    self.spawn_upload(sid, mgr.clone(), remote_path, picked, ctx);
+                        .map(|x| x.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "remote-file".into());
+                    if let Some(e) = self.entries.iter().find(|x| x.path == rem) {
+                        if e.is_dir {
+                            self.toast_err = Some("请选文件而非目录".into());
+                            return;
+                        }
+                    }
+                    if let Err(e) = std::fs::create_dir_all(&download_dir_path) {
+                        self.toast_err = Some(format!("无法创建本机目录：{}", e));
+                        return;
+                    }
+                    let save = download_dir_path.join(&name);
+                    self.spawn_download(sid, mgr.clone(), rem, save, ctx);
+                }
+            }
+        });
+
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(!self.busy, egui::Button::new("上传…"))
+                .on_hover_text("可多选；文件名保持与本地一致，写入当前远端目录")
+                .clicked()
+            {
+                if let Some(files) = FileDialog::new().pick_files() {
+                    if files.is_empty() {
+                        return;
+                    }
+                    if files.len() == 1 {
+                        let picked = files.into_iter().next().expect("len checked");
+                        let fname = picked
+                            .file_name()
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| PathBuf::from("upload.bin"));
+                        let remote_path = self.cwd.join(fname);
+                        self.spawn_upload(sid, mgr.clone(), remote_path, picked, ctx);
+                    } else {
+                        self.spawn_upload_many(sid, mgr.clone(), self.cwd.clone(), files, ctx);
+                    }
                 }
             }
             if ui
