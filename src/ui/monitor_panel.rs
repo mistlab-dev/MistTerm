@@ -159,13 +159,13 @@ impl MonitorPanel {
 
             // 服务器运行时间
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("⏱ 运行时间").size(13.0).color(egui::Color32::from_rgb(180, 180, 180)));
+                ui.label(egui::RichText::new("⏱ 运行时间").size(13.0).color(theme.fg_medium_color()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(stats.format_uptime())
                             .monospace()
                             .size(13.0)
-                            .color(egui::Color32::WHITE),
+                            .color(theme.fg_high_color()),
                     );
                 });
             });
@@ -174,28 +174,31 @@ impl MonitorPanel {
             // CPU 使用率
             self.show_metric_bar(
                 ui,
+                theme,
                 "🖥 CPU",
                 stats.cpu_percent,
                 format!("{:.1}%", stats.cpu_percent),
-                cpu_color(stats.cpu_percent),
+                cpu_color(stats.cpu_percent, theme),
             );
 
             // 内存使用
             self.show_metric_bar(
                 ui,
+                theme,
                 "💾 内存",
                 stats.memory_percent(),
                 stats.format_memory(),
-                mem_color(stats.memory_percent()),
+                mem_color(stats.memory_percent(), theme),
             );
 
             // 磁盘使用
             self.show_metric_bar(
                 ui,
+                theme,
                 "💿 磁盘",
                 stats.disk_percent(),
                 stats.format_disk(),
-                disk_color(stats.disk_percent()),
+                disk_color(stats.disk_percent(), theme),
             );
 
             ui.add_space(8.0);
@@ -249,12 +252,12 @@ impl MonitorPanel {
                 ui.label(
                     egui::RichText::new("请先连接服务器")
                         .size(14.0)
-                        .color(egui::Color32::from_rgb(153, 153, 153)),
+                        .color(theme.fg_low_color()),
                 );
                 ui.label(
                     egui::RichText::new("连接后点击监控按钮启用")
                         .size(12.0)
-                        .color(egui::Color32::from_rgb(100, 100, 100)),
+                        .color(theme.fg_medium_color()),
                 );
             });
         }
@@ -263,7 +266,7 @@ impl MonitorPanel {
         if let Some(ref err) = self.last_error {
             ui.add_space(8.0);
             ui.colored_label(
-                egui::Color32::from_rgb(255, 80, 80),
+                theme.red_color(),
                 egui::RichText::new(format!("⚠ {}", err)).size(11.0),
             );
         }
@@ -324,17 +327,17 @@ impl MonitorPanel {
     }
 
     /// 显示负载标签
-    fn load_chip(&self, ui: &mut egui::Ui, label: &str, value: f32) {
+    fn load_chip(&self, ui: &mut egui::Ui, theme: &crate::ui::theme::Theme, label: &str, value: f32) {
         let color = if value < 1.0 {
-            egui::Color32::from_rgb(80, 200, 120)
+            theme.green_color()
         } else if value < 4.0 {
             egui::Color32::from_rgb(255, 200, 50)
         } else {
-            egui::Color32::from_rgb(255, 80, 80)
+            theme.red_color()
         };
 
         egui::Frame::none()
-            .fill(egui::Color32::from_rgb(60, 60, 60))
+            .fill(theme.border_color())
             .rounding(4.0)
             .inner_margin(egui::Margin::symmetric(8.0, 4.0))
             .show(ui, |ui| {
