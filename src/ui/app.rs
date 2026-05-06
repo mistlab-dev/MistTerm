@@ -44,7 +44,9 @@ pub struct MistTermApp {
     show_fragments_dialog: bool,
     show_fragment_panel: bool,  // 命令片段侧边栏
     show_git_sync_panel: bool,  // Git 同步面板
+    show_monitor_panel: bool,   // 监控面板
     git_sync_panel: GitSyncPanel,
+    monitor_panel: MonitorPanel,
     
     /// 新建会话表单
     new_session_name: String,
@@ -103,7 +105,9 @@ impl MistTermApp {
             show_fragments_dialog: false,
             show_fragment_panel: false,
             show_git_sync_panel: false,
+            show_monitor_panel: false,
             git_sync_panel: GitSyncPanel::new(),
+            monitor_panel: MonitorPanel::new(),
             new_session_name: String::new(),
             new_session_host: String::new(),
             new_session_port: 22,
@@ -443,10 +447,11 @@ impl MistTermApp {
         const QUICK_H: f32 = 44.0;
         const STATUS_H: f32 = 28.0;
 
-        let bar_fill = egui::Color32::from_rgb(37, 37, 38); // #252526
-        let btn_idle = egui::Color32::from_rgb(60, 60, 60); // #3c3c3c
-        let btn_primary = egui::Color32::from_rgb(102, 126, 234); // #667eea
-        let purple = egui::Color32::from_rgb(102, 126, 234);
+        let theme = self.theme_manager.current_theme();
+        let bar_fill = theme.bg_window_color();
+        let btn_idle = theme.border_color();
+        let btn_primary = theme.accent_color();
+        let status_bar_bg = theme.accent_color();
         let h_btn = 32.0;
 
         egui::TopBottomPanel::bottom("bottom_chrome")
@@ -465,7 +470,7 @@ impl MistTermApp {
                         ui.painter().hline(
                             rect.x_range(),
                             rect.top(),
-                            egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 60)),
+                            egui::Stroke::new(1.0, theme.border_color()),
                         );
                         ui.add_space(10.0);
                         ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
@@ -474,7 +479,7 @@ impl MistTermApp {
                                 egui::Button::new(
                                     egui::RichText::new(label)
                                         .size(12.0)
-                                        .color(egui::Color32::WHITE),
+                                        .color(theme.fg_high_color()),
                                 )
                                 .fill(fill)
                                 .rounding(4.0)
@@ -528,7 +533,7 @@ impl MistTermApp {
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         let rect = ui.max_rect();
-                        ui.painter().rect_filled(rect, 0.0, purple);
+                        ui.painter().rect_filled(rect, 0.0, status_bar_bg);
                         ui.add_space(10.0);
 
                         let mut server_line = "🖥️ 未选择会话".to_string();
@@ -553,19 +558,19 @@ impl MistTermApp {
                                 egui::RichText::new(&server_line)
                                     .monospace()
                                     .size(11.0)
-                                    .color(egui::Color32::from_rgb(248, 250, 255)),
+                                    .color(theme.fg_high_color()),
                             );
                             ui.label(
                                 egui::RichText::new("🔒 SSH-2.0")
                                     .monospace()
                                     .size(11.0)
-                                    .color(egui::Color32::from_rgb(248, 250, 255)),
+                                    .color(theme.fg_high_color()),
                             );
                             ui.label(
                                 egui::RichText::new("🌐 Asia/Shanghai")
                                     .monospace()
                                     .size(11.0)
-                                    .color(egui::Color32::from_rgb(248, 250, 255)),
+                                    .color(theme.fg_high_color()),
                             );
                             ui.add_space(4.0);
                             Self::status_chip(ui, "UTF-8");
@@ -590,6 +595,7 @@ fn truncate_status(s: &str, max_chars: usize) -> String {
 impl eframe::App for MistTermApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.apply_current_theme(ctx);
+        let theme = self.theme_manager.current_theme();
 
         // 检查是否有终端等待 rz 上传文件
         if let Some(terminal) = self.current_terminal() {
@@ -648,7 +654,7 @@ impl eframe::App for MistTermApp {
         // 顶部标题栏
         egui::TopBottomPanel::top("title_bar")
             .exact_height(36.0)
-            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(45, 45, 45)))
+            .frame(egui::Frame::none().fill(theme.bg_tab_bar_color()))
             .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.menu_button("文件", |ui| {
@@ -704,11 +710,11 @@ impl eframe::App for MistTermApp {
                         .current_terminal()
                         .map(|t| format!("MistTerm - {}", t.connection_server_text()))
                         .unwrap_or_else(|| "MistTerm".to_string());
-                    // README §2.4 标题栏：13px，#999
+                    // README §2.4 标题栏：13px
                     ui.label(
                         egui::RichText::new(title)
                             .size(13.0)
-                            .color(egui::Color32::from_rgb(153, 153, 153)),
+                            .color(theme.fg_low_color()),
                     );
                 });
             });
@@ -729,7 +735,7 @@ impl eframe::App for MistTermApp {
 
         // 主内容区：侧边栏 + 终端
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(45, 45, 45)))
+            .frame(egui::Frame::none().fill(theme.bg_body_color()))
             .show(ctx, |ui| {
                 let full_h = ui.available_height();
                 ui.horizontal(|ui| {
@@ -747,14 +753,14 @@ impl eframe::App for MistTermApp {
                             egui::Layout::top_down(egui::Align::LEFT),
                             |ui| {
                                 egui::Frame::none()
-                                    .fill(egui::Color32::from_rgb(37, 37, 38)) // #252526
-                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 60))) // #3c3c3c
+                                    .fill(theme.bg_window_color())
+                                    .stroke(egui::Stroke::new(1.0, theme.border_color()))
                                     .inner_margin(egui::Margin::same(12.0))
                                     .show(ui, |ui| {
                                         ui.set_width(self.sidebar_width);
                                         // README §2.4 搜索框：高 36px、内边距 8px 12px、背景 #3c3c3c、圆角 6px
                                         egui::Frame::none()
-                                            .fill(egui::Color32::from_rgb(60, 60, 60))
+                                            .fill(theme.border_color())
                                             .rounding(6.0)
                                             .inner_margin(egui::Margin::symmetric(12.0, 8.0))
                                             .show(ui, |ui| {
@@ -802,9 +808,9 @@ impl eframe::App for MistTermApp {
                             egui::Sense::drag(),
                         );
                         let color = if drag_resp.hovered() || drag_resp.dragged() {
-                            egui::Color32::from_rgb(90, 90, 90)
+                            theme.accent_dim_color()
                         } else {
-                            egui::Color32::from_rgb(60, 60, 60)
+                            theme.border_color()
                         };
                         ui.painter().rect_filled(drag_rect, 0.0, color);
                         if drag_resp.dragged() {
@@ -819,12 +825,12 @@ impl eframe::App for MistTermApp {
                         egui::vec2(ui.available_width(), full_h),
                         egui::Layout::top_down(egui::Align::LEFT),
                         |ui| {
-                            // README §2.4 标签栏：背景 #2d2d2d、底部分隔 1px #3c3c3c、标签高 40px
+                            // README §2.4 标签栏
                             egui::Frame::none()
-                                .fill(egui::Color32::from_rgb(45, 45, 45))
+                                .fill(theme.bg_tab_bar_color())
                                 .stroke(egui::Stroke::new(
                                     1.0,
-                                    egui::Color32::from_rgb(60, 60, 60),
+                                    theme.border_color(),
                                 ))
                                 .inner_margin(egui::Margin::symmetric(8.0, 0.0))
                                 .show(ui, |ui| {
@@ -843,18 +849,18 @@ impl eframe::App for MistTermApp {
                                                     egui::Button::new(
                                                         egui::RichText::new(&tab_label).size(12.0).color(
                                                             if active {
-                                                                egui::Color32::WHITE
+                                                                theme.fg_high_color()
                                                             } else {
-                                                                egui::Color32::from_rgb(153, 153, 153)
+                                                                theme.fg_low_color()
                                                             },
                                                         ),
                                                     )
                                                     .fill(if active {
-                                                        egui::Color32::from_rgb(30, 30, 30) // #1e1e1e 激活
+                                                        theme.bg_terminal_color()
                                                     } else {
-                                                        egui::Color32::from_rgb(45, 45, 45) // #2d2d2d 非激活
+                                                        theme.bg_tab_bar_color()
                                                     })
-                                                    .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(60, 60, 60)))
+                                                    .stroke(egui::Stroke::new(1.0, theme.border_color()))
                                                     .rounding(4.0)
                                                     .min_size(egui::vec2(170.0, 30.0)),
                                                 );

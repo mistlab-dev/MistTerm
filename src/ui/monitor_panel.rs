@@ -243,7 +243,7 @@ impl MonitorPanel {
             ui.add_space(4.0);
 
             // CPU / 内存折线图
-            self.show_history_chart(ui, history);
+            self.show_history_chart(ui, theme, history);
 
         } else {
             // 未初始化提示
@@ -358,7 +358,7 @@ impl MonitorPanel {
     }
 
     /// 显示历史趋势图（CPU + 内存折线）
-    fn show_history_chart(&self, ui: &mut egui::Ui, history: &[ServerStats]) {
+    fn show_history_chart(&self, ui: &mut egui::Ui, theme: &crate::ui::theme::Theme, history: &[ServerStats]) {
         let chart_height = 120.0;
         let width = ui.available_width();
 
@@ -366,7 +366,7 @@ impl MonitorPanel {
             ui.label(
                 egui::RichText::new("等待数据采集…")
                     .size(11.0)
-                    .color(egui::Color32::from_rgb(100, 100, 100)),
+                    .color(theme.fg_low_color()),
             );
             return;
         }
@@ -379,7 +379,7 @@ impl MonitorPanel {
         let painter = ui.painter();
 
         // 背景网格
-        painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(30, 30, 30));
+        painter.rect_filled(rect, 4.0, theme.bg_terminal_color());
 
         // 水平参考线 (25%, 50%, 75%)
         for pct in [25.0, 50.0, 75.0] {
@@ -475,35 +475,35 @@ impl MonitorPanel {
 }
 
 /// CPU 使用率颜色
-fn cpu_color(pct: f32) -> egui::Color32 {
+fn cpu_color(pct: f32, theme: &crate::ui::theme::Theme) -> egui::Color32 {
     if pct < 50.0 {
-        egui::Color32::from_rgb(80, 200, 120)
+        theme.green_color()
     } else if pct < 80.0 {
         egui::Color32::from_rgb(255, 200, 50)
     } else {
-        egui::Color32::from_rgb(255, 80, 80)
+        theme.red_color()
     }
 }
 
 /// 内存使用率颜色
-fn mem_color(pct: f32) -> egui::Color32 {
+fn mem_color(pct: f32, theme: &crate::ui::theme::Theme) -> egui::Color32 {
     if pct < 70.0 {
-        egui::Color32::from_rgb(102, 126, 234)
+        theme.accent_color()
     } else if pct < 90.0 {
         egui::Color32::from_rgb(255, 200, 50)
     } else {
-        egui::Color32::from_rgb(255, 80, 80)
+        theme.red_color()
     }
 }
 
 /// 磁盘使用率颜色
-fn disk_color(pct: f32) -> egui::Color32 {
+fn disk_color(pct: f32, theme: &crate::ui::theme::Theme) -> egui::Color32 {
     if pct < 70.0 {
-        egui::Color32::from_rgb(180, 130, 255)
+        theme.accent_color()
     } else if pct < 90.0 {
         egui::Color32::from_rgb(255, 200, 50)
     } else {
-        egui::Color32::from_rgb(255, 80, 80)
+        theme.red_color()
     }
 }
 
