@@ -1,6 +1,4 @@
-//! 命令片段统计功能
-//!
-//! 提供命令片段的使用统计（次数、成功率、耗时）
+//! 命令片段：统计、分类、标签、变量占位符
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -8,6 +6,8 @@ use std::fs;
 use std::io::{self, BufReader, BufWriter};
 use std::path::PathBuf;
 use uuid::Uuid;
+
+use super::session::SessionConfig;
 
 /// 单个命令片段的统计信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +20,9 @@ pub struct FragmentStats {
     pub command: String,
     /// 分类
     pub category: String,
+    /// 标签（用于筛选与同步）
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// 使用次数
     pub usage_count: u32,
     /// 成功次数
@@ -38,6 +41,7 @@ impl FragmentStats {
             title,
             command,
             category,
+            tags: Vec::new(),
             usage_count: 0,
             success_count: 0,
             total_time_ms: 0,
@@ -89,6 +93,63 @@ impl FragmentStats {
         self.total_time_ms += time_ms as u64;
         self.last_used = Some(chrono::Utc::now().timestamp());
     }
+}
+
+/// 将 `<key>` 占位符替换为 `extras` 或当前会话上下文的值；未解析的占位符保持原样。
+pub fn expand_command_template(
+    template: &str,
+    session: Option<&SessionConfig>,
+    extras: &HashMap<String, String>,
+) -> String {
+    fn session_value(s: &SessionConfig, key: &str) -> Option<String> {
+        match key {
+            "host" | "hostname" => Some(s.host.clone()),
+            "user" | "username" => Some(s.username.clone()),
+            "port" => Some(s.port.to_string()),
+            "session" | "session_name" | "name" => Some(s.name.clone()),
+            _ => None,
+        }
+    }
+
+    let mut out = String::with_capacity(template.len().saturating_mul(2));
+    let mut rest = template;
+    while let Some(open) = rest.find('<') {
+        out.push_str(&rest[..open]);
+        rest = &rest[open + 1..];
+        let Some(close) = rest.find('>') else {
+            out.push('<');
+            out.push_str(rest);
+            return out;
+        };
+        let key = rest[..close].trim();
+        rest = &rest[close + 1..];
+        let replacement = extras
+            .get(key)
+            .cloned()
+            .or_else(|| session.and_then(|s| session_value(s, key)))
+            .unwrap_or_else(|| format!("<{}>", key));
+        out.push_str(&replacement);
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 提取模板中的占位符名称（去重、保序）
+pub fn list_placeholder_keys(template: &str) -> Vec<String> {
+    let mut seen = HashMap::<String, ()>::new();
+    let mut order = Vec::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('<') {
+        rest = &rest[open + 1..];
+        let Some(close) = rest.find('>') else { break };
+        let key = rest[..close].trim().to_string();
+        if !key.is_empty() && !seen.contains_key(&key) {
+            seen.insert(key.clone(), ());
+            order.push(key);
+        }
+        rest = &rest[close + 1..];
+    }
+    order
 }
 
 /// 排序方式
@@ -268,11 +329,43 @@ impl FragmentManager {
 
     /// 添加新片段
     pub fn add_fragment(&mut self, title: String, command: String, category: String) -> &FragmentStats {
+        self.add_fragment_with_tags(title, command, category, Vec::new())
+    }
+
+    /// 添加带标签的片段
+    pub fn add_fragment_with_tags(
+        &mut self,
+        title: String,
+        command: String,
+        category: String,
+        tags: Vec<String>,
+    ) -> &FragmentStats {
         let id = Uuid::new_v4().to_string();
-        let fragment = FragmentStats::new(id, title, command, category);
+        let mut fragment = FragmentStats::new(id, title, command, category);
+        fragment.tags = tags;
         self.fragments.push(fragment);
         self.rebuild_id_map();
         self.fragments.last().unwrap()
+    }
+
+    /// 更新片段元数据（保留统计）
+    pub fn update_fragment(
+        &mut self,
+        id: &str,
+        title: String,
+        command: String,
+        category: String,
+        tags: Vec<String>,
+    ) -> bool {
+        if let Some(frag) = self.get_by_id_mut(id) {
+            frag.title = title;
+            frag.command = command;
+            frag.category = category;
+            frag.tags = tags;
+            true
+        } else {
+            false
+        }
     }
 
     /// 删除片段
@@ -323,6 +416,7 @@ impl FragmentManager {
                 f.title.to_lowercase().contains(&query_lower)
                     || f.command.to_lowercase().contains(&query_lower)
                     || f.category.to_lowercase().contains(&query_lower)
+                    || f.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
             })
             .collect()
     }
@@ -331,6 +425,32 @@ impl FragmentManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::session::SessionConfig;
+
+    #[test]
+    fn test_expand_command_template() {
+        let s = SessionConfig {
+            id: "1".into(),
+            name: "生产".into(),
+            group: "g".into(),
+            host: "10.0.0.1".into(),
+            port: 2222,
+            username: "ubuntu".into(),
+            password: String::new(),
+            last_connected_at: None,
+        };
+        let mut m = HashMap::new();
+        m.insert("service".into(), "nginx".into());
+        let t = "ssh <user>@<host> -p <port> restart <service>";
+        let out = expand_command_template(t, Some(&s), &m);
+        assert_eq!(out, "ssh ubuntu@10.0.0.1 -p 2222 restart nginx");
+    }
+
+    #[test]
+    fn test_list_placeholder_keys() {
+        let t = "echo <a> and <b> <a>";
+        assert_eq!(list_placeholder_keys(t), vec!["a", "b"]);
+    }
 
     #[test]
     fn test_fragment_stats_human_readable() {

@@ -306,10 +306,20 @@ impl TerminalView {
                             "远端 → 本机"
                         };
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("📁 ZMODEM").strong());
-                            ui.label(dir);
-                            ui.label("·");
-                            ui.monospace(&progress.0);
+                            ui.label(
+                                egui::RichText::new("📁 ZMODEM")
+                                    .strong()
+                                    .color(theme.accent_color()),
+                            );
+                            ui.label(
+                                egui::RichText::new(dir).color(theme.fg_medium_color()),
+                            );
+                            ui.label(egui::RichText::new("·").color(theme.fg_low_color()));
+                            ui.label(
+                                egui::RichText::new(&progress.0)
+                                    .monospace()
+                                    .color(theme.fg_high_color()),
+                            );
                         });
                         let percent = if progress.2 > 0 {
                             (progress.1 as f32 / progress.2 as f32 * 100.0).min(100.0)
@@ -322,7 +332,12 @@ impl TerminalView {
                             human_readable_size(progress.2.max(1)),
                             percent
                         );
-                        ui.add(egui::ProgressBar::new(percent / 100.0).text(detail));
+                        ui.add(
+                            egui::ProgressBar::new(percent / 100.0)
+                                .fill(theme.accent_color())
+                                .desired_width(f32::INFINITY)
+                                .text(egui::RichText::new(detail).color(theme.fg_high_color())),
+                        );
                     }
                 });
             });

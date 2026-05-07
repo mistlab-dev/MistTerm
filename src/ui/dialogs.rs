@@ -5,6 +5,8 @@
 
 use eframe::egui;
 
+use crate::ui::theme::Theme;
+
 /// 新建会话对话框
 pub struct NewSessionDialog {
     /// 会话名称
@@ -39,8 +41,8 @@ impl NewSessionDialog {
         }
     }
 
-    /// 显示对话框
-    pub fn show(&mut self, ctx: &egui::Context) {
+    /// 显示对话框（文字与输入框颜色随 `Theme`）
+    pub fn show(&mut self, ctx: &egui::Context, theme: &Theme) {
         if !self.visible {
             return;
         }
@@ -51,35 +53,58 @@ impl NewSessionDialog {
             .default_width(400.0)
             .show(ctx, |ui| {
                 ui.vertical(|ui| {
-                    ui.label("会话名称");
-                    ui.text_edit_singleline(&mut self.name);
-                    
+                    ui.label(
+                        egui::RichText::new("会话名称").color(theme.fg_medium_color()),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.name)
+                            .desired_width(f32::INFINITY)
+                            .text_color(theme.fg_high_color()),
+                    );
+
                     ui.separator();
-                    
-                    ui.label("主机地址");
-                    ui.text_edit_singleline(&mut self.host);
-                    
+
+                    ui.label(
+                        egui::RichText::new("主机地址").color(theme.fg_medium_color()),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.host)
+                            .desired_width(f32::INFINITY)
+                            .text_color(theme.fg_high_color()),
+                    );
+
                     ui.horizontal(|ui| {
-                        ui.label("端口");
-                        ui.add(egui::DragValue::new(&mut self.port));
+                        ui.label(egui::RichText::new("端口").color(theme.fg_medium_color()));
+                        ui.add(egui::DragValue::new(&mut self.port).text_color(theme.fg_high_color()));
                     });
-                    
+
                     ui.separator();
-                    
-                    ui.label("用户名");
-                    ui.text_edit_singleline(&mut self.username);
-                    
-                    ui.label("密码");
-                    ui.add(egui::TextEdit::singleline(&mut self.password).password(true));
-                    
+
+                    ui.label(
+                        egui::RichText::new("用户名").color(theme.fg_medium_color()),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.username)
+                            .desired_width(f32::INFINITY)
+                            .text_color(theme.fg_high_color()),
+                    );
+
+                    ui.label(egui::RichText::new("密码").color(theme.fg_medium_color()));
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.password)
+                            .password(true)
+                            .desired_width(f32::INFINITY)
+                            .text_color(theme.fg_high_color()),
+                    );
+
                     ui.separator();
-                    
+
                     ui.horizontal(|ui| {
                         if ui.button("取消").clicked() {
                             self.visible = false;
                             self.reset();
                         }
-                        
+
                         if ui.button("创建").clicked() {
                             // TODO: 调用回调创建会话
                             self.visible = false;

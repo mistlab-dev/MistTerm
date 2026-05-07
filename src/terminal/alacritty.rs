@@ -125,7 +125,7 @@ impl Terminal {
                 let x = content.cursor.point.column.0;
                 let y = vp.line;
                 if y < self.height && x < self.width {
-                    rows[y][x] = ('│', Color32::from_rgb(220, 220, 220));
+                    rows[y][x] = ('│', default_fg);
                 }
             }
         }
