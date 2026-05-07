@@ -297,7 +297,7 @@ impl ThemeManager {
     }
 
     /// 获取配置文件路径
-    fn config_path() -> PathBuf {
+    pub fn config_path() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
             .join("mistterm")

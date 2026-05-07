@@ -98,7 +98,6 @@ impl CredentialPanel {
         theme: &Theme,
         action_out: &mut Option<CredentialPanelAction>,
     ) -> bool {
-        action_out.take();
         if !self.open {
             return false;
         }
@@ -265,8 +264,9 @@ impl CredentialPanel {
                                     .selected_id
                                     .clone()
                                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                                let prior = self.vault.get(&id);
                                 let c = Credential {
-                                    id,
+                                    id: id.clone(),
                                     name: self.form_name.trim().to_string(),
                                     category: self.form_category,
                                     host: self.form_host.trim().to_string(),
@@ -276,15 +276,12 @@ impl CredentialPanel {
                                     secret: self.form_secret.clone(),
                                     notes: self.form_notes.clone(),
                                     tags: Self::parse_tags(&self.form_tags),
-                                    created_at: self
-                                        .vault
-                                        .get(self.selected_id.as_deref().unwrap_or(""))
-                                        .map(|x| x.created_at)
-                                        .unwrap_or(now),
+                                    created_at: prior.as_ref().map(|p| p.created_at).unwrap_or(now),
                                     updated_at: now,
                                 };
                                 if self.vault.upsert(c).is_ok() {
                                     self.status_msg = "已保存".to_string();
+                                    self.selected_id = Some(id);
                                     self.reload_vault();
                                 } else {
                                     self.status_msg = "保存失败".to_string();

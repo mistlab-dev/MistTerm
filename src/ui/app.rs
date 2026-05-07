@@ -6,13 +6,18 @@ use eframe::egui;
 use rfd::FileDialog;
 use std::collections::HashSet;
 use std::time::Instant;
-use crate::core::{SessionManager, FragmentManager, FragmentStats, SortBy};
+use crate::core::{
+    Credential, CredentialAuthKind, expand_command_template, SessionManager, FragmentManager, FragmentStats, SortBy,
+};
 use crate::ui::sidebar::Sidebar;
 use crate::ui::terminal::TerminalView;
 use crate::ui::git_sync::GitSyncPanel;
 use crate::ui::monitor_panel::MonitorPanel;
 use crate::ui::sftp_panel::SftpPanel;
 use crate::ui::theme::ThemeManager;
+use crate::ui::fragment_library::FragmentLibraryState;
+use crate::ui::credential_panel::{CredentialPanel, CredentialPanelAction};
+use crate::ui::cloud_sync_panel::{CloudSyncPanel, CloudSyncDeps};
 
 struct TerminalTab {
     session_id: String,
@@ -50,9 +55,6 @@ pub struct MistTermApp {
     show_sftp_panel: bool,       // SFTP 文件浏览器
     /// 上次已同步 SFTP 列表的终端标签索引（切换标签时重置远端浏览状态）
     sftp_last_tab: Option<usize>,
-    git_sync_panel: GitSyncPanel,
-    monitor_panel: MonitorPanel,
-    sftp_panel: SftpPanel,
     
     /// 新建会话表单
     new_session_name: String,
@@ -117,6 +119,9 @@ impl MistTermApp {
             git_sync_panel: GitSyncPanel::new(),
             monitor_panel: MonitorPanel::new(),
             sftp_panel: SftpPanel::new(),
+            fragment_library: FragmentLibraryState::new(),
+            credential_panel: CredentialPanel::new(),
+            cloud_sync_panel: CloudSyncPanel::new(),
             new_session_name: String::new(),
             new_session_host: String::new(),
             new_session_port: 22,
@@ -392,14 +397,19 @@ impl MistTermApp {
 
     /// 向当前标签页插入命令片段并记录统计
     fn insert_fragment_with_stats(&mut self, id: &str, command: &str) {
+        let session = self
+            .selected_session_id
+            .as_deref()
+            .and_then(|sid| self.session_manager.get_session(sid));
+        let expanded = expand_command_template(command, session, &std::collections::HashMap::new());
         if let Some(idx) = self.active_tab {
             if let Some(tab) = self.tabs.get_mut(idx) {
-                match tab.terminal.insert_fragment(command) {
+                match tab.terminal.insert_fragment(&expanded) {
                     Ok(_) => {
                         // 记录成功，耗时估算为 0（实际耗时无法精确测量）
                         self.fragment_manager.record_usage(id, true, 0);
                         let _ = self.fragment_manager.save(&FragmentManager::default_config_path());
-                        self.status_message = format!("插入命令：{}", command);
+                        self.status_message = format!("插入命令：{}", expanded);
                     }
                     Err(e) => {
                         self.fragment_manager.record_usage(id, false, 0);
@@ -547,6 +557,20 @@ impl MistTermApp {
                                 self.show_monitor_panel = !self.show_monitor_panel;
                             }
                             if ui
+                                .add(mk("🔐 凭证", btn_idle, 88.0))
+                                .on_hover_text("加密凭证库")
+                                .clicked()
+                            {
+                                self.credential_panel.open = !self.credential_panel.open;
+                            }
+                            if ui
+                                .add(mk("☁️ 同步", btn_idle, 88.0))
+                                .on_hover_text("云端同步 / 导出包")
+                                .clicked()
+                            {
+                                self.cloud_sync_panel.open = !self.cloud_sync_panel.open;
+                            }
+                            if ui
                                 .add(mk("📂 SFTP", btn_idle, 88.0))
                                 .on_hover_text("显示/隐藏远端 SFTP 侧栏")
                                 .clicked()
@@ -614,6 +638,24 @@ impl MistTermApp {
                     },
                 );
             });
+    }
+
+    fn apply_credential_to_new_session_form(&mut self, c: Credential) {
+        self.show_new_session_dialog = true;
+        self.new_session_name = if c.name.is_empty() {
+            c.host.clone()
+        } else {
+            c.name.clone()
+        };
+        self.new_session_host = c.host.clone();
+        self.new_session_port = c.port.max(1);
+        self.new_session_username = c.username.clone();
+        self.new_session_password = if matches!(c.auth, CredentialAuthKind::Password) {
+            c.secret.clone()
+        } else {
+            String::new()
+        };
+        self.status_message = "已从凭证填入新建会话（请检查后连接）".to_string();
     }
 }
 
@@ -751,6 +793,20 @@ impl eframe::App for MistTermApp {
                         }
                     });
                 });
+                ui.menu_button("工具", |ui| {
+                    if ui.button("命令片段库…").clicked() {
+                        self.fragment_library.open = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("凭证管理").clicked() {
+                        self.credential_panel.open = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("云端同步").clicked() {
+                        self.cloud_sync_panel.open = true;
+                        ui.close_menu();
+                    }
+                });
                 ui.menu_button("帮助", |ui| {
                     if ui.button("关于").clicked() {
                         self.show_about_dialog = true;
@@ -786,6 +842,34 @@ impl eframe::App for MistTermApp {
             self.show_git_sync_panel(ctx, theme);
         }
 
+        let mut cred_action: Option<CredentialPanelAction> = None;
+        if self.credential_panel.open {
+            if self
+                .credential_panel
+                .show_side_panel(ctx, theme, &mut cred_action)
+            {
+                self.credential_panel.open = false;
+            }
+        }
+
+        let fragments_export_path = FragmentManager::default_config_path();
+        let sessions_export_path = self.session_manager.storage_path().clone();
+        let theme_export_path = ThemeManager::config_path();
+        let mut deps = CloudSyncDeps {
+            fragments_path: &fragments_export_path,
+            sessions_path: &sessions_export_path,
+            theme_path: &theme_export_path,
+            fragment_manager: &mut self.fragment_manager,
+            theme_manager: &mut self.theme_manager,
+        };
+        self.cloud_sync_panel.show(ctx, theme, &mut deps);
+
+        if let Some(action) = cred_action {
+            if let CredentialPanelAction::UseForQuickConnect(c) = action {
+                self.apply_credential_to_new_session_form(c);
+            }
+        }
+
         // SFTP（右侧面板；切换终端标签时重置远端路径并重新拉列表）
         let mut close_sftp_panel = false;
         if self.show_sftp_panel {
@@ -808,6 +892,23 @@ impl eframe::App for MistTermApp {
         // 系统监控面板
         if self.show_monitor_panel {
             self.show_monitor_panel(ctx);
+        }
+
+        let session_for_fragments = self
+            .selected_session_id
+            .as_deref()
+            .and_then(|sid| self.session_manager.get_session(sid).cloned());
+        let fragment_cfg = FragmentManager::default_config_path();
+        let lib_saved = self.fragment_library.show_window(
+            ctx,
+            &mut self.fragment_manager,
+            &mut self.fragment_sort_by,
+            &fragment_cfg,
+            session_for_fragments.as_ref(),
+            theme,
+        );
+        if lib_saved {
+            self.fragment_manager.sort(self.fragment_sort_by);
         }
 
         // 主内容区：侧边栏 + 终端

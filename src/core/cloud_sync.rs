@@ -97,4 +97,10 @@ impl CloudSyncSettings {
         self.last_error = msg.into();
         let _ = self.save();
     }
+
+    pub fn record_manual_import_ok(&mut self) {
+        self.last_sync_unix = Some(chrono::Utc::now().timestamp());
+        self.last_error.clear();
+        let _ = self.save();
+    }
 }
