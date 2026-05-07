@@ -4,11 +4,11 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use eframe::egui;
+use rfd::FileDialog;
 
 use crate::core::{
-    FragmentManager, FragmentStats,
-    SortBy,
-    expand_command_template, list_placeholder_keys,
+    FragmentManager, FragmentMergeReport, FragmentStats, SortBy, expand_command_template,
+    list_placeholder_keys,
 };
 use crate::core::session::SessionConfig;
 
@@ -23,11 +23,16 @@ pub struct FragmentLibraryState {
     pub form_category: String,
     pub form_tags: String,
     pub status_msg: String,
+    /// 从 JSON 文件导入片段时是否与现有条目按 id 合并
+    pub import_merge: bool,
 }
 
 impl FragmentLibraryState {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            import_merge: true,
+            ..Self::default()
+        }
     }
 
     fn clear_form(&mut self) {
@@ -88,6 +93,78 @@ impl FragmentLibraryState {
                             .desired_width(180.0)
                             .hint_text("标题 / 命令 / 标签"),
                     );
+                    ui.separator();
+                    if ui
+                        .button("导出 JSON…")
+                        .on_hover_text("将当前片段库保存为用户选择的任意路径")
+                        .clicked()
+                    {
+                        let stem = format!(
+                            "mistterm-fragments-{}",
+                            chrono::Utc::now().format("%Y%m%d-%H%M%S")
+                        );
+                        if let Some(dest) = FileDialog::new()
+                            .set_title("导出片段 JSON")
+                            .add_filter("JSON", &["json"])
+                            .set_file_name(format!("{}.json", stem))
+                            .save_file()
+                        {
+                            match manager.save(&dest) {
+                                Ok(()) => {
+                                    self.status_msg =
+                                        format!("已导出 {}", dest.display());
+                                    saved = true;
+                                }
+                                Err(e) => self.status_msg = format!("导出失败：{}", e),
+                            }
+                        }
+                    }
+                    if ui
+                        .button("导入 JSON…")
+                        .on_hover_text("从文件合并或替换当前库；合并时相同 id 的条目保留本地")
+                        .clicked()
+                    {
+                        if let Some(src) =
+                            FileDialog::new().add_filter("JSON", &["json"]).pick_file()
+                        {
+                            let path = PathBuf::from(src);
+                            match FragmentManager::import_from_json_path(
+                                &path,
+                                self.import_merge,
+                                manager,
+                            ) {
+                                Ok(FragmentMergeReport {
+                                    added,
+                                    skipped_duplicate_id,
+                                }) => {
+                                    if manager.save(fragment_cfg_path).is_ok() {
+                                        if self.import_merge {
+                                            self.status_msg = format!(
+                                                "已从 {} 合并：新增 {}，跳过 {}",
+                                                src.display(),
+                                                added,
+                                                skipped_duplicate_id
+                                            );
+                                        } else {
+                                            self.status_msg = format!(
+                                                "已从 {} 替换为 {} 条",
+                                                src.display(),
+                                                added
+                                            );
+                                        }
+                                        saved = true;
+                                    } else {
+                                        self.status_msg = "写入配置目录失败".to_string();
+                                    }
+                                }
+                                Err(e) => {
+                                    self.status_msg = format!("导入失败：{}", e);
+                                }
+                            }
+                        }
+                    }
+                    ui.separator();
+                    ui.checkbox(&mut self.import_merge, "合并导入");
                     ui.separator();
                     let sort_label = match sort_by {
                         SortBy::UsageCount => "排序：次数",

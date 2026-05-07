@@ -59,6 +59,14 @@ impl CredentialPanel {
         self.vault = CredentialVault::new();
     }
 
+    /// 外部（如同步包还原）更新了 `credentials.json` 后调用，刷新表单与缓存
+    pub fn reload_after_external_file_replace(&mut self) {
+        self.reload_vault();
+        self.selected_id = None;
+        self.clear_form();
+        self.status_msg.clear();
+    }
+
     fn clear_form(&mut self) {
         self.selected_id = None;
         self.form_name.clear();

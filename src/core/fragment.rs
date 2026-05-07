@@ -165,6 +165,13 @@ pub enum SortBy {
     Name,
 }
 
+/// 合并导入片段时的摘要
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FragmentMergeReport {
+    pub added: usize,
+    pub skipped_duplicate_id: usize,
+}
+
 /// 片段管理器
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FragmentManager {
@@ -405,6 +412,43 @@ impl FragmentManager {
             }
         }
         self.rebuild_id_map();
+    }
+
+    pub fn merge_from_other(&mut self, other: &FragmentManager) -> FragmentMergeReport {
+        let mut report = FragmentMergeReport::default();
+        for f in &other.fragments {
+            if self.id_map.contains_key(&f.id) {
+                report.skipped_duplicate_id += 1;
+                continue;
+            }
+            self.fragments.push(f.clone());
+            report.added += 1;
+        }
+        self.rebuild_id_map();
+        report
+    }
+
+    pub fn replace_with(&mut self, other: FragmentManager) {
+        self.fragments = other.fragments;
+        self.rebuild_id_map();
+    }
+
+    /// 从 `fragments.json` 路径加载并合并或替换到 `target`
+    pub fn import_from_json_path(
+        path: &PathBuf,
+        merge: bool,
+        target: &mut Self,
+    ) -> io::Result<FragmentMergeReport> {
+        let loaded = Self::load(path)?;
+        if merge {
+            Ok(target.merge_from_other(&loaded))
+        } else {
+            target.replace_with(loaded);
+            Ok(FragmentMergeReport {
+                added: target.fragments.len(),
+                skipped_duplicate_id: 0,
+            })
+        }
     }
 
     /// 搜索片段

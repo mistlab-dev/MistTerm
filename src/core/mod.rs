@@ -8,7 +8,8 @@ pub mod cloud_sync;
 
 pub use session::{SessionConfig, SessionManager};
 pub use fragment::{
-    expand_command_template, list_placeholder_keys, FragmentManager, FragmentStats, SortBy,
+    expand_command_template, list_placeholder_keys, FragmentManager, FragmentMergeReport,
+    FragmentStats, SortBy,
 };
 pub use credential::{
     Credential, CredentialAuthKind, CredentialCategory, CredentialVault,

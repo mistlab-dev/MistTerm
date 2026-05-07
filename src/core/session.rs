@@ -67,6 +67,65 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
+    pub fn parse_stored_sessions_json(
+        device_key_bytes: &[u8; 32],
+        content: &str,
+    ) -> Option<(Vec<SessionConfig>, bool)> {
+        let stored: Vec<StoredSessionConfig> = serde_json::from_str(content).ok()?;
+        let mut sessions = Vec::with_capacity(stored.len());
+        let mut had_plaintext = false;
+        for cfg in stored {
+            let password =
+                if !cfg.encrypted_password.is_empty() && !cfg.password_nonce.is_empty() {
+                    device_key::decrypt_secret(
+                        device_key_bytes,
+                        &cfg.encrypted_password,
+                        &cfg.password_nonce,
+                    )
+                    .unwrap_or_default()
+                } else if !cfg.password.is_empty() {
+                    had_plaintext = true;
+                    cfg.password
+                } else {
+                    String::new()
+                };
+            sessions.push(SessionConfig {
+                id: if cfg.id.is_empty() {
+                    uuid::Uuid::new_v4().to_string()
+                } else {
+                    cfg.id
+                },
+                name: cfg.name,
+                group: cfg.group,
+                host: cfg.host,
+                port: cfg.port,
+                username: cfg.username,
+                password,
+                last_connected_at: cfg.last_connected_at,
+            });
+        }
+        Some((sessions, had_plaintext))
+    }
+
+    /// 从会话备份 JSON 替换当前会话（路径可为同步包内的 `sessions.json`）
+    pub fn import_sessions_from_file_path(&mut self, path: &std::path::Path) -> io::Result<()> {
+        let content = fs::read_to_string(path)?;
+        let Some((sessions, had_plaintext)) =
+            Self::parse_stored_sessions_json(&self.device_key, &content)
+        else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "无法解析会话备份文件（JSON 格式或字段无效）",
+            ));
+        };
+        self.sessions = sessions;
+        self.save();
+        if had_plaintext {
+            log::warn!("导入的包中含明文会话密码，已载入并重新加密写入本地文件");
+        }
+        Ok(())
+    }
+
     /// 创建新的会话管理器
     pub fn new() -> Self {
         let mut file_path = std::env::current_dir().unwrap_or_default();
@@ -87,42 +146,18 @@ impl SessionManager {
         if !self.file_path.exists() {
             return;
         }
-        
+
         if let Ok(content) = fs::read_to_string(&self.file_path) {
-            if let Ok(stored) = serde_json::from_str::<Vec<StoredSessionConfig>>(&content) {
-                let mut sessions = Vec::with_capacity(stored.len());
-                let mut had_plaintext = false;
-                for cfg in stored {
-                    let password = if !cfg.encrypted_password.is_empty() && !cfg.password_nonce.is_empty() {
-                        device_key::decrypt_secret(
-                            &self.device_key,
-                            &cfg.encrypted_password,
-                            &cfg.password_nonce,
-                        )
-                        .unwrap_or_default()
-                    } else if !cfg.password.is_empty() {
-                        had_plaintext = true;
-                        cfg.password
-                    } else {
-                        String::new()
-                    };
-                    sessions.push(SessionConfig {
-                        id: if cfg.id.is_empty() { uuid::Uuid::new_v4().to_string() } else { cfg.id },
-                        name: cfg.name,
-                        group: cfg.group,
-                        host: cfg.host,
-                        port: cfg.port,
-                        username: cfg.username,
-                        password,
-                        last_connected_at: cfg.last_connected_at,
-                    });
-                }
-                self.sessions = sessions;
-                log::info!("Loaded {} saved sessions", self.sessions.len());
-                if had_plaintext {
-                    log::warn!("Detected plaintext passwords in sessions.json; migrated to encrypted storage.");
-                    self.save();
-                }
+            let Some((sessions, had_plaintext)) =
+                Self::parse_stored_sessions_json(&self.device_key, &content)
+            else {
+                return;
+            };
+            self.sessions = sessions;
+            log::info!("Loaded {} saved sessions", self.sessions.len());
+            if had_plaintext {
+                log::warn!("Detected plaintext passwords in sessions.json; migrated to encrypted storage.");
+                self.save();
             }
         }
     }

@@ -861,6 +861,8 @@ impl eframe::App for MistTermApp {
             theme_path: &theme_export_path,
             fragment_manager: &mut self.fragment_manager,
             theme_manager: &mut self.theme_manager,
+            session_manager: &mut self.session_manager,
+            credential_panel: &mut self.credential_panel,
         };
         self.cloud_sync_panel.show(ctx, theme, &mut deps);
 
