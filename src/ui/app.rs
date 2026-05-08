@@ -374,25 +374,76 @@ impl MistTermApp {
                 );
                 ui.add_space(4.0);
                 
+                // 分类筛选
+                ui.horizontal(|ui| {
+                    ui.label("📂 分类：");
+                    
+                    // 获取所有分类
+                    let mut categories = self.fragment_manager.get_categories();
+                    categories.sort();
+                    categories.dedup();
+                    
+                    let mut selected = self.fragment_panel_state.category_filter.clone();
+                    
+                    let mut current_text = selected.clone().unwrap_or_else(|| "全部".to_string());
+                    
+                    egui::ComboBox::from_id_source("category_filter")
+                        .selected_text(&current_text)
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(selected.is_none(), "全部").clicked() {
+                                self.fragment_panel_state.category_filter = None;
+                            }
+                            for cat in categories {
+                                if ui.selectable_label(
+                                    selected.as_deref() == Some(&cat),
+                                    &cat
+                                ).clicked() {
+                                    self.fragment_panel_state.category_filter = Some(cat);
+                                }
+                            }
+                        });
+                });
+
+                ui.add_space(8.0);
+                
                 ui.vertical(|ui| {
                     // 根据搜索和分类显示片段
-                    let search_results = if self.fragment_search_query.is_empty() {
-                        self.fragment_manager.get_all().to_vec()
-                    } else {
-                        self.fragment_manager.search(&self.fragment_search_query)
-                            .into_iter().cloned().collect()
-                    };
+                    let search_lower = self.fragment_search_query.to_lowercase();
+                    let category_filter = &self.fragment_panel_state.category_filter;
+                    
+                    let all_fragments = self.fragment_manager.get_all();
+                    let filtered_fragments: Vec<&FragmentStats> = all_fragments
+                        .iter()
+                        .filter(|f| {
+                            // 搜索过滤
+                            let search_match = search_lower.is_empty() 
+                                || f.title.to_lowercase().contains(&search_lower)
+                                || f.command.to_lowercase().contains(&search_lower);
+                            
+                            // 分类过滤
+                            let category_match = category_filter.is_none() 
+                                || category_filter.as_deref() == Some(&f.category);
+                            
+                            search_match && category_match
+                        })
+                        .collect();
                     
                     let categories = self.fragment_manager.get_categories();
                     for category in &categories {
-                        let category_fragments: Vec<&FragmentStats> = search_results
+                        // 先检查该分类下是否有符合筛选条件的片段
+                        let has_fragments_in_category = filtered_fragments
                             .iter()
-                            .filter(|f| f.category == *category)
-                            .collect();
+                            .any(|f| f.category == *category);
                         
-                        if category_fragments.is_empty() {
+                        if !has_fragments_in_category {
                             continue;
                         }
+                        
+                        let category_fragments: Vec<&FragmentStats> = filtered_fragments
+                            .iter()
+                            .filter(|f| f.category == *category)
+                            .cloned()
+                            .collect();
                         
                         let category_emoji = match category.as_str() {
                             "系统监控" => "📊",
