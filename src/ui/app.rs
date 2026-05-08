@@ -25,6 +25,37 @@ struct TerminalTab {
     terminal: TerminalView,
 }
 
+/// 变量输入对话框状态
+#[derive(Clone, Debug, Default)]
+pub struct FragmentVariableDialog {
+    pub open: bool,
+    pub fragment_id: Option<String>,
+    pub fragment_title: String,
+    pub values: std::collections::HashMap<String, String>,
+}
+
+/// 快速片段选择器状态
+#[derive(Clone, Debug, Default)]
+pub struct FragmentQuickSelector {
+    pub open: bool,
+    pub search_query: String,
+    pub selected_index: usize,
+}
+
+/// 片段面板筛选状态
+#[derive(Clone, Debug)]
+pub struct FragmentPanelState {
+    pub category_filter: Option<String>,
+}
+
+impl Default for FragmentPanelState {
+    fn default() -> Self {
+        Self {
+            category_filter: None,
+        }
+    }
+}
+
 /// 主应用程序
 pub struct MistTermApp {
     /// 会话管理器
@@ -80,6 +111,12 @@ pub struct MistTermApp {
     fragment_sort_by: SortBy,
     /// 片段面板使用统计跟踪：记录插入时的 Instant
     fragment_pending_ids: Vec<(String, Instant)>,
+    /// 片段面板状态（分类筛选等）
+    fragment_panel_state: FragmentPanelState,
+    /// 变量输入对话框
+    variable_dialog: FragmentVariableDialog,
+    /// 快速片段选择器
+    quick_selector: FragmentQuickSelector,
 
     /// 主题管理器
     theme_manager: ThemeManager,
@@ -141,6 +178,9 @@ impl MistTermApp {
                 .unwrap_or_else(|_| FragmentManager::new()),
             fragment_sort_by: SortBy::UsageCount,
             fragment_pending_ids: Vec::new(),
+            fragment_panel_state: FragmentPanelState::default(),
+            variable_dialog: FragmentVariableDialog::default(),
+            quick_selector: FragmentQuickSelector::default(),
             theme_manager: ThemeManager::load(),
         }
     }
