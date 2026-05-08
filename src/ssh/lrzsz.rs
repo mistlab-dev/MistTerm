@@ -149,13 +149,17 @@ fn binary_frame_type(data: &[u8], want: u8) -> bool {
 /// 传输事件
 #[derive(Debug, Clone)]
 pub enum TransferEvent {
-    /// `outgoing`: 本机→远端（`rz` 上传）为 `true`；远端 `sz` 下发到本机为 `false`
     FileStart {
         filename: String,
         size: u64,
+        /// true：本机向远端发送（`sz`/对应 `rz` 场景）；false：本机接收
         outgoing: bool,
     },
-    FileProgress { filename: String, received: u64, total: u64 },
+    FileProgress {
+        filename: String,
+        received: u64,
+        total: u64,
+    },
     FileComplete { filename: String, path: PathBuf },
     FileError { filename: String, error: String },
     TransferComplete,
@@ -438,6 +442,141 @@ impl LrzszTransfer {
                     let _ = c.flush();
                     log::debug!("ZMODEM 向通道写入 {} bytes", data.len());
                 }
+            }
+        }
+    }
+    
+    /// 发送 ZRINIT
+    fn send_zrinit(&self) {
+        let zrinit = ZmodemPacket::new(
+            zmodem::ZRINIT,
+            [0x40, 0x00, 0x00, 0x00]
+        );
+        let zrinit_bytes = zrinit.encode();
+        self.write_to_channel(&zrinit_bytes);
+        log::info!("发送 ZRINIT: {} bytes", zrinit_bytes.len());
+    }
+    
+    /// 发送 ZACK
+    fn send_zack(&self, position: u64) {
+        let pos_bytes = position.to_be_bytes();
+        let zack = ZmodemPacket::new(
+            zmodem::ZACK,
+            [pos_bytes[4], pos_bytes[5], pos_bytes[6], pos_bytes[7]]
+        );
+        let zack_bytes = zack.encode();
+        self.write_to_channel(&zack_bytes);
+    }
+    
+    /// 处理接收到的 ZMODEM 数据（由 process_ssh_messages 调用）
+    pub fn feed_receive_data(&self, data: &[u8]) -> bool {
+        log::info!("feed_receive_data 被调用，data_len={}, is_active={}", data.len(), self.is_active.load(Ordering::Relaxed));
+        
+        // 打印前 32 字节用于调试
+        let hex: String = data[..data.len().min(32)].iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<Vec<_>>()
+            .join(" ");
+        log::info!("数据 hex: {}", hex);
+        
+        // 如果不在活动状态，返回 false（数据仍然传递给终端）
+        if !self.is_active.load(Ordering::Relaxed) {
+            return false;
+        }
+        
+        let state = self.receive_state.lock().unwrap().clone();
+        
+        match state {
+            ReceiveState::Idle => {
+                return false;
+            }
+            ReceiveState::WaitingForZRQINIT => {
+                // 检查数据中是否包含 ZRQINIT
+                let mut buf = self.receive_buffer.lock().unwrap();
+                buf.extend_from_slice(data);
+                
+                if parse_zrqinit_packet(&buf) {
+                    log::info!("收到 ZRQINIT，发送 ZRINIT 响应");
+                    // 发送 ZRINIT
+                    self.send_zrinit();
+                    *self.receive_state.lock().unwrap() = ReceiveState::WaitingForZFILE;
+                    buf.clear();
+                } else if buf.len() > 256 {
+                    buf.clear(); // 防止缓冲无限增长
+                }
+                return true; // 已经消费了数据
+            }
+            ReceiveState::WaitingForZFILE => {
+                let mut buf = self.receive_buffer.lock().unwrap();
+                buf.extend_from_slice(data);
+                
+                if let Some((filename, size)) = parse_zfile_packet(&buf) {
+                    log::info!("收到 ZFILE：{} ({} bytes)", filename, size);
+                    
+                    // 更新状态
+                    self.current_filename.lock().unwrap().clone_from(&filename);
+                    self.total_bytes.store(size, Ordering::Relaxed);
+                    let _ = self.tx.send(TransferEvent::FileStart {
+                        filename: filename.clone(),
+                        size,
+                        outgoing: false,
+                    });
+                    
+                    // 创建文件
+                    let file_path = self.download_dir.join(&filename);
+                    if let Ok(file) = File::create(&file_path) {
+                        *self.receive_file.lock().unwrap() = Some(file);
+                    } else {
+                        log::error!("无法创建文件：{}", file_path.display());
+                    }
+                    
+                    // 发送 ZACK
+                    self.send_zack(0);
+                    
+                    *self.receive_state.lock().unwrap() = ReceiveState::ReceivingData;
+                    buf.clear();
+                } else if buf.len() > 1024 {
+                    buf.clear(); // 防止缓冲无限增长
+                }
+                return true;
+            }
+            ReceiveState::ReceivingData => {
+                // 解析 ZDATA 包并提取数据
+                let mut buf = self.receive_buffer.lock().unwrap();
+                buf.extend_from_slice(data);
+                
+                // 尝试解析 ZDATA
+                if let Some(file_data) = parse_zdata_packet(&buf) {
+                    if !file_data.is_empty() {
+                        // 写入文件
+                        let mut f_lock = self.receive_file.lock().unwrap();
+                        if let Some(ref mut file) = *f_lock {
+                            if file.write_all(&file_data).is_ok() {
+                                let received = self.received_bytes.fetch_add(file_data.len() as u64, Ordering::Relaxed) + file_data.len() as u64;
+                                
+                                let _ = self.tx.send(TransferEvent::FileProgress {
+                                    filename: self.current_filename.lock().unwrap().clone(),
+                                    received,
+                                    total: self.total_bytes.load(Ordering::Relaxed),
+                                });
+                                
+                                // 发送 ZACK
+                                self.send_zack(received);
+                            }
+                        }
+                        
+                        buf.clear();
+                    }
+                }
+                // 缓冲太多时清理
+                if buf.len() > 65536 {
+                    buf.clear();
+                }
+                
+                return true;
+            }
+            ReceiveState::Complete | ReceiveState::Error(_) => {
+                return false;
             }
         }
     }
@@ -789,6 +928,30 @@ impl LrzszTransfer {
         });
         
         Ok(())
+    }
+
+    /// 旧版 UI 曾通过「壳泵旁路」区分 ZMODEM 与 PTY；当前实现由 `start_send` 线程直接锁 Channel 读写，恒为 false。
+    pub fn is_upload_pty_capture(&self) -> bool {
+        false
+    }
+
+    pub fn begin_rz_handshake_capture(&self) {}
+
+    pub fn end_rz_handshake_capture(&self) {}
+
+    pub fn feed_send_pty_output(&self, _data: &[u8]) {}
+
+    pub fn register_shell_pump_upload_feed(&self, _handle: &crate::ssh::manager::SshSessionHandle) {}
+
+    pub fn unregister_shell_pump_upload_feed(&self, _handle: &crate::ssh::manager::SshSessionHandle) {}
+
+    /// 用户 Ctrl+C 或中止传输时复位状态
+    pub fn cancel_active_transfer(&self) {
+        self.is_active.store(false, Ordering::Relaxed);
+        *self.channel.lock().unwrap() = None;
+        *self.receive_state.lock().unwrap() = ReceiveState::Idle;
+        self.receive_buffer.lock().unwrap().clear();
+        let _ = self.receive_file.lock().unwrap().take();
     }
 }
 

@@ -6,11 +6,20 @@
 
 use eframe::egui;
 use rfd::FileDialog;
-use std::collections::{HashMap, HashSet};
-use std::path::Path;
-use crate::core::{FragmentManager, SessionManager};
+use std::collections::HashSet;
+use std::time::Instant;
+use crate::core::{
+    Credential, CredentialAuthKind, expand_command_template, SessionManager, FragmentManager, FragmentStats, SortBy,
+};
 use crate::ui::sidebar::Sidebar;
-use crate::ui::terminal::{RemotePathEntry, TerminalView};
+use crate::ui::terminal::TerminalView;
+use crate::ui::git_sync::GitSyncPanel;
+use crate::ui::monitor_panel::MonitorPanel;
+use crate::ui::sftp_panel::SftpPanel;
+use crate::ui::theme::ThemeManager;
+use crate::ui::fragment_library::FragmentLibraryState;
+use crate::ui::credential_panel::{CredentialPanel, CredentialPanelAction};
+use crate::ui::cloud_sync_panel::{CloudSyncPanel, CloudSyncDeps};
 
 struct TerminalTab {
     session_id: String,
@@ -18,13 +27,35 @@ struct TerminalTab {
     terminal: TerminalView,
 }
 
-#[derive(Debug, Clone)]
-struct SftpTask {
-    id: u64,
-    direction: String,
-    file_name: String,
-    status: String,
-    detail: String,
+/// 变量输入对话框状态
+#[derive(Clone, Debug, Default)]
+pub struct FragmentVariableDialog {
+    pub open: bool,
+    pub fragment_id: Option<String>,
+    pub fragment_title: String,
+    pub values: std::collections::HashMap<String, String>,
+}
+
+/// 快速片段选择器状态
+#[derive(Clone, Debug, Default)]
+pub struct FragmentQuickSelector {
+    pub open: bool,
+    pub search_query: String,
+    pub selected_index: usize,
+}
+
+/// 片段面板筛选状态
+#[derive(Clone, Debug)]
+pub struct FragmentPanelState {
+    pub category_filter: Option<String>,
+}
+
+impl Default for FragmentPanelState {
+    fn default() -> Self {
+        Self {
+            category_filter: None,
+        }
+    }
 }
 
 /// 主应用程序
@@ -54,7 +85,11 @@ pub struct MistTermApp {
     show_fragments_dialog: bool,
     show_stats_dialog: bool,
     show_fragment_panel: bool,  // 命令片段侧边栏
-    show_sftp_panel: bool,
+    show_git_sync_panel: bool,  // Git 同步面板
+    show_monitor_panel: bool,   // 监控面板
+    show_sftp_panel: bool,       // SFTP 文件浏览器
+    /// 上次已同步 SFTP 列表的终端标签索引（切换标签时重置远端浏览状态）
+    sftp_last_tab: Option<usize>,
     
     /// 新建会话表单
     new_session_name: String,
@@ -74,48 +109,28 @@ pub struct MistTermApp {
     sidebar_search_query: String,
     sidebar_filter: String,
     fragment_search_query: String,
-    new_fragment_name: String,
-    new_fragment_command: String,
-    new_fragment_category: String,
-    new_fragment_tags: String,
-    editing_fragment_id: Option<String>,
-    show_fragment_vars_dialog: bool,
-    pending_fragment_id: Option<String>,
-    pending_fragment_name: String,
-    pending_fragment_command: String,
-    pending_fragment_vars: Vec<(String, String)>,
-    fragment_filter_category: String,
-    fragment_filter_tag: String,
-    sftp_local_dir: String,
-    sftp_remote_dir: String,
-    sftp_local_entries: Vec<String>,
-    sftp_remote_entries: Vec<RemotePathEntry>,
-    sftp_selected_local: Option<String>,
-    sftp_selected_remote: Option<String>,
-    sftp_tasks: Vec<SftpTask>,
-    next_sftp_task_id: u64,
-    pending_fragment_insert: Option<(usize, Option<String>, String)>,
+    
+    /// 命令片段管理器
+    fragment_manager: FragmentManager,
+    /// 片段排序方式
+    fragment_sort_by: SortBy,
+    /// 片段面板使用统计跟踪：记录插入时的 Instant
+    fragment_pending_ids: Vec<(String, Instant)>,
+    /// 片段面板状态（分类筛选等）
+    fragment_panel_state: FragmentPanelState,
+    /// 变量输入对话框
+    variable_dialog: FragmentVariableDialog,
+    /// 快速片段选择器
+    quick_selector: FragmentQuickSelector,
+
+    /// 主题管理器
+    theme_manager: ThemeManager,
 }
 
 impl MistTermApp {
-    fn apply_design_theme(ctx: &egui::Context) {
-        // 对齐 docs/product/MistTerm-设计文档.md 配色
-        let mut style = (*ctx.style()).clone();
-        style.visuals = egui::Visuals::dark();
-        style.visuals.panel_fill = egui::Color32::from_rgb(13, 13, 20); // #0d0d14
-        style.visuals.faint_bg_color = egui::Color32::from_rgb(19, 19, 28); // #13131c
-        style.visuals.extreme_bg_color = egui::Color32::from_rgb(10, 10, 18); // #0a0a12
-        style.visuals.window_fill = egui::Color32::from_rgb(19, 19, 28);
-        style.visuals.widgets.noninteractive.bg_fill =
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10);
-        style.visuals.widgets.inactive.bg_fill =
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8);
-        style.visuals.widgets.hovered.bg_fill =
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 16);
-        style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(102, 126, 234); // #667eea
-        style.spacing.item_spacing = egui::vec2(8.0, 8.0);
-        style.spacing.button_padding = egui::vec2(12.0, 6.0);
-        ctx.set_style(style);
+    /// 应用当前主题（由 ThemeManager 统一管理）
+    fn apply_current_theme(&self, ctx: &egui::Context) {
+        self.theme_manager.apply_theme(ctx);
     }
 
     /// 创建新的应用实例
@@ -141,7 +156,16 @@ impl MistTermApp {
             show_fragments_dialog: false,
             show_stats_dialog: false,
             show_fragment_panel: false,
+            show_git_sync_panel: false,
+            show_monitor_panel: false,
             show_sftp_panel: false,
+            sftp_last_tab: None,
+            git_sync_panel: GitSyncPanel::new(),
+            monitor_panel: MonitorPanel::new(),
+            sftp_panel: SftpPanel::new(),
+            fragment_library: FragmentLibraryState::new(),
+            credential_panel: CredentialPanel::new(),
+            cloud_sync_panel: CloudSyncPanel::new(),
             new_session_name: String::new(),
             new_session_host: String::new(),
             new_session_port: 22,
@@ -158,30 +182,14 @@ impl MistTermApp {
             sidebar_search_query: String::new(),
             sidebar_filter: "全部".to_string(),
             fragment_search_query: String::new(),
-            new_fragment_name: String::new(),
-            new_fragment_command: String::new(),
-            new_fragment_category: "默认".to_string(),
-            new_fragment_tags: String::new(),
-            editing_fragment_id: None,
-            show_fragment_vars_dialog: false,
-            pending_fragment_id: None,
-            pending_fragment_name: String::new(),
-            pending_fragment_command: String::new(),
-            pending_fragment_vars: Vec::new(),
-            fragment_filter_category: "全部".to_string(),
-            fragment_filter_tag: "全部".to_string(),
-            sftp_local_dir: std::env::current_dir()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string(),
-            sftp_remote_dir: ".".to_string(),
-            sftp_local_entries: Vec::new(),
-            sftp_remote_entries: Vec::new(),
-            sftp_selected_local: None,
-            sftp_selected_remote: None,
-            sftp_tasks: Vec::new(),
-            next_sftp_task_id: 1,
-            pending_fragment_insert: None,
+            fragment_manager: FragmentManager::load(&FragmentManager::default_config_path())
+                .unwrap_or_else(|_| FragmentManager::new()),
+            fragment_sort_by: SortBy::UsageCount,
+            fragment_pending_ids: Vec::new(),
+            fragment_panel_state: FragmentPanelState::default(),
+            variable_dialog: FragmentVariableDialog::default(),
+            quick_selector: FragmentQuickSelector::default(),
+            theme_manager: ThemeManager::load(),
         }
     }
 
@@ -427,7 +435,7 @@ impl MistTermApp {
         }
     }
 
-    /// 显示命令片段面板
+    /// 显示命令片段面板（带统计信息）
     fn show_fragment_panel(&mut self, ctx: &egui::Context) {
         if !matches!(
             self.fragment_filter_category.as_str(),
@@ -436,232 +444,203 @@ impl MistTermApp {
             self.fragment_filter_category = "全部".to_string();
         }
         egui::SidePanel::right("fragment_panel")
-            .default_width(260.0)
-            .min_width(260.0)
-            .max_width(260.0)
-            .resizable(false)
+            .default_width(320.0)
+            .resizable(true)
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("命令片段")
-                            .size(10.0)
-                            .strong()
-                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 51)),
-                    );
+                    ui.heading("⚡ 命令片段");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new("−")
-                                        .size(14.0)
-                                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 51)),
-                                )
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE)
-                                .frame(false),
-                            )
-                            .clicked()
-                        {
-                            self.show_fragment_panel = false;
+                        // 排序按钮
+                        let sort_label = match self.fragment_sort_by {
+                            SortBy::UsageCount => "🔢 次数",
+                            SortBy::SuccessRate => "✅ 成功率",
+                            SortBy::LastUsed => "🕐 最近",
+                            SortBy::Name => "🔤 名称",
+                        };
+                        if ui.button(sort_label).clicked() {
+                            // 循环切换排序方式
+                            self.fragment_sort_by = match self.fragment_sort_by {
+                                SortBy::UsageCount => SortBy::SuccessRate,
+                                SortBy::SuccessRate => SortBy::LastUsed,
+                                SortBy::LastUsed => SortBy::Name,
+                                SortBy::Name => SortBy::UsageCount,
+                            };
+                            self.fragment_manager.sort(self.fragment_sort_by);
                         }
                     });
                 });
                 ui.separator();
-
-                egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(19, 19, 28))
-                    .stroke(egui::Stroke::new(
-                        0.5,
-                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 6),
-                    ))
-                    .rounding(4.0)
-                    .inner_margin(egui::Margin::symmetric(8.0, 5.0))
-                    .show(ui, |ui| {
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.fragment_search_query)
-                                .hint_text("搜索片段...")
-                                .text_color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128))
-                                .frame(false)
-                                .desired_width(f32::INFINITY),
-                        );
-                    });
-
-                ui.add_space(6.0);
+                
+                // 搜索框
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.fragment_search_query)
+                        .hint_text("搜索片段...")
+                        .desired_width(f32::INFINITY)
+                );
+                ui.add_space(4.0);
+                
+                // 分类筛选
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                    for label in ["常用", "Docker", "K8s", "全部"] {
-                        let active = self.fragment_filter_category == label;
-                        let text_color = if active {
-                            egui::Color32::from_rgba_unmultiplied(102, 126, 234, 200)
-                        } else {
-                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 46)
-                        };
-                        let fill = if active {
-                            egui::Color32::from_rgba_unmultiplied(102, 126, 234, 128)
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        let resp = ui.add(
-                            egui::Button::new(egui::RichText::new(label).size(10.0).color(text_color))
-                                .fill(fill)
-                                .stroke(egui::Stroke::NONE)
-                                .rounding(3.0)
-                                .min_size(egui::vec2(54.0, 20.0)),
-                        );
-                        if resp.clicked() {
-                            self.fragment_filter_category = label.to_string();
-                        }
-                    }
-                });
-                ui.add_space(6.0);
-
-                let mut fragments = self
-                    .fragment_manager
-                    .search_fragments(&self.fragment_search_query);
-                let tab = self.fragment_filter_category.clone();
-                fragments.retain(|f| Self::fragment_matches_tab(f, &tab));
-                if self.fragment_filter_tag != "全部" {
-                    fragments.retain(|f| f.tags.iter().any(|t| t == &self.fragment_filter_tag));
-                }
-                fragments.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-
-                let mut pending_delete_id: Option<String> = None;
-                let mut pending_edit_id: Option<String> = None;
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for fragment in &fragments {
-                        let (rect, resp) = ui.allocate_exact_size(
-                            egui::vec2(ui.available_width(), 66.0),
-                            egui::Sense::click(),
-                        );
-                        let bg = if resp.hovered() {
-                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8)
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        ui.painter().rect_filled(rect, 4.0, bg);
-                        let mut row_ui = ui.child_ui(
-                            rect.shrink2(egui::vec2(8.0, 7.0)),
-                            egui::Layout::top_down(egui::Align::Min),
-                        );
-                        row_ui.horizontal(|ui| {
-                            let title_color = if resp.hovered() {
-                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 178)
-                            } else {
-                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)
-                            };
-                            ui.label(
-                                egui::RichText::new(&fragment.name)
-                                    .size(12.0)
-                                    .color(title_color),
-                            );
-                            ui.add_space(4.0);
-                            let tag = Self::fragment_chip(fragment);
-                            let (tag_bg, tag_fg) = match tag.as_str() {
-                                "团队" => (
-                                    egui::Color32::from_rgba_unmultiplied(76, 175, 80, 13),
-                                    egui::Color32::from_rgba_unmultiplied(76, 175, 80, 120),
-                                ),
-                                "模板" => (
-                                    egui::Color32::from_rgba_unmultiplied(255, 152, 0, 13),
-                                    egui::Color32::from_rgba_unmultiplied(255, 152, 0, 120),
-                                ),
-                                _ => (
-                                    egui::Color32::from_rgba_unmultiplied(102, 126, 234, 13),
-                                    egui::Color32::from_rgba_unmultiplied(102, 126, 234, 120),
-                                ),
-                            };
-                            egui::Frame::none()
-                                .fill(tag_bg)
-                                .rounding(3.0)
-                                .inner_margin(egui::Margin::symmetric(5.0, 1.0))
-                                .show(ui, |ui| {
-                                    ui.label(egui::RichText::new(tag).size(9.0).color(tag_fg));
-                                });
-                        });
-                        let cmd_text = if fragment.command.chars().count() > 40 {
-                            format!(
-                                "{}…",
-                                fragment.command.chars().take(39).collect::<String>()
-                            )
-                        } else {
-                            fragment.command.clone()
-                        };
-                        row_ui.label(
-                            egui::RichText::new(cmd_text)
-                                .monospace()
-                                .size(10.0)
-                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 31)),
-                        );
-                        let (n, succ, secs) = Self::fragment_stats(fragment);
-                        row_ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing = egui::vec2(3.0, 0.0);
-                            ui.label(
-                                egui::RichText::new(format!("{}次", n))
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)),
-                            );
-                            ui.label(
-                                egui::RichText::new("·")
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 26)),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!("{}%成功", succ))
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)),
-                            );
-                            ui.label(
-                                egui::RichText::new("·")
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 26)),
-                            );
-                            ui.label(
-                                egui::RichText::new(format!("{:.1}s", secs))
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)),
-                            );
-                        });
-                        if resp.clicked() {
-                            self.trigger_fragment_insert(
-                                &fragment.id,
-                                &fragment.name,
-                                &fragment.command,
-                            );
-                        }
-                        resp.context_menu(|ui| {
-                            if ui.button("编辑").clicked() {
-                                pending_edit_id = Some(fragment.id.clone());
-                                ui.close_menu();
+                    ui.label("📂 分类：");
+                    
+                    // 获取所有分类
+                    let mut categories = self.fragment_manager.get_categories();
+                    categories.sort();
+                    categories.dedup();
+                    
+                    let mut selected = self.fragment_panel_state.category_filter.clone();
+                    
+                    let mut current_text = selected.clone().unwrap_or_else(|| "全部".to_string());
+                    
+                    egui::ComboBox::from_id_source("category_filter")
+                        .selected_text(&current_text)
+                        .show_ui(ui, |ui| {
+                            if ui.selectable_label(selected.is_none(), "全部").clicked() {
+                                self.fragment_panel_state.category_filter = None;
                             }
-                            if ui.button("删除").clicked() {
-                                pending_delete_id = Some(fragment.id.clone());
-                                ui.close_menu();
+                            for cat in categories {
+                                if ui.selectable_label(
+                                    selected.as_deref() == Some(&cat),
+                                    &cat
+                                ).clicked() {
+                                    self.fragment_panel_state.category_filter = Some(cat);
+                                }
                             }
                         });
-                        ui.add_space(1.0);
-                        ui.separator();
-                    }
                 });
-                if let Some(id) = pending_delete_id {
-                    if self.fragment_manager.delete_fragment(&id) {
-                        self.status_message = "已删除命令片段".to_string();
-                    }
-                }
-                if let Some(id) = pending_edit_id {
-                    if let Some(fragment) = self
-                        .fragment_manager
-                        .list_fragments()
+
+                ui.add_space(8.0);
+                
+                ui.vertical(|ui| {
+                    // 根据搜索和分类显示片段
+                    let search_lower = self.fragment_search_query.to_lowercase();
+                    let category_filter = &self.fragment_panel_state.category_filter;
+                    
+                    let all_fragments = self.fragment_manager.get_all();
+                    let filtered_fragments: Vec<&FragmentStats> = all_fragments
                         .iter()
-                        .find(|f| f.id == id)
-                        .cloned()
-                    {
-                        self.editing_fragment_id = Some(fragment.id);
-                        self.new_fragment_name = fragment.name;
-                        self.new_fragment_command = fragment.command;
-                        self.new_fragment_category = fragment.category;
-                        self.new_fragment_tags = fragment.tags.join(", ");
+                        .filter(|f| {
+                            // 搜索过滤
+                            let search_match = search_lower.is_empty() 
+                                || f.title.to_lowercase().contains(&search_lower)
+                                || f.command.to_lowercase().contains(&search_lower);
+                            
+                            // 分类过滤
+                            let category_match = category_filter.is_none() 
+                                || category_filter.as_deref() == Some(&f.category);
+                            
+                            search_match && category_match
+                        })
+                        .collect();
+                    
+                    let categories = self.fragment_manager.get_categories();
+                    for category in &categories {
+                        // 先检查该分类下是否有符合筛选条件的片段
+                        let has_fragments_in_category = filtered_fragments
+                            .iter()
+                            .any(|f| f.category == *category);
+                        
+                        if !has_fragments_in_category {
+                            continue;
+                        }
+                        
+                        let category_fragments: Vec<&FragmentStats> = filtered_fragments
+                            .iter()
+                            .filter(|f| f.category == *category)
+                            .cloned()
+                            .collect();
+                        
+                        let category_emoji = match category.as_str() {
+                            "系统监控" => "📊",
+                            "进程管理" => "🔄",
+                            "网络" => "🌐",
+                            "Docker" => "🐳",
+                            "Nginx" => "🌍",
+                            _ => "📁",
+                        };
+                        
+                        ui.collapsing(format!("{} {}", category_emoji, category), |ui| {
+                            for frag in category_fragments {
+                                // 在每个片段项中添加统计显示
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        let button = ui.button(frag.title.as_str());
+                                        if button.clicked() {
+                                            let id = frag.id.clone();
+                                            let command = frag.command.clone();
+                                            self.insert_fragment_with_stats(&id, &command);
+                                        }
+                                        if button.hovered() {
+                                            button.on_hover_text(&frag.command);
+                                        }
+                                        
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            // 统计信息
+                                            let success_rate = if frag.usage_count > 0 {
+                                                (frag.success_count as f32 / frag.usage_count as f32) * 100.0
+                                            } else {
+                                                0.0
+                                            };
+                                            
+                                            ui.label(
+                                                egui::RichText::new(format!("🔢{}次 ✅{:.0}%", frag.usage_count, success_rate))
+                                                    .small()
+                                                    .color(self.theme_manager.current_theme().fg_low_color())
+                                            );
+                                        });
+                                    });
+                                    
+                                    // 命令预览
+                                    ui.label(
+                                        egui::RichText::new(&frag.command)
+                                            .small()
+                                            .color(self.theme_manager.current_theme().fg_low_color())
+                                    );
+                                });
+                            }
+                        });
+                        
+                        ui.add_space(2.0);
+                    }
+                });
+            });
+    }
+
+    /// 向当前标签页插入命令片段并记录统计
+    fn insert_fragment_with_stats(&mut self, id: &str, command: &str) {
+        let session = self
+            .selected_session_id
+            .as_deref()
+            .and_then(|sid| self.session_manager.get_session(sid));
+        let expanded = expand_command_template(command, session, &std::collections::HashMap::new());
+        if let Some(idx) = self.active_tab {
+            if let Some(tab) = self.tabs.get_mut(idx) {
+                match tab.terminal.insert_fragment(&expanded) {
+                    Ok(_) => {
+                        // 记录成功，耗时估算为 0（实际耗时无法精确测量）
+                        self.fragment_manager.record_usage(id, true, 0);
+                        let _ = self.fragment_manager.save(&FragmentManager::default_config_path());
+                        self.status_message = format!("插入命令：{}", expanded);
+                    }
+                    Err(e) => {
+                        self.fragment_manager.record_usage(id, false, 0);
+                        let _ = self.fragment_manager.save(&FragmentManager::default_config_path());
+                        self.status_message = format!("插入失败：{}", e);
                     }
                 }
+            }
+        } else {
+            self.status_message = "没有活动的终端标签页".to_string();
+        }
+    }
+
+    /// 显示 Git 同步面板
+    fn show_git_sync_panel(&mut self, ctx: &egui::Context, theme: &crate::ui::theme::Theme) {
+        egui::SidePanel::right("git_sync_panel")
+            .default_width(320.0)
+            .resizable(true)
+            .show(ctx, |ui| {
+                self.git_sync_panel.show(ui, theme);
             });
     }
 
@@ -949,38 +928,169 @@ impl MistTermApp {
         }
     }
 
-    /// 底部状态栏（单层 28px）：左侧连接信息，右侧工具按钮。
+    /// README §2.4 状态徽章：淡色底，内边距 2px 8px，圆角 4px，11px 高对比字色
+    fn status_chip(ui: &mut egui::Ui, text: &str, theme: &crate::ui::theme::Theme) {
+        let c = theme.fg_high_color();
+        let [r, g, b, _] = c.to_array();
+        let fill = egui::Color32::from_rgba_unmultiplied(r, g, b, 51);
+        egui::Frame::none()
+            .fill(fill)
+            .rounding(egui::Rounding::same(4.0))
+            .inner_margin(egui::Margin::symmetric(8.0, 2.0))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(text)
+                        .monospace()
+                        .size(11.0)
+                        .color(theme.fg_high_color()),
+                );
+            });
+    }
+
+    /// 底部快捷栏 + 状态栏合并为 **一个** TopBottomPanel，避免两个 bottom 叠绘挡住紫色条（README §2.3）
     fn show_bottom_chrome(&mut self, ctx: &egui::Context) {
         const STATUS_H: f32 = 28.0;
+
+        let theme = self.theme_manager.current_theme();
+        let bar_fill = theme.bg_window_color();
+        let btn_idle = theme.border_color();
+        let btn_primary = theme.accent_color();
+        let status_bar_bg = theme.accent_color();
+        let h_btn = 32.0;
 
         egui::TopBottomPanel::bottom("bottom_chrome")
             .exact_height(STATUS_H)
             .frame(egui::Frame::none())
             .show(ctx, |ui| {
+                ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+
+                // 上：快捷操作栏（固定 44px，避免被内边距挤压）
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), QUICK_H),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        let rect = ui.max_rect();
+                        ui.painter().rect_filled(rect, 0.0, bar_fill);
+                        ui.painter().hline(
+                            rect.x_range(),
+                            rect.top(),
+                            egui::Stroke::new(1.0, theme.border_color()),
+                        );
+                        ui.add_space(10.0);
+                        ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+                        ui.horizontal(|ui| {
+                            let mk = |label: &str, fill: egui::Color32, w: f32| {
+                                egui::Button::new(
+                                    egui::RichText::new(label)
+                                        .size(12.0)
+                                        .color(theme.fg_high_color()),
+                                )
+                                .fill(fill)
+                                .rounding(4.0)
+                                .min_size(egui::vec2(w, h_btn))
+                            };
+
+                            if ui
+                                .add(mk("📋 命令片段", btn_primary, 108.0))
+                                .on_hover_text("⌘J")
+                                .clicked()
+                            {
+                                self.show_fragment_panel = !self.show_fragment_panel;
+                            }
+                            if ui.add(mk("📤 上传", btn_idle, 88.0)).clicked() {
+                                if let Some(terminal) = self.current_terminal_mut() {
+                                    if let Some(path) = FileDialog::new().pick_file() {
+                                        match terminal.start_upload(path.as_path()) {
+                                            Ok(_) => {
+                                                self.status_message =
+                                                    format!("开始上传: {}", path.display())
+                                            }
+                                            Err(e) => {
+                                                self.status_message = format!("上传失败: {}", e)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            if ui.add(mk("📥 下载/SFTP", btn_idle, 120.0))
+                                .on_hover_text("打开 SFTP；ZMODEM 默认目录见侧栏提示")
+                                .clicked()
+                            {
+                                self.show_sftp_panel = true;
+                                self.sftp_last_tab = None;
+                                self.sftp_panel.request_list_on_open();
+                                if let Some(terminal) = self.current_terminal() {
+                                    self.status_message = format!(
+                                        "SFTP 已打开；ZMODEM 下载目录 {}",
+                                        terminal.download_dir()
+                                    );
+                                }
+                            }
+                            if ui.add(mk("🔍 搜索", btn_idle, 88.0)).clicked() {
+                                self.status_message = "终端搜索（开发中）".to_string();
+                            }
+                            if ui.add(mk("⚙️ 设置", btn_idle, 88.0)).clicked() {
+                                self.status_message = "设置（开发中）".to_string();
+                            }
+                            if ui.add(mk("🔀 Git", btn_idle, 88.0)).on_hover_text("Git 同步面板").clicked() {
+                                self.show_git_sync_panel = !self.show_git_sync_panel;
+                            }
+                            if ui.add(mk("📊 监控", btn_idle, 88.0)).on_hover_text("系统监控面板").clicked() {
+                                self.show_monitor_panel = !self.show_monitor_panel;
+                            }
+                            if ui
+                                .add(mk("🔐 凭证", btn_idle, 88.0))
+                                .on_hover_text("加密凭证库")
+                                .clicked()
+                            {
+                                self.credential_panel.open = !self.credential_panel.open;
+                            }
+                            if ui
+                                .add(mk("☁️ 同步", btn_idle, 88.0))
+                                .on_hover_text("云端同步 / 导出包")
+                                .clicked()
+                            {
+                                self.cloud_sync_panel.open = !self.cloud_sync_panel.open;
+                            }
+                            if ui
+                                .add(mk("📂 SFTP", btn_idle, 88.0))
+                                .on_hover_text("显示/隐藏远端 SFTP 侧栏")
+                                .clicked()
+                            {
+                                self.show_sftp_panel = !self.show_sftp_panel;
+                                if self.show_sftp_panel {
+                                    self.sftp_last_tab = None;
+                                    self.sftp_panel.request_list_on_open();
+                                }
+                            }
+                        });
+                    },
+                );
+
+                // 下：状态栏（固定 28px，贴底）
                 ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), STATUS_H),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         let rect = ui.max_rect();
-                        ui.painter()
-                            .rect_filled(rect, 0.0, egui::Color32::from_rgb(19, 19, 28)); // #13131c
-                        ui.painter().hline(
-                            rect.x_range(),
-                            rect.top(),
-                            egui::Stroke::new(
-                                1.0,
-                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8),
-                            ),
-                        );
-                        ui.add_space(14.0);
-                        let session_count = self.session_manager.list_sessions().len();
-                        let fragment_count = self.fragment_manager.list_fragments().len();
-                        let (total_exec, _total_success, _total_failure, success_rate) =
-                            self.aggregate_fragment_metrics();
-                        let server_line = self
-                            .current_terminal()
-                            .map(|t| format!("⚡ {}", t.connection_server_text()))
-                            .unwrap_or_else(|| "⚡ 未选择会话".to_string());
+                        ui.painter().rect_filled(rect, 0.0, status_bar_bg);
+                        ui.add_space(10.0);
+
+                        let mut server_line = "🖥️ 未选择会话".to_string();
+                        let mut font_px = "14px".to_string();
+                        let mut duration_chip = "—".to_string();
+
+                        if let Some(terminal) = self.current_terminal() {
+                            server_line = format!("🖥️ {}", terminal.connection_server_text());
+                            font_px = format!("{:.0}px", terminal.font_size());
+                            duration_chip = if let Some(err) = terminal.connection_error_text() {
+                                truncate_status(err, 28)
+                            } else if terminal.is_connected() {
+                                terminal.connection_duration_text()
+                            } else {
+                                "连接中…".to_string()
+                            };
+                        }
 
                         ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
                         ui.horizontal(|ui| {
@@ -1014,398 +1124,46 @@ impl MistTermApp {
                                 egui::RichText::new(&server_line)
                                     .monospace()
                                     .size(11.0)
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 31)),
+                                    .color(theme.fg_high_color()),
                             );
-
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.spacing_mut().item_spacing = egui::vec2(3.0, 0.0);
-                                    ui.add_space(4.0);
-                                    ui.label(
-                                        egui::RichText::new(format!("↑{}%", success_rate))
-                                            .size(11.0)
-                                            .color(egui::Color32::from_rgba_unmultiplied(76, 175, 80, 76)),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(format!("{}次", total_exec))
-                                            .size(10.0)
-                                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 25)),
-                                    );
-                                    ui.label(
-                                        egui::RichText::new("·")
-                                            .size(10.0)
-                                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 25)),
-                                    );
-                                    let mk_status_btn = |label: &str| {
-                                        egui::Button::new(
-                                            egui::RichText::new(label)
-                                                .size(13.5)
-                                                .color(egui::Color32::from_rgba_unmultiplied(
-                                                    255, 255, 255, 20,
-                                                )),
-                                        )
-                                        .fill(egui::Color32::TRANSPARENT)
-                                        .stroke(egui::Stroke::NONE)
-                                        .rounding(3.0)
-                                        .min_size(egui::vec2(24.0, 22.0))
-                                    };
-                                    if ui
-                                        .add(mk_status_btn("📊"))
-                                        .on_hover_text("统计")
-                                        .clicked()
-                                    {
-                                        self.show_stats_dialog = !self.show_stats_dialog;
-                                    }
-                                    if ui
-                                        .add(mk_status_btn("🔍"))
-                                        .on_hover_text("搜索输出")
-                                        .clicked()
-                                    {
-                                        self.status_message = "搜索（开发中）".to_string();
-                                    }
-                                    if ui
-                                        .add(mk_status_btn("📤"))
-                                        .on_hover_text("文件传输")
-                                        .clicked()
-                                    {
-                                        self.show_sftp_panel = !self.show_sftp_panel;
-                                        if self.show_sftp_panel {
-                                            self.show_fragment_panel = false;
-                                        }
-                                        self.refresh_sftp_entries();
-                                    }
-                                    if ui
-                                        .add(mk_status_btn("📋"))
-                                        .on_hover_text("命令片段（⌘J）")
-                                        .clicked()
-                                    {
-                                        self.show_fragment_panel = !self.show_fragment_panel;
-                                        if self.show_fragment_panel {
-                                            self.show_sftp_panel = false;
-                                        }
-                                    }
-                                },
+                            ui.label(
+                                egui::RichText::new("🔒 SSH-2.0")
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(theme.fg_high_color()),
                             );
+                            ui.label(
+                                egui::RichText::new("🌐 Asia/Shanghai")
+                                    .monospace()
+                                    .size(11.0)
+                                    .color(theme.fg_high_color()),
+                            );
+                            ui.add_space(4.0);
+                            Self::status_chip(ui, "UTF-8", theme);
+                            Self::status_chip(ui, &font_px, theme);
+                            Self::status_chip(ui, &duration_chip, theme);
                         });
                     },
                 );
             });
     }
 
-    fn refresh_sftp_entries(&mut self) {
-        self.sftp_local_entries = list_local_entries(Path::new(&self.sftp_local_dir));
-        if let Some(terminal) = self.current_terminal() {
-            match terminal.list_remote_dir(&self.sftp_remote_dir) {
-                Ok(entries) => {
-                    self.sftp_remote_entries = entries;
-                }
-                Err(e) => {
-                    self.sftp_remote_entries.clear();
-                    self.status_message = format!("SFTP 读取失败: {}", e);
-                }
-            }
-        }
-    }
-
-    fn sftp_push_task(&mut self, direction: &str, file_name: &str, status: &str, detail: &str) -> u64 {
-        let id = self.next_sftp_task_id;
-        self.next_sftp_task_id = self.next_sftp_task_id.saturating_add(1);
-        self.sftp_tasks.insert(
-            0,
-            SftpTask {
-                id,
-                direction: direction.to_string(),
-                file_name: file_name.to_string(),
-                status: status.to_string(),
-                detail: detail.to_string(),
-            },
-        );
-        id
-    }
-
-    fn sftp_update_task(&mut self, id: u64, status: &str, detail: &str) {
-        if let Some(task) = self.sftp_tasks.iter_mut().find(|t| t.id == id) {
-            task.status = status.to_string();
-            task.detail = detail.to_string();
-        }
-    }
-
-    fn sftp_parent_dir(path: &str) -> String {
-        let p = Path::new(path);
-        if let Some(parent) = p.parent() {
-            let s = parent.to_string_lossy().to_string();
-            if s.is_empty() {
-                ".".to_string()
-            } else {
-                s
-            }
+    fn apply_credential_to_new_session_form(&mut self, c: Credential) {
+        self.show_new_session_dialog = true;
+        self.new_session_name = if c.name.is_empty() {
+            c.host.clone()
         } else {
-            ".".to_string()
-        }
-    }
-
-    fn show_sftp_panel(&mut self, ctx: &egui::Context) {
-        egui::SidePanel::right("sftp_panel")
-            .default_width(420.0)
-            .min_width(380.0)
-            .max_width(560.0)
-            .resizable(true)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new("文件传输")
-                            .size(10.0)
-                            .strong()
-                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 51)),
-                    );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(
-                                    egui::RichText::new("−")
-                                        .size(14.0)
-                                        .color(egui::Color32::from_rgba_unmultiplied(
-                                            255, 255, 255, 51,
-                                        )),
-                                )
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::NONE)
-                                .frame(false),
-                            )
-                            .clicked()
-                        {
-                            self.show_sftp_panel = false;
-                        }
-                    });
-                });
-                ui.separator();
-
-                ui.horizontal(|ui| {
-                    ui.label("本地目录:");
-                    ui.text_edit_singleline(&mut self.sftp_local_dir);
-                });
-                ui.horizontal(|ui| {
-                    ui.label("远程目录:");
-                    ui.text_edit_singleline(&mut self.sftp_remote_dir);
-                });
-                ui.horizontal(|ui| {
-                    if ui.button("刷新").clicked() {
-                        self.refresh_sftp_entries();
-                    }
-                    if ui.button("选择本地目录").clicked() {
-                        if let Some(path) = FileDialog::new().pick_folder() {
-                            self.sftp_local_dir = path.display().to_string();
-                            self.refresh_sftp_entries();
-                        }
-                    }
-                    if ui.button("返回远程上级").clicked() {
-                        self.sftp_remote_dir = Self::sftp_parent_dir(&self.sftp_remote_dir);
-                        self.refresh_sftp_entries();
-                    }
-                });
-                ui.separator();
-
-                let actions_h = 34.0;
-                // 先为底部操作区预留空间，确保上传/下载按钮始终可见可点
-                let footer_reserved_h = 188.0;
-                let list_panel_h = (ui.available_height() - footer_reserved_h).max(120.0);
-                ui.columns(2, |columns| {
-                        columns[0].label("本地文件");
-                        columns[0].add_space(4.0);
-                        egui::Frame::none()
-                            .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 5))
-                            .stroke(egui::Stroke::new(
-                                0.5,
-                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 13),
-                            ))
-                            .rounding(4.0)
-                            .inner_margin(egui::Margin::same(6.0))
-                            .show(&mut columns[0], |ui| {
-                                ui.set_min_height((list_panel_h - 24.0).max(120.0));
-                                egui::ScrollArea::vertical()
-                                    .auto_shrink([false, false])
-                                    .show(ui, |ui| {
-                                        for entry in &self.sftp_local_entries {
-                                            let selected =
-                                                self.sftp_selected_local.as_deref() == Some(entry.as_str());
-                                            if ui.selectable_label(selected, entry).clicked() {
-                                                self.sftp_selected_local = Some(entry.clone());
-                                            }
-                                        }
-                                    });
-                            });
-
-                        columns[1].label("远程文件");
-                        columns[1].add_space(4.0);
-                        egui::Frame::none()
-                            .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 5))
-                            .stroke(egui::Stroke::new(
-                                0.5,
-                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 13),
-                            ))
-                            .rounding(4.0)
-                            .inner_margin(egui::Margin::same(6.0))
-                            .show(&mut columns[1], |ui| {
-                                ui.set_min_height((list_panel_h - 24.0).max(120.0));
-                                egui::ScrollArea::vertical()
-                                    .auto_shrink([false, false])
-                                    .show(ui, |ui| {
-                                        let mut pending_remote_enter: Option<String> = None;
-                                        for entry in &self.sftp_remote_entries {
-                                            let label = if entry.is_dir {
-                                                format!("📁 {}", entry.name)
-                                            } else if let Some(size) = entry.size {
-                                                format!("📄 {} ({} B)", entry.name, size)
-                                            } else {
-                                                format!("📄 {}", entry.name)
-                                            };
-                                            let selected = self.sftp_selected_remote.as_deref()
-                                                == Some(entry.name.as_str());
-                                            let resp = ui.selectable_label(selected, label);
-                                            if resp.clicked() {
-                                                self.sftp_selected_remote = Some(entry.name.clone());
-                                            }
-                                            if resp.double_clicked() && entry.is_dir {
-                                                pending_remote_enter = Some(entry.name.clone());
-                                            }
-                                        }
-                                        if let Some(dir_name) = pending_remote_enter {
-                                            self.sftp_remote_dir = format!(
-                                                "{}/{}",
-                                                self.sftp_remote_dir.trim_end_matches('/'),
-                                                dir_name
-                                            );
-                                            self.refresh_sftp_entries();
-                                        }
-                                    });
-                            });
-                    });
-                ui.add_space(6.0);
-                egui::Frame::none()
-                    .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 2))
-                    .stroke(egui::Stroke::new(
-                        0.5,
-                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 12),
-                    ))
-                    .rounding(4.0)
-                    .inner_margin(egui::Margin::same(8.0))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            if ui
-                                .add(egui::Button::new("⬆ 上传选中文件").min_size(egui::vec2(140.0, actions_h)))
-                                .clicked()
-                            {
-                                let local_name = self.sftp_selected_local.clone();
-                                if let Some(file_name) = local_name {
-                                    let local_path = Path::new(&self.sftp_local_dir).join(&file_name);
-                                    let remote_path = format!("{}/{}", self.sftp_remote_dir, file_name);
-                                    let task_id = self.sftp_push_task("上传", &file_name, "进行中", &remote_path);
-                                    if let Some(terminal) = self.current_terminal_mut() {
-                                        match terminal.start_upload_to_remote(&local_path, &remote_path) {
-                                            Ok(_) => {
-                                                self.status_message = format!("上传成功: {}", remote_path);
-                                                self.sftp_update_task(task_id, "成功", &remote_path);
-                                                self.refresh_sftp_entries();
-                                            }
-                                            Err(e) => {
-                                                self.status_message = format!("上传失败: {}", e);
-                                                self.sftp_update_task(task_id, "失败", &e);
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    self.status_message = "请先选择本地文件".to_string();
-                                }
-                            }
-                            if ui
-                                .add(egui::Button::new("⬇ 下载选中文件").min_size(egui::vec2(140.0, actions_h)))
-                                .clicked()
-                            {
-                                let remote_name = self.sftp_selected_remote.clone();
-                                if let Some(file_name) = remote_name {
-                                    if self
-                                        .sftp_remote_entries
-                                        .iter()
-                                        .any(|e| e.name == file_name && e.is_dir)
-                                    {
-                                        self.status_message = "目录暂不支持直接下载".to_string();
-                                    } else {
-                                        let remote_path = format!("{}/{}", self.sftp_remote_dir, file_name);
-                                        let local_path = Path::new(&self.sftp_local_dir).join(&file_name);
-                                        let task_id = self.sftp_push_task(
-                                            "下载",
-                                            &file_name,
-                                            "进行中",
-                                            &local_path.display().to_string(),
-                                        );
-                                        if let Some(terminal) = self.current_terminal_mut() {
-                                            match terminal.download_remote_file(&remote_path, &local_path) {
-                                                Ok(_) => {
-                                                    self.status_message =
-                                                        format!("下载成功: {}", local_path.display());
-                                                    self.sftp_update_task(
-                                                        task_id,
-                                                        "成功",
-                                                        &local_path.display().to_string(),
-                                                    );
-                                                    self.refresh_sftp_entries();
-                                                }
-                                                Err(e) => {
-                                                    self.status_message = format!("下载失败: {}", e);
-                                                    self.sftp_update_task(task_id, "失败", &e);
-                                                }
-                                            }
-                                        }
-                                    }
-                                } else {
-                                    self.status_message = "请先选择远程文件".to_string();
-                                }
-                            }
-                        });
-                        ui.add_space(6.0);
-                        ui.separator();
-                        ui.label("传输队列");
-                        let mut retry_upload: Option<String> = None;
-                        let mut retry_download: Option<String> = None;
-                        egui::ScrollArea::vertical()
-                            .max_height(ui.available_height().max(72.0))
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                if self.sftp_tasks.is_empty() {
-                                    ui.small("暂无任务");
-                                }
-                                for task in &self.sftp_tasks {
-                                    ui.group(|ui| {
-                                        ui.horizontal(|ui| {
-                                            ui.label(format!(
-                                                "#{} {} {}",
-                                                task.id, task.direction, task.file_name
-                                            ));
-                                            ui.separator();
-                                            ui.label(format!("状态: {}", task.status));
-                                            if task.status == "失败" && ui.small_button("重试").clicked() {
-                                                if task.direction == "上传" {
-                                                    retry_upload = Some(task.file_name.clone());
-                                                } else {
-                                                    retry_download = Some(task.file_name.clone());
-                                                }
-                                            }
-                                        });
-                                        ui.small(&task.detail);
-                                    });
-                                }
-                            });
-                        if let Some(file_name) = retry_upload {
-                            self.sftp_selected_local = Some(file_name);
-                            self.status_message = "已选中失败上传任务文件，请再次点击上传".to_string();
-                        }
-                        if let Some(file_name) = retry_download {
-                            self.sftp_selected_remote = Some(file_name);
-                            self.status_message = "已选中失败下载任务文件，请再次点击下载".to_string();
-                        }
-                    });
-            });
+            c.name.clone()
+        };
+        self.new_session_host = c.host.clone();
+        self.new_session_port = c.port.max(1);
+        self.new_session_username = c.username.clone();
+        self.new_session_password = if matches!(c.auth, CredentialAuthKind::Password) {
+            c.secret.clone()
+        } else {
+            String::new()
+        };
+        self.status_message = "已从凭证填入新建会话（请检查后连接）".to_string();
     }
 }
 
@@ -1421,85 +1179,48 @@ fn list_local_entries(dir: &Path) -> Vec<String> {
 }
 
 impl eframe::App for MistTermApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        Self::apply_design_theme(ctx);
-
-        for tab in &mut self.tabs {
-            if let Some(result) = tab.terminal.poll_upload_result() {
-                match result {
-                    Ok(remote_path) => {
-                        self.status_message = format!("上传成功: {}", remote_path);
-                    }
-                    Err(e) => {
-                        self.status_message = format!("上传失败: {}", e);
-                    }
-                }
-            }
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // Ctrl+J 快捷键：打开快速片段选择器
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::J)) {
+            self.quick_selector.open = true;
         }
 
-        if let Some((idx, fragment_id, command)) = self.pending_fragment_insert.clone() {
-            let mut clear_pending = true;
-            if let Some(tab) = self.tabs.get_mut(idx) {
-                if tab.terminal.is_connecting() {
-                    clear_pending = false;
-                } else {
-                    let start = std::time::Instant::now();
-                    match tab.terminal.insert_fragment(&command) {
-                        Ok(_) => {
-                            let dur_ms = start.elapsed().as_millis().max(1) as u64;
-                            if let Some(fragment_id) = fragment_id.as_deref() {
-                                self.fragment_manager
-                                    .record_execution(fragment_id, true, dur_ms);
-                            }
-                            self.status_message = format!("已自动发送片段：{}", command);
-                        }
-                        Err(e) => {
-                            let dur_ms = start.elapsed().as_millis().max(1) as u64;
-                            if let Some(fragment_id) = fragment_id.as_deref() {
-                                self.fragment_manager
-                                    .record_execution(fragment_id, false, dur_ms);
-                            }
-                            self.status_message = format!("自动发送片段失败：{}", e);
-                        }
-                    }
-                }
-            }
-            if clear_pending {
-                self.pending_fragment_insert = None;
-            }
-        }
+        self.apply_current_theme(ctx);
+        let theme = self.theme_manager.current_theme();
 
-        // 检查是否有终端等待 rz 上传文件
+        // 检查是否有终端等待 rz 上传文件（ZMODEM：`start_rz_upload`，非 SCP `start_upload`）
         if let Some(terminal) = self.current_terminal() {
             if terminal.pending_rz_upload {
-                // 重置状态，防止重复触发
                 if let Some(t) = self.current_terminal_mut() {
                     t.pending_rz_upload = false;
                 }
                 if let Some(path) = FileDialog::new()
-                    .set_title("选择要上传的文件")
-                    .pick_file() 
+                    .set_title("选择要上传到远端（rz）的文件")
+                    .pick_file()
                 {
-                    self.status_message = format!("rz上传: {}", path.display());
+                    self.status_message = format!("ZMODEM 上传: {}", path.display());
                     if let Some(t) = self.current_terminal_mut() {
                         match t.start_rz_upload(path.as_path()) {
-                            Ok(_) => {
-                                self.status_message = format!("开始 ZMODEM 上传: {}", path.display());
+                            Ok(()) => {
+                                self.status_message =
+                                    format!("ZMODEM 已启动: {}", path.display());
                             }
                             Err(e) => {
-                                self.status_message = format!("上传失败: {}", e);
+                                t.end_rz_handshake_capture();
+                                self.status_message = format!("ZMODEM 启动失败: {}", e);
                             }
                         }
                     }
                 } else {
+                    self.status_message = "rz 上传已取消".to_string();
                     if let Some(t) = self.current_terminal_mut() {
-                        t.cancel_rz_upload_selection();
+                        t.end_rz_handshake_capture();
+                        t.clear_rz_control_mode();
                     }
-                    self.status_message = "rz上传已取消".to_string();
                 }
             }
         }
-        
+
         if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::N)) {
             self.show_new_session_dialog = true;
         }
@@ -1532,7 +1253,7 @@ impl eframe::App for MistTermApp {
         // 顶部标题栏
         egui::TopBottomPanel::top("title_bar")
             .exact_height(36.0)
-            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(19, 19, 28)))
+            .frame(egui::Frame::none().fill(theme.bg_tab_bar_color()))
             .show(ctx, |ui| {
                 let right_info = self
                     .current_terminal()
@@ -1542,29 +1263,82 @@ impl eframe::App for MistTermApp {
                         } else {
                             "SSH · connecting".to_string()
                         }
-                    })
-                    .unwrap_or_else(|| "SSH · —".to_string());
-                ui.painter().hline(
-                    ui.max_rect().x_range(),
-                    ui.max_rect().bottom(),
-                    egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10)),
-                );
-                ui.columns(3, |cols| {
-                    cols[0].add_space(4.0);
-                    cols[1].with_layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight), |ui| {
-                        ui.label(
-                            egui::RichText::new("MistTerm")
-                                .size(13.0)
-                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
-                        );
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if ui.button("退出").clicked() {
+                        frame.close();
+                        ui.close_menu();
+                    }
+                });
+                ui.menu_button("视图", |ui| {
+                    if ui.button(self.sidebar_collapsed.then(|| "展开侧边栏").unwrap_or("折叠侧边栏")).clicked() {
+                        self.sidebar_collapsed = !self.sidebar_collapsed;
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    let sftp_menu = if self.show_sftp_panel {
+                        "✓ SFTP 文件面板"
+                    } else {
+                        "SFTP 文件面板"
+                    };
+                    if ui.button(sftp_menu).clicked() {
+                        self.show_sftp_panel = !self.show_sftp_panel;
+                        if self.show_sftp_panel {
+                            self.sftp_last_tab = None;
+                            self.sftp_panel.request_list_on_open();
+                        }
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.menu_button("主题", |ui| {
+                        for (i, theme) in self.theme_manager.list_themes().iter().enumerate() {
+                            let is_current = i == self.theme_manager.current;
+                            let label = if is_current {
+                                format!("✓ {}", theme.name)
+                            } else {
+                                theme.name.clone()
+                            };
+                            if ui.button(label).clicked() {
+                                self.theme_manager.set_theme_index(i);
+                                self.theme_manager.save();
+                                ui.close_menu();
+                            }
+                        }
                     });
-                    cols[2].with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(right_info)
-                                .size(11.0)
-                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 51)),
-                        );
-                    });
+                });
+                ui.menu_button("工具", |ui| {
+                    if ui.button("命令片段库…").clicked() {
+                        self.fragment_library.open = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("凭证管理").clicked() {
+                        self.credential_panel.open = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("云端同步").clicked() {
+                        self.cloud_sync_panel.open = true;
+                        ui.close_menu();
+                    }
+                });
+                ui.menu_button("帮助", |ui| {
+                    if ui.button("关于").clicked() {
+                        self.show_about_dialog = true;
+                        ui.close_menu();
+                    }
+                });
+                ui.add_space(8.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let title = self
+                        .current_terminal()
+                        .map(|t| format!("MistTerm - {}", t.connection_server_text()))
+                        .unwrap_or_else(|| "MistTerm".to_string());
+                    // README §2.4 标题栏：13px
+                    ui.label(
+                        egui::RichText::new(title)
+                            .size(13.0)
+                            .color(theme.fg_low_color()),
+                    );
                 });
             });
 
@@ -1579,9 +1353,85 @@ impl eframe::App for MistTermApp {
             self.show_sftp_panel(ctx);
         }
 
+        // Git 同步面板
+        if self.show_git_sync_panel {
+            self.show_git_sync_panel(ctx, theme);
+        }
+
+        let mut cred_action: Option<CredentialPanelAction> = None;
+        if self.credential_panel.open {
+            if self
+                .credential_panel
+                .show_side_panel(ctx, theme, &mut cred_action)
+            {
+                self.credential_panel.open = false;
+            }
+        }
+
+        let fragments_export_path = FragmentManager::default_config_path();
+        let sessions_export_path = self.session_manager.storage_path().clone();
+        let theme_export_path = ThemeManager::config_path();
+        let mut deps = CloudSyncDeps {
+            fragments_path: &fragments_export_path,
+            sessions_path: &sessions_export_path,
+            theme_path: &theme_export_path,
+            fragment_manager: &mut self.fragment_manager,
+            theme_manager: &mut self.theme_manager,
+            session_manager: &mut self.session_manager,
+            credential_panel: &mut self.credential_panel,
+        };
+        self.cloud_sync_panel.show(ctx, theme, &mut deps);
+
+        if let Some(action) = cred_action {
+            if let CredentialPanelAction::UseForQuickConnect(c) = action {
+                self.apply_credential_to_new_session_form(c);
+            }
+        }
+
+        // SFTP（右侧面板；切换终端标签时重置远端路径并重新拉列表）
+        let mut close_sftp_panel = false;
+        if self.show_sftp_panel {
+            if self.sftp_last_tab != self.active_tab {
+                self.sftp_last_tab = self.active_tab;
+                self.sftp_panel.reset();
+                self.sftp_panel.request_list_on_open();
+            }
+            self.sftp_panel.show_side_panel(
+                ctx,
+                theme,
+                self.current_terminal(),
+                &mut close_sftp_panel,
+            );
+        }
+        if close_sftp_panel {
+            self.show_sftp_panel = false;
+        }
+
+        // 系统监控面板
+        if self.show_monitor_panel {
+            self.show_monitor_panel(ctx);
+        }
+
+        let session_for_fragments = self
+            .selected_session_id
+            .as_deref()
+            .and_then(|sid| self.session_manager.get_session(sid).cloned());
+        let fragment_cfg = FragmentManager::default_config_path();
+        let lib_saved = self.fragment_library.show_window(
+            ctx,
+            &mut self.fragment_manager,
+            &mut self.fragment_sort_by,
+            &fragment_cfg,
+            session_for_fragments.as_ref(),
+            theme,
+        );
+        if lib_saved {
+            self.fragment_manager.sort(self.fragment_sort_by);
+        }
+
         // 主内容区：侧边栏 + 终端
         egui::CentralPanel::default()
-            .frame(egui::Frame::none().fill(egui::Color32::from_rgb(13, 13, 20)))
+            .frame(egui::Frame::none().fill(theme.bg_body_color()))
             .show(ctx, |ui| {
                 let full_h = ui.available_height();
                 ui.horizontal(|ui| {
@@ -1599,28 +1449,20 @@ impl eframe::App for MistTermApp {
                             egui::Layout::top_down(egui::Align::LEFT),
                             |ui| {
                                 egui::Frame::none()
-                                    .fill(egui::Color32::from_rgb(19, 19, 28))
-                                    .stroke(egui::Stroke::new(
-                                        0.5,
-                                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10),
-                                    ))
+                                    .fill(theme.bg_window_color())
+                                    .stroke(egui::Stroke::new(1.0, theme.border_color()))
                                     .inner_margin(egui::Margin::same(12.0))
                                     .show(ui, |ui| {
                                         ui.set_width(self.sidebar_width);
                                         egui::Frame::none()
-                                            .fill(egui::Color32::from_rgb(19, 19, 28))
-                                            .stroke(egui::Stroke::new(
-                                                0.5,
-                                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8),
-                                            ))
-                                            .rounding(4.0)
-                                            .inner_margin(egui::Margin::symmetric(8.0, 5.0))
+                                            .fill(theme.border_color())
+                                            .rounding(6.0)
+                                            .inner_margin(egui::Margin::symmetric(12.0, 8.0))
                                             .show(ui, |ui| {
                                                 ui.add(
                                                     egui::TextEdit::singleline(&mut self.sidebar_search_query)
                                                         .hint_text("搜索连接...")
-                                                        .text_color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128))
-                                                        .frame(false)
+                                                        .text_color(theme.fg_high_color())
                                                         .desired_width(f32::INFINITY),
                                                 );
                                             });
@@ -1662,6 +1504,7 @@ impl eframe::App for MistTermApp {
                                             &self.sidebar_search_query,
                                             &self.sidebar_filter,
                                             &connected_sessions,
+                                            theme,
                                         );
 
                                         if sidebar_output.create_session_clicked {
@@ -1685,6 +1528,25 @@ impl eframe::App for MistTermApp {
                                     });
                             },
                         );
+                    } else if ui.button("☰").clicked() {
+                        self.sidebar_collapsed = false;
+                    }
+
+                    if !self.sidebar_collapsed {
+                        let (drag_rect, drag_resp) = ui.allocate_exact_size(
+                            egui::vec2(4.0, full_h),
+                            egui::Sense::drag(),
+                        );
+                        let color = if drag_resp.hovered() || drag_resp.dragged() {
+                            theme.accent_dim_color()
+                        } else {
+                            theme.border_color()
+                        };
+                        ui.painter().rect_filled(drag_rect, 0.0, color);
+                        if drag_resp.dragged() {
+                            self.sidebar_width =
+                                (self.sidebar_width + drag_resp.drag_delta().x).clamp(180.0, 400.0);
+                        }
                     } else {
                         ui.add_space(6.0);
                     }
@@ -1693,12 +1555,12 @@ impl eframe::App for MistTermApp {
                         egui::vec2(ui.available_width(), full_h),
                         egui::Layout::top_down(egui::Align::LEFT),
                         |ui| {
-                            // README §2.4 标签栏：背景 #2d2d2d、底部分隔 1px #3c3c3c、标签高 40px
+                            // README §2.4 标签栏
                             egui::Frame::none()
-                                .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 5))
+                                .fill(theme.bg_tab_bar_color())
                                 .stroke(egui::Stroke::new(
-                                    0.5,
-                                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10),
+                                    1.0,
+                                    theme.border_color(),
                                 ))
                                 .inner_margin(egui::Margin::symmetric(4.0, 0.0))
                                 .show(ui, |ui| {
@@ -1726,15 +1588,20 @@ impl eframe::App for MistTermApp {
                                                 };
                                                 let tab_resp = ui.add(
                                                     egui::Button::new(
-                                                        egui::RichText::new(&tab.title)
-                                                            .size(11.0)
-                                                            .color(title_color),
+                                                        egui::RichText::new(&tab_label).size(12.0).color(
+                                                            if active {
+                                                                theme.fg_high_color()
+                                                            } else {
+                                                                theme.fg_low_color()
+                                                            },
+                                                        ),
                                                     )
-                                                    .fill(tab_fill)
-                                                    .stroke(egui::Stroke::new(
-                                                        0.5,
-                                                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10),
-                                                    ))
+                                                    .fill(if active {
+                                                        theme.bg_terminal_color()
+                                                    } else {
+                                                        theme.bg_tab_bar_color()
+                                                    })
+                                                    .stroke(egui::Stroke::new(1.0, theme.border_color()))
                                                     .rounding(4.0)
                                                     .min_size(egui::vec2(146.0, 28.0)),
                                                 );
@@ -1768,8 +1635,8 @@ impl eframe::App for MistTermApp {
                                                     .add(
                                                         egui::Button::new(
                                                             egui::RichText::new("×")
-                                                                .size(11.0)
-                                                                .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 76)),
+                                                                .size(13.0)
+                                                                .color(theme.fg_low_color()),
                                                         )
                                                         .fill(egui::Color32::TRANSPARENT)
                                                         .frame(false),
@@ -1785,8 +1652,8 @@ impl eframe::App for MistTermApp {
                                             .add(
                                                 egui::Button::new(
                                                     egui::RichText::new("+")
-                                                        .size(12.0)
-                                                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)),
+                                                        .size(14.0)
+                                                        .color(theme.fg_low_color()),
                                                 )
                                                 .fill(egui::Color32::TRANSPARENT)
                                                 .frame(false),
@@ -1826,41 +1693,17 @@ impl eframe::App for MistTermApp {
                                 });
 
                             let terminal_h = ui.available_height().max(120.0);
-                            if self.show_stats_dialog {
-                                let stats_h = (terminal_h * 0.5).clamp(180.0, 320.0);
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(ui.available_width(), stats_h),
-                                    egui::Layout::top_down(egui::Align::LEFT),
-                                    |ui| {
-                                        self.show_stats_half_panel(ui);
-                                    },
-                                );
-                                ui.add_space(6.0);
-                                let remain_h = (terminal_h - stats_h - 6.0).max(120.0);
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(ui.available_width(), remain_h),
-                                    egui::Layout::top_down(egui::Align::LEFT),
-                                    |ui| {
-                                        if let Some(terminal) = self.current_terminal_mut() {
-                                            terminal.show(ui);
-                                        } else {
-                                            self.show_welcome(ui);
-                                        }
-                                    },
-                                );
-                            } else {
-                                ui.allocate_ui_with_layout(
-                                    egui::vec2(ui.available_width(), terminal_h),
-                                    egui::Layout::top_down(egui::Align::LEFT),
-                                    |ui| {
-                                        if let Some(terminal) = self.current_terminal_mut() {
-                                            terminal.show(ui);
-                                        } else {
-                                            self.show_welcome(ui);
-                                        }
-                                    },
-                                );
-                            }
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ui.available_width(), terminal_h),
+                                egui::Layout::top_down(egui::Align::LEFT),
+                                |ui| {
+                                    if let Some(terminal) = self.current_terminal_mut() {
+                                        terminal.show(ui, theme);
+                                    } else {
+                                        self.show_welcome(ui);
+                                    }
+                                },
+                            );
 
                         },
                     );
@@ -2426,10 +2269,128 @@ impl eframe::App for MistTermApp {
             }
             self.show_fragment_vars_dialog = open && !should_close;
         }
+
+        // 快速片段选择器
+        if self.quick_selector.open {
+            use egui::*;
+            
+            Window::new("⚡ 快速选择片段")
+                .collapsible(false)
+                .resizable(true)
+                .default_size([500.0, 400.0])
+                .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    // 搜索框
+                    ui.horizontal(|ui| {
+                        ui.label("🔍");
+                        ui.text_edit_singleline(&mut self.quick_selector.search_query);
+                    });
+                    
+                    ui.add_space(8.0);
+                    
+                    // 片段列表
+                    egui::ScrollArea::vertical()
+                        .max_height(300.0)
+                        .show(ui, |ui| {
+                            let fragments = self.fragment_manager.list();
+                            let search_lower = self.quick_selector.search_query.to_lowercase();
+                            
+                            for (idx, fragment) in fragments.iter().enumerate() {
+                                // 搜索过滤
+                                if !search_lower.is_empty() 
+                                    && !fragment.title.to_lowercase().contains(&search_lower)
+                                    && !fragment.command.to_lowercase().contains(&search_lower) {
+                                    continue;
+                                }
+                                
+                                let is_selected = idx == self.quick_selector.selected_index;
+                                
+                                if ui.selectable_label(is_selected, &fragment.title).clicked() {
+                                    // 点击执行
+                                    self.execute_fragment(fragment);
+                                    self.quick_selector.open = false;
+                                }
+                            }
+                        });
+                    
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("❌ 取消 (ESC)").clicked() {
+                            self.quick_selector.open = false;
+                        }
+                    });
+                });
+        }
+
+        // 变量输入对话框
+        if self.variable_dialog.open {
+            use egui::*;
+            
+            Window::new(format!("📝 输入变量：{}", self.variable_dialog.fragment_title))
+                .collapsible(false)
+                .resizable(true)
+                .default_size([450.0, 300.0])
+                .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    if let Some(fragment_id) = &self.variable_dialog.fragment_id {
+                        if let Some(fragment) = self.fragment_manager.get(fragment_id) {
+                            for var in &fragment.variables {
+                                ui.horizontal(|ui| {
+                                    ui.label(&var.description);
+                                    let value = self.variable_dialog.values
+                                        .entry(var.name.clone())
+                                        .or_insert_with(String::new);
+                                    ui.text_edit_singleline(value);
+                                });
+                                ui.add_space(4.0);
+                            }
+                        }
+                    }
+                    
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("❌ 取消").clicked() {
+                            self.variable_dialog.open = false;
+                        }
+                        if ui.button("✅ 执行").clicked() {
+                            if let Some(fragment_id) = &self.variable_dialog.fragment_id {
+                                if let Some(fragment) = self.fragment_manager.get(fragment_id) {
+                                    let command = fragment.apply_variables(&self.variable_dialog.values);
+                                    if let Some(session_id) = &self.selected_session_id {
+                                        if let Some(tab) = self.tabs.iter_mut().find(|t| t.session_id == *session_id) {
+                                            let _ = tab.terminal.send_command(&command);
+                                        }
+                                    }
+                                }
+                            }
+                            self.variable_dialog.open = false;
+                        }
+                    });
+                });
+        }
     }
 }
 
 impl MistTermApp {
+    /// 执行命令片段
+    fn execute_fragment(&mut self, fragment: &FragmentStats) {
+        if fragment.has_variables() {
+            // 有变量，打开对话框
+            self.variable_dialog.open = true;
+            self.variable_dialog.fragment_id = Some(fragment.id.clone());
+            self.variable_dialog.fragment_title = fragment.title.clone();
+            self.variable_dialog.values = fragment.variable_defaults();
+        } else {
+            // 无变量，直接执行
+            if let Some(session_id) = &self.selected_session_id {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.session_id == *session_id) {
+                    let _ = tab.terminal.send_command(&fragment.command);
+                }
+            }
+            self.quick_selector.open = false;
+        }
+    }
+
     /// 显示欢迎界面
     fn show_welcome(&self, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::TopDown), |ui| {

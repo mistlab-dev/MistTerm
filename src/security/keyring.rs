@@ -1,12 +1,11 @@
 //! 系统密钥链管理
-#![allow(dead_code)]
 //!
 //! 跨平台安全存储密码和敏感信息
-//!
 //! - macOS: Keychain
 //! - Windows: Credential Manager
 //! - Linux: Secret Service (GNOME Keyring, KWallet)
 
+use keyring::Entry;
 use thiserror::Error;
 
 /// 密钥链错误
@@ -50,31 +49,39 @@ impl CredentialManager {
 
     /// 保存密码
     pub fn save_password(&self, username: &str, password: &str) -> Result<(), KeyringError> {
-        // TODO: 使用 keyring crate 实现
-        tracing::debug!("保存密码：service={}, username={}", self.service, username);
-        let _ = password; // 临时使用
-        Ok(())
+        let entry = Entry::new(&self.service, username).map_err(|e| {
+            KeyringError::Unavailable(format!("创建条目失败：{}", e))
+        })?;
+        entry
+            .set_password(password)
+            .map_err(|e| KeyringError::SaveError(e.to_string()))
     }
 
     /// 获取密码
     pub fn get_password(&self, username: &str) -> Result<String, KeyringError> {
-        // TODO: 使用 keyring crate 实现
-        tracing::debug!("获取密码：service={}, username={}", self.service, username);
-        let _ = username;
-        Err(KeyringError::NotFound)
+        let entry = Entry::new(&self.service, username).map_err(|e| {
+            KeyringError::Unavailable(format!("创建条目失败：{}", e))
+        })?;
+        match entry.get_password() {
+            Ok(p) => Ok(p),
+            Err(keyring::Error::NoEntry) => Err(KeyringError::NotFound),
+            Err(e) => Err(KeyringError::GetError(e.to_string())),
+        }
     }
 
     /// 删除密码
     pub fn delete_password(&self, username: &str) -> Result<(), KeyringError> {
-        // TODO: 使用 keyring crate 实现
-        tracing::debug!("删除密码：service={}, username={}", self.service, username);
-        let _ = username;
-        Ok(())
+        let entry = Entry::new(&self.service, username).map_err(|e| {
+            KeyringError::Unavailable(format!("创建条目失败：{}", e))
+        })?;
+        entry
+            .delete_password()
+            .map_err(|e| KeyringError::DeleteError(e.to_string()))
     }
 
-    /// 检查密钥链是否可用
+    /// 检查密钥链是否可用（能否创建条目）
     pub fn is_available() -> bool {
-        true
+        Entry::new("MistTerm", "healthcheck").is_ok()
     }
 
     /// 获取服务名

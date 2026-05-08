@@ -15,8 +15,9 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
-use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, LrzszTransfer, TransferEvent};
+use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, SshSessionId, LrzszTransfer, TransferEvent};
 use crate::terminal::Terminal as VtTerminal;
+use crate::ui::theme::Theme;
 
 /// 终端视图组件
 pub struct TerminalView {
@@ -71,13 +72,6 @@ pub struct TerminalView {
     rz_control_mode_until: Option<Instant>,
     upload_result_rx: Option<Receiver<Result<String, String>>>,
     command_usage: HashMap<String, u64>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RemotePathEntry {
-    pub name: String,
-    pub is_dir: bool,
-    pub size: Option<u64>,
 }
 
 impl TerminalView {
@@ -214,10 +208,30 @@ impl TerminalView {
     }
 
     /// 显示终端视图
-    pub fn show(&mut self, ui: &mut egui::Ui) {
+    pub fn show(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         // 先处理网络与键盘，再绘制，避免输入/输出滞后一帧
         self.process_ssh_messages();
         self.process_transfer_events(ui.ctx());
+
+        // Ctrl + 滚轮：缩放终端字体（不改变 PTY 行列，仅视觉）
+        let wheel = ui.ctx().input(|i| {
+            let z = i.smooth_scroll_delta.y + i.raw_scroll_delta.y;
+            if self.terminal_focused
+                && self.connected
+                && i.modifiers.ctrl
+                && !i.modifiers.shift
+                && z.abs() > 0.5
+            {
+                Some(z)
+            } else {
+                None
+            }
+        });
+        if let Some(z) = wheel {
+            let step = if z > 0.0 { 1.0 } else { -1.0 };
+            self.set_font_size(self.font_size + step);
+        }
+
         self.capture_inline_input(ui);
         if self.connected {
             // ZMODEM 上传时 PTY 回包经 UI 旁路进 lrzsz；须高频重绘以免 `mpsc` 积压导致「等 ZACK」式卡顿。
@@ -242,11 +256,11 @@ impl TerminalView {
             available_size.x,
             (available_size.y - progress_reserve_y).max(80.0),
         );
-        self.sync_pty_size_with_ui(ui, pty_sync_size);
+        self.sync_pty_size_with_ui(ui, pty_sync_size, theme);
         
-        // 设计稿终端区域：背景 #0a0a12、内边距 16px（状态栏由主窗口统一渲染）
+        // README §2.4 终端区域：背景随主题、内边距 16px（不在终端内再放一条状态栏，由主窗口底栏承担）
         egui::Frame::none()
-            .fill(egui::Color32::from_rgb(10, 10, 18)) // #0a0a12
+            .fill(theme.bg_terminal_color())
             .inner_margin(egui::Margin::same(16.0))
             .show(ui, |ui| {
                 ui.vertical(|ui| {
@@ -258,9 +272,9 @@ impl TerminalView {
                     let scroll_h = (ui.available_height() - footer_h).max(80.0);
 
                     // 终端内容区在上，ZMODEM 进度条固定在底部，避免插在命令与 shell 输出之间
-                    let layout_job =
-                        self.terminal
-                            .get_layout_job(self.font_size, egui::Color32::from_rgb(212, 212, 212));
+                    let layout_job = self
+                        .terminal
+                        .get_layout_job(self.font_size, theme.fg_medium_color());
                     let scroll_output = egui::ScrollArea::vertical()
                         .stick_to_bottom(self.auto_follow_output)
                         .auto_shrink([false, false])
@@ -342,10 +356,20 @@ impl TerminalView {
                             "远端 → 本机"
                         };
                         ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new("📁 ZMODEM").strong());
-                            ui.label(dir);
-                            ui.label("·");
-                            ui.monospace(&progress.0);
+                            ui.label(
+                                egui::RichText::new("📁 ZMODEM")
+                                    .strong()
+                                    .color(theme.accent_color()),
+                            );
+                            ui.label(
+                                egui::RichText::new(dir).color(theme.fg_medium_color()),
+                            );
+                            ui.label(egui::RichText::new("·").color(theme.fg_low_color()));
+                            ui.label(
+                                egui::RichText::new(&progress.0)
+                                    .monospace()
+                                    .color(theme.fg_high_color()),
+                            );
                         });
                         let percent = if progress.2 > 0 {
                             (progress.1 as f32 / progress.2 as f32 * 100.0).min(100.0)
@@ -358,13 +382,18 @@ impl TerminalView {
                             human_readable_size(progress.2.max(1)),
                             percent
                         );
-                        ui.add(egui::ProgressBar::new(percent / 100.0).text(detail));
+                        ui.add(
+                            egui::ProgressBar::new(percent / 100.0)
+                                .fill(theme.accent_color())
+                                .desired_width(f32::INFINITY)
+                                .text(egui::RichText::new(detail).color(theme.fg_high_color())),
+                        );
                     }
                 });
             });
     }
 
-    fn sync_pty_size_with_ui(&mut self, ui: &egui::Ui, available_size: egui::Vec2) {
+    fn sync_pty_size_with_ui(&mut self, ui: &egui::Ui, available_size: egui::Vec2, theme: &Theme) {
         // 预留状态栏、进度条、边距；输入已并入滚动区，不再单独预留一行
         let usable_width = (available_size.x - 32.0).max(120.0);
         // 无终端内状态栏后略减预留（进度条等仍占高）
@@ -373,7 +402,8 @@ impl TerminalView {
         // 用真实字体测量单字符网格尺寸，避免 80x24 误差
         let font_id = egui::FontId::monospace(self.font_size);
         let (cell_w, cell_h) = ui.ctx().fonts(|fonts| {
-            let galley = fonts.layout_no_wrap("W".to_string(), font_id, egui::Color32::WHITE);
+            let galley =
+                fonts.layout_no_wrap("W".to_string(), font_id, theme.fg_high_color());
             (galley.size().x.max(6.0), galley.size().y.max(12.0))
         });
 
@@ -699,6 +729,18 @@ impl TerminalView {
                             continue;
                         }
                         match key {
+                            egui::Key::V if modifiers.ctrl && modifiers.shift => {
+                                if let Ok(mut clip) = Clipboard::new() {
+                                    if let Ok(text) = clip.get_text() {
+                                        self.paste_text(&text);
+                                    }
+                                }
+                            }
+                            egui::Key::C if modifiers.ctrl && modifiers.shift => {
+                                if let Ok(mut clip) = Clipboard::new() {
+                                    let _ = clip.set_text(self.terminal.get_formatted_output());
+                                }
+                            }
                             egui::Key::Enter => {
                                 if let Err(e) = handle.send_input(b"\r") {
                                     log::error!("PTY write (enter): {}", e);
@@ -718,7 +760,7 @@ impl TerminalView {
                             egui::Key::Tab => {
                                 // Tab 已在 consume_key 阶段统一发送
                             }
-                            egui::Key::C if modifiers.ctrl => {
+                            egui::Key::C if modifiers.ctrl && !modifiers.shift => {
                                 if self.lrzsz.is_active() {
                                     self.lrzsz.cancel_active_transfer();
                                 }
@@ -828,14 +870,16 @@ impl TerminalView {
             .ssh_handle
             .as_ref()
             .ok_or_else(|| "PTY 未就绪".to_string())?;
-        let pump_tx = handle.shell_pump_tx();
+        let channel = handle
+            .get_channel()
+            .ok_or_else(|| "PTY 通道不可用".to_string())?;
         self.rz_control_mode_until = Some(Instant::now() + Duration::from_secs(90));
         log::info!(
             "start_rz_upload: path={} session_id={:?}",
             path.display(),
             handle.session_id
         );
-        match self.lrzsz.start_send(path_str, pump_tx) {
+        match self.lrzsz.start_send(path_str, channel) {
             Ok(()) => Ok(()),
             Err(e) => {
                 self.lrzsz.end_rz_handshake_capture();
@@ -951,70 +995,14 @@ impl TerminalView {
         Ok(())
     }
 
-    pub fn download_remote_file(&mut self, remote_path: &str, local_path: &Path) -> Result<(), String> {
-        let session_id = self.session_id
-            .ok_or_else(|| "没有 SSH 会话".to_string())?;
-        let session = self.ssh_manager.as_ref()
-            .and_then(|m| m.get_session(session_id))
-            .ok_or_else(|| "获取 SSH 会话失败".to_string())?;
-        let sftp = Self::retry_sftp_op(|| session.sftp(), "创建 SFTP 通道失败")?;
-        let mut remote = Self::retry_sftp_op(
-            || sftp.open(Path::new(remote_path)),
-            "打开远端文件失败",
-        )?;
-
-        let mut buf = Vec::new();
-        use std::io::Read;
-        let mut chunk = [0u8; 16 * 1024];
-        loop {
-            match remote.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => buf.extend_from_slice(&chunk[..n]),
-                Err(e) => {
-                    if Self::is_would_block_like(&e) {
-                        thread::sleep(Duration::from_millis(8));
-                        continue;
-                    }
-                    return Err(format!("SFTP 下载读取失败：{}", e));
-                }
-            }
+    /// SFTP 等：`SshManager` 克隆后与后台线程配合使用（避免阻塞 UI）。
+    pub fn sftp_session_for_ops(&self) -> Option<(SshSessionId, SshManager)> {
+        if !self.connected {
+            return None;
         }
-        std::fs::write(local_path, &buf)
-            .map_err(|e| format!("保存本地文件失败：{}", e))?;
-        Ok(())
-    }
-
-    pub fn list_remote_dir(&self, remote_dir: &str) -> Result<Vec<RemotePathEntry>, String> {
-        let session_id = self.session_id
-            .ok_or_else(|| "没有 SSH 会话".to_string())?;
-        let session = self.ssh_manager.as_ref()
-            .and_then(|m| m.get_session(session_id))
-            .ok_or_else(|| "获取 SSH 会话失败".to_string())?;
-
-        let sftp = Self::retry_sftp_op(|| session.sftp(), "创建 SFTP 失败")?;
-        let path = PathBuf::from(remote_dir);
-        let entries = Self::retry_sftp_op(
-            || sftp.readdir(path.as_path()),
-            "读取远端目录失败",
-        )?;
-
-        let mut items = entries
-            .into_iter()
-            .filter_map(|(p, stat)| {
-                let name = p.file_name()?.to_string_lossy().to_string();
-                if name == "." || name == ".." {
-                    return None;
-                }
-                let is_dir = stat.is_dir();
-                Some(RemotePathEntry {
-                    name,
-                    is_dir,
-                    size: stat.size,
-                })
-            })
-            .collect::<Vec<_>>();
-        items.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
-        Ok(items)
+        let id = self.session_id?;
+        let mgr = self.ssh_manager.as_ref()?.clone();
+        Some((id, mgr))
     }
 
     pub fn download_dir(&self) -> &str {

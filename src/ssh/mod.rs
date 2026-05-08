@@ -12,9 +12,10 @@ mod lrzsz_zmodem2_send;
 mod lrzsz_external_sz;
 mod zmodem_pty_pipeline;
 mod file_transfer;
-pub mod zmodem_pty_prefix;
+pub mod sftp;
 
 pub use client::SshConfig;
-pub use manager::{ShellPumpCommand, ShellPumpTx, SshManager, SshMessage, SshSessionHandle};
+pub use sftp::{SftpClient, SftpEntry};
+pub use manager::{SshManager, SshMessage, SshSessionHandle, SshSessionId};
 pub use lrzsz::{LrzszTransfer, TransferEvent};
 pub use file_transfer::{FileTransfer, ProgressTracker};

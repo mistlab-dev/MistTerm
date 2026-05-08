@@ -6,5 +6,14 @@ pub mod app;
 pub mod terminal;
 pub mod sidebar;
 pub mod dialogs;
+pub mod git_sync;
+pub mod monitor_panel;
+pub mod theme;
+pub mod sftp_panel;
+pub mod fragment_library;
+pub mod credential_panel;
+pub mod cloud_sync_panel;
 
 pub use app::MistTermApp;
+pub use theme::{Theme, ThemeManager};
+pub use monitor_panel::MonitorPanel;

@@ -60,12 +60,28 @@ impl SshClient {
                 log::info!("Authenticated with password");
             }
             Err(e) => {
-                log::info!("Password auth failed: {}, trying key...", e);
-                let private_key_path = std::path::Path::new("/Users/tianguangyu/.ssh/id_rsa");
-                if session.userauth_pubkey_file(&self.config.username, None, private_key_path, None).is_ok() {
-                    log::info!("Authenticated with SSH key");
-                } else {
-                    return Err("Authentication failed (password and key both failed)".to_string());
+                log::info!(
+                    "Password auth failed: {}, trying default keys under ~/.ssh ...",
+                    e
+                );
+                let mut authenticated = false;
+                if let Some(home) = dirs::home_dir() {
+                    let ssh_dir = home.join(".ssh");
+                    for key_name in ["id_ed25519", "id_rsa", "id_ecdsa"] {
+                        let p = ssh_dir.join(key_name);
+                        if p.is_file()
+                            && session
+                                .userauth_pubkey_file(&self.config.username, None, &p, None)
+                                .is_ok()
+                        {
+                            log::info!("Authenticated with SSH key {}", p.display());
+                            authenticated = true;
+                            break;
+                        }
+                    }
+                }
+                if !authenticated {
+                    return Err("Authentication failed (password and SSH keys failed)".to_string());
                 }
             }
         }

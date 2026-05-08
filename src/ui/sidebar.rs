@@ -6,6 +6,7 @@ use eframe::egui;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::core::session::SessionManager;
+use crate::ui::theme::Theme;
 
 pub struct SidebarOutput {
     pub response: egui::Response,
@@ -30,6 +31,7 @@ impl Sidebar {
         search_query: &str,
         filter: &str,
         connected_sessions: &HashSet<String>,
+        theme: &Theme,
     ) -> SidebarOutput {
         let width = if ui.available_width() > 250.0 { 200.0 } else { ui.available_width() };
         let mut selected_session_id = None;
@@ -84,6 +86,7 @@ impl Sidebar {
                     });
                 });
                 ui.separator();
+                ui.small(egui::RichText::new("最近连接").color(theme.fg_low_color()).size(11.0));
 
                 // 会话列表
                 ui.vertical(|ui| {
@@ -125,15 +128,24 @@ impl Sidebar {
                         });
                     } else {
                         for session in &sessions {
+                            if session.group != current_group {
+                                current_group = session.group.clone();
+                                ui.add_space(6.0);
+                                ui.small(
+                                    egui::RichText::new(format!("📁 {}", current_group))
+                                        .size(10.0)
+                                        .color(theme.fg_low_color()),
+                                );
+                            }
                             let is_selected = selected_id.as_ref() == Some(&session.id);
                             let (row_rect, response) = ui.allocate_exact_size(
                                 egui::vec2(ui.available_width(), 36.0),
                                 egui::Sense::click(),
                             );
                             let bg = if is_selected {
-                                egui::Color32::from_rgba_unmultiplied(102, 126, 234, 13)
+                                theme.list_row_selected_bg()
                             } else if response.hovered() {
-                                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8)
+                                theme.list_row_hover_bg()
                             } else {
                                 egui::Color32::TRANSPARENT
                             };
@@ -148,19 +160,20 @@ impl Sidebar {
                                 row_rect.shrink2(egui::vec2(10.0, 8.0)),
                                 egui::Layout::left_to_right(egui::Align::Center),
                             );
-                            row_ui.label(
-                                egui::RichText::new("🖥")
-                                    .size(11.0)
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 90)),
-                            );
+                            let color = if connected_sessions.contains(&session.id) {
+                                theme.green_color()
+                            } else {
+                                theme.red_color()
+                            };
+                            row_ui.colored_label(color, "●");
                             row_ui.add_space(6.0);
                             row_ui.label(
                                 egui::RichText::new(&session.name)
                                     .size(12.0)
                                     .color(if is_selected {
-                                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 191)
+                                        theme.fg_high_color()
                                     } else {
-                                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)
+                                        theme.fg_medium_color()
                                     }),
                             );
                             row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -194,6 +207,27 @@ impl Sidebar {
                         }
                     }
                 });
+
+                ui.add_space(10.0);
+                ui.separator();
+                ui.small(egui::RichText::new("命令片段").color(theme.fg_low_color()).size(11.0));
+                for (name, cmd) in [
+                    ("重启 Nginx", "systemctl restart nginx"),
+                    ("查看日志", "tail -f /var/log/nginx/error.log"),
+                ] {
+                    ui.label(egui::RichText::new(name).size(13.0));
+                    let compact_cmd = if cmd.len() > 26 {
+                        format!("{}...", &cmd[..26])
+                    } else {
+                        cmd.to_string()
+                    };
+                    ui.small(
+                        egui::RichText::new(compact_cmd)
+                            .color(theme.fg_low_color())
+                            .size(11.0),
+                    );
+                    ui.add_space(6.0);
+                }
             }
         ).response;
 

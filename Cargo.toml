@@ -73,6 +73,8 @@ thiserror = "1.0"
 aes-gcm = "0.10"
 rand = "0.8"
 base64 = "0.21"
+hkdf = "0.12"
+sha2 = "0.10"
 
 # Logging
 tracing = "0.1"

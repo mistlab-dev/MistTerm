@@ -1,16 +1,11 @@
 //! 会话管理 - 保存和加载 SSH 会话配置
 #![allow(dead_code)]
 
-use aes_gcm::aead::Aead;
-use aes_gcm::aead::KeyInit;
-use aes_gcm::{Aes256Gcm, Nonce};
-use base64::engine::general_purpose::STANDARD as B64;
-use base64::Engine as _;
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
+
+use crate::security::device_key;
 
 /// 会话配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,89 +67,71 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
-    fn build_device_fingerprint() -> String {
-        // macOS: 优先取 IOPlatformUUID 作为设备指纹
-        let output = Command::new("ioreg")
-            .args(["-rd1", "-c", "IOPlatformExpertDevice"])
-            .output();
-        if let Ok(out) = output {
-            if out.status.success() {
-                let text = String::from_utf8_lossy(&out.stdout);
-                for line in text.lines() {
-                    if let Some(pos) = line.find("IOPlatformUUID") {
-                        let tail = &line[pos..];
-                        let parts: Vec<&str> = tail.split('"').collect();
-                        if parts.len() >= 4 {
-                            return parts[3].to_string();
-                        }
-                    }
-                }
-            }
+    pub fn parse_stored_sessions_json(
+        device_key_bytes: &[u8; 32],
+        content: &str,
+    ) -> Option<(Vec<SessionConfig>, bool)> {
+        let stored: Vec<StoredSessionConfig> = serde_json::from_str(content).ok()?;
+        let mut sessions = Vec::with_capacity(stored.len());
+        let mut had_plaintext = false;
+        for cfg in stored {
+            let password =
+                if !cfg.encrypted_password.is_empty() && !cfg.password_nonce.is_empty() {
+                    device_key::decrypt_secret(
+                        device_key_bytes,
+                        &cfg.encrypted_password,
+                        &cfg.password_nonce,
+                    )
+                    .unwrap_or_default()
+                } else if !cfg.password.is_empty() {
+                    had_plaintext = true;
+                    cfg.password
+                } else {
+                    String::new()
+                };
+            sessions.push(SessionConfig {
+                id: if cfg.id.is_empty() {
+                    uuid::Uuid::new_v4().to_string()
+                } else {
+                    cfg.id
+                },
+                name: cfg.name,
+                group: cfg.group,
+                host: cfg.host,
+                port: cfg.port,
+                username: cfg.username,
+                password,
+                last_connected_at: cfg.last_connected_at,
+            });
         }
-        // 退化方案（仍具备设备绑定倾向）
-        format!(
-            "{}:{}:{}",
-            std::env::consts::OS,
-            std::env::var("USER").unwrap_or_default(),
-            std::env::var("HOSTNAME").unwrap_or_default()
-        )
+        Some((sessions, had_plaintext))
     }
 
-    fn derive_key_from_fingerprint(fingerprint: &str) -> [u8; 32] {
-        // 轻量 key 派生（依赖设备指纹 + 固定盐）
-        let mut key = [0u8; 32];
-        let salt = b"MistTerm-Local-Device-Key-v1";
-        let bytes = fingerprint.as_bytes();
-        if bytes.is_empty() {
-            return key;
+    /// 从会话备份 JSON 替换当前会话（路径可为同步包内的 `sessions.json`）
+    pub fn import_sessions_from_file_path(&mut self, path: &std::path::Path) -> io::Result<()> {
+        let content = fs::read_to_string(path)?;
+        let Some((sessions, had_plaintext)) =
+            Self::parse_stored_sessions_json(&self.device_key, &content)
+        else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "无法解析会话备份文件（JSON 格式或字段无效）",
+            ));
+        };
+        self.sessions = sessions;
+        self.save();
+        if had_plaintext {
+            log::warn!("导入的包中含明文会话密码，已载入并重新加密写入本地文件");
         }
-        for i in 0..32 {
-            let a = bytes[i % bytes.len()];
-            let b = salt[i % salt.len()];
-            key[i] = a.wrapping_add(b).rotate_left((i % 8) as u32) ^ (i as u8);
-        }
-        key
-    }
-
-    fn encrypt_password_with_key(key: &[u8; 32], password: &str) -> Option<(String, String)> {
-        if password.is_empty() {
-            return Some((String::new(), String::new()));
-        }
-        let cipher = Aes256Gcm::new_from_slice(key).ok()?;
-        let mut nonce_bytes = [0u8; 12];
-        rand::thread_rng().fill_bytes(&mut nonce_bytes);
-        let nonce = Nonce::from_slice(&nonce_bytes);
-        let ciphertext = cipher.encrypt(nonce, password.as_bytes()).ok()?;
-        Some((B64.encode(ciphertext), B64.encode(nonce_bytes)))
-    }
-
-    fn decrypt_password_with_key(key: &[u8; 32], encrypted: &str, nonce_b64: &str) -> Option<String> {
-        if encrypted.is_empty() || nonce_b64.is_empty() {
-            return Some(String::new());
-        }
-        let cipher = Aes256Gcm::new_from_slice(key).ok()?;
-        let ciphertext = B64.decode(encrypted).ok()?;
-        let nonce_raw = B64.decode(nonce_b64).ok()?;
-        if nonce_raw.len() != 12 {
-            return None;
-        }
-        let nonce = Nonce::from_slice(&nonce_raw);
-        let plain = cipher.decrypt(nonce, ciphertext.as_ref()).ok()?;
-        String::from_utf8(plain).ok()
+        Ok(())
     }
 
     /// 创建新的会话管理器
     pub fn new() -> Self {
         let mut file_path = std::env::current_dir().unwrap_or_default();
         file_path.push("sessions.json");
-        Self::with_sessions_path(file_path)
-    }
-
-    /// 从指定路径加载 `sessions.json`（供集成测试绑定到仓库根目录等场景）
-    pub fn with_sessions_path(file_path: PathBuf) -> Self {
-        let fingerprint = Self::build_device_fingerprint();
-        let device_key = Self::derive_key_from_fingerprint(&fingerprint);
-
+        let device_key = device_key::device_key();
+        
         let mut manager = Self {
             sessions: Vec::new(),
             file_path,
@@ -169,42 +146,18 @@ impl SessionManager {
         if !self.file_path.exists() {
             return;
         }
-        
+
         if let Ok(content) = fs::read_to_string(&self.file_path) {
-            if let Ok(stored) = serde_json::from_str::<Vec<StoredSessionConfig>>(&content) {
-                let mut sessions = Vec::with_capacity(stored.len());
-                let mut had_plaintext = false;
-                for cfg in stored {
-                    let password = if !cfg.encrypted_password.is_empty() && !cfg.password_nonce.is_empty() {
-                        Self::decrypt_password_with_key(
-                            &self.device_key,
-                            &cfg.encrypted_password,
-                            &cfg.password_nonce,
-                        )
-                        .unwrap_or_default()
-                    } else if !cfg.password.is_empty() {
-                        had_plaintext = true;
-                        cfg.password
-                    } else {
-                        String::new()
-                    };
-                    sessions.push(SessionConfig {
-                        id: if cfg.id.is_empty() { uuid::Uuid::new_v4().to_string() } else { cfg.id },
-                        name: cfg.name,
-                        group: cfg.group,
-                        host: cfg.host,
-                        port: cfg.port,
-                        username: cfg.username,
-                        password,
-                        last_connected_at: cfg.last_connected_at,
-                    });
-                }
-                self.sessions = sessions;
-                log::info!("Loaded {} saved sessions", self.sessions.len());
-                if had_plaintext {
-                    log::warn!("Detected plaintext passwords in sessions.json; migrated to encrypted storage.");
-                    self.save();
-                }
+            let Some((sessions, had_plaintext)) =
+                Self::parse_stored_sessions_json(&self.device_key, &content)
+            else {
+                return;
+            };
+            self.sessions = sessions;
+            log::info!("Loaded {} saved sessions", self.sessions.len());
+            if had_plaintext {
+                log::warn!("Detected plaintext passwords in sessions.json; migrated to encrypted storage.");
+                self.save();
             }
         }
     }
@@ -214,7 +167,7 @@ impl SessionManager {
         let mut stored = Vec::with_capacity(self.sessions.len());
         for cfg in &self.sessions {
             let (encrypted_password, password_nonce) =
-                Self::encrypt_password_with_key(&self.device_key, &cfg.password)
+                device_key::encrypt_secret(&self.device_key, &cfg.password)
                     .unwrap_or((String::new(), String::new()));
             stored.push(StoredSessionConfig {
                 id: cfg.id.clone(),
@@ -331,6 +284,11 @@ impl SessionManager {
     pub fn count(&self) -> usize {
         self.sessions.len()
     }
+
+    /// 会话存储文件路径（用于备份/导出）
+    pub fn storage_path(&self) -> &PathBuf {
+        &self.file_path
+    }
 }
 
 impl Default for SessionManager {
@@ -359,10 +317,10 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_roundtrip() {
-        let key = SessionManager::derive_key_from_fingerprint("test-device");
+        let key = crate::security::device_key::derive_key_from_fingerprint("test-device");
         let src = "secret-123";
-        let (enc, nonce) = SessionManager::encrypt_password_with_key(&key, src).unwrap();
-        let plain = SessionManager::decrypt_password_with_key(&key, &enc, &nonce).unwrap();
+        let (enc, nonce) = crate::security::device_key::encrypt_secret(&key, src).unwrap();
+        let plain = crate::security::device_key::decrypt_secret(&key, &enc, &nonce).unwrap();
         assert_eq!(plain, src);
     }
 }
