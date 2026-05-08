@@ -278,19 +278,18 @@ impl SftpClient {
 
 /// 格式化权限位为 Unix 风格字符串
 fn format_permissions(mode: u32) -> String {
-    /// POSIX `S_IFDIR` / `S_IFLNK`（与 `libc` 一致，避免依赖 `ssh2` 私有 `libc`）
+    /// POSIX 文件类型位（`S_IFMT` / `S_IFDIR` / `S_IFLNK`，与 `libc` 一致）
+    const S_IFMT: u32 = 0o170_000;
     const S_IFDIR: u32 = 0o040_000;
     const S_IFLNK: u32 = 0o120_000;
 
     let mut result = String::with_capacity(10);
 
-    // 文件类型
-    let file_type = if (mode & S_IFDIR) != 0 {
-        'd'
-    } else if (mode & S_IFLNK) != 0 {
-        'l'
-    } else {
-        '-'
+    // 文件类型（必须用 `S_IFMT` 掩码后再比较：`S_IFREG` 与 `S_IFLNK` 按位与会非零）
+    let file_type = match mode & S_IFMT {
+        S_IFDIR => 'd',
+        S_IFLNK => 'l',
+        _ => '-',
     };
     result.push(file_type);
 

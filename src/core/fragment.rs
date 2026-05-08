@@ -690,11 +690,11 @@ mod tests {
         let categories = manager.get_categories();
         assert!(!categories.is_empty());
         
-        // 记录使用
-        let first = manager.get_all().first().unwrap();
-        manager.record_usage(&first.id, true, 1000);
+        // 记录使用 - 先克隆 ID，避免借用冲突
+        let first_id = manager.get_all().first().unwrap().id.clone();
+        manager.record_usage(&first_id, true, 1000);
         
-        let first_updated = manager.get_by_id(&first.id).unwrap();
+        let first_updated = manager.get_by_id(&first_id).unwrap();
         assert_eq!(first_updated.usage_count, 1);
         assert_eq!(first_updated.success_count, 1);
     }
@@ -703,12 +703,12 @@ mod tests {
     fn test_fragment_manager_sort() {
         let mut manager = FragmentManager::new();
         
-        // 记录不同使用次数
-        let fragments = manager.get_all();
-        if fragments.len() >= 3 {
-            manager.record_usage(&fragments[0].id, true, 100);
-            manager.record_usage(&fragments[0].id, true, 100);
-            manager.record_usage(&fragments[1].id, true, 100);
+        // 记录不同使用次数 - 先克隆需要的 ID，避免借用冲突
+        let fragment_ids: Vec<String> = manager.get_all().iter().take(3).map(|f| f.id.clone()).collect();
+        if fragment_ids.len() >= 3 {
+            manager.record_usage(&fragment_ids[0], true, 100);
+            manager.record_usage(&fragment_ids[0], true, 100);
+            manager.record_usage(&fragment_ids[1], true, 100);
         }
         
         manager.sort(SortBy::UsageCount);

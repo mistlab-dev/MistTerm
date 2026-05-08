@@ -127,10 +127,9 @@ impl SessionManager {
         Ok(())
     }
 
-    /// 创建新的会话管理器
-    pub fn new() -> Self {
-        let mut file_path = std::env::current_dir().unwrap_or_default();
-        file_path.push("sessions.json");
+    /// 从指定路径创建会话管理器
+    pub fn with_sessions_path<P: Into<PathBuf>>(path: P) -> Self {
+        let file_path = path.into();
         let device_key = device_key::device_key();
         
         let mut manager = Self {
@@ -140,6 +139,13 @@ impl SessionManager {
         };
         manager.load();
         manager
+    }
+
+    /// 创建新的会话管理器
+    pub fn new() -> Self {
+        let mut file_path = std::env::current_dir().unwrap_or_default();
+        file_path.push("sessions.json");
+        Self::with_sessions_path(file_path)
     }
 
     /// 加载已保存的会话
