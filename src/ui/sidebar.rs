@@ -127,6 +127,7 @@ impl Sidebar {
                             }
                         });
                     } else {
+                        let mut current_group = String::new();
                         for session in &sessions {
                             if session.group != current_group {
                                 current_group = session.group.clone();

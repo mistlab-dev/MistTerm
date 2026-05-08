@@ -77,10 +77,10 @@ impl SftpClient {
                 let size = stat.size.unwrap_or(0);
                 
                 // 格式化权限
-                let perms = format_permissions(stat.perm().unwrap_or(0));
-                
-                // 获取修改时间
-                let modified = stat.mtime()
+                let perms = format_permissions(stat.perm.unwrap_or(0));
+
+                let modified = stat
+                    .mtime
                     .and_then(|t| Utc.timestamp_opt(t as i64, 0).single())
                     .unwrap_or_else(Utc::now);
 
@@ -232,21 +232,11 @@ impl SftpClient {
             file_size += n as u64;
         }
 
-        remote_file
-            .send_eof()
-            .map_err(|e| format!("Failed to send EOF: {}", e))?;
-
-        remote_file
-            .wait_eof()
-            .map_err(|e| format!("Failed to wait EOF: {}", e))?;
-
+        std::io::Write::flush(&mut remote_file)
+            .map_err(|e| format!("Failed to flush remote file: {}", e))?;
         remote_file
             .close()
             .map_err(|e| format!("Failed to close remote file: {}", e))?;
-
-        remote_file
-            .wait_close()
-            .map_err(|e| format!("Failed to wait close: {}", e))?;
 
         Ok(file_size)
     }
@@ -264,7 +254,7 @@ impl SftpClient {
             .unwrap_or_else(|| path.display().to_string());
 
         let modified = stat
-            .mtime()
+            .mtime
             .and_then(|t| Utc.timestamp_opt(t as i64, 0).single())
             .unwrap_or_else(Utc::now);
 
@@ -272,7 +262,7 @@ impl SftpClient {
             name,
             is_dir: stat.is_dir(),
             size: stat.size.unwrap_or(0),
-            permissions: format_permissions(stat.perm().unwrap_or(0)),
+            permissions: format_permissions(stat.perm.unwrap_or(0)),
             modified,
             path: path.to_path_buf(),
         })
@@ -288,12 +278,16 @@ impl SftpClient {
 
 /// 格式化权限位为 Unix 风格字符串
 fn format_permissions(mode: u32) -> String {
+    /// POSIX `S_IFDIR` / `S_IFLNK`（与 `libc` 一致，避免依赖 `ssh2` 私有 `libc`）
+    const S_IFDIR: u32 = 0o040_000;
+    const S_IFLNK: u32 = 0o120_000;
+
     let mut result = String::with_capacity(10);
-    
+
     // 文件类型
-    let file_type = if (mode & ssh2::libc::S_IFDIR as u32) != 0 {
+    let file_type = if (mode & S_IFDIR) != 0 {
         'd'
-    } else if (mode & ssh2::libc::S_IFLNK as u32) != 0 {
+    } else if (mode & S_IFLNK) != 0 {
         'l'
     } else {
         '-'

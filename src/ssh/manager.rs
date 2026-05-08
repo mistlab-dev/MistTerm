@@ -60,6 +60,7 @@ pub enum SshMessage {
 }
 
 /// SSH 会话句柄
+#[derive(Clone)]
 pub struct SshSessionHandle {
     pub session_id: SshSessionId,
     pump_tx: ShellPumpTx,

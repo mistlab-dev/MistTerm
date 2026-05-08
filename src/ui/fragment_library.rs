@@ -82,8 +82,9 @@ impl FragmentLibraryState {
 
         let preview_extras = HashMap::<String, String>::new();
 
+        let mut win_open = self.open;
         egui::Window::new("命令片段库")
-            .open(&mut self.open)
+            .open(&mut win_open)
             .default_size([620.0, 480.0])
             .resizable(true)
             .show(ctx, |ui| {
@@ -133,7 +134,8 @@ impl FragmentLibraryState {
                         if let Some(src) =
                             FileDialog::new().add_filter("JSON", &["json"]).pick_file()
                         {
-                            let path = PathBuf::from(src);
+                            let src_label = src.display().to_string();
+                            let path = PathBuf::from(&src);
                             match FragmentManager::import_from_json_path(
                                 &path,
                                 self.import_merge,
@@ -147,14 +149,14 @@ impl FragmentLibraryState {
                                         if self.import_merge {
                                             self.status_msg = format!(
                                                 "已从 {} 合并：新增 {}，跳过 {}",
-                                                src.display(),
+                                                src_label,
                                                 added,
                                                 skipped_duplicate_id
                                             );
                                         } else {
                                             self.status_msg = format!(
                                                 "已从 {} 替换为 {} 条",
-                                                src.display(),
+                                                src_label,
                                                 added
                                             );
                                         }
@@ -370,6 +372,8 @@ impl FragmentLibraryState {
                     });
                 });
             });
+
+        self.open = win_open;
 
         saved
     }

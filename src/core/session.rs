@@ -3,6 +3,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io;
 use std::path::PathBuf;
 
 use crate::security::device_key;

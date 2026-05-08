@@ -15,8 +15,8 @@ pub struct MonitorPanel {
     auto_refresh: bool,
     /// 刷新间隔（秒）
     refresh_interval_secs: f32,
-    /// 上次 UI 刷新时间
-    last_ui_refresh: f32,
+    /// 上次 UI 刷新时间（秒，`egui` input time）
+    last_ui_refresh: f64,
     /// 最后一次错误
     last_error: Option<String>,
     /// 是否可见
@@ -37,7 +37,7 @@ impl MonitorPanel {
             monitor: None,
             auto_refresh: false,
             refresh_interval_secs: 5.0,
-            last_ui_refresh: 0.0,
+            last_ui_refresh: 0.0_f64,
             last_error: None,
             visible: false,
             refresh_label: "📊 监控".to_string(),
@@ -94,7 +94,7 @@ impl MonitorPanel {
         }
 
         let now = ctx.input(|i| i.time);
-        if now - self.last_ui_refresh >= self.refresh_interval_secs {
+        if now - self.last_ui_refresh >= f64::from(self.refresh_interval_secs) {
             self.last_ui_refresh = now;
             self.refresh();
             // 请求下次刷新
@@ -430,7 +430,9 @@ impl MonitorPanel {
             let y = rect.max.y - (stats.cpu_percent.clamp(0.0, 100.0) / 100.0) * rect.height();
             cpu_points.push(egui::pos2(x, y));
         }
-        painter.line_series(cpu_points, egui::Stroke::new(1.5, cpu_line));
+        for w in cpu_points.windows(2) {
+            painter.line_segment([w[0], w[1]], egui::Stroke::new(1.5, cpu_line));
+        }
 
         // 内存折线（主强调色）
         let mem_line = theme.accent_color();
@@ -440,7 +442,9 @@ impl MonitorPanel {
             let y = rect.max.y - (stats.memory_percent().clamp(0.0, 100.0) / 100.0) * rect.height();
             mem_points.push(egui::pos2(x, y));
         }
-        painter.line_series(mem_points, egui::Stroke::new(1.5, mem_line));
+        for w in mem_points.windows(2) {
+            painter.line_segment([w[0], w[1]], egui::Stroke::new(1.5, mem_line));
+        }
 
         // 图例
         let legend_x = rect.max.x - 80.0;

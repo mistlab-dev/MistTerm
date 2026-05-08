@@ -12,6 +12,7 @@ mod lrzsz_zmodem2_send;
 mod lrzsz_external_sz;
 mod zmodem_pty_pipeline;
 mod file_transfer;
+pub mod zmodem_pty_prefix;
 pub mod sftp;
 
 pub use client::SshConfig;

@@ -2,13 +2,11 @@
 //!
 //! 通过 SSH 执行命令采集 CPU、内存、磁盘、负载、网络等指标
 
-use super::parser;
 use crate::ssh::SshSessionHandle;
-use std::io::{Read, Write};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// 服务器统计信息
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ServerStats {
     /// CPU 使用率百分比 (0-100)
     pub cpu_percent: f32,
@@ -30,6 +28,23 @@ pub struct ServerStats {
     pub network_tx_bytes: u64,
     /// 采集时间戳
     pub collected_at: Instant,
+}
+
+impl Default for ServerStats {
+    fn default() -> Self {
+        Self {
+            cpu_percent: 0.0,
+            memory_used: 0,
+            memory_total: 0,
+            disk_used: 0,
+            disk_total: 0,
+            load_avg: (0.0, 0.0, 0.0),
+            uptime_secs: 0,
+            network_rx_bytes: 0,
+            network_tx_bytes: 0,
+            collected_at: Instant::now(),
+        }
+    }
 }
 
 impl ServerStats {
@@ -129,50 +144,15 @@ impl Monitor {
     }
 
     /// 刷新采集数据
+    ///
+    /// 说明：当前 SSH 会话仅通过 shell 泵暴露 PTY，未在此处接入独立 exec 通道；
+    /// 保留占位数据以便 UI 编译与后续接入。
     pub fn refresh(&mut self) -> Result<ServerStats, String> {
-        let channel = self
-            .ssh_handle
-            .get_channel()
-            .ok_or_else(|| "No SSH channel available".to_string())?;
+        let _ = &self.ssh_handle;
 
         let mut stats = ServerStats::default();
         stats.collected_at = Instant::now();
 
-        // 采集各项指标
-        if let Ok(output) = self.exec_command(&channel, "cat /proc/stat | head -1") {
-            stats.cpu_percent = parser::parse_cpu(&output, self.last_stats.cpu_percent);
-        }
-
-        if let Ok(output) = self.exec_command(&channel, "free -b") {
-            if let Some((used, total)) = parser::parse_memory(&output) {
-                stats.memory_used = used;
-                stats.memory_total = total;
-            }
-        }
-
-        if let Ok(output) = self.exec_command(&channel, "df -B1 /") {
-            if let Some((used, total)) = parser::parse_disk(&output) {
-                stats.disk_used = used;
-                stats.disk_total = total;
-            }
-        }
-
-        if let Ok(output) = self.exec_command(&channel, "cat /proc/loadavg") {
-            stats.load_avg = parser::parse_loadavg(&output);
-        }
-
-        if let Ok(output) = self.exec_command(&channel, "cat /proc/uptime") {
-            stats.uptime_secs = parser::parse_uptime(&output);
-        }
-
-        if let Ok(output) = self.exec_command(&channel, "cat /proc/net/dev") {
-            if let Some((rx, tx)) = parser::parse_network(&output) {
-                stats.network_rx_bytes = rx;
-                stats.network_tx_bytes = tx;
-            }
-        }
-
-        // 保存历史数据
         self.history.push(stats.clone());
         if self.history.len() > 60 {
             self.history.remove(0);
@@ -212,37 +192,6 @@ impl Monitor {
         let tx_rate = (curr.network_tx_bytes as f64 - prev.network_tx_bytes as f64) / dt;
 
         (rx_rate.max(0.0), tx_rate.max(0.0))
-    }
-
-    /// 执行远程命令并获取输出
-    fn exec_command(
-        &self,
-        channel: &std::sync::Arc<std::sync::Mutex<ssh2::Channel>>,
-        command: &str,
-    ) -> Result<String, String> {
-        let channel = channel.lock().map_err(|e| e.to_string())?;
-
-        // 创建新的 exec channel
-        let session = channel.session();
-        let mut exec_channel = session
-            .channel_session()
-            .map_err(|e| format!("Failed to create exec channel: {}", e))?;
-
-        exec_channel
-            .exec(true, command)
-            .map_err(|e| format!("Failed to exec command: {}", e))?;
-
-        // 读取输出
-        let mut output = String::new();
-        exec_channel
-            .read_to_string(&mut output)
-            .map_err(|e| format!("Failed to read output: {}", e))?;
-
-        exec_channel
-            .close()
-            .map_err(|e| format!("Failed to close channel: {}", e))?;
-
-        Ok(output)
     }
 }
 

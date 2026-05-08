@@ -11,7 +11,7 @@
 use eframe::egui;
 use arboard::Clipboard;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -215,7 +215,7 @@ impl TerminalView {
 
         // Ctrl + 滚轮：缩放终端字体（不改变 PTY 行列，仅视觉）
         let wheel = ui.ctx().input(|i| {
-            let z = i.smooth_scroll_delta.y + i.raw_scroll_delta.y;
+            let z = i.scroll_delta.y;
             if self.terminal_focused
                 && self.connected
                 && i.modifiers.ctrl
@@ -870,16 +870,14 @@ impl TerminalView {
             .ssh_handle
             .as_ref()
             .ok_or_else(|| "PTY 未就绪".to_string())?;
-        let channel = handle
-            .get_channel()
-            .ok_or_else(|| "PTY 通道不可用".to_string())?;
+        let pump_tx = handle.shell_pump_tx();
         self.rz_control_mode_until = Some(Instant::now() + Duration::from_secs(90));
         log::info!(
             "start_rz_upload: path={} session_id={:?}",
             path.display(),
             handle.session_id
         );
-        match self.lrzsz.start_send(path_str, channel) {
+        match self.lrzsz.start_send(path_str, pump_tx) {
             Ok(()) => Ok(()),
             Err(e) => {
                 self.lrzsz.end_rz_handshake_capture();
@@ -1019,6 +1017,10 @@ impl TerminalView {
 
     pub fn is_connected(&self) -> bool {
         self.connected
+    }
+
+    pub fn ssh_session_handle(&self) -> Option<SshSessionHandle> {
+        self.ssh_handle.clone()
     }
 
     /// 是否处于连接建立中（认证/启动 shell 阶段）

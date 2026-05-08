@@ -75,7 +75,7 @@ impl NewSessionDialog {
 
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("端口").color(theme.fg_medium_color()));
-                        ui.add(egui::DragValue::new(&mut self.port).text_color(theme.fg_high_color()));
+                        ui.add(egui::DragValue::new(&mut self.port).speed(1.0));
                     });
 
                     ui.separator();

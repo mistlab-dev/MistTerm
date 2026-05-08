@@ -130,7 +130,7 @@ impl Terminal {
                 let x = content.cursor.point.column.0;
                 let y = vp.line;
                 if y < self.height && x < self.width {
-                    rows[y][x] = ('│', default_fg);
+                    rows[y][x] = ('│', default_fg, terminal_bg);
                 }
             }
         }

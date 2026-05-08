@@ -5,7 +5,7 @@
 use eframe::egui;
 use std::path::PathBuf;
 
-use crate::sync::git::{GitRepo, RepoStatus};
+use crate::sync::{GitRepo, RepoStatus};
 use crate::ui::theme::Theme;
 
 /// Git 同步面板
@@ -245,8 +245,8 @@ impl GitSyncPanel {
 
             ui.add_space(8.0);
 
-            // 仓库状态显示
-            if let Some(ref repo) = self.repo {
+            // 仓库状态显示（不显式借用 `repo`，避免与 `pull/commit` 等对 `&mut self` 的调用冲突）
+            if self.repo.is_some() {
                 ui.group(|ui| {
                     ui.label(egui::RichText::new("仓库状态").strong());
                     ui.horizontal(|ui| {
@@ -327,10 +327,12 @@ impl GitSyncPanel {
                     );
                     ui.horizontal(|ui| {
                         if ui.button("暂存全部").clicked() {
-                            if let Err(e) = repo.add_all() {
-                                self.error_message = format!("暂存失败：{}", e);
-                            } else {
-                                self.status_message = "已暂存所有更改".to_string();
+                            if let Some(r) = self.repo.as_ref() {
+                                if let Err(e) = r.add_all() {
+                                    self.error_message = format!("暂存失败：{}", e);
+                                } else {
+                                    self.status_message = "已暂存所有更改".to_string();
+                                }
                             }
                         }
                     });

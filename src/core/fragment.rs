@@ -65,6 +65,9 @@ pub struct FragmentStats {
     pub last_used: Option<i64>,
 }
 
+/// 兼容旧代码路径的类型别名（原「命令片段」模型）。
+pub type CommandFragment = FragmentStats;
+
 impl FragmentStats {
     /// 创建新的片段统计
     pub fn new(id: String, title: String, command: String, category: String) -> Self {
@@ -107,7 +110,7 @@ impl FragmentStats {
     pub fn apply_variables(&self, values: &HashMap<String, String>) -> String {
         let mut result = self.command.clone();
         for var in &self.variables {
-            let placeholder = format!('<{}>', var.name);
+            let placeholder = format!("<{}>", var.name);
             if let Some(value) = values.get(&var.name) {
                 result = result.replace(&placeholder, value);
             }
@@ -345,6 +348,20 @@ impl FragmentManager {
     /// 获取所有片段
     pub fn get_all(&self) -> &[FragmentStats] {
         &self.fragments
+    }
+
+    /// 旧 UI / 合并分支兼容别名
+    pub fn list(&self) -> &[FragmentStats] {
+        self.get_all()
+    }
+
+    pub fn get(&self, id: &str) -> Option<&FragmentStats> {
+        self.get_by_id(id)
+    }
+
+    pub fn record_execution(&mut self, id: &str, success: bool, dur_ms: u64) {
+        let ms = dur_ms.min(u32::MAX as u64) as u32;
+        self.record_usage(id, success, ms);
     }
 
     /// 按分类获取片段

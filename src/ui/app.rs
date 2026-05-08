@@ -6,10 +6,12 @@
 
 use eframe::egui;
 use rfd::FileDialog;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::time::Instant;
 use crate::core::{
-    Credential, CredentialAuthKind, expand_command_template, SessionManager, FragmentManager, FragmentStats, SortBy,
+    Credential, CredentialAuthKind, expand_command_template, list_placeholder_keys, SessionManager,
+    FragmentManager, FragmentStats, SortBy,
 };
 use crate::ui::sidebar::Sidebar;
 use crate::ui::terminal::TerminalView;
@@ -20,6 +22,52 @@ use crate::ui::theme::ThemeManager;
 use crate::ui::fragment_library::FragmentLibraryState;
 use crate::ui::credential_panel::{CredentialPanel, CredentialPanelAction};
 use crate::ui::cloud_sync_panel::{CloudSyncPanel, CloudSyncDeps};
+
+fn truncate_status(s: &str, max_chars: usize) -> String {
+    let mut it = s.chars();
+    let head: String = it.by_ref().take(max_chars).collect();
+    if it.next().is_some() {
+        format!("{}…", head)
+    } else {
+        head
+    }
+}
+
+/// 设计文档 §5.4：`{次数}次 · {成功率}%成功 · {耗时}s`
+fn format_fragment_stats_line(frag: &FragmentStats) -> String {
+    if frag.usage_count == 0 {
+        return "未使用".to_string();
+    }
+    let rate = (frag.success_count as f32 / frag.usage_count as f32) * 100.0;
+    let avg_s = frag.total_time_ms as f64 / frag.usage_count as f64 / 1000.0;
+    format!(
+        "{}次 · {:.0}%成功 · {:.1}s",
+        frag.usage_count, rate, avg_s
+    )
+}
+
+/// `expand_command_template` 已替换的会话占位符；其余 `<key>` 仍需用户填写。
+const SESSION_PLACEHOLDER_KEYS: &[&str] = &[
+    "host",
+    "hostname",
+    "user",
+    "username",
+    "port",
+    "session",
+    "session_name",
+    "name",
+];
+
+fn placeholders_needing_user(template: &str) -> Vec<String> {
+    list_placeholder_keys(template)
+        .into_iter()
+        .filter(|k| {
+            !SESSION_PLACEHOLDER_KEYS
+                .iter()
+                .any(|&sk| sk == k.as_str())
+        })
+        .collect()
+}
 
 struct TerminalTab {
     session_id: String,
@@ -34,6 +82,18 @@ pub struct FragmentVariableDialog {
     pub fragment_id: Option<String>,
     pub fragment_title: String,
     pub values: std::collections::HashMap<String, String>,
+    /// 为 true 时在终端内插入（粘贴）；为 false 时直接「执行」发送一行命令。
+    pub paste_after_fill: bool,
+}
+
+/// 「填写片段变量」弹窗关闭后的动作（插入终端 vs ⌘J 直接发送）
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FragmentVarsCompletion {
+    /// 右侧栏逻辑：粘贴进终端并记 usage 统计
+    #[default]
+    PasteInsertStats,
+    /// 快速选择器：合成一行后发出去
+    QuickExecuteSend,
 }
 
 /// 快速片段选择器状态
@@ -62,8 +122,9 @@ impl Default for FragmentPanelState {
 pub struct MistTermApp {
     /// 会话管理器
     session_manager: SessionManager,
+    /// 命令片段管理器
     fragment_manager: FragmentManager,
-    
+
     /// 当前选中的会话 ID
     selected_session_id: Option<String>,
     
@@ -109,9 +170,7 @@ pub struct MistTermApp {
     sidebar_search_query: String,
     sidebar_filter: String,
     fragment_search_query: String,
-    
-    /// 命令片段管理器
-    fragment_manager: FragmentManager,
+
     /// 片段排序方式
     fragment_sort_by: SortBy,
     /// 片段面板使用统计跟踪：记录插入时的 Instant
@@ -120,8 +179,26 @@ pub struct MistTermApp {
     fragment_panel_state: FragmentPanelState,
     /// 变量输入对话框
     variable_dialog: FragmentVariableDialog,
+    /// `show_fragment_vars_dialog` 确认后的行为（见 [`FragmentVarsCompletion`]）
+    fragment_vars_completion: FragmentVarsCompletion,
     /// 快速片段选择器
     quick_selector: FragmentQuickSelector,
+
+    git_sync_panel: GitSyncPanel,
+    monitor_panel: MonitorPanel,
+    sftp_panel: SftpPanel,
+    fragment_library: FragmentLibraryState,
+    credential_panel: CredentialPanel,
+    cloud_sync_panel: CloudSyncPanel,
+
+    pending_fragment_id: Option<String>,
+    pending_fragment_name: String,
+    pending_fragment_command: String,
+    pending_fragment_vars: Vec<(String, String)>,
+    show_fragment_vars_dialog: bool,
+    fragment_filter_category: String,
+    /// 连接就绪后要插入的片段（标签索引、片段 id、命令）
+    pending_fragment_insert: Option<(usize, Option<String>, String)>,
 
     /// 主题管理器
     theme_manager: ThemeManager,
@@ -143,7 +220,8 @@ impl MistTermApp {
 
         Self {
             session_manager,
-            fragment_manager: FragmentManager::new(),
+            fragment_manager: FragmentManager::load(&FragmentManager::default_config_path())
+                .unwrap_or_else(|_| FragmentManager::new()),
             selected_session_id,
             sidebar_collapsed: false,
             sidebar_width: 200.0,
@@ -166,6 +244,13 @@ impl MistTermApp {
             fragment_library: FragmentLibraryState::new(),
             credential_panel: CredentialPanel::new(),
             cloud_sync_panel: CloudSyncPanel::new(),
+            pending_fragment_id: None,
+            pending_fragment_name: String::new(),
+            pending_fragment_command: String::new(),
+            pending_fragment_vars: Vec::new(),
+            show_fragment_vars_dialog: false,
+            fragment_filter_category: "全部".to_string(),
+            pending_fragment_insert: None,
             new_session_name: String::new(),
             new_session_host: String::new(),
             new_session_port: 22,
@@ -182,12 +267,11 @@ impl MistTermApp {
             sidebar_search_query: String::new(),
             sidebar_filter: "全部".to_string(),
             fragment_search_query: String::new(),
-            fragment_manager: FragmentManager::load(&FragmentManager::default_config_path())
-                .unwrap_or_else(|_| FragmentManager::new()),
             fragment_sort_by: SortBy::UsageCount,
             fragment_pending_ids: Vec::new(),
             fragment_panel_state: FragmentPanelState::default(),
             variable_dialog: FragmentVariableDialog::default(),
+            fragment_vars_completion: FragmentVarsCompletion::default(),
             quick_selector: FragmentQuickSelector::default(),
             theme_manager: ThemeManager::load(),
         }
@@ -436,20 +520,41 @@ impl MistTermApp {
     }
 
     /// 显示命令片段面板（带统计信息）
-    fn show_fragment_panel(&mut self, ctx: &egui::Context) {
+    ///
+    /// 布局对齐 `docs/product/SPECIFICATION_DETAILED.md` §5：卡片三行（标题 / 命令截断 / 统计），避免同一行挤压重叠。
+    fn show_fragment_panel(&mut self, ctx: &egui::Context, theme: &crate::ui::theme::Theme) {
         if !matches!(
             self.fragment_filter_category.as_str(),
             "常用" | "Docker" | "K8s" | "全部"
         ) {
             self.fragment_filter_category = "全部".to_string();
         }
+        let stats_num = {
+            let c = theme.fg_high_color();
+            let [r, g, b, _] = c.to_array();
+            egui::Color32::from_rgba_unmultiplied(r, g, b, 64)
+        };
         egui::SidePanel::right("fragment_panel")
-            .default_width(320.0)
+            .default_width(260.0)
             .resizable(true)
+            .frame(
+                egui::Frame::none()
+                    .fill(theme.bg_window_color())
+                    .inner_margin(egui::Margin::symmetric(10.0, 8.0)),
+            )
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.heading("⚡ 命令片段");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .small_button("➕ 新建…")
+                            .on_hover_text(
+                                "打开片段库：自建命令、`<变量>`、会话占位符（host/user/port）等",
+                            )
+                            .clicked()
+                        {
+                            self.fragment_library.open = true;
+                        }
                         // 排序按钮
                         let sort_label = match self.fragment_sort_by {
                             SortBy::UsageCount => "🔢 次数",
@@ -488,9 +593,9 @@ impl MistTermApp {
                     categories.sort();
                     categories.dedup();
                     
-                    let mut selected = self.fragment_panel_state.category_filter.clone();
+                    let selected = self.fragment_panel_state.category_filter.clone();
                     
-                    let mut current_text = selected.clone().unwrap_or_else(|| "全部".to_string());
+                    let current_text = selected.clone().unwrap_or_else(|| "全部".to_string());
                     
                     egui::ComboBox::from_id_source("category_filter")
                         .selected_text(&current_text)
@@ -510,27 +615,29 @@ impl MistTermApp {
                 });
 
                 ui.add_space(8.0);
-                
-                ui.vertical(|ui| {
+
+                let scroll_h = ui.available_height().max(80.0);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .max_height(scroll_h)
+                    .show(ui, |ui| {
                     // 根据搜索和分类显示片段
                     let search_lower = self.fragment_search_query.to_lowercase();
                     let category_filter = &self.fragment_panel_state.category_filter;
                     
-                    let all_fragments = self.fragment_manager.get_all();
-                    let filtered_fragments: Vec<&FragmentStats> = all_fragments
+                    let filtered_fragments: Vec<FragmentStats> = self
+                        .fragment_manager
+                        .get_all()
                         .iter()
                         .filter(|f| {
-                            // 搜索过滤
-                            let search_match = search_lower.is_empty() 
+                            let search_match = search_lower.is_empty()
                                 || f.title.to_lowercase().contains(&search_lower)
                                 || f.command.to_lowercase().contains(&search_lower);
-                            
-                            // 分类过滤
-                            let category_match = category_filter.is_none() 
+                            let category_match = category_filter.is_none()
                                 || category_filter.as_deref() == Some(&f.category);
-                            
                             search_match && category_match
                         })
+                        .cloned()
                         .collect();
                     
                     let categories = self.fragment_manager.get_categories();
@@ -544,7 +651,7 @@ impl MistTermApp {
                             continue;
                         }
                         
-                        let category_fragments: Vec<&FragmentStats> = filtered_fragments
+                        let category_fragments: Vec<FragmentStats> = filtered_fragments
                             .iter()
                             .filter(|f| f.category == *category)
                             .cloned()
@@ -561,42 +668,44 @@ impl MistTermApp {
                         
                         ui.collapsing(format!("{} {}", category_emoji, category), |ui| {
                             for frag in category_fragments {
-                                // 在每个片段项中添加统计显示
-                                ui.vertical(|ui| {
-                                    ui.horizontal(|ui| {
-                                        let button = ui.button(frag.title.as_str());
-                                        if button.clicked() {
-                                            let id = frag.id.clone();
-                                            let command = frag.command.clone();
-                                            self.insert_fragment_with_stats(&id, &command);
-                                        }
-                                        if button.hovered() {
-                                            button.on_hover_text(&frag.command);
-                                        }
-                                        
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            // 统计信息
-                                            let success_rate = if frag.usage_count > 0 {
-                                                (frag.success_count as f32 / frag.usage_count as f32) * 100.0
-                                            } else {
-                                                0.0
-                                            };
-                                            
+                                let cmd_one_line =
+                                    truncate_status(frag.command.trim(), 44);
+                                let stats_line = format_fragment_stats_line(&frag);
+
+                                egui::Frame::none()
+                                    .inner_margin(egui::Margin::symmetric(8.0, 7.0))
+                                    .rounding(4.0)
+                                    .show(ui, |ui| {
+                                        ui.vertical(|ui| {
+                                            ui.spacing_mut().item_spacing.y = 3.0;
+                                            let title_resp = ui.link(
+                                                egui::RichText::new(&frag.title)
+                                                    .size(12.0)
+                                                    .color(theme.fg_medium_color()),
+                                            );
+                                            if title_resp.clicked() {
+                                                self.begin_fragment_insert(&frag);
+                                            }
+                                            title_resp.on_hover_text(&frag.command);
+
                                             ui.label(
-                                                egui::RichText::new(format!("🔢{}次 ✅{:.0}%", frag.usage_count, success_rate))
+                                                egui::RichText::new(&cmd_one_line)
                                                     .small()
-                                                    .color(self.theme_manager.current_theme().fg_low_color())
+                                                    .monospace()
+                                                    .color(theme.fg_low_color()),
+                                            );
+
+                                            ui.label(
+                                                egui::RichText::new(&stats_line)
+                                                    .size(10.0)
+                                                    .color(stats_num),
                                             );
                                         });
                                     });
-                                    
-                                    // 命令预览
-                                    ui.label(
-                                        egui::RichText::new(&frag.command)
-                                            .small()
-                                            .color(self.theme_manager.current_theme().fg_low_color())
-                                    );
-                                });
+
+                                ui.add_space(2.0);
+                                ui.separator();
+                                ui.add_space(2.0);
                             }
                         });
                         
@@ -606,18 +715,52 @@ impl MistTermApp {
             });
     }
 
-    /// 向当前标签页插入命令片段并记录统计
-    fn insert_fragment_with_stats(&mut self, id: &str, command: &str) {
+    /// 从右侧片段列表点击：支持片段库定义的变量、命令里的 `<占位符>`，以及会话字段替换。
+    fn begin_fragment_insert(&mut self, fragment: &FragmentStats) {
+        if self.active_tab.is_none() {
+            self.status_message = "没有活动的终端标签页".to_string();
+            return;
+        }
+
+        if fragment.has_variables() {
+            self.variable_dialog.open = true;
+            self.variable_dialog.fragment_id = Some(fragment.id.clone());
+            self.variable_dialog.fragment_title = fragment.title.clone();
+            self.variable_dialog.values = fragment.variable_defaults();
+            self.variable_dialog.paste_after_fill = true;
+            return;
+        }
+
         let session = self
             .selected_session_id
             .as_deref()
             .and_then(|sid| self.session_manager.get_session(sid));
-        let expanded = expand_command_template(command, session, &std::collections::HashMap::new());
+        let expanded =
+            expand_command_template(&fragment.command, session, &std::collections::HashMap::new());
+
+        let needs_user = placeholders_needing_user(&expanded);
+
+        if needs_user.is_empty() {
+            self.insert_expanded_fragment_with_stats(&fragment.id, &expanded);
+        } else {
+            self.pending_fragment_id = Some(fragment.id.clone());
+            self.pending_fragment_name = fragment.title.clone();
+            self.pending_fragment_command = expanded;
+            self.pending_fragment_vars = needs_user
+                .into_iter()
+                .map(|k| (k, String::new()))
+                .collect();
+            self.fragment_vars_completion = FragmentVarsCompletion::PasteInsertStats;
+            self.show_fragment_vars_dialog = true;
+        }
+    }
+
+    /// 向当前标签页插入已展开的命令并记录统计
+    fn insert_expanded_fragment_with_stats(&mut self, id: &str, expanded: &str) {
         if let Some(idx) = self.active_tab {
             if let Some(tab) = self.tabs.get_mut(idx) {
-                match tab.terminal.insert_fragment(&expanded) {
+                match tab.terminal.insert_fragment(expanded) {
                     Ok(_) => {
-                        // 记录成功，耗时估算为 0（实际耗时无法精确测量）
                         self.fragment_manager.record_usage(id, true, 0);
                         let _ = self.fragment_manager.save(&FragmentManager::default_config_path());
                         self.status_message = format!("插入命令：{}", expanded);
@@ -680,27 +823,27 @@ impl MistTermApp {
     }
 
     fn fragment_stats(fragment: &crate::core::fragment::CommandFragment) -> (u32, u8, f32) {
-        let n = fragment.execution_count as u32;
-        let success = if fragment.execution_count == 0 {
+        let n = fragment.usage_count;
+        let success = if fragment.usage_count == 0 {
             100
         } else {
-            ((fragment.success_count as f32 / fragment.execution_count as f32) * 100.0)
+            ((fragment.success_count as f32 / fragment.usage_count as f32) * 100.0)
                 .round()
                 .clamp(0.0, 100.0) as u8
         };
-        let secs = if fragment.execution_count == 0 {
+        let secs = if fragment.usage_count == 0 {
             0.0
         } else {
-            (fragment.total_duration_ms as f32 / fragment.execution_count as f32) / 1000.0
+            (fragment.total_time_ms as f32 / fragment.usage_count as f32) / 1000.0
         };
         (n, success, secs)
     }
 
     fn aggregate_fragment_metrics(&self) -> (u64, u64, u64, u64) {
-        let fragments = self.fragment_manager.list_fragments();
-        let total_exec = fragments.iter().map(|f| f.execution_count).sum::<u64>();
-        let total_success = fragments.iter().map(|f| f.success_count).sum::<u64>();
-        let total_failure = fragments.iter().map(|f| f.failure_count).sum::<u64>();
+        let fragments = self.fragment_manager.get_all();
+        let total_exec = fragments.iter().map(|f| f.usage_count as u64).sum::<u64>();
+        let total_success = fragments.iter().map(|f| f.success_count as u64).sum::<u64>();
+        let total_failure = total_exec.saturating_sub(total_success);
         let success_rate = if total_exec == 0 {
             100
         } else {
@@ -936,7 +1079,7 @@ impl MistTermApp {
         egui::Frame::none()
             .fill(fill)
             .rounding(egui::Rounding::same(4.0))
-            .inner_margin(egui::Margin::symmetric(8.0, 2.0))
+            .inner_margin(egui::Margin::symmetric(10.0, 3.0))
             .show(ui, |ui| {
                 ui.label(
                     egui::RichText::new(text)
@@ -950,16 +1093,20 @@ impl MistTermApp {
     /// 底部快捷栏 + 状态栏合并为 **一个** TopBottomPanel，避免两个 bottom 叠绘挡住紫色条（README §2.3）
     fn show_bottom_chrome(&mut self, ctx: &egui::Context) {
         const STATUS_H: f32 = 28.0;
+        const QUICK_H: f32 = 44.0;
+        /// 必须与实际上下两块高度一致，否则 egui 只留 28px 会把 44px 工具条裁切叠乱
+        const BOTTOM_CHROME_H: f32 = QUICK_H + STATUS_H;
 
-        let theme = self.theme_manager.current_theme();
+        let theme = self.theme_manager.current_theme().clone();
         let bar_fill = theme.bg_window_color();
-        let btn_idle = theme.border_color();
+        // 设计 §2.5：工具条 idle ≈ rgba(255,255,255,0.08)；状态栏勿整块 accent（SPEC §6）
+        let btn_idle = egui::Color32::from_rgba_unmultiplied(255, 255, 255, 20);
         let btn_primary = theme.accent_color();
-        let status_bar_bg = theme.accent_color();
+        let status_bar_bg = theme.bg_tab_bar_color();
         let h_btn = 32.0;
 
         egui::TopBottomPanel::bottom("bottom_chrome")
-            .exact_height(STATUS_H)
+            .exact_height(BOTTOM_CHROME_H)
             .frame(egui::Frame::none())
             .show(ctx, |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
@@ -986,13 +1133,15 @@ impl MistTermApp {
                                         .color(theme.fg_high_color()),
                                 )
                                 .fill(fill)
-                                .rounding(4.0)
+                                .rounding(3.0)
                                 .min_size(egui::vec2(w, h_btn))
                             };
 
                             if ui
                                 .add(mk("📋 命令片段", btn_primary, 108.0))
-                                .on_hover_text("⌘J")
+                                .on_hover_text(
+                                    "切换右侧片段列表 · ⌘J 快速选择 · 自建片段请点右侧「➕ 新建」或菜单「工具→命令片段库」",
+                                )
                                 .clicked()
                             {
                                 self.show_fragment_panel = !self.show_fragment_panel;
@@ -1012,20 +1161,6 @@ impl MistTermApp {
                                     }
                                 }
                             }
-                            if ui.add(mk("📥 下载/SFTP", btn_idle, 120.0))
-                                .on_hover_text("打开 SFTP；ZMODEM 默认目录见侧栏提示")
-                                .clicked()
-                            {
-                                self.show_sftp_panel = true;
-                                self.sftp_last_tab = None;
-                                self.sftp_panel.request_list_on_open();
-                                if let Some(terminal) = self.current_terminal() {
-                                    self.status_message = format!(
-                                        "SFTP 已打开；ZMODEM 下载目录 {}",
-                                        terminal.download_dir()
-                                    );
-                                }
-                            }
                             if ui.add(mk("🔍 搜索", btn_idle, 88.0)).clicked() {
                                 self.status_message = "终端搜索（开发中）".to_string();
                             }
@@ -1037,6 +1172,12 @@ impl MistTermApp {
                             }
                             if ui.add(mk("📊 监控", btn_idle, 88.0)).on_hover_text("系统监控面板").clicked() {
                                 self.show_monitor_panel = !self.show_monitor_panel;
+                                self.monitor_panel.set_visible(self.show_monitor_panel);
+                                if self.show_monitor_panel && !self.monitor_panel.is_initialized() {
+                                    if let Some(h) = self.active_tab.and_then(|i| self.tabs.get(i)).and_then(|t| t.terminal.ssh_session_handle()) {
+                                        self.monitor_panel.init(h);
+                                    }
+                                }
                             }
                             if ui
                                 .add(mk("🔐 凭证", btn_idle, 88.0))
@@ -1053,28 +1194,41 @@ impl MistTermApp {
                                 self.cloud_sync_panel.open = !self.cloud_sync_panel.open;
                             }
                             if ui
-                                .add(mk("📂 SFTP", btn_idle, 88.0))
-                                .on_hover_text("显示/隐藏远端 SFTP 侧栏")
+                                .add(mk("📂 SFTP", btn_idle, 104.0))
+                                .on_hover_text(
+                                    "切换远端 SFTP 侧栏。ZMODEM 下载目录可在连接后于状态栏查看。",
+                                )
                                 .clicked()
                             {
                                 self.show_sftp_panel = !self.show_sftp_panel;
                                 if self.show_sftp_panel {
                                     self.sftp_last_tab = None;
                                     self.sftp_panel.request_list_on_open();
+                                    if let Some(terminal) = self.current_terminal() {
+                                        self.status_message = format!(
+                                            "SFTP 侧栏已打开；本机 ZMODEM 目录 {}",
+                                            terminal.download_dir()
+                                        );
+                                    }
                                 }
                             }
                         });
                     },
                 );
 
-                // 下：状态栏（固定 28px，贴底）
+                // 下：状态栏（SPEC §6：28px，顶部分割线，padding 约 4×14）
                 ui.allocate_ui_with_layout(
                     egui::vec2(ui.available_width(), STATUS_H),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         let rect = ui.max_rect();
                         ui.painter().rect_filled(rect, 0.0, status_bar_bg);
-                        ui.add_space(10.0);
+                        ui.painter().hline(
+                            rect.x_range(),
+                            rect.top(),
+                            egui::Stroke::new(1.0, theme.subtle_line_color()),
+                        );
+                        ui.add_space(14.0);
 
                         let mut server_line = "🖥️ 未选择会话".to_string();
                         let mut font_px = "14px".to_string();
@@ -1092,7 +1246,9 @@ impl MistTermApp {
                             };
                         }
 
-                        ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+                        ui.spacing_mut().item_spacing = egui::vec2(10.0, 0.0);
+                        let session_count = self.tabs.len();
+                        let fragment_count = self.fragment_manager.get_all().len();
                         ui.horizontal(|ui| {
                             if self.sidebar_collapsed {
                                 let restore = egui::Button::new(
@@ -1126,22 +1282,10 @@ impl MistTermApp {
                                     .size(11.0)
                                     .color(theme.fg_high_color()),
                             );
-                            ui.label(
-                                egui::RichText::new("🔒 SSH-2.0")
-                                    .monospace()
-                                    .size(11.0)
-                                    .color(theme.fg_high_color()),
-                            );
-                            ui.label(
-                                egui::RichText::new("🌐 Asia/Shanghai")
-                                    .monospace()
-                                    .size(11.0)
-                                    .color(theme.fg_high_color()),
-                            );
                             ui.add_space(4.0);
-                            Self::status_chip(ui, "UTF-8", theme);
-                            Self::status_chip(ui, &font_px, theme);
-                            Self::status_chip(ui, &duration_chip, theme);
+                            Self::status_chip(ui, "UTF-8", &theme);
+                            Self::status_chip(ui, &font_px, &theme);
+                            Self::status_chip(ui, &duration_chip, &theme);
                         });
                     },
                 );
@@ -1186,7 +1330,7 @@ impl eframe::App for MistTermApp {
         }
 
         self.apply_current_theme(ctx);
-        let theme = self.theme_manager.current_theme();
+        let theme = self.theme_manager.current_theme().clone();
 
         // 检查是否有终端等待 rz 上传文件（ZMODEM：`start_rz_upload`，非 SCP `start_upload`）
         if let Some(terminal) = self.current_terminal() {
@@ -1255,13 +1399,17 @@ impl eframe::App for MistTermApp {
             .exact_height(36.0)
             .frame(egui::Frame::none().fill(theme.bg_tab_bar_color()))
             .show(ctx, |ui| {
-                let right_info = self
-                    .current_terminal()
-                    .map(|t| {
-                        if t.is_connected() {
-                            format!("SSH · {}", t.connection_duration_text())
-                        } else {
-                            "SSH · connecting".to_string()
+            ui.horizontal(|ui| {
+                ui.menu_button("文件", |ui| {
+                    if ui.button("新建会话 ⌘N").clicked() {
+                        self.show_new_session_dialog = true;
+                        ui.close_menu();
+                    }
+                    if ui.button("关闭标签 ⌘W").clicked() {
+                        if let Some(idx) = self.active_tab {
+                            self.tabs.remove(idx);
+                            self.active_tab = self.tabs.len().checked_sub(1);
+                            self.selected_session_id = self.active_tab.and_then(|i| self.tabs.get(i)).map(|t| t.session_id.clone());
                         }
                         ui.close_menu();
                     }
@@ -1292,12 +1440,18 @@ impl eframe::App for MistTermApp {
                     }
                     ui.separator();
                     ui.menu_button("主题", |ui| {
-                        for (i, theme) in self.theme_manager.list_themes().iter().enumerate() {
-                            let is_current = i == self.theme_manager.current;
-                            let label = if is_current {
-                                format!("✓ {}", theme.name)
+                        let theme_names: Vec<String> = self
+                            .theme_manager
+                            .list_themes()
+                            .iter()
+                            .map(|t| t.name.clone())
+                            .collect();
+                        let current_idx = self.theme_manager.current;
+                        for (i, name) in theme_names.into_iter().enumerate() {
+                            let label = if i == current_idx {
+                                format!("✓ {}", name)
                             } else {
-                                theme.name.clone()
+                                name
                             };
                             if ui.button(label).clicked() {
                                 self.theme_manager.set_theme_index(i);
@@ -1341,28 +1495,23 @@ impl eframe::App for MistTermApp {
                     );
                 });
             });
+        });
 
-        // 底部快捷栏 + 状态栏：单面板纵向排布，避免两个 bottom 叠绘挡住状态栏
-        self.show_bottom_chrome(ctx);
-
-        // 命令片段面板
+        // 命令片段面板（须先于底栏与 Central 注册，见下方 show_bottom_chrome 注释）
         if self.show_fragment_panel {
-            self.show_fragment_panel(ctx);
-        }
-        if self.show_sftp_panel {
-            self.show_sftp_panel(ctx);
+            self.show_fragment_panel(ctx, &theme);
         }
 
         // Git 同步面板
         if self.show_git_sync_panel {
-            self.show_git_sync_panel(ctx, theme);
+            self.show_git_sync_panel(ctx, &theme);
         }
 
         let mut cred_action: Option<CredentialPanelAction> = None;
         if self.credential_panel.open {
             if self
                 .credential_panel
-                .show_side_panel(ctx, theme, &mut cred_action)
+                .show_side_panel(ctx, &theme, &mut cred_action)
             {
                 self.credential_panel.open = false;
             }
@@ -1380,12 +1529,10 @@ impl eframe::App for MistTermApp {
             session_manager: &mut self.session_manager,
             credential_panel: &mut self.credential_panel,
         };
-        self.cloud_sync_panel.show(ctx, theme, &mut deps);
+        self.cloud_sync_panel.show(ctx, &theme, &mut deps);
 
-        if let Some(action) = cred_action {
-            if let CredentialPanelAction::UseForQuickConnect(c) = action {
-                self.apply_credential_to_new_session_form(c);
-            }
+        if let Some(CredentialPanelAction::UseForQuickConnect(c)) = cred_action {
+            self.apply_credential_to_new_session_form(c);
         }
 
         // SFTP（右侧面板；切换终端标签时重置远端路径并重新拉列表）
@@ -1396,10 +1543,13 @@ impl eframe::App for MistTermApp {
                 self.sftp_panel.reset();
                 self.sftp_panel.request_list_on_open();
             }
+            let current_terminal_ref = self
+                .active_tab
+                .and_then(|idx| self.tabs.get(idx).map(|t| &t.terminal));
             self.sftp_panel.show_side_panel(
                 ctx,
-                theme,
-                self.current_terminal(),
+                &theme,
+                current_terminal_ref,
                 &mut close_sftp_panel,
             );
         }
@@ -1409,25 +1559,11 @@ impl eframe::App for MistTermApp {
 
         // 系统监控面板
         if self.show_monitor_panel {
-            self.show_monitor_panel(ctx);
+            self.monitor_panel.show(ctx, &theme);
         }
 
-        let session_for_fragments = self
-            .selected_session_id
-            .as_deref()
-            .and_then(|sid| self.session_manager.get_session(sid).cloned());
-        let fragment_cfg = FragmentManager::default_config_path();
-        let lib_saved = self.fragment_library.show_window(
-            ctx,
-            &mut self.fragment_manager,
-            &mut self.fragment_sort_by,
-            &fragment_cfg,
-            session_for_fragments.as_ref(),
-            theme,
-        );
-        if lib_saved {
-            self.fragment_manager.sort(self.fragment_sort_by);
-        }
+        // egui：须先完成所有左右 SidePanel，再注册底栏，最后 CentralPanel；否则右栏与主区叠绘错位（点击片段后像「全屏花屏」）
+        self.show_bottom_chrome(ctx);
 
         // 主内容区：侧边栏 + 终端
         egui::CentralPanel::default()
@@ -1504,7 +1640,7 @@ impl eframe::App for MistTermApp {
                                             &self.sidebar_search_query,
                                             &self.sidebar_filter,
                                             &connected_sessions,
-                                            theme,
+                                            &theme,
                                         );
 
                                         if sidebar_output.create_session_clicked {
@@ -1575,17 +1711,8 @@ impl eframe::App for MistTermApp {
                                         let mut close_right = None;
                                         for (idx, tab) in self.tabs.iter().enumerate() {
                                             let active = self.active_tab == Some(idx);
+                                            let tab_label = tab.title.clone();
                                             ui.horizontal(|ui| {
-                                                let title_color = if active {
-                                                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 204)
-                                                } else {
-                                                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)
-                                                };
-                                                let tab_fill = if active {
-                                                    egui::Color32::from_rgb(10, 10, 18)
-                                                } else {
-                                                    egui::Color32::from_rgba_unmultiplied(255, 255, 255, 5)
-                                                };
                                                 let tab_resp = ui.add(
                                                     egui::Button::new(
                                                         egui::RichText::new(&tab_label).size(12.0).color(
@@ -1698,7 +1825,7 @@ impl eframe::App for MistTermApp {
                                 egui::Layout::top_down(egui::Align::LEFT),
                                 |ui| {
                                     if let Some(terminal) = self.current_terminal_mut() {
-                                        terminal.show(ui, theme);
+                                        terminal.show(ui, &theme);
                                     } else {
                                         self.show_welcome(ui);
                                     }
@@ -1709,6 +1836,23 @@ impl eframe::App for MistTermApp {
                     );
                 });
             });
+
+        let session_for_fragments = self
+            .selected_session_id
+            .as_deref()
+            .and_then(|sid| self.session_manager.get_session(sid).cloned());
+        let fragment_cfg = FragmentManager::default_config_path();
+        let lib_saved = self.fragment_library.show_window(
+            ctx,
+            &mut self.fragment_manager,
+            &mut self.fragment_sort_by,
+            &fragment_cfg,
+            session_for_fragments.as_ref(),
+            &theme,
+        );
+        if lib_saved {
+            self.fragment_manager.sort(self.fragment_sort_by);
+        }
 
         // 显示新建会话对话框
         if self.show_new_session_dialog {
@@ -2224,8 +2368,12 @@ impl eframe::App for MistTermApp {
                             ui.add_space(4.0);
                             ui.horizontal(|ui| {
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    let insert_label = match self.fragment_vars_completion {
+                                        FragmentVarsCompletion::PasteInsertStats => "插入终端",
+                                        FragmentVarsCompletion::QuickExecuteSend => "发送命令",
+                                    };
                                     let insert_btn = egui::Button::new(
-                                        egui::RichText::new("插入命令")
+                                        egui::RichText::new(insert_label)
                                             .size(12.0)
                                             .color(egui::Color32::from_rgb(102, 126, 234)),
                                     )
@@ -2238,11 +2386,29 @@ impl eframe::App for MistTermApp {
                                             &self.pending_fragment_command,
                                             &self.pending_fragment_vars,
                                         );
-                                        let fragment_id = self.pending_fragment_id.clone();
-                                        self.insert_fragment_to_active_tab(
-                                            fragment_id.as_deref(),
-                                            &filled,
-                                        );
+                                        match self.fragment_vars_completion {
+                                            FragmentVarsCompletion::PasteInsertStats => {
+                                                if let Some(id) =
+                                                    self.pending_fragment_id.clone()
+                                                {
+                                                    self.insert_expanded_fragment_with_stats(
+                                                        &id, &filled,
+                                                    );
+                                                }
+                                            }
+                                            FragmentVarsCompletion::QuickExecuteSend => {
+                                                if let Some(session_id) =
+                                                    &self.selected_session_id
+                                                {
+                                                    if let Some(tab) = self.tabs.iter_mut().find(
+                                                        |t| t.session_id == *session_id,
+                                                    ) {
+                                                        let _ = tab.terminal.send_command(&filled);
+                                                    }
+                                                }
+                                                self.quick_selector.open = false;
+                                            }
+                                        }
                                         should_close = true;
                                     }
                                     let cancel_btn = egui::Button::new(
@@ -2292,7 +2458,8 @@ impl eframe::App for MistTermApp {
                     egui::ScrollArea::vertical()
                         .max_height(300.0)
                         .show(ui, |ui| {
-                            let fragments = self.fragment_manager.list();
+                            let fragments: Vec<_> =
+                                self.fragment_manager.list().iter().cloned().collect();
                             let search_lower = self.quick_selector.search_query.to_lowercase();
                             
                             for (idx, fragment) in fragments.iter().enumerate() {
@@ -2322,10 +2489,16 @@ impl eframe::App for MistTermApp {
                 });
         }
 
-        // 变量输入对话框
+        // 变量输入对话框（片段库定义的变量；与命令里的 `<pod>` 等占位符可串联）
         if self.variable_dialog.open {
             use egui::*;
             
+            let ok_label = if self.variable_dialog.paste_after_fill {
+                "✅ 插入终端"
+            } else {
+                "✅ 执行"
+            };
+
             Window::new(format!("📝 输入变量：{}", self.variable_dialog.fragment_title))
                 .collapsible(false)
                 .resizable(true)
@@ -2351,19 +2524,56 @@ impl eframe::App for MistTermApp {
                     ui.horizontal(|ui| {
                         if ui.button("❌ 取消").clicked() {
                             self.variable_dialog.open = false;
+                            self.variable_dialog.paste_after_fill = false;
                         }
-                        if ui.button("✅ 执行").clicked() {
-                            if let Some(fragment_id) = &self.variable_dialog.fragment_id {
-                                if let Some(fragment) = self.fragment_manager.get(fragment_id) {
-                                    let command = fragment.apply_variables(&self.variable_dialog.values);
-                                    if let Some(session_id) = &self.selected_session_id {
-                                        if let Some(tab) = self.tabs.iter_mut().find(|t| t.session_id == *session_id) {
-                                            let _ = tab.terminal.send_command(&command);
+                        if ui.button(ok_label).clicked() {
+                            let paste = self.variable_dialog.paste_after_fill;
+                            if let Some(fid) = self.variable_dialog.fragment_id.clone() {
+                                if let Some(fragment) = self.fragment_manager.get(&fid).cloned() {
+                                    let session = self
+                                        .selected_session_id
+                                        .as_deref()
+                                        .and_then(|sid| self.session_manager.get_session(sid));
+                                    let after_vars =
+                                        fragment.apply_variables(&self.variable_dialog.values);
+                                    let expanded = expand_command_template(
+                                        &after_vars,
+                                        session,
+                                        &HashMap::new(),
+                                    );
+                                    let needs = placeholders_needing_user(&expanded);
+                                    if needs.is_empty() {
+                                        if paste {
+                                            self.insert_expanded_fragment_with_stats(&fid, &expanded);
+                                        } else if let Some(session_id) = &self.selected_session_id {
+                                            if let Some(tab) = self
+                                                .tabs
+                                                .iter_mut()
+                                                .find(|t| t.session_id == *session_id)
+                                            {
+                                                let _ = tab.terminal.send_command(&expanded);
+                                            }
+                                            self.quick_selector.open = false;
                                         }
+                                    } else {
+                                        self.pending_fragment_id = Some(fid.clone());
+                                        self.pending_fragment_name = fragment.title.clone();
+                                        self.pending_fragment_command = expanded;
+                                        self.pending_fragment_vars = needs
+                                            .into_iter()
+                                            .map(|k| (k, String::new()))
+                                            .collect();
+                                        self.fragment_vars_completion = if paste {
+                                            FragmentVarsCompletion::PasteInsertStats
+                                        } else {
+                                            FragmentVarsCompletion::QuickExecuteSend
+                                        };
+                                        self.show_fragment_vars_dialog = true;
                                     }
+                                    self.variable_dialog.paste_after_fill = false;
+                                    self.variable_dialog.open = false;
                                 }
                             }
-                            self.variable_dialog.open = false;
                         }
                     });
                 });
@@ -2372,23 +2582,49 @@ impl eframe::App for MistTermApp {
 }
 
 impl MistTermApp {
-    /// 执行命令片段
+    /// 执行命令片段（⌘J 快速选择）：会话占位符展开；片段库变量与 `<自定义>` 占位符弹窗填写。
     fn execute_fragment(&mut self, fragment: &FragmentStats) {
+        if self.selected_session_id.is_none() {
+            self.status_message = "请先选择左侧会话".to_string();
+            return;
+        }
+
         if fragment.has_variables() {
-            // 有变量，打开对话框
             self.variable_dialog.open = true;
             self.variable_dialog.fragment_id = Some(fragment.id.clone());
             self.variable_dialog.fragment_title = fragment.title.clone();
             self.variable_dialog.values = fragment.variable_defaults();
-        } else {
-            // 无变量，直接执行
+            self.variable_dialog.paste_after_fill = false;
+            return;
+        }
+
+        let session = self
+            .selected_session_id
+            .as_deref()
+            .and_then(|sid| self.session_manager.get_session(sid));
+        let expanded =
+            expand_command_template(&fragment.command, session, &std::collections::HashMap::new());
+        let needs = placeholders_needing_user(&expanded);
+
+        if needs.is_empty() {
             if let Some(session_id) = &self.selected_session_id {
                 if let Some(tab) = self.tabs.iter_mut().find(|t| t.session_id == *session_id) {
-                    let _ = tab.terminal.send_command(&fragment.command);
+                    let _ = tab.terminal.send_command(&expanded);
                 }
             }
             self.quick_selector.open = false;
+            return;
         }
+
+        self.pending_fragment_id = Some(fragment.id.clone());
+        self.pending_fragment_name = fragment.title.clone();
+        self.pending_fragment_command = expanded;
+        self.pending_fragment_vars = needs
+            .into_iter()
+            .map(|k| (k, String::new()))
+            .collect();
+        self.fragment_vars_completion = FragmentVarsCompletion::QuickExecuteSend;
+        self.show_fragment_vars_dialog = true;
     }
 
     /// 显示欢迎界面
@@ -2412,6 +2648,9 @@ impl MistTermApp {
                 ui.label("3. 使用");
                 ui.label("rz/sz");
                 ui.label("进行文件传输");
+            });
+            ui.horizontal(|ui| {
+                ui.label("自建命令片段：菜单「工具 → 命令片段库」或右侧栏「➕ 新建」");
             });
             ui.separator();
             ui.small("提示：双击侧边栏可以折叠/展开");

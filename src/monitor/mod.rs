@@ -5,4 +5,4 @@
 mod collector;
 mod parser;
 
-pub use collector::{Monitor, ServerStats};
+pub use collector::{format_bytes, Monitor, ServerStats};

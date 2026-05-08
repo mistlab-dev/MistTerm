@@ -7,7 +7,7 @@ use eframe::egui;
 use rfd::FileDialog;
 
 use crate::core::{
-    CloudSyncSettings, CredentialVault, FragmentManager, FragmentMergeReport, SortBy,
+    CloudSyncSettings, CredentialVault, FragmentManager, FragmentMergeReport, SessionManager, SortBy,
 };
 use crate::ui::credential_panel::CredentialPanel;
 use crate::ui::theme::{Theme, ThemeManager};
