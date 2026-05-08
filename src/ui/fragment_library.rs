@@ -7,8 +7,8 @@ use eframe::egui;
 use rfd::FileDialog;
 
 use crate::core::{
-    FragmentManager, FragmentMergeReport, FragmentStats, SortBy, expand_command_template,
-    list_placeholder_keys,
+    FragmentManager, FragmentMergeReport, FragmentStats, FragmentVariable, SortBy, 
+    expand_command_template, list_placeholder_keys,
 };
 use crate::core::session::SessionConfig;
 
@@ -22,6 +22,8 @@ pub struct FragmentLibraryState {
     pub form_command: String,
     pub form_category: String,
     pub form_tags: String,
+    /// 变量表单：(name, description, default_value)
+    pub form_variables: Vec<(String, String, String)>,
     pub status_msg: String,
     /// 从 JSON 文件导入片段时是否与现有条目按 id 合并
     pub import_merge: bool,
@@ -41,6 +43,7 @@ impl FragmentLibraryState {
         self.form_command.clear();
         self.form_category.clear();
         self.form_tags.clear();
+        self.form_variables.clear();
     }
 
     fn load_from_fragment(&mut self, f: &FragmentStats) {
@@ -49,6 +52,9 @@ impl FragmentLibraryState {
         self.form_command = f.command.clone();
         self.form_category = f.category.clone();
         self.form_tags = f.tags.join(", ");
+        self.form_variables = f.variables.iter().map(|v| {
+            (v.name.clone(), v.description.clone(), v.default_value.clone().unwrap_or_default())
+        }).collect();
     }
 
     fn parse_tags(&self) -> Vec<String> {
@@ -240,6 +246,30 @@ impl FragmentLibraryState {
                                 .desired_rows(4),
                         );
 
+                        // 变量编辑区
+                        ui.label(egui::RichText::new("变量定义").strong());
+                        let mut var_to_remove = None;
+                        for (idx, (name, desc, default)) in self.form_variables.iter_mut().enumerate() {
+                            ui.horizontal(|ui| {
+                                ui.set_width(ui.available_width());
+                                ui.label("名称：");
+                                ui.add(egui::TextEdit::singleline(name).desired_width(80.0));
+                                ui.label("描述：");
+                                ui.add(egui::TextEdit::singleline(desc).desired_width(100.0));
+                                ui.label("默认：");
+                                ui.add(egui::TextEdit::singleline(default).desired_width(80.0));
+                                if ui.button("🗑️").clicked() {
+                                    var_to_remove = Some(idx);
+                                }
+                            });
+                        }
+                        if let Some(idx) = var_to_remove {
+                            self.form_variables.remove(idx);
+                        }
+                        if ui.button("➕ 添加变量").clicked() {
+                            self.form_variables.push((String::new(), String::new(), String::new()));
+                        }
+
                         let keys = list_placeholder_keys(&self.form_command);
                         if !keys.is_empty() {
                             ui.label(
@@ -271,13 +301,30 @@ impl FragmentLibraryState {
                                 && !self.form_category.trim().is_empty()
                             {
                                 let tags = self.parse_tags();
+                                let variables: Vec<FragmentVariable> = self.form_variables
+                                    .iter()
+                                    .filter(|(name, _, _)| !name.trim().is_empty())
+                                    .map(|(name, desc, default)| {
+                                        FragmentVariable {
+                                            name: name.trim().to_string(),
+                                            description: desc.clone(),
+                                            default_value: if default.is_empty() {
+                                                None
+                                            } else {
+                                                Some(default.clone())
+                                            },
+                                        }
+                                    })
+                                    .collect();
+
                                 if let Some(id) = &self.editing_id {
-                                    let ok = manager.update_fragment(
+                                    let ok = manager.update_fragment_with_vars(
                                         id,
                                         self.form_title.trim().to_string(),
                                         self.form_command.clone(),
                                         self.form_category.trim().to_string(),
                                         tags,
+                                        variables,
                                     );
                                     if ok {
                                         if manager.save(fragment_cfg_path).is_ok() {
@@ -288,11 +335,12 @@ impl FragmentLibraryState {
                                         }
                                     }
                                 } else {
-                                    manager.add_fragment_with_tags(
+                                    manager.add_fragment_with_all(
                                         self.form_title.trim().to_string(),
                                         self.form_command.clone(),
                                         self.form_category.trim().to_string(),
                                         tags,
+                                        variables,
                                     );
                                     if manager.save(fragment_cfg_path).is_ok() {
                                         self.status_msg = "已添加片段".to_string();

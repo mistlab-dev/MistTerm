@@ -9,6 +9,35 @@ use uuid::Uuid;
 
 use super::session::SessionConfig;
 
+/// 命令片段变量定义
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FragmentVariable {
+    /// 变量名（对应 `<name>` 占位符）
+    pub name: String,
+    /// 变量描述（用于提示用户）
+    pub description: String,
+    /// 默认值
+    pub default_value: Option<String>,
+}
+
+impl FragmentVariable {
+    pub fn new(name: &str, description: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            description: description.to_string(),
+            default_value: None,
+        }
+    }
+
+    pub fn with_default(name: &str, description: &str, default: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            description: description.to_string(),
+            default_value: Some(default.to_string()),
+        }
+    }
+}
+
 /// 单个命令片段的统计信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FragmentStats {
@@ -23,6 +52,9 @@ pub struct FragmentStats {
     /// 标签（用于筛选与同步）
     #[serde(default)]
     pub tags: Vec<String>,
+    /// 变量定义列表
+    #[serde(default)]
+    pub variables: Vec<FragmentVariable>,
     /// 使用次数
     pub usage_count: u32,
     /// 成功次数
@@ -42,11 +74,45 @@ impl FragmentStats {
             command,
             category,
             tags: Vec::new(),
+            variables: Vec::new(),
             usage_count: 0,
             success_count: 0,
             total_time_ms: 0,
             last_used: None,
         }
+    }
+
+    /// 检查是否有需要用户输入的变量
+    pub fn has_variables(&self) -> bool {
+        !self.variables.is_empty()
+    }
+
+    /// 从命令中提取所有占位符名称
+    pub fn extract_placeholders(&self) -> Vec<String> {
+        list_placeholder_keys(&self.command)
+    }
+
+    /// 获取变量的默认值映射
+    pub fn variable_defaults(&self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        for var in &self.variables {
+            if let Some(default) = &var.default_value {
+                map.insert(var.name.clone(), default.clone());
+            }
+        }
+        map
+    }
+
+    /// 应用变量值替换命令中的占位符
+    pub fn apply_variables(&self, values: &HashMap<String, String>) -> String {
+        let mut result = self.command.clone();
+        for var in &self.variables {
+            let placeholder = format!('<{}>', var.name);
+            if let Some(value) = values.get(&var.name) {
+                result = result.replace(&placeholder, value);
+            }
+        }
+        result
     }
 
     /// 计算成功率
@@ -355,6 +421,24 @@ impl FragmentManager {
         self.fragments.last().unwrap()
     }
 
+    /// 添加带标签和变量的片段
+    pub fn add_fragment_with_all(
+        &mut self,
+        title: String,
+        command: String,
+        category: String,
+        tags: Vec<String>,
+        variables: Vec<FragmentVariable>,
+    ) -> &FragmentStats {
+        let id = Uuid::new_v4().to_string();
+        let mut fragment = FragmentStats::new(id, title, command, category);
+        fragment.tags = tags;
+        fragment.variables = variables;
+        self.fragments.push(fragment);
+        self.rebuild_id_map();
+        self.fragments.last().unwrap()
+    }
+
     /// 更新片段元数据（保留统计）
     pub fn update_fragment(
         &mut self,
@@ -369,6 +453,28 @@ impl FragmentManager {
             frag.command = command;
             frag.category = category;
             frag.tags = tags;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 更新片段（含变量定义）
+    pub fn update_fragment_with_vars(
+        &mut self,
+        id: &str,
+        title: String,
+        command: String,
+        category: String,
+        tags: Vec<String>,
+        variables: Vec<FragmentVariable>,
+    ) -> bool {
+        if let Some(frag) = self.get_by_id_mut(id) {
+            frag.title = title;
+            frag.command = command;
+            frag.category = category;
+            frag.tags = tags;
+            frag.variables = variables;
             true
         } else {
             false
