@@ -1318,10 +1318,81 @@ impl eframe::App for MistTermApp {
                 });
             self.show_fragments_dialog = open;
         }
+
+        // 快速片段选择器
+        if self.quick_selector.open {
+            use egui::*;
+            
+            Window::new("⚡ 快速选择片段")
+                .collapsible(false)
+                .resizable(true)
+                .default_size([500.0, 400.0])
+                .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    // 搜索框
+                    ui.horizontal(|ui| {
+                        ui.label("🔍");
+                        ui.text_edit_singleline(&mut self.quick_selector.search_query);
+                    });
+                    
+                    ui.add_space(8.0);
+                    
+                    // 片段列表
+                    egui::ScrollArea::vertical()
+                        .max_height(300.0)
+                        .show(ui, |ui| {
+                            let fragments = self.fragment_manager.list();
+                            let search_lower = self.quick_selector.search_query.to_lowercase();
+                            
+                            for (idx, fragment) in fragments.iter().enumerate() {
+                                // 搜索过滤
+                                if !search_lower.is_empty() 
+                                    && !fragment.title.to_lowercase().contains(&search_lower)
+                                    && !fragment.command.to_lowercase().contains(&search_lower) {
+                                    continue;
+                                }
+                                
+                                let is_selected = idx == self.quick_selector.selected_index;
+                                
+                                if ui.selectable_label(is_selected, &fragment.title).clicked() {
+                                    // 点击执行
+                                    self.execute_fragment(fragment);
+                                    self.quick_selector.open = false;
+                                }
+                            }
+                        });
+                    
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("❌ 取消 (ESC)").clicked() {
+                            self.quick_selector.open = false;
+                        }
+                    });
+                });
+        }
     }
 }
 
 impl MistTermApp {
+    /// 执行命令片段
+    fn execute_fragment(&mut self, fragment: &FragmentStats) {
+        if fragment.has_variables() {
+            // 有变量，打开对话框
+            self.variable_dialog.open = true;
+            self.variable_dialog.fragment_id = Some(fragment.id.clone());
+            self.variable_dialog.fragment_title = fragment.title.clone();
+            self.variable_dialog.values = fragment.variable_defaults();
+        } else {
+            // 无变量，直接执行
+            if let Some(session_id) = &self.selected_session_id {
+                if let Some(tab) = self.tabs.iter_mut().find(|t| t.session_id == *session_id) {
+                    let _ = tab.terminal.send_command(&fragment.command);
+                }
+            }
+            self.quick_selector.open = false;
+        }
+    }
+
     /// 显示欢迎界面
     fn show_welcome(&self, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::TopDown), |ui| {
