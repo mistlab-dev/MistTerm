@@ -557,6 +557,43 @@ impl FragmentManager {
         }
     }
 
+    /// 导出所有片段为 JSON 字符串
+    pub fn export_to_json(&self) -> Result<String, String> {
+        serde_json::to_string_pretty(&self.fragments)
+            .map_err(|e| format!("JSON导出失败: {}", e))
+    }
+
+    /// 从 JSON 字符串导入片段（合并模式，跳过重复 ID）
+    pub fn import_from_json(&mut self, json: &str) -> Result<usize, String> {
+        let fragments: Vec<FragmentStats> = serde_json::from_str(json)
+            .map_err(|e| format!("JSON导入失败: {}", e))?;
+        
+        let mut added = 0;
+        for fragment in fragments {
+            if !self.id_map.contains_key(&fragment.id) {
+                self.fragments.push(fragment.clone());
+                self.id_map.insert(fragment.id, self.fragments.len() - 1);
+                added += 1;
+            }
+        }
+        
+        Ok(added)
+    }
+
+    /// 导出片段到文件
+    pub fn export_to_file(&self, path: &std::path::Path) -> Result<(), String> {
+        let json = self.export_to_json()?;
+        std::fs::write(path, json)
+            .map_err(|e| format!("写入文件失败: {}", e))
+    }
+
+    /// 从文件导入片段
+    pub fn import_from_file(&mut self, path: &std::path::Path) -> Result<usize, String> {
+        let json = std::fs::read_to_string(path)
+            .map_err(|e| format!("读取文件失败: {}", e))?;
+        self.import_from_json(&json)
+    }
+
     /// 搜索片段
     pub fn search(&self, query: &str) -> Vec<&FragmentStats> {
         let query_lower = query.to_lowercase();
