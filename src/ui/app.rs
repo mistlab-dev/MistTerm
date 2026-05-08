@@ -1370,6 +1370,53 @@ impl eframe::App for MistTermApp {
                     });
                 });
         }
+
+        // 变量输入对话框
+        if self.variable_dialog.open {
+            use egui::*;
+            
+            Window::new(format!("📝 输入变量：{}", self.variable_dialog.fragment_title))
+                .collapsible(false)
+                .resizable(true)
+                .default_size([450.0, 300.0])
+                .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    if let Some(fragment_id) = &self.variable_dialog.fragment_id {
+                        if let Some(fragment) = self.fragment_manager.get(fragment_id) {
+                            for var in &fragment.variables {
+                                ui.horizontal(|ui| {
+                                    ui.label(&var.description);
+                                    let value = self.variable_dialog.values
+                                        .entry(var.name.clone())
+                                        .or_insert_with(String::new);
+                                    ui.text_edit_singleline(value);
+                                });
+                                ui.add_space(4.0);
+                            }
+                        }
+                    }
+                    
+                    ui.add_space(12.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("❌ 取消").clicked() {
+                            self.variable_dialog.open = false;
+                        }
+                        if ui.button("✅ 执行").clicked() {
+                            if let Some(fragment_id) = &self.variable_dialog.fragment_id {
+                                if let Some(fragment) = self.fragment_manager.get(fragment_id) {
+                                    let command = fragment.apply_variables(&self.variable_dialog.values);
+                                    if let Some(session_id) = &self.selected_session_id {
+                                        if let Some(tab) = self.tabs.iter_mut().find(|t| t.session_id == *session_id) {
+                                            let _ = tab.terminal.send_command(&command);
+                                        }
+                                    }
+                                }
+                            }
+                            self.variable_dialog.open = false;
+                        }
+                    });
+                });
+        }
     }
 }
 
