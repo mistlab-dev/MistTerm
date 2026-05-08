@@ -710,6 +710,11 @@ fn truncate_status(s: &str, max_chars: usize) -> String {
 
 impl eframe::App for MistTermApp {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // Ctrl+J 快捷键：打开快速片段选择器
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::J)) {
+            self.quick_selector.open = true;
+        }
+
         self.apply_current_theme(ctx);
         let theme = self.theme_manager.current_theme();
 
