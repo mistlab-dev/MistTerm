@@ -456,27 +456,42 @@ impl MistTermApp {
                         
                         ui.collapsing(format!("{} {}", category_emoji, category), |ui| {
                             for frag in category_fragments {
-                                ui.horizontal(|ui| {
-                                    let button = ui.button(frag.title.as_str());
-                                    if button.clicked() {
-                                        let id = frag.id.clone();
-                                        let command = frag.command.clone();
-                                        self.insert_fragment_with_stats(&id, &command);
-                                    }
-                                    if button.hovered() {
-                                        button.on_hover_text(&frag.command);
-                                    }
-                                });
-                                
-                                // 显示统计信息
-                                if frag.usage_count > 0 {
-                                    let stats_text = frag.human_readable();
+                                // 在每个片段项中添加统计显示
+                                ui.vertical(|ui| {
+                                    ui.horizontal(|ui| {
+                                        let button = ui.button(frag.title.as_str());
+                                        if button.clicked() {
+                                            let id = frag.id.clone();
+                                            let command = frag.command.clone();
+                                            self.insert_fragment_with_stats(&id, &command);
+                                        }
+                                        if button.hovered() {
+                                            button.on_hover_text(&frag.command);
+                                        }
+                                        
+                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                            // 统计信息
+                                            let success_rate = if frag.usage_count > 0 {
+                                                (frag.success_count as f32 / frag.usage_count as f32) * 100.0
+                                            } else {
+                                                0.0
+                                            };
+                                            
+                                            ui.label(
+                                                egui::RichText::new(format!("🔢{}次 ✅{:.0}%", frag.usage_count, success_rate))
+                                                    .small()
+                                                    .color(self.theme_manager.current_theme().fg_low_color())
+                                            );
+                                        });
+                                    });
+                                    
+                                    // 命令预览
                                     ui.label(
-                                        egui::RichText::new(stats_text)
+                                        egui::RichText::new(&frag.command)
                                             .small()
                                             .color(self.theme_manager.current_theme().fg_low_color())
                                     );
-                                }
+                                });
                             }
                         });
                         
