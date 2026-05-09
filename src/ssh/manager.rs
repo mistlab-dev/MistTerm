@@ -436,6 +436,38 @@ impl SshManager {
         let sessions = self.sessions.lock().unwrap();
         sessions.get(&session_id).map(|c| c.get_session().clone())
     }
+
+    /// 在独立 exec 通道执行远程命令（与交互式 shell 并存）。
+    ///
+    /// 与 SFTP/SCP 相同，使用 [`get_session`] 克隆的会话句柄并短期切为阻塞模式完成读写，
+    /// 执行结束后恢复非阻塞供 shell 泵使用。
+    pub fn exec_remote(&self, session_id: SshSessionId, command: &str) -> Result<String, String> {
+        let session = self
+            .get_session(session_id)
+            .ok_or_else(|| format!("会话 {} 不可用（未连接或已移除）", session_id))?;
+        Self::exec_on_cloned_session(&session, command)
+    }
+
+    fn exec_on_cloned_session(session: &ssh2::Session, command: &str) -> Result<String, String> {
+        use std::io::Read;
+        session.set_blocking(true);
+        let result = (|| {
+            let mut channel = session
+                .channel_session()
+                .map_err(|e| format!("打开 exec 通道失败: {}", e))?;
+            channel
+                .exec(command)
+                .map_err(|e| format!("exec 失败: {} — {}", command, e))?;
+            let mut output = Vec::new();
+            channel
+                .read_to_end(&mut output)
+                .map_err(|e| format!("读取命令输出失败: {}", e))?;
+            let _ = channel.wait_close();
+            String::from_utf8(output).map_err(|e| format!("输出非 UTF-8: {}", e))
+        })();
+        session.set_blocking(false);
+        result
+    }
 }
 
 /// Shell 泵：专用 OS 线程 + `sync_channel`，避免 Tokio `block_on`/`recv` 与上传线程的调度死锁。

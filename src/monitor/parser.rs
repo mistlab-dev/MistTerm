@@ -2,6 +2,41 @@
 //!
 //! 解析各种 Linux 命令输出，提取系统指标
 
+/// 从 `cpu` 行解析活跃 jiffies 与总 jiffies（用于两次采样差分算 CPU%）
+/// 格式: cpu  user nice system idle iowait irq softirq steal guest guest_nice
+pub fn parse_cpu_jiffies_line(line: &str) -> Option<(u64, u64)> {
+    let line = line.trim();
+    if !line.starts_with("cpu ") {
+        return None;
+    }
+    let parts: Vec<u64> = line
+        .split_whitespace()
+        .skip(1)
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    if parts.len() < 4 {
+        return None;
+    }
+    let idle = parts[3];
+    let iowait = parts.get(4).copied().unwrap_or(0);
+    let idle_total = idle + iowait;
+    let sum: u64 = parts.iter().sum();
+    let active = sum.saturating_sub(idle_total);
+    Some((active, sum))
+}
+
+/// 根据两次相邻的 `grep '^cpu ' /proc/stat` 输出行计算 CPU 使用率
+pub fn cpu_percent_between(prev_line: &str, curr_line: &str) -> Option<f32> {
+    let (a1, t1) = parse_cpu_jiffies_line(prev_line)?;
+    let (a2, t2) = parse_cpu_jiffies_line(curr_line)?;
+    let da = a2.saturating_sub(a1);
+    let dt = t2.saturating_sub(t1);
+    if dt == 0 {
+        return None;
+    }
+    Some(((da as f64 / dt as f64) * 100.0).clamp(0.0, 100.0) as f32)
+}
+
 /// 解析 CPU 使用率
 /// 从 /proc/stat 第一行解析
 /// 格式: cpu  user nice system idle iowait irq softirq steal guest guest_nice
@@ -161,6 +196,14 @@ mod tests {
         let output = "cpu  12345 678 9012 345678 9012 345 678 90\n";
         let result = parse_cpu(output, 0.0);
         assert!(result > 0.0 && result <= 100.0);
+    }
+
+    #[test]
+    fn test_cpu_percent_between() {
+        let prev = "cpu  200 0 0 400 0 0 0 0\n";
+        let curr = "cpu  250 0 0 450 0 0 0 0\n";
+        let pct = cpu_percent_between(prev, curr).expect("delta");
+        assert!((pct - 50.0).abs() < 0.01);
     }
 
     #[test]

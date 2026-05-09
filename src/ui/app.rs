@@ -1174,8 +1174,15 @@ impl MistTermApp {
                                 self.show_monitor_panel = !self.show_monitor_panel;
                                 self.monitor_panel.set_visible(self.show_monitor_panel);
                                 if self.show_monitor_panel && !self.monitor_panel.is_initialized() {
-                                    if let Some(h) = self.active_tab.and_then(|i| self.tabs.get(i)).and_then(|t| t.terminal.ssh_session_handle()) {
-                                        self.monitor_panel.init(h);
+                                    if let Some(tab) =
+                                        self.active_tab.and_then(|i| self.tabs.get(i))
+                                    {
+                                        if let (Some(h), Some(mgr)) = (
+                                            tab.terminal.ssh_session_handle(),
+                                            tab.terminal.ssh_manager_clone(),
+                                        ) {
+                                            self.monitor_panel.init(h, mgr);
+                                        }
                                     }
                                 }
                             }

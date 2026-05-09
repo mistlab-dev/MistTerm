@@ -44,9 +44,13 @@ impl MonitorPanel {
         }
     }
 
-    /// 初始化监控器（使用现有 SSH 连接）
-    pub fn init(&mut self, ssh_handle: crate::ssh::SshSessionHandle) {
-        self.monitor = Some(Monitor::new(ssh_handle));
+    /// 初始化监控器（使用现有 SSH 连接与对应的 `SshManager` 克隆以供 exec）
+    pub fn init(
+        &mut self,
+        ssh_handle: crate::ssh::SshSessionHandle,
+        ssh_manager: crate::ssh::SshManager,
+    ) {
+        self.monitor = Some(Monitor::new(ssh_handle, ssh_manager));
         self.last_error = None;
         self.refresh();
     }

@@ -1,9 +1,23 @@
 //! 服务器资源采集器
 //!
-//! 通过 SSH 执行命令采集 CPU、内存、磁盘、负载、网络等指标
+//! 通过 SSH **独立 exec 通道**采集 CPU、内存、磁盘、负载、网络等指标（与交互式 PTY 并存，见
+//! [`crate::ssh::SshManager::exec_remote`]。远端一次执行多条只读命令：内容与 `top`/`free`/`df`/`uptime`/`/proc/net/dev`
+//! 等价，输出由 [`super::parser`] 解析；CPU 使用率为连续两次刷新间 `/proc/stat` 聚合行的差分。）
 
-use crate::ssh::SshSessionHandle;
+use crate::monitor::parser;
+use crate::ssh::{SshManager, SshSessionHandle};
 use std::time::Instant;
+
+fn section_after<'a>(text: &'a str, label: &str) -> Option<&'a str> {
+    let key = format!("---{}---", label);
+    let (_, tail) = text.split_once(&key)?;
+    let tail = tail.trim_start_matches(['\r', '\n']);
+    if let Some(pos) = tail.find("\n---") {
+        Some(tail[..pos].trim())
+    } else {
+        Some(tail.trim())
+    }
+}
 
 /// 服务器统计信息
 #[derive(Debug, Clone)]
@@ -119,39 +133,100 @@ pub fn format_bytes(bytes: u64) -> String {
 
 /// 监控器
 pub struct Monitor {
-    /// SSH 会话句柄
+    /// SSH 会话句柄（与 PTY 同源，用于 `session_id`）
     ssh_handle: SshSessionHandle,
+    /// 与 SFTP 相同的 `SshManager` 克隆，用于 exec 采集
+    ssh_manager: SshManager,
     /// 最近一次采集数据
     last_stats: ServerStats,
     /// 历史数据（最近 60 条）
     history: Vec<ServerStats>,
-    /// 上次网络统计（用于计算速率）
+    /// 上次网络统计（预留给扩展）
+    #[allow(dead_code)]
     last_network: Option<(u64, u64, Instant)>,
     /// 上次采集时间
     last_refresh: Option<Instant>,
+    /// 上一帧的 `/proc/stat` 聚合 CPU 行，用于差分 CPU%
+    last_cpu_stat_line: Option<String>,
 }
 
 impl Monitor {
     /// 创建新的监控器
-    pub fn new(ssh_handle: SshSessionHandle) -> Self {
+    pub fn new(ssh_handle: SshSessionHandle, ssh_manager: SshManager) -> Self {
         Self {
             ssh_handle,
+            ssh_manager,
             last_stats: ServerStats::default(),
             history: Vec::with_capacity(60),
             last_network: None,
             last_refresh: None,
+            last_cpu_stat_line: None,
         }
     }
 
-    /// 刷新采集数据
-    ///
-    /// 说明：当前 SSH 会话仅通过 shell 泵暴露 PTY，未在此处接入独立 exec 通道；
-    /// 保留占位数据以便 UI 编译与后续接入。
-    pub fn refresh(&mut self) -> Result<ServerStats, String> {
-        let _ = &self.ssh_handle;
+    /// 单次远程采集：`/proc/stat`、`free -b`、`df -B1 /`、`/proc/loadavg`、`/proc/uptime`、`/proc/net/dev`
+    const COLLECT_CMD: &'static str = r#"sh -c 'printf "%s\n" "---CPU---"; grep "^cpu " /proc/stat | head -n1; printf "%s\n" "---FREE---"; free -b; printf "%s\n" "---DF---"; df -B1 /; printf "%s\n" "---LOAD---"; cat /proc/loadavg; printf "%s\n" "---UPTIME---"; cat /proc/uptime; printf "%s\n" "---NET---"; cat /proc/net/dev'"#;
 
-        let mut stats = ServerStats::default();
-        stats.collected_at = Instant::now();
+    /// 刷新采集数据
+    pub fn refresh(&mut self) -> Result<ServerStats, String> {
+        let sid = self.ssh_handle.session_id;
+        let raw = self
+            .ssh_manager
+            .exec_remote(sid, Self::COLLECT_CMD)
+            .map_err(|e| format!("监控采集失败: {}", e))?;
+
+        let cpu_block = section_after(&raw, "CPU").ok_or("采集输出缺少 CPU 段")?;
+        let cpu_line = cpu_block
+            .lines()
+            .find(|l| l.trim_start().starts_with("cpu "))
+            .map(str::trim)
+            .unwrap_or_else(|| cpu_block.lines().next().unwrap_or("").trim());
+
+        let cpu_percent = if !cpu_line.is_empty() {
+            if let Some(ref prev) = self.last_cpu_stat_line {
+                parser::cpu_percent_between(prev, cpu_line)
+                    .unwrap_or(self.last_stats.cpu_percent)
+            } else {
+                0.0
+            }
+        } else {
+            self.last_stats.cpu_percent
+        };
+        if !cpu_line.is_empty() {
+            self.last_cpu_stat_line = Some(cpu_line.to_string());
+        }
+
+        let mem_block = section_after(&raw, "FREE").ok_or("采集输出缺少 FREE 段")?;
+        let (memory_used, memory_total) =
+            parser::parse_memory(mem_block).unwrap_or((0, 0));
+
+        let df_block = section_after(&raw, "DF").ok_or("采集输出缺少 DF 段")?;
+        let (disk_used, disk_total) = parser::parse_disk(df_block).unwrap_or((0, 0));
+
+        let load_block = section_after(&raw, "LOAD").ok_or("采集输出缺少 LOAD 段")?;
+        let load_line = load_block.lines().next().unwrap_or(load_block).trim();
+        let load_avg = parser::parse_loadavg(load_line);
+
+        let up_block = section_after(&raw, "UPTIME").ok_or("采集输出缺少 UPTIME 段")?;
+        let up_line = up_block.lines().next().unwrap_or(up_block).trim();
+        let uptime_secs = parser::parse_uptime(up_line);
+
+        let net_block = section_after(&raw, "NET").ok_or("采集输出缺少 NET 段")?;
+        let (network_rx_bytes, network_tx_bytes) =
+            parser::parse_network(net_block).unwrap_or((0, 0));
+
+        let mut stats = ServerStats {
+            cpu_percent,
+            memory_used,
+            memory_total,
+            disk_used,
+            disk_total,
+            load_avg,
+            uptime_secs,
+            network_rx_bytes,
+            network_tx_bytes,
+            collected_at: Instant::now(),
+        };
 
         self.history.push(stats.clone());
         if self.history.len() > 60 {

@@ -1023,6 +1023,11 @@ impl TerminalView {
         self.ssh_handle.clone()
     }
 
+    /// 克隆 SSH 管理器，供监控面板 exec 采集等与 PTY 并行的操作使用。
+    pub fn ssh_manager_clone(&self) -> Option<SshManager> {
+        self.ssh_manager.as_ref().cloned()
+    }
+
     /// 是否处于连接建立中（认证/启动 shell 阶段）
     pub fn is_connecting(&self) -> bool {
         !self.connected && self.error_message.is_none() && self.ssh_manager.is_some()
