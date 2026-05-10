@@ -10,6 +10,7 @@ use crate::core::{
     CloudSyncSettings, CredentialVault, FragmentManager, FragmentMergeReport, SessionManager, SortBy,
 };
 use crate::ui::credential_panel::CredentialPanel;
+use crate::ui::layout_util::{self, SidePanelProfile};
 use crate::ui::theme::{Theme, ThemeManager};
 
 /// 导出/导入所需的本地路径与可变引用（由主窗口注入）
@@ -242,16 +243,30 @@ impl CloudSyncPanel {
         parts.join(" · ")
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, theme: &Theme, deps: &mut CloudSyncDeps<'_>) {
+    pub fn show(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        deps: &mut CloudSyncDeps<'_>,
+        right_dock_outer_left: &mut Option<f32>,
+    ) {
         if !self.open {
             return;
         }
 
         let mut close_me = false;
+        let (cl_def, cl_min, cl_max) = layout_util::side_panel_widths(ctx, SidePanelProfile::Standard);
         egui::SidePanel::right("cloud_sync_panel")
-            .default_width(360.0)
+            .default_width(cl_def)
+            .min_width(cl_min)
+            .max_width(cl_max)
             .resizable(true)
             .show(ctx, |ui| {
+                layout_util::record_right_dock_outer_left(
+                    ui,
+                    layout_util::EGUI_SIDE_PANEL_FRAME_MARGIN_X,
+                    right_dock_outer_left,
+                );
                 ui.horizontal(|ui| {
                     ui.heading("☁️ 云端同步");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -266,14 +281,15 @@ impl CloudSyncPanel {
                 );
                 ui.separator();
 
+                let cloud_scroll_h = layout_util::scroll_area_fill_height(ui, 140.0);
                 egui::ScrollArea::vertical()
-                    .max_height(420.0)
+                    .max_height(cloud_scroll_h)
                     .show(ui, |ui| {
                         ui.label(egui::RichText::new("账号（展示）").color(theme.fg_medium_color()));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.settings.account_hint)
                                 .hint_text("未登录 — 后续对接账户")
-                                .desired_width(f32::INFINITY),
+                                .desired_width(layout_util::finite_content_width(ui)),
                         );
 
                         ui.add_space(6.0);

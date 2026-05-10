@@ -5,6 +5,7 @@
 
 use eframe::egui;
 
+use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 
 /// 新建会话对话框
@@ -50,7 +51,7 @@ impl NewSessionDialog {
         egui::Window::new("新建会话")
             .resizable(true)
             .collapsible(false)
-            .default_width(400.0)
+            .default_width(layout_util::modal_default_width(ctx))
             .show(ctx, |ui| {
                 ui.vertical(|ui| {
                     ui.label(
@@ -58,7 +59,7 @@ impl NewSessionDialog {
                     );
                     ui.add(
                         egui::TextEdit::singleline(&mut self.name)
-                            .desired_width(f32::INFINITY)
+                            .desired_width(layout_util::finite_content_width(ui))
                             .text_color(theme.fg_high_color()),
                     );
 
@@ -69,7 +70,7 @@ impl NewSessionDialog {
                     );
                     ui.add(
                         egui::TextEdit::singleline(&mut self.host)
-                            .desired_width(f32::INFINITY)
+                            .desired_width(layout_util::finite_content_width(ui))
                             .text_color(theme.fg_high_color()),
                     );
 
@@ -85,7 +86,7 @@ impl NewSessionDialog {
                     );
                     ui.add(
                         egui::TextEdit::singleline(&mut self.username)
-                            .desired_width(f32::INFINITY)
+                            .desired_width(layout_util::finite_content_width(ui))
                             .text_color(theme.fg_high_color()),
                     );
 
@@ -93,7 +94,7 @@ impl NewSessionDialog {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.password)
                             .password(true)
-                            .desired_width(f32::INFINITY)
+                            .desired_width(layout_util::finite_content_width(ui))
                             .text_color(theme.fg_high_color()),
                     );
 
@@ -106,7 +107,7 @@ impl NewSessionDialog {
                         }
 
                         if ui.button("创建").clicked() {
-                            // TODO: 调用回调创建会话
+                            // 独立组件未接入 SessionManager；请使用主窗口「文件 → 新建会话」
                             self.visible = false;
                             self.reset();
                         }

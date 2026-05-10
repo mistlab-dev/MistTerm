@@ -319,7 +319,7 @@ mod tests {
     fn test_session_manager_creation() {
         let manager = SessionManager::new();
         // 应该能正常创建，即使没有 sessions.json 文件
-        assert!(manager.count() >= 0);
+        assert_eq!(manager.count(), 0);
     }
 
     #[test]

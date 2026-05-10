@@ -4,8 +4,7 @@
 
 use std::fs;
 use std::io::{Read, Write};
-use std::path::PathBuf;
-use md5::{compute, Digest};
+use md5::compute;
 use ssh2::Session;
 
 fn main() {

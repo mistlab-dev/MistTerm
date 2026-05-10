@@ -6,6 +6,7 @@ use eframe::egui;
 use std::path::PathBuf;
 
 use crate::sync::{GitRepo, RepoStatus};
+use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 
 /// Git 同步面板
@@ -18,8 +19,8 @@ pub struct GitSyncPanel {
     status: Option<RepoStatus>,
     /// 提交信息
     commit_message: String,
-    /// 选中的文件列表（用于暂存）
-    staged_files: Vec<String>,
+    /// 选中的文件列表（用于暂存；待接入暂存 UI）
+    _staged_files: Vec<String>,
     /// 状态消息
     status_message: String,
     /// 错误消息
@@ -34,8 +35,8 @@ pub struct GitSyncPanel {
     branch: String,
     /// 远程 URL
     remote_url: String,
-    /// 最后提交信息
-    last_commit: String,
+    /// 最后提交信息（待展示）
+    _last_commit: String,
     /// 操作状态
     operation_status: OperationStatus,
 }
@@ -55,7 +56,7 @@ impl GitSyncPanel {
             repo: None,
             status: None,
             commit_message: String::new(),
-            staged_files: Vec::new(),
+            _staged_files: Vec::new(),
             status_message: String::new(),
             error_message: String::new(),
             show_clone_dialog: false,
@@ -63,7 +64,7 @@ impl GitSyncPanel {
             clone_path: String::new(),
             branch: String::new(),
             remote_url: String::new(),
-            last_commit: String::new(),
+            _last_commit: String::new(),
             operation_status: OperationStatus::Idle,
         }
     }
@@ -322,7 +323,7 @@ impl GitSyncPanel {
                     ui.label(egui::RichText::new("提交信息").strong());
                     ui.add(
                         egui::TextEdit::singleline(&mut self.commit_message)
-                            .desired_width(f32::INFINITY)
+                            .desired_width(layout_util::finite_content_width(ui))
                             .hint_text("输入提交信息..."),
                     );
                     ui.horizontal(|ui| {
@@ -390,19 +391,19 @@ impl GitSyncPanel {
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ui.ctx(), |ui| {
-                        ui.set_min_width(400.0);
+                        ui.set_min_width(layout_util::modal_default_width(ui.ctx()));
                         ui.vertical(|ui| {
                             ui.label("克隆 URL：");
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.clone_url)
-                                    .desired_width(f32::INFINITY)
+                                    .desired_width(layout_util::finite_content_width(ui))
                                     .hint_text("https://github.com/user/repo.git"),
                             );
                             ui.add_space(8.0);
                             ui.label("目标路径：");
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.clone_path)
-                                    .desired_width(f32::INFINITY)
+                                    .desired_width(layout_util::finite_content_width(ui))
                                     .hint_text("/path/to/clone"),
                             );
                             ui.add_space(16.0);

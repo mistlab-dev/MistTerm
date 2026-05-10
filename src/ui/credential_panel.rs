@@ -5,6 +5,7 @@ use eframe::egui;
 use crate::core::{
     Credential, CredentialAuthKind, CredentialCategory, CredentialVault,
 };
+use crate::ui::layout_util::{self, SidePanelProfile};
 use crate::ui::theme::Theme;
 
 #[derive(Clone, Debug)]
@@ -105,16 +106,25 @@ impl CredentialPanel {
         ctx: &egui::Context,
         theme: &Theme,
         action_out: &mut Option<CredentialPanelAction>,
+        right_dock_outer_left: &mut Option<f32>,
     ) -> bool {
         if !self.open {
             return false;
         }
 
         let mut close_panel = false;
+        let (c_def, c_min, c_max) = layout_util::side_panel_widths(ctx, SidePanelProfile::Standard);
         egui::SidePanel::right("credential_panel")
-            .default_width(360.0)
+            .default_width(c_def)
+            .min_width(c_min)
+            .max_width(c_max)
             .resizable(true)
             .show(ctx, |ui| {
+                layout_util::record_right_dock_outer_left(
+                    ui,
+                    layout_util::EGUI_SIDE_PANEL_FRAME_MARGIN_X,
+                    right_dock_outer_left,
+                );
                 ui.horizontal(|ui| {
                     ui.heading("🔐 凭证库");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -137,7 +147,7 @@ impl CredentialPanel {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.search)
                             .hint_text("搜索…")
-                            .desired_width(f32::INFINITY),
+                            .desired_width(layout_util::finite_content_width_inset(ui, 6.0, 120.0, 520.0)),
                     );
                 });
                 ui.separator();
@@ -196,7 +206,7 @@ impl CredentialPanel {
 
                     ui.vertical(|ui| {
                         ui.label("名称");
-                        ui.add(egui::TextEdit::singleline(&mut self.form_name).desired_width(f32::INFINITY));
+                        ui.add(egui::TextEdit::singleline(&mut self.form_name).desired_width(layout_util::finite_content_width(ui)));
                         ui.horizontal(|ui| {
                             ui.label("类别");
                             egui::ComboBox::from_id_source("cred_cat")
@@ -238,30 +248,30 @@ impl CredentialPanel {
                                 });
                         });
                         ui.label("主机");
-                        ui.add(egui::TextEdit::singleline(&mut self.form_host).desired_width(f32::INFINITY));
+                        ui.add(egui::TextEdit::singleline(&mut self.form_host).desired_width(layout_util::finite_content_width(ui)));
                         ui.horizontal(|ui| {
                             ui.label("端口");
                             ui.add(egui::DragValue::new(&mut self.form_port));
                         });
                         ui.label("用户名（可选）");
                         ui.add(
-                            egui::TextEdit::singleline(&mut self.form_username).desired_width(f32::INFINITY),
+                            egui::TextEdit::singleline(&mut self.form_username).desired_width(layout_util::finite_content_width(ui)),
                         );
                         ui.label(format!("密钥 / {}", self.form_auth.label_zh()));
                         ui.add(
                             egui::TextEdit::multiline(&mut self.form_secret)
-                                .desired_width(f32::INFINITY)
+                                .desired_width(layout_util::finite_content_width(ui))
                                 .desired_rows(3)
                                 .password(!matches!(self.form_auth, CredentialAuthKind::SshKey)),
                         );
                         ui.label("标签（逗号分隔）");
                         ui.add(
-                            egui::TextEdit::singleline(&mut self.form_tags).desired_width(f32::INFINITY),
+                            egui::TextEdit::singleline(&mut self.form_tags).desired_width(layout_util::finite_content_width(ui)),
                         );
                         ui.label("备注");
                         ui.add(
                             egui::TextEdit::multiline(&mut self.form_notes)
-                                .desired_width(f32::INFINITY)
+                                .desired_width(layout_util::finite_content_width(ui))
                                 .desired_rows(2),
                         );
 

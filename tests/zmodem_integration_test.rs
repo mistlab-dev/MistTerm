@@ -18,20 +18,20 @@ use std::path::PathBuf;
 /// 测试配置
 struct TestConfig {
     host: String,
-    port: u16,
+    _port: u16,
     username: String,
-    password: String,
-    test_dir: String,
+    _password: String,
+    _test_dir: String,
 }
 
 impl TestConfig {
     fn from_sessions_json() -> Self {
         let config = Self {
             host: "124.220.224.223".to_string(),
-            port: 22,
+            _port: 22,
             username: "ubuntu".to_string(),
-            password: "".to_string(),
-            test_dir: "/tmp/zmodem_test".to_string(),
+            _password: "".to_string(),
+            _test_dir: "/tmp/zmodem_test".to_string(),
         };
         
         let sessions_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sessions.json");

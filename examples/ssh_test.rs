@@ -2,10 +2,9 @@
 //! 
 //! 用法：cargo run --example ssh_test
 
-use std::io::{Read, Write, stdin};
+use std::io::{Read, stdin};
 use std::net::TcpStream;
 use std::path::Path;
-use std::thread;
 use std::time::Duration;
 
 fn main() {

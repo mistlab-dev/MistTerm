@@ -5,6 +5,7 @@
 use crate::ssh::SshSessionId;
 use crate::ssh::{SftpClient, SftpEntry, SshManager};
 use crate::ui::terminal::TerminalView;
+use crate::ui::layout_util::{self, SidePanelProfile};
 use crate::ui::theme::Theme;
 use eframe::egui;
 use rfd::FileDialog;
@@ -306,11 +307,20 @@ impl SftpPanel {
         theme: &Theme,
         terminal: Option<&TerminalView>,
         close_panel: &mut bool,
+        right_dock_outer_left: &mut Option<f32>,
     ) {
+        let (s_def, s_min, s_max) = layout_util::side_panel_widths(ctx, SidePanelProfile::Standard);
         egui::SidePanel::right("sftp_browser_panel")
-            .default_width(360.0)
+            .default_width(s_def)
+            .min_width(s_min)
+            .max_width(s_max)
             .resizable(true)
             .show(ctx, |ui| {
+                layout_util::record_right_dock_outer_left(
+                    ui,
+                    layout_util::EGUI_SIDE_PANEL_FRAME_MARGIN_X,
+                    right_dock_outer_left,
+                );
                 self.show_content(ui, ctx, theme, terminal, close_panel);
             });
     }
@@ -401,7 +411,7 @@ impl SftpPanel {
             );
             ui.add(
                 egui::TextEdit::singleline(&mut self.path_edit)
-                    .desired_width((ui.available_width() - 148.0).max(80.0))
+                    .desired_width(layout_util::finite_avail_minus(ui, 160.0, 80.0, 1200.0))
                     .hint_text("/tmp 或 ."),
             );
             if ui.add_enabled(!self.busy, egui::Button::new("前往")).clicked() {

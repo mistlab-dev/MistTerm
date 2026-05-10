@@ -33,8 +33,12 @@ fn main() -> eframe::Result<()> {
     // macOS：启动时尝试切到「ABC」英文键盘布局（需在系统里启用过该输入源）
     mistterm::platform::apply_preferred_english_input_source();
 
+    // docs/product/SPECIFICATION_DETAILED.md §1.1：约 820 高；最大宽约 1440（eframe 0.23 用 initial_window_size）
     let options = eframe::NativeOptions {
-        maximized: true,
+        maximized: false,
+        initial_window_size: Some(egui::vec2(1200.0, 820.0)),
+        max_window_size: Some(egui::vec2(1440.0, 2160.0)),
+        app_id: Some("mistterm".to_string()),
         ..Default::default()
     };
     

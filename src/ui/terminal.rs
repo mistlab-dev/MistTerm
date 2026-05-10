@@ -77,6 +77,20 @@ pub struct TerminalView {
 impl TerminalView {
     const SFTP_RETRY_ATTEMPTS: usize = 160;
     const SFTP_RETRY_SLEEP_MS: u64 = 8;
+    /// 终端区与外边：左/上/下各 1px；右侧不留（滚动条已隐藏，勿再挤占一列）
+    const TERMINAL_CONTENT_INSET: egui::Margin = egui::Margin {
+        left: 1.0,
+        right: 0.0,
+        top: 1.0,
+        bottom: 1.0,
+    };
+    /// Scroll 内容与视口边框的极小余量，避免偶发裁切一个字形
+    const INNER_TEXT_SLACK: f32 = 0.0;
+    /// ScrollArea **内容区内宽**（已不含纵向滚动条）→ TextEdit.desired_width
+    #[inline]
+    fn text_width_in_scroll_viewport(scroll_inner_width: f32) -> f32 {
+        (scroll_inner_width - Self::INNER_TEXT_SLACK).max(64.0)
+    }
 
     fn is_would_block_text(msg: &str) -> bool {
         let msg = msg.to_lowercase();
@@ -207,8 +221,8 @@ impl TerminalView {
         }
     }
 
-    /// 显示终端视图
-    pub fn show(&mut self, ui: &mut egui::Ui, theme: &Theme) {
+    /// 显示终端视图。`column_width` 须为宿主在 **标签栏下方** 为终端列 `allocate_ui_with_layout` 的宽度（勿用 `clip_rect`，常为整窗宽）。
+    pub fn show(&mut self, ui: &mut egui::Ui, theme: &Theme, column_width: f32) {
         // 先处理网络与键盘，再绘制，避免输入/输出滞后一帧
         self.process_ssh_messages();
         self.process_transfer_events(ui.ctx());
@@ -243,27 +257,44 @@ impl TerminalView {
             }
         }
 
-        let available_size = ui.available_size();
+        // 吃满宿主 allocate 的矩形；否则 Frame 随内容收缩，父区露出 bg_body（像左边/上边一条灰）并易触发中央区滚动条
+        let fill_region = ui.available_size();
+        if fill_region.x.is_finite()
+            && fill_region.y.is_finite()
+            && fill_region.x > 0.0
+            && fill_region.y > 0.0
+        {
+            ui.set_min_size(fill_region);
+        }
+
+        let _ = column_width.max(1.0).min(16_384.0);
         // 进度条在 Frame 内先占位；若仍用全高算行列，网格会高于 ScrollArea，滚动与「│」光标错位
         // 与 Frame 内底部进度条占位一致（分隔线 + 两行文案 + ProgressBar）
         const TRANSFER_FOOTER_H: f32 = 72.0;
-        let progress_reserve_y = if self.transfer_progress.is_some() {
-            TRANSFER_FOOTER_H
-        } else {
-            0.0
-        };
-        let pty_sync_size = egui::vec2(
-            available_size.x,
-            (available_size.y - progress_reserve_y).max(80.0),
-        );
-        self.sync_pty_size_with_ui(ui, pty_sync_size, theme);
-        
-        // README §2.4 终端区域：背景随主题、内边距 16px（不在终端内再放一条状态栏，由主窗口底栏承担）
+        // README §2.4：主底栏承担状态；PTY 尺寸在 ScrollArea 内容区内按真实 viewport 同步（见下方）
         egui::Frame::none()
             .fill(theme.bg_terminal_color())
-            .inner_margin(egui::Margin::same(16.0))
+            .inner_margin(Self::TERMINAL_CONTENT_INSET)
             .show(ui, |ui| {
+                // Scroll 滑道、Multiline/TextEdit(code_editor) 背板都用「极暗底色」；
+                // 设为终端同色，否则会露出比 bg_terminal 更浅的灰条。
+                let prev_extreme = ui.visuals().extreme_bg_color;
+                ui.visuals_mut().extreme_bg_color = theme.bg_terminal_color();
+                let inner_fill = ui.available_size();
+                if inner_fill.x.is_finite()
+                    && inner_fill.y.is_finite()
+                    && inner_fill.x > 0.0
+                    && inner_fill.y > 0.0
+                {
+                    ui.set_min_size(inner_fill);
+                }
                 ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                    // 同上：收窄的 min_rect 会让 Frame.fill 不按整列铺开，左侧/上出现 bg_body 「灰框」
+                    let col_w = ui.available_width();
+                    let col_h = ui.available_height();
+                    ui.set_min_width(col_w.max(1.0));
+                    ui.set_min_height(col_h.max(1.0));
                     let footer_h = if self.transfer_progress.is_some() {
                         TRANSFER_FOOTER_H
                     } else {
@@ -272,14 +303,31 @@ impl TerminalView {
                     let scroll_h = (ui.available_height() - footer_h).max(80.0);
 
                     // 终端内容区在上，ZMODEM 进度条固定在底部，避免插在命令与 shell 输出之间
-                    let layout_job = self
-                        .terminal
-                        .get_layout_job(self.font_size, theme.fg_medium_color());
+                    let terminal_bg = theme.bg_terminal_color();
+                    let layout_job = self.terminal.get_layout_job(
+                        self.font_size,
+                        theme.fg_medium_color(),
+                        terminal_bg,
+                    );
                     let scroll_output = egui::ScrollArea::vertical()
                         .stick_to_bottom(self.auto_follow_output)
                         .auto_shrink([false, false])
+                        .scroll_bar_visibility(
+                            egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                        )
                         .max_height(scroll_h)
                         .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                            ui.set_min_width(ui.available_width().max(1.0));
+                            let vw = ui.available_width().max(1.0);
+                            // 先铺与格子一致的底色，避免 PTY 行高取整后 galley 略矮露出「另一块」底色
+                            let pre = ui.available_rect_before_wrap();
+                            if pre.width() > 0.0 && pre.height() > 0.0 {
+                                ui.painter().rect_filled(pre, 0.0, terminal_bg);
+                            }
+                            // 与 TextEdit 同宽：Scroll 内容区已不含纵向条，勿再扣 SCROLL_VBAR_RESERVE（否则会窄一截、右侧露 extreme_bg）
+                            self.sync_pty_size_with_ui(ui, egui::vec2(vw, scroll_h.max(1.0)), theme);
+                            let edit_w = Self::text_width_in_scroll_viewport(vw);
                             // `String` + 可编辑会触发 egui 插入/IME 光标，与 VT 里「│」叠成双光标；用 `&str` 只读缓冲只保留 PTY 光标
                             let display_owned = self.terminal.get_formatted_output();
                             let mut display_view: &str = display_owned.as_str();
@@ -288,11 +336,19 @@ impl TerminalView {
                                 let job = layout_job.clone();
                                 ui.ctx().fonts(|f| f.layout_job(job))
                             };
+                            // Scroll 内短内容时 galley 高度 < 视口，底下会留一块「纯黑」；强制最小高度铺满视口
                             let response = ui.add(
                                 egui::TextEdit::multiline(&mut display_view)
                                     .id_source("terminal_text_area")
+                                    // egui 默认 margin (4,2)，文本不会贴齐 Scroll 内缘；终端须为 0
+                                    .margin(egui::vec2(0.0, 0.0))
+                                    .horizontal_align(egui::Align::LEFT)
+                                    // min_size 拉高控件后默认 TOP 对齐，底下一大块「纯黑」；终端内容贴底更贴近真实 shell
+                                    .vertical_align(egui::Align::BOTTOM)
                                     .font(egui::TextStyle::Monospace)
-                                    .desired_width(f32::INFINITY)
+                                    // 必须与父 Scroll/Frame 同宽；过大 min 宽会把 Central 撑到盖住右侧栏
+                                    .desired_width(edit_w)
+                                    .min_size(egui::vec2(vw, scroll_h))
                                     .code_editor()
                                     // 终端输入场景下，Tab/方向键应优先发给 PTY，不应被 egui 焦点遍历抢走。
                                     .lock_focus(true)
@@ -382,22 +438,23 @@ impl TerminalView {
                             human_readable_size(progress.2.max(1)),
                             percent
                         );
+                        let bar_w = Self::text_width_in_scroll_viewport(ui.available_width().max(1.0));
                         ui.add(
                             egui::ProgressBar::new(percent / 100.0)
                                 .fill(theme.accent_color())
-                                .desired_width(f32::INFINITY)
+                                .desired_width(bar_w)
                                 .text(egui::RichText::new(detail).color(theme.fg_high_color())),
                         );
                     }
                 });
+                ui.visuals_mut().extreme_bg_color = prev_extreme;
             });
     }
 
-    fn sync_pty_size_with_ui(&mut self, ui: &egui::Ui, available_size: egui::Vec2, theme: &Theme) {
-        // 预留状态栏、进度条、边距；输入已并入滚动区，不再单独预留一行
-        let usable_width = (available_size.x - 32.0).max(120.0);
-        // 无终端内状态栏后略减预留（进度条等仍占高）
-        let usable_height = (available_size.y - 72.0).max(80.0);
+    /// `viewport`：ScrollArea **内容区**（inner）的宽 × 可视区高度（与 `max_height(scroll_h)` 一致），已不含 Frame inner_margin 与纵向滚动条占位。
+    fn sync_pty_size_with_ui(&mut self, ui: &egui::Ui, viewport: egui::Vec2, theme: &Theme) {
+        let usable_width = Self::text_width_in_scroll_viewport(viewport.x).max(120.0);
+        let usable_height = viewport.y.max(48.0);
 
         // 用真实字体测量单字符网格尺寸，避免 80x24 误差
         let font_id = egui::FontId::monospace(self.font_size);
@@ -1019,6 +1076,11 @@ impl TerminalView {
         self.connected
     }
 
+    /// 终端网格是否持有键盘焦点（用于全局快捷键与 Delete 等不与 PTY 抢键）
+    pub fn is_terminal_focused(&self) -> bool {
+        self.terminal_focused
+    }
+
     pub fn ssh_session_handle(&self) -> Option<SshSessionHandle> {
         self.ssh_handle.clone()
     }
@@ -1101,11 +1163,14 @@ impl TerminalView {
         }
     }
 
-    /// 断开连接
+    /// 断开连接（关闭 SSH 并清空本地终端网格，用于移除标签等场景）
     pub fn disconnect(&mut self) {
         if let Some(ref h) = self.ssh_handle {
             self.lrzsz.unregister_shell_pump_upload_feed(h);
         }
+        self.pending_rz_upload = false;
+        self.end_rz_handshake_capture();
+        self.clear_rz_control_mode();
         self.connected = false;
         self.ssh_handle = None;
         self.ssh_manager = None;
@@ -1120,6 +1185,29 @@ impl TerminalView {
         self.terminal_focused = false;
     }
 
+    /// 仅断开 SSH，保留当前屏幕与滚动缓冲（FUNCTIONAL_SPEC §1.3.5：Tab 保留、输出冻结、不可再输入）
+    pub fn disconnect_ssh_keep_buffer(&mut self) {
+        if let Some(ref h) = self.ssh_handle {
+            self.lrzsz.unregister_shell_pump_upload_feed(h);
+        }
+        self.pending_rz_upload = false;
+        self.end_rz_handshake_capture();
+        self.clear_rz_control_mode();
+        self.connected = false;
+        self.ssh_handle = None;
+        self.ssh_manager = None;
+        self.ssh_rx = None;
+        self.session_id = None;
+        self.error_message = None;
+        self.transfer_progress = None;
+        self.transfer_outgoing = false;
+        self.pending_focus_terminal = false;
+        self.connected_at = None;
+        self.terminal_focused = false;
+        self.terminal
+            .feed(b"\r\n\x1b[90m[SSH disconnected; scrollback kept, input disabled]\x1b[0m\r\n");
+    }
+
     /// 插入命令片段（自动添加回车）
     pub fn insert_fragment(&mut self, command: &str) -> Result<(), String> {
         if !self.connected {
@@ -1132,6 +1220,45 @@ impl TerminalView {
         handle
             .send_input(input.as_bytes())
             .map_err(|e| format!("发送失败: {}", e))
+    }
+
+    /// 在当前视口文本中搜索（与 [`Self::show`] 所用 `get_formatted_output` 同源；不含卷动区历史）。
+    ///
+    /// 返回每个匹配位置：**(行号从 1 起, 列号从 1 起，按 Unicode 标量值计)**。
+    pub fn search_viewport(&self, query: &str, ignore_case: bool) -> Vec<(usize, usize)> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let text = self.terminal.get_formatted_output();
+        let q_len = query.chars().count();
+        if q_len == 0 {
+            return Vec::new();
+        }
+        let q_cmp = if ignore_case {
+            query.to_lowercase()
+        } else {
+            query.to_string()
+        };
+        let mut out = Vec::new();
+        for (line_idx, line) in text.lines().enumerate() {
+            let line_chars: Vec<char> = line.chars().collect();
+            let n = line_chars.len();
+            if n < q_len {
+                continue;
+            }
+            for start in 0..=(n - q_len) {
+                let window: String = line_chars[start..start + q_len].iter().collect();
+                let ok = if ignore_case {
+                    window.to_lowercase() == q_cmp
+                } else {
+                    window == q_cmp
+                };
+                if ok {
+                    out.push((line_idx + 1, start + 1));
+                }
+            }
+        }
+        out
     }
 }
 

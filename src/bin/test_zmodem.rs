@@ -8,7 +8,6 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::time::Duration;
 use ssh2::Session;
 
 fn main() {

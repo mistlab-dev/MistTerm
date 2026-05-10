@@ -10,8 +10,6 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use ssh2::Session;
 
 fn main() {

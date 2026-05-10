@@ -101,9 +101,14 @@ impl Terminal {
         }
         out
     }
-    /// 返回带颜色信息的布局（保持等宽）
-    pub fn get_layout_job(&self, font_size: f32, default_fg: Color32) -> LayoutJob {
-        let terminal_bg = Color32::from_rgb(10, 10, 18);
+    /// 返回带颜色信息的布局（保持等宽）。`terminal_bg` 须与 UI [`Theme::bg_terminal_color`] 一致，
+    /// 否则整块格子与外框底色色差会像「四周留白」。
+    pub fn get_layout_job(
+        &self,
+        font_size: f32,
+        default_fg: Color32,
+        terminal_bg: Color32,
+    ) -> LayoutJob {
         let mut rows = vec![vec![(' ', default_fg, terminal_bg); self.width]; self.height];
         let content = self.term.renderable_content();
 

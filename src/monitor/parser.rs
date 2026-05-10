@@ -40,6 +40,7 @@ pub fn cpu_percent_between(prev_line: &str, curr_line: &str) -> Option<f32> {
 /// 解析 CPU 使用率
 /// 从 /proc/stat 第一行解析
 /// 格式: cpu  user nice system idle iowait irq softirq steal guest guest_nice
+#[allow(dead_code)] // 单元测试使用；监控面板优先用 [`cpu_percent_between`] 差分
 pub fn parse_cpu(output: &str, last_cpu_percent: f32) -> f32 {
     let line = output.trim();
     if !line.starts_with("cpu ") {

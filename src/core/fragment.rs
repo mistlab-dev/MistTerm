@@ -203,20 +203,74 @@ pub fn expand_command_template(
     out
 }
 
-/// 提取模板中的占位符名称（去重、保序）
+/// 将 `pairs` 中出现的 `<key>` 逐字替换为对应 `value`（与 UI 填写片段变量、`pending_fragment_vars` 行为一致）。
+#[inline]
+pub fn substitute_angle_placeholders(template: &str, pairs: &[(String, String)]) -> String {
+    let mut output = template.to_string();
+    for (key, value) in pairs {
+        output = output.replace(&format!("<{}>", key), value);
+    }
+    output
+}
+
+/// UI 与片段库共用的展开顺序：**不得在整串上先于 Rhai 做 `<>` 字面替换**，否则会破坏 `{{ md5(<user>) }}`（会变成非法的 `md5(alice)` 标识符）。
+/// 流程：在 `expand_rhai_blocks` 内部的 `{{ … }}` 里把 `<占位符>` 换成带引号的 Rhai 字面量（见 `fragment_expr::substitute_angle_placeholders_in_expr`）→ 会话/表单变量上下文求值；
+/// 再对整条结果做 [`expand_command_template`]，展开 Rhai **之外**残留的 `<占位符>`（会话与 `extras`）。
+pub fn expand_fragment_command_stages(
+    template: &str,
+    session: Option<&SessionConfig>,
+    template_extras: &HashMap<String, String>,
+) -> Result<String, String> {
+    use super::fragment_expr::{expand_rhai_blocks, merge_rhai_context};
+    let ctx = merge_rhai_context(session, template_extras);
+    let after_rhai = expand_rhai_blocks(template, &ctx)?;
+    Ok(expand_command_template(
+        &after_rhai,
+        session,
+        template_extras,
+    ))
+}
+
+/// 提取模板中的 `<占位符>` 名称（去重、保序）。`{{ … }}` 表达式内的内容不参与扫描，避免 `a < b` 等误匹配。
 pub fn list_placeholder_keys(template: &str) -> Vec<String> {
+    use super::fragment_expr::find_closing_double_brace;
+
     let mut seen = HashMap::<String, ()>::new();
     let mut order = Vec::new();
-    let mut rest = template;
-    while let Some(open) = rest.find('<') {
-        rest = &rest[open + 1..];
-        let Some(close) = rest.find('>') else { break };
-        let key = rest[..close].trim().to_string();
-        if !key.is_empty() && !seen.contains_key(&key) {
-            seen.insert(key.clone(), ());
-            order.push(key);
+    let bytes = template.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'{' && bytes[i + 1] == b'{' {
+            let open = i;
+            if let Some(close) = find_closing_double_brace(template, open) {
+                i = close + 2;
+            } else {
+                break;
+            }
+            continue;
         }
-        rest = &rest[close + 1..];
+        if bytes[i] == b'<' {
+            i += 1;
+            let start = i;
+            while i < bytes.len() && bytes[i] != b'>' {
+                i += 1;
+            }
+            if i >= bytes.len() {
+                break;
+            }
+            let key = template
+                .get(start..i)
+                .map(str::trim)
+                .unwrap_or("")
+                .to_string();
+            if !key.is_empty() && !seen.contains_key(&key) {
+                seen.insert(key.clone(), ());
+                order.push(key);
+            }
+            i += 1;
+            continue;
+        }
+        i += 1;
     }
     order
 }
@@ -632,6 +686,62 @@ mod tests {
     use crate::core::session::SessionConfig;
 
     #[test]
+    fn test_substitute_angle_placeholders() {
+        let pairs = vec![
+            ("svc".into(), "nginx".into()),
+            ("path".into(), "/tmp".into()),
+        ];
+        let out = substitute_angle_placeholders("systemctl status <svc> <path>", &pairs);
+        assert_eq!(out, "systemctl status nginx /tmp");
+    }
+
+    #[test]
+    fn test_expand_fragment_command_md5_inside_rhai_then_plain_user() {
+        let mut m = std::collections::HashMap::new();
+        m.insert("user".into(), "alice".into());
+        let out =
+            expand_fragment_command_stages("echo u_{{ md5(<user>) }}_<user>", None, &m)
+                .expect("inside-{{ }} `<user>` is quoted before Rhai");
+        assert!(!out.contains('<'), "{}", out);
+        assert!(!out.contains("{{"), "{}", out);
+        assert!(
+            out.contains("alice"),
+            "trailing `_<user>` should become `_alice`: {}",
+            out
+        );
+    }
+
+    #[test]
+    fn test_expand_fragment_command_stages_order() {
+        let s = SessionConfig {
+            id: "1".into(),
+            name: "生产".into(),
+            group: "g".into(),
+            host: "10.1.2.3".into(),
+            port: 22,
+            username: "alice".into(),
+            password: String::new(),
+            last_connected_at: None,
+        };
+        let mut extras = HashMap::new();
+        extras.insert("svc".into(), "127.0.0.1".into());
+        let out = expand_fragment_command_stages(
+            "ping <svc> @ <host> — {{ 1 + 2 }}",
+            Some(&s),
+            &extras,
+        )
+        .unwrap();
+        assert!(out.contains("127.0.0.1"));
+        assert!(out.contains("10.1.2.3"));
+        assert!(
+            out.contains("3"),
+            "Rhai scalar should stringify in output: {}",
+            out
+        );
+        assert!(!out.contains("{{"));
+    }
+
+    #[test]
     fn test_expand_command_template() {
         let s = SessionConfig {
             id: "1".into(),
@@ -654,6 +764,12 @@ mod tests {
     fn test_list_placeholder_keys() {
         let t = "echo <a> and <b> <a>";
         assert_eq!(list_placeholder_keys(t), vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_list_placeholder_keys_skips_rhai_blocks() {
+        let t = "{{ a + b }} <host>";
+        assert_eq!(list_placeholder_keys(t), vec!["host"]);
     }
 
     #[test]

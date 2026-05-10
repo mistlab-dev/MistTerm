@@ -16,12 +16,34 @@ use ssh2::Channel;
 pub type SshSessionId = usize;
 
 /// Shell 泵命令（经 `std::sync::mpsc::sync_channel` 入队，**专用 OS 线程**顺序执行 PTY I/O）
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// 说明：`ExecRemote` 必须在泵线程执行，与 PTY `Channel` **互斥**使用同一底层 `Session`，
+/// 不得在其他 OS 线程并发 `exec_remote`（否则易出现 PTY「假死」、终端无法交互）。
 pub enum ShellPumpCommand {
     /// 用户键盘 → PTY
     PtyInput(Vec<u8>),
     /// 本机 ZMODEM 上传（sz→rz）二进制帧 → 同一 PTY
     ZmodemWrite(Vec<u8>),
+    ExecRemote {
+        cmd: String,
+        reply: mpsc::Sender<Result<String, String>>,
+    },
+}
+
+impl std::fmt::Debug for ShellPumpCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ShellPumpCommand::PtyInput(v) => {
+                f.debug_tuple("ShellPumpCommand::PtyInput").field(v).finish()
+            }
+            ShellPumpCommand::ZmodemWrite(v) => {
+                f.debug_tuple("ShellPumpCommand::ZmodemWrite").field(v).finish()
+            }
+            ShellPumpCommand::ExecRemote { cmd, .. } => {
+                f.debug_struct("ShellPumpCommand::ExecRemote").field("cmd", cmd).finish()
+            }
+        }
+    }
 }
 
 /// 有界同步队列发送端（与 [`SHELL_PUMP_QUEUE_CAP`] 一致；任意线程 `send` 阻塞直至泵取走）
@@ -94,6 +116,22 @@ impl SshSessionHandle {
         self.resize_tx
             .send((cols, rows))
             .map_err(|e| format!("Resize failed: {}", e))
+    }
+
+    /// 将远程一次 `exec` 排入 **shell 泵线程**，与 PTY 读写在同一 OS 线程互斥执行。
+    ///
+    /// 不得在其它线程对本会话并行调用 [`SshManager::exec_remote`]，否则会与 PTY `Channel` 争用底层
+    /// `Session`（常见症状：终端卡死、`set_blocking` 状态错乱）。
+    pub fn enqueue_remote_exec(
+        &self,
+        command: &str,
+    ) -> Result<mpsc::Receiver<Result<String, String>>, String> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        self.pump_send(ShellPumpCommand::ExecRemote {
+            cmd: command.to_string(),
+            reply: reply_tx,
+        })?;
+        Ok(reply_rx)
     }
 
     /// ZMODEM→`rz` 上传：注册后 shell 泵在每次 `channel.read` 时同步旁路到 `upload_pty_rx`（见 [`crate::ssh::lrzsz::LrzszTransfer`]）。
@@ -400,6 +438,8 @@ impl SshManager {
         let (resize_tx, resize_rx) = sync_channel::<(u32, u32)>(RESIZE_QUEUE_CAP);
         let upload_bypass_slot = Arc::new(Mutex::new(None::<Arc<UploadPtyBypass>>));
 
+        let mgr_for_pump = self.clone();
+
         let channel = {
             let mut sessions = sessions.lock().unwrap();
             let session = sessions
@@ -418,6 +458,7 @@ impl SshManager {
             message_tx,
             session_id,
             upload_bypass_slot.clone(),
+            mgr_for_pump,
         );
 
         Ok(SshSessionHandle {
@@ -486,6 +527,7 @@ mod shell_pump {
         message_tx: Sender<SshMessage>,
         session_id: SshSessionId,
         upload_bypass_slot: Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
+        mgr: SshManager,
     ) {
         let channel = Arc::new(Mutex::new(channel));
         thread::Builder::new()
@@ -503,6 +545,7 @@ mod shell_pump {
                     message_tx,
                     session_id,
                     upload_bypass_slot,
+                    mgr,
                 );
                 log::warn!("shell 泵线程退出 session_id={}", session_id);
             })
@@ -516,6 +559,7 @@ mod shell_pump {
         message_tx: Sender<SshMessage>,
         session_id: SshSessionId,
         upload_bypass_slot: Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
+        mgr: SshManager,
     ) {
         let mut read_buffer = [0u8; 16384];
         let mut input_line_buf: Vec<u8> = Vec::new();
@@ -550,6 +594,7 @@ mod shell_pump {
                         }
                     }
                     if !process_one_command_sync(
+                        &mgr,
                         &channel,
                         &message_tx,
                         session_id,
@@ -561,6 +606,7 @@ mod shell_pump {
                     }
                     while let Ok(more) = pump_rx.try_recv() {
                         if !process_one_command_sync(
+                            &mgr,
                             &channel,
                             &message_tx,
                             session_id,
@@ -595,6 +641,7 @@ mod shell_pump {
     }
 
     fn process_one_command_sync(
+        mgr: &SshManager,
         channel: &Arc<Mutex<Channel>>,
         message_tx: &Sender<SshMessage>,
         session_id: SshSessionId,
@@ -651,6 +698,11 @@ mod shell_pump {
                         e
                     );
                 }
+            }
+            ShellPumpCommand::ExecRemote { cmd, reply } => {
+                drop(ch);
+                let res = mgr.exec_remote(session_id, &cmd);
+                let _ = reply.send(res);
             }
         }
         true
@@ -780,14 +832,14 @@ mod shell_pump {
             tx.send(ShellPumpCommand::ZmodemWrite(vec![0x2a, 0x2a]))
                 .unwrap();
             drop(tx);
-            assert_eq!(
-                rx.recv().unwrap(),
-                ShellPumpCommand::PtyInput(vec![0x61])
-            );
-            assert_eq!(
-                rx.recv().unwrap(),
-                ShellPumpCommand::ZmodemWrite(vec![0x2a, 0x2a])
-            );
+            match rx.recv().unwrap() {
+                ShellPumpCommand::PtyInput(v) => assert_eq!(v, vec![0x61]),
+                other => panic!("unexpected: {:?}", other),
+            }
+            match rx.recv().unwrap() {
+                ShellPumpCommand::ZmodemWrite(v) => assert_eq!(v, vec![0x2a, 0x2a]),
+                other => panic!("unexpected: {:?}", other),
+            }
             assert!(rx.recv().is_err());
         }
 
@@ -801,10 +853,19 @@ mod shell_pump {
                 tx_c.send(ShellPumpCommand::PtyInput(vec![3])).unwrap();
             });
             thread::sleep(Duration::from_millis(20));
-            assert_eq!(rx.recv().unwrap(), ShellPumpCommand::PtyInput(vec![1]));
-            assert_eq!(rx.recv().unwrap(), ShellPumpCommand::PtyInput(vec![2]));
+            match rx.recv().unwrap() {
+                ShellPumpCommand::PtyInput(v) => assert_eq!(v, vec![1]),
+                other => panic!("unexpected: {:?}", other),
+            }
+            match rx.recv().unwrap() {
+                ShellPumpCommand::PtyInput(v) => assert_eq!(v, vec![2]),
+                other => panic!("unexpected: {:?}", other),
+            }
             fill.join().unwrap();
-            assert_eq!(rx.recv().unwrap(), ShellPumpCommand::PtyInput(vec![3]));
+            match rx.recv().unwrap() {
+                ShellPumpCommand::PtyInput(v) => assert_eq!(v, vec![3]),
+                other => panic!("unexpected: {:?}", other),
+            }
         }
     }
 }

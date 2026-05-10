@@ -4,7 +4,7 @@
 //! 
 //! 用法：cargo run --example ssh_multi_session
 
-use std::io::{Read, Write, stdin};
+use std::io::Read;
 use std::net::TcpStream;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -15,12 +15,15 @@ use ssh2::Session;
 /// SSH 会话包装
 struct SshSession {
     session: Session,
-    session_id: usize,
+    _session_id: usize,
 }
 
 impl SshSession {
     fn new(session: Session, session_id: usize) -> Self {
-        Self { session, session_id }
+        Self {
+            session,
+            _session_id: session_id,
+        }
     }
 
     fn execute(&mut self, cmd: &str) -> Result<String, String> {

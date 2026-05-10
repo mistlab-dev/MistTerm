@@ -32,7 +32,7 @@ path = "src/main.rs"
 
 [dependencies]
 md5 = "0.7"
-eframe = { version = "0.23", features = ["wgpu"] }
+eframe = { version = "0.23", features = ["wgpu", "persistence"] }
 # GUI - eframe with wgpu for GPU acceleration
 egui = "0.23"
 egui_extras = { version = "0.24", features = ["all_loaders"] }
@@ -86,6 +86,8 @@ parking_lot = "0.12"
 shellexpand = "3.1"
 dirs = "5.0"
 chrono = "0.4"
+# 片段命令中 {{ ... }} 表达式（md5/base64 等），默认沙箱、无 IO
+rhai = "1.19"
 
 # Font support
 ab_glyph = "0.2"
