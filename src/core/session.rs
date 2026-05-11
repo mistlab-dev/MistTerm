@@ -317,7 +317,11 @@ mod tests {
 
     #[test]
     fn test_session_manager_creation() {
-        let manager = SessionManager::new();
+        // 使用临时目录，避免加载当前目录下的 sessions.json
+        let temp_dir = tempfile::tempdir().unwrap();
+        let mut path = temp_dir.path().to_path_buf();
+        path.push("sessions.json");
+        let manager = SessionManager::with_sessions_path(path);
         // 应该能正常创建，即使没有 sessions.json 文件
         assert_eq!(manager.count(), 0);
     }
