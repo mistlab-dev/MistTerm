@@ -3,6 +3,7 @@
 //! 实时显示服务器资源使用状态
 
 use eframe::egui;
+use egui_plot::{AxisBools, Corner, Legend, Line, LineStyle, Plot, PlotPoints, VLine};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
@@ -342,12 +343,11 @@ impl MonitorPanel {
             ui.separator();
             ui.add_space(4.0);
 
-            // 历史图表标题
-            ui.label(egui::RichText::new("📈 历史趋势 (60s)").size(13.0).color(theme.fg_medium_color()));
+            // 历史图表（egui_plot，至多 60 个采样点）
+            ui.label(egui::RichText::new("📈 历史趋势").size(13.0).color(theme.fg_medium_color()));
             ui.add_space(4.0);
 
-            // CPU / 内存折线图
-            self.show_history_chart(ui, theme, history);
+            self.show_history_plots(ui, theme, history);
 
         } else {
             // 未初始化提示
@@ -463,123 +463,223 @@ impl MonitorPanel {
             });
     }
 
-    /// 显示历史趋势图（CPU + 内存折线）
-    fn show_history_chart(&self, ui: &mut egui::Ui, theme: &Theme, history: &[ServerStats]) {
-        let chart_height = 120.0;
+    /// 历史趋势：`egui_plot` 展示 CPU/内存（%）与网络速率（B/s），横轴为相对时间并联动。
+    fn show_history_plots(&self, ui: &mut egui::Ui, theme: &Theme, history: &[ServerStats]) {
+        const CHART_HEIGHT: f32 = 110.0;
         let width = layout_util::finite_content_width_inset(ui, 8.0, 200.0, 2000.0);
+        let link_x_id = ui.id().with("monitor_hist_time_axis");
+        let tip_id = ui.id().with("monitor_history_tooltip");
 
         if history.len() < 2 {
             ui.label(
-                egui::RichText::new("等待数据采集…")
+                egui::RichText::new("等待数据采集…（至少两次刷新后显示曲线）")
                     .size(11.0)
                     .color(theme.fg_low_color()),
             );
             return;
         }
 
-        let (rect, _resp) = ui.allocate_exact_size(
-            egui::vec2(width, chart_height),
-            egui::Sense::hover(),
-        );
-
-        let painter = ui.painter();
-
-        // 背景网格
-        painter.rect_filled(rect, 4.0, theme.bg_terminal_color());
-
-        // 水平参考线 (25%, 50%, 75%)
-        for pct in [25.0, 50.0, 75.0] {
-            let y = rect.max.y - (pct / 100.0) * rect.height();
-            painter.line_segment(
-                [egui::pos2(rect.min.x, y), egui::pos2(rect.max.x, y)],
-                egui::Stroke::new(0.5, theme.subtle_line_color()),
-            );
-        }
-
-        // Y 轴刻度
-        painter.text(
-            egui::pos2(rect.min.x + 4.0, rect.min.y + 2.0),
-            egui::Align2::LEFT_TOP,
-            "100%",
-            egui::FontId::monospace(9.0),
-            theme.subtle_label_color(),
-        );
-        painter.text(
-            egui::pos2(rect.min.x + 4.0, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            "50%",
-            egui::FontId::monospace(9.0),
-            theme.subtle_label_color(),
-        );
-        painter.text(
-            egui::pos2(rect.min.x + 4.0, rect.max.y - 4.0),
-            egui::Align2::LEFT_BOTTOM,
-            "0%",
-            egui::FontId::monospace(9.0),
-            theme.subtle_label_color(),
-        );
-
         let n = history.len();
-        let x_step = rect.width() / (n - 1).max(1) as f32;
+        let t0 = history[0].collected_at;
+        let t_end = (history[n - 1].collected_at - t0).as_secs_f64().max(0.0);
 
-        // CPU 折线（成功/监控主色 — 绿）
-        let cpu_line = theme.green_color();
-        let mut cpu_points = Vec::with_capacity(n);
-        for (i, stats) in history.iter().enumerate() {
-            let x = rect.min.x + i as f32 * x_step;
-            let y = rect.max.y - (stats.cpu_percent.clamp(0.0, 100.0) / 100.0) * rect.height();
-            cpu_points.push(egui::pos2(x, y));
-        }
-        for w in cpu_points.windows(2) {
-            painter.line_segment([w[0], w[1]], egui::Stroke::new(1.5, cpu_line));
-        }
+        let cpu_points: PlotPoints = history
+            .iter()
+            .map(|s| {
+                let x = (s.collected_at - t0).as_secs_f64();
+                let y = f64::from(s.cpu_percent.clamp(0.0, 100.0));
+                [x, y]
+            })
+            .collect();
 
-        // 内存折线（主强调色）
-        let mem_line = theme.accent_color();
-        let mut mem_points = Vec::with_capacity(n);
-        for (i, stats) in history.iter().enumerate() {
-            let x = rect.min.x + i as f32 * x_step;
-            let y = rect.max.y - (stats.memory_percent().clamp(0.0, 100.0) / 100.0) * rect.height();
-            mem_points.push(egui::pos2(x, y));
-        }
-        for w in mem_points.windows(2) {
-            painter.line_segment([w[0], w[1]], egui::Stroke::new(1.5, mem_line));
-        }
+        let mem_points: PlotPoints = history
+            .iter()
+            .map(|s| {
+                let x = (s.collected_at - t0).as_secs_f64();
+                let y = f64::from(s.memory_percent().clamp(0.0, 100.0));
+                [x, y]
+            })
+            .collect();
 
-        // 图例
-        let legend_x = rect.max.x - 80.0;
-        let legend_y = rect.min.y + 6.0;
+        let cpu_line = Line::new(cpu_points)
+            .name("CPU")
+            .color(theme.green_color())
+            .width(1.6);
+        let mem_line = Line::new(mem_points)
+            .name("内存")
+            .color(theme.accent_color())
+            .width(1.6);
 
-        painter.rect_filled(
-            egui::Rect::from_min_size(
-                egui::pos2(legend_x, legend_y),
-                egui::vec2(6.0, 6.0),
-            ),
-            2.0,
-            cpu_line,
+        ui.label(
+            egui::RichText::new("CPU / 内存")
+                .size(12.0)
+                .color(theme.fg_low_color()),
         );
-        painter.text(
-            egui::pos2(legend_x + 10.0, legend_y + 3.0),
-            egui::Align2::LEFT_CENTER,
-            "CPU",
-            egui::FontId::monospace(10.0),
-            theme.fg_medium_color(),
-        );
+        ui.add_space(2.0);
 
-        painter.rect_filled(
-            egui::Rect::from_min_size(
-                egui::pos2(legend_x + 40.0, legend_y),
-                egui::vec2(6.0, 6.0),
-            ),
-            2.0,
-            mem_line,
+        let mut hover_idx: Option<usize> = None;
+
+        let pct_resp = Plot::new(ui.id().with("mist_monitor_pct"))
+            .height(CHART_HEIGHT)
+            .width(width)
+            .link_axis(link_x_id, true, false)
+            .allow_zoom(AxisBools::new(true, false))
+            .allow_drag(AxisBools::new(true, false))
+            .allow_scroll(true)
+            .allow_boxed_zoom(false)
+            .include_x(0.0)
+            .include_x(t_end.max(1.0))
+            .include_y(0.0)
+            .include_y(100.0)
+            .set_margin_fraction(egui::vec2(0.02, 0.05))
+            .y_axis_label("使用率 %")
+            .x_axis_label("时间 (s)")
+            .legend(
+                Legend::default()
+                    .position(Corner::RightTop)
+                    .background_alpha(0.55),
+            )
+            .show_axes([true, true])
+            .show_grid([true, true])
+            .label_formatter(|name, value| {
+                if name.is_empty() {
+                    format!("t={:.1}s  {:.1}%", value.x, value.y)
+                } else {
+                    format!("{}  t={:.1}s  {:.1}%", name, value.x, value.y)
+                }
+            })
+            .show(ui, |plot_ui| {
+                plot_ui.line(cpu_line);
+                plot_ui.line(mem_line);
+
+                if plot_ui.response().hovered() {
+                    if let Some(pp) = plot_ui.pointer_coordinate() {
+                        let xi = pp.x.clamp(0.0, t_end.max(1e-6));
+                        let idx = nearest_history_index(history, t0, xi);
+                        hover_idx = Some(idx);
+                        let snap_x = (history[idx].collected_at - t0).as_secs_f64();
+                        plot_ui.vline(
+                            VLine::new(snap_x)
+                                .color(theme.subtle_line_color())
+                                .width(1.0)
+                                .style(LineStyle::Dotted { spacing: 4.0 }),
+                        );
+                    }
+                }
+            });
+
+        if pct_resp.response.hovered() {
+            if let Some(idx) = hover_idx {
+                let s = &history[idx];
+                let (l1, l5, l15) = s.load_avg;
+                let tip = format!(
+                    "样本 {}/{}\n\
+                     t = {:.1} s · CPU {:.1}%\n\
+                     内存 {:.1}%（{}）\n\
+                     磁盘 {:.1}%（{}）\n\
+                     负载 {:.2} / {:.2} / {:.2}",
+                    idx + 1,
+                    n,
+                    (s.collected_at - t0).as_secs_f64(),
+                    s.cpu_percent,
+                    s.memory_percent(),
+                    s.format_memory(),
+                    s.disk_percent(),
+                    s.format_disk(),
+                    l1,
+                    l5,
+                    l15,
+                );
+                egui::show_tooltip_text(ui.ctx(), tip_id, tip);
+            }
+        }
+
+        ui.add_space(10.0);
+
+        let mut rx_pts: Vec<[f64; 2]> = Vec::new();
+        let mut tx_pts: Vec<[f64; 2]> = Vec::new();
+        for i in 1..history.len() {
+            let prev = &history[i - 1];
+            let curr = &history[i];
+            let dt = (curr.collected_at - prev.collected_at).as_secs_f64();
+            if dt <= f64::EPSILON {
+                continue;
+            }
+            let x = (curr.collected_at - t0).as_secs_f64();
+            let rx = (curr.network_rx_bytes.saturating_sub(prev.network_rx_bytes) as f64) / dt;
+            let tx = (curr.network_tx_bytes.saturating_sub(prev.network_tx_bytes) as f64) / dt;
+            rx_pts.push([x, rx.max(0.0)]);
+            tx_pts.push([x, tx.max(0.0)]);
+        }
+
+        ui.label(
+            egui::RichText::new("网络速率")
+                .size(12.0)
+                .color(theme.fg_low_color()),
         );
-        painter.text(
-            egui::pos2(legend_x + 50.0, legend_y + 3.0),
-            egui::Align2::LEFT_CENTER,
-            "MEM",
-            egui::FontId::monospace(10.0),
-            theme.fg_medium_color(),
+        ui.add_space(2.0);
+
+        if rx_pts.is_empty() {
+            ui.label(
+                egui::RichText::new("暂无有效采样间隔…")
+                    .size(11.0)
+                    .color(theme.fg_low_color()),
+            );
+        } else {
+            let rx_line: PlotPoints = rx_pts.into();
+            let tx_line: PlotPoints = tx_pts.into();
+
+            Plot::new(ui.id().with("mist_monitor_net"))
+                .height(CHART_HEIGHT)
+                .width(width)
+                .link_axis(link_x_id, true, false)
+                .allow_zoom(AxisBools::new(true, false))
+                .allow_drag(AxisBools::new(true, false))
+                .allow_scroll(true)
+                .allow_boxed_zoom(false)
+                .include_x(0.0)
+                .include_x(t_end.max(1.0))
+                .include_y(0.0)
+                .auto_bounds_y()
+                .set_margin_fraction(egui::vec2(0.02, 0.05))
+                .y_axis_label("B/s")
+                .x_axis_label("时间 (s)")
+                .y_axis_formatter(|v, _max_chars, _range| format_bytes_per_sec(v))
+                .legend(
+                    Legend::default()
+                        .position(Corner::RightTop)
+                        .background_alpha(0.55),
+                )
+                .show_axes([true, true])
+                .show_grid([true, true])
+                .label_formatter(|name, value| {
+                    if name.is_empty() {
+                        format!("t={:.1}s  {}", value.x, format_bytes_per_sec(value.y))
+                    } else {
+                        format!("{}  t={:.1}s  {}", name, value.x, format_bytes_per_sec(value.y))
+                    }
+                })
+                .show(ui, |plot_ui| {
+                    plot_ui.line(
+                        Line::new(rx_line)
+                            .name("下行")
+                            .color(theme.green_color())
+                            .width(1.6),
+                    );
+                    plot_ui.line(
+                        Line::new(tx_line)
+                            .name("上行")
+                            .color(theme.accent_color())
+                            .width(1.6),
+                    );
+                });
+        }
+
+        ui.add_space(4.0);
+        ui.label(
+            egui::RichText::new("提示：至多保留 60 个采样；双击复位视图；上下两图横向联动。")
+                .size(10.0)
+                .color(theme.fg_low_color()),
         );
     }
 }
@@ -615,6 +715,23 @@ fn disk_color(pct: f32, theme: &Theme) -> egui::Color32 {
     } else {
         theme.red_color()
     }
+}
+
+/// 与横轴采样时间最接近的历史点索引（用于悬浮提示）。
+fn nearest_history_index(history: &[ServerStats], t0: std::time::Instant, plot_x: f64) -> usize {
+    if history.is_empty() {
+        return 0;
+    }
+    history
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            let da = ((a.collected_at - t0).as_secs_f64() - plot_x).abs();
+            let db = ((b.collected_at - t0).as_secs_f64() - plot_x).abs();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(i, _)| i)
+        .unwrap_or(0)
 }
 
 /// 格式化每秒字节数
