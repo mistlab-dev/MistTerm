@@ -13,19 +13,19 @@ use crate::ui::theme::Theme;
 
 /// 监控面板组件
 pub struct MonitorPanel {
-    /// 监控器（None 表示未初始化）
+    /// 监控器(None 表示未初始化)
     monitor: Option<Monitor>,
     /// 是否自动刷新
     auto_refresh: bool,
-    /// 刷新间隔（秒）
+    /// 刷新间隔(秒)
     refresh_interval_secs: f32,
-    /// 上次 UI 刷新时间（秒，`egui` input time）
+    /// 上次 UI 刷新时间(秒,`egui` input time)
     last_ui_refresh: f64,
     /// 最后一次错误
     last_error: Option<String>,
     /// 手动刷新按钮标签
     refresh_label: String,
-    /// 经 shell 泵串行执行的 `exec` 结果通道（未完成时 UI 仍可交互）
+    /// 经 shell 泵串行执行的 `exec` 结果通道(未完成时 UI 仍可交互)
     pending_raw: Option<Receiver<Result<String, String>>>,
 }
 
@@ -48,7 +48,7 @@ impl MonitorPanel {
         }
     }
 
-    /// 初始化监控器（使用现有 SSH 连接与对应的 `SshManager` 克隆以供 exec）
+    /// 初始化监控器(使用现有 SSH 连接与对应的 `SshManager` 克隆以供 exec)
     pub fn init(
         &mut self,
         ssh_handle: crate::ssh::SshSessionHandle,
@@ -57,11 +57,11 @@ impl MonitorPanel {
         self.pending_raw = None;
         self.monitor = Some(Monitor::new(ssh_handle, ssh_manager));
         self.last_error = None;
-        self.refresh_label = "📊 监控 …".to_string();
+        self.refresh_label = "📊 监控 ...".to_string();
         self.begin_async_collect();
     }
 
-    /// 清空采集状态（切换至无 SSH 的标签或未连接时调用）。
+    /// 清空采集状态(切换至无 SSH 的标签或未连接时调用)。
     pub fn clear(&mut self) {
         self.pending_raw = None;
         self.monitor = None;
@@ -69,7 +69,7 @@ impl MonitorPanel {
         self.refresh_label = "📊 监控".to_string();
     }
 
-    /// 若当前无进行中的采集，则向 shell 泵排队一次 `exec`（不得另开线程，以免与 PTY 争用 `Session`）。
+    /// 若当前无进行中的采集,则向 shell 泵排队一次 `exec`(不得另开线程,以免与 PTY 争用 `Session`)。
     fn begin_async_collect(&mut self) {
         if self.monitor.is_none() {
             return;
@@ -136,7 +136,7 @@ impl MonitorPanel {
         }
     }
 
-    /// 手动触发一次后台采集（不阻塞 UI）
+    /// 手动触发一次后台采集(不阻塞 UI)
     pub fn refresh(&mut self) {
         self.begin_async_collect();
     }
@@ -146,7 +146,7 @@ impl MonitorPanel {
         self.monitor.is_some()
     }
 
-    /// 每帧更新：拉取 shell 泵返回的采集结果，并在开启自动刷新时排队下一次采集。
+    /// 每帧更新:拉取 shell 泵返回的采集结果,并在开启自动刷新时排队下一次采集。
     pub fn update(&mut self, ctx: &egui::Context, panel_open: bool) {
         if !panel_open {
             self.pending_raw = None;
@@ -170,7 +170,7 @@ impl MonitorPanel {
         }
     }
 
-    /// 右侧嵌入式侧栏（与会话列表、SFTP 同一类布局；`exec` 仍经 shell 泵串行）。
+    /// 右侧嵌入式侧栏(与会话列表、SFTP 同一类布局;`exec` 仍经 shell 泵串行)。
     pub fn show_side_panel(
         &mut self,
         ctx: &egui::Context,
@@ -206,7 +206,7 @@ impl MonitorPanel {
                 ui.horizontal(|ui| {
                     ui.heading(
                         egui::RichText::new("📊 系统监控")
-                            .size(15.0)
+                            .size(theme.font_size_xl())
                             .color(theme.fg_high_color()),
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -246,15 +246,15 @@ impl MonitorPanel {
                 }
             });
         });
-        ui.add_space(8.0);
+        ui.add_space(theme.spacing_md());
 
         if self.pending_raw.is_some() {
             ui.label(
-                egui::RichText::new("远程采集中…")
-                    .size(12.0)
+                egui::RichText::new("远程采集中...")
+                    .size(theme.font_size_normal())
                     .color(theme.fg_medium_color()),
             );
-            ui.add_space(6.0);
+            ui.add_space(theme.spacing_md() - theme.spacing_sm());
         }
 
         if let Some(ref monitor) = self.monitor {
@@ -264,17 +264,17 @@ impl MonitorPanel {
 
             // 服务器运行时间
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("⏱ 运行时间").size(13.0).color(theme.fg_medium_color()));
+                ui.label(egui::RichText::new("⏱ 运行时间").size(theme.font_size_medium()).color(theme.fg_medium_color()));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(stats.format_uptime())
                             .monospace()
-                            .size(13.0)
+                            .size(theme.font_size_medium())
                             .color(theme.fg_high_color()),
                     );
                 });
             });
-            ui.add_space(4.0);
+            ui.add_space(theme.spacing_sm());
 
             // CPU 使用率
             self.show_metric_bar(
@@ -306,12 +306,12 @@ impl MonitorPanel {
                 disk_color(stats.disk_percent(), theme),
             );
 
-            ui.add_space(8.0);
+            ui.add_space(theme.spacing_md());
             ui.separator();
-            ui.add_space(4.0);
+            ui.add_space(theme.spacing_sm());
 
             // 系统负载
-            ui.label(egui::RichText::new("📊 系统负载").size(13.0).color(theme.fg_medium_color()));
+            ui.label(egui::RichText::new("📊 系统负载").size(theme.font_size_medium()).color(theme.fg_medium_color()));
             ui.horizontal(|ui| {
                 let (l1, l5, l15) = stats.load_avg;
                 self.load_chip(ui, theme, "1m", l1);
@@ -319,7 +319,7 @@ impl MonitorPanel {
                 self.load_chip(ui, theme, "15m", l15);
             });
 
-            ui.add_space(8.0);
+            ui.add_space(theme.spacing_md());
 
             // 网络流量
             ui.label(egui::RichText::new("🌐 网络速率").size(13.0).color(theme.fg_medium_color()));
@@ -327,25 +327,25 @@ impl MonitorPanel {
                 ui.label(
                     egui::RichText::new(format!("↓ {}", format_bytes_per_sec(rx_rate)))
                         .monospace()
-                        .size(12.0)
+                        .size(theme.font_size_normal())
                         .color(theme.green_color()),
                 );
-                ui.add_space(16.0);
+                ui.add_space(theme.spacing_lg());
                 ui.label(
                     egui::RichText::new(format!("↑ {}", format_bytes_per_sec(tx_rate)))
                         .monospace()
-                        .size(12.0)
+                        .size(theme.font_size_normal())
                         .color(theme.accent_color()),
                 );
             });
 
-            ui.add_space(12.0);
+            ui.add_space(theme.spacing_lg() - theme.spacing_sm());
             ui.separator();
-            ui.add_space(4.0);
+            ui.add_space(theme.spacing_sm());
 
-            // 历史图表（egui_plot，至多 60 个采样点）
-            ui.label(egui::RichText::new("📈 历史趋势").size(13.0).color(theme.fg_medium_color()));
-            ui.add_space(4.0);
+            // 历史图表(egui_plot,至多 60 个采样点)
+            ui.label(egui::RichText::new("📈 历史趋势").size(theme.font_size_medium()).color(theme.fg_medium_color()));
+            ui.add_space(theme.spacing_sm());
 
             self.show_history_plots(ui, theme, history);
 
@@ -355,12 +355,12 @@ impl MonitorPanel {
                 ui.add_space(40.0);
                 ui.label(
                     egui::RichText::new("当前标签无可用 SSH 会话")
-                        .size(14.0)
+                        .size(theme.font_size_large())
                         .color(theme.fg_low_color()),
                 );
                 ui.label(
-                    egui::RichText::new("请先连接服务器，或切换到已连接的标签")
-                        .size(12.0)
+                    egui::RichText::new("请先连接服务器,或切换到已连接的标签")
+                        .size(theme.font_size_normal())
                         .color(theme.fg_medium_color()),
                 );
             });
@@ -371,7 +371,7 @@ impl MonitorPanel {
             ui.add_space(8.0);
             ui.colored_label(
                 theme.red_color(),
-                egui::RichText::new(format!("⚠ {}", err)).size(11.0),
+                egui::RichText::new(format!("⚠ {}", err)).size(theme.font_size_small()),
             );
         }
     }
@@ -389,22 +389,22 @@ impl MonitorPanel {
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(label)
-                    .size(13.0)
+                    .size(theme.font_size_medium())
                     .color(theme.fg_medium_color()),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
                     egui::RichText::new(&value_text)
                         .monospace()
-                        .size(12.0)
+                        .size(theme.font_size_normal())
                         .color(theme.fg_high_color()),
                 );
             });
         });
 
-        let bar_height = 8.0;
+        let bar_height = theme.progress_bar_height();
         let available_width =
-            layout_util::finite_content_width_inset(ui, 4.0, 120.0, 2000.0);
+            layout_util::finite_content_width_inset(ui, theme.spacing_sm(), 120.0, 2000.0);
         let bg_color = theme.border_color();
 
         ui.allocate_ui_with_layout(
@@ -450,20 +450,20 @@ impl MonitorPanel {
                 ui.vertical(|ui| {
                     ui.label(
                         egui::RichText::new(label)
-                            .size(10.0)
+                            .size(theme.font_size_small())
                             .color(theme.fg_low_color()),
                     );
                     ui.label(
                         egui::RichText::new(format!("{:.2}", value))
                             .monospace()
-                            .size(13.0)
+                            .size(theme.font_size_medium())
                             .color(color),
                     );
                 });
             });
     }
 
-    /// 历史趋势：`egui_plot` 展示 CPU/内存（%）与网络速率（B/s），横轴为相对时间并联动。
+    /// 历史趋势:`egui_plot` 展示 CPU/内存/磁盘(%)、负载与网络速率(B/s),横轴为相对时间并联动。
     fn show_history_plots(&self, ui: &mut egui::Ui, theme: &Theme, history: &[ServerStats]) {
         const CHART_HEIGHT: f32 = 110.0;
         let width = layout_util::finite_content_width_inset(ui, 8.0, 200.0, 2000.0);
@@ -472,7 +472,7 @@ impl MonitorPanel {
 
         if history.len() < 2 {
             ui.label(
-                egui::RichText::new("等待数据采集…（至少两次刷新后显示曲线）")
+                egui::RichText::new("等待数据采集...(至少两次刷新后显示曲线)")
                     .size(11.0)
                     .color(theme.fg_low_color()),
             );
@@ -501,6 +501,15 @@ impl MonitorPanel {
             })
             .collect();
 
+        let disk_points: PlotPoints = history
+            .iter()
+            .map(|s| {
+                let x = (s.collected_at - t0).as_secs_f64();
+                let y = f64::from(s.disk_percent().clamp(0.0, 100.0));
+                [x, y]
+            })
+            .collect();
+
         let cpu_line = Line::new(cpu_points)
             .name("CPU")
             .color(theme.green_color())
@@ -509,10 +518,14 @@ impl MonitorPanel {
             .name("内存")
             .color(theme.accent_color())
             .width(1.6);
+        let disk_line = Line::new(disk_points)
+            .name("磁盘")
+            .color(disk_color(72.0_f32, theme))
+            .width(1.6);
 
         ui.label(
-            egui::RichText::new("CPU / 内存")
-                .size(12.0)
+            egui::RichText::new("CPU / 内存 / 磁盘")
+                .size(theme.font_size_normal())
                 .color(theme.fg_low_color()),
         );
         ui.add_space(2.0);
@@ -551,6 +564,7 @@ impl MonitorPanel {
             .show(ui, |plot_ui| {
                 plot_ui.line(cpu_line);
                 plot_ui.line(mem_line);
+                plot_ui.line(disk_line);
 
                 if plot_ui.response().hovered() {
                     if let Some(pp) = plot_ui.pointer_coordinate() {
@@ -575,8 +589,8 @@ impl MonitorPanel {
                 let tip = format!(
                     "样本 {}/{}\n\
                      t = {:.1} s · CPU {:.1}%\n\
-                     内存 {:.1}%（{}）\n\
-                     磁盘 {:.1}%（{}）\n\
+                     内存 {:.1}%({})\n\
+                     磁盘 {:.1}%({})\n\
                      负载 {:.2} / {:.2} / {:.2}",
                     idx + 1,
                     n,
@@ -593,6 +607,90 @@ impl MonitorPanel {
                 egui::show_tooltip_text(ui.ctx(), tip_id, tip);
             }
         }
+
+        ui.add_space(10.0);
+
+        let load1_points: PlotPoints = history
+            .iter()
+            .map(|s| {
+                let x = (s.collected_at - t0).as_secs_f64();
+                let y = f64::from(s.load_avg.0.max(0.0));
+                [x, y]
+            })
+            .collect();
+        let load5_points: PlotPoints = history
+            .iter()
+            .map(|s| {
+                let x = (s.collected_at - t0).as_secs_f64();
+                let y = f64::from(s.load_avg.1.max(0.0));
+                [x, y]
+            })
+            .collect();
+        let load15_points: PlotPoints = history
+            .iter()
+            .map(|s| {
+                let x = (s.collected_at - t0).as_secs_f64();
+                let y = f64::from(s.load_avg.2.max(0.0));
+                [x, y]
+            })
+            .collect();
+
+        ui.label(
+            egui::RichText::new("负载 (load average)")
+                .size(theme.font_size_normal())
+                .color(theme.fg_low_color()),
+        );
+        ui.add_space(2.0);
+
+        Plot::new(ui.id().with("mist_monitor_load"))
+            .height(CHART_HEIGHT)
+            .width(width)
+            .link_axis(link_x_id, true, false)
+            .allow_zoom(AxisBools::new(true, false))
+            .allow_drag(AxisBools::new(true, false))
+            .allow_scroll(true)
+            .allow_boxed_zoom(false)
+            .include_x(0.0)
+            .include_x(t_end.max(1.0))
+            .include_y(0.0)
+            .auto_bounds_y()
+            .set_margin_fraction(egui::vec2(0.02, 0.05))
+            .y_axis_label("负载")
+            .x_axis_label("时间 (s)")
+            .legend(
+                Legend::default()
+                    .position(Corner::RightTop)
+                    .background_alpha(0.55),
+            )
+            .show_axes([true, true])
+            .show_grid([true, true])
+            .label_formatter(|name, value| {
+                if name.is_empty() {
+                    format!("t={:.1}s  {:.2}", value.x, value.y)
+                } else {
+                    format!("{}  t={:.1}s  {:.2}", name, value.x, value.y)
+                }
+            })
+            .show(ui, |plot_ui| {
+                plot_ui.line(
+                    Line::new(load1_points)
+                        .name("1 分钟")
+                        .color(theme.green_color())
+                        .width(1.6),
+                );
+                plot_ui.line(
+                    Line::new(load5_points)
+                        .name("5 分钟")
+                        .color(theme.amber_color())
+                        .width(1.6),
+                );
+                plot_ui.line(
+                    Line::new(load15_points)
+                        .name("15 分钟")
+                        .color(theme.fg_high_color())
+                        .width(1.6),
+                );
+            });
 
         ui.add_space(10.0);
 
@@ -614,15 +712,15 @@ impl MonitorPanel {
 
         ui.label(
             egui::RichText::new("网络速率")
-                .size(12.0)
+                .size(theme.font_size_normal())
                 .color(theme.fg_low_color()),
         );
         ui.add_space(2.0);
 
         if rx_pts.is_empty() {
             ui.label(
-                egui::RichText::new("暂无有效采样间隔…")
-                    .size(11.0)
+                egui::RichText::new("暂无有效采样间隔...")
+                    .size(theme.font_size_small())
                     .color(theme.fg_low_color()),
             );
         } else {
@@ -677,8 +775,8 @@ impl MonitorPanel {
 
         ui.add_space(4.0);
         ui.label(
-            egui::RichText::new("提示：至多保留 60 个采样；双击复位视图；上下两图横向联动。")
-                .size(10.0)
+            egui::RichText::new("提示:至多保留 60 个采样;双击复位视图;各图横向联动。")
+                .size(theme.font_size_small())
                 .color(theme.fg_low_color()),
         );
     }
@@ -717,7 +815,7 @@ fn disk_color(pct: f32, theme: &Theme) -> egui::Color32 {
     }
 }
 
-/// 与横轴采样时间最接近的历史点索引（用于悬浮提示）。
+/// 与横轴采样时间最接近的历史点索引(用于悬浮提示)。
 fn nearest_history_index(history: &[ServerStats], t0: std::time::Instant, plot_x: f64) -> usize {
     if history.is_empty() {
         return 0;

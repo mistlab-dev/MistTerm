@@ -126,6 +126,22 @@ impl Theme {
         self.amber.to_color32()
     }
 
+    // ── 字体大小（响应式，基于 DPI 缩放） ──
+    pub fn font_size_small(&self) -> f32 { 10.0 }  // 辅助文字
+    pub fn font_size_normal(&self) -> f32 { 12.0 } // 常规文字
+    pub fn font_size_medium(&self) -> f32 { 13.0 } // 标签文字
+    pub fn font_size_large(&self) -> f32 { 14.0 }  // 标题文字
+    pub fn font_size_xl(&self) -> f32 { 15.0 }     // 大标题
+
+    // ── 间距系统（8px 网格） ──
+    pub fn spacing_xs(&self) -> f32 { 2.0 }
+    pub fn spacing_sm(&self) -> f32 { 4.0 }
+    pub fn spacing_md(&self) -> f32 { 8.0 }
+    pub fn spacing_lg(&self) -> f32 { 16.0 }
+
+    // ── 组件尺寸 ──
+    pub fn progress_bar_height(&self) -> f32 { 8.0 }
+
     /// 图表网格线等极淡分隔（随前景色变化，适配明暗主题）
     pub fn subtle_line_color(&self) -> Color32 {
         let c = self.fg_high.to_color32();
