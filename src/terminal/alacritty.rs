@@ -52,6 +52,7 @@ impl Terminal {
         let width = width.clamp(20, 512);
         let height = height.clamp(5, 256);
         let size = TermSize::new(width, height);
+        // FUNCTIONAL_SPEC §2.4：`alacritty_terminal` 默认 `scrolling_history` 已为 10000，与「保留最后 10000 行」一致。
         Self {
             term: Term::new(Config::default(), &size, VoidListener),
             parser: Processor::default(),
@@ -140,6 +141,8 @@ impl Terminal {
             }
         }
 
+        apply_heuristic_shell_row_style(&mut rows, default_fg, terminal_bg, self.width);
+
         let mut job = LayoutJob::default();
         for row in rows {
             for (ch, color, bg) in row {
@@ -168,6 +171,99 @@ impl Terminal {
             );
         }
         job
+    }
+}
+
+/// FUNCTIONAL_SPEC §2.3.2：对「整行均为应用默认前景 + 终端背景」的行做轻量 shell 提示启发式着色；
+/// 任意单元格已带 ANSI 前景/背景差异时整行跳过，避免覆盖远端配色。
+fn apply_heuristic_shell_row_style(
+    rows: &mut [Vec<(char, Color32, Color32)>],
+    default_fg: Color32,
+    terminal_bg: Color32,
+    width: usize,
+) {
+    if width == 0 {
+        return;
+    }
+    const PROMPT_ARROW: Color32 = Color32::from_rgb(0x4c, 0xaf, 0x50);
+    const PATH_HINT: Color32 = Color32::from_rgb(0x67, 0x7e, 0xea);
+
+    for row in rows.iter_mut() {
+        let mut all_default = true;
+        for (_ch, fg, bg) in row.iter() {
+            if *fg != default_fg || *bg != terminal_bg {
+                all_default = false;
+                break;
+            }
+        }
+        if !all_default {
+            continue;
+        }
+
+        let chars: Vec<char> = row.iter().map(|(c, _, _)| *c).collect();
+        if chars.iter().all(|c| c.is_whitespace()) {
+            continue;
+        }
+
+        let line: String = chars.iter().collect();
+        let line_trim = line.trim_end();
+        if line_trim.is_empty() {
+            continue;
+        }
+
+        let looks_prompt = line_trim.contains('➜')
+            || (line_trim.contains('@')
+                && line_trim.contains(':')
+                && (line_trim.contains('~') || line_trim.contains('/')));
+
+        if looks_prompt {
+            for cell in row.iter_mut() {
+                if cell.0 == '➜' {
+                    cell.1 = PROMPT_ARROW;
+                }
+            }
+            if let Some(at) = chars.iter().position(|&c| c == '@') {
+                if let Some(colon_pos) = chars
+                    .iter()
+                    .enumerate()
+                    .skip(at.saturating_add(1))
+                    .find(|(_, &c)| c == ':')
+                    .map(|(i, _)| i)
+                {
+                    let mut x = colon_pos + 1;
+                    while x < width && chars.get(x) == Some(&' ') {
+                        x += 1;
+                    }
+                    if x < width {
+                        let first = chars[x];
+                        if first == '~' || first == '/' {
+                            while x < width {
+                                let c = row[x].0;
+                                if c.is_whitespace() {
+                                    break;
+                                }
+                                if matches!(c, '$' | '%' | '#' | '`') {
+                                    break;
+                                }
+                                row[x].1 = PATH_HINT;
+                                x += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            let soften = |u: u8| -> u8 { ((u as u16 * 230) / 255).min(255) as u8 };
+            for cell in row.iter_mut() {
+                if !cell.0.is_whitespace() {
+                    cell.1 = Color32::from_rgb(
+                        soften(default_fg.r()),
+                        soften(default_fg.g()),
+                        soften(default_fg.b()),
+                    );
+                }
+            }
+        }
     }
 }
 

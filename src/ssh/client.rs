@@ -6,6 +6,8 @@ use std::io::Write;
 use std::net::TcpStream;
 use std::time::Duration;
 
+use super::format_ssh_connect_error;
+
 /// SSH 配置
 #[derive(Debug, Clone)]
 pub struct SshConfig {
@@ -36,8 +38,9 @@ impl SshClient {
         log::info!("Connecting to {}...", addr);
 
         // 建立 TCP 连接
-        let stream = TcpStream::connect(&addr)
-            .map_err(|e| format!("TCP connection failed: {}", e))?;
+        let stream = TcpStream::connect(&addr).map_err(|e| {
+            format_ssh_connect_error(&format!("TCP connection failed: {}", e))
+        })?;
         log::info!("TCP connected");
 
         stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
@@ -50,8 +53,9 @@ impl SshClient {
         session.set_tcp_stream(stream);
 
         // SSH 握手
-        session.handshake()
-            .map_err(|e| format!("SSH handshake failed: {}", e))?;
+        session.handshake().map_err(|e| {
+            format_ssh_connect_error(&format!("SSH handshake failed: {}", e))
+        })?;
         log::info!("SSH handshake completed");
 
         // 先尝试密码认证
@@ -81,7 +85,9 @@ impl SshClient {
                     }
                 }
                 if !authenticated {
-                    return Err("Authentication failed (password and SSH keys failed)".to_string());
+                    return Err(format_ssh_connect_error(
+                        "Authentication failed (password and SSH keys failed)",
+                    ));
                 }
             }
         }

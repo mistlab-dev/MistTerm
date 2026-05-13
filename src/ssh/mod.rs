@@ -6,6 +6,7 @@
 //! 3. **直传**：`TerminalView::start_upload`（当前实现为 SCP）、`start_upload_to_remote`（`cat >`）等，不经 ZMODEM。
 
 mod client;
+mod user_facing;
 mod manager;
 mod lrzsz;
 mod lrzsz_zmodem2_send;
@@ -16,6 +17,7 @@ pub mod zmodem_pty_prefix;
 pub mod sftp;
 
 pub use client::SshConfig;
+pub use user_facing::format_ssh_connect_error;
 pub use sftp::{SftpClient, SftpEntry};
 pub use manager::{SshManager, SshMessage, SshSessionHandle, SshSessionId};
 pub use lrzsz::{LrzszTransfer, TransferEvent};

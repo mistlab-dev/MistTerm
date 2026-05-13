@@ -7,6 +7,7 @@
 use eframe::egui;
 use rfd::FileDialog;
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 use crate::core::{
     Credential, CredentialAuthKind, expand_command_template, expand_fragment_command_stages,
     expand_rhai_blocks, list_placeholder_keys, merge_rhai_context,
@@ -362,7 +363,8 @@ impl MistTermApp {
 
     /// 创建新的应用实例
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        let session_manager = SessionManager::new();
+        let mut session_manager = SessionManager::new();
+        let boot_diagnostics = session_manager.take_load_diagnostics().join("；");
         let sessions = session_manager.list_sessions();
         
         // 自动选择第一个会话
@@ -379,7 +381,11 @@ impl MistTermApp {
             last_responsive_layout_band: None,
             tabs: Vec::new(),
             active_tab: None,
-            status_message: "就绪".to_string(),
+            status_message: if boot_diagnostics.is_empty() {
+                "就绪".to_string()
+            } else {
+                boot_diagnostics
+            },
             show_new_session_dialog: false,
             show_edit_session_dialog: false,
             show_about_dialog: false,
@@ -596,6 +602,7 @@ impl MistTermApp {
             self.status_message = "未找到会话配置，无法重连".to_string();
             return;
         };
+        let offline = self.tabs[idx].terminal.offline_input_snapshot();
         self.tabs[idx].terminal.disconnect();
         self.tabs[idx].terminal.connect(
             &session.host,
@@ -603,6 +610,9 @@ impl MistTermApp {
             &session.username,
             &session.password,
         );
+        self.tabs[idx]
+            .terminal
+            .restore_offline_input_snapshot(offline.0, offline.1);
         if let Some(t) = self.tabs.get_mut(idx) {
             t.title = format!("{}@{}", session.username, session.host);
         }
@@ -1801,6 +1811,18 @@ impl eframe::App for MistTermApp {
         // 监控：`exec` 由 shell 泵串行执行，在此处轮询结果并驱动自动刷新
         self.monitor_panel.update(ctx, self.show_monitor_panel);
         self.try_flush_pending_fragment_insert();
+
+        // FUNCTIONAL_SPEC §2.4：非当前标签仍消费 SSH 输出；有 VTE 更新时用低频重绘，避免与活动 Tab 抢同一帧节奏。
+        let active = self.active_tab;
+        let mut inactive_tab_vte_dirty = false;
+        for (i, tab) in self.tabs.iter_mut().enumerate() {
+            if Some(i) != active && tab.terminal.pump_ssh_only() {
+                inactive_tab_vte_dirty = true;
+            }
+        }
+        if inactive_tab_vte_dirty {
+            ctx.request_repaint_after(Duration::from_millis(120));
+        }
 
         // SCP 直传结果（`TerminalView::start_upload` 后台线程）
         for tab in &mut self.tabs {

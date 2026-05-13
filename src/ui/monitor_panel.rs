@@ -15,10 +15,16 @@ use crate::ui::theme::Theme;
 pub struct MonitorPanel {
     /// 监控器(None 表示未初始化)
     monitor: Option<Monitor>,
-    /// 是否自动刷新
+    /// 是否自动刷新（默认开启，与产品稿「自动刷新 5s」一致）
     auto_refresh: bool,
     /// 刷新间隔(秒)
     refresh_interval_secs: f32,
+    /// CPU 告警阈值（%）
+    alert_cpu_pct: f32,
+    /// 内存告警阈值（%）
+    alert_mem_pct: f32,
+    /// 磁盘告警阈值（%）
+    alert_disk_pct: f32,
     /// 上次 UI 刷新时间(秒,`egui` input time)
     last_ui_refresh: f64,
     /// 最后一次错误
@@ -39,8 +45,11 @@ impl MonitorPanel {
     pub fn new() -> Self {
         Self {
             monitor: None,
-            auto_refresh: false,
+            auto_refresh: true,
             refresh_interval_secs: 5.0,
+            alert_cpu_pct: 80.0,
+            alert_mem_pct: 90.0,
+            alert_disk_pct: 85.0,
             last_ui_refresh: 0.0_f64,
             last_error: None,
             refresh_label: "📊 监控".to_string(),
@@ -146,6 +155,45 @@ impl MonitorPanel {
         self.monitor.is_some()
     }
 
+    /// 判断当前快照是否已具备有效指标（避免全零占位触发误告警）。
+    fn stats_look_valid(stats: &ServerStats) -> bool {
+        stats.memory_total > 0 || stats.disk_total > 0 || stats.uptime_secs > 0
+    }
+
+    /// 当前采样下超过阈值的告警文案（本地规则，Week 10 告警设置的最小可用版）。
+    fn collect_alerts_with(
+        cpu_th: f32,
+        mem_th: f32,
+        disk_th: f32,
+        stats: &ServerStats,
+    ) -> Vec<String> {
+        if !Self::stats_look_valid(stats) {
+            return Vec::new();
+        }
+        let mut v = Vec::new();
+        if stats.cpu_percent >= cpu_th {
+            v.push(format!("CPU {:.1}% ≥ 阈值 {:.0}%", stats.cpu_percent, cpu_th));
+        }
+        let mem = stats.memory_percent();
+        if mem >= mem_th {
+            v.push(format!("内存 {:.1}% ≥ 阈值 {:.0}%", mem, mem_th));
+        }
+        let disk = stats.disk_percent();
+        if disk >= disk_th {
+            v.push(format!("磁盘 {:.1}% ≥ 阈值 {:.0}%", disk, disk_th));
+        }
+        v
+    }
+
+    fn collect_alerts(&self, stats: &ServerStats) -> Vec<String> {
+        Self::collect_alerts_with(
+            self.alert_cpu_pct,
+            self.alert_mem_pct,
+            self.alert_disk_pct,
+            stats,
+        )
+    }
+
     /// 每帧更新:拉取 shell 泵返回的采集结果,并在开启自动刷新时排队下一次采集。
     pub fn update(&mut self, ctx: &egui::Context, panel_open: bool) {
         if !panel_open {
@@ -209,6 +257,21 @@ impl MonitorPanel {
                             .size(theme.font_size_xl())
                             .color(theme.fg_high_color()),
                     );
+                    if let Some(ref mon) = self.monitor {
+                        let alerts = Self::collect_alerts_with(
+                            self.alert_cpu_pct,
+                            self.alert_mem_pct,
+                            self.alert_disk_pct,
+                            mon.last_stats(),
+                        );
+                        if !alerts.is_empty() {
+                            ui.label(
+                                egui::RichText::new(format!("⚠ {} 项告警", alerts.len()))
+                                    .size(theme.font_size_medium())
+                                    .color(theme.red_color()),
+                            );
+                        }
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .small_button("✕")
@@ -246,6 +309,37 @@ impl MonitorPanel {
                 }
             });
         });
+        ui.add_space(theme.spacing_sm());
+
+        egui::CollapsingHeader::new(
+            egui::RichText::new("告警阈值")
+                .size(theme.font_size_medium())
+                .color(theme.fg_medium_color()),
+        )
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new("超出阈值时在标题与下方显示告警（仅当前会话）。")
+                    .size(theme.font_size_small())
+                    .color(theme.fg_low_color()),
+            );
+            ui.add_space(4.0);
+            ui.add(
+                egui::Slider::new(&mut self.alert_cpu_pct, 50.0..=100.0)
+                    .text("CPU 告警 %")
+                    .suffix("%"),
+            );
+            ui.add(
+                egui::Slider::new(&mut self.alert_mem_pct, 50.0..=100.0)
+                    .text("内存告警 %")
+                    .suffix("%"),
+            );
+            ui.add(
+                egui::Slider::new(&mut self.alert_disk_pct, 50.0..=100.0)
+                    .text("磁盘告警 %")
+                    .suffix("%"),
+            );
+        });
         ui.add_space(theme.spacing_md());
 
         if self.pending_raw.is_some() {
@@ -261,6 +355,30 @@ impl MonitorPanel {
             let stats = monitor.last_stats();
             let history = monitor.get_history();
             let (rx_rate, tx_rate) = monitor.network_rate();
+            let alerts = self.collect_alerts(stats);
+            if !alerts.is_empty() {
+                egui::Frame::none()
+                    .fill(theme.red_color().gamma_multiply(0.12))
+                    .stroke(egui::Stroke::new(1.0, theme.red_color().gamma_multiply(0.45)))
+                    .rounding(6.0)
+                    .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new("当前告警")
+                                .size(theme.font_size_medium())
+                                .color(theme.red_color()),
+                        );
+                        ui.add_space(4.0);
+                        for line in &alerts {
+                            ui.label(
+                                egui::RichText::new(line)
+                                    .size(theme.font_size_small())
+                                    .color(theme.fg_high_color()),
+                            );
+                        }
+                    });
+                ui.add_space(theme.spacing_md());
+            }
 
             // 服务器运行时间
             ui.horizontal(|ui| {

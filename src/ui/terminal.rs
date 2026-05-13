@@ -15,7 +15,7 @@ use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
-use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, SshSessionId, LrzszTransfer, TransferEvent};
+use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, SshSessionId, LrzszTransfer, TransferEvent, format_ssh_connect_error};
 use crate::terminal::Terminal as VtTerminal;
 use crate::ui::theme::Theme;
 
@@ -72,9 +72,21 @@ pub struct TerminalView {
     rz_control_mode_until: Option<Instant>,
     upload_result_rx: Option<Receiver<Result<String, String>>>,
     command_usage: HashMap<String, u64>,
+    /// FUNCTIONAL_SPEC §2.4：超长粘贴分片发送（>10KB 时每批 4096 字节、间隔 5ms）
+    paste_pending: Vec<u8>,
+    paste_next_chunk_at: Option<Instant>,
+    /// 「仅断开 SSH 保留画面」后为 true：键盘输入写入 [`Self::disconnected_input_buffer`] 而非 PTY（FUNCTIONAL_SPEC §2.4）。
+    buffer_input_while_disconnected: bool,
+    /// 断线期间缓存的待发送字节（上限 [`Self::OFFLINE_INPUT_CAP`]）。
+    disconnected_input_buffer: Vec<u8>,
+    /// 重连且 shell 就绪后，若缓存非空则弹出是否重发。
+    resend_offline_input_dialog_open: bool,
 }
 
 impl TerminalView {
+    /// 断线缓存输入上限（字节）
+    const OFFLINE_INPUT_CAP: usize = 64 * 1024;
+
     const SFTP_RETRY_ATTEMPTS: usize = 160;
     const SFTP_RETRY_SLEEP_MS: u64 = 8;
     /// 终端区与外边：左/上/下各 1px；右侧不留（滚动条已隐藏，勿再挤占一列）
@@ -189,6 +201,11 @@ impl TerminalView {
             rz_control_mode_until: None,
             upload_result_rx: None,
             command_usage: HashMap::new(),
+            paste_pending: Vec::new(),
+            paste_next_chunk_at: None,
+            buffer_input_while_disconnected: false,
+            disconnected_input_buffer: Vec::new(),
+            resend_offline_input_dialog_open: false,
         }
     }
 
@@ -205,6 +222,9 @@ impl TerminalView {
         
         match manager.create_session_async(config) {
             Ok(session_id) => {
+                self.buffer_input_while_disconnected = false;
+                self.disconnected_input_buffer.clear();
+                self.resend_offline_input_dialog_open = false;
                 self.session_id = Some(session_id);
                 self.ssh_manager = Some(manager);
                 self.ssh_rx = Some(rx);
@@ -216,7 +236,10 @@ impl TerminalView {
                 self.connection_target = Some((username.to_string(), host.to_string()));
             }
             Err(e) => {
-                self.error_message = Some(format!("Failed to create session: {}", e));
+                self.error_message = Some(format_ssh_connect_error(&format!(
+                    "Failed to create session: {}",
+                    e
+                )));
             }
         }
     }
@@ -225,13 +248,14 @@ impl TerminalView {
     pub fn show(&mut self, ui: &mut egui::Ui, theme: &Theme, column_width: f32) {
         // 先处理网络与键盘，再绘制，避免输入/输出滞后一帧
         self.process_ssh_messages();
+        self.flush_paste_queue(ui.ctx());
         self.process_transfer_events(ui.ctx());
 
         // Ctrl + 滚轮：缩放终端字体（不改变 PTY 行列，仅视觉）
         let wheel = ui.ctx().input(|i| {
             let z = i.scroll_delta.y;
             if self.terminal_focused
-                && self.connected
+                && (self.connected || self.buffer_input_while_disconnected)
                 && i.modifiers.ctrl
                 && !i.modifiers.shift
                 && z.abs() > 0.5
@@ -374,7 +398,7 @@ impl TerminalView {
                                 if ui.button("粘贴").clicked() {
                                     if let Ok(mut clip) = Clipboard::new() {
                                         if let Ok(text) = clip.get_text() {
-                                            self.paste_text(&text);
+                                            self.paste_text(&text, ui.ctx());
                                         }
                                     }
                                     ui.close_menu();
@@ -449,6 +473,7 @@ impl TerminalView {
                 });
                 ui.visuals_mut().extreme_bg_color = prev_extreme;
             });
+        self.render_resend_offline_dialog(ui.ctx(), theme);
     }
 
     /// `viewport`：ScrollArea **内容区**（inner）的宽 × 可视区高度（与 `max_height(scroll_h)` 一致），已不含 Frame inner_margin 与纵向滚动条占位。
@@ -472,8 +497,56 @@ impl TerminalView {
         }
     }
 
-    /// 处理 SSH 消息
-    fn process_ssh_messages(&mut self) {
+    /// 非活动标签仅消费 SSH 接收队列；若有新内容写入 VTE 则返回 `true`（用于低频重绘）。
+    pub fn pump_ssh_only(&mut self) -> bool {
+        self.process_ssh_messages()
+    }
+
+    /// FUNCTIONAL_SPEC §2.4：超长粘贴分片写入 PTY（每批 4096 字节，间隔 5ms）。
+    fn flush_paste_queue(&mut self, ctx: &egui::Context) {
+        const CHUNK: usize = 4096;
+        const GAP: Duration = Duration::from_millis(5);
+
+        if self.paste_pending.is_empty() {
+            self.paste_next_chunk_at = None;
+            return;
+        }
+        if !self.connected {
+            self.paste_pending.clear();
+            self.paste_next_chunk_at = None;
+            return;
+        }
+        let Some(handle) = self.ssh_handle.as_ref() else {
+            self.paste_pending.clear();
+            self.paste_next_chunk_at = None;
+            return;
+        };
+
+        let now = Instant::now();
+        if let Some(t) = self.paste_next_chunk_at {
+            if now < t {
+                ctx.request_repaint_after(t - now);
+                return;
+            }
+        }
+
+        let n = CHUNK.min(self.paste_pending.len());
+        let chunk: Vec<u8> = self.paste_pending.drain(..n).collect();
+        if let Err(e) = handle.send_input(&chunk) {
+            log::error!("PTY write (paste chunk): {}", e);
+        }
+
+        if !self.paste_pending.is_empty() {
+            self.paste_next_chunk_at = Some(now + GAP);
+            ctx.request_repaint_after(GAP);
+        } else {
+            self.paste_next_chunk_at = None;
+        }
+    }
+
+    /// 处理 SSH 消息；若终端缓冲有更新则返回 `true`。
+    fn process_ssh_messages(&mut self) -> bool {
+        let mut vte_dirty = false;
         if let Some(ref rx) = self.ssh_rx {
             for msg in rx.try_iter() {
                 match msg {
@@ -502,6 +575,7 @@ impl TerminalView {
                                 && Self::pty_chunk_safe_to_mirror_vte(&data)
                             {
                                 self.terminal.feed(&data);
+                                vte_dirty = true;
                             }
                             continue; // 不显示在终端
                         }
@@ -513,6 +587,7 @@ impl TerminalView {
                                 && Self::pty_chunk_safe_to_mirror_vte(&data)
                             {
                                 self.terminal.feed(&data);
+                                vte_dirty = true;
                             }
                             continue;
                         }
@@ -534,6 +609,7 @@ impl TerminalView {
                         }
                         if !display_data.is_empty() {
                             self.terminal.feed(&display_data);
+                            vte_dirty = true;
                         }
                     }
                     SshMessage::Connected { .. } => {
@@ -542,6 +618,7 @@ impl TerminalView {
                         self.terminal_focused = true;
                         self.pending_focus_terminal = true;
                         self.terminal.feed(b"\r\nConnected!\r\n\r\n");
+                        vte_dirty = true;
                         self.auto_follow_output = true;
                         
                         // 启动交互式 shell
@@ -550,18 +627,26 @@ impl TerminalView {
                                 match manager.start_interactive_shell(session_id, self.cols, self.rows) {
                                     Ok(handle) => {
                                         self.ssh_handle = Some(handle);
+                                        if !self.disconnected_input_buffer.is_empty() {
+                                            self.resend_offline_input_dialog_open = true;
+                                        }
                                     }
                                     Err(e) => {
-                                        self.error_message = Some(format!("Failed to start shell: {}", e));
+                                        self.error_message = Some(format_ssh_connect_error(&format!(
+                                            "Failed to start shell: {}",
+                                            e
+                                        )));
                                     }
                                 }
                             }
                         }
                     }
                     SshMessage::Error { error, .. } => {
-                        self.error_message = Some(error.clone());
+                        let msg = format_ssh_connect_error(&error);
+                        self.error_message = Some(msg.clone());
                         self.connected_at = None;
-                        self.terminal.feed(format!("Error: {}\r\n", error).as_bytes());
+                        self.terminal.feed(format!("Error: {}\r\n", msg).as_bytes());
+                        vte_dirty = true;
                         self.auto_follow_output = true;
                     }
                     SshMessage::Disconnected { .. } => {
@@ -569,7 +654,9 @@ impl TerminalView {
                         self.terminal_focused = false;
                         self.connected_at = None;
                         self.terminal.feed(b"\r\nDisconnected\r\n");
+                        vte_dirty = true;
                         self.auto_follow_output = true;
+                        self.resend_offline_input_dialog_open = false;
                     }
                     SshMessage::UserCommand { command, .. } => {
                         *self.command_usage.entry(command).or_insert(0) += 1;
@@ -577,6 +664,7 @@ impl TerminalView {
                 }
             }
         }
+        vte_dirty
     }
 
     pub fn command_usage_snapshot(&self) -> Vec<(String, u64)> {
@@ -652,17 +740,269 @@ impl TerminalView {
         }
     }
 
+    /// 断线重连时由宿主在 `disconnect` / `connect` 之间保留/恢复（`connect()` 会清空缓存）。
+    pub fn offline_input_snapshot(&self) -> (Vec<u8>, bool) {
+        (
+            self.disconnected_input_buffer.clone(),
+            self.buffer_input_while_disconnected,
+        )
+    }
+
+    pub fn restore_offline_input_snapshot(&mut self, buf: Vec<u8>, flag: bool) {
+        self.disconnected_input_buffer = buf;
+        self.buffer_input_while_disconnected = flag;
+    }
+
+    fn append_offline_bytes(&mut self, data: &[u8]) {
+        if data.is_empty() {
+            return;
+        }
+        let cap = Self::OFFLINE_INPUT_CAP;
+        if self.disconnected_input_buffer.len() >= cap {
+            return;
+        }
+        let take = (cap - self.disconnected_input_buffer.len()).min(data.len());
+        self.disconnected_input_buffer.extend_from_slice(&data[..take]);
+    }
+
+    /// 断线保留画面时：把按键写入本地缓冲（与 PTY 路径相同的字节序列，便于重发）。
+    fn capture_inline_input_disconnected(&mut self, ui: &egui::Ui) {
+        let mut pending_paste: Option<String> = None;
+
+        ui.input_mut(|i| {
+            let tab_plain = i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
+            let tab_shift = i.consume_key(
+                egui::Modifiers {
+                    shift: true,
+                    ..Default::default()
+                },
+                egui::Key::Tab,
+            );
+            if tab_plain || tab_shift {
+                self.append_offline_bytes(b"\t");
+            }
+            let up = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp);
+            let down = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown);
+            let left = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft);
+            let right = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight);
+            let home = i.consume_key(egui::Modifiers::NONE, egui::Key::Home);
+            let end = i.consume_key(egui::Modifiers::NONE, egui::Key::End);
+            let page_up = i.consume_key(egui::Modifiers::NONE, egui::Key::PageUp);
+            let page_down = i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown);
+            if up {
+                self.append_offline_bytes(b"\x1b[A");
+            }
+            if down {
+                self.append_offline_bytes(b"\x1b[B");
+            }
+            if right {
+                self.append_offline_bytes(b"\x1b[C");
+            }
+            if left {
+                self.append_offline_bytes(b"\x1b[D");
+            }
+            if home {
+                self.append_offline_bytes(b"\x1b[H");
+            }
+            if end {
+                self.append_offline_bytes(b"\x1b[F");
+            }
+            if page_up {
+                self.append_offline_bytes(b"\x1b[5~");
+            }
+            if page_down {
+                self.append_offline_bytes(b"\x1b[6~");
+            }
+
+            let mut backspace_key = false;
+            let mut delete_key = false;
+            for event in &i.events {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    ..
+                } = event
+                {
+                    if *key == egui::Key::Backspace {
+                        backspace_key = true;
+                    }
+                    if *key == egui::Key::Delete {
+                        delete_key = true;
+                    }
+                }
+            }
+
+            for event in &i.events {
+                match event {
+                    egui::Event::Text(text) => {
+                        if text == "\n" || text == "\r" {
+                            continue;
+                        }
+                        if i.modifiers.command || i.modifiers.ctrl {
+                            continue;
+                        }
+                        if text == "\t" {
+                            continue;
+                        }
+                        if text == "\u{7f}" {
+                            if backspace_key || delete_key {
+                                continue;
+                            }
+                            #[cfg(target_os = "macos")]
+                            {
+                                self.append_offline_bytes(b"\x1b[3~");
+                                continue;
+                            }
+                            #[cfg(not(target_os = "macos"))]
+                            {
+                                self.append_offline_bytes(&[0x7f]);
+                                continue;
+                            }
+                        }
+                        self.append_offline_bytes(text.as_bytes());
+                    }
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        modifiers,
+                        ..
+                    } => {
+                        if modifiers.command {
+                            if *key == egui::Key::V {
+                                if let Ok(mut clip) = Clipboard::new() {
+                                    if let Ok(text) = clip.get_text() {
+                                        pending_paste = Some(text);
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        match key {
+                            egui::Key::V if modifiers.ctrl && modifiers.shift => {
+                                if let Ok(mut clip) = Clipboard::new() {
+                                    if let Ok(text) = clip.get_text() {
+                                        pending_paste = Some(text);
+                                    }
+                                }
+                            }
+                            egui::Key::Enter => {
+                                self.append_offline_bytes(b"\r");
+                            }
+                            egui::Key::Backspace => {
+                                self.append_offline_bytes(&[0x7f]);
+                            }
+                            egui::Key::Delete => {
+                                self.append_offline_bytes(b"\x1b[3~");
+                            }
+                            egui::Key::Tab => {}
+                            _ => {}
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        if let Some(text) = pending_paste {
+            let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+            self.append_offline_bytes(normalized.as_bytes());
+        }
+        ui.ctx().request_repaint_after(Duration::from_millis(50));
+    }
+
+    fn render_resend_offline_dialog(&mut self, ctx: &egui::Context, theme: &Theme) {
+        if !self.resend_offline_input_dialog_open {
+            return;
+        }
+        let n = self.disconnected_input_buffer.len();
+        if n == 0 {
+            self.resend_offline_input_dialog_open = false;
+            return;
+        }
+        let preview = String::from_utf8_lossy(&self.disconnected_input_buffer[..n.min(200)]);
+        let preview_esc = preview.replace('\r', "\\r").replace('\n', "\\n");
+
+        let mut open = true;
+        egui::Window::new("resend_offline_input")
+            .open(&mut open)
+            .title_bar(false)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .collapsible(false)
+            .resizable(false)
+            .frame(
+                egui::Frame::popup(&ctx.style())
+                    .fill(theme.bg_window_color())
+                    .stroke(egui::Stroke::new(1.0, theme.border_color()))
+                    .rounding(8.0)
+                    .inner_margin(egui::Margin::symmetric(16.0, 14.0)),
+            )
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new("检测到断线期间暂存的输入")
+                        .size(15.0)
+                        .strong()
+                        .color(theme.fg_high_color()),
+                );
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(format!("共 {} 字节，是否发送到当前远程 shell？", n))
+                        .size(13.0)
+                        .color(theme.fg_medium_color()),
+                );
+                if !preview_esc.is_empty() {
+                    ui.add_space(4.0);
+                    ui.label(
+                        egui::RichText::new(format!("预览：{}", preview_esc))
+                            .monospace()
+                            .size(11.0)
+                            .color(theme.fg_low_color()),
+                    );
+                }
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(egui::RichText::new("发送到远端").color(theme.accent_color()))
+                        .clicked()
+                    {
+                        if let Some(handle) = self.ssh_handle.clone() {
+                            for chunk in self.disconnected_input_buffer.chunks(4096) {
+                                let _ = handle.send_input(chunk);
+                            }
+                        }
+                        self.disconnected_input_buffer.clear();
+                        self.buffer_input_while_disconnected = false;
+                        self.resend_offline_input_dialog_open = false;
+                    }
+                    if ui.button("丢弃缓存").clicked() {
+                        self.disconnected_input_buffer.clear();
+                        self.buffer_input_while_disconnected = false;
+                        self.resend_offline_input_dialog_open = false;
+                    }
+                });
+            });
+        if !open {
+            self.resend_offline_input_dialog_open = false;
+        }
+    }
+
     /// 将键盘事件直接写入 PTY，由远端 shell 回显，避免「本地预览 + 回显」叠字（如 lsls）
     fn capture_inline_input(&mut self, ui: &egui::Ui) {
+        if self.buffer_input_while_disconnected && !self.connected {
+            if self.terminal_focused {
+                self.capture_inline_input_disconnected(ui);
+            }
+            return;
+        }
         if !self.connected {
             return;
         }
-        let Some(handle) = self.ssh_handle.as_ref() else {
+        let Some(handle) = self.ssh_handle.clone() else {
             return;
         };
         if !self.terminal_focused {
             return;
         }
+
+        let mut pending_paste: Option<String> = None;
 
         ui.input_mut(|i| {
             // 强制拦截 Tab 焦点遍历，把 Tab/Shift+Tab 交给终端
@@ -779,7 +1119,7 @@ impl TerminalView {
                             if *key == egui::Key::V {
                                 if let Ok(mut clip) = Clipboard::new() {
                                     if let Ok(text) = clip.get_text() {
-                                        self.paste_text(&text);
+                                        pending_paste = Some(text);
                                     }
                                 }
                             }
@@ -789,7 +1129,7 @@ impl TerminalView {
                             egui::Key::V if modifiers.ctrl && modifiers.shift => {
                                 if let Ok(mut clip) = Clipboard::new() {
                                     if let Ok(text) = clip.get_text() {
-                                        self.paste_text(&text);
+                                        pending_paste = Some(text);
                                     }
                                 }
                             }
@@ -833,6 +1173,9 @@ impl TerminalView {
                 }
             }
         });
+        if let Some(text) = pending_paste {
+            self.paste_text(&text, ui.ctx());
+        }
     }
 
     /// 粘贴或执行一整段命令：只写 PTY，不把内容再写入本地 buffer（回显由远端负责）
@@ -853,18 +1196,28 @@ impl TerminalView {
         }
     }
 
-    /// 粘贴文本到终端：原样发到 PTY，不自动补回车
-    fn paste_text(&self, text: &str) {
+    /// 粘贴文本到终端：原样发到 PTY，不自动补回车；超长内容分片发送（FUNCTIONAL_SPEC §2.4）。
+    fn paste_text(&mut self, text: &str, ctx: &egui::Context) {
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
         if !self.connected {
+            if self.buffer_input_while_disconnected {
+                self.append_offline_bytes(normalized.as_bytes());
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
             return;
         }
         let Some(handle) = self.ssh_handle.as_ref() else {
             return;
         };
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-        if let Err(e) = handle.send_input(normalized.as_bytes()) {
-            log::error!("PTY write (paste): {}", e);
+        const LONG_PASTE: usize = 10 * 1024;
+        if normalized.len() <= LONG_PASTE {
+            if let Err(e) = handle.send_input(normalized.as_bytes()) {
+                log::error!("PTY write (paste): {}", e);
+            }
+            return;
         }
+        self.paste_pending.extend_from_slice(normalized.as_bytes());
+        self.flush_paste_queue(ctx);
     }
 
     pub fn clear_screen(&mut self) {
@@ -1183,6 +1536,11 @@ impl TerminalView {
         self.pending_focus_terminal = false;
         self.connected_at = None;
         self.terminal_focused = false;
+        self.paste_pending.clear();
+        self.paste_next_chunk_at = None;
+        self.buffer_input_while_disconnected = false;
+        self.disconnected_input_buffer.clear();
+        self.resend_offline_input_dialog_open = false;
     }
 
     /// 仅断开 SSH，保留当前屏幕与滚动缓冲（FUNCTIONAL_SPEC §1.3.5：Tab 保留、输出冻结、不可再输入）
@@ -1204,8 +1562,14 @@ impl TerminalView {
         self.pending_focus_terminal = false;
         self.connected_at = None;
         self.terminal_focused = false;
-        self.terminal
-            .feed(b"\r\n\x1b[90m[SSH disconnected; scrollback kept, input disabled]\x1b[0m\r\n");
+        self.paste_pending.clear();
+        self.paste_next_chunk_at = None;
+        self.buffer_input_while_disconnected = true;
+        self.resend_offline_input_dialog_open = false;
+        self.terminal.feed(
+            "\r\n\x1b[33m[已断开 SSH；键盘输入将暂存，重连后可选择是否发送到远端]\x1b[0m\r\n"
+                .as_bytes(),
+        );
     }
 
     /// 插入命令片段（自动添加回车）
