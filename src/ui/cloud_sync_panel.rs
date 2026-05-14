@@ -279,6 +279,10 @@ impl CloudSyncPanel {
                     egui::RichText::new("本地同步包 · 勾选控制导出/导入范围")
                         .color(theme.fg_low_color()),
                 );
+                ui.small(
+                    egui::RichText::new("FUNCTIONAL_SPEC §6：同步会话/片段等非敏感字段；SSH 密码不参与导出，各设备本地录入。")
+                        .color(theme.fg_low_color()),
+                );
                 ui.separator();
 
                 let cloud_scroll_h = layout_util::scroll_area_fill_height(ui, 140.0);

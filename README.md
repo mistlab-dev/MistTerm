@@ -93,26 +93,20 @@ sz filename.txt  # 发送文件（从服务器到本地）
 
 ### 核心组件
 
+冒烟清单见 [docs/SMOKE.md](docs/SMOKE.md)；产品规格见 [docs/product/FUNCTIONAL_SPEC.md](docs/product/FUNCTIONAL_SPEC.md)。
+
 ```
 MistTerm/
 ├── src/
 │   ├── main.rs          # GUI 主界面 (eframe/egui)
-│   ├── core/            # 核心模块
-│   │   ├── session.rs   # 会话管理
-│   │   └── connection.rs # 连接管理
-│   ├── ssh/             # SSH 模块
-│   │   ├── client.rs    # SSH 客户端
-│   │   ├── manager.rs   # 会话管理器
-│   │   └── lrzsz.rs     # ZMODEM 文件传输协议 ⭐
-│   ├── terminal/        # 终端模拟
-│   │   └── terminal.rs  # VT100/ANSI 终端
-│   ├── ui/              # UI 组件
-│   │   ├── app.rs       # 主应用
-│   │   └── terminal.rs  # 终端视图
-│   ├── sync/            # 同步模块
-│   │   └── git.rs       # Git 同步
-│   └── security/        # 安全模块
-│       └── keychain.rs  # 密钥链管理
+│   ├── core/            # 核心模块（会话、片段等）
+│   ├── ssh/             # SSH、lrzsz、SCP
+│   ├── terminal/        # alacritty_terminal 适配（如 alacritty.rs）
+│   ├── ui/              # UI（app.rs、terminal.rs 等）
+│   ├── sync/            # Git 同步（git.rs）
+│   └── security/        # keyring.rs 等
+├── docs/
+│   └── SMOKE.md         # 手工冒烟
 ├── tests/
 │   └── zmodem_integration_test.rs  # ZMODEM 集成测试
 ├── examples/

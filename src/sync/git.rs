@@ -290,14 +290,16 @@ impl GitRepo {
                         .map_err(|e| GitError::PullError(format!("创建分支失败：{}", e)))?;
                 }
             }
+            self.repo
+                .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                .map_err(|e| GitError::PullError(format!("检出发失败：{}", e)))?;
+            return Ok(());
         }
 
-        // 更新工作目录
-        self.repo
-            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
-            .map_err(|e| GitError::PullError(format!("检出发失败：{}", e)))?;
-
-        Ok(())
+        Err(GitError::PullError(
+            "FUNCTIONAL_SPEC §6.4：远程与本地出现分叉（非快进）。以本地为准，未自动合并；请在本机用 git merge/rebase 处理后再推送。"
+                .to_string(),
+        ))
     }
 
     /// 同步（先拉取再推送）

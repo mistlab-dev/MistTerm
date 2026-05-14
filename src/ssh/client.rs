@@ -3,7 +3,7 @@
 
 use ssh2::Session;
 use std::io::Write;
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use super::format_ssh_connect_error;
@@ -37,9 +37,16 @@ impl SshClient {
         let addr = format!("{}:{}", self.config.host, self.config.port);
         log::info!("Connecting to {}...", addr);
 
-        // 建立 TCP 连接
-        let stream = TcpStream::connect(&addr).map_err(|e| {
-            format_ssh_connect_error(&format!("TCP connection failed: {}", e))
+        let mut addrs = (&self.config.host as &str, self.config.port)
+            .to_socket_addrs()
+            .map_err(|e| {
+                format_ssh_connect_error(&format!("无法解析主机地址: {}", e))
+            })?;
+        let sock = addrs.next().ok_or_else(|| {
+            format_ssh_connect_error("无可解析的地址（请检查主机名与端口）")
+        })?;
+        let stream = TcpStream::connect_timeout(&sock, Duration::from_secs(30)).map_err(|e| {
+            format_ssh_connect_error(&format!("TCP 连接失败（30 秒内未建立）: {}", e))
         })?;
         log::info!("TCP connected");
 

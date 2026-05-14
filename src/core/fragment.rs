@@ -413,6 +413,9 @@ impl FragmentManager {
         self.get_by_id(id)
     }
 
+    /// 将一次「片段已展开并写入 PTY（含末尾回车）」记为一次使用；`success` 表示 PTY 写入是否成功。
+    /// FUNCTIONAL_SPEC §3.3.4 要求的「按远端退出码判定成败」需在 shell 侧配合（如 `PROMPT_COMMAND` 回传）后才能闭环；
+    /// 当前实现不把普通交互式命令的退出码与片段自动关联。
     pub fn record_execution(&mut self, id: &str, success: bool, dur_ms: u64) {
         let ms = dur_ms.min(u32::MAX as u64) as u32;
         self.record_usage(id, success, ms);

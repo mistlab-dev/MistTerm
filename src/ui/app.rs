@@ -7,7 +7,7 @@
 use eframe::egui;
 use rfd::FileDialog;
 use std::collections::{HashMap, HashSet};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use crate::core::{
     Credential, CredentialAuthKind, expand_command_template, expand_fragment_command_stages,
     expand_rhai_blocks, list_placeholder_keys, merge_rhai_context,
@@ -32,6 +32,8 @@ struct MistTermUiPersist {
     sidebar_width: f32,
     sidebar_collapsed: bool,
     sidebar_user_dismissed_responsive: bool,
+    #[serde(default)]
+    auto_reconnect_enabled: bool,
 }
 
 fn truncate_status(s: &str, max_chars: usize) -> String {
@@ -42,6 +44,23 @@ fn truncate_status(s: &str, max_chars: usize) -> String {
     } else {
         head
     }
+}
+
+/// FUNCTIONAL_SPEC §7 快捷键单一真源（关于页与帮助共用）
+fn mistterm_functional_spec_shortcuts() -> &'static str {
+    "FUNCTIONAL_SPEC §7 摘录（Mac 用 ⌘，Win/Linux 用 Ctrl）\n\
+     ⌘N / Ctrl+N — 新建会话\n\
+     ⌘E / Ctrl+E — 编辑所选会话\n\
+     ⌘T / Ctrl+T — 新终端标签\n\
+     ⌘W / Ctrl+W — 关闭当前标签\n\
+     ⌘1–9 / Ctrl+1–9 — 切换第 N 个标签\n\
+     ⌘Tab / Ctrl+Tab — 下一标签；加 Shift 为上一标签\n\
+     ⌘J / Ctrl+J — 聚焦连接搜索\n\
+     ⌘K / Ctrl+K — 聚焦片段搜索\n\
+     ⌘⇧J / Ctrl+⇧J — 快速片段选择器\n\
+     ⌘F / Ctrl+F — 终端内搜索\n\
+     ⌘, / Ctrl+, — 偏好设置\n\
+     ⌘H / Ctrl+H — 关于与本说明"
 }
 
 /// 底栏 / 提示文案颜色：错误类用主题红，其余用弱文字色（避免顶栏大块告警色）
@@ -98,6 +117,9 @@ struct TerminalTab {
     session_id: String,
     title: String,
     terminal: TerminalView,
+    /// 自动重连：计划执行时间；与 `ssh_auto_reconnect_attempts` 配合（§1.4 可选行为）
+    ssh_auto_reconnect_next: Option<Instant>,
+    ssh_auto_reconnect_attempts: u8,
 }
 
 /// 变量输入对话框状态
@@ -238,6 +260,11 @@ pub struct MistTermApp {
 
     /// 主题管理器
     theme_manager: ThemeManager,
+
+    /// 网络断开后是否自动重连（偏好设置，§1.4）
+    auto_reconnect_enabled: bool,
+    /// ≥10MB 上传：待用户选择 SCP 或 ZMODEM 的本地路径
+    large_upload_pending_path: Option<std::path::PathBuf>,
 
     /// FUNCTIONAL_SPEC §1.3.4：Delete 删除会话前的确认 `(session_id, display_name)`
     delete_session_confirm: Option<(String, String)>,
@@ -440,6 +467,8 @@ impl MistTermApp {
             theme_manager: ThemeManager::load(),
             delete_session_confirm: None,
             close_tab_confirm_idx: None,
+            auto_reconnect_enabled: false,
+            large_upload_pending_path: None,
         };
 
         if let Some(storage) = cc.storage {
@@ -449,6 +478,7 @@ impl MistTermApp {
                 app.sidebar_width = p.sidebar_width.clamp(160.0, 520.0);
                 app.sidebar_collapsed = p.sidebar_collapsed;
                 app.sidebar_user_dismissed_responsive = p.sidebar_user_dismissed_responsive;
+                app.auto_reconnect_enabled = p.auto_reconnect_enabled;
             }
         }
 
@@ -473,6 +503,7 @@ impl MistTermApp {
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
             || self.quick_selector.open
+            || self.large_upload_pending_path.is_some()
     }
 
     fn focus_sidebar_connection_search(&mut self, ctx: &egui::Context) {
@@ -597,6 +628,8 @@ impl MistTermApp {
         if idx >= self.tabs.len() {
             return;
         }
+        self.tabs[idx].ssh_auto_reconnect_next = None;
+        self.tabs[idx].ssh_auto_reconnect_attempts = 0;
         let sid = self.tabs[idx].session_id.clone();
         let Some(session) = self.session_manager.get_session(&sid).cloned() else {
             self.status_message = "未找到会话配置，无法重连".to_string();
@@ -627,6 +660,40 @@ impl MistTermApp {
             return;
         };
         self.reconnect_tab_at(idx);
+    }
+
+    /// 活动标签：SCP 直传或弹出 ≥10MB 选择（与拖放共用，FUNCTIONAL_SPEC §4.3）
+    fn enqueue_upload_for_active_tab(&mut self, path: std::path::PathBuf) {
+        const TEN_MB: u64 = 10 * 1024 * 1024;
+        if self.active_tab.is_none() {
+            self.status_message = "没有活动的终端标签，无法上传".to_string();
+            return;
+        }
+        let sz = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+        if sz >= TEN_MB {
+            let disp = path.display().to_string();
+            self.large_upload_pending_path = Some(path);
+            self.status_message = format!(
+                "请选择上传方式（≥10MB）：{}（{}）",
+                disp,
+                Self::format_bytes_short(sz)
+            );
+            return;
+        }
+        if let Some(terminal) = self.current_terminal_mut() {
+            match terminal.start_upload(path.as_path()) {
+                Ok(_) => {
+                    self.status_message = format!(
+                        "开始 SCP 上传: {} · {}",
+                        path.display(),
+                        Self::format_bytes_short(sz)
+                    );
+                }
+                Err(e) => {
+                    self.status_message = format!("上传失败: {}", e);
+                }
+            }
+        }
     }
 
     fn modal_window_frame() -> egui::Frame {
@@ -785,6 +852,8 @@ impl MistTermApp {
             session_id: session.id.clone(),
             title: format!("{}@{}", session.username, session.host),
             terminal,
+            ssh_auto_reconnect_next: None,
+            ssh_auto_reconnect_attempts: 0,
         });
         self.active_tab = Some(self.tabs.len() - 1);
         self.session_manager.mark_session_connected(&session.id);
@@ -1516,41 +1585,12 @@ impl MistTermApp {
                             }
                             if ui.add(mk("📤 上传", btn_idle, 88.0))
                                 .on_hover_text(
-                                    "SCP 直传至远端当前目录（FUNCTIONAL_SPEC §4.3：<10MB 推荐；大文件建议终端内 rz + ZMODEM）",
+                                    "上传至远端当前目录（<10MB 默认 SCP；≥10MB 可选 ZMODEM）。拖放文件到终端区亦可（§4.3）。",
                                 )
                                 .clicked()
                             {
-                                if let Some(terminal) = self.current_terminal_mut() {
-                                    if let Some(path) = FileDialog::new().pick_file() {
-                                        const TEN_MB: u64 = 10 * 1024 * 1024;
-                                        let size_note = match std::fs::metadata(&path) {
-                                            Ok(m) => {
-                                                let sz = m.len();
-                                                if sz >= TEN_MB {
-                                                    Some(format!(
-                                                        " · {}（≥10MB：当前为 SCP；ZMODEM/续传请用终端 rz）",
-                                                        Self::format_bytes_short(sz)
-                                                    ))
-                                                } else {
-                                                    Some(format!(" · {}", Self::format_bytes_short(sz)))
-                                                }
-                                            }
-                                            Err(_) => None,
-                                        };
-                                        match terminal.start_upload(path.as_path()) {
-                                            Ok(_) => {
-                                                self.status_message = match size_note {
-                                                    Some(note) => {
-                                                        format!("开始 SCP 上传: {}{}", path.display(), note)
-                                                    }
-                                                    None => format!("开始 SCP 上传: {}", path.display()),
-                                                };
-                                            }
-                                            Err(e) => {
-                                                self.status_message = format!("上传失败: {}", e);
-                                            }
-                                        }
-                                    }
+                                if let Some(path) = FileDialog::new().pick_file() {
+                                    self.enqueue_upload_for_active_tab(path);
                                 }
                             }
                             if ui.add(mk("🔍 搜索", btn_idle, 88.0))
@@ -1779,6 +1819,7 @@ impl eframe::App for MistTermApp {
             sidebar_width: self.sidebar_width,
             sidebar_collapsed: self.sidebar_collapsed,
             sidebar_user_dismissed_responsive: self.sidebar_user_dismissed_responsive,
+            auto_reconnect_enabled: self.auto_reconnect_enabled,
         };
         eframe::set_value(storage, MISTTERM_UI_STORAGE_KEY, &p);
     }
@@ -1811,6 +1852,49 @@ impl eframe::App for MistTermApp {
         // 监控：`exec` 由 shell 泵串行执行，在此处轮询结果并驱动自动刷新
         self.monitor_panel.update(ctx, self.show_monitor_panel);
         self.try_flush_pending_fragment_insert();
+
+        if let Some(ti) = self.active_tab {
+            if let Some(tab) = self.tabs.get_mut(ti) {
+                for p in tab.terminal.take_drop_upload_paths() {
+                    self.enqueue_upload_for_active_tab(p);
+                }
+            }
+        }
+
+        let now = Instant::now();
+        let mut reconnect_fire: Vec<usize> = Vec::new();
+        for (i, tab) in self.tabs.iter().enumerate() {
+            if let Some(t) = tab.ssh_auto_reconnect_next {
+                if self.auto_reconnect_enabled && now >= t {
+                    reconnect_fire.push(i);
+                }
+            }
+        }
+        for i in reconnect_fire {
+            self.tabs[i].ssh_auto_reconnect_next = None;
+            self.reconnect_tab_at(i);
+        }
+        for tab in &mut self.tabs {
+            if !self.auto_reconnect_enabled {
+                let _ = tab.terminal.take_unexpected_disconnect_notified();
+                continue;
+            }
+            if tab.terminal.take_unexpected_disconnect_notified() {
+                if tab.ssh_auto_reconnect_attempts < 5 {
+                    let exp = tab.ssh_auto_reconnect_attempts.min(4);
+                    let delay = Duration::from_secs(1u64 << exp);
+                    tab.ssh_auto_reconnect_next = Some(now + delay);
+                    tab.ssh_auto_reconnect_attempts += 1;
+                    self.status_message = format!(
+                        "连接已断开，{} 秒后将自动重连（{}/5）",
+                        delay.as_secs(),
+                        tab.ssh_auto_reconnect_attempts
+                    );
+                } else {
+                    self.status_message = "连接已断开；自动重连已达 5 次上限".to_string();
+                }
+            }
+        }
 
         // FUNCTIONAL_SPEC §2.4：非当前标签仍消费 SSH 输出；有 VTE 更新时用低频重绘，避免与活动 Tab 抢同一帧节奏。
         let active = self.active_tab;
@@ -2740,7 +2824,7 @@ impl eframe::App for MistTermApp {
                 .movable(false)
                 .resizable(false)
                 .collapsible(false)
-                .fixed_size(egui::vec2(360.0, 220.0))
+                .fixed_size(egui::vec2(420.0, 360.0))
                 .frame(Self::modal_window_frame())
                 .show(ctx, |ui| {
                     Self::modal_content_frame().show(ui, |ui| {
@@ -2771,13 +2855,15 @@ impl eframe::App for MistTermApp {
                                             .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
                                     );
                                     ui.add_space(6.0);
-                                    ui.label(
-                                        egui::RichText::new(
-                                            "快捷键见 FUNCTIONAL_SPEC §7：⌘J 连接 · ⌘K 片段 · ⌘⇧J 快速选片段 · ⌘⇧Tab 上一标签 · ⌘, 偏好",
-                                        )
-                                        .size(10.0)
-                                        .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 89)),
-                                    );
+                                    egui::ScrollArea::vertical()
+                                        .max_height(200.0)
+                                        .show(ui, |ui| {
+                                            ui.label(
+                                                egui::RichText::new(mistterm_functional_spec_shortcuts())
+                                                    .font(egui::FontId::monospace(10.0))
+                                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 89)),
+                                            );
+                                        });
                                 });
                             ui.add_space(10.0);
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2811,7 +2897,7 @@ impl eframe::App for MistTermApp {
                 .movable(false)
                 .resizable(false)
                 .collapsible(false)
-                .fixed_size(egui::vec2(400.0, 340.0))
+                .fixed_size(egui::vec2(400.0, 400.0))
                 .frame(Self::modal_window_frame())
                 .show(ctx, |ui| {
                     Self::modal_content_frame().show(ui, |ui| {
@@ -2848,6 +2934,24 @@ impl eframe::App for MistTermApp {
                                 self.theme_manager.set_theme_index(i);
                                 self.theme_manager.save();
                             }
+                        }
+                        ui.add_space(14.0);
+                        ui.label(
+                            egui::RichText::new("连接")
+                                .size(11.0)
+                                .strong()
+                                .color(label_color),
+                        );
+                        ui.add_space(6.0);
+                        let mut ar = self.auto_reconnect_enabled;
+                        if ui
+                            .checkbox(&mut ar, "网络断开后自动重连（最多 5 次，指数退避）")
+                            .on_hover_text(
+                                "FUNCTIONAL_SPEC §1.4：默认不自动重连；开启后仅对意外断开生效，手动「断开」不会弹此策略。",
+                            )
+                            .changed()
+                        {
+                            self.auto_reconnect_enabled = ar;
                         }
                         ui.add_space(14.0);
                         ui.label(
@@ -2901,6 +3005,97 @@ impl eframe::App for MistTermApp {
                     });
                 });
             self.show_preferences_dialog = open && !should_close;
+        }
+
+        if self.large_upload_pending_path.is_some() {
+            let path_hint = self
+                .large_upload_pending_path
+                .as_ref()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default();
+            let mut open = true;
+            #[derive(Clone, Copy)]
+            enum LargePick {
+                Dismiss,
+                Zmodem,
+                Scp,
+            }
+            let mut pick: Option<LargePick> = None;
+            egui::Window::new("large_upload_modal")
+                .open(&mut open)
+                .title_bar(false)
+                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+                .movable(false)
+                .resizable(false)
+                .collapsible(false)
+                .fixed_size(egui::vec2(440.0, 260.0))
+                .frame(Self::modal_window_frame())
+                .show(ctx, |ui| {
+                    Self::modal_content_frame().show(ui, |ui| {
+                        let mut should_close_hdr = false;
+                        Self::modal_header(ui, "大文件上传", &mut should_close_hdr);
+                        if should_close_hdr {
+                            pick = Some(LargePick::Dismiss);
+                        }
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "「{}」≥ 10MB：SCP 无断点续传；ZMODEM 需远端 lrzsz，并将向 PTY 发送 rz -y。",
+                                path_hint
+                            ))
+                            .size(11.0)
+                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 179)),
+                        );
+                        ui.add_space(12.0);
+                        ui.horizontal(|ui| {
+                            if ui.button("ZMODEM（推荐大文件）").clicked() {
+                                pick = Some(LargePick::Zmodem);
+                            }
+                            if ui.button("仍用 SCP").clicked() {
+                                pick = Some(LargePick::Scp);
+                            }
+                        });
+                        ui.add_space(8.0);
+                        if ui.button("取消").clicked() {
+                            pick = Some(LargePick::Dismiss);
+                        }
+                    });
+                });
+            if !open && pick.is_none() {
+                pick = Some(LargePick::Dismiss);
+            }
+            match pick {
+                Some(LargePick::Zmodem) => {
+                    if let Some(p) = self.large_upload_pending_path.take() {
+                        if let Some(t) = self.current_terminal_mut() {
+                            t.queue_zmodem_upload_after_rz(p.clone());
+                            self.status_message = format!(
+                                "已发送 rz -y，握手就绪后以 ZMODEM 上传 {}",
+                                p.display()
+                            );
+                        }
+                    }
+                }
+                Some(LargePick::Scp) => {
+                    if let Some(p) = self.large_upload_pending_path.take() {
+                        if let Some(t) = self.current_terminal_mut() {
+                            match t.start_upload(p.as_path()) {
+                                Ok(_) => {
+                                    self.status_message =
+                                        format!("开始 SCP 上传: {}", p.display());
+                                }
+                                Err(e) => {
+                                    self.status_message =
+                                        format!("SCP 上传启动失败: {}", e);
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(LargePick::Dismiss) => {
+                    self.large_upload_pending_path = None;
+                }
+                None => {}
+            }
         }
 
         if let Some((del_id, del_name)) = self.delete_session_confirm.clone() {

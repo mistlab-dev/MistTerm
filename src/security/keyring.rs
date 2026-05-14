@@ -4,6 +4,9 @@
 //! - macOS: Keychain
 //! - Windows: Credential Manager
 //! - Linux: Secret Service (GNOME Keyring, KWallet)
+//!
+//! FUNCTIONAL_SPEC §5：无 GUI/密钥服务时 `keyring` 可能失败，上层应回退本地加密并提示用户；
+//! 密钥材料丢失后需重新录入密码（见产品文档 §5.4）。
 
 use keyring::Entry;
 use thiserror::Error;

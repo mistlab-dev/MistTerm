@@ -11,13 +11,47 @@
 use eframe::egui;
 use arboard::Clipboard;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, SshSessionId, LrzszTransfer, TransferEvent, format_ssh_connect_error};
 use crate::terminal::Terminal as VtTerminal;
 use crate::ui::theme::Theme;
+
+/// 与 [`VtTerminal::content_epoch`] 组合，避免 PTY 无输出帧重复构建整屏 [`egui::text::LayoutJob`]。
+struct TerminalVisualLayoutCache {
+    vt_gen: u64,
+    content_epoch: u64,
+    cols: u32,
+    rows: u32,
+    font_bits: u32,
+    fg: egui::Color32,
+    bg: egui::Color32,
+    layout_job: egui::text::LayoutJob,
+    formatted: String,
+}
+
+impl TerminalVisualLayoutCache {
+    fn matches(
+        &self,
+        vt_gen: u64,
+        content_epoch: u64,
+        cols: u32,
+        rows: u32,
+        font_bits: u32,
+        fg: egui::Color32,
+        bg: egui::Color32,
+    ) -> bool {
+        self.vt_gen == vt_gen
+            && self.content_epoch == content_epoch
+            && self.cols == cols
+            && self.rows == rows
+            && self.font_bits == font_bits
+            && self.fg == fg
+            && self.bg == bg
+    }
+}
 
 /// 终端视图组件
 pub struct TerminalView {
@@ -81,6 +115,17 @@ pub struct TerminalView {
     disconnected_input_buffer: Vec<u8>,
     /// 重连且 shell 就绪后，若缓存非空则弹出是否重发。
     resend_offline_input_dialog_open: bool,
+    /// 整屏替换 VTE 或清屏时递增，与 [`VtTerminal::content_epoch`] 一并参与布局缓存键（FUNCTIONAL_SPEC §2.3.1）。
+    vt_visual_generation: u64,
+    visual_layout_cache: Option<TerminalVisualLayoutCache>,
+    /// 用户主动断开（`disconnect` / `disconnect_ssh_keep_buffer`）期间忽略随后到达的 `Disconnected`，避免误触发自动重连。
+    local_disconnect_intent: bool,
+    /// 本轮 `process_ssh_messages` 后若曾为「非主动」断开则置位；由宿主 `take()` 后清除。
+    unexpected_disconnect_notified: bool,
+    /// 拖入终端区域、待宿主处理的上传路径（§4.3.2）。
+    pending_drop_upload_paths: Vec<PathBuf>,
+    /// 大文件上传：用户选 ZMODEM 后先发 `rz -y`，握手检测到后再用此路径 `start_rz_upload`。
+    zmodem_upload_after_rz_path: Option<PathBuf>,
 }
 
 impl TerminalView {
@@ -102,6 +147,32 @@ impl TerminalView {
     #[inline]
     fn text_width_in_scroll_viewport(scroll_inner_width: f32) -> f32 {
         (scroll_inner_width - Self::INNER_TEXT_SLACK).max(64.0)
+    }
+
+    /// §4.3.2：拖放文件到终端区域时收集路径（由宿主决定 SCP / ZMODEM）。
+    fn collect_file_drops_into(ui: &egui::Ui, pending: &mut Vec<PathBuf>) {
+        if ui.ctx().input(|i| i.raw.dropped_files.is_empty()) {
+            return;
+        }
+        let rect = ui.clip_rect();
+        let inside = ui.ctx().input(|i| {
+            i.pointer
+                .interact_pos()
+                .map(|p| rect.contains(p))
+                .unwrap_or(false)
+        });
+        if !inside {
+            return;
+        }
+        ui.ctx().input(|i| {
+            for f in &i.raw.dropped_files {
+                if let Some(p) = &f.path {
+                    if !pending.iter().any(|x| x == p) {
+                        pending.push(p.clone());
+                    }
+                }
+            }
+        });
     }
 
     fn is_would_block_text(msg: &str) -> bool {
@@ -206,6 +277,12 @@ impl TerminalView {
             buffer_input_while_disconnected: false,
             disconnected_input_buffer: Vec::new(),
             resend_offline_input_dialog_open: false,
+            vt_visual_generation: 0,
+            visual_layout_cache: None,
+            local_disconnect_intent: false,
+            unexpected_disconnect_notified: false,
+            pending_drop_upload_paths: Vec::new(),
+            zmodem_upload_after_rz_path: None,
         }
     }
 
@@ -231,6 +308,9 @@ impl TerminalView {
                 self.connected = false;
                 self.error_message = None;
                 self.terminal = VtTerminal::new(self.cols as usize, self.rows as usize);
+                self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
+                self.visual_layout_cache = None;
+                self.local_disconnect_intent = false;
                 self.terminal.feed(b"Connecting...\r\n");
                 self.connected_at = None;
                 self.connection_target = Some((username.to_string(), host.to_string()));
@@ -319,6 +399,7 @@ impl TerminalView {
                     let col_h = ui.available_height();
                     ui.set_min_width(col_w.max(1.0));
                     ui.set_min_height(col_h.max(1.0));
+                    Self::collect_file_drops_into(ui, &mut self.pending_drop_upload_paths);
                     let footer_h = if self.transfer_progress.is_some() {
                         TRANSFER_FOOTER_H
                     } else {
@@ -328,16 +409,79 @@ impl TerminalView {
 
                     // 终端内容区在上，ZMODEM 进度条固定在底部，避免插在命令与 shell 输出之间
                     let terminal_bg = theme.bg_terminal_color();
-                    let layout_job = self.terminal.get_layout_job(
-                        self.font_size,
-                        theme.fg_medium_color(),
+                    let fg = theme.fg_medium_color();
+                    let font_bits = self.font_size.to_bits();
+                    let cache_key = (
+                        self.vt_visual_generation,
+                        self.terminal.content_epoch(),
+                        self.cols,
+                        self.rows,
+                        font_bits,
+                        fg,
                         terminal_bg,
                     );
+                    let (layout_job, display_owned) =
+                        if let Some(ref c) = self.visual_layout_cache {
+                            if c.matches(
+                                cache_key.0,
+                                cache_key.1,
+                                cache_key.2,
+                                cache_key.3,
+                                cache_key.4,
+                                cache_key.5,
+                                cache_key.6,
+                            ) {
+                                (
+                                    c.layout_job.clone(),
+                                    c.formatted.clone(),
+                                )
+                            } else {
+                                let layout_job = self
+                                    .terminal
+                                    .get_layout_job(self.font_size, fg, terminal_bg);
+                                let formatted = self.terminal.get_formatted_output();
+                                self.visual_layout_cache = Some(TerminalVisualLayoutCache {
+                                    vt_gen: cache_key.0,
+                                    content_epoch: cache_key.1,
+                                    cols: cache_key.2,
+                                    rows: cache_key.3,
+                                    font_bits: cache_key.4,
+                                    fg: cache_key.5,
+                                    bg: cache_key.6,
+                                    layout_job: layout_job.clone(),
+                                    formatted: formatted.clone(),
+                                });
+                                (layout_job, formatted)
+                            }
+                        } else {
+                            let layout_job = self
+                                .terminal
+                                .get_layout_job(self.font_size, fg, terminal_bg);
+                            let formatted = self.terminal.get_formatted_output();
+                            self.visual_layout_cache = Some(TerminalVisualLayoutCache {
+                                vt_gen: cache_key.0,
+                                content_epoch: cache_key.1,
+                                cols: cache_key.2,
+                                rows: cache_key.3,
+                                font_bits: cache_key.4,
+                                fg: cache_key.5,
+                                bg: cache_key.6,
+                                layout_job: layout_job.clone(),
+                                formatted: formatted.clone(),
+                            });
+                            (layout_job, formatted)
+                        };
+
+                    let prev_scroll_w = ui.spacing().scroll_bar_width;
+                    let prev_inactive_fill = ui.visuals().widgets.inactive.bg_fill;
+                    ui.spacing_mut().scroll_bar_width = 4.0;
+                    ui.visuals_mut().widgets.inactive.bg_fill =
+                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 15);
                     let scroll_output = egui::ScrollArea::vertical()
                         .stick_to_bottom(self.auto_follow_output)
                         .auto_shrink([false, false])
                         .scroll_bar_visibility(
-                            egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden,
+                            egui::containers::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
                         )
                         .max_height(scroll_h)
                         .show(ui, |ui| {
@@ -353,7 +497,6 @@ impl TerminalView {
                             self.sync_pty_size_with_ui(ui, egui::vec2(vw, scroll_h.max(1.0)), theme);
                             let edit_w = Self::text_width_in_scroll_viewport(vw);
                             // `String` + 可编辑会触发 egui 插入/IME 光标，与 VT 里「│」叠成双光标；用 `&str` 只读缓冲只保留 PTY 光标
-                            let display_owned = self.terminal.get_formatted_output();
                             let mut display_view: &str = display_owned.as_str();
                             let mut layouter = |ui: &egui::Ui, text: &str, _wrap_width: f32| {
                                 let _ = text;
@@ -418,6 +561,9 @@ impl TerminalView {
                                 }
                             });
                         });
+
+                    ui.spacing_mut().scroll_bar_width = prev_scroll_w;
+                    ui.visuals_mut().widgets.inactive.bg_fill = prev_inactive_fill;
 
                     // iTerm2 风格：离开底部则停止自动跟随，回到底部恢复跟随
                     let viewport_h = scroll_output.inner_rect.height();
@@ -548,7 +694,8 @@ impl TerminalView {
     fn process_ssh_messages(&mut self) -> bool {
         let mut vte_dirty = false;
         if let Some(ref rx) = self.ssh_rx {
-            for msg in rx.try_iter() {
+            let batch: Vec<SshMessage> = rx.try_iter().collect();
+            for msg in batch {
                 match msg {
                     SshMessage::Output { data, .. } => {
                         // 上传（本机 sz→远端 rz）时，PTY 上的 ZMODEM 帧只能经 SSH 泵线程到达此处；
@@ -561,7 +708,33 @@ impl TerminalView {
                             || text.contains("B0000"); // 兼容不同 rz 实现的握手串
 
                         // 尽早打开旁路：选文件前 `rz` 发出的 ZRQINIT 若只进 VTE，`start_send` 会永远等下一轮超时。
-                        if is_rz_prompt && !self.pending_rz_upload && self.connected {
+                        if is_rz_prompt && self.connected {
+                            if let Some(path) = self.zmodem_upload_after_rz_path.take() {
+                                log::info!(
+                                    "rz 握手就绪，开始 ZMODEM 上传（预排队）{}",
+                                    path.display()
+                                );
+                                self.pending_rz_upload = false;
+                                self.rz_control_mode_until =
+                                    Some(Instant::now() + Duration::from_secs(90));
+                                self.lrzsz.begin_rz_handshake_capture();
+                                self.lrzsz.feed_send_pty_output(&data);
+                                if let Some(ref h) = self.ssh_handle {
+                                    self.lrzsz.register_shell_pump_upload_feed(h);
+                                }
+                                if Self::mirror_rz_text_to_vte_enabled()
+                                    && Self::pty_chunk_safe_to_mirror_vte(&data)
+                                {
+                                    self.terminal.feed(&data);
+                                    vte_dirty = true;
+                                }
+                                if let Err(e) = self.start_rz_upload(path.as_path()) {
+                                    self.error_message = Some(e);
+                                    self.lrzsz.end_rz_handshake_capture();
+                                }
+                                continue;
+                            }
+                            if !self.pending_rz_upload {
                             log::info!("检测到 rz 命令，弹出上传文件选择");
                             self.pending_rz_upload = true;
                             self.rz_control_mode_until = Some(Instant::now() + Duration::from_secs(20));
@@ -578,6 +751,7 @@ impl TerminalView {
                                 vte_dirty = true;
                             }
                             continue; // 不显示在终端
+                            }
                         }
 
                         self.lrzsz.feed_send_pty_output(&data);
@@ -650,6 +824,11 @@ impl TerminalView {
                         self.auto_follow_output = true;
                     }
                     SshMessage::Disconnected { .. } => {
+                        if self.local_disconnect_intent {
+                            self.local_disconnect_intent = false;
+                        } else {
+                            self.unexpected_disconnect_notified = true;
+                        }
                         self.connected = false;
                         self.terminal_focused = false;
                         self.connected_at = None;
@@ -1222,6 +1401,8 @@ impl TerminalView {
 
     pub fn clear_screen(&mut self) {
         self.terminal = VtTerminal::new(self.cols as usize, self.rows as usize);
+        self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
+        self.visual_layout_cache = None;
     }
 
     pub fn send_ctrl_c(&self) -> Result<(), String> {
@@ -1418,7 +1599,11 @@ impl TerminalView {
     }
 
     pub fn set_font_size(&mut self, size: f32) {
-        self.font_size = size.clamp(10.0, 24.0);
+        let n = size.clamp(10.0, 24.0);
+        if (n - self.font_size).abs() > f32::EPSILON {
+            self.visual_layout_cache = None;
+        }
+        self.font_size = n;
     }
 
     pub fn font_size(&self) -> f32 {
@@ -1518,6 +1703,7 @@ impl TerminalView {
 
     /// 断开连接（关闭 SSH 并清空本地终端网格，用于移除标签等场景）
     pub fn disconnect(&mut self) {
+        self.local_disconnect_intent = true;
         if let Some(ref h) = self.ssh_handle {
             self.lrzsz.unregister_shell_pump_upload_feed(h);
         }
@@ -1530,6 +1716,8 @@ impl TerminalView {
         self.ssh_rx = None;
         self.session_id = None;
         self.terminal = VtTerminal::new(self.cols as usize, self.rows as usize);
+        self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
+        self.visual_layout_cache = None;
         self.error_message = None;
         self.transfer_progress = None;
         self.transfer_outgoing = false;
@@ -1545,6 +1733,7 @@ impl TerminalView {
 
     /// 仅断开 SSH，保留当前屏幕与滚动缓冲（FUNCTIONAL_SPEC §1.3.5：Tab 保留、输出冻结、不可再输入）
     pub fn disconnect_ssh_keep_buffer(&mut self) {
+        self.local_disconnect_intent = true;
         if let Some(ref h) = self.ssh_handle {
             self.lrzsz.unregister_shell_pump_upload_feed(h);
         }
@@ -1584,6 +1773,27 @@ impl TerminalView {
         handle
             .send_input(input.as_bytes())
             .map_err(|e| format!("发送失败: {}", e))
+    }
+
+    /// 取走拖入终端区域的上传路径（宿主每帧至多处理一次）。
+    pub fn take_drop_upload_paths(&mut self) -> Vec<PathBuf> {
+        std::mem::take(&mut self.pending_drop_upload_paths)
+    }
+
+    /// 非用户主动断开时为 `true` 一次（供自动重连等）；读取后清除。
+    pub fn take_unexpected_disconnect_notified(&mut self) -> bool {
+        std::mem::take(&mut self.unexpected_disconnect_notified)
+    }
+
+    /// 大文件走 ZMODEM：向 PTY 发送 `rz -y` 并在握手就绪后用 `path` 启动上传（FUNCTIONAL_SPEC §4.3）。
+    pub fn queue_zmodem_upload_after_rz(&mut self, path: PathBuf) {
+        self.zmodem_upload_after_rz_path = Some(path);
+        self.pending_rz_upload = false;
+        if self.connected {
+            if let Some(ref h) = self.ssh_handle {
+                let _ = h.send_input(b"\nrz -y\r");
+            }
+        }
     }
 
     /// 在当前视口文本中搜索（与 [`Self::show`] 所用 `get_formatted_output` 同源；不含卷动区历史）。

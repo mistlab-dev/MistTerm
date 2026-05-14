@@ -39,6 +39,8 @@ pub struct Terminal {
     parser: Processor,
     width: usize,
     height: usize,
+    /// PTY 有字节写入 VTE 时递增；用于 UI 跳过未变更帧的整屏 `LayoutJob` 重建（FUNCTIONAL_SPEC §2.3.1）。
+    content_epoch: u64,
 }
 
 impl Default for Terminal {
@@ -58,16 +60,30 @@ impl Terminal {
             parser: Processor::default(),
             width,
             height,
+            content_epoch: 0,
         }
     }
 
+    #[inline]
+    pub fn content_epoch(&self) -> u64 {
+        self.content_epoch
+    }
+
     pub fn resize(&mut self, width: usize, height: usize) {
-        self.width = width.clamp(20, 512);
-        self.height = height.clamp(5, 256);
-        self.term.resize(TermSize::new(self.width, self.height));
+        let nw = width.clamp(20, 512);
+        let nh = height.clamp(5, 256);
+        if nw != self.width || nh != self.height {
+            self.content_epoch = self.content_epoch.wrapping_add(1);
+            self.width = nw;
+            self.height = nh;
+            self.term.resize(TermSize::new(self.width, self.height));
+        }
     }
 
     pub fn feed(&mut self, data: &[u8]) {
+        if !data.is_empty() {
+            self.content_epoch = self.content_epoch.wrapping_add(1);
+        }
         self.parser.advance(&mut self.term, data);
     }
 
@@ -211,12 +227,41 @@ fn apply_heuristic_shell_row_style(
             continue;
         }
 
+        if line_trim.contains("://") {
+            continue;
+        }
+
         let looks_prompt = line_trim.contains('➜')
             || (line_trim.contains('@')
                 && line_trim.contains(':')
-                && (line_trim.contains('~') || line_trim.contains('/')));
+                && (line_trim.contains('~') || line_trim.contains('/'))
+                && line_trim
+                    .find('@')
+                    .map(|i| i > 0 && line_trim.chars().nth(i - 1).is_some_and(|c| {
+                        c.is_alphanumeric() || c == ']' || c == '_'
+                    }))
+                    .unwrap_or(false));
+
+        let last_non_ws = chars
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, c)| !c.is_whitespace())
+            .map(|(i, _)| i)
+            .unwrap_or(0);
+
+        let scale_line_fg = |cell: &mut (char, Color32, Color32), factor: f32| {
+            if cell.1 == default_fg {
+                cell.1 = Color32::from_rgb(
+                    ((default_fg.r() as f32) * factor).min(255.0) as u8,
+                    ((default_fg.g() as f32) * factor).min(255.0) as u8,
+                    ((default_fg.b() as f32) * factor).min(255.0) as u8,
+                );
+            }
+        };
 
         if looks_prompt {
+            let mut path_end_col: Option<usize> = None;
             for cell in row.iter_mut() {
                 if cell.0 == '➜' {
                     cell.1 = PROMPT_ARROW;
@@ -248,19 +293,37 @@ fn apply_heuristic_shell_row_style(
                                 row[x].1 = PATH_HINT;
                                 x += 1;
                             }
+                            path_end_col = Some(x);
                         }
                     }
                 }
             }
+
+            const CMD_FACTOR: f32 = 0.9;
+            if let Some(pe) = path_end_col {
+                let mut i = pe;
+                while i < width && row[i].0.is_whitespace() {
+                    i += 1;
+                }
+                for k in i..=last_non_ws {
+                    scale_line_fg(&mut row[k], CMD_FACTOR);
+                }
+            } else if line_trim.contains('➜') {
+                if let Some(i) = chars.iter().position(|&c| c == '➜') {
+                    let mut j = i.saturating_add(1);
+                    while j < width && chars[j].is_whitespace() {
+                        j += 1;
+                    }
+                    for k in j..=last_non_ws {
+                        scale_line_fg(&mut row[k], CMD_FACTOR);
+                    }
+                }
+            }
         } else {
-            let soften = |u: u8| -> u8 { ((u as u16 * 230) / 255).min(255) as u8 };
+            const OUT_FACTOR: f32 = 0.4;
             for cell in row.iter_mut() {
                 if !cell.0.is_whitespace() {
-                    cell.1 = Color32::from_rgb(
-                        soften(default_fg.r()),
-                        soften(default_fg.g()),
-                        soften(default_fg.b()),
-                    );
+                    scale_line_fg(cell, OUT_FACTOR);
                 }
             }
         }
@@ -378,3 +441,27 @@ fn dim_color(color: Color32) -> Color32 {
     Color32::from_rgb(scale(color.r()), scale(color.g()), scale(color.b()))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::Terminal;
+
+    #[test]
+    fn content_epoch_increments_on_nonempty_feed_only() {
+        let mut t = Terminal::new(20, 5);
+        let e0 = t.content_epoch();
+        t.feed(b"a");
+        assert_eq!(t.content_epoch(), e0.wrapping_add(1));
+        t.feed(&[]);
+        assert_eq!(t.content_epoch(), e0.wrapping_add(1));
+    }
+
+    #[test]
+    fn content_epoch_changes_on_resize_when_dimensions_change() {
+        let mut t = Terminal::new(20, 5);
+        let e0 = t.content_epoch();
+        t.resize(20, 5);
+        assert_eq!(t.content_epoch(), e0);
+        t.resize(21, 5);
+        assert_eq!(t.content_epoch(), e0.wrapping_add(1));
+    }
+}
