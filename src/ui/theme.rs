@@ -150,6 +150,378 @@ impl Theme {
         self.amber.to_color32()
     }
 
+    /// FUNCTIONAL_SPEC §2.3.2：提示行命令段相对默认前景亮度（设计稿 `.cmd` ≈ 0.9）。
+    pub fn terminal_command_dim_factor(&self) -> f32 {
+        crate::terminal::style::TERMINAL_COMMAND_DIM_FACTOR
+    }
+
+    /// FUNCTIONAL_SPEC §2.3.2：非提示输出行相对默认前景亮度（设计稿 `.out` ≈ 0.4）。
+    pub fn terminal_output_dim_factor(&self) -> f32 {
+        crate::terminal::style::TERMINAL_OUTPUT_DIM_FACTOR
+    }
+
+    /// FUNCTIONAL_SPEC §2.3.4：终端纵向滚动条宽度（px）。
+    pub fn terminal_scroll_bar_width(&self) -> f32 {
+        crate::terminal::style::TERMINAL_SCROLL_BAR_WIDTH
+    }
+
+    /// 终端滚动条轨道底色（设计稿 `rgba(255,255,255,0.06)`，随主题前景派生）。
+    pub fn terminal_scroll_bar_track_fill(&self) -> Color32 {
+        self.fg_high_alpha(crate::terminal::style::TERMINAL_SCROLL_BAR_TRACK_ALPHA)
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // UI 样式令牌 — 调整颜色/间距/尺寸请优先改本节；业务代码勿写裸 RGB/RGBA
+    // ══════════════════════════════════════════════════════════════════════════
+
+    // ── 语义色（由主题色派生，随明暗主题变化） ──
+
+    /// 面板 / 弹窗 / 底栏 / 右 dock 统一表面色（= `bg_window`）
+    #[inline]
+    pub fn color_panel_surface(&self) -> Color32 {
+        self.bg_window_color()
+    }
+
+    /// ScrollArea、Multiline 的 `extreme_bg_color`（与面板底一致，避免灰条）
+    #[inline]
+    pub fn color_scroll_extreme_bg(&self) -> Color32 {
+        self.bg_window_color()
+    }
+
+    /// 侧栏 uppercase 节标题、片段面板小标题（≈ 20% 白）
+    #[inline]
+    pub fn color_section_title(&self) -> Color32 {
+        self.fg_high_a51()
+    }
+
+    /// 表单字段标签、弹窗次要标签
+    #[inline]
+    pub fn color_form_label(&self) -> Color32 {
+        self.fg_high_alpha(76)
+    }
+
+    /// 表单说明、占位提示
+    #[inline]
+    pub fn color_form_hint(&self) -> Color32 {
+        self.fg_high_alpha(102)
+    }
+
+    /// 连接列表前置图标
+    #[inline]
+    pub fn color_sidebar_icon(&self) -> Color32 {
+        self.fg_high_alpha(89)
+    }
+
+    /// 在线会话次要状态字
+    #[inline]
+    pub fn color_status_online_muted(&self) -> Color32 {
+        self.fg_high_alpha(77)
+    }
+
+    /// 离线会话状态字
+    #[inline]
+    pub fn color_status_offline_muted(&self) -> Color32 {
+        self.fg_high_a64()
+    }
+
+    /// 统计/选中徽章淡底、片段筛选高亮底
+    #[inline]
+    pub fn color_chip_fill(&self) -> Color32 {
+        self.fg_high_a64()
+    }
+
+    /// 极淡块底（折叠区、表单分组底 ≈ 2% 白）
+    #[inline]
+    pub fn color_subtle_inset_fill(&self) -> Color32 {
+        self.fg_high_alpha(4)
+    }
+
+    /// 弹窗描边
+    #[inline]
+    pub fn color_modal_stroke(&self) -> Color32 {
+        self.fg_high_a15()
+    }
+
+    /// 片段 team 标签字色
+    #[inline]
+    pub fn color_fragment_tag_text(&self) -> Color32 {
+        self.accent_alpha(115)
+    }
+
+    /// 片段 team 标签淡底
+    #[inline]
+    pub fn color_fragment_tag_fill(&self) -> Color32 {
+        self.accent_alpha(48)
+    }
+
+    /// 终端内联选区高亮
+    #[inline]
+    pub fn color_terminal_selection(&self) -> Color32 {
+        Color32::from_rgba_unmultiplied(61, 133, 224, 150)
+    }
+
+    /// SFTP 文件行 hover
+    #[inline]
+    pub fn color_sftp_row_hover(&self) -> Color32 {
+        Color32::from_rgba_unmultiplied(61, 133, 224, 30)
+    }
+
+    /// 危险强调字（断开、删除提示等）
+    #[inline]
+    pub fn color_danger_emphasis(&self) -> Color32 {
+        Color32::from_rgb(255, 138, 128)
+    }
+
+    /// 监控告警块淡红底
+    #[inline]
+    pub fn color_alert_box_fill(&self) -> Color32 {
+        self.red_color().gamma_multiply(0.12)
+    }
+
+    /// 监控告警块描边
+    #[inline]
+    pub fn color_alert_box_stroke(&self) -> Color32 {
+        self.red_color().gamma_multiply(0.45)
+    }
+
+    // ── 尺寸：底栏 / 弹窗 / Tab / 列表 ──
+
+    /// 关闭 ×、收起 − 图标字号
+    pub fn size_icon_glyph(&self) -> f32 {
+        18.0
+    }
+
+    /// 底栏快捷按钮行高
+    pub fn size_bottom_quick_bar_h(&self) -> f32 {
+        44.0
+    }
+
+    /// 快捷栏与状态栏缝隙
+    pub fn size_bottom_quick_status_gap(&self) -> f32 {
+        3.0
+    }
+
+    /// 底栏总高（快捷 + 缝 + 状态）
+    pub fn size_bottom_chrome_total_h(&self) -> f32 {
+        self.size_bottom_quick_bar_h() + self.size_bottom_quick_status_gap() + self.status_bar_height()
+    }
+
+    /// 底栏快捷文字按钮高
+    pub fn size_bottom_quick_btn_h(&self) -> f32 {
+        32.0
+    }
+
+    /// 弹窗底栏按钮高（与状态栏行高一致）
+    pub fn size_modal_footer_btn_h(&self) -> f32 {
+        self.status_bar_height()
+    }
+
+    pub fn size_modal_footer_btn_min_w_secondary(&self) -> f32 {
+        72.0
+    }
+
+    pub fn size_modal_footer_btn_min_w_primary(&self) -> f32 {
+        104.0
+    }
+
+    pub fn size_tab_min_w(&self) -> f32 {
+        146.0
+    }
+
+    pub fn size_tab_min_h(&self) -> f32 {
+        28.0
+    }
+
+    pub fn size_sidebar_filter_chip_h(&self) -> f32 {
+        20.0
+    }
+
+    pub fn size_session_list_row_h(&self) -> f32 {
+        36.0
+    }
+
+    pub fn size_sidebar_search_inset_x(&self) -> f32 {
+        2.0
+    }
+
+    pub fn size_sidebar_search_inset_y(&self) -> f32 {
+        4.0
+    }
+
+    pub fn size_fragment_panel_header_btn_h(&self) -> f32 {
+        24.0
+    }
+
+    pub fn size_bottom_tool_btn_fragment_w(&self) -> f32 {
+        108.0
+    }
+
+    pub fn size_bottom_tool_btn_default_w(&self) -> f32 {
+        88.0
+    }
+
+    pub fn size_title_menu_btn_w(&self) -> f32 {
+        56.0
+    }
+
+    pub fn size_title_menu_btn_h(&self) -> f32 {
+        18.0
+    }
+
+    pub fn size_fragment_var_field_min_h(&self) -> f32 {
+        28.0
+    }
+
+    pub fn spacing_modal_content_x(&self) -> f32 {
+        16.0
+    }
+
+    pub fn spacing_modal_content_y(&self) -> f32 {
+        14.0
+    }
+
+    pub fn spacing_modal_header_after_title(&self) -> f32 {
+        8.0
+    }
+
+    pub fn spacing_modal_header_after_sep(&self) -> f32 {
+        12.0
+    }
+
+    pub fn spacing_tab_bar_inner_y(&self) -> f32 {
+        6.0
+    }
+
+    pub fn spacing_monitor_alert_inner(&self) -> f32 {
+        4.0
+    }
+
+    /// 片段变量弹窗正文字号
+    pub fn font_size_fragment_dialog_body(&self) -> f32 {
+        12.0
+    }
+
+    /// 片段变量弹窗说明/标题字号
+    pub fn font_size_fragment_dialog_caption(&self) -> f32 {
+        11.0
+    }
+
+    /// 片段变量等宽预览字号
+    pub fn font_size_fragment_dialog_mono(&self) -> f32 {
+        12.0
+    }
+
+    /// 监控「网络速率」等小节标题（介于 medium 与 tab）
+    pub fn font_size_monitor_section(&self) -> f32 {
+        13.0
+    }
+
+    /// 空状态 / 占位大标题
+    pub fn font_size_empty_state(&self) -> f32 {
+        18.0
+    }
+
+    /// 顶栏菜单项字号
+    pub fn font_size_menu_item(&self) -> f32 {
+        11.0
+    }
+
+    /// 关于页产品名、空状态副标题等
+    pub fn font_size_prominent(&self) -> f32 {
+        16.0
+    }
+
+    // ── 边距 / Frame 工厂（egui Frame，非业务布局） ──
+
+    pub fn margin_sidebar_title(&self) -> egui::Margin {
+        egui::Margin::symmetric(self.spacing_panel_title_pad_x(), self.spacing_panel_title_pad_y())
+    }
+
+    pub fn margin_sidebar_search_field(&self) -> egui::Margin {
+        egui::Margin::symmetric(self.size_sidebar_search_inset_x(), self.size_sidebar_search_inset_y())
+    }
+
+    pub fn margin_tab_bar(&self) -> egui::Margin {
+        egui::Margin::symmetric(self.spacing_region_pad_x(), self.spacing_tab_bar_inner_y())
+    }
+
+    pub fn margin_modal_content(&self) -> egui::Margin {
+        egui::Margin::symmetric(self.spacing_modal_content_x(), self.spacing_modal_content_y())
+    }
+
+    pub fn margin_monitor_alert_box(&self) -> egui::Margin {
+        egui::Margin::symmetric(10.0, 8.0)
+    }
+
+    pub fn margin_monitor_metric_row(&self) -> egui::Margin {
+        egui::Margin::symmetric(8.0, 4.0)
+    }
+
+    pub fn margin_status_chip(&self) -> egui::Margin {
+        egui::Margin::symmetric(self.spacing_list_item_x(), 3.0)
+    }
+
+    pub fn margin_title_bar_menu(&self) -> egui::Margin {
+        egui::Margin::symmetric(10.0, 7.0)
+    }
+
+    /// 居中弹窗外框
+    pub fn frame_modal_window(&self) -> egui::Frame {
+        egui::Frame::none()
+            .fill(self.color_panel_surface())
+            .stroke(egui::Stroke::new(1.0, self.color_modal_stroke()))
+            .rounding(self.radius_window())
+            .inner_margin(egui::Margin::ZERO)
+    }
+
+    /// 弹窗内容区内边距
+    pub fn frame_modal_content(&self) -> egui::Frame {
+        egui::Frame::none().inner_margin(self.margin_modal_content())
+    }
+
+    /// 左连接栏 / 右 dock 外框
+    pub fn frame_region_panel(&self) -> egui::Frame {
+        egui::Frame::none()
+            .fill(self.color_panel_surface())
+            .rounding(0.0)
+            .inner_margin(self.region_content_margin())
+    }
+
+    /// 状态徽章（底栏统计等）
+    pub fn frame_status_chip(&self) -> egui::Frame {
+        egui::Frame::none()
+            .fill(self.color_chip_fill())
+            .rounding(egui::Rounding::same(self.radius_list_item()))
+            .inner_margin(self.margin_status_chip())
+    }
+
+    /// 监控告警汇总块
+    pub fn frame_monitor_alert(&self) -> egui::Frame {
+        egui::Frame::none()
+            .fill(self.color_alert_box_fill())
+            .stroke(egui::Stroke::new(1.0, self.color_alert_box_stroke()))
+            .rounding(self.radius_panel())
+            .inner_margin(self.margin_monitor_alert_box())
+    }
+
+    pub fn vec2_tab_min_size(&self) -> egui::Vec2 {
+        egui::vec2(self.size_tab_min_w(), self.size_tab_min_h())
+    }
+
+    pub fn vec2_modal_footer_secondary(&self) -> egui::Vec2 {
+        egui::vec2(
+            self.size_modal_footer_btn_min_w_secondary(),
+            self.size_modal_footer_btn_h(),
+        )
+    }
+
+    pub fn vec2_modal_footer_primary(&self) -> egui::Vec2 {
+        egui::vec2(
+            self.size_modal_footer_btn_min_w_primary(),
+            self.size_modal_footer_btn_h(),
+        )
+    }
+
     // ── 字体大小（按设计规范 §0.2 映射） ──
     pub fn font_size_title_bar(&self) -> f32 { 13.0 }      // 标题栏
     pub fn font_size_title_bar_info(&self) -> f32 { 11.0 }  // 标题栏信息
@@ -187,6 +559,19 @@ impl Theme {
     pub fn spacing_tab_dot_text(&self) -> f32 { 6.0 }        // Tab 圆点与文字间距
     pub fn spacing_terminal_pad_x(&self) -> f32 { 16.0 }     // 终端滚动区左右 padding
     pub fn spacing_terminal_pad_y(&self) -> f32 { 10.0 }     // 终端滚动区上下 padding
+    /// 主工作区左栏 / 右 dock 外框内容区内边距
+    pub fn spacing_region_pad_x(&self) -> f32 { 12.0 }
+    pub fn spacing_region_pad_y(&self) -> f32 { 10.0 }
+    /// 左栏｜终端｜右栏之间的缝隙（露出 Central 底色）
+    pub fn spacing_region_gap(&self) -> f32 { 4.0 }
+
+    pub fn region_content_margin(&self) -> egui::Margin {
+        egui::Margin::symmetric(self.spacing_region_pad_x(), self.spacing_region_pad_y())
+    }
+
+    pub fn terminal_content_margin(&self) -> egui::Margin {
+        egui::Margin::symmetric(self.spacing_terminal_pad_x(), self.spacing_terminal_pad_y())
+    }
     pub fn spacing_card_x(&self) -> f32 { 8.0 }              // 卡片左右 padding
     pub fn spacing_card_y(&self) -> f32 { 7.0 }              // 卡片上下 padding
     pub fn spacing_status_bar_x(&self) -> f32 { 14.0 }       // 状态栏左右 padding

@@ -12,7 +12,7 @@ use crate::core::{
 };
 use crate::core::session::SessionConfig;
 use crate::ui::layout_util::{
-    finite_avail_minus, finite_content_width_inset, fragment_library_window_bounds,
+    clamp_f32, finite_avail_minus, finite_content_width_inset, fragment_library_window_bounds,
 };
 
 /// 片段库编辑器状态（不与 `FragmentStats` 强绑定便于表单编辑）
@@ -218,7 +218,7 @@ impl FragmentLibraryState {
                 let body_h = ui.available_height().max(180.0);
                 let list_scroll_h = (body_h - 52.0).max(100.0);
                 let row_w = finite_content_width_inset(ui, 16.0, 680.0, 1150.0);
-                let left_col = (row_w * 0.355).clamp(200.0, 340.0);
+                let left_col = clamp_f32(row_w * 0.355, 120.0, 340.0_f32.min(row_w.max(120.0)));
                 ui.horizontal(|ui| {
                     ui.set_min_width(row_w);
                     ui.set_min_height(body_h);
@@ -257,11 +257,9 @@ impl FragmentLibraryState {
                         ui.set_min_width((row_w - left_col - 12.0).max(200.0));
                         ui.label(egui::RichText::new("编辑").strong());
                         if self.editing_id.is_none() {
-                            let c = theme.accent_dim_color();
-                            let [r, g, b, _] = c.to_array();
                             egui::Frame::none()
-                                .fill(egui::Color32::from_rgba_unmultiplied(r, g, b, 48))
-                                .inner_margin(egui::Margin::same(8.0))
+                                .fill(theme.color_fragment_tag_fill())
+                                .inner_margin(egui::Margin::same(theme.spacing_card_x()))
                                 .rounding(theme.radius_list_item())
                                 .show(ui, |ui| {
                                     ui.label(

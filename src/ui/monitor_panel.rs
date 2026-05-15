@@ -232,25 +232,17 @@ impl MonitorPanel {
 
         let (m_def, m_min, m_max) =
             crate::ui::layout_util::side_panel_widths(ctx, crate::ui::layout_util::SidePanelProfile::Monitor);
-        /// 须与下方 `.inner_margin(symmetric(10, 8))` 的 **左** 一致
-        const MONITOR_FRAME_MARGIN_L: f32 = 10.0;
-        egui::SidePanel::right("monitor_panel")
+        let panel = egui::SidePanel::right("monitor_panel")
             .default_width(m_def)
             .min_width(m_min)
             .max_width(m_max)
             .resizable(true)
             .frame(
-                egui::Frame::none()
+                crate::ui::chrome::region_panel_frame(theme)
                     .fill(theme.bg_window_color())
-                    .stroke(egui::Stroke::new(1.0, theme.border_color()))
-                    .inner_margin(egui::Margin::symmetric(10.0, 8.0)),
+                    .stroke(egui::Stroke::new(1.0, theme.border_color())),
             )
             .show(ctx, |ui| {
-                crate::ui::layout_util::record_right_dock_outer_left(
-                    ui,
-                    MONITOR_FRAME_MARGIN_L,
-                    right_dock_outer_left,
-                );
                 ui.horizontal(|ui| {
                     ui.heading(
                         egui::RichText::new("📊 系统监控")
@@ -273,8 +265,7 @@ impl MonitorPanel {
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .small_button("✕")
+                        if crate::ui::chrome::close_icon_button(ui, theme)
                             .on_hover_text("隐藏侧栏 · 也可用底部「📊 监控」切换")
                             .clicked()
                         {
@@ -290,6 +281,7 @@ impl MonitorPanel {
                         self.show_content(ui, theme);
                     });
             });
+        crate::ui::layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
     }
 
     fn show_content(&mut self, ui: &mut egui::Ui, theme: &Theme) {
@@ -357,11 +349,7 @@ impl MonitorPanel {
             let (rx_rate, tx_rate) = monitor.network_rate();
             let alerts = self.collect_alerts(stats);
             if !alerts.is_empty() {
-                egui::Frame::none()
-                    .fill(theme.red_color().gamma_multiply(0.12))
-                    .stroke(egui::Stroke::new(1.0, theme.red_color().gamma_multiply(0.45)))
-                    .rounding(6.0)
-                    .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+                theme.frame_monitor_alert()
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new("当前告警")
@@ -440,7 +428,11 @@ impl MonitorPanel {
             ui.add_space(theme.spacing_md());
 
             // 网络流量
-            ui.label(egui::RichText::new("🌐 网络速率").size(13.0).color(theme.fg_medium_color()));
+            ui.label(
+                egui::RichText::new("🌐 网络速率")
+                    .size(theme.font_size_monitor_section())
+                    .color(theme.fg_medium_color()),
+            );
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(format!("↓ {}", format_bytes_per_sec(rx_rate)))
@@ -563,7 +555,7 @@ impl MonitorPanel {
         egui::Frame::none()
             .fill(theme.border_color())
             .rounding(4.0)
-            .inner_margin(egui::Margin::symmetric(8.0, 4.0))
+            .inner_margin(theme.margin_monitor_metric_row())
             .show(ui, |ui| {
                 ui.vertical(|ui| {
                     ui.label(
@@ -591,7 +583,7 @@ impl MonitorPanel {
         if history.len() < 2 {
             ui.label(
                 egui::RichText::new("等待数据采集...(至少两次刷新后显示曲线)")
-                    .size(11.0)
+                    .size(theme.font_size_menu_item())
                     .color(theme.fg_low_color()),
             );
             return;

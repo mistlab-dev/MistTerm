@@ -5,6 +5,7 @@ use eframe::egui;
 use crate::core::{
     Credential, CredentialAuthKind, CredentialCategory, CredentialVault,
 };
+use crate::ui::chrome;
 use crate::ui::layout_util::{self, SidePanelProfile};
 use crate::ui::theme::Theme;
 
@@ -101,6 +102,191 @@ impl CredentialPanel {
             .collect()
     }
 
+    /// 侧栏真实内容宽度（`available_width` 在 SidePanel 内偶发为 ∞，勿用于分列）。
+    fn panel_content_width(ui: &egui::Ui) -> f32 {
+        let w = ui.clip_rect().width().min(ui.max_rect().width());
+        if w.is_finite() && w > 32.0 {
+            w
+        } else {
+            320.0
+        }
+    }
+
+    fn show_credential_list(ui: &mut egui::Ui, theme: &Theme, list: &[Credential], selected_id: &Option<String>, load: &mut impl FnMut(&Credential)) {
+        let list_h = layout_util::clamp_f32(ui.available_height() * 0.28, 72.0, 200.0);
+        let prev_extreme = ui.visuals().extreme_bg_color;
+        ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
+        egui::ScrollArea::vertical()
+            .id_source("credential_panel_list")
+            .max_height(list_h)
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                ui.set_width(ui.max_rect().width());
+                let categories = [
+                    CredentialCategory::Server,
+                    CredentialCategory::Database,
+                    CredentialCategory::SshKey,
+                    CredentialCategory::Api,
+                    CredentialCategory::Other,
+                ];
+                let mut any = false;
+                for cat in categories {
+                    let subs: Vec<&Credential> = list.iter().filter(|c| c.category == cat).collect();
+                    if subs.is_empty() {
+                        continue;
+                    }
+                    any = true;
+                    ui.collapsing(format!("{} {}", cat.emoji(), cat.label_zh()), |ui| {
+                        for c in subs {
+                            let sel = selected_id.as_deref() == Some(c.id.as_str());
+                            if ui.selectable_label(sel, &c.name).clicked() {
+                                load(c);
+                            }
+                        }
+                    });
+                }
+                if !any {
+                    ui.label(
+                        egui::RichText::new("暂无凭证，点「➕ 新建」添加")
+                            .color(theme.fg_low_color()),
+                    );
+                }
+            });
+        ui.visuals_mut().extreme_bg_color = prev_extreme;
+    }
+
+    fn show_credential_form(
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        field_w: f32,
+        panel: &mut CredentialPanel,
+        action_out: &mut Option<CredentialPanelAction>,
+    ) {
+        ui.label("名称");
+        ui.add(
+            egui::TextEdit::singleline(&mut panel.form_name).desired_width(field_w),
+        );
+        ui.horizontal(|ui| {
+            ui.label("类别");
+            egui::ComboBox::from_id_source("cred_cat")
+                .selected_text(panel.form_category.label_zh())
+                .show_ui(ui, |ui| {
+                    for v in [
+                        CredentialCategory::Server,
+                        CredentialCategory::Database,
+                        CredentialCategory::SshKey,
+                        CredentialCategory::Api,
+                        CredentialCategory::Other,
+                    ] {
+                        if ui
+                            .selectable_label(panel.form_category == v, v.label_zh())
+                            .clicked()
+                        {
+                            panel.form_category = v;
+                        }
+                    }
+                });
+        });
+        ui.horizontal(|ui| {
+            ui.label("认证");
+            egui::ComboBox::from_id_source("cred_auth")
+                .selected_text(panel.form_auth.label_zh())
+                .show_ui(ui, |ui| {
+                    for v in [
+                        CredentialAuthKind::Password,
+                        CredentialAuthKind::SshKey,
+                        CredentialAuthKind::Token,
+                    ] {
+                        if ui
+                            .selectable_label(panel.form_auth == v, v.label_zh())
+                            .clicked()
+                        {
+                            panel.form_auth = v;
+                        }
+                    }
+                });
+        });
+        ui.label("主机");
+        ui.add(
+            egui::TextEdit::singleline(&mut panel.form_host).desired_width(field_w),
+        );
+        ui.horizontal(|ui| {
+            ui.label("端口");
+            ui.add(egui::DragValue::new(&mut panel.form_port));
+        });
+        ui.label("用户名（可选）");
+        ui.add(
+            egui::TextEdit::singleline(&mut panel.form_username).desired_width(field_w),
+        );
+        ui.label(format!("密钥 / {}", panel.form_auth.label_zh()));
+        ui.add(
+            egui::TextEdit::multiline(&mut panel.form_secret)
+                .desired_width(field_w)
+                .desired_rows(3)
+                .password(!matches!(panel.form_auth, CredentialAuthKind::SshKey)),
+        );
+        ui.label("标签（逗号分隔）");
+        ui.add(
+            egui::TextEdit::singleline(&mut panel.form_tags).desired_width(field_w),
+        );
+        ui.label("备注");
+        ui.add(
+            egui::TextEdit::multiline(&mut panel.form_notes)
+                .desired_width(field_w)
+                .desired_rows(2),
+        );
+
+        ui.horizontal(|ui| {
+            if ui.button("保存").clicked() && !panel.form_name.trim().is_empty() {
+                let now = chrono::Utc::now().timestamp();
+                let id = panel
+                    .selected_id
+                    .clone()
+                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let prior = panel.vault.get(&id);
+                let c = Credential {
+                    id: id.clone(),
+                    name: panel.form_name.trim().to_string(),
+                    category: panel.form_category,
+                    host: panel.form_host.trim().to_string(),
+                    port: panel.form_port.max(1),
+                    username: panel.form_username.trim().to_string(),
+                    auth: panel.form_auth,
+                    secret: panel.form_secret.clone(),
+                    notes: panel.form_notes.clone(),
+                    tags: Self::parse_tags(&panel.form_tags),
+                    created_at: prior.as_ref().map(|p| p.created_at).unwrap_or(now),
+                    updated_at: now,
+                };
+                if panel.vault.upsert(c).is_ok() {
+                    panel.status_msg = "已保存".to_string();
+                    panel.selected_id = Some(id);
+                    panel.reload_vault();
+                } else {
+                    panel.status_msg = "保存失败".to_string();
+                }
+            }
+            if ui.button("删除").clicked() {
+                if let Some(id) = panel.selected_id.clone() {
+                    if panel.vault.remove(&id).unwrap_or(false) {
+                        panel.clear_form();
+                        panel.status_msg = "已删除".to_string();
+                    }
+                }
+            }
+            if ui.button("用于连接…").clicked() {
+                if let Some(id) = &panel.selected_id {
+                    if let Some(c) = panel.vault.get(id) {
+                        *action_out = Some(CredentialPanelAction::UseForQuickConnect(c));
+                    }
+                }
+            }
+        });
+        if !panel.status_msg.is_empty() {
+            ui.small(egui::RichText::new(&panel.status_msg).color(theme.fg_low_color()));
+        }
+    }
+
     pub fn show_side_panel(
         &mut self,
         ctx: &egui::Context,
@@ -114,25 +300,19 @@ impl CredentialPanel {
 
         let mut close_panel = false;
         let (c_def, c_min, c_max) = layout_util::side_panel_widths(ctx, SidePanelProfile::Standard);
-        egui::SidePanel::right("credential_panel")
+        let panel = egui::SidePanel::right("credential_panel")
             .default_width(c_def)
             .min_width(c_min)
             .max_width(c_max)
             .resizable(true)
+            .frame(crate::ui::chrome::region_panel_frame(theme))
             .show(ctx, |ui| {
-                layout_util::record_right_dock_outer_left(
-                    ui,
-                    layout_util::EGUI_SIDE_PANEL_FRAME_MARGIN_X,
-                    right_dock_outer_left,
-                );
-                ui.horizontal(|ui| {
-                    ui.heading("🔐 凭证库");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("✕").clicked() {
-                            close_panel = true;
-                        }
-                    });
-                });
+                let panel_w = Self::panel_content_width(ui);
+                ui.set_max_width(panel_w);
+
+                if chrome::side_panel_title_row(ui, theme, "🔐 凭证库") {
+                    close_panel = true;
+                }
                 ui.small(
                     egui::RichText::new(format!("存储：{}", self.vault.path().display()))
                         .color(theme.fg_low_color()),
@@ -144,10 +324,11 @@ impl CredentialPanel {
                         self.clear_form();
                         self.status_msg = "新建凭证".to_string();
                     }
+                    let search_w = (panel_w - 88.0).max(120.0);
                     ui.add(
                         egui::TextEdit::singleline(&mut self.search)
                             .hint_text("搜索…")
-                            .desired_width(layout_util::finite_content_width_inset(ui, 6.0, 120.0, 520.0)),
+                            .desired_width(search_w),
                     );
                 });
                 ui.separator();
@@ -164,171 +345,37 @@ impl CredentialPanel {
                 }
                 list.sort_by(|a, b| a.name.cmp(&b.name));
 
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_min_width(120.0);
-                        egui::ScrollArea::vertical()
-                            .max_height(260.0)
-                            .show(ui, |ui| {
-                                let categories = [
-                                    CredentialCategory::Server,
-                                    CredentialCategory::Database,
-                                    CredentialCategory::SshKey,
-                                    CredentialCategory::Api,
-                                    CredentialCategory::Other,
-                                ];
-                                for cat in categories {
-                                    let subs: Vec<&Credential> =
-                                        list.iter().filter(|c| c.category == cat).collect();
-                                    if subs.is_empty() {
-                                        continue;
-                                    }
-                                    ui.collapsing(
-                                        format!("{} {}", cat.emoji(), cat.label_zh()),
-                                        |ui| {
-                                            for c in subs {
-                                                let sel =
-                                                    self.selected_id.as_deref() == Some(c.id.as_str());
-                                                if ui
-                                                    .selectable_label(sel, &c.name)
-                                                    .clicked()
-                                                {
-                                                    self.load_cred(c);
-                                                }
-                                            }
-                                        },
-                                    );
-                                }
-                            });
+                ui.label(
+                    egui::RichText::new("凭证列表")
+                        .size(theme.font_size_small())
+                        .color(theme.fg_high_a51()),
+                );
+                let selected_id = self.selected_id.clone();
+                Self::show_credential_list(ui, theme, &list, &selected_id, &mut |c| self.load_cred(c));
+
+                ui.add_space(theme.spacing_panel_gap());
+                ui.separator();
+                ui.label(
+                    egui::RichText::new("编辑")
+                        .size(theme.font_size_small())
+                        .color(theme.fg_high_a51()),
+                );
+
+                let field_w = (panel_w - 8.0).max(160.0);
+                let form_scroll_h = layout_util::scroll_area_fill_height(ui, 120.0);
+                let prev_extreme = ui.visuals().extreme_bg_color;
+                ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
+                egui::ScrollArea::vertical()
+                    .id_source("credential_panel_form")
+                    .max_height(form_scroll_h)
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                        ui.set_max_width(panel_w);
+                        Self::show_credential_form(ui, theme, field_w, self, action_out);
                     });
-
-                    ui.separator();
-
-                    ui.vertical(|ui| {
-                        ui.label("名称");
-                        ui.add(egui::TextEdit::singleline(&mut self.form_name).desired_width(layout_util::finite_content_width(ui)));
-                        ui.horizontal(|ui| {
-                            ui.label("类别");
-                            egui::ComboBox::from_id_source("cred_cat")
-                                .selected_text(self.form_category.label_zh())
-                                .show_ui(ui, |ui| {
-                                    for v in [
-                                        CredentialCategory::Server,
-                                        CredentialCategory::Database,
-                                        CredentialCategory::SshKey,
-                                        CredentialCategory::Api,
-                                        CredentialCategory::Other,
-                                    ] {
-                                        if ui
-                                            .selectable_label(self.form_category == v, v.label_zh())
-                                            .clicked()
-                                        {
-                                            self.form_category = v;
-                                        }
-                                    }
-                                });
-                        });
-                        ui.horizontal(|ui| {
-                            ui.label("认证");
-                            egui::ComboBox::from_id_source("cred_auth")
-                                .selected_text(self.form_auth.label_zh())
-                                .show_ui(ui, |ui| {
-                                    for v in [
-                                        CredentialAuthKind::Password,
-                                        CredentialAuthKind::SshKey,
-                                        CredentialAuthKind::Token,
-                                    ] {
-                                        if ui
-                                            .selectable_label(self.form_auth == v, v.label_zh())
-                                            .clicked()
-                                        {
-                                            self.form_auth = v;
-                                        }
-                                    }
-                                });
-                        });
-                        ui.label("主机");
-                        ui.add(egui::TextEdit::singleline(&mut self.form_host).desired_width(layout_util::finite_content_width(ui)));
-                        ui.horizontal(|ui| {
-                            ui.label("端口");
-                            ui.add(egui::DragValue::new(&mut self.form_port));
-                        });
-                        ui.label("用户名（可选）");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.form_username).desired_width(layout_util::finite_content_width(ui)),
-                        );
-                        ui.label(format!("密钥 / {}", self.form_auth.label_zh()));
-                        ui.add(
-                            egui::TextEdit::multiline(&mut self.form_secret)
-                                .desired_width(layout_util::finite_content_width(ui))
-                                .desired_rows(3)
-                                .password(!matches!(self.form_auth, CredentialAuthKind::SshKey)),
-                        );
-                        ui.label("标签（逗号分隔）");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.form_tags).desired_width(layout_util::finite_content_width(ui)),
-                        );
-                        ui.label("备注");
-                        ui.add(
-                            egui::TextEdit::multiline(&mut self.form_notes)
-                                .desired_width(layout_util::finite_content_width(ui))
-                                .desired_rows(2),
-                        );
-
-                        ui.horizontal(|ui| {
-                            if ui.button("保存").clicked() && !self.form_name.trim().is_empty() {
-                                let now = chrono::Utc::now().timestamp();
-                                let id = self
-                                    .selected_id
-                                    .clone()
-                                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-                                let prior = self.vault.get(&id);
-                                let c = Credential {
-                                    id: id.clone(),
-                                    name: self.form_name.trim().to_string(),
-                                    category: self.form_category,
-                                    host: self.form_host.trim().to_string(),
-                                    port: self.form_port.max(1),
-                                    username: self.form_username.trim().to_string(),
-                                    auth: self.form_auth,
-                                    secret: self.form_secret.clone(),
-                                    notes: self.form_notes.clone(),
-                                    tags: Self::parse_tags(&self.form_tags),
-                                    created_at: prior.as_ref().map(|p| p.created_at).unwrap_or(now),
-                                    updated_at: now,
-                                };
-                                if self.vault.upsert(c).is_ok() {
-                                    self.status_msg = "已保存".to_string();
-                                    self.selected_id = Some(id);
-                                    self.reload_vault();
-                                } else {
-                                    self.status_msg = "保存失败".to_string();
-                                }
-                            }
-                            if ui.button("删除").clicked() {
-                                if let Some(id) = self.selected_id.clone() {
-                                    if self.vault.remove(&id).unwrap_or(false) {
-                                        self.clear_form();
-                                        self.status_msg = "已删除".to_string();
-                                    }
-                                }
-                            }
-                            if ui.button("用于连接…").clicked() {
-                                if let Some(id) = &self.selected_id {
-                                    if let Some(c) = self.vault.get(id) {
-                                        *action_out = Some(CredentialPanelAction::UseForQuickConnect(c));
-                                    }
-                                }
-                            }
-                        });
-                        if !self.status_msg.is_empty() {
-                            ui.small(
-                                egui::RichText::new(&self.status_msg).color(theme.fg_low_color()),
-                            );
-                        }
-                    });
-                });
+                ui.visuals_mut().extreme_bg_color = prev_extreme;
             });
+        layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
 
         close_panel
     }

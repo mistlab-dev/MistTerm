@@ -1,5 +1,9 @@
 //! 基于 alacritty_terminal 的终端适配层
 
+use crate::terminal::style::{
+    TerminalShellStyle, is_user_error_line, is_user_info_line, is_user_success_line,
+    is_user_warn_line,
+};
 use egui::{Color32, FontId, TextFormat, text::LayoutJob};
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
@@ -124,14 +128,11 @@ impl Terminal {
         }
         out
     }
-    /// 返回带颜色信息的布局（保持等宽）。`terminal_bg` 须与 UI [`Theme::bg_terminal_color`] 一致，
-    /// 否则整块格子与外框底色色差会像「四周留白」。
-    pub fn get_layout_job(
-        &self,
-        font_size: f32,
-        default_fg: Color32,
-        terminal_bg: Color32,
-    ) -> LayoutJob {
+    /// 返回带颜色信息的布局（保持等宽）。`shell` 须由 [`TerminalShellStyle::from_theme`] 生成，
+    /// 且 `terminal_bg` 与 UI 外框一致，否则整块格子与外框底色色差会像「四周留白」。
+    pub fn get_layout_job(&self, font_size: f32, shell: &TerminalShellStyle) -> LayoutJob {
+        let default_fg = shell.default_fg;
+        let terminal_bg = shell.terminal_bg;
         let mut rows = vec![vec![(' ', default_fg, terminal_bg); self.width]; self.height];
         let content = self.term.renderable_content();
 
@@ -163,7 +164,7 @@ impl Terminal {
             }
         }
 
-        apply_heuristic_shell_row_style(&mut rows, default_fg, terminal_bg, self.width);
+        apply_heuristic_shell_row_style(&mut rows, shell, self.width);
 
         let mut job = LayoutJob::default();
         for row in rows {
@@ -200,15 +201,14 @@ impl Terminal {
 /// 任意单元格已带 ANSI 前景/背景差异时整行跳过，避免覆盖远端配色。
 fn apply_heuristic_shell_row_style(
     rows: &mut [Vec<(char, Color32, Color32)>],
-    default_fg: Color32,
-    terminal_bg: Color32,
+    shell: &TerminalShellStyle,
     width: usize,
 ) {
     if width == 0 {
         return;
     }
-    const PROMPT_ARROW: Color32 = Color32::from_rgb(0x4c, 0xaf, 0x50);
-    const PATH_HINT: Color32 = Color32::from_rgb(0x67, 0x7e, 0xea);
+    let default_fg = shell.default_fg;
+    let terminal_bg = shell.terminal_bg;
 
     for row in rows.iter_mut() {
         let mut all_default = true;
@@ -234,6 +234,39 @@ fn apply_heuristic_shell_row_style(
         }
 
         if line_trim.contains("://") {
+            continue;
+        }
+
+        if is_user_error_line(line_trim) {
+            for cell in row.iter_mut() {
+                if !cell.0.is_whitespace() {
+                    cell.1 = shell.user_error;
+                }
+            }
+            continue;
+        }
+        if is_user_success_line(line_trim) {
+            for cell in row.iter_mut() {
+                if !cell.0.is_whitespace() {
+                    cell.1 = shell.user_success;
+                }
+            }
+            continue;
+        }
+        if is_user_warn_line(line_trim) {
+            for cell in row.iter_mut() {
+                if !cell.0.is_whitespace() {
+                    cell.1 = shell.user_warn;
+                }
+            }
+            continue;
+        }
+        if is_user_info_line(line_trim) {
+            for cell in row.iter_mut() {
+                if !cell.0.is_whitespace() {
+                    cell.1 = shell.user_info;
+                }
+            }
             continue;
         }
 
@@ -270,7 +303,7 @@ fn apply_heuristic_shell_row_style(
             let mut path_end_col: Option<usize> = None;
             for cell in row.iter_mut() {
                 if cell.0 == '➜' {
-                    cell.1 = PROMPT_ARROW;
+                    cell.1 = shell.prompt_arrow;
                 }
             }
             if let Some(at) = chars.iter().position(|&c| c == '@') {
@@ -296,7 +329,7 @@ fn apply_heuristic_shell_row_style(
                                 if matches!(c, '$' | '%' | '#' | '`') {
                                     break;
                                 }
-                                row[x].1 = PATH_HINT;
+                                row[x].1 = shell.path_hint;
                                 x += 1;
                             }
                             path_end_col = Some(x);
@@ -305,14 +338,13 @@ fn apply_heuristic_shell_row_style(
                 }
             }
 
-            const CMD_FACTOR: f32 = 0.9;
             if let Some(pe) = path_end_col {
                 let mut i = pe;
                 while i < width && row[i].0.is_whitespace() {
                     i += 1;
                 }
                 for k in i..=last_non_ws {
-                    scale_line_fg(&mut row[k], CMD_FACTOR);
+                    scale_line_fg(&mut row[k], shell.command_dim_factor);
                 }
             } else if line_trim.contains('➜') {
                 if let Some(i) = chars.iter().position(|&c| c == '➜') {
@@ -321,15 +353,14 @@ fn apply_heuristic_shell_row_style(
                         j += 1;
                     }
                     for k in j..=last_non_ws {
-                        scale_line_fg(&mut row[k], CMD_FACTOR);
+                        scale_line_fg(&mut row[k], shell.command_dim_factor);
                     }
                 }
             }
         } else {
-            const OUT_FACTOR: f32 = 0.4;
             for cell in row.iter_mut() {
                 if !cell.0.is_whitespace() {
-                    scale_line_fg(cell, OUT_FACTOR);
+                    scale_line_fg(cell, shell.output_dim_factor);
                 }
             }
         }

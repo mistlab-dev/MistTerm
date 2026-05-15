@@ -55,54 +55,29 @@ impl Sidebar {
             ),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
-                // SPEC §3.2：面板标题区 padding 9px 10px
                 egui::Frame::none()
-                    .inner_margin(egui::Margin::symmetric(10.0, 9.0))
+                    .inner_margin(theme.margin_sidebar_title())
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new("连接")
                                     .size(theme.font_size_small())
                                     .strong()
-                                    .color(egui::Color32::from_rgba_unmultiplied(
-                                        255, 255, 255, 51,
-                                    )),
+                                    .color(theme.color_section_title()),
                             );
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                egui::RichText::new("−")
-                                                    .size(theme.font_size_large())
-                                                    .color(egui::Color32::from_rgba_unmultiplied(
-                                                        255, 255, 255, 51,
-                                                    )),
-                                            )
-                                            .fill(egui::Color32::TRANSPARENT)
-                                            .stroke(egui::Stroke::NONE)
-                                            .frame(false),
-                                        )
-                                        .clicked()
-                                    {
+                                    if crate::ui::chrome::collapse_icon_button(ui, theme).clicked() {
                                         collapse_clicked = true;
                                     }
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                egui::RichText::new("＋")
-                                                    .size(theme.font_size_normal())
-                                                    .color(
-                                                        egui::Color32::from_rgba_unmultiplied(
-                                                            255, 255, 255, 72,
-                                                        ),
-                                                    ),
-                                            )
-                                            .fill(egui::Color32::TRANSPARENT)
-                                            .stroke(egui::Stroke::NONE)
-                                            .frame(false),
-                                        )
+                                    if crate::ui::chrome::icon_button(
+                                        ui,
+                                        theme,
+                                        "＋",
+                                        theme.fg_high_a76(),
+                                    )
+                                    .on_hover_text("新建会话")
                                         .clicked()
                                     {
                                         create_session_clicked = true;
@@ -175,7 +150,7 @@ impl Sidebar {
                                 }
                             };
                             let (row_rect, response) = ui.allocate_exact_size(
-                                egui::vec2(row_inner_w, 36.0),
+                                egui::vec2(row_inner_w, theme.size_session_list_row_h()),
                                 egui::Sense::click(),
                             );
                             let bg = if is_selected {
@@ -185,7 +160,11 @@ impl Sidebar {
                             } else {
                                 egui::Color32::TRANSPARENT
                             };
-                            ui.painter().rect_filled(row_rect.shrink2(egui::vec2(0.0, 2.0)), 4.0, bg);
+                            ui.painter().rect_filled(
+                                row_rect.shrink2(egui::vec2(0.0, 2.0)),
+                                theme.radius_list_item(),
+                                bg,
+                            );
 
                             let status_text = if connected_sessions.contains(&session.id) {
                                 relative_last_connected(session.last_connected_at)
@@ -193,13 +172,16 @@ impl Sidebar {
                                 "离线".to_string()
                             };
                             let mut row_ui = ui.child_ui(
-                                row_rect.shrink2(egui::vec2(10.0, 8.0)),
+                                row_rect.shrink2(egui::vec2(
+                                    theme.spacing_list_item_x(),
+                                    theme.spacing_list_item_y(),
+                                )),
                                 egui::Layout::left_to_right(egui::Align::Center),
                             );
                             row_ui.label(
                                 egui::RichText::new("🖥")
                                     .size(theme.font_size_panel_title())
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 89)),
+                                    .color(theme.color_sidebar_icon()),
                             );
                             row_ui.add_space(theme.spacing_panel_gap());
                             row_ui.label(
@@ -216,9 +198,9 @@ impl Sidebar {
                                     egui::RichText::new(status_text)
                                         .size(theme.font_size_small())
                                         .color(if connected_sessions.contains(&session.id) {
-                                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)
+                                            theme.color_status_online_muted()
                                         } else {
-                                            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 64)
+                                            theme.color_status_offline_muted()
                                         }),
                                 );
                             });
@@ -238,12 +220,13 @@ impl Sidebar {
                                     ui.close_menu();
                                 }
                             });
-                            ui.add_space(1.0);
+                            ui.add_space(theme.spacing_list_item_gap());
                         }
                     }
                 });
-            }
-        ).response;
+            },
+        )
+        .response;
 
         SidebarOutput {
             response,

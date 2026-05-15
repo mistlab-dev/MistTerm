@@ -374,7 +374,9 @@ impl GitSyncPanel {
                 // 未打开仓库
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.0);
-                    ui.label(egui::RichText::new("📦 未打开 Git 仓库").size(18.0));
+                    ui.label(
+                        egui::RichText::new("📦 未打开 Git 仓库").size(theme.font_size_empty_state()),
+                    );
                     ui.add_space(theme.spacing_list_item_x());
                     ui.label("请输入仓库路径或克隆一个新仓库");
                     ui.add_space(theme.spacing_list_item_x());
@@ -408,14 +410,23 @@ impl GitSyncPanel {
                             );
                             ui.add_space(theme.spacing_lg());
                             ui.horizontal(|ui| {
-                                if ui.button("取消").clicked() {
-                                    self.show_clone_dialog = false;
-                                    self.clone_url.clear();
-                                    self.clone_path.clear();
-                                }
-                                if ui.button("克隆").clicked() {
-                                    self.clone_repo();
-                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if crate::ui::chrome::modal_primary_button(ui, theme, "克隆")
+                                            .clicked()
+                                        {
+                                            self.clone_repo();
+                                        }
+                                        if crate::ui::chrome::modal_secondary_button(ui, theme, "取消")
+                                            .clicked()
+                                        {
+                                            self.show_clone_dialog = false;
+                                            self.clone_url.clear();
+                                            self.clone_path.clear();
+                                        }
+                                    },
+                                );
                             });
                         });
                     });

@@ -10,6 +10,7 @@ use crate::core::{
     CloudSyncSettings, CredentialVault, FragmentManager, FragmentMergeReport, SessionManager, SortBy,
 };
 use crate::ui::credential_panel::CredentialPanel;
+use crate::ui::chrome;
 use crate::ui::layout_util::{self, SidePanelProfile};
 use crate::ui::theme::{Theme, ThemeManager};
 
@@ -256,25 +257,16 @@ impl CloudSyncPanel {
 
         let mut close_me = false;
         let (cl_def, cl_min, cl_max) = layout_util::side_panel_widths(ctx, SidePanelProfile::Standard);
-        egui::SidePanel::right("cloud_sync_panel")
+        let panel = egui::SidePanel::right("cloud_sync_panel")
             .default_width(cl_def)
             .min_width(cl_min)
             .max_width(cl_max)
             .resizable(true)
+            .frame(crate::ui::chrome::region_panel_frame(theme))
             .show(ctx, |ui| {
-                layout_util::record_right_dock_outer_left(
-                    ui,
-                    layout_util::EGUI_SIDE_PANEL_FRAME_MARGIN_X,
-                    right_dock_outer_left,
-                );
-                ui.horizontal(|ui| {
-                    ui.heading("☁️ 云端同步");
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("✕").clicked() {
-                            close_me = true;
-                        }
-                    });
-                });
+                if chrome::side_panel_title_row(ui, theme, "☁️ 云端同步") {
+                    close_me = true;
+                }
                 ui.small(
                     egui::RichText::new("本地同步包 · 勾选控制导出/导入范围")
                         .color(theme.fg_low_color()),
@@ -459,6 +451,7 @@ impl CloudSyncPanel {
                     );
                 });
             });
+        layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
 
         if close_me {
             self.pending_import_dir = None;

@@ -310,19 +310,16 @@ impl SftpPanel {
         right_dock_outer_left: &mut Option<f32>,
     ) {
         let (s_def, s_min, s_max) = layout_util::side_panel_widths(ctx, SidePanelProfile::Standard);
-        egui::SidePanel::right("sftp_browser_panel")
+        let panel = egui::SidePanel::right("sftp_browser_panel")
             .default_width(s_def)
             .min_width(s_min)
             .max_width(s_max)
             .resizable(true)
+            .frame(crate::ui::chrome::region_panel_frame(theme))
             .show(ctx, |ui| {
-                layout_util::record_right_dock_outer_left(
-                    ui,
-                    layout_util::EGUI_SIDE_PANEL_FRAME_MARGIN_X,
-                    right_dock_outer_left,
-                );
                 self.show_content(ui, ctx, theme, terminal, close_panel);
             });
+        layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
     }
 
     fn show_content(
@@ -338,8 +335,7 @@ impl SftpPanel {
         ui.horizontal(|ui| {
             ui.heading(egui::RichText::new("📂 SFTP").color(theme.fg_high_color()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui
-                    .small_button("✕")
+                if crate::ui::chrome::close_icon_button(ui, theme)
                     .on_hover_text("隐藏侧栏 · 也可用底部「📂 SFTP」切换")
                     .clicked()
                 {
@@ -569,7 +565,7 @@ impl SftpPanel {
                     ui.painter().rect_filled(
                         ui.clip_rect(),
                         0.0,
-                        egui::Color32::from_rgba_unmultiplied(61, 133, 224, 30),
+                        theme.color_sftp_row_hover(),
                     );
                     let center = ui.clip_rect().center();
                     ui.painter().text(

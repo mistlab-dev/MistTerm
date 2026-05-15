@@ -16,7 +16,10 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, SshSessionId, LrzszTransfer, TransferEvent, format_ssh_connect_error};
-use crate::terminal::Terminal as VtTerminal;
+use crate::terminal::{Terminal as VtTerminal, TerminalShellStyle};
+use crate::terminal::style::{
+    format_user_error_line, format_user_info_line, format_user_success_line, format_user_warn_line,
+};
 use crate::ui::theme::Theme;
 
 /// 与 [`VtTerminal::content_epoch`] 组合，避免 PTY 无输出帧重复构建整屏 [`egui::text::LayoutJob`]。
@@ -168,19 +171,33 @@ impl TerminalView {
 
     const SFTP_RETRY_ATTEMPTS: usize = 160;
     const SFTP_RETRY_SLEEP_MS: u64 = 8;
-    /// 终端区与外边：左/上/下各 1px；右侧不留（滚动条已隐藏，勿再挤占一列）
-    const TERMINAL_CONTENT_INSET: egui::Margin = egui::Margin {
-        left: 1.0,
-        right: 0.0,
-        top: 1.0,
-        bottom: 1.0,
-    };
     /// Scroll 内容与视口边框的极小余量，避免偶发裁切一个字形
     const INNER_TEXT_SLACK: f32 = 0.0;
     /// ScrollArea **内容区内宽**（已不含纵向滚动条）→ TextEdit.desired_width
     #[inline]
     fn text_width_in_scroll_viewport(scroll_inner_width: f32) -> f32 {
         (scroll_inner_width - Self::INNER_TEXT_SLACK).max(64.0)
+    }
+
+    /// 本机状态行：truecolor ANSI（随主题），避免被 §2.3.2 输出压暗后在黑底上几乎看不见。
+    fn feed_user_error_line(&mut self, theme: &Theme, message: &str) {
+        let line = format_user_error_line(theme, message);
+        self.terminal.feed(line.as_bytes());
+    }
+
+    fn feed_user_info_line(&mut self, theme: &Theme, message: &str) {
+        let line = format_user_info_line(theme, message);
+        self.terminal.feed(line.as_bytes());
+    }
+
+    fn feed_user_success_line(&mut self, theme: &Theme, message: &str) {
+        let line = format_user_success_line(theme, message);
+        self.terminal.feed(line.as_bytes());
+    }
+
+    fn feed_user_warn_line(&mut self, theme: &Theme, message: &str) {
+        let line = format_user_warn_line(theme, message);
+        self.terminal.feed(line.as_bytes());
     }
 
     /// §4.3.2：拖放文件到终端区域时收集路径（由宿主决定 SCP / ZMODEM）。
@@ -322,7 +339,15 @@ impl TerminalView {
     }
 
     /// 连接到 SSH 服务器
-    pub fn connect(&mut self, host: &str, port: u16, username: &str, password: &str, private_key_path: &str) {
+    pub fn connect(
+        &mut self,
+        theme: &Theme,
+        host: &str,
+        port: u16,
+        username: &str,
+        password: &str,
+        private_key_path: &str,
+    ) {
         let config = SshConfig {
             host: host.to_string(),
             port,
@@ -347,7 +372,7 @@ impl TerminalView {
                 self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
                 self.visual_layout_cache = None;
                 self.local_disconnect_intent = false;
-                self.terminal.feed(b"Connecting...\r\n");
+                self.feed_user_info_line(theme, "正在连接…");
                 self.connected_at = None;
                 self.connection_target = Some((username.to_string(), host.to_string()));
             }
@@ -363,9 +388,9 @@ impl TerminalView {
     /// 显示终端视图。`column_width` 须为宿主在 **标签栏下方** 为终端列 `allocate_ui_with_layout` 的宽度（勿用 `clip_rect`，常为整窗宽）。
     pub fn show(&mut self, ui: &mut egui::Ui, theme: &Theme, column_width: f32) {
         // 先处理网络与键盘，再绘制，避免输入/输出滞后一帧
-        self.process_ssh_messages();
+        self.process_ssh_messages(theme);
         self.flush_paste_queue(ui.ctx());
-        self.process_transfer_events(ui.ctx());
+        self.process_transfer_events(theme, ui.ctx());
 
         // Ctrl + 滚轮：缩放终端字体（不改变 PTY 行列，仅视觉）
         let wheel = ui.ctx().input(|i| {
@@ -397,8 +422,15 @@ impl TerminalView {
             }
         }
 
-        // 吃满宿主 allocate 的矩形；否则 Frame 随内容收缩，父区露出 bg_body（像左边/上边一条灰）并易触发中央区滚动条
-        let fill_region = ui.available_size();
+        let column_width = column_width.max(1.0).min(16_384.0);
+        // 宿主传入的列宽（已扣右侧 dock）；勿仅用 available_width，否则中央区 max_rect 仍可能盖住右栏。
+        ui.set_max_width(column_width);
+
+        // 吃满宿主矩形，但不得超过 column_width（否则 Central 后绘会盖住右栏）
+        let mut fill_region = ui.available_size();
+        if fill_region.x.is_finite() {
+            fill_region.x = fill_region.x.min(column_width);
+        }
         if fill_region.x.is_finite()
             && fill_region.y.is_finite()
             && fill_region.x > 0.0
@@ -406,15 +438,13 @@ impl TerminalView {
         {
             ui.set_min_size(fill_region);
         }
-
-        let _ = column_width.max(1.0).min(16_384.0);
         // 进度条在 Frame 内先占位；若仍用全高算行列，网格会高于 ScrollArea，滚动与「│」光标错位
         // 与 Frame 内底部进度条占位一致（分隔线 + 两行文案 + ProgressBar）
         const TRANSFER_FOOTER_H: f32 = 72.0;
         // README §2.4：主底栏承担状态；PTY 尺寸在 ScrollArea 内容区内按真实 viewport 同步（见下方）
         egui::Frame::none()
             .fill(theme.bg_terminal_color())
-            .inner_margin(Self::TERMINAL_CONTENT_INSET)
+            .inner_margin(theme.terminal_content_margin())
             .show(ui, |ui| {
                 // Scroll 滑道、Multiline/TextEdit(code_editor) 背板都用「极暗底色」；
                 // 设为终端同色，否则会露出比 bg_terminal 更浅的灰条。
@@ -431,8 +461,9 @@ impl TerminalView {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
                     // 同上：收窄的 min_rect 会让 Frame.fill 不按整列铺开，左侧/上出现 bg_body 「灰框」
-                    let col_w = ui.available_width();
+                    let col_w = ui.available_width().min(column_width);
                     let col_h = ui.available_height();
+                    ui.set_max_width(column_width);
                     ui.set_min_width(col_w.max(1.0));
                     ui.set_min_height(col_h.max(1.0));
                     Self::collect_file_drops_into(ui, &mut self.pending_drop_upload_paths);
@@ -444,8 +475,7 @@ impl TerminalView {
                     let scroll_h = (ui.available_height() - footer_h).max(80.0);
 
                     // 终端内容区在上，ZMODEM 进度条固定在底部，避免插在命令与 shell 输出之间
-                    let terminal_bg = theme.bg_terminal_color();
-                    let fg = theme.fg_medium_color();
+                    let shell = TerminalShellStyle::from_theme(theme);
                     let font_bits = self.font_size.to_bits();
                     let cache_key = (
                         self.vt_visual_generation,
@@ -453,8 +483,8 @@ impl TerminalView {
                         self.cols,
                         self.rows,
                         font_bits,
-                        fg,
-                        terminal_bg,
+                        shell.default_fg,
+                        shell.terminal_bg,
                     );
                     let (layout_job, display_owned) =
                         if let Some(ref c) = self.visual_layout_cache {
@@ -474,7 +504,7 @@ impl TerminalView {
                             } else {
                                 let layout_job = self
                                     .terminal
-                                    .get_layout_job(self.font_size, fg, terminal_bg);
+                                    .get_layout_job(self.font_size, &shell);
                                 let formatted = self.terminal.get_formatted_output();
                                 self.visual_layout_cache = Some(TerminalVisualLayoutCache {
                                     vt_gen: cache_key.0,
@@ -483,7 +513,7 @@ impl TerminalView {
                                     rows: cache_key.3,
                                     font_bits: cache_key.4,
                                     fg: cache_key.5,
-                                    bg: cache_key.6,
+                                    bg: cache_key.6, // shell.default_fg / terminal_bg
                                     layout_job: layout_job.clone(),
                                     formatted: formatted.clone(),
                                 });
@@ -492,7 +522,7 @@ impl TerminalView {
                         } else {
                             let layout_job = self
                                 .terminal
-                                .get_layout_job(self.font_size, fg, terminal_bg);
+                                .get_layout_job(self.font_size, &shell);
                             let formatted = self.terminal.get_formatted_output();
                             self.visual_layout_cache = Some(TerminalVisualLayoutCache {
                                 vt_gen: cache_key.0,
@@ -510,9 +540,9 @@ impl TerminalView {
 
                     let prev_scroll_w = ui.spacing().scroll_bar_width;
                     let prev_inactive_fill = ui.visuals().widgets.inactive.bg_fill;
-                    ui.spacing_mut().scroll_bar_width = 4.0;
+                    ui.spacing_mut().scroll_bar_width = theme.terminal_scroll_bar_width();
                     ui.visuals_mut().widgets.inactive.bg_fill =
-                        egui::Color32::from_rgba_unmultiplied(255, 255, 255, 15);
+                        theme.terminal_scroll_bar_track_fill();
                     let scroll_output = egui::ScrollArea::vertical()
                         .stick_to_bottom(self.auto_follow_output)
                         .auto_shrink([false, false])
@@ -525,9 +555,11 @@ impl TerminalView {
                             ui.set_min_width(ui.available_width().max(1.0));
                             let vw = ui.available_width().max(1.0);
                             // 先铺与格子一致的底色，避免 PTY 行高取整后 galley 略矮露出「另一块」底色
-                            let pre = ui.available_rect_before_wrap();
+                            let pre = ui
+                                .available_rect_before_wrap()
+                                .intersect(ui.clip_rect());
                             if pre.width() > 0.0 && pre.height() > 0.0 {
-                                ui.painter().rect_filled(pre, 0.0, terminal_bg);
+                                ui.painter().rect_filled(pre, 0.0, shell.terminal_bg);
                             }
                             // 与 TextEdit 同宽：Scroll 内容区已不含纵向条，勿再扣 SCROLL_VBAR_RESERVE（否则会窄一截、右侧露 extreme_bg）
                             self.sync_pty_size_with_ui(ui, egui::vec2(vw, scroll_h.max(1.0)), theme);
@@ -642,7 +674,7 @@ impl TerminalView {
                                         painter.rect_filled(
                                             sel_rect,
                                             0.0,
-                                            egui::Color32::from_rgba_unmultiplied(61, 133, 224, 150),
+                                            theme.color_terminal_selection(),
                                         );
                                     }
                                 }
@@ -772,8 +804,8 @@ impl TerminalView {
     }
 
     /// 非活动标签仅消费 SSH 接收队列；若有新内容写入 VTE 则返回 `true`（用于低频重绘）。
-    pub fn pump_ssh_only(&mut self) -> bool {
-        self.process_ssh_messages()
+    pub fn pump_ssh_only(&mut self, theme: &Theme) -> bool {
+        self.process_ssh_messages(theme)
     }
 
     /// FUNCTIONAL_SPEC §2.4：超长粘贴分片写入 PTY（每批 4096 字节，间隔 5ms）。
@@ -819,7 +851,7 @@ impl TerminalView {
     }
 
     /// 处理 SSH 消息；若终端缓冲有更新则返回 `true`。
-    fn process_ssh_messages(&mut self) -> bool {
+    fn process_ssh_messages(&mut self, theme: &Theme) -> bool {
         let mut vte_dirty = false;
         if let Some(ref rx) = self.ssh_rx {
             let batch: Vec<SshMessage> = rx.try_iter().collect();
@@ -919,7 +951,7 @@ impl TerminalView {
                         self.connected_at = Some(Instant::now());
                         self.terminal_focused = true;
                         self.pending_focus_terminal = true;
-                        self.terminal.feed(b"\r\nConnected!\r\n\r\n");
+                        self.feed_user_success_line(theme, "已连接");
                         vte_dirty = true;
                         self.auto_follow_output = true;
                         
@@ -947,7 +979,7 @@ impl TerminalView {
                         let msg = format_ssh_connect_error(&error);
                         self.error_message = Some(msg.clone());
                         self.connected_at = None;
-                        self.terminal.feed(format!("Error: {}\r\n", msg).as_bytes());
+                        self.feed_user_error_line(theme, &msg);
                         vte_dirty = true;
                         self.auto_follow_output = true;
                     }
@@ -960,7 +992,7 @@ impl TerminalView {
                         self.connected = false;
                         self.terminal_focused = false;
                         self.connected_at = None;
-                        self.terminal.feed(b"\r\nDisconnected\r\n");
+                        self.feed_user_warn_line(theme, "连接已断开");
                         vte_dirty = true;
                         self.auto_follow_output = true;
                         self.resend_offline_input_dialog_open = false;
@@ -982,7 +1014,7 @@ impl TerminalView {
     }
 
     /// 处理文件传输事件
-    fn process_transfer_events(&mut self, ctx: &egui::Context) {
+    fn process_transfer_events(&mut self, theme: &Theme, ctx: &egui::Context) {
         while let Some(event) = self.lrzsz.try_recv_event() {
             match event {
                 TransferEvent::FileStart {
@@ -1010,15 +1042,12 @@ impl TerminalView {
                     };
                     self.transfer_outgoing = false;
                     // 完成后多一空行，与后续 shell 提示符/命令拉开
-                    self.terminal.feed(
-                        format!(
-                            "\r\n✅ {}：{} -> {}\r\n\r\n",
-                            title,
-                            filename,
-                            path.display()
-                        )
-                        .as_bytes(),
-                    );
+                    self.feed_user_success_line(theme, &format!(
+                        "✅ {}：{} -> {}",
+                        title,
+                        filename,
+                        path.display()
+                    ));
                 }
                 TransferEvent::FileError { filename, error } => {
                     if let Some(ref h) = self.ssh_handle {
@@ -1026,9 +1055,7 @@ impl TerminalView {
                     }
                     self.transfer_progress = None;
                     self.transfer_outgoing = false;
-                    self.terminal.feed(
-                        format!("\r\n❌ 传输失败 {}: {}\r\n", filename, error).as_bytes()
-                    );
+                    self.feed_user_error_line(theme, &format!("传输失败 {}: {}", filename, error));
                     self.flush_ssh_pty_size_after_transfer();
                 }
                 TransferEvent::TransferComplete => {
@@ -1240,7 +1267,7 @@ impl TerminalView {
                     .fill(theme.bg_window_color())
                     .stroke(egui::Stroke::new(1.0, theme.border_color()))
                     .rounding(8.0)
-                    .inner_margin(egui::Margin::symmetric(16.0, 14.0)),
+                    .inner_margin(theme.margin_modal_content()),
             )
             .show(ctx, |ui| {
                 ui.label(
@@ -1266,10 +1293,7 @@ impl TerminalView {
                 }
                 ui.add_space(12.0);
                 ui.horizontal(|ui| {
-                    if ui
-                        .button(egui::RichText::new("发送到远端").color(theme.accent_color()))
-                        .clicked()
-                    {
+                    if crate::ui::chrome::modal_primary_button(ui, theme, "发送到远端").clicked() {
                         if let Some(handle) = self.ssh_handle.clone() {
                             for chunk in self.disconnected_input_buffer.chunks(4096) {
                                 let _ = handle.send_input(chunk);
@@ -1279,7 +1303,7 @@ impl TerminalView {
                         self.buffer_input_while_disconnected = false;
                         self.resend_offline_input_dialog_open = false;
                     }
-                    if ui.button("丢弃缓存").clicked() {
+                    if crate::ui::chrome::modal_secondary_button(ui, theme, "丢弃缓存").clicked() {
                         self.disconnected_input_buffer.clear();
                         self.buffer_input_while_disconnected = false;
                         self.resend_offline_input_dialog_open = false;
