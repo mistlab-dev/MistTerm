@@ -15,6 +15,7 @@ pub struct SshConfig {
     pub port: u16,
     pub username: String,
     pub password: String,
+    pub private_key_path: String,
 }
 
 /// SSH 客户端
@@ -65,38 +66,64 @@ impl SshClient {
         })?;
         log::info!("SSH handshake completed");
 
-        // 先尝试密码认证
-        match session.userauth_password(&self.config.username, &self.config.password) {
-            Ok(_) => {
-                log::info!("Authenticated with password");
-            }
-            Err(e) => {
-                log::info!(
-                    "Password auth failed: {}, trying default keys under ~/.ssh ...",
-                    e
-                );
-                let mut authenticated = false;
-                if let Some(home) = dirs::home_dir() {
-                    let ssh_dir = home.join(".ssh");
-                    for key_name in ["id_ed25519", "id_rsa", "id_ecdsa"] {
-                        let p = ssh_dir.join(key_name);
-                        if p.is_file()
-                            && session
-                                .userauth_pubkey_file(&self.config.username, None, &p, None)
-                                .is_ok()
-                        {
-                            log::info!("Authenticated with SSH key {}", p.display());
-                            authenticated = true;
-                            break;
-                        }
+        // 认证策略：优先使用用户指定的私钥，然后尝试密码，最后尝试默认系统密钥
+        let mut authenticated = false;
+
+        // 1. 优先尝试用户指定的私钥路径
+        if !self.config.private_key_path.is_empty() {
+            let p = std::path::Path::new(&self.config.private_key_path);
+            if p.is_file() {
+                match session.userauth_pubkey_file(&self.config.username, None, p, None) {
+                    Ok(_) => {
+                        log::info!("Authenticated with user-specified SSH key: {}", self.config.private_key_path);
+                        authenticated = true;
+                    }
+                    Err(e) => {
+                        log::warn!("User-specified SSH key auth failed: {}", e);
                     }
                 }
-                if !authenticated {
-                    return Err(format_ssh_connect_error(
-                        "Authentication failed (password and SSH keys failed)",
-                    ));
+            } else {
+                log::warn!("User-specified SSH key not found: {}", self.config.private_key_path);
+            }
+        }
+
+        // 2. 尝试密码认证
+        if !authenticated && !self.config.password.is_empty() {
+            match session.userauth_password(&self.config.username, &self.config.password) {
+                Ok(_) => {
+                    log::info!("Authenticated with password");
+                    authenticated = true;
+                }
+                Err(e) => {
+                    log::info!("Password auth failed: {}", e);
                 }
             }
+        }
+
+        // 3. 尝试默认系统密钥
+        if !authenticated {
+            log::info!("Trying default SSH keys under ~/.ssh ...");
+            if let Some(home) = dirs::home_dir() {
+                let ssh_dir = home.join(".ssh");
+                for key_name in ["id_ed25519", "id_rsa", "id_ecdsa"] {
+                    let p = ssh_dir.join(key_name);
+                    if p.is_file()
+                        && session
+                            .userauth_pubkey_file(&self.config.username, None, &p, None)
+                            .is_ok()
+                    {
+                        log::info!("Authenticated with SSH key {}", p.display());
+                        authenticated = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if !authenticated {
+            return Err(format_ssh_connect_error(
+                "Authentication failed (password and SSH keys failed)",
+            ));
         }
 
         // 认证完成后再切到非阻塞，供 shell 读写线程轮询
@@ -202,6 +229,7 @@ mod tests {
             port: 22,
             username: "test".to_string(),
             password: "pass".to_string(),
+            private_key_path: String::new(),
         };
         
         assert_eq!(config.host, "localhost");
@@ -215,6 +243,7 @@ mod tests {
             port: 22,
             username: "test".to_string(),
             password: "pass".to_string(),
+            private_key_path: String::new(),
         };
         
         let client = SshClient::new(config);

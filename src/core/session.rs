@@ -291,6 +291,7 @@ impl SessionManager {
         username: &str,
         password: &str,
         group: &str,
+        private_key_path: &str,
     ) -> SessionConfig {
         let mut config = SessionConfig::default();
         config.id = uuid::Uuid::new_v4().to_string();
@@ -300,6 +301,7 @@ impl SessionManager {
         config.username = username.to_string();
         config.password = password.to_string();
         config.group = if group.trim().is_empty() { "默认".to_string() } else { group.trim().to_string() };
+        config.private_key_path = private_key_path.to_string();
         self.sessions.push(config.clone());
         self.save();
         config
@@ -323,6 +325,7 @@ impl SessionManager {
         username: &str,
         password: &str,
         group: &str,
+        private_key_path: &str,
     ) -> bool {
         if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
             session.name = name.to_string();
@@ -331,6 +334,7 @@ impl SessionManager {
             session.username = username.to_string();
             session.password = password.to_string();
             session.group = if group.trim().is_empty() { "默认".to_string() } else { group.trim().to_string() };
+            session.private_key_path = private_key_path.to_string();
             self.save();
             return true;
         }

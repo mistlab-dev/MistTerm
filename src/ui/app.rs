@@ -219,6 +219,7 @@ pub struct MistTermApp {
     new_session_username: String,
     new_session_password: String,
     new_session_group: String,
+    new_session_private_key_path: String,
 
     edit_session_id: Option<String>,
     edit_session_name: String,
@@ -227,6 +228,7 @@ pub struct MistTermApp {
     edit_session_username: String,
     edit_session_password: String,
     edit_session_group: String,
+    edit_session_private_key_path: String,
     sidebar_search_query: String,
     sidebar_filter: String,
     fragment_search_query: String,
@@ -450,6 +452,7 @@ impl MistTermApp {
             new_session_username: String::new(),
             new_session_password: String::new(),
             new_session_group: "默认".to_string(),
+            new_session_private_key_path: String::new(),
             edit_session_id: None,
             edit_session_name: String::new(),
             edit_session_host: String::new(),
@@ -457,6 +460,7 @@ impl MistTermApp {
             edit_session_username: String::new(),
             edit_session_password: String::new(),
             edit_session_group: "默认".to_string(),
+            edit_session_private_key_path: String::new(),
             sidebar_search_query: String::new(),
             sidebar_filter: "全部".to_string(),
             fragment_search_query: String::new(),
@@ -642,6 +646,7 @@ impl MistTermApp {
             session.port,
             &session.username,
             &session.password,
+            &session.private_key_path,
         );
         self.tabs[idx]
             .terminal
@@ -847,6 +852,7 @@ impl MistTermApp {
             session.port,
             &session.username,
             &session.password,
+            &session.private_key_path,
         );
         self.tabs.push(TerminalTab {
             session_id: session.id.clone(),
@@ -926,6 +932,7 @@ impl MistTermApp {
             &self.new_session_username,
             &self.new_session_password,
             &self.new_session_group,
+            &self.new_session_private_key_path,
         );
 
         // 选择会话
@@ -942,6 +949,7 @@ impl MistTermApp {
         self.new_session_username.clear();
         self.new_session_password.clear();
         self.new_session_group = "默认".to_string();
+        self.new_session_private_key_path.clear();
     }
 
     /// 删除会话
@@ -982,6 +990,7 @@ impl MistTermApp {
             // FUNCTIONAL_SPEC §1.3.3：不将真实密码填入 UI
             self.edit_session_password = "****".to_string();
             self.edit_session_group = session.group;
+            self.edit_session_private_key_path = session.private_key_path;
             self.show_edit_session_dialog = true;
         }
     }
@@ -1016,6 +1025,7 @@ impl MistTermApp {
             &self.edit_session_username,
             &password_to_store,
             &self.edit_session_group,
+            &self.edit_session_private_key_path,
         );
 
         if updated {
@@ -2754,6 +2764,17 @@ impl eframe::App for MistTermApp {
                                 });
                             });
 
+                            field_label(ui, "SSH 私钥路径");
+                            input_frame(ui, &mut |ui| {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.new_session_private_key_path)
+                                        .frame(false)
+                                        .hint_text("~/.ssh/id_rsa（留空则用密码或系统默认密钥）")
+                                        .text_color(text_color)
+                                        .desired_width(layout_util::finite_content_width(ui)),
+                                );
+                            });
+
                             field_label(ui, "分组");
                             input_frame(ui, &mut |ui| {
                                 ui.add(
@@ -3349,6 +3370,17 @@ impl eframe::App for MistTermApp {
                                         );
                                     });
                                 });
+                            });
+
+                            field_label(ui, "SSH 私钥路径");
+                            input_frame(ui, &mut |ui| {
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut self.edit_session_private_key_path)
+                                        .frame(false)
+                                        .hint_text("~/.ssh/id_rsa（留空则用密码或系统默认密钥）")
+                                        .text_color(text_color)
+                                        .desired_width(layout_util::finite_content_width(ui)),
+                                );
                             });
 
                             field_label(ui, "分组");

@@ -322,12 +322,13 @@ impl TerminalView {
     }
 
     /// 连接到 SSH 服务器
-    pub fn connect(&mut self, host: &str, port: u16, username: &str, password: &str) {
+    pub fn connect(&mut self, host: &str, port: u16, username: &str, password: &str, private_key_path: &str) {
         let config = SshConfig {
             host: host.to_string(),
             port,
             username: username.to_string(),
             password: password.to_string(),
+            private_key_path: private_key_path.to_string(),
         };
 
         let (manager, rx) = SshManager::new();
