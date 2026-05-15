@@ -292,6 +292,33 @@ impl MistTermApp {
         self.theme_manager.apply_theme(ctx);
     }
 
+    // ── 通用 UI 辅助函数（统一字体大小和间距） ──
+
+    /// 表单字段标签：统一使用 11px 字体 + 加粗
+    fn ui_field_label(ui: &mut egui::Ui, text: &str, label_color: egui::Color32) {
+        ui.label(
+            egui::RichText::new(text)
+                .size(11.0)
+                .strong()
+                .color(label_color),
+        );
+    }
+
+    /// 输入框统一边距：左右10px，上下7px，圆角4px
+    fn ui_input_frame(
+        ui: &mut egui::Ui,
+        input_fill: egui::Color32,
+        input_stroke: egui::Stroke,
+        add_content: &mut dyn FnMut(&mut egui::Ui),
+    ) {
+        egui::Frame::none()
+            .fill(input_fill)
+            .stroke(input_stroke)
+            .rounding(4.0)
+            .inner_margin(egui::Margin::symmetric(10.0, 7.0))
+            .show(ui, |ui| add_content(ui));
+    }
+
     #[inline]
     fn layout_window_width(ctx: &egui::Context) -> f32 {
         ctx.screen_rect().width()
@@ -2665,20 +2692,9 @@ impl eframe::App for MistTermApp {
                         egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8),
                     );
                     let input_fill = egui::Color32::from_rgb(19, 19, 28);
-                    let input_rounding = 4.0;
+                    let _input_rounding = 4.0;
                     let required_missing =
                         self.new_session_name.trim().is_empty() || self.new_session_host.trim().is_empty();
-                    let field_label = |ui: &mut egui::Ui, text: &str| {
-                        ui.label(egui::RichText::new(text).size(10.0).strong().color(label_color));
-                    };
-                    let input_frame = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
-                        egui::Frame::none()
-                            .fill(input_fill)
-                            .stroke(input_stroke)
-                            .rounding(input_rounding)
-                            .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                            .show(ui, |ui| add(ui));
-                    };
 
                     Self::modal_content_frame().show(ui, |ui| {
                             let mut close_via_header = false;
@@ -2689,8 +2705,8 @@ impl eframe::App for MistTermApp {
                             }
 
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
-                            field_label(ui, "会话名称");
-                            input_frame(ui, &mut |ui| {
+                            Self::ui_field_label(ui, "会话名称", label_color);
+                            Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.new_session_name)
                                         .frame(false)
@@ -2706,8 +2722,8 @@ impl eframe::App for MistTermApp {
                                 let host_w = (row_w - 98.0).max(160.0);
                                 ui.vertical(|ui| {
                                     ui.set_width(host_w);
-                                    field_label(ui, "主机地址");
-                                    input_frame(ui, &mut |ui| {
+                                    Self::ui_field_label(ui, "主机地址", label_color);
+                                    Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(&mut self.new_session_host)
                                                 .frame(false)
@@ -2719,8 +2735,8 @@ impl eframe::App for MistTermApp {
                                 });
                                 ui.vertical(|ui| {
                                     ui.set_width(88.0);
-                                    field_label(ui, "端口");
-                                    input_frame(ui, &mut |ui| {
+                                    Self::ui_field_label(ui, "端口", label_color);
+                                    Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                         ui.add_sized(
                                             [68.0, 20.0],
                                             egui::DragValue::new(&mut self.new_session_port)
@@ -2737,8 +2753,8 @@ impl eframe::App for MistTermApp {
                                 let half = ((row_w - 10.0) / 2.0).max(140.0);
                                 ui.vertical(|ui| {
                                     ui.set_width(half);
-                                    field_label(ui, "用户名");
-                                    input_frame(ui, &mut |ui| {
+                                    Self::ui_field_label(ui, "用户名", label_color);
+                                    Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(&mut self.new_session_username)
                                                 .frame(false)
@@ -2750,8 +2766,8 @@ impl eframe::App for MistTermApp {
                                 });
                                 ui.vertical(|ui| {
                                     ui.set_width(half);
-                                    field_label(ui, "密码");
-                                    input_frame(ui, &mut |ui| {
+                                    Self::ui_field_label(ui, "密码", label_color);
+                                    Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(&mut self.new_session_password)
                                                 .frame(false)
@@ -2764,8 +2780,8 @@ impl eframe::App for MistTermApp {
                                 });
                             });
 
-                            field_label(ui, "SSH 私钥路径");
-                            input_frame(ui, &mut |ui| {
+                            Self::ui_field_label(ui, "SSH 私钥路径", label_color);
+                            Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.new_session_private_key_path)
                                         .frame(false)
@@ -2775,8 +2791,8 @@ impl eframe::App for MistTermApp {
                                 );
                             });
 
-                            field_label(ui, "分组");
-                            input_frame(ui, &mut |ui| {
+                            Self::ui_field_label(ui, "分组", label_color);
+                            Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.new_session_group)
                                         .frame(false)
@@ -3278,27 +3294,16 @@ impl eframe::App for MistTermApp {
                         egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8),
                     );
                     let input_fill = egui::Color32::from_rgb(19, 19, 28);
-                    let input_rounding = 4.0;
+                    let _input_rounding = 4.0;
                     let required_missing =
                         self.edit_session_name.trim().is_empty() || self.edit_session_host.trim().is_empty();
-                    let field_label = |ui: &mut egui::Ui, text: &str| {
-                        ui.label(egui::RichText::new(text).size(10.0).strong().color(label_color));
-                    };
-                    let input_frame = |ui: &mut egui::Ui, add: &mut dyn FnMut(&mut egui::Ui)| {
-                        egui::Frame::none()
-                            .fill(input_fill)
-                            .stroke(input_stroke)
-                            .rounding(input_rounding)
-                            .inner_margin(egui::Margin::symmetric(10.0, 7.0))
-                            .show(ui, |ui| add(ui));
-                    };
 
                     Self::modal_content_frame().show(ui, |ui| {
                             Self::modal_header(ui, "编辑会话", &mut should_close);
 
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
-                            field_label(ui, "会话名称");
-                            input_frame(ui, &mut |ui| {
+                            Self::ui_field_label(ui, "会话名称", label_color);
+                            Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.edit_session_name)
                                         .frame(false)
@@ -3314,8 +3319,8 @@ impl eframe::App for MistTermApp {
                                 let host_w = (row_w - 98.0).max(160.0);
                                 ui.vertical(|ui| {
                                     ui.set_width(host_w);
-                                    field_label(ui, "主机地址");
-                                    input_frame(ui, &mut |ui| {
+                                    Self::ui_field_label(ui, "主机地址", label_color);
+                                    Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(&mut self.edit_session_host)
                                                 .frame(false)
@@ -3327,8 +3332,8 @@ impl eframe::App for MistTermApp {
                                 });
                                 ui.vertical(|ui| {
                                     ui.set_width(88.0);
-                                    field_label(ui, "端口");
-                                    input_frame(ui, &mut |ui| {
+                                    Self::ui_field_label(ui, "端口", label_color);
+                                    Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                         ui.add_sized(
                                             [68.0, 20.0],
                                             egui::DragValue::new(&mut self.edit_session_port)
@@ -3345,8 +3350,8 @@ impl eframe::App for MistTermApp {
                                 let half = ((row_w - 10.0) / 2.0).max(140.0);
                                 ui.vertical(|ui| {
                                     ui.set_width(half);
-                                    field_label(ui, "用户名");
-                                    input_frame(ui, &mut |ui| {
+                                    Self::ui_field_label(ui, "用户名", label_color);
+                                    Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(&mut self.edit_session_username)
                                                 .frame(false)
@@ -3358,8 +3363,8 @@ impl eframe::App for MistTermApp {
                                 });
                                 ui.vertical(|ui| {
                                     ui.set_width(half);
-                                    field_label(ui, "密码");
-                                    input_frame(ui, &mut |ui| {
+                                    Self::ui_field_label(ui, "密码", label_color);
+                                    Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(&mut self.edit_session_password)
                                                 .frame(false)
@@ -3372,8 +3377,8 @@ impl eframe::App for MistTermApp {
                                 });
                             });
 
-                            field_label(ui, "SSH 私钥路径");
-                            input_frame(ui, &mut |ui| {
+                            Self::ui_field_label(ui, "SSH 私钥路径", label_color);
+                            Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.edit_session_private_key_path)
                                         .frame(false)
@@ -3383,8 +3388,8 @@ impl eframe::App for MistTermApp {
                                 );
                             });
 
-                            field_label(ui, "分组");
-                            input_frame(ui, &mut |ui| {
+                            Self::ui_field_label(ui, "分组", label_color);
+                            Self::ui_input_frame(ui, input_fill, input_stroke, &mut |ui| {
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.edit_session_group)
                                         .frame(false)
