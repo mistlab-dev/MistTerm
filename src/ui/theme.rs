@@ -228,6 +228,55 @@ impl Theme {
     pub fn status_bar_height(&self) -> f32 { 28.0 }          // 状态栏高度
     pub fn title_bar_height(&self) -> f32 { 36.0 }           // 标题栏高度
 
+    // ── 常用 alpha 颜色辅助方法 ──
+    /// FG_HIGH alpha 版本
+    pub fn fg_high_alpha(&self, alpha: u8) -> Color32 {
+        let c = self.fg_high.to_color32();
+        let [r, g, b, _] = c.to_array();
+        Color32::from_rgba_unmultiplied(r, g, b, alpha)
+    }
+    pub fn fg_high_a10(&self) -> Color32 { self.fg_high_alpha(10) }   // 按钮 idle
+    pub fn fg_high_a15(&self) -> Color32 { self.fg_high_alpha(15) }   // 极淡边框
+    pub fn fg_high_a20(&self) -> Color32 { self.fg_high_alpha(20) }   // subtle_line
+    pub fn fg_high_a46(&self) -> Color32 { self.fg_high_alpha(46) }   // 次选文字
+    pub fn fg_high_a51(&self) -> Color32 { self.fg_high_alpha(51) }   // panel title
+    pub fn fg_high_a64(&self) -> Color32 { self.fg_high_alpha(64) }   // LOW 约 0.25
+    pub fn fg_high_a76(&self) -> Color32 { self.fg_high_alpha(76) }   // 标签文字 0.3
+    pub fn fg_high_a100(&self) -> Color32 { self.fg_high_alpha(100) } // placeholder
+    pub fn fg_high_a128(&self) -> Color32 { self.fg_high_alpha(128) } // subtle_label
+    pub fn fg_high_a179(&self) -> Color32 { self.fg_high_alpha(179) } // 约 0.7 普通文字
+    pub fn fg_high_a200(&self) -> Color32 { self.fg_high_alpha(200) } // 选中文字
+    pub fn fg_high_a230(&self) -> Color32 { self.fg_high_alpha(230) } // MEDIUM 约 0.9
+
+    /// ACCENT alpha 版本
+    pub fn accent_alpha(&self, alpha: u8) -> Color32 {
+        let c = self.accent.to_color32();
+        let [r, g, b, _] = c.to_array();
+        Color32::from_rgba_unmultiplied(r, g, b, alpha)
+    }
+    pub fn accent_a10(&self) -> Color32 { self.accent_alpha(10) }     // 按钮 hover 背景
+    pub fn accent_a13(&self) -> Color32 { self.accent_alpha(13) }     // bg_selected
+    pub fn accent_a89(&self) -> Color32 { self.accent_alpha(89) }     // accent_dim
+    pub fn accent_a128(&self) -> Color32 { self.accent_alpha(128) }   // 中等高亮
+    pub fn accent_a200(&self) -> Color32 { self.accent_alpha(200) }   // 强选中
+
+    /// GREEN alpha 版本
+    pub fn green_alpha(&self, alpha: u8) -> Color32 {
+        let c = self.green.to_color32();
+        let [r, g, b, _] = c.to_array();
+        Color32::from_rgba_unmultiplied(r, g, b, alpha)
+    }
+    pub fn green_a64(&self) -> Color32 { self.green_alpha(64) }       // green_dim
+    pub fn green_a200(&self) -> Color32 { self.green_alpha(200) }     // 强绿色
+
+    /// RED alpha 版本
+    pub fn red_alpha(&self, alpha: u8) -> Color32 {
+        let c = self.red.to_color32();
+        let [r, g, b, _] = c.to_array();
+        Color32::from_rgba_unmultiplied(r, g, b, alpha)
+    }
+    pub fn red_a128(&self) -> Color32 { self.red_alpha(128) }         // 半透明红色
+
     /// 图表网格线等极淡分隔（随前景色变化，适配明暗主题）
     pub fn subtle_line_color(&self) -> Color32 {
         let c = self.fg_high.to_color32();
