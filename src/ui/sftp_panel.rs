@@ -403,7 +403,7 @@ impl SftpPanel {
                 .small()
                 .color(theme.fg_low_color()),
         );
-        ui.add_space(8.0);
+        ui.add_space(theme.spacing_md());
 
         ui.horizontal(|ui| {
             ui.label(
@@ -642,7 +642,7 @@ impl SftpPanel {
             });
 
         if self.busy {
-            ui.add_space(6.0);
+            ui.add_space(theme.spacing_panel_gap());
             ui.label(egui::RichText::new("SFTP 处理中…").small().color(theme.fg_low_color()));
         }
     }

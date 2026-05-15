@@ -244,7 +244,7 @@ impl GitSyncPanel {
                 });
             });
 
-            ui.add_space(8.0);
+            ui.add_space(theme.spacing_md());
 
             // 仓库状态显示（不显式借用 `repo`，避免与 `pull/commit` 等对 `&mut self` 的调用冲突）
             if self.repo.is_some() {
@@ -286,7 +286,7 @@ impl GitSyncPanel {
                     }
                 });
 
-                ui.add_space(8.0);
+                ui.add_space(theme.spacing_md());
 
                 // 操作按钮
                 ui.group(|ui| {
@@ -316,7 +316,7 @@ impl GitSyncPanel {
                     });
                 });
 
-                ui.add_space(8.0);
+                ui.add_space(theme.spacing_md());
 
                 // 提交信息输入
                 ui.group(|ui| {
@@ -339,7 +339,7 @@ impl GitSyncPanel {
                     });
                 });
 
-                ui.add_space(8.0);
+                ui.add_space(theme.spacing_md());
 
                 // 操作状态显示
                 match &self.operation_status {
@@ -375,9 +375,9 @@ impl GitSyncPanel {
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.0);
                     ui.label(egui::RichText::new("📦 未打开 Git 仓库").size(18.0));
-                    ui.add_space(10.0);
+                    ui.add_space(theme.spacing_list_item_x());
                     ui.label("请输入仓库路径或克隆一个新仓库");
-                    ui.add_space(10.0);
+                    ui.add_space(theme.spacing_list_item_x());
                     if ui.button("克隆仓库...").clicked() {
                         self.show_clone_dialog = true;
                     }
@@ -399,14 +399,14 @@ impl GitSyncPanel {
                                     .desired_width(layout_util::finite_content_width(ui))
                                     .hint_text("https://github.com/user/repo.git"),
                             );
-                            ui.add_space(8.0);
+                            ui.add_space(theme.spacing_md());
                             ui.label("目标路径：");
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.clone_path)
                                     .desired_width(layout_util::finite_content_width(ui))
                                     .hint_text("/path/to/clone"),
                             );
-                            ui.add_space(16.0);
+                            ui.add_space(theme.spacing_lg());
                             ui.horizontal(|ui| {
                                 if ui.button("取消").clicked() {
                                     self.show_clone_dialog = false;

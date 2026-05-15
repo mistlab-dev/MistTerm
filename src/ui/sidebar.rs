@@ -62,7 +62,7 @@ impl Sidebar {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new("连接")
-                                    .size(10.0)
+                                    .size(theme.font_size_small())
                                     .strong()
                                     .color(egui::Color32::from_rgba_unmultiplied(
                                         255, 255, 255, 51,
@@ -75,7 +75,7 @@ impl Sidebar {
                                         .add(
                                             egui::Button::new(
                                                 egui::RichText::new("−")
-                                                    .size(14.0)
+                                                    .size(theme.font_size_large())
                                                     .color(egui::Color32::from_rgba_unmultiplied(
                                                         255, 255, 255, 51,
                                                     )),
@@ -92,7 +92,7 @@ impl Sidebar {
                                         .add(
                                             egui::Button::new(
                                                 egui::RichText::new("＋")
-                                                    .size(12.0)
+                                                    .size(theme.font_size_normal())
                                                     .color(
                                                         egui::Color32::from_rgba_unmultiplied(
                                                             255, 255, 255, 72,
@@ -158,10 +158,10 @@ impl Sidebar {
                         for session in &sessions {
                             if session.group != current_group {
                                 current_group = session.group.clone();
-                                ui.add_space(6.0);
+                                ui.add_space(theme.spacing_panel_gap());
                                 ui.small(
                                     egui::RichText::new(format!("📁 {}", current_group))
-                                        .size(10.0)
+                                        .size(theme.font_size_small())
                                         .color(theme.fg_low_color()),
                                 );
                             }
@@ -198,13 +198,13 @@ impl Sidebar {
                             );
                             row_ui.label(
                                 egui::RichText::new("🖥")
-                                    .size(11.0)
+                                    .size(theme.font_size_panel_title())
                                     .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 89)),
                             );
-                            row_ui.add_space(6.0);
+                            row_ui.add_space(theme.spacing_panel_gap());
                             row_ui.label(
                                 egui::RichText::new(&session.name)
-                                    .size(12.0)
+                                    .size(theme.font_size_normal())
                                     .color(if is_selected {
                                         theme.fg_high_color()
                                     } else {
@@ -214,7 +214,7 @@ impl Sidebar {
                             row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.label(
                                     egui::RichText::new(status_text)
-                                        .size(10.0)
+                                        .size(theme.font_size_small())
                                         .color(if connected_sessions.contains(&session.id) {
                                             egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)
                                         } else {

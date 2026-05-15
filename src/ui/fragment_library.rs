@@ -262,17 +262,17 @@ impl FragmentLibraryState {
                             egui::Frame::none()
                                 .fill(egui::Color32::from_rgba_unmultiplied(r, g, b, 48))
                                 .inner_margin(egui::Margin::same(8.0))
-                                .rounding(4.0)
+                                .rounding(theme.radius_list_item())
                                 .show(ui, |ui| {
                                     ui.label(
                                         egui::RichText::new(
                                             "新片段：在下面填写标题、分类与命令，完成后点「保存」。",
                                         )
-                                        .size(13.0)
+                                        .size(theme.font_size_medium())
                                         .color(theme.fg_high_color()),
                                     );
                                 });
-                            ui.add_space(4.0);
+                            ui.add_space(theme.spacing_sm());
                         }
 
                         // 表单在列内纵向滚动；高度用布局分配后的剩余空间（优于固定像素）。

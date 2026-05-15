@@ -702,7 +702,7 @@ impl TerminalView {
                     self.auto_follow_output = at_bottom;
 
                     if let Some(ref progress) = self.transfer_progress {
-                        ui.add_space(4.0);
+                        ui.add_space(theme.spacing_sm());
                         ui.separator();
                         let dir = if self.transfer_outgoing {
                             "本机 → 远端"
@@ -1245,22 +1245,22 @@ impl TerminalView {
             .show(ctx, |ui| {
                 ui.label(
                     egui::RichText::new("检测到断线期间暂存的输入")
-                        .size(15.0)
+                        .size(theme.font_size_xl())
                         .strong()
                         .color(theme.fg_high_color()),
                 );
-                ui.add_space(6.0);
+                ui.add_space(theme.spacing_panel_gap());
                 ui.label(
                     egui::RichText::new(format!("共 {} 字节，是否发送到当前远程 shell？", n))
-                        .size(13.0)
+                        .size(theme.font_size_medium())
                         .color(theme.fg_medium_color()),
                 );
                 if !preview_esc.is_empty() {
-                    ui.add_space(4.0);
+                    ui.add_space(theme.spacing_sm());
                     ui.label(
                         egui::RichText::new(format!("预览：{}", preview_esc))
                             .monospace()
-                            .size(11.0)
+                            .size(theme.font_size_panel_title())
                             .color(theme.fg_low_color()),
                     );
                 }

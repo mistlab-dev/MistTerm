@@ -296,7 +296,7 @@ impl CloudSyncPanel {
                                 .desired_width(layout_util::finite_content_width(ui)),
                         );
 
-                        ui.add_space(6.0);
+                        ui.add_space(theme.spacing_panel_gap());
                         ui.collapsing("同步内容与频率", |ui| {
                             ui.horizontal(|ui| {
                                 if ui.small_button("全选").clicked() {
@@ -332,7 +332,7 @@ impl CloudSyncPanel {
                             ui.checkbox(&mut self.settings.sync_credentials, "凭证库（加密文件）");
                             ui.checkbox(&mut self.settings.sync_team_config, "团队配置（占位）");
 
-                            ui.add_space(6.0);
+                            ui.add_space(theme.spacing_panel_gap());
                             ui.label(
                                 egui::RichText::new("同步频率（分钟，0=仅手动）")
                                     .color(theme.fg_medium_color()),
@@ -355,7 +355,7 @@ impl CloudSyncPanel {
                             );
                         });
 
-                        ui.add_space(6.0);
+                        ui.add_space(theme.spacing_panel_gap());
                         if let Some(ts) = self.settings.last_sync_unix {
                             let t = chrono::DateTime::from_timestamp(ts, 0)
                                 .map(|x| x.format("%Y-%m-%d %H:%M").to_string())
@@ -404,7 +404,7 @@ impl CloudSyncPanel {
                     });
 
                 if let Some(dir) = self.pending_import_dir.clone() {
-                    ui.add_space(6.0);
+                    ui.add_space(theme.spacing_panel_gap());
                     ui.group(|ui| {
                         ui.label(
                             egui::RichText::new("⚠️ 导入确认").strong().color(theme.red_color()),
@@ -445,7 +445,7 @@ impl CloudSyncPanel {
                 }
 
                 if !self.message.is_empty() {
-                    ui.add_space(4.0);
+                    ui.add_space(theme.spacing_sm());
                     ui.label(
                         egui::RichText::new(&self.message)
                             .small()
