@@ -87,6 +87,12 @@ impl Terminal {
         self.parser.advance(&mut self.term, data);
     }
 
+    /// 清空滚动历史缓冲区，保留当前屏幕内容
+    pub fn clear_history(&mut self) {
+        self.content_epoch = self.content_epoch.wrapping_add(1);
+        self.term.grid_mut().clear_history();
+    }
+
     /// 返回当前视口（screen）可见文本，保持固定列宽，避免表格错位
     pub fn get_formatted_output(&self) -> String {
         let mut rows = vec![vec![' '; self.width]; self.height];

@@ -218,6 +218,7 @@ mod tests {
             port: 22,
             username: "u".to_string(),
             password: "p".to_string(),
+            private_key_path: String::new(),
             last_connected_at: None,
         }
     }

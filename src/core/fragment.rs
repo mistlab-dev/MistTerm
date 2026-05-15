@@ -724,6 +724,7 @@ mod tests {
             port: 22,
             username: "alice".into(),
             password: String::new(),
+            private_key_path: String::new(),
             last_connected_at: None,
         };
         let mut extras = HashMap::new();
@@ -754,6 +755,7 @@ mod tests {
             port: 2222,
             username: "ubuntu".into(),
             password: String::new(),
+            private_key_path: String::new(),
             last_connected_at: None,
         };
         let mut m = HashMap::new();

@@ -20,6 +20,8 @@ pub struct SessionConfig {
     pub port: u16,
     pub username: String,
     pub password: String,
+    /// SSH 私钥文件路径（空表示用密码或系统默认密钥）
+    pub private_key_path: String,
     pub last_connected_at: Option<i64>,
 }
 
@@ -33,6 +35,7 @@ impl Default for SessionConfig {
             port: 22,
             username: String::new(),
             password: String::new(),
+            private_key_path: String::new(),
             last_connected_at: None,
         }
     }
@@ -54,6 +57,8 @@ struct StoredSessionConfig {
     encrypted_password: String,
     #[serde(default)]
     password_nonce: String,
+    #[serde(default)]
+    private_key_path: String,
     #[serde(default)]
     last_connected_at: Option<i64>,
 }
@@ -114,6 +119,7 @@ impl SessionManager {
                 port: cfg.port,
                 username: cfg.username,
                 password,
+                private_key_path: cfg.private_key_path,
                 last_connected_at: cfg.last_connected_at,
             });
         }
@@ -236,6 +242,7 @@ impl SessionManager {
                 password: String::new(),
                 encrypted_password,
                 password_nonce,
+                private_key_path: cfg.private_key_path.clone(),
                 last_connected_at: cfg.last_connected_at,
             });
         }

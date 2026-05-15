@@ -53,6 +53,38 @@ impl TerminalVisualLayoutCache {
     }
 }
 
+/// 终端文本选择（行号从 0 开始，列号从 0 开始）
+#[derive(Clone, Debug, Default)]
+struct Selection {
+    start_line: usize,
+    start_col: usize,
+    end_line: usize,
+    end_col: usize,
+    active: bool,
+}
+
+impl Selection {
+    fn is_empty(&self) -> bool {
+        !self.active || (self.start_line == self.end_line && self.start_col == self.end_col)
+    }
+
+    fn normalize(&self) -> (usize, usize, usize, usize) {
+        if (self.start_line, self.start_col) <= (self.end_line, self.end_col) {
+            (self.start_line, self.start_col, self.end_line, self.end_col)
+        } else {
+            (self.end_line, self.end_col, self.start_line, self.start_col)
+        }
+    }
+
+    fn clear(&mut self) {
+        self.active = false;
+        self.start_line = 0;
+        self.start_col = 0;
+        self.end_line = 0;
+        self.end_col = 0;
+    }
+}
+
 /// 终端视图组件
 pub struct TerminalView {
     /// 会话 ID
@@ -126,6 +158,8 @@ pub struct TerminalView {
     pending_drop_upload_paths: Vec<PathBuf>,
     /// 大文件上传：用户选 ZMODEM 后先发 `rz -y`，握手检测到后再用此路径 `start_rz_upload`。
     zmodem_upload_after_rz_path: Option<PathBuf>,
+    /// 终端文本选择状态
+    selection: Selection,
 }
 
 impl TerminalView {
@@ -283,6 +317,7 @@ impl TerminalView {
             unexpected_disconnect_notified: false,
             pending_drop_upload_paths: Vec::new(),
             zmodem_upload_after_rz_path: None,
+            selection: Selection::default(),
         }
     }
 
@@ -531,7 +566,99 @@ impl TerminalView {
                                 self.pending_focus_terminal = false;
                             }
                             self.terminal_focused = response.has_focus();
+
+                            // === 文本选择处理 ===
+                            let font_id = egui::FontId::monospace(self.font_size);
+                            let (cell_w, cell_h) = ui.ctx().fonts(|fonts| {
+                                let galley = fonts.layout_no_wrap("W".to_string(), font_id.clone(), theme.fg_high_color());
+                                (galley.size().x.max(6.0), galley.size().y.max(12.0))
+                            });
+
+                            // 点击时清除选择或开始选择
+                            if response.clicked() {
+                                if let Some(pos) = response.interact_pointer_pos() {
+                                    let rel_pos = pos - response.rect.min;
+                                    let line = (rel_pos.y / cell_h).floor() as usize;
+                                    let col = (rel_pos.x / cell_w).floor() as usize;
+                                    self.selection.start_line = line;
+                                    self.selection.start_col = col;
+                                    self.selection.end_line = line;
+                                    self.selection.end_col = col;
+                                    self.selection.active = true;
+                                }
+                            }
+
+                            // 拖拽更新选择范围
+                            if response.dragged() {
+                                if let Some(pos) = response.interact_pointer_pos() {
+                                    let rel_pos = pos - response.rect.min;
+                                    let line = (rel_pos.y / cell_h).floor() as usize;
+                                    let col = (rel_pos.x / cell_w).floor() as usize;
+                                    self.selection.end_line = line;
+                                    self.selection.end_col = col;
+                                    self.selection.active = true;
+                                }
+                            }
+
+                            // 松开鼠标时复制选中内容到剪贴板
+                            if response.drag_released() && !self.selection.is_empty() {
+                                let text = self.get_selected_text();
+                                if !text.is_empty() {
+                                    if let Ok(mut clip) = Clipboard::new() {
+                                        let _ = clip.set_text(text);
+                                    }
+                                }
+                            }
+
+                            // 绘制选择高亮
+                            if !self.selection.is_empty() {
+                                let painter = ui.painter().clone().with_layer_id(response.layer_id);
+                                let (start_l, start_c, end_l, end_c) = self.selection.normalize();
+                                let lines = display_owned.lines().collect::<Vec<_>>();
+                                
+                                for line_idx in start_l..=end_l {
+                                    if line_idx >= lines.len() {
+                                        break;
+                                    }
+                                    let line = lines[line_idx];
+                                    let chars: Vec<char> = line.chars().collect();
+                                    let line_len = chars.len();
+                                    
+                                    let c_start = if line_idx == start_l { start_c } else { 0 };
+                                    let c_end = if line_idx == end_l { end_c } else { line_len };
+                                    let c_start = c_start.min(line_len);
+                                    let c_end = c_end.min(line_len);
+                                    
+                                    if c_start < c_end {
+                                        let x_start = response.rect.min.x + c_start as f32 * cell_w;
+                                        let x_end = response.rect.min.x + c_end as f32 * cell_w;
+                                        let y_top = response.rect.min.y + line_idx as f32 * cell_h;
+                                        
+                                        let sel_rect = egui::Rect::from_min_max(
+                                            egui::pos2(x_start, y_top),
+                                            egui::pos2(x_end, y_top + cell_h),
+                                        );
+                                        painter.rect_filled(
+                                            sel_rect,
+                                            0.0,
+                                            egui::Color32::from_rgba_unmultiplied(61, 133, 224, 150),
+                                        );
+                                    }
+                                }
+                            }
                             response.context_menu(|ui| {
+                                if !self.selection.is_empty() {
+                                    if ui.button("复制选中").clicked() {
+                                        let text = self.get_selected_text();
+                                        if !text.is_empty() {
+                                            if let Ok(mut clip) = Clipboard::new() {
+                                                let _ = clip.set_text(text);
+                                            }
+                                        }
+                                        ui.close_menu();
+                                    }
+                                    ui.separator();
+                                }
                                 if ui.button("复制全部").clicked() {
                                     if let Ok(mut clip) = Clipboard::new() {
                                         let _ = clip.set_text(self.terminal.get_formatted_output());
@@ -1400,9 +1527,47 @@ impl TerminalView {
     }
 
     pub fn clear_screen(&mut self) {
-        self.terminal = VtTerminal::new(self.cols as usize, self.rows as usize);
+        // 清空滚动历史，保留当前屏幕内容（类似 tmux clear-history）
+        // 同时把光标移到屏幕顶部，方便继续输入
+        self.terminal.clear_history();
+        self.terminal.feed(b"\x1b[H");  // 光标移到左上角
         self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
         self.visual_layout_cache = None;
+        self.selection.clear();
+    }
+
+    /// 获取选中的文本
+    fn get_selected_text(&self) -> String {
+        if self.selection.is_empty() {
+            return String::new();
+        }
+        let text = self.terminal.get_formatted_output();
+        let lines: Vec<&str> = text.lines().collect();
+        let (start_l, start_c, end_l, end_c) = self.selection.normalize();
+        
+        let mut result = String::new();
+        for line_idx in start_l..=end_l {
+            if line_idx >= lines.len() {
+                break;
+            }
+            let line = lines[line_idx];
+            let chars: Vec<char> = line.chars().collect();
+            let line_len = chars.len();
+            
+            let c_start = if line_idx == start_l { start_c } else { 0 };
+            let c_end = if line_idx == end_l { end_c } else { line_len };
+            let c_start = c_start.min(line_len);
+            let c_end = c_end.min(line_len);
+            
+            if c_start < c_end {
+                let selected: String = chars[c_start..c_end].iter().collect();
+                result.push_str(&selected);
+            }
+            if line_idx < end_l {
+                result.push('\n');
+            }
+        }
+        result
     }
 
     pub fn send_ctrl_c(&self) -> Result<(), String> {

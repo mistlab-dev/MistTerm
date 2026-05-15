@@ -550,13 +550,45 @@ impl SftpPanel {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                // === 拖拽检测：检测文件拖入 SFTP 面板（上传） ===
+                let has_dropped = !ui.ctx().input(|i| i.raw.dropped_files.is_empty());
+                let is_hovering = ui.ctx().input(|i| i.pointer.hover_pos().map_or(false, |p| ui.clip_rect().contains(p)));
+                
+                if has_dropped && is_hovering {
+                    let files: Vec<PathBuf> = ui.ctx().input(|i| {
+                        i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect()
+                    });
+                    if !files.is_empty() {
+                        // 上传拖入的文件到当前目录
+                        self.spawn_upload_many(sid, mgr.clone(), self.cwd.clone(), files, ctx);
+                    }
+                }
+
+                // 拖拽提示
+                if ui.ctx().input(|i| i.raw.dropped_files.is_empty() && !i.raw.hovered_files.is_empty()) && is_hovering {
+                    ui.painter().rect_filled(
+                        ui.clip_rect(),
+                        0.0,
+                        egui::Color32::from_rgba_unmultiplied(61, 133, 224, 30),
+                    );
+                    let center = ui.clip_rect().center();
+                    ui.painter().text(
+                        center,
+                        egui::Align2::CENTER_CENTER,
+                        "📂 释放以上传文件",
+                        egui::FontId::proportional(14.0),
+                        theme.fg_high_color(),
+                    );
+                }
+
                 ui.label(
-                    egui::RichText::new(format!("{} 项（双击目录进入）", self.entries.len()))
+                    egui::RichText::new(format!("{} 项（拖入文件上传，拖出文件下载）", self.entries.len()))
                         .small()
                         .color(theme.fg_low_color()),
                 );
 
                 let mut enter_dir: Option<PathBuf> = None;
+                let mut download_path: Option<(PathBuf, String)> = None;
 
                 for e in self.entries.iter() {
                     let is_sel = self.selected.as_ref() == Some(&e.path);
@@ -576,10 +608,36 @@ impl SftpPanel {
                     if response.double_clicked() && e.is_dir {
                         enter_dir = Some(e.path.clone());
                     }
+
+                    // === 拖拽文件下载 ===
+                    if !e.is_dir && response.dragged() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                        egui::popup::show_tooltip(ui.ctx(), ui.id().with("drag_tip"), |ui| {
+                            ui.label(format!("拖出后选择位置下载: {}", e.name));
+                        });
+                    }
+                    if !e.is_dir && response.drag_released() {
+                        // 拖拽释放时弹出保存对话框
+                        let file_name = e.path.file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("download")
+                            .to_string();
+                        download_path = Some((e.path.clone(), file_name));
+                    }
                 }
 
                 if let Some(d) = enter_dir {
                     self.spawn_list(sid, mgr.clone(), d, ctx);
+                }
+
+                // 处理下载（在循环外，避免 borrow checker 问题）
+                if let Some((remote_path, file_name)) = download_path {
+                    if let Some(save) = FileDialog::new()
+                        .set_file_name(&file_name)
+                        .save_file()
+                    {
+                        self.spawn_download(sid, mgr.clone(), remote_path, save, ctx);
+                    }
                 }
             });
 

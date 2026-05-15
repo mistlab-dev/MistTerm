@@ -27,10 +27,10 @@ struct TestConfig {
 impl TestConfig {
     fn from_sessions_json() -> Self {
         let config = Self {
-            host: "124.220.224.223".to_string(),
+            host: "localhost".to_string(),
             _port: 22,
-            username: "ubuntu".to_string(),
-            _password: "".to_string(),
+            username: "mistterm_test".to_string(),
+            _password: "test123456".to_string(),
             _test_dir: "/tmp/zmodem_test".to_string(),
         };
         
@@ -237,18 +237,45 @@ fn test_create_files() {
     let _ = fs::remove_dir_all(&test_dir);
 }
 
-/// 测试 SSH 连接（跳过，需要真实服务器）
+/// 测试 SSH 连接
 #[test]
-#[ignore]
 fn test_ssh_connect() {
-    let config = TestConfig::from_sessions_json();
+    // 强制使用本地测试服务器
+    let config = TestConfig {
+        host: "localhost".to_string(),
+        _port: 22,
+        username: "mistterm_test".to_string(),
+        _password: "test123456".to_string(),
+        _test_dir: "/tmp/zmodem_test".to_string(),
+    };
     
     println!("📡 测试 SSH 连接:");
     println!("   主机：{}", config.host);
+    println!("   端口：{}", config._port);
     println!("   用户：{}", config.username);
     
-    // 这里需要 ssh2 库，跳过实际连接
-    println!("⚠️  跳过实际连接测试（需要真实服务器）");
+    use std::net::TcpStream;
+    use ssh2::Session;
+    
+    // 连接 TCP
+    let tcp = TcpStream::connect((config.host.as_str(), config._port))
+        .expect("TCP 连接失败");
+    println!("✅ TCP 连接成功");
+    
+    // 创建 SSH 会话
+    let mut sess = Session::new().expect("创建 SSH 会话失败");
+    sess.set_tcp_stream(tcp);
+    sess.handshake().expect("SSH 握手失败");
+    println!("✅ SSH 握手成功");
+    println!("   服务器版本：{}", sess.banner().unwrap_or(""));
+    
+    // 密码认证
+    sess.userauth_password(&config.username, &config._password)
+        .expect("密码认证失败");
+    println!("✅ 密码认证成功");
+    
+    assert!(sess.authenticated());
+    println!("✅ SSH 连接测试通过！");
 }
 
 /// 测试 ZMODEM 接收（跳过，需要真实服务器和完整实现）

@@ -319,7 +319,7 @@ mod tests {
 
     /// 创建测试用的 SFTP 客户端
     fn create_test_sftp_client() -> SftpClient {
-        // 连接到 localhost:22
+        // 连接到 localhost:22，使用本地测试账号
         let tcp = TcpStream::connect("localhost:22")
             .expect("Failed to connect to localhost:22");
         
@@ -329,8 +329,8 @@ mod tests {
         session.handshake()
             .expect("SSH handshake failed");
         
-        // 使用 root 用户认证（测试环境）
-        session.userauth_password("root", "")
+        // 使用本地测试账号
+        session.userauth_password("mistterm_test", "test123456")
             .expect("SSH authentication failed");
         
         SftpClient::new(&session)
@@ -420,7 +420,7 @@ mod tests {
         let test_dir = Path::new("/tmp/mistterm_test");
         
         // 创建测试目录
-        client.mkdir(test_dir).ok();
+        let _ = client.mkdir(test_dir);  // 忽略已存在错误
         
         // 创建本地测试文件
         let local_file = std::env::temp_dir().join("mistterm_test_upload.txt");
