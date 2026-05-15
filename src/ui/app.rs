@@ -292,9 +292,9 @@ impl MistTermApp {
         self.theme_manager.apply_theme(ctx);
     }
 
-    // ── 通用 UI 辅助函数（统一字体大小和间距） ──
+    // ── 通用 UI 辅助函数（统一字体大小和间距，按设计规范固定值） ──
 
-    /// 表单字段标签：统一使用 11px 字体 + 加粗
+    /// 表单字段标签：统一使用 11px 字体 + 加粗（设计规范 §0.2: font_size_panel_title）
     fn ui_field_label(ui: &mut egui::Ui, text: &str, label_color: egui::Color32) {
         ui.label(
             egui::RichText::new(text)
@@ -304,7 +304,7 @@ impl MistTermApp {
         );
     }
 
-    /// 输入框统一边距：左右10px，上下7px，圆角4px
+    /// 输入框统一边距：左右10px，上下7px，圆角4px（设计规范 §7/§8）
     fn ui_input_frame(
         ui: &mut egui::Ui,
         input_fill: egui::Color32,
@@ -740,6 +740,7 @@ impl MistTermApp {
     }
 
     fn modal_content_frame() -> egui::Frame {
+        // 设计规范 §8: terminal_pad_x = 16px
         egui::Frame::none().inner_margin(egui::Margin::symmetric(16.0, 14.0))
     }
 
@@ -769,7 +770,7 @@ impl MistTermApp {
                 }
             });
         });
-        ui.add_space(8.0);
+        ui.add_space(8.0);  // 设计规范 §8: spacing_md
         ui.separator();
         ui.add_space(12.0);
     }
@@ -1097,10 +1098,10 @@ impl MistTermApp {
                 egui::Frame::none()
                     .fill(theme.bg_window_color())
                     .rounding(0.0)
-                    .inner_margin(egui::Margin::same(8.0)),
+                    .inner_margin(egui::Margin::same(theme.spacing_panel_content_x())),
             )
             .show(ctx, |ui| {
-                // 与下方 `.inner_margin(egui::Margin::same(8.0))` 左侧一致
+                // 与下方 `.inner_margin(egui::Margin::same(theme.spacing_panel_content_x()))` 左侧一致
                 layout_util::record_right_dock_outer_left(ui, 8.0, &mut self.right_dock_outer_left_x);
 
                 // 某些帧上 `available_width` 会为 ∞，与 max 组合仍为 ∞，会把整个侧栏撑满屏
@@ -1115,12 +1116,12 @@ impl MistTermApp {
                 let panel_w = aw.clamp(frag_min, frag_max);
                 // SPEC §3.2 / §5：面板标题区 padding 9px 10px
                 egui::Frame::none()
-                    .inner_margin(egui::Margin::symmetric(10.0, 9.0))
+                    .inner_margin(egui::Margin::symmetric(theme.spacing_panel_title_pad_x(), theme.spacing_panel_title_pad_y()))
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new("命令片段")
-                                    .size(10.0)
+                                    .size(theme.font_size_small())
                                     .strong()
                                     .color(title_style),
                             );
@@ -1131,7 +1132,7 @@ impl MistTermApp {
                                         .add(
                                             egui::Button::new(
                                                 egui::RichText::new("−")
-                                                    .size(14.0)
+                                                    .size(theme.font_size_large())
                                                     .color(title_style),
                                             )
                                             .fill(egui::Color32::TRANSPARENT)
@@ -1146,10 +1147,10 @@ impl MistTermApp {
                                     if ui
                                         .add(
                                             egui::Button::new(
-                                                egui::RichText::new("➕ 新建…").size(11.0),
+                                                egui::RichText::new("➕ 新建…").size(theme.font_size_panel_title()),
                                             )
                                             .min_size(egui::vec2(0.0, hdr_btn_h))
-                                            .rounding(4.0),
+                                            .rounding(theme.radius_list_item()),
                                         )
                                         .on_hover_text(
                                             "打开片段库：自建命令、`<变量>`、会话占位符（host/user/port）等",
@@ -1166,9 +1167,9 @@ impl MistTermApp {
                                     };
                                     if ui
                                         .add(
-                                            egui::Button::new(egui::RichText::new(sort_label).size(11.0))
+                                            egui::Button::new(egui::RichText::new(sort_label).size(theme.font_size_tool_btn()))
                                                 .min_size(egui::vec2(0.0, hdr_btn_h))
-                                                .rounding(4.0),
+                                                .rounding(theme.radius_list_item()),
                                         )
                                         .clicked()
                                     {
@@ -1188,14 +1189,14 @@ impl MistTermApp {
                 ui.separator();
 
                 // SPEC §3.3：搜索框区域 padding 上 4、左右沿用面板 8、下 6
-                ui.add_space(4.0);
+                ui.add_space(theme.spacing_sm());
                 ui.add(
                     egui::TextEdit::singleline(&mut self.fragment_search_query)
                         .id(Self::id_fragment_panel_search())
                         .hint_text("搜索片段…")
                         .desired_width((panel_w - 14.0).max(72.0)),
                 );
-                ui.add_space(6.0);
+                ui.add_space(theme.spacing_panel_gap());
 
                 // §5.3：常用 │ Docker │ K8s │ 全部（与左侧「全部·在线·离线」同等分样式）
                 ui.horizontal(|ui| {
@@ -1215,11 +1216,11 @@ impl MistTermApp {
                         };
                         let resp = ui.add(
                             egui::Button::new(
-                                egui::RichText::new(label).size(10.0).color(text_color),
+                                egui::RichText::new(label).size(theme.font_size_small()).color(text_color),
                             )
                             .fill(fill)
                             .stroke(egui::Stroke::NONE)
-                            .rounding(3.0)
+                            .rounding(theme.radius_status_btn())
                             .min_size(egui::vec2(item_w, 20.0)),
                         );
                         if resp.clicked() {
@@ -1228,7 +1229,7 @@ impl MistTermApp {
                     }
                 });
 
-                ui.add_space(8.0);
+                ui.add_space(theme.spacing_md());
 
                 let search_lower = self.fragment_search_query.to_lowercase();
                 let search_match = |f: &FragmentStats| {
@@ -1297,7 +1298,7 @@ impl MistTermApp {
                         if work.is_empty() {
                             ui.label(
                                 egui::RichText::new("暂无片段")
-                                    .size(11.0)
+                                    .size(theme.font_size_panel_title())
                                     .color(theme.fg_low_color()),
                             );
                         }
@@ -1316,8 +1317,8 @@ impl MistTermApp {
 
                             // SPEC §5.4：片段卡片 padding 7px × 8px
                             egui::Frame::none()
-                                .inner_margin(egui::Margin::symmetric(8.0, 7.0))
-                                .rounding(4.0)
+                                .inner_margin(egui::Margin::symmetric(theme.spacing_panel_content_x(), theme.spacing_card_y()))
+                                .rounding(theme.radius_list_item())
                                 .show(ui, |ui| {
                                     let full_w = ui.available_width();
                                     let main_w = (full_w - tag_col - mid_gap).max(52.0);
@@ -1329,7 +1330,7 @@ impl MistTermApp {
 
                                             let title_resp = ui.link(
                                                 egui::RichText::new(&frag.title)
-                                                    .size(12.0)
+                                                    .size(theme.font_size_normal())
                                                     .color(theme.fg_medium_color()),
                                             );
                                             if title_resp.clicked() {
@@ -1341,7 +1342,7 @@ impl MistTermApp {
                                             ui.add(
                                                 egui::Label::new(
                                                     egui::RichText::new(cmd_trim)
-                                                        .size(10.0)
+                                                        .size(theme.font_size_small())
                                                         .monospace()
                                                         .color(theme.fg_low_color()),
                                                 )
@@ -1352,7 +1353,7 @@ impl MistTermApp {
                                             ui.add(
                                                 egui::Label::new(
                                                     egui::RichText::new(&stats_line)
-                                                        .size(10.0)
+                                                        .size(theme.font_size_small())
                                                         .color(stats_num),
                                                 )
                                                 .truncate(true),
@@ -1368,7 +1369,7 @@ impl MistTermApp {
                                                     ui.add(
                                                         egui::Label::new(
                                                             egui::RichText::new(&tag_label)
-                                                                .size(9.0)
+                                                                .size(theme.font_size_tag())
                                                                 .color(
                                                                     egui::Color32::from_rgba_unmultiplied(
                                                                         102, 126, 234, 115,
@@ -1537,13 +1538,13 @@ impl MistTermApp {
         let fill = egui::Color32::from_rgba_unmultiplied(r, g, b, 51);
         egui::Frame::none()
             .fill(fill)
-            .rounding(egui::Rounding::same(4.0))
-            .inner_margin(egui::Margin::symmetric(10.0, 3.0))
+            .rounding(egui::Rounding::same(theme.radius_list_item()))
+            .inner_margin(egui::Margin::symmetric(theme.spacing_list_item_x(), 3.0))
             .show(ui, |ui| {
                 ui.label(
                     egui::RichText::new(text)
                         .monospace()
-                        .size(11.0)
+                        .size(theme.font_size_panel_title())
                         .color(theme.fg_high_color()),
                 );
             });
@@ -1593,17 +1594,17 @@ impl MistTermApp {
                             rect.top(),
                             egui::Stroke::new(1.0, theme.border_color()),
                         );
-                        ui.add_space(10.0);
-                        ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+                        ui.add_space(theme.spacing_list_item_x());
+                        ui.spacing_mut().item_spacing = egui::vec2(theme.spacing_md(), 0.0);
                         ui.horizontal(|ui| {
                             let mk = |label: &str, fill: egui::Color32, w: f32| {
                                 egui::Button::new(
                                     egui::RichText::new(label)
-                                        .size(12.0)
+                                        .size(theme.font_size_normal())
                                         .color(theme.fg_high_color()),
                                 )
                                 .fill(fill)
-                                .rounding(3.0)
+                                .rounding(theme.radius_status_btn())
                                 .min_size(egui::vec2(w, h_btn))
                             };
 
@@ -1725,7 +1726,7 @@ impl MistTermApp {
                             rect.top(),
                             egui::Stroke::new(1.0, theme.subtle_line_color()),
                         );
-                        ui.add_space(14.0);
+                        ui.add_space(theme.spacing_status_bar_x());
 
                         let session_count = self.tabs.len();
                         let fragment_count = self.fragment_manager.get_all().len();
@@ -1747,7 +1748,7 @@ impl MistTermApp {
                         }
 
                         ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing = egui::vec2(8.0, 0.0);
+                            ui.spacing_mut().item_spacing = egui::vec2(theme.spacing_md(), 0.0);
                             // §8 档位放最前，避免被长 host 行挤出可视区
                             let lw = Self::layout_window_width(ctx);
                             if let Some(b) = Self::layout_band_from_width(lw) {
@@ -1761,13 +1762,13 @@ impl MistTermApp {
                             if self.sidebar_collapsed {
                                 let restore = egui::Button::new(
                                     egui::RichText::new(format!("▸ 连接 · {}", session_count))
-                                        .size(10.0)
+                                        .size(theme.font_size_small())
                                         .color(egui::Color32::from_rgba_unmultiplied(
                                             102, 126, 234, 64,
                                         )),
                                 )
                                 .fill(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 10))
-                                .rounding(3.0)
+                                .rounding(theme.radius_status_btn())
                                 .min_size(egui::vec2(56.0, 18.0));
                                 if ui.add(restore).clicked() {
                                     self.sidebar_collapsed = false;
@@ -1777,13 +1778,13 @@ impl MistTermApp {
                             if !self.show_fragment_panel {
                                 let restore = egui::Button::new(
                                     egui::RichText::new(format!("▸ 命令片段 · {}", fragment_count))
-                                        .size(10.0)
+                                        .size(theme.font_size_small())
                                         .color(egui::Color32::from_rgba_unmultiplied(
                                             102, 126, 234, 64,
                                         )),
                                 )
                                 .fill(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 10))
-                                .rounding(3.0)
+                                .rounding(theme.radius_status_btn())
                                 .min_size(egui::vec2(56.0, 18.0));
                                 if ui.add(restore).clicked() {
                                     if self.ensure_right_dock_allowed_or_warn(ctx) {
@@ -1795,19 +1796,19 @@ impl MistTermApp {
                                 egui::Label::new(
                                     egui::RichText::new(&server_line)
                                         .monospace()
-                                        .size(11.0)
+                                        .size(theme.font_size_panel_title())
                                         .color(theme.fg_medium_color()),
                                 )
                                 .truncate(true),
                             );
-                            ui.add_space(4.0);
+                            ui.add_space(theme.spacing_sm());
                             Self::status_chip(ui, "UTF-8", &theme);
                             Self::status_chip(ui, &font_px, &theme);
                             Self::status_chip(ui, &duration_chip, &theme);
                             Self::status_chip(ui, &format!("累计{}次", total_runs), &theme);
 
                             if !self.status_message.is_empty() {
-                                ui.add_space(10.0);
+                                ui.add_space(theme.spacing_list_item_x());
                                 let hint_w = (ui.available_width() - 8.0).clamp(160.0, 560.0);
                                 ui.add_sized(
                                     [hint_w, STATUS_H],
@@ -1816,7 +1817,7 @@ impl MistTermApp {
                                             &self.status_message,
                                             140,
                                         ))
-                                        .size(10.0)
+                                        .size(theme.font_size_small())
                                         .color(status_message_text_color(
                                             &self.status_message,
                                             &theme,
@@ -2216,7 +2217,7 @@ impl eframe::App for MistTermApp {
                     // README §2.4 标题栏：13px
                     ui.label(
                         egui::RichText::new(title)
-                            .size(13.0)
+                            .size(theme.font_size_title_bar())
                             .color(theme.fg_low_color()),
                     );
                 });
@@ -2401,11 +2402,11 @@ impl eframe::App for MistTermApp {
                                                 };
                                                 let resp = ui.add(
                                                     egui::Button::new(
-                                                        egui::RichText::new(label).size(10.0).color(text_color),
+                                                        egui::RichText::new(label).size(theme.font_size_small()).color(text_color),
                                                     )
                                                     .fill(fill)
                                                     .stroke(egui::Stroke::NONE)
-                                                    .rounding(3.0)
+                                                    .rounding(theme.radius_status_btn())
                                                     .min_size(egui::vec2(item_w, 20.0)),
                                                 );
                                                 if resp.clicked() {
@@ -2508,7 +2509,7 @@ impl eframe::App for MistTermApp {
                                             ui.horizontal(|ui| {
                                                 let tab_resp = ui.add(
                                                     egui::Button::new(
-                                                        egui::RichText::new(&tab_label).size(11.0).color(
+                                                        egui::RichText::new(&tab_label).size(theme.font_size_tab_label()).color(
                                                             if active {
                                                                 theme.fg_high_color()
                                                             } else {
@@ -2522,7 +2523,7 @@ impl eframe::App for MistTermApp {
                                                         theme.bg_tab_bar_color()
                                                     })
                                                     .stroke(egui::Stroke::new(1.0, theme.border_color()))
-                                                    .rounding(4.0)
+                                                    .rounding(theme.radius_list_item())
                                                     .min_size(egui::vec2(146.0, 28.0)),
                                                 );
                                                 let dot_color = if tab.terminal.is_connected() {
@@ -2568,7 +2569,7 @@ impl eframe::App for MistTermApp {
                                                     .add(
                                                         egui::Button::new(
                                                             egui::RichText::new("×")
-                                                                .size(13.0)
+                                                                .size(theme.font_size_title_bar())
                                                                 .color(theme.fg_low_color()),
                                                         )
                                                         .fill(egui::Color32::TRANSPARENT)
@@ -2585,7 +2586,7 @@ impl eframe::App for MistTermApp {
                                             .add(
                                                 egui::Button::new(
                                                     egui::RichText::new("+")
-                                                        .size(14.0)
+                                                        .size(theme.font_size_large())
                                                         .color(theme.fg_low_color()),
                                                 )
                                                 .fill(egui::Color32::TRANSPARENT)
@@ -2803,39 +2804,39 @@ impl eframe::App for MistTermApp {
                             });
 
                             if required_missing {
-                                ui.add_space(4.0);
+                                ui.add_space(theme.spacing_sm());
                                 ui.label(
                                     egui::RichText::new("请先填写会话名称和主机地址")
-                                        .size(11.0)
+                                        .size(theme.font_size_panel_title())
                                         .color(egui::Color32::from_rgba_unmultiplied(244, 67, 54, 128)),
                                 );
                             }
 
-                            ui.add_space(10.0);
+                            ui.add_space(theme.spacing_list_item_x());
                             ui.horizontal(|ui| {
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     let save_btn = egui::Button::new(
                                         egui::RichText::new("保存并连接")
-                                            .size(12.0)
+                                            .size(theme.font_size_normal())
                                             .color(egui::Color32::from_rgb(102, 126, 234)),
                                     )
                                     .min_size(egui::vec2(104.0, 28.0))
                                     .fill(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 89))
                                     .stroke(egui::Stroke::NONE)
-                                    .rounding(4.0);
+                                    .rounding(theme.radius_list_item());
                                     if ui.add_enabled(!required_missing, save_btn).clicked() {
                                         self.create_and_connect_session();
                                         should_close = true;
                                     }
                                     let cancel_btn = egui::Button::new(
                                         egui::RichText::new("取消")
-                                            .size(12.0)
+                                            .size(theme.font_size_normal())
                                             .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
                                     )
                                     .min_size(egui::vec2(72.0, 28.0))
                                     .fill(egui::Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::NONE)
-                                    .rounding(4.0);
+                                    .rounding(theme.radius_list_item());
                                     if ui.add(cancel_btn).clicked() {
                                         self.reset_new_session_form();
                                         should_close = true;
@@ -2873,25 +2874,25 @@ impl eframe::App for MistTermApp {
                             );
                             ui.label(
                                 egui::RichText::new("一个现代化 SSH 终端工具")
-                                    .size(11.0)
+                                    .size(theme.font_size_panel_title())
                                     .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 102)),
                             );
-                            ui.add_space(8.0);
+                            ui.add_space(theme.spacing_md());
                             egui::Frame::none()
                                 .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 4))
                                 .stroke(egui::Stroke::new(
                                     1.0,
                                     egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10),
                                 ))
-                                .rounding(4.0)
-                                .inner_margin(egui::Margin::symmetric(10.0, 7.0))
+                                .rounding(theme.radius_list_item())
+                                .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
                                 .show(ui, |ui| {
                                     ui.label(
                                         egui::RichText::new("版本: v0.1.0")
-                                            .size(11.0)
+                                            .size(theme.font_size_panel_title())
                                             .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
                                     );
-                                    ui.add_space(6.0);
+                                    ui.add_space(theme.spacing_panel_gap());
                                     egui::ScrollArea::vertical()
                                         .max_height(200.0)
                                         .show(ui, |ui| {
@@ -2902,17 +2903,17 @@ impl eframe::App for MistTermApp {
                                             );
                                         });
                                 });
-                            ui.add_space(10.0);
+                            ui.add_space(theme.spacing_list_item_x());
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let close_btn = egui::Button::new(
                                     egui::RichText::new("关闭")
-                                        .size(12.0)
+                                        .size(theme.font_size_normal())
                                         .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
                                 )
                                 .min_size(egui::vec2(72.0, 28.0))
                                 .fill(egui::Color32::TRANSPARENT)
                                 .stroke(egui::Stroke::NONE)
-                                .rounding(4.0);
+                                .rounding(theme.radius_list_item());
                                 if ui.add(close_btn).clicked() {
                                     should_close = true;
                                 }
@@ -2943,17 +2944,17 @@ impl eframe::App for MistTermApp {
                             egui::RichText::new(
                                 "窗口大小与位置、左侧栏宽度与折叠会在退出时自动保存（§8.1）。",
                             )
-                            .size(10.0)
+                            .size(theme.font_size_small())
                             .color(text_low),
                         );
-                        ui.add_space(8.0);
+                        ui.add_space(theme.spacing_md());
                         ui.label(
                             egui::RichText::new("外观")
-                                .size(11.0)
+                                .size(theme.font_size_panel_title())
                                 .strong()
                                 .color(label_color),
                         );
-                        ui.add_space(6.0);
+                        ui.add_space(theme.spacing_panel_gap());
                         let theme_names: Vec<String> = self
                             .theme_manager
                             .list_themes()
@@ -2972,14 +2973,14 @@ impl eframe::App for MistTermApp {
                                 self.theme_manager.save();
                             }
                         }
-                        ui.add_space(14.0);
+                        ui.add_space(theme.spacing_status_bar_x());
                         ui.label(
                             egui::RichText::new("连接")
-                                .size(11.0)
+                                .size(theme.font_size_panel_title())
                                 .strong()
                                 .color(label_color),
                         );
-                        ui.add_space(6.0);
+                        ui.add_space(theme.spacing_panel_gap());
                         let mut ar = self.auto_reconnect_enabled;
                         if ui
                             .checkbox(&mut ar, "网络断开后自动重连（最多 5 次，指数退避）")
@@ -2990,18 +2991,18 @@ impl eframe::App for MistTermApp {
                         {
                             self.auto_reconnect_enabled = ar;
                         }
-                        ui.add_space(14.0);
+                        ui.add_space(theme.spacing_status_bar_x());
                         ui.label(
                             egui::RichText::new("同步与数据")
-                                .size(11.0)
+                                .size(theme.font_size_panel_title())
                                 .strong()
                                 .color(label_color),
                         );
-                        ui.add_space(6.0);
+                        ui.add_space(theme.spacing_panel_gap());
                         if ui
                             .button(
                                 egui::RichText::new("打开云端同步…")
-                                    .size(12.0)
+                                    .size(theme.font_size_normal())
                                     .color(egui::Color32::from_rgb(102, 126, 234)),
                             )
                             .clicked()
@@ -3018,23 +3019,23 @@ impl eframe::App for MistTermApp {
                                 );
                             }
                         }
-                        ui.add_space(10.0);
+                        ui.add_space(theme.spacing_list_item_x());
                         ui.label(
                             egui::RichText::new("其余项请用顶部菜单：视图、工具、帮助。")
-                                .size(10.0)
+                                .size(theme.font_size_small())
                                 .color(text_low),
                         );
-                        ui.add_space(10.0);
+                        ui.add_space(theme.spacing_list_item_x());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let close_btn = egui::Button::new(
                                 egui::RichText::new("关闭")
-                                    .size(12.0)
+                                    .size(theme.font_size_normal())
                                     .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
                             )
                             .min_size(egui::vec2(72.0, 28.0))
                             .fill(egui::Color32::TRANSPARENT)
                             .stroke(egui::Stroke::NONE)
-                            .rounding(4.0);
+                            .rounding(theme.radius_list_item());
                             if ui.add(close_btn).clicked() {
                                 should_close = true;
                             }
@@ -3079,7 +3080,7 @@ impl eframe::App for MistTermApp {
                                 "「{}」≥ 10MB：SCP 无断点续传；ZMODEM 需远端 lrzsz，并将向 PTY 发送 rz -y。",
                                 path_hint
                             ))
-                            .size(11.0)
+                            .size(theme.font_size_panel_title())
                             .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 179)),
                         );
                         ui.add_space(12.0);
@@ -3091,7 +3092,7 @@ impl eframe::App for MistTermApp {
                                 pick = Some(LargePick::Scp);
                             }
                         });
-                        ui.add_space(8.0);
+                        ui.add_space(theme.spacing_md());
                         if ui.button("取消").clicked() {
                             pick = Some(LargePick::Dismiss);
                         }
@@ -3156,16 +3157,16 @@ impl eframe::App for MistTermApp {
                                 "确认删除「{}」的会话配置？此操作不可恢复。",
                                 del_name
                             ))
-                            .size(12.0)
+                            .size(theme.font_size_normal())
                             .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 179)),
                         );
-                        ui.add_space(16.0);
+                        ui.add_space(theme.spacing_lg());
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if ui
                                 .add(
                                     egui::Button::new(
                                         egui::RichText::new("删除")
-                                            .size(12.0)
+                                            .size(theme.font_size_normal())
                                             .color(egui::Color32::from_rgb(239, 83, 80)),
                                     )
                                     .min_size(egui::vec2(72.0, 28.0)),
@@ -3179,13 +3180,13 @@ impl eframe::App for MistTermApp {
                                 .add(
                                     egui::Button::new(
                                         egui::RichText::new("取消")
-                                            .size(12.0)
+                                            .size(theme.font_size_normal())
                                             .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
                                     )
                                     .min_size(egui::vec2(72.0, 28.0))
                                     .fill(egui::Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::NONE)
-                                    .rounding(4.0),
+                                    .rounding(theme.radius_list_item()),
                                 )
                                 .clicked()
                             {
@@ -3227,16 +3228,16 @@ impl eframe::App for MistTermApp {
                                     "标签「{}」仍连接或握手中，确定关闭？",
                                     tab_title
                                 ))
-                                .size(12.0)
+                                .size(theme.font_size_normal())
                                 .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 179)),
                             );
-                            ui.add_space(16.0);
+                            ui.add_space(theme.spacing_lg());
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if ui
                                     .add(
                                         egui::Button::new(
                                             egui::RichText::new("关闭")
-                                                .size(12.0)
+                                                .size(theme.font_size_normal())
                                                 .color(egui::Color32::from_rgb(102, 126, 234)),
                                         )
                                         .min_size(egui::vec2(72.0, 28.0)),
@@ -3250,13 +3251,13 @@ impl eframe::App for MistTermApp {
                                     .add(
                                         egui::Button::new(
                                             egui::RichText::new("取消")
-                                                .size(12.0)
+                                                .size(theme.font_size_normal())
                                                 .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
                                         )
                                         .min_size(egui::vec2(72.0, 28.0))
                                         .fill(egui::Color32::TRANSPARENT)
                                         .stroke(egui::Stroke::NONE)
-                                        .rounding(4.0),
+                                        .rounding(theme.radius_list_item()),
                                     )
                                     .clicked()
                                 {
@@ -3400,39 +3401,39 @@ impl eframe::App for MistTermApp {
                             });
 
                             if required_missing {
-                                ui.add_space(4.0);
+                                ui.add_space(theme.spacing_sm());
                                 ui.label(
                                     egui::RichText::new("请先填写会话名称和主机地址")
-                                        .size(11.0)
+                                        .size(theme.font_size_panel_title())
                                         .color(egui::Color32::from_rgba_unmultiplied(244, 67, 54, 128)),
                                 );
                             }
 
-                            ui.add_space(10.0);
+                            ui.add_space(theme.spacing_list_item_x());
                             ui.horizontal(|ui| {
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     let save_btn = egui::Button::new(
                                         egui::RichText::new("保存")
-                                            .size(12.0)
+                                            .size(theme.font_size_normal())
                                             .color(egui::Color32::from_rgb(102, 126, 234)),
                                     )
                                     .min_size(egui::vec2(84.0, 28.0))
                                     .fill(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 89))
                                     .stroke(egui::Stroke::NONE)
-                                    .rounding(4.0);
+                                    .rounding(theme.radius_list_item());
                                     if ui.add_enabled(!required_missing, save_btn).clicked() {
                                         self.save_edit_session();
                                         should_close = !self.show_edit_session_dialog;
                                     }
                                     let cancel_btn = egui::Button::new(
                                         egui::RichText::new("取消")
-                                            .size(12.0)
+                                            .size(theme.font_size_normal())
                                             .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
                                     )
                                     .min_size(egui::vec2(72.0, 28.0))
                                     .fill(egui::Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::NONE)
-                                    .rounding(4.0);
+                                    .rounding(theme.radius_list_item());
                                     if ui.add(cancel_btn).clicked() {
                                         should_close = true;
                                     }
@@ -3463,36 +3464,36 @@ impl eframe::App for MistTermApp {
                             Self::modal_header(ui, "命令片段", &mut should_close);
                             ui.label(
                                 egui::RichText::new("提示：点击底部「命令片段」按钮打开侧边栏面板")
-                                    .size(11.0)
+                                    .size(theme.font_size_panel_title())
                                     .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
                             );
-                            ui.add_space(8.0);
+                            ui.add_space(theme.spacing_md());
                             egui::Frame::none()
                                 .fill(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 4))
                                 .stroke(egui::Stroke::new(
                                     1.0,
                                     egui::Color32::from_rgba_unmultiplied(255, 255, 255, 10),
                                 ))
-                                .rounding(4.0)
-                                .inner_margin(egui::Margin::symmetric(10.0, 7.0))
+                                .rounding(theme.radius_list_item())
+                                .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
                                 .show(ui, |ui| {
                                     ui.label(
                                         egui::RichText::new("📋 命令片段侧边栏提供更丰富的命令分类和快捷操作")
-                                            .size(10.0)
+                                            .size(theme.font_size_small())
                                             .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 90)),
                                     );
                                 });
-                            ui.add_space(10.0);
+                            ui.add_space(theme.spacing_list_item_x());
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 let close_btn = egui::Button::new(
                                     egui::RichText::new("关闭")
-                                        .size(12.0)
+                                        .size(theme.font_size_normal())
                                         .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 77)),
                                 )
                                 .min_size(egui::vec2(72.0, 28.0))
                                 .fill(egui::Color32::TRANSPARENT)
                                 .stroke(egui::Stroke::NONE)
-                                .rounding(4.0);
+                                .rounding(theme.radius_list_item());
                                 if ui.add(close_btn).clicked() {
                                     should_close = true;
                                 }
@@ -3524,7 +3525,7 @@ impl eframe::App for MistTermApp {
                                     .size(Self::FRAG_VARS_CAPTION_PX)
                                     .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, 128)),
                             );
-                            ui.add_space(6.0);
+                            ui.add_space(theme.spacing_panel_gap());
                             for (key, value) in &mut self.pending_fragment_vars {
                                 ui.label(
                                     egui::RichText::new(format!("<{}>", key))
@@ -3538,8 +3539,8 @@ impl eframe::App for MistTermApp {
                                         1.0,
                                         egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8),
                                     ))
-                                    .rounding(4.0)
-                                    .inner_margin(egui::Margin::symmetric(10.0, 7.0))
+                                    .rounding(theme.radius_list_item())
+                                    .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
                                     .show(ui, |ui| {
                                         ui.add(
                                             egui::TextEdit::singleline(value)
@@ -3553,7 +3554,7 @@ impl eframe::App for MistTermApp {
                                                 )),
                                         );
                                     });
-                                ui.add_space(6.0);
+                                ui.add_space(theme.spacing_panel_gap());
                             }
                             ui.separator();
                             if ui
@@ -3583,7 +3584,7 @@ impl eframe::App for MistTermApp {
                                     .desired_rows(4)
                                     .hint_text("支持 {{ md5(a) }} 等表达式"),
                             );
-                            ui.add_space(4.0);
+                            ui.add_space(theme.spacing_sm());
                             ui.horizontal(|ui| {
                                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                     let insert_label = match self.fragment_vars_completion {
@@ -3598,7 +3599,7 @@ impl eframe::App for MistTermApp {
                                     .min_size(egui::vec2(92.0, 28.0))
                                     .fill(egui::Color32::from_rgba_unmultiplied(102, 126, 234, 89))
                                     .stroke(egui::Stroke::NONE)
-                                    .rounding(4.0);
+                                    .rounding(theme.radius_list_item());
                                     if ui.add(insert_btn).clicked() {
                                         match self.finalize_pending_fragment_send() {
                                             Ok(filled) => {
@@ -3682,7 +3683,7 @@ impl eframe::App for MistTermApp {
                                     .min_size(egui::vec2(72.0, 28.0))
                                     .fill(egui::Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::NONE)
-                                    .rounding(4.0);
+                                    .rounding(theme.radius_list_item());
                                     if ui.add(cancel_btn).clicked() {
                                         should_close = true;
                                     }
@@ -3718,7 +3719,7 @@ impl eframe::App for MistTermApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             RichText::new("查找")
-                                .size(12.0)
+                                .size(theme.font_size_normal())
                                 .color(theme.fg_medium_color()),
                         );
                         let resp = ui.add(
@@ -3775,7 +3776,7 @@ impl eframe::App for MistTermApp {
                             col
                         )
                     };
-                    ui.label(RichText::new(detail).size(11.0).color(theme.fg_low_color()));
+                    ui.label(RichText::new(detail).size(theme.font_size_panel_title()).color(theme.fg_low_color()));
                 });
             if close_search {
                 self.show_terminal_search = false;
@@ -3799,7 +3800,7 @@ impl eframe::App for MistTermApp {
                         ui.text_edit_singleline(&mut self.quick_selector.search_query);
                     });
                     
-                    ui.add_space(8.0);
+                    ui.add_space(theme.spacing_md());
                     
                     // 片段列表
                     egui::ScrollArea::vertical()
@@ -3827,7 +3828,7 @@ impl eframe::App for MistTermApp {
                             }
                         });
                     
-                    ui.add_space(8.0);
+                    ui.add_space(theme.spacing_md());
                     ui.horizontal(|ui| {
                         if ui.button("❌ 取消 (ESC)").clicked() {
                             self.quick_selector.open = false;
@@ -3861,7 +3862,7 @@ impl eframe::App for MistTermApp {
                             .strong()
                             .color(theme.fg_high_color()),
                     );
-                    ui.add_space(4.0);
+                    ui.add_space(theme.spacing_sm());
                     egui::ScrollArea::vertical()
                         .max_height(scroll_h)
                         .show(ui, |ui| {
@@ -3889,8 +3890,8 @@ impl eframe::App for MistTermApp {
                                                 1.0,
                                                 egui::Color32::from_rgba_unmultiplied(255, 255, 255, 8),
                                             ))
-                                            .rounding(4.0)
-                                            .inner_margin(egui::Margin::symmetric(10.0, 7.0))
+                                            .rounding(theme.radius_list_item())
+                                            .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
                                             .show(ui, |ui| {
                                                 ui.add(
                                                     egui::TextEdit::singleline(value)
@@ -3900,7 +3901,7 @@ impl eframe::App for MistTermApp {
                                                         .text_color(theme.fg_high_color()),
                                                 );
                                             });
-                                        ui.add_space(8.0);
+                                        ui.add_space(theme.spacing_md());
                                     }
                                     ui.separator();
                                     if ui
@@ -3938,7 +3939,7 @@ impl eframe::App for MistTermApp {
                             }
                         });
                     if let Some(ref err) = self.variable_dialog.last_finalize_error {
-                        ui.add_space(6.0);
+                        ui.add_space(theme.spacing_panel_gap());
                         ui.label(
                             egui::RichText::new(err)
                                 .size(Self::FRAG_VARS_CAPTION_PX)
