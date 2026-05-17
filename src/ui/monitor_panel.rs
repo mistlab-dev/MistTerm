@@ -33,6 +33,8 @@ pub struct MonitorPanel {
     refresh_label: String,
     /// 经 shell 泵串行执行的 `exec` 结果通道(未完成时 UI 仍可交互)
     pending_raw: Option<Receiver<Result<String, String>>>,
+    /// 本帧 `SidePanel` 槽位矩形（`ui.max_rect()`，与布局占位一致）
+    last_panel_slot_rect: Option<egui::Rect>,
 }
 
 impl Default for MonitorPanel {
@@ -54,6 +56,7 @@ impl MonitorPanel {
             last_error: None,
             refresh_label: "📊 监控".to_string(),
             pending_raw: None,
+            last_panel_slot_rect: None,
         }
     }
 
@@ -155,6 +158,20 @@ impl MonitorPanel {
         self.monitor.is_some()
     }
 
+    /// 底栏摘要：CPU / 内存（无有效采集数据时返回 None）
+    pub fn status_bar_metrics_line(&self) -> Option<String> {
+        let monitor = self.monitor.as_ref()?;
+        let stats = monitor.last_stats();
+        if stats.memory_total == 0 && stats.disk_total == 0 && stats.uptime_secs == 0 {
+            return None;
+        }
+        Some(format!(
+            "CPU {:.0}% · {}",
+            stats.cpu_percent,
+            stats.format_memory()
+        ))
+    }
+
     /// 判断当前快照是否已具备有效指标（避免全零占位触发误告警）。
     fn stats_look_valid(stats: &ServerStats) -> bool {
         stats.memory_total > 0 || stats.disk_total > 0 || stats.uptime_secs > 0
@@ -218,7 +235,7 @@ impl MonitorPanel {
         }
     }
 
-    /// 右侧嵌入式侧栏(与会话列表、SFTP 同一类布局;`exec` 仍经 shell 泵串行)。
+    /// 注册监控栏槽位（须在 Central 之前）。正文见 [`show_foreground_panel`]。
     pub fn show_side_panel(
         &mut self,
         ctx: &egui::Context,
@@ -227,66 +244,133 @@ impl MonitorPanel {
         right_dock_outer_left: &mut Option<f32>,
     ) {
         if !*open {
+            self.last_panel_slot_rect = None;
             return;
         }
 
         let (m_def, m_min, m_max) =
             crate::ui::layout_util::side_panel_widths(ctx, crate::ui::layout_util::SidePanelProfile::Monitor);
-        let panel = egui::SidePanel::right("monitor_panel")
+        let panel = egui::SidePanel::right(layout_util::MONITOR_PANEL_ID)
             .default_width(m_def)
             .min_width(m_min)
             .max_width(m_max)
             .resizable(true)
-            .frame(
-                crate::ui::chrome::region_panel_frame(theme)
-                    .fill(theme.bg_window_color())
-                    .stroke(egui::Stroke::new(1.0, theme.border_color())),
-            )
+            .frame(egui::Frame::none())
             .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    ui.heading(
-                        egui::RichText::new("📊 系统监控")
-                            .size(theme.font_size_xl())
-                            .color(theme.fg_high_color()),
-                    );
-                    if let Some(ref mon) = self.monitor {
-                        let alerts = Self::collect_alerts_with(
-                            self.alert_cpu_pct,
-                            self.alert_mem_pct,
-                            self.alert_disk_pct,
-                            mon.last_stats(),
-                        );
-                        if !alerts.is_empty() {
-                            ui.label(
-                                egui::RichText::new(format!("⚠ {} 项告警", alerts.len()))
-                                    .size(theme.font_size_medium())
-                                    .color(theme.red_color()),
-                            );
-                        }
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::ui::chrome::close_icon_button(ui, theme)
-                            .on_hover_text("隐藏侧栏 · 也可用底部「📊 监控」切换")
-                            .clicked()
-                        {
-                            *open = false;
-                        }
-                    });
-                });
-                ui.separator();
-
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        self.show_content(ui, theme);
-                    });
+                self.last_panel_slot_rect = Some(ui.max_rect());
+                let w = layout_util::dock_panel_content_width(ui, m_min, m_max);
+                let h = ui.available_height().max(1.0);
+                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
             });
-        crate::ui::layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
+        if let Some(slot) = self.last_panel_slot_rect {
+            layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
+        } else {
+            layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
+        }
+        let _ = theme;
     }
 
-    fn show_content(&mut self, ui: &mut egui::Ui, theme: &Theme) {
+    /// Central 之后绘制监控侧栏（避免被 CentralPanel 盖住）。
+    pub fn show_foreground_panel(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        open: &mut bool,
+    ) {
+        if !*open {
+            return;
+        }
+        let screen = ctx.screen_rect();
+        let Some(slot) = layout_util::right_dock_foreground_slot(
+            self.last_panel_slot_rect,
+            ctx,
+            layout_util::MONITOR_PANEL_ID,
+            layout_util::SidePanelProfile::Monitor,
+            None,
+        ) else {
+            return;
+        };
+        let paint = layout_util::inset_slot_for_foreground_paint(slot, screen);
+        let (_, m_min, m_max) =
+            layout_util::side_panel_widths(ctx, layout_util::SidePanelProfile::Monitor);
+        let inner = crate::ui::chrome::right_dock_slot_content_rect(paint, theme);
+        let panel_w = layout_util::clamp_f32(inner.width(), m_min, m_max);
+        let border = theme.border_color();
+        egui::Area::new(egui::Id::new("mistterm_monitor_fg"))
+            .order(egui::Order::Middle)
+            .movable(false)
+            .constrain(true)
+            .constrain_to(paint)
+            .fixed_pos(paint.min)
+            .show(ctx, |ui| {
+                ui.set_clip_rect(paint);
+                ui.set_min_size(paint.size());
+                ui.set_max_size(paint.size());
+                crate::ui::chrome::paint_right_dock_slot_shell(ui, paint, theme);
+                ui.allocate_ui_at_rect(inner, |ui| {
+                    ui.set_clip_rect(inner);
+                    ui.set_min_width(panel_w);
+                    ui.set_max_width(panel_w);
+                    ui.horizontal(|ui| {
+                        ui.set_min_width(panel_w);
+                        ui.set_max_width(panel_w);
+                        ui.heading(
+                            egui::RichText::new("📊 系统监控")
+                                .size(theme.font_size_xl())
+                                .color(theme.fg_high_color()),
+                        );
+                        if let Some(ref mon) = self.monitor {
+                            let alerts = Self::collect_alerts_with(
+                                self.alert_cpu_pct,
+                                self.alert_mem_pct,
+                                self.alert_disk_pct,
+                                mon.last_stats(),
+                            );
+                            if !alerts.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(format!("⚠ {} 项告警", alerts.len()))
+                                        .size(theme.font_size_medium())
+                                        .color(theme.red_color()),
+                                );
+                            }
+                        }
+                        let btn_w = ui.available_width().max(0.0);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(btn_w, 22.0),
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if crate::ui::chrome::close_icon_button(ui, theme)
+                                    .on_hover_text("隐藏侧栏 · 也可用底部「📊 监控」切换")
+                                    .clicked()
+                                {
+                                    *open = false;
+                                }
+                            },
+                        );
+                    });
+                    ui.separator();
+
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.set_min_width(panel_w);
+                            ui.set_max_width(panel_w);
+                            self.show_content(ui, theme, panel_w);
+                        });
+                });
+                ui.painter().vline(
+                    paint.max.x - 0.5,
+                    paint.y_range(),
+                    egui::Stroke::new(1.0, border),
+                );
+            });
+    }
+
+    fn show_content(&mut self, ui: &mut egui::Ui, theme: &Theme, panel_w: f32) {
+        ui.set_max_width(panel_w);
         // 控制栏
         ui.horizontal(|ui| {
+            ui.set_max_width(panel_w);
             ui.checkbox(&mut self.auto_refresh, "自动刷新");
             if self.auto_refresh {
                 ui.add(
@@ -369,17 +453,18 @@ impl MonitorPanel {
             }
 
             // 服务器运行时间
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("⏱ 运行时间").size(theme.font_size_medium()).color(theme.fg_medium_color()));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(
-                        egui::RichText::new(stats.format_uptime())
-                            .monospace()
-                            .size(theme.font_size_medium())
-                            .color(theme.fg_high_color()),
-                    );
-                });
-            });
+            Self::label_value_row(
+                ui,
+                theme,
+                panel_w,
+                egui::RichText::new("⏱ 运行时间")
+                    .size(theme.font_size_medium())
+                    .color(theme.fg_medium_color()),
+                egui::RichText::new(stats.format_uptime())
+                    .monospace()
+                    .size(theme.font_size_medium())
+                    .color(theme.fg_high_color()),
+            );
             ui.add_space(theme.spacing_sm());
 
             // CPU 使用率
@@ -457,7 +542,7 @@ impl MonitorPanel {
             ui.label(egui::RichText::new("📈 历史趋势").size(theme.font_size_medium()).color(theme.fg_medium_color()));
             ui.add_space(theme.spacing_sm());
 
-            self.show_history_plots(ui, theme, history);
+            self.show_history_plots(ui, theme, history, panel_w);
 
         } else {
             // 未初始化提示
@@ -486,6 +571,29 @@ impl MonitorPanel {
         }
     }
 
+    /// 行内左标签 + 右对齐值（限制在 panel_w 内，避免 RTL 按窗宽排版）。
+    fn label_value_row(
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        panel_w: f32,
+        label: egui::RichText,
+        value: egui::RichText,
+    ) {
+        let _ = theme;
+        ui.horizontal(|ui| {
+            ui.set_max_width(panel_w);
+            ui.label(label);
+            let val_w = ui.available_width().max(0.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(val_w, 18.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    ui.label(value);
+                },
+            );
+        });
+    }
+
     /// 显示指标进度条
     fn show_metric_bar(
         &self,
@@ -496,25 +604,22 @@ impl MonitorPanel {
         value_text: String,
         bar_color: egui::Color32,
     ) {
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(label)
-                    .size(theme.font_size_medium())
-                    .color(theme.fg_medium_color()),
-            );
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    egui::RichText::new(&value_text)
-                        .monospace()
-                        .size(theme.font_size_normal())
-                        .color(theme.fg_high_color()),
-                );
-            });
-        });
+        let row_w = ui.available_width().max(120.0);
+        Self::label_value_row(
+            ui,
+            theme,
+            row_w,
+            egui::RichText::new(label)
+                .size(theme.font_size_medium())
+                .color(theme.fg_medium_color()),
+            egui::RichText::new(&value_text)
+                .monospace()
+                .size(theme.font_size_normal())
+                .color(theme.fg_high_color()),
+        );
 
         let bar_height = theme.progress_bar_height();
-        let available_width =
-            layout_util::finite_content_width_inset(ui, theme.spacing_sm(), 120.0, 2000.0);
+        let available_width = row_w;
         let bg_color = theme.border_color();
 
         ui.allocate_ui_with_layout(
@@ -574,9 +679,21 @@ impl MonitorPanel {
     }
 
     /// 历史趋势:`egui_plot` 展示 CPU/内存/磁盘(%)、负载与网络速率(B/s),横轴为相对时间并联动。
-    fn show_history_plots(&self, ui: &mut egui::Ui, theme: &Theme, history: &[ServerStats]) {
+    fn show_history_plots(
+        &self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        history: &[ServerStats],
+        panel_w: f32,
+    ) {
         const CHART_HEIGHT: f32 = 110.0;
-        let width = layout_util::finite_content_width_inset(ui, 8.0, 200.0, 2000.0);
+        let width = ui.available_width().max(160.0).min(panel_w);
+        let plot_margin = egui::vec2(0.10, 0.12);
+        let legend = |corner: Corner| {
+            Legend::default()
+                .position(corner)
+                .background_alpha(0.55)
+        };
         let link_x_id = ui.id().with("monitor_hist_time_axis");
         let tip_id = ui.id().with("monitor_history_tooltip");
 
@@ -655,14 +772,10 @@ impl MonitorPanel {
             .include_x(t_end.max(1.0))
             .include_y(0.0)
             .include_y(100.0)
-            .set_margin_fraction(egui::vec2(0.02, 0.05))
+            .set_margin_fraction(plot_margin)
             .y_axis_label("使用率 %")
             .x_axis_label("时间 (s)")
-            .legend(
-                Legend::default()
-                    .position(Corner::RightTop)
-                    .background_alpha(0.55),
-            )
+            .legend(legend(Corner::LeftTop))
             .show_axes([true, true])
             .show_grid([true, true])
             .label_formatter(|name, value| {
@@ -766,14 +879,10 @@ impl MonitorPanel {
             .include_x(t_end.max(1.0))
             .include_y(0.0)
             .auto_bounds_y()
-            .set_margin_fraction(egui::vec2(0.02, 0.05))
+            .set_margin_fraction(plot_margin)
             .y_axis_label("负载")
             .x_axis_label("时间 (s)")
-            .legend(
-                Legend::default()
-                    .position(Corner::RightTop)
-                    .background_alpha(0.55),
-            )
+            .legend(legend(Corner::LeftTop))
             .show_axes([true, true])
             .show_grid([true, true])
             .label_formatter(|name, value| {
@@ -852,15 +961,11 @@ impl MonitorPanel {
                 .include_x(t_end.max(1.0))
                 .include_y(0.0)
                 .auto_bounds_y()
-                .set_margin_fraction(egui::vec2(0.02, 0.05))
+                .set_margin_fraction(plot_margin)
                 .y_axis_label("B/s")
                 .x_axis_label("时间 (s)")
                 .y_axis_formatter(|v, _max_chars, _range| format_bytes_per_sec(v))
-                .legend(
-                    Legend::default()
-                        .position(Corner::RightTop)
-                        .background_alpha(0.55),
-                )
+                .legend(legend(Corner::LeftTop))
                 .show_axes([true, true])
                 .show_grid([true, true])
                 .label_formatter(|name, value| {

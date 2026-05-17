@@ -6,7 +6,8 @@ use crate::terminal::style::{
 };
 use egui::{Color32, FontId, TextFormat, text::LayoutJob};
 use alacritty_terminal::event::VoidListener;
-use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::{Dimensions, Scroll};
+use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::{point_to_viewport, Config, Term};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{CursorShape, Processor};
@@ -35,6 +36,13 @@ impl Dimensions for TermSize {
     fn columns(&self) -> usize {
         self.columns
     }
+}
+
+/// 缓冲区搜索命中（含 scrollback）；`column` 为 **0-based** 网格列。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SearchHit {
+    pub line: Line,
+    pub column: usize,
 }
 
 /// 终端模拟器（由 alacritty_terminal 驱动）
@@ -97,6 +105,104 @@ impl Terminal {
         self.term.grid_mut().clear_history();
     }
 
+    /// 滚动视口查看 scrollback（`Scroll::Delta` 为正时向上翻历史）。
+    pub fn scroll_display(&mut self, scroll: Scroll) {
+        let before = self.term.grid().display_offset();
+        self.term.scroll_display(scroll);
+        if self.term.grid().display_offset() != before {
+            self.content_epoch = self.content_epoch.wrapping_add(1);
+        }
+    }
+
+    /// 是否在最新输出（未向上滚动）。
+    pub fn is_scrolled_to_bottom(&self) -> bool {
+        self.term.grid().display_offset() == 0
+    }
+
+    #[inline]
+    pub fn display_offset(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
+    fn row_chars(&self, line: Line) -> Vec<char> {
+        let grid = self.term.grid();
+        let cols = grid.columns();
+        (0..cols)
+            .map(|c| grid[line][Column(c)].c)
+            .collect()
+    }
+
+    fn chars_match(a: &[char], b: &[char], ignore_case: bool) -> bool {
+        if a.len() != b.len() {
+            return false;
+        }
+        if ignore_case {
+            a.iter()
+                .zip(b.iter())
+                .all(|(x, y)| x.to_ascii_lowercase() == y.to_ascii_lowercase())
+        } else {
+            a == b
+        }
+    }
+
+    /// 在完整网格（含 scrollback）中搜索子串。
+    pub fn search_all(&self, query: &str, ignore_case: bool) -> Vec<SearchHit> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let q: Vec<char> = if ignore_case {
+            query.to_ascii_lowercase().chars().collect()
+        } else {
+            query.chars().collect()
+        };
+        let q_len = q.len();
+        if q_len == 0 {
+            return Vec::new();
+        }
+        let grid = self.term.grid();
+        let cols = grid.columns();
+        if cols < q_len {
+            return Vec::new();
+        }
+        let mut hits = Vec::new();
+        let top = grid.topmost_line().0;
+        let bottom = grid.bottommost_line().0;
+        for line_idx in top..=bottom {
+            let line = Line(line_idx);
+            let row = self.row_chars(line);
+            for start_col in 0..=cols - q_len {
+                let window: Vec<char> = row[start_col..start_col + q_len].to_vec();
+                if Self::chars_match(&window, &q, ignore_case) {
+                    hits.push(SearchHit {
+                        line,
+                        column: start_col,
+                    });
+                }
+            }
+        }
+        hits
+    }
+
+    /// 滚动视口使 `line` 出现在屏内，并返回用于高亮的 **(视口行, 列)**（均为 1-based）。
+    pub fn reveal_search_hit(&mut self, hit: SearchHit) -> Option<(usize, usize)> {
+        self.scroll_line_into_view(hit.line);
+        let offset = self.term.grid().display_offset();
+        let pt = Point::new(hit.line, Column(hit.column));
+        point_to_viewport(offset, pt).map(|vp| (vp.line + 1, hit.column + 1))
+    }
+
+    fn scroll_line_into_view(&mut self, line: Line) {
+        let grid = self.term.grid();
+        let target_offset = (0i32.saturating_sub(line.0)).max(0) as usize;
+        let target_offset = target_offset.min(grid.history_size());
+        let current = grid.display_offset();
+        if target_offset > current {
+            self.scroll_display(Scroll::Delta((target_offset - current) as i32));
+        } else if current > target_offset {
+            self.scroll_display(Scroll::Delta(-((current - target_offset) as i32)));
+        }
+    }
+
     /// 返回当前视口（screen）可见文本，保持固定列宽，避免表格错位
     pub fn get_formatted_output(&self) -> String {
         let mut rows = vec![vec![' '; self.width]; self.height];
@@ -130,7 +236,13 @@ impl Terminal {
     }
     /// 返回带颜色信息的布局（保持等宽）。`shell` 须由 [`TerminalShellStyle::from_theme`] 生成，
     /// 且 `terminal_bg` 与 UI 外框一致，否则整块格子与外框底色色差会像「四周留白」。
-    pub fn get_layout_job(&self, font_size: f32, shell: &TerminalShellStyle) -> LayoutJob {
+    /// `highlight`: 当前命中 `(行, 列, 长度)`，均为 **1-based** 字符下标（与 [`Self::search_viewport`] 一致）。
+    pub fn get_layout_job(
+        &self,
+        font_size: f32,
+        shell: &TerminalShellStyle,
+        highlight: Option<(usize, usize, usize)>,
+    ) -> LayoutJob {
         let default_fg = shell.default_fg;
         let terminal_bg = shell.terminal_bg;
         let mut rows = vec![vec![(' ', default_fg, terminal_bg); self.width]; self.height];
@@ -165,6 +277,20 @@ impl Terminal {
         }
 
         apply_heuristic_shell_row_style(&mut rows, shell, self.width);
+
+        if let Some((hl_line, hl_col, hl_len)) = highlight {
+            let y = hl_line.saturating_sub(1);
+            if y < self.height && hl_len > 0 {
+                let x0 = hl_col.saturating_sub(1);
+                for i in 0..hl_len {
+                    let x = x0 + i;
+                    if x < self.width {
+                        rows[y][x].1 = shell.search_match_fg;
+                        rows[y][x].2 = shell.search_match_bg;
+                    }
+                }
+            }
+        }
 
         let mut job = LayoutJob::default();
         for row in rows {
@@ -500,5 +626,20 @@ mod tests {
         assert_eq!(t.content_epoch(), e0);
         t.resize(21, 5);
         assert_eq!(t.content_epoch(), e0.wrapping_add(1));
+    }
+
+    #[test]
+    fn search_all_finds_substring_at_grid_column() {
+        let mut t = Terminal::new(40, 3);
+        t.feed(b"    3655.1 total\n");
+        let hits = t.search_all("55", false);
+        assert!(!hits.is_empty());
+        let line = t.get_formatted_output();
+        let first = line.lines().next().expect("line");
+        let chars: Vec<char> = first.chars().collect();
+        let window: String = chars[hits[0].column..hits[0].column + 2]
+            .iter()
+            .collect();
+        assert_eq!(window, "55");
     }
 }

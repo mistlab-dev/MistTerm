@@ -317,6 +317,8 @@ impl SftpPanel {
             .resizable(true)
             .frame(crate::ui::chrome::region_panel_frame(theme))
             .show(ctx, |ui| {
+                let panel_w = layout_util::dock_panel_content_width(ui, s_min, s_max);
+                ui.set_max_width(panel_w);
                 self.show_content(ui, ctx, theme, terminal, close_panel);
             });
         layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);

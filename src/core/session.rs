@@ -23,7 +23,55 @@ pub struct SessionConfig {
     /// SSH 私钥文件路径（空表示用密码或系统默认密钥）
     pub private_key_path: String,
     pub last_connected_at: Option<i64>,
+    /// 创建时间（排序用）
+    #[serde(default)]
+    pub created_at: Option<i64>,
+    /// 已从 ~/.ssh/config 导入的标记 `Host|HostName|Port`
+    #[serde(default)]
+    pub ssh_config_marker: Option<String>,
+    /// 环境色标：空 / red / yellow / green / blue / purple / cyan
+    #[serde(default)]
+    pub color_tag: String,
+    #[serde(default = "default_keepalive_enabled")]
+    pub keepalive_enabled: bool,
+    #[serde(default = "default_keepalive_interval")]
+    pub keepalive_interval_secs: u32,
+    #[serde(default = "default_keepalive_count_max")]
+    pub keepalive_count_max: u8,
 }
+
+fn default_keepalive_enabled() -> bool {
+    true
+}
+fn default_keepalive_interval() -> u32 {
+    30
+}
+fn default_keepalive_count_max() -> u8 {
+    3
+}
+
+/// 侧栏颜色标签 → egui 色（由 UI 层调用）
+pub fn session_color_tag_rgb(tag: &str) -> Option<(u8, u8, u8)> {
+    match tag {
+        "red" => Some((239, 68, 68)),
+        "yellow" => Some((234, 179, 8)),
+        "green" => Some((34, 197, 94)),
+        "blue" => Some((59, 130, 246)),
+        "purple" => Some((168, 85, 247)),
+        "cyan" => Some((34, 211, 238)),
+        _ => None,
+    }
+}
+
+pub const SESSION_COLOR_TAGS: &[(&str, &str)] = &[
+    ("", "无"),
+    ("red", "红"),
+    ("yellow", "黄"),
+    ("green", "绿"),
+    ("blue", "蓝"),
+    ("purple", "紫"),
+    ("cyan", "青"),
+];
 
 impl Default for SessionConfig {
     fn default() -> Self {
@@ -37,6 +85,12 @@ impl Default for SessionConfig {
             password: String::new(),
             private_key_path: String::new(),
             last_connected_at: None,
+            created_at: None,
+            ssh_config_marker: None,
+            color_tag: String::new(),
+            keepalive_enabled: default_keepalive_enabled(),
+            keepalive_interval_secs: default_keepalive_interval(),
+            keepalive_count_max: default_keepalive_count_max(),
         }
     }
 }
@@ -61,6 +115,18 @@ struct StoredSessionConfig {
     private_key_path: String,
     #[serde(default)]
     last_connected_at: Option<i64>,
+    #[serde(default)]
+    created_at: Option<i64>,
+    #[serde(default)]
+    ssh_config_marker: Option<String>,
+    #[serde(default)]
+    color_tag: String,
+    #[serde(default = "default_keepalive_enabled")]
+    keepalive_enabled: bool,
+    #[serde(default = "default_keepalive_interval")]
+    keepalive_interval_secs: u32,
+    #[serde(default = "default_keepalive_count_max")]
+    keepalive_count_max: u8,
 }
 
 fn default_group() -> String {
@@ -121,6 +187,12 @@ impl SessionManager {
                 password,
                 private_key_path: cfg.private_key_path,
                 last_connected_at: cfg.last_connected_at,
+                created_at: cfg.created_at,
+                ssh_config_marker: cfg.ssh_config_marker,
+                color_tag: cfg.color_tag,
+                keepalive_enabled: cfg.keepalive_enabled,
+                keepalive_interval_secs: cfg.keepalive_interval_secs,
+                keepalive_count_max: cfg.keepalive_count_max,
             });
         }
         Some((sessions, had_plaintext, warnings))
@@ -244,6 +316,12 @@ impl SessionManager {
                 password_nonce,
                 private_key_path: cfg.private_key_path.clone(),
                 last_connected_at: cfg.last_connected_at,
+                created_at: cfg.created_at,
+                ssh_config_marker: cfg.ssh_config_marker.clone(),
+                color_tag: cfg.color_tag.clone(),
+                keepalive_enabled: cfg.keepalive_enabled,
+                keepalive_interval_secs: cfg.keepalive_interval_secs,
+                keepalive_count_max: cfg.keepalive_count_max,
             });
         }
 
@@ -302,6 +380,7 @@ impl SessionManager {
         config.password = password.to_string();
         config.group = if group.trim().is_empty() { "默认".to_string() } else { group.trim().to_string() };
         config.private_key_path = private_key_path.to_string();
+        config.created_at = Some(chrono::Utc::now().timestamp());
         self.sessions.push(config.clone());
         self.save();
         config
@@ -346,6 +425,16 @@ impl SessionManager {
             session.last_connected_at = Some(chrono::Utc::now().timestamp());
             self.save();
         }
+    }
+
+    /// 就地更新会话扩展字段（色标、KeepAlive 等）
+    pub fn patch_session(&mut self, id: &str, patch: impl FnOnce(&mut SessionConfig)) -> bool {
+        if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
+            patch(session);
+            self.save();
+            return true;
+        }
+        false
     }
 
     /// 获取会话数量

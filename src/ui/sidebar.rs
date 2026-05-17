@@ -5,7 +5,8 @@
 use eframe::egui;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::core::session::SessionManager;
+use crate::core::session::{session_color_tag_rgb, SessionManager};
+use crate::core::session_sort::{sort_sessions, SessionSortBy};
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 
@@ -16,12 +17,73 @@ pub struct SidebarOutput {
     pub edit_session_id: Option<String>,
     pub create_session_clicked: bool,
     pub collapse_clicked: bool,
+    pub view_log_session_id: Option<String>,
+}
+
+/// 左栏整列（导入条 + 圆角面板）的附加动作
+pub struct SidebarColumnActions {
+    pub open_ssh_import: bool,
+    pub dismiss_ssh_banner: bool,
 }
 
 /// 侧边栏组件
 pub struct Sidebar;
 
 impl Sidebar {
+    /// 左栏整列：SSH 导入条（可选）→ 圆角连接面板（[`Sidebar::show`]）
+    pub fn show_column<'a>(
+        ui: &mut egui::Ui,
+        layout_h: f32,
+        sidebar_width: f32,
+        ssh_import_banner_dismissed: bool,
+        ssh_pending_imports: usize,
+        session_manager: &'a SessionManager,
+        selected_id: &Option<String>,
+        search_query: &mut String,
+        filter: &mut String,
+        sort_by: &mut SessionSortBy,
+        connected_sessions: &HashSet<String>,
+        search_field_id: egui::Id,
+        theme: &Theme,
+    ) -> (SidebarOutput, SidebarColumnActions) {
+        let mut actions = SidebarColumnActions {
+            open_ssh_import: false,
+            dismiss_ssh_banner: false,
+        };
+        ui.set_width(sidebar_width);
+        ui.set_min_height(layout_h);
+        if !ssh_import_banner_dismissed && ssh_pending_imports > 0 {
+            if let Some(act) =
+                crate::ui::chrome::ssh_import_sidebar_banner(ui, theme, ssh_pending_imports)
+            {
+                if act.import {
+                    actions.open_ssh_import = true;
+                }
+                if act.dismiss {
+                    actions.dismiss_ssh_banner = true;
+                }
+            }
+        }
+        let output = crate::ui::chrome::region_panel_frame(theme)
+            .stroke(egui::Stroke::NONE)
+            .show(ui, |ui| {
+                ui.set_width(sidebar_width);
+                Self::show(
+                    ui,
+                    session_manager,
+                    selected_id,
+                    search_query,
+                    filter,
+                    sort_by,
+                    connected_sessions,
+                    search_field_id,
+                    theme,
+                )
+            })
+            .inner;
+        (output, actions)
+    }
+
     /// 显示侧边栏
     /// 
     /// 返回双击事件响应
@@ -29,9 +91,11 @@ impl Sidebar {
         ui: &mut egui::Ui,
         session_manager: &'a SessionManager,
         selected_id: &Option<String>,
-        search_query: &str,
-        filter: &str,
+        search_query: &mut String,
+        filter: &mut String,
+        sort_by: &mut SessionSortBy,
         connected_sessions: &HashSet<String>,
+        search_field_id: egui::Id,
         theme: &Theme,
     ) -> SidebarOutput {
         let aw = ui.available_width();
@@ -47,6 +111,7 @@ impl Sidebar {
         let mut edit_session_id = None;
         let mut create_session_clicked = false;
         let mut collapse_clicked = false;
+        let mut view_log_session_id = None;
         
         let response = ui.allocate_ui_with_layout(
             egui::vec2(
@@ -59,34 +124,83 @@ impl Sidebar {
                     .inner_margin(theme.margin_sidebar_title())
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = theme.spacing_status_left_gap();
                             ui.label(
                                 egui::RichText::new("连接")
-                                    .size(theme.font_size_small())
+                                    .size(theme.font_size_sidebar_section())
                                     .strong()
-                                    .color(theme.color_section_title()),
+                                    .color(theme.fg_low_color()),
                             );
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if crate::ui::chrome::collapse_icon_button(ui, theme).clicked() {
-                                        collapse_clicked = true;
-                                    }
-                                    if crate::ui::chrome::icon_button(
-                                        ui,
-                                        theme,
-                                        "＋",
-                                        theme.fg_high_a76(),
-                                    )
-                                    .on_hover_text("新建会话")
-                                        .clicked()
-                                    {
-                                        create_session_clicked = true;
-                                    }
-                                },
-                            );
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.spacing_mut().item_spacing.x = theme.spacing_tool_btn_gap();
+                                if crate::ui::chrome::sidebar_header_icon_button(
+                                    ui,
+                                    theme,
+                                    crate::ui::chrome::GLYPH_COLLAPSE,
+                                    theme.fg_high_a51(),
+                                )
+                                .on_hover_text("收起")
+                                .clicked()
+                                {
+                                    collapse_clicked = true;
+                                }
+                                if crate::ui::chrome::sidebar_header_icon_button(
+                                    ui,
+                                    theme,
+                                    "＋",
+                                    theme.fg_high_a76(),
+                                )
+                                .on_hover_text("新建会话")
+                                .clicked()
+                                {
+                                    create_session_clicked = true;
+                                }
+                                crate::ui::chrome::sidebar_sort_combo(ui, theme, sort_by);
+                            });
                         });
                     });
-                ui.separator();
+
+                let search_w = layout_util::finite_content_width_inset(
+                    ui,
+                    0.0,
+                    120.0,
+                    ui.available_width(),
+                );
+                egui::Frame::none()
+                    .outer_margin(theme.spacing_sidebar_search_outer())
+                    .show(ui, |ui| {
+                        crate::ui::chrome::sidebar_search_field(
+                            ui,
+                            theme,
+                            search_field_id,
+                            search_query,
+                            "搜索会话…",
+                            search_w,
+                        );
+                    });
+                egui::Frame::none()
+                    .outer_margin(theme.spacing_sidebar_filter_outer())
+                    .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                    let tab_row_w = ui.available_width().max(96.0);
+                    let item_w = (tab_row_w / 3.0).max(52.0);
+                    for label in ["全部", "在线", "离线"] {
+                        let active = filter.as_str() == label;
+                        if crate::ui::chrome::filter_chip_button(
+                            ui,
+                            theme,
+                            label,
+                            active,
+                            egui::vec2(item_w, theme.size_sidebar_filter_chip_h()),
+                        )
+                        .clicked()
+                        {
+                            *filter = label.to_string();
+                        }
+                    }
+                });
+                });
 
                 // 会话列表
                 ui.vertical(|ui| {
@@ -103,29 +217,36 @@ impl Sidebar {
                                 || s.group.to_lowercase().contains(&query)
                         })
                         .cloned()
-                        .filter(|s| match filter {
+                        .filter(|s| match filter.as_str() {
                             "在线" => connected_sessions.contains(&s.id),
                             "离线" => !connected_sessions.contains(&s.id),
                             _ => true,
                         })
                         .collect::<Vec<_>>();
 
-                    sessions.sort_by(|a, b| {
-                        let a_online = connected_sessions.contains(&a.id);
-                        let b_online = connected_sessions.contains(&b.id);
-                        b_online
-                            .cmp(&a_online)
-                            .then_with(|| b.last_connected_at.cmp(&a.last_connected_at))
-                            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-                    });
+                    sort_sessions(&mut sessions, *sort_by, connected_sessions);
                     
                     if sessions.is_empty() {
                         ui.centered_and_justified(|ui| {
+                            let hint_font = theme.font_size_sidebar_control();
+                            let hint_color = theme.fg_low_color();
                             if search_query.trim().is_empty() {
-                                ui.small("暂无会话");
-                                ui.small("点击 ➕ 创建");
+                                ui.label(
+                                    egui::RichText::new("暂无会话")
+                                        .size(hint_font)
+                                        .color(hint_color),
+                                );
+                                ui.label(
+                                    egui::RichText::new("点击 ＋ 创建")
+                                        .size(hint_font)
+                                        .color(hint_color),
+                                );
                             } else {
-                                ui.small("没有匹配的会话");
+                                ui.label(
+                                    egui::RichText::new("没有匹配的会话")
+                                        .size(hint_font)
+                                        .color(hint_color),
+                                );
                             }
                         });
                     } else {
@@ -134,9 +255,9 @@ impl Sidebar {
                             if session.group != current_group {
                                 current_group = session.group.clone();
                                 ui.add_space(theme.spacing_panel_gap());
-                                ui.small(
+                                ui.label(
                                     egui::RichText::new(format!("📁 {}", current_group))
-                                        .size(theme.font_size_small())
+                                        .size(theme.font_size_connection_meta())
                                         .color(theme.fg_low_color()),
                                 );
                             }
@@ -161,10 +282,17 @@ impl Sidebar {
                                 egui::Color32::TRANSPARENT
                             };
                             ui.painter().rect_filled(
-                                row_rect.shrink2(egui::vec2(0.0, 2.0)),
+                                row_rect,
                                 theme.radius_list_item(),
                                 bg,
                             );
+                            if is_selected {
+                                crate::ui::chrome::paint_sidebar_selection_accent(
+                                    ui.painter(),
+                                    row_rect,
+                                    theme,
+                                );
+                            }
 
                             let status_text = if connected_sessions.contains(&session.id) {
                                 relative_last_connected(session.last_connected_at)
@@ -178,15 +306,27 @@ impl Sidebar {
                                 )),
                                 egui::Layout::left_to_right(egui::Align::Center),
                             );
-                            row_ui.label(
-                                egui::RichText::new("🖥")
-                                    .size(theme.font_size_panel_title())
-                                    .color(theme.color_sidebar_icon()),
+                            let online = connected_sessions.contains(&session.id);
+                            let env_color = session_color_tag_rgb(&session.color_tag)
+                                .map(|(r, g, b)| egui::Color32::from_rgb(r, g, b));
+                            let dot_color = env_color.unwrap_or_else(|| {
+                                if online {
+                                    theme.green_color()
+                                } else {
+                                    theme.fg_high_a64()
+                                }
+                            });
+                            let (dot_rect, _) = row_ui.allocate_exact_size(
+                                egui::vec2(5.0, 5.0),
+                                egui::Sense::hover(),
                             );
-                            row_ui.add_space(theme.spacing_panel_gap());
+                            row_ui
+                                .painter()
+                                .circle_filled(dot_rect.center(), 2.5, dot_color);
+                            row_ui.add_space(theme.spacing_tab_dot_text());
                             row_ui.label(
                                 egui::RichText::new(&session.name)
-                                    .size(theme.font_size_normal())
+                                    .size(theme.font_size_connection_name())
                                     .color(if is_selected {
                                         theme.fg_high_color()
                                     } else {
@@ -196,7 +336,7 @@ impl Sidebar {
                             row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.label(
                                     egui::RichText::new(status_text)
-                                        .size(theme.font_size_small())
+                                        .size(theme.font_size_connection_meta())
                                         .color(if connected_sessions.contains(&session.id) {
                                             theme.color_status_online_muted()
                                         } else {
@@ -211,12 +351,17 @@ impl Sidebar {
                             
                             // 右键菜单
                             response.context_menu(|ui| {
+                                crate::ui::chrome::apply_context_menu_style(ui, theme);
                                 if ui.button("编辑").clicked() {
                                     edit_session_id = Some(session.id.clone());
                                     ui.close_menu();
                                 }
                                 if ui.button("删除").clicked() {
                                     delete_session_id = Some(session.id.clone());
+                                    ui.close_menu();
+                                }
+                                if ui.button("查看日志…").clicked() {
+                                    view_log_session_id = Some(session.id.clone());
                                     ui.close_menu();
                                 }
                             });
@@ -235,6 +380,7 @@ impl Sidebar {
             edit_session_id,
             create_session_clicked,
             collapse_clicked,
+            view_log_session_id,
         }
     }
 }

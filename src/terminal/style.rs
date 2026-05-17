@@ -25,6 +25,9 @@ pub struct TerminalShellStyle {
     pub user_warn: Color32,
     pub command_dim_factor: f32,
     pub output_dim_factor: f32,
+    /// 查找命中高亮（由 [`Theme::list_row_selected_bg`] 等派生）
+    pub search_match_fg: Color32,
+    pub search_match_bg: Color32,
 }
 
 impl TerminalShellStyle {
@@ -40,6 +43,8 @@ impl TerminalShellStyle {
             user_warn: theme.amber_color(),
             command_dim_factor: theme.terminal_command_dim_factor(),
             output_dim_factor: theme.terminal_output_dim_factor(),
+            search_match_fg: theme.fg_high_color(),
+            search_match_bg: theme.list_row_selected_bg(),
         }
     }
 }

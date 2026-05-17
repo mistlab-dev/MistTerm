@@ -220,6 +220,7 @@ mod tests {
             password: "p".to_string(),
             private_key_path: String::new(),
             last_connected_at: None,
+            ..SessionConfig::default()
         }
     }
 

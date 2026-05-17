@@ -59,12 +59,12 @@ fn configure_fonts(ctx: &egui::Context) {
         let cjk_name = "mistterm-cjk".to_string();
         fonts.font_data.insert(cjk_name.clone(), cjk_font);
 
-        // Proportional 可以优先用 CJK，保证中文 UI 不缺字
+        // CJK 放在默认字体之后：拉丁/符号（如菜单 ✓）走 bundled 字体，中文缺字再回退到 CJK
         fonts
             .families
             .entry(egui::FontFamily::Proportional)
             .or_default()
-            .insert(0, cjk_name.clone());
+            .push(cjk_name.clone());
         // Monospace 必须把 CJK 放后面，避免把等宽英文挤成“看起来不等宽”
         fonts
             .families

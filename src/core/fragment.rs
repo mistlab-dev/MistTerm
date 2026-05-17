@@ -726,6 +726,7 @@ mod tests {
             password: String::new(),
             private_key_path: String::new(),
             last_connected_at: None,
+            ..SessionConfig::default()
         };
         let mut extras = HashMap::new();
         extras.insert("svc".into(), "127.0.0.1".into());
@@ -757,6 +758,7 @@ mod tests {
             password: String::new(),
             private_key_path: String::new(),
             last_connected_at: None,
+            ..SessionConfig::default()
         };
         let mut m = HashMap::new();
         m.insert("service".into(), "nginx".into());

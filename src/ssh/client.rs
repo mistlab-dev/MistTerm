@@ -16,6 +16,23 @@ pub struct SshConfig {
     pub username: String,
     pub password: String,
     pub private_key_path: String,
+    /// `ServerAliveInterval`（秒）；0 表示不启用
+    pub keepalive_interval_secs: u32,
+    pub keepalive_count_max: u8,
+}
+
+impl Default for SshConfig {
+    fn default() -> Self {
+        Self {
+            host: String::new(),
+            port: 22,
+            username: String::new(),
+            password: String::new(),
+            private_key_path: String::new(),
+            keepalive_interval_secs: 0,
+            keepalive_count_max: 3,
+        }
+    }
 }
 
 /// SSH 客户端
@@ -65,6 +82,16 @@ impl SshClient {
             format_ssh_connect_error(&format!("SSH handshake failed: {}", e))
         })?;
         log::info!("SSH handshake completed");
+
+        if self.config.keepalive_interval_secs > 0 {
+            let want = self.config.keepalive_interval_secs;
+            let _ = session.set_keepalive(true, want);
+            log::info!(
+                "SSH keepalive enabled: interval={}s count_max={}",
+                want,
+                self.config.keepalive_count_max
+            );
+        }
 
         // 认证策略：优先使用用户指定的私钥，然后尝试密码，最后尝试默认系统密钥
         let mut authenticated = false;
@@ -230,6 +257,7 @@ mod tests {
             username: "test".to_string(),
             password: "pass".to_string(),
             private_key_path: String::new(),
+            ..SshConfig::default()
         };
         
         assert_eq!(config.host, "localhost");
@@ -238,13 +266,7 @@ mod tests {
 
     #[test]
     fn test_client_creation() {
-        let config = SshConfig {
-            host: "localhost".to_string(),
-            port: 22,
-            username: "test".to_string(),
-            password: "pass".to_string(),
-            private_key_path: String::new(),
-        };
+        let config = SshConfig::default();
         
         let client = SshClient::new(config);
         assert!(!client.is_connected());

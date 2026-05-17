@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MistTerm 改造后效果（开发标注版）</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0d0d14; display: flex; justify-content: center; align-items: center; min-height: 100vh; font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; padding: 40px; }
+.window { width: min(95vw, 1280px); height: min(90vh, 780px); background: #0d0d14; border-radius: 10px; box-shadow: 0 30px 80px rgba(0,0,0,0.7); overflow: hidden; display: flex; flex-direction: column; border: 1px solid rgba(255,255,255,0.06); }
+.title-bar { height: 36px; display: flex; align-items: center; padding: 0 min(2vw, 14px); background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.04); flex-shrink: 0; }
+.traffic-lights { display: flex; gap: 7px; width: 54px; flex-shrink: 0; }
+.dot { width: 11px; height: 11px; border-radius: 50%; flex-shrink: 0; }
+.dot.close { background: #ff5f56; } .dot.minimize { background: #ffbd2e; } .dot.maximize { background: #27c93f; }
+.app-name { flex: 1; text-align: center; font-size: clamp(11px, 1.2vw, 13px); color: rgba(255,255,255,0.3); font-weight: 400; letter-spacing: 0.3px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; padding: 0 8px; }
+.conn-info { font-size: clamp(10px, 1vw, 11px); color: rgba(255,255,255,0.2); width: auto; text-align: right; flex-shrink: 0; white-space: nowrap; }
+.main { flex: 1; display: flex; padding: min(1vw, 8px); gap: min(0.8vw, 6px); background: #0d0d14; min-height: 0; }
+.sidebar { width: min(18vw, 220px); min-width: 160px; max-width: 280px; background: #13131c; border-radius: 6px; display: flex; flex-direction: column; border: 1px solid rgba(255,255,255,0.04); overflow: hidden; flex-shrink: 0; }
+.sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 9px 10px; border-bottom: 1px solid rgba(255,255,255,0.03); flex-shrink: 0; }
+.section-title { font-size: 10px; font-weight: 700; color: rgba(255,255,255,0.2); text-transform: uppercase; letter-spacing: 0.5px; }
+.sidebar-add { width: 18px; height: 18px; background: rgba(102,126,234,0.35); border: none; border-radius: 3px; color: rgba(102,126,234,0.7); font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.sidebar-add:hover { background: rgba(102,126,234,0.5); }
+.search-wrap { padding: 4px 8px 6px; flex-shrink: 0; }
+.search-input { width: 100%; padding: 5px 8px; background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.03); border-radius: 4px; font-size: 11px; color: rgba(255,255,255,0.5); font-family: 'Inter', sans-serif; outline: none; }
+.search-input:focus { border-color: rgba(102,126,234,0.2); }
+.search-input::placeholder { color: rgba(255,255,255,0.12); }
+.filter-tabs { display: flex; padding: 0 10px 6px; gap: 4px; flex-shrink: 0; }
+.filter-tab { flex: 1; text-align: center; padding: 4px 0; font-size: 10px; color: rgba(255,255,255,0.18); border-radius: 3px; cursor: pointer; }
+.filter-tab:hover { color: rgba(255,255,255,0.3); }
+.filter-tab.active { background: rgba(102,126,234,0.2); color: rgba(102,126,234,0.6); }
+.conn-list { flex: 1; overflow-y: auto; padding: 0 4px 4px; }
+.conn-item { display: flex; align-items: center; padding: 8px 10px; border-radius: 4px; cursor: pointer; gap: 8px; margin-bottom: 1px; }
+.conn-item:hover { background: rgba(255,255,255,0.03); }
+.conn-item.active { background: rgba(102,126,234,0.05); }
+.conn-icon { font-size: 12px; color: rgba(255,255,255,0.35); width: 16px; text-align: center; flex-shrink: 0; }
+.conn-info { flex: 1; min-width: 0; }
+.conn-name { font-size: 12px; color: rgba(255,255,255,0.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.4; }
+.conn-item.active .conn-name { color: rgba(255,255,255,0.75); }
+.conn-item:hover .conn-name { color: rgba(255,255,255,0.7); }
+.conn-time { font-size: 10px; color: rgba(255,255,255,0.12); white-space: nowrap; flex-shrink: 0; }
+.conn-time.online { background: rgba(76,175,80,0.25); color: #4CAF50; padding: 1px 5px; border-radius: 2px; }
+.conn-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+.conn-dot.online { background: #4CAF50; } .conn-dot.offline { background: rgba(255,255,255,0.15); }
+.terminal-area { flex: 1; min-width: 0; display: flex; flex-direction: column; background: #13131c; border-radius: 6px; border: 1px solid rgba(255,255,255,0.04); overflow: hidden; }
+.tab-bar { display: flex; background: rgba(255,255,255,0.02); border-bottom: 1px solid rgba(255,255,255,0.03); align-items: center; height: 34px; flex-shrink: 0; }
+.tab { display: flex; align-items: center; gap: 6px; padding: 7px 14px; font-size: 12px; color: rgba(255,255,255,0.25); cursor: pointer; border-right: 1px solid rgba(255,255,255,0.03); height: 100%; flex-shrink: 0; }
+.tab:hover { background: rgba(255,255,255,0.02); }
+.tab.active { background: #0a0a12; color: rgba(255,255,255,0.8); }
+.tab-dot { width: 5px; height: 5px; border-radius: 50%; background: #4CAF50; flex-shrink: 0; }
+.tab .close-btn { font-size: 13px; color: transparent; margin-left: 2px; line-height: 1; }
+.tab:hover .close-btn { color: rgba(255,255,255,0.3); }
+.tab .close-btn:hover { color: rgba(255,255,255,0.6); }
+.tab-new { padding: 7px 10px; color: rgba(255,255,255,0.25); cursor: pointer; font-size: 14px; flex-shrink: 0; }
+.tab-new:hover { color: rgba(255,255,255,0.5); }
+.terminal-content { flex: 1; padding: 10px 16px; font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace; font-size: clamp(12px, 1.1vw, 13px); line-height: 1.7; background: #0a0a12; overflow-y: auto; color: rgba(255,255,255,0.4); min-height: 0; }
+.term-line { white-space: pre-wrap; word-break: break-all; margin-bottom: 0; }
+.term-line.prompt-command { margin-bottom: 4px; }
+.prompt { color: #4CAF50; } .path { color: #667eea; }
+.cmd { color: rgba(255,255,255,0.9); }
+.out { color: rgba(255,255,255,0.4); }
+.cursor-block { display: inline-block; width: 7px; height: 15px; background: rgba(255,255,255,0.9); animation: blink 1s step-end infinite; vertical-align: text-bottom; margin-left: 1px; }
+@keyframes blink { 50% { opacity: 0; } }
+.right-panel { width: min(22vw, 280px); min-width: 160px; max-width: 320px; background: #13131c; border-radius: 6px; display: flex; flex-direction: column; border: 1px solid rgba(255,255,255,0.04); overflow: hidden; flex-shrink: 0; }
+.right-header { display: flex; align-items: center; justify-content: space-between; padding: 9px 10px; border-bottom: 1px solid rgba(255,255,255,0.03); flex-shrink: 0; }
+.right-search-wrap { padding: 4px 8px 6px; flex-shrink: 0; }
+.fragment-cats { display: flex; padding: 0 8px 6px; gap: 2px; flex-shrink: 0; }
+.frag-cat { padding: 2px 6px; font-size: 10px; color: rgba(255,255,255,0.18); border-radius: 3px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
+.frag-cat:hover { color: rgba(255,255,255,0.3); }
+.frag-cat.active { color: rgba(102,126,234,0.5); }
+.fragment-list { flex: 1; overflow-y: auto; padding: 0 4px 4px; }
+.frag-card { padding: 7px 8px; border-radius: 4px; cursor: pointer; margin-bottom: 1px; }
+.frag-card:hover { background: rgba(255,255,255,0.03); }
+.frag-card-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 3px; gap: 6px; }
+.frag-card-title { font-size: 12px; color: rgba(255,255,255,0.5); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.frag-card:hover .frag-card-title { color: rgba(255,255,255,0.7); }
+.frag-tag { font-size: 9px; font-weight: 500; padding: 1px 5px; border-radius: 3px; line-height: 1.4; flex-shrink: 0; }
+.frag-tag.team { background: rgba(76,175,80,0.05); color: rgba(76,175,80,0.35); }
+.frag-tag.personal { background: rgba(102,126,234,0.05); color: rgba(102,126,234,0.35); }
+.frag-tag.template { background: rgba(255,152,0,0.05); color: rgba(255,152,0,0.35); }
+.frag-cmd { font-family: 'JetBrains Mono', monospace; font-size: 10px; color: rgba(255,255,255,0.12); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 3px; }
+.frag-stats { font-size: 10px; }
+.frag-stats .num { color: rgba(255,255,255,0.25); }
+.frag-stats .lbl { color: rgba(255,255,255,0.1); }
+.status-bar { height: 32px; display: flex; align-items: center; padding: 0 min(2vw, 14px); background: rgba(255,255,255,0.04); border-top: 1px solid rgba(255,255,255,0.03); gap: 8px; flex-shrink: 0; }
+.status-left { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+.restore-btn { font-size: 10px; color: rgba(102,126,234,0.25); padding: 1px 5px; border-radius: 3px; cursor: pointer; flex-shrink: 0; }
+.restore-btn:hover { color: rgba(102,126,234,0.45); background: rgba(102,126,234,0.04); }
+.status-conn { font-size: clamp(10px, 0.9vw, 11px); color: rgba(255,255,255,0.12); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.status-right { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+.tool-btn { font-size: 12px; color: rgba(255,255,255,0.08); cursor: pointer; padding: 0 3px; line-height: 1; user-select: none; }
+.tool-btn:hover { color: rgba(255,255,255,0.25); }
+.status-divider { width: 1px; height: 12px; background: rgba(255,255,255,0.04); margin: 0 4px; flex-shrink: 0; }
+.status-stats { font-size: 10px; white-space: nowrap; }
+.status-stats .num { color: rgba(255,255,255,0.25); }
+.status-stats .lbl { color: rgba(255,255,255,0.1); }
+.status-stats .up { color: rgba(76,175,80,0.3); font-size: 11px; }
+::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.06); border-radius: 2px; }
+@media (max-width: 700px) { .sidebar, .right-panel { display: none; } }
+</style>
+</head>
+<body>
+
+<div class="window">
+
+  <!-- ===== 标题栏 ===== -->
+  <!-- P0-6: 删除菜单栏。P0-7: 改为左红绿灯+中应用名+右连接信息 -->
+  <div class="title-bar">
+    <div class="traffic-lights">
+      <div class="dot close"></div>
+      <div class="dot minimize"></div>
+      <div class="dot maximize"></div>
+    </div>
+    <!-- 应用名: 13px, 30%透明度 -->
+    <div class="app-name">MistTerm</div>
+    <!-- 连接信息: 11px, 20%透明度 -->
+    <div class="conn-info">SSH · 2h 34m</div>
+  </div>
+
+  <!-- ===== 主区域 ===== -->
+  <!-- P0-1/P0-2/P0-3: 配色 #0d0d14 / #13131c / #0a0a12 -->
+  <!-- P1-14: padding 8px. P1-13: gap 6px -->
+  <div class="main">
+
+    <!-- ===== 左侧面板 ===== -->
+    <!-- P1-2: 宽度 min(18vw, 220px) 范围 160~280px. P0-2: 底色 #13131c -->
+    <div class="sidebar">
+      <!-- P1-15: padding 9px 10px. 标题 10px Bold uppercase -->
+      <div class="sidebar-header">
+        <span class="section-title">连接</span>
+        <button class="sidebar-add">＋</button>
+      </div>
+      <!-- P1-20: padding 4px 8px 6px. 搜索框11px -->
+      <div class="search-wrap">
+        <input class="search-input" type="text" placeholder="🔍 搜索连接…">
+      </div>
+      <!-- P1-1: 三段分类标签 "全部/在线/离线"，flex三等分，10px -->
+      <div class="filter-tabs">
+        <div class="filter-tab active">全部</div>
+        <div class="filter-tab">在线</div>
+        <div class="filter-tab">离线</div>
+      </div>
+      <div class="conn-list">
+        <!-- P1-3: 条目间距margin-bottom:1px. P1-17: padding 8px 10px. P1-25: 圆角4px -->
+        <div class="conn-item active">
+          <!-- P2-3: 状态圆点 5px替代emoji. 绿色=在线,灰色=离线 -->
+          <div class="conn-dot online"></div>
+          <div class="conn-icon">🖥</div>
+          <div class="conn-info">
+            <div class="conn-name">生产服务器</div>
+          </div>
+          <div class="conn-time online">2h 34m</div>
+        </div>
+        <div class="conn-item">
+          <div class="conn-dot online"></div>
+          <div class="conn-icon">🖥</div>
+          <div class="conn-info">
+            <div class="conn-name">测试服务器</div>
+          </div>
+          <div class="conn-time online">45m</div>
+        </div>
+        <div class="conn-item">
+          <div class="conn-dot online"></div>
+          <div class="conn-icon">🖥</div>
+          <div class="conn-info">
+            <div class="conn-name">数据库服务器</div>
+          </div>
+          <div class="conn-time online">18m</div>
+        </div>
+        <div class="conn-item">
+          <div class="conn-dot offline"></div>
+          <div class="conn-icon">🖥</div>
+          <div class="conn-info">
+            <div class="conn-name">预发布环境</div>
+          </div>
+          <div class="conn-time">离线</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===== 终端区域 ===== -->
+    <!-- flex:1 自适应宽度 -->
+    <div class="terminal-area">
+      <!-- Tab栏 P2-6: 激活Tab背景=#0a0a12 -->
+      <div class="tab-bar">
+        <div class="tab active">
+          <!-- P2-3: 绿色圆点5px替代🖥 -->
+          <div class="tab-dot"></div>
+          <span>ubuntu@prod-server-01</span>
+          <!-- P2-4: 关闭按钮默认透明, hover Tab时30%可见 -->
+          <span class="close-btn">×</span>
+        </div>
+        <div class="tab">
+          <div class="tab-dot"></div>
+          <span>root@test-server</span>
+          <span class="close-btn">×</span>
+        </div>
+        <!-- P2-5: +按钮 25%透明度 -->
+        <div class="tab-new">+</div>
+      </div>
+      <!-- P0-3: 终端底色 #0a0a12. P0-14: 13px -->
+      <div class="terminal-content">
+        <div class="term-line">Last login: Thu May 14 08:45:32 2026</div>
+        <div class="term-line">Welcome to Ubuntu 22.04.3 LTS</div>
+        <div class="term-line"> </div>
+        <div class="term-line"><span class="prompt">➜</span> <span class="path">~</span> <span class="cmd">systemctl status nginx</span></div>
+        <div class="term-line out">● nginx.service — A high performance web server</div>
+        <div class="term-line out">   Active: active (running) since 1 day 4h ago</div>
+        <div class="term-line"> </div>
+        <div class="term-line"><span class="prompt">➜</span> <span class="path">~</span> <span class="cmd">tail -f /var/log/nginx/access.log</span></div>
+        <div class="term-line out">192.168.1.1 - - [14/May/2026:20:15:32 +0800] "GET /api/health" 200</div>
+        <div class="term-line"> </div>
+        <div class="term-line"><span class="prompt">➜</span> <span class="path">~</span> <span class="cmd"></span><span class="cursor-block"></span></div>
+      </div>
+    </div>
+
+    <!-- ===== 右侧面板 ===== -->
+    <!-- P1-6: 固定侧栏(非弹窗). P1-7: 宽度 min(22vw,280px) 范围160~320px -->
+    <div class="right-panel">
+      <div class="right-header">
+        <span class="section-title">命令片段</span>
+        <button class="sidebar-add">＋</button>
+      </div>
+      <div class="right-search-wrap">
+        <input class="search-input" type="text" placeholder="🔍 搜索片段…">
+      </div>
+      <!-- P1-9: 分类标签: 常用/Docker/K8s/全部 -->
+      <div class="fragment-cats">
+        <span class="frag-cat active">常用</span>
+        <span class="frag-cat">Docker</span>
+        <span class="frag-cat">K8s</span>
+        <span class="frag-cat">全部</span>
+      </div>
+      <div class="fragment-list">
+        <!-- P1-8: 卡片: 标题12px+标签9px+命令10px+统计10px -->
+        <div class="frag-card">
+          <div class="frag-card-header">
+            <span class="frag-card-title">查看 Pod 日志</span>
+            <span class="frag-tag team">团队</span>
+          </div>
+          <div class="frag-cmd">kubectl logs -f --tail=100 -n production</div>
+          <div class="frag-stats"><span class="num">320次</span><span class="lbl"> · 95%成功 · 1.2s</span></div>
+        </div>
+        <div class="frag-card">
+          <div class="frag-card-header">
+            <span class="frag-card-title">重启 Nginx</span>
+            <span class="frag-tag team">团队</span>
+          </div>
+          <div class="frag-cmd">systemctl restart nginx && systemctl status nginx</div>
+          <div class="frag-stats"><span class="num">500次</span><span class="lbl"> · 98%成功 · 0.8s</span></div>
+        </div>
+        <div class="frag-card">
+          <div class="frag-card-header">
+            <span class="frag-card-title">访问日志</span>
+            <span class="frag-tag personal">个人</span>
+          </div>
+          <div class="frag-cmd">tail -f /var/log/nginx/access.log | awk '{print $1}'</div>
+          <div class="frag-stats"><span class="num">156次</span><span class="lbl"> · 100%成功 · 0.3s</span></div>
+        </div>
+        <div class="frag-card">
+          <div class="frag-card-header">
+            <span class="frag-card-title">Docker 健康检查</span>
+            <span class="frag-tag template">模板</span>
+          </div>
+          <div class="frag-cmd">docker ps --format "table {{.Names}}\t{{.Status}}"</div>
+          <div class="frag-stats"><span class="num">1,200次</span><span class="lbl"> · 96%成功 · 0.5s</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 状态栏 ===== -->
+  <!-- P0-9: 32px单行(非44+28). P0-10: rgba(255,255,255,0.04)暗色(非紫色) -->
+  <div class="status-bar">
+    <div class="status-left">
+      <!-- P1-10: 复原按钮 10px紫色25%, 面板折叠时显示 -->
+      <span class="restore-btn">▸ 连接 · 4</span>
+      <!-- P0-11: 11px, 12%透明度 -->
+      <span class="status-conn">⚡ ubuntu@prod-server-01</span>
+    </div>
+    <div class="status-right">
+      <!-- P0-13: 4个工具按钮: 默认8%, hover 25% -->
+      <span class="tool-btn">📋</span>
+      <span class="tool-btn">📤</span>
+      <span class="tool-btn">🔍</span>
+      <span class="tool-btn">📊</span>
+      <div class="status-divider"></div>
+      <div class="status-stats"><span class="num">1,234</span><span class="lbl">次 </span><span class="up">↑8%</span></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ===== 设计标注（直接写在元素旁，方便开发对照源码） ===== -->
+<!--
+【标题栏】
+  文件/视图/工具/帮助 → 全部删除 (P0-6)
+  改为: 红绿灯 + "MistTerm" + "SSH · 2h 34m" (P0-7)
+  height: 36px
+  新建→左侧＋按钮+⌘N, 偏好设置→状态栏⚙️+⌘,, 关闭标签→⌘W (P0-8)
+
+【状态栏】
+  当前: 44px快捷栏+28px紫色双层 (P0-9) → 改为32px暗色单行
+  底色: #667eea紫色 → rgba(255,255,255,0.04)深色 (P0-10)
+  文字: 白色 → 11px 12%透明度 (P0-11)
+  工具按钮: 独立着色 → 默认8% hover 25% (P0-12)
+  按钮数量: 当前5个(📋📤🔍📥📊) → 统一为4个(📋📤🔍📊) (P0-13)
+
+【配色】
+  窗口外 #0d0d14 (P0-1) | 面板 #13131c (P0-2) | 终端 #0a0a12 (P0-3)
+  边框全部半透明: 窗口0.06 / 面板0.04 / 分割线0.03 (P0-4)
+  文字4档: 90%-命令 / 50%-标题 / 25%-弱化 / 12%-极弱 (P0-5)
+
+【左侧面板】
+  宽度: 固定px → min(18vw,220px) 范围160~280px (P1-2)
+  搜索框下加"全部/在线/离线"三段分类标签 (P1-1)
+  条目间距: 当前0 → 1px (P1-3)
+  选中态: 紫色底 rgba(102,126,234,0.05) (P1-4)
+  删除终端区左上角☰ (P1-5)
+
+【右侧面板】
+  从弹窗SidePanel → 固定侧栏(与左侧对称) (P1-6)
+  宽度: min(22vw,280px) 范围160~320px (P1-7)
+  分类标签: 常用/Docker/K8s/全部 (P1-9)
+
+【字号规格】
+  终端: 14→13px | 面板标题: 10px Bold uppercase
+  连接名称: 12px | 片段标题: 12px | 标签: 9px Medium
+  分类标签: 10px | 搜索框: 11px | 统计: 10px
+  命令原文: 10px mono | 状态栏: 11px | 应用名: 13px
+
+【间距规格 (P1-13~22)】
+  面板gap: 0→6px | 主区域padding: 8px
+  面板标题padding: 9px 10px | 面板内容padding: 0 4px 4px
+  连接条目padding: 8px 10px | 片段卡片padding: 7px 8px
+  Tab padding: 7px 14px | 搜索框padding: 4px 8px 6px
+  终端padding: 10px 16px | 状态栏padding: 0 14px
+
+【圆角规格 (P1-23~25)】
+  窗口: 10px | 面板: 6px | 终端区域: 6px
+  小元素: 3px (按钮/标签/分类标签/复原按钮)
+  卡片: 4px (片段/连接条目) | 搜索框: 6→4px
+
+【字体 (P2-1~2)】
+  UI文字: Inter | 终端/命令: JetBrains Mono
+  注册8档TextStyle: 9/10/11/12/13px
+
+【Tab栏 (P2-3~6)】
+  前缀: 🖥emoji → 5px圆点(绿色/灰色)
+  关闭按钮: 默认透明 hover可见30%
+  新建+: 25%透明度
+  激活Tab背景 = #0a0a12
+
+【交互 (P2-7~12)】
+  hover条目/卡片 → rgba(255,255,255,0.03)
+  hover工具按钮 → 8%→25%
+  hover复原按钮 → 紫色25%→45% + 紫色底4%
+  搜索框focus → 紫色边框 rgba(102,126,234,0.2)
+  所有hover过渡0.1s
+
+【文件传输进度条 (P2-13~15)】
+  ScrollArea内部 → 终端区底部固定浮层
+  高度72px (分隔线+两行+进度条)
+  不传输时完全隐藏
+
+【窄屏 (P1-14自适应)】
+  面板宽度: clamp+min/max 约束
+  终端字号: clamp(12px,1.1vw,13px)
+  <700px: 隐藏两侧面板
+-->
+
+</body>
+</html>

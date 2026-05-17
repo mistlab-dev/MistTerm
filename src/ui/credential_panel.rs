@@ -102,16 +102,6 @@ impl CredentialPanel {
             .collect()
     }
 
-    /// 侧栏真实内容宽度（`available_width` 在 SidePanel 内偶发为 ∞，勿用于分列）。
-    fn panel_content_width(ui: &egui::Ui) -> f32 {
-        let w = ui.clip_rect().width().min(ui.max_rect().width());
-        if w.is_finite() && w > 32.0 {
-            w
-        } else {
-            320.0
-        }
-    }
-
     fn show_credential_list(ui: &mut egui::Ui, theme: &Theme, list: &[Credential], selected_id: &Option<String>, load: &mut impl FnMut(&Credential)) {
         let list_h = layout_util::clamp_f32(ui.available_height() * 0.28, 72.0, 200.0);
         let prev_extreme = ui.visuals().extreme_bg_color;
@@ -171,6 +161,7 @@ impl CredentialPanel {
             egui::ComboBox::from_id_source("cred_cat")
                 .selected_text(panel.form_category.label_zh())
                 .show_ui(ui, |ui| {
+                    crate::ui::chrome::apply_menu_popup_style(ui, theme);
                     for v in [
                         CredentialCategory::Server,
                         CredentialCategory::Database,
@@ -192,6 +183,7 @@ impl CredentialPanel {
             egui::ComboBox::from_id_source("cred_auth")
                 .selected_text(panel.form_auth.label_zh())
                 .show_ui(ui, |ui| {
+                    crate::ui::chrome::apply_menu_popup_style(ui, theme);
                     for v in [
                         CredentialAuthKind::Password,
                         CredentialAuthKind::SshKey,
@@ -307,7 +299,7 @@ impl CredentialPanel {
             .resizable(true)
             .frame(crate::ui::chrome::region_panel_frame(theme))
             .show(ctx, |ui| {
-                let panel_w = Self::panel_content_width(ui);
+                let panel_w = layout_util::dock_panel_content_width(ui, c_min, c_max);
                 ui.set_max_width(panel_w);
 
                 if chrome::side_panel_title_row(ui, theme, "🔐 凭证库") {

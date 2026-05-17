@@ -264,7 +264,9 @@ impl CloudSyncPanel {
             .resizable(true)
             .frame(crate::ui::chrome::region_panel_frame(theme))
             .show(ctx, |ui| {
-                if chrome::side_panel_title_row(ui, theme, "☁️ 云端同步") {
+                let panel_w = layout_util::dock_panel_content_width(ui, cl_min, cl_max);
+                ui.set_max_width(panel_w);
+                if chrome::side_panel_title_row(ui, theme, "☁ 云端同步") {
                     close_me = true;
                 }
                 ui.small(

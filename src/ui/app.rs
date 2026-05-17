@@ -9,10 +9,15 @@ use rfd::FileDialog;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use crate::core::{
-    Credential, CredentialAuthKind, expand_command_template, expand_fragment_command_stages,
+    candidate_to_session, default_ssh_config_path, parse_ssh_config_file, pending_imports,
+    CommandHistory, Credential, CredentialAuthKind, SessionLogSettings, SessionLogWriter,
+    SessionSortBy, SshConfigCandidate, expand_command_template, expand_fragment_command_stages,
     expand_rhai_blocks, list_placeholder_keys, merge_rhai_context,
-    FragmentManager, FragmentStats, SessionConfig, SessionManager, SortBy,
+    FragmentManager, FragmentStats, SessionConfig, SessionManager, SortBy, SESSION_COLOR_TAGS,
 };
+use crate::ui::command_history_overlay::{CommandHistoryAction, CommandHistoryOverlay};
+use crate::ui::session_log_dialog::SessionLogDialog;
+use crate::ui::ssh_config_import_dialog::SshConfigImportDialog;
 use crate::ui::sidebar::Sidebar;
 use crate::ui::terminal::TerminalView;
 use crate::ui::git_sync::GitSyncPanel;
@@ -34,6 +39,26 @@ struct MistTermUiPersist {
     sidebar_user_dismissed_responsive: bool,
     #[serde(default)]
     auto_reconnect_enabled: bool,
+    #[serde(default)]
+    session_sort_by: SessionSortBy,
+    #[serde(default = "default_session_log_enabled")]
+    session_log_enabled: bool,
+    #[serde(default = "default_keepalive_enabled_persist")]
+    default_keepalive_enabled: bool,
+    #[serde(default = "default_keepalive_interval_persist")]
+    default_keepalive_interval_secs: u32,
+    #[serde(default)]
+    ssh_import_banner_dismissed: bool,
+}
+
+fn default_session_log_enabled() -> bool {
+    true
+}
+fn default_keepalive_enabled_persist() -> bool {
+    true
+}
+fn default_keepalive_interval_persist() -> u32 {
+    30
 }
 
 fn truncate_status(s: &str, max_chars: usize) -> String {
@@ -102,7 +127,7 @@ const SESSION_PLACEHOLDER_KEYS: &[&str] = &[
     "name",
 ];
 
-fn placeholders_needing_user(template: &str) -> Vec<String> {
+pub(crate) fn placeholders_needing_user(template: &str) -> Vec<String> {
     list_placeholder_keys(template)
         .into_iter()
         .filter(|k| {
@@ -120,6 +145,8 @@ struct TerminalTab {
     /// 自动重连：计划执行时间；与 `ssh_auto_reconnect_attempts` 配合（§1.4 可选行为）
     ssh_auto_reconnect_next: Option<Instant>,
     ssh_auto_reconnect_attempts: u8,
+    log_writer: Option<SessionLogWriter>,
+    last_term_rect: egui::Rect,
 }
 
 /// 变量输入对话框状态
@@ -196,15 +223,19 @@ pub struct MistTermApp {
     show_preferences_dialog: bool,
     show_fragments_dialog: bool,
     show_fragment_panel: bool,  // 命令片段侧边栏
+    /// 本帧命令片段 `SidePanel` 槽位矩形（`ui.max_rect()`）
+    fragment_panel_slot_rect: Option<egui::Rect>,
     /// 本帧任意右侧 dock（片段/SFTP/监控等）与主区交界的最左 **屏幕 x**（多栏时取 min，即贴主区的那条边）
     right_dock_outer_left_x: Option<f32>,
     show_git_sync_panel: bool,  // Git 同步面板
     show_monitor_panel: bool,   // 监控面板
     /// 终端视口搜索（当前屏缓冲，不含卷动历史）
     show_terminal_search: bool,
+    /// 打开查找条后首帧聚焦输入框
+    terminal_search_pending_focus: bool,
     terminal_search_query: String,
     terminal_search_ignore_case: bool,
-    terminal_search_matches: Vec<(usize, usize)>,
+    terminal_search_hits: Vec<crate::terminal::SearchHit>,
     terminal_search_cur: usize,
     show_sftp_panel: bool,       // SFTP 文件浏览器
     /// 上次已同步 SFTP 列表的终端标签索引（切换标签时重置远端浏览状态）
@@ -229,8 +260,13 @@ pub struct MistTermApp {
     edit_session_password: String,
     edit_session_group: String,
     edit_session_private_key_path: String,
+    edit_session_color_tag: String,
+    edit_session_keepalive_enabled: bool,
+    edit_session_keepalive_interval_secs: u32,
+    edit_session_keepalive_count_max: u8,
     sidebar_search_query: String,
     sidebar_filter: String,
+    session_sort_by: SessionSortBy,
     fragment_search_query: String,
 
     /// 片段排序方式
@@ -267,6 +303,19 @@ pub struct MistTermApp {
     auto_reconnect_enabled: bool,
     /// ≥10MB 上传：待用户选择 SCP 或 ZMODEM 的本地路径
     large_upload_pending_path: Option<std::path::PathBuf>,
+
+    command_history: CommandHistory,
+    command_history_overlay: CommandHistoryOverlay,
+    ssh_import_dialog: SshConfigImportDialog,
+    ssh_config_candidates: Vec<SshConfigCandidate>,
+    ssh_config_path: std::path::PathBuf,
+    ssh_import_banner_dismissed: bool,
+    title_ssh_import_dismissed: bool,
+    session_log_settings: SessionLogSettings,
+    session_log_dialog: SessionLogDialog,
+    session_log_enabled: bool,
+    default_keepalive_enabled: bool,
+    default_keepalive_interval_secs: u32,
 
     /// FUNCTIONAL_SPEC §1.3.4：Delete 删除会话前的确认 `(session_id, display_name)`
     delete_session_confirm: Option<(String, String)>,
@@ -430,7 +479,7 @@ impl MistTermApp {
                 .unwrap_or_else(|_| FragmentManager::new()),
             selected_session_id,
             sidebar_collapsed: false,
-            sidebar_width: 200.0,
+            sidebar_width: layout_util::default_sidebar_width(&cc.egui_ctx),
             sidebar_user_dismissed_responsive: false,
             last_responsive_layout_band: None,
             tabs: Vec::new(),
@@ -446,13 +495,15 @@ impl MistTermApp {
             show_preferences_dialog: false,
             show_fragments_dialog: false,
             show_fragment_panel: false,
+            fragment_panel_slot_rect: None,
             right_dock_outer_left_x: None,
             show_git_sync_panel: false,
             show_monitor_panel: false,
             show_terminal_search: false,
+            terminal_search_pending_focus: false,
             terminal_search_query: String::new(),
             terminal_search_ignore_case: true,
-            terminal_search_matches: Vec::new(),
+            terminal_search_hits: Vec::new(),
             terminal_search_cur: 0,
             show_sftp_panel: false,
             sftp_last_tab: None,
@@ -486,8 +537,13 @@ impl MistTermApp {
             edit_session_password: String::new(),
             edit_session_group: "默认".to_string(),
             edit_session_private_key_path: String::new(),
+            edit_session_color_tag: String::new(),
+            edit_session_keepalive_enabled: true,
+            edit_session_keepalive_interval_secs: 30,
+            edit_session_keepalive_count_max: 3,
             sidebar_search_query: String::new(),
             sidebar_filter: "全部".to_string(),
+            session_sort_by: SessionSortBy::default(),
             fragment_search_query: String::new(),
             fragment_sort_by: SortBy::UsageCount,
             variable_dialog: FragmentVariableDialog::default(),
@@ -498,20 +554,205 @@ impl MistTermApp {
             close_tab_confirm_idx: None,
             auto_reconnect_enabled: false,
             large_upload_pending_path: None,
+            command_history: CommandHistory::new(),
+            command_history_overlay: CommandHistoryOverlay::default(),
+            ssh_import_dialog: SshConfigImportDialog::default(),
+            ssh_config_candidates: Vec::new(),
+            ssh_config_path: default_ssh_config_path(),
+            ssh_import_banner_dismissed: false,
+            title_ssh_import_dismissed: false,
+            session_log_settings: SessionLogSettings::default(),
+            session_log_dialog: SessionLogDialog::default(),
+            session_log_enabled: true,
+            default_keepalive_enabled: true,
+            default_keepalive_interval_secs: 30,
         };
 
         if let Some(storage) = cc.storage {
             if let Some(p) =
                 eframe::get_value::<MistTermUiPersist>(storage, MISTTERM_UI_STORAGE_KEY)
             {
-                app.sidebar_width = p.sidebar_width.clamp(160.0, 520.0);
+                app.sidebar_width = layout_util::clamp_sidebar_width(p.sidebar_width);
                 app.sidebar_collapsed = p.sidebar_collapsed;
                 app.sidebar_user_dismissed_responsive = p.sidebar_user_dismissed_responsive;
                 app.auto_reconnect_enabled = p.auto_reconnect_enabled;
+                app.session_sort_by = p.session_sort_by;
+                app.session_log_enabled = p.session_log_enabled;
+                app.default_keepalive_enabled = p.default_keepalive_enabled;
+                app.default_keepalive_interval_secs = p.default_keepalive_interval_secs;
+                app.ssh_import_banner_dismissed = p.ssh_import_banner_dismissed;
             }
         }
+        app.session_log_settings.enabled = app.session_log_enabled;
+        app.refresh_ssh_config_candidates();
 
         app
+    }
+
+    fn refresh_ssh_config_candidates(&mut self) {
+        self.ssh_config_candidates = if self.ssh_config_path.exists() {
+            parse_ssh_config_file(&self.ssh_config_path)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+    }
+
+    fn ssh_pending_import_count(&self) -> usize {
+        pending_imports(
+            &self.ssh_config_candidates,
+            self.session_manager.list_sessions(),
+        )
+        .len()
+    }
+
+    fn open_ssh_import_dialog(&mut self) {
+        self.refresh_ssh_config_candidates();
+        let pending: Vec<SshConfigCandidate> = pending_imports(
+            &self.ssh_config_candidates,
+            self.session_manager.list_sessions(),
+        )
+        .into_iter()
+        .cloned()
+        .collect();
+        if pending.is_empty() {
+            self.status_message = if self.ssh_config_path.exists() {
+                "所有 SSH 配置已导入".to_string()
+            } else {
+                format!(
+                    "未找到 SSH 配置文件：{}",
+                    self.ssh_config_path.display()
+                )
+            };
+            return;
+        }
+        self.ssh_import_dialog.set_candidates(pending);
+    }
+
+    fn import_ssh_indices(&mut self, indices: &[usize]) {
+        let existing_names: Vec<String> = self
+            .session_manager
+            .list_sessions()
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+        let mut names = existing_names;
+        let mut added = 0usize;
+        for &i in indices {
+            let Some(c) = self.ssh_import_dialog.candidates.get(i) else {
+                continue;
+            };
+            if !c.importable() {
+                continue;
+            }
+            let mut cfg = candidate_to_session(c, &names);
+            if !self.default_keepalive_enabled {
+                cfg.keepalive_enabled = false;
+            } else {
+                cfg.keepalive_interval_secs = self.default_keepalive_interval_secs;
+            }
+            let name = cfg.name.clone();
+            names.push(name.clone());
+            self.session_manager.add_session(cfg);
+            added += 1;
+        }
+        if added > 0 {
+            self.status_message = format!("已导入 {} 个 SSH 配置", added);
+            self.refresh_ssh_config_candidates();
+        }
+    }
+
+    fn terminal_connect(terminal: &mut TerminalView, theme: &crate::ui::theme::Theme, session: &SessionConfig) {
+        let (ka_on, ka_int, ka_max) = Self::session_keepalive_params(session);
+        terminal.connect(
+            theme,
+            &session.host,
+            session.port,
+            &session.username,
+            &session.password,
+            &session.private_key_path,
+            ka_on,
+            ka_int,
+            ka_max,
+        );
+    }
+
+    fn session_keepalive_params(session: &SessionConfig) -> (bool, u32, u8) {
+        if session.keepalive_enabled {
+            (
+                true,
+                session.keepalive_interval_secs.max(1),
+                session.keepalive_count_max.max(1),
+            )
+        } else {
+            (false, 0, session.keepalive_count_max.max(1))
+        }
+    }
+
+    fn ensure_tab_log_writer(&mut self, tab_idx: usize) {
+        let Some(tab) = self.tabs.get(tab_idx) else {
+            return;
+        };
+        if tab.log_writer.is_some() {
+            return;
+        }
+        let sid = tab.session_id.clone();
+        let name = self
+            .session_manager
+            .get_session(&sid)
+            .map(|s| s.name.clone())
+            .unwrap_or_else(|| tab.title.clone());
+        let settings = self.session_log_settings.clone();
+        if let Some(tab) = self.tabs.get_mut(tab_idx) {
+            tab.log_writer = Some(SessionLogWriter::new(sid, name, settings));
+        }
+    }
+
+    fn poll_command_history_from_active_tab(&mut self) {
+        let Some(idx) = self.active_tab else {
+            return;
+        };
+        let (sid, sname, cmd) = {
+            let Some(tab) = self.tabs.get_mut(idx) else {
+                return;
+            };
+            let cmd = tab.terminal.take_submitted_line();
+            let sid = tab.session_id.clone();
+            let sname = self
+                .session_manager
+                .get_session(&sid)
+                .map(|s| s.name.clone());
+            (sid, sname, cmd)
+        };
+        if let Some(command) = cmd {
+            self.command_history.record(
+                &command,
+                Some(&sid),
+                sname.as_deref(),
+                true,
+            );
+        }
+    }
+
+    fn append_terminal_output_logs(&mut self) {
+        if !self.session_log_enabled {
+            return;
+        }
+        for tab in &mut self.tabs {
+            if let Some(writer) = tab.log_writer.as_mut() {
+                while let Some(chunk) = tab.terminal.take_pending_log_output() {
+                    writer.append_output(&chunk);
+                }
+            }
+        }
+    }
+
+    fn active_tab_log_status(&self) -> Option<String> {
+        let idx = self.active_tab?;
+        let tab = self.tabs.get(idx)?;
+        tab.log_writer
+            .as_ref()
+            .map(|w| w.status_label())
     }
 
     fn id_sidebar_connection_search() -> egui::Id {
@@ -533,6 +774,9 @@ impl MistTermApp {
             || self.close_tab_confirm_idx.is_some()
             || self.quick_selector.open
             || self.large_upload_pending_path.is_some()
+            || self.ssh_import_dialog.open
+            || self.command_history_overlay.open
+            || self.session_log_dialog.open
     }
 
     fn focus_sidebar_connection_search(&mut self, ctx: &egui::Context) {
@@ -667,19 +911,12 @@ impl MistTermApp {
         let offline = self.tabs[idx].terminal.offline_input_snapshot();
         self.tabs[idx].terminal.disconnect();
         let theme = self.theme_manager.current_theme();
-        self.tabs[idx].terminal.connect(
-            theme,
-            &session.host,
-            session.port,
-            &session.username,
-            &session.password,
-            &session.private_key_path,
-        );
+        Self::terminal_connect(&mut self.tabs[idx].terminal, theme, &session);
         self.tabs[idx]
             .terminal
             .restore_offline_input_snapshot(offline.0, offline.1);
         if let Some(t) = self.tabs.get_mut(idx) {
-            t.title = format!("{}@{}", session.username, session.host);
+            t.title = session.name.clone();
         }
         self.session_manager.mark_session_connected(&sid);
         self.sync_monitor_panel_to_active_tab();
@@ -696,33 +933,35 @@ impl MistTermApp {
 
     /// 活动标签：SCP 直传或弹出 ≥10MB 选择（与拖放共用，FUNCTIONAL_SPEC §4.3）
     fn enqueue_upload_for_active_tab(&mut self, path: std::path::PathBuf) {
-        const TEN_MB: u64 = 10 * 1024 * 1024;
-        if self.active_tab.is_none() {
-            self.status_message = "没有活动的终端标签，无法上传".to_string();
-            return;
-        }
-        let sz = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        if sz >= TEN_MB {
-            let disp = path.display().to_string();
-            self.large_upload_pending_path = Some(path);
-            self.status_message = format!(
-                "请选择上传方式（≥10MB）：{}（{}）",
-                disp,
-                Self::format_bytes_short(sz)
-            );
-            return;
-        }
-        if let Some(terminal) = self.current_terminal_mut() {
-            match terminal.start_upload(path.as_path()) {
-                Ok(_) => {
-                    self.status_message = format!(
-                        "开始 SCP 上传: {} · {}",
-                        path.display(),
-                        Self::format_bytes_short(sz)
-                    );
-                }
-                Err(e) => {
-                    self.status_message = format!("上传失败: {}", e);
+        use crate::core::{decide_upload_dispatch, format_bytes_short, UploadDispatch};
+
+        match decide_upload_dispatch(path.as_path(), self.active_tab.is_some()) {
+            UploadDispatch::NoActiveTab => {
+                self.status_message = "没有活动的终端标签，无法上传".to_string();
+            }
+            UploadDispatch::PromptLargeFile { size_bytes } => {
+                let disp = path.display().to_string();
+                self.large_upload_pending_path = Some(path);
+                self.status_message = format!(
+                    "请选择上传方式（≥10MB）：{}（{}）",
+                    disp,
+                    format_bytes_short(size_bytes)
+                );
+            }
+            UploadDispatch::ScpDirect { size_bytes } => {
+                if let Some(terminal) = self.current_terminal_mut() {
+                    match terminal.start_upload(path.as_path()) {
+                        Ok(_) => {
+                            self.status_message = format!(
+                                "开始 SCP 上传: {} · {}",
+                                path.display(),
+                                format_bytes_short(size_bytes)
+                            );
+                        }
+                        Err(e) => {
+                            self.status_message = format!("上传失败: {}", e);
+                        }
+                    }
                 }
             }
         }
@@ -751,19 +990,8 @@ impl MistTermApp {
         fragment: &FragmentStats,
         values: &HashMap<String, String>,
     ) -> String {
-        let session = self
-            .selected_session_id
-            .as_deref()
-            .and_then(|sid| self.session_manager.get_session(sid));
-        expand_fragment_command_stages(&fragment.command, session, values).unwrap_or_else(
-            |_| {
-                let after = fragment.apply_variables(values);
-                let ctx = merge_rhai_context(session, values);
-                expand_rhai_blocks(&after, &ctx)
-                    .map(|rh| expand_command_template(&rh, session, values))
-                    .unwrap_or_else(|_| expand_command_template(&after, session, values))
-            },
-        )
+        let session = self.session_for_selected();
+        crate::core::build_fragment_command_preview(fragment, session, values)
     }
 
     fn finalize_fragment_command_text(
@@ -771,12 +999,14 @@ impl MistTermApp {
         text: &str,
         values: &HashMap<String, String>,
     ) -> Result<String, String> {
-        let session = self
-            .selected_session_id
+        let session = self.session_for_selected();
+        crate::core::finalize_fragment_command_text(text, session, values)
+    }
+
+    fn session_for_selected(&self) -> Option<&crate::core::SessionConfig> {
+        self.selected_session_id
             .as_deref()
-            .and_then(|sid| self.session_manager.get_session(sid));
-        // 与 `expand_fragment_command_stages` 一致：`{{ md5(<user>) }}` 依赖 Rhai 块内再将 `<>` 转成引号字面量
-        expand_fragment_command_stages(text, session, values)
+            .and_then(|sid| self.session_manager.get_session(sid))
     }
 
     fn finalize_pending_fragment_send(&self) -> Result<String, String> {
@@ -818,39 +1048,23 @@ impl MistTermApp {
         i.modifiers.command || i.modifiers.ctrl
     }
 
-    /// 上传/提示用简短体积文案
-    fn format_bytes_short(n: u64) -> String {
-        const KB: u64 = 1024;
-        const MB: u64 = KB * 1024;
-        if n >= MB {
-            format!("{:.1} MB", n as f64 / MB as f64)
-        } else if n >= KB {
-            format!("{:.1} KB", n as f64 / KB as f64)
-        } else {
-            format!("{} B", n)
-        }
-    }
-
     /// 为给定会话配置追加一个新终端标签并发起连接（不检查是否已有同会话标签）
     fn push_tab_connecting(&mut self, session: &SessionConfig) {
-        let theme = self.theme_manager.current_theme();
         let mut terminal = TerminalView::new();
-        terminal.connect(
-            theme,
-            &session.host,
-            session.port,
-            &session.username,
-            &session.password,
-            &session.private_key_path,
-        );
+        let theme = self.theme_manager.current_theme();
+        Self::terminal_connect(&mut terminal, theme, session);
         self.tabs.push(TerminalTab {
             session_id: session.id.clone(),
-            title: format!("{}@{}", session.username, session.host),
+            title: session.name.clone(),
             terminal,
             ssh_auto_reconnect_next: None,
             ssh_auto_reconnect_attempts: 0,
+            log_writer: None,
+            last_term_rect: egui::Rect::NOTHING,
         });
-        self.active_tab = Some(self.tabs.len() - 1);
+        let idx = self.tabs.len() - 1;
+        self.ensure_tab_log_writer(idx);
+        self.active_tab = Some(idx);
         self.session_manager.mark_session_connected(&session.id);
         self.status_message = format!("正在连接：{}", session.name);
     }
@@ -870,25 +1084,171 @@ impl MistTermApp {
         self.push_tab_connecting(&session);
     }
 
+    /// 终端列内查找条（非浮动 Window，避免标题栏占满宽）。返回 `true` 表示关闭。
+    fn show_terminal_search_bar(&mut self, ui: &mut egui::Ui, theme: &crate::ui::theme::Theme) -> bool {
+        use eframe::egui::{Key, RichText};
+        let bar_h = theme.size_terminal_search_bar_h();
+        let w = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(w, bar_h), egui::Sense::hover());
+        ui.painter().rect_filled(rect, 0.0, theme.chrome_bar_fill());
+        ui.painter().hline(
+            rect.x_range(),
+            rect.top(),
+            egui::Stroke::new(1.0, theme.border_divider_color()),
+        );
+
+        let detail = if self.current_terminal().is_none() {
+            "请先打开终端标签".to_string()
+        } else if self.terminal_search_query.is_empty() {
+                "匹配终端缓冲（含 scrollback）".to_string()
+            } else if self.terminal_search_hits.is_empty() {
+                "无匹配".to_string()
+            } else {
+                let hit = self.terminal_search_hits[self.terminal_search_cur];
+                format!(
+                    "第 {}/{} · 行{} 列{}",
+                    self.terminal_search_cur + 1,
+                    self.terminal_search_hits.len(),
+                    hit.line.0,
+                    hit.column + 1
+                )
+            };
+
+        let mut close = false;
+        let inner = rect.shrink2(egui::vec2(theme.spacing_region_pad_x(), 0.0));
+        ui.allocate_ui_at_rect(inner, |ui| {
+            ui.set_height(bar_h);
+            if ui.input(|i| i.key_pressed(Key::Escape)) {
+                close = true;
+            }
+            if ui.input(|i| i.key_pressed(Key::F3) && i.modifiers.shift) {
+                self.terminal_search_step(-1);
+            } else if ui.input(|i| i.key_pressed(Key::F3)) {
+                self.terminal_search_step(1);
+            }
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = theme.spacing_status_left_gap();
+                ui.label(
+                    RichText::new("查找")
+                        .size(theme.font_size_panel_title())
+                        .color(theme.fg_medium_color()),
+                );
+                let search_id = egui::Id::new("mistterm_terminal_search_input");
+                let input_w = (ui.available_width() * 0.22).clamp(96.0, 200.0);
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut self.terminal_search_query)
+                        .id(search_id)
+                        .hint_text("关键词…")
+                        .desired_width(input_w)
+                        .text_color(theme.fg_high_color()),
+                );
+                if self.terminal_search_pending_focus {
+                    resp.request_focus();
+                    self.terminal_search_pending_focus = false;
+                }
+                if resp.changed() {
+                    self.rebuild_terminal_search_matches();
+                }
+                if resp.has_focus()
+                    && ui.ctx().input(|i| i.key_pressed(Key::Enter))
+                    && !self.terminal_search_hits.is_empty()
+                {
+                    self.terminal_search_step(1);
+                }
+                if ui
+                    .checkbox(&mut self.terminal_search_ignore_case, "Aa")
+                    .on_hover_text("忽略大小写")
+                    .changed()
+                {
+                    self.rebuild_terminal_search_matches();
+                }
+                if ui.small_button("◀").on_hover_text("上一个 (Shift+F3)").clicked() {
+                    self.terminal_search_step(-1);
+                }
+                if ui.small_button("▶").on_hover_text("下一个 (F3 / Enter)").clicked() {
+                    self.terminal_search_step(1);
+                }
+                if crate::ui::chrome::close_icon_button(ui, theme).clicked() {
+                    close = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(detail)
+                            .size(theme.font_size_small())
+                            .color(theme.fg_low_color()),
+                    );
+                });
+            });
+        });
+        close
+    }
+
+    fn toggle_terminal_search(&mut self) {
+        self.show_terminal_search = !self.show_terminal_search;
+        if self.show_terminal_search {
+            self.terminal_search_pending_focus = true;
+            self.rebuild_terminal_search_matches();
+        } else {
+            self.terminal_search_pending_focus = false;
+            self.sync_terminal_search_highlight();
+        }
+    }
+
+    fn sync_terminal_search_highlight(&mut self) {
+        let q_len = self.terminal_search_query.chars().count();
+        if !self.show_terminal_search || self.terminal_search_query.is_empty() || q_len == 0 {
+            if let Some(t) = self.current_terminal_mut() {
+                t.set_search_highlight(None);
+            }
+            return;
+        }
+        let Some(hit) = self.terminal_search_hits.get(self.terminal_search_cur).copied() else {
+            if let Some(t) = self.current_terminal_mut() {
+                t.set_search_highlight(None);
+            }
+            return;
+        };
+        if let Some(t) = self.current_terminal_mut() {
+            let highlight = t.reveal_search_hit(hit).map(|(line, col)| (line, col, q_len));
+            t.set_search_highlight(highlight);
+        }
+    }
+
+    fn terminal_search_step(&mut self, delta: isize) {
+        if self.terminal_search_hits.is_empty() {
+            return;
+        }
+        let n = self.terminal_search_hits.len();
+        self.terminal_search_cur = if delta >= 0 {
+            (self.terminal_search_cur + 1) % n
+        } else {
+            (self.terminal_search_cur + n - 1) % n
+        };
+        self.sync_terminal_search_highlight();
+    }
+
     fn rebuild_terminal_search_matches(&mut self) {
-        self.terminal_search_matches.clear();
+        self.terminal_search_hits.clear();
         let Some(t) = self.current_terminal() else {
             self.terminal_search_cur = 0;
+            self.sync_terminal_search_highlight();
             return;
         };
         if self.terminal_search_query.is_empty() {
             self.terminal_search_cur = 0;
+            self.sync_terminal_search_highlight();
             return;
         }
-        self.terminal_search_matches =
-            t.search_viewport(&self.terminal_search_query, self.terminal_search_ignore_case);
-        if self.terminal_search_matches.is_empty() {
+        self.terminal_search_hits =
+            t.search_all(&self.terminal_search_query, self.terminal_search_ignore_case);
+        if self.terminal_search_hits.is_empty() {
             self.terminal_search_cur = 0;
         } else {
             self.terminal_search_cur = self
                 .terminal_search_cur
-                .min(self.terminal_search_matches.len() - 1);
+                .min(self.terminal_search_hits.len() - 1);
         }
+        self.sync_terminal_search_highlight();
     }
 
     /// 选择会话
@@ -980,6 +1340,10 @@ impl MistTermApp {
             self.edit_session_password = "****".to_string();
             self.edit_session_group = session.group;
             self.edit_session_private_key_path = session.private_key_path;
+            self.edit_session_color_tag = session.color_tag.clone();
+            self.edit_session_keepalive_enabled = session.keepalive_enabled;
+            self.edit_session_keepalive_interval_secs = session.keepalive_interval_secs;
+            self.edit_session_keepalive_count_max = session.keepalive_count_max;
             self.show_edit_session_dialog = true;
         }
     }
@@ -1018,6 +1382,16 @@ impl MistTermApp {
         );
 
         if updated {
+            let color = self.edit_session_color_tag.clone();
+            let ka_on = self.edit_session_keepalive_enabled;
+            let ka_int = self.edit_session_keepalive_interval_secs;
+            let ka_max = self.edit_session_keepalive_count_max;
+            let _ = self.session_manager.patch_session(&session_id, |s| {
+                s.color_tag = color;
+                s.keepalive_enabled = ka_on;
+                s.keepalive_interval_secs = ka_int;
+                s.keepalive_count_max = ka_max;
+            });
             self.status_message = format!("已更新会话：{}", self.edit_session_name);
             if self.selected_session_id.as_deref() == Some(session_id.as_str()) {
                 self.select_session(&session_id);
@@ -1028,10 +1402,93 @@ impl MistTermApp {
         }
     }
 
-    /// 显示命令片段面板（带统计信息）
-    ///
-    /// 布局对齐 `docs/product/SPECIFICATION_DETAILED.md` §5：扁平列表 + 四标签，卡片三行（标题 / 命令截断 / 统计）。
+    /// 注册命令片段栏槽位（须在 Central 之前）。实际 UI 见 [`show_fragment_panel_foreground`]。
     fn show_fragment_panel(&mut self, ctx: &egui::Context, theme: &crate::ui::theme::Theme) {
+        let (frag_def, frag_min, frag_max) =
+            layout_util::side_panel_widths(ctx, layout_util::SidePanelProfile::Fragment);
+        let fragment_panel = egui::SidePanel::right(layout_util::FRAGMENT_PANEL_ID)
+            .default_width(frag_def)
+            .min_width(frag_min)
+            .max_width(frag_max)
+            .resizable(true)
+            .show_separator_line(false)
+            // 仅占布局宽；勿在此绘制内容（CentralPanel 后绘会盖住）。内容在 Foreground Area 重绘。
+            .frame(egui::Frame::none())
+            .show(ctx, |ui| {
+                self.fragment_panel_slot_rect = Some(ui.max_rect());
+                let w = layout_util::dock_panel_content_width(ui, frag_min, frag_max);
+                let h = ui.available_height().max(1.0);
+                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+            });
+        if let Some(slot) = self.fragment_panel_slot_rect {
+            layout_util::record_right_dock_panel_rect(&slot, &mut self.right_dock_outer_left_x);
+        } else {
+            layout_util::record_right_dock_panel(
+                &fragment_panel.response,
+                &mut self.right_dock_outer_left_x,
+            );
+        }
+        let _ = theme;
+    }
+
+    /// Central 之后绘制命令片段（egui 规定 Central 最后绘制，会盖住同层 SidePanel 的像素）。
+    pub(crate) fn show_fragment_panel_foreground(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+    ) {
+        if !self.show_fragment_panel {
+            return;
+        }
+        let screen = ctx.screen_rect();
+        let Some(slot) = layout_util::right_dock_foreground_slot(
+            self.fragment_panel_slot_rect,
+            ctx,
+            layout_util::FRAGMENT_PANEL_ID,
+            layout_util::SidePanelProfile::Fragment,
+            None,
+        ) else {
+            return;
+        };
+        let paint = layout_util::inset_slot_for_foreground_paint(slot, screen);
+        let (_, frag_min, frag_max) =
+            layout_util::side_panel_widths(ctx, layout_util::SidePanelProfile::Fragment);
+        let inner = crate::ui::chrome::right_dock_slot_content_rect(paint, theme);
+        let panel_w = layout_util::clamp_f32(inner.width(), frag_min, frag_max);
+        let border = theme.border_color();
+        // Middle + constrain_to(paint)：须在 Central(Background) 之上、模态 Window(Middle, 后绘) 之下。
+        egui::Area::new(egui::Id::new("mistterm_fragment_fg"))
+            .order(egui::Order::Middle)
+            .movable(false)
+            .constrain(true)
+            .constrain_to(paint)
+            .fixed_pos(paint.min)
+            .show(ctx, |ui| {
+                ui.set_clip_rect(paint);
+                ui.set_min_size(paint.size());
+                ui.set_max_size(paint.size());
+                crate::ui::chrome::paint_right_dock_slot_shell(ui, paint, theme);
+                ui.allocate_ui_at_rect(inner, |ui| {
+                    ui.set_clip_rect(inner);
+                    ui.set_min_width(panel_w);
+                    ui.set_max_width(panel_w);
+                    self.show_fragment_panel_contents(ui, theme, panel_w);
+                });
+                ui.painter().vline(
+                    paint.max.x - 0.5,
+                    paint.y_range(),
+                    egui::Stroke::new(1.0, border),
+                );
+            });
+    }
+
+    /// 命令片段面板正文（§5 扁平列表 + 四标签）。
+    fn show_fragment_panel_contents(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &crate::ui::theme::Theme,
+        panel_w: f32,
+    ) {
         if !matches!(
             self.fragment_filter_category.as_str(),
             "常用" | "Docker" | "K8s" | "全部"
@@ -1040,202 +1497,173 @@ impl MistTermApp {
         }
         let stats_num = theme.color_chip_fill();
         let title_style = theme.color_section_title();
-        let (frag_def, frag_min, frag_max) =
-            layout_util::side_panel_widths(ctx, layout_util::SidePanelProfile::Fragment);
-        let fragment_panel = egui::SidePanel::right("fragment_panel")
-            .default_width(frag_def)
-            .min_width(frag_min)
-            .max_width(frag_max)
-            .resizable(true)
-            // 默认可见分隔线画在 Frame 左缘；与中央区叠层时偶发错位。关闭后仍可在左缘拖拽改宽度。
-            .show_separator_line(false)
-            // 与 SFTP 等默认 SidePanel 一致：外侧不用圆角，避免左缘（靠终端一侧）抗锯齿与底色错位像「灰条」；
-            // 卡片行内仍保留圆角（见下方片段 Frame）。
-            .frame(crate::ui::chrome::region_panel_frame(theme))
-            .show(ctx, |ui| {
-                // 某些帧上 `available_width` 会为 ∞，与 max 组合仍为 ∞，会把整个侧栏撑满屏
-                let mut aw = ui.available_width();
-                if !aw.is_finite() || aw > 10_000.0 {
-                    aw = ui.max_rect().width();
-                }
-                if !aw.is_finite() || aw < 1.0 {
-                    aw = frag_def;
-                }
-                // 勿 `ui.set_width`：会干扰 SidePanel 实际宽度，叠层时中央终端易「压」在右栏上
-                let panel_w = layout_util::clamp_f32(aw, frag_min, frag_max);
-                // SPEC §3.2 / §5：面板标题区 padding 9px 10px
-                egui::Frame::none()
-                    .inner_margin(egui::Margin::symmetric(theme.spacing_panel_title_pad_x(), theme.spacing_panel_title_pad_y()))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("命令片段")
-                                    .size(theme.font_size_small())
-                                    .strong()
-                                    .color(title_style),
-                            );
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if crate::ui::chrome::close_icon_button(ui, theme)
-                                        .on_hover_text("关闭命令片段侧栏")
-                                        .clicked()
-                                    {
-                                        self.show_fragment_panel = false;
-                                    }
-                                    let hdr_btn_h = 22.0;
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                egui::RichText::new("➕ 新建…").size(theme.font_size_panel_title()),
-                                            )
-                                            .min_size(egui::vec2(0.0, hdr_btn_h))
-                                            .rounding(theme.radius_list_item()),
-                                        )
-                                        .on_hover_text(
-                                            "打开片段库：自建命令、`<变量>`、会话占位符（host/user/port）等",
-                                        )
-                                        .clicked()
-                                    {
-                                        self.fragment_library.open = true;
-                                    }
-                                    let sort_label = match self.fragment_sort_by {
-                                        SortBy::UsageCount => "🔢 次数",
-                                        SortBy::SuccessRate => "✅ 成功率",
-                                        SortBy::LastUsed => "🕐 最近",
-                                        SortBy::Name => "🔤 名称",
-                                    };
-                                    if ui
-                                        .add(
-                                            egui::Button::new(egui::RichText::new(sort_label).size(theme.font_size_tool_btn()))
-                                                .min_size(egui::vec2(0.0, hdr_btn_h))
-                                                .rounding(theme.radius_list_item()),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.fragment_sort_by =
-                                            match self.fragment_sort_by {
-                                                SortBy::UsageCount => SortBy::SuccessRate,
-                                                SortBy::SuccessRate => SortBy::LastUsed,
-                                                SortBy::LastUsed => SortBy::Name,
-                                                SortBy::Name => SortBy::UsageCount,
-                                            };
-                                        self.fragment_manager.sort(self.fragment_sort_by);
-                                    }
-                                },
-                            );
-                        });
-                    });
-                ui.separator();
+        ui.set_max_width(panel_w);
 
-                // SPEC §3.3：搜索框区域 padding 上 4、左右沿用面板 8、下 6
-                ui.add_space(theme.spacing_sm());
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.fragment_search_query)
-                        .id(Self::id_fragment_panel_search())
-                        .hint_text("搜索片段…")
-                        .desired_width((panel_w - 14.0).max(72.0)),
-                );
-                ui.add_space(theme.spacing_panel_gap());
-
-                // §5.3：常用 │ Docker │ K8s │ 全部（与左侧「全部·在线·离线」同等分样式）
+        // SPEC §3.2 / §5：面板标题区 padding 9px 10px
+        egui::Frame::none()
+            .inner_margin(egui::Margin::symmetric(
+                theme.spacing_panel_title_pad_x(),
+                theme.spacing_panel_title_pad_y(),
+            ))
+            .show(ui, |ui| {
+                ui.set_max_width(panel_w);
                 ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                    let item_w = ((panel_w - 8.0) / 4.0).max(34.0);
-                    for label in ["常用", "Docker", "K8s", "全部"] {
-                        let active = self.fragment_filter_category == label;
-                        let text_color = if active {
-                            theme.accent_a128()
-                        } else {
-                            theme.fg_high_a46()
-                        };
-                        let fill = if active {
-                            theme.accent_a128()
-                        } else {
-                            egui::Color32::TRANSPARENT
-                        };
-                        let resp = ui.add(
-                            egui::Button::new(
-                                egui::RichText::new(label).size(theme.font_size_small()).color(text_color),
+                    ui.set_max_width(panel_w);
+                    ui.label(
+                        egui::RichText::new("命令片段")
+                            .size(theme.font_size_small())
+                            .strong()
+                            .color(title_style),
+                    );
+                    // 与监控/凭证 dock 一致：RTL 贴右排列，避免 allocate 固定宽把 × 裁到面板外。
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
+                            if crate::ui::chrome::close_icon_button(ui, theme)
+                                .on_hover_text("关闭命令片段侧栏")
+                                .clicked()
+                            {
+                                self.show_fragment_panel = false;
+                            }
+                            if crate::ui::chrome::panel_toolbar_button(
+                                ui,
+                                theme,
+                                "➕ 新建…",
+                                theme.font_size_panel_title(),
                             )
-                            .fill(fill)
-                            .stroke(egui::Stroke::NONE)
-                            .rounding(theme.radius_status_btn())
-                            .min_size(egui::vec2(item_w, 20.0)),
-                        );
-                        if resp.clicked() {
-                            self.fragment_filter_category = label.to_string();
-                        }
-                    }
+                            .on_hover_text(
+                                "打开片段库：自建命令、`<变量>`、会话占位符（host/user/port）等",
+                            )
+                            .clicked()
+                            {
+                                self.fragment_library.open = true;
+                            }
+                            let sort_label = match self.fragment_sort_by {
+                                SortBy::UsageCount => "🔢 次数",
+                                SortBy::SuccessRate => "✅ 成功率",
+                                SortBy::LastUsed => "🕐 最近",
+                                SortBy::Name => "🔤 名称",
+                            };
+                            if crate::ui::chrome::panel_toolbar_button(
+                                ui,
+                                theme,
+                                sort_label,
+                                theme.font_size_tool_btn(),
+                            )
+                            .clicked()
+                            {
+                                self.fragment_sort_by = match self.fragment_sort_by {
+                                    SortBy::UsageCount => SortBy::SuccessRate,
+                                    SortBy::SuccessRate => SortBy::LastUsed,
+                                    SortBy::LastUsed => SortBy::Name,
+                                    SortBy::Name => SortBy::UsageCount,
+                                };
+                                self.fragment_manager.sort(self.fragment_sort_by);
+                            }
+                        },
+                    );
                 });
+            });
+        ui.separator();
 
-                ui.add_space(theme.spacing_md());
+        // SPEC §3.3：搜索框区域 padding 上 4、左右沿用面板 8、下 6
+        ui.add_space(theme.spacing_sm());
+        let field_w = ui.available_width().max(72.0);
+        ui.add(
+            egui::TextEdit::singleline(&mut self.fragment_search_query)
+                .id(Self::id_fragment_panel_search())
+                .hint_text("搜索片段…")
+                .desired_width((field_w - 2.0).max(72.0)),
+        );
+        ui.add_space(theme.spacing_panel_gap());
 
-                let search_lower = self.fragment_search_query.to_lowercase();
-                let search_match = |f: &FragmentStats| {
-                    search_lower.is_empty()
-                        || f.title.to_lowercase().contains(&search_lower)
-                        || f.command.to_lowercase().contains(&search_lower)
-                };
-
-                let mut work: Vec<FragmentStats> = self
-                    .fragment_manager
-                    .get_all()
-                    .iter()
-                    .filter(|f| search_match(f))
-                    .cloned()
-                    .collect();
-
-                match self.fragment_filter_category.as_str() {
-                    "Docker" => work.retain(|f| f.category == "Docker"),
-                    "K8s" => work.retain(|f| f.category == "K8s"),
-                    "常用" => {
-                        work.retain(|f| f.usage_count > 0);
-                        if work.is_empty() {
-                            work = self
-                                .fragment_manager
-                                .get_all()
-                                .iter()
-                                .filter(|f| search_match(&f))
-                                .cloned()
-                                .collect();
-                        }
-                        work.sort_by(|a, b| b.usage_count.cmp(&a.usage_count));
-                    }
-                    _ => {
-                        let sort = self.fragment_sort_by;
-                        match sort {
-                            SortBy::UsageCount => {
-                                work.sort_by(|a, b| b.usage_count.cmp(&a.usage_count))
-                            }
-                            SortBy::SuccessRate => work.sort_by(|a, b| {
-                                b.success_rate()
-                                    .partial_cmp(&a.success_rate())
-                                    .unwrap_or(std::cmp::Ordering::Equal)
-                            }),
-                            SortBy::LastUsed => {
-                                work.sort_by(|a, b| b.last_used.cmp(&a.last_used))
-                            }
-                            SortBy::Name => work.sort_by(|a, b| a.title.cmp(&b.title)),
-                        }
-                    }
+        // §5.3：常用 │ Docker │ K8s │ 全部
+        ui.horizontal(|ui| {
+            ui.set_max_width(panel_w);
+            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+            let item_w = ((ui.available_width() - 6.0) / 4.0).max(34.0);
+            for label in ["常用", "Docker", "K8s", "全部"] {
+                let active = self.fragment_filter_category == label;
+                if crate::ui::chrome::filter_chip_button(
+                    ui,
+                    theme,
+                    label,
+                    active,
+                    egui::vec2(item_w, 20.0),
+                )
+                .clicked()
+                {
+                    self.fragment_filter_category = label.to_string();
                 }
+            }
+        });
 
-                let scroll_h = ui.available_height().max(80.0);
-                // 滑道/占位条用面板同色，避免默认 extreme_bg 比 bg_window 浅时像一条竖灰带（SFTP 默认 Scroll 未隐藏条，不明显）。
-                let prev_extreme = ui.visuals().extreme_bg_color;
-                ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
-                egui::ScrollArea::vertical()
-                    .id_source("mistterm_fragment_list_scroll")
-                    .auto_shrink([false, false])
-                    .max_height(scroll_h)
-                    // egui：clip 偏窄时会把纵向滚动条整体左移以免被裁掉，会压到片段文字上。
-                    .scroll_bar_visibility(
-                        egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden,
-                    )
-                    .show(ui, |ui| {
-                        // 不要用 set_width(panel_w)：滚动条会占宽度，强设 full 宽会导致内容超出可视区被裁切
-                        if work.is_empty() {
+        ui.add_space(theme.spacing_md());
+
+        let search_lower = self.fragment_search_query.to_lowercase();
+        let search_match = |f: &FragmentStats| {
+            search_lower.is_empty()
+                || f.title.to_lowercase().contains(&search_lower)
+                || f.command.to_lowercase().contains(&search_lower)
+        };
+
+        let mut work: Vec<FragmentStats> = self
+            .fragment_manager
+            .get_all()
+            .iter()
+            .filter(|f| search_match(f))
+            .cloned()
+            .collect();
+
+        match self.fragment_filter_category.as_str() {
+            "Docker" => work.retain(|f| f.category == "Docker"),
+            "K8s" => work.retain(|f| f.category == "K8s"),
+            "常用" => {
+                work.retain(|f| f.usage_count > 0);
+                if work.is_empty() {
+                    work = self
+                        .fragment_manager
+                        .get_all()
+                        .iter()
+                        .filter(|f| search_match(f))
+                        .cloned()
+                        .collect();
+                }
+                work.sort_by(|a, b| b.usage_count.cmp(&a.usage_count));
+            }
+            _ => {
+                let sort = self.fragment_sort_by;
+                match sort {
+                    SortBy::UsageCount => {
+                        work.sort_by(|a, b| b.usage_count.cmp(&a.usage_count))
+                    }
+                    SortBy::SuccessRate => work.sort_by(|a, b| {
+                        b.success_rate()
+                            .partial_cmp(&a.success_rate())
+                            .unwrap_or(std::cmp::Ordering::Equal)
+                    }),
+                    SortBy::LastUsed => {
+                        work.sort_by(|a, b| b.last_used.cmp(&a.last_used))
+                    }
+                    SortBy::Name => work.sort_by(|a, b| a.title.cmp(&b.title)),
+                }
+            }
+        }
+
+        let scroll_h = ui.available_height().max(80.0);
+        let prev_extreme = ui.visuals().extreme_bg_color;
+        ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
+        egui::ScrollArea::vertical()
+            .id_source("mistterm_fragment_list_scroll")
+            .auto_shrink([false, false])
+            .max_height(scroll_h)
+            .scroll_bar_visibility(
+                egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden,
+            )
+            .show(ui, |ui| {
+                ui.set_max_width(panel_w);
+                if work.is_empty() {
                             ui.label(
                                 egui::RichText::new("暂无片段")
                                     .size(theme.font_size_panel_title())
@@ -1252,85 +1680,97 @@ impl MistTermApp {
                                 }
                             });
 
-                            let tag_col = (panel_w * 0.17).clamp(40.0, 56.0);
+                            let row_w = ui.available_width().max(72.0);
+                            let tag_col = (row_w * 0.17).clamp(36.0, 52.0);
                             let mid_gap = 4.0_f32;
 
-                            // SPEC §5.4：片段卡片 padding 7px × 8px
-                            egui::Frame::none()
-                                .inner_margin(egui::Margin::symmetric(theme.spacing_panel_content_x(), theme.spacing_card_y()))
-                                .rounding(theme.radius_list_item())
-                                .show(ui, |ui| {
-                                    let full_w = ui.available_width();
-                                    let main_w = (full_w - tag_col - mid_gap).max(52.0);
+                            const ROW_MIN_H: f32 = 52.0;
+                            let pad_x = theme.spacing_panel_content_x();
+                            let pad_y = theme.spacing_card_y();
+                            let (row_rect, row_response) = ui.allocate_at_least(
+                                egui::vec2(row_w, ROW_MIN_H),
+                                egui::Sense::click(),
+                            );
+                            let bg = if row_response.hovered() {
+                                theme.list_row_hover_bg()
+                            } else {
+                                egui::Color32::TRANSPARENT
+                            };
+                            ui.painter().rect_filled(
+                                row_rect,
+                                theme.radius_card(),
+                                bg,
+                            );
+                            let main_w = (row_w - tag_col - mid_gap).max(52.0);
+                            let inner = egui::Margin::symmetric(pad_x, pad_y).shrink_rect(row_rect);
+                            let mut row_ui = ui.child_ui(
+                                inner,
+                                egui::Layout::left_to_right(egui::Align::TOP),
+                            );
+                            row_ui.horizontal(|ui| {
+                                ui.set_max_width(inner.width());
+                                ui.vertical(|ui| {
+                                    ui.set_max_width(main_w);
+                                    ui.spacing_mut().item_spacing.y = 2.0;
 
-                                    ui.horizontal(|ui| {
-                                        ui.vertical(|ui| {
-                                            ui.set_max_width(main_w);
-                                            ui.spacing_mut().item_spacing.y = 2.0;
+                                    let title_resp = ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&frag.title)
+                                                .size(theme.font_size_fragment_title())
+                                                .color(theme.accent_a128()),
+                                        )
+                                        .sense(egui::Sense::click()),
+                                    );
+                                    if title_resp.clicked() {
+                                        self.begin_fragment_insert(frag);
+                                    }
+                                    title_resp.on_hover_text(&frag.command);
 
-                                            let title_resp = ui.link(
-                                                egui::RichText::new(&frag.title)
-                                                    .size(theme.font_size_normal())
-                                                    .color(theme.fg_medium_color()),
-                                            );
-                                            if title_resp.clicked() {
-                                                self.begin_fragment_insert(frag);
-                                            }
-                                            title_resp.on_hover_text(&frag.command);
+                                    let cmd_trim = frag.command.trim();
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(cmd_trim)
+                                                .size(theme.font_size_fragment_cmd())
+                                                .monospace()
+                                                .color(theme.fg_high_a31()),
+                                        )
+                                        .truncate(true),
+                                    )
+                                    .on_hover_text(cmd_trim);
 
-                                            let cmd_trim = frag.command.trim();
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(&stats_line)
+                                                .size(theme.font_size_fragment_stats())
+                                                .color(stats_num),
+                                        )
+                                        .truncate(true),
+                                    );
+                                });
+                                ui.add_space(mid_gap);
+                                ui.vertical(|ui| {
+                                    ui.set_width(tag_col);
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::TOP),
+                                        |ui| {
                                             ui.add(
                                                 egui::Label::new(
-                                                    egui::RichText::new(cmd_trim)
-                                                        .size(theme.font_size_small())
-                                                        .monospace()
-                                                        .color(theme.fg_low_color()),
+                                                    egui::RichText::new(&tag_label)
+                                                        .size(theme.font_size_tag())
+                                                        .color(theme.color_fragment_tag_text()),
                                                 )
                                                 .truncate(true),
                                             )
-                                            .on_hover_text(cmd_trim);
-
-                                            ui.add(
-                                                egui::Label::new(
-                                                    egui::RichText::new(&stats_line)
-                                                        .size(theme.font_size_small())
-                                                        .color(stats_num),
-                                                )
-                                                .truncate(true),
-                                            );
-                                        });
-
-                                        ui.add_space(mid_gap);
-                                        ui.vertical(|ui| {
-                                            ui.set_width(tag_col);
-                                            ui.with_layout(
-                                                egui::Layout::right_to_left(egui::Align::TOP),
-                                                |ui| {
-                                                    ui.add(
-                                                        egui::Label::new(
-                                                            egui::RichText::new(&tag_label)
-                                                                .size(theme.font_size_tag())
-                                                                .color(
-                                                                    theme.color_fragment_tag_text(),
-                                                                ),
-                                                        )
-                                                        .truncate(true),
-                                                    )
-                                                    .on_hover_text(&tag_label);
-                                                },
-                                            );
-                                        });
-                                    });
+                                            .on_hover_text(&tag_label);
+                                        },
+                                    );
                                 });
+                            });
 
-                            ui.add_space(1.0);
-                            ui.separator();
-                            ui.add_space(1.0);
+                            ui.add_space(theme.spacing_list_item_gap());
                         }
                     });
-                ui.visuals_mut().extreme_bg_color = prev_extreme;
-            });
-        layout_util::record_right_dock_panel(&fragment_panel.response, &mut self.right_dock_outer_left_x);
+        ui.visuals_mut().extreme_bg_color = prev_extreme;
     }
 
     /// 从右侧片段列表点击：支持片段库定义的变量、命令里的 `<占位符>`，以及会话字段替换。
@@ -1462,35 +1902,51 @@ impl MistTermApp {
             .resizable(true)
             .frame(crate::ui::chrome::region_panel_frame(theme))
             .show(ctx, |ui| {
+                let panel_w = layout_util::dock_panel_content_width(ui, g_min, g_max);
+                ui.set_max_width(panel_w);
                 self.git_sync_panel.show(ui, theme);
             });
         layout_util::record_right_dock_panel(&git_panel.response, &mut self.right_dock_outer_left_x);
     }
 
+    #[allow(dead_code)]
+    fn title_bar_connection(&self) -> Option<crate::ui::chrome::TitleBarConnection> {
+        let terminal = self.current_terminal()?;
+        let online = terminal.is_connected();
+        let connecting = terminal.is_connecting();
+        let status_label = if let Some(err) = terminal.connection_error_text() {
+            truncate_status(err, 24)
+        } else if online {
+            "在线".to_string()
+        } else if connecting {
+            "连接中…".to_string()
+        } else {
+            "已断开".to_string()
+        };
+        Some(crate::ui::chrome::TitleBarConnection {
+            server_text: terminal.connection_server_text(),
+            status_label,
+            online,
+            connecting,
+        })
+    }
+
     /// README §2.4 状态徽章：淡色底，内边距 2px 8px，圆角 4px，11px 高对比字色
     fn status_chip(ui: &mut egui::Ui, text: &str, theme: &crate::ui::theme::Theme) {
         theme.frame_status_chip().show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new(text)
-                        .monospace()
-                        .size(theme.font_size_panel_title())
-                        .color(theme.fg_high_color()),
-                );
-            });
+            ui.label(
+                egui::RichText::new(text)
+                    .size(theme.font_size_status_bar())
+                    .color(theme.fg_high_color()),
+            );
+        });
     }
 
-    /// 底栏：上行 **44px** 快捷文字按钮（易见）；下行 SPEC §6 **28px** 状态区。单行 28px 时易换行被裁切且纯图标过淡。
+    /// 底栏：改造后 **32px** 单行状态栏（左复原+连接信息，右工具图标+统计）
     fn show_bottom_chrome(&mut self, ctx: &egui::Context) {
         let theme = self.theme_manager.current_theme().clone();
-        let bottom_h = theme.size_bottom_chrome_total_h();
-        let quick_h = theme.size_bottom_quick_bar_h();
         let status_h = theme.status_bar_height();
-        let bar_fill = theme.color_panel_surface();
-        let btn_idle = theme.fg_high_a20();
-        let btn_primary = theme.accent_color();
-        let status_bar_bg = theme.bg_tab_bar_color();
-        let h_btn = theme.size_bottom_quick_btn_h();
-
+        let fragment_count = self.fragment_manager.get_all().len();
         let total_runs: u32 = self
             .fragment_manager
             .get_all()
@@ -1499,261 +1955,112 @@ impl MistTermApp {
             .sum();
 
         egui::TopBottomPanel::bottom("bottom_chrome")
-            .exact_height(bottom_h)
-            .frame(
-                egui::Frame::none()
-                    .inner_margin(egui::Margin::ZERO)
-                    .outer_margin(egui::Margin::ZERO),
-            )
+            .exact_height(status_h)
+            .frame(theme.frame_chrome_bar())
             .show(ctx, |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
+                let outer = ui.max_rect();
+                ui.painter()
+                    .rect_filled(outer, 0.0, theme.chrome_bar_fill());
+                ui.painter().hline(
+                    outer.x_range(),
+                    outer.top(),
+                    egui::Stroke::new(1.0, theme.border_divider_color()),
+                );
+                let content_h = ui
+                    .available_height()
+                    .min(theme.chrome_bar_content_height(status_h));
+                let bar_w = ui.available_width();
+                let right_w = 168.0;
+                ui.horizontal(|ui| {
+                    ui.set_min_height(content_h);
+                    ui.spacing_mut().item_spacing =
+                        egui::vec2(theme.spacing_status_left_gap(), 0.0);
 
-                // 上：快捷操作栏
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), quick_h),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        let rect = ui.max_rect();
-                        ui.painter().rect_filled(rect, 0.0, bar_fill);
-                        ui.painter().hline(
-                            rect.x_range(),
-                            rect.top(),
-                            egui::Stroke::new(1.0, theme.border_color()),
-                        );
-                        ui.add_space(theme.spacing_list_item_x());
-                        ui.spacing_mut().item_spacing = egui::vec2(theme.spacing_md(), 0.0);
-                        ui.horizontal(|ui| {
-                            let mk = |label: &str, fill: egui::Color32, w: f32| {
-                                egui::Button::new(
-                                    egui::RichText::new(label)
-                                        .size(theme.font_size_normal())
-                                        .color(theme.fg_high_color()),
-                                )
-                                .fill(fill)
-                                .rounding(theme.radius_status_btn())
-                                .min_size(egui::vec2(w, h_btn))
-                            };
-
-                            if ui
-                                .add(mk(
-                                    "📋 命令片段",
-                                    btn_primary,
-                                    theme.size_bottom_tool_btn_fragment_w(),
-                                ))
-                                .on_hover_text(
-                                    "切换右侧片段列表 · ⌘J · 菜单「工具→命令片段库」\n§8：窗口宽 <1200px 时无法打开右侧侧栏，底栏会显示「§8中/窄」提示",
-                                )
-                                .clicked()
-                            {
-                                if self.show_fragment_panel {
-                                    self.show_fragment_panel = false;
-                                } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                    self.show_fragment_panel = true;
-                                }
+                    let left_w = (bar_w - right_w).max(120.0);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(left_w, content_h),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            if let Some(metrics) = self.monitor_panel.status_bar_metrics_line() {
+                                Self::status_chip(ui, &metrics, &theme);
                             }
-                            if ui.add(mk(
-                                    "📤 上传",
-                                    btn_idle,
-                                    theme.size_bottom_tool_btn_default_w(),
-                                ))
-                                .on_hover_text(
-                                    "上传至远端当前目录（<10MB 默认 SCP；≥10MB 可选 ZMODEM）。拖放文件到终端区亦可（§4.3）。",
-                                )
-                                .clicked()
-                            {
-                                if let Some(path) = FileDialog::new().pick_file() {
-                                    self.enqueue_upload_for_active_tab(path);
-                                }
+                            if self.auto_reconnect_enabled {
+                                ui.add_space(theme.spacing_sm());
+                                Self::status_chip(ui, "↻ 自动重连", &theme);
                             }
-                            if ui.add(mk("🔍 搜索", btn_idle, theme.size_bottom_tool_btn_default_w()))
-                                .on_hover_text("在当前终端视口搜索 · ⌘F / Ctrl+F")
-                                .clicked()
-                            {
-                                self.show_terminal_search = !self.show_terminal_search;
-                                if self.show_terminal_search {
-                                    self.rebuild_terminal_search_matches();
-                                }
-                            }
-                            if ui.add(mk("⚙️ 设置", btn_idle, theme.size_bottom_tool_btn_default_w()))
-                                .on_hover_text("偏好设置（主题、云端同步入口）· 同 ⌘,")
-                                .clicked()
-                            {
-                                self.show_preferences_dialog = true;
-                            }
-                            if ui.add(mk("🔀 Git", btn_idle, theme.size_bottom_tool_btn_default_w())).on_hover_text("Git 同步面板").clicked()
-                            {
-                                if self.show_git_sync_panel {
-                                    self.show_git_sync_panel = false;
-                                } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                    self.show_git_sync_panel = true;
-                                }
-                            }
-                            if ui.add(mk("📊 监控", btn_idle, theme.size_bottom_tool_btn_default_w())).on_hover_text("系统监控面板").clicked()
-                            {
-                                if self.show_monitor_panel {
-                                    self.show_monitor_panel = false;
-                                    self.monitor_last_tab = None;
-                                } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                    self.show_monitor_panel = true;
-                                    self.sync_monitor_panel_to_active_tab();
-                                    self.monitor_last_tab = self.active_tab;
-                                }
-                            }
-                            if ui
-                                .add(mk("🔐 凭证", btn_idle, theme.size_bottom_tool_btn_default_w()))
-                                .on_hover_text("加密凭证库")
-                                .clicked()
-                            {
-                                if self.credential_panel.open {
-                                    self.credential_panel.open = false;
-                                } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                    self.credential_panel.open = true;
-                                }
-                            }
-                            if ui
-                                .add(mk("☁️ 同步", btn_idle, theme.size_bottom_tool_btn_default_w()))
-                                .on_hover_text("云端同步 / 导出包")
-                                .clicked()
-                            {
-                                if self.cloud_sync_panel.open {
-                                    self.cloud_sync_panel.open = false;
-                                } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                    self.cloud_sync_panel.open = true;
-                                }
-                            }
-                            if ui
-                                .add(mk("📂 SFTP", btn_idle, 104.0))
-                                .on_hover_text(
-                                    "切换远端 SFTP 侧栏。ZMODEM 下载目录可在连接后于状态栏查看。",
-                                )
-                                .clicked()
-                            {
-                                if self.show_sftp_panel {
-                                    self.show_sftp_panel = false;
-                                } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                    self.show_sftp_panel = true;
-                                    self.sftp_last_tab = None;
-                                    self.sftp_panel.request_list_on_open();
-                                    if let Some(terminal) = self.current_terminal() {
-                                        self.status_message = format!(
-                                            "SFTP 侧栏已打开；本机 ZMODEM 目录 {}",
-                                            terminal.download_dir()
-                                        );
+                            if self.session_log_enabled {
+                                if let Some(log_label) = self.active_tab_log_status() {
+                                    ui.add_space(theme.spacing_sm());
+                                    let chip = ui
+                                        .add(
+                                            egui::Label::new(
+                                                egui::RichText::new(log_label)
+                                                    .size(theme.font_size_status_bar_stats())
+                                                    .color(theme.fg_low_color()),
+                                            )
+                                            .sense(egui::Sense::click()),
+                                        )
+                                        .on_hover_text("查看本会话的终端输出录制（本地日志文件）");
+                                    if chip.clicked() {
+                                        if let Some(idx) = self.active_tab {
+                                            let sid =
+                                                self.tabs.get(idx).map(|t| t.session_id.clone());
+                                            let name = sid.as_deref().and_then(|id| {
+                                                self.session_manager
+                                                    .get_session(id)
+                                                    .map(|s| s.name.clone())
+                                            });
+                                            if let (Some(id), Some(n)) = (sid, name) {
+                                                self.session_log_dialog.open_for(
+                                                    &id,
+                                                    &n,
+                                                    &self.session_log_settings,
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                             }
-                        });
-                    },
-                );
-
-                ui.add_space(theme.size_bottom_quick_status_gap());
-
-                // 下：状态栏（28px，单行，避免嵌套 horizontal + 右对齐再次换行被裁掉）
-                ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), status_h),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        let rect = ui.max_rect();
-                        ui.painter().rect_filled(rect, 0.0, status_bar_bg);
-                        ui.painter().hline(
-                            rect.x_range(),
-                            rect.top(),
-                            egui::Stroke::new(1.0, theme.subtle_line_color()),
-                        );
-                        ui.add_space(theme.spacing_status_bar_x());
-
-                        let session_count = self.tabs.len();
-                        let fragment_count = self.fragment_manager.get_all().len();
-
-                        let mut server_line = "⚡ 未选择会话".to_string();
-                        let mut font_px = "14px".to_string();
-                        let mut duration_chip = "—".to_string();
-
-                        if let Some(terminal) = self.current_terminal() {
-                            server_line = format!("⚡ {}", terminal.connection_server_text());
-                            font_px = format!("{:.0}px", terminal.font_size());
-                            duration_chip = if let Some(err) = terminal.connection_error_text() {
-                                truncate_status(err, 28)
-                            } else if terminal.is_connected() {
-                                terminal.connection_duration_text()
-                            } else {
-                                "连接中…".to_string()
-                            };
-                        }
-
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing = egui::vec2(theme.spacing_md(), 0.0);
-                            // §8 档位放最前，避免被长 host 行挤出可视区
-                            let lw = Self::layout_window_width(ctx);
-                            if let Some(b) = Self::layout_band_from_width(lw) {
-                                let band_chip = match b {
-                                    ResponsiveLayoutBand::Narrow => format!("§8窄 {:.0}px", lw),
-                                    ResponsiveLayoutBand::Medium => format!("§8中 {:.0}px", lw),
-                                    ResponsiveLayoutBand::Wide => format!("§8宽 {:.0}px", lw),
-                                };
-                                Self::status_chip(ui, &band_chip, &theme);
-                            }
                             if self.sidebar_collapsed {
-                                let restore = egui::Button::new(
-                                    egui::RichText::new(format!("▸ 连接 · {}", session_count))
-                                        .size(theme.font_size_small())
-                                        .color(theme.accent_alpha(64)),
+                                ui.add_space(theme.spacing_sm());
+                                if crate::ui::chrome::status_restore_chip(
+                                    ui,
+                                    &theme,
+                                    &format!("▸ 连接 · {}", self.tabs.len()),
                                 )
-                                .fill(theme.accent_a10())
-                                .rounding(theme.radius_status_btn())
-                                .min_size(egui::vec2(
-                                    theme.size_title_menu_btn_w(),
-                                    theme.size_title_menu_btn_h(),
-                                ));
-                                if ui.add(restore).clicked() {
+                                .on_hover_text("展开左侧连接栏")
+                                .clicked()
+                                {
                                     self.sidebar_collapsed = false;
                                     self.sidebar_user_dismissed_responsive = false;
                                 }
                             }
                             if !self.show_fragment_panel {
-                                let restore = egui::Button::new(
-                                    egui::RichText::new(format!("▸ 命令片段 · {}", fragment_count))
-                                        .size(theme.font_size_small())
-                                        .color(theme.accent_alpha(64)),
+                                ui.add_space(theme.spacing_sm());
+                                if crate::ui::chrome::status_restore_chip(
+                                    ui,
+                                    &theme,
+                                    &format!("▸ 命令片段 · {}", fragment_count),
                                 )
-                                .fill(theme.accent_a10())
-                                .rounding(theme.radius_status_btn())
-                                .min_size(egui::vec2(
-                                    theme.size_title_menu_btn_w(),
-                                    theme.size_title_menu_btn_h(),
-                                ));
-                                if ui.add(restore).clicked() {
+                                .on_hover_text("展开右侧命令片段侧栏")
+                                .clicked()
+                                {
                                     if self.ensure_right_dock_allowed_or_warn(ctx) {
                                         self.show_fragment_panel = true;
                                     }
                                 }
                             }
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&server_line)
-                                        .monospace()
-                                        .size(theme.font_size_panel_title())
-                                        .color(theme.fg_medium_color()),
-                                )
-                                .truncate(true),
-                            );
-                            ui.add_space(theme.spacing_sm());
-                            Self::status_chip(ui, "UTF-8", &theme);
-                            Self::status_chip(ui, &font_px, &theme);
-                            Self::status_chip(ui, &duration_chip, &theme);
-                            Self::status_chip(ui, &format!("累计{}次", total_runs), &theme);
-
                             if !self.status_message.is_empty() {
-                                ui.add_space(theme.spacing_list_item_x());
-                                let hint_w = (ui.available_width() - 8.0).clamp(160.0, 560.0);
+                                ui.add_space(theme.spacing_sm());
+                                let msg_w = ui.available_width().max(40.0);
                                 ui.add_sized(
-                                    [hint_w, status_h],
+                                    [msg_w, content_h],
                                     egui::Label::new(
                                         egui::RichText::new(truncate_status(
                                             &self.status_message,
-                                            140,
+                                            40,
                                         ))
-                                        .size(theme.font_size_small())
+                                        .size(theme.font_size_status_bar_stats())
                                         .color(status_message_text_color(
                                             &self.status_message,
                                             &theme,
@@ -1762,9 +2069,71 @@ impl MistTermApp {
                                     .truncate(true),
                                 );
                             }
-                        });
-                    },
-                );
+                        },
+                    );
+
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(right_w, content_h),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                        ui.spacing_mut().item_spacing =
+                            egui::vec2(theme.spacing_tool_btn_gap(), 0.0);
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{}片段 · {}次",
+                                fragment_count, total_runs
+                            ))
+                            .size(theme.font_size_status_bar_stats())
+                            .color(theme.fg_low_color()),
+                        );
+                        ui.add_space(theme.spacing_status_right_gap());
+                        ui.label(
+                            egui::RichText::new("|")
+                                .size(theme.font_size_status_bar_stats())
+                                .color(theme.fg_high_a10()),
+                        );
+
+                        // right_to_left：先 add 的靠右；顺序 📋→📤→🔍→📊 视觉为 📊🔍📤📋
+                        if crate::ui::chrome::status_tool_glyph(ui, &theme, "📋")
+                            .on_hover_text("命令片段 · ⌘K")
+                            .clicked()
+                        {
+                            if self.show_fragment_panel {
+                                self.show_fragment_panel = false;
+                            } else if self.ensure_right_dock_allowed_or_warn(ctx) {
+                                self.show_fragment_panel = true;
+                            }
+                        }
+                        if crate::ui::chrome::status_tool_glyph(ui, &theme, "📤")
+                            .on_hover_text("上传文件 · 拖放亦可")
+                            .clicked()
+                        {
+                            if let Some(path) = FileDialog::new().pick_file() {
+                                self.enqueue_upload_for_active_tab(path);
+                            }
+                        }
+                        if crate::ui::chrome::status_tool_glyph(ui, &theme, "🔍")
+                            .on_hover_text("终端搜索 · ⌘F")
+                            .clicked()
+                        {
+                            self.toggle_terminal_search();
+                        }
+                        if crate::ui::chrome::status_tool_glyph(ui, &theme, "📊")
+                            .on_hover_text("系统监控")
+                            .clicked()
+                        {
+                            if self.show_monitor_panel {
+                                self.show_monitor_panel = false;
+                                self.monitor_last_tab = None;
+                            } else if self.ensure_right_dock_allowed_or_warn(ctx) {
+                                self.show_monitor_panel = true;
+                                self.sync_monitor_panel_to_active_tab();
+                                self.monitor_last_tab = self.active_tab;
+                            }
+                        }
+                        },
+                    );
+                });
             });
     }
 
@@ -1794,8 +2163,14 @@ impl eframe::App for MistTermApp {
             sidebar_collapsed: self.sidebar_collapsed,
             sidebar_user_dismissed_responsive: self.sidebar_user_dismissed_responsive,
             auto_reconnect_enabled: self.auto_reconnect_enabled,
+            session_sort_by: self.session_sort_by,
+            session_log_enabled: self.session_log_enabled,
+            default_keepalive_enabled: self.default_keepalive_enabled,
+            default_keepalive_interval_secs: self.default_keepalive_interval_secs,
+            ssh_import_banner_dismissed: self.ssh_import_banner_dismissed,
         };
         eframe::set_value(storage, MISTTERM_UI_STORAGE_KEY, &p);
+        let _ = self.command_history.save();
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
@@ -1815,9 +2190,18 @@ impl eframe::App for MistTermApp {
         if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
             || ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F))
         {
-            self.show_terminal_search = !self.show_terminal_search;
-            if self.show_terminal_search {
-                self.rebuild_terminal_search_matches();
+            self.toggle_terminal_search();
+        }
+        if self.show_terminal_search {
+            let step = ctx.input(|i| {
+                if i.key_pressed(egui::Key::F3) {
+                    Some(if i.modifiers.shift { -1 } else { 1 })
+                } else {
+                    None
+                }
+            });
+            if let Some(delta) = step {
+                self.terminal_search_step(delta);
             }
         }
 
@@ -1826,6 +2210,8 @@ impl eframe::App for MistTermApp {
         // 监控：`exec` 由 shell 泵串行执行，在此处轮询结果并驱动自动刷新
         self.monitor_panel.update(ctx, self.show_monitor_panel);
         self.try_flush_pending_fragment_insert();
+        self.poll_command_history_from_active_tab();
+        self.append_terminal_output_logs();
 
         if let Some(ti) = self.active_tab {
             if let Some(tab) = self.tabs.get_mut(ti) {
@@ -1836,15 +2222,19 @@ impl eframe::App for MistTermApp {
         }
 
         let now = Instant::now();
-        let mut reconnect_fire: Vec<usize> = Vec::new();
-        for (i, tab) in self.tabs.iter().enumerate() {
-            if let Some(t) = tab.ssh_auto_reconnect_next {
-                if self.auto_reconnect_enabled && now >= t {
-                    reconnect_fire.push(i);
-                }
-            }
-        }
-        for i in reconnect_fire {
+        use crate::core::{
+            collect_tabs_due_for_reconnect, schedule_after_unexpected_disconnect,
+            TabReconnectSchedule, DEFAULT_MAX_RECONNECT_ATTEMPTS,
+        };
+        let schedules: Vec<TabReconnectSchedule> = self
+            .tabs
+            .iter()
+            .map(|t| TabReconnectSchedule {
+                next_fire: t.ssh_auto_reconnect_next,
+                attempts: t.ssh_auto_reconnect_attempts,
+            })
+            .collect();
+        for i in collect_tabs_due_for_reconnect(&schedules, now, self.auto_reconnect_enabled) {
             self.tabs[i].ssh_auto_reconnect_next = None;
             self.reconnect_tab_at(i);
         }
@@ -1854,18 +2244,19 @@ impl eframe::App for MistTermApp {
                 continue;
             }
             if tab.terminal.take_unexpected_disconnect_notified() {
-                if tab.ssh_auto_reconnect_attempts < 5 {
-                    let exp = tab.ssh_auto_reconnect_attempts.min(4);
-                    let delay = Duration::from_secs(1u64 << exp);
-                    tab.ssh_auto_reconnect_next = Some(now + delay);
-                    tab.ssh_auto_reconnect_attempts += 1;
-                    self.status_message = format!(
-                        "连接已断开，{} 秒后将自动重连（{}/5）",
-                        delay.as_secs(),
-                        tab.ssh_auto_reconnect_attempts
-                    );
-                } else {
-                    self.status_message = "连接已断开；自动重连已达 5 次上限".to_string();
+                let sched = TabReconnectSchedule {
+                    next_fire: tab.ssh_auto_reconnect_next,
+                    attempts: tab.ssh_auto_reconnect_attempts,
+                };
+                let (new_sched, status) = schedule_after_unexpected_disconnect(
+                    sched,
+                    DEFAULT_MAX_RECONNECT_ATTEMPTS,
+                    now,
+                );
+                tab.ssh_auto_reconnect_next = new_sched.next_fire;
+                tab.ssh_auto_reconnect_attempts = new_sched.attempts;
+                if let Some(s) = status {
+                    self.status_message = s.message;
                 }
             }
         }
@@ -1957,6 +2348,18 @@ impl eframe::App for MistTermApp {
             if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::H)) {
                 self.show_about_dialog = true;
             }
+            if ctx.input(|i| i.key_pressed(egui::Key::R) && i.modifiers.ctrl && !i.modifiers.command) {
+                if self.current_terminal().map(|t| t.is_connected()).unwrap_or(false) {
+                    if self.command_history_overlay.open {
+                        self.command_history_overlay.match_index =
+                            self.command_history_overlay.match_index.saturating_add(1);
+                    } else {
+                        self.command_history_overlay.open_new();
+                    }
+                } else {
+                    self.status_message = "请先连接终端后再使用 Ctrl+R 搜索命令历史".to_string();
+                }
+            }
             // egui 0.23 无 Key::Comma；⌘/Ctrl+, 常表现为 Text(",") + 主修饰键
             let prefs_shortcut = ctx.input_mut(|i| {
                 if !Self::input_primary_mod(i) {
@@ -2033,1826 +2436,7 @@ impl eframe::App for MistTermApp {
             }
         }
 
-        // SPEC §2：标题栏 36px，padding 10×16；底部分割线 §2.1
-        egui::TopBottomPanel::top("title_bar")
-            .exact_height(36.0)
-            .frame(
-                egui::Frame::none()
-                    .fill(theme.bg_tab_bar_color())
-                    .inner_margin(egui::Margin::ZERO)
-                    .outer_margin(egui::Margin::ZERO),
-            )
-            .show(ctx, |ui| {
-            let title_panel_rect = ui.max_rect();
-            ui.horizontal(|ui| {
-                ui.menu_button("文件", |ui| {
-                    if ui.button("新建会话 ⌘N").clicked() {
-                        self.show_new_session_dialog = true;
-                        ui.close_menu();
-                    }
-                    if ui.button("偏好设置 ⌘,").clicked() {
-                        self.show_preferences_dialog = true;
-                        ui.close_menu();
-                    }
-                    if ui.button("关闭标签 ⌘W").clicked() {
-                        self.request_close_active_tab();
-                        ui.close_menu();
-                    }
-                    if ui.button("断开 SSH（保留输出）").clicked() {
-                        self.disconnect_ssh_keep_buffer_active();
-                        ui.close_menu();
-                    }
-                    if ui.button("重连当前标签").clicked() {
-                        self.reconnect_active_tab();
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui.button("退出").clicked() {
-                        frame.close();
-                        ui.close_menu();
-                    }
-                });
-                ui.menu_button("视图", |ui| {
-                    if ui.button(self.sidebar_collapsed.then(|| "展开侧边栏").unwrap_or("折叠侧边栏")).clicked() {
-                        self.sidebar_collapsed = !self.sidebar_collapsed;
-                        if self.sidebar_collapsed {
-                            self.sidebar_user_dismissed_responsive = true;
-                        } else {
-                            self.sidebar_user_dismissed_responsive = false;
-                        }
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    let sftp_menu = if self.show_sftp_panel {
-                        "✓ SFTP 文件面板"
-                    } else {
-                        "SFTP 文件面板"
-                    };
-                    if ui.button(sftp_menu).clicked() {
-                        if self.show_sftp_panel {
-                            self.show_sftp_panel = false;
-                        } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                            self.show_sftp_panel = true;
-                            self.sftp_last_tab = None;
-                            self.sftp_panel.request_list_on_open();
-                        }
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    ui.menu_button("主题", |ui| {
-                        let theme_names: Vec<String> = self
-                            .theme_manager
-                            .list_themes()
-                            .iter()
-                            .map(|t| t.name.clone())
-                            .collect();
-                        let current_idx = self.theme_manager.current;
-                        for (i, name) in theme_names.into_iter().enumerate() {
-                            let label = if i == current_idx {
-                                format!("✓ {}", name)
-                            } else {
-                                name
-                            };
-                            if ui.button(label).clicked() {
-                                self.theme_manager.set_theme_index(i);
-                                self.theme_manager.save();
-                                ui.close_menu();
-                            }
-                        }
-                    });
-                });
-                ui.menu_button("工具", |ui| {
-                    if ui.button("命令片段库…").clicked() {
-                        self.fragment_library.open = true;
-                        ui.close_menu();
-                    }
-                    if ui.button("凭证管理").clicked() {
-                        if self.ensure_right_dock_allowed_or_warn(ctx) {
-                            self.credential_panel.open = true;
-                        }
-                        ui.close_menu();
-                    }
-                    if ui.button("云端同步").clicked() {
-                        if self.ensure_right_dock_allowed_or_warn(ctx) {
-                            self.cloud_sync_panel.open = true;
-                        }
-                        ui.close_menu();
-                    }
-                });
-                ui.menu_button("帮助", |ui| {
-                    if ui.button("关于").clicked() {
-                        self.show_about_dialog = true;
-                        ui.close_menu();
-                    }
-                });
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let title = self
-                        .current_terminal()
-                        .map(|t| format!("MistTerm - {}", t.connection_server_text()))
-                        .unwrap_or_else(|| "MistTerm".to_string());
-                    // README §2.4 标题栏：13px
-                    ui.label(
-                        egui::RichText::new(title)
-                            .size(theme.font_size_title_bar())
-                            .color(theme.fg_low_color()),
-                    );
-                });
-            });
-            ui.painter().hline(
-                title_panel_rect.x_range(),
-                title_panel_rect.bottom() - 1.0,
-                egui::Stroke::new(
-                    1.0,
-                    theme.fg_high_a10(),
-                ),
-            );
-        });
-
-        // 右侧 dock：须先于底栏与 Central 注册（见下方 show_bottom_chrome 注释）
-        self.right_dock_outer_left_x = None;
-
-        if self.show_fragment_panel {
-            self.show_fragment_panel(ctx, &theme);
-        }
-
-        // Git 同步面板
-        if self.show_git_sync_panel {
-            self.show_git_sync_panel(ctx, &theme);
-        }
-
-        let mut cred_action: Option<CredentialPanelAction> = None;
-        if self.credential_panel.open {
-            if self
-                .credential_panel
-                .show_side_panel(ctx, &theme, &mut cred_action, &mut self.right_dock_outer_left_x)
-            {
-                self.credential_panel.open = false;
-            }
-        }
-
-        let fragments_export_path = FragmentManager::default_config_path();
-        let sessions_export_path = self.session_manager.storage_path().clone();
-        let theme_export_path = ThemeManager::config_path();
-        let mut deps = CloudSyncDeps {
-            fragments_path: &fragments_export_path,
-            sessions_path: &sessions_export_path,
-            theme_path: &theme_export_path,
-            fragment_manager: &mut self.fragment_manager,
-            theme_manager: &mut self.theme_manager,
-            session_manager: &mut self.session_manager,
-            credential_panel: &mut self.credential_panel,
-        };
-        self.cloud_sync_panel
-            .show(ctx, &theme, &mut deps, &mut self.right_dock_outer_left_x);
-
-        if let Some(CredentialPanelAction::UseForQuickConnect(c)) = cred_action {
-            self.apply_credential_to_new_session_form(c);
-        }
-
-        // SFTP（右侧面板；切换终端标签时重置远端路径并重新拉列表）
-        let mut close_sftp_panel = false;
-        if self.show_sftp_panel {
-            if self.sftp_last_tab != self.active_tab {
-                self.sftp_last_tab = self.active_tab;
-                self.sftp_panel.reset();
-                self.sftp_panel.request_list_on_open();
-            }
-            let current_terminal_ref = self
-                .active_tab
-                .and_then(|idx| self.tabs.get(idx).map(|t| &t.terminal));
-            self.sftp_panel.show_side_panel(
-                ctx,
-                &theme,
-                current_terminal_ref,
-                &mut close_sftp_panel,
-                &mut self.right_dock_outer_left_x,
-            );
-        }
-        if close_sftp_panel {
-            self.show_sftp_panel = false;
-        }
-
-        // 系统监控：切换终端标签时改为采集当前 SSH 会话（与 SFTP 侧栏一致）
-        if self.show_monitor_panel {
-            if self.monitor_last_tab != self.active_tab {
-                self.monitor_last_tab = self.active_tab;
-                self.sync_monitor_panel_to_active_tab();
-            }
-            self.monitor_panel.show_side_panel(
-                ctx,
-                &theme,
-                &mut self.show_monitor_panel,
-                &mut self.right_dock_outer_left_x,
-            );
-        }
-
-        // egui：须先完成所有左右 SidePanel，再注册底栏，最后 CentralPanel；否则右栏与主区叠绘错位（点击片段后像「全屏花屏」）
-        self.show_bottom_chrome(ctx);
-
-        // 主内容区：侧边栏 + 终端
-        egui::CentralPanel::default()
-            // 透明底：Central 在 SidePanel 之后绘制，若此处铺 bg_body 会叠在右栏文字上形成「灰竖条」
-            .frame(
-                egui::Frame::none()
-                    .fill(egui::Color32::TRANSPARENT)
-                    .inner_margin(egui::Margin::ZERO)
-                    .outer_margin(egui::Margin::ZERO),
-            )
-            .show(ctx, |ui| {
-                // Central 后于 SidePanel 绘制；工作区以 ctx.available_rect 为准（已扣除右栏），
-                // 再以各右栏记录的 max_rect.min.x 收紧，避免终端黑底盖住监控/SFTP 等。
-                let work = layout_util::central_work_rect(ctx, self.right_dock_outer_left_x);
-                if work.width() < 1.0 || work.height() < 1.0 {
-                    return;
-                }
-                ui.set_clip_rect(work);
-                ui.allocate_ui_at_rect(work, |ui| {
-                ui.set_clip_rect(work);
-                ui.painter().rect_filled(work, 0.0, theme.bg_body_color());
-                ui.set_min_size(work.size());
-                let layout_h = ui.available_height();
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                    ui.set_height(layout_h);
-                    // 须用已分配子项的右缘，勿用 max_rect.min.x（仍是整行左缘，终端会盖住侧栏）
-                    let mut col_left = ui.max_rect().min.x;
-                    if !self.sidebar_collapsed {
-                        let connected_sessions: HashSet<String> = self
-                            .tabs
-                            .iter()
-                            .filter(|t| t.terminal.is_connected())
-                            .map(|t| t.session_id.clone())
-                            .collect();
-
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(self.sidebar_width, layout_h),
-                            egui::Layout::top_down(egui::Align::LEFT),
-                            |ui| {
-                                crate::ui::chrome::region_panel_frame(&theme)
-                                    .stroke(egui::Stroke::NONE)
-                                    .show(ui, |ui| {
-                                        ui.set_width(self.sidebar_width);
-                                        egui::Frame::none()
-                                            .fill(theme.border_color())
-                                            .rounding(0.0)
-                                            .inner_margin(theme.margin_sidebar_search_field())
-                                            .show(ui, |ui| {
-                                                ui.add(
-                                                    egui::TextEdit::singleline(&mut self.sidebar_search_query)
-                                                        .id(Self::id_sidebar_connection_search())
-                                                        .hint_text("搜索连接…")
-                                                        .text_color(theme.fg_high_color())
-                                                        .desired_width(
-                                                            layout_util::finite_content_width_inset(
-                                                                ui,
-                                                                0.0,
-                                                                120.0,
-                                                                ui.available_width(),
-                                                            ),
-                                                        ),
-                                                );
-                                            });
-                                        ui.horizontal(|ui| {
-                                            ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
-                                            let tab_row_w = ui.available_width().max(96.0);
-                                            let item_w = (tab_row_w / 3.0).max(48.0);
-                                            for label in ["全部", "在线", "离线"] {
-                                                let active = self.sidebar_filter == label;
-                                                let text_color = if active {
-                                                    theme.accent_a200()
-                                                } else {
-                                                    theme.fg_high_a46()
-                                                };
-                                                let fill = if active {
-                                                    theme.accent_a128()
-                                                } else {
-                                                    egui::Color32::TRANSPARENT
-                                                };
-                                                let resp = ui.add(
-                                                    egui::Button::new(
-                                                        egui::RichText::new(label).size(theme.font_size_small()).color(text_color),
-                                                    )
-                                                    .fill(fill)
-                                                    .stroke(egui::Stroke::NONE)
-                                                    .rounding(theme.radius_status_btn())
-                                                    .min_size(egui::vec2(
-                                                        item_w,
-                                                        theme.size_sidebar_filter_chip_h(),
-                                                    )),
-                                                );
-                                                if resp.clicked() {
-                                                    self.sidebar_filter = label.to_string();
-                                                }
-                                            }
-                                        });
-                                        let sidebar_output = Sidebar::show(
-                                            ui,
-                                            &self.session_manager,
-                                            &self.selected_session_id,
-                                            &self.sidebar_search_query,
-                                            &self.sidebar_filter,
-                                            &connected_sessions,
-                                            &theme,
-                                        );
-
-                                        if sidebar_output.create_session_clicked {
-                                            self.show_new_session_dialog = true;
-                                        }
-                                        if sidebar_output.collapse_clicked {
-                                            self.sidebar_collapsed = true;
-                                            self.sidebar_user_dismissed_responsive = true;
-                                        }
-                                        if let Some(session_id) = sidebar_output.selected_session_id {
-                                            self.select_session(&session_id);
-                                        }
-                                        if let Some(session_id) = sidebar_output.delete_session_id {
-                                            if let Some(s) = self.session_manager.get_session(&session_id) {
-                                                self.delete_session_confirm =
-                                                    Some((session_id, s.name.clone()));
-                                            }
-                                        }
-                                        if let Some(session_id) = sidebar_output.edit_session_id {
-                                            self.open_edit_session_dialog(&session_id);
-                                        }
-                                        if sidebar_output.response.double_clicked() {
-                                            self.sidebar_collapsed = true;
-                                            self.sidebar_user_dismissed_responsive = true;
-                                        }
-                                    });
-                            },
-                        );
-                        col_left = ui.min_rect().max.x;
-                    } else if ui.button("☰").clicked() {
-                        self.sidebar_collapsed = false;
-                        self.sidebar_user_dismissed_responsive = false;
-                        col_left = ui.min_rect().max.x;
-                    }
-
-                    if !self.sidebar_collapsed {
-                        // 宽 0 无法拖拽；压到 1px 尽量不占位
-                        let (drag_rect, drag_resp) = ui.allocate_exact_size(
-                            egui::vec2(1.0, layout_h),
-                            egui::Sense::drag(),
-                        );
-                        col_left = ui.min_rect().max.x;
-                        // 空闲态与终端左缘同色，避免侧栏右侧出现一条「分界线」似的灰竖条；拖拽时仍以高亮色提示
-                        let color = if drag_resp.hovered() || drag_resp.dragged() {
-                            theme.accent_dim_color()
-                        } else {
-                            theme.bg_terminal_color()
-                        };
-                        ui.painter().rect_filled(drag_rect, 0.0, color);
-                        if drag_resp.dragged() {
-                            let (lo, hi) = layout_util::left_sidebar_drag_clamp(ctx);
-                            self.sidebar_width = layout_util::clamp_f32(
-                                self.sidebar_width + drag_resp.drag_delta().x,
-                                lo,
-                                hi,
-                            );
-                        }
-                    }
-
-                    let term_col_w = layout_util::terminal_column_width(
-                        col_left,
-                        work.max.x,
-                        self.right_dock_outer_left_x,
-                    );
-                    let term_top = ui.max_rect().min.y;
-                    let term_rect = egui::Rect::from_min_max(
-                        egui::pos2(col_left, term_top),
-                        egui::pos2(col_left + term_col_w, term_top + layout_h),
-                    );
-                    ui.allocate_ui_at_rect(term_rect, |ui| {
-                            ui.set_clip_rect(term_rect);
-                            ui.set_max_width(term_col_w);
-                            // `top_down` 默认 item_spacing.y 会在标签栏与终端之间露出 Central 的 bg_body，形成「灰条」并易撑出滚动条
-                            let saved_col_item_spacing = ui.spacing().item_spacing;
-                            ui.spacing_mut().item_spacing.y = 0.0;
-                            // README §2.4 标签栏
-                            egui::Frame::none()
-                                .fill(theme.bg_tab_bar_color())
-                                .stroke(egui::Stroke::NONE)
-                                .inner_margin(theme.margin_tab_bar())
-                                .show(ui, |ui| {
-                                    // Frame 背景只画在 content min_rect 外扩 inner_margin 上；不拉满宽整行会露出 bg_body，像标签栏下一条灰
-                                    // 勿固定 min_height=36：会在 Tab 行下方垫一行空白，终端顶上像「多一条缝」
-                                    ui.set_min_width(ui.available_width());
-                                    let prev_padding = ui.spacing().button_padding;
-                                    let prev_item_spacing = ui.spacing().item_spacing;
-                                    // SPEC §4.3 / §8：Tab 内边距与 Tab 间距（终端区勿动此项）
-                                    ui.spacing_mut().button_padding = egui::vec2(14.0, 7.0);
-                                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 0.0);
-                                    // `horizontal` 会在剩余高度里纵向居中 Tab，易在 Tab 行上方留出一条 tab_bar 色带
-                                    ui.horizontal_top(|ui| {
-                                        let mut to_close = None;
-                                        let mut close_others = None;
-                                        let mut close_right = None;
-                                        let mut disconnect_ssh_idx = None;
-                                        let mut reconnect_idx = None;
-                                        for (idx, tab) in self.tabs.iter().enumerate() {
-                                            let active = self.active_tab == Some(idx);
-                                            let tab_label = tab.title.clone();
-                                            ui.horizontal(|ui| {
-                                                let tab_resp = ui.add(
-                                                    egui::Button::new(
-                                                        egui::RichText::new(&tab_label).size(theme.font_size_tab_label()).color(
-                                                            if active {
-                                                                theme.fg_high_color()
-                                                            } else {
-                                                                theme.fg_low_color()
-                                                            },
-                                                        ),
-                                                    )
-                                                    .fill(if active {
-                                                        theme.bg_terminal_color()
-                                                    } else {
-                                                        theme.bg_tab_bar_color()
-                                                    })
-                                                    .stroke(egui::Stroke::new(1.0, theme.border_color()))
-                                                    .rounding(theme.radius_list_item())
-                                                    .min_size(theme.vec2_tab_min_size()),
-                                                );
-                                                let dot_color = if tab.terminal.is_connected() {
-                                                    theme.green_color()
-                                                } else {
-                                                    theme.fg_high_a64()
-                                                };
-                                                let dot_pos = egui::pos2(
-                                                    tab_resp.rect.left() + 11.0,
-                                                    tab_resp.rect.center().y,
-                                                );
-                                                ui.painter().circle_filled(dot_pos, 2.5, dot_color);
-                                                if tab_resp.clicked() {
-                                                    self.active_tab = Some(idx);
-                                                    self.selected_session_id = Some(tab.session_id.clone());
-                                                }
-                                                let tab_hovered = tab_resp.hovered();
-                                                tab_resp.context_menu(|ui| {
-                                                    if tab.terminal.is_connected()
-                                                        || tab.terminal.is_connecting()
-                                                    {
-                                                        if ui.button("断开 SSH（保留输出）").clicked() {
-                                                            disconnect_ssh_idx = Some(idx);
-                                                            ui.close_menu();
-                                                        }
-                                                    }
-                                                    if ui.button("重连此标签").clicked() {
-                                                        reconnect_idx = Some(idx);
-                                                        ui.close_menu();
-                                                    }
-                                                    ui.separator();
-                                                    if ui.button("关闭其他标签").clicked() {
-                                                        close_others = Some(idx);
-                                                        ui.close_menu();
-                                                    }
-                                                    if ui.button("关闭右侧标签").clicked() {
-                                                        close_right = Some(idx);
-                                                        ui.close_menu();
-                                                    }
-                                                });
-                                                if tab_hovered
-                                                    && ui
-                                                    .add(
-                                                        egui::Button::new(
-                                                            egui::RichText::new("×")
-                                                                .size(theme.font_size_title_bar())
-                                                                .color(theme.fg_low_color()),
-                                                        )
-                                                        .fill(egui::Color32::TRANSPARENT)
-                                                        .frame(false),
-                                                    )
-                                                    .on_hover_text("关闭标签")
-                                                    .clicked()
-                                                {
-                                                    to_close = Some(idx);
-                                                }
-                                            });
-                                        }
-                                        if ui
-                                            .add(
-                                                egui::Button::new(
-                                                    egui::RichText::new("+")
-                                                        .size(theme.font_size_large())
-                                                        .color(theme.fg_low_color()),
-                                                )
-                                                .fill(egui::Color32::TRANSPARENT)
-                                                .frame(false),
-                                            )
-                                            .on_hover_text(
-                                                "新标签：左侧选中连接后点此或 ⌘T；无选中时打开新建会话配置",
-                                            )
-                                            .clicked()
-                                        {
-                                            if self.selected_session_id.is_some() {
-                                                self.open_new_tab_from_selection();
-                                            } else {
-                                                self.show_new_session_dialog = true;
-                                            }
-                                        }
-                                        if let Some(idx) = to_close {
-                                            self.request_close_tab_at(idx);
-                                        }
-                                        if let Some(idx) = disconnect_ssh_idx {
-                                            self.disconnect_ssh_keep_buffer_at(idx);
-                                        }
-                                        if let Some(idx) = reconnect_idx {
-                                            self.reconnect_tab_at(idx);
-                                        }
-                                        if let Some(idx) = close_others {
-                                            if idx < self.tabs.len() {
-                                                let kept = self.tabs.remove(idx);
-                                                for t in self.tabs.iter_mut() {
-                                                    t.terminal.disconnect();
-                                                }
-                                                self.tabs.clear();
-                                                self.tabs.push(kept);
-                                                self.active_tab = Some(0);
-                                                self.selected_session_id =
-                                                    self.tabs.first().map(|t| t.session_id.clone());
-                                            }
-                                        }
-                                        if let Some(idx) = close_right {
-                                            if idx + 1 < self.tabs.len() {
-                                                for t in self.tabs.iter_mut().skip(idx + 1) {
-                                                    t.terminal.disconnect();
-                                                }
-                                                self.tabs.truncate(idx + 1);
-                                                self.active_tab = Some(idx);
-                                                self.selected_session_id =
-                                                    self.tabs.get(idx).map(|t| t.session_id.clone());
-                                            }
-                                        }
-                                    });
-                                    ui.spacing_mut().button_padding = prev_padding;
-                                    ui.spacing_mut().item_spacing = prev_item_spacing;
-                                });
-
-                            let term_col_w = layout_util::terminal_column_width(
-                                col_left,
-                                work.max.x,
-                                self.right_dock_outer_left_x,
-                            );
-                            if let Some(terminal) = self.current_terminal_mut() {
-                                terminal.show(ui, &theme, term_col_w);
-                            } else {
-                                self.show_welcome(ui);
-                            }
-
-                            ui.spacing_mut().item_spacing = saved_col_item_spacing;
-                    });
-                });
-                });
-            });
-
-        let session_for_fragments = self
-            .selected_session_id
-            .as_deref()
-            .and_then(|sid| self.session_manager.get_session(sid).cloned());
-        let fragment_cfg = FragmentManager::default_config_path();
-        let lib_saved = self.fragment_library.show_window(
-            ctx,
-            &mut self.fragment_manager,
-            &mut self.fragment_sort_by,
-            &fragment_cfg,
-            session_for_fragments.as_ref(),
-            &theme,
-        );
-        if lib_saved {
-            self.fragment_manager.sort(self.fragment_sort_by);
-        }
-
-        // 显示新建会话对话框
-        if self.show_new_session_dialog {
-            let mut open = self.show_new_session_dialog;
-            let mut should_close = false;
-            egui::Window::new("new_session_modal")
-                .open(&mut open)
-                .title_bar(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
-                .resizable(false)
-                .collapsible(false)
-                .fixed_size(egui::vec2(380.0, 412.0))
-                .frame(crate::ui::chrome::modal_window_frame(&theme))
-                .show(ctx, |ui| {
-                    let text_color = theme.fg_high_a179();
-                    let input_stroke = egui::Stroke::new(
-                        1.0,
-                        theme.fg_high_alpha(8),
-                    );
-                    let input_fill = theme.color_panel_surface();
-                    let _input_rounding = 4.0;
-                    let required_missing =
-                        self.new_session_name.trim().is_empty() || self.new_session_host.trim().is_empty();
-
-                    crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                            let mut close_via_header = false;
-                            Self::modal_header(ui, &theme, "新建会话", &mut close_via_header);
-                            if close_via_header {
-                                self.reset_new_session_form();
-                                should_close = true;
-                            }
-
-                            ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
-                            Self::ui_field_label(ui, &theme, "会话名称");
-                            Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.new_session_name)
-                                        .frame(false)
-                                        .hint_text("例: 生产服务器-01")
-                                        .text_color(text_color)
-                                        .desired_width(layout_util::finite_content_width(ui)),
-                                );
-                            });
-
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 10.0;
-                                let row_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
-                                let host_w = (row_w - 98.0).max(160.0);
-                                ui.vertical(|ui| {
-                                    ui.set_width(host_w);
-                                    Self::ui_field_label(ui, &theme, "主机地址");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.new_session_host)
-                                                .frame(false)
-                                                .hint_text("IP 或域名")
-                                                .text_color(text_color)
-                                                .desired_width(layout_util::finite_content_width(ui)),
-                                        );
-                                    });
-                                });
-                                ui.vertical(|ui| {
-                                    ui.set_width(88.0);
-                                    Self::ui_field_label(ui, &theme, "端口");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add_sized(
-                                            [68.0, 20.0],
-                                            egui::DragValue::new(&mut self.new_session_port)
-                                                .clamp_range(1..=65535)
-                                                .speed(1.0),
-                                        );
-                                    });
-                                });
-                            });
-
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 10.0;
-                                let row_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
-                                let half = ((row_w - 10.0) / 2.0).max(140.0);
-                                ui.vertical(|ui| {
-                                    ui.set_width(half);
-                                    Self::ui_field_label(ui, &theme, "用户名");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.new_session_username)
-                                                .frame(false)
-                                                .hint_text("root")
-                                                .text_color(text_color)
-                                                .desired_width(layout_util::finite_content_width(ui)),
-                                        );
-                                    });
-                                });
-                                ui.vertical(|ui| {
-                                    ui.set_width(half);
-                                    Self::ui_field_label(ui, &theme, "密码");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.new_session_password)
-                                                .frame(false)
-                                                .password(true)
-                                                .hint_text("可留空")
-                                                .text_color(text_color)
-                                                .desired_width(layout_util::finite_content_width(ui)),
-                                        );
-                                    });
-                                });
-                            });
-
-                            Self::ui_field_label(ui, &theme, "SSH 私钥路径");
-                            Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.new_session_private_key_path)
-                                        .frame(false)
-                                        .hint_text("~/.ssh/id_rsa（留空则用密码或系统默认密钥）")
-                                        .text_color(text_color)
-                                        .desired_width(layout_util::finite_content_width(ui)),
-                                );
-                            });
-
-                            Self::ui_field_label(ui, &theme, "分组");
-                            Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.new_session_group)
-                                        .frame(false)
-                                        .hint_text("默认分组")
-                                        .text_color(text_color)
-                                        .desired_width(layout_util::finite_content_width(ui)),
-                                );
-                            });
-
-                            if required_missing {
-                                ui.add_space(theme.spacing_sm());
-                                ui.label(
-                                    egui::RichText::new("请先填写会话名称和主机地址")
-                                        .size(theme.font_size_panel_title())
-                                        .color(theme.red_a128()),
-                                );
-                            }
-
-                            ui.add_space(theme.spacing_list_item_x());
-                            ui.horizontal(|ui| {
-                                crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
-                                    if ui
-                                        .add_enabled(
-                                            !required_missing,
-                                            crate::ui::chrome::modal_primary_button_widget(
-                                                th,
-                                                "保存并连接",
-                                            ),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.create_and_connect_session();
-                                        should_close = true;
-                                    }
-                                    if crate::ui::chrome::modal_secondary_button(ui, th, "取消").clicked() {
-                                        self.reset_new_session_form();
-                                        should_close = true;
-                                    }
-                                });
-                            });
-                    });
-                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !required_missing {
-                        self.create_and_connect_session();
-                        should_close = true;
-                    }
-                });
-            self.show_new_session_dialog = open && !should_close;
-        }
-
-        if self.show_about_dialog {
-            let mut open = self.show_about_dialog;
-            let mut should_close = false;
-            egui::Window::new("about_modal")
-                .open(&mut open)
-                .title_bar(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
-                .resizable(false)
-                .collapsible(false)
-                .fixed_size(egui::vec2(420.0, 360.0))
-                .frame(crate::ui::chrome::modal_window_frame(&theme))
-                .show(ctx, |ui| {
-                    crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                            Self::modal_header(ui, &theme, "关于", &mut should_close);
-                            ui.label(
-                                egui::RichText::new("MistTerm")
-                                    .size(theme.font_size_prominent())
-                                    .color(theme.fg_high_a179()),
-                            );
-                            ui.label(
-                                egui::RichText::new("一个现代化 SSH 终端工具")
-                                    .size(theme.font_size_panel_title())
-                                    .color(theme.color_form_hint()),
-                            );
-                            ui.add_space(theme.spacing_md());
-                            egui::Frame::none()
-                                .fill(theme.color_subtle_inset_fill())
-                                .stroke(egui::Stroke::new(
-                                    1.0,
-                                    theme.fg_high_a10(),
-                                ))
-                                .rounding(theme.radius_list_item())
-                                .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        egui::RichText::new("版本: v0.1.0")
-                                            .size(theme.font_size_panel_title())
-                                            .color(theme.fg_high_a128()),
-                                    );
-                                    ui.add_space(theme.spacing_panel_gap());
-                                    egui::ScrollArea::vertical()
-                                        .max_height(200.0)
-                                        .show(ui, |ui| {
-                                            ui.label(
-                                                egui::RichText::new(mistterm_functional_spec_shortcuts())
-                                                    .font(egui::FontId::monospace(10.0))
-                                                    .color(theme.color_sidebar_icon()),
-                                            );
-                                        });
-                                });
-                            ui.add_space(theme.spacing_list_item_x());
-                            crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
-                                if crate::ui::chrome::modal_secondary_button(ui, th, "关闭").clicked() {
-                                    should_close = true;
-                                }
-                            });
-                    });
-                });
-            self.show_about_dialog = open && !should_close;
-        }
-
-        if self.show_preferences_dialog {
-            let mut open = self.show_preferences_dialog;
-            let mut should_close = false;
-            let label_color = theme.color_form_label();
-            let text_low = theme.color_form_hint();
-            egui::Window::new("preferences_modal")
-                .open(&mut open)
-                .title_bar(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
-                .resizable(false)
-                .collapsible(false)
-                .fixed_size(egui::vec2(400.0, 400.0))
-                .frame(crate::ui::chrome::modal_window_frame(&theme))
-                .show(ctx, |ui| {
-                    crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                        Self::modal_header(ui, &theme, "偏好设置", &mut should_close);
-                        ui.label(
-                            egui::RichText::new(
-                                "窗口大小与位置、左侧栏宽度与折叠会在退出时自动保存（§8.1）。",
-                            )
-                            .size(theme.font_size_small())
-                            .color(text_low),
-                        );
-                        ui.add_space(theme.spacing_md());
-                        ui.label(
-                            egui::RichText::new("外观")
-                                .size(theme.font_size_panel_title())
-                                .strong()
-                                .color(label_color),
-                        );
-                        ui.add_space(theme.spacing_panel_gap());
-                        let theme_names: Vec<String> = self
-                            .theme_manager
-                            .list_themes()
-                            .iter()
-                            .map(|t| t.name.clone())
-                            .collect();
-                        let current_idx = self.theme_manager.current;
-                        for (i, name) in theme_names.into_iter().enumerate() {
-                            let label = if i == current_idx {
-                                format!("✓ {}", name)
-                            } else {
-                                name
-                            };
-                            if ui.button(label).clicked() {
-                                self.theme_manager.set_theme_index(i);
-                                self.theme_manager.save();
-                            }
-                        }
-                        ui.add_space(theme.spacing_status_bar_x());
-                        ui.label(
-                            egui::RichText::new("连接")
-                                .size(theme.font_size_panel_title())
-                                .strong()
-                                .color(label_color),
-                        );
-                        ui.add_space(theme.spacing_panel_gap());
-                        let mut ar = self.auto_reconnect_enabled;
-                        if ui
-                            .checkbox(&mut ar, "网络断开后自动重连（最多 5 次，指数退避）")
-                            .on_hover_text(
-                                "FUNCTIONAL_SPEC §1.4：默认不自动重连；开启后仅对意外断开生效，手动「断开」不会弹此策略。",
-                            )
-                            .changed()
-                        {
-                            self.auto_reconnect_enabled = ar;
-                        }
-                        ui.add_space(theme.spacing_status_bar_x());
-                        ui.label(
-                            egui::RichText::new("同步与数据")
-                                .size(theme.font_size_panel_title())
-                                .strong()
-                                .color(label_color),
-                        );
-                        ui.add_space(theme.spacing_panel_gap());
-                        if ui
-                            .button(
-                                egui::RichText::new("打开云端同步…")
-                                    .size(theme.font_size_normal())
-                                    .color(theme.accent_color()),
-                            )
-                            .clicked()
-                        {
-                            should_close = true;
-                            if Self::right_dock_open_allowed(Self::layout_window_width(ctx)) {
-                                self.cloud_sync_panel.open = true;
-                            } else {
-                                let w = Self::layout_window_width(ctx);
-                                self.status_message = format!(
-                                    "当前窗口约 {:.0}px，§8 需 ≥ {:.0}px 才能打开右侧「云端同步」面板",
-                                    w,
-                                    Self::RESP_LAYOUT_WIDE_MIN_PX
-                                );
-                            }
-                        }
-                        ui.add_space(theme.spacing_list_item_x());
-                        ui.label(
-                            egui::RichText::new("其余项请用顶部菜单：视图、工具、帮助。")
-                                .size(theme.font_size_small())
-                                .color(text_low),
-                        );
-                        ui.add_space(theme.spacing_list_item_x());
-                        crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
-                            if crate::ui::chrome::modal_secondary_button(ui, th, "关闭").clicked() {
-                                should_close = true;
-                            }
-                        });
-                    });
-                });
-            self.show_preferences_dialog = open && !should_close;
-        }
-
-        if self.large_upload_pending_path.is_some() {
-            let path_hint = self
-                .large_upload_pending_path
-                .as_ref()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default();
-            let mut open = true;
-            #[derive(Clone, Copy)]
-            enum LargePick {
-                Dismiss,
-                Zmodem,
-                Scp,
-            }
-            let mut pick: Option<LargePick> = None;
-            egui::Window::new("large_upload_modal")
-                .open(&mut open)
-                .title_bar(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
-                .resizable(false)
-                .collapsible(false)
-                .fixed_size(egui::vec2(440.0, 260.0))
-                .frame(crate::ui::chrome::modal_window_frame(&theme))
-                .show(ctx, |ui| {
-                    crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                        let mut should_close_hdr = false;
-                        Self::modal_header(ui, &theme, "大文件上传", &mut should_close_hdr);
-                        if should_close_hdr {
-                            pick = Some(LargePick::Dismiss);
-                        }
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "「{}」≥ 10MB：SCP 无断点续传；ZMODEM 需远端 lrzsz，并将向 PTY 发送 rz -y。",
-                                path_hint
-                            ))
-                            .size(theme.font_size_panel_title())
-                            .color(theme.fg_high_a179()),
-                        );
-                        ui.add_space(12.0);
-                        ui.horizontal(|ui| {
-                            if crate::ui::chrome::modal_primary_button(ui, &theme, "ZMODEM（推荐）").clicked() {
-                                pick = Some(LargePick::Zmodem);
-                            }
-                            if crate::ui::chrome::modal_secondary_button(ui, &theme, "仍用 SCP").clicked() {
-                                pick = Some(LargePick::Scp);
-                            }
-                        });
-                        ui.add_space(theme.spacing_md());
-                        if crate::ui::chrome::modal_secondary_button(ui, &theme, "取消").clicked() {
-                            pick = Some(LargePick::Dismiss);
-                        }
-                    });
-                });
-            if !open && pick.is_none() {
-                pick = Some(LargePick::Dismiss);
-            }
-            match pick {
-                Some(LargePick::Zmodem) => {
-                    if let Some(p) = self.large_upload_pending_path.take() {
-                        if let Some(t) = self.current_terminal_mut() {
-                            t.queue_zmodem_upload_after_rz(p.clone());
-                            self.status_message = format!(
-                                "已发送 rz -y，握手就绪后以 ZMODEM 上传 {}",
-                                p.display()
-                            );
-                        }
-                    }
-                }
-                Some(LargePick::Scp) => {
-                    if let Some(p) = self.large_upload_pending_path.take() {
-                        if let Some(t) = self.current_terminal_mut() {
-                            match t.start_upload(p.as_path()) {
-                                Ok(_) => {
-                                    self.status_message =
-                                        format!("开始 SCP 上传: {}", p.display());
-                                }
-                                Err(e) => {
-                                    self.status_message =
-                                        format!("SCP 上传启动失败: {}", e);
-                                }
-                            }
-                        }
-                    }
-                }
-                Some(LargePick::Dismiss) => {
-                    self.large_upload_pending_path = None;
-                }
-                None => {}
-            }
-        }
-
-        if let Some((del_id, del_name)) = self.delete_session_confirm.clone() {
-            let mut open = true;
-            let mut should_close = false;
-            let mut do_delete = false;
-            egui::Window::new("delete_session_confirm")
-                .open(&mut open)
-                .title_bar(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
-                .resizable(false)
-                .collapsible(false)
-                .fixed_size(egui::vec2(400.0, 200.0))
-                .frame(crate::ui::chrome::modal_window_frame(&theme))
-                .show(ctx, |ui| {
-                    crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                        Self::modal_header(ui, &theme, "删除会话", &mut should_close);
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "确认删除「{}」的会话配置？此操作不可恢复。",
-                                del_name
-                            ))
-                            .size(theme.font_size_normal())
-                            .color(theme.fg_high_a179()),
-                        );
-                        ui.add_space(theme.spacing_lg());
-                        crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
-                            if crate::ui::chrome::modal_danger_button(ui, th, "删除").clicked() {
-                                do_delete = true;
-                                should_close = true;
-                            }
-                            if crate::ui::chrome::modal_secondary_button(ui, th, "取消").clicked() {
-                                should_close = true;
-                            }
-                        });
-                    });
-                });
-            if do_delete {
-                self.delete_session(&del_id);
-            }
-            if !open || should_close {
-                self.delete_session_confirm = None;
-            }
-        }
-
-        if let Some(pending_idx) = self.close_tab_confirm_idx {
-            if pending_idx >= self.tabs.len() {
-                self.close_tab_confirm_idx = None;
-            } else {
-                let tab_title = self.tabs[pending_idx].title.clone();
-                let mut open = true;
-                let mut should_close = false;
-                let mut confirmed = false;
-                egui::Window::new("close_tab_confirm")
-                    .open(&mut open)
-                    .title_bar(false)
-                    .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                    .movable(false)
-                    .resizable(false)
-                    .collapsible(false)
-                    .fixed_size(egui::vec2(400.0, 200.0))
-                    .frame(crate::ui::chrome::modal_window_frame(&theme))
-                    .show(ctx, |ui| {
-                        crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                            Self::modal_header(ui, &theme, "关闭标签", &mut should_close);
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "标签「{}」仍连接或握手中，确定关闭？",
-                                    tab_title
-                                ))
-                                .size(theme.font_size_normal())
-                                .color(theme.fg_high_a179()),
-                            );
-                            ui.add_space(theme.spacing_lg());
-                            crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
-                                if crate::ui::chrome::modal_primary_button(ui, th, "关闭").clicked() {
-                                    confirmed = true;
-                                    should_close = true;
-                                }
-                                if crate::ui::chrome::modal_secondary_button(ui, th, "取消").clicked() {
-                                    should_close = true;
-                                }
-                            });
-                        });
-                    });
-                if confirmed && pending_idx < self.tabs.len() {
-                    self.remove_tab_at(pending_idx);
-                }
-                if !open || should_close {
-                    self.close_tab_confirm_idx = None;
-                }
-            }
-        }
-
-        if self.show_edit_session_dialog {
-            let mut open = self.show_edit_session_dialog;
-            let mut should_close = false;
-            egui::Window::new("edit_session_modal")
-                .open(&mut open)
-                .title_bar(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
-                .resizable(false)
-                .collapsible(false)
-                .fixed_size(egui::vec2(380.0, 412.0))
-                .frame(crate::ui::chrome::modal_window_frame(&theme))
-                .show(ctx, |ui| {
-                    let text_color = theme.fg_high_a179();
-                    let input_stroke = egui::Stroke::new(
-                        1.0,
-                        theme.fg_high_alpha(8),
-                    );
-                    let input_fill = theme.color_panel_surface();
-                    let _input_rounding = 4.0;
-                    let required_missing =
-                        self.edit_session_name.trim().is_empty() || self.edit_session_host.trim().is_empty();
-
-                    crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                            Self::modal_header(ui, &theme, "编辑会话", &mut should_close);
-
-                            ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
-                            Self::ui_field_label(ui, &theme, "会话名称");
-                            Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.edit_session_name)
-                                        .frame(false)
-                                        .hint_text("例: 生产服务器-01")
-                                        .text_color(text_color)
-                                        .desired_width(layout_util::finite_content_width(ui)),
-                                );
-                            });
-
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 10.0;
-                                let row_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
-                                let host_w = (row_w - 98.0).max(160.0);
-                                ui.vertical(|ui| {
-                                    ui.set_width(host_w);
-                                    Self::ui_field_label(ui, &theme, "主机地址");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.edit_session_host)
-                                                .frame(false)
-                                                .hint_text("IP 或域名")
-                                                .text_color(text_color)
-                                                .desired_width(layout_util::finite_content_width(ui)),
-                                        );
-                                    });
-                                });
-                                ui.vertical(|ui| {
-                                    ui.set_width(88.0);
-                                    Self::ui_field_label(ui, &theme, "端口");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add_sized(
-                                            [68.0, 20.0],
-                                            egui::DragValue::new(&mut self.edit_session_port)
-                                                .clamp_range(1..=65535)
-                                                .speed(1.0),
-                                        );
-                                    });
-                                });
-                            });
-
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 10.0;
-                                let row_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
-                                let half = ((row_w - 10.0) / 2.0).max(140.0);
-                                ui.vertical(|ui| {
-                                    ui.set_width(half);
-                                    Self::ui_field_label(ui, &theme, "用户名");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.edit_session_username)
-                                                .frame(false)
-                                                .hint_text("root")
-                                                .text_color(text_color)
-                                                .desired_width(layout_util::finite_content_width(ui)),
-                                        );
-                                    });
-                                });
-                                ui.vertical(|ui| {
-                                    ui.set_width(half);
-                                    Self::ui_field_label(ui, &theme, "密码");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.edit_session_password)
-                                                .frame(false)
-                                                .password(true)
-                                                .hint_text("**** 表示沿用原密码；改为新口令以保存新密码")
-                                                .text_color(text_color)
-                                                .desired_width(layout_util::finite_content_width(ui)),
-                                        );
-                                    });
-                                });
-                            });
-
-                            Self::ui_field_label(ui, &theme, "SSH 私钥路径");
-                            Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.edit_session_private_key_path)
-                                        .frame(false)
-                                        .hint_text("~/.ssh/id_rsa（留空则用密码或系统默认密钥）")
-                                        .text_color(text_color)
-                                        .desired_width(layout_util::finite_content_width(ui)),
-                                );
-                            });
-
-                            Self::ui_field_label(ui, &theme, "分组");
-                            Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.edit_session_group)
-                                        .frame(false)
-                                        .hint_text("默认分组")
-                                        .text_color(text_color)
-                                        .desired_width(layout_util::finite_content_width(ui)),
-                                );
-                            });
-
-                            if required_missing {
-                                ui.add_space(theme.spacing_sm());
-                                ui.label(
-                                    egui::RichText::new("请先填写会话名称和主机地址")
-                                        .size(theme.font_size_panel_title())
-                                        .color(theme.red_a128()),
-                                );
-                            }
-
-                            ui.add_space(theme.spacing_list_item_x());
-                            crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
-                                if ui
-                                    .add_enabled(
-                                        !required_missing,
-                                        crate::ui::chrome::modal_primary_button_widget(th, "保存"),
-                                    )
-                                    .clicked()
-                                {
-                                    self.save_edit_session();
-                                    should_close = !self.show_edit_session_dialog;
-                                }
-                                if crate::ui::chrome::modal_secondary_button(ui, th, "取消").clicked() {
-                                    should_close = true;
-                                }
-                            });
-                    });
-                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !required_missing {
-                        self.save_edit_session();
-                        should_close = !self.show_edit_session_dialog;
-                    }
-                });
-            self.show_edit_session_dialog = open && !should_close;
-        }
-
-        if self.show_fragments_dialog {
-            let mut open = self.show_fragments_dialog;
-            let mut should_close = false;
-            egui::Window::new("fragments_modal")
-                .open(&mut open)
-                .title_bar(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
-                .resizable(false)
-                .fixed_size(egui::vec2(380.0, 220.0))
-                .frame(crate::ui::chrome::modal_window_frame(&theme))
-                .show(ctx, |ui| {
-                    crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                            Self::modal_header(ui, &theme, "命令片段", &mut should_close);
-                            ui.label(
-                                egui::RichText::new("提示：点击底部「命令片段」按钮打开侧边栏面板")
-                                    .size(theme.font_size_panel_title())
-                                    .color(theme.fg_high_a128()),
-                            );
-                            ui.add_space(theme.spacing_md());
-                            egui::Frame::none()
-                                .fill(theme.color_subtle_inset_fill())
-                                .stroke(egui::Stroke::new(
-                                    1.0,
-                                    theme.fg_high_a10(),
-                                ))
-                                .rounding(theme.radius_list_item())
-                                .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
-                                .show(ui, |ui| {
-                                    ui.label(
-                                        egui::RichText::new("📋 命令片段侧边栏提供更丰富的命令分类和快捷操作")
-                                            .size(theme.font_size_small())
-                                            .color(theme.fg_high_alpha(90)),
-                                    );
-                                });
-                            ui.add_space(theme.spacing_list_item_x());
-                            crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
-                                if crate::ui::chrome::modal_secondary_button(ui, th, "关闭").clicked() {
-                                    should_close = true;
-                                }
-                            });
-                    });
-                });
-            self.show_fragments_dialog = open && !should_close;
-        }
-
-        if self.show_fragment_vars_dialog {
-            let mut open = self.show_fragment_vars_dialog;
-            let mut should_close = false;
-            egui::Window::new("fragment_vars_modal")
-                .open(&mut open)
-                .title_bar(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
-                .resizable(false)
-                .collapsible(false)
-                .fixed_size(layout_util::fragment_vars_modal_size(ctx))
-                .frame(crate::ui::chrome::modal_window_frame(&theme))
-                .show(ctx, |ui| {
-                    crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                            Self::modal_header(ui, &theme, "填写片段变量", &mut should_close);
-                            ui.add_space(-2.0);
-                            ui.label(
-                                egui::RichText::new(format!("片段：{}", self.pending_fragment_name))
-                                    .size(theme.font_size_fragment_dialog_caption())
-                                    .color(theme.fg_high_a128()),
-                            );
-                            ui.add_space(theme.spacing_panel_gap());
-                            for (key, value) in &mut self.pending_fragment_vars {
-                                ui.label(
-                                    egui::RichText::new(format!("<{}>", key))
-                                        .size(theme.font_size_fragment_dialog_caption())
-                                        .strong()
-                                        .color(theme.color_form_label()),
-                                );
-                                egui::Frame::none()
-                                    .fill(theme.color_panel_surface())
-                                    .stroke(egui::Stroke::new(
-                                        1.0,
-                                        theme.fg_high_alpha(8),
-                                    ))
-                                    .rounding(theme.radius_list_item())
-                                    .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
-                                    .show(ui, |ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(value)
-                                                .frame(false)
-                                                .font(egui::FontId::proportional(
-                                                    theme.font_size_fragment_dialog_body(),
-                                                ))
-                                                .desired_width(layout_util::finite_content_width(ui))
-                                                .text_color(theme.fg_high_a179()),
-                                        );
-                                    });
-                                ui.add_space(theme.spacing_panel_gap());
-                            }
-                            ui.separator();
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new("↻ 根据变量重算命令")
-                                            .size(theme.font_size_fragment_dialog_body())
-                                            .color(theme.fg_high_a179()),
-                                    )
-                                    .min_size(egui::vec2(0.0, theme.size_fragment_var_field_min_h())),
-                                )
-                                .clicked()
-                            {
-                                self.sync_pending_fragment_command_edit();
-                            }
-                            ui.label(
-                                egui::RichText::new("将要执行（可编辑）")
-                                    .size(theme.font_size_fragment_dialog_body())
-                                    .color(theme.fg_high_a128()),
-                            );
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.pending_fragment_command_edit)
-                                    .font(egui::FontId::monospace(theme.font_size_fragment_dialog_mono()))
-                                    .desired_width(layout_util::finite_content_width(ui))
-                                    .desired_rows(4)
-                                    .hint_text("支持 {{ md5(a) }} 等表达式"),
-                            );
-                            ui.add_space(theme.spacing_sm());
-                            ui.horizontal(|ui| {
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    let insert_label = match self.fragment_vars_completion {
-                                        FragmentVarsCompletion::PasteInsertStats => "插入终端",
-                                        FragmentVarsCompletion::QuickExecuteSend => "发送命令",
-                                    };
-                                    if ui
-                                        .add(crate::ui::chrome::modal_primary_button_widget(
-                                            &theme,
-                                            insert_label,
-                                        ))
-                                        .clicked()
-                                    {
-                                        match self.finalize_pending_fragment_send() {
-                                            Ok(filled) => {
-                                                match self.fragment_vars_completion {
-                                                    FragmentVarsCompletion::PasteInsertStats => {
-                                                        if let Some(id) =
-                                                            self.pending_fragment_id.clone()
-                                                        {
-                                                            self.insert_expanded_fragment_with_stats(
-                                                                &id, &filled,
-                                                            );
-                                                        }
-                                                    }
-                                                    FragmentVarsCompletion::QuickExecuteSend => {
-                                                        let start = std::time::Instant::now();
-                                                        if let Some(session_id) =
-                                                            &self.selected_session_id
-                                                        {
-                                                            let idx = self
-                                                                .active_tab
-                                                                .filter(|&i| {
-                                                                    i < self.tabs.len()
-                                                                        && self.tabs[i].session_id
-                                                                            == *session_id
-                                                                })
-                                                                .or_else(|| {
-                                                                    self.tabs.iter().position(|t| {
-                                                                        t.session_id == *session_id
-                                                                    })
-                                                                });
-                                                            if let Some(idx) = idx {
-                                                                if self.tabs[idx].terminal.is_connected()
-                                                                {
-                                                                    self.tabs[idx]
-                                                                        .terminal
-                                                                        .send_command(&filled);
-                                                                    if let Some(ref fid) =
-                                                                        self.pending_fragment_id
-                                                                    {
-                                                                        let dur_ms = start
-                                                                            .elapsed()
-                                                                            .as_millis()
-                                                                            .max(1)
-                                                                            as u64;
-                                                                        self.fragment_manager
-                                                                            .record_execution(
-                                                                                fid,
-                                                                                true,
-                                                                                dur_ms,
-                                                                            );
-                                                                        let _ = self
-                                                                            .fragment_manager
-                                                                            .save(
-                                                                                &FragmentManager::default_config_path(),
-                                                                            );
-                                                                    }
-                                                                } else if let Some(fid) =
-                                                                    self.pending_fragment_id.clone()
-                                                                {
-                                                                    self.insert_fragment_at_tab_index(
-                                                                        idx,
-                                                                        Some(fid.as_str()),
-                                                                        &filled,
-                                                                    );
-                                                                }
-                                                            }
-                                                        }
-                                                        self.quick_selector.open = false;
-                                                    }
-                                                }
-                                                should_close = true;
-                                            }
-                                            Err(e) => self.status_message = e,
-                                        }
-                                    }
-                                    if crate::ui::chrome::modal_secondary_button(ui, &theme, "取消").clicked() {
-                                        should_close = true;
-                                    }
-                                });
-                            });
-                        });
-                });
-            if should_close {
-                self.pending_fragment_id = None;
-                self.pending_fragment_name.clear();
-                self.pending_fragment_command.clear();
-                self.pending_fragment_vars.clear();
-            }
-            self.show_fragment_vars_dialog = open && !should_close;
-        }
-
-        // 终端视口搜索（当前屏；与底部快捷栏错开）
-        if self.show_terminal_search {
-            use egui::*;
-            let mut close_search = false;
-            let search_bar_w = layout_util::floating_bar_default_width(ctx);
-            Window::new("终端搜索")
-                .id(Id::new("mistterm_terminal_search"))
-                .collapsible(false)
-                .resizable(false)
-                .anchor(Align2::CENTER_BOTTOM, [0.0, -92.0])
-                .default_width(search_bar_w)
-                .show(ctx, |ui| {
-                    if ui.input(|i| i.key_pressed(Key::Escape)) {
-                        close_search = true;
-                    }
-                    self.rebuild_terminal_search_matches();
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new("查找")
-                                .size(theme.font_size_normal())
-                                .color(theme.fg_medium_color()),
-                        );
-                        let resp = ui.add(
-                            TextEdit::singleline(&mut self.terminal_search_query)
-                                .hint_text("输入关键词…")
-                                .desired_width(layout_util::finite_content_width(ui))
-                                .text_color(theme.fg_high_color()),
-                        );
-                        if resp.has_focus()
-                            && ui.ctx().input(|i| i.key_pressed(Key::Enter))
-                            && !self.terminal_search_matches.is_empty()
-                        {
-                            self.terminal_search_cur =
-                                (self.terminal_search_cur + 1) % self.terminal_search_matches.len();
-                        }
-                        if ui
-                            .checkbox(&mut self.terminal_search_ignore_case, "忽略大小写")
-                            .changed()
-                        {
-                            self.rebuild_terminal_search_matches();
-                        }
-                        if ui.button("上一个").clicked() {
-                            if !self.terminal_search_matches.is_empty() {
-                                self.terminal_search_cur = (self.terminal_search_cur
-                                    + self.terminal_search_matches.len()
-                                    - 1)
-                                    % self.terminal_search_matches.len();
-                            }
-                        }
-                        if ui.button("下一个").clicked() {
-                            if !self.terminal_search_matches.is_empty() {
-                                self.terminal_search_cur =
-                                    (self.terminal_search_cur + 1) % self.terminal_search_matches.len();
-                            }
-                        }
-                        if crate::ui::chrome::modal_secondary_button(ui, &theme, "关闭").clicked() {
-                            close_search = true;
-                        }
-                    });
-                    let n = self.terminal_search_matches.len();
-                    let detail = if self.current_terminal().is_none() {
-                        "请先打开一个终端标签".to_string()
-                    } else if self.terminal_search_query.is_empty() {
-                        "输入关键词后自动匹配当前屏幕可见内容（不含卷动历史）".to_string()
-                    } else if n == 0 {
-                        "无匹配".to_string()
-                    } else {
-                        let (line, col) = self.terminal_search_matches[self.terminal_search_cur];
-                        format!(
-                            "第 {} / {} 处 · 行 {} 列 {}",
-                            self.terminal_search_cur + 1,
-                            n,
-                            line,
-                            col
-                        )
-                    };
-                    ui.label(RichText::new(detail).size(theme.font_size_panel_title()).color(theme.fg_low_color()));
-                });
-            if close_search {
-                self.show_terminal_search = false;
-            }
-        }
-
-        // 快速片段选择器
-        if self.quick_selector.open {
-            use egui::*;
-            let qsz = layout_util::centered_window_default_size(ctx, 0.40, 0.48);
-            let q_scroll_max = layout_util::dialog_scroll_max_height(ctx, 220.0);
-            Window::new("⚡ 快速选择片段")
-                .collapsible(false)
-                .resizable(true)
-                .default_size(qsz)
-                .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    // 搜索框
-                    ui.horizontal(|ui| {
-                        ui.label("🔍");
-                        ui.text_edit_singleline(&mut self.quick_selector.search_query);
-                    });
-                    
-                    ui.add_space(theme.spacing_md());
-                    
-                    // 片段列表
-                    egui::ScrollArea::vertical()
-                        .max_height(q_scroll_max)
-                        .show(ui, |ui| {
-                            let fragments: Vec<_> =
-                                self.fragment_manager.list().iter().cloned().collect();
-                            let search_lower = self.quick_selector.search_query.to_lowercase();
-                            
-                            for (idx, fragment) in fragments.iter().enumerate() {
-                                // 搜索过滤
-                                if !search_lower.is_empty() 
-                                    && !fragment.title.to_lowercase().contains(&search_lower)
-                                    && !fragment.command.to_lowercase().contains(&search_lower) {
-                                    continue;
-                                }
-                                
-                                let is_selected = idx == self.quick_selector.selected_index;
-                                
-                                if ui.selectable_label(is_selected, &fragment.title).clicked() {
-                                    // 点击执行
-                                    self.execute_fragment(fragment);
-                                    self.quick_selector.open = false;
-                                }
-                            }
-                        });
-                    
-                    ui.add_space(theme.spacing_md());
-                    ui.horizontal(|ui| {
-                        if crate::ui::chrome::modal_secondary_button(ui, &theme, "取消 (ESC)").clicked() {
-                            self.quick_selector.open = false;
-                        }
-                    });
-                });
-        }
-
-        // 变量输入对话框（片段库定义的变量；与命令里的 `<pod>` 等占位符可串联）
-        if self.variable_dialog.open {
-            use egui::*;
-            
-            let ok_label = if self.variable_dialog.paste_after_fill {
-                "✅ 插入终端"
-            } else {
-                "✅ 执行"
-            };
-
-            let var_sz = layout_util::centered_window_default_size(ctx, 0.36, 0.38);
-            let scroll_h = layout_util::dialog_scroll_max_height(ctx, 240.0);
-            Window::new("📝 输入变量")
-                .id(egui::Id::new("mistterm_fragment_variable_dialog"))
-                .collapsible(false)
-                .resizable(true)
-                .default_size(var_sz)
-                .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
-                .show(ctx, |ui| {
-                    ui.label(
-                        egui::RichText::new(&self.variable_dialog.fragment_title)
-                            .size(theme.font_size_fragment_dialog_body())
-                            .strong()
-                            .color(theme.fg_high_color()),
-                    );
-                    ui.add_space(theme.spacing_sm());
-                    egui::ScrollArea::vertical()
-                        .max_height(scroll_h)
-                        .show(ui, |ui| {
-                            if let Some(fragment_id) = &self.variable_dialog.fragment_id {
-                                if let Some(fragment) = self.fragment_manager.get(fragment_id) {
-                                    for var in &fragment.variables {
-                                        ui.label(
-                                            egui::RichText::new(&var.description)
-                                                .size(theme.font_size_fragment_dialog_body())
-                                                .color(theme.fg_high_color()),
-                                        );
-                                        ui.label(
-                                            egui::RichText::new(format!("占位符 <{}>", var.name))
-                                                .size(theme.font_size_fragment_dialog_caption())
-                                                .color(theme.fg_low_color()),
-                                        );
-                                        let value = self
-                                            .variable_dialog
-                                            .values
-                                            .entry(var.name.clone())
-                                            .or_insert_with(String::new);
-                                        egui::Frame::none()
-                                            .fill(theme.color_panel_surface())
-                                            .stroke(egui::Stroke::new(
-                                                1.0,
-                                                theme.fg_high_alpha(8),
-                                            ))
-                                            .rounding(theme.radius_list_item())
-                                            .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
-                                            .show(ui, |ui| {
-                                                ui.add(
-                                                    egui::TextEdit::singleline(value)
-                                                        .frame(false)
-                                                        .font(egui::FontId::proportional(theme.font_size_fragment_dialog_body()))
-                                                        .desired_width(layout_util::finite_content_width(ui))
-                                                        .text_color(theme.fg_high_color()),
-                                                );
-                                            });
-                                        ui.add_space(theme.spacing_md());
-                                    }
-                                    ui.separator();
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                egui::RichText::new("↻ 用上方变量重写命令")
-                                                    .size(theme.font_size_fragment_dialog_body())
-                                                    .color(theme.fg_medium_color()),
-                                            )
-                                            .min_size(egui::vec2(0.0, theme.size_fragment_var_field_min_h())),
-                                        )
-                                        .clicked()
-                                    {
-                                        self.variable_dialog.last_finalize_error = None;
-                                        self.variable_dialog.command_edit =
-                                            self.build_fragment_command_preview(
-                                                fragment,
-                                                &self.variable_dialog.values,
-                                            );
-                                    }
-                                    ui.label(
-                                        egui::RichText::new("将要执行的命令（可编辑）")
-                                            .size(theme.font_size_fragment_dialog_body())
-                                            .color(theme.fg_medium_color()),
-                                    );
-                                    ui.add(
-                                        egui::TextEdit::multiline(&mut self.variable_dialog.command_edit)
-                                            .font(egui::FontId::monospace(theme.font_size_fragment_dialog_mono()))
-                                            .desired_width(layout_util::finite_content_width(ui))
-                                            .desired_rows(5)
-                                            .text_color(theme.fg_high_color())
-                                            .hint_text("可先填变量再点 ↻ 同步；{{ … }} 为表达式，见片段库帮助"),
-                                    );
-                                }
-                            }
-                        });
-                    if let Some(ref err) = self.variable_dialog.last_finalize_error {
-                        ui.add_space(theme.spacing_panel_gap());
-                        ui.label(
-                            egui::RichText::new(err)
-                                .size(theme.font_size_fragment_dialog_caption())
-                                .color(theme.color_danger_emphasis()),
-                        );
-                    }
-                    ui.add_space(12.0);
-                    crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
-                        if ui
-                            .add(crate::ui::chrome::modal_primary_button_widget(th, ok_label))
-                            .clicked()
-                        {
-                            let paste = self.variable_dialog.paste_after_fill;
-                            if let Some(fid) = self.variable_dialog.fragment_id.clone() {
-                                if let Some(fragment) = self.fragment_manager.get(&fid).cloned() {
-                                    match self.finalize_fragment_command_text(
-                                        &self.variable_dialog.command_edit,
-                                        &self.variable_dialog.values,
-                                    ) {
-                                        Ok(cmd) => {
-                                            self.variable_dialog.last_finalize_error = None;
-                                            let needs = placeholders_needing_user(&cmd);
-                                            if needs.is_empty() {
-                                                if paste {
-                                                    self.insert_expanded_fragment_with_stats(&fid, &cmd);
-                                                } else if let Some(session_id) =
-                                                    &self.selected_session_id
-                                                {
-                                                    if let Some(tab) = self
-                                                        .tabs
-                                                        .iter_mut()
-                                                        .find(|t| t.session_id == *session_id)
-                                                    {
-                                                        let _ = tab.terminal.send_command(&cmd);
-                                                    }
-                                                    self.quick_selector.open = false;
-                                                }
-                                            } else {
-                                                self.pending_fragment_id = Some(fid.clone());
-                                                self.pending_fragment_name = fragment.title.clone();
-                                                self.pending_fragment_command = cmd;
-                                                self.pending_fragment_vars = needs
-                                                    .into_iter()
-                                                    .map(|k| (k, String::new()))
-                                                    .collect();
-                                                self.fragment_vars_completion = if paste {
-                                                    FragmentVarsCompletion::PasteInsertStats
-                                                } else {
-                                                    FragmentVarsCompletion::QuickExecuteSend
-                                                };
-                                                self.sync_pending_fragment_command_edit();
-                                                self.show_fragment_vars_dialog = true;
-                                            }
-                                            self.variable_dialog.paste_after_fill = false;
-                                            self.variable_dialog.open = false;
-                                        }
-                                        Err(e) => {
-                                            self.status_message = e.clone();
-                                            self.variable_dialog.last_finalize_error = Some(e);
-                                        }
-                                    }
-                                } else {
-                                    self.status_message =
-                                        "找不到该片段（可能已从库中删除）".to_string();
-                                }
-                            }
-                        }
-                        if crate::ui::chrome::modal_secondary_button(ui, th, "取消").clicked() {
-                            self.variable_dialog.open = false;
-                            self.variable_dialog.paste_after_fill = false;
-                            self.variable_dialog.last_finalize_error = None;
-                        }
-                    });
-                });
-            ctx.move_to_top(egui::LayerId::new(
-                egui::Order::Middle,
-                egui::Id::new("mistterm_fragment_variable_dialog"),
-            ));
-        }
+        self.render_workspace_shell(ctx, frame, &theme);
     }
 }
 
@@ -3968,9 +2552,177 @@ impl MistTermApp {
     }
 }
 
+/// 主窗口布局 shell（`docs/product/LAYOUT.md`）
+#[path = "workspace.rs"]
+mod workspace;
+
+/// 应用菜单（文件 / 视图 / 工具 / 帮助）— 子模块可访问 `MistTermApp` 私有字段
+mod menu {
+    use super::*;
+
+    impl MistTermApp {
+        pub(crate) fn show_application_menu_bar(
+            &mut self,
+            ui: &mut egui::Ui,
+            ctx: &egui::Context,
+            theme: &crate::ui::theme::Theme,
+            frame: &mut eframe::Frame,
+        ) {
+            let label = |text: &str| {
+                egui::RichText::new(text)
+                    .size(theme.font_size_menu_item())
+                    .color(theme.fg_medium_color())
+            };
+            let ssh_import_enabled = self.ssh_config_path.exists();
+
+            egui::menu::menu_button(ui, label("文件"), |ui| {
+                crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                if ui
+                    .add_enabled(
+                        ssh_import_enabled,
+                        egui::Button::new(crate::ui::chrome::menu_item_label(
+                            theme,
+                            "导入 SSH 配置",
+                            None,
+                        )),
+                    )
+                    .clicked()
+                {
+                    self.open_ssh_import_dialog();
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui
+                    .button(crate::ui::chrome::menu_item_label(theme, "新建会话", Some("⌘N")))
+                    .clicked()
+                {
+                    self.show_new_session_dialog = true;
+                    ui.close_menu();
+                }
+                if ui.button("偏好设置 ⌘,").clicked() {
+                    self.show_preferences_dialog = true;
+                    ui.close_menu();
+                }
+                if ui.button("关闭标签 ⌘W").clicked() {
+                    self.request_close_active_tab();
+                    ui.close_menu();
+                }
+                if ui.button("断开 SSH（保留输出）").clicked() {
+                    self.disconnect_ssh_keep_buffer_active();
+                    ui.close_menu();
+                }
+                if ui.button("重连当前标签").clicked() {
+                    self.reconnect_active_tab();
+                    ui.close_menu();
+                }
+                ui.separator();
+                if ui.button("退出").clicked() {
+                    frame.close();
+                    ui.close_menu();
+                }
+            });
+            egui::menu::menu_button(ui, label("视图"), |ui| {
+                crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                if ui
+                    .button(
+                        self.sidebar_collapsed
+                            .then_some("展开侧边栏")
+                            .unwrap_or("折叠侧边栏"),
+                    )
+                    .clicked()
+                {
+                    self.sidebar_collapsed = !self.sidebar_collapsed;
+                    if self.sidebar_collapsed {
+                        self.sidebar_user_dismissed_responsive = true;
+                    } else {
+                        self.sidebar_user_dismissed_responsive = false;
+                    }
+                    ui.close_menu();
+                }
+                ui.separator();
+                if crate::ui::chrome::menu_theme_item(
+                    ui,
+                    theme,
+                    self.show_sftp_panel,
+                    "SFTP 文件面板",
+                )
+                .clicked()
+                {
+                    if self.show_sftp_panel {
+                        self.show_sftp_panel = false;
+                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
+                        self.show_sftp_panel = true;
+                        self.sftp_last_tab = None;
+                        self.sftp_panel.request_list_on_open();
+                    }
+                    ui.close_menu();
+                }
+                ui.separator();
+                ui.menu_button(label("主题"), |ui| {
+                    crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                    let current_idx = self.theme_manager.current;
+                    let names: Vec<String> = self
+                        .theme_manager
+                        .list_themes()
+                        .iter()
+                        .map(|t| t.name.clone())
+                        .collect();
+                    for (i, name) in names.iter().enumerate() {
+                        let selected = i == current_idx;
+                        if crate::ui::chrome::menu_theme_item(ui, theme, selected, name).clicked()
+                        {
+                            self.theme_manager.set_theme_index(i);
+                            self.theme_manager.save();
+                            ui.ctx().request_repaint();
+                            ui.close_menu();
+                        }
+                    }
+                });
+            });
+            egui::menu::menu_button(ui, label("工具"), |ui| {
+                crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                if ui.button("命令片段库…").clicked() {
+                    self.fragment_library.open = true;
+                    ui.close_menu();
+                }
+                if ui.button("凭证管理").clicked() {
+                    if self.ensure_right_dock_allowed_or_warn(ctx) {
+                        self.credential_panel.open = true;
+                    }
+                    ui.close_menu();
+                }
+                if ui.button("云端同步").clicked() {
+                    if self.ensure_right_dock_allowed_or_warn(ctx) {
+                        self.cloud_sync_panel.open = true;
+                    }
+                    ui.close_menu();
+                }
+            });
+            egui::menu::menu_button(ui, label("帮助"), |ui| {
+                crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                if ui.button("关于").clicked() {
+                    self.show_about_dialog = true;
+                    ui.close_menu();
+                }
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod responsive_layout_tests {
     use super::MistTermApp;
+    use crate::ui::layout_util::{terminal_column_width, work_area_inner_rect};
+
+    #[test]
+    fn work_area_inner_rect_terminal_width_respects_pad() {
+        let work = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1200.0, 800.0));
+        let inner = work_area_inner_rect(work, 8.0);
+        let col_left = inner.min.x + 200.0;
+        let w = terminal_column_width(col_left, inner.max.x, None);
+        assert!(col_left + w <= inner.max.x + 0.01);
+        assert_eq!(inner.width(), work.width() - 16.0);
+    }
 
     #[test]
     fn right_dock_open_allowed_respects_wide_min() {

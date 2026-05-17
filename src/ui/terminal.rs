@@ -16,6 +16,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
 use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, SshSessionId, LrzszTransfer, TransferEvent, format_ssh_connect_error};
+use alacritty_terminal::grid::Scroll;
 use crate::terminal::{Terminal as VtTerminal, TerminalShellStyle};
 use crate::terminal::style::{
     format_user_error_line, format_user_info_line, format_user_success_line, format_user_warn_line,
@@ -163,6 +164,12 @@ pub struct TerminalView {
     zmodem_upload_after_rz_path: Option<PathBuf>,
     /// 终端文本选择状态
     selection: Selection,
+    /// 当前行已键入字节（用于 Ctrl+R 命令历史，近似 PTY 行缓冲）
+    typed_line_buffer: String,
+    /// 待写入会话日志的 PTY 输出块
+    pending_log_output: Vec<Vec<u8>>,
+    /// 查找命中高亮：`(行, 列, 长度)` 均为 1-based 字符下标
+    search_highlight: Option<(usize, usize, usize)>,
 }
 
 impl TerminalView {
@@ -335,6 +342,49 @@ impl TerminalView {
             pending_drop_upload_paths: Vec::new(),
             zmodem_upload_after_rz_path: None,
             selection: Selection::default(),
+            typed_line_buffer: String::new(),
+            pending_log_output: Vec::new(),
+            search_highlight: None,
+        }
+    }
+
+    pub fn set_search_highlight(&mut self, highlight: Option<(usize, usize, usize)>) {
+        if self.search_highlight != highlight {
+            self.search_highlight = highlight;
+            self.visual_layout_cache = None;
+        }
+    }
+
+    pub fn take_pending_log_output(&mut self) -> Option<Vec<u8>> {
+        self.pending_log_output.pop()
+    }
+
+    /// Enter 提交后取走当前行命令（供命令历史记录）
+    pub fn take_submitted_line(&mut self) -> Option<String> {
+        let line = self.typed_line_buffer.trim().to_string();
+        self.typed_line_buffer.clear();
+        if line.is_empty() {
+            None
+        } else {
+            Some(line)
+        }
+    }
+
+    fn track_typed_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            if ch == '\n' || ch == '\r' {
+                continue;
+            }
+            if ch.is_control() && ch != '\t' {
+                continue;
+            }
+            self.typed_line_buffer.push(ch);
+        }
+    }
+
+    fn track_backspace(&mut self) {
+        if !self.typed_line_buffer.is_empty() {
+            self.typed_line_buffer.pop();
         }
     }
 
@@ -347,13 +397,23 @@ impl TerminalView {
         username: &str,
         password: &str,
         private_key_path: &str,
+        keepalive_enabled: bool,
+        keepalive_interval_secs: u32,
+        keepalive_count_max: u8,
     ) {
+        let interval = if keepalive_enabled {
+            keepalive_interval_secs.max(1)
+        } else {
+            0
+        };
         let config = SshConfig {
             host: host.to_string(),
             port,
             username: username.to_string(),
             password: password.to_string(),
             private_key_path: private_key_path.to_string(),
+            keepalive_interval_secs: interval,
+            keepalive_count_max: keepalive_count_max.max(1),
         };
 
         let (manager, rx) = SshManager::new();
@@ -386,7 +446,13 @@ impl TerminalView {
     }
 
     /// 显示终端视图。`column_width` 须为宿主在 **标签栏下方** 为终端列 `allocate_ui_with_layout` 的宽度（勿用 `clip_rect`，常为整窗宽）。
-    pub fn show(&mut self, ui: &mut egui::Ui, theme: &Theme, column_width: f32) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        column_width: f32,
+        terminal_search_open: bool,
+    ) {
         // 先处理网络与键盘，再绘制，避免输入/输出滞后一帧
         self.process_ssh_messages(theme);
         self.flush_paste_queue(ui.ctx());
@@ -502,9 +568,11 @@ impl TerminalView {
                                     c.formatted.clone(),
                                 )
                             } else {
-                                let layout_job = self
-                                    .terminal
-                                    .get_layout_job(self.font_size, &shell);
+                                let layout_job = self.terminal.get_layout_job(
+                                    self.font_size,
+                                    &shell,
+                                    self.search_highlight,
+                                );
                                 let formatted = self.terminal.get_formatted_output();
                                 self.visual_layout_cache = Some(TerminalVisualLayoutCache {
                                     vt_gen: cache_key.0,
@@ -520,9 +588,11 @@ impl TerminalView {
                                 (layout_job, formatted)
                             }
                         } else {
-                            let layout_job = self
-                                .terminal
-                                .get_layout_job(self.font_size, &shell);
+                            let layout_job = self.terminal.get_layout_job(
+                                self.font_size,
+                                &shell,
+                                self.search_highlight,
+                            );
                             let formatted = self.terminal.get_formatted_output();
                             self.visual_layout_cache = Some(TerminalVisualLayoutCache {
                                 vt_gen: cache_key.0,
@@ -543,11 +613,13 @@ impl TerminalView {
                     ui.spacing_mut().scroll_bar_width = theme.terminal_scroll_bar_width();
                     ui.visuals_mut().widgets.inactive.bg_fill =
                         theme.terminal_scroll_bar_track_fill();
+                    // 内容仅为当前视口行数；历史在 VTE scrollback，须用 scroll_display 而非 ScrollArea 滑条
                     let scroll_output = egui::ScrollArea::vertical()
-                        .stick_to_bottom(self.auto_follow_output)
                         .auto_shrink([false, false])
+                        .enable_scrolling(false)
+                        .drag_to_scroll(false)
                         .scroll_bar_visibility(
-                            egui::containers::scroll_area::ScrollBarVisibility::VisibleWhenNeeded,
+                            egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden,
                         )
                         .max_height(scroll_h)
                         .show(ui, |ui| {
@@ -585,27 +657,46 @@ impl TerminalView {
                                     .desired_width(edit_w)
                                     .min_size(egui::vec2(vw, scroll_h))
                                     .code_editor()
-                                    // 终端输入场景下，Tab/方向键应优先发给 PTY，不应被 egui 焦点遍历抢走。
-                                    .lock_focus(true)
+                                    // 查找条打开时释放 lock，否则无法聚焦搜索框输入。
+                                    .lock_focus(!terminal_search_open)
                                     .interactive(true)
                                     .frame(false)
                                     .layouter(&mut layouter),
                             );
-                            if response.clicked() {
-                                response.request_focus();
-                            }
-                            if self.pending_focus_terminal {
-                                response.request_focus();
-                                self.pending_focus_terminal = false;
+                            if !terminal_search_open {
+                                if response.clicked() {
+                                    response.request_focus();
+                                }
+                                if self.pending_focus_terminal {
+                                    response.request_focus();
+                                    self.pending_focus_terminal = false;
+                                }
                             }
                             self.terminal_focused = response.has_focus();
 
-                            // === 文本选择处理 ===
                             let font_id = egui::FontId::monospace(self.font_size);
                             let (cell_w, cell_h) = ui.ctx().fonts(|fonts| {
-                                let galley = fonts.layout_no_wrap("W".to_string(), font_id.clone(), theme.fg_high_color());
+                                let galley = fonts.layout_no_wrap(
+                                    "W".to_string(),
+                                    font_id.clone(),
+                                    theme.fg_high_color(),
+                                );
                                 (galley.size().x.max(6.0), galley.size().y.max(12.0))
                             });
+
+                            // 滚轮浏览 scrollback（与 alacritty 一致：Delta>0 向上翻历史）
+                            if (response.hovered() || response.has_focus())
+                                && ui.input(|i| !i.modifiers.ctrl && i.scroll_delta.y.abs() > 0.5)
+                            {
+                                let dy = ui.input(|i| i.scroll_delta.y);
+                                let lines = (dy / cell_h).round().clamp(-64.0, 64.0) as i32;
+                                if lines != 0 {
+                                    self.terminal.scroll_display(Scroll::Delta(lines));
+                                    self.visual_layout_cache = None;
+                                }
+                            }
+
+                            // === 文本选择处理 ===
 
                             // 点击时清除选择或开始选择
                             if response.clicked() {
@@ -680,6 +771,7 @@ impl TerminalView {
                                 }
                             }
                             response.context_menu(|ui| {
+                                crate::ui::chrome::apply_context_menu_style(ui, theme);
                                 if !self.selection.is_empty() {
                                     if ui.button("复制选中").clicked() {
                                         let text = self.get_selected_text();
@@ -725,13 +817,9 @@ impl TerminalView {
                     ui.spacing_mut().scroll_bar_width = prev_scroll_w;
                     ui.visuals_mut().widgets.inactive.bg_fill = prev_inactive_fill;
 
-                    // iTerm2 风格：离开底部则停止自动跟随，回到底部恢复跟随
-                    let viewport_h = scroll_output.inner_rect.height();
-                    let content_h = scroll_output.content_size.y;
-                    let max_offset_y = (content_h - viewport_h).max(0.0);
-                    let offset_y = scroll_output.state.offset.y.max(0.0);
-                    let at_bottom = (max_offset_y - offset_y) <= 2.0;
-                    self.auto_follow_output = at_bottom;
+                    // 离开底部（display_offset>0）则停止自动跟随；滚回最新输出后恢复
+                    self.auto_follow_output = self.terminal.is_scrolled_to_bottom();
+                    let _ = scroll_output;
 
                     if let Some(ref progress) = self.transfer_progress {
                         ui.add_space(theme.spacing_sm());
@@ -942,6 +1030,7 @@ impl TerminalView {
                             }
                         }
                         if !display_data.is_empty() {
+                            self.pending_log_output.push(display_data.clone());
                             self.terminal.feed(&display_data);
                             vte_dirty = true;
                         }
@@ -1291,7 +1380,7 @@ impl TerminalView {
                             .color(theme.fg_low_color()),
                     );
                 }
-                ui.add_space(12.0);
+                ui.add_space(theme.spacing_list_item_x());
                 ui.horizontal(|ui| {
                     if crate::ui::chrome::modal_primary_button(ui, theme, "发送到远端").clicked() {
                         if let Some(handle) = self.ssh_handle.clone() {
@@ -1435,6 +1524,7 @@ impl TerminalView {
                                 continue;
                             }
                         }
+                        self.track_typed_text(text);
                         if let Err(e) = handle.send_input(text.as_bytes()) {
                             log::error!("PTY write (text): {}", e);
                         }
@@ -1475,6 +1565,7 @@ impl TerminalView {
                                 }
                             }
                             egui::Key::Backspace => {
+                                self.track_backspace();
                                 if let Err(e) = handle.send_input(&[0x7f]) {
                                     log::error!("PTY write (bs): {}", e);
                                 }
@@ -1514,6 +1605,7 @@ impl TerminalView {
         if !self.connected {
             return;
         }
+        self.typed_line_buffer.clear();
         let Some(handle) = self.ssh_handle.as_ref() else {
             return;
         };
@@ -1986,43 +2078,18 @@ impl TerminalView {
         }
     }
 
-    /// 在当前视口文本中搜索（与 [`Self::show`] 所用 `get_formatted_output` 同源；不含卷动区历史）。
-    ///
-    /// 返回每个匹配位置：**(行号从 1 起, 列号从 1 起，按 Unicode 标量值计)**。
-    pub fn search_viewport(&self, query: &str, ignore_case: bool) -> Vec<(usize, usize)> {
-        if query.is_empty() {
-            return Vec::new();
-        }
-        let text = self.terminal.get_formatted_output();
-        let q_len = query.chars().count();
-        if q_len == 0 {
-            return Vec::new();
-        }
-        let q_cmp = if ignore_case {
-            query.to_lowercase()
-        } else {
-            query.to_string()
-        };
-        let mut out = Vec::new();
-        for (line_idx, line) in text.lines().enumerate() {
-            let line_chars: Vec<char> = line.chars().collect();
-            let n = line_chars.len();
-            if n < q_len {
-                continue;
-            }
-            for start in 0..=(n - q_len) {
-                let window: String = line_chars[start..start + q_len].iter().collect();
-                let ok = if ignore_case {
-                    window.to_lowercase() == q_cmp
-                } else {
-                    window == q_cmp
-                };
-                if ok {
-                    out.push((line_idx + 1, start + 1));
-                }
-            }
-        }
-        out
+    /// 在完整终端缓冲（含 scrollback）中搜索。
+    pub fn search_all(&self, query: &str, ignore_case: bool) -> Vec<crate::terminal::SearchHit> {
+        self.terminal.search_all(query, ignore_case)
+    }
+
+    /// 滚到命中行并返回视口内高亮坐标（1-based）。
+    pub fn reveal_search_hit(
+        &mut self,
+        hit: crate::terminal::SearchHit,
+    ) -> Option<(usize, usize)> {
+        self.visual_layout_cache = None;
+        self.terminal.reveal_search_hit(hit)
     }
 }
 
