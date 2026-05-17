@@ -30,6 +30,16 @@ impl CommandHistoryOverlay {
         self.match_index = 0;
     }
 
+    pub fn cycle_match(&mut self, result_len: usize) {
+        if result_len == 0 {
+            self.match_index = 0;
+            self.selected = 0;
+            return;
+        }
+        self.match_index = (self.match_index + 1) % result_len;
+        self.selected = self.match_index;
+    }
+
     pub fn show(
         &mut self,
         ctx: &egui::Context,
@@ -40,9 +50,16 @@ impl CommandHistoryOverlay {
         if !self.open {
             return CommandHistoryAction::None;
         }
+        if !history.is_loaded() {
+            return CommandHistoryAction::None;
+        }
         let results = history.search(&self.query, true);
         if self.selected >= results.len() && !results.is_empty() {
             self.selected = results.len() - 1;
+        }
+        if self.match_index >= results.len() && !results.is_empty() {
+            self.match_index = 0;
+            self.selected = 0;
         }
         let mut action = CommandHistoryAction::None;
 
@@ -53,10 +70,12 @@ impl CommandHistoryOverlay {
             if i.key_pressed(egui::Key::ArrowDown) {
                 if !results.is_empty() {
                     self.selected = (self.selected + 1).min(results.len() - 1);
+                    self.match_index = self.selected;
                 }
             }
             if i.key_pressed(egui::Key::ArrowUp) {
                 self.selected = self.selected.saturating_sub(1);
+                self.match_index = self.selected;
             }
             if i.key_pressed(egui::Key::Enter) {
                 if let Some(entry) = results.get(self.selected) {
@@ -108,8 +127,17 @@ impl CommandHistoryOverlay {
                                     );
                                 } else {
                                     for (i, entry) in results.iter().enumerate() {
-                                        if row_button(ui, theme, entry, i == self.selected).clicked() {
+                                        let row = row_button(ui, theme, entry, i == self.selected);
+                                        if row.clicked() {
                                             action = CommandHistoryAction::Apply(entry.command.clone());
+                                        }
+                                        if row.hovered() {
+                                            ui.horizontal(|ui| {
+                                                ui.add_space(ui.available_width() - 28.0);
+                                                if ui.small_button("🗑").on_hover_text("从历史删除").clicked() {
+                                                    action = CommandHistoryAction::Delete(entry.command.clone());
+                                                }
+                                            });
                                         }
                                     }
                                 }
@@ -140,11 +168,18 @@ fn row_button(ui: &mut egui::Ui, theme: &Theme, entry: &HistoryEntry, selected: 
         .as_deref()
         .map(|n| format!(" # {}", n))
         .unwrap_or_default();
-    let label = format!("{}{}", entry.command, suffix);
+    let cmd = entry.display_command();
+    let status = if entry.success { "" } else { " · 失败" };
+    let label = format!("{}{}{}", cmd, suffix, status);
     let fill = if selected {
         theme.accent_alpha(51)
     } else {
         egui::Color32::TRANSPARENT
+    };
+    let text_color = if entry.success {
+        theme.fg_high_color()
+    } else {
+        theme.amber_color()
     };
     ui.add(
         egui::Button::new(
@@ -154,7 +189,7 @@ fn row_button(ui: &mut egui::Ui, theme: &Theme, entry: &HistoryEntry, selected: 
                 format!("  {}", label)
             })
             .font(egui::FontId::monospace(theme.font_size_normal()))
-            .color(theme.fg_high_color()),
+            .color(text_color),
         )
         .fill(fill)
         .stroke(egui::Stroke::NONE)
@@ -167,4 +202,5 @@ pub enum CommandHistoryAction {
     None,
     Close,
     Apply(String),
+    Delete(String),
 }

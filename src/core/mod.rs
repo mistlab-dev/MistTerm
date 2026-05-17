@@ -26,14 +26,14 @@ pub mod session_sort;
 
 pub use session::{SessionConfig, SessionManager, SESSION_COLOR_TAGS, session_color_tag_rgb};
 pub use ssh_config_importer::{
-    candidate_to_session, default_ssh_config_path, parse_ssh_config_file,
-    parse_ssh_config_str, pending_imports, SshConfigCandidate,
+    candidate_to_session, default_ssh_config_path, is_already_imported, parse_ssh_config_file,
+    parse_ssh_config_str, pending_imports, SshConfigCandidate, SshConfigParseResult,
 };
 pub use command_history::{CommandHistory, HistoryEntry};
 pub use session_logger::{
-    default_log_base_dir, list_session_log_files, log_text_for_display, read_log_tail,
-    SessionLogSettings,
-    SessionLogWriter,
+    cleanup_old_logs, default_log_base_dir, list_session_log_files, log_text_for_display,
+    read_log_tail, spawn_cleanup_old_logs, SessionLogSettings, SessionLogWriter,
+    DEFAULT_MAX_FILE_BYTES, DEFAULT_RETENTION_DAYS, LOG_TAIL_READ_BYTES,
 };
 pub use session_sort::{sort_sessions, SessionSortBy};
 pub use fragment::{

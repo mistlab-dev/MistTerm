@@ -6,11 +6,14 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
 
 const MEMORY_CAP: usize = 500;
 const FILE_CAP: usize = 1000;
 const RETENTION_DAYS: i64 = 60;
 const MAX_COMMAND_LEN: usize = 1000;
+pub const DISPLAY_COMMAND_MAX: usize = 500;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HistoryEntry {
@@ -25,6 +28,15 @@ impl HistoryEntry {
     pub fn executed_at_local(&self) -> Option<DateTime<Local>> {
         Local.timestamp_opt(self.executed_at, 0).single()
     }
+
+    pub fn display_command(&self) -> String {
+        if self.command.chars().count() > DISPLAY_COMMAND_MAX {
+            let s: String = self.command.chars().take(DISPLAY_COMMAND_MAX).collect();
+            format!("{}…", s)
+        } else {
+            self.command.clone()
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -37,18 +49,47 @@ pub struct CommandHistory {
     entries: VecDeque<HistoryEntry>,
     persist_path: PathBuf,
     dirty: bool,
+    load_rx: Option<mpsc::Receiver<VecDeque<HistoryEntry>>>,
 }
 
 impl CommandHistory {
     pub fn new() -> Self {
         let path = Self::default_persist_path();
-        let mut h = Self {
+        let (tx, rx) = mpsc::channel();
+        let load_path = path.clone();
+        thread::spawn(move || {
+            let loaded = Self::load_entries_from_disk(&load_path);
+            let _ = tx.send(loaded);
+        });
+        Self {
             entries: VecDeque::new(),
             persist_path: path,
             dirty: false,
+            load_rx: Some(rx),
+        }
+    }
+
+    /// 轮询后台加载；返回 true 表示刚完成加载
+    pub fn poll_background_load(&mut self) -> bool {
+        let Some(rx) = &self.load_rx else {
+            return false;
         };
-        h.load_from_disk();
-        h
+        match rx.try_recv() {
+            Ok(loaded) => {
+                self.entries = loaded;
+                self.load_rx = None;
+                true
+            }
+            Err(mpsc::TryRecvError::Empty) => false,
+            Err(mpsc::TryRecvError::Disconnected) => {
+                self.load_rx = None;
+                false
+            }
+        }
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.load_rx.is_none()
     }
 
     pub fn default_persist_path() -> PathBuf {
@@ -58,23 +99,23 @@ impl CommandHistory {
         p
     }
 
-    pub fn load_from_disk(&mut self) {
-        if !self.persist_path.exists() {
-            return;
+    fn load_entries_from_disk(path: &PathBuf) -> VecDeque<HistoryEntry> {
+        if !path.exists() {
+            return VecDeque::new();
         }
-        let Ok(content) = fs::read_to_string(&self.persist_path) else {
-            self.entries.clear();
-            return;
+        let Ok(content) = fs::read_to_string(path) else {
+            return VecDeque::new();
         };
         let Ok(file) = serde_json::from_str::<HistoryFile>(&content) else {
-            self.entries.clear();
-            return;
+            return VecDeque::new();
         };
-        self.entries = file.entries.into_iter().collect();
-        self.prune_old();
-        while self.entries.len() > MEMORY_CAP {
-            self.entries.pop_front();
+        let mut entries: VecDeque<HistoryEntry> = file.entries.into_iter().collect();
+        let cutoff = Local::now().timestamp() - RETENTION_DAYS * 86400;
+        entries.retain(|e| e.executed_at >= cutoff);
+        while entries.len() > MEMORY_CAP {
+            entries.pop_front();
         }
+        entries
     }
 
     pub fn save(&mut self) -> io::Result<()> {
@@ -85,7 +126,8 @@ impl CommandHistory {
             fs::create_dir_all(parent)?;
         }
         let mut all: Vec<HistoryEntry> = self.entries.iter().cloned().collect();
-        self.prune_vec(&mut all);
+        let cutoff = Local::now().timestamp() - RETENTION_DAYS * 86400;
+        all.retain(|e| e.executed_at >= cutoff);
         if all.len() > FILE_CAP {
             all.drain(0..all.len() - FILE_CAP);
         }
@@ -108,13 +150,13 @@ impl CommandHistory {
         if cmd.is_empty() || cmd.starts_with('\x1b') {
             return;
         }
-        let cmd = if cmd.len() > MAX_COMMAND_LEN {
-            &cmd[..MAX_COMMAND_LEN]
+        let stored = if cmd.len() > MAX_COMMAND_LEN {
+            cmd[..MAX_COMMAND_LEN].to_string()
         } else {
-            cmd
+            cmd.to_string()
         };
         if let Some(last) = self.entries.back() {
-            if last.command == cmd {
+            if last.command == stored {
                 if let Some(back) = self.entries.back_mut() {
                     back.executed_at = Local::now().timestamp();
                     back.success = success;
@@ -126,7 +168,7 @@ impl CommandHistory {
             }
         }
         self.entries.push_back(HistoryEntry {
-            command: cmd.to_string(),
+            command: stored,
             executed_at: Local::now().timestamp(),
             session_id: session_id.map(str::to_string),
             session_name: session_name.map(str::to_string),
@@ -165,16 +207,6 @@ impl CommandHistory {
         self.entries.retain(|e| e.command != command);
         self.dirty = true;
     }
-
-    fn prune_old(&mut self) {
-        let cutoff = Local::now().timestamp() - RETENTION_DAYS * 86400;
-        self.entries.retain(|e| e.executed_at >= cutoff);
-    }
-
-    fn prune_vec(&self, entries: &mut Vec<HistoryEntry>) {
-        let cutoff = Local::now().timestamp() - RETENTION_DAYS * 86400;
-        entries.retain(|e| e.executed_at >= cutoff);
-    }
 }
 
 #[cfg(test)]
@@ -187,10 +219,12 @@ mod tests {
             entries: VecDeque::new(),
             persist_path: PathBuf::from("/tmp/unused"),
             dirty: false,
+            load_rx: None,
         };
         h.record("ls", None, None, true);
-        h.record("ls", None, None, true);
+        h.record("ls", None, None, false);
         assert_eq!(h.entries.len(), 1);
+        assert!(!h.entries[0].success);
     }
 
     #[test]
@@ -199,6 +233,7 @@ mod tests {
             entries: VecDeque::new(),
             persist_path: PathBuf::from("/tmp/unused"),
             dirty: false,
+            load_rx: None,
         };
         h.record("docker ps", None, Some("srv"), true);
         h.record("git status", None, None, true);

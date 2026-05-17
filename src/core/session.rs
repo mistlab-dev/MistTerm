@@ -29,7 +29,13 @@ pub struct SessionConfig {
     /// 已从 ~/.ssh/config 导入的标记 `Host|HostName|Port`
     #[serde(default)]
     pub ssh_config_marker: Option<String>,
-    /// 环境色标：空 / red / yellow / green / blue / purple / cyan
+    /// OpenSSH ProxyJump（完整跳板链见 P1）
+    #[serde(default)]
+    pub proxy_jump: String,
+    /// OpenSSH ProxyCommand
+    #[serde(default)]
+    pub proxy_command: String,
+    /// 环境色标：空 / red / yellow / green / blue / purple / gray
     #[serde(default)]
     pub color_tag: String,
     #[serde(default = "default_keepalive_enabled")]
@@ -38,6 +44,8 @@ pub struct SessionConfig {
     pub keepalive_interval_secs: u32,
     #[serde(default = "default_keepalive_count_max")]
     pub keepalive_count_max: u8,
+    #[serde(default = "default_keepalive_auto_reconnect")]
+    pub keepalive_auto_reconnect: bool,
 }
 
 fn default_keepalive_enabled() -> bool {
@@ -49,6 +57,9 @@ fn default_keepalive_interval() -> u32 {
 fn default_keepalive_count_max() -> u8 {
     3
 }
+fn default_keepalive_auto_reconnect() -> bool {
+    true
+}
 
 /// 侧栏颜色标签 → egui 色（由 UI 层调用）
 pub fn session_color_tag_rgb(tag: &str) -> Option<(u8, u8, u8)> {
@@ -58,7 +69,7 @@ pub fn session_color_tag_rgb(tag: &str) -> Option<(u8, u8, u8)> {
         "green" => Some((34, 197, 94)),
         "blue" => Some((59, 130, 246)),
         "purple" => Some((168, 85, 247)),
-        "cyan" => Some((34, 211, 238)),
+        "gray" => Some((158, 158, 158)),
         _ => None,
     }
 }
@@ -70,7 +81,7 @@ pub const SESSION_COLOR_TAGS: &[(&str, &str)] = &[
     ("green", "绿"),
     ("blue", "蓝"),
     ("purple", "紫"),
-    ("cyan", "青"),
+    ("gray", "灰"),
 ];
 
 impl Default for SessionConfig {
@@ -87,10 +98,13 @@ impl Default for SessionConfig {
             last_connected_at: None,
             created_at: None,
             ssh_config_marker: None,
+            proxy_jump: String::new(),
+            proxy_command: String::new(),
             color_tag: String::new(),
             keepalive_enabled: default_keepalive_enabled(),
             keepalive_interval_secs: default_keepalive_interval(),
             keepalive_count_max: default_keepalive_count_max(),
+            keepalive_auto_reconnect: default_keepalive_auto_reconnect(),
         }
     }
 }
@@ -120,6 +134,10 @@ struct StoredSessionConfig {
     #[serde(default)]
     ssh_config_marker: Option<String>,
     #[serde(default)]
+    proxy_jump: String,
+    #[serde(default)]
+    proxy_command: String,
+    #[serde(default)]
     color_tag: String,
     #[serde(default = "default_keepalive_enabled")]
     keepalive_enabled: bool,
@@ -127,6 +145,8 @@ struct StoredSessionConfig {
     keepalive_interval_secs: u32,
     #[serde(default = "default_keepalive_count_max")]
     keepalive_count_max: u8,
+    #[serde(default = "default_keepalive_auto_reconnect")]
+    keepalive_auto_reconnect: bool,
 }
 
 fn default_group() -> String {
@@ -189,10 +209,13 @@ impl SessionManager {
                 last_connected_at: cfg.last_connected_at,
                 created_at: cfg.created_at,
                 ssh_config_marker: cfg.ssh_config_marker,
+                proxy_jump: cfg.proxy_jump,
+                proxy_command: cfg.proxy_command,
                 color_tag: cfg.color_tag,
                 keepalive_enabled: cfg.keepalive_enabled,
                 keepalive_interval_secs: cfg.keepalive_interval_secs,
                 keepalive_count_max: cfg.keepalive_count_max,
+                keepalive_auto_reconnect: cfg.keepalive_auto_reconnect,
             });
         }
         Some((sessions, had_plaintext, warnings))
@@ -318,10 +341,13 @@ impl SessionManager {
                 last_connected_at: cfg.last_connected_at,
                 created_at: cfg.created_at,
                 ssh_config_marker: cfg.ssh_config_marker.clone(),
+                proxy_jump: cfg.proxy_jump.clone(),
+                proxy_command: cfg.proxy_command.clone(),
                 color_tag: cfg.color_tag.clone(),
                 keepalive_enabled: cfg.keepalive_enabled,
                 keepalive_interval_secs: cfg.keepalive_interval_secs,
                 keepalive_count_max: cfg.keepalive_count_max,
+                keepalive_auto_reconnect: cfg.keepalive_auto_reconnect,
             });
         }
 

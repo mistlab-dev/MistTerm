@@ -9,8 +9,10 @@ use rfd::FileDialog;
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 use crate::core::{
-    candidate_to_session, default_ssh_config_path, parse_ssh_config_file, pending_imports,
+    candidate_to_session, default_ssh_config_path, is_already_imported, parse_ssh_config_file,
+    pending_imports, SshConfigParseResult,
     CommandHistory, Credential, CredentialAuthKind, SessionLogSettings, SessionLogWriter,
+    spawn_cleanup_old_logs, DEFAULT_RETENTION_DAYS,
     SessionSortBy, SshConfigCandidate, expand_command_template, expand_fragment_command_stages,
     expand_rhai_blocks, list_placeholder_keys, merge_rhai_context,
     FragmentManager, FragmentStats, SessionConfig, SessionManager, SortBy, SESSION_COLOR_TAGS,
@@ -47,6 +49,12 @@ struct MistTermUiPersist {
     default_keepalive_enabled: bool,
     #[serde(default = "default_keepalive_interval_persist")]
     default_keepalive_interval_secs: u32,
+    #[serde(default = "default_keepalive_count_max_persist")]
+    default_keepalive_count_max: u8,
+    #[serde(default)]
+    session_log_retention_days: u32,
+    #[serde(default)]
+    session_log_include_ansi: bool,
     #[serde(default)]
     ssh_import_banner_dismissed: bool,
 }
@@ -59,6 +67,9 @@ fn default_keepalive_enabled_persist() -> bool {
 }
 fn default_keepalive_interval_persist() -> u32 {
     30
+}
+fn default_keepalive_count_max_persist() -> u8 {
+    3
 }
 
 fn truncate_status(s: &str, max_chars: usize) -> String {
@@ -264,6 +275,7 @@ pub struct MistTermApp {
     edit_session_keepalive_enabled: bool,
     edit_session_keepalive_interval_secs: u32,
     edit_session_keepalive_count_max: u8,
+    edit_session_keepalive_auto_reconnect: bool,
     sidebar_search_query: String,
     sidebar_filter: String,
     session_sort_by: SessionSortBy,
@@ -316,6 +328,7 @@ pub struct MistTermApp {
     session_log_enabled: bool,
     default_keepalive_enabled: bool,
     default_keepalive_interval_secs: u32,
+    default_keepalive_count_max: u8,
 
     /// FUNCTIONAL_SPEC §1.3.4：Delete 删除会话前的确认 `(session_id, display_name)`
     delete_session_confirm: Option<(String, String)>,
@@ -541,6 +554,7 @@ impl MistTermApp {
             edit_session_keepalive_enabled: true,
             edit_session_keepalive_interval_secs: 30,
             edit_session_keepalive_count_max: 3,
+            edit_session_keepalive_auto_reconnect: true,
             sidebar_search_query: String::new(),
             sidebar_filter: "全部".to_string(),
             session_sort_by: SessionSortBy::default(),
@@ -566,6 +580,7 @@ impl MistTermApp {
             session_log_enabled: true,
             default_keepalive_enabled: true,
             default_keepalive_interval_secs: 30,
+            default_keepalive_count_max: 3,
         };
 
         if let Some(storage) = cc.storage {
@@ -580,10 +595,23 @@ impl MistTermApp {
                 app.session_log_enabled = p.session_log_enabled;
                 app.default_keepalive_enabled = p.default_keepalive_enabled;
                 app.default_keepalive_interval_secs = p.default_keepalive_interval_secs;
+                app.default_keepalive_count_max = p.default_keepalive_count_max;
+                app.session_log_settings.retention_days =
+                    if p.session_log_retention_days == 0 {
+                        DEFAULT_RETENTION_DAYS
+                    } else {
+                        p.session_log_retention_days
+                    };
+                app.session_log_settings.include_ansi = p.session_log_include_ansi;
                 app.ssh_import_banner_dismissed = p.ssh_import_banner_dismissed;
             }
         }
         app.session_log_settings.enabled = app.session_log_enabled;
+        {
+            let base = app.session_log_settings.base_dir.clone();
+            let days = app.session_log_settings.retention_days;
+            spawn_cleanup_old_logs(base, days);
+        }
         app.refresh_ssh_config_candidates();
 
         app
@@ -592,6 +620,7 @@ impl MistTermApp {
     fn refresh_ssh_config_candidates(&mut self) {
         self.ssh_config_candidates = if self.ssh_config_path.exists() {
             parse_ssh_config_file(&self.ssh_config_path)
+                .map(|r| r.candidates)
                 .unwrap_or_default()
         } else {
             Vec::new()
@@ -607,26 +636,34 @@ impl MistTermApp {
     }
 
     fn open_ssh_import_dialog(&mut self) {
-        self.refresh_ssh_config_candidates();
-        let pending: Vec<SshConfigCandidate> = pending_imports(
-            &self.ssh_config_candidates,
-            self.session_manager.list_sessions(),
-        )
-        .into_iter()
-        .cloned()
-        .collect();
-        if pending.is_empty() {
-            self.status_message = if self.ssh_config_path.exists() {
-                "所有 SSH 配置已导入".to_string()
-            } else {
-                format!(
-                    "未找到 SSH 配置文件：{}",
-                    self.ssh_config_path.display()
-                )
-            };
+        if !self.ssh_config_path.exists() {
+            self.status_message = format!(
+                "未找到 SSH 配置文件：{}",
+                self.ssh_config_path.display()
+            );
             return;
         }
-        self.ssh_import_dialog.set_candidates(pending);
+        let parse = parse_ssh_config_file(&self.ssh_config_path).unwrap_or(SshConfigParseResult {
+            candidates: Vec::new(),
+            warnings: vec!["无法读取 SSH 配置文件".to_string()],
+        });
+        self.ssh_config_candidates = parse.candidates.clone();
+        let existing = self.session_manager.list_sessions();
+        let already_imported: Vec<bool> = parse
+            .candidates
+            .iter()
+            .map(|c| is_already_imported(c, existing))
+            .collect();
+        if pending_imports(&parse.candidates, existing).is_empty()
+            && parse.candidates.iter().any(|c| c.importable())
+        {
+            self.status_message = "所有可导入的 SSH 配置已存在".to_string();
+        }
+        self.ssh_import_dialog.set_candidates(
+            parse.candidates,
+            already_imported,
+            parse.warnings,
+        );
     }
 
     fn import_ssh_indices(&mut self, indices: &[usize]) {
@@ -650,7 +687,9 @@ impl MistTermApp {
                 cfg.keepalive_enabled = false;
             } else {
                 cfg.keepalive_interval_secs = self.default_keepalive_interval_secs;
+                cfg.keepalive_count_max = self.default_keepalive_count_max;
             }
+            cfg.keepalive_auto_reconnect = self.auto_reconnect_enabled;
             let name = cfg.name.clone();
             names.push(name.clone());
             self.session_manager.add_session(cfg);
@@ -678,10 +717,10 @@ impl MistTermApp {
     }
 
     fn session_keepalive_params(session: &SessionConfig) -> (bool, u32, u8) {
-        if session.keepalive_enabled {
+        if session.keepalive_enabled && session.keepalive_interval_secs > 0 {
             (
                 true,
-                session.keepalive_interval_secs.max(1),
+                session.keepalive_interval_secs,
                 session.keepalive_count_max.max(1),
             )
         } else {
@@ -697,15 +736,29 @@ impl MistTermApp {
             return;
         }
         let sid = tab.session_id.clone();
-        let name = self
+        let (name, host_line) = self
             .session_manager
             .get_session(&sid)
-            .map(|s| s.name.clone())
-            .unwrap_or_else(|| tab.title.clone());
+            .map(|s| {
+                (
+                    s.name.clone(),
+                    format!("{}@{}:{}", s.username, s.host, s.port),
+                )
+            })
+            .unwrap_or_else(|| (tab.title.clone(), String::new()));
         let settings = self.session_log_settings.clone();
         if let Some(tab) = self.tabs.get_mut(tab_idx) {
-            tab.log_writer = Some(SessionLogWriter::new(sid, name, settings));
+            let mut writer = SessionLogWriter::new(sid, name, host_line, settings);
+            writer.write_connected();
+            tab.log_writer = Some(writer);
         }
+    }
+
+    fn tab_auto_reconnect_enabled(&self, session_id: &str) -> bool {
+        self.session_manager
+            .get_session(session_id)
+            .map(|s| s.keepalive_auto_reconnect)
+            .unwrap_or(self.auto_reconnect_enabled)
     }
 
     fn poll_command_history_from_active_tab(&mut self) {
@@ -725,6 +778,11 @@ impl MistTermApp {
             (sid, sname, cmd)
         };
         if let Some(command) = cmd {
+            if let Some(tab) = self.tabs.get_mut(idx) {
+                if let Some(w) = tab.log_writer.as_mut() {
+                    w.write_prompt_marker(&command);
+                }
+            }
             self.command_history.record(
                 &command,
                 Some(&sid),
@@ -844,6 +902,9 @@ impl MistTermApp {
         if idx >= self.tabs.len() {
             return;
         }
+        if let Some(w) = self.tabs[idx].log_writer.as_mut() {
+            w.stop_log();
+        }
         self.tabs[idx].terminal.disconnect();
         self.tabs.remove(idx);
         if let Some(active) = self.active_tab {
@@ -883,6 +944,9 @@ impl MistTermApp {
     fn disconnect_ssh_keep_buffer_at(&mut self, idx: usize) {
         if idx >= self.tabs.len() {
             return;
+        }
+        if let Some(w) = self.tabs[idx].log_writer.as_mut() {
+            w.stop_log();
         }
         self.tabs[idx].terminal.disconnect_ssh_keep_buffer();
         self.sync_monitor_panel_to_active_tab();
@@ -1344,6 +1408,7 @@ impl MistTermApp {
             self.edit_session_keepalive_enabled = session.keepalive_enabled;
             self.edit_session_keepalive_interval_secs = session.keepalive_interval_secs;
             self.edit_session_keepalive_count_max = session.keepalive_count_max;
+            self.edit_session_keepalive_auto_reconnect = session.keepalive_auto_reconnect;
             self.show_edit_session_dialog = true;
         }
     }
@@ -1386,11 +1451,13 @@ impl MistTermApp {
             let ka_on = self.edit_session_keepalive_enabled;
             let ka_int = self.edit_session_keepalive_interval_secs;
             let ka_max = self.edit_session_keepalive_count_max;
+            let ka_ar = self.edit_session_keepalive_auto_reconnect;
             let _ = self.session_manager.patch_session(&session_id, |s| {
                 s.color_tag = color;
                 s.keepalive_enabled = ka_on;
                 s.keepalive_interval_secs = ka_int;
                 s.keepalive_count_max = ka_max;
+                s.keepalive_auto_reconnect = ka_ar;
             });
             self.status_message = format!("已更新会话：{}", self.edit_session_name);
             if self.selected_session_id.as_deref() == Some(session_id.as_str()) {
@@ -1971,6 +2038,17 @@ impl MistTermApp {
                     .min(theme.chrome_bar_content_height(status_h));
                 let bar_w = ui.available_width();
                 let right_w = 168.0;
+                let status_ctx = ui.interact(
+                    ui.max_rect(),
+                    egui::Id::new("status_bar_context"),
+                    egui::Sense::click(),
+                );
+                status_ctx.context_menu(|ui| {
+                    crate::ui::chrome::apply_context_menu_style(ui, &theme);
+                    if ui.button("导入 SSH 配置…").clicked() {
+                        self.open_ssh_import_dialog();
+                    }
+                });
                 ui.horizontal(|ui| {
                     ui.set_min_height(content_h);
                     ui.spacing_mut().item_spacing =
@@ -2167,6 +2245,9 @@ impl eframe::App for MistTermApp {
             session_log_enabled: self.session_log_enabled,
             default_keepalive_enabled: self.default_keepalive_enabled,
             default_keepalive_interval_secs: self.default_keepalive_interval_secs,
+            default_keepalive_count_max: self.default_keepalive_count_max,
+            session_log_retention_days: self.session_log_settings.retention_days,
+            session_log_include_ansi: self.session_log_settings.include_ansi,
             ssh_import_banner_dismissed: self.ssh_import_banner_dismissed,
         };
         eframe::set_value(storage, MISTTERM_UI_STORAGE_KEY, &p);
@@ -2210,6 +2291,9 @@ impl eframe::App for MistTermApp {
         // 监控：`exec` 由 shell 泵串行执行，在此处轮询结果并驱动自动刷新
         self.monitor_panel.update(ctx, self.show_monitor_panel);
         self.try_flush_pending_fragment_insert();
+        if self.command_history.poll_background_load() {
+            ctx.request_repaint();
+        }
         self.poll_command_history_from_active_tab();
         self.append_terminal_output_logs();
 
@@ -2223,8 +2307,8 @@ impl eframe::App for MistTermApp {
 
         let now = Instant::now();
         use crate::core::{
-            collect_tabs_due_for_reconnect, schedule_after_unexpected_disconnect,
-            TabReconnectSchedule, DEFAULT_MAX_RECONNECT_ATTEMPTS,
+            schedule_after_unexpected_disconnect, TabReconnectSchedule,
+            DEFAULT_MAX_RECONNECT_ATTEMPTS,
         };
         let schedules: Vec<TabReconnectSchedule> = self
             .tabs
@@ -2234,27 +2318,38 @@ impl eframe::App for MistTermApp {
                 attempts: t.ssh_auto_reconnect_attempts,
             })
             .collect();
-        for i in collect_tabs_due_for_reconnect(&schedules, now, self.auto_reconnect_enabled) {
+        let due: Vec<usize> = schedules
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| {
+                if !self.tab_auto_reconnect_enabled(&self.tabs[i].session_id) {
+                    return None;
+                }
+                s.next_fire.filter(|t| now >= *t).map(|_| i)
+            })
+            .collect();
+        for i in due {
             self.tabs[i].ssh_auto_reconnect_next = None;
             self.reconnect_tab_at(i);
         }
-        for tab in &mut self.tabs {
-            if !self.auto_reconnect_enabled {
-                let _ = tab.terminal.take_unexpected_disconnect_notified();
+        for i in 0..self.tabs.len() {
+            let sid = self.tabs[i].session_id.clone();
+            if !self.tab_auto_reconnect_enabled(&sid) {
+                let _ = self.tabs[i].terminal.take_unexpected_disconnect_notified();
                 continue;
             }
-            if tab.terminal.take_unexpected_disconnect_notified() {
+            if self.tabs[i].terminal.take_unexpected_disconnect_notified() {
                 let sched = TabReconnectSchedule {
-                    next_fire: tab.ssh_auto_reconnect_next,
-                    attempts: tab.ssh_auto_reconnect_attempts,
+                    next_fire: self.tabs[i].ssh_auto_reconnect_next,
+                    attempts: self.tabs[i].ssh_auto_reconnect_attempts,
                 };
                 let (new_sched, status) = schedule_after_unexpected_disconnect(
                     sched,
                     DEFAULT_MAX_RECONNECT_ATTEMPTS,
                     now,
                 );
-                tab.ssh_auto_reconnect_next = new_sched.next_fire;
-                tab.ssh_auto_reconnect_attempts = new_sched.attempts;
+                self.tabs[i].ssh_auto_reconnect_next = new_sched.next_fire;
+                self.tabs[i].ssh_auto_reconnect_attempts = new_sched.attempts;
                 if let Some(s) = status {
                     self.status_message = s.message;
                 }
@@ -2351,8 +2446,11 @@ impl eframe::App for MistTermApp {
             if ctx.input(|i| i.key_pressed(egui::Key::R) && i.modifiers.ctrl && !i.modifiers.command) {
                 if self.current_terminal().map(|t| t.is_connected()).unwrap_or(false) {
                     if self.command_history_overlay.open {
-                        self.command_history_overlay.match_index =
-                            self.command_history_overlay.match_index.saturating_add(1);
+                        let n = self
+                            .command_history
+                            .search(&self.command_history_overlay.query, true)
+                            .len();
+                        self.command_history_overlay.cycle_match(n);
                     } else {
                         self.command_history_overlay.open_new();
                     }

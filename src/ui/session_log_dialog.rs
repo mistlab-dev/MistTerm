@@ -2,6 +2,7 @@
 
 use crate::core::session_logger::{
     list_session_log_files, log_text_for_display, read_log_tail, SessionLogSettings,
+    LOG_TAIL_READ_BYTES,
 };
 use crate::ui::chrome;
 use crate::ui::layout_util;
@@ -16,6 +17,7 @@ pub struct SessionLogDialog {
     log_files: Vec<PathBuf>,
     selected_file: usize,
     content: String,
+    search_query: String,
 }
 
 impl Default for SessionLogDialog {
@@ -27,6 +29,7 @@ impl Default for SessionLogDialog {
             log_files: Vec::new(),
             selected_file: 0,
             content: String::new(),
+            search_query: String::new(),
         }
     }
 }
@@ -37,6 +40,7 @@ impl SessionLogDialog {
         self.session_name = session_name.to_string();
         self.log_files = list_session_log_files(&settings.base_dir, session_id);
         self.selected_file = 0;
+        self.search_query.clear();
         self.reload_content(settings);
         self.open = true;
     }
@@ -44,7 +48,7 @@ impl SessionLogDialog {
     fn reload_content(&mut self, settings: &SessionLogSettings) {
         self.content.clear();
         if let Some(path) = self.log_files.get(self.selected_file) {
-            match read_log_tail(path, 256 * 1024) {
+            match read_log_tail(path, LOG_TAIL_READ_BYTES) {
                 Ok(text) if text.trim().is_empty() => {
                     self.content =
                         "日志文件存在但尚无内容；请在终端产生输出后再查看。".to_string();
@@ -64,9 +68,25 @@ impl SessionLogDialog {
         } else if self.log_files.is_empty() {
             self.content = format!(
                 "暂无日志文件。\n目录：{}",
-                settings.base_dir.join(&self.session_id).display()
+                settings
+                    .base_dir
+                    .join(sanitize_dir_hint(&self.session_id))
+                    .display()
             );
         }
+    }
+
+    fn filtered_content(&self) -> String {
+        let q = self.search_query.trim();
+        if q.is_empty() {
+            return self.content.clone();
+        }
+        let ql = q.to_lowercase();
+        self.content
+            .lines()
+            .filter(|line| line.to_lowercase().contains(&ql))
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     pub fn show(&mut self, ctx: &egui::Context, theme: &Theme, settings: &SessionLogSettings) {
@@ -75,6 +95,7 @@ impl SessionLogDialog {
         }
         let mut should_close = false;
         let mut reload = false;
+        let display = self.filtered_content();
         egui::Window::new("session_log_viewer")
             .open(&mut self.open)
             .title_bar(false)
@@ -97,6 +118,15 @@ impl SessionLogDialog {
                         .size(theme.font_size_small())
                         .color(theme.fg_low_color()),
                     );
+                    ui.horizontal(|ui| {
+                        ui.label("搜索");
+                        if ui
+                            .text_edit_singleline(&mut self.search_query)
+                            .changed()
+                        {
+                            // filter only affects display
+                        }
+                    });
                     if !self.log_files.is_empty() {
                         ui.horizontal(|ui| {
                             ui.label("日期：");
@@ -104,21 +134,21 @@ impl SessionLogDialog {
                                 .log_files
                                 .iter()
                                 .filter_map(|p| {
-                                    p.file_stem().and_then(|s| s.to_str().map(str::to_string))
+                                    p.file_name().and_then(|s| s.to_str().map(str::to_string))
                                 })
                                 .collect();
-                            let mut label = names
-                                .get(self.selected_file)
-                                .cloned()
-                                .unwrap_or_default();
                             egui::ComboBox::from_id_source("session_log_file")
-                                .selected_text(&label)
+                                .selected_text(
+                                    names
+                                        .get(self.selected_file)
+                                        .cloned()
+                                        .unwrap_or_default(),
+                                )
                                 .show_ui(ui, |ui| {
                                     crate::ui::chrome::apply_menu_popup_style(ui, theme);
                                     for (i, name) in names.iter().enumerate() {
                                         if ui.selectable_label(self.selected_file == i, name).clicked() {
                                             self.selected_file = i;
-                                            label = name.clone();
                                             reload = true;
                                         }
                                     }
@@ -145,10 +175,10 @@ impl SessionLogDialog {
                                     ui.set_min_width(ui.available_width());
                                     ui.add(
                                         egui::Label::new(
-                                            egui::RichText::new(if self.content.is_empty() {
-                                                "（无内容）"
+                                            egui::RichText::new(if display.is_empty() {
+                                                "（无匹配内容）"
                                             } else {
-                                                self.content.as_str()
+                                                display.as_str()
                                             })
                                             .font(egui::FontId::monospace(
                                                 theme.font_size_small(),
@@ -174,4 +204,16 @@ impl SessionLogDialog {
             self.open = false;
         }
     }
+}
+
+fn sanitize_dir_hint(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }

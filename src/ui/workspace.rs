@@ -511,22 +511,14 @@ impl MistTermApp {
                                             CommandHistoryAction::Apply(cmd) => {
                                                 if let Some(t) = self.current_terminal_mut() {
                                                     t.send_command(&cmd);
-                                                    self.command_history.record(
-                                                        &cmd,
-                                                        self.active_tab.and_then(|i| {
-                                                            self.tabs.get(i).map(|t| t.session_id.as_str())
-                                                        }),
-                                                        self.selected_session_id.as_deref().and_then(
-                                                            |sid| {
-                                                                self.session_manager
-                                                                    .get_session(sid)
-                                                                    .map(|s| s.name.as_str())
-                                                            },
-                                                        ),
-                                                        true,
-                                                    );
                                                 }
                                                 self.command_history_overlay.open = false;
+                                            }
+                                            CommandHistoryAction::Delete(cmd) => {
+                                                self.command_history.remove_matching(&cmd);
+                                                if self.command_history_overlay.selected > 0 {
+                                                    self.command_history_overlay.selected -= 1;
+                                                }
                                             }
                                             CommandHistoryAction::None => {}
                                         }
@@ -876,7 +868,19 @@ impl MistTermApp {
                                 egui::DragValue::new(&mut self.default_keepalive_interval_secs)
                                     .clamp_range(5..=300),
                             );
+                            ui.label("超时次数");
+                            ui.add(
+                                egui::DragValue::new(&mut self.default_keepalive_count_max)
+                                    .clamp_range(1..=20),
+                            );
                         });
+                        ui.label(
+                            egui::RichText::new(
+                                "说明：libssh2 仅支持心跳间隔；超时次数用于会话配置，完整判定见后续版本。",
+                            )
+                            .size(theme.font_size_small())
+                            .color(text_low),
+                        );
                         ui.add_space(theme.spacing_status_bar_x());
                         ui.label(
                             egui::RichText::new("终端日志")
@@ -890,10 +894,22 @@ impl MistTermApp {
                             self.session_log_enabled = log_on;
                             self.session_log_settings.enabled = log_on;
                         }
+                        ui.horizontal(|ui| {
+                            ui.label("保留天数");
+                            ui.add(
+                                egui::DragValue::new(&mut self.session_log_settings.retention_days)
+                                    .clamp_range(1..=365),
+                            );
+                        });
+                        let mut ansi = self.session_log_settings.include_ansi;
+                        if ui.checkbox(&mut ansi, "日志包含 ANSI 颜色").changed() {
+                            self.session_log_settings.include_ansi = ansi;
+                        }
                         ui.label(
                             egui::RichText::new(format!(
-                                "目录：{}",
-                                self.session_log_settings.base_dir.display()
+                                "目录：{}（单文件上限 {} MB）",
+                                self.session_log_settings.base_dir.display(),
+                                self.session_log_settings.max_file_bytes / (1024 * 1024)
                             ))
                             .size(theme.font_size_small())
                             .color(text_low),
@@ -1279,7 +1295,13 @@ impl MistTermApp {
                                     }
                                 });
 
-                            ui.checkbox(&mut self.edit_session_keepalive_enabled, "SSH KeepAlive");
+                            ui.label(
+                                egui::RichText::new("连接保活")
+                                    .size(theme.font_size_panel_title())
+                                    .strong()
+                                    .color(text_color),
+                            );
+                            ui.checkbox(&mut self.edit_session_keepalive_enabled, "启用心跳保持");
                             if self.edit_session_keepalive_enabled {
                                 ui.horizontal(|ui| {
                                     ui.label("间隔(秒)");
@@ -1289,13 +1311,17 @@ impl MistTermApp {
                                         )
                                         .clamp_range(5..=300),
                                     );
-                                    ui.label("最大次数");
+                                    ui.label("超时次数");
                                     ui.add(
                                         egui::DragValue::new(&mut self.edit_session_keepalive_count_max)
-                                            .clamp_range(1..=10),
+                                            .clamp_range(1..=20),
                                     );
                                 });
                             }
+                            ui.checkbox(
+                                &mut self.edit_session_keepalive_auto_reconnect,
+                                "断开后自动重连",
+                            );
 
                             if required_missing {
                                 ui.add_space(theme.spacing_sm());

@@ -224,7 +224,7 @@ impl Sidebar {
                         })
                         .collect::<Vec<_>>();
 
-                    sort_sessions(&mut sessions, *sort_by, connected_sessions);
+                    sort_sessions(&mut sessions, *sort_by);
                     
                     if sessions.is_empty() {
                         ui.centered_and_justified(|ui| {
@@ -306,23 +306,24 @@ impl Sidebar {
                                 )),
                                 egui::Layout::left_to_right(egui::Align::Center),
                             );
-                            let online = connected_sessions.contains(&session.id);
+                            let _online = connected_sessions.contains(&session.id);
                             let env_color = session_color_tag_rgb(&session.color_tag)
                                 .map(|(r, g, b)| egui::Color32::from_rgb(r, g, b));
-                            let dot_color = env_color.unwrap_or_else(|| {
-                                if online {
-                                    theme.green_color()
-                                } else {
-                                    theme.fg_high_a64()
-                                }
-                            });
+                            let dot_r = 3.0_f32;
                             let (dot_rect, _) = row_ui.allocate_exact_size(
-                                egui::vec2(5.0, 5.0),
+                                egui::vec2(dot_r * 2.0, dot_r * 2.0),
                                 egui::Sense::hover(),
                             );
-                            row_ui
-                                .painter()
-                                .circle_filled(dot_rect.center(), 2.5, dot_color);
+                            let center = dot_rect.center();
+                            if let Some(rgb) = env_color {
+                                row_ui.painter().circle_filled(center, dot_r, rgb);
+                            } else {
+                                row_ui.painter().circle_stroke(
+                                    center,
+                                    dot_r,
+                                    egui::Stroke::new(1.0, theme.fg_high_a64()),
+                                );
+                            }
                             row_ui.add_space(theme.spacing_tab_dot_text());
                             row_ui.label(
                                 egui::RichText::new(&session.name)

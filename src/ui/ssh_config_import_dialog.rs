@@ -6,10 +6,15 @@ use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 use eframe::egui;
 
+const PAGE_SIZE: usize = 20;
+
 pub struct SshConfigImportDialog {
     pub open: bool,
     pub candidates: Vec<SshConfigCandidate>,
     pub selected: Vec<bool>,
+    pub already_imported: Vec<bool>,
+    pub parse_warnings: Vec<String>,
+    pub page: usize,
 }
 
 impl Default for SshConfigImportDialog {
@@ -18,17 +23,29 @@ impl Default for SshConfigImportDialog {
             open: false,
             candidates: Vec::new(),
             selected: Vec::new(),
+            already_imported: Vec::new(),
+            parse_warnings: Vec::new(),
+            page: 0,
         }
     }
 }
 
 impl SshConfigImportDialog {
-    pub fn set_candidates(&mut self, candidates: Vec<SshConfigCandidate>) {
+    pub fn set_candidates(
+        &mut self,
+        candidates: Vec<SshConfigCandidate>,
+        already_imported: Vec<bool>,
+        parse_warnings: Vec<String>,
+    ) {
         self.selected = candidates
             .iter()
-            .map(|c| c.importable())
+            .enumerate()
+            .map(|(i, c)| c.importable() && !already_imported.get(i).copied().unwrap_or(false))
             .collect();
         self.candidates = candidates;
+        self.already_imported = already_imported;
+        self.parse_warnings = parse_warnings;
+        self.page = 0;
         self.open = true;
     }
 
@@ -42,8 +59,18 @@ impl SshConfigImportDialog {
             .candidates
             .iter()
             .enumerate()
-            .filter(|(i, c)| c.importable() && self.selected.get(*i).copied().unwrap_or(false))
+            .filter(|(i, c)| {
+                c.importable()
+                    && !self.already_imported.get(*i).copied().unwrap_or(false)
+                    && self.selected.get(*i).copied().unwrap_or(false)
+            })
             .count();
+
+        let total_pages = (self.candidates.len() + PAGE_SIZE - 1) / PAGE_SIZE.max(1);
+        let page = self.page.min(total_pages.saturating_sub(1));
+        self.page = page;
+        let page_start = page * PAGE_SIZE;
+        let page_end = (page_start + PAGE_SIZE).min(self.candidates.len());
 
         egui::Window::new("ssh_config_import")
             .open(&mut self.open)
@@ -68,12 +95,34 @@ impl SshConfigImportDialog {
                         .size(theme.font_size_normal())
                         .color(theme.fg_medium_color()),
                     );
+                    if !self.parse_warnings.is_empty() {
+                        ui.add_space(theme.spacing_sm());
+                        for w in self.parse_warnings.iter().take(5) {
+                            ui.label(
+                                egui::RichText::new(w)
+                                    .size(theme.font_size_small())
+                                    .color(theme.amber_color()),
+                            );
+                        }
+                        if self.parse_warnings.len() > 5 {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "… 另有 {} 条解析提示",
+                                    self.parse_warnings.len() - 5
+                                ))
+                                .size(theme.font_size_small())
+                                .color(theme.fg_low_color()),
+                            );
+                        }
+                    }
                     ui.add_space(theme.spacing_panel_gap());
                     egui::ScrollArea::vertical()
                         .max_height(280.0)
                         .show(ui, |ui| {
-                            for (i, c) in self.candidates.iter().enumerate() {
-                                let can = c.importable();
+                            for i in page_start..page_end {
+                                let c = &self.candidates[i];
+                                let imported = self.already_imported.get(i).copied().unwrap_or(false);
+                                let can = c.importable() && !imported;
                                 ui.horizontal(|ui| {
                                     let mut sel = self.selected.get(i).copied().unwrap_or(false);
                                     if !can {
@@ -83,19 +132,24 @@ impl SshConfigImportDialog {
                                             *s = sel;
                                         }
                                     }
-                                    let name = egui::RichText::new(&c.host_alias)
-                                        .color(if can {
-                                            theme.fg_high_color()
-                                        } else {
-                                            theme.fg_low_color()
-                                        });
+                                    let name = egui::RichText::new(&c.host_alias).color(if can {
+                                        theme.fg_high_color()
+                                    } else {
+                                        theme.fg_low_color()
+                                    });
                                     ui.label(name);
                                     ui.label(
                                         egui::RichText::new(format!("→ {}", c.display_target()))
                                             .size(theme.font_size_small())
                                             .color(theme.fg_low_color()),
                                     );
-                                    if let Some(reason) = &c.skip_reason {
+                                    if imported {
+                                        ui.label(
+                                            egui::RichText::new("(已导入)")
+                                                .size(theme.font_size_small())
+                                                .color(theme.fg_low_color()),
+                                        );
+                                    } else if let Some(reason) = &c.skip_reason {
                                         ui.label(
                                             egui::RichText::new(format!("({})", reason))
                                                 .size(theme.font_size_small())
@@ -105,6 +159,26 @@ impl SshConfigImportDialog {
                                 });
                             }
                         });
+                    if total_pages > 1 {
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add_enabled(page > 0, egui::Button::new("上一页"))
+                                .clicked()
+                            {
+                                self.page = page.saturating_sub(1);
+                            }
+                            ui.label(format!("第 {}/{} 页", page + 1, total_pages));
+                            if ui
+                                .add_enabled(
+                                    page + 1 < total_pages,
+                                    egui::Button::new("下一页"),
+                                )
+                                .clicked()
+                            {
+                                self.page = page + 1;
+                            }
+                        });
+                    }
                     ui.add_space(theme.spacing_lg());
                     chrome::modal_footer_actions(ui, theme, |ui, th| {
                         let label = if importable_count > 0 {
@@ -121,6 +195,7 @@ impl SshConfigImportDialog {
                                     .enumerate()
                                     .filter(|(i, c)| {
                                         c.importable()
+                                            && !self.already_imported.get(*i).copied().unwrap_or(false)
                                             && self.selected.get(*i).copied().unwrap_or(false)
                                     })
                                     .map(|(i, _)| i)
