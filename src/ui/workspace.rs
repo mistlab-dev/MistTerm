@@ -421,12 +421,14 @@ impl MistTermApp {
                                 |ui| {
                                     ui.set_min_height(term_body_h);
                                     ui.set_max_width(term_col_w);
+                                    let capture_pty_keyboard = self.should_capture_pty_keyboard();
                                     if let Some(terminal) = self.current_terminal_mut() {
                                         terminal.show(
                                             ui,
                                             &theme,
                                             term_col_w,
                                             terminal_search_open,
+                                            capture_pty_keyboard,
                                         );
                                     } else {
                                         self.show_welcome(ui);

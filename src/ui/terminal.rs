@@ -478,6 +478,7 @@ impl TerminalView {
         theme: &Theme,
         column_width: f32,
         terminal_search_open: bool,
+        capture_pty_keyboard: bool,
     ) {
         // 先处理网络与键盘，再绘制，避免输入/输出滞后一帧
         self.process_ssh_messages(theme);
@@ -503,7 +504,9 @@ impl TerminalView {
             self.set_font_size(self.font_size + step);
         }
 
-        self.capture_inline_input(ui);
+        if capture_pty_keyboard {
+            self.capture_inline_input(ui);
+        }
         if self.connected {
             // ZMODEM 上传时 PTY 回包经 UI 旁路进 lrzsz；须高频重绘以免 `mpsc` 积压导致「等 ZACK」式卡顿。
             if self.lrzsz.is_upload_pty_capture() {
@@ -1216,6 +1219,9 @@ impl TerminalView {
 
     /// 断线保留画面时：把按键写入本地缓冲（与 PTY 路径相同的字节序列，便于重发）。
     fn capture_inline_input_disconnected(&mut self, ui: &egui::Ui) {
+        if self.resend_offline_input_dialog_open {
+            return;
+        }
         let mut pending_paste: Option<String> = None;
 
         ui.input_mut(|i| {
@@ -1317,6 +1323,7 @@ impl TerminalView {
                         ..
                     } => {
                         if modifiers.command {
+                            // 仅拦截 ⌘V→离线缓冲；⌘C/⌘A 等留给侧栏/弹窗内 TextEdit
                             if *key == egui::Key::V {
                                 if let Ok(mut clip) = Clipboard::new() {
                                     if let Ok(text) = clip.get_text() {
@@ -1324,8 +1331,7 @@ impl TerminalView {
                                     }
                                 }
                             }
-                            continue;
-                        }
+                        } else {
                         match key {
                             egui::Key::V if modifiers.ctrl && modifiers.shift => {
                                 if let Ok(mut clip) = Clipboard::new() {
@@ -1345,6 +1351,7 @@ impl TerminalView {
                             }
                             egui::Key::Tab => {}
                             _ => {}
+                        }
                         }
                     }
                     _ => {}
@@ -1431,6 +1438,9 @@ impl TerminalView {
 
     /// 将键盘事件直接写入 PTY，由远端 shell 回显，避免「本地预览 + 回显」叠字（如 lsls）
     fn capture_inline_input(&mut self, ui: &egui::Ui) {
+        if self.resend_offline_input_dialog_open {
+            return;
+        }
         if self.buffer_input_while_disconnected && !self.connected {
             if self.terminal_focused {
                 self.capture_inline_input_disconnected(ui);
@@ -1561,7 +1571,7 @@ impl TerminalView {
                         ..
                     } => {
                         if modifiers.command {
-                            // macOS: ⌘V 粘贴到远端 shell（终端区选中复制仍交给 TextEdit 默认行为）
+                            // 仅 ⌘V→PTY；⌘C/⌘A 等留给表单/侧栏 TextEdit（勿 continue 整段 command）
                             if *key == egui::Key::V {
                                 if let Ok(mut clip) = Clipboard::new() {
                                     if let Ok(text) = clip.get_text() {
@@ -1569,8 +1579,7 @@ impl TerminalView {
                                     }
                                 }
                             }
-                            continue;
-                        }
+                        } else {
                         match key {
                             egui::Key::V if modifiers.ctrl && modifiers.shift => {
                                 if let Ok(mut clip) = Clipboard::new() {
@@ -1615,6 +1624,7 @@ impl TerminalView {
                                 let _ = handle.send_input(&[0x04]);
                             }
                             _ => {}
+                        }
                         }
                     }
                     _ => {}

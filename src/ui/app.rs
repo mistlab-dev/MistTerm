@@ -872,13 +872,18 @@ impl MistTermApp {
         egui::Id::new("mistterm_fragment_panel_search")
     }
 
-    /// 阻塞全局快捷键（避免与模态、快速选择器抢键）
+    /// 存在模态/表单/查找条等需使用标准编辑快捷键（⌘C/V/A）的 UI
     fn global_shortcuts_blocked(&self) -> bool {
         self.show_new_session_dialog
             || self.show_edit_session_dialog
             || self.show_about_dialog
             || self.show_preferences_dialog
+            || self.show_fragments_dialog
             || self.show_fragment_vars_dialog
+            || self.variable_dialog.open
+            || self.fragment_library.open
+            || self.show_terminal_search
+            || self.git_sync_panel.is_clone_dialog_open()
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
             || self.quick_selector.open
@@ -887,6 +892,63 @@ impl MistTermApp {
             || self.command_history_overlay.open
             || self.session_log_dialog.open
             || self.help_docs_dialog.open
+    }
+
+    /// 是否将键盘输入交给 PTY（弹窗打开或终端未聚焦时不抢键）
+    fn should_capture_pty_keyboard(&self) -> bool {
+        if self.global_shortcuts_blocked() {
+            return false;
+        }
+        self.active_tab
+            .and_then(|i| self.tabs.get(i))
+            .map(|t| t.terminal.is_terminal_focused())
+            .unwrap_or(false)
+    }
+
+    /// 编辑菜单 ⌘C/⌘V/全选 是否应发给远端 PTY（否则发给当前焦点控件）
+    fn route_edit_shortcuts_to_terminal(&self) -> bool {
+        !self.global_shortcuts_blocked()
+            && self
+                .active_tab
+                .and_then(|i| self.tabs.get(i))
+                .map(|t| t.terminal.is_terminal_focused())
+                .unwrap_or(false)
+    }
+
+    /// 将剪贴板内容粘贴到当前获得焦点的 egui 控件（如弹窗内 TextEdit）
+    pub(crate) fn menu_paste_to_focused_widget(&self, ctx: &egui::Context) {
+        if let Ok(mut clip) = arboard::Clipboard::new() {
+            if let Ok(text) = clip.get_text() {
+                if !text.is_empty() {
+                    ctx.input_mut(|i| i.events.push(egui::Event::Paste(text)));
+                    ctx.request_repaint();
+                }
+            }
+        }
+    }
+
+    pub(crate) fn menu_paste_for_context(&mut self, ctx: &egui::Context) {
+        if self.route_edit_shortcuts_to_terminal() {
+            self.menu_paste_to_terminal(ctx);
+        } else {
+            self.menu_paste_to_focused_widget(ctx);
+        }
+    }
+
+    pub(crate) fn menu_copy_for_context(&mut self, ctx: &egui::Context) {
+        if self.route_edit_shortcuts_to_terminal() {
+            self.menu_copy_terminal(ctx);
+        } else {
+            ctx.input_mut(|i| i.events.push(egui::Event::Copy));
+            ctx.request_repaint();
+        }
+    }
+
+    pub(crate) fn menu_select_all_for_context(&mut self, ctx: &egui::Context) {
+        if self.route_edit_shortcuts_to_terminal() {
+            self.menu_select_all_terminal(ctx);
+        }
+        // 表单内全选无标准 Event，依赖 ⌘A；菜单项在表单场景下不重复发终端全选
     }
 
     fn focus_sidebar_connection_search(&mut self, ctx: &egui::Context) {
@@ -2312,9 +2374,9 @@ impl MistTermApp {
             MacMenuAction::DisconnectSsh => self.disconnect_ssh_keep_buffer_active(),
             MacMenuAction::ReconnectTab => self.reconnect_active_tab(),
             MacMenuAction::Quit => frame.close(),
-            MacMenuAction::CopyTerminal => self.menu_copy_terminal(ctx),
-            MacMenuAction::PasteToTerminal => self.menu_paste_to_terminal(ctx),
-            MacMenuAction::SelectAllTerminal => self.menu_select_all_terminal(ctx),
+            MacMenuAction::CopyTerminal => self.menu_copy_for_context(ctx),
+            MacMenuAction::PasteToTerminal => self.menu_paste_for_context(ctx),
+            MacMenuAction::SelectAllTerminal => self.menu_select_all_for_context(ctx),
             MacMenuAction::ToggleSidebar => {
                 self.sidebar_collapsed = !self.sidebar_collapsed;
                 if self.sidebar_collapsed {
@@ -2910,21 +2972,21 @@ mod menu {
                     .button(crate::ui::chrome::menu_item_label(theme, "复制", Some("⌘C")))
                     .clicked()
                 {
-                    self.menu_copy_terminal(ctx);
+                    self.menu_copy_for_context(ctx);
                     ui.close_menu();
                 }
                 if ui
                     .button(crate::ui::chrome::menu_item_label(theme, "粘贴", Some("⌘V")))
                     .clicked()
                 {
-                    self.menu_paste_to_terminal(ctx);
+                    self.menu_paste_for_context(ctx);
                     ui.close_menu();
                 }
                 if ui
                     .button(crate::ui::chrome::menu_item_label(theme, "全选", Some("⌘A")))
                     .clicked()
                 {
-                    self.menu_select_all_terminal(ctx);
+                    self.menu_select_all_for_context(ctx);
                     ui.close_menu();
                 }
                 ui.separator();

@@ -50,6 +50,11 @@ pub enum OperationStatus {
 }
 
 impl GitSyncPanel {
+    #[inline]
+    pub fn is_clone_dialog_open(&self) -> bool {
+        self.show_clone_dialog
+    }
+
     pub fn new() -> Self {
         Self {
             repo_path: String::new(),
