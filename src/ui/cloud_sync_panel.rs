@@ -266,7 +266,13 @@ impl CloudSyncPanel {
             .show(ctx, |ui| {
                 let panel_w = layout_util::dock_panel_content_width(ui, cl_min, cl_max);
                 ui.set_max_width(panel_w);
-                if chrome::side_panel_title_row(ui, theme, "☁ 云端同步") {
+                if chrome::dock_panel_title_close_only(
+                    ui,
+                    theme,
+                    "☁ 云端同步",
+                    chrome::DockPanelTitleStyle::DockHeading,
+                    "关闭云端同步",
+                ) {
                     close_me = true;
                 }
                 ui.small(
@@ -286,14 +292,18 @@ impl CloudSyncPanel {
                         ui.label(egui::RichText::new("账号（展示）").color(theme.fg_medium_color()));
                         ui.add(
                             egui::TextEdit::singleline(&mut self.settings.account_hint)
-                                .hint_text("未登录 — 后续对接账户")
+                                .hint_text(crate::ui::chrome::hint_rich(
+                                    theme,
+                                    "未登录 — 后续对接账户",
+                                    theme.font_size_normal(),
+                                ))
                                 .desired_width(layout_util::finite_content_width(ui)),
                         );
 
                         ui.add_space(theme.spacing_panel_gap());
                         ui.collapsing("同步内容与频率", |ui| {
                             ui.horizontal(|ui| {
-                                if ui.small_button("全选").clicked() {
+                                if crate::ui::chrome::chrome_small_button(ui, theme, "全选").clicked() {
                                     self.settings.sync_sessions = true;
                                     self.settings.sync_fragments = true;
                                     self.settings.sync_themes = true;
@@ -301,7 +311,7 @@ impl CloudSyncPanel {
                                     self.settings.sync_credentials = true;
                                     self.settings.sync_team_config = true;
                                 }
-                                if ui.small_button("仅核心").clicked() {
+                                if crate::ui::chrome::chrome_small_button(ui, theme, "仅核心").clicked() {
                                     self.settings.sync_sessions = true;
                                     self.settings.sync_fragments = true;
                                     self.settings.sync_themes = true;
@@ -309,7 +319,7 @@ impl CloudSyncPanel {
                                     self.settings.sync_credentials = false;
                                     self.settings.sync_team_config = false;
                                 }
-                                if ui.small_button("全部取消").clicked() {
+                                if crate::ui::chrome::chrome_small_button(ui, theme, "全部取消").clicked() {
                                     self.settings.sync_sessions = false;
                                     self.settings.sync_fragments = false;
                                     self.settings.sync_themes = false;

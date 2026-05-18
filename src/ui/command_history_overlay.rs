@@ -109,7 +109,11 @@ impl CommandHistoryOverlay {
                         );
                         ui.add_space(6.0);
                         let te = egui::TextEdit::singleline(&mut self.query)
-                            .hint_text("❯")
+                            .hint_text(
+                                egui::RichText::new("❯")
+                                    .font(egui::FontId::monospace(theme.font_size_normal()))
+                                    .color(theme.color_form_hint()),
+                            )
                             .desired_width(f32::INFINITY)
                             .font(egui::FontId::monospace(theme.font_size_normal()));
                         let resp = ui.add(te);
@@ -134,7 +138,10 @@ impl CommandHistoryOverlay {
                                         if row.hovered() {
                                             ui.horizontal(|ui| {
                                                 ui.add_space(ui.available_width() - 28.0);
-                                                if ui.small_button("🗑").on_hover_text("从历史删除").clicked() {
+                                                if crate::ui::chrome::chrome_small_button(ui, theme, "🗑")
+                                                    .on_hover_text("从历史删除")
+                                                    .clicked()
+                                                {
                                                     action = CommandHistoryAction::Delete(entry.command.clone());
                                                 }
                                             });
@@ -150,7 +157,7 @@ impl CommandHistoryOverlay {
                                     .color(theme.fg_low_color()),
                             );
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button("Esc 关闭").clicked() {
+                                if crate::ui::chrome::chrome_small_button(ui, theme, "Esc 关闭").clicked() {
                                     action = CommandHistoryAction::Close;
                                 }
                             });

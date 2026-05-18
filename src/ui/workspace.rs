@@ -11,32 +11,44 @@ impl MistTermApp {
         frame: &mut eframe::Frame,
         theme: &crate::ui::theme::Theme,
     ) {
-        // 顶栏：仅菜单行（连接信息见 Tab + 底栏）
-        egui::TopBottomPanel::top("top_chrome")
-            .exact_height(theme.top_chrome_total_height())
-            .frame(theme.frame_chrome_bar())
-            .show(ctx, |ui| {
-                let bar_bg = ui.max_rect();
-                ui.painter()
-                    .rect_filled(bar_bg, 0.0, theme.chrome_bar_fill());
-                let pending = self.ssh_pending_import_count();
-                let show_import_chip = self.sidebar_collapsed
-                    && !self.title_ssh_import_dismissed
-                    && pending > 0;
-                let title_actions = crate::ui::chrome::render_top_chrome_panel(
-                    ui,
-                    &theme,
-                    |ui| self.show_application_menu_bar(ui, ctx, &theme, frame),
-                    pending,
-                    show_import_chip,
-                );
-                if title_actions.open_ssh_import {
-                    self.open_ssh_import_dialog();
-                }
-                if title_actions.dismiss_ssh_import {
-                    self.title_ssh_import_dismissed = true;
-                }
-            });
+        // 顶栏：非 macOS 为窗口内菜单；macOS 用系统菜单栏，仅在有 SSH 导入提示时保留窄条
+        let pending = self.ssh_pending_import_count();
+        let show_import_chip = self.sidebar_collapsed
+            && !self.title_ssh_import_dismissed
+            && pending > 0;
+        let top_chrome_height = if self.uses_native_menu_bar() {
+            if show_import_chip {
+                theme.menu_bar_height()
+            } else {
+                0.0
+            }
+        } else {
+            theme.top_chrome_total_height()
+        };
+        if top_chrome_height > 0.0 {
+            egui::TopBottomPanel::top("top_chrome")
+                .exact_height(top_chrome_height)
+                .frame(theme.frame_chrome_bar())
+                .show(ctx, |ui| {
+                    let bar_bg = ui.max_rect();
+                    ui.painter()
+                        .rect_filled(bar_bg, 0.0, theme.chrome_bar_fill());
+                    let title_actions = crate::ui::chrome::render_top_chrome_panel(
+                        ui,
+                        &theme,
+                        !self.uses_native_menu_bar(),
+                        |ui| self.show_application_menu_bar(ui, ctx, &theme, frame),
+                        pending,
+                        show_import_chip,
+                    );
+                    if title_actions.open_ssh_import {
+                        self.open_ssh_import_dialog();
+                    }
+                    if title_actions.dismiss_ssh_import {
+                        self.title_ssh_import_dismissed = true;
+                    }
+                });
+        }
 
         // 右侧 dock：须先于底栏与 Central 注册（见下方 show_bottom_chrome 注释）
         self.right_dock_outer_left_x = None;
@@ -283,8 +295,8 @@ impl MistTermApp {
                                         egui::vec2(theme.spacing_tab_x(), theme.spacing_tab_y());
                                     ui.spacing_mut().item_spacing =
                                         egui::vec2(theme.spacing_region_gap(), 0.0);
-                                    // `horizontal` 会在剩余高度里纵向居中 Tab，易在 Tab 行上方留出一条 tab_bar 色带
-                                    ui.horizontal_top(|ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.set_min_height(theme.size_tab_bar_row_h());
                                         let mut to_close = None;
                                         let mut close_others = None;
                                         let mut close_right = None;
@@ -303,53 +315,25 @@ impl MistTermApp {
                                                     )
                                                 })
                                                 .unwrap_or_else(|| tab_label.clone());
-                                            ui.horizontal(|ui| {
-                                                ui.spacing_mut().item_spacing.x =
-                                                    theme.spacing_tab_dot_text();
-                                                let dot_color = if tab.terminal.is_connected() {
-                                                    theme.green_color()
-                                                } else {
-                                                    theme.fg_high_a64()
-                                                };
-                                                let (dot_rect, _) = ui.allocate_exact_size(
-                                                    egui::vec2(5.0, 5.0),
-                                                    egui::Sense::hover(),
-                                                );
-                                                ui.painter().circle_filled(
-                                                    dot_rect.center(),
-                                                    2.5,
-                                                    dot_color,
-                                                );
-                                                let tab_resp = ui.add(
-                                                    egui::Button::new(
-                                                        egui::RichText::new(&tab_label)
-                                                            .size(theme.font_size_tab_label())
-                                                            .color(if active {
-                                                                theme.fg_high_color()
-                                                            } else {
-                                                                theme.fg_low_color()
-                                                            }),
-                                                    )
-                                                    .fill(if active {
-                                                        theme.bg_terminal_color()
-                                                    } else {
-                                                        egui::Color32::TRANSPARENT
-                                                    })
-                                                    .stroke(egui::Stroke::NONE)
-                                                    .rounding(0.0)
-                                                    .min_size(egui::vec2(
-                                                        theme.size_tab_min_w() - 20.0,
-                                                        theme.size_tab_min_h(),
-                                                    )),
-                                                )
+                                            let tab_chip = crate::ui::chrome::session_tab_chip(
+                                                ui,
+                                                &theme,
+                                                &tab_label,
+                                                active,
+                                                tab.terminal.is_connected(),
+                                                false,
+                                            );
+                                            let tab_resp = tab_chip
+                                                .response
                                                 .on_hover_text(tab_hover);
-                                                if tab_resp.clicked() {
-                                                    self.active_tab = Some(idx);
-                                                    self.selected_session_id =
-                                                        Some(tab.session_id.clone());
-                                                }
-                                                let tab_hovered = tab_resp.hovered();
-                                                tab_resp.context_menu(|ui| {
+                                            if tab_chip.close_clicked {
+                                                to_close = Some(idx);
+                                            } else if tab_resp.clicked() {
+                                                self.active_tab = Some(idx);
+                                                self.selected_session_id =
+                                                    Some(tab.session_id.clone());
+                                            }
+                                            tab_resp.context_menu(|ui| {
                                                     crate::ui::chrome::apply_context_menu_style(
                                                         ui, &theme,
                                                     );
@@ -375,40 +359,8 @@ impl MistTermApp {
                                                         ui.close_menu();
                                                     }
                                                 });
-                                                if tab_hovered {
-                                                    let close_color = theme.fg_high_alpha(76);
-                                                    if ui
-                                                        .add(
-                                                            egui::Button::new(
-                                                                egui::RichText::new("×")
-                                                                    .size(theme.font_size_tool_btn())
-                                                                    .color(close_color),
-                                                            )
-                                                            .fill(egui::Color32::TRANSPARENT)
-                                                            .frame(false),
-                                                        )
-                                                        .on_hover_text("关闭标签 · ⌘W")
-                                                        .clicked()
-                                                    {
-                                                        to_close = Some(idx);
-                                                    }
-                                                }
-                                            });
                                         }
-                                        let plus_color = theme.fg_low_color();
-                                        if ui
-                                            .add(
-                                                egui::Button::new(
-                                                    egui::RichText::new("+")
-                                                        .size(theme.font_size_large())
-                                                        .color(plus_color),
-                                                )
-                                                .fill(egui::Color32::TRANSPARENT)
-                                                .frame(false),
-                                            )
-                                            .on_hover_text(
-                                                "新标签：左侧选中连接后点此或 ⌘T；无选中时打开新建会话配置",
-                                            )
+                                        if crate::ui::chrome::tab_bar_new_tab_button(ui, &theme)
                                             .clicked()
                                         {
                                             if self.selected_session_id.is_some() {
@@ -572,15 +524,9 @@ impl MistTermApp {
                 .fixed_size(layout_util::modal_edit_size(ctx))
                 .frame(crate::ui::chrome::modal_window_frame(&theme))
                 .show(ctx, |ui| {
-                    let text_color = theme.fg_high_a179();
-                    let input_stroke = egui::Stroke::new(
-                        1.0,
-                        theme.fg_high_alpha(8),
-                    );
-                    let input_fill = theme.color_panel_surface();
-                    let _input_rounding = 4.0;
                     let required_missing =
                         self.new_session_name.trim().is_empty() || self.new_session_host.trim().is_empty();
+                    let form_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
 
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
                             let mut close_via_header = false;
@@ -592,15 +538,15 @@ impl MistTermApp {
 
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
                             Self::ui_field_label(ui, &theme, "会话名称");
-                            Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.new_session_name)
-                                        .frame(false)
-                                        .hint_text("例: 生产服务器-01")
-                                        .text_color(text_color)
-                                        .desired_width(layout_util::finite_content_width(ui)),
-                                );
-                            });
+                            Self::ui_form_singleline(
+                                ui,
+                                &theme,
+                                "new_session_name",
+                                &mut self.new_session_name,
+                                "例: 生产服务器-01",
+                                form_w,
+                                false,
+                            );
 
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 10.0;
@@ -609,27 +555,27 @@ impl MistTermApp {
                                 ui.vertical(|ui| {
                                     ui.set_width(host_w);
                                     Self::ui_field_label(ui, &theme, "主机地址");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.new_session_host)
-                                                .frame(false)
-                                                .hint_text("IP 或域名")
-                                                .text_color(text_color)
-                                                .desired_width(layout_util::finite_content_width(ui)),
-                                        );
-                                    });
+                                    Self::ui_form_singleline(
+                                        ui,
+                                        &theme,
+                                        "new_session_host",
+                                        &mut self.new_session_host,
+                                        "IP 或域名",
+                                        host_w,
+                                        false,
+                                    );
                                 });
                                 ui.vertical(|ui| {
                                     ui.set_width(88.0);
                                     Self::ui_field_label(ui, &theme, "端口");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add_sized(
-                                            [68.0, 20.0],
-                                            egui::DragValue::new(&mut self.new_session_port)
-                                                .clamp_range(1..=65535)
-                                                .speed(1.0),
-                                        );
-                                    });
+                                    Self::ui_form_port(
+                                        ui,
+                                        &theme,
+                                        "new_session_port",
+                                        &mut self.new_session_port_str,
+                                        &mut self.new_session_port,
+                                        88.0,
+                                    );
                                 });
                             });
 
@@ -640,53 +586,52 @@ impl MistTermApp {
                                 ui.vertical(|ui| {
                                     ui.set_width(half);
                                     Self::ui_field_label(ui, &theme, "用户名");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.new_session_username)
-                                                .frame(false)
-                                                .hint_text("root")
-                                                .text_color(text_color)
-                                                .desired_width(layout_util::finite_content_width(ui)),
-                                        );
-                                    });
+                                    Self::ui_form_singleline(
+                                        ui,
+                                        &theme,
+                                        "new_session_username",
+                                        &mut self.new_session_username,
+                                        "root",
+                                        half,
+                                        false,
+                                    );
                                 });
                                 ui.vertical(|ui| {
                                     ui.set_width(half);
                                     Self::ui_field_label(ui, &theme, "密码");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.new_session_password)
-                                                .frame(false)
-                                                .password(true)
-                                                .hint_text("可留空")
-                                                .text_color(text_color)
-                                                .desired_width(layout_util::finite_content_width(ui)),
-                                        );
-                                    });
+                                    Self::ui_form_singleline(
+                                        ui,
+                                        &theme,
+                                        "new_session_password",
+                                        &mut self.new_session_password,
+                                        "可留空",
+                                        half,
+                                        true,
+                                    );
                                 });
                             });
 
                             Self::ui_field_label(ui, &theme, "SSH 私钥路径");
-                            Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.new_session_private_key_path)
-                                        .frame(false)
-                                        .hint_text("~/.ssh/id_rsa（留空则用密码或系统默认密钥）")
-                                        .text_color(text_color)
-                                        .desired_width(layout_util::finite_content_width(ui)),
-                                );
-                            });
+                            Self::ui_form_singleline(
+                                ui,
+                                &theme,
+                                "new_session_private_key_path",
+                                &mut self.new_session_private_key_path,
+                                "~/.ssh/id_rsa（留空则用密码或系统默认密钥）",
+                                form_w,
+                                false,
+                            );
 
                             Self::ui_field_label(ui, &theme, "分组");
-                            Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.new_session_group)
-                                        .frame(false)
-                                        .hint_text("默认分组")
-                                        .text_color(text_color)
-                                        .desired_width(layout_util::finite_content_width(ui)),
-                                );
-                            });
+                            Self::ui_form_singleline(
+                                ui,
+                                &theme,
+                                "new_session_group",
+                                &mut self.new_session_group,
+                                "默认分组",
+                                form_w,
+                                false,
+                            );
 
                             if required_missing {
                                 ui.add_space(theme.spacing_sm());
@@ -700,16 +645,21 @@ impl MistTermApp {
                             ui.add_space(theme.spacing_list_item_x());
                             ui.horizontal(|ui| {
                                 crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
-                                    if ui
-                                        .add_enabled(
-                                            !required_missing,
+                                    let can_save = !required_missing;
+                                    let save_connect = ui
+                                        .add(
                                             crate::ui::chrome::modal_primary_button_widget(
                                                 th,
                                                 "保存并连接",
-                                            ),
+                                            )
+                                            .can_activate(can_save),
                                         )
-                                        .clicked()
-                                    {
+                                        .on_hover_text(if can_save {
+                                            "保存会话并打开终端连接"
+                                        } else {
+                                            "请先填写会话名称和主机地址"
+                                        });
+                                    if save_connect.clicked() && can_save {
                                         self.create_and_connect_session();
                                         should_close = true;
                                     }
@@ -744,9 +694,9 @@ impl MistTermApp {
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
                             Self::modal_header(ui, &theme, "关于", &mut should_close);
                             ui.label(
-                                egui::RichText::new("MistTerm")
+                                egui::RichText::new("Mist")
                                     .size(theme.font_size_prominent())
-                                    .color(theme.fg_high_a179()),
+                                    .color(theme.color_body_text_muted()),
                             );
                             ui.label(
                                 egui::RichText::new("一个现代化 SSH 终端工具")
@@ -758,7 +708,7 @@ impl MistTermApp {
                                 .fill(theme.color_subtle_inset_fill())
                                 .stroke(egui::Stroke::new(
                                     1.0,
-                                    theme.fg_high_a10(),
+                                    theme.color_overlay_fill_subtle(),
                                 ))
                                 .rounding(theme.radius_list_item())
                                 .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
@@ -766,7 +716,7 @@ impl MistTermApp {
                                     ui.label(
                                         egui::RichText::new("版本: v0.1.0")
                                             .size(theme.font_size_panel_title())
-                                            .color(theme.fg_high_a128()),
+                                            .color(theme.color_caption_text()),
                                     );
                                     ui.add_space(theme.spacing_panel_gap());
                                     egui::ScrollArea::vertical()
@@ -995,7 +945,7 @@ impl MistTermApp {
                                 path_hint
                             ))
                             .size(theme.font_size_panel_title())
-                            .color(theme.fg_high_a179()),
+                            .color(theme.color_body_text_muted()),
                         );
                         ui.add_space(theme.spacing_list_item_x());
                         ui.horizontal(|ui| {
@@ -1072,7 +1022,7 @@ impl MistTermApp {
                                 del_name
                             ))
                             .size(theme.font_size_normal())
-                            .color(theme.fg_high_a179()),
+                            .color(theme.color_body_text_muted()),
                         );
                         ui.add_space(theme.spacing_lg());
                         crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
@@ -1120,7 +1070,7 @@ impl MistTermApp {
                                     tab_title
                                 ))
                                 .size(theme.font_size_normal())
-                                .color(theme.fg_high_a179()),
+                                .color(theme.color_body_text_muted()),
                             );
                             ui.add_space(theme.spacing_lg());
                             crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
@@ -1147,6 +1097,12 @@ impl MistTermApp {
             self.import_ssh_indices(&indices);
         }
         self.session_log_dialog.show(ctx, &theme, &self.session_log_settings);
+        self.help_docs_dialog.show(
+            ctx,
+            &theme,
+            crate::ui::app::mistterm_functional_spec_shortcuts(),
+            &mut self.status_message,
+        );
 
         if self.show_edit_session_dialog {
             let mut open = self.show_edit_session_dialog;
@@ -1161,30 +1117,24 @@ impl MistTermApp {
                 .fixed_size(layout_util::modal_edit_size(ctx))
                 .frame(crate::ui::chrome::modal_window_frame(&theme))
                 .show(ctx, |ui| {
-                    let text_color = theme.fg_high_a179();
-                    let input_stroke = egui::Stroke::new(
-                        1.0,
-                        theme.fg_high_alpha(8),
-                    );
-                    let input_fill = theme.color_panel_surface();
-                    let _input_rounding = 4.0;
                     let required_missing =
                         self.edit_session_name.trim().is_empty() || self.edit_session_host.trim().is_empty();
+                    let form_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
 
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
                             Self::modal_header(ui, &theme, "编辑会话", &mut should_close);
 
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
                             Self::ui_field_label(ui, &theme, "会话名称");
-                            Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.edit_session_name)
-                                        .frame(false)
-                                        .hint_text("例: 生产服务器-01")
-                                        .text_color(text_color)
-                                        .desired_width(layout_util::finite_content_width(ui)),
-                                );
-                            });
+                            Self::ui_form_singleline(
+                                ui,
+                                &theme,
+                                "edit_session_name",
+                                &mut self.edit_session_name,
+                                "例: 生产服务器-01",
+                                form_w,
+                                false,
+                            );
 
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 10.0;
@@ -1193,27 +1143,27 @@ impl MistTermApp {
                                 ui.vertical(|ui| {
                                     ui.set_width(host_w);
                                     Self::ui_field_label(ui, &theme, "主机地址");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.edit_session_host)
-                                                .frame(false)
-                                                .hint_text("IP 或域名")
-                                                .text_color(text_color)
-                                                .desired_width(layout_util::finite_content_width(ui)),
-                                        );
-                                    });
+                                    Self::ui_form_singleline(
+                                        ui,
+                                        &theme,
+                                        "edit_session_host",
+                                        &mut self.edit_session_host,
+                                        "IP 或域名",
+                                        host_w,
+                                        false,
+                                    );
                                 });
                                 ui.vertical(|ui| {
                                     ui.set_width(88.0);
                                     Self::ui_field_label(ui, &theme, "端口");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add_sized(
-                                            [68.0, 20.0],
-                                            egui::DragValue::new(&mut self.edit_session_port)
-                                                .clamp_range(1..=65535)
-                                                .speed(1.0),
-                                        );
-                                    });
+                                    Self::ui_form_port(
+                                        ui,
+                                        &theme,
+                                        "edit_session_port",
+                                        &mut self.edit_session_port_str,
+                                        &mut self.edit_session_port,
+                                        88.0,
+                                    );
                                 });
                             });
 
@@ -1224,53 +1174,52 @@ impl MistTermApp {
                                 ui.vertical(|ui| {
                                     ui.set_width(half);
                                     Self::ui_field_label(ui, &theme, "用户名");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.edit_session_username)
-                                                .frame(false)
-                                                .hint_text("root")
-                                                .text_color(text_color)
-                                                .desired_width(layout_util::finite_content_width(ui)),
-                                        );
-                                    });
+                                    Self::ui_form_singleline(
+                                        ui,
+                                        &theme,
+                                        "edit_session_username",
+                                        &mut self.edit_session_username,
+                                        "root",
+                                        half,
+                                        false,
+                                    );
                                 });
                                 ui.vertical(|ui| {
                                     ui.set_width(half);
                                     Self::ui_field_label(ui, &theme, "密码");
-                                    Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                        ui.add(
-                                            egui::TextEdit::singleline(&mut self.edit_session_password)
-                                                .frame(false)
-                                                .password(true)
-                                                .hint_text("**** 表示沿用原密码；改为新口令以保存新密码")
-                                                .text_color(text_color)
-                                                .desired_width(layout_util::finite_content_width(ui)),
-                                        );
-                                    });
+                                    Self::ui_form_singleline(
+                                        ui,
+                                        &theme,
+                                        "edit_session_password",
+                                        &mut self.edit_session_password,
+                                        "**** 表示沿用原密码；改为新口令以保存新密码",
+                                        half,
+                                        true,
+                                    );
                                 });
                             });
 
                             Self::ui_field_label(ui, &theme, "SSH 私钥路径");
-                            Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.edit_session_private_key_path)
-                                        .frame(false)
-                                        .hint_text("~/.ssh/id_rsa（留空则用密码或系统默认密钥）")
-                                        .text_color(text_color)
-                                        .desired_width(layout_util::finite_content_width(ui)),
-                                );
-                            });
+                            Self::ui_form_singleline(
+                                ui,
+                                &theme,
+                                "edit_session_private_key_path",
+                                &mut self.edit_session_private_key_path,
+                                "~/.ssh/id_rsa（留空则用密码或系统默认密钥）",
+                                form_w,
+                                false,
+                            );
 
                             Self::ui_field_label(ui, &theme, "分组");
-                            Self::ui_input_frame(ui, &theme, input_fill, input_stroke, &mut |ui| {
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.edit_session_group)
-                                        .frame(false)
-                                        .hint_text("默认分组")
-                                        .text_color(text_color)
-                                        .desired_width(layout_util::finite_content_width(ui)),
-                                );
-                            });
+                            Self::ui_form_singleline(
+                                ui,
+                                &theme,
+                                "edit_session_group",
+                                &mut self.edit_session_group,
+                                "默认分组",
+                                form_w,
+                                false,
+                            );
 
                             Self::ui_field_label(ui, &theme, "环境色标");
                             egui::ComboBox::from_id_source("edit_session_color")
@@ -1299,7 +1248,7 @@ impl MistTermApp {
                                 egui::RichText::new("连接保活")
                                     .size(theme.font_size_panel_title())
                                     .strong()
-                                    .color(text_color),
+                                    .color(theme.color_form_label()),
                             );
                             ui.checkbox(&mut self.edit_session_keepalive_enabled, "启用心跳保持");
                             if self.edit_session_keepalive_enabled {
@@ -1334,12 +1283,19 @@ impl MistTermApp {
 
                             ui.add_space(theme.spacing_list_item_x());
                             crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
+                                let can_save = !required_missing;
                                 if ui
-                                    .add_enabled(
-                                        !required_missing,
-                                        crate::ui::chrome::modal_primary_button_widget(th, "保存"),
+                                    .add(
+                                        crate::ui::chrome::modal_primary_button_widget(th, "保存")
+                                            .can_activate(can_save),
                                     )
+                                    .on_hover_text(if can_save {
+                                        "保存会话配置"
+                                    } else {
+                                        "请先填写会话名称和主机地址"
+                                    })
                                     .clicked()
+                                    && can_save
                                 {
                                     self.save_edit_session();
                                     should_close = !self.show_edit_session_dialog;
@@ -1374,14 +1330,14 @@ impl MistTermApp {
                             ui.label(
                                 egui::RichText::new("提示：点击底部「命令片段」按钮打开侧边栏面板")
                                     .size(theme.font_size_panel_title())
-                                    .color(theme.fg_high_a128()),
+                                    .color(theme.color_caption_text()),
                             );
                             ui.add_space(theme.spacing_md());
                             egui::Frame::none()
                                 .fill(theme.color_subtle_inset_fill())
                                 .stroke(egui::Stroke::new(
                                     1.0,
-                                    theme.fg_high_a10(),
+                                    theme.color_overlay_fill_subtle(),
                                 ))
                                 .rounding(theme.radius_list_item())
                                 .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
@@ -1389,7 +1345,7 @@ impl MistTermApp {
                                     ui.label(
                                         egui::RichText::new("📋 命令片段侧边栏提供更丰富的命令分类和快捷操作")
                                             .size(theme.font_size_small())
-                                            .color(theme.fg_high_alpha(90)),
+                                            .color(theme.color_caption_text()),
                                     );
                                 });
                             ui.add_space(theme.spacing_list_item_x());
@@ -1422,7 +1378,7 @@ impl MistTermApp {
                             ui.label(
                                 egui::RichText::new(format!("片段：{}", self.pending_fragment_name))
                                     .size(theme.font_size_fragment_dialog_caption())
-                                    .color(theme.fg_high_a128()),
+                                    .color(theme.color_caption_text()),
                             );
                             ui.add_space(theme.spacing_panel_gap());
                             for (key, value) in &mut self.pending_fragment_vars {
@@ -1433,10 +1389,10 @@ impl MistTermApp {
                                         .color(theme.color_form_label()),
                                 );
                                 egui::Frame::none()
-                                    .fill(theme.color_panel_surface())
+                                    .fill(theme.color_text_input_fill())
                                     .stroke(egui::Stroke::new(
                                         1.0,
-                                        theme.fg_high_alpha(8),
+                                        theme.color_text_input_stroke(),
                                     ))
                                     .rounding(theme.radius_list_item())
                                     .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
@@ -1448,7 +1404,7 @@ impl MistTermApp {
                                                     theme.font_size_fragment_dialog_body(),
                                                 ))
                                                 .desired_width(layout_util::finite_content_width(ui))
-                                                .text_color(theme.fg_high_a179()),
+                                                .text_color(theme.color_body_text_muted()),
                                         );
                                     });
                                 ui.add_space(theme.spacing_panel_gap());
@@ -1460,7 +1416,7 @@ impl MistTermApp {
                                         theme,
                                         egui::RichText::new("↻ 根据变量重算命令")
                                             .size(theme.font_size_fragment_dialog_body())
-                                            .color(theme.fg_high_a179()),
+                                            .color(theme.color_body_text_muted()),
                                     )
                                     .min_size(egui::vec2(0.0, theme.size_fragment_var_field_min_h())),
                                 )
@@ -1471,14 +1427,18 @@ impl MistTermApp {
                             ui.label(
                                 egui::RichText::new("将要执行（可编辑）")
                                     .size(theme.font_size_fragment_dialog_body())
-                                    .color(theme.fg_high_a128()),
+                                    .color(theme.color_form_label()),
                             );
                             ui.add(
                                 egui::TextEdit::multiline(&mut self.pending_fragment_command_edit)
                                     .font(egui::FontId::monospace(theme.font_size_fragment_dialog_mono()))
                                     .desired_width(layout_util::finite_content_width(ui))
                                     .desired_rows(4)
-                                    .hint_text("支持 {{ md5(a) }} 等表达式"),
+                                    .hint_text(crate::ui::chrome::hint_rich(
+                                        theme,
+                                        "支持 {{ md5(a) }} 等表达式",
+                                        theme.font_size_fragment_dialog_mono(),
+                                    )),
                             );
                             ui.add_space(theme.spacing_sm());
                             ui.horizontal(|ui| {
@@ -1589,15 +1549,21 @@ impl MistTermApp {
             use egui::*;
             let qsz = layout_util::centered_window_default_size(ctx, 0.40, 0.48);
             let q_scroll_max = layout_util::dialog_scroll_max_height(ctx, 220.0);
-            Window::new("⚡ 快速选择片段")
-                .collapsible(false)
+            let mut quick_close_hdr = false;
+            crate::ui::chrome::modal_window("quick_fragment_selector", &theme)
                 .resizable(true)
                 .default_size(qsz)
-                .title_bar(false)
-                .frame(crate::ui::chrome::modal_window_frame(&theme))
                 .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
+                    if crate::ui::chrome::modal_header(
+                        ui,
+                        &theme,
+                        "快速选择片段",
+                        crate::ui::chrome::modal_title_font_size(&theme),
+                    ) {
+                        quick_close_hdr = true;
+                    }
                     // 搜索框
                     ui.horizontal(|ui| {
                         ui.label("🔍");
@@ -1640,6 +1606,9 @@ impl MistTermApp {
                     });
                     });
                 });
+            if quick_close_hdr {
+                self.quick_selector.open = false;
+            }
         }
 
         // 变量输入对话框（片段库定义的变量；与命令里的 `<pod>` 等占位符可串联）
@@ -1654,21 +1623,27 @@ impl MistTermApp {
 
             let var_sz = layout_util::centered_window_default_size(ctx, 0.36, 0.38);
             let scroll_h = layout_util::dialog_scroll_max_height(ctx, 240.0);
-            Window::new("📝 输入变量")
+            let mut var_close_hdr = false;
+            crate::ui::chrome::modal_window("fragment_variable_modal", &theme)
                 .id(egui::Id::new("mistterm_fragment_variable_dialog"))
-                .collapsible(false)
                 .resizable(true)
                 .default_size(var_sz)
-                .title_bar(false)
-                .frame(crate::ui::chrome::modal_window_frame(&theme))
                 .anchor(Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
+                    if crate::ui::chrome::modal_header(
+                        ui,
+                        &theme,
+                        "填写变量",
+                        crate::ui::chrome::modal_title_font_size(&theme),
+                    ) {
+                        var_close_hdr = true;
+                    }
                     ui.label(
-                        egui::RichText::new(&self.variable_dialog.fragment_title)
-                            .size(theme.font_size_fragment_dialog_body())
-                            .strong()
-                            .color(theme.fg_high_color()),
+                        crate::ui::chrome::rich_caption(
+                            &theme,
+                            &self.variable_dialog.fragment_title,
+                        ),
                     );
                     ui.add_space(theme.spacing_sm());
                     egui::ScrollArea::vertical()
@@ -1693,10 +1668,10 @@ impl MistTermApp {
                                             .entry(var.name.clone())
                                             .or_insert_with(String::new);
                                         egui::Frame::none()
-                                            .fill(theme.color_panel_surface())
+                                            .fill(theme.color_text_input_fill())
                                             .stroke(egui::Stroke::new(
                                                 1.0,
-                                                theme.fg_high_alpha(8),
+                                                theme.color_text_input_stroke(),
                                             ))
                                             .rounding(theme.radius_list_item())
                                             .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
@@ -1740,8 +1715,12 @@ impl MistTermApp {
                                             .font(egui::FontId::monospace(theme.font_size_fragment_dialog_mono()))
                                             .desired_width(layout_util::finite_content_width(ui))
                                             .desired_rows(5)
-                                            .text_color(theme.fg_high_color())
-                                            .hint_text("可先填变量再点 ↻ 同步；{{ … }} 为表达式，见片段库帮助"),
+                                            .text_color(theme.color_text_input_text())
+                                            .hint_text(crate::ui::chrome::hint_rich(
+                                                theme,
+                                                "可先填变量再点 ↻ 同步；{{ … }} 为表达式，见片段库帮助",
+                                                theme.font_size_fragment_dialog_mono(),
+                                            )),
                                     );
                                 }
                             }
@@ -1823,6 +1802,11 @@ impl MistTermApp {
                     });
                     });
                 });
+            if var_close_hdr {
+                self.variable_dialog.open = false;
+                self.variable_dialog.paste_after_fill = false;
+                self.variable_dialog.last_finalize_error = None;
+            }
             ctx.move_to_top(egui::LayerId::new(
                 egui::Order::Middle,
                 egui::Id::new("mistterm_fragment_variable_dialog"),

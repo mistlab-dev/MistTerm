@@ -89,16 +89,25 @@ impl FragmentLibraryState {
 
         let mut win_open = self.open;
         let (lib_def, lib_min) = fragment_library_window_bounds(ctx);
-        egui::Window::new("命令片段库")
+        let mut close_via_header = false;
+        crate::ui::chrome::modal_window("fragment_library_modal", theme)
             .id(egui::Id::new("mistterm_fragment_library_window"))
             .open(&mut win_open)
-            // 与「新建会话」等弹窗一致：屏幕居中；勿同时使用 default_pos（egui 会冲突导致窗口偏一侧、右侧留空）
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .default_size(lib_def)
             .min_width(lib_min[0])
             .min_height(lib_min[1])
             .resizable(true)
             .show(ctx, |ui| {
+                crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
+                if crate::ui::chrome::modal_header(
+                    ui,
+                    theme,
+                    "命令片段库",
+                    crate::ui::chrome::modal_title_font_size(theme),
+                ) {
+                    close_via_header = true;
+                }
                 let sw = ctx.screen_rect().width().max(360.0);
                 let fill_w = finite_content_width_inset(
                     ui,
@@ -108,7 +117,7 @@ impl FragmentLibraryState {
                 );
                 ui.set_min_width(fill_w);
                 ui.horizontal(|ui| {
-                    if ui.button("➕ 新建").clicked() {
+                    if crate::ui::chrome::panel_toolbar_button(ui, theme, "➕ 新建").clicked() {
                         self.clear_form();
                         self.focus_title_next_frame = true;
                         self.status_msg =
@@ -120,7 +129,11 @@ impl FragmentLibraryState {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.search_query)
                             .desired_width(search_w)
-                            .hint_text("标题 / 命令 / 标签"),
+                            .hint_text(crate::ui::chrome::hint_rich(
+                                theme,
+                                "标题 / 命令 / 标签",
+                                theme.font_size_normal(),
+                            )),
                     );
                     ui.separator();
                     if ui
@@ -285,7 +298,11 @@ impl FragmentLibraryState {
                                 ui.label("标题");
                                 let title_edit = egui::TextEdit::singleline(&mut self.form_title)
                                     .id(egui::Id::new("fragment_library_form_title"))
-                                    .hint_text("例如：查看磁盘占用")
+                                    .hint_text(crate::ui::chrome::hint_rich(
+                                        theme,
+                                        "例如：查看磁盘占用",
+                                        theme.font_size_normal(),
+                                    ))
                                     .desired_width(edit_w);
                                 let title_resp = ui.add(title_edit);
                                 if self.focus_title_next_frame {
@@ -295,13 +312,21 @@ impl FragmentLibraryState {
                                 ui.label("分类");
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.form_category)
-                                        .hint_text("例如：运维 · 主机")
+                                        .hint_text(crate::ui::chrome::hint_rich(
+                                            theme,
+                                            "例如：运维 · 主机",
+                                            theme.font_size_normal(),
+                                        ))
                                         .desired_width(edit_w),
                                 );
                                 ui.label("标签（逗号分隔）");
                                 ui.add(
                                     egui::TextEdit::singleline(&mut self.form_tags)
-                                        .hint_text("prod, nginx")
+                                        .hint_text(crate::ui::chrome::hint_rich(
+                                            theme,
+                                            "prod, nginx",
+                                            theme.font_size_normal(),
+                                        ))
                                         .desired_width(edit_w),
                                 );
                                 ui.label(
@@ -309,7 +334,11 @@ impl FragmentLibraryState {
                                 );
                                 ui.add(
                                     egui::TextEdit::multiline(&mut self.form_command)
-                                        .hint_text("例如：df -h 或 systemctl status <service>")
+                                        .hint_text(crate::ui::chrome::hint_rich(
+                                            theme,
+                                            "例如：df -h 或 systemctl status <service>",
+                                            theme.font_size_normal(),
+                                        ))
                                         .desired_width(edit_w)
                                         .desired_rows(5),
                                 );
@@ -473,8 +502,12 @@ impl FragmentLibraryState {
                             });
                     });
                 });
+                });
             });
 
+        if close_via_header {
+            win_open = false;
+        }
         self.open = win_open;
 
         saved

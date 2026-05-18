@@ -1,62 +1,236 @@
-//! 弹窗 / 侧栏标题与操作按钮的统一视觉（关闭 ×、收起 −、主次按钮）。
+//! 弹窗 / 侧栏标题与操作按钮的统一视觉（关闭 ×、侧栏 ◀ 收起、主次按钮）。
 //! 颜色与尺寸均来自 [`Theme`]，本模块不硬编码样式。
 
-use eframe::egui::{self, Button, Color32, Response, RichText, Ui};
+use eframe::egui::{self, Button, Color32, CursorIcon, Response, RichText, Sense, Ui, Widget};
 use crate::ui::theme::Theme;
 
-/// 关闭（弹窗、侧栏）
+/// 关闭（弹窗、右 dock、终端搜索条等）
 pub const GLYPH_CLOSE: &str = "×";
-/// 收起（左侧连接栏、可折叠侧栏）
-pub const GLYPH_COLLAPSE: &str = "−";
+/// 收起左侧连接栏（勿用「−」，避免与「＋ 新建」形成加减歧义）
+pub const GLYPH_SIDEBAR_COLLAPSE: &str = "◀";
+/// 新建终端 Tab
+pub const GLYPH_TAB_NEW: &str = "+";
 
-/// 无底色、无边框的图标按钮（关闭 / 收起）。
+/// 方形图标点击区（× / − / ＋ 等）：自绘悬停底，勿用 `Button::fill(TRANSPARENT)`。
+fn icon_hit_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    glyph: &str,
+    hit_size: f32,
+    font_size: f32,
+    idle_color: Color32,
+    hover_color: Color32,
+) -> Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(hit_size, hit_size), Sense::click());
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    if hovered || pressed {
+        ui.ctx().request_repaint();
+    }
+    if hovered || pressed {
+        let fill = if pressed {
+            theme.accent_alpha(45)
+        } else {
+            theme.color_tab_bar_icon_btn_hover_fill()
+        };
+        ui.painter()
+            .rect_filled(rect, theme.radius_list_item(), fill);
+    }
+    let color = if hovered || pressed {
+        hover_color
+    } else {
+        idle_color
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        glyph,
+        egui::FontId::proportional(font_size),
+        color,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response
+}
+
+/// Tab 栏图标按钮（× 关闭 / ＋ 新建）：固定点击区、悬停底、可读字色。
+pub fn tab_bar_icon_button(ui: &mut Ui, theme: &Theme, glyph: &str, tooltip: &str) -> Response {
+    icon_hit_button(
+        ui,
+        theme,
+        glyph,
+        theme.size_tab_bar_icon_btn(),
+        theme.font_size_tab_bar_icon(),
+        theme.color_tab_bar_icon(),
+        theme.color_tab_bar_icon_hover(),
+    )
+    .on_hover_text(tooltip)
+}
+
+/// 标签栏「新建 Tab」按钮（与 Tab 芯片同高、垂直居中）
+pub fn tab_bar_new_tab_button(ui: &mut Ui, theme: &Theme) -> Response {
+    let row_h = theme.size_tab_bar_row_h();
+    let icon = theme.size_tab_bar_icon_btn();
+    ui.allocate_ui_with_layout(
+        egui::vec2(icon, row_h),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            tab_bar_icon_button(
+                ui,
+                theme,
+                GLYPH_TAB_NEW,
+                "新标签：左侧选中连接后点此或 ⌘T；无选中时打开新建会话配置",
+            )
+        },
+    )
+    .inner
+}
+
+/// 通用图标按钮（可指定 idle 色）
 pub fn icon_button(ui: &mut Ui, theme: &Theme, glyph: &str, color: Color32) -> Response {
-    ui.add(
-        Button::new(
-            RichText::new(glyph)
-                .size(theme.size_icon_glyph())
-                .color(color),
-        )
-        .fill(Color32::TRANSPARENT)
-        .stroke(egui::Stroke::NONE)
-        .frame(false),
+    icon_hit_button(
+        ui,
+        theme,
+        glyph,
+        theme.size_panel_header_control_h(),
+        theme.size_icon_glyph(),
+        color,
+        theme.fg_high_color(),
     )
 }
 
+/// 弹窗 / 侧栏标题栏关闭 ×
 pub fn close_icon_button(ui: &mut Ui, theme: &Theme) -> Response {
-    let s = theme.size_fragment_panel_header_btn_h();
-    ui.add(
-        Button::new(
-            RichText::new(GLYPH_CLOSE)
-                .size(theme.size_icon_glyph())
-                .color(theme.fg_high_a76()),
-        )
-        .fill(Color32::TRANSPARENT)
-        .stroke(egui::Stroke::NONE)
-        .frame(false)
-        .min_size(egui::vec2(s, s)),
+    icon_hit_button(
+        ui,
+        theme,
+        GLYPH_CLOSE,
+        theme.size_panel_header_control_h(),
+        theme.size_icon_glyph(),
+        theme.color_sidebar_header_icon(),
+        theme.fg_high_color(),
     )
     .on_hover_text("关闭")
 }
 
-pub fn collapse_icon_button(ui: &mut Ui, theme: &Theme) -> Response {
-    icon_button(ui, theme, GLYPH_COLLAPSE, theme.fg_high_a51()).on_hover_text("收起")
-}
-
 /// 侧栏标题行方形图标按钮（与排序下拉同高）。
 pub fn sidebar_header_icon_button(ui: &mut Ui, theme: &Theme, glyph: &str, color: Color32) -> Response {
-    let s = theme.size_sidebar_header_icon();
-    ui.add(
-        Button::new(
-            RichText::new(glyph)
-                .size(theme.font_size_sidebar_icon_glyph())
-                .color(color),
-        )
-        .fill(Color32::TRANSPARENT)
-        .stroke(egui::Stroke::NONE)
-        .frame(false)
-        .min_size(egui::vec2(s, s)),
+    icon_hit_button(
+        ui,
+        theme,
+        glyph,
+        theme.size_sidebar_header_icon(),
+        theme.font_size_sidebar_icon_glyph(),
+        color,
+        theme.fg_high_color(),
     )
+}
+
+/// 侧栏「＋」新建会话（浅紫底，与「◀ 收起」区分）
+pub fn sidebar_new_session_button(ui: &mut Ui, theme: &Theme) -> Response {
+    let size = egui::vec2(
+        theme.size_sidebar_header_icon(),
+        theme.size_sidebar_header_icon(),
+    );
+    let rounding = theme.radius_list_item();
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    if hovered || pressed {
+        ui.ctx().request_repaint();
+    }
+    let fill = if pressed {
+        theme.accent_alpha(64)
+    } else if hovered {
+        theme.accent_alpha(51)
+    } else {
+        theme.accent_alpha(38)
+    };
+    ui.painter().rect(rect, rounding, fill, egui::Stroke::NONE);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "＋",
+        egui::FontId::proportional(theme.font_size_sidebar_icon_glyph()),
+        theme.accent_color(),
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response
+}
+
+/// 小号文字按钮（替换 `small_button`，带悬停底）
+pub fn chrome_small_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
+    text_hit_button(
+        ui,
+        theme,
+        label,
+        theme.font_size_panel_title(),
+        theme.color_modal_secondary_text(),
+        theme.fg_high_color(),
+        egui::vec2(6.0, 3.0),
+    )
+}
+
+/// 强调色小号文字按钮（如 SSH 导入条「导入」）
+pub fn chrome_small_accent_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
+    text_hit_button(
+        ui,
+        theme,
+        label,
+        theme.font_size_panel_title(),
+        theme.accent_color(),
+        theme.color_modal_primary_fill_hover(),
+        egui::vec2(8.0, 4.0),
+    )
+}
+
+fn text_hit_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    label: &str,
+    font_size: f32,
+    idle_color: Color32,
+    hover_color: Color32,
+    padding: egui::Vec2,
+) -> Response {
+    let font = egui::FontId::proportional(font_size);
+    let measure = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), idle_color);
+    let size = measure.size() + 2.0 * padding;
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    if hovered || pressed {
+        ui.ctx().request_repaint();
+    }
+    if hovered || pressed {
+        ui.painter().rect_filled(
+            rect,
+            theme.radius_list_item(),
+            if pressed {
+                theme.accent_alpha(51)
+            } else {
+                theme.color_panel_toolbar_btn_fill()
+            },
+        );
+    }
+    let text_color = if hovered || pressed {
+        hover_color
+    } else {
+        idle_color
+    };
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, text_color);
+    ui.painter().galley(rect.min + padding, galley);
+    if hovered {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response
 }
 
 /// 侧栏排序下拉（固定宽、菜单不换行）
@@ -110,8 +284,8 @@ pub fn apply_popup_widget_visuals(visuals: &mut egui::Visuals, theme: &Theme) {
     open.bg_fill = theme.accent_alpha(38);
     open.bg_stroke = egui::Stroke::NONE;
     open.fg_stroke.color = theme.fg_high_color();
-    visuals.selection.bg_fill = theme.accent_alpha(48);
-    visuals.selection.stroke.color = theme.accent_color();
+    visuals.selection.bg_fill = theme.color_text_selection_bg();
+    visuals.selection.stroke.color = theme.color_text_selection_fg();
 }
 
 fn apply_sidebar_menu_popup_style(ui: &mut Ui, theme: &Theme) {
@@ -127,6 +301,19 @@ pub fn modal_window_frame(theme: &Theme) -> egui::Frame {
 
 pub fn modal_content_frame(theme: &Theme) -> egui::Frame {
     theme.frame_modal_content()
+}
+
+/// 居中弹窗标题字号（与新建会话等一致）
+pub fn modal_title_font_size(theme: &Theme) -> f32 {
+    theme.font_size_fragment_dialog_body()
+}
+
+/// 标准弹窗 `Window`：无系统标题栏、不可折叠、统一外框（须再 `.open()` / `.show()` / 尺寸）
+pub fn modal_window<'a>(window_id: &'a str, theme: &Theme) -> egui::Window<'a> {
+    egui::Window::new(window_id)
+        .title_bar(false)
+        .collapsible(false)
+        .frame(modal_window_frame(theme))
 }
 
 /// 右侧 dock / 左侧连接栏外框：统一底色与内容区内边距。
@@ -157,6 +344,19 @@ pub fn right_dock_slot_content_rect(slot: egui::Rect, theme: &Theme) -> egui::Re
     theme.region_content_margin().shrink_rect(slot)
 }
 
+/// Central 之后 Foreground 重绘右 dock 用的 `Area`。
+///
+/// 必须 `interactable(false)`：默认 `true` 时 egui 会把整块槽位登记为可点层，
+/// `layer_id_at` 在槽位矩形内优先于 Background 的侧栏/终端，导致左侧无法操作。
+/// 面板内按钮/输入仍由子控件各自响应点击。
+pub fn right_dock_foreground_area(id: &'static str) -> egui::Area {
+    egui::Area::new(egui::Id::new(id))
+        .order(egui::Order::Middle)
+        .movable(false)
+        .interactable(false)
+        .constrain(true)
+}
+
 /// 标题栏连接区展示数据（§三）
 #[derive(Clone)]
 pub struct TitleBarConnection {
@@ -179,6 +379,7 @@ fn paint_top_strip(ui: &mut Ui, rect: egui::Rect, theme: &Theme) {
 pub fn render_top_chrome_panel(
     ui: &mut Ui,
     theme: &Theme,
+    show_in_window_menu: bool,
     mut draw_menu: impl FnMut(&mut Ui),
     pending_ssh_imports: usize,
     show_ssh_import_chip: bool,
@@ -197,9 +398,12 @@ pub fn render_top_chrome_panel(
         ui.set_min_height(content_h);
         ui.style_mut().spacing.interact_size.y = content_h;
         egui::menu::bar(ui, |ui| {
-            ui.add_space(theme.spacing_title_bar_x());
-            menu_bar_brand(ui, theme);
-            draw_menu(ui);
+            if show_in_window_menu {
+                ui.spacing_mut().item_spacing.x = theme.spacing_menu_bar_gap();
+                ui.add_space(theme.spacing_menu_bar_left());
+                menu_bar_brand(ui, theme);
+                draw_menu(ui);
+            }
             if show_ssh_import_chip && pending_ssh_imports > 0 {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.set_min_width(ui.available_width());
@@ -225,17 +429,22 @@ fn ssh_import_chip_actions(
         out.dismiss_ssh_import = true;
     }
     ui.add_space(theme.spacing_sm());
+    let chip_label = format!("⚡ {} 个待导入", pending_ssh_imports);
     if ui
-        .add(
-            Button::new(
-                RichText::new(format!("⚡ {} 个待导入", pending_ssh_imports))
-                    .size(theme.font_size_title_bar_info())
-                    .color(theme.amber_color()),
+        .scope(|ui| {
+            let w = &mut ui.style_mut().visuals.widgets;
+            w.inactive.weak_bg_fill = theme.color_overlay_fill_subtle();
+            w.hovered.weak_bg_fill = theme.accent_alpha(25);
+            ui.add(
+                Button::new(
+                    RichText::new(&chip_label)
+                        .size(theme.font_size_title_bar_info())
+                        .color(theme.amber_color()),
+                )
+                .rounding(4.0),
             )
-            .fill(theme.fg_high_a10())
-            .stroke(egui::Stroke::NONE)
-            .rounding(4.0),
-        )
+        })
+        .inner
         .clicked()
     {
         out.open_ssh_import = true;
@@ -247,7 +456,7 @@ fn ssh_import_chip_actions(
 #[cfg(not(target_os = "macos"))]
 pub fn menu_bar_brand(ui: &mut Ui, theme: &Theme) {
     ui.label(
-        RichText::new("✦ MistTerm")
+        RichText::new("✦ Mist")
             .size(theme.font_size_menu_item())
             .color(theme.fg_low_color()),
     );
@@ -263,6 +472,92 @@ pub struct TitleBarChromeResult {
     pub dismiss_ssh_import: bool,
 }
 
+/// 终端区会话 Tab：整块底色（圆点 + 标题 + 关闭），对齐 proto `.tab`。
+pub struct SessionTabChipResult {
+    pub response: Response,
+    pub close_clicked: bool,
+}
+
+pub fn session_tab_chip(
+    ui: &mut Ui,
+    theme: &Theme,
+    label: &str,
+    active: bool,
+    online: bool,
+    show_close: bool,
+) -> SessionTabChipResult {
+    let size = egui::vec2(theme.size_tab_min_w(), theme.size_tab_min_h());
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let hovered = response.hovered();
+    let show_close = show_close || active || hovered;
+    let fill = if active {
+        theme.color_tab_active_fill()
+    } else if hovered {
+        theme.color_tab_inactive_hover_fill()
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let rounding = egui::Rounding {
+        nw: theme.radius_list_item(),
+        ne: theme.radius_list_item(),
+        sw: 0.0,
+        se: 0.0,
+    };
+    let stroke = if active {
+        egui::Stroke::new(1.0, theme.color_tab_stroke())
+    } else {
+        egui::Stroke::NONE
+    };
+    ui.painter().rect(rect, rounding, fill, stroke);
+    if active {
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.bottom() - 2.0),
+            rect.right_bottom(),
+        );
+        ui.painter().rect_filled(bar, 0.0, theme.accent_color());
+    }
+    let mut close_clicked = false;
+    let inner = rect.shrink2(egui::vec2(
+        theme.spacing_tab_x(),
+        theme.spacing_tab_y(),
+    ));
+    let mut row_ui = ui.child_ui(inner, egui::Layout::left_to_right(egui::Align::Center));
+    row_ui.set_width(inner.width());
+    row_ui.set_min_width(inner.width());
+    row_ui.set_max_width(inner.width());
+    row_ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = theme.spacing_tab_dot_text();
+        let dot_color = if online {
+            theme.green_color()
+        } else {
+            theme.color_tab_offline_dot()
+        };
+        let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(5.0, 5.0), egui::Sense::hover());
+        ui.painter()
+            .circle_filled(dot_rect.center(), 2.5, dot_color);
+        ui.label(
+            RichText::new(label)
+                .size(theme.font_size_tab_label())
+                .color(if active {
+                    theme.fg_high_color()
+                } else {
+                    theme.fg_low_color()
+                }),
+        );
+        if show_close {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if tab_bar_icon_button(ui, theme, GLYPH_CLOSE, "关闭标签 · ⌘W").clicked() {
+                    close_clicked = true;
+                }
+            });
+        }
+    });
+    SessionTabChipResult {
+        response,
+        close_clicked,
+    }
+}
+
 /// 会话列表选中行左侧 3px 强调条（§4.4）
 pub fn paint_sidebar_selection_accent(
     painter: &egui::Painter,
@@ -276,7 +571,7 @@ pub fn paint_sidebar_selection_accent(
     painter.rect_filled(bar, 0.0, theme.accent_color());
 }
 
-/// 侧栏 / 右 dock 标题行次要工具按钮（浅底 + 描边，对齐 proto secondary）。
+/// 侧栏 / 右 dock 标题行次要工具按钮（浅底 + 描边；宽度按文字测量）。
 pub fn panel_toolbar_button_widget<'a>(theme: &'a Theme, text: RichText) -> Button<'a> {
     Button::new(text)
         .fill(theme.color_panel_toolbar_btn_fill())
@@ -284,21 +579,411 @@ pub fn panel_toolbar_button_widget<'a>(theme: &'a Theme, text: RichText) -> Butt
         .rounding(theme.radius_list_item())
 }
 
-pub fn panel_toolbar_button(
+fn panel_toolbar_button_size(ui: &Ui, theme: &Theme, label: &str) -> egui::Vec2 {
+    let h = theme.size_panel_header_control_h();
+    let pad_x = theme.spacing_panel_header_btn_pad_x();
+    let font = egui::FontId::proportional(theme.font_size_panel_header_control());
+    let text_w = ui
+        .painter()
+        .layout_no_wrap(
+            label.to_owned(),
+            font,
+            theme.color_body_text_muted(),
+        )
+        .size()
+        .x;
+    let w = (text_w + 2.0 * pad_x).max(theme.size_panel_header_btn_min_w());
+    egui::vec2(w, h)
+}
+
+pub fn panel_toolbar_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
+    let size = panel_toolbar_button_size(ui, theme, label);
+    let rounding = theme.radius_list_item();
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    if hovered || pressed {
+        ui.ctx().request_repaint();
+    }
+    let fill = if pressed {
+        theme.accent_alpha(38)
+    } else if hovered {
+        theme.color_panel_toolbar_btn_fill().gamma_multiply(1.35)
+    } else {
+        theme.color_panel_toolbar_btn_fill()
+    };
+    let stroke = egui::Stroke::new(
+        1.0,
+        if hovered || pressed {
+            theme.accent_alpha(51)
+        } else {
+            theme.border_divider_color()
+        },
+    );
+    ui.painter().rect(rect, rounding, fill, stroke);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(theme.font_size_panel_header_control()),
+        theme.color_body_text_muted(),
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response
+}
+
+/// 右 dock / 侧栏标题行样式
+#[derive(Clone, Copy)]
+pub enum DockPanelTitleStyle {
+    /// 片段面板等：小号加粗 section 色
+    Section { color: Color32 },
+    /// 凭证库、云端同步等：标准 dock 标题
+    DockHeading,
+    /// 监控等大号标题
+    LargeHeading,
+}
+
+fn dock_panel_title_rich_text(theme: &Theme, title: &str, style: DockPanelTitleStyle) -> RichText {
+    match style {
+        DockPanelTitleStyle::Section { color } => rich_section_title(theme, title, color),
+        DockPanelTitleStyle::DockHeading => rich_section_title(theme, title, theme.fg_high_color()),
+        DockPanelTitleStyle::LargeHeading => rich_dock_title(theme, title),
+    }
+}
+
+/// 区段标题（侧栏「连接」、右 dock「命令片段」、凭证库标题等）— 11px 加粗
+pub fn rich_section_title(theme: &Theme, text: &str, color: Color32) -> RichText {
+    RichText::new(text)
+        .size(theme.font_size_section_title())
+        .strong()
+        .color(color)
+}
+
+/// 右 dock 大标题（系统监控、Git 同步）— 14px
+pub fn rich_dock_title(theme: &Theme, text: &str) -> RichText {
+    RichText::new(text)
+        .size(theme.font_size_dock_title())
+        .strong()
+        .color(theme.fg_high_color())
+}
+
+/// 表单字段标签 — 11px
+pub fn rich_form_label(theme: &Theme, text: &str) -> RichText {
+    RichText::new(text)
+        .size(theme.font_size_form_label())
+        .strong()
+        .color(theme.color_form_label())
+}
+
+/// 正文 — 12px
+pub fn rich_body(theme: &Theme, text: &str) -> RichText {
+    RichText::new(text)
+        .size(theme.font_size_body())
+        .color(theme.fg_high_color())
+}
+
+/// 辅助说明 / 元信息 — 10px
+pub fn rich_caption(theme: &Theme, text: &str) -> RichText {
+    RichText::new(text)
+        .size(theme.font_size_caption())
+        .color(theme.color_body_text_muted())
+}
+
+pub fn form_field_label(ui: &mut Ui, theme: &Theme, text: &str) {
+    ui.label(rich_form_label(theme, text));
+}
+
+/// 标题行右侧操作区宽度（工具按钮 + 关闭 ×；RTL 顺序为 close, …tools）
+pub fn panel_header_trailing_width(ui: &Ui, theme: &Theme, tool_labels: &[&str]) -> f32 {
+    let close_w = theme.size_panel_header_control_h();
+    let gap = theme.spacing_panel_gap();
+    let pad = theme.spacing_panel_title_pad_x() * 0.5;
+    if tool_labels.is_empty() {
+        return close_w + pad;
+    }
+    let tools_w: f32 = tool_labels
+        .iter()
+        .map(|l| panel_toolbar_button_size(ui, theme, l).x)
+        .sum();
+    tools_w + gap * tool_labels.len() as f32 + close_w + pad
+}
+
+/// 右 dock / 侧栏统一标题行：左侧标题区（可截断），右侧 RTL 操作区
+pub fn dock_panel_title_row(
     ui: &mut Ui,
     theme: &Theme,
-    label: &str,
-    font_size: f32,
-) -> Response {
-    ui.add(
-        panel_toolbar_button_widget(
-            theme,
-            RichText::new(label)
-                .size(font_size)
-                .color(theme.fg_high_a179()),
-        )
-        .min_size(egui::vec2(0.0, theme.size_fragment_panel_header_btn_h())),
+    mut draw_title: impl FnMut(&mut Ui),
+    _close_tooltip: &str,
+    trailing_width: f32,
+    mut draw_trailing: impl FnMut(&mut Ui, &Theme) -> bool,
+) -> bool {
+    let mut closed = false;
+    let row_gap = theme.spacing_panel_gap();
+    ui.horizontal(|ui| {
+        let total_w = ui.available_width();
+        ui.scope(|ui| {
+            ui.set_max_width((total_w - trailing_width - row_gap).max(0.0));
+            draw_title(ui);
+        });
+        ui.with_layout(
+            egui::Layout::right_to_left(egui::Align::Center),
+            |ui| {
+                ui.set_min_width(trailing_width);
+                ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
+                closed = draw_trailing(ui, theme);
+            },
+        );
+    });
+    closed
+}
+
+fn dock_panel_title_close_trailing(
+    ui: &mut Ui,
+    theme: &Theme,
+    close_tooltip: &str,
+) -> bool {
+    close_icon_button(ui, theme)
+        .on_hover_text(close_tooltip)
+        .clicked()
+}
+
+/// 仅标题 + 关闭 ×
+pub fn dock_panel_title_close_only(
+    ui: &mut Ui,
+    theme: &Theme,
+    title: &str,
+    style: DockPanelTitleStyle,
+    close_tooltip: &str,
+) -> bool {
+    let trailing_w = panel_header_trailing_width(ui, theme, &[]);
+    let title = title.to_string();
+    dock_panel_title_row(
+        ui,
+        theme,
+        |ui| {
+            ui.label(dock_panel_title_rich_text(theme, &title, style));
+        },
+        close_tooltip,
+        trailing_w,
+        |ui, theme| dock_panel_title_close_trailing(ui, theme, close_tooltip),
     )
+}
+
+/// 命令片段等：标题 + 工具按钮 + 关闭
+pub struct DockPanelHeaderActions {
+    pub closed: bool,
+    pub new_fragment: bool,
+    pub cycle_sort: bool,
+}
+
+pub fn dock_panel_title_bar(
+    ui: &mut Ui,
+    theme: &Theme,
+    title: &str,
+    title_color: Color32,
+    sort_label: &str,
+    new_label: &str,
+    close_tooltip: &str,
+) -> DockPanelHeaderActions {
+    let mut out = DockPanelHeaderActions {
+        closed: false,
+        new_fragment: false,
+        cycle_sort: false,
+    };
+    let trailing_w = panel_header_trailing_width(ui, theme, &[new_label, sort_label]);
+    let title = title.to_string();
+    let closed = dock_panel_title_row(
+        ui,
+        theme,
+        |ui| {
+            ui.label(dock_panel_title_rich_text(
+                theme,
+                &title,
+                DockPanelTitleStyle::Section { color: title_color },
+            ));
+        },
+        close_tooltip,
+        trailing_w,
+        |ui, theme| {
+            let mut closed = false;
+            if dock_panel_title_close_trailing(ui, theme, close_tooltip) {
+                closed = true;
+            }
+            if panel_toolbar_button(ui, theme, new_label)
+                .on_hover_text("打开片段库：自建命令、占位符与变量")
+                .clicked()
+            {
+                out.new_fragment = true;
+            }
+            if panel_toolbar_button(ui, theme, sort_label).clicked() {
+                out.cycle_sort = true;
+            }
+            closed
+        },
+    );
+    out.closed = closed;
+    out
+}
+
+/// 命令片段侧栏列表行入参
+pub struct FragmentListRow<'a> {
+    pub title: &'a str,
+    pub command: &'a str,
+    pub stats_line: &'a str,
+    pub tag_label: &'a str,
+}
+
+/// 命令片段列表行交互结果
+pub struct FragmentListRowResponse {
+    pub row: Response,
+    pub title: Response,
+}
+
+/// 按面板可用宽度与标签文字测量，分配主栏/标签列宽（无裸像素魔法数）。
+fn fragment_list_row_column_widths(
+    ui: &Ui,
+    theme: &Theme,
+    tag_label: &str,
+    content_w: f32,
+) -> (f32, f32) {
+    let gap = theme.spacing_fragment_row_tag_gap();
+    let main_min = theme.size_fragment_list_main_min_w();
+    let tag_pad = theme.spacing_fragment_tag_inner_x();
+    let tag_font = egui::FontId::proportional(theme.font_size_tag());
+    let tag_color = theme.color_fragment_tag_text();
+    let tag_text_w = ui
+        .painter()
+        .layout_no_wrap(tag_label.to_owned(), tag_font, tag_color)
+        .size()
+        .x;
+    let tag_w_desired = tag_text_w + 2.0 * tag_pad;
+    let tag_cap = content_w * theme.fragment_list_tag_max_width_frac();
+    let tag_budget = (content_w - gap - main_min).max(0.0);
+    let tag_w = tag_w_desired.min(tag_cap).min(tag_budget);
+    let main_w = (content_w - gap - tag_w).max(0.0);
+    (main_w, tag_w)
+}
+
+/// 命令片段侧栏单行（标题 + 命令 + 统计 + 右侧分类/标签，宽度自适应）。
+pub fn fragment_list_row(ui: &mut Ui, theme: &Theme, row: FragmentListRow<'_>) -> FragmentListRowResponse {
+    let pad_x = theme.spacing_fragment_row_pad_x();
+    let pad_y = theme.spacing_fragment_row_pad_y();
+    let gap = theme.spacing_fragment_row_tag_gap();
+    let line_gap = theme.spacing_fragment_row_line_gap();
+
+    let row_w = ui.available_width();
+    let content_w = (row_w - 2.0 * pad_x).max(0.0);
+    let (main_w, tag_w) = fragment_list_row_column_widths(ui, theme, row.tag_label, content_w);
+    let row_h = theme.size_fragment_list_row_min_h();
+
+    let (row_rect, row_response) =
+        ui.allocate_at_least(egui::vec2(row_w, row_h), egui::Sense::click());
+    let bg = if row_response.hovered() {
+        theme.list_row_hover_bg()
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter()
+        .rect_filled(row_rect, theme.radius_card(), bg);
+
+    let inner = egui::Margin::symmetric(pad_x, pad_y).shrink_rect(row_rect);
+    let mut row_ui = ui.child_ui(inner, egui::Layout::left_to_right(egui::Align::TOP));
+    row_ui.set_max_width(content_w);
+    let title_resp = row_ui.horizontal(|ui| {
+        ui.set_max_width(content_w);
+        ui.spacing_mut().item_spacing.x = gap;
+        let title = ui.vertical(|ui| {
+            ui.set_max_width(main_w);
+            ui.set_min_width(0.0);
+            ui.spacing_mut().item_spacing.y = line_gap;
+
+            let title = ui
+                .add(
+                    egui::Label::new(
+                        RichText::new(row.title)
+                            .size(theme.font_size_fragment_title())
+                            .color(theme.accent_color()),
+                    )
+                    .sense(egui::Sense::click()),
+                )
+                .on_hover_text(row.command);
+
+            let cmd_trim = row.command.trim();
+            ui.add(
+                egui::Label::new(
+                    RichText::new(cmd_trim)
+                        .size(theme.font_size_fragment_cmd())
+                        .monospace()
+                        .color(theme.color_status_bar_conn()),
+                )
+                .truncate(true),
+            )
+            .on_hover_text(cmd_trim);
+
+            ui.add(
+                egui::Label::new(
+                    RichText::new(row.stats_line)
+                        .size(theme.font_size_fragment_stats())
+                        .color(theme.color_caption_text()),
+                )
+                .truncate(true),
+            );
+            title
+        });
+        ui.allocate_ui_with_layout(
+            egui::vec2(tag_w.max(0.0), inner.height()),
+            egui::Layout::top_down(egui::Align::RIGHT),
+            |ui| {
+                ui.set_max_width(tag_w.max(0.0));
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(row.tag_label)
+                            .size(theme.font_size_tag())
+                            .color(theme.color_fragment_tag_text()),
+                    )
+                    .truncate(true),
+                )
+                .on_hover_text(row.tag_label);
+            },
+        );
+        title.inner
+    })
+    .inner;
+
+    FragmentListRowResponse {
+        row: row_response,
+        title: title_resp,
+    }
+}
+
+/// 均分宽度的筛选芯片行（常用/Docker、全部/在线/离线等）
+pub fn filter_chip_row(
+    ui: &mut Ui,
+    theme: &Theme,
+    labels: &[&str],
+    active: &str,
+    panel_w: f32,
+) -> Option<String> {
+    let mut picked = None;
+    ui.horizontal(|ui| {
+        ui.set_max_width(panel_w);
+        let chip_h = theme.size_panel_filter_chip_h();
+        let chip_gap = theme.spacing_panel_gap();
+        ui.spacing_mut().item_spacing = egui::vec2(chip_gap, 0.0);
+        let n = labels.len().max(1) as f32;
+        let item_w = ((ui.available_width() - chip_gap * (n - 1.0)) / n)
+            .max(theme.size_panel_header_btn_min_w());
+        for label in labels {
+            let is_active = active == *label;
+            if filter_chip_button(ui, theme, label, is_active, egui::vec2(item_w, chip_h)).clicked()
+            {
+                picked = Some((*label).to_string());
+            }
+        }
+    });
+    picked
 }
 
 /// 分类筛选芯片（全部/在线/离线、常用/Docker 等）
@@ -310,19 +995,19 @@ pub fn filter_chip_button(
     min_size: egui::Vec2,
 ) -> Response {
     let text_color = if active {
-        theme.accent_a128()
+        theme.color_filter_chip_active_text()
     } else {
-        theme.fg_high_a46()
+        theme.color_filter_chip_inactive_text()
     };
     let fill = if active {
-        theme.accent_alpha(51)
+        theme.color_filter_chip_active_fill()
     } else {
         Color32::TRANSPARENT
     };
     ui.add(
         Button::new(
             RichText::new(label)
-                .size(theme.font_size_sidebar_control())
+                .size(theme.font_size_category_label())
                 .color(text_color),
         )
         .fill(fill)
@@ -359,6 +1044,20 @@ pub fn menu_theme_check_slot(ui: &mut Ui, theme: &Theme, selected: bool) {
     }
 }
 
+/// 视图菜单等开关项（无左侧 18px 勾选列，避免未选中时文字前大块空白）
+pub fn menu_toggle_item(ui: &mut Ui, theme: &Theme, selected: bool, name: &str) -> egui::Response {
+    ui.selectable_label(
+        selected,
+        RichText::new(name)
+            .size(theme.font_size_menu_item())
+            .color(if selected {
+                theme.accent_color()
+            } else {
+                theme.fg_medium_color()
+            }),
+    )
+}
+
 /// 主题子菜单一行：勾选列 + 可选标签（选中项文字用 accent）。
 pub fn menu_theme_item(ui: &mut Ui, theme: &Theme, selected: bool, name: &str) -> egui::Response {
     ui.horizontal(|ui| {
@@ -385,6 +1084,67 @@ pub fn menu_item_label(theme: &Theme, title: &str, shortcut: Option<&str>) -> Ri
     RichText::new(text)
         .size(theme.font_size_menu_item())
         .color(theme.fg_medium_color())
+}
+
+/// 输入框占位符 RichText（各主题统一用 `color_form_hint`）
+pub fn hint_rich(theme: &Theme, text: &str, font_size: f32) -> RichText {
+    RichText::new(text)
+        .size(font_size)
+        .color(theme.color_form_hint())
+}
+
+/// 单行输入框（带底+描边，各主题可读）
+pub fn form_singleline_field(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    text: &mut String,
+    hint: &str,
+    desired_width: f32,
+    password: bool,
+) -> Response {
+    let focused = ui.memory(|m| m.has_focus(id));
+    theme.frame_form_text_input(focused).show(ui, |ui| {
+        let mut edit = egui::TextEdit::singleline(text)
+            .id(id)
+            .frame(false)
+            .desired_width((desired_width - 16.0).max(48.0))
+            .text_color(theme.color_text_input_text())
+            .font(egui::FontId::proportional(theme.font_size_body()));
+        if !hint.is_empty() {
+            edit = edit.hint_text(hint_rich(theme, hint, theme.font_size_body()));
+        }
+        if password {
+            edit = edit.password(true);
+        }
+        ui.add(edit)
+    }).inner
+}
+
+/// 多行输入框（带底+描边）
+pub fn form_multiline_field(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    text: &mut String,
+    desired_width: f32,
+    rows: usize,
+    password: bool,
+) -> Response {
+    let focused = ui.memory(|m| m.has_focus(id));
+    theme.frame_form_text_input(focused).show(ui, |ui| {
+        let mut edit = egui::TextEdit::multiline(text)
+            .id(id)
+            .frame(false)
+            .desired_width((desired_width - 16.0).max(48.0))
+            .desired_rows(rows)
+            .text_color(theme.color_text_input_text())
+            .font(egui::FontId::proportional(theme.font_size_body()));
+        if password {
+            edit = edit.password(true);
+        }
+        ui.add(edit)
+    }).inner
 }
 
 /// 侧栏搜索框（左侧 🔍，focus 时紫色描边）
@@ -419,8 +1179,9 @@ pub fn sidebar_search_field(
                 ui.add(
                     egui::TextEdit::singleline(query)
                         .id(id)
-                        .hint_text(hint)
-                        .text_color(theme.fg_medium_color())
+                        .frame(false)
+                        .hint_text(hint_rich(theme, hint, font))
+                        .text_color(theme.color_text_input_text())
                         .font(egui::FontId::proportional(font))
                         .desired_width((desired_width - 22.0).max(80.0)),
                 );
@@ -485,38 +1246,30 @@ pub fn ssh_import_sidebar_banner(
         ui.horizontal_centered(|ui| {
             ui.label(
                 RichText::new("⚡")
-                    .size(11.0)
+                    .size(theme.font_size_title_bar_info())
                     .color(theme.amber_color()),
             );
             ui.add_space(theme.spacing_tool_btn_gap() + 1.0);
             let label = ui.label(
                 RichText::new(&msg)
-                    .size(11.0)
+                    .size(theme.font_size_title_bar_info())
                     .color(theme.fg_low_color()),
             );
             label.on_hover_text(&msg);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if icon_button(ui, theme, GLYPH_CLOSE, theme.fg_high_a46())
+                if icon_button(ui, theme, GLYPH_CLOSE, theme.color_caption_text())
                     .on_hover_text("关闭提示")
                     .clicked()
                 {
                     action.dismiss = true;
                 }
                 ui.add_space(theme.spacing_region_gap());
-                let import = ui.add(
-                    Button::new(
-                        RichText::new("导入")
-                            .size(11.0)
-                            .color(theme.accent_a128()),
-                    )
-                    .fill(Color32::TRANSPARENT)
-                    .stroke(egui::Stroke::NONE)
-                    .frame(false),
-                );
-                if import.clicked() {
+                if chrome_small_accent_button(ui, theme, "导入")
+                    .on_hover_text("打开 SSH 配置导入")
+                    .clicked()
+                {
                     action.import = true;
                 }
-                import.on_hover_text("打开 SSH 配置导入");
             });
         });
     });
@@ -557,9 +1310,9 @@ pub fn status_tool_glyph(ui: &mut Ui, theme: &Theme, glyph: &str) -> Response {
     let (rect, resp) =
         ui.allocate_exact_size(egui::vec2(22.0, h), egui::Sense::click());
     let color = if resp.hovered() {
-        theme.fg_high_a64_tool_hover()
+        theme.color_toolbar_glyph_hover()
     } else {
-        theme.fg_high_a20_tool()
+        theme.color_toolbar_glyph_idle()
     };
     ui.painter().text(
         rect.center(),
@@ -591,20 +1344,23 @@ pub fn status_restore_chip(ui: &mut Ui, theme: &Theme, label: &str) -> Response 
 
 /// 弹窗标题行 + 分隔线；返回 `true` 表示点了关闭。
 pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> bool {
-    let mut close = false;
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(title)
-                .size(title_px)
-                .strong()
-                .color(theme.color_section_title()),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if close_icon_button(ui, theme).clicked() {
-                close = true;
-            }
-        });
-    });
+    let trailing_w = panel_header_trailing_width(ui, theme, &[]);
+    let title = title.to_string();
+    let close = dock_panel_title_row(
+        ui,
+        theme,
+        |ui| {
+            ui.label(
+                RichText::new(&title)
+                    .size(title_px)
+                    .strong()
+                    .color(theme.color_section_title()),
+            );
+        },
+        "关闭",
+        trailing_w,
+        |ui, theme| dock_panel_title_close_trailing(ui, theme, "关闭"),
+    );
     ui.add_space(theme.spacing_modal_header_after_title());
     ui.separator();
     ui.add_space(theme.spacing_modal_header_after_sep());
@@ -612,89 +1368,205 @@ pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> b
 }
 
 /// 右侧 dock 标题行（标题 + 关闭 ×）。
+#[inline]
 pub fn side_panel_title_row(ui: &mut Ui, theme: &Theme, title: &str) -> bool {
-    let mut close = false;
-    ui.horizontal(|ui| {
-        ui.heading(RichText::new(title).color(theme.fg_high_color()));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if close_icon_button(ui, theme).clicked() {
-                close = true;
-            }
-        });
-    });
-    close
+    dock_panel_title_close_only(
+        ui,
+        theme,
+        title,
+        DockPanelTitleStyle::DockHeading,
+        "关闭",
+    )
 }
 
-/// 侧栏小标题（如「命令片段」）+ 右侧关闭 ×。
+/// 侧栏小标题 + 右侧关闭 ×（与 [`dock_panel_title_close_only`] 相同布局）。
+#[inline]
 pub fn side_panel_section_title(
     ui: &mut Ui,
     theme: &Theme,
     title: &str,
     title_color: Color32,
 ) -> bool {
-    let mut close = false;
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(title)
-                .size(theme.font_size_small())
-                .strong()
-                .color(title_color),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if close_icon_button(ui, theme).clicked() {
-                close = true;
-            }
+    dock_panel_title_close_only(
+        ui,
+        theme,
+        title,
+        DockPanelTitleStyle::Section { color: title_color },
+        "关闭",
+    )
+}
+
+/// 弹窗主按钮（自绘三态；勿 `add_enabled` 灰化，否则悬停不可见）
+pub struct ModalPrimaryButton<'a> {
+    theme: &'a Theme,
+    label: &'a str,
+    /// `false` 时仍可悬停高亮，点击由调用方忽略
+    can_activate: bool,
+}
+
+impl ModalPrimaryButton<'_> {
+    pub fn can_activate(mut self, can: bool) -> Self {
+        self.can_activate = can;
+        self
+    }
+}
+
+impl Widget for ModalPrimaryButton<'_> {
+    fn ui(self, ui: &mut Ui) -> Response {
+        paint_modal_primary_button(ui, self.theme, self.label, self.can_activate)
+    }
+}
+
+pub fn modal_primary_button_widget<'a>(theme: &'a Theme, label: &'a str) -> ModalPrimaryButton<'a> {
+    ModalPrimaryButton {
+        theme,
+        label,
+        can_activate: true,
+    }
+}
+
+fn paint_modal_primary_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    label: &str,
+    can_activate: bool,
+) -> Response {
+    let size = theme.vec2_modal_footer_primary();
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let rounding = theme.radius_list_item();
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    if hovered || pressed {
+        ui.ctx().request_repaint();
+    }
+
+    let (fill, text_color) = if can_activate {
+        if pressed {
+            (
+                theme.accent_dim_color(),
+                theme.color_modal_primary_text(),
+            )
+        } else if hovered {
+            (
+                theme.color_modal_primary_fill_hover(),
+                theme.color_modal_primary_text(),
+            )
+        } else {
+            (
+                theme.color_modal_primary_fill(),
+                theme.color_modal_primary_text(),
+            )
+        }
+    } else if hovered {
+        (
+            theme.color_modal_primary_fill_hover().gamma_multiply(0.75),
+            theme.fg_high_color(),
+        )
+    } else {
+        (
+            theme.accent_alpha(89),
+            theme.color_modal_secondary_text(),
+        )
+    };
+
+    ui.painter().rect_filled(rect, rounding, fill);
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(theme.font_size_normal()),
+        text_color,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(if can_activate {
+            CursorIcon::PointingHand
+        } else {
+            CursorIcon::NotAllowed
         });
-    });
-    close
+    }
+    response
 }
 
-pub fn modal_secondary_button_widget<'a>(theme: &'a Theme, label: &'a str) -> Button<'a> {
-    Button::new(
-        RichText::new(label)
-            .size(theme.font_size_normal())
-            .color(theme.color_status_online_muted()),
-    )
-    .min_size(theme.vec2_modal_footer_secondary())
-    .fill(Color32::TRANSPARENT)
-    .stroke(egui::Stroke::NONE)
-    .rounding(theme.radius_list_item())
+fn paint_modal_secondary_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
+    let size = theme.vec2_modal_footer_secondary();
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let rounding = theme.radius_list_item();
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    if hovered || pressed {
+        ui.ctx().request_repaint();
+    }
+
+    if hovered || pressed {
+        let fill = if pressed {
+            theme.accent_alpha(51)
+        } else {
+            theme.color_panel_toolbar_btn_fill()
+        };
+        ui.painter().rect_filled(rect, rounding, fill);
+    }
+    let text_color = if hovered || pressed {
+        theme.fg_high_color()
+    } else {
+        theme.color_modal_secondary_text()
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(theme.font_size_normal()),
+        text_color,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response
 }
 
-pub fn modal_primary_button_widget<'a>(theme: &'a Theme, label: &'a str) -> Button<'a> {
-    Button::new(
-        RichText::new(label)
-            .size(theme.font_size_normal())
-            .color(theme.accent_color()),
-    )
-    .min_size(theme.vec2_modal_footer_primary())
-    .fill(theme.accent_a89())
-    .stroke(egui::Stroke::NONE)
-    .rounding(theme.radius_list_item())
-}
-
-pub fn modal_danger_button_widget<'a>(theme: &'a Theme, label: &'a str) -> Button<'a> {
-    Button::new(
-        RichText::new(label)
-            .size(theme.font_size_normal())
-            .color(theme.red_color()),
-    )
-    .min_size(theme.vec2_modal_footer_secondary())
-    .fill(Color32::TRANSPARENT)
-    .stroke(egui::Stroke::NONE)
-    .rounding(theme.radius_list_item())
+fn paint_modal_danger_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
+    let size = theme.vec2_modal_footer_secondary();
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let rounding = theme.radius_list_item();
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    if hovered || pressed {
+        ui.ctx().request_repaint();
+    }
+    if hovered || pressed {
+        ui.painter().rect_filled(
+            rect,
+            rounding,
+            theme.red_color().gamma_multiply(if pressed { 0.22 } else { 0.14 }),
+        );
+    }
+    let text_color = if hovered || pressed {
+        theme.red_color()
+    } else {
+        theme.red_color().gamma_multiply(0.85)
+    };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        label,
+        egui::FontId::proportional(theme.font_size_normal()),
+        text_color,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response
 }
 
 pub fn modal_secondary_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
-    ui.add(modal_secondary_button_widget(theme, label))
+    paint_modal_secondary_button(ui, theme, label)
 }
 
 pub fn modal_primary_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
-    ui.add(modal_primary_button_widget(theme, label))
+    paint_modal_primary_button(ui, theme, label, true)
 }
 
 pub fn modal_danger_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
-    ui.add(modal_danger_button_widget(theme, label))
+    paint_modal_danger_button(ui, theme, label)
 }
 
 /// 右对齐底栏：先 add 主操作，再 add 次操作（`right_to_left` 布局）。

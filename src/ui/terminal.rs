@@ -166,6 +166,10 @@ pub struct TerminalView {
     selection: Selection,
     /// 当前行已键入字节（用于 Ctrl+R 命令历史，近似 PTY 行缓冲）
     typed_line_buffer: String,
+    /// Enter 提交后待取走的整行命令（供命令历史 / 会话日志）
+    submitted_line: Option<String>,
+    /// 待写入会话日志的命令（片段执行、Enter 提交等）
+    pending_log_commands: Vec<String>,
     /// 待写入会话日志的 PTY 输出块
     pending_log_output: Vec<Vec<u8>>,
     /// 查找命中高亮：`(行, 列, 长度)` 均为 1-based 字符下标
@@ -343,6 +347,8 @@ impl TerminalView {
             zmodem_upload_after_rz_path: None,
             selection: Selection::default(),
             typed_line_buffer: String::new(),
+            submitted_line: None,
+            pending_log_commands: Vec::new(),
             pending_log_output: Vec::new(),
             search_highlight: None,
         }
@@ -361,12 +367,32 @@ impl TerminalView {
 
     /// Enter 提交后取走当前行命令（供命令历史记录）
     pub fn take_submitted_line(&mut self) -> Option<String> {
+        self.submitted_line.take()
+    }
+
+    /// 取走待写入会话日志的命令
+    pub fn take_pending_log_command(&mut self) -> Option<String> {
+        if self.pending_log_commands.is_empty() {
+            None
+        } else {
+            Some(self.pending_log_commands.remove(0))
+        }
+    }
+
+    fn commit_typed_line_on_enter(&mut self) {
         let line = self.typed_line_buffer.trim().to_string();
         self.typed_line_buffer.clear();
         if line.is_empty() {
-            None
-        } else {
-            Some(line)
+            return;
+        }
+        self.submitted_line = Some(line.clone());
+        self.pending_log_commands.push(line);
+    }
+
+    fn enqueue_log_command(&mut self, command: &str) {
+        let trimmed = command.trim();
+        if !trimmed.is_empty() {
+            self.pending_log_commands.push(trimmed.to_string());
         }
     }
 
@@ -1345,27 +1371,21 @@ impl TerminalView {
         let preview_esc = preview.replace('\r', "\\r").replace('\n', "\\n");
 
         let mut open = true;
-        egui::Window::new("resend_offline_input")
+        let mut close_via_header = false;
+        crate::ui::chrome::modal_window("resend_offline_input", theme)
             .open(&mut open)
-            .title_bar(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .collapsible(false)
             .resizable(false)
-            .frame(
-                egui::Frame::popup(&ctx.style())
-                    .fill(theme.bg_window_color())
-                    .stroke(egui::Stroke::new(1.0, theme.border_color()))
-                    .rounding(8.0)
-                    .inner_margin(theme.margin_modal_content()),
-            )
             .show(ctx, |ui| {
-                ui.label(
-                    egui::RichText::new("检测到断线期间暂存的输入")
-                        .size(theme.font_size_xl())
-                        .strong()
-                        .color(theme.fg_high_color()),
-                );
-                ui.add_space(theme.spacing_panel_gap());
+                crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
+                if crate::ui::chrome::modal_header(
+                    ui,
+                    theme,
+                    "断线期间暂存的输入",
+                    crate::ui::chrome::modal_title_font_size(theme),
+                ) {
+                    close_via_header = true;
+                }
                 ui.label(
                     egui::RichText::new(format!("共 {} 字节，是否发送到当前远程 shell？", n))
                         .size(theme.font_size_medium())
@@ -1398,9 +1418,14 @@ impl TerminalView {
                         self.resend_offline_input_dialog_open = false;
                     }
                 });
+                });
             });
-        if !open {
+        if !open || close_via_header {
             self.resend_offline_input_dialog_open = false;
+            if close_via_header {
+                self.disconnected_input_buffer.clear();
+                self.buffer_input_while_disconnected = false;
+            }
         }
     }
 
@@ -1560,6 +1585,7 @@ impl TerminalView {
                                 }
                             }
                             egui::Key::Enter => {
+                                self.commit_typed_line_on_enter();
                                 if let Err(e) = handle.send_input(b"\r") {
                                     log::error!("PTY write (enter): {}", e);
                                 }
@@ -1606,11 +1632,15 @@ impl TerminalView {
             return;
         }
         self.typed_line_buffer.clear();
+        let normalized = command.replace("\r\n", "\n").replace('\r', "\n");
+        let lines: Vec<&str> = normalized.lines().collect();
+        for line in &lines {
+            self.enqueue_log_command(line);
+        }
         let Some(handle) = self.ssh_handle.as_ref() else {
             return;
         };
-        let normalized = command.replace("\r\n", "\n").replace('\r', "\n");
-        for line in normalized.lines() {
+        for line in lines {
             let mut payload = line.to_string();
             payload.push('\r');
             if let Err(e) = handle.send_input(payload.as_bytes()) {
@@ -1651,6 +1681,43 @@ impl TerminalView {
         self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
         self.visual_layout_cache = None;
         self.selection.clear();
+    }
+
+    /// 菜单「复制」：优先选区，否则复制当前屏格式化输出。
+    pub(crate) fn menu_copy_to_clipboard(&self) -> bool {
+        let text = self.get_selected_text();
+        let text = if text.is_empty() {
+            self.terminal.get_formatted_output()
+        } else {
+            text
+        };
+        if text.is_empty() {
+            return false;
+        }
+        Clipboard::new()
+            .ok()
+            .and_then(|mut c| c.set_text(text).ok())
+            .is_some()
+    }
+
+    /// 菜单「粘贴」：从系统剪贴板粘贴到 PTY。
+    pub(crate) fn menu_paste_from_clipboard(&mut self, ctx: &egui::Context) {
+        if let Ok(mut clip) = Clipboard::new() {
+            if let Ok(text) = clip.get_text() {
+                self.paste_text(&text, ctx);
+            }
+        }
+    }
+
+    /// 菜单「全选」：选中当前屏全部内容。
+    pub(crate) fn menu_select_all(&mut self) {
+        let rows = self.rows.max(1) as usize;
+        let cols = self.cols.max(1) as usize;
+        self.selection.start_line = 0;
+        self.selection.start_col = 0;
+        self.selection.end_line = rows.saturating_sub(1);
+        self.selection.end_col = cols.saturating_sub(1);
+        self.selection.active = true;
     }
 
     /// 获取选中的文本

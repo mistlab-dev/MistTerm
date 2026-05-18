@@ -334,17 +334,15 @@ impl SftpPanel {
     ) {
         self.poll_rx();
 
-        ui.horizontal(|ui| {
-            ui.heading(egui::RichText::new("📂 SFTP").color(theme.fg_high_color()));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::ui::chrome::close_icon_button(ui, theme)
-                    .on_hover_text("隐藏侧栏 · 也可用底部「📂 SFTP」切换")
-                    .clicked()
-                {
-                    *close_panel = true;
-                }
-            });
-        });
+        if crate::ui::chrome::dock_panel_title_close_only(
+            ui,
+            theme,
+            "📂 SFTP",
+            crate::ui::chrome::DockPanelTitleStyle::DockHeading,
+            "隐藏侧栏 · 也可用底部「📂 SFTP」切换",
+        ) {
+            *close_panel = true;
+        }
         ui.separator();
 
         let Some(t) = terminal else {
@@ -379,14 +377,14 @@ impl SftpPanel {
 
         if let Some(ok) = &self.toast_ok {
             ui.label(egui::RichText::new(ok).color(theme.green_color()));
-            if ui.small_button("关闭提示").clicked() {
+            if crate::ui::chrome::chrome_small_button(ui, theme, "关闭提示").clicked() {
                 self.toast_ok = None;
             }
             ui.separator();
         }
         if let Some(err) = &self.toast_err {
             ui.label(egui::RichText::new(err).color(theme.red_color()));
-            if ui.small_button("关闭").clicked() {
+            if crate::ui::chrome::chrome_small_button(ui, theme, "关闭").clicked() {
                 self.toast_err = None;
             }
             ui.separator();
@@ -410,7 +408,11 @@ impl SftpPanel {
             ui.add(
                 egui::TextEdit::singleline(&mut self.path_edit)
                     .desired_width(layout_util::finite_avail_minus(ui, 160.0, 80.0, 1200.0))
-                    .hint_text("/tmp 或 ."),
+                    .hint_text(crate::ui::chrome::hint_rich(
+                        theme,
+                        "/tmp 或 .",
+                        theme.font_size_normal(),
+                    )),
             );
             if ui.add_enabled(!self.busy, egui::Button::new("前往")).clicked() {
                 let p = PathBuf::from(self.path_edit.trim());
@@ -520,8 +522,16 @@ impl SftpPanel {
             ui.label(
                 egui::RichText::new("新建目录").small().color(theme.fg_low_color()),
             );
-            ui.add(egui::TextEdit::singleline(&mut self.mkdir_name).hint_text("名称"));
-            if ui.small_button("创建").clicked() && !self.mkdir_name.trim().is_empty() {
+            ui.add(
+                egui::TextEdit::singleline(&mut self.mkdir_name).hint_text(crate::ui::chrome::hint_rich(
+                    theme,
+                    "名称",
+                    theme.font_size_normal(),
+                )),
+            );
+            if crate::ui::chrome::chrome_small_button(ui, theme, "创建").clicked()
+                && !self.mkdir_name.trim().is_empty()
+            {
                 let p = self.cwd.join(self.mkdir_name.trim());
                 self.mkdir_name.clear();
                 self.spawn_mkdir(sid, mgr.clone(), p, ctx);
@@ -574,7 +584,7 @@ impl SftpPanel {
                         center,
                         egui::Align2::CENTER_CENTER,
                         "📂 释放以上传文件",
-                        egui::FontId::proportional(14.0),
+                        egui::FontId::proportional(theme.font_size_body()),
                         theme.fg_high_color(),
                     );
                 }

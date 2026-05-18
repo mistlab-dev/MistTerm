@@ -48,15 +48,25 @@ impl NewSessionDialog {
             return;
         }
 
-        egui::Window::new("新建会话")
+        let mut open = self.visible;
+        let mut close_via_header = false;
+        let mut dismiss = false;
+        crate::ui::chrome::modal_window("legacy_new_session", theme)
+            .open(&mut open)
             .resizable(true)
-            .collapsible(false)
             .default_width(layout_util::modal_default_width(ctx))
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
-                ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new("会话名称").color(theme.fg_medium_color()),
-                    );
+                crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
+                    if crate::ui::chrome::modal_header(
+                        ui,
+                        theme,
+                        "新建会话",
+                        crate::ui::chrome::modal_title_font_size(theme),
+                    ) {
+                        close_via_header = true;
+                    }
+                    ui.label(crate::ui::chrome::rich_form_label(theme, "会话名称"));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.name)
                             .desired_width(layout_util::finite_content_width(ui))
@@ -102,18 +112,21 @@ impl NewSessionDialog {
 
                     ui.horizontal(|ui| {
                         if ui.button("取消").clicked() {
-                            self.visible = false;
-                            self.reset();
+                            dismiss = true;
                         }
 
                         if ui.button("创建").clicked() {
                             // 独立组件未接入 SessionManager；请使用主窗口「文件 → 新建会话」
-                            self.visible = false;
-                            self.reset();
+                            dismiss = true;
                         }
                     });
                 });
             });
+        if close_via_header || dismiss {
+            open = false;
+            self.reset();
+        }
+        self.visible = open;
     }
 
     /// 打开对话框

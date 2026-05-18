@@ -3,7 +3,7 @@ name = "mistterm"
 version = "0.1.0"
 edition = "2021"
 autobins = false
-default-run = "mistterm"
+default-run = "Mist"
 description = "A modern SSH terminal with lrzsz support and Git sync"
 
 [lib]
@@ -27,7 +27,7 @@ name = "rz_upload_smoke"
 path = "src/bin/rz_upload_smoke.rs"
 
 [[bin]]
-name = "mistterm"
+name = "Mist"
 path = "src/main.rs"
 
 [dependencies]
@@ -109,6 +109,11 @@ winapi = { version = "0.3", features = ["winuser"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
+embed_plist = "1.2"
+muda = "0.19"
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

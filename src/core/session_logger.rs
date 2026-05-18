@@ -148,11 +148,16 @@ impl SessionLogWriter {
         }
     }
 
+    /// 记录用户提交的命令（带时间戳，便于与后续输出按顺序对照）
     pub fn write_prompt_marker(&mut self, command: &str) {
         if command.trim().is_empty() {
             return;
         }
-        let line = format!("❯ {}\n", command.trim());
+        let line = format!(
+            "[MistTerm {}] ❯ {}\n",
+            Local::now().format("%Y-%m-%d %H:%M:%S"),
+            command.trim()
+        );
         self.write_raw(line.as_bytes());
     }
 
@@ -376,5 +381,33 @@ mod tests {
     fn log_text_for_display_strips_csi_color() {
         let raw = "ok\x1b[39;49m\x1b[0m\n";
         assert_eq!(log_text_for_display(raw), "ok\n");
+    }
+
+    #[test]
+    fn write_prompt_marker_includes_timestamp_and_glyph() {
+        let dir = std::env::temp_dir().join(format!(
+            "mistterm_log_test_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        let settings = SessionLogSettings {
+            enabled: true,
+            base_dir: dir.clone(),
+            ..SessionLogSettings::default()
+        };
+        let mut w = SessionLogWriter::new(
+            "sess".into(),
+            "test".into(),
+            String::new(),
+            settings,
+        );
+        w.write_prompt_marker("ls -la");
+        w.stop_log();
+        let files = list_session_log_files(&dir, "sess");
+        let body = fs::read_to_string(files.first().expect("log file")).unwrap();
+        assert!(
+            body.contains("[MistTerm ") && body.contains("] ❯ ls -la"),
+            "expected timestamped command line, got:\n{body}"
+        );
     }
 }

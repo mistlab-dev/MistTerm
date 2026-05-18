@@ -33,7 +33,9 @@ pub mod cloud_sync_panel;
 pub mod ssh_config_import_dialog;
 pub mod command_history_overlay;
 pub mod session_log_dialog;
+pub mod help_docs_dialog;
 
 pub use app::MistTermApp;
+pub use help_docs_dialog::{HelpDocsDialog, HelpPage};
 pub use theme::{Theme, ThemeManager};
 pub use monitor_panel::MonitorPanel;

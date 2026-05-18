@@ -296,10 +296,7 @@ impl MonitorPanel {
         let inner = crate::ui::chrome::right_dock_slot_content_rect(paint, theme);
         let panel_w = layout_util::clamp_f32(inner.width(), m_min, m_max);
         let border = theme.border_color();
-        egui::Area::new(egui::Id::new("mistterm_monitor_fg"))
-            .order(egui::Order::Middle)
-            .movable(false)
-            .constrain(true)
+        crate::ui::chrome::right_dock_foreground_area("mistterm_monitor_fg")
             .constrain_to(paint)
             .fixed_pos(paint.min)
             .show(ctx, |ui| {
@@ -311,43 +308,46 @@ impl MonitorPanel {
                     ui.set_clip_rect(inner);
                     ui.set_min_width(panel_w);
                     ui.set_max_width(panel_w);
-                    ui.horizontal(|ui| {
-                        ui.set_min_width(panel_w);
-                        ui.set_max_width(panel_w);
-                        ui.heading(
-                            egui::RichText::new("📊 系统监控")
-                                .size(theme.font_size_xl())
-                                .color(theme.fg_high_color()),
+                    let alert_label = self.monitor.as_ref().and_then(|mon| {
+                        let alerts = Self::collect_alerts_with(
+                            self.alert_cpu_pct,
+                            self.alert_mem_pct,
+                            self.alert_disk_pct,
+                            mon.last_stats(),
                         );
-                        if let Some(ref mon) = self.monitor {
-                            let alerts = Self::collect_alerts_with(
-                                self.alert_cpu_pct,
-                                self.alert_mem_pct,
-                                self.alert_disk_pct,
-                                mon.last_stats(),
-                            );
-                            if !alerts.is_empty() {
-                                ui.label(
-                                    egui::RichText::new(format!("⚠ {} 项告警", alerts.len()))
-                                        .size(theme.font_size_medium())
-                                        .color(theme.red_color()),
-                                );
-                            }
+                        if alerts.is_empty() {
+                            None
+                        } else {
+                            Some(format!("⚠ {} 项告警", alerts.len()))
                         }
-                        let btn_w = ui.available_width().max(0.0);
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(btn_w, 22.0),
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if crate::ui::chrome::close_icon_button(ui, theme)
-                                    .on_hover_text("隐藏侧栏 · 也可用底部「📊 监控」切换")
-                                    .clicked()
-                                {
-                                    *open = false;
-                                }
-                            },
-                        );
                     });
+                    let trailing_w =
+                        crate::ui::chrome::panel_header_trailing_width(ui, theme, &[]);
+                    if crate::ui::chrome::dock_panel_title_row(
+                        ui,
+                        theme,
+                        |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(crate::ui::chrome::rich_dock_title(theme, "📊 系统监控"));
+                                if let Some(ref text) = alert_label {
+                                    ui.label(
+                                        egui::RichText::new(text)
+                                            .size(theme.font_size_medium())
+                                            .color(theme.red_color()),
+                                    );
+                                }
+                            });
+                        },
+                        "隐藏侧栏 · 也可用底部「📊 监控」切换",
+                        trailing_w,
+                        |ui, theme| {
+                            crate::ui::chrome::close_icon_button(ui, theme)
+                                .on_hover_text("隐藏侧栏 · 也可用底部「📊 监控」切换")
+                                .clicked()
+                        },
+                    ) {
+                        *open = false;
+                    }
                     ui.separator();
 
                     egui::ScrollArea::vertical()

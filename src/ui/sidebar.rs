@@ -98,14 +98,13 @@ impl Sidebar {
         search_field_id: egui::Id,
         theme: &Theme,
     ) -> SidebarOutput {
-        let aw = ui.available_width();
-        let width = if !aw.is_finite() || aw > 10_000.0 {
-            200.0
-        } else if aw > 250.0 {
-            200.0
-        } else {
-            aw
-        };
+        // 占满宿主分配的侧栏列宽（勿再 cap 200px，否则列宽 > 内容宽会出现一条空白缝）
+        let width = layout_util::finite_avail_minus(
+            ui,
+            0.0,
+            160.0,
+            ui.max_rect().width().max(160.0),
+        );
         let mut selected_session_id = None;
         let mut delete_session_id = None;
         let mut edit_session_id = None;
@@ -125,33 +124,28 @@ impl Sidebar {
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = theme.spacing_status_left_gap();
-                            ui.label(
-                                egui::RichText::new("连接")
-                                    .size(theme.font_size_sidebar_section())
-                                    .strong()
-                                    .color(theme.fg_low_color()),
-                            );
+                            ui.label(crate::ui::chrome::rich_section_title(
+                                theme,
+                                "连接",
+                                theme.color_section_title(),
+                            ));
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.spacing_mut().item_spacing.x = theme.spacing_tool_btn_gap();
                                 if crate::ui::chrome::sidebar_header_icon_button(
                                     ui,
                                     theme,
-                                    crate::ui::chrome::GLYPH_COLLAPSE,
-                                    theme.fg_high_a51(),
+                                    crate::ui::chrome::GLYPH_SIDEBAR_COLLAPSE,
+                                    theme.color_sidebar_header_icon(),
                                 )
-                                .on_hover_text("收起")
+                                .on_hover_text("收起连接栏")
                                 .clicked()
                                 {
                                     collapse_clicked = true;
                                 }
-                                if crate::ui::chrome::sidebar_header_icon_button(
-                                    ui,
-                                    theme,
-                                    "＋",
-                                    theme.fg_high_a76(),
-                                )
-                                .on_hover_text("新建会话")
-                                .clicked()
+                                ui.add_space(theme.spacing_panel_gap());
+                                if crate::ui::chrome::sidebar_new_session_button(ui, theme)
+                                    .on_hover_text("新建会话 · ⌘N")
+                                    .clicked()
                                 {
                                     create_session_clicked = true;
                                 }
@@ -181,25 +175,16 @@ impl Sidebar {
                 egui::Frame::none()
                     .outer_margin(theme.spacing_sidebar_filter_outer())
                     .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
-                    let tab_row_w = ui.available_width().max(96.0);
-                    let item_w = (tab_row_w / 3.0).max(52.0);
-                    for label in ["全部", "在线", "离线"] {
-                        let active = filter.as_str() == label;
-                        if crate::ui::chrome::filter_chip_button(
-                            ui,
-                            theme,
-                            label,
-                            active,
-                            egui::vec2(item_w, theme.size_sidebar_filter_chip_h()),
-                        )
-                        .clicked()
-                        {
-                            *filter = label.to_string();
-                        }
-                    }
-                });
+                let tab_row_w = ui.available_width().max(96.0);
+                if let Some(picked) = crate::ui::chrome::filter_chip_row(
+                    ui,
+                    theme,
+                    &["全部", "在线", "离线"],
+                    filter.as_str(),
+                    tab_row_w,
+                ) {
+                    *filter = picked;
+                }
                 });
 
                 // 会话列表
@@ -321,7 +306,7 @@ impl Sidebar {
                                 row_ui.painter().circle_stroke(
                                     center,
                                     dot_r,
-                                    egui::Stroke::new(1.0, theme.fg_high_a64()),
+                                    egui::Stroke::new(1.0, theme.border_divider_color()),
                                 );
                             }
                             row_ui.add_space(theme.spacing_tab_dot_text());

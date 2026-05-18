@@ -211,16 +211,31 @@ impl GitSyncPanel {
         }
     }
 
-    /// 显示 Git 同步面板
-    pub fn show(&mut self, ui: &mut egui::Ui, theme: &Theme) {
+    /// 显示 Git 同步面板；`close_panel` 为 true 时由宿主关闭侧栏。
+    pub fn show(&mut self, ui: &mut egui::Ui, theme: &Theme, close_panel: &mut bool) {
         ui.vertical(|ui| {
-            // 标题
-            ui.horizontal(|ui| {
-                ui.heading("🔀 Git 同步");
-                if ui.button("🔄 刷新").clicked() {
-                    self.refresh_status();
-                }
-            });
+            let trailing_w =
+                crate::ui::chrome::panel_header_trailing_width(ui, theme, &["🔄 刷新"]);
+            if crate::ui::chrome::dock_panel_title_row(
+                ui,
+                theme,
+                |ui| {
+                    ui.label(crate::ui::chrome::rich_dock_title(theme, "🔀 Git 同步"));
+                },
+                "关闭 Git 同步",
+                trailing_w,
+                |ui, theme| {
+                    let closed = crate::ui::chrome::close_icon_button(ui, theme)
+                        .on_hover_text("关闭 Git 同步")
+                        .clicked();
+                    if crate::ui::chrome::panel_toolbar_button(ui, theme, "🔄 刷新").clicked() {
+                        self.refresh_status();
+                    }
+                    closed
+                },
+            ) {
+                *close_panel = true;
+            }
             ui.separator();
 
             // 仓库路径设置
@@ -230,7 +245,11 @@ impl GitSyncPanel {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.repo_path)
                             .desired_width(300.0)
-                            .hint_text("/path/to/repo"),
+                            .hint_text(crate::ui::chrome::hint_rich(
+                                theme,
+                                "/path/to/repo",
+                                theme.font_size_normal(),
+                            )),
                     );
                     if ui.button("打开").clicked() && !self.repo_path.is_empty() {
                         self.open_repo();
@@ -324,7 +343,11 @@ impl GitSyncPanel {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.commit_message)
                             .desired_width(layout_util::finite_content_width(ui))
-                            .hint_text("输入提交信息..."),
+                            .hint_text(crate::ui::chrome::hint_rich(
+                                theme,
+                                "输入提交信息...",
+                                theme.font_size_normal(),
+                            )),
                     );
                     ui.horizontal(|ui| {
                         if ui.button("暂存全部").clicked() {
@@ -388,25 +411,48 @@ impl GitSyncPanel {
 
             // 克隆对话框
             if self.show_clone_dialog {
-                egui::Window::new("克隆仓库")
-                    .collapsible(false)
+                let mut clone_open = self.show_clone_dialog;
+                let mut close_via_header = false;
+                let mut cancel_clone = false;
+                crate::ui::chrome::modal_window("clone_repo_modal", theme)
+                    .open(&mut clone_open)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .fixed_size(egui::vec2(
+                        layout_util::modal_default_width(ui.ctx()),
+                        0.0,
+                    ))
                     .show(ui.ctx(), |ui| {
-                        ui.set_min_width(layout_util::modal_default_width(ui.ctx()));
-                        ui.vertical(|ui| {
-                            ui.label("克隆 URL：");
+                        crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
+                            if crate::ui::chrome::modal_header(
+                                ui,
+                                theme,
+                                "克隆仓库",
+                                crate::ui::chrome::modal_title_font_size(theme),
+                            ) {
+                                close_via_header = true;
+                            }
+                            ui.set_min_width(layout_util::finite_content_width(ui));
+                            crate::ui::chrome::form_field_label(ui, theme, "克隆 URL");
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.clone_url)
                                     .desired_width(layout_util::finite_content_width(ui))
-                                    .hint_text("https://github.com/user/repo.git"),
+                                    .hint_text(crate::ui::chrome::hint_rich(
+                                        theme,
+                                        "https://github.com/user/repo.git",
+                                        theme.font_size_normal(),
+                                    )),
                             );
                             ui.add_space(theme.spacing_md());
-                            ui.label("目标路径：");
+                            crate::ui::chrome::form_field_label(ui, theme, "目标路径");
                             ui.add(
                                 egui::TextEdit::singleline(&mut self.clone_path)
                                     .desired_width(layout_util::finite_content_width(ui))
-                                    .hint_text("/path/to/clone"),
+                                    .hint_text(crate::ui::chrome::hint_rich(
+                                        theme,
+                                        "/path/to/clone",
+                                        theme.font_size_normal(),
+                                    )),
                             );
                             ui.add_space(theme.spacing_lg());
                             ui.horizontal(|ui| {
@@ -421,15 +467,19 @@ impl GitSyncPanel {
                                         if crate::ui::chrome::modal_secondary_button(ui, theme, "取消")
                                             .clicked()
                                         {
-                                            self.show_clone_dialog = false;
-                                            self.clone_url.clear();
-                                            self.clone_path.clear();
+                                            cancel_clone = true;
                                         }
                                     },
                                 );
                             });
                         });
                     });
+                if close_via_header || cancel_clone {
+                    clone_open = false;
+                    self.clone_url.clear();
+                    self.clone_path.clear();
+                }
+                self.show_clone_dialog = clone_open;
             }
         });
     }

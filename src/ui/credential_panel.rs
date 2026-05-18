@@ -152,12 +152,18 @@ impl CredentialPanel {
         panel: &mut CredentialPanel,
         action_out: &mut Option<CredentialPanelAction>,
     ) {
-        ui.label("名称");
-        ui.add(
-            egui::TextEdit::singleline(&mut panel.form_name).desired_width(field_w),
+        chrome::form_field_label(ui, theme, "名称");
+        chrome::form_singleline_field(
+            ui,
+            theme,
+            egui::Id::new("cred_form_name"),
+            &mut panel.form_name,
+            "",
+            field_w,
+            false,
         );
         ui.horizontal(|ui| {
-            ui.label("类别");
+            chrome::form_field_label(ui, theme, "类别");
             egui::ComboBox::from_id_source("cred_cat")
                 .selected_text(panel.form_category.label_zh())
                 .show_ui(ui, |ui| {
@@ -179,7 +185,7 @@ impl CredentialPanel {
                 });
         });
         ui.horizontal(|ui| {
-            ui.label("认证");
+            chrome::form_field_label(ui, theme, "认证");
             egui::ComboBox::from_id_source("cred_auth")
                 .selected_text(panel.form_auth.label_zh())
                 .show_ui(ui, |ui| {
@@ -198,34 +204,63 @@ impl CredentialPanel {
                     }
                 });
         });
-        ui.label("主机");
-        ui.add(
-            egui::TextEdit::singleline(&mut panel.form_host).desired_width(field_w),
+        chrome::form_field_label(ui, theme, "主机");
+        chrome::form_singleline_field(
+            ui,
+            theme,
+            egui::Id::new("cred_form_host"),
+            &mut panel.form_host,
+            "example.com",
+            field_w,
+            false,
         );
         ui.horizontal(|ui| {
-            ui.label("端口");
+            chrome::form_field_label(ui, theme, "端口");
             ui.add(egui::DragValue::new(&mut panel.form_port));
         });
-        ui.label("用户名（可选）");
-        ui.add(
-            egui::TextEdit::singleline(&mut panel.form_username).desired_width(field_w),
+        chrome::form_field_label(ui, theme, "用户名（可选）");
+        chrome::form_singleline_field(
+            ui,
+            theme,
+            egui::Id::new("cred_form_username"),
+            &mut panel.form_username,
+            "root",
+            field_w,
+            false,
         );
-        ui.label(format!("密钥 / {}", panel.form_auth.label_zh()));
-        ui.add(
-            egui::TextEdit::multiline(&mut panel.form_secret)
-                .desired_width(field_w)
-                .desired_rows(3)
-                .password(!matches!(panel.form_auth, CredentialAuthKind::SshKey)),
+        chrome::form_field_label(
+            ui,
+            theme,
+            &format!("密钥 / {}", panel.form_auth.label_zh()),
         );
-        ui.label("标签（逗号分隔）");
-        ui.add(
-            egui::TextEdit::singleline(&mut panel.form_tags).desired_width(field_w),
+        chrome::form_multiline_field(
+            ui,
+            theme,
+            egui::Id::new("cred_form_secret"),
+            &mut panel.form_secret,
+            field_w,
+            3,
+            !matches!(panel.form_auth, CredentialAuthKind::SshKey),
         );
-        ui.label("备注");
-        ui.add(
-            egui::TextEdit::multiline(&mut panel.form_notes)
-                .desired_width(field_w)
-                .desired_rows(2),
+        chrome::form_field_label(ui, theme, "标签（逗号分隔）");
+        chrome::form_singleline_field(
+            ui,
+            theme,
+            egui::Id::new("cred_form_tags"),
+            &mut panel.form_tags,
+            "prod, web",
+            field_w,
+            false,
+        );
+        chrome::form_field_label(ui, theme, "备注");
+        chrome::form_multiline_field(
+            ui,
+            theme,
+            egui::Id::new("cred_form_notes"),
+            &mut panel.form_notes,
+            field_w,
+            2,
+            false,
         );
 
         ui.horizontal(|ui| {
@@ -302,7 +337,13 @@ impl CredentialPanel {
                 let panel_w = layout_util::dock_panel_content_width(ui, c_min, c_max);
                 ui.set_max_width(panel_w);
 
-                if chrome::side_panel_title_row(ui, theme, "🔐 凭证库") {
+                if chrome::dock_panel_title_close_only(
+                    ui,
+                    theme,
+                    "🔐 凭证库",
+                    chrome::DockPanelTitleStyle::DockHeading,
+                    "关闭凭证库",
+                ) {
                     close_panel = true;
                 }
                 ui.small(
@@ -312,15 +353,19 @@ impl CredentialPanel {
                 ui.separator();
 
                 ui.horizontal(|ui| {
-                    if ui.button("➕ 新建").clicked() {
+                    if chrome::panel_toolbar_button(ui, theme, "➕ 新建").clicked() {
                         self.clear_form();
                         self.status_msg = "新建凭证".to_string();
                     }
                     let search_w = (panel_w - 88.0).max(120.0);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.search)
-                            .hint_text("搜索…")
-                            .desired_width(search_w),
+                    chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        egui::Id::new("credential_panel_search"),
+                        &mut self.search,
+                        "搜索凭证…",
+                        search_w,
+                        false,
                     );
                 });
                 ui.separator();
@@ -337,21 +382,21 @@ impl CredentialPanel {
                 }
                 list.sort_by(|a, b| a.name.cmp(&b.name));
 
-                ui.label(
-                    egui::RichText::new("凭证列表")
-                        .size(theme.font_size_small())
-                        .color(theme.fg_high_a51()),
-                );
+                ui.label(crate::ui::chrome::rich_section_title(
+                    theme,
+                    "凭证列表",
+                    theme.color_section_title(),
+                ));
                 let selected_id = self.selected_id.clone();
                 Self::show_credential_list(ui, theme, &list, &selected_id, &mut |c| self.load_cred(c));
 
                 ui.add_space(theme.spacing_panel_gap());
                 ui.separator();
-                ui.label(
-                    egui::RichText::new("编辑")
-                        .size(theme.font_size_small())
-                        .color(theme.fg_high_a51()),
-                );
+                ui.label(crate::ui::chrome::rich_section_title(
+                    theme,
+                    "编辑",
+                    theme.color_section_title(),
+                ));
 
                 let field_w = (panel_w - 8.0).max(160.0);
                 let form_scroll_h = layout_util::scroll_area_fill_height(ui, 120.0);
