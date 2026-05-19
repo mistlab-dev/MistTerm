@@ -337,16 +337,20 @@ impl CloudSyncPanel {
             .show(ctx, |ui| {
                 let panel_w = layout_util::dock_panel_content_width(ui, cl_min, cl_max);
                 ui.set_max_width(panel_w);
-                if chrome::dock_panel_title_close_only(
-                    ui,
-                    theme,
-                    Some(crate::ui::icons::IconId::Cloud),
-                    "云端同步",
-                    chrome::DockPanelTitleStyle::DockHeading,
-                    "关闭云端同步",
-                ) {
+                let mut header_closed = false;
+                theme.frame_panel_header_band().show(ui, |ui| {
+                    header_closed = chrome::dock_panel_title_close_only(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Cloud,
+                        "云端同步",
+                        "关闭云端同步",
+                    );
+                });
+                if header_closed {
                     close_me = true;
                 }
+                chrome::panel_header_divider(ui, theme);
                 ui.label(
                     chrome::rich_caption(
                         theme,
@@ -427,10 +431,17 @@ impl CloudSyncPanel {
                         ui.add_space(theme.spacing_panel_gap());
                         chrome::form_field_label(ui, theme, "自动同步间隔");
                         ui.horizontal(|ui| {
-                            ui.add(
-                                egui::DragValue::new(&mut self.settings.frequency_minutes)
-                                    .speed(1.0)
-                                    .prefix("每 "),
+                            chrome::form_drag_value_field(
+                                ui,
+                                theme,
+                                egui::Id::new("cloud_sync_freq_min"),
+                                |ui| {
+                                    ui.add(
+                                        egui::DragValue::new(&mut self.settings.frequency_minutes)
+                                            .speed(1.0)
+                                            .prefix("每 "),
+                                    )
+                                },
                             );
                             ui.label(chrome::rich_caption(theme, "分钟（0 = 仅手动）"));
                         });
@@ -462,22 +473,16 @@ impl CloudSyncPanel {
                         ui.add_space(theme.spacing_panel_gap());
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 6.0;
-                            if ui.button("保存勾选与间隔").clicked() {
+                            if chrome::panel_action_button(ui, theme, "保存勾选与间隔").clicked() {
                                 self.save_settings();
                             }
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        chrome::rich_body(theme, "导出同步包…").strong(),
-                                    )
-                                    .fill(theme.green_color()),
-                                )
+                            if chrome::panel_action_primary_button(ui, theme, "导出同步包…")
                                 .on_hover_text("新建 mistterm-sync-时间戳 目录并复制勾选文件")
                                 .clicked()
                             {
                                 self.run_export(deps);
                             }
-                            if ui.button("从同步包导入…").clicked() {
+                            if chrome::panel_action_button(ui, theme, "从同步包导入…").clicked() {
                                 self.pick_import_folder(deps);
                             }
                         });
@@ -508,14 +513,11 @@ impl CloudSyncPanel {
                             ui.label("• 将用包内凭证库覆盖本机加密文件（需同源设备密钥才解密）。");
                         }
                         ui.horizontal(|ui| {
-                            if ui.button("取消").clicked() {
+                            if chrome::panel_action_button(ui, theme, "取消").clicked() {
                                 self.pending_import_dir = None;
                                 self.message = "已取消导入".to_string();
                             }
-                            if ui
-                                .add(egui::Button::new("确认导入").fill(theme.green_color()))
-                                .clicked()
-                            {
+                            if chrome::panel_action_primary_button(ui, theme, "确认导入").clicked() {
                                 let msg = Self::perform_import_package(
                                     &dir,
                                     self.merge_fragments_on_package_import,

@@ -375,17 +375,20 @@ impl SftpPanel {
     ) {
         self.poll_rx(audit);
 
-        if crate::ui::chrome::dock_panel_title_close_only(
-            ui,
-            theme,
-            Some(crate::ui::icons::IconId::Folder),
-            "SFTP",
-            crate::ui::chrome::DockPanelTitleStyle::DockHeading,
-            "隐藏侧栏 · 也可用底部 SFTP 切换",
-        ) {
+        let mut header_closed = false;
+        theme.frame_panel_header_band().show(ui, |ui| {
+            header_closed = crate::ui::chrome::dock_panel_title_close_only(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Folder,
+                "SFTP",
+                "隐藏侧栏 · 也可用底部 SFTP 切换",
+            );
+        });
+        if header_closed {
             *close_panel = true;
         }
-        ui.separator();
+        crate::ui::chrome::panel_header_divider(ui, theme);
 
         let Some(t) = terminal else {
             ui.label(
@@ -444,30 +447,28 @@ impl SftpPanel {
         ui.add_space(theme.spacing_md());
 
         ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("路径").small().color(theme.text_tertiary()),
+            crate::ui::chrome::form_field_label(ui, theme, "路径");
+            let path_w = layout_util::finite_avail_minus(ui, 200.0, 120.0, 480.0);
+            crate::ui::chrome::form_singleline_field(
+                ui,
+                theme,
+                egui::Id::new("sftp_path_edit"),
+                &mut self.path_edit,
+                "/tmp 或 .",
+                path_w,
+                false,
             );
-            ui.add(
-                egui::TextEdit::singleline(&mut self.path_edit)
-                    .desired_width(layout_util::finite_avail_minus(ui, 160.0, 80.0, 1200.0))
-                    .hint_text(crate::ui::chrome::hint_rich(
-                        theme,
-                        "/tmp 或 .",
-                        theme.font_size_normal(),
-                    )),
-            );
-            if ui.add_enabled(!self.busy, egui::Button::new("前往")).clicked() {
+            if crate::ui::chrome::panel_action_button_ex(ui, theme, "前往", !self.busy).clicked() {
                 let p = PathBuf::from(self.path_edit.trim());
                 self.spawn_list(sid, mgr.clone(), p, ctx);
             }
-            if ui.add_enabled(!self.busy, egui::Button::new("刷新")).clicked() {
+            if crate::ui::chrome::panel_action_button_ex(ui, theme, "刷新", !self.busy).clicked() {
                 self.spawn_list(sid, mgr.clone(), self.cwd.clone(), ctx);
             }
         });
 
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(!self.busy, egui::Button::new("上层目录"))
+            if crate::ui::chrome::panel_action_button_ex(ui, theme, "上层目录", !self.busy)
                 .clicked()
             {
                 let parent = self
@@ -477,9 +478,13 @@ impl SftpPanel {
                     .unwrap_or_else(|| PathBuf::from("/"));
                 self.spawn_list(sid, mgr.clone(), parent, ctx);
             }
-            if ui
-                .add_enabled(!self.busy && self.selected.is_some(), egui::Button::new("另存为…"))
-                .clicked()
+            if crate::ui::chrome::panel_action_button_ex(
+                ui,
+                theme,
+                "另存为…",
+                !self.busy && self.selected.is_some(),
+            )
+            .clicked()
             {
                 if let Some(rem) = &self.selected {
                     let name = rem
@@ -501,10 +506,14 @@ impl SftpPanel {
                     }
                 }
             }
-            if ui
-                .add_enabled(!self.busy && self.selected.is_some(), egui::Button::new("下载到默认目录"))
-                .on_hover_text(format!("写入：{}", download_dir_hint))
-                .clicked()
+            if crate::ui::chrome::panel_action_button_ex(
+                ui,
+                theme,
+                "下载到默认目录",
+                !self.busy && self.selected.is_some(),
+            )
+            .on_hover_text(format!("写入：{}", download_dir_hint))
+            .clicked()
             {
                 if let Some(rem) = self.selected.clone() {
                     let name = rem
@@ -528,8 +537,7 @@ impl SftpPanel {
         });
 
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(!self.busy, egui::Button::new("上传…"))
+            if crate::ui::chrome::panel_action_button_ex(ui, theme, "上传…", !self.busy)
                 .on_hover_text("可多选；文件名保持与本地一致，写入当前远端目录")
                 .clicked()
             {
@@ -550,9 +558,13 @@ impl SftpPanel {
                     }
                 }
             }
-            if ui
-                .add_enabled(!self.busy && self.selected.is_some(), egui::Button::new("删除选中…"))
-                .clicked()
+            if crate::ui::chrome::panel_action_button_ex(
+                ui,
+                theme,
+                "删除选中…",
+                !self.busy && self.selected.is_some(),
+            )
+            .clicked()
             {
                 if let Some(p) = self.selected.clone() {
                     self.pending_delete = Some(p);
@@ -561,17 +573,24 @@ impl SftpPanel {
         });
 
         ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new("新建目录").small().color(theme.text_tertiary()),
+            crate::ui::chrome::form_field_label(ui, theme, "新建目录");
+            let mkdir_w = layout_util::finite_avail_minus(ui, 120.0, 80.0, 200.0);
+            crate::ui::chrome::form_singleline_field(
+                ui,
+                theme,
+                egui::Id::new("sftp_mkdir_name"),
+                &mut self.mkdir_name,
+                "名称",
+                mkdir_w,
+                false,
             );
-            ui.add(
-                egui::TextEdit::singleline(&mut self.mkdir_name).hint_text(crate::ui::chrome::hint_rich(
-                    theme,
-                    "名称",
-                    theme.font_size_normal(),
-                )),
-            );
-            if crate::ui::chrome::chrome_small_button(ui, theme, "创建").clicked()
+            if crate::ui::chrome::panel_action_button_ex(
+                ui,
+                theme,
+                "创建",
+                !self.mkdir_name.trim().is_empty(),
+            )
+            .clicked()
                 && !self.mkdir_name.trim().is_empty()
             {
                 let p = self.cwd.join(self.mkdir_name.trim());
@@ -584,11 +603,11 @@ impl SftpPanel {
             ui.group(|ui| {
                 ui.label(format!("确认删除？\n{}", p.to_string_lossy()));
                 ui.horizontal(|ui| {
-                    if ui.button("删除").clicked() {
+                    if crate::ui::chrome::panel_action_primary_button(ui, theme, "删除").clicked() {
                         let path = self.pending_delete.take().unwrap();
                         self.spawn_remove(sid, mgr.clone(), path, ctx);
                     }
-                    if ui.button("取消").clicked() {
+                    if crate::ui::chrome::panel_action_button(ui, theme, "取消").clicked() {
                         self.pending_delete = None;
                     }
                 });

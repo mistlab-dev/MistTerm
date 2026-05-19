@@ -947,7 +947,9 @@ impl TerminalView {
                             response.context_menu(|ui| {
                                 crate::ui::chrome::apply_context_menu_style(ui, theme);
                                 if !self.selection.is_empty() {
-                                    if ui.button("复制选中").clicked() {
+                                    if crate::ui::chrome::popup_menu_button(ui, theme, "复制选中")
+                                        .clicked()
+                                    {
                                         let text = self.get_selected_text();
                                         if !text.is_empty() {
                                             if let Ok(mut clip) = Clipboard::new() {
@@ -958,13 +960,14 @@ impl TerminalView {
                                     }
                                     ui.separator();
                                 }
-                                if ui.button("复制全部").clicked() {
+                                if crate::ui::chrome::popup_menu_button(ui, theme, "复制全部").clicked()
+                                {
                                     if let Ok(mut clip) = Clipboard::new() {
                                         let _ = clip.set_text(self.terminal.get_formatted_output());
                                     }
                                     ui.close_menu();
                                 }
-                                if ui.button("粘贴").clicked() {
+                                if crate::ui::chrome::popup_menu_button(ui, theme, "粘贴").clicked() {
                                     if let Ok(mut clip) = Clipboard::new() {
                                         if let Ok(text) = clip.get_text() {
                                             self.paste_text(&text, ui.ctx());
@@ -973,15 +976,17 @@ impl TerminalView {
                                     ui.close_menu();
                                 }
                                 ui.separator();
-                                if ui.button("清屏").clicked() {
+                                if crate::ui::chrome::popup_menu_button(ui, theme, "清屏").clicked() {
                                     self.clear_screen();
                                     ui.close_menu();
                                 }
-                                if ui.button("字体 +").clicked() {
+                                if crate::ui::chrome::popup_menu_button(ui, theme, "字体 +").clicked()
+                                {
                                     self.set_font_size(self.font_size + 1.0);
                                     ui.close_menu();
                                 }
-                                if ui.button("字体 -").clicked() {
+                                if crate::ui::chrome::popup_menu_button(ui, theme, "字体 -").clicked()
+                                {
                                     self.set_font_size(self.font_size - 1.0);
                                     ui.close_menu();
                                 }

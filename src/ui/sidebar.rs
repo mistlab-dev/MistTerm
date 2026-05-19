@@ -119,16 +119,15 @@ impl Sidebar {
             ),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
-                egui::Frame::none()
-                    .inner_margin(theme.margin_sidebar_title())
-                    .show(ui, |ui| {
+                theme.frame_panel_header_band().show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = theme.spacing_status_left_gap();
-                            ui.label(crate::ui::chrome::rich_section_title(
+                            crate::ui::chrome::panel_header_title_leading(
+                                ui,
                                 theme,
+                                crate::ui::icons::IconId::Plug,
                                 "连接",
-                                theme.color_section_title(),
-                            ));
+                            );
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.spacing_mut().item_spacing.x = theme.spacing_tool_btn_gap();
                                 if crate::ui::chrome::sidebar_header_icon_button(
@@ -143,7 +142,7 @@ impl Sidebar {
                                     collapse_clicked = true;
                                 }
                                 ui.add_space(theme.spacing_panel_gap());
-                                if crate::ui::chrome::sidebar_new_session_button(ui, theme)
+                                if crate::ui::chrome::panel_header_new_button(ui, theme)
                                     .on_hover_text(format!(
                                         "新建会话 · {}",
                                         crate::platform::accel("N")
@@ -155,32 +154,29 @@ impl Sidebar {
                             });
                         });
                     });
+                crate::ui::chrome::panel_header_divider(ui, theme);
 
-                let search_w = layout_util::finite_content_width_inset(
+                crate::ui::chrome::panel_search_row(
                     ui,
-                    0.0,
-                    120.0,
-                    ui.available_width(),
+                    theme,
+                    search_field_id,
+                    search_query,
+                    "搜索会话…",
+                    None,
                 );
-                egui::Frame::none()
-                    .outer_margin(theme.spacing_sidebar_search_outer())
-                    .show(ui, |ui| {
-                        crate::ui::chrome::sidebar_search_field(
-                            ui,
-                            theme,
-                            search_field_id,
-                            search_query,
-                            "搜索会话…",
-                            search_w,
-                        );
-                    });
                 egui::Frame::none()
                     .outer_margin(theme.spacing_sidebar_filter_outer())
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = theme.spacing_tool_btn_gap();
-                            let sort_w = theme.size_sidebar_header_icon() + theme.spacing_panel_gap();
-                            let chip_row_w = (ui.available_width() - sort_w).max(96.0);
+                            ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
+                            let sort_w = crate::ui::chrome::panel_sort_chip_width(
+                                ui,
+                                theme,
+                                sort_by.short_label(),
+                            );
+                            let chip_row_w =
+                                (ui.available_width() - sort_w - theme.spacing_panel_gap())
+                                    .max(96.0);
                             if let Some(picked) = crate::ui::chrome::filter_chip_row(
                                 ui,
                                 theme,
@@ -362,15 +358,17 @@ impl Sidebar {
                             // 右键菜单
                             response.context_menu(|ui| {
                                 crate::ui::chrome::apply_context_menu_style(ui, theme);
-                                if ui.button("编辑").clicked() {
+                                if crate::ui::chrome::popup_menu_button(ui, theme, "编辑").clicked() {
                                     edit_session_id = Some(session.id.clone());
                                     ui.close_menu();
                                 }
-                                if ui.button("删除").clicked() {
+                                if crate::ui::chrome::popup_menu_button(ui, theme, "删除").clicked() {
                                     delete_session_id = Some(session.id.clone());
                                     ui.close_menu();
                                 }
-                                if ui.button("查看日志…").clicked() {
+                                if crate::ui::chrome::popup_menu_button(ui, theme, "查看日志…")
+                                    .clicked()
+                                {
                                     view_log_session_id = Some(session.id.clone());
                                     ui.close_menu();
                                 }

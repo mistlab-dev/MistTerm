@@ -111,27 +111,15 @@ impl CommandHistoryOverlay {
                                 .color(theme.text_tertiary()),
                         );
                         ui.add_space(6.0);
-                        let search_resp = ui
-                            .horizontal(|ui| {
-                                let px = theme.font_size_normal();
-                                let (r, _) = ui.allocate_exact_size(
-                                    egui::vec2(px, px),
-                                    egui::Sense::hover(),
-                                );
-                                crate::ui::icons::paint_icon(
-                                    ui,
-                                    r,
-                                    crate::ui::icons::IconId::TerminalPrompt,
-                                    theme.color_form_hint(),
-                                    px,
-                                );
-                                let te = egui::TextEdit::singleline(&mut self.query)
-                                    .hint_text("搜索历史命令…")
-                                    .desired_width(f32::INFINITY)
-                                    .font(egui::FontId::monospace(theme.font_size_normal()));
-                                ui.add(te)
-                            })
-                            .inner;
+                        let search_w = (inner.width() - 24.0).max(120.0);
+                        let search_resp = crate::ui::chrome::search_field(
+                            ui,
+                            theme,
+                            egui::Id::new("cmd_history_search"),
+                            &mut self.query,
+                            "搜索历史命令…",
+                            search_w,
+                        );
                         if self.open {
                             search_resp.request_focus();
                         }

@@ -335,26 +335,44 @@ impl Theme {
         self.bg_window_color()
     }
 
-    /// 侧栏 uppercase 节标题、片段面板小标题
+    /// 侧栏 / 右 dock / 弹窗等面板标题字色（与 [`color_panel_header_title`] 一致，保留别名）
     #[inline]
     pub fn color_section_title(&self) -> Color32 {
-        if self.is_light_theme() {
-            self.text_primary()
+        self.color_panel_header_title()
+    }
+
+    /// 面板标题行文字（连接、新建会话、系统监控、命令片段等统一）
+    #[inline]
+    pub fn color_panel_header_title(&self) -> Color32 {
+        self.text_primary()
+    }
+
+    /// 表单字段标签、弹窗次要标签（须亮于 hint、暗于输入正文）
+    #[inline]
+    pub fn color_form_label(&self) -> Color32 {
+        if self.uses_solid_fg_palette() {
+            self.text_secondary()
         } else {
-            self.muted_secondary_text()
+            // 暗夜：勿用 fg_medium(50%)，否则与占位符灰度贴太近
+            self.fg_high_alpha(200)
         }
     }
 
-    /// 表单字段标签、弹窗次要标签
-    #[inline]
-    pub fn color_form_label(&self) -> Color32 {
-        self.text_secondary()
-    }
-
-    /// 表单说明、占位提示（输入框 hint，须明显弱于正文但仍可读）
+    /// 表单说明、占位提示（输入框 hint，须明显弱于 [`color_text_input_text`]）
     #[inline]
     pub fn color_form_hint(&self) -> Color32 {
-        self.muted_tertiary_text()
+        if self.uses_solid_fg_palette() {
+            self.fg_low_color()
+        } else {
+            // 暗夜：弱于正文，仍满足 hint 在输入框底上的可读对比
+            self.fg_high_alpha(88)
+        }
+    }
+
+    /// 居中弹窗主标题（与 [`color_panel_header_title`] 一致）
+    #[inline]
+    pub fn color_modal_title(&self) -> Color32 {
+        self.color_panel_header_title()
     }
 
     /// 连接列表前置图标
@@ -395,8 +413,40 @@ impl Theme {
         } else if self.uses_solid_fg_palette() {
             Color32::from_rgba_unmultiplied(255, 255, 255, 10)
         } else {
-            self.fg_high_alpha(4)
+            self.fg_high_alpha(8)
         }
+    }
+
+    /// 面板标题条底（侧栏 / 右 dock / 居中弹窗共用）
+    #[inline]
+    pub fn color_panel_header_band_fill(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 12)
+        } else if self.uses_solid_fg_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 10)
+        } else {
+            self.accent_alpha(36)
+        }
+    }
+
+    #[inline]
+    pub fn color_modal_title_band_fill(&self) -> Color32 {
+        self.color_panel_header_band_fill()
+    }
+
+    /// 标题条下分隔线（须强于 `color_tab_inactive_stroke`，暗夜勿用 7% 白边）
+    #[inline]
+    pub fn color_panel_header_divider(&self) -> Color32 {
+        if self.uses_solid_fg_palette() {
+            self.divider_stroke_color()
+        } else {
+            Color32::from_rgb(72, 72, 92)
+        }
+    }
+
+    #[inline]
+    pub fn color_modal_header_divider(&self) -> Color32 {
+        self.color_panel_header_divider()
     }
 
     /// 单行/多行输入框底色（相对面板略提亮，勿过亮以免描边显得粗）
@@ -417,20 +467,30 @@ impl Theme {
                 w.b().saturating_add(10).min(255),
             )
         } else {
-            self.fg_high_alpha(22)
+            // 暗夜：实色阶梯 #151520 → #222236，比 fg_high_alpha 叠层更可辨
+            Color32::from_rgb(34, 34, 52)
         }
     }
 
-    /// 输入框描边（§10.2：1px，走 `stroke_input_color`）
+    /// 输入框描边（§10.2：1px）
     #[inline]
     pub fn color_text_input_stroke(&self) -> Color32 {
-        self.stroke_input_color()
+        if self.uses_solid_fg_palette() {
+            self.stroke_input_color()
+        } else {
+            Color32::from_rgb(70, 70, 88)
+        }
     }
 
-    /// 输入框正文色
+    /// 输入框正文色（须明显亮于 [`color_form_hint`] / egui 占位符）
     #[inline]
     pub fn color_text_input_text(&self) -> Color32 {
-        self.text_primary()
+        if self.uses_solid_fg_palette() {
+            self.text_primary()
+        } else {
+            // 暗夜：满强度白，避免与 gray_out(hint) 的占位符融在一起
+            Color32::from_rgba_unmultiplied(255, 255, 255, 255)
+        }
     }
 
     /// 输入框 Frame（圆角、内边距；外框 1px，内层 TextEdit 须 `frame(false)` 避免双边）
@@ -438,7 +498,7 @@ impl Theme {
         let stroke = if focused {
             egui::Stroke::new(self.stroke_width_panel(), self.stroke_focus_color())
         } else {
-            self.stroke_input()
+            egui::Stroke::new(self.stroke_width_panel(), self.color_text_input_stroke())
         };
         egui::Frame::none()
             .fill(self.color_text_input_fill())
@@ -774,17 +834,42 @@ impl Theme {
         32.0
     }
 
-    /// 弹窗底栏按钮高（与状态栏行高一致）
+    /// 搜索框 / 表单单行输入统一字号（13px）
+    pub fn font_size_control_input(&self) -> f32 {
+        self.font_size_body()
+    }
+
+    /// 次要 / 工具按钮统一字号
+    pub fn font_size_control_btn(&self) -> f32 {
+        self.font_size_body()
+    }
+
+    /// 搜索框、表单单行、标题栏工具、弹窗底栏按钮统一高度
+    pub fn size_control_btn_h(&self) -> f32 {
+        28.0
+    }
+
+    /// 次要按钮最小宽度（取消、刷新等）
+    pub fn size_control_btn_min_w(&self) -> f32 {
+        56.0
+    }
+
+    /// 主按钮最小宽度（保存并连接等）
+    pub fn size_control_btn_min_w_primary(&self) -> f32 {
+        96.0
+    }
+
+    /// 弹窗底栏按钮高（与 [`size_control_btn_h`] 一致）
     pub fn size_modal_footer_btn_h(&self) -> f32 {
-        self.status_bar_height()
+        self.size_control_btn_h()
     }
 
     pub fn size_modal_footer_btn_min_w_secondary(&self) -> f32 {
-        72.0
+        self.size_control_btn_min_w()
     }
 
     pub fn size_modal_footer_btn_min_w_primary(&self) -> f32 {
-        104.0
+        self.size_control_btn_min_w_primary()
     }
 
     pub fn size_tab_min_w(&self) -> f32 {
@@ -831,7 +916,7 @@ impl Theme {
 
     /// 侧栏控件统一字号：搜索框、排序下拉
     pub fn font_size_sidebar_control(&self) -> f32 {
-        self.font_size_search_input()
+        self.font_size_control_input()
     }
 
     /// 侧栏 ＋/− 图标字号
@@ -876,7 +961,7 @@ impl Theme {
 
     /// 右 dock / 片段面板标题行：工具按钮与关闭 × 统一高度
     pub fn size_panel_header_control_h(&self) -> f32 {
-        self.size_sidebar_header_control_h() + 4.0
+        self.size_control_btn_h()
     }
 
     #[inline]
@@ -886,7 +971,7 @@ impl Theme {
 
     /// 标题行工具按钮字号（排序 / 新建等统一）
     pub fn font_size_panel_header_control(&self) -> f32 {
-        self.font_size_tool_btn()
+        self.font_size_control_btn()
     }
 
     /// 标题行工具按钮水平内边距
@@ -1066,16 +1151,21 @@ impl Theme {
             .inner_margin(self.margin_status_chip())
     }
 
-    /// 弹窗标题行底带
-    pub fn frame_modal_title_band(&self) -> egui::Frame {
+    /// 面板标题行底带（侧栏 / 右 dock / 弹窗共用内边距与底色）
+    pub fn frame_panel_header_band(&self) -> egui::Frame {
         egui::Frame::none()
-            .fill(self.color_subtle_inset_fill())
-            .stroke(egui::Stroke::new(1.0, self.color_tab_inactive_stroke()))
-            .rounding(egui::Rounding::same(self.radius_list_item()))
+            .fill(self.color_panel_header_band_fill())
+            .stroke(egui::Stroke::new(1.0, self.color_panel_header_divider()))
             .inner_margin(egui::Margin::symmetric(
-                self.spacing_search_input_x(),
-                self.spacing_search_input_y(),
+                self.spacing_panel_title_pad_x(),
+                self.spacing_panel_title_pad_y(),
             ))
+    }
+
+    /// 弹窗标题行底带（在通用条带上保留圆角）
+    pub fn frame_modal_title_band(&self) -> egui::Frame {
+        self.frame_panel_header_band()
+            .rounding(egui::Rounding::same(self.radius_list_item()))
     }
 
     /// 监控告警汇总块
@@ -1135,6 +1225,16 @@ impl Theme {
     /// 15px — 右 dock 大标题（监控、Git 等）
     pub fn font_size_dock_title(&self) -> f32 {
         15.0
+    }
+
+    /// 13px — 面板标题行（侧栏「连接」、右 dock、居中弹窗「新建会话」等，统一）
+    pub fn font_size_panel_header_title(&self) -> f32 {
+        self.font_size_body()
+    }
+
+    /// 居中弹窗主标题（与 [`font_size_panel_header_title`] 一致）
+    pub fn font_size_modal_title(&self) -> f32 {
+        self.font_size_panel_header_title()
     }
 
     pub fn font_size_title_bar(&self) -> f32 {
@@ -1203,7 +1303,7 @@ impl Theme {
         15.0
     }
     pub fn font_size_search_input(&self) -> f32 {
-        self.font_size_ui_control()
+        self.font_size_control_input()
     }
     pub fn font_size_menu_item(&self) -> f32 {
         self.font_size_ui_control()
@@ -1819,6 +1919,35 @@ mod theme_semantic_tests {
                 "{}: hint vs input fill contrast {:.2}",
                 theme.name,
                 contrast_ratio(hint, fill)
+            );
+        }
+    }
+
+    #[test]
+    fn all_builtin_themes_input_text_brighter_than_hint() {
+        for theme in [
+            Theme::dark(),
+            Theme::light(),
+            Theme::ocean(),
+            Theme::forest(),
+        ] {
+            let input = theme.color_text_input_text();
+            let hint = theme.color_form_hint();
+            let fill = theme.color_text_input_fill();
+            let input_cr = contrast_ratio(input, fill);
+            let hint_cr = contrast_ratio(hint, fill);
+            assert!(
+                input_cr > hint_cr,
+                "{}: input contrast {:.2} should exceed hint {:.2}",
+                theme.name,
+                input_cr,
+                hint_cr
+            );
+            assert!(
+                input_cr >= 4.5,
+                "{}: input text vs fill contrast {:.2}",
+                theme.name,
+                input_cr
             );
         }
     }

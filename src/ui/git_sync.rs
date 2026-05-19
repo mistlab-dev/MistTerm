@@ -227,60 +227,87 @@ impl GitSyncPanel {
                     label: "刷新",
                 }],
             );
-            if crate::ui::chrome::dock_panel_title_row(
-                ui,
-                theme,
-                |ui| {
-                    crate::ui::chrome::dock_title_row(
-                        ui,
-                        theme,
-                        crate::ui::icons::IconId::GitBranch,
-                        "Git 同步",
-                    );
-                },
-                "关闭 Git 同步",
-                trailing_w,
-                |ui, theme| {
-                    let closed = crate::ui::chrome::close_icon_button(ui, theme)
-                        .on_hover_text("关闭 Git 同步")
-                        .clicked();
-                    if crate::ui::chrome::panel_toolbar_icon_button(
-                        ui,
-                        theme,
-                        Some(crate::ui::icons::IconId::Refresh),
-                        "刷新",
-                    )
-                    .clicked()
-                    {
-                        self.refresh_status();
-                    }
-                    closed
-                },
-            ) {
+            let mut header_closed = false;
+            theme.frame_panel_header_band().show(ui, |ui| {
+                header_closed = crate::ui::chrome::dock_panel_title_row(
+                    ui,
+                    theme,
+                    |ui| {
+                        crate::ui::chrome::dock_title_row(
+                            ui,
+                            theme,
+                            crate::ui::icons::IconId::GitBranch,
+                            "Git 同步",
+                        );
+                    },
+                    "关闭 Git 同步",
+                    trailing_w,
+                    |ui, theme| {
+                        let closed = crate::ui::chrome::close_icon_button(ui, theme)
+                            .on_hover_text("关闭 Git 同步")
+                            .clicked();
+                        if crate::ui::chrome::panel_toolbar_icon_button(
+                            ui,
+                            theme,
+                            Some(crate::ui::icons::IconId::Refresh),
+                            "刷新",
+                        )
+                        .clicked()
+                        {
+                            self.refresh_status();
+                        }
+                        closed
+                    },
+                );
+            });
+            if header_closed {
                 *close_panel = true;
             }
-            ui.separator();
+            crate::ui::chrome::panel_header_divider(ui, theme);
 
             // 仓库路径设置
             ui.group(|ui| {
-                ui.label("仓库路径：");
+                crate::ui::chrome::form_field_label(ui, theme, "仓库路径");
+                let path_w = crate::ui::layout_util::finite_content_width_inset(
+                    ui,
+                    0.0,
+                    200.0,
+                    ui.available_width(),
+                );
+                crate::ui::chrome::form_singleline_field(
+                    ui,
+                    theme,
+                    egui::Id::new("git_sync_repo_path"),
+                    &mut self.repo_path,
+                    "/path/to/repo",
+                    path_w,
+                    false,
+                );
                 ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.repo_path)
-                            .desired_width(300.0)
-                            .hint_text(crate::ui::chrome::hint_rich(
-                                theme,
-                                "/path/to/repo",
-                                theme.font_size_normal(),
-                            )),
-                    );
-                    if ui.button("打开").clicked() && !self.repo_path.is_empty() {
+                    ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
+                    if crate::ui::chrome::panel_action_button_ex(
+                        ui,
+                        theme,
+                        "打开",
+                        !self.repo_path.is_empty(),
+                    )
+                    .clicked()
+                        && !self.repo_path.is_empty()
+                    {
                         self.open_repo();
                     }
-                    if ui.button("初始化").clicked() && !self.repo_path.is_empty() {
+                    if crate::ui::chrome::panel_action_button_ex(
+                        ui,
+                        theme,
+                        "初始化",
+                        !self.repo_path.is_empty(),
+                    )
+                    .clicked()
+                        && !self.repo_path.is_empty()
+                    {
                         self.init_repo();
                     }
-                    if ui.button("克隆...").clicked() {
+                    if crate::ui::chrome::panel_action_button(ui, theme, "克隆…").clicked() {
                         self.show_clone_dialog = true;
                     }
                 });
@@ -382,18 +409,19 @@ impl GitSyncPanel {
 
                 // 提交信息输入
                 ui.group(|ui| {
-                    ui.label(egui::RichText::new("提交信息").strong());
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.commit_message)
-                            .desired_width(layout_util::finite_content_width(ui))
-                            .hint_text(crate::ui::chrome::hint_rich(
-                                theme,
-                                "输入提交信息...",
-                                theme.font_size_normal(),
-                            )),
+                    crate::ui::chrome::form_field_label(ui, theme, "提交信息");
+                    let msg_w = layout_util::finite_content_width_inset(ui, 0.0, 200.0, ui.available_width());
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        egui::Id::new("git_sync_commit_msg"),
+                        &mut self.commit_message,
+                        "输入提交信息…",
+                        msg_w,
+                        false,
                     );
                     ui.horizontal(|ui| {
-                        if ui.button("暂存全部").clicked() {
+                        if crate::ui::chrome::panel_action_button(ui, theme, "暂存全部").clicked() {
                             if let Some(r) = self.repo.as_ref() {
                                 if let Err(e) = r.add_all() {
                                     self.error_message = format!("暂存失败：{}", e);
@@ -462,7 +490,7 @@ impl GitSyncPanel {
                     ui.add_space(theme.spacing_list_item_x());
                     ui.label("请输入仓库路径或克隆一个新仓库");
                     ui.add_space(theme.spacing_list_item_x());
-                    if ui.button("克隆仓库...").clicked() {
+                    if crate::ui::chrome::panel_action_button(ui, theme, "克隆仓库…").clicked() {
                         self.show_clone_dialog = true;
                     }
                 });
@@ -492,26 +520,28 @@ impl GitSyncPanel {
                                 close_via_header = true;
                             }
                             ui.set_min_width(layout_util::finite_content_width(ui));
+                            let field_w =
+                                layout_util::finite_content_width_inset(ui, 0.0, 280.0, ui.available_width());
                             crate::ui::chrome::form_field_label(ui, theme, "克隆 URL");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.clone_url)
-                                    .desired_width(layout_util::finite_content_width(ui))
-                                    .hint_text(crate::ui::chrome::hint_rich(
-                                        theme,
-                                        "https://github.com/user/repo.git",
-                                        theme.font_size_normal(),
-                                    )),
+                            crate::ui::chrome::form_singleline_field(
+                                ui,
+                                theme,
+                                egui::Id::new("git_clone_url"),
+                                &mut self.clone_url,
+                                "https://github.com/user/repo.git",
+                                field_w,
+                                false,
                             );
                             ui.add_space(theme.spacing_md());
                             crate::ui::chrome::form_field_label(ui, theme, "目标路径");
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.clone_path)
-                                    .desired_width(layout_util::finite_content_width(ui))
-                                    .hint_text(crate::ui::chrome::hint_rich(
-                                        theme,
-                                        "/path/to/clone",
-                                        theme.font_size_normal(),
-                                    )),
+                            crate::ui::chrome::form_singleline_field(
+                                ui,
+                                theme,
+                                egui::Id::new("git_clone_path"),
+                                &mut self.clone_path,
+                                "/path/to/clone",
+                                field_w,
+                                false,
                             );
                             ui.add_space(theme.spacing_lg());
                             ui.horizontal(|ui| {

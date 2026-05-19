@@ -84,7 +84,7 @@ impl SshConfigImportDialog {
             .show(ctx, |ui| {
                 chrome::modal_content_frame(theme).show(ui, |ui| {
                     let mut close_hdr = false;
-                    if chrome::modal_header(ui, theme, "SSH Config 导入", theme.font_size_fragment_dialog_body()) {
+                    if chrome::modal_header(ui, theme, "SSH Config 导入", chrome::modal_title_font_size(theme)) {
                         close_hdr = true;
                     }
                     ui.label(
@@ -161,19 +161,19 @@ impl SshConfigImportDialog {
                         });
                     if total_pages > 1 {
                         ui.horizontal(|ui| {
-                            if ui
-                                .add_enabled(page > 0, egui::Button::new("上一页"))
+                            if chrome::panel_action_button_ex(ui, theme, "上一页", page > 0)
                                 .clicked()
                             {
                                 self.page = page.saturating_sub(1);
                             }
                             ui.label(format!("第 {}/{} 页", page + 1, total_pages));
-                            if ui
-                                .add_enabled(
-                                    page + 1 < total_pages,
-                                    egui::Button::new("下一页"),
-                                )
-                                .clicked()
+                            if chrome::panel_action_button_ex(
+                                ui,
+                                theme,
+                                "下一页",
+                                page + 1 < total_pages,
+                            )
+                            .clicked()
                             {
                                 self.page = page + 1;
                             }

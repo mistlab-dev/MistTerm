@@ -41,6 +41,27 @@
 - [ ] **晨曦**浅色：灰边不与 `#f5f5f5` 融在一起；**Retina / 125% 缩放**下小字不发虚
 - [ ] 切换主题后整窗 **一次重绘**，图标图集与 `pixels_per_point` 一致
 
+## 控件样式（`chrome.rs` 统一入口）
+
+| 类型 | 使用 | 勿用 |
+|------|------|------|
+| 表单标签 | `form_field_label` / `rich_form_label` | 裸 `ui.label` / `.small()` |
+| 单行输入 | `form_singleline_field` | 裸 `TextEdit::singleline` |
+| 多行输入 | `form_multiline_field` | 裸 `TextEdit::multiline` |
+| 搜索行 | `panel_search_row` / `search_field` | 裸搜索框 |
+| 菜单项 | `popup_menu_button` / `menu_item_label_accel` | 裸 `ui.button` |
+| 数字 | `form_drag_value_field` + `DragValue` | 裸 `DragValue` |
+| 筛选 | `filter_chip_row` / `filter_chip_row_with_sort` | 裸 `Button` |
+| 排序 | `panel_sort_chip` | 标题栏大灰钮 |
+| 标题新建 | `panel_header_new_button` | `panel_toolbar_primary` 宽条 |
+| 面板操作 | `panel_action_button` / `panel_action_primary_button` | `ui.button` |
+| 弹窗底栏 | `modal_primary_button` / `modal_secondary_button` | 裸 `Button` |
+| 弹窗标题 | `modal_header` | 系统标题栏 |
+
+**已对齐**：连接侧栏、命令片段、凭证、SFTP、Git、云同步、片段库、审计/会话日志、偏好设置、变量弹窗、顶栏/右键/Tab 菜单、命令历史浮层、SSH 导入分页、快速片段选择器。
+
+**有意保留裸控件**：终端仿真区 `TextEdit::multiline`（只读缓冲）、命令历史列表行 `row_button`（选中高亮列表项）。
+
 ## 功能抽测
 
 - [ ] 终端 Delete/Backspace（mac 与 Win 行为符合平台习惯）

@@ -301,53 +301,44 @@ impl MonitorPanel {
                             Some(alerts.len())
                         }
                     });
-                    egui::Frame::none()
-                        .inner_margin(egui::Margin::symmetric(
-                            theme.spacing_panel_title_pad_x(),
-                            theme.spacing_panel_title_pad_y(),
-                        ))
-                        .show(ui, |ui| {
+                    theme.frame_panel_header_band().show(ui, |ui| {
                             layout_util::set_width_to_available(ui);
-                            let trailing_w =
-                                crate::ui::chrome::panel_header_trailing_width(ui, theme, &[]);
-                            if crate::ui::chrome::dock_panel_title_row(
-                                ui,
-                                theme,
-                                |ui| {
-                                    ui.horizontal(|ui| {
-                                        crate::ui::chrome::dock_title_row(
+                            ui.horizontal(|ui| {
+                                ui.horizontal(|ui| {
+                                    crate::ui::chrome::panel_header_title_leading(
+                                        ui,
+                                        theme,
+                                        crate::ui::icons::IconId::Monitor,
+                                        "系统监控",
+                                    );
+                                    if let Some(n) = alert_count {
+                                        crate::ui::icons::icon_label_row(
                                             ui,
-                                            theme,
-                                            crate::ui::icons::IconId::Monitor,
-                                            "系统监控",
+                                            crate::ui::icons::IconId::Warning,
+                                            &format!("{n} 项告警"),
+                                            theme.font_size_medium(),
+                                            5.0,
+                                            |t| {
+                                                t.size(theme.font_size_medium())
+                                                    .color(theme.red_color())
+                                            },
                                         );
-                                        if let Some(n) = alert_count {
-                                            crate::ui::icons::icon_label_row(
-                                                ui,
-                                                crate::ui::icons::IconId::Warning,
-                                                &format!("{n} 项告警"),
-                                                theme.font_size_medium(),
-                                                5.0,
-                                                |t| {
-                                                    t.size(theme.font_size_medium())
-                                                        .color(theme.red_color())
-                                                },
-                                            );
+                                    }
+                                });
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if crate::ui::chrome::close_icon_button(ui, theme)
+                                            .on_hover_text("隐藏侧栏 · 也可用底部「监控」切换")
+                                            .clicked()
+                                        {
+                                            *open = false;
                                         }
-                                    });
-                                },
-                                "隐藏侧栏 · 也可用底部「监控」切换",
-                                trailing_w,
-                                |ui, theme| {
-                                    crate::ui::chrome::close_icon_button(ui, theme)
-                                        .on_hover_text("隐藏侧栏 · 也可用底部「监控」切换")
-                                        .clicked()
-                                },
-                            ) {
-                                *open = false;
-                            }
+                                    },
+                                );
+                            });
                         });
-                    ui.separator();
+                    crate::ui::chrome::panel_header_divider(ui, theme);
 
                     let scroll_h = ui.available_height().max(120.0);
                     let prev_extreme = ui.visuals().extreme_bg_color;

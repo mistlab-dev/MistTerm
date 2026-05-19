@@ -117,13 +117,9 @@ impl FragmentLibraryState {
                 );
                 ui.set_min_width(fill_w);
                 ui.horizontal(|ui| {
-                    if crate::ui::chrome::panel_toolbar_icon_button(
-                        ui,
-                        theme,
-                        Some(crate::ui::icons::IconId::Plus),
-                        "新建",
-                    )
-                    .clicked()
+                    if crate::ui::chrome::panel_header_new_button(ui, theme)
+                        .on_hover_text("新建片段")
+                        .clicked()
                     {
                         self.clear_form();
                         self.focus_title_next_frame = true;
@@ -131,20 +127,19 @@ impl FragmentLibraryState {
                             "新建片段：请在右侧填写标题、分类与命令，再点「保存」".to_string();
                     }
                     ui.separator();
-                    ui.label(egui::RichText::new("搜索").color(theme.text_secondary()));
+                    crate::ui::chrome::form_field_label(ui, theme, "搜索");
                     let search_w = finite_avail_minus(ui, 10.0, 140.0, 280.0);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.search_query)
-                            .desired_width(search_w)
-                            .hint_text(crate::ui::chrome::hint_rich(
-                                theme,
-                                "标题 / 命令 / 标签",
-                                theme.font_size_normal(),
-                            )),
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        egui::Id::new("fragment_lib_search"),
+                        &mut self.search_query,
+                        "标题 / 命令 / 标签",
+                        search_w,
+                        false,
                     );
                     ui.separator();
-                    if ui
-                        .button("导出 JSON…")
+                    if crate::ui::chrome::panel_action_button(ui, theme, "导出 JSON…")
                         .on_hover_text("将当前片段库保存为用户选择的任意路径")
                         .clicked()
                     {
@@ -168,8 +163,7 @@ impl FragmentLibraryState {
                             }
                         }
                     }
-                    if ui
-                        .button("导入 JSON…")
+                    if crate::ui::chrome::panel_action_button(ui, theme, "导入 JSON…")
                         .on_hover_text("从文件合并或替换当前库；合并时相同 id 的条目保留本地")
                         .clicked()
                     {
@@ -310,52 +304,53 @@ impl FragmentLibraryState {
                             .show(ui, |ui| {
                                 let edit_w = finite_content_width_inset(ui, 12.0, 360.0, 840.0);
 
-                                ui.label("标题");
-                                let title_edit = egui::TextEdit::singleline(&mut self.form_title)
-                                    .id(egui::Id::new("fragment_library_form_title"))
-                                    .hint_text(crate::ui::chrome::hint_rich(
-                                        theme,
-                                        "例如：查看磁盘占用",
-                                        theme.font_size_normal(),
-                                    ))
-                                    .desired_width(edit_w);
-                                let title_resp = ui.add(title_edit);
+                                crate::ui::chrome::form_field_label(ui, theme, "标题");
+                                let title_resp = crate::ui::chrome::form_singleline_field(
+                                    ui,
+                                    theme,
+                                    egui::Id::new("fragment_library_form_title"),
+                                    &mut self.form_title,
+                                    "例如：查看磁盘占用",
+                                    edit_w,
+                                    false,
+                                );
                                 if self.focus_title_next_frame {
                                     title_resp.request_focus();
                                     self.focus_title_next_frame = false;
                                 }
-                                ui.label("分类");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.form_category)
-                                        .hint_text(crate::ui::chrome::hint_rich(
-                                            theme,
-                                            "例如：运维 · 主机",
-                                            theme.font_size_normal(),
-                                        ))
-                                        .desired_width(edit_w),
+                                crate::ui::chrome::form_field_label(ui, theme, "分类");
+                                crate::ui::chrome::form_singleline_field(
+                                    ui,
+                                    theme,
+                                    egui::Id::new("fragment_library_form_category"),
+                                    &mut self.form_category,
+                                    "例如：运维 · 主机",
+                                    edit_w,
+                                    false,
                                 );
-                                ui.label("标签（逗号分隔）");
-                                ui.add(
-                                    egui::TextEdit::singleline(&mut self.form_tags)
-                                        .hint_text(crate::ui::chrome::hint_rich(
-                                            theme,
-                                            "prod, nginx",
-                                            theme.font_size_normal(),
-                                        ))
-                                        .desired_width(edit_w),
+                                crate::ui::chrome::form_field_label(ui, theme, "标签（逗号分隔）");
+                                crate::ui::chrome::form_singleline_field(
+                                    ui,
+                                    theme,
+                                    egui::Id::new("fragment_library_form_tags"),
+                                    &mut self.form_tags,
+                                    "prod, nginx",
+                                    edit_w,
+                                    false,
                                 );
-                                ui.label(
-                                    "命令（`<host>` 等会话占位符；`{{ md5(a) }}` 等见 Rhai 表达式，变量名须为合法标识符）",
+                                crate::ui::chrome::form_field_label(
+                                    ui,
+                                    theme,
+                                    "命令（`<host>` 占位符；`{{ md5(a) }}` 见 Rhai）",
                                 );
-                                ui.add(
-                                    egui::TextEdit::multiline(&mut self.form_command)
-                                        .hint_text(crate::ui::chrome::hint_rich(
-                                            theme,
-                                            "例如：df -h 或 systemctl status <service>",
-                                            theme.font_size_normal(),
-                                        ))
-                                        .desired_width(edit_w)
-                                        .desired_rows(5),
+                                crate::ui::chrome::form_multiline_field(
+                                    ui,
+                                    theme,
+                                    egui::Id::new("fragment_library_form_command"),
+                                    &mut self.form_command,
+                                    edit_w,
+                                    5,
+                                    false,
                                 );
 
                                 ui.label(egui::RichText::new("变量定义").strong());
@@ -366,19 +361,36 @@ impl FragmentLibraryState {
                                     ui.push_id(idx, |ui| {
                                     ui.group(|ui| {
                                         ui.set_width(edit_w + 8.0);
-                                        ui.label("名称");
-                                        ui.add(
-                                            egui::TextEdit::singleline(name).desired_width(edit_w),
+                                        crate::ui::chrome::form_field_label(ui, theme, "名称");
+                                        crate::ui::chrome::form_singleline_field(
+                                            ui,
+                                            theme,
+                                            egui::Id::new(("frag_var_name", idx)),
+                                            name,
+                                            "",
+                                            edit_w,
+                                            false,
                                         );
-                                        ui.label("描述");
-                                        ui.add(
-                                            egui::TextEdit::singleline(desc).desired_width(edit_w),
+                                        crate::ui::chrome::form_field_label(ui, theme, "描述");
+                                        crate::ui::chrome::form_singleline_field(
+                                            ui,
+                                            theme,
+                                            egui::Id::new(("frag_var_desc", idx)),
+                                            desc,
+                                            "",
+                                            edit_w,
+                                            false,
                                         );
                                         ui.horizontal(|ui| {
-                                            ui.label("默认");
-                                            ui.add(
-                                                egui::TextEdit::singleline(default)
-                                                    .desired_width((edit_w - 56.0).max(72.0)),
+                                            crate::ui::chrome::form_field_label(ui, theme, "默认");
+                                            crate::ui::chrome::form_singleline_field(
+                                                ui,
+                                                theme,
+                                                egui::Id::new(("frag_var_default", idx)),
+                                                default,
+                                                "",
+                                                (edit_w - 56.0).max(72.0),
+                                                false,
                                             );
                                             if crate::ui::chrome::icon_button(
                                                 ui,
@@ -397,13 +409,8 @@ impl FragmentLibraryState {
                                 if let Some(idx) = var_to_remove {
                                     self.form_variables.remove(idx);
                                 }
-                                if crate::ui::chrome::panel_toolbar_icon_button(
-                                    ui,
-                                    theme,
-                                    Some(crate::ui::icons::IconId::Plus),
-                                    "添加变量",
-                                )
-                                .clicked()
+                                if crate::ui::chrome::panel_action_button(ui, theme, "添加变量")
+                                    .clicked()
                                 {
                                     self.form_variables.push((String::new(), String::new(), String::new()));
                                 }
@@ -452,7 +459,8 @@ impl FragmentLibraryState {
                                 });
 
                                 ui.horizontal(|ui| {
-                                    if ui.button("保存").clicked()
+                                    if crate::ui::chrome::panel_action_primary_button(ui, theme, "保存")
+                                        .clicked()
                                         && !self.form_title.trim().is_empty()
                                         && !self.form_category.trim().is_empty()
                                     {
@@ -504,7 +512,7 @@ impl FragmentLibraryState {
                                             }
                                         }
                                     }
-                                    if ui.button("删除").clicked() {
+                                    if crate::ui::chrome::panel_action_button(ui, theme, "删除").clicked() {
                                         if let Some(id) = self.editing_id.clone() {
                                             if manager.remove_fragment(&id)
                                                 && manager.save(fragment_cfg_path).is_ok()

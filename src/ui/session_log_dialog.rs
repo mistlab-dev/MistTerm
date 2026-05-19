@@ -115,7 +115,7 @@ impl SessionLogDialog {
             .show(ctx, |ui| {
                 chrome::modal_content_frame(theme).show(ui, |ui| {
                     let title = format!("会话日志 — {}", self.session_name);
-                    if chrome::modal_header(ui, theme, &title, theme.font_size_fragment_dialog_body()) {
+                    if chrome::modal_header(ui, theme, &title, chrome::modal_title_font_size(theme)) {
                         should_close = true;
                     }
                     ui.label(
@@ -125,18 +125,18 @@ impl SessionLogDialog {
                         .size(theme.font_size_small())
                         .color(theme.text_tertiary()),
                     );
-                    ui.horizontal(|ui| {
-                        ui.label("搜索");
-                        if ui
-                            .text_edit_singleline(&mut self.search_query)
-                            .changed()
-                        {
-                            // filter only affects display
-                        }
-                    });
+                    let search_w = layout_util::finite_content_width(ui);
+                    crate::ui::chrome::search_field(
+                        ui,
+                        theme,
+                        egui::Id::new("session_log_search"),
+                        &mut self.search_query,
+                        "过滤日志内容…",
+                        search_w,
+                    );
                     if !self.log_files.is_empty() {
                         ui.horizontal(|ui| {
-                            ui.label("日期：");
+                            crate::ui::chrome::form_field_label(ui, theme, "日期");
                             let names: Vec<String> = self
                                 .log_files
                                 .iter()
@@ -160,7 +160,7 @@ impl SessionLogDialog {
                                         }
                                     }
                                 });
-                            if ui.button("刷新").clicked() {
+                            if chrome::panel_action_button(ui, theme, "刷新").clicked() {
                                 self.log_files =
                                     list_session_log_files(&settings.base_dir, &self.session_id);
                                 reload = true;

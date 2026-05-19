@@ -1258,7 +1258,12 @@ impl MistTermApp {
     }
 
     fn modal_header(ui: &mut egui::Ui, theme: &crate::ui::theme::Theme, title: &str, should_close: &mut bool) {
-        if crate::ui::chrome::modal_header(ui, theme, title, theme.font_size_fragment_dialog_body()) {
+        if crate::ui::chrome::modal_header(
+            ui,
+            theme,
+            title,
+            crate::ui::chrome::modal_title_font_size(theme),
+        ) {
             *should_close = true;
         }
     }
@@ -1928,32 +1933,24 @@ impl MistTermApp {
         ) {
             self.fragment_filter_category = "全部".to_string();
         }
-        let title_style = theme.color_section_title();
         ui.set_max_width(panel_w);
 
-        // SPEC §3.2 / §5：面板标题区 padding 9px 10px
-        egui::Frame::none()
-            .inner_margin(egui::Margin::symmetric(
-                theme.spacing_panel_title_pad_x(),
-                theme.spacing_panel_title_pad_y(),
-            ))
-            .show(ui, |ui| {
+        let sort_icon = crate::ui::icons::fragment_sort_icon(self.fragment_sort_by);
+        let sort_label = match self.fragment_sort_by {
+            SortBy::UsageCount => "次数",
+            SortBy::SuccessRate => "成功率",
+            SortBy::LastUsed => "最近",
+            SortBy::Name => "名称",
+        };
+
+        theme.frame_panel_header_band().show(ui, |ui| {
                 ui.set_max_width(panel_w);
-                let sort_icon = crate::ui::icons::fragment_sort_icon(self.fragment_sort_by);
-                let sort_label = match self.fragment_sort_by {
-                    SortBy::UsageCount => "次数",
-                    SortBy::SuccessRate => "成功率",
-                    SortBy::LastUsed => "最近",
-                    SortBy::Name => "名称",
-                };
                 let header = crate::ui::chrome::dock_panel_title_bar(
                     ui,
                     theme,
                     "命令片段",
-                    title_style,
-                    sort_icon,
-                    sort_label,
-                    "新建",
+                    theme.color_panel_header_title(),
+                    "打开片段库：自建命令、占位符与变量",
                     "关闭命令片段侧栏",
                 );
                 if header.closed {
@@ -1962,44 +1959,44 @@ impl MistTermApp {
                 if header.new_fragment {
                     self.fragment_library.open = true;
                 }
-                if header.cycle_sort {
-                    self.fragment_sort_by = match self.fragment_sort_by {
-                        SortBy::UsageCount => SortBy::SuccessRate,
-                        SortBy::SuccessRate => SortBy::LastUsed,
-                        SortBy::LastUsed => SortBy::Name,
-                        SortBy::Name => SortBy::UsageCount,
-                    };
-                    self.fragment_manager.sort(self.fragment_sort_by);
-                }
             });
-        ui.separator();
+        crate::ui::chrome::panel_header_divider(ui, theme);
 
-        // SPEC §3.3：搜索框区域 padding 上 4、左右沿用面板 8、下 6
+        // SPEC §3.3：搜索框区域 padding 上 4、左右与侧栏搜索一致，下 6
         ui.add_space(theme.spacing_sm());
-        let field_w = ui.available_width().max(72.0);
-        crate::ui::chrome::form_singleline_field(
+        crate::ui::chrome::panel_search_row(
             ui,
             theme,
             Self::id_fragment_panel_search(),
             &mut self.fragment_search_query,
             "搜索片段…",
-            field_w,
-            false,
+            Some(panel_w),
         );
         ui.add_space(theme.spacing_panel_gap());
 
-        // §5.3：常用 │ Docker │ K8s │ 全部
-        if let Some(picked) = crate::ui::chrome::filter_chip_row(
+        // §5.3：分类筛选 + 右侧排序（与芯片同排，不再单独占「片段列表」行）
+        let chip_row = crate::ui::chrome::filter_chip_row_with_sort(
             ui,
             theme,
             &["常用", "Docker", "K8s", "全部"],
             self.fragment_filter_category.as_str(),
             panel_w,
-        ) {
+            sort_icon,
+            sort_label,
+        );
+        if let Some(picked) = chip_row.picked {
             self.fragment_filter_category = picked;
         }
-
-        ui.add_space(theme.spacing_md());
+        if chip_row.cycle_sort {
+            self.fragment_sort_by = match self.fragment_sort_by {
+                SortBy::UsageCount => SortBy::SuccessRate,
+                SortBy::SuccessRate => SortBy::LastUsed,
+                SortBy::LastUsed => SortBy::Name,
+                SortBy::Name => SortBy::UsageCount,
+            };
+            self.fragment_manager.sort(self.fragment_sort_by);
+        }
+        ui.add_space(theme.spacing_panel_gap());
 
         let search_lower = self.fragment_search_query.to_lowercase();
         let search_match = |f: &FragmentStats| {
@@ -2434,7 +2431,7 @@ impl MistTermApp {
                 );
                 status_ctx.context_menu(|ui| {
                     crate::ui::chrome::apply_context_menu_style(ui, &theme);
-                    if ui.button("导入 SSH 配置…").clicked() {
+                    if crate::ui::chrome::popup_menu_button(ui, &theme, "导入 SSH 配置…").clicked() {
                         self.open_ssh_import_dialog();
                     }
                 });
@@ -3196,37 +3193,38 @@ mod menu {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui
-                    .button(format!(
-                        "关闭标签 {}",
-                        crate::platform::accel("W")
-                    ))
-                    .clicked()
+                if crate::ui::chrome::popup_menu_button(
+                    ui,
+                    theme,
+                    &format!("关闭标签 {}", crate::platform::accel("W")),
+                )
+                .clicked()
                 {
                     self.request_close_active_tab();
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("断开 SSH（保留输出）").clicked() {
+                if crate::ui::chrome::popup_menu_button(ui, theme, "断开 SSH（保留输出）").clicked()
+                {
                     self.disconnect_ssh_keep_buffer_active();
                     ui.close_menu();
                 }
-                if ui.button("重连当前标签").clicked() {
+                if crate::ui::chrome::popup_menu_button(ui, theme, "重连当前标签").clicked() {
                     self.reconnect_active_tab();
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui
-                    .button(format!(
-                        "偏好设置 {}",
-                        crate::platform::accel(",")
-                    ))
-                    .clicked()
+                if crate::ui::chrome::popup_menu_button(
+                    ui,
+                    theme,
+                    &format!("偏好设置 {}", crate::platform::accel(",")),
+                )
+                .clicked()
                 {
                     self.show_preferences_dialog = true;
                     ui.close_menu();
                 }
-                if ui.button("退出").clicked() {
+                if crate::ui::chrome::popup_menu_button(ui, theme, "退出").clicked() {
                     frame.close();
                     ui.close_menu();
                 }
@@ -3269,13 +3267,14 @@ mod menu {
             });
             egui::menu::menu_button(ui, label("视图"), |ui| {
                 crate::ui::chrome::apply_menu_popup_style(ui, theme);
-                if ui
-                    .button(
-                        self.sidebar_collapsed
-                            .then_some("展开侧边栏")
-                            .unwrap_or("折叠侧边栏"),
-                    )
-                    .clicked()
+                if crate::ui::chrome::popup_menu_button(
+                    ui,
+                    theme,
+                    self.sidebar_collapsed
+                        .then_some("展开侧边栏")
+                        .unwrap_or("折叠侧边栏"),
+                )
+                .clicked()
                 {
                     self.sidebar_collapsed = !self.sidebar_collapsed;
                     if self.sidebar_collapsed {
@@ -3286,13 +3285,16 @@ mod menu {
                     ui.close_menu();
                 }
                 let maximized = frame.info().window_info.maximized;
-                if ui
-                    .button(if maximized {
+                if crate::ui::chrome::popup_menu_button(
+                    ui,
+                    theme,
+                    if maximized {
                         "还原窗口大小"
                     } else {
                         "最大化窗口"
-                    })
-                    .clicked()
+                    },
+                )
+                .clicked()
                 {
                     frame.set_maximized(!maximized);
                     ui.close_menu();
@@ -3355,7 +3357,7 @@ mod menu {
             });
             egui::menu::menu_button(ui, label("工具"), |ui| {
                 crate::ui::chrome::apply_menu_popup_style(ui, theme);
-                if ui.button("命令片段库…").clicked() {
+                if crate::ui::chrome::popup_menu_button(ui, theme, "命令片段库…").clicked() {
                     self.fragment_library.open = true;
                     ui.close_menu();
                 }
@@ -3382,45 +3384,49 @@ mod menu {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("凭证管理").clicked() {
+                if crate::ui::chrome::popup_menu_button(ui, theme, "凭证管理").clicked() {
                     if self.ensure_right_dock_allowed_or_warn(ctx) {
                         self.credential_panel.open = true;
                     }
                     ui.close_menu();
                 }
-                if ui.button("云端同步").clicked() {
+                if crate::ui::chrome::popup_menu_button(ui, theme, "云端同步").clicked() {
                     if self.ensure_right_dock_allowed_or_warn(ctx) {
                         self.cloud_sync_panel.open = true;
                     }
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("浏览会话日志…").clicked() {
+                if crate::ui::chrome::popup_menu_button(ui, theme, "浏览会话日志…").clicked() {
                     self.menu_open_session_log_browser();
                     ui.close_menu();
                 }
             });
             egui::menu::menu_button(ui, label("帮助"), |ui| {
                 crate::ui::chrome::apply_menu_popup_style(ui, theme);
-                if ui.button("快速入门…").clicked() {
+                if crate::ui::chrome::popup_menu_button(ui, theme, "快速入门…").clicked() {
                     self.help_docs_dialog.open_page(HelpPage::QuickStart);
                     ui.close_menu();
                 }
-                if ui.button("说明文档（系统打开）").clicked() {
+                if crate::ui::chrome::popup_menu_button(ui, theme, "说明文档（系统打开）").clicked()
+                {
                     match HelpDocsDialog::open_markdown_in_system("product/FUNCTIONAL_SPEC.md") {
                         Ok(()) => self.status_message = "已在系统默认应用中打开说明文档".to_string(),
                         Err(e) => self.status_message = e,
                     }
                     ui.close_menu();
                 }
-                if ui.button("键盘快捷键…").clicked() {
+                if crate::ui::chrome::popup_menu_button(ui, theme, "键盘快捷键…").clicked() {
                     self.help_docs_dialog.open_page(HelpPage::Shortcuts);
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui
-                    .button(crate::platform::reveal_docs_folder_menu_action_label())
-                    .clicked()
+                if crate::ui::chrome::popup_menu_button(
+                    ui,
+                    theme,
+                    crate::platform::reveal_docs_folder_menu_action_label(),
+                )
+                .clicked()
                 {
                     if crate::platform::docs::reveal_docs_directory() {
                         self.status_message =
@@ -3431,7 +3437,7 @@ mod menu {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("关于 Mist").clicked() {
+                if crate::ui::chrome::popup_menu_button(ui, theme, "关于 Mist").clicked() {
                     self.show_about_dialog = true;
                     ui.close_menu();
                 }

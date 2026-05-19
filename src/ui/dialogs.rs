@@ -66,57 +66,72 @@ impl NewSessionDialog {
                     ) {
                         close_via_header = true;
                     }
-                    ui.label(crate::ui::chrome::rich_form_label(theme, "会话名称"));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.name)
-                            .desired_width(layout_util::finite_content_width(ui))
-                            .text_color(theme.text_primary()),
+                    let form_w = layout_util::finite_content_width_inset(ui, 0.0, 280.0, ui.available_width());
+                    crate::ui::chrome::form_field_label(ui, theme, "会话名称");
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        egui::Id::new("legacy_new_session_name"),
+                        &mut self.name,
+                        "",
+                        form_w,
+                        false,
                     );
 
                     ui.separator();
 
-                    ui.label(
-                        egui::RichText::new("主机地址").color(theme.text_secondary()),
-                    );
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.host)
-                            .desired_width(layout_util::finite_content_width(ui))
-                            .text_color(theme.text_primary()),
+                    crate::ui::chrome::form_field_label(ui, theme, "主机地址");
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        egui::Id::new("legacy_new_session_host"),
+                        &mut self.host,
+                        "IP 或域名",
+                        form_w,
+                        false,
                     );
 
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("端口").color(theme.text_secondary()));
-                        ui.add(egui::DragValue::new(&mut self.port).speed(1.0));
+                        crate::ui::chrome::form_field_label(ui, theme, "端口");
+                        crate::ui::chrome::form_drag_value_field(
+                            ui,
+                            theme,
+                            egui::Id::new("legacy_new_session_port"),
+                            |ui| ui.add(egui::DragValue::new(&mut self.port).speed(1.0)),
+                        );
                     });
 
                     ui.separator();
 
-                    ui.label(
-                        egui::RichText::new("用户名").color(theme.text_secondary()),
-                    );
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.username)
-                            .desired_width(layout_util::finite_content_width(ui))
-                            .text_color(theme.text_primary()),
+                    crate::ui::chrome::form_field_label(ui, theme, "用户名");
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        egui::Id::new("legacy_new_session_user"),
+                        &mut self.username,
+                        "如 root",
+                        form_w,
+                        false,
                     );
 
-                    ui.label(egui::RichText::new("密码").color(theme.text_secondary()));
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.password)
-                            .password(true)
-                            .desired_width(layout_util::finite_content_width(ui))
-                            .text_color(theme.text_primary()),
+                    crate::ui::chrome::form_field_label(ui, theme, "密码");
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        egui::Id::new("legacy_new_session_pass"),
+                        &mut self.password,
+                        "",
+                        form_w,
+                        true,
                     );
 
                     ui.separator();
 
-                    ui.horizontal(|ui| {
-                        if ui.button("取消").clicked() {
+                    crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
+                        if crate::ui::chrome::modal_primary_button(ui, th, "创建").clicked() {
                             dismiss = true;
                         }
-
-                        if ui.button("创建").clicked() {
-                            // 独立组件未接入 SessionManager；请使用主窗口「文件 → 新建会话」
+                        if crate::ui::chrome::modal_secondary_button(ui, th, "取消").clicked() {
                             dismiss = true;
                         }
                     });

@@ -112,7 +112,7 @@ impl AuditLogDialog {
             .frame(chrome::modal_window_frame(theme))
             .show(ctx, |ui| {
                 chrome::modal_content_frame(theme).show(ui, |ui| {
-                    if chrome::modal_header(ui, theme, "审计日志", theme.font_size_body()) {
+                    if chrome::modal_header(ui, theme, "审计日志", chrome::modal_title_font_size(theme)) {
                         should_close = true;
                     }
                     ui.label(
@@ -121,7 +121,7 @@ impl AuditLogDialog {
                             .color(theme.color_form_hint()),
                     );
                     ui.horizontal(|ui| {
-                        ui.label("日志文件");
+                        chrome::form_field_label(ui, theme, "日志文件");
                         let prev = self.selected_file;
                         egui::ComboBox::from_id_source("audit_log_file_pick")
                             .selected_text(
@@ -147,24 +147,40 @@ impl AuditLogDialog {
                         if self.selected_file != prev {
                             reload = true;
                         }
-                        if ui.button("刷新").clicked() {
+                        if chrome::panel_action_button(ui, theme, "刷新").clicked() {
                             self.log_files = list_audit_log_files(&settings.file_dir);
                             reload = true;
                         }
                     });
                     ui.horizontal(|ui| {
-                        ui.label("搜索");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.search_query)
-                                .hint_text("action / host / resource…")
-                                .desired_width(180.0),
-                        );
-                        ui.label("类别");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.filter_category)
-                                .hint_text("session / vault / …")
-                                .desired_width(100.0),
-                        );
+                        let row_w = ui.available_width().max(320.0);
+                        let half = ((row_w - theme.spacing_panel_gap()) / 2.0).max(120.0);
+                        ui.vertical(|ui| {
+                            ui.set_width(half);
+                            chrome::form_field_label(ui, theme, "搜索");
+                            chrome::form_singleline_field(
+                                ui,
+                                theme,
+                                egui::Id::new("audit_log_search"),
+                                &mut self.search_query,
+                                "action / host / resource…",
+                                half,
+                                false,
+                            );
+                        });
+                        ui.vertical(|ui| {
+                            ui.set_width(half);
+                            chrome::form_field_label(ui, theme, "类别");
+                            chrome::form_singleline_field(
+                                ui,
+                                theme,
+                                egui::Id::new("audit_log_category"),
+                                &mut self.filter_category,
+                                "session / vault / …",
+                                half,
+                                false,
+                            );
+                        });
                     });
                     ui.add_space(4.0);
                     let h = ui.available_height().max(200.0);
