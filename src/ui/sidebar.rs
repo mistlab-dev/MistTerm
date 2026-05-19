@@ -134,7 +134,7 @@ impl Sidebar {
                                 if crate::ui::chrome::sidebar_header_icon_button(
                                     ui,
                                     theme,
-                                    crate::ui::chrome::GLYPH_SIDEBAR_COLLAPSE,
+                                    crate::ui::icons::IconId::SidebarCollapse,
                                     theme.color_sidebar_header_icon(),
                                 )
                                 .on_hover_text("收起连接栏")
@@ -144,12 +144,14 @@ impl Sidebar {
                                 }
                                 ui.add_space(theme.spacing_panel_gap());
                                 if crate::ui::chrome::sidebar_new_session_button(ui, theme)
-                                    .on_hover_text("新建会话 · ⌘N")
+                                    .on_hover_text(format!(
+                                        "新建会话 · {}",
+                                        crate::platform::accel("N")
+                                    ))
                                     .clicked()
                                 {
                                     create_session_clicked = true;
                                 }
-                                crate::ui::chrome::sidebar_sort_combo(ui, theme, sort_by);
                             });
                         });
                     });
@@ -175,17 +177,22 @@ impl Sidebar {
                 egui::Frame::none()
                     .outer_margin(theme.spacing_sidebar_filter_outer())
                     .show(ui, |ui| {
-                let tab_row_w = ui.available_width().max(96.0);
-                if let Some(picked) = crate::ui::chrome::filter_chip_row(
-                    ui,
-                    theme,
-                    &["全部", "在线", "离线"],
-                    filter.as_str(),
-                    tab_row_w,
-                ) {
-                    *filter = picked;
-                }
-                });
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = theme.spacing_tool_btn_gap();
+                            let sort_w = theme.size_sidebar_header_icon() + theme.spacing_panel_gap();
+                            let chip_row_w = (ui.available_width() - sort_w).max(96.0);
+                            if let Some(picked) = crate::ui::chrome::filter_chip_row(
+                                ui,
+                                theme,
+                                &["全部", "在线", "离线"],
+                                filter.as_str(),
+                                chip_row_w,
+                            ) {
+                                *filter = picked;
+                            }
+                            crate::ui::chrome::sidebar_list_sort_button(ui, theme, sort_by);
+                        });
+                    });
 
                 // 会话列表
                 ui.vertical(|ui| {
@@ -221,11 +228,26 @@ impl Sidebar {
                                         .size(hint_font)
                                         .color(hint_color),
                                 );
-                                ui.label(
-                                    egui::RichText::new("点击 ＋ 创建")
-                                        .size(hint_font)
-                                        .color(hint_color),
-                                );
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                    let px = hint_font;
+                                    let (r, _) = ui.allocate_exact_size(
+                                        egui::vec2(px, px),
+                                        egui::Sense::hover(),
+                                    );
+                                    crate::ui::icons::paint_icon(
+                                        ui,
+                                        r,
+                                        crate::ui::icons::IconId::Plus,
+                                        hint_color,
+                                        px,
+                                    );
+                                    ui.label(
+                                        egui::RichText::new("点击 创建")
+                                            .size(hint_font)
+                                            .color(hint_color),
+                                    );
+                                });
                             } else {
                                 ui.label(
                                     egui::RichText::new("没有匹配的会话")
@@ -241,7 +263,7 @@ impl Sidebar {
                                 current_group = session.group.clone();
                                 ui.add_space(theme.spacing_panel_gap());
                                 ui.label(
-                                    egui::RichText::new(format!("📁 {}", current_group))
+                                    egui::RichText::new(format!("[{}]", current_group))
                                         .size(theme.font_size_connection_meta())
                                         .color(theme.fg_low_color()),
                                 );

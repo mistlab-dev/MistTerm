@@ -169,7 +169,7 @@ impl NativeAppMenu {
             MenuItem::with_id("mistterm.view.toggle_maximize", "最大化窗口", true, None);
         let sftp_panel = CheckMenuItem::with_id(
             "mistterm.view.panel.sftp",
-            "SFTP 文件浏览器",
+            "SFTP 文件",
             true,
             false,
             None,

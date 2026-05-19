@@ -158,6 +158,8 @@ pub struct TerminalView {
     local_disconnect_intent: bool,
     /// 本轮 `process_ssh_messages` 后若曾为「非主动」断开则置位；由宿主 `take()` 后清除。
     unexpected_disconnect_notified: bool,
+    /// 连接成功/失败待宿主写入审计（`take_connect_audit` 取走）
+    pending_connect_audit: Option<(bool, String)>,
     /// 拖入终端区域、待宿主处理的上传路径（§4.3.2）。
     pending_drop_upload_paths: Vec<PathBuf>,
     /// 大文件上传：用户选 ZMODEM 后先发 `rz -y`，握手检测到后再用此路径 `start_rz_upload`。
@@ -343,6 +345,7 @@ impl TerminalView {
             visual_layout_cache: None,
             local_disconnect_intent: false,
             unexpected_disconnect_notified: false,
+            pending_connect_audit: None,
             pending_drop_upload_paths: Vec::new(),
             zmodem_upload_after_rz_path: None,
             selection: Selection::default(),
@@ -859,10 +862,13 @@ impl TerminalView {
                             "远端 → 本机"
                         };
                         ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new("📁 ZMODEM")
-                                    .strong()
-                                    .color(theme.accent_color()),
+                            crate::ui::icons::icon_label_row(
+                                ui,
+                                crate::ui::icons::IconId::Zmodem,
+                                "ZMODEM",
+                                theme.font_size_body(),
+                                6.0,
+                                |t| t.strong().color(theme.accent_color()),
                             );
                             ui.label(
                                 egui::RichText::new(dir).color(theme.fg_medium_color()),
@@ -1065,6 +1071,9 @@ impl TerminalView {
                         }
                     }
                     SshMessage::Connected { .. } => {
+                        if let Some((_, host)) = &self.connection_target {
+                            self.pending_connect_audit = Some((true, host.clone()));
+                        }
                         self.connected = true;
                         self.connected_at = Some(Instant::now());
                         self.terminal_focused = true;
@@ -1095,6 +1104,9 @@ impl TerminalView {
                     }
                     SshMessage::Error { error, .. } => {
                         let msg = format_ssh_connect_error(&error);
+                        if let Some((_, host)) = &self.connection_target {
+                            self.pending_connect_audit = Some((false, host.clone()));
+                        }
                         self.error_message = Some(msg.clone());
                         self.connected_at = None;
                         self.feed_user_error_line(theme, &msg);
@@ -1161,7 +1173,7 @@ impl TerminalView {
                     self.transfer_outgoing = false;
                     // 完成后多一空行，与后续 shell 提示符/命令拉开
                     self.feed_user_success_line(theme, &format!(
-                        "✅ {}：{} -> {}",
+                        "OK {}：{} -> {}",
                         title,
                         filename,
                         path.display()
@@ -2142,6 +2154,11 @@ impl TerminalView {
     /// 非用户主动断开时为 `true` 一次（供自动重连等）；读取后清除。
     pub fn take_unexpected_disconnect_notified(&mut self) -> bool {
         std::mem::take(&mut self.unexpected_disconnect_notified)
+    }
+
+    /// 取走待上报的连接结果（`success`, `host`）。
+    pub fn take_connect_audit(&mut self) -> Option<(bool, String)> {
+        self.pending_connect_audit.take()
     }
 
     /// 大文件走 ZMODEM：向 PTY 发送 `rz -y` 并在握手就绪后用 `path` 启动上传（FUNCTIONAL_SPEC §4.3）。

@@ -55,51 +55,11 @@ fn main() -> eframe::Result<()> {
         "Mist",
         options,
         Box::new(|cc| {
-            configure_fonts(&cc.egui_ctx);
+            if !mistterm::platform::configure_egui_fonts(&cc.egui_ctx) {
+                log::warn!("CJK 字体未加载，界面中文可能显示为方框");
+            }
+            mistterm::ui::icons::UiIcons::install(&cc.egui_ctx);
             Box::new(MistTermApp::new(cc))
         }),
     )
-}
-
-fn configure_fonts(ctx: &egui::Context) {
-    let mut fonts = egui::FontDefinitions::default();
-
-    if let Some(cjk_font) = load_cjk_font() {
-        let cjk_name = "mistterm-cjk".to_string();
-        fonts.font_data.insert(cjk_name.clone(), cjk_font);
-
-        // CJK 放在默认字体之后：拉丁/符号（如菜单 ✓）走 bundled 字体，中文缺字再回退到 CJK
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .push(cjk_name.clone());
-        // Monospace 必须把 CJK 放后面，避免把等宽英文挤成“看起来不等宽”
-        fonts
-            .families
-            .entry(egui::FontFamily::Monospace)
-            .or_default()
-            .push(cjk_name);
-    }
-
-    ctx.set_fonts(fonts);
-}
-
-fn load_cjk_font() -> Option<egui::FontData> {
-    let candidates = [
-        // macOS
-        "/System/Library/Fonts/PingFang.ttc",
-        "/System/Library/Fonts/Hiragino Sans GB.ttc",
-        // Common Linux distributions
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJKSC-Regular.otf",
-    ];
-
-    for path in candidates {
-        if let Ok(bytes) = std::fs::read(path) {
-            return Some(egui::FontData::from_owned(bytes));
-        }
-    }
-
-    None
 }

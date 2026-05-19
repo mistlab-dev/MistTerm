@@ -1,5 +1,10 @@
-//! 平台相关能力（输入法、窗口、系统菜单等）
+//! 平台相关能力（字体、快捷键文案、系统 shell、路径、macOS 菜单等）
 
+pub mod docs;
+pub mod fonts;
+pub mod paths;
+pub mod shell;
+pub mod shortcuts;
 #[cfg(target_os = "macos")]
 mod macos_app_name;
 #[cfg(target_os = "macos")]
@@ -8,8 +13,10 @@ mod macos_ime;
 #[cfg(target_os = "macos")]
 pub mod macos_menu;
 
-pub mod docs;
-
+pub use fonts::{cjk_font_loaded, configure_egui_fonts};
+pub use paths::{default_ssh_config_path, home_dir};
+pub use shell::{open_file, reveal_directory};
+pub use shortcuts::{accel, accel_shift, help_line, primary_modifier_label, terminal_history_accel};
 #[cfg(target_os = "macos")]
 pub use macos_app_name::{
     fix_menu_bar_application_title, set_application_display_name, APP_DISPLAY_NAME,

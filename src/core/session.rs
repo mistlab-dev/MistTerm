@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
+use crate::core::credential::SecretBackend;
 use crate::security::device_key;
 
 /// 会话配置
@@ -46,6 +47,9 @@ pub struct SessionConfig {
     pub keepalive_count_max: u8,
     #[serde(default = "default_keepalive_auto_reconnect")]
     pub keepalive_auto_reconnect: bool,
+    /// 密码/密钥来源（Vault 引用时不落盘明文）
+    #[serde(default)]
+    pub secret_backend: SecretBackend,
 }
 
 fn default_keepalive_enabled() -> bool {
@@ -105,6 +109,7 @@ impl Default for SessionConfig {
             keepalive_interval_secs: default_keepalive_interval(),
             keepalive_count_max: default_keepalive_count_max(),
             keepalive_auto_reconnect: default_keepalive_auto_reconnect(),
+            secret_backend: SecretBackend::default(),
         }
     }
 }
@@ -147,6 +152,8 @@ struct StoredSessionConfig {
     keepalive_count_max: u8,
     #[serde(default = "default_keepalive_auto_reconnect")]
     keepalive_auto_reconnect: bool,
+    #[serde(default)]
+    secret_backend: SecretBackend,
 }
 
 fn default_group() -> String {
@@ -216,6 +223,7 @@ impl SessionManager {
                 keepalive_interval_secs: cfg.keepalive_interval_secs,
                 keepalive_count_max: cfg.keepalive_count_max,
                 keepalive_auto_reconnect: cfg.keepalive_auto_reconnect,
+                secret_backend: cfg.secret_backend,
             });
         }
         Some((sessions, had_plaintext, warnings))
@@ -348,6 +356,7 @@ impl SessionManager {
                 keepalive_interval_secs: cfg.keepalive_interval_secs,
                 keepalive_count_max: cfg.keepalive_count_max,
                 keepalive_auto_reconnect: cfg.keepalive_auto_reconnect,
+                secret_backend: cfg.secret_backend.clone(),
             });
         }
 

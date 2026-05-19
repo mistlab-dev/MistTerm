@@ -23,6 +23,10 @@ pub mod ssh_config_importer;
 pub mod command_history;
 pub mod session_logger;
 pub mod session_sort;
+pub mod audit;
+pub mod app_settings;
+pub mod vault;
+pub mod secret_resolver;
 
 pub use session::{SessionConfig, SessionManager, SESSION_COLOR_TAGS, session_color_tag_rgb};
 pub use ssh_config_importer::{
@@ -44,8 +48,17 @@ pub use fragment::{
 pub use fragment_expr::{expand_rhai_blocks, merge_rhai_context};
 pub use fragment_command::{build_fragment_command_preview, finalize_fragment_command_text};
 pub use credential::{
-    Credential, CredentialAuthKind, CredentialCategory, CredentialVault,
+    Credential, CredentialAuthKind, CredentialCategory, CredentialVault, SecretBackend,
 };
+pub use audit::{
+    command_preview, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, AuditSettings,
+    HttpSinkSettings, SyslogSinkSettings,
+};
+pub use app_settings::AppSettings;
+pub use vault::{
+    HashiCorpVaultClient, VaultAuthSettings, VaultKvRef, VaultListEntry, VaultSettings,
+};
+pub use secret_resolver::{ResolvedSshSecrets, ResolveError, SecretResolver, TempKeyFile};
 pub use cloud_sync::CloudSyncSettings;
 pub use reconnect::{
     cleared_schedule, collect_tabs_due_for_reconnect, schedule_after_unexpected_disconnect,

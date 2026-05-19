@@ -103,22 +103,37 @@ impl CommandHistoryOverlay {
                     .show(ui, |ui| {
                         ui.set_width(inner.width() - 24.0);
                         ui.label(
-                            egui::RichText::new("搜索命令历史 (Ctrl+R 继续 · Esc 关闭)")
+                            egui::RichText::new(format!(
+                                "搜索命令历史 ({} 继续 · Esc 关闭)",
+                                crate::platform::terminal_history_accel()
+                            ))
                                 .size(theme.font_size_small())
                                 .color(theme.fg_low_color()),
                         );
                         ui.add_space(6.0);
-                        let te = egui::TextEdit::singleline(&mut self.query)
-                            .hint_text(
-                                egui::RichText::new("❯")
-                                    .font(egui::FontId::monospace(theme.font_size_normal()))
-                                    .color(theme.color_form_hint()),
-                            )
-                            .desired_width(f32::INFINITY)
-                            .font(egui::FontId::monospace(theme.font_size_normal()));
-                        let resp = ui.add(te);
+                        let search_resp = ui
+                            .horizontal(|ui| {
+                                let px = theme.font_size_normal();
+                                let (r, _) = ui.allocate_exact_size(
+                                    egui::vec2(px, px),
+                                    egui::Sense::hover(),
+                                );
+                                crate::ui::icons::paint_icon(
+                                    ui,
+                                    r,
+                                    crate::ui::icons::IconId::TerminalPrompt,
+                                    theme.color_form_hint(),
+                                    px,
+                                );
+                                let te = egui::TextEdit::singleline(&mut self.query)
+                                    .hint_text("搜索历史命令…")
+                                    .desired_width(f32::INFINITY)
+                                    .font(egui::FontId::monospace(theme.font_size_normal()));
+                                ui.add(te)
+                            })
+                            .inner;
                         if self.open {
-                            resp.request_focus();
+                            search_resp.request_focus();
                         }
                         ui.add_space(8.0);
                         egui::ScrollArea::vertical()
@@ -138,7 +153,12 @@ impl CommandHistoryOverlay {
                                         if row.hovered() {
                                             ui.horizontal(|ui| {
                                                 ui.add_space(ui.available_width() - 28.0);
-                                                if crate::ui::chrome::chrome_small_button(ui, theme, "🗑")
+                                                if crate::ui::chrome::icon_button(
+                                                    ui,
+                                                    theme,
+                                                    crate::ui::icons::IconId::Trash,
+                                                    theme.color_body_text_muted(),
+                                                )
                                                     .on_hover_text("从历史删除")
                                                     .clicked()
                                                 {

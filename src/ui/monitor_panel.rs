@@ -29,8 +29,6 @@ pub struct MonitorPanel {
     last_ui_refresh: f64,
     /// 最后一次错误
     last_error: Option<String>,
-    /// 手动刷新按钮标签
-    refresh_label: String,
     /// 经 shell 泵串行执行的 `exec` 结果通道(未完成时 UI 仍可交互)
     pending_raw: Option<Receiver<Result<String, String>>>,
     /// 本帧 `SidePanel` 槽位矩形（`ui.max_rect()`，与布局占位一致）
@@ -54,7 +52,6 @@ impl MonitorPanel {
             alert_disk_pct: 85.0,
             last_ui_refresh: 0.0_f64,
             last_error: None,
-            refresh_label: "📊 监控".to_string(),
             pending_raw: None,
             last_panel_slot_rect: None,
         }
@@ -69,7 +66,6 @@ impl MonitorPanel {
         self.pending_raw = None;
         self.monitor = Some(Monitor::new(ssh_handle, ssh_manager));
         self.last_error = None;
-        self.refresh_label = "📊 监控 ...".to_string();
         self.begin_async_collect();
     }
 
@@ -78,7 +74,6 @@ impl MonitorPanel {
         self.pending_raw = None;
         self.monitor = None;
         self.last_error = None;
-        self.refresh_label = "📊 监控".to_string();
     }
 
     /// 若当前无进行中的采集,则向 shell 泵排队一次 `exec`(不得另开线程,以免与 PTY 争用 `Session`)。
@@ -99,7 +94,6 @@ impl MonitorPanel {
             }
             Err(e) => {
                 self.last_error = Some(e);
-                self.refresh_label = "📊 监控 ✗".to_string();
             }
         }
     }
@@ -116,14 +110,8 @@ impl MonitorPanel {
                 self.last_ui_refresh = ctx.input(|i| i.time);
                 if let Some(monitor) = &mut self.monitor {
                     match monitor.ingest_remote_output(&raw) {
-                        Ok(_) => {
-                            self.last_error = None;
-                            self.refresh_label = "📊 监控 ✓".to_string();
-                        }
-                        Err(e) => {
-                            self.last_error = Some(e);
-                            self.refresh_label = "📊 监控 ✗".to_string();
-                        }
+                        Ok(_) => self.last_error = None,
+                        Err(e) => self.last_error = Some(e),
                     }
                 }
                 ctx.request_repaint();
@@ -132,17 +120,15 @@ impl MonitorPanel {
                 self.pending_raw = None;
                 self.last_ui_refresh = ctx.input(|i| i.time);
                 self.last_error = Some(format!("监控采集失败: {}", e));
-                self.refresh_label = "📊 监控 ✗".to_string();
                 ctx.request_repaint();
             }
             Some(Err(TryRecvError::Empty)) => {
-                ctx.request_repaint();
+                ctx.request_repaint_after(Duration::from_millis(120));
             }
             Some(Err(TryRecvError::Disconnected)) => {
                 self.pending_raw = None;
                 self.last_ui_refresh = ctx.input(|i| i.time);
                 self.last_error = Some("采集结果通道已断开".to_string());
-                self.refresh_label = "📊 监控 ✗".to_string();
                 ctx.request_repaint();
             }
         }
@@ -226,6 +212,7 @@ impl MonitorPanel {
 
         let now = ctx.input(|i| i.time);
         if self.pending_raw.is_some() {
+            ctx.request_repaint_after(Duration::from_millis(120));
             return;
         }
         if now - self.last_ui_refresh >= f64::from(self.refresh_interval_secs) {
@@ -255,7 +242,7 @@ impl MonitorPanel {
             .min_width(m_min)
             .max_width(m_max)
             .resizable(true)
-            .frame(egui::Frame::none())
+            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
                 self.last_panel_slot_rect = Some(ui.max_rect());
                 let w = layout_util::dock_panel_content_width(ui, m_min, m_max);
@@ -281,34 +268,27 @@ impl MonitorPanel {
             return;
         }
         let screen = ctx.screen_rect();
+        let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.last_panel_slot_rect,
             ctx,
             layout_util::MONITOR_PANEL_ID,
             layout_util::SidePanelProfile::Monitor,
             None,
+            dock_inset,
         ) else {
             return;
         };
-        let paint = layout_util::inset_slot_for_foreground_paint(slot, screen);
-        let (_, m_min, m_max) =
-            layout_util::side_panel_widths(ctx, layout_util::SidePanelProfile::Monitor);
-        let inner = crate::ui::chrome::right_dock_slot_content_rect(paint, theme);
-        let panel_w = layout_util::clamp_f32(inner.width(), m_min, m_max);
-        let border = theme.border_color();
-        crate::ui::chrome::right_dock_foreground_area("mistterm_monitor_fg")
-            .constrain_to(paint)
-            .fixed_pos(paint.min)
-            .show(ctx, |ui| {
-                ui.set_clip_rect(paint);
-                ui.set_min_size(paint.size());
-                ui.set_max_size(paint.size());
-                crate::ui::chrome::paint_right_dock_slot_shell(ui, paint, theme);
-                ui.allocate_ui_at_rect(inner, |ui| {
-                    ui.set_clip_rect(inner);
-                    ui.set_min_width(panel_w);
-                    ui.set_max_width(panel_w);
-                    let alert_label = self.monitor.as_ref().and_then(|mon| {
+        let geom = crate::ui::chrome::prepare_right_dock_foreground_geom(slot, screen, theme);
+        let layer_id = crate::ui::chrome::right_dock_foreground_layer_id("mistterm_monitor_fg");
+        crate::ui::chrome::paint_right_dock_foreground_shell(ctx, layer_id, geom.paint, theme);
+        crate::ui::chrome::show_right_dock_foreground_body(
+            "mistterm_monitor_fg",
+            ctx,
+            &geom,
+            crate::ui::layout_util::SidePanelProfile::Monitor,
+            |ui, _body_w| {
+                let alert_count = self.monitor.as_ref().and_then(|mon| {
                         let alerts = Self::collect_alerts_with(
                             self.alert_cpu_pct,
                             self.alert_mem_pct,
@@ -318,72 +298,97 @@ impl MonitorPanel {
                         if alerts.is_empty() {
                             None
                         } else {
-                            Some(format!("⚠ {} 项告警", alerts.len()))
+                            Some(alerts.len())
                         }
                     });
-                    let trailing_w =
-                        crate::ui::chrome::panel_header_trailing_width(ui, theme, &[]);
-                    if crate::ui::chrome::dock_panel_title_row(
-                        ui,
-                        theme,
-                        |ui| {
-                            ui.horizontal(|ui| {
-                                ui.label(crate::ui::chrome::rich_dock_title(theme, "📊 系统监控"));
-                                if let Some(ref text) = alert_label {
-                                    ui.label(
-                                        egui::RichText::new(text)
-                                            .size(theme.font_size_medium())
-                                            .color(theme.red_color()),
-                                    );
-                                }
-                            });
-                        },
-                        "隐藏侧栏 · 也可用底部「📊 监控」切换",
-                        trailing_w,
-                        |ui, theme| {
-                            crate::ui::chrome::close_icon_button(ui, theme)
-                                .on_hover_text("隐藏侧栏 · 也可用底部「📊 监控」切换")
-                                .clicked()
-                        },
-                    ) {
-                        *open = false;
-                    }
+                    egui::Frame::none()
+                        .inner_margin(egui::Margin::symmetric(
+                            theme.spacing_panel_title_pad_x(),
+                            theme.spacing_panel_title_pad_y(),
+                        ))
+                        .show(ui, |ui| {
+                            layout_util::set_width_to_available(ui);
+                            let trailing_w =
+                                crate::ui::chrome::panel_header_trailing_width(ui, theme, &[]);
+                            if crate::ui::chrome::dock_panel_title_row(
+                                ui,
+                                theme,
+                                |ui| {
+                                    ui.horizontal(|ui| {
+                                        crate::ui::chrome::dock_title_row(
+                                            ui,
+                                            theme,
+                                            crate::ui::icons::IconId::Monitor,
+                                            "系统监控",
+                                        );
+                                        if let Some(n) = alert_count {
+                                            crate::ui::icons::icon_label_row(
+                                                ui,
+                                                crate::ui::icons::IconId::Warning,
+                                                &format!("{n} 项告警"),
+                                                theme.font_size_medium(),
+                                                5.0,
+                                                |t| {
+                                                    t.size(theme.font_size_medium())
+                                                        .color(theme.red_color())
+                                                },
+                                            );
+                                        }
+                                    });
+                                },
+                                "隐藏侧栏 · 也可用底部「监控」切换",
+                                trailing_w,
+                                |ui, theme| {
+                                    crate::ui::chrome::close_icon_button(ui, theme)
+                                        .on_hover_text("隐藏侧栏 · 也可用底部「监控」切换")
+                                        .clicked()
+                                },
+                            ) {
+                                *open = false;
+                            }
+                        });
                     ui.separator();
 
+                    let scroll_h = ui.available_height().max(120.0);
+                    let prev_extreme = ui.visuals().extreme_bg_color;
+                    ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
                     egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
+                        .id_source("mistterm_monitor_scroll")
+                        .auto_shrink([false; 2])
+                        .max_height(scroll_h)
                         .show(ui, |ui| {
-                            ui.set_min_width(panel_w);
-                            ui.set_max_width(panel_w);
-                            self.show_content(ui, theme, panel_w);
+                            layout_util::set_width_to_available(ui);
+                            self.show_content(ui, theme);
                         });
-                });
-                ui.painter().vline(
-                    paint.max.x - 0.5,
-                    paint.y_range(),
-                    egui::Stroke::new(1.0, border),
-                );
-            });
+                    ui.visuals_mut().extreme_bg_color = prev_extreme;
+        },
+        );
     }
 
-    fn show_content(&mut self, ui: &mut egui::Ui, theme: &Theme, panel_w: f32) {
-        ui.set_max_width(panel_w);
-        // 控制栏
-        ui.horizontal(|ui| {
-            ui.set_max_width(panel_w);
-            ui.checkbox(&mut self.auto_refresh, "自动刷新");
-            if self.auto_refresh {
-                ui.add(
-                    egui::Slider::new(&mut self.refresh_interval_secs, 1.0..=30.0)
-                        .text("间隔")
-                        .suffix("s"),
-                );
-            }
-            ui.add_enabled_ui(self.pending_raw.is_none(), |ui| {
-                if ui.button("🔄 刷新").clicked() {
+    fn show_content(&mut self, ui: &mut egui::Ui, theme: &Theme) {
+        layout_util::set_width_to_available(ui);
+        ui.vertical(|ui| {
+            layout_util::set_width_to_available(ui);
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut self.auto_refresh, "自动刷新");
+                if crate::ui::chrome::panel_toolbar_icon_button_or_busy(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::Refresh,
+                    "刷新",
+                    self.pending_raw.is_some(),
+                )
+                .clicked()
+                {
                     self.refresh();
                 }
             });
+            if self.auto_refresh {
+                ui.add(
+                    egui::Slider::new(&mut self.refresh_interval_secs, 1.0..=30.0)
+                        .text("间隔 (秒)"),
+                );
+            }
         });
         ui.add_space(theme.spacing_sm());
 
@@ -394,38 +399,26 @@ impl MonitorPanel {
         )
         .default_open(false)
         .show(ui, |ui| {
+            layout_util::set_width_to_available(ui);
             ui.label(
                 egui::RichText::new("超出阈值时在标题与下方显示告警（仅当前会话）。")
                     .size(theme.font_size_small())
                     .color(theme.fg_low_color()),
             );
             ui.add_space(4.0);
-            ui.add(
-                egui::Slider::new(&mut self.alert_cpu_pct, 50.0..=100.0)
-                    .text("CPU 告警 %")
-                    .suffix("%"),
-            );
-            ui.add(
-                egui::Slider::new(&mut self.alert_mem_pct, 50.0..=100.0)
-                    .text("内存告警 %")
-                    .suffix("%"),
-            );
-            ui.add(
-                egui::Slider::new(&mut self.alert_disk_pct, 50.0..=100.0)
-                    .text("磁盘告警 %")
-                    .suffix("%"),
-            );
+            for (pct, label) in [
+                (&mut self.alert_cpu_pct, "CPU 告警 %"),
+                (&mut self.alert_mem_pct, "内存告警 %"),
+                (&mut self.alert_disk_pct, "磁盘告警 %"),
+            ] {
+                ui.add(
+                    egui::Slider::new(pct, 50.0..=100.0)
+                        .text(label)
+                        .suffix("%"),
+                );
+            }
         });
         ui.add_space(theme.spacing_md());
-
-        if self.pending_raw.is_some() {
-            ui.label(
-                egui::RichText::new("远程采集中...")
-                    .size(theme.font_size_normal())
-                    .color(theme.fg_medium_color()),
-            );
-            ui.add_space(theme.spacing_md() - theme.spacing_sm());
-        }
 
         if let Some(ref monitor) = self.monitor {
             let stats = monitor.last_stats();
@@ -452,18 +445,12 @@ impl MonitorPanel {
                 ui.add_space(theme.spacing_md());
             }
 
-            // 服务器运行时间
-            Self::label_value_row(
+            crate::ui::chrome::dock_label_value_row(
                 ui,
                 theme,
-                panel_w,
-                egui::RichText::new("⏱ 运行时间")
-                    .size(theme.font_size_medium())
-                    .color(theme.fg_medium_color()),
-                egui::RichText::new(stats.format_uptime())
-                    .monospace()
-                    .size(theme.font_size_medium())
-                    .color(theme.fg_high_color()),
+                crate::ui::icons::IconId::Timer,
+                "运行时间",
+                stats.format_uptime(),
             );
             ui.add_space(theme.spacing_sm());
 
@@ -471,27 +458,28 @@ impl MonitorPanel {
             self.show_metric_bar(
                 ui,
                 theme,
-                "🖥 CPU",
+                crate::ui::icons::IconId::Cpu,
+                "CPU",
                 stats.cpu_percent,
                 format!("{:.1}%", stats.cpu_percent),
                 cpu_color(stats.cpu_percent, theme),
             );
 
-            // 内存使用
             self.show_metric_bar(
                 ui,
                 theme,
-                "💾 内存",
+                crate::ui::icons::IconId::Memory,
+                "内存",
                 stats.memory_percent(),
                 stats.format_memory(),
                 mem_color(stats.memory_percent(), theme),
             );
 
-            // 磁盘使用
             self.show_metric_bar(
                 ui,
                 theme,
-                "💿 磁盘",
+                crate::ui::icons::IconId::Disk,
+                "磁盘",
                 stats.disk_percent(),
                 stats.format_disk(),
                 disk_color(stats.disk_percent(), theme),
@@ -502,7 +490,14 @@ impl MonitorPanel {
             ui.add_space(theme.spacing_sm());
 
             // 系统负载
-            ui.label(egui::RichText::new("📊 系统负载").size(theme.font_size_medium()).color(theme.fg_medium_color()));
+            crate::ui::icons::icon_label_row(
+                ui,
+                crate::ui::icons::IconId::Chart,
+                "系统负载",
+                theme.font_size_medium(),
+                6.0,
+                |t| t.size(theme.font_size_medium()).color(theme.fg_medium_color()),
+            );
             ui.horizontal(|ui| {
                 let (l1, l5, l15) = stats.load_avg;
                 self.load_chip(ui, theme, "1m", l1);
@@ -512,11 +507,16 @@ impl MonitorPanel {
 
             ui.add_space(theme.spacing_md());
 
-            // 网络流量
-            ui.label(
-                egui::RichText::new("🌐 网络速率")
-                    .size(theme.font_size_monitor_section())
-                    .color(theme.fg_medium_color()),
+            crate::ui::icons::icon_label_row(
+                ui,
+                crate::ui::icons::IconId::Network,
+                "网络速率",
+                theme.font_size_monitor_section(),
+                6.0,
+                |t| {
+                    t.size(theme.font_size_monitor_section())
+                        .color(theme.fg_medium_color())
+                },
             );
             ui.horizontal(|ui| {
                 ui.label(
@@ -539,10 +539,17 @@ impl MonitorPanel {
             ui.add_space(theme.spacing_sm());
 
             // 历史图表(egui_plot,至多 60 个采样点)
-            ui.label(egui::RichText::new("📈 历史趋势").size(theme.font_size_medium()).color(theme.fg_medium_color()));
+            crate::ui::icons::icon_label_row(
+                ui,
+                crate::ui::icons::IconId::Chart,
+                "历史趋势",
+                theme.font_size_medium(),
+                6.0,
+                |t| t.size(theme.font_size_medium()).color(theme.fg_medium_color()),
+            );
             ui.add_space(theme.spacing_sm());
 
-            self.show_history_plots(ui, theme, history, panel_w);
+            self.show_history_plots(ui, theme, history);
 
         } else {
             // 未初始化提示
@@ -564,34 +571,15 @@ impl MonitorPanel {
         // 显示错误信息
         if let Some(ref err) = self.last_error {
             ui.add_space(8.0);
-            ui.colored_label(
-                theme.red_color(),
-                egui::RichText::new(format!("⚠ {}", err)).size(theme.font_size_small()),
+            crate::ui::icons::icon_label_row(
+                ui,
+                crate::ui::icons::IconId::Warning,
+                err,
+                theme.font_size_small(),
+                6.0,
+                |t| t.size(theme.font_size_small()).color(theme.red_color()),
             );
         }
-    }
-
-    /// 行内左标签 + 右对齐值（限制在 panel_w 内，避免 RTL 按窗宽排版）。
-    fn label_value_row(
-        ui: &mut egui::Ui,
-        theme: &Theme,
-        panel_w: f32,
-        label: egui::RichText,
-        value: egui::RichText,
-    ) {
-        let _ = theme;
-        ui.horizontal(|ui| {
-            ui.set_max_width(panel_w);
-            ui.label(label);
-            let val_w = ui.available_width().max(0.0);
-            ui.allocate_ui_with_layout(
-                egui::vec2(val_w, 18.0),
-                egui::Layout::right_to_left(egui::Align::Center),
-                |ui| {
-                    ui.label(value);
-                },
-            );
-        });
     }
 
     /// 显示指标进度条
@@ -599,27 +587,16 @@ impl MonitorPanel {
         &self,
         ui: &mut egui::Ui,
         theme: &Theme,
+        icon: crate::ui::icons::IconId,
         label: &str,
         percent: f32,
         value_text: String,
         bar_color: egui::Color32,
     ) {
-        let row_w = ui.available_width().max(120.0);
-        Self::label_value_row(
-            ui,
-            theme,
-            row_w,
-            egui::RichText::new(label)
-                .size(theme.font_size_medium())
-                .color(theme.fg_medium_color()),
-            egui::RichText::new(&value_text)
-                .monospace()
-                .size(theme.font_size_normal())
-                .color(theme.fg_high_color()),
-        );
+        crate::ui::chrome::dock_label_value_row(ui, theme, icon, label, value_text);
 
         let bar_height = theme.progress_bar_height();
-        let available_width = row_w;
+        let available_width = layout_util::set_width_to_available(ui);
         let bg_color = theme.border_color();
 
         ui.allocate_ui_with_layout(
@@ -684,11 +661,10 @@ impl MonitorPanel {
         ui: &mut egui::Ui,
         theme: &Theme,
         history: &[ServerStats],
-        panel_w: f32,
     ) {
         const CHART_HEIGHT: f32 = 110.0;
-        let width = ui.available_width().max(160.0).min(panel_w);
-        let plot_margin = egui::vec2(0.10, 0.12);
+        let width = layout_util::set_width_to_available(ui);
+        let plot_margin = egui::vec2(0.14, 0.14);
         let legend = |corner: Corner| {
             Legend::default()
                 .position(corner)

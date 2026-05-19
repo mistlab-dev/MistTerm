@@ -637,7 +637,7 @@ impl Theme {
 
     // ── 尺寸：底栏 / 弹窗 / Tab / 列表 ──
 
-    /// 关闭 ×、收起 − 图标字号
+    /// 标题栏 / 工具条内嵌图标边长（×、排序、新建等，egui 逻辑点；图集 HiDPI 由纹理格负责）
     pub fn size_icon_glyph(&self) -> f32 {
         18.0
     }
@@ -1061,11 +1061,21 @@ impl Theme {
     pub fn font_size_fragment_stats(&self) -> f32 {
         self.font_size_caption()
     }
+    /// 片段列表行右侧分类/标签（与统计同级，便于与标题行对齐）
+    pub fn font_size_fragment_tag(&self) -> f32 {
+        self.font_size_caption()
+    }
+    /// 标题行额外行高（标题与标签垂直居中）
+    pub fn spacing_fragment_title_line_pad(&self) -> f32 {
+        2.0
+    }
     /// 片段列表行最小高度（由三行字号 + 行距 + 内边距派生）
     pub fn size_fragment_list_row_min_h(&self) -> f32 {
         let gap = self.spacing_fragment_row_line_gap();
         self.spacing_fragment_row_pad_y() * 2.0
             + self.font_size_fragment_title()
+                .max(self.font_size_fragment_tag())
+            + self.spacing_fragment_title_line_pad()
             + gap
             + self.font_size_fragment_cmd()
             + gap
@@ -1151,8 +1161,23 @@ impl Theme {
     pub fn spacing_region_pad_y(&self) -> f32 { 10.0 }
     /// 左栏｜终端｜右栏之间的缝隙（露出 Central 底色）
     pub fn spacing_region_gap(&self) -> f32 { 6.0 }
+    /// 右 dock 面板与窗口右缘缝宽（细缝即可；小于 [`spacing_work_area_pad`]）
+    pub fn spacing_right_dock_screen_inset(&self) -> f32 {
+        4.0
+    }
     /// 主工作区相对 `central_work_rect` 的外圈内边距（对齐原型 `.main { padding: 8px }`）
     pub fn spacing_work_area_pad(&self) -> f32 { self.spacing_body_pad() }
+
+    /// 右 `SidePanel` 外框：在屏右缘留出 `bg_body` 缝（仅 `right` 非零）
+    pub fn margin_right_dock_screen_outer(&self) -> egui::Margin {
+        let g = self.spacing_right_dock_screen_inset();
+        egui::Margin {
+            left: 0.0,
+            right: g,
+            top: 0.0,
+            bottom: 0.0,
+        }
+    }
 
     pub fn region_content_margin(&self) -> egui::Margin {
         egui::Margin::symmetric(self.spacing_region_pad_x(), self.spacing_region_pad_y())

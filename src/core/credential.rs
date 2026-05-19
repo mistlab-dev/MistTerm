@@ -37,14 +37,32 @@ impl CredentialCategory {
         }
     }
 
-    pub fn emoji(&self) -> &'static str {
-        match self {
-            CredentialCategory::Server => "🖥️",
-            CredentialCategory::Database => "🗄️",
-            CredentialCategory::SshKey => "🔑",
-            CredentialCategory::Api => "🔐",
-            CredentialCategory::Other => "📎",
-        }
+}
+
+/// 机密存储后端
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SecretBackend {
+    #[serde(rename = "local")]
+    LocalEncrypted,
+    VaultKv {
+        mount: String,
+        path: String,
+        field: String,
+        #[serde(default)]
+        version: Option<u32>,
+    },
+}
+
+impl Default for SecretBackend {
+    fn default() -> Self {
+        SecretBackend::LocalEncrypted
+    }
+}
+
+impl SecretBackend {
+    pub fn is_vault(&self) -> bool {
+        matches!(self, SecretBackend::VaultKv { .. })
     }
 }
 
@@ -84,6 +102,7 @@ pub struct Credential {
     pub tags: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    pub secret_backend: SecretBackend,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,13 +123,19 @@ struct StoredCredential {
     tags: Vec<String>,
     secret_enc: String,
     secret_nonce: String,
+    #[serde(default)]
+    secret_backend: SecretBackend,
     created_at: i64,
     updated_at: i64,
 }
 
 impl StoredCredential {
     fn from_credential(key: &[u8; 32], c: &Credential) -> Option<Self> {
-        let (secret_enc, secret_nonce) = device_key::encrypt_secret(key, &c.secret)?;
+        let (secret_enc, secret_nonce) = if c.secret_backend.is_vault() {
+            (String::new(), String::new())
+        } else {
+            device_key::encrypt_secret(key, &c.secret)?
+        };
         Some(StoredCredential {
             id: c.id.clone(),
             name: c.name.clone(),
@@ -123,13 +148,16 @@ impl StoredCredential {
             tags: c.tags.clone(),
             secret_enc,
             secret_nonce,
+            secret_backend: c.secret_backend.clone(),
             created_at: c.created_at,
             updated_at: c.updated_at,
         })
     }
 
     fn to_credential(&self, key: &[u8; 32]) -> Option<Credential> {
-        let secret = if self.secret_enc.is_empty() && self.secret_nonce.is_empty() {
+        let secret = if self.secret_backend.is_vault() {
+            String::new()
+        } else if self.secret_enc.is_empty() && self.secret_nonce.is_empty() {
             String::new()
         } else {
             device_key::decrypt_secret(key, &self.secret_enc, &self.secret_nonce)?
@@ -147,6 +175,7 @@ impl StoredCredential {
             tags: self.tags.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
+            secret_backend: self.secret_backend.clone(),
         })
     }
 }
@@ -404,6 +433,7 @@ mod tests {
             tags: vec!["prod".to_string()],
             created_at: 0,
             updated_at: 0,
+            secret_backend: SecretBackend::default(),
         };
         vault.upsert(c).unwrap();
         drop(vault);
@@ -433,6 +463,7 @@ mod tests {
             tags: vec![],
             created_at: 1,
             updated_at: 2,
+            secret_backend: SecretBackend::default(),
         };
         let stored = StoredCredential::from_credential(&dk, &c).unwrap();
         fs::write(&path, serde_json::to_string(&vec![stored]).unwrap()).unwrap();

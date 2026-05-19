@@ -55,16 +55,7 @@ pub struct SshConfigParseResult {
 
 /// 默认 ssh config 路径
 pub fn default_ssh_config_path() -> PathBuf {
-    #[cfg(windows)]
-    {
-        if let Ok(p) = std::env::var("USERPROFILE") {
-            return PathBuf::from(p).join(".ssh").join("config");
-        }
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        return PathBuf::from(home).join(".ssh").join("config");
-    }
-    PathBuf::from(".ssh/config")
+    crate::platform::default_ssh_config_path()
 }
 
 /// 读取并解析 ssh config 文件
@@ -162,8 +153,8 @@ fn split_ssh_directive(line: &str) -> Option<(&str, &str)> {
 
 fn expand_tilde(path: &str) -> String {
     if let Some(rest) = path.strip_prefix("~/") {
-        if let Ok(home) = std::env::var("HOME") {
-            return format!("{}/{}", home, rest);
+        if let Some(home) = crate::platform::home_dir() {
+            return home.join(rest).to_string_lossy().into_owned();
         }
     }
     path.to_string()

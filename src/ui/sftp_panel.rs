@@ -315,7 +315,7 @@ impl SftpPanel {
             .min_width(s_min)
             .max_width(s_max)
             .resizable(true)
-            .frame(crate::ui::chrome::region_panel_frame(theme))
+            .frame(crate::ui::chrome::right_dock_panel_frame(theme))
             .show(ctx, |ui| {
                 let panel_w = layout_util::dock_panel_content_width(ui, s_min, s_max);
                 ui.set_max_width(panel_w);
@@ -337,9 +337,10 @@ impl SftpPanel {
         if crate::ui::chrome::dock_panel_title_close_only(
             ui,
             theme,
-            "📂 SFTP",
+            Some(crate::ui::icons::IconId::Folder),
+            "SFTP",
             crate::ui::chrome::DockPanelTitleStyle::DockHeading,
-            "隐藏侧栏 · 也可用底部「📂 SFTP」切换",
+            "隐藏侧栏 · 也可用底部 SFTP 切换",
         ) {
             *close_panel = true;
         }
@@ -354,7 +355,7 @@ impl SftpPanel {
         };
 
         if !t.is_connected() {
-            ui.label(egui::RichText::new("连接建立中…").color(theme.fg_low_color()));
+            crate::ui::chrome::busy_row(ui, theme, "连接建立中…");
             return;
         }
 
@@ -583,7 +584,7 @@ impl SftpPanel {
                     ui.painter().text(
                         center,
                         egui::Align2::CENTER_CENTER,
-                        "📂 释放以上传文件",
+                        "释放以上传文件",
                         egui::FontId::proportional(theme.font_size_body()),
                         theme.fg_high_color(),
                     );
@@ -600,14 +601,21 @@ impl SftpPanel {
 
                 for e in self.entries.iter() {
                     let is_sel = self.selected.as_ref() == Some(&e.path);
-                    let line = format!(
-                        "{}  {} · {}",
-                        if e.is_dir { "📁" } else { "📄" },
-                        &e.name,
-                        e.size_human()
-                    );
-
-                    let response = ui.add(egui::SelectableLabel::new(is_sel, line));
+                    let response = ui.horizontal(|ui| {
+                        let icon = if e.is_dir {
+                            crate::ui::icons::IconId::Folder
+                        } else {
+                            crate::ui::icons::IconId::File
+                        };
+                        let px = theme.font_size_body();
+                        let (r, _) =
+                            ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                        crate::ui::icons::paint_icon(ui, r, icon, theme.fg_medium_color(), px);
+                        ui.add(egui::SelectableLabel::new(
+                            is_sel,
+                            format!("{} · {}", &e.name, e.size_human()),
+                        ))
+                    }).inner;
                     let response =
                         response.on_hover_text(e.path.to_string_lossy());
                     if response.clicked() {

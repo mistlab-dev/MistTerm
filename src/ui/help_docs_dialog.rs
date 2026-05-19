@@ -1,6 +1,6 @@
 //! 帮助弹窗：结构化排版（快速入门 / 快捷键），完整文档用系统应用打开。
 
-use crate::platform::docs;
+use crate::platform::{docs, shortcuts};
 use crate::ui::chrome;
 use crate::ui::theme::Theme;
 use eframe::egui::{self, FontId, RichText, Ui};
@@ -9,36 +9,41 @@ use std::path::PathBuf;
 struct QuickStep {
     title: &'static str,
     detail: &'static str,
-    keys: &'static [&'static str],
+    keys: Vec<String>,
 }
 
-const QUICK_STEPS: &[QuickStep] = &[
-    QuickStep {
-        title: "连接与标签",
-        detail: "左侧选择或新建连接；双击 / 回车打开终端标签。",
-        keys: &["⌘N", "⌘T"],
-    },
-    QuickStep {
-        title: "底栏工具",
-        detail: "上传文件、SFTP、命令片段、系统监控等一键入口。",
-        keys: &[],
-    },
-    QuickStep {
-        title: "视图与面板",
-        detail: "菜单「视图」可开关右侧 SFTP、片段侧栏、监控面板。",
-        keys: &[],
-    },
-    QuickStep {
-        title: "工具与数据",
-        detail: "片段库、凭证管理、云端同步、会话日志在「工具」菜单。",
-        keys: &[],
-    },
-    QuickStep {
-        title: "终端内操作",
-        detail: "搜索当前屏输出；已连接时可用命令历史。",
-        keys: &["⌘F", "Ctrl+R"],
-    },
-];
+fn quick_steps() -> Vec<QuickStep> {
+    vec![
+        QuickStep {
+            title: "连接与标签",
+            detail: "左侧选择或新建连接；双击 / 回车打开终端标签。",
+            keys: vec![shortcuts::accel("N"), shortcuts::accel("T")],
+        },
+        QuickStep {
+            title: "底栏工具",
+            detail: "SFTP 文件、命令片段、系统监控等底栏图标入口；终端搜索见菜单或快捷键 F。",
+            keys: vec![],
+        },
+        QuickStep {
+            title: "视图与面板",
+            detail: "菜单「视图」可开关右侧 SFTP、片段侧栏、监控面板。",
+            keys: vec![],
+        },
+        QuickStep {
+            title: "工具与数据",
+            detail: "片段库、凭证管理、云端同步、会话日志在「工具」菜单。",
+            keys: vec![],
+        },
+        QuickStep {
+            title: "终端内操作",
+            detail: "搜索当前屏输出；已连接时可用命令历史。",
+            keys: vec![
+                shortcuts::accel("F"),
+                shortcuts::terminal_history_accel().to_string(),
+            ],
+        },
+    ]
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HelpPage {
@@ -78,38 +83,7 @@ impl HelpDocsDialog {
 
     pub fn open_markdown_in_system(doc_rel_path: &str) -> Result<(), String> {
         let path: PathBuf = docs::docs_directory().join(doc_rel_path);
-        if !path.is_file() {
-            return Err(format!("未找到文件：{}", path.display()));
-        }
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open")
-                .arg(&path)
-                .spawn()
-                .map_err(|e| e.to_string())?;
-            return Ok(());
-        }
-        #[cfg(target_os = "windows")]
-        {
-            std::process::Command::new("cmd")
-                .args(["/C", "start", "", path.to_str().unwrap_or("")])
-                .spawn()
-                .map_err(|e| e.to_string())?;
-            return Ok(());
-        }
-        #[cfg(all(unix, not(target_os = "macos")))]
-        {
-            std::process::Command::new("xdg-open")
-                .arg(&path)
-                .spawn()
-                .map_err(|e| e.to_string())?;
-            return Ok(());
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
-        {
-            let _ = path;
-            Err("当前平台不支持自动打开文档".to_string())
-        }
+        crate::platform::open_file(&path)
     }
 
     pub fn show(
@@ -231,9 +205,10 @@ fn render_quick_start(ui: &mut Ui, theme: &Theme) {
             .color(theme.color_form_hint()),
     );
     ui.add_space(theme.spacing_lg());
-    for (i, step) in QUICK_STEPS.iter().enumerate() {
+    let steps = quick_steps();
+    for (i, step) in steps.iter().enumerate() {
         render_step_row(ui, theme, i + 1, step);
-        if i + 1 < QUICK_STEPS.len() {
+        if i + 1 < steps.len() {
             ui.add_space(theme.spacing_md());
         }
     }
@@ -279,7 +254,7 @@ fn render_step_row(ui: &mut Ui, theme: &Theme, index: usize, step: &QuickStep) {
                 ui.add_space(theme.spacing_sm());
                 ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
-                    for key in step.keys {
+                    for key in &step.keys {
                         kbd_chip(ui, theme, key);
                     }
                 });

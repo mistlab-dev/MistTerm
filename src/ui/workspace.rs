@@ -66,7 +66,14 @@ impl MistTermApp {
         if self.credential_panel.open {
             if self
                 .credential_panel
-                .show_side_panel(ctx, &theme, &mut cred_action, &mut self.right_dock_outer_left_x)
+                .show_side_panel(
+                    ctx,
+                    &theme,
+                    &self.app_settings.vault,
+                    &self.audit_logger,
+                    &mut cred_action,
+                    &mut self.right_dock_outer_left_x,
+                )
             {
                 self.credential_panel.open = false;
             }
@@ -83,6 +90,7 @@ impl MistTermApp {
             theme_manager: &mut self.theme_manager,
             session_manager: &mut self.session_manager,
             credential_panel: &mut self.credential_panel,
+            audit: Some(&self.audit_logger),
         };
         self.cloud_sync_panel
             .show(ctx, &theme, &mut deps, &mut self.right_dock_outer_left_x);
@@ -488,6 +496,8 @@ impl MistTermApp {
                 });
             });
 
+        crate::ui::chrome::paint_right_dock_screen_gutter(ctx, &theme, top_chrome_height);
+
         // egui：CentralPanel 同层后绘会盖住 SidePanel；右 dock 须在 Central 之后 Foreground 重绘（靠左的先画）
         if self.show_monitor_panel {
             self.monitor_panel
@@ -724,8 +734,9 @@ impl MistTermApp {
                                     egui::ScrollArea::vertical()
                                         .max_height(200.0)
                                         .show(ui, |ui| {
+                                            let shortcuts = mistterm_functional_spec_shortcuts();
                                             ui.label(
-                                                egui::RichText::new(mistterm_functional_spec_shortcuts())
+                                                egui::RichText::new(shortcuts)
                                                     .font(egui::FontId::monospace(10.0))
                                                     .color(theme.color_sidebar_icon()),
                                             );
@@ -862,6 +873,181 @@ impl MistTermApp {
                                 "目录：{}（单文件上限 {} MB）",
                                 self.session_log_settings.base_dir.display(),
                                 self.session_log_settings.max_file_bytes / (1024 * 1024)
+                            ))
+                            .size(theme.font_size_small())
+                            .color(text_low),
+                        );
+                        ui.add_space(theme.spacing_status_bar_x());
+                        ui.label(
+                            egui::RichText::new("HashiCorp Vault")
+                                .size(theme.font_size_panel_title())
+                                .strong()
+                                .color(label_color),
+                        );
+                        ui.add_space(theme.spacing_panel_gap());
+                        if ui
+                            .checkbox(&mut self.app_settings.vault.enabled, "启用 Vault 集成")
+                            .changed()
+                        {
+                            let _ = self.app_settings.save();
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("地址");
+                            if ui
+                                .text_edit_singleline(&mut self.app_settings.vault.address)
+                                .lost_focus()
+                            {
+                                let _ = self.app_settings.save();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Namespace");
+                            if ui
+                                .text_edit_singleline(&mut self.app_settings.vault.namespace)
+                                .lost_focus()
+                            {
+                                let _ = self.app_settings.save();
+                            }
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("默认 KV mount");
+                            if ui
+                                .text_edit_singleline(&mut self.app_settings.vault.default_mount)
+                                .lost_focus()
+                            {
+                                let _ = self.app_settings.save();
+                            }
+                        });
+                        let mut auth = self.app_settings.vault.auth;
+                        egui::ComboBox::from_id_source("pref_vault_auth")
+                            .selected_text(match auth {
+                                crate::core::VaultAuthSettings::None => "未配置",
+                                crate::core::VaultAuthSettings::Token => "Token（存钥匙串）",
+                                crate::core::VaultAuthSettings::AppRole => "AppRole（存钥匙串）",
+                            })
+                            .show_ui(ui, |ui| {
+                                crate::ui::chrome::apply_menu_popup_style(ui, &theme);
+                                for v in [
+                                    crate::core::VaultAuthSettings::None,
+                                    crate::core::VaultAuthSettings::Token,
+                                    crate::core::VaultAuthSettings::AppRole,
+                                ] {
+                                    let label = match v {
+                                        crate::core::VaultAuthSettings::None => "未配置",
+                                        crate::core::VaultAuthSettings::Token => "Token（存钥匙串）",
+                                        crate::core::VaultAuthSettings::AppRole => {
+                                            "AppRole（存钥匙串）"
+                                        }
+                                    };
+                                    if ui.selectable_label(auth == v, label).clicked() {
+                                        auth = v;
+                                    }
+                                }
+                            });
+                        if auth != self.app_settings.vault.auth {
+                            self.app_settings.vault.auth = auth;
+                            let _ = self.app_settings.save();
+                        }
+                        let mut vault_token_buf = String::new();
+                        ui.horizontal(|ui| {
+                            ui.label("Token");
+                            ui.text_edit_singleline(&mut vault_token_buf);
+                            if ui.button("存钥匙串").clicked() && !vault_token_buf.is_empty() {
+                                self.app_settings.vault.auth =
+                                    crate::core::VaultAuthSettings::Token;
+                                let _ = crate::core::HashiCorpVaultClient::save_token_to_keyring(
+                                    &vault_token_buf,
+                                );
+                                let _ = self.app_settings.save();
+                            }
+                        });
+                        if ui.button("测试 Vault 连接").clicked() {
+                            match crate::core::HashiCorpVaultClient::new(
+                                self.app_settings.vault.clone(),
+                            ) {
+                                Ok(c) => match c.test_connection() {
+                                    Ok(()) => self.status_message = "Vault 连接成功".into(),
+                                    Err(e) => self.status_message = format!("Vault: {e}"),
+                                },
+                                Err(e) => self.status_message = format!("Vault: {e}"),
+                            }
+                        }
+                        ui.add_space(theme.spacing_status_bar_x());
+                        ui.label(
+                            egui::RichText::new("安全审计（SIEM）")
+                                .size(theme.font_size_panel_title())
+                                .strong()
+                                .color(label_color),
+                        );
+                        ui.add_space(theme.spacing_panel_gap());
+                        if ui
+                            .checkbox(&mut self.app_settings.audit.enabled, "启用审计日志")
+                            .changed()
+                        {
+                            self.audit_logger
+                                .update_settings(self.app_settings.audit.clone());
+                            let _ = self.app_settings.save();
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label("保留天数");
+                            if ui
+                                .add(egui::DragValue::new(
+                                    &mut self.app_settings.audit.retention_days,
+                                ))
+                                .changed()
+                            {
+                                let _ = self.app_settings.save();
+                            }
+                        });
+                        ui.checkbox(
+                            &mut self.app_settings.audit.log_command_preview,
+                            "记录命令预览（不含完整明文时可截断）",
+                        );
+                        ui.checkbox(
+                            &mut self.app_settings.audit.http.enabled,
+                            "HTTP 批量上报",
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label("URL");
+                            ui.text_edit_singleline(&mut self.app_settings.audit.http.url);
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label("Bearer");
+                            ui.text_edit_singleline(
+                                &mut self.app_settings.audit.http.bearer_token,
+                            );
+                        });
+                        ui.checkbox(
+                            &mut self.app_settings.audit.syslog.enabled,
+                            "Syslog (UDP/TCP)",
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label("主机:端口");
+                            ui.text_edit_singleline(&mut self.app_settings.audit.syslog.host);
+                            ui.add(egui::DragValue::new(&mut self.app_settings.audit.syslog.port));
+                            ui.checkbox(&mut self.app_settings.audit.syslog.use_tcp, "TCP");
+                        });
+                        if ui.button("保存审计/Vault 设置").clicked() {
+                            self.audit_logger
+                                .update_settings(self.app_settings.audit.clone());
+                            match self.app_settings.save() {
+                                Ok(()) => {
+                                    self.audit_logger.record(
+                                        crate::core::AuditEvent::new(
+                                            crate::core::AuditCategory::Config,
+                                            "config.audit.updated",
+                                            crate::core::AuditOutcome::Success,
+                                        ),
+                                    );
+                                    self.status_message = "已保存 Vault/审计设置".into();
+                                }
+                                Err(e) => self.status_message = format!("保存失败: {e}"),
+                            }
+                        }
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "审计目录：{}",
+                                self.app_settings.audit.file_dir.display()
                             ))
                             .size(theme.font_size_small())
                             .color(text_low),
@@ -1099,10 +1285,11 @@ impl MistTermApp {
             self.import_ssh_indices(&indices);
         }
         self.session_log_dialog.show(ctx, &theme, &self.session_log_settings);
+        let help_shortcuts = crate::ui::app::mistterm_functional_spec_shortcuts();
         self.help_docs_dialog.show(
             ctx,
             &theme,
-            crate::ui::app::mistterm_functional_spec_shortcuts(),
+            &help_shortcuts,
             &mut self.status_message,
         );
 
@@ -1344,10 +1531,16 @@ impl MistTermApp {
                                 .rounding(theme.radius_list_item())
                                 .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
                                 .show(ui, |ui| {
-                                    ui.label(
-                                        egui::RichText::new("📋 命令片段侧边栏提供更丰富的命令分类和快捷操作")
-                                            .size(theme.font_size_small())
-                                            .color(theme.color_caption_text()),
+                                    crate::ui::icons::icon_label_row(
+                                        ui,
+                                        crate::ui::icons::IconId::Fragment,
+                                        "命令片段侧边栏提供更丰富的命令分类和快捷操作",
+                                        theme.font_size_small(),
+                                        6.0,
+                                        |t| {
+                                            t.size(theme.font_size_small())
+                                                .color(theme.color_caption_text())
+                                        },
                                     );
                                 });
                             ui.add_space(theme.spacing_list_item_x());
@@ -1412,20 +1605,32 @@ impl MistTermApp {
                                 ui.add_space(theme.spacing_panel_gap());
                             }
                             ui.separator();
-                            if ui
-                                .add(
-                                    crate::ui::chrome::panel_toolbar_button_widget(
-                                        theme,
-                                        egui::RichText::new("↻ 根据变量重算命令")
-                                            .size(theme.font_size_fragment_dialog_body())
-                                            .color(theme.color_body_text_muted()),
+                            ui.horizontal(|ui| {
+                                let px = theme.font_size_fragment_dialog_body();
+                                let (r, _) =
+                                    ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                                crate::ui::icons::paint_icon(
+                                    ui,
+                                    r,
+                                    crate::ui::icons::IconId::Refresh,
+                                    theme.color_body_text_muted(),
+                                    px,
+                                );
+                                if ui
+                                    .add(
+                                        crate::ui::chrome::panel_toolbar_button_widget(
+                                            theme,
+                                            egui::RichText::new("根据变量重算命令")
+                                                .size(theme.font_size_fragment_dialog_body())
+                                                .color(theme.color_body_text_muted()),
+                                        )
+                                        .min_size(egui::vec2(0.0, theme.size_fragment_var_field_min_h())),
                                     )
-                                    .min_size(egui::vec2(0.0, theme.size_fragment_var_field_min_h())),
-                                )
-                                .clicked()
-                            {
-                                self.sync_pending_fragment_command_edit();
-                            }
+                                    .clicked()
+                                {
+                                    self.sync_pending_fragment_command_edit();
+                                }
+                            });
                             ui.label(
                                 egui::RichText::new("将要执行（可编辑）")
                                     .size(theme.font_size_fragment_dialog_body())
@@ -1568,7 +1773,16 @@ impl MistTermApp {
                     }
                     // 搜索框
                     ui.horizontal(|ui| {
-                        ui.label("🔍");
+                        let px = theme.font_size_normal();
+                        let (r, _) =
+                            ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                        crate::ui::icons::paint_icon(
+                            ui,
+                            r,
+                            crate::ui::icons::IconId::Search,
+                            theme.fg_low_color(),
+                            px,
+                        );
                         ui.text_edit_singleline(&mut self.quick_selector.search_query);
                     });
                     
@@ -1618,9 +1832,9 @@ impl MistTermApp {
             use egui::*;
             
             let ok_label = if self.variable_dialog.paste_after_fill {
-                "✅ 插入终端"
+                "插入终端"
             } else {
-                "✅ 执行"
+                "执行"
             };
 
             let var_sz = layout_util::centered_window_default_size(ctx, 0.36, 0.38);
@@ -1692,7 +1906,7 @@ impl MistTermApp {
                                     if ui
                                         .add(
                                             egui::Button::new(
-                                                egui::RichText::new("↻ 用上方变量重写命令")
+                                                egui::RichText::new("用上方变量重写命令")
                                                     .size(theme.font_size_fragment_dialog_body())
                                                     .color(theme.fg_medium_color()),
                                             )
@@ -1720,7 +1934,7 @@ impl MistTermApp {
                                             .text_color(theme.color_text_input_text())
                                             .hint_text(crate::ui::chrome::hint_rich(
                                                 theme,
-                                                "可先填变量再点 ↻ 同步；{{ … }} 为表达式，见片段库帮助",
+                                                "可先填变量再点「重写」同步；{{ … }} 为表达式，见片段库帮助",
                                                 theme.font_size_fragment_dialog_mono(),
                                             )),
                                     );

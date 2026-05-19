@@ -9,25 +9,5 @@ pub fn docs_directory() -> PathBuf {
 
 /// 在系统文件管理器中打开文档目录。
 pub fn reveal_docs_directory() -> bool {
-    let path = docs_directory();
-    if !path.is_dir() {
-        return false;
-    }
-    #[cfg(target_os = "macos")]
-    {
-        return std::process::Command::new("open").arg(&path).spawn().is_ok();
-    }
-    #[cfg(target_os = "windows")]
-    {
-        return std::process::Command::new("explorer").arg(&path).spawn().is_ok();
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        return std::process::Command::new("xdg-open").arg(&path).spawn().is_ok();
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
-    {
-        let _ = path;
-        false
-    }
+    crate::platform::reveal_directory(&docs_directory())
 }

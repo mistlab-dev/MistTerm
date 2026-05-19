@@ -11,10 +11,11 @@ use std::time::{Duration, Instant};
 use crate::core::{
     candidate_to_session, default_ssh_config_path, is_already_imported, parse_ssh_config_file,
     pending_imports, SshConfigParseResult,
-    CommandHistory, Credential, CredentialAuthKind, SessionLogSettings, SessionLogWriter,
-    spawn_cleanup_old_logs, DEFAULT_RETENTION_DAYS,
-    SessionSortBy, SshConfigCandidate, expand_command_template, expand_fragment_command_stages,
-    expand_rhai_blocks, list_placeholder_keys, merge_rhai_context,
+    AppSettings, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, CommandHistory, Credential,
+    CredentialAuthKind, SecretResolver, SessionLogSettings, SessionLogWriter, SecretBackend,
+    TempKeyFile, spawn_cleanup_old_logs, DEFAULT_RETENTION_DAYS,
+    SessionSortBy, SshConfigCandidate, command_preview, expand_command_template,
+    expand_fragment_command_stages, expand_rhai_blocks, list_placeholder_keys, merge_rhai_context,
     FragmentManager, FragmentStats, SessionConfig, SessionManager, SortBy, SESSION_COLOR_TAGS,
 };
 use crate::ui::command_history_overlay::{CommandHistoryAction, CommandHistoryOverlay};
@@ -83,21 +84,39 @@ fn truncate_status(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// FUNCTIONAL_SPEC §7 快捷键单一真源（关于页与帮助共用）
-pub(crate) fn mistterm_functional_spec_shortcuts() -> &'static str {
-    "FUNCTIONAL_SPEC §7 摘录（Mac 用 ⌘，Win/Linux 用 Ctrl）\n\
-     ⌘N / Ctrl+N — 新建会话\n\
-     ⌘E / Ctrl+E — 编辑所选会话\n\
-     ⌘T / Ctrl+T — 新终端标签\n\
-     ⌘W / Ctrl+W — 关闭当前标签\n\
-     ⌘1–9 / Ctrl+1–9 — 切换第 N 个标签\n\
-     ⌘Tab / Ctrl+Tab — 下一标签；加 Shift 为上一标签\n\
-     ⌘J / Ctrl+J — 聚焦连接搜索\n\
-     ⌘K / Ctrl+K — 聚焦片段搜索\n\
-     ⌘⇧J / Ctrl+⇧J — 快速片段选择器\n\
-     ⌘F / Ctrl+F — 终端内搜索\n\
-     ⌘, / Ctrl+, — 偏好设置\n\
-     ⌘H / Ctrl+H — 关于与本说明"
+/// FUNCTIONAL_SPEC §7 快捷键单一真源（关于页与帮助共用；随平台显示 ⌘ 或 Ctrl）。
+pub(crate) fn mistterm_functional_spec_shortcuts() -> String {
+    use crate::platform::shortcuts as s;
+    format!(
+        "键盘快捷键（主修饰键：{}）\n\
+         {}\n\
+         {}\n\
+         {}\n\
+         {}\n\
+         {}1–9 — 切换第 N 个标签\n\
+         {}Tab — 下一标签；加 Shift 为上一标签\n\
+         {}\n\
+         {}\n\
+         {}\n\
+         {}F — 终端内搜索\n\
+         {}, — 偏好设置\n\
+         {}H — 关于与本说明\n\
+         {} — 命令历史（终端内）",
+        s::primary_modifier_label(),
+        s::help_line("N", "新建会话"),
+        s::help_line("E", "编辑所选会话"),
+        s::help_line("T", "新终端标签"),
+        s::help_line("W", "关闭当前标签"),
+        s::primary_modifier_label(),
+        s::primary_modifier_label(),
+        s::help_line("J", "聚焦连接搜索"),
+        s::help_line("K", "聚焦片段搜索"),
+        s::accel_shift("J") + " — 快速片段选择器",
+        s::primary_modifier_label(),
+        s::primary_modifier_label(),
+        s::primary_modifier_label(),
+        s::terminal_history_accel(),
+    )
 }
 
 /// 底栏 / 提示文案颜色：错误类用主题红，其余用弱文字色（避免顶栏大块告警色）
@@ -157,6 +176,8 @@ struct TerminalTab {
     /// 自动重连：计划执行时间；与 `ssh_auto_reconnect_attempts` 配合（§1.4 可选行为）
     ssh_auto_reconnect_next: Option<Instant>,
     ssh_auto_reconnect_attempts: u8,
+    /// Vault/内存 PEM 临时私钥，断开或关闭标签时删除
+    ssh_temp_key: Option<TempKeyFile>,
     log_writer: Option<SessionLogWriter>,
     last_term_rect: egui::Rect,
 }
@@ -264,6 +285,7 @@ pub struct MistTermApp {
     new_session_password: String,
     new_session_group: String,
     new_session_private_key_path: String,
+    new_session_secret_backend: SecretBackend,
 
     edit_session_id: Option<String>,
     edit_session_name: String,
@@ -313,6 +335,9 @@ pub struct MistTermApp {
 
     /// 主题管理器
     theme_manager: ThemeManager,
+    /// Vault / 审计等应用设置
+    app_settings: AppSettings,
+    audit_logger: AuditLogger,
 
     /// 网络断开后是否自动重连（偏好设置，§1.4）
     auto_reconnect_enabled: bool,
@@ -512,6 +537,8 @@ impl MistTermApp {
 
     /// 创建新的应用实例
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let app_settings = AppSettings::load();
+        let audit_logger = AuditLogger::new(app_settings.audit.clone());
         let mut session_manager = SessionManager::new();
         let boot_diagnostics = session_manager.take_load_diagnostics().join("；");
         let sessions = session_manager.list_sessions();
@@ -530,10 +557,21 @@ impl MistTermApp {
             last_responsive_layout_band: None,
             tabs: Vec::new(),
             active_tab: None,
-            status_message: if boot_diagnostics.is_empty() {
-                "就绪".to_string()
-            } else {
-                boot_diagnostics
+            status_message: {
+                let mut msg = if boot_diagnostics.is_empty() {
+                    "就绪".to_string()
+                } else {
+                    boot_diagnostics
+                };
+                if !crate::platform::cjk_font_loaded() {
+                    let warn = "未加载中文字体，界面中文可能显示为方框";
+                    if msg.is_empty() || msg == "就绪" {
+                        msg = warn.to_string();
+                    } else {
+                        msg = format!("{msg}；{warn}");
+                    }
+                }
+                msg
             },
             show_new_session_dialog: false,
             show_edit_session_dialog: false,
@@ -576,6 +614,7 @@ impl MistTermApp {
             new_session_password: String::new(),
             new_session_group: "默认".to_string(),
             new_session_private_key_path: String::new(),
+            new_session_secret_backend: SecretBackend::default(),
             edit_session_id: None,
             edit_session_name: String::new(),
             edit_session_host: String::new(),
@@ -599,6 +638,8 @@ impl MistTermApp {
             fragment_vars_completion: FragmentVarsCompletion::default(),
             quick_selector: FragmentQuickSelector::default(),
             theme_manager: ThemeManager::load(),
+            app_settings,
+            audit_logger,
             delete_session_confirm: None,
             close_tab_confirm_idx: None,
             auto_reconnect_enabled: false,
@@ -735,20 +776,76 @@ impl MistTermApp {
             added += 1;
         }
         if added > 0 {
+            self.audit_logger.record(
+                AuditEvent::new(AuditCategory::Session, "session.import_ssh", AuditOutcome::Success)
+                    .with_detail(serde_json::json!({ "count": added })),
+            );
             self.status_message = format!("已导入 {} 个 SSH 配置", added);
             self.refresh_ssh_config_candidates();
         }
     }
 
-    fn terminal_connect(terminal: &mut TerminalView, theme: &crate::ui::theme::Theme, session: &SessionConfig) {
+    fn poll_connect_audit_from_tabs(&mut self) {
+        for tab in &mut self.tabs {
+            if let Some((ok, host)) = tab.terminal.take_connect_audit() {
+                let action = if ok {
+                    "connect.success"
+                } else {
+                    "connect.failure"
+                };
+                let outcome = if ok {
+                    AuditOutcome::Success
+                } else {
+                    AuditOutcome::Failure
+                };
+                self.audit_logger.record(
+                    AuditEvent::new(AuditCategory::Session, action, outcome)
+                        .with_host(&host)
+                        .with_session(&tab.session_id),
+                );
+            }
+        }
+    }
+
+    fn terminal_connect_session(
+        &mut self,
+        terminal: &mut TerminalView,
+        session: &SessionConfig,
+        temp_key: &mut Option<TempKeyFile>,
+    ) {
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Session, "connect.start", AuditOutcome::Success)
+                .with_host(&session.host)
+                .with_session(&session.id),
+        );
+        let resolver = SecretResolver::new(self.app_settings.vault.clone());
+        let resolved = match resolver.resolve_session(session) {
+            Ok(r) => r,
+            Err(e) => {
+                self.audit_logger.record(
+                    AuditEvent::new(
+                        AuditCategory::Session,
+                        "connect.resolve_failed",
+                        AuditOutcome::Failure,
+                    )
+                    .with_host(&session.host)
+                    .with_session(&session.id)
+                    .with_detail(serde_json::json!({ "error": e.to_string() })),
+                );
+                self.status_message = format!("解析凭据失败: {e}");
+                return;
+            }
+        };
+        *temp_key = resolved.temp_key_file;
+        let theme = self.theme_manager.current_theme();
         let (ka_on, ka_int, ka_max) = Self::session_keepalive_params(session);
         terminal.connect(
             theme,
             &session.host,
             session.port,
             &session.username,
-            &session.password,
-            &session.private_key_path,
+            &resolved.password,
+            &resolved.private_key_path,
             ka_on,
             ka_int,
             ka_max,
@@ -817,11 +914,20 @@ impl MistTermApp {
             (sid, sname, cmd)
         };
         if let Some(command) = cmd {
+            let preview = command_preview(&command, 120);
+            self.audit_logger.record(
+                AuditEvent::new(AuditCategory::Command, "command.submit", AuditOutcome::Success)
+                    .with_session(&sid)
+                    .with_detail(serde_json::json!({
+                        "preview": preview,
+                        "len": command.len(),
+                    })),
+            );
             self.command_history.record(
                 &command,
                 Some(&sid),
                 sname.as_deref(),
-                true,
+                false,
             );
         }
     }
@@ -957,23 +1063,26 @@ impl MistTermApp {
             self.sidebar_user_dismissed_responsive = false;
         }
         ctx.memory_mut(|m| m.request_focus(Self::id_sidebar_connection_search()));
-        self.status_message = "已聚焦连接搜索框（⌘J / Ctrl+J）".to_string();
+        self.status_message =
+            format!("已聚焦连接搜索框（{}）", crate::platform::accel("J"));
     }
 
     fn focus_fragment_panel_search(&mut self, ctx: &egui::Context) {
         if !Self::right_dock_open_allowed(Self::layout_window_width(ctx)) {
             let w = Self::layout_window_width(ctx);
             self.status_message = format!(
-                "当前窗口约 {:.0}px，§8 需 ≥ {:.0}px 才能打开命令片段侧栏以使用 ⌘K / Ctrl+K",
+                "当前窗口约 {:.0}px，§8 需 ≥ {:.0}px 才能打开命令片段侧栏以使用 {}",
                 w,
-                Self::RESP_LAYOUT_WIDE_MIN_PX
+                Self::RESP_LAYOUT_WIDE_MIN_PX,
+                crate::platform::accel("K"),
             );
             return;
         }
         self.show_fragment_panel = true;
         self.show_sftp_panel = false;
         ctx.memory_mut(|m| m.request_focus(Self::id_fragment_panel_search()));
-        self.status_message = "已聚焦片段搜索框（⌘K / Ctrl+K）".to_string();
+        self.status_message =
+            format!("已聚焦片段搜索框（{}）", crate::platform::accel("K"));
     }
 
     fn switch_tab_to_index(&mut self, idx: usize) {
@@ -1088,8 +1197,11 @@ impl MistTermApp {
         };
         let offline = self.tabs[idx].terminal.offline_input_snapshot();
         self.tabs[idx].terminal.disconnect();
-        let theme = self.theme_manager.current_theme();
-        Self::terminal_connect(&mut self.tabs[idx].terminal, theme, &session);
+        let mut temp_key = None;
+        let mut terminal = std::mem::replace(&mut self.tabs[idx].terminal, TerminalView::new());
+        self.terminal_connect_session(&mut terminal, &session, &mut temp_key);
+        self.tabs[idx].terminal = terminal;
+        self.tabs[idx].ssh_temp_key = temp_key;
         self.tabs[idx]
             .terminal
             .restore_offline_input_snapshot(offline.0, offline.1);
@@ -1229,14 +1341,15 @@ impl MistTermApp {
     /// 为给定会话配置追加一个新终端标签并发起连接（不检查是否已有同会话标签）
     fn push_tab_connecting(&mut self, session: &SessionConfig) {
         let mut terminal = TerminalView::new();
-        let theme = self.theme_manager.current_theme();
-        Self::terminal_connect(&mut terminal, theme, session);
+        let mut temp_key = None;
+        self.terminal_connect_session(&mut terminal, session, &mut temp_key);
         self.tabs.push(TerminalTab {
             session_id: session.id.clone(),
             title: session.name.clone(),
             terminal,
             ssh_auto_reconnect_next: None,
             ssh_auto_reconnect_attempts: 0,
+            ssh_temp_key: temp_key,
             log_writer: None,
             last_term_rect: egui::Rect::NOTHING,
         });
@@ -1251,7 +1364,11 @@ impl MistTermApp {
     fn open_new_tab_from_selection(&mut self) {
         let Some(ref sid) = self.selected_session_id else {
             self.status_message =
-                "请先在左侧选择一个连接，再按 ⌘T / Ctrl+T 新开标签；⌘N 为新建会话配置".to_string();
+                format!(
+                    "请先在左侧选择一个连接，再按 {} 新开标签；{} 为新建会话配置",
+                    crate::platform::accel("T"),
+                    crate::platform::accel("N"),
+                );
             return;
         };
         let Some(session) = self.session_manager.get_session(sid).cloned() else {
@@ -1342,15 +1459,23 @@ impl MistTermApp {
                 {
                     self.rebuild_terminal_search_matches();
                 }
-                if crate::ui::chrome::chrome_small_button(ui, theme, "◀")
-                    .on_hover_text("上一个 (Shift+F3)")
-                    .clicked()
+                if crate::ui::chrome::chrome_small_icon_button(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::ChevronLeft,
+                )
+                .on_hover_text("上一个 (Shift+F3)")
+                .clicked()
                 {
                     self.terminal_search_step(-1);
                 }
-                if crate::ui::chrome::chrome_small_button(ui, theme, "▶")
-                    .on_hover_text("下一个 (F3 / Enter)")
-                    .clicked()
+                if crate::ui::chrome::chrome_small_icon_button(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::ChevronRight,
+                )
+                .on_hover_text("下一个 (F3 / Enter)")
+                .clicked()
                 {
                     self.terminal_search_step(1);
                 }
@@ -1565,9 +1690,24 @@ impl MistTermApp {
             &self.new_session_group,
             &self.new_session_private_key_path,
         );
+        let sid = session.id.clone();
+        let backend = self.new_session_secret_backend.clone();
+        if !matches!(backend, SecretBackend::LocalEncrypted) {
+            self.session_manager.patch_session(&sid, |s| {
+                s.secret_backend = backend.clone();
+                if backend.is_vault() {
+                    s.password.clear();
+                }
+            });
+        }
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Session, "session.create", AuditOutcome::Success)
+                .with_session(&sid)
+                .with_host(&session.host),
+        );
 
         // 选择会话
-        self.selected_session_id = Some(session.id.clone());
+        self.selected_session_id = Some(sid.clone());
         self.push_tab_connecting(&session);
         self.reset_new_session_form();
     }
@@ -1582,6 +1722,7 @@ impl MistTermApp {
         self.new_session_password.clear();
         self.new_session_group = "默认".to_string();
         self.new_session_private_key_path.clear();
+        self.new_session_secret_backend = SecretBackend::default();
     }
 
     /// 删除会话
@@ -1596,6 +1737,11 @@ impl MistTermApp {
                 t.terminal.disconnect();
             }
         }
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Session, "session.delete", AuditOutcome::Success)
+                .with_session(session_id)
+                .with_detail(serde_json::json!({ "name": display })),
+        );
         self.session_manager.delete_session(session_id);
         self.tabs.retain(|t| t.session_id != session_id);
         if let Some(idx) = self.active_tab {
@@ -1700,7 +1846,7 @@ impl MistTermApp {
             .resizable(true)
             .show_separator_line(false)
             // 仅占布局宽；勿在此绘制内容（CentralPanel 后绘会盖住）。内容在 Foreground Area 重绘。
-            .frame(egui::Frame::none())
+            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
                 self.fragment_panel_slot_rect = Some(ui.max_rect());
                 let w = layout_util::dock_panel_content_width(ui, frag_min, frag_max);
@@ -1728,42 +1874,29 @@ impl MistTermApp {
             return;
         }
         let screen = ctx.screen_rect();
+        let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.fragment_panel_slot_rect,
             ctx,
             layout_util::FRAGMENT_PANEL_ID,
             layout_util::SidePanelProfile::Fragment,
             None,
+            dock_inset,
         ) else {
             return;
         };
-        let paint = layout_util::inset_slot_for_foreground_paint(slot, screen);
-        let (_, frag_min, frag_max) =
-            layout_util::side_panel_widths(ctx, layout_util::SidePanelProfile::Fragment);
-        let inner = crate::ui::chrome::right_dock_slot_content_rect(paint, theme);
-        let panel_w = layout_util::clamp_f32(inner.width(), frag_min, frag_max);
-        let border = theme.border_color();
-        // Middle + constrain_to(paint)：须在 Central(Background) 之上、模态 Window(Middle, 后绘) 之下。
-        crate::ui::chrome::right_dock_foreground_area("mistterm_fragment_fg")
-            .constrain_to(paint)
-            .fixed_pos(paint.min)
-            .show(ctx, |ui| {
-                ui.set_clip_rect(paint);
-                ui.set_min_size(paint.size());
-                ui.set_max_size(paint.size());
-                crate::ui::chrome::paint_right_dock_slot_shell(ui, paint, theme);
-                ui.allocate_ui_at_rect(inner, |ui| {
-                    ui.set_clip_rect(inner);
-                    ui.set_min_width(panel_w);
-                    ui.set_max_width(panel_w);
-                    self.show_fragment_panel_contents(ui, theme, panel_w);
-                });
-                ui.painter().vline(
-                    paint.max.x - 0.5,
-                    paint.y_range(),
-                    egui::Stroke::new(1.0, border),
-                );
-            });
+        let geom = crate::ui::chrome::prepare_right_dock_foreground_geom(slot, screen, theme);
+        let layer_id = crate::ui::chrome::right_dock_foreground_layer_id("mistterm_fragment_fg");
+        crate::ui::chrome::paint_right_dock_foreground_shell(ctx, layer_id, geom.paint, theme);
+        crate::ui::chrome::show_right_dock_foreground_body(
+            "mistterm_fragment_fg",
+            ctx,
+            &geom,
+            layout_util::SidePanelProfile::Fragment,
+            |ui, panel_w| {
+                self.show_fragment_panel_contents(ui, theme, panel_w);
+            },
+        );
     }
 
     /// 命令片段面板正文（§5 扁平列表 + 四标签）。
@@ -1790,19 +1923,21 @@ impl MistTermApp {
             ))
             .show(ui, |ui| {
                 ui.set_max_width(panel_w);
+                let sort_icon = crate::ui::icons::fragment_sort_icon(self.fragment_sort_by);
                 let sort_label = match self.fragment_sort_by {
-                    SortBy::UsageCount => "🔢 次数",
-                    SortBy::SuccessRate => "✅ 成功率",
-                    SortBy::LastUsed => "🕐 最近",
-                    SortBy::Name => "🔤 名称",
+                    SortBy::UsageCount => "次数",
+                    SortBy::SuccessRate => "成功率",
+                    SortBy::LastUsed => "最近",
+                    SortBy::Name => "名称",
                 };
                 let header = crate::ui::chrome::dock_panel_title_bar(
                     ui,
                     theme,
                     "命令片段",
                     title_style,
+                    sort_icon,
                     sort_label,
-                    "➕ 新建",
+                    "新建",
                     "关闭命令片段侧栏",
                 );
                 if header.closed {
@@ -1953,6 +2088,11 @@ impl MistTermApp {
             self.status_message = "没有活动的终端标签页".to_string();
             return;
         }
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Fragment, "fragment.insert", AuditOutcome::Success)
+                .with_resource(&fragment.id)
+                .with_detail(serde_json::json!({ "title": fragment.title })),
+        );
 
         if fragment.has_variables() {
             self.variable_dialog.open = true;
@@ -2074,7 +2214,7 @@ impl MistTermApp {
             .min_width(g_min)
             .max_width(g_max)
             .resizable(true)
-            .frame(crate::ui::chrome::region_panel_frame(theme))
+            .frame(crate::ui::chrome::right_dock_panel_frame(theme))
             .show(ctx, |ui| {
                 let panel_w = layout_util::dock_panel_content_width(ui, g_min, g_max);
                 ui.set_max_width(panel_w);
@@ -2175,7 +2315,12 @@ impl MistTermApp {
                             }
                             if self.auto_reconnect_enabled {
                                 ui.add_space(theme.spacing_sm());
-                                Self::status_chip(ui, "↻ 自动重连", &theme);
+                                crate::ui::chrome::status_icon_chip(
+                                    ui,
+                                    &theme,
+                                    crate::ui::icons::IconId::Refresh,
+                                    "自动重连",
+                                );
                             }
                             if self.session_log_enabled {
                                 if let Some(log_label) = self.active_tab_log_status() {
@@ -2215,28 +2360,14 @@ impl MistTermApp {
                                 if crate::ui::chrome::status_restore_chip(
                                     ui,
                                     &theme,
-                                    &format!("▸ 连接 · {}", self.tabs.len()),
+                                    "连接",
+                                    self.tabs.len(),
                                 )
                                 .on_hover_text("展开左侧连接栏")
                                 .clicked()
                                 {
                                     self.sidebar_collapsed = false;
                                     self.sidebar_user_dismissed_responsive = false;
-                                }
-                            }
-                            if !self.show_fragment_panel {
-                                ui.add_space(theme.spacing_sm());
-                                if crate::ui::chrome::status_restore_chip(
-                                    ui,
-                                    &theme,
-                                    &format!("▸ 命令片段 · {}", fragment_count),
-                                )
-                                .on_hover_text("展开右侧命令片段侧栏")
-                                .clicked()
-                                {
-                                    if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                        self.show_fragment_panel = true;
-                                    }
                                 }
                             }
                             if !self.status_message.is_empty() {
@@ -2282,9 +2413,15 @@ impl MistTermApp {
                                 .color(theme.color_caption_text()),
                         );
 
-                        // right_to_left：先 add 的靠右；顺序 📋→📤→🔍→📊 视觉为 📊🔍📤📋
-                        if crate::ui::chrome::status_tool_glyph(ui, &theme, "📋")
-                            .on_hover_text("命令片段 · ⌘K")
+                        if crate::ui::chrome::status_tool_icon(
+                            ui,
+                            &theme,
+                            crate::ui::icons::IconId::Fragment,
+                        )
+                            .on_hover_text(format!(
+                                "命令片段 · {}",
+                                crate::platform::accel("K")
+                            ))
                             .clicked()
                         {
                             if self.show_fragment_panel {
@@ -2293,21 +2430,25 @@ impl MistTermApp {
                                 self.show_fragment_panel = true;
                             }
                         }
-                        if crate::ui::chrome::status_tool_glyph(ui, &theme, "📤")
-                            .on_hover_text("上传文件 · 拖放亦可")
+                        if crate::ui::chrome::status_tool_icon(
+                            ui,
+                            &theme,
+                            crate::ui::icons::IconId::Folder,
+                        )
+                            .on_hover_text("SFTP 文件 · 浏览/上传/下载")
                             .clicked()
                         {
-                            if let Some(path) = FileDialog::new().pick_file() {
-                                self.enqueue_upload_for_active_tab(path);
+                            if self.show_sftp_panel {
+                                self.show_sftp_panel = false;
+                            } else if self.ensure_right_dock_allowed_or_warn(ctx) {
+                                self.toggle_sftp_panel(ctx);
                             }
                         }
-                        if crate::ui::chrome::status_tool_glyph(ui, &theme, "🔍")
-                            .on_hover_text("终端搜索 · ⌘F")
-                            .clicked()
-                        {
-                            self.toggle_terminal_search();
-                        }
-                        if crate::ui::chrome::status_tool_glyph(ui, &theme, "📊")
+                        if crate::ui::chrome::status_tool_icon(
+                            ui,
+                            &theme,
+                            crate::ui::icons::IconId::Monitor,
+                        )
                             .on_hover_text("系统监控")
                             .clicked()
                         {
@@ -2447,6 +2588,15 @@ impl MistTermApp {
     }
 
     fn apply_credential_to_new_session_form(&mut self, c: Credential) {
+        self.audit_logger.record(
+            AuditEvent::new(
+                AuditCategory::Credential,
+                "credential.use_for_connect",
+                AuditOutcome::Success,
+            )
+            .with_resource(&c.id)
+            .with_host(&c.host),
+        );
         self.show_new_session_dialog = true;
         self.new_session_name = if c.name.is_empty() {
             c.host.clone()
@@ -2457,11 +2607,25 @@ impl MistTermApp {
         self.new_session_port = c.port.max(1);
         self.new_session_port_str = self.new_session_port.to_string();
         self.new_session_username = c.username.clone();
-        self.new_session_password = if matches!(c.auth, CredentialAuthKind::Password) {
-            c.secret.clone()
-        } else {
-            String::new()
-        };
+        self.new_session_secret_backend = c.secret_backend.clone();
+        match c.auth {
+            CredentialAuthKind::Password | CredentialAuthKind::Token => {
+                self.new_session_password = if c.secret_backend.is_vault() {
+                    String::new()
+                } else {
+                    c.secret.clone()
+                };
+                self.new_session_private_key_path.clear();
+            }
+            CredentialAuthKind::SshKey => {
+                self.new_session_password.clear();
+                if c.secret.contains("BEGIN") {
+                    self.new_session_private_key_path.clear();
+                } else {
+                    self.new_session_private_key_path = c.secret.clone();
+                }
+            }
+        }
         self.status_message = "已从凭证填入新建会话（请检查后连接）".to_string();
     }
 }
@@ -2487,6 +2651,7 @@ impl eframe::App for MistTermApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        crate::ui::icons::UiIcons::reload_if_ppp_changed(ctx);
         self.apply_current_theme(ctx);
         self.apply_responsive_layout(ctx);
 
@@ -2530,6 +2695,7 @@ impl eframe::App for MistTermApp {
             ctx.request_repaint();
         }
         self.poll_command_history_from_active_tab();
+        self.poll_connect_audit_from_tabs();
         self.poll_session_log_commands();
         self.append_terminal_output_logs();
 
@@ -2673,7 +2839,10 @@ impl eframe::App for MistTermApp {
                     self.open_edit_session_dialog(sid);
                 } else {
                     self.status_message =
-                        "请先在左侧选择一个连接（⌘E / Ctrl+E 编辑会话配置）".to_string();
+                        format!(
+                            "请先在左侧选择一个连接（{} 编辑会话配置）",
+                            crate::platform::accel("E"),
+                        );
                 }
             }
             if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::H)) {
@@ -2691,7 +2860,10 @@ impl eframe::App for MistTermApp {
                         self.command_history_overlay.open_new();
                     }
                 } else {
-                    self.status_message = "请先连接终端后再使用 Ctrl+R 搜索命令历史".to_string();
+                    self.status_message = format!(
+                        "请先连接终端后再使用 {} 搜索命令历史",
+                        crate::platform::terminal_history_accel()
+                    );
                 }
             }
             // egui 0.23 无 Key::Comma；⌘/Ctrl+, 常表现为 Text(",") + 主修饰键
@@ -2781,6 +2953,11 @@ impl MistTermApp {
             self.status_message = "请先选择左侧会话".to_string();
             return;
         }
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Fragment, "fragment.execute", AuditOutcome::Success)
+                .with_resource(&fragment.id)
+                .with_detail(serde_json::json!({ "title": fragment.title })),
+        );
 
         if fragment.has_variables() {
             self.variable_dialog.open = true;
@@ -2853,6 +3030,7 @@ impl MistTermApp {
 
     /// 显示欢迎界面
     fn show_welcome(&self, ui: &mut egui::Ui) {
+        let icon_px = self.theme_manager.current_theme().size_icon_glyph();
         let s = ui.available_size();
         if s.x.is_finite() && s.y.is_finite() && s.x > 0.0 && s.y > 0.0 {
             ui.set_min_size(s);
@@ -2860,17 +3038,40 @@ impl MistTermApp {
         ui.with_layout(egui::Layout::centered_and_justified(egui::Direction::TopDown), |ui| {
             ui.heading("欢迎使用 Mist");
             ui.separator();
-            ui.colored_label(
-                ui.style().visuals.selection.bg_fill,
-                "🚀 快速开始"
+            let accent = ui.style().visuals.selection.bg_fill;
+            crate::ui::icons::icon_label_row(
+                ui,
+                crate::ui::icons::IconId::Rocket,
+                "快速开始",
+                icon_px,
+                8.0,
+                move |t| t.color(accent),
             );
             ui.horizontal(|ui| {
                 ui.label("1. 点击左侧");
-                ui.label("➕ 创建新会话");
+                let px = icon_px;
+                let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                crate::ui::icons::paint_icon(
+                    ui,
+                    r,
+                    crate::ui::icons::IconId::Plus,
+                    ui.visuals().text_color(),
+                    px,
+                );
+                ui.label("创建新会话");
             });
             ui.horizontal(|ui| {
                 ui.label("2. 选择会话");
-                ui.label("🔌 建立连接");
+                let px = icon_px;
+                let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                crate::ui::icons::paint_icon(
+                    ui,
+                    r,
+                    crate::ui::icons::IconId::Plug,
+                    ui.visuals().text_color(),
+                    px,
+                );
+                ui.label("建立连接");
             });
             ui.horizontal(|ui| {
                 ui.label("3. 使用");
@@ -2878,7 +3079,7 @@ impl MistTermApp {
                 ui.label("进行文件传输");
             });
             ui.horizontal(|ui| {
-                ui.label("自建命令片段：菜单「工具 → 命令片段库」或右侧栏「➕ 新建」");
+                ui.label("自建命令片段：菜单「工具 → 命令片段库」或右侧栏「新建」");
             });
             ui.separator();
             ui.small("提示：双击侧边栏可以折叠/展开");
@@ -2915,14 +3116,14 @@ mod menu {
             egui::menu::menu_button(ui, label("终端"), |ui| {
                 crate::ui::chrome::apply_menu_popup_style(ui, theme);
                 if ui
-                    .button(crate::ui::chrome::menu_item_label(theme, "新建会话", Some("⌘N")))
+                    .button(crate::ui::chrome::menu_item_label_accel(theme, "新建会话", "N"))
                     .clicked()
                 {
                     self.show_new_session_dialog = true;
                     ui.close_menu();
                 }
                 if ui
-                    .button(crate::ui::chrome::menu_item_label(theme, "新建标签", Some("⌘T")))
+                    .button(crate::ui::chrome::menu_item_label_accel(theme, "新建标签", "T"))
                     .clicked()
                 {
                     self.open_new_tab_from_selection();
@@ -2943,7 +3144,13 @@ mod menu {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("关闭标签 ⌘W").clicked() {
+                if ui
+                    .button(format!(
+                        "关闭标签 {}",
+                        crate::platform::accel("W")
+                    ))
+                    .clicked()
+                {
                     self.request_close_active_tab();
                     ui.close_menu();
                 }
@@ -2957,7 +3164,13 @@ mod menu {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("偏好设置 ⌘,").clicked() {
+                if ui
+                    .button(format!(
+                        "偏好设置 {}",
+                        crate::platform::accel(",")
+                    ))
+                    .clicked()
+                {
                     self.show_preferences_dialog = true;
                     ui.close_menu();
                 }
@@ -2969,21 +3182,21 @@ mod menu {
             egui::menu::menu_button(ui, label("编辑"), |ui| {
                 crate::ui::chrome::apply_menu_popup_style(ui, theme);
                 if ui
-                    .button(crate::ui::chrome::menu_item_label(theme, "复制", Some("⌘C")))
+                    .button(crate::ui::chrome::menu_item_label_accel(theme, "复制", "C"))
                     .clicked()
                 {
                     self.menu_copy_for_context(ctx);
                     ui.close_menu();
                 }
                 if ui
-                    .button(crate::ui::chrome::menu_item_label(theme, "粘贴", Some("⌘V")))
+                    .button(crate::ui::chrome::menu_item_label_accel(theme, "粘贴", "V"))
                     .clicked()
                 {
                     self.menu_paste_for_context(ctx);
                     ui.close_menu();
                 }
                 if ui
-                    .button(crate::ui::chrome::menu_item_label(theme, "全选", Some("⌘A")))
+                    .button(crate::ui::chrome::menu_item_label_accel(theme, "全选", "A"))
                     .clicked()
                 {
                     self.menu_select_all_for_context(ctx);
@@ -2991,10 +3204,10 @@ mod menu {
                 }
                 ui.separator();
                 if ui
-                    .button(crate::ui::chrome::menu_item_label(
+                    .button(crate::ui::chrome::menu_item_label_accel(
                         theme,
                         "在终端中搜索",
-                        Some("⌘F"),
+                        "F",
                     ))
                     .clicked()
                 {
@@ -3037,7 +3250,7 @@ mod menu {
                     ui,
                     theme,
                     self.show_sftp_panel,
-                    "SFTP 文件浏览器",
+                    "SFTP 文件",
                 )
                 .clicked()
                 {
@@ -3095,10 +3308,10 @@ mod menu {
                     ui.close_menu();
                 }
                 if ui
-                    .button(crate::ui::chrome::menu_item_label(
+                    .button(crate::ui::chrome::menu_item_label_accel_shift(
                         theme,
                         "快速片段选择器",
-                        Some("⌘⇧J"),
+                        "J",
                     ))
                     .clicked()
                 {
@@ -3109,7 +3322,7 @@ mod menu {
                     .button(crate::ui::chrome::menu_item_label(
                         theme,
                         "命令历史…",
-                        Some("Ctrl+R"),
+                        Some(crate::platform::terminal_history_accel()),
                     ))
                     .clicked()
                 {

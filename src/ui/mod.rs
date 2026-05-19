@@ -18,6 +18,7 @@
 //! **不要**在面板内写：自动重连退避、片段展开、≥10MB 上传策略等——应使用 `crate::core`。
 
 pub mod layout_util;
+pub mod icons;
 pub mod chrome;
 pub mod app;
 pub mod terminal;

@@ -7,7 +7,8 @@ use eframe::egui;
 use rfd::FileDialog;
 
 use crate::core::{
-    CloudSyncSettings, CredentialVault, FragmentManager, FragmentMergeReport, SessionManager, SortBy,
+    AuditCategory, AuditEvent, AuditLogger, AuditOutcome, CloudSyncSettings, CredentialVault,
+    FragmentManager, FragmentMergeReport, SessionManager, SortBy,
 };
 use crate::ui::credential_panel::CredentialPanel;
 use crate::ui::chrome;
@@ -23,6 +24,7 @@ pub struct CloudSyncDeps<'a> {
     pub theme_manager: &'a mut ThemeManager,
     pub session_manager: &'a mut SessionManager,
     pub credential_panel: &'a mut CredentialPanel,
+    pub audit: Option<&'a AuditLogger>,
 }
 
 /// 同步面板（右侧栏）
@@ -129,6 +131,19 @@ impl CloudSyncPanel {
             self.message = e;
         } else {
             self.settings.mark_sync_ok();
+            if let Some(audit) = deps.audit {
+                audit.record(
+                    AuditEvent::new(
+                        AuditCategory::Config,
+                        "cloud_sync.export",
+                        AuditOutcome::Success,
+                    )
+                    .with_detail(serde_json::json!({
+                        "dest": dest.display().to_string(),
+                        "files": wrote,
+                    })),
+                );
+            }
             let preview = if wrote.is_empty() {
                 "（未勾选可导出项或源文件缺失）".to_string()
             } else {
@@ -241,6 +256,19 @@ impl CloudSyncPanel {
         }
 
         settings.record_manual_import_ok();
+        if let Some(audit) = deps.audit {
+            audit.record(
+                AuditEvent::new(
+                    AuditCategory::Config,
+                    "cloud_sync.import",
+                    AuditOutcome::Success,
+                )
+                .with_detail(serde_json::json!({
+                    "dir": dir.display().to_string(),
+                    "summary": parts,
+                })),
+            );
+        }
         parts.join(" · ")
     }
 
@@ -262,14 +290,15 @@ impl CloudSyncPanel {
             .min_width(cl_min)
             .max_width(cl_max)
             .resizable(true)
-            .frame(crate::ui::chrome::region_panel_frame(theme))
+            .frame(crate::ui::chrome::right_dock_panel_frame(theme))
             .show(ctx, |ui| {
                 let panel_w = layout_util::dock_panel_content_width(ui, cl_min, cl_max);
                 ui.set_max_width(panel_w);
                 if chrome::dock_panel_title_close_only(
                     ui,
                     theme,
-                    "☁ 云端同步",
+                    Some(crate::ui::icons::IconId::Cloud),
+                    "云端同步",
                     chrome::DockPanelTitleStyle::DockHeading,
                     "关闭云端同步",
                 ) {
@@ -410,8 +439,13 @@ impl CloudSyncPanel {
                 if let Some(dir) = self.pending_import_dir.clone() {
                     ui.add_space(theme.spacing_panel_gap());
                     ui.group(|ui| {
-                        ui.label(
-                            egui::RichText::new("⚠️ 导入确认").strong().color(theme.red_color()),
+                        crate::ui::icons::icon_label_row(
+                            ui,
+                            crate::ui::icons::IconId::Warning,
+                            "导入确认",
+                            theme.font_size_body(),
+                            6.0,
+                            |t| t.strong().color(theme.red_color()),
                         );
                         ui.label(
                             egui::RichText::new(format!(

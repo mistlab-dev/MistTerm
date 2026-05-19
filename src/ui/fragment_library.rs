@@ -117,7 +117,14 @@ impl FragmentLibraryState {
                 );
                 ui.set_min_width(fill_w);
                 ui.horizontal(|ui| {
-                    if crate::ui::chrome::panel_toolbar_button(ui, theme, "➕ 新建").clicked() {
+                    if crate::ui::chrome::panel_toolbar_icon_button(
+                        ui,
+                        theme,
+                        Some(crate::ui::icons::IconId::Plus),
+                        "新建",
+                    )
+                    .clicked()
+                    {
                         self.clear_form();
                         self.focus_title_next_frame = true;
                         self.status_msg =
@@ -209,13 +216,21 @@ impl FragmentLibraryState {
                     ui.separator();
                     ui.checkbox(&mut self.import_merge, "合并导入");
                     ui.separator();
+                    let sort_icon = crate::ui::icons::fragment_sort_icon(*sort_by);
                     let sort_label = match sort_by {
                         SortBy::UsageCount => "排序：次数",
                         SortBy::SuccessRate => "排序：成功率",
                         SortBy::LastUsed => "排序：最近",
                         SortBy::Name => "排序：名称",
                     };
-                    if ui.button(sort_label).clicked() {
+                    if crate::ui::chrome::panel_toolbar_icon_button(
+                        ui,
+                        theme,
+                        Some(sort_icon),
+                        sort_label,
+                    )
+                    .clicked()
+                    {
                         *sort_by = match sort_by {
                             SortBy::UsageCount => SortBy::SuccessRate,
                             SortBy::SuccessRate => SortBy::LastUsed,
@@ -365,7 +380,14 @@ impl FragmentLibraryState {
                                                 egui::TextEdit::singleline(default)
                                                     .desired_width((edit_w - 56.0).max(72.0)),
                                             );
-                                            if ui.button("🗑️").clicked() {
+                                            if crate::ui::chrome::icon_button(
+                                                ui,
+                                                theme,
+                                                crate::ui::icons::IconId::Trash,
+                                                theme.color_body_text_muted(),
+                                            )
+                                            .clicked()
+                                            {
                                                 var_to_remove = Some(idx);
                                             }
                                         });
@@ -375,7 +397,14 @@ impl FragmentLibraryState {
                                 if let Some(idx) = var_to_remove {
                                     self.form_variables.remove(idx);
                                 }
-                                if ui.button("➕ 添加变量").clicked() {
+                                if crate::ui::chrome::panel_toolbar_icon_button(
+                                    ui,
+                                    theme,
+                                    Some(crate::ui::icons::IconId::Plus),
+                                    "添加变量",
+                                )
+                                .clicked()
+                                {
                                     self.form_variables.push((String::new(), String::new(), String::new()));
                                 }
 

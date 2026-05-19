@@ -219,13 +219,24 @@ impl GitSyncPanel {
     /// 显示 Git 同步面板；`close_panel` 为 true 时由宿主关闭侧栏。
     pub fn show(&mut self, ui: &mut egui::Ui, theme: &Theme, close_panel: &mut bool) {
         ui.vertical(|ui| {
-            let trailing_w =
-                crate::ui::chrome::panel_header_trailing_width(ui, theme, &["🔄 刷新"]);
+            let trailing_w = crate::ui::chrome::panel_header_trailing_width_tools(
+                ui,
+                theme,
+                &[crate::ui::chrome::PanelToolbarSpec {
+                    icon: Some(crate::ui::icons::IconId::Refresh),
+                    label: "刷新",
+                }],
+            );
             if crate::ui::chrome::dock_panel_title_row(
                 ui,
                 theme,
                 |ui| {
-                    ui.label(crate::ui::chrome::rich_dock_title(theme, "🔀 Git 同步"));
+                    crate::ui::chrome::dock_title_row(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::GitBranch,
+                        "Git 同步",
+                    );
                 },
                 "关闭 Git 同步",
                 trailing_w,
@@ -233,7 +244,14 @@ impl GitSyncPanel {
                     let closed = crate::ui::chrome::close_icon_button(ui, theme)
                         .on_hover_text("关闭 Git 同步")
                         .clicked();
-                    if crate::ui::chrome::panel_toolbar_button(ui, theme, "🔄 刷新").clicked() {
+                    if crate::ui::chrome::panel_toolbar_icon_button(
+                        ui,
+                        theme,
+                        Some(crate::ui::icons::IconId::Refresh),
+                        "刷新",
+                    )
+                    .clicked()
+                    {
                         self.refresh_status();
                     }
                     closed
@@ -296,14 +314,22 @@ impl GitSyncPanel {
                         ui.horizontal(|ui| {
                             ui.label("状态：");
                             if status.is_dirty {
-                                ui.label(
-                                    egui::RichText::new("● 有更改")
-                                        .color(theme.amber_color()),
+                                crate::ui::icons::icon_label_row(
+                                    ui,
+                                    crate::ui::icons::IconId::Dot,
+                                    "有更改",
+                                    10.0,
+                                    4.0,
+                                    |t| t.color(theme.amber_color()),
                                 );
                             } else {
-                                ui.label(
-                                    egui::RichText::new("● 干净")
-                                        .color(theme.green_color()),
+                                crate::ui::icons::icon_label_row(
+                                    ui,
+                                    crate::ui::icons::IconId::Dot,
+                                    "干净",
+                                    10.0,
+                                    4.0,
+                                    |t| t.color(theme.green_color()),
                                 );
                             }
                         });
@@ -316,24 +342,36 @@ impl GitSyncPanel {
                 ui.group(|ui| {
                     ui.label(egui::RichText::new("操作").strong());
                     ui.horizontal(|ui| {
-                        if ui
-                            .button("📥 Pull")
-                            .on_hover_text("从远程拉取更新")
-                            .clicked()
+                        if crate::ui::chrome::panel_toolbar_icon_button(
+                            ui,
+                            theme,
+                            Some(crate::ui::icons::IconId::GitPull),
+                            "Pull",
+                        )
+                        .on_hover_text("从远程拉取更新")
+                        .clicked()
                         {
                             self.pull();
                         }
-                        if ui
-                            .button("📤 Push")
-                            .on_hover_text("推送到远程")
-                            .clicked()
+                        if crate::ui::chrome::panel_toolbar_icon_button(
+                            ui,
+                            theme,
+                            Some(crate::ui::icons::IconId::GitPush),
+                            "Push",
+                        )
+                        .on_hover_text("推送到远程")
+                        .clicked()
                         {
                             self.push();
                         }
-                        if ui
-                            .button("📝 Commit")
-                            .on_hover_text("提交更改")
-                            .clicked()
+                        if crate::ui::chrome::panel_toolbar_icon_button(
+                            ui,
+                            theme,
+                            Some(crate::ui::icons::IconId::GitCommit),
+                            "Commit",
+                        )
+                        .on_hover_text("提交更改")
+                        .clicked()
                         {
                             self.commit();
                         }
@@ -373,16 +411,27 @@ impl GitSyncPanel {
                 match &self.operation_status {
                     OperationStatus::Idle => {}
                     OperationStatus::Loading => {
-                        ui.horizontal(|ui| {
-                            ui.spinner();
-                            ui.label("操作中...");
-                        });
+                        crate::ui::chrome::busy_row(ui, theme, "操作中…");
                     }
                     OperationStatus::Success(msg) => {
-                        ui.colored_label(theme.green_color(), format!("✓ {}", msg));
+                        crate::ui::icons::icon_label_row(
+                            ui,
+                            crate::ui::icons::IconId::Check,
+                            msg,
+                            theme.size_icon_glyph(),
+                            6.0,
+                            |t| t.color(theme.green_color()),
+                        );
                     }
                     OperationStatus::Error(msg) => {
-                        ui.colored_label(theme.red_color(), format!("✗ {}", msg));
+                        crate::ui::icons::icon_label_row(
+                            ui,
+                            crate::ui::icons::IconId::Cross,
+                            msg,
+                            theme.size_icon_glyph(),
+                            6.0,
+                            |t| t.color(theme.red_color()),
+                        );
                     }
                 }
 
@@ -402,8 +451,13 @@ impl GitSyncPanel {
                 // 未打开仓库
                 ui.vertical_centered(|ui| {
                     ui.add_space(40.0);
-                    ui.label(
-                        egui::RichText::new("📦 未打开 Git 仓库").size(theme.font_size_empty_state()),
+                    crate::ui::icons::icon_label_row(
+                        ui,
+                        crate::ui::icons::IconId::Package,
+                        "未打开 Git 仓库",
+                        theme.font_size_empty_state(),
+                        8.0,
+                        |t| t.size(theme.font_size_empty_state()),
                     );
                     ui.add_space(theme.spacing_list_item_x());
                     ui.label("请输入仓库路径或克隆一个新仓库");
