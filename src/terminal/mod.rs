@@ -3,5 +3,5 @@
 mod alacritty;
 pub mod style;
 
-pub use alacritty::{SearchHit, Terminal};
+pub use alacritty::{SearchHit, Terminal, ViewportCursor};
 pub use style::TerminalShellStyle;

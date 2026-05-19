@@ -142,11 +142,11 @@ impl HelpDocsDialog {
                         });
                     ui.add_space(theme.spacing_md());
                     ui.horizontal(|ui| {
-                        if chrome::modal_secondary_button(ui, theme, "打开《功能规格》").clicked()
+                        if chrome::modal_secondary_button(ui, theme, "打开完整说明").clicked()
                         {
                             match Self::open_markdown_in_system("product/FUNCTIONAL_SPEC.md") {
                                 Ok(()) => {
-                                    *status_message = "已在系统默认应用中打开功能规格".to_string();
+                                    *status_message = "已在系统默认应用中打开说明文档".to_string();
                                 }
                                 Err(e) => *status_message = e,
                             }
@@ -180,7 +180,7 @@ fn render_help_tabs(ui: &mut Ui, theme: &Theme, page: &mut HelpPage) {
             let label = RichText::new(tab.label())
                 .size(theme.font_size_connection_name())
                 .color(if selected {
-                    theme.fg_high_color()
+                    theme.text_primary()
                 } else {
                     theme.color_form_hint()
                 })
@@ -197,7 +197,7 @@ fn render_quick_start(ui: &mut Ui, theme: &Theme) {
         RichText::new("Mist")
             .size(theme.font_size_empty_state())
             .strong()
-            .color(theme.fg_high_color()),
+            .color(theme.text_primary()),
     );
     ui.label(
         RichText::new("SSH 终端 · 快速上手")
@@ -213,12 +213,11 @@ fn render_quick_start(ui: &mut Ui, theme: &Theme) {
         }
     }
     ui.add_space(theme.spacing_lg());
-    render_tip_box(
-        ui,
-        theme,
-        "完整说明",
-        "产品规格与详细设计在 docs/ 目录；也可通过菜单「帮助 → 在 Finder 中打开文档文件夹」查看。",
+    let docs_menu_hint = format!(
+        "产品规格与详细设计在 docs/ 目录；也可通过菜单「{}」查看。",
+        crate::platform::reveal_docs_folder_menu_hint()
     );
+    render_tip_box(ui, theme, "完整说明", &docs_menu_hint);
 }
 
 fn render_step_row(ui: &mut Ui, theme: &Theme, index: usize, step: &QuickStep) {
@@ -242,7 +241,7 @@ fn render_step_row(ui: &mut Ui, theme: &Theme, index: usize, step: &QuickStep) {
                 RichText::new(step.title)
                     .size(theme.font_size_connection_name())
                     .strong()
-                    .color(theme.fg_high_color()),
+                    .color(theme.text_primary()),
             );
             ui.add_space(2.0);
             ui.label(
@@ -323,7 +322,7 @@ fn kbd_chip(ui: &mut Ui, theme: &Theme, text: &str) {
             ui.label(
                 RichText::new(text)
                     .font(FontId::monospace(theme.font_size_connection_name()))
-                    .color(theme.fg_high_color()),
+                    .color(theme.text_primary()),
             );
         });
 }

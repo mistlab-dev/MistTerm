@@ -7,6 +7,9 @@ use egui::Color32;
 pub const TERMINAL_COMMAND_DIM_FACTOR: f32 = 0.9;
 pub const TERMINAL_OUTPUT_DIM_FACTOR: f32 = 0.4;
 
+/// 块状光标闪烁周期（秒），与常见终端 ~530ms 一致。
+pub const TERMINAL_CURSOR_BLINK_PERIOD_SECS: f64 = 0.53;
+
 /// 终端 ScrollArea 纵向条（§2.3.4：宽 4px、轨道约 `rgba(255,255,255,0.06)`）。
 pub const TERMINAL_SCROLL_BAR_WIDTH: f32 = 4.0;
 /// 255 * 0.06 ≈ 15，与 `Theme::fg_high_a15` 一致。
@@ -30,20 +33,29 @@ pub struct TerminalShellStyle {
     pub search_match_bg: Color32,
 }
 
+/// 去掉行内空白，便于匹配被 VTE 拉开的 CJK 状态文案。
+pub fn line_compact(line: &str) -> String {
+    line.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
 impl TerminalShellStyle {
     pub fn from_theme(theme: &Theme) -> Self {
         Self {
-            default_fg: theme.fg_high_color(),
+            default_fg: theme.text_primary(),
             terminal_bg: theme.bg_terminal_color(),
             prompt_arrow: theme.green_color(),
             path_hint: theme.accent_color(),
             user_error: theme.red_color(),
-            user_info: theme.fg_high_color(),
+            user_info: if theme.is_light_theme() {
+                theme.accent_color()
+            } else {
+                theme.text_primary()
+            },
             user_success: theme.green_color(),
             user_warn: theme.amber_color(),
             command_dim_factor: theme.terminal_command_dim_factor(),
             output_dim_factor: theme.terminal_output_dim_factor(),
-            search_match_fg: theme.fg_high_color(),
+            search_match_fg: theme.text_primary(),
             search_match_bg: theme.list_row_selected_bg(),
         }
     }
@@ -91,13 +103,19 @@ pub fn is_user_error_line(line: &str) -> bool {
 }
 
 pub fn is_user_info_line(line: &str) -> bool {
+    let compact = line_compact(line);
     line.starts_with("Connecting")
         || line.contains("正在连接")
+        || compact.contains("正在连接")
         || line.starts_with("Connected")
+        || compact.contains("Connecting")
 }
 
 pub fn is_user_success_line(line: &str) -> bool {
-    line.starts_with("✅") || line.starts_with("已连接")
+    let compact = line_compact(line);
+    line.starts_with("✅")
+        || line.starts_with("已连接")
+        || compact.starts_with("已连接")
 }
 
 pub fn is_user_warn_line(line: &str) -> bool {

@@ -13,6 +13,10 @@ mod macos_ime;
 #[cfg(target_os = "macos")]
 pub mod macos_menu;
 
+pub use docs::{
+    docs_directory, reveal_docs_directory, reveal_docs_folder_menu_action_label,
+    reveal_docs_folder_menu_hint, reveal_docs_folder_success_message,
+};
 pub use fonts::{cjk_font_loaded, configure_egui_fonts};
 pub use paths::{default_ssh_config_path, home_dir};
 pub use shell::{open_file, reveal_directory};

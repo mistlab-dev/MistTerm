@@ -205,8 +205,10 @@ ui.painter()
 
 ## 七、视觉验收表（改布局后勾选）
 
-- [ ] 窗口四边：主内容距边缘约 8px `#0d0d14`（右 dock 屏右缘用 [`Theme::spacing_right_dock_screen_inset`](../src/ui/theme.rs)；缝由 [`paint_right_dock_screen_gutter`](../src/ui/chrome.rs) 铺 `bg_body`）
-- [ ] 三列之间 6px 缝隙可见（`bg_body`，**非** GPU 黑底）
+- [ ] 窗口四边：主内容距边缘约 8px `surface_body`（右 dock 屏右缘用 [`Theme::spacing_right_dock_screen_inset`](../src/ui/theme.rs)；缝由 [`paint_right_dock_screen_gutter`](../src/ui/chrome.rs) 铺 `surface_body`）
+- [ ] 三列之间 6px 缝隙可见（`surface_body`，**非** GPU 黑底）
+- [ ] 左栏 / 终端 / 右 dock：**1px `panel_stroke()`** 外框可辨；内部分隔用 `divider_stroke()`（见 [`theme.rs`](../src/ui/theme.rs) Token v2）
+- [ ] **四套主题**各走查：面板边框、hint、Tab/按钮不裁切（细则见 [`CROSS_PLATFORM_QA.md`](../docs/tech/CROSS_PLATFORM_QA.md) §主题视觉）
 - [ ] 左栏：导入条 + 单块圆角面板，无「条在 panel 外、列表在 panel 内」割裂感
 - [ ] 顶栏一行：菜单（文件/视图/工具/帮助）；无重复连接条
 - [ ] 底栏 32px，无第二行快捷栏

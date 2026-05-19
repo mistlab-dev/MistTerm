@@ -114,6 +114,7 @@ impl MistTermApp {
                 ctx,
                 &theme,
                 current_terminal_ref,
+                &self.audit_logger,
                 &mut close_sftp_panel,
                 &mut self.right_dock_outer_left_x,
             );
@@ -555,7 +556,7 @@ impl MistTermApp {
                                 &theme,
                                 "new_session_name",
                                 &mut self.new_session_name,
-                                "例: 生产服务器-01",
+                                "例：生产服务器-01",
                                 form_w,
                                 false,
                             );
@@ -645,6 +646,22 @@ impl MistTermApp {
                                 false,
                             );
 
+                            ui.add_space(theme.spacing_sm());
+                            self.new_session_vault.show(
+                                ui,
+                                &theme,
+                                form_w,
+                                &self.app_settings.vault,
+                                "new_session",
+                            );
+                            if self.new_session_vault.use_vault {
+                                ui.label(
+                                    egui::RichText::new("连接时从 Vault 读取密码/密钥，本地不保存明文")
+                                        .size(theme.font_size_caption())
+                                        .color(theme.color_form_hint()),
+                                );
+                            }
+
                             if required_missing {
                                 ui.add_space(theme.spacing_sm());
                                 ui.label(
@@ -726,7 +743,7 @@ impl MistTermApp {
                                 .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
                                 .show(ui, |ui| {
                                     ui.label(
-                                        egui::RichText::new("版本: v0.1.0")
+                                        egui::RichText::new("版本：v0.1.0")
                                             .size(theme.font_size_panel_title())
                                             .color(theme.color_caption_text()),
                                     );
@@ -772,7 +789,7 @@ impl MistTermApp {
                         Self::modal_header(ui, &theme, "偏好设置", &mut should_close);
                         ui.label(
                             egui::RichText::new(
-                                "窗口大小与位置、左侧栏宽度与折叠会在退出时自动保存（§8.1）。",
+                                "窗口大小与位置、左侧连接栏宽度及折叠状态会在退出时自动保存。",
                             )
                             .size(theme.font_size_small())
                             .color(text_low),
@@ -814,7 +831,7 @@ impl MistTermApp {
                         if ui
                             .checkbox(&mut ar, "网络断开后自动重连（最多 5 次，指数退避）")
                             .on_hover_text(
-                                "FUNCTIONAL_SPEC §1.4：默认不自动重连；开启后仅对意外断开生效，手动「断开」不会弹此策略。",
+                                "默认关闭。开启后仅在意外断线时自动重连；手动点击「断开」不会重连。",
                             )
                             .changed()
                         {
@@ -966,10 +983,10 @@ impl MistTermApp {
                                 self.app_settings.vault.clone(),
                             ) {
                                 Ok(c) => match c.test_connection() {
-                                    Ok(()) => self.status_message = "Vault 连接成功".into(),
-                                    Err(e) => self.status_message = format!("Vault: {e}"),
+                                    Ok(()) => self.status_message = "已连接到 HashiCorp Vault".into(),
+                                    Err(e) => self.status_message = format!("HashiCorp Vault：{e}"),
                                 },
-                                Err(e) => self.status_message = format!("Vault: {e}"),
+                                Err(e) => self.status_message = format!("HashiCorp Vault：{e}"),
                             }
                         }
                         ui.add_space(theme.spacing_status_bar_x());
@@ -1039,9 +1056,9 @@ impl MistTermApp {
                                             crate::core::AuditOutcome::Success,
                                         ),
                                     );
-                                    self.status_message = "已保存 Vault/审计设置".into();
+                                    self.status_message = "已保存 Vault 与审计设置".into();
                                 }
-                                Err(e) => self.status_message = format!("保存失败: {e}"),
+                                Err(e) => self.status_message = format!("保存失败：{e}"),
                             }
                         }
                         ui.label(
@@ -1052,6 +1069,10 @@ impl MistTermApp {
                             .size(theme.font_size_small())
                             .color(text_low),
                         );
+                        if ui.button("查看审计日志…").clicked() {
+                            self.audit_log_dialog
+                                .open_viewer(&self.app_settings.audit);
+                        }
                         ui.add_space(theme.spacing_status_bar_x());
                         ui.label(
                             egui::RichText::new("同步与数据")
@@ -1073,11 +1094,7 @@ impl MistTermApp {
                                 self.cloud_sync_panel.open = true;
                             } else {
                                 let w = Self::layout_window_width(ctx);
-                                self.status_message = format!(
-                                    "当前窗口约 {:.0}px，§8 需 ≥ {:.0}px 才能打开右侧「云端同步」面板",
-                                    w,
-                                    Self::RESP_LAYOUT_WIDE_MIN_PX
-                                );
+                                self.status_message = Self::narrow_window_right_dock_hint(w);
                             }
                         }
                         ui.add_space(theme.spacing_list_item_x());
@@ -1159,7 +1176,7 @@ impl MistTermApp {
                         if let Some(t) = self.current_terminal_mut() {
                             t.queue_zmodem_upload_after_rz(p.clone());
                             self.status_message = format!(
-                                "已发送 rz -y，握手就绪后以 ZMODEM 上传 {}",
+                                "已发送 rz -y，握手就绪后将通过 ZMODEM 上传：{}",
                                 p.display()
                             );
                         }
@@ -1171,11 +1188,11 @@ impl MistTermApp {
                             match t.start_upload(p.as_path()) {
                                 Ok(_) => {
                                     self.status_message =
-                                        format!("开始 SCP 上传: {}", p.display());
+                                        format!("开始 SCP 上传：{}", p.display());
                                 }
                                 Err(e) => {
                                     self.status_message =
-                                        format!("SCP 上传启动失败: {}", e);
+                                        format!("SCP 上传启动失败：{}", e);
                                 }
                             }
                         }
@@ -1285,6 +1302,8 @@ impl MistTermApp {
             self.import_ssh_indices(&indices);
         }
         self.session_log_dialog.show(ctx, &theme, &self.session_log_settings);
+        self.audit_log_dialog
+            .show(ctx, &theme, &self.app_settings.audit);
         let help_shortcuts = crate::ui::app::mistterm_functional_spec_shortcuts();
         self.help_docs_dialog.show(
             ctx,
@@ -1320,7 +1339,7 @@ impl MistTermApp {
                                 &theme,
                                 "edit_session_name",
                                 &mut self.edit_session_name,
-                                "例: 生产服务器-01",
+                                "例：生产服务器-01",
                                 form_w,
                                 false,
                             );
@@ -1459,6 +1478,15 @@ impl MistTermApp {
                             ui.checkbox(
                                 &mut self.edit_session_keepalive_auto_reconnect,
                                 "断开后自动重连",
+                            );
+
+                            ui.add_space(theme.spacing_sm());
+                            self.edit_session_vault.show(
+                                ui,
+                                &theme,
+                                form_w,
+                                &self.app_settings.vault,
+                                "edit_session",
                             );
 
                             if required_missing {
@@ -1780,7 +1808,7 @@ impl MistTermApp {
                             ui,
                             r,
                             crate::ui::icons::IconId::Search,
-                            theme.fg_low_color(),
+                            theme.text_tertiary(),
                             px,
                         );
                         ui.text_edit_singleline(&mut self.quick_selector.search_query);
@@ -1871,12 +1899,12 @@ impl MistTermApp {
                                         ui.label(
                                             egui::RichText::new(&var.description)
                                                 .size(theme.font_size_fragment_dialog_body())
-                                                .color(theme.fg_high_color()),
+                                                .color(theme.text_primary()),
                                         );
                                         ui.label(
                                             egui::RichText::new(format!("占位符 <{}>", var.name))
                                                 .size(theme.font_size_fragment_dialog_caption())
-                                                .color(theme.fg_low_color()),
+                                                .color(theme.text_tertiary()),
                                         );
                                         let value = self
                                             .variable_dialog
@@ -1897,7 +1925,7 @@ impl MistTermApp {
                                                         .frame(false)
                                                         .font(egui::FontId::proportional(theme.font_size_fragment_dialog_body()))
                                                         .desired_width(layout_util::finite_content_width(ui))
-                                                        .text_color(theme.fg_high_color()),
+                                                        .text_color(theme.text_primary()),
                                                 );
                                             });
                                         ui.add_space(theme.spacing_md());
@@ -1908,7 +1936,7 @@ impl MistTermApp {
                                             egui::Button::new(
                                                 egui::RichText::new("用上方变量重写命令")
                                                     .size(theme.font_size_fragment_dialog_body())
-                                                    .color(theme.fg_medium_color()),
+                                                    .color(theme.text_secondary()),
                                             )
                                             .min_size(egui::vec2(0.0, theme.size_fragment_var_field_min_h())),
                                         )
@@ -1924,7 +1952,7 @@ impl MistTermApp {
                                     ui.label(
                                         egui::RichText::new("将要执行的命令（可编辑）")
                                             .size(theme.font_size_fragment_dialog_body())
-                                            .color(theme.fg_medium_color()),
+                                            .color(theme.text_secondary()),
                                     );
                                     ui.add(
                                         egui::TextEdit::multiline(&mut self.variable_dialog.command_edit)

@@ -301,7 +301,7 @@ impl GitSyncPanel {
                     ui.horizontal(|ui| {
                         ui.label("远程：");
                         if self.remote_url.is_empty() {
-                            ui.label(egui::RichText::new("未配置").color(theme.fg_low_color()));
+                            ui.label(egui::RichText::new("未配置").color(theme.text_tertiary()));
                         } else {
                             ui.label(
                                 egui::RichText::new(&self.remote_url).color(theme.green_color()),
@@ -439,7 +439,7 @@ impl GitSyncPanel {
                 if !self.status_message.is_empty() {
                     ui.label(
                         egui::RichText::new(&self.status_message)
-                            .color(theme.fg_low_color()),
+                            .color(theme.text_tertiary()),
                     );
                 }
 

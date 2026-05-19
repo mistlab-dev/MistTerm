@@ -7,6 +7,7 @@ use crate::core::session_logger::{
 use crate::ui::chrome;
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
+use arboard::Clipboard;
 use eframe::egui;
 use std::path::PathBuf;
 
@@ -95,7 +96,13 @@ impl SessionLogDialog {
         }
         let mut should_close = false;
         let mut reload = false;
+        let mut copy_all = false;
         let display = self.filtered_content();
+        let display_for_view = if display.is_empty() {
+            "（无匹配内容）".to_string()
+        } else {
+            display
+        };
         egui::Window::new("session_log_viewer")
             .open(&mut self.open)
             .title_bar(false)
@@ -116,7 +123,7 @@ impl SessionLogDialog {
                             "本地录制的终端输出（非实时）。已去除颜色控制符；完整原始内容见日志文件。",
                         )
                         .size(theme.font_size_small())
-                        .color(theme.fg_low_color()),
+                        .color(theme.text_tertiary()),
                     );
                     ui.horizontal(|ui| {
                         ui.label("搜索");
@@ -172,20 +179,14 @@ impl SessionLogDialog {
                                 .stick_to_bottom(false)
                                 .auto_shrink([false, false])
                                 .show(ui, |ui| {
-                                    ui.set_min_width(ui.available_width());
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(if display.is_empty() {
-                                                "（无匹配内容）"
-                                            } else {
-                                                display.as_str()
-                                            })
-                                            .font(egui::FontId::monospace(
-                                                theme.font_size_small(),
-                                            ))
-                                            .color(theme.fg_medium_color()),
-                                        )
-                                        .wrap(true),
+                                    let w = ui.available_width();
+                                    ui.set_min_width(w);
+                                    chrome::selectable_readonly_monospace(
+                                        ui,
+                                        theme,
+                                        display_for_view.as_str(),
+                                        theme.font_size_small(),
+                                        w,
                                     );
                                 });
                         });
@@ -194,11 +195,17 @@ impl SessionLogDialog {
                         if chrome::modal_secondary_button(ui, th, "关闭").clicked() {
                             should_close = true;
                         }
+                        if chrome::modal_secondary_button(ui, th, "复制全部").clicked() {
+                            copy_all = true;
+                        }
                     });
                 });
             });
         if reload {
             self.reload_content(settings);
+        }
+        if copy_all {
+            let _ = Clipboard::new().and_then(|mut c| c.set_text(display_for_view));
         }
         if should_close {
             self.open = false;

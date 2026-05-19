@@ -156,7 +156,7 @@ impl CredentialPanel {
         self.vault_list_busy = true;
         self.vault_list_entries.clear();
         if !vault_settings.enabled {
-            self.status_msg = "Vault 未启用".to_string();
+            self.status_msg = "HashiCorp Vault 未启用".to_string();
             self.vault_list_busy = false;
             return;
         }
@@ -169,11 +169,12 @@ impl CredentialPanel {
             Ok(client) => match client.list_kv(&mount, &self.vault_list_prefix) {
                 Ok(entries) => {
                     self.vault_list_entries = entries;
-                    self.status_msg = format!("Vault 列表：{} 项", self.vault_list_entries.len());
+                    self.status_msg =
+                        format!("Vault 密钥列表：{} 项", self.vault_list_entries.len());
                 }
-                Err(e) => self.status_msg = format!("Vault 列表失败: {e}"),
+                Err(e) => self.status_msg = format!("拉取 Vault 列表失败：{e}"),
             },
-            Err(e) => self.status_msg = format!("Vault 客户端: {e}"),
+            Err(e) => self.status_msg = format!("Vault 客户端错误：{e}"),
         }
         self.vault_list_busy = false;
     }
@@ -218,7 +219,7 @@ impl CredentialPanel {
                             ui,
                             r,
                             crate::ui::icons::credential_category_icon(cat),
-                            theme.fg_high_color(),
+                            theme.text_primary(),
                             px,
                         );
                         ui.vertical(|ui| {
@@ -236,7 +237,7 @@ impl CredentialPanel {
                 if !any {
                     ui.label(
                         egui::RichText::new("暂无凭证，点「新建」添加")
-                            .color(theme.fg_low_color()),
+                            .color(theme.text_tertiary()),
                     );
                 }
             });
@@ -386,7 +387,7 @@ impl CredentialPanel {
                                             "path": reference.path,
                                         })),
                                     );
-                                    panel.status_msg = "Vault 读取成功".to_string();
+                                    panel.status_msg = "已从 Vault 读取机密".to_string();
                                 }
                                 Err(e) => {
                                     audit.record(
@@ -401,11 +402,11 @@ impl CredentialPanel {
                                             "error": e.to_string(),
                                         })),
                                     );
-                                    panel.status_msg = format!("Vault 读取失败: {e}");
+                                    panel.status_msg = format!("Vault 读取失败：{e}");
                                 }
                             }
                         }
-                        Err(e) => panel.status_msg = format!("Vault 客户端: {e}"),
+                        Err(e) => panel.status_msg = format!("Vault 客户端错误：{e}"),
                     }
                 }
                 if ui.button("写入 Vault").clicked()
@@ -449,11 +450,11 @@ impl CredentialPanel {
                                             "error": e.to_string(),
                                         })),
                                     );
-                                    panel.status_msg = format!("Vault 写入失败: {e}");
+                                    panel.status_msg = format!("Vault 写入失败：{e}");
                                 }
                             }
                         }
-                        Err(e) => panel.status_msg = format!("Vault 客户端: {e}"),
+                        Err(e) => panel.status_msg = format!("Vault 客户端错误：{e}"),
                     }
                 }
             });
@@ -566,7 +567,7 @@ impl CredentialPanel {
             }
         });
         if !panel.status_msg.is_empty() {
-            ui.small(egui::RichText::new(&panel.status_msg).color(theme.fg_low_color()));
+            ui.small(egui::RichText::new(&panel.status_msg).color(theme.text_tertiary()));
         }
     }
 
@@ -607,7 +608,7 @@ impl CredentialPanel {
                 }
                 ui.small(
                     egui::RichText::new(format!("存储：{}", self.vault.path().display()))
-                        .color(theme.fg_low_color()),
+                        .color(theme.text_tertiary()),
                 );
                 ui.separator();
 
@@ -649,7 +650,21 @@ impl CredentialPanel {
                     theme.color_section_title(),
                 ));
                 let selected_id = self.selected_id.clone();
-                Self::show_credential_list(ui, theme, &list, &selected_id, &mut |c| self.load_cred(c));
+                Self::show_credential_list(ui, theme, &list, &selected_id, &mut |c| {
+                    let prev = self.selected_id.as_deref();
+                    if prev != Some(c.id.as_str()) {
+                        audit.record(
+                            AuditEvent::new(
+                                AuditCategory::Credential,
+                                "credential.view",
+                                AuditOutcome::Success,
+                            )
+                            .with_resource(&c.id)
+                            .with_host(&c.host),
+                        );
+                    }
+                    self.load_cred(c);
+                });
 
                 if vault_settings.enabled {
                     ui.add_space(theme.spacing_panel_gap());

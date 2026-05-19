@@ -57,6 +57,25 @@ impl TerminalVisualLayoutCache {
     }
 }
 
+/// 底栏展示的 SSH 连接状态（不写入 VTE scrollback）。
+#[derive(Clone, Debug)]
+pub struct ConnectionBarStatus {
+    pub host_line: String,
+    pub state_line: String,
+    pub state_color: egui::Color32,
+}
+
+fn truncate_connection_status(s: &str, max_chars: usize) -> String {
+    let s = s.trim();
+    let mut it = s.chars();
+    let head: String = it.by_ref().take(max_chars).collect();
+    if it.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
 /// 终端文本选择（行号从 0 开始，列号从 0 开始）
 #[derive(Clone, Debug, Default)]
 struct Selection {
@@ -190,6 +209,88 @@ impl TerminalView {
     #[inline]
     fn text_width_in_scroll_viewport(scroll_inner_width: f32) -> f32 {
         (scroll_inner_width - Self::INNER_TEXT_SLACK).max(64.0)
+    }
+
+    fn layout_terminal_galley(
+        ui: &egui::Ui,
+        layout_job: &egui::text::LayoutJob,
+    ) -> std::sync::Arc<egui::Galley> {
+        ui.ctx().fonts(|f| f.layout_job(layout_job.clone()))
+    }
+
+    /// 与 TextEdit `vertical_align(BOTTOM)` 一致：文本块顶边（勿用 `行数 * cell_h` 估算）。
+    fn terminal_text_top(response: &egui::Response, galley: &egui::Galley) -> f32 {
+        response.rect.max.y - galley.size().y
+    }
+
+    fn terminal_cell_metrics(ui: &egui::Ui, font_size: f32, color: egui::Color32) -> (f32, f32) {
+        ui.ctx().fonts(|fonts| {
+            let galley = fonts.layout_no_wrap(
+                "W".to_string(),
+                egui::FontId::monospace(font_size),
+                color,
+            );
+            (galley.size().x.max(6.0), galley.size().y.max(12.0))
+        })
+    }
+
+    fn terminal_row_col_at_pointer(
+        galley: &egui::Galley,
+        text_top: f32,
+        response: &egui::Response,
+        pos: egui::Pos2,
+    ) -> (usize, usize) {
+        let rel_y = (pos.y - text_top).max(0.0);
+        let row_i = galley
+            .rows
+            .iter()
+            .enumerate()
+            .find(|(_, r)| rel_y >= r.rect.min.y && rel_y < r.rect.max.y)
+            .map(|(i, _)| i)
+            .unwrap_or_else(|| galley.rows.len().saturating_sub(1));
+        let row = galley.rows.get(row_i);
+        let col = row
+            .map(|r| r.char_at((pos.x - response.rect.min.x).max(0.0)))
+            .unwrap_or(0);
+        (row_i, col)
+    }
+
+    fn terminal_block_cursor_rect(
+        response: &egui::Response,
+        galley: &egui::Galley,
+        text_top: f32,
+        cur: crate::terminal::ViewportCursor,
+        cell_w: f32,
+    ) -> egui::Rect {
+        let row_i = cur.row.min(galley.rows.len().saturating_sub(1));
+        let row = &galley.rows[row_i];
+        let y = text_top + row.rect.min.y;
+        let h = row.height().max(1.0);
+        let x = response.rect.min.x + row.x_offset(cur.col);
+        egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell_w, h))
+    }
+
+    fn terminal_selection_rect(
+        response: &egui::Response,
+        galley: &egui::Galley,
+        text_top: f32,
+        line_idx: usize,
+        c_start: usize,
+        c_end: usize,
+        cell_w: f32,
+    ) -> Option<egui::Rect> {
+        let row = galley.rows.get(line_idx)?;
+        if c_start >= c_end {
+            return None;
+        }
+        let y = text_top + row.rect.min.y;
+        let h = row.height().max(1.0);
+        let x_start = response.rect.min.x + row.x_offset(c_start);
+        let x_end = response.rect.min.x + row.x_offset(c_end).max(x_start + cell_w * 0.5);
+        Some(egui::Rect::from_min_max(
+            egui::pos2(x_start, y),
+            egui::pos2(x_end, y + h),
+        ))
     }
 
     /// 本机状态行：truecolor ANSI（随主题），避免被 §2.3.2 输出压暗后在黑底上几乎看不见。
@@ -420,7 +521,7 @@ impl TerminalView {
     /// 连接到 SSH 服务器
     pub fn connect(
         &mut self,
-        theme: &Theme,
+        _theme: &Theme,
         host: &str,
         port: u16,
         username: &str,
@@ -461,7 +562,6 @@ impl TerminalView {
                 self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
                 self.visual_layout_cache = None;
                 self.local_disconnect_intent = false;
-                self.feed_user_info_line(theme, "正在连接…");
                 self.connected_at = None;
                 self.connection_target = Some((username.to_string(), host.to_string()));
             }
@@ -668,6 +768,8 @@ impl TerminalView {
                             // 与 TextEdit 同宽：Scroll 内容区已不含纵向条，勿再扣 SCROLL_VBAR_RESERVE（否则会窄一截、右侧露 extreme_bg）
                             self.sync_pty_size_with_ui(ui, egui::vec2(vw, scroll_h.max(1.0)), theme);
                             let edit_w = Self::text_width_in_scroll_viewport(vw);
+                            let (cell_w, cell_h) =
+                                Self::terminal_cell_metrics(ui, self.font_size, theme.text_primary());
                             // `String` + 可编辑会触发 egui 插入/IME 光标，与 VT 里「│」叠成双光标；用 `&str` 只读缓冲只保留 PTY 光标
                             let mut display_view: &str = display_owned.as_str();
                             let mut layouter = |ui: &egui::Ui, text: &str, _wrap_width: f32| {
@@ -675,6 +777,11 @@ impl TerminalView {
                                 let job = layout_job.clone();
                                 ui.ctx().fonts(|f| f.layout_job(job))
                             };
+                            // 勿让 TextEdit 自带拖选（visuals.selection 灰底）与终端格网选区（accent 底）叠成双色
+                            let prev_sel_bg = ui.visuals().selection.bg_fill;
+                            let prev_sel_fg = ui.visuals().selection.stroke.color;
+                            ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
+                            ui.visuals_mut().selection.stroke.color = egui::Color32::TRANSPARENT;
                             // Scroll 内短内容时 galley 高度 < 视口，底下会留一块「纯黑」；强制最小高度铺满视口
                             let response = ui.add(
                                 egui::TextEdit::multiline(&mut display_view)
@@ -695,6 +802,16 @@ impl TerminalView {
                                     .frame(false)
                                     .layouter(&mut layouter),
                             );
+                            ui.visuals_mut().selection.bg_fill = prev_sel_bg;
+                            ui.visuals_mut().selection.stroke.color = prev_sel_fg;
+                            if let Some(mut te_state) =
+                                egui::widgets::text_edit::TextEditState::load(ui.ctx(), response.id)
+                            {
+                                te_state.set_cursor_range(None);
+                                te_state.store(ui.ctx(), response.id);
+                            }
+                            let galley = Self::layout_terminal_galley(ui, &layout_job);
+                            let text_top = Self::terminal_text_top(&response, &galley);
                             if !terminal_search_open {
                                 if response.clicked() {
                                     response.request_focus();
@@ -705,16 +822,6 @@ impl TerminalView {
                                 }
                             }
                             self.terminal_focused = response.has_focus();
-
-                            let font_id = egui::FontId::monospace(self.font_size);
-                            let (cell_w, cell_h) = ui.ctx().fonts(|fonts| {
-                                let galley = fonts.layout_no_wrap(
-                                    "W".to_string(),
-                                    font_id.clone(),
-                                    theme.fg_high_color(),
-                                );
-                                (galley.size().x.max(6.0), galley.size().y.max(12.0))
-                            });
 
                             // 滚轮浏览 scrollback（与 alacritty 一致：Delta>0 向上翻历史）
                             if (response.hovered() || response.has_focus())
@@ -733,9 +840,9 @@ impl TerminalView {
                             // 点击时清除选择或开始选择
                             if response.clicked() {
                                 if let Some(pos) = response.interact_pointer_pos() {
-                                    let rel_pos = pos - response.rect.min;
-                                    let line = (rel_pos.y / cell_h).floor() as usize;
-                                    let col = (rel_pos.x / cell_w).floor() as usize;
+                                    let (line, col) = Self::terminal_row_col_at_pointer(
+                                        &galley, text_top, &response, pos,
+                                    );
                                     self.selection.start_line = line;
                                     self.selection.start_col = col;
                                     self.selection.end_line = line;
@@ -747,9 +854,9 @@ impl TerminalView {
                             // 拖拽更新选择范围
                             if response.dragged() {
                                 if let Some(pos) = response.interact_pointer_pos() {
-                                    let rel_pos = pos - response.rect.min;
-                                    let line = (rel_pos.y / cell_h).floor() as usize;
-                                    let col = (rel_pos.x / cell_w).floor() as usize;
+                                    let (line, col) = Self::terminal_row_col_at_pointer(
+                                        &galley, text_top, &response, pos,
+                                    );
                                     self.selection.end_line = line;
                                     self.selection.end_col = col;
                                     self.selection.active = true;
@@ -764,6 +871,39 @@ impl TerminalView {
                                         let _ = clip.set_text(text);
                                     }
                                 }
+                            }
+
+                            // 块状闪烁光标（UI 层绘制，勿再用 │ 字符占位）
+                            if self.terminal_focused
+                                && !terminal_search_open
+                                && self.selection.is_empty()
+                            {
+                                if let Some(cur) = self.terminal.viewport_cursor() {
+                                    let t = ui.input(|i| i.time);
+                                    let phase = (t
+                                        / crate::terminal::style::TERMINAL_CURSOR_BLINK_PERIOD_SECS)
+                                        .floor() as i64
+                                        % 2;
+                                    if phase == 0 {
+                                        let cursor_rect = Self::terminal_block_cursor_rect(
+                                            &response,
+                                            &galley,
+                                            text_top,
+                                            cur,
+                                            cell_w,
+                                        );
+                                        let painter =
+                                            ui.painter().clone().with_layer_id(response.layer_id);
+                                        painter.rect_filled(
+                                            cursor_rect,
+                                            0.0,
+                                            theme.color_terminal_cursor_block(),
+                                        );
+                                    }
+                                }
+                                ui.ctx().request_repaint_after(
+                                    std::time::Duration::from_millis(60),
+                                );
                             }
 
                             // 绘制选择高亮
@@ -786,19 +926,21 @@ impl TerminalView {
                                     let c_end = c_end.min(line_len);
                                     
                                     if c_start < c_end {
-                                        let x_start = response.rect.min.x + c_start as f32 * cell_w;
-                                        let x_end = response.rect.min.x + c_end as f32 * cell_w;
-                                        let y_top = response.rect.min.y + line_idx as f32 * cell_h;
-                                        
-                                        let sel_rect = egui::Rect::from_min_max(
-                                            egui::pos2(x_start, y_top),
-                                            egui::pos2(x_end, y_top + cell_h),
-                                        );
-                                        painter.rect_filled(
-                                            sel_rect,
-                                            0.0,
-                                            theme.color_terminal_selection(),
-                                        );
+                                        if let Some(sel_rect) = Self::terminal_selection_rect(
+                                            &response,
+                                            &galley,
+                                            text_top,
+                                            line_idx,
+                                            c_start,
+                                            c_end,
+                                            cell_w,
+                                        ) {
+                                            painter.rect_filled(
+                                                sel_rect,
+                                                0.0,
+                                                theme.color_terminal_selection(),
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -871,13 +1013,13 @@ impl TerminalView {
                                 |t| t.strong().color(theme.accent_color()),
                             );
                             ui.label(
-                                egui::RichText::new(dir).color(theme.fg_medium_color()),
+                                egui::RichText::new(dir).color(theme.text_secondary()),
                             );
-                            ui.label(egui::RichText::new("·").color(theme.fg_low_color()));
+                            ui.label(egui::RichText::new("·").color(theme.text_tertiary()));
                             ui.label(
                                 egui::RichText::new(&progress.0)
                                     .monospace()
-                                    .color(theme.fg_high_color()),
+                                    .color(theme.text_primary()),
                             );
                         });
                         let percent = if progress.2 > 0 {
@@ -896,7 +1038,7 @@ impl TerminalView {
                             egui::ProgressBar::new(percent / 100.0)
                                 .fill(theme.accent_color())
                                 .desired_width(bar_w)
-                                .text(egui::RichText::new(detail).color(theme.fg_high_color())),
+                                .text(egui::RichText::new(detail).color(theme.text_primary())),
                         );
                     }
                 });
@@ -914,7 +1056,7 @@ impl TerminalView {
         let font_id = egui::FontId::monospace(self.font_size);
         let (cell_w, cell_h) = ui.ctx().fonts(|fonts| {
             let galley =
-                fonts.layout_no_wrap("W".to_string(), font_id, theme.fg_high_color());
+                fonts.layout_no_wrap("W".to_string(), font_id, theme.text_primary());
             (galley.size().x.max(6.0), galley.size().y.max(12.0))
         });
 
@@ -974,7 +1116,7 @@ impl TerminalView {
     }
 
     /// 处理 SSH 消息；若终端缓冲有更新则返回 `true`。
-    fn process_ssh_messages(&mut self, theme: &Theme) -> bool {
+    fn process_ssh_messages(&mut self, _theme: &Theme) -> bool {
         let mut vte_dirty = false;
         if let Some(ref rx) = self.ssh_rx {
             let batch: Vec<SshMessage> = rx.try_iter().collect();
@@ -1078,8 +1220,6 @@ impl TerminalView {
                         self.connected_at = Some(Instant::now());
                         self.terminal_focused = true;
                         self.pending_focus_terminal = true;
-                        self.feed_user_success_line(theme, "已连接");
-                        vte_dirty = true;
                         self.auto_follow_output = true;
                         
                         // 启动交互式 shell
@@ -1109,8 +1249,6 @@ impl TerminalView {
                         }
                         self.error_message = Some(msg.clone());
                         self.connected_at = None;
-                        self.feed_user_error_line(theme, &msg);
-                        vte_dirty = true;
                         self.auto_follow_output = true;
                     }
                     SshMessage::Disconnected { .. } => {
@@ -1122,8 +1260,6 @@ impl TerminalView {
                         self.connected = false;
                         self.terminal_focused = false;
                         self.connected_at = None;
-                        self.feed_user_warn_line(theme, "连接已断开");
-                        vte_dirty = true;
                         self.auto_follow_output = true;
                         self.resend_offline_input_dialog_open = false;
                     }
@@ -1408,7 +1544,7 @@ impl TerminalView {
                 ui.label(
                     egui::RichText::new(format!("共 {} 字节，是否发送到当前远程 shell？", n))
                         .size(theme.font_size_medium())
-                        .color(theme.fg_medium_color()),
+                        .color(theme.text_secondary()),
                 );
                 if !preview_esc.is_empty() {
                     ui.add_space(theme.spacing_sm());
@@ -1416,7 +1552,7 @@ impl TerminalView {
                         egui::RichText::new(format!("预览：{}", preview_esc))
                             .monospace()
                             .size(theme.font_size_panel_title())
-                            .color(theme.fg_low_color()),
+                            .color(theme.text_tertiary()),
                     );
                 }
                 ui.add_space(theme.spacing_list_item_x());
@@ -2004,6 +2140,34 @@ impl TerminalView {
         !self.connected && self.error_message.is_none() && self.ssh_manager.is_some()
     }
 
+    /// 底栏连接状态（不写入终端 scrollback）。
+    pub fn connection_status_for_bar(&self, theme: &Theme) -> Option<ConnectionBarStatus> {
+        if self.ssh_manager.is_none() && self.connection_target.is_none() {
+            return None;
+        }
+        let host_line = self.connection_server_text();
+        let (state_line, state_color) = if let Some(err) = self.error_message.as_deref() {
+            (
+                truncate_connection_status(err, 36),
+                theme.red_color(),
+            )
+        } else if self.connected {
+            (
+                self.connection_duration_text(),
+                theme.green_color(),
+            )
+        } else if self.is_connecting() {
+            ("正在连接…".to_string(), theme.accent_color())
+        } else {
+            ("已断开".to_string(), theme.amber_color())
+        };
+        Some(ConnectionBarStatus {
+            host_line,
+            state_line,
+            state_color,
+        })
+    }
+
     /// README §2.6 连接时长格式
     pub fn connection_duration_text(&self) -> String {
         let Some(connected_at) = self.connected_at else {
@@ -2017,8 +2181,10 @@ impl TerminalView {
             format!("已连接 {}d {}h", days, hours % 24)
         } else if hours > 0 {
             format!("已连接 {}h {}m", hours, mins % 60)
+        } else if mins > 0 {
+            format!("已连接 {} 分钟", mins)
         } else {
-            format!("已连接 {}m", mins)
+            "刚连接".to_string()
         }
     }
 

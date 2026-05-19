@@ -125,16 +125,29 @@ impl Theme {
         self.bg_selected.to_color32()
     }
 
+    /// 高亮前景。暗夜主题的 `fg_high` 存的是 alpha 档位，须用 [`fg_high_alpha`] 解析为可读实色。
     pub fn fg_high_color(&self) -> Color32 {
-        self.fg_high.to_color32()
+        if self.is_light_theme() || self.uses_solid_fg_palette() {
+            self.fg_high.to_color32()
+        } else {
+            self.fg_high_alpha(self.fg_high.a)
+        }
     }
 
     pub fn fg_medium_color(&self) -> Color32 {
-        self.fg_medium.to_color32()
+        if self.is_light_theme() || self.uses_solid_fg_palette() {
+            self.fg_medium.to_color32()
+        } else {
+            self.fg_high_alpha(self.fg_medium.a)
+        }
     }
 
     pub fn fg_low_color(&self) -> Color32 {
-        self.fg_low.to_color32()
+        if self.is_light_theme() || self.uses_solid_fg_palette() {
+            self.fg_low.to_color32()
+        } else {
+            self.fg_high_alpha(self.fg_low.a)
+        }
     }
 
     /// 浅色主题（晨曦等）：语义色须用实色档位，勿用 `fg_high_alpha`（在浅底上几乎不可见）。
@@ -147,24 +160,16 @@ impl Theme {
         self.fg_high.a >= 250
     }
 
-    /// 次要正文（标签、侧栏图标、Tab ×/+ 等）
+    /// 次要正文（标签、侧栏图标、Tab ×/+ 等）— 与 [`fg_medium_color`] 同一档位
     #[inline]
     fn muted_secondary_text(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.fg_medium_color()
-        } else {
-            self.fg_high_alpha(89)
-        }
+        self.fg_medium_color()
     }
 
-    /// 更弱文字（占位 hint、离线状态等）
+    /// 更弱文字（占位 hint、离线状态等）— 与 [`fg_low_color`] 同一档位
     #[inline]
     fn muted_tertiary_text(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.fg_low_color()
-        } else {
-            self.fg_high_alpha(140)
-        }
+        self.fg_low_color()
     }
 
     pub fn accent_color(&self) -> Color32 {
@@ -181,6 +186,89 @@ impl Theme {
 
     pub fn border_divider_color(&self) -> Color32 {
         self.border_divider.to_color32()
+    }
+
+    // ── Theme Token v2：表面 / 描边 / 文字（业务优先调这些方法，勿用 fg_high_alpha 画边框）──
+
+    /// 窗口外背景（= `bg_body`）
+    #[inline]
+    pub fn surface_body(&self) -> Color32 {
+        self.bg_body_color()
+    }
+
+    /// 侧栏 / 右 dock / 弹窗面板底（= `bg_window`）
+    #[inline]
+    pub fn surface_panel(&self) -> Color32 {
+        self.bg_window_color()
+    }
+
+    /// 顶栏 / 底栏 / Tab 条（= `bg_tab_bar`）
+    #[inline]
+    pub fn surface_elevated(&self) -> Color32 {
+        self.bg_tab_bar_color()
+    }
+
+    /// 终端区 / 激活 Tab（= `bg_terminal`）
+    #[inline]
+    pub fn surface_terminal(&self) -> Color32 {
+        self.bg_terminal_color()
+    }
+
+    /// 正文 / 主标签
+    #[inline]
+    pub fn text_primary(&self) -> Color32 {
+        self.fg_high_color()
+    }
+
+    /// 次要正文（节标题、图标、Tab 控件）
+    #[inline]
+    pub fn text_secondary(&self) -> Color32 {
+        self.muted_secondary_text()
+    }
+
+    /// 占位 / hint / 离线状态
+    #[inline]
+    pub fn text_tertiary(&self) -> Color32 {
+        self.muted_tertiary_text()
+    }
+
+    /// 面板外框线宽（逻辑 px）
+    pub fn stroke_width_panel(&self) -> f32 {
+        1.0
+    }
+
+    #[inline]
+    pub fn panel_stroke_color(&self) -> Color32 {
+        self.border_color()
+    }
+
+    #[inline]
+    pub fn divider_stroke_color(&self) -> Color32 {
+        self.border_divider_color()
+    }
+
+    /// 输入框 / 搜索框描边色
+    #[inline]
+    pub fn stroke_input_color(&self) -> Color32 {
+        self.border_color()
+    }
+
+    /// 聚焦环描边色
+    #[inline]
+    pub fn stroke_focus_color(&self) -> Color32 {
+        self.accent_alpha(51)
+    }
+
+    pub fn panel_stroke(&self) -> egui::Stroke {
+        egui::Stroke::new(self.stroke_width_panel(), self.panel_stroke_color())
+    }
+
+    pub fn divider_stroke(&self) -> egui::Stroke {
+        egui::Stroke::new(self.stroke_width_panel(), self.divider_stroke_color())
+    }
+
+    pub fn stroke_input(&self) -> egui::Stroke {
+        egui::Stroke::new(self.stroke_width_panel(), self.stroke_input_color())
     }
 
     pub fn green_color(&self) -> Color32 {
@@ -206,7 +294,11 @@ impl Theme {
 
     /// FUNCTIONAL_SPEC §2.3.2：非提示输出行相对默认前景亮度（设计稿 `.out` ≈ 0.4）。
     pub fn terminal_output_dim_factor(&self) -> f32 {
-        crate::terminal::style::TERMINAL_OUTPUT_DIM_FACTOR
+        if self.is_light_theme() {
+            0.62
+        } else {
+            crate::terminal::style::TERMINAL_OUTPUT_DIM_FACTOR
+        }
     }
 
     /// FUNCTIONAL_SPEC §2.3.4：终端纵向滚动条宽度（px）。
@@ -246,17 +338,17 @@ impl Theme {
     /// 侧栏 uppercase 节标题、片段面板小标题
     #[inline]
     pub fn color_section_title(&self) -> Color32 {
-        self.muted_secondary_text()
+        if self.is_light_theme() {
+            self.text_primary()
+        } else {
+            self.muted_secondary_text()
+        }
     }
 
     /// 表单字段标签、弹窗次要标签
     #[inline]
     pub fn color_form_label(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.fg_medium_color()
-        } else {
-            self.fg_high_alpha(76)
-        }
+        self.text_secondary()
     }
 
     /// 表单说明、占位提示（输入框 hint，须明显弱于正文但仍可读）
@@ -280,17 +372,15 @@ impl Theme {
     /// 离线会话状态字
     #[inline]
     pub fn color_status_offline_muted(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.fg_low_color()
-        } else {
-            self.fg_high_a64()
-        }
+        self.text_tertiary()
     }
 
     /// 统计/选中徽章淡底、片段筛选高亮底
     #[inline]
     pub fn color_chip_fill(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
+        if self.is_light_theme() {
+            self.accent_alpha(76)
+        } else if self.uses_solid_fg_palette() {
             self.accent_alpha(38)
         } else {
             self.fg_high_a64()
@@ -331,32 +421,24 @@ impl Theme {
         }
     }
 
-    /// 输入框描边（§10.2：1px 弱描边）
+    /// 输入框描边（§10.2：1px，走 `stroke_input_color`）
     #[inline]
     pub fn color_text_input_stroke(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.border_color()
-        } else {
-            self.fg_high_alpha(20)
-        }
+        self.stroke_input_color()
     }
 
     /// 输入框正文色
     #[inline]
     pub fn color_text_input_text(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.fg_high_color()
-        } else {
-            self.fg_high_a179()
-        }
+        self.text_primary()
     }
 
     /// 输入框 Frame（圆角、内边距；外框 1px，内层 TextEdit 须 `frame(false)` 避免双边）
     pub fn frame_form_text_input(&self, focused: bool) -> egui::Frame {
         let stroke = if focused {
-            egui::Stroke::new(1.0, self.accent_alpha(51))
+            egui::Stroke::new(self.stroke_width_panel(), self.stroke_focus_color())
         } else {
-            egui::Stroke::new(1.0, self.color_text_input_stroke())
+            self.stroke_input()
         };
         egui::Frame::none()
             .fill(self.color_text_input_fill())
@@ -383,11 +465,7 @@ impl Theme {
     /// 弹窗描边
     #[inline]
     pub fn color_modal_stroke(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.border_color()
-        } else {
-            self.fg_high_a15()
-        }
+        self.panel_stroke_color()
     }
 
     /// 弹窗主按钮底
@@ -422,11 +500,7 @@ impl Theme {
     /// 弹窗次按钮字
     #[inline]
     pub fn color_modal_secondary_text(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.fg_medium_color()
-        } else {
-            self.fg_high_alpha(179)
-        }
+        self.text_secondary()
     }
 
     /// 侧栏筛选芯片：未选中文字
@@ -483,6 +557,16 @@ impl Theme {
         self.accent_alpha(150)
     }
 
+    /// 终端块状光标（闪烁时绘制整格实心块）
+    #[inline]
+    pub fn color_terminal_cursor_block(&self) -> Color32 {
+        if self.is_light_theme() {
+            self.accent_color()
+        } else {
+            self.accent_a128()
+        }
+    }
+
     /// UI 文本拖选高亮底（勿用饱和 accent，否则 accent 色字会融进选区）
     #[inline]
     pub fn color_text_selection_bg(&self) -> Color32 {
@@ -509,44 +593,58 @@ impl Theme {
         self.bg_terminal_color()
     }
 
+    /// 未激活 Tab 默认底（标签形态，略强于透明）
+    #[inline]
+    pub fn color_tab_inactive_fill(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 32)
+        } else if self.uses_solid_fg_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 14)
+        } else {
+            self.fg_high_alpha(12)
+        }
+    }
+
     /// 未激活 Tab 悬停底
     #[inline]
     pub fn color_tab_inactive_hover_fill(&self) -> Color32 {
         if self.is_light_theme() {
-            Color32::from_rgba_unmultiplied(0, 0, 0, 14)
+            Color32::from_rgba_unmultiplied(0, 0, 0, 48)
+        } else if self.uses_solid_fg_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 22)
         } else {
-            Color32::from_rgba_unmultiplied(255, 255, 255, 10)
+            self.fg_high_alpha(20)
+        }
+    }
+
+    /// 未激活 Tab 描边（勾勒标签轮廓）
+    #[inline]
+    pub fn color_tab_inactive_stroke(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 64)
+        } else if self.uses_solid_fg_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 28)
+        } else {
+            self.fg_high_alpha(18)
         }
     }
 
     /// Tab 离线状态圆点
     #[inline]
     pub fn color_tab_offline_dot(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.fg_low_color()
-        } else {
-            self.fg_high_a64()
-        }
+        self.text_tertiary()
     }
 
     /// 正文级次要字（弹窗说明、面板工具按钮）
     #[inline]
     pub fn color_body_text_muted(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.fg_medium_color()
-        } else {
-            self.fg_high_a179()
-        }
+        self.text_secondary()
     }
 
-    /// 更弱说明/标签（版本号、辅助行）
+    /// 更弱说明/标签（版本号、底栏统计、状态 chip）
     #[inline]
     pub fn color_caption_text(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.fg_low_color()
-        } else {
-            self.fg_high_a128()
-        }
+        self.text_secondary()
     }
 
     /// 极淡嵌底（chip、kbd、关于页信息块）
@@ -561,24 +659,20 @@ impl Theme {
         }
     }
 
-    /// 状态栏工具图标默认字色
+    /// 状态栏工具图标默认字色（刻意弱于 caption，仅装饰性图标）
     #[inline]
     pub fn color_toolbar_glyph_idle(&self) -> Color32 {
         if self.is_light_theme() || self.uses_solid_fg_palette() {
             self.fg_low_color()
         } else {
-            self.fg_high_a20_tool()
+            self.fg_high_alpha(31)
         }
     }
 
     /// 状态栏工具图标悬停字色
     #[inline]
     pub fn color_toolbar_glyph_hover(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.fg_medium_color()
-        } else {
-            self.fg_high_a64_tool_hover()
-        }
+        self.text_secondary()
     }
 
     /// Tab 外描边（与标签栏分隔）
@@ -660,11 +754,7 @@ impl Theme {
     /// 标题栏应用名（≈30% 白）
     #[inline]
     pub fn color_title_bar_app_name(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.fg_medium_color()
-        } else {
-            self.fg_high_alpha(76)
-        }
+        self.text_secondary()
     }
 
     /// 标题栏 / 状态栏次要连接信息（≈20% / 12% 白）
@@ -676,11 +766,7 @@ impl Theme {
     /// 状态栏连接文案（≈12% 白）
     #[inline]
     pub fn color_status_bar_conn(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.fg_low_color()
-        } else {
-            self.fg_high_a31()
-        }
+        self.text_tertiary()
     }
 
     /// 底栏快捷文字按钮高
@@ -750,7 +836,7 @@ impl Theme {
 
     /// 侧栏 ＋/− 图标字号
     pub fn font_size_sidebar_icon_glyph(&self) -> f32 {
-        12.0
+        13.0
     }
 
     pub fn spacing_sidebar_search_outer(&self) -> egui::Margin {
@@ -884,12 +970,12 @@ impl Theme {
 
     /// 空状态 / 占位大标题
     pub fn font_size_empty_state(&self) -> f32 {
-        18.0
+        19.0
     }
 
     /// 关于页产品名、空状态副标题等
     pub fn font_size_prominent(&self) -> f32 {
-        16.0
+        17.0
     }
 
     // ── 边距 / Frame 工厂（egui Frame，非业务布局） ──
@@ -935,7 +1021,7 @@ impl Theme {
     pub fn frame_modal_window(&self) -> egui::Frame {
         egui::Frame::none()
             .fill(self.color_panel_surface())
-            .stroke(egui::Stroke::new(1.0, self.color_modal_stroke()))
+            .stroke(self.panel_stroke())
             .rounding(self.radius_window())
             .inner_margin(egui::Margin::ZERO)
     }
@@ -949,7 +1035,7 @@ impl Theme {
     pub fn frame_region_panel(&self) -> egui::Frame {
         egui::Frame::none()
             .fill(self.color_panel_surface())
-            .stroke(egui::Stroke::new(1.0, self.border_color()))
+            .stroke(self.panel_stroke())
             .rounding(egui::Rounding::same(self.radius_panel()))
             .inner_margin(self.region_content_margin())
     }
@@ -958,7 +1044,7 @@ impl Theme {
     pub fn frame_terminal_column(&self) -> egui::Frame {
         egui::Frame::none()
             .fill(self.bg_terminal_color())
-            .stroke(egui::Stroke::new(1.0, self.border_color()))
+            .stroke(self.panel_stroke())
             .rounding(egui::Rounding::same(self.radius_panel()))
             .inner_margin(egui::Margin::ZERO)
     }
@@ -969,6 +1055,27 @@ impl Theme {
             .fill(self.color_chip_fill())
             .rounding(egui::Rounding::same(self.radius_list_item()))
             .inner_margin(self.margin_status_chip())
+    }
+
+    /// 信息标签（连接元信息、分组名、弹窗标题条等，比 status_chip 略显眼）
+    pub fn frame_label_tag(&self) -> egui::Frame {
+        egui::Frame::none()
+            .fill(self.color_chip_fill())
+            .stroke(egui::Stroke::new(1.0, self.color_tab_inactive_stroke()))
+            .rounding(egui::Rounding::same(self.radius_category()))
+            .inner_margin(self.margin_status_chip())
+    }
+
+    /// 弹窗标题行底带
+    pub fn frame_modal_title_band(&self) -> egui::Frame {
+        egui::Frame::none()
+            .fill(self.color_subtle_inset_fill())
+            .stroke(egui::Stroke::new(1.0, self.color_tab_inactive_stroke()))
+            .rounding(egui::Rounding::same(self.radius_list_item()))
+            .inner_margin(egui::Margin::symmetric(
+                self.spacing_search_input_x(),
+                self.spacing_search_input_y(),
+            ))
     }
 
     /// 监控告警汇总块
@@ -998,36 +1105,36 @@ impl Theme {
         )
     }
 
-    // ── 字体大小（改造设计规范 §二：9 / 10 / 11 / 12 / 13 / 14 / 16 / 18） ──
+    // ── 字体大小（Token v2：全局 +1px，保持相对比例） ──
 
-    /// 9px — 角标 / team 标签
+    /// 10px — 角标 / team 标签
     pub fn font_size_tag(&self) -> f32 {
-        9.0
-    }
-
-    /// 10px — 元信息、统计、偏好分组小标题、片段命令、筛选芯片
-    pub fn font_size_caption(&self) -> f32 {
         10.0
     }
 
-    /// 11px — 菜单、搜索、状态栏、表单标签、区段标题、侧栏「连接」
-    pub fn font_size_ui_control(&self) -> f32 {
+    /// 11px — 元信息、统计、偏好分组小标题、片段命令、筛选芯片
+    pub fn font_size_caption(&self) -> f32 {
         11.0
     }
 
-    /// 12px — 正文、连接名、Tab、片段标题、表单输入
-    pub fn font_size_body(&self) -> f32 {
+    /// 12px — 菜单、搜索、状态栏、表单标签、区段标题、侧栏「连接」
+    pub fn font_size_ui_control(&self) -> f32 {
         12.0
     }
 
-    /// 13px — 终端输出、标题栏主文
-    pub fn font_size_terminal(&self) -> f32 {
+    /// 13px — 正文、连接名、Tab、片段标题、表单输入
+    pub fn font_size_body(&self) -> f32 {
         13.0
     }
 
-    /// 14px — 右 dock 大标题（监控、Git 等）
-    pub fn font_size_dock_title(&self) -> f32 {
+    /// 14px — 终端输出、标题栏主文
+    pub fn font_size_terminal(&self) -> f32 {
         14.0
+    }
+
+    /// 15px — 右 dock 大标题（监控、Git 等）
+    pub fn font_size_dock_title(&self) -> f32 {
+        15.0
     }
 
     pub fn font_size_title_bar(&self) -> f32 {
@@ -1261,11 +1368,15 @@ impl Theme {
     }
 
     // ── 常用 alpha 颜色辅助方法 ──
-    /// FG_HIGH alpha 版本
+    /// 暗夜：在表面上的前景 alpha（白字）；浅色/彩色：沿用 `fg_high` 的 RGB。
     pub fn fg_high_alpha(&self, alpha: u8) -> Color32 {
-        let c = self.fg_high.to_color32();
-        let [r, g, b, _] = c.to_array();
-        Color32::from_rgba_unmultiplied(r, g, b, alpha)
+        if self.is_light_theme() || self.uses_solid_fg_palette() {
+            let c = self.fg_high.to_color32();
+            let [r, g, b, _] = c.to_array();
+            Color32::from_rgba_unmultiplied(r, g, b, alpha)
+        } else {
+            Color32::from_rgba_unmultiplied(255, 255, 255, alpha)
+        }
     }
     pub fn fg_high_a10(&self) -> Color32 { self.fg_high_alpha(10) }   // 状态栏底 / 按钮 idle
     pub fn fg_high_a20_tool(&self) -> Color32 { self.fg_high_alpha(20) } // 工具按钮默认 ≈8%
@@ -1314,16 +1425,12 @@ impl Theme {
 
     /// 图表网格线等极淡分隔（随前景色变化，适配明暗主题）
     pub fn subtle_line_color(&self) -> Color32 {
-        let c = self.fg_high.to_color32();
-        let [r, g, b, _] = c.to_array();
-        Color32::from_rgba_unmultiplied(r, g, b, 20)
+        self.fg_high_alpha(20)
     }
 
     /// 图表坐标刻度等次要标注
     pub fn subtle_label_color(&self) -> Color32 {
-        let c = self.fg_high.to_color32();
-        let [r, g, b, _] = c.to_array();
-        Color32::from_rgba_unmultiplied(r, g, b, 60)
+        self.fg_high_alpha(60)
     }
 
     /// 侧栏/会话列表等：行悬停底色 rgba(255,255,255,0.03)
@@ -1336,27 +1443,29 @@ impl Theme {
         self.bg_selected_color()
     }
 
-    /// 创建暗夜主题（Dark）- 按设计规范 §0.1 精确配色
+    /// 创建暗夜主题（Dark）- Token v2：加强描边与表面阶梯
     pub fn dark() -> Self {
         Self {
             name: "暗夜".to_string(),
             // === 背景色 ===
             bg_body: Color32Serializable::new(13, 13, 20),            // #0d0d14 — 窗口外背景
-            bg_window: Color32Serializable::new(19, 19, 28),          // #13131c — 面板/窗口底色
+            bg_window: Color32Serializable::new(21, 21, 32),          // #151520 — 面板/窗口底色
             bg_terminal: Color32Serializable::new(10, 10, 18),        // #0a0a12 — 终端区域/激活 Tab
-            bg_tab_bar: Color32Serializable::new(16, 16, 24), // 顶栏/底栏/Tab 条（勿用极低 alpha，透明会露出窗口黑底）
-            bg_hover: Color32Serializable::with_alpha(8, 8, 8, 8),   // rgba(255,255,255,0.03) — 悬停背景
+            bg_tab_bar: Color32Serializable::new(18, 18, 28), // 顶栏/底栏/Tab 条
+            bg_hover: Color32Serializable::with_alpha(10, 10, 10, 10),   // rgba(255,255,255,~0.04) — 悬停
             bg_selected: Color32Serializable::with_alpha(5, 6, 12, 13), // rgba(102,126,234,0.05) — 选中背景
             // === 文字 ===
-            fg_high: Color32Serializable::with_alpha(229, 229, 229, 230), // rgba(255,255,255,0.9)
-            fg_medium: Color32Serializable::with_alpha(128, 128, 128, 128), // rgba(255,255,255,0.5)
-            fg_low: Color32Serializable::with_alpha(64, 64, 64, 64),       // rgba(255,255,255,0.25)
+            // 暗夜 fg_* 仅使用 .a 作为白字 alpha 档位；RGB 在解析时由 fg_high_alpha 统一为白
+            fg_high: Color32Serializable::with_alpha(255, 255, 255, 230), // ~90%
+            fg_medium: Color32Serializable::with_alpha(255, 255, 255, 128), // ~50%
+            fg_low: Color32Serializable::with_alpha(255, 255, 255, 100),  // ~39% hint/弱字
             // === 主色调 ===
             accent: Color32Serializable::new(102, 126, 234),          // #667eea
             accent_dim: Color32Serializable::with_alpha(36, 44, 82, 89), // rgba(102,126,234,0.35)
             // === 边框 ===
-            border: Color32Serializable::with_alpha(15, 15, 15, 15),       // rgba(255,255,255,0.06)
-            border_divider: Color32Serializable::with_alpha(8, 8, 8, 8),   // rgba(255,255,255,0.03) — 分隔线
+            // 实色描边（WCAG 对比测试按 RGB；半透明白边在测试中与底色差过小）
+            border: Color32Serializable::new(58, 58, 72),       // 面板外框，相对 #151520 可辨 1px
+            border_divider: Color32Serializable::new(44, 44, 56), // 内部分隔
             // === 状态色 ===
             green: Color32Serializable::new(76, 175, 80),             // #4CAF50 — 成功/连接
             green_dim: Color32Serializable::with_alpha(19, 44, 20, 64), // rgba(76,175,80,0.25)
@@ -1365,27 +1474,27 @@ impl Theme {
         }
     }
 
-    /// 创建晨曦主题（Light）- 浅色背景，对比度满足日常阅读
+    /// 创建晨曦主题（Light）- 实色描边，浅底对比加强
     pub fn light() -> Self {
         Self {
             name: "晨曦".to_string(),
             // === 背景色 ===
-            bg_body: Color32Serializable::new(240, 240, 240),        // #f0f0f0
+            bg_body: Color32Serializable::new(235, 235, 235),        // #ebebeb
             bg_window: Color32Serializable::new(245, 245, 245),      // #f5f5f5
             bg_terminal: Color32Serializable::new(252, 252, 252),    // #fcfcfc
-            bg_tab_bar: Color32Serializable::new(245, 245, 245),     // #f5f5f5
-            bg_hover: Color32Serializable::with_alpha(0, 0, 0, 15),
+            bg_tab_bar: Color32Serializable::new(242, 242, 242),     // 略高于 window，区分顶底栏
+            bg_hover: Color32Serializable::with_alpha(0, 0, 0, 18),
             bg_selected: Color32Serializable::with_alpha(102, 126, 234, 40),
             // === 文字（实色，勿依赖 fg_high_alpha）===
             fg_high: Color32Serializable::new(26, 26, 26),             // #1a1a1a
-            fg_medium: Color32Serializable::new(68, 68, 68),         // #444
-            fg_low: Color32Serializable::new(115, 115, 115),         // #737373
+            fg_medium: Color32Serializable::new(58, 58, 58),         // #3a3a3a
+            fg_low: Color32Serializable::new(92, 92, 92),            // #5c5c5c
             // === 主色调 ===
             accent: Color32Serializable::new(88, 106, 210),          // 略深于 #667eea，浅底可读
             accent_dim: Color32Serializable::new(210, 218, 248),     // #d2daf8
             // === 边框 ===
-            border: Color32Serializable::new(208, 208, 208),         // #d0d0d0
-            border_divider: Color32Serializable::new(228, 228, 228), // #e4e4e4
+            border: Color32Serializable::new(196, 196, 196),         // #c4c4c4
+            border_divider: Color32Serializable::new(220, 220, 220), // #dcdcdc
             // === 状态色 ===
             green: Color32Serializable::new(76, 175, 80),            // #4CAF50
             green_dim: Color32Serializable::with_alpha(76, 175, 80, 64),
@@ -1403,7 +1512,7 @@ impl Theme {
             bg_window: Color32Serializable::new(28, 45, 62),         // #1c2d3e
             bg_terminal: Color32Serializable::new(22, 36, 50),       // #162432
             bg_tab_bar: Color32Serializable::new(35, 55, 75),        // #23374b
-            bg_hover: Color32Serializable::with_alpha(255, 255, 255, 8), // rgba(255,255,255,0.03)
+            bg_hover: Color32Serializable::with_alpha(255, 255, 255, 12), // rgba(255,255,255,~0.05)
             bg_selected: Color32Serializable::with_alpha(70, 130, 180, 13),
             // === 文字 ===
             fg_high: Color32Serializable::new(230, 240, 250),        // #e6f0fa
@@ -1413,8 +1522,8 @@ impl Theme {
             accent: Color32Serializable::new(70, 130, 180),          // steel blue
             accent_dim: Color32Serializable::new(50, 90, 130),       // dim steel blue
             // === 边框 ===
-            border: Color32Serializable::new(60, 90, 120),           // #3c5a78
-            border_divider: Color32Serializable::with_alpha(255, 255, 255, 8), // rgba(255,255,255,0.03)
+            border: Color32Serializable::new(74, 106, 136),           // #4a6a88 实色外框
+            border_divider: Color32Serializable::with_alpha(255, 255, 255, 38), // ~15% 白分隔
             // === 状态色 ===
             green: Color32Serializable::new(80, 200, 120),           // teal green
             green_dim: Color32Serializable::with_alpha(80, 200, 120, 64),
@@ -1432,7 +1541,7 @@ impl Theme {
             bg_window: Color32Serializable::new(32, 50, 42),         // #20322a
             bg_terminal: Color32Serializable::new(26, 42, 35),       // #1a2a23
             bg_tab_bar: Color32Serializable::new(40, 60, 50),        // #283c32
-            bg_hover: Color32Serializable::with_alpha(255, 255, 255, 8), // rgba(255,255,255,0.03)
+            bg_hover: Color32Serializable::with_alpha(255, 255, 255, 12), // rgba(255,255,255,~0.05)
             bg_selected: Color32Serializable::with_alpha(90, 170, 100, 13),
             // === 文字 ===
             fg_high: Color32Serializable::new(230, 245, 235),        // #e6f5eb
@@ -1442,8 +1551,8 @@ impl Theme {
             accent: Color32Serializable::new(90, 170, 100),          // forest green
             accent_dim: Color32Serializable::new(70, 130, 80),       // dim forest green
             // === 边框 ===
-            border: Color32Serializable::new(60, 90, 70),            // #3c5a46
-            border_divider: Color32Serializable::with_alpha(255, 255, 255, 8), // rgba(255,255,255,0.03)
+            border: Color32Serializable::new(74, 106, 88),            // #4a6a58 实色外框
+            border_divider: Color32Serializable::with_alpha(255, 255, 255, 38), // ~15% 白分隔
             // === 状态色 ===
             green: Color32Serializable::new(100, 200, 120),          // bright forest green
             green_dim: Color32Serializable::with_alpha(100, 200, 120, 64),
@@ -1532,27 +1641,33 @@ impl ThemeManager {
         };
 
         // 应用自定义颜色
-        style.visuals.panel_fill = theme.bg_window_color();
-        style.visuals.faint_bg_color = theme.bg_tab_bar_color();
+        style.visuals.panel_fill = theme.surface_panel();
+        style.visuals.faint_bg_color = theme.surface_elevated();
         // TextEdit / 裸输入框底色（勿用终端色，否则侧栏表单与面板融在一起）
         style.visuals.extreme_bg_color = theme.color_text_input_fill();
-        style.visuals.window_fill = theme.bg_window_color();
-        style.visuals.widgets.noninteractive.weak_bg_fill = theme.bg_body_color();
-        
-        // 按钮样式：默认透明底 + 悬停 accent 弱底（避免 border 色块呈「灰按钮」）
-        style.visuals.widgets.noninteractive.bg_fill = theme.border_color();
+        style.visuals.window_fill = theme.surface_panel();
+        style.visuals.window_stroke = theme.panel_stroke();
+        style.visuals.widgets.noninteractive.weak_bg_fill = theme.surface_body();
+
+        // 按钮样式：默认透明底 + 悬停 accent 弱底
+        style.visuals.widgets.noninteractive.bg_fill = theme.color_subtle_inset_fill();
+        style.visuals.widgets.noninteractive.bg_stroke = theme.divider_stroke();
         style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
         style.visuals.widgets.inactive.weak_bg_fill = theme.color_subtle_inset_fill();
         style.visuals.widgets.hovered.bg_fill = theme.accent_alpha(38);
         style.visuals.widgets.hovered.weak_bg_fill = theme.accent_alpha(51);
         style.visuals.widgets.active.bg_fill = theme.accent_color();
-        
-        // 文字颜色（提高默认可读性；占位符仍建议 RichText + color_form_hint）
-        style.visuals.override_text_color = Some(theme.fg_high_color());
-        style.visuals.widgets.noninteractive.fg_stroke.color = theme.fg_high_color();
-        style.visuals.widgets.inactive.fg_stroke.color = theme.fg_medium_color();
-        style.visuals.widgets.hovered.fg_stroke.color = theme.fg_high_color();
-        style.visuals.widgets.active.fg_stroke.color = theme.fg_high_color();
+
+        // 文字颜色（语义 token；占位符仍建议 RichText + color_form_hint）
+        style.visuals.override_text_color = Some(theme.text_primary());
+        style.visuals.widgets.noninteractive.fg_stroke =
+            egui::Stroke::new(1.0, theme.text_primary());
+        style.visuals.widgets.inactive.fg_stroke =
+            egui::Stroke::new(1.0, theme.text_secondary());
+        style.visuals.widgets.hovered.fg_stroke =
+            egui::Stroke::new(1.0, theme.text_primary());
+        style.visuals.widgets.active.fg_stroke =
+            egui::Stroke::new(1.0, theme.text_primary());
         
         // 文本拖选（勿用 accent 纯色底，避免与 accent 色 RichText 冲突）
         style.visuals.selection.bg_fill = theme.color_text_selection_bg();
@@ -1585,7 +1700,7 @@ impl ThemeManager {
             egui::FontId::proportional(theme.font_size_terminal()),
         );
         style.text_styles.insert(
-            egui::TextStyle::Name("xl14".into()),
+            egui::TextStyle::Name("xl15".into()),
             egui::FontId::proportional(theme.font_size_dock_title()),
         );
         style.text_styles.insert(
@@ -1610,6 +1725,7 @@ impl ThemeManager {
         );
 
         ctx.set_style(style);
+        ctx.request_repaint();
     }
 
     /// 获取当前主题
@@ -1760,6 +1876,96 @@ mod theme_semantic_tests {
                 "{}: tab offline dot {:.2}",
                 theme.name,
                 contrast_ratio(theme.color_tab_offline_dot(), theme.bg_tab_bar_color())
+            );
+        }
+    }
+
+    #[test]
+    fn all_builtin_themes_panel_stroke_nonzero() {
+        for theme in [
+            Theme::dark(),
+            Theme::light(),
+            Theme::ocean(),
+            Theme::forest(),
+        ] {
+            assert!(
+                theme.panel_stroke_color().a() > 0,
+                "{}: panel stroke alpha",
+                theme.name
+            );
+            assert!(
+                theme.divider_stroke_color().a() > 0,
+                "{}: divider stroke alpha",
+                theme.name
+            );
+            let bg = theme.surface_panel();
+            assert!(
+                contrast_ratio(theme.panel_stroke_color(), bg) >= 1.15,
+                "{}: panel border vs panel bg {:.2}",
+                theme.name,
+                contrast_ratio(theme.panel_stroke_color(), bg)
+            );
+        }
+    }
+
+    #[test]
+    fn all_builtin_themes_text_tiers_readable_on_chrome() {
+        for theme in [
+            Theme::dark(),
+            Theme::light(),
+            Theme::ocean(),
+            Theme::forest(),
+        ] {
+            for (name, bg) in [
+                ("panel", theme.surface_panel()),
+                ("tab_bar", theme.surface_elevated()),
+            ] {
+                assert!(
+                    contrast_ratio(theme.text_primary(), bg) >= 4.5,
+                    "{} {}: primary {:.2}",
+                    theme.name,
+                    name,
+                    contrast_ratio(theme.text_primary(), bg)
+                );
+                assert!(
+                    contrast_ratio(theme.text_secondary(), bg) >= 2.8,
+                    "{} {}: secondary {:.2}",
+                    theme.name,
+                    name,
+                    contrast_ratio(theme.text_secondary(), bg)
+                );
+                assert!(
+                    contrast_ratio(theme.text_tertiary(), bg) >= 2.2,
+                    "{} {}: tertiary {:.2}",
+                    theme.name,
+                    name,
+                    contrast_ratio(theme.text_tertiary(), bg)
+                );
+                assert!(
+                    contrast_ratio(theme.color_caption_text(), bg) >= 2.8,
+                    "{} {}: caption {:.2}",
+                    theme.name,
+                    name,
+                    contrast_ratio(theme.color_caption_text(), bg)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn all_builtin_themes_body_text_contrast() {
+        for theme in [
+            Theme::dark(),
+            Theme::light(),
+            Theme::ocean(),
+            Theme::forest(),
+        ] {
+            let bg = theme.surface_panel();
+            assert!(
+                contrast_ratio(theme.text_primary(), bg) >= 4.5,
+                "{}: primary text on panel {:.2}",
+                theme.name,
+                contrast_ratio(theme.text_primary(), bg)
             );
         }
     }

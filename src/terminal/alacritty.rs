@@ -45,6 +45,13 @@ pub struct SearchHit {
     pub column: usize,
 }
 
+/// 当前屏可见区内的 PTY 光标（0-based 行列）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewportCursor {
+    pub col: usize,
+    pub row: usize,
+}
+
 /// 终端模拟器（由 alacritty_terminal 驱动）
 pub struct Terminal {
     term: Term<VoidListener>,
@@ -79,6 +86,23 @@ impl Terminal {
     #[inline]
     pub fn content_epoch(&self) -> u64 {
         self.content_epoch
+    }
+
+    /// PTY 光标在视口中的格网位置；隐藏或越界时返回 `None`。
+    pub fn viewport_cursor(&self) -> Option<ViewportCursor> {
+        let content = self.term.renderable_content();
+        if content.cursor.shape == CursorShape::Hidden {
+            return None;
+        }
+        let vp = point_to_viewport(content.display_offset, content.cursor.point)?;
+        let col = content.cursor.point.column.0;
+        if vp.line >= self.height || col >= self.width {
+            return None;
+        }
+        Some(ViewportCursor {
+            col,
+            row: vp.line,
+        })
     }
 
     pub fn resize(&mut self, width: usize, height: usize) {
@@ -216,15 +240,6 @@ impl Terminal {
             }
         }
 
-        // 光标覆盖而非插入，避免把后续列右移
-        if content.cursor.shape != CursorShape::Hidden {
-            if let Some(vp) = point_to_viewport(content.display_offset, content.cursor.point) {
-                if vp.line < self.height && content.cursor.point.column.0 < self.width {
-                    rows[vp.line][content.cursor.point.column.0] = '│';
-                }
-            }
-        }
-
         let mut out = String::with_capacity(self.height * (self.width + 1));
         for row in rows {
             for ch in row {
@@ -262,16 +277,6 @@ impl Terminal {
                         std::mem::swap(&mut fg, &mut bg);
                     }
                     rows[y][x] = (indexed.cell.c, fg, bg);
-                }
-            }
-        }
-
-        if content.cursor.shape != CursorShape::Hidden {
-            if let Some(vp) = point_to_viewport(content.display_offset, content.cursor.point) {
-                let x = content.cursor.point.column.0;
-                let y = vp.line;
-                if y < self.height && x < self.width {
-                    rows[y][x] = ('│', default_fg, terminal_bg);
                 }
             }
         }
@@ -483,6 +488,12 @@ fn apply_heuristic_shell_row_style(
                     }
                 }
             }
+        } else if is_user_error_line(line_trim)
+            || is_user_info_line(line_trim)
+            || is_user_success_line(line_trim)
+            || is_user_warn_line(line_trim)
+        {
+            // 状态行若未命中上方着色（如 CJK 被拉开空格），勿按输出行 0.4/0.62 压暗
         } else {
             for cell in row.iter_mut() {
                 if !cell.0.is_whitespace() {

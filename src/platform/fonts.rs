@@ -12,6 +12,9 @@ pub fn cjk_font_loaded() -> bool {
 
 /// 为 egui 注册 CJK 回退字体（拉丁仍用 egui 自带字体）。成功返回 `true`。
 pub fn configure_egui_fonts(ctx: &egui::Context) -> bool {
+    let ppp = ctx.pixels_per_point();
+    log::info!("egui pixels_per_point = {ppp:.2}（HiDPI 验收参考）");
+
     let mut fonts = egui::FontDefinitions::default();
     let loaded = if let Some(cjk_font) = load_cjk_font() {
         let cjk_name = "mistterm-cjk".to_string();
@@ -43,6 +46,13 @@ pub fn configure_egui_fonts(ctx: &egui::Context) -> bool {
     loaded
 }
 
+/// 略提高字形视觉权重，减轻小字号发虚（仅视觉，不影响布局字号）。
+fn tune_cjk_font(mut data: egui::FontData) -> egui::FontData {
+    data.tweak.scale = 1.02;
+    data.tweak.y_offset_factor = -0.02;
+    data
+}
+
 fn load_cjk_font() -> Option<egui::FontData> {
     if let Some(data) = load_embedded_cjk_font() {
         return Some(data);
@@ -51,7 +61,7 @@ fn load_cjk_font() -> Option<egui::FontData> {
         match std::fs::read(&path) {
             Ok(bytes) => {
                 log::info!("已加载系统 CJK 字体: {}", path.display());
-                return Some(egui::FontData::from_owned(bytes));
+                return Some(tune_cjk_font(egui::FontData::from_owned(bytes)));
             }
             Err(e) => log::debug!("跳过 CJK 字体 {}: {e}", path.display()),
         }
@@ -65,7 +75,7 @@ fn load_embedded_cjk_font() -> Option<egui::FontData> {
         return None;
     }
     log::info!("已加载内置 CJK 字体 NotoSansSC-Regular.otf ({} bytes)", BYTES.len());
-    Some(egui::FontData::from_static(BYTES))
+    Some(tune_cjk_font(egui::FontData::from_static(BYTES)))
 }
 
 /// 各平台系统自带中文字体路径（按优先级，内置失败时使用）。

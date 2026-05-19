@@ -221,7 +221,7 @@ impl Sidebar {
                     if sessions.is_empty() {
                         ui.centered_and_justified(|ui| {
                             let hint_font = theme.font_size_sidebar_control();
-                            let hint_color = theme.fg_low_color();
+                            let hint_color = theme.text_tertiary();
                             if search_query.trim().is_empty() {
                                 ui.label(
                                     egui::RichText::new("暂无会话")
@@ -262,10 +262,12 @@ impl Sidebar {
                             if session.group != current_group {
                                 current_group = session.group.clone();
                                 ui.add_space(theme.spacing_panel_gap());
-                                ui.label(
-                                    egui::RichText::new(format!("[{}]", current_group))
-                                        .size(theme.font_size_connection_meta())
-                                        .color(theme.fg_low_color()),
+                                crate::ui::chrome::label_tag_chip(
+                                    ui,
+                                    theme,
+                                    &format!("[{}]", current_group),
+                                    theme.font_size_connection_meta(),
+                                    theme.color_section_title(),
                                 );
                             }
                             let is_selected = selected_id.as_ref() == Some(&session.id);
@@ -336,9 +338,9 @@ impl Sidebar {
                                 egui::RichText::new(&session.name)
                                     .size(theme.font_size_connection_name())
                                     .color(if is_selected {
-                                        theme.fg_high_color()
+                                        theme.text_primary()
                                     } else {
-                                        theme.fg_medium_color()
+                                        theme.text_secondary()
                                     }),
                             );
                             row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

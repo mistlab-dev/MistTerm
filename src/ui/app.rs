@@ -20,7 +20,9 @@ use crate::core::{
 };
 use crate::ui::command_history_overlay::{CommandHistoryAction, CommandHistoryOverlay};
 use crate::ui::help_docs_dialog::{HelpDocsDialog, HelpPage};
+use crate::ui::audit_log_dialog::AuditLogDialog;
 use crate::ui::session_log_dialog::SessionLogDialog;
+use crate::ui::vault_form::VaultSecretForm;
 use crate::ui::ssh_config_import_dialog::SshConfigImportDialog;
 use crate::ui::sidebar::Sidebar;
 use crate::ui::terminal::TerminalView;
@@ -125,11 +127,13 @@ fn status_message_text_color(msg: &str, theme: &crate::ui::theme::Theme) -> egui
         || msg.starts_with("插入失败")
         || msg.starts_with("上传失败")
         || msg.starts_with("文件上传失败")
+        || msg.starts_with("保存失败")
+        || msg.starts_with("解析凭据失败")
         || (msg.starts_with("ZMODEM") && msg.contains("失败"))
     {
         theme.red_color()
     } else {
-        theme.fg_low_color()
+        theme.color_caption_text()
     }
 }
 
@@ -238,7 +242,7 @@ pub struct MistTermApp {
     sidebar_width: f32,
     /// 用户曾主动折叠左侧连接栏；宽屏时响应式不自动展开（FUNCTIONAL_SPEC §8 注意）
     sidebar_user_dismissed_responsive: bool,
-    /// 上一帧的 §8 布局档位；变化时写入 `status_message` 便于察觉
+    /// 上一帧的响应式布局档位（窄 / 中 / 宽），仅用于检测变化
     last_responsive_layout_band: Option<ResponsiveLayoutBand>,
     
     /// 终端标签页
@@ -285,7 +289,7 @@ pub struct MistTermApp {
     new_session_password: String,
     new_session_group: String,
     new_session_private_key_path: String,
-    new_session_secret_backend: SecretBackend,
+    new_session_vault: VaultSecretForm,
 
     edit_session_id: Option<String>,
     edit_session_name: String,
@@ -301,6 +305,7 @@ pub struct MistTermApp {
     edit_session_keepalive_interval_secs: u32,
     edit_session_keepalive_count_max: u8,
     edit_session_keepalive_auto_reconnect: bool,
+    edit_session_vault: VaultSecretForm,
     sidebar_search_query: String,
     sidebar_filter: String,
     session_sort_by: SessionSortBy,
@@ -356,6 +361,7 @@ pub struct MistTermApp {
     native_menu: Option<crate::platform::macos_menu::NativeAppMenu>,
     session_log_settings: SessionLogSettings,
     session_log_dialog: SessionLogDialog,
+    audit_log_dialog: AuditLogDialog,
     help_docs_dialog: HelpDocsDialog,
     session_log_enabled: bool,
     default_keepalive_enabled: bool,
@@ -479,9 +485,6 @@ impl MistTermApp {
         let Some(band) = Self::layout_band_from_width(w) else {
             return;
         };
-        let prev = self.last_responsive_layout_band;
-        let band_changed = prev != Some(band);
-
         if w < Self::RESP_LAYOUT_NARROW_LT_PX {
             self.sidebar_collapsed = true;
             self.close_all_right_dock_panels();
@@ -491,33 +494,25 @@ impl MistTermApp {
             self.sidebar_collapsed = false;
         }
 
-        if band_changed {
-            self.last_responsive_layout_band = Some(band);
-            let w_txt = format!("{:.0}", w);
-            self.status_message = match band {
-                ResponsiveLayoutBand::Narrow => format!(
-                    "§8 窄屏（{}px）：已自动收起左侧连接栏与右侧侧栏；拉宽到 ≥800 可恢复左栏",
-                    w_txt
-                ),
-                ResponsiveLayoutBand::Medium => format!(
-                    "§8 中宽（{}px）：右侧侧栏已自动关闭；拉宽到 ≥1200 可再打开片段/Git/SFTP 等",
-                    w_txt
-                ),
-                ResponsiveLayoutBand::Wide => {
-                    if self.sidebar_user_dismissed_responsive {
-                        format!(
-                            "§8 宽屏（{}px）：左侧栏因您曾手动折叠而未自动展开；点「展开侧边栏」可恢复",
-                            w_txt
-                        )
-                    } else {
-                        format!(
-                            "§8 宽屏（{}px）：左侧栏已展开，可打开右侧侧栏",
-                            w_txt
-                        )
-                    }
-                }
-            };
-        }
+        self.last_responsive_layout_band = Some(band);
+    }
+
+    /// 窗口宽度不足以打开右侧 dock 时的状态栏提示。
+    fn narrow_window_right_dock_hint(window_width: f32) -> String {
+        format!(
+            "窗口较窄（约 {:.0}px），拉宽到 {:.0}px 以上可打开右侧面板",
+            window_width,
+            Self::RESP_LAYOUT_WIDE_MIN_PX
+        )
+    }
+
+    fn narrow_window_fragment_panel_hint(window_width: f32) -> String {
+        format!(
+            "窗口较窄（约 {:.0}px），拉宽到 {:.0}px 以上后再用 {} 打开片段侧栏",
+            window_width,
+            Self::RESP_LAYOUT_WIDE_MIN_PX,
+            crate::platform::accel("K"),
+        )
     }
 
     /// 打开任意右侧 dock 前调用；不允许时写状态栏并返回 false
@@ -526,11 +521,7 @@ impl MistTermApp {
         if Self::right_dock_open_allowed(w) {
             true
         } else {
-            self.status_message = format!(
-                "当前窗口约 {:.0}px，§8 要求宽度 ≥ {:.0}px 才能打开右侧侧栏；请先拉宽窗口",
-                w,
-                Self::RESP_LAYOUT_WIDE_MIN_PX
-            );
+            self.status_message = Self::narrow_window_right_dock_hint(w);
             false
         }
     }
@@ -614,7 +605,7 @@ impl MistTermApp {
             new_session_password: String::new(),
             new_session_group: "默认".to_string(),
             new_session_private_key_path: String::new(),
-            new_session_secret_backend: SecretBackend::default(),
+            new_session_vault: VaultSecretForm::default(),
             edit_session_id: None,
             edit_session_name: String::new(),
             edit_session_host: String::new(),
@@ -629,6 +620,7 @@ impl MistTermApp {
             edit_session_keepalive_interval_secs: 30,
             edit_session_keepalive_count_max: 3,
             edit_session_keepalive_auto_reconnect: true,
+            edit_session_vault: VaultSecretForm::default(),
             sidebar_search_query: String::new(),
             sidebar_filter: "全部".to_string(),
             session_sort_by: SessionSortBy::default(),
@@ -655,6 +647,7 @@ impl MistTermApp {
             native_menu: None,
             session_log_settings: SessionLogSettings::default(),
             session_log_dialog: SessionLogDialog::default(),
+            audit_log_dialog: AuditLogDialog::default(),
             help_docs_dialog: HelpDocsDialog::default(),
             session_log_enabled: true,
             default_keepalive_enabled: true,
@@ -832,7 +825,7 @@ impl MistTermApp {
                     .with_session(&session.id)
                     .with_detail(serde_json::json!({ "error": e.to_string() })),
                 );
-                self.status_message = format!("解析凭据失败: {e}");
+                self.status_message = format!("解析凭据失败：{e}");
                 return;
             }
         };
@@ -997,6 +990,7 @@ impl MistTermApp {
             || self.ssh_import_dialog.open
             || self.command_history_overlay.open
             || self.session_log_dialog.open
+            || self.audit_log_dialog.open
             || self.help_docs_dialog.open
     }
 
@@ -1070,12 +1064,7 @@ impl MistTermApp {
     fn focus_fragment_panel_search(&mut self, ctx: &egui::Context) {
         if !Self::right_dock_open_allowed(Self::layout_window_width(ctx)) {
             let w = Self::layout_window_width(ctx);
-            self.status_message = format!(
-                "当前窗口约 {:.0}px，§8 需 ≥ {:.0}px 才能打开命令片段侧栏以使用 {}",
-                w,
-                Self::RESP_LAYOUT_WIDE_MIN_PX,
-                crate::platform::accel("K"),
-            );
+            self.status_message = Self::narrow_window_fragment_panel_hint(w);
             return;
         }
         self.show_fragment_panel = true;
@@ -1171,14 +1160,25 @@ impl MistTermApp {
         if let Some(w) = self.tabs[idx].log_writer.as_mut() {
             w.stop_log();
         }
+        let sid = self.tabs[idx].session_id.clone();
+        let host = self
+            .session_manager
+            .get_session(&sid)
+            .map(|s| s.host.clone())
+            .unwrap_or_default();
         self.tabs[idx].terminal.disconnect_ssh_keep_buffer();
         self.sync_monitor_panel_to_active_tab();
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Session, "session.disconnect", AuditOutcome::Success)
+                .with_session(&sid)
+                .with_host(&host),
+        );
         self.status_message = "已断开 SSH（本标签输出已保留，可重连或关闭标签）".to_string();
     }
 
     fn disconnect_ssh_keep_buffer_active(&mut self) {
         let Some(idx) = self.active_tab else {
-            self.status_message = "当前没有打开的终端标签".to_string();
+            self.status_message = "请先打开终端标签".to_string();
             return;
         };
         self.disconnect_ssh_keep_buffer_at(idx);
@@ -1215,7 +1215,7 @@ impl MistTermApp {
 
     fn reconnect_active_tab(&mut self) {
         let Some(idx) = self.active_tab else {
-            self.status_message = "当前没有打开的终端标签".to_string();
+            self.status_message = "请先打开终端标签".to_string();
             return;
         };
         self.reconnect_tab_at(idx);
@@ -1227,13 +1227,13 @@ impl MistTermApp {
 
         match decide_upload_dispatch(path.as_path(), self.active_tab.is_some()) {
             UploadDispatch::NoActiveTab => {
-                self.status_message = "没有活动的终端标签，无法上传".to_string();
+                self.status_message = "请先打开终端标签后再上传".to_string();
             }
             UploadDispatch::PromptLargeFile { size_bytes } => {
                 let disp = path.display().to_string();
                 self.large_upload_pending_path = Some(path);
                 self.status_message = format!(
-                    "请选择上传方式（≥10MB）：{}（{}）",
+                    "文件较大（≥10 MB），请选择上传方式：{}（{}）",
                     disp,
                     format_bytes_short(size_bytes)
                 );
@@ -1243,13 +1243,13 @@ impl MistTermApp {
                     match terminal.start_upload(path.as_path()) {
                         Ok(_) => {
                             self.status_message = format!(
-                                "开始 SCP 上传: {} · {}",
+                                "开始 SCP 上传：{}（{}）",
                                 path.display(),
                                 format_bytes_short(size_bytes)
                             );
                         }
                         Err(e) => {
-                            self.status_message = format!("上传失败: {}", e);
+                            self.status_message = format!("上传失败：{}", e);
                         }
                     }
                 }
@@ -1357,7 +1357,6 @@ impl MistTermApp {
         self.ensure_tab_log_writer(idx);
         self.active_tab = Some(idx);
         self.session_manager.mark_session_connected(&session.id);
-        self.status_message = format!("正在连接：{}", session.name);
     }
 
     /// ⌘T / Ctrl+T：为左侧当前选中会话新开标签；未选中时提示（与 ⌘N 新建配置区分）
@@ -1426,7 +1425,7 @@ impl MistTermApp {
                 ui.label(
                     RichText::new("查找")
                         .size(theme.font_size_panel_title())
-                        .color(theme.fg_medium_color()),
+                        .color(theme.text_secondary()),
                 );
                 let search_id = egui::Id::new("mistterm_terminal_search_input");
                 let input_w = (ui.available_width() * 0.22).clamp(96.0, 200.0);
@@ -1486,7 +1485,7 @@ impl MistTermApp {
                     ui.label(
                         RichText::new(detail)
                             .size(theme.font_size_small())
-                            .color(theme.fg_low_color()),
+                            .color(theme.text_tertiary()),
                     );
                 });
             });
@@ -1577,7 +1576,7 @@ impl MistTermApp {
 
     pub(crate) fn menu_open_session_log_browser(&mut self) {
         let Some(idx) = self.active_tab else {
-            self.status_message = "请先打开一个会话标签".to_string();
+            self.status_message = "请先打开终端标签".to_string();
             return;
         };
         let session_id = self.tabs[idx].session_id.clone();
@@ -1661,7 +1660,6 @@ impl MistTermApp {
     /// 选择会话
     pub fn select_session(&mut self, session_id: &str) {
         self.selected_session_id = Some(session_id.to_string());
-        self.status_message = format!("已选择会话：{}", session_id);
 
         if let Some(idx) = self.tabs.iter().position(|t| t.session_id == session_id) {
             self.active_tab = Some(idx);
@@ -1691,7 +1689,9 @@ impl MistTermApp {
             &self.new_session_private_key_path,
         );
         let sid = session.id.clone();
-        let backend = self.new_session_secret_backend.clone();
+        let backend = self
+            .new_session_vault
+            .to_backend(&self.app_settings.vault);
         if !matches!(backend, SecretBackend::LocalEncrypted) {
             self.session_manager.patch_session(&sid, |s| {
                 s.secret_backend = backend.clone();
@@ -1722,7 +1722,7 @@ impl MistTermApp {
         self.new_session_password.clear();
         self.new_session_group = "默认".to_string();
         self.new_session_private_key_path.clear();
-        self.new_session_secret_backend = SecretBackend::default();
+        self.new_session_vault = VaultSecretForm::default();
     }
 
     /// 删除会话
@@ -1775,6 +1775,10 @@ impl MistTermApp {
             self.edit_session_keepalive_interval_secs = session.keepalive_interval_secs;
             self.edit_session_keepalive_count_max = session.keepalive_count_max;
             self.edit_session_keepalive_auto_reconnect = session.keepalive_auto_reconnect;
+            self.edit_session_vault = VaultSecretForm::from_backend(
+                &session.secret_backend,
+                &self.app_settings.vault.default_mount,
+            );
             self.show_edit_session_dialog = true;
         }
     }
@@ -1818,13 +1822,25 @@ impl MistTermApp {
             let ka_int = self.edit_session_keepalive_interval_secs;
             let ka_max = self.edit_session_keepalive_count_max;
             let ka_ar = self.edit_session_keepalive_auto_reconnect;
+            let backend = self
+                .edit_session_vault
+                .to_backend(&self.app_settings.vault);
             let _ = self.session_manager.patch_session(&session_id, |s| {
                 s.color_tag = color;
                 s.keepalive_enabled = ka_on;
                 s.keepalive_interval_secs = ka_int;
                 s.keepalive_count_max = ka_max;
                 s.keepalive_auto_reconnect = ka_ar;
+                s.secret_backend = backend.clone();
+                if backend.is_vault() {
+                    s.password.clear();
+                }
             });
+            self.audit_logger.record(
+                AuditEvent::new(AuditCategory::Session, "session.update", AuditOutcome::Success)
+                    .with_session(&session_id)
+                    .with_host(&self.edit_session_host),
+            );
             self.status_message = format!("已更新会话：{}", self.edit_session_name);
             if self.selected_session_id.as_deref() == Some(session_id.as_str()) {
                 self.select_session(&session_id);
@@ -2051,7 +2067,7 @@ impl MistTermApp {
                             ui.label(
                                 egui::RichText::new("暂无片段")
                                     .size(theme.font_size_panel_title())
-                                    .color(theme.fg_low_color()),
+                                    .color(theme.text_tertiary()),
                             );
                         }
                         for frag in &work {
@@ -2085,7 +2101,7 @@ impl MistTermApp {
     /// 从右侧片段列表点击：支持片段库定义的变量、命令里的 `<占位符>`，以及会话字段替换。
     fn begin_fragment_insert(&mut self, fragment: &FragmentStats) {
         if self.active_tab.is_none() {
-            self.status_message = "没有活动的终端标签页".to_string();
+            self.status_message = "请先打开终端标签".to_string();
             return;
         }
         self.audit_logger.record(
@@ -2199,7 +2215,7 @@ impl MistTermApp {
 
     fn insert_expanded_fragment_with_stats(&mut self, id: &str, expanded: &str) {
         let Some(idx) = self.active_tab else {
-            self.status_message = "没有活动的终端标签页".to_string();
+            self.status_message = "请先打开终端标签".to_string();
             return;
         };
         self.insert_fragment_at_tab_index(idx, Some(id), expanded);
@@ -2251,12 +2267,136 @@ impl MistTermApp {
 
     /// README §2.4 状态徽章：淡色底，内边距 2px 8px，圆角 4px，11px 高对比字色
     fn status_chip(ui: &mut egui::Ui, text: &str, theme: &crate::ui::theme::Theme) {
+        Self::status_chip_colored(ui, text, theme, theme.text_primary());
+    }
+
+    fn status_chip_colored(
+        ui: &mut egui::Ui,
+        text: &str,
+        theme: &crate::ui::theme::Theme,
+        color: egui::Color32,
+    ) {
         theme.frame_status_chip().show(ui, |ui| {
             ui.label(
                 egui::RichText::new(text)
                     .size(theme.font_size_status_bar())
-                    .color(theme.fg_high_color()),
+                    .color(color),
             );
+        });
+    }
+
+    /// 底栏左侧：连接 / 侧栏会话 / 日志等状态信息成组排列（不拉满整行）。
+    fn status_bar_info_cluster(&mut self, ui: &mut egui::Ui, theme: &crate::ui::theme::Theme) {
+        ui.spacing_mut().item_spacing = egui::vec2(theme.spacing_sm(), 0.0);
+
+        if let Some(idx) = self.active_tab {
+            if let Some(tab) = self.tabs.get(idx) {
+                if let Some(conn) = tab.terminal.connection_status_for_bar(theme) {
+                    Self::status_connection_chip(ui, &conn, theme);
+                }
+            }
+        }
+
+        if let Some(sid) = &self.selected_session_id {
+            let active_sid = self
+                .active_tab
+                .and_then(|i| self.tabs.get(i).map(|t| t.session_id.as_str()));
+            if active_sid != Some(sid.as_str()) {
+                let label = self
+                    .session_manager
+                    .get_session(sid)
+                    .map(|s| format!("侧栏：{}", s.name))
+                    .unwrap_or_else(|| "侧栏：未命名".to_string());
+                Self::status_chip(ui, &label, theme);
+            }
+        }
+
+        if self.session_log_enabled {
+            if let Some(log_label) = self.active_tab_log_status() {
+                let chip = theme.frame_status_chip().show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(log_label)
+                                .size(theme.font_size_status_bar_stats())
+                                .color(theme.text_primary()),
+                        )
+                        .sense(egui::Sense::click()),
+                    )
+                })
+                .inner
+                .on_hover_text("查看本会话的终端输出录制（本地日志文件）");
+                if chip.clicked() {
+                    if let Some(idx) = self.active_tab {
+                        let sid = self.tabs.get(idx).map(|t| t.session_id.clone());
+                        let name = sid.as_deref().and_then(|id| {
+                            self.session_manager.get_session(id).map(|s| s.name.clone())
+                        });
+                        if let (Some(id), Some(n)) = (sid, name) {
+                            self.session_log_dialog.open_for(&id, &n, &self.session_log_settings);
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(metrics) = self.monitor_panel.status_bar_metrics_line() {
+            Self::status_chip(ui, &metrics, theme);
+        }
+
+        if self.auto_reconnect_enabled {
+            crate::ui::chrome::status_icon_chip(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Refresh,
+                "自动重连",
+            );
+        }
+
+        if self.sidebar_collapsed {
+            if crate::ui::chrome::status_restore_chip(ui, theme, "连接", self.tabs.len())
+                .on_hover_text("展开左侧连接栏")
+                .clicked()
+            {
+                self.sidebar_collapsed = false;
+                self.sidebar_user_dismissed_responsive = false;
+            }
+        }
+
+        if !self.status_message.is_empty() {
+            Self::status_chip_colored(
+                ui,
+                &truncate_status(&self.status_message, 36),
+                theme,
+                status_message_text_color(&self.status_message, theme),
+            );
+        }
+    }
+
+    /// 当前标签 SSH 连接状态（主机 + 状态字色），不占用终端 scrollback。
+    fn status_connection_chip(
+        ui: &mut egui::Ui,
+        status: &crate::ui::terminal::ConnectionBarStatus,
+        theme: &crate::ui::theme::Theme,
+    ) {
+        theme.frame_status_chip().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = theme.spacing_sm();
+                ui.label(
+                    egui::RichText::new(&status.host_line)
+                        .size(theme.font_size_status_bar())
+                        .color(theme.text_primary()),
+                );
+                ui.label(
+                    egui::RichText::new("·")
+                        .size(theme.font_size_status_bar())
+                        .color(theme.text_tertiary()),
+                );
+                ui.label(
+                    egui::RichText::new(&status.state_line)
+                        .size(theme.font_size_status_bar())
+                        .color(status.state_color),
+                );
+            });
         });
     }
 
@@ -2287,8 +2427,6 @@ impl MistTermApp {
                 let content_h = ui
                     .available_height()
                     .min(theme.chrome_bar_content_height(status_h));
-                let bar_w = ui.available_width();
-                let right_w = 168.0;
                 let status_ctx = ui.interact(
                     ui.max_rect(),
                     egui::Id::new("status_bar_context"),
@@ -2305,106 +2443,17 @@ impl MistTermApp {
                     ui.spacing_mut().item_spacing =
                         egui::vec2(theme.spacing_status_left_gap(), 0.0);
 
-                    let left_w = (bar_w - right_w).max(120.0);
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(left_w, content_h),
-                        egui::Layout::left_to_right(egui::Align::Center),
-                        |ui| {
-                            if let Some(metrics) = self.monitor_panel.status_bar_metrics_line() {
-                                Self::status_chip(ui, &metrics, &theme);
-                            }
-                            if self.auto_reconnect_enabled {
-                                ui.add_space(theme.spacing_sm());
-                                crate::ui::chrome::status_icon_chip(
-                                    ui,
-                                    &theme,
-                                    crate::ui::icons::IconId::Refresh,
-                                    "自动重连",
-                                );
-                            }
-                            if self.session_log_enabled {
-                                if let Some(log_label) = self.active_tab_log_status() {
-                                    ui.add_space(theme.spacing_sm());
-                                    let chip = ui
-                                        .add(
-                                            egui::Label::new(
-                                                egui::RichText::new(log_label)
-                                                    .size(theme.font_size_status_bar_stats())
-                                                    .color(theme.fg_low_color()),
-                                            )
-                                            .sense(egui::Sense::click()),
-                                        )
-                                        .on_hover_text("查看本会话的终端输出录制（本地日志文件）");
-                                    if chip.clicked() {
-                                        if let Some(idx) = self.active_tab {
-                                            let sid =
-                                                self.tabs.get(idx).map(|t| t.session_id.clone());
-                                            let name = sid.as_deref().and_then(|id| {
-                                                self.session_manager
-                                                    .get_session(id)
-                                                    .map(|s| s.name.clone())
-                                            });
-                                            if let (Some(id), Some(n)) = (sid, name) {
-                                                self.session_log_dialog.open_for(
-                                                    &id,
-                                                    &n,
-                                                    &self.session_log_settings,
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            if self.sidebar_collapsed {
-                                ui.add_space(theme.spacing_sm());
-                                if crate::ui::chrome::status_restore_chip(
-                                    ui,
-                                    &theme,
-                                    "连接",
-                                    self.tabs.len(),
-                                )
-                                .on_hover_text("展开左侧连接栏")
-                                .clicked()
-                                {
-                                    self.sidebar_collapsed = false;
-                                    self.sidebar_user_dismissed_responsive = false;
-                                }
-                            }
-                            if !self.status_message.is_empty() {
-                                ui.add_space(theme.spacing_sm());
-                                let msg_w = ui.available_width().max(40.0);
-                                ui.add_sized(
-                                    [msg_w, content_h],
-                                    egui::Label::new(
-                                        egui::RichText::new(truncate_status(
-                                            &self.status_message,
-                                            40,
-                                        ))
-                                        .size(theme.font_size_status_bar_stats())
-                                        .color(status_message_text_color(
-                                            &self.status_message,
-                                            &theme,
-                                        )),
-                                    )
-                                    .truncate(true),
-                                );
-                            }
-                        },
-                    );
+                    self.status_bar_info_cluster(ui, &theme);
 
-                    ui.allocate_ui_with_layout(
-                        egui::vec2(right_w, content_h),
+                    ui.with_layout(
                         egui::Layout::right_to_left(egui::Align::Center),
                         |ui| {
                         ui.spacing_mut().item_spacing =
                             egui::vec2(theme.spacing_tool_btn_gap(), 0.0);
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{}片段 · {}次",
-                                fragment_count, total_runs
-                            ))
-                            .size(theme.font_size_status_bar_stats())
-                            .color(theme.fg_low_color()),
+                        Self::status_chip(
+                            ui,
+                            &format!("{}片段 · {}次", fragment_count, total_runs),
+                            &theme,
                         );
                         ui.add_space(theme.spacing_status_right_gap());
                         ui.label(
@@ -2461,8 +2510,7 @@ impl MistTermApp {
                                 self.monitor_last_tab = self.active_tab;
                             }
                         }
-                        },
-                    );
+                    });
                 });
             });
     }
@@ -2559,7 +2607,7 @@ impl MistTermApp {
             }
             MacMenuAction::HelpFunctionalSpec => {
                 match HelpDocsDialog::open_markdown_in_system("product/FUNCTIONAL_SPEC.md") {
-                    Ok(()) => self.status_message = "已在系统默认应用中打开功能规格".to_string(),
+                    Ok(()) => self.status_message = "已在系统默认应用中打开说明文档".to_string(),
                     Err(e) => self.status_message = e,
                 }
             }
@@ -2568,7 +2616,8 @@ impl MistTermApp {
             }
             MacMenuAction::HelpRevealDocsFolder => {
                 if crate::platform::docs::reveal_docs_directory() {
-                    self.status_message = "已在 Finder 中打开文档文件夹".to_string();
+                    self.status_message =
+                        crate::platform::reveal_docs_folder_success_message().to_string();
                 } else {
                     self.status_message = "未找到 docs 目录（开发构建时位于仓库根目录）".to_string();
                 }
@@ -2607,7 +2656,10 @@ impl MistTermApp {
         self.new_session_port = c.port.max(1);
         self.new_session_port_str = self.new_session_port.to_string();
         self.new_session_username = c.username.clone();
-        self.new_session_secret_backend = c.secret_backend.clone();
+        self.new_session_vault = VaultSecretForm::from_backend(
+            &c.secret_backend,
+            &self.app_settings.vault.default_mount,
+        );
         match c.auth {
             CredentialAuthKind::Password | CredentialAuthKind::Token => {
                 self.new_session_password = if c.secret_backend.is_vault() {
@@ -2795,7 +2847,7 @@ impl eframe::App for MistTermApp {
                     .set_title("选择要上传到远端（rz）的文件")
                     .pick_file()
                 {
-                    self.status_message = format!("ZMODEM 上传: {}", path.display());
+                    self.status_message = format!("ZMODEM 上传：{}", path.display());
                     if let Some(t) = self.current_terminal_mut() {
                         match t.start_rz_upload(path.as_path()) {
                             Ok(()) => {
@@ -2804,7 +2856,7 @@ impl eframe::App for MistTermApp {
                             }
                             Err(e) => {
                                 t.end_rz_handshake_capture();
-                                self.status_message = format!("ZMODEM 启动失败: {}", e);
+                                self.status_message = format!("ZMODEM 启动失败：{}", e);
                             }
                         }
                     }
@@ -3109,7 +3161,7 @@ mod menu {
             let label = |text: &str| {
                 egui::RichText::new(text)
                     .size(theme.font_size_menu_item())
-                    .color(theme.fg_medium_color())
+                    .color(theme.text_secondary())
             };
             let ssh_import_enabled = self.ssh_config_path.exists();
 
@@ -3354,9 +3406,9 @@ mod menu {
                     self.help_docs_dialog.open_page(HelpPage::QuickStart);
                     ui.close_menu();
                 }
-                if ui.button("功能规格（系统打开）").clicked() {
+                if ui.button("说明文档（系统打开）").clicked() {
                     match HelpDocsDialog::open_markdown_in_system("product/FUNCTIONAL_SPEC.md") {
-                        Ok(()) => self.status_message = "已在系统默认应用中打开功能规格".to_string(),
+                        Ok(()) => self.status_message = "已在系统默认应用中打开说明文档".to_string(),
                         Err(e) => self.status_message = e,
                     }
                     ui.close_menu();
@@ -3366,9 +3418,13 @@ mod menu {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("打开文档文件夹").clicked() {
+                if ui
+                    .button(crate::platform::reveal_docs_folder_menu_action_label())
+                    .clicked()
+                {
                     if crate::platform::docs::reveal_docs_directory() {
-                        self.status_message = "已打开文档文件夹".to_string();
+                        self.status_message =
+                            crate::platform::reveal_docs_folder_success_message().to_string();
                     } else {
                         self.status_message = "未找到 docs 目录".to_string();
                     }

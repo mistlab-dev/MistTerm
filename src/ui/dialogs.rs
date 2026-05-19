@@ -70,42 +70,42 @@ impl NewSessionDialog {
                     ui.add(
                         egui::TextEdit::singleline(&mut self.name)
                             .desired_width(layout_util::finite_content_width(ui))
-                            .text_color(theme.fg_high_color()),
+                            .text_color(theme.text_primary()),
                     );
 
                     ui.separator();
 
                     ui.label(
-                        egui::RichText::new("主机地址").color(theme.fg_medium_color()),
+                        egui::RichText::new("主机地址").color(theme.text_secondary()),
                     );
                     ui.add(
                         egui::TextEdit::singleline(&mut self.host)
                             .desired_width(layout_util::finite_content_width(ui))
-                            .text_color(theme.fg_high_color()),
+                            .text_color(theme.text_primary()),
                     );
 
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("端口").color(theme.fg_medium_color()));
+                        ui.label(egui::RichText::new("端口").color(theme.text_secondary()));
                         ui.add(egui::DragValue::new(&mut self.port).speed(1.0));
                     });
 
                     ui.separator();
 
                     ui.label(
-                        egui::RichText::new("用户名").color(theme.fg_medium_color()),
+                        egui::RichText::new("用户名").color(theme.text_secondary()),
                     );
                     ui.add(
                         egui::TextEdit::singleline(&mut self.username)
                             .desired_width(layout_util::finite_content_width(ui))
-                            .text_color(theme.fg_high_color()),
+                            .text_color(theme.text_primary()),
                     );
 
-                    ui.label(egui::RichText::new("密码").color(theme.fg_medium_color()));
+                    ui.label(egui::RichText::new("密码").color(theme.text_secondary()));
                     ui.add(
                         egui::TextEdit::singleline(&mut self.password)
                             .password(true)
                             .desired_width(layout_util::finite_content_width(ui))
-                            .text_color(theme.fg_high_color()),
+                            .text_color(theme.text_primary()),
                     );
 
                     ui.separator();

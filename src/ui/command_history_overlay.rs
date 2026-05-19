@@ -108,7 +108,7 @@ impl CommandHistoryOverlay {
                                 crate::platform::terminal_history_accel()
                             ))
                                 .size(theme.font_size_small())
-                                .color(theme.fg_low_color()),
+                                .color(theme.text_tertiary()),
                         );
                         ui.add_space(6.0);
                         let search_resp = ui
@@ -142,7 +142,7 @@ impl CommandHistoryOverlay {
                                 if results.is_empty() {
                                     ui.label(
                                         egui::RichText::new("无匹配记录")
-                                            .color(theme.fg_low_color()),
+                                            .color(theme.text_tertiary()),
                                     );
                                 } else {
                                     for (i, entry) in results.iter().enumerate() {
@@ -174,7 +174,7 @@ impl CommandHistoryOverlay {
                             ui.label(
                                 egui::RichText::new(format!("共 {} 条结果", results.len()))
                                     .size(theme.font_size_small())
-                                    .color(theme.fg_low_color()),
+                                    .color(theme.text_tertiary()),
                             );
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if crate::ui::chrome::chrome_small_button(ui, theme, "Esc 关闭").clicked() {
@@ -204,7 +204,7 @@ fn row_button(ui: &mut egui::Ui, theme: &Theme, entry: &HistoryEntry, selected: 
         egui::Color32::TRANSPARENT
     };
     let text_color = if entry.success {
-        theme.fg_high_color()
+        theme.text_primary()
     } else {
         theme.amber_color()
     };

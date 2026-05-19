@@ -119,6 +119,79 @@ pub fn default_audit_dir() -> PathBuf {
     p
 }
 
+/// 审计日志单文件尾部读取上限（查看器用）
+pub const AUDIT_LOG_TAIL_READ_BYTES: usize = 512 * 1024;
+
+/// 列出审计目录下的 `audit-*.jsonl`（新文件在前）
+pub fn list_audit_log_files(dir: &Path) -> Vec<PathBuf> {
+    let Ok(read) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut files: Vec<PathBuf> = read
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension().map(|e| e == "jsonl").unwrap_or(false)
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("audit-"))
+                    .unwrap_or(false)
+        })
+        .collect();
+    files.sort_by(|a, b| b.cmp(a));
+    files
+}
+
+/// 读取审计文件尾部（大文件只取最后一段）
+pub fn read_audit_log_tail(path: &Path, max_bytes: usize) -> std::io::Result<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path)?;
+    let len = f.metadata()?.len();
+    if len > max_bytes as u64 {
+        f.seek(SeekFrom::End(-(max_bytes as i64)))?;
+    }
+    let mut buf = String::new();
+    f.read_to_string(&mut buf)?;
+    Ok(buf)
+}
+
+/// 将 JSONL 格式化为可读多行（每行一条事件摘要）
+pub fn format_audit_jsonl_for_display(raw: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    for line in raw.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<AuditEvent>(t) {
+            Ok(ev) => {
+                let host = ev.host.as_deref().unwrap_or("-");
+                let res = ev.resource.as_deref().unwrap_or("");
+                let res_part = if res.is_empty() {
+                    String::new()
+                } else {
+                    format!(" resource={res}")
+                };
+                let _ = writeln!(
+                    out,
+                    "[{}] {:?} {} {} {} host={}",
+                    ev.ts,
+                    ev.category,
+                    ev.action,
+                    format!("{:?}", ev.outcome).to_lowercase(),
+                    res_part,
+                    host
+                );
+            }
+            Err(_) => {
+                let _ = writeln!(out, "{t}");
+            }
+        }
+    }
+    out.trim_end().to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HttpSinkSettings {
     #[serde(default)]

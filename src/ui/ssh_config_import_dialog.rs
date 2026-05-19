@@ -93,7 +93,7 @@ impl SshConfigImportDialog {
                             self.candidates.len()
                         ))
                         .size(theme.font_size_normal())
-                        .color(theme.fg_medium_color()),
+                        .color(theme.text_secondary()),
                     );
                     if !self.parse_warnings.is_empty() {
                         ui.add_space(theme.spacing_sm());
@@ -111,7 +111,7 @@ impl SshConfigImportDialog {
                                     self.parse_warnings.len() - 5
                                 ))
                                 .size(theme.font_size_small())
-                                .color(theme.fg_low_color()),
+                                .color(theme.text_tertiary()),
                             );
                         }
                     }
@@ -133,21 +133,21 @@ impl SshConfigImportDialog {
                                         }
                                     }
                                     let name = egui::RichText::new(&c.host_alias).color(if can {
-                                        theme.fg_high_color()
+                                        theme.text_primary()
                                     } else {
-                                        theme.fg_low_color()
+                                        theme.text_tertiary()
                                     });
                                     ui.label(name);
                                     ui.label(
                                         egui::RichText::new(format!("→ {}", c.display_target()))
                                             .size(theme.font_size_small())
-                                            .color(theme.fg_low_color()),
+                                            .color(theme.text_tertiary()),
                                     );
                                     if imported {
                                         ui.label(
                                             egui::RichText::new("(已导入)")
                                                 .size(theme.font_size_small())
-                                                .color(theme.fg_low_color()),
+                                                .color(theme.text_tertiary()),
                                         );
                                     } else if let Some(reason) = &c.skip_reason {
                                         ui.label(

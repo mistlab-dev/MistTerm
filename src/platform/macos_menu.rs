@@ -234,7 +234,7 @@ impl NativeAppMenu {
         // ── 帮助 ──
         let help = Submenu::new("帮助", true);
         let help_guide = MenuItem::with_id("mistterm.help.guide", "快速入门…", true, None);
-        let help_spec = MenuItem::with_id("mistterm.help.spec", "功能规格（系统打开）", true, None);
+        let help_spec = MenuItem::with_id("mistterm.help.spec", "说明文档（系统打开）", true, None);
         let help_keys = MenuItem::with_id("mistterm.help.shortcuts", "键盘快捷键…", true, None);
         let help_folder =
             MenuItem::with_id("mistterm.help.open_docs", "在 Finder 中打开文档文件夹", true, None);

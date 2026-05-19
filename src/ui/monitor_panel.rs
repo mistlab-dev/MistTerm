@@ -119,7 +119,7 @@ impl MonitorPanel {
             Some(Ok(Err(e))) => {
                 self.pending_raw = None;
                 self.last_ui_refresh = ctx.input(|i| i.time);
-                self.last_error = Some(format!("监控采集失败: {}", e));
+                self.last_error = Some(format!("监控采集失败：{}", e));
                 ctx.request_repaint();
             }
             Some(Err(TryRecvError::Empty)) => {
@@ -395,7 +395,7 @@ impl MonitorPanel {
         egui::CollapsingHeader::new(
             egui::RichText::new("告警阈值")
                 .size(theme.font_size_medium())
-                .color(theme.fg_medium_color()),
+                .color(theme.text_secondary()),
         )
         .default_open(false)
         .show(ui, |ui| {
@@ -403,7 +403,7 @@ impl MonitorPanel {
             ui.label(
                 egui::RichText::new("超出阈值时在标题与下方显示告警（仅当前会话）。")
                     .size(theme.font_size_small())
-                    .color(theme.fg_low_color()),
+                    .color(theme.text_tertiary()),
             );
             ui.add_space(4.0);
             for (pct, label) in [
@@ -438,7 +438,7 @@ impl MonitorPanel {
                             ui.label(
                                 egui::RichText::new(line)
                                     .size(theme.font_size_small())
-                                    .color(theme.fg_high_color()),
+                                    .color(theme.text_primary()),
                             );
                         }
                     });
@@ -496,7 +496,7 @@ impl MonitorPanel {
                 "系统负载",
                 theme.font_size_medium(),
                 6.0,
-                |t| t.size(theme.font_size_medium()).color(theme.fg_medium_color()),
+                |t| t.size(theme.font_size_medium()).color(theme.text_secondary()),
             );
             ui.horizontal(|ui| {
                 let (l1, l5, l15) = stats.load_avg;
@@ -515,7 +515,7 @@ impl MonitorPanel {
                 6.0,
                 |t| {
                     t.size(theme.font_size_monitor_section())
-                        .color(theme.fg_medium_color())
+                        .color(theme.text_secondary())
                 },
             );
             ui.horizontal(|ui| {
@@ -545,7 +545,7 @@ impl MonitorPanel {
                 "历史趋势",
                 theme.font_size_medium(),
                 6.0,
-                |t| t.size(theme.font_size_medium()).color(theme.fg_medium_color()),
+                |t| t.size(theme.font_size_medium()).color(theme.text_secondary()),
             );
             ui.add_space(theme.spacing_sm());
 
@@ -558,12 +558,12 @@ impl MonitorPanel {
                 ui.label(
                     egui::RichText::new("当前标签无可用 SSH 会话")
                         .size(theme.font_size_large())
-                        .color(theme.fg_low_color()),
+                        .color(theme.text_tertiary()),
                 );
                 ui.label(
-                    egui::RichText::new("请先连接服务器,或切换到已连接的标签")
+                    egui::RichText::new("请先连接服务器，或切换到已连接的标签")
                         .size(theme.font_size_normal())
-                        .color(theme.fg_medium_color()),
+                        .color(theme.text_secondary()),
                 );
             });
         }
@@ -643,7 +643,7 @@ impl MonitorPanel {
                     ui.label(
                         egui::RichText::new(label)
                             .size(theme.font_size_small())
-                            .color(theme.fg_low_color()),
+                            .color(theme.text_tertiary()),
                     );
                     ui.label(
                         egui::RichText::new(format!("{:.2}", value))
@@ -675,9 +675,9 @@ impl MonitorPanel {
 
         if history.len() < 2 {
             ui.label(
-                egui::RichText::new("等待数据采集...(至少两次刷新后显示曲线)")
+                egui::RichText::new("等待数据采集…（至少两次刷新后显示曲线）")
                     .size(theme.font_size_menu_item())
-                    .color(theme.fg_low_color()),
+                    .color(theme.text_tertiary()),
             );
             return;
         }
@@ -729,7 +729,7 @@ impl MonitorPanel {
         ui.label(
             egui::RichText::new("CPU / 内存 / 磁盘")
                 .size(theme.font_size_normal())
-                .color(theme.fg_low_color()),
+                .color(theme.text_tertiary()),
         );
         ui.add_space(2.0);
 
@@ -838,7 +838,7 @@ impl MonitorPanel {
         ui.label(
             egui::RichText::new("负载 (load average)")
                 .size(theme.font_size_normal())
-                .color(theme.fg_low_color()),
+                .color(theme.text_tertiary()),
         );
         ui.add_space(2.0);
 
@@ -884,7 +884,7 @@ impl MonitorPanel {
                 plot_ui.line(
                     Line::new(load15_points)
                         .name("15 分钟")
-                        .color(theme.fg_high_color())
+                        .color(theme.text_primary())
                         .width(1.6),
                 );
             });
@@ -910,7 +910,7 @@ impl MonitorPanel {
         ui.label(
             egui::RichText::new("网络速率")
                 .size(theme.font_size_normal())
-                .color(theme.fg_low_color()),
+                .color(theme.text_tertiary()),
         );
         ui.add_space(2.0);
 
@@ -918,7 +918,7 @@ impl MonitorPanel {
             ui.label(
                 egui::RichText::new("暂无有效采样间隔...")
                     .size(theme.font_size_small())
-                    .color(theme.fg_low_color()),
+                    .color(theme.text_tertiary()),
             );
         } else {
             let rx_line: PlotPoints = rx_pts.into();
@@ -971,7 +971,7 @@ impl MonitorPanel {
         ui.label(
             egui::RichText::new("提示:至多保留 60 个采样;双击复位视图;各图横向联动。")
                 .size(theme.font_size_small())
-                .color(theme.fg_low_color()),
+                .color(theme.text_tertiary()),
         );
     }
 }

@@ -72,7 +72,7 @@ pub fn icon_button(ui: &mut Ui, theme: &Theme, id: IconId, color: Color32) -> Re
         theme.size_panel_header_control_h(),
         theme.size_icon_glyph(),
         color,
-        theme.fg_high_color(),
+        theme.text_primary(),
     )
 }
 
@@ -91,7 +91,7 @@ pub fn sidebar_header_icon_button(ui: &mut Ui, theme: &Theme, id: IconId, color:
         theme.size_sidebar_header_icon(),
         theme.font_size_sidebar_icon_glyph(),
         color,
-        theme.fg_high_color(),
+        theme.text_primary(),
     )
 }
 
@@ -138,7 +138,7 @@ pub fn chrome_small_icon_button(ui: &mut Ui, theme: &Theme, id: IconId) -> Respo
         theme.size_panel_header_control_h(),
         theme.size_icon_glyph(),
         theme.color_modal_secondary_text(),
-        theme.fg_high_color(),
+        theme.text_primary(),
     )
 }
 
@@ -150,7 +150,7 @@ pub fn busy_row(ui: &mut Ui, theme: &Theme, label: &str) {
         ui.label(
             RichText::new(label)
                 .size(theme.font_size_body())
-                .color(theme.fg_low_color()),
+                .color(theme.text_tertiary()),
         );
     });
     ui.ctx()
@@ -165,7 +165,7 @@ pub fn chrome_small_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response 
         label,
         theme.font_size_panel_title(),
         theme.color_modal_secondary_text(),
-        theme.fg_high_color(),
+        theme.text_primary(),
         egui::vec2(6.0, 3.0),
     )
 }
@@ -247,7 +247,7 @@ pub fn sidebar_list_sort_button(
     use crate::core::session_sort::SessionSortBy;
     let popup_id = ui.auto_id_with("session_list_sort");
     let icon = session_sort_icon(*sort_by);
-    let response = sidebar_header_icon_button(ui, theme, icon, theme.fg_medium_color())
+    let response = sidebar_header_icon_button(ui, theme, icon, theme.text_secondary())
         .on_hover_text(format!("排序：{}", sort_by.label()));
     if response.clicked() {
         ui.memory_mut(|mem| mem.toggle_popup(popup_id));
@@ -281,13 +281,13 @@ pub fn apply_popup_widget_visuals(visuals: &mut egui::Visuals, theme: &Theme) {
     visuals.widgets.inactive.bg_fill = theme.bg_window_color();
     visuals.widgets.hovered.bg_fill = theme.accent_alpha(38);
     visuals.widgets.active.bg_fill = theme.accent_alpha(64);
-    visuals.widgets.inactive.fg_stroke.color = theme.fg_medium_color();
-    visuals.widgets.hovered.fg_stroke.color = theme.fg_high_color();
+    visuals.widgets.inactive.fg_stroke.color = theme.text_secondary();
+    visuals.widgets.hovered.fg_stroke.color = theme.text_primary();
     let open = &mut visuals.widgets.open;
     open.weak_bg_fill = theme.accent_alpha(38);
     open.bg_fill = theme.accent_alpha(38);
     open.bg_stroke = egui::Stroke::NONE;
-    open.fg_stroke.color = theme.fg_high_color();
+    open.fg_stroke.color = theme.text_primary();
     visuals.selection.bg_fill = theme.color_text_selection_bg();
     visuals.selection.stroke.color = theme.color_text_selection_fg();
 }
@@ -378,11 +378,7 @@ pub fn paint_right_dock_slot_shell_with_painter(painter: &Painter, slot: egui::R
     fill.min.x -= RIGHT_DOCK_SHELL_LEFT_BLEED;
     let rounding = egui::Rounding::same(theme.radius_panel());
     painter.rect_filled(fill, rounding, theme.color_panel_surface());
-    painter.rect_stroke(
-        slot,
-        rounding,
-        egui::Stroke::new(1.0, theme.border_color()),
-    );
+    painter.rect_stroke(slot, rounding, theme.panel_stroke());
 }
 
 /// 槽位扣除 region panel 内边距后的内容矩形（须用 `Margin::shrink_rect`，勿 `shrink2(left+right)`）。
@@ -435,11 +431,7 @@ pub fn paint_right_dock_foreground_shell(
 ) {
     let painter = egui::Painter::new(ctx.clone(), layer_id, paint);
     paint_right_dock_slot_shell_with_painter(&painter, paint, theme);
-    painter.vline(
-        paint.max.x - 0.5,
-        paint.y_range(),
-        egui::Stroke::new(1.0, theme.border_color()),
-    );
+    painter.vline(paint.max.x - 0.5, paint.y_range(), theme.panel_stroke());
 }
 
 /// 标准 Foreground 正文宿主：固定 `inner`、clip，正文宽 = 槽位 `inner.width()`（随 SidePanel 拖拽，非 ∞ avail）。
@@ -481,14 +473,14 @@ pub fn dock_label_value_row(
             ui.set_max_width(row_w);
         }
         crate::ui::icons::icon_label_row(ui, icon, label, px, 6.0, |t| {
-            t.size(px).color(theme.fg_medium_color())
+            t.size(px).color(theme.text_secondary())
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
                 egui::RichText::new(value.to_string())
                     .monospace()
                     .size(px)
-                    .color(theme.fg_high_color()),
+                    .color(theme.text_primary()),
             );
         });
     });
@@ -508,7 +500,7 @@ fn paint_top_strip(ui: &mut Ui, rect: egui::Rect, theme: &Theme) {
     ui.painter().hline(
         rect.x_range(),
         rect.bottom() - 1.0,
-        egui::Stroke::new(1.0, theme.border_divider_color()),
+        theme.divider_stroke(),
     );
 }
 
@@ -605,11 +597,11 @@ pub fn menu_bar_brand(ui: &mut Ui, theme: &Theme) {
         ui.spacing_mut().item_spacing.x = 5.0;
         let px = theme.size_icon_glyph();
         let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
-        icons::paint_icon(ui, r, IconId::Brand, theme.fg_low_color(), px);
+        icons::paint_icon(ui, r, IconId::Brand, theme.text_tertiary(), px);
         ui.label(
             RichText::new("Mist")
                 .size(theme.font_size_menu_item())
-                .color(theme.fg_low_color()),
+                .color(theme.text_tertiary()),
         );
     });
 }
@@ -647,18 +639,13 @@ pub fn session_tab_chip(
     } else if hovered {
         theme.color_tab_inactive_hover_fill()
     } else {
-        egui::Color32::TRANSPARENT
+        theme.color_tab_inactive_fill()
     };
-    let rounding = egui::Rounding {
-        nw: theme.radius_list_item(),
-        ne: theme.radius_list_item(),
-        sw: 0.0,
-        se: 0.0,
-    };
+    let rounding = egui::Rounding::same(theme.radius_category());
     let stroke = if active {
         egui::Stroke::new(1.0, theme.color_tab_stroke())
     } else {
-        egui::Stroke::NONE
+        egui::Stroke::new(1.0, theme.color_tab_inactive_stroke())
     };
     ui.painter().rect(rect, rounding, fill, stroke);
     if active {
@@ -691,9 +678,9 @@ pub fn session_tab_chip(
             RichText::new(label)
                 .size(theme.font_size_tab_label())
                 .color(if active {
-                    theme.fg_high_color()
+                    theme.text_primary()
                 } else {
-                    theme.fg_low_color()
+                    theme.text_tertiary()
                 }),
         );
         if show_close {
@@ -734,7 +721,7 @@ pub fn paint_sidebar_selection_accent(
 pub fn panel_toolbar_button_widget<'a>(theme: &'a Theme, text: RichText) -> Button<'a> {
     Button::new(text)
         .fill(theme.color_panel_toolbar_btn_fill())
-        .stroke(egui::Stroke::new(1.0, theme.border_divider_color()))
+        .stroke(theme.divider_stroke())
         .rounding(theme.radius_list_item())
 }
 
@@ -850,7 +837,7 @@ pub fn panel_toolbar_icon_button_or_busy(
         rect,
         rounding,
         theme.color_panel_toolbar_btn_fill(),
-        egui::Stroke::new(1.0, theme.border_divider_color()),
+        theme.divider_stroke(),
     );
     let mut child = ui.child_ui(
         rect,
@@ -866,7 +853,7 @@ pub fn dock_title_row(ui: &mut Ui, theme: &Theme, icon: IconId, title: &str) {
         ui.spacing_mut().item_spacing.x = 6.0;
         let px = theme.size_icon_glyph();
         let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
-        icons::paint_icon(ui, r, icon, theme.fg_high_color(), px);
+        icons::paint_icon(ui, r, icon, theme.text_primary(), px);
         ui.label(rich_dock_title(theme, title));
     });
 }
@@ -896,7 +883,7 @@ pub enum DockPanelTitleStyle {
 fn dock_panel_title_rich_text(theme: &Theme, title: &str, style: DockPanelTitleStyle) -> RichText {
     match style {
         DockPanelTitleStyle::Section { color } => rich_section_title(theme, title, color),
-        DockPanelTitleStyle::DockHeading => rich_section_title(theme, title, theme.fg_high_color()),
+        DockPanelTitleStyle::DockHeading => rich_section_title(theme, title, theme.text_primary()),
         DockPanelTitleStyle::LargeHeading => rich_dock_title(theme, title),
     }
 }
@@ -914,7 +901,7 @@ pub fn rich_dock_title(theme: &Theme, text: &str) -> RichText {
     RichText::new(text)
         .size(theme.font_size_dock_title())
         .strong()
-        .color(theme.fg_high_color())
+        .color(theme.text_primary())
 }
 
 /// 表单字段标签 — 11px
@@ -929,7 +916,7 @@ pub fn rich_form_label(theme: &Theme, text: &str) -> RichText {
 pub fn rich_body(theme: &Theme, text: &str) -> RichText {
     RichText::new(text)
         .size(theme.font_size_body())
-        .color(theme.fg_high_color())
+        .color(theme.text_primary())
 }
 
 /// 辅助说明 / 元信息 — 10px
@@ -1298,7 +1285,7 @@ pub fn filter_chip_button(
     let fill = if active {
         theme.color_filter_chip_active_fill()
     } else {
-        Color32::TRANSPARENT
+        theme.color_overlay_fill_subtle()
     };
     ui.add(
         Button::new(
@@ -1349,7 +1336,7 @@ pub fn menu_toggle_item(ui: &mut Ui, theme: &Theme, selected: bool, name: &str) 
             .color(if selected {
                 theme.accent_color()
             } else {
-                theme.fg_medium_color()
+                theme.text_secondary()
             }),
     )
 }
@@ -1363,7 +1350,7 @@ pub fn menu_theme_item(ui: &mut Ui, theme: &Theme, selected: bool, name: &str) -
             .color(if selected {
                 theme.accent_color()
             } else {
-                theme.fg_medium_color()
+                theme.text_secondary()
             });
         ui.selectable_label(selected, label)
     })
@@ -1379,7 +1366,7 @@ pub fn menu_item_label(theme: &Theme, title: &str, shortcut: Option<&str>) -> Ri
     };
     RichText::new(text)
         .size(theme.font_size_menu_item())
-        .color(theme.fg_medium_color())
+        .color(theme.text_secondary())
 }
 
 /// 菜单项 + 当前平台主修饰键快捷键（`⌘N` / `Ctrl+N`）。
@@ -1455,6 +1442,26 @@ pub fn form_multiline_field(
     }).inner
 }
 
+/// 只读多行文本：支持鼠标拖选与 Ctrl/Cmd+C（`&str` 缓冲不可编辑）。
+pub fn selectable_readonly_monospace(
+    ui: &mut Ui,
+    theme: &Theme,
+    text: &str,
+    font_size: f32,
+    desired_width: f32,
+) -> Response {
+    let mut text_ref = text;
+    ui.add(
+        egui::TextEdit::multiline(&mut text_ref)
+            .font(egui::FontId::monospace(font_size))
+            .text_color(theme.text_secondary())
+            .frame(false)
+            .margin(egui::vec2(0.0, 0.0))
+            .desired_width(desired_width.max(1.0))
+            .code_editor(),
+    )
+}
+
 /// 侧栏搜索框（左侧 🔍，focus 时紫色描边）
 pub fn sidebar_search_field(
     ui: &mut Ui,
@@ -1468,7 +1475,7 @@ pub fn sidebar_search_field(
     let stroke = if focused {
         egui::Stroke::new(1.0, theme.accent_alpha(51))
     } else {
-        egui::Stroke::new(1.0, theme.border_divider_color())
+        theme.divider_stroke()
     };
     let font = theme.font_size_sidebar_control();
     egui::Frame::none()
@@ -1480,7 +1487,7 @@ pub fn sidebar_search_field(
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let (r, _) = ui.allocate_exact_size(egui::vec2(font, font), egui::Sense::hover());
-                icons::paint_icon(ui, r, IconId::Search, theme.fg_low_color(), font);
+                icons::paint_icon(ui, r, IconId::Search, theme.text_tertiary(), font);
                 ui.add(
                     egui::TextEdit::singleline(query)
                         .id(id)
@@ -1541,7 +1548,7 @@ pub fn ssh_import_sidebar_banner(
     painter.hline(
         rect.x_range(),
         rect.bottom() - 1.0,
-        egui::Stroke::new(1.0, theme.border_divider_color()),
+        theme.divider_stroke(),
     );
 
     let msg = format!("检测到 {} 个未导入的 SSH 配置", pending_count);
@@ -1562,7 +1569,7 @@ pub fn ssh_import_sidebar_banner(
             let label = ui.label(
                 RichText::new(&msg)
                     .size(theme.font_size_title_bar_info())
-                    .color(theme.fg_low_color()),
+                    .color(theme.text_tertiary()),
             );
             label.on_hover_text(&msg);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1637,16 +1644,31 @@ pub fn status_tool_icon(ui: &mut Ui, theme: &Theme, id: IconId) -> Response {
 
 /// 状态栏带小图标的文字 chip（如自动重连）
 pub fn status_icon_chip(ui: &mut Ui, theme: &Theme, id: IconId, text: &str) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        let px = theme.font_size_status_bar_stats();
-        let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
-        icons::paint_icon(ui, r, id, theme.fg_low_color(), px);
-        ui.label(
-            RichText::new(text)
-                .size(theme.font_size_status_bar_stats())
-                .color(theme.fg_low_color()),
-        );
+    theme.frame_status_chip().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let px = theme.font_size_status_bar_stats();
+            let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+            icons::paint_icon(ui, r, id, theme.color_caption_text(), px);
+            ui.label(
+                RichText::new(text)
+                    .size(theme.font_size_status_bar_stats())
+                    .color(theme.text_primary()),
+            );
+        });
+    });
+}
+
+/// 只读信息标签（连接元信息、侧栏分组等）
+pub fn label_tag_chip(
+    ui: &mut Ui,
+    theme: &Theme,
+    text: &str,
+    font_size: f32,
+    text_color: Color32,
+) {
+    theme.frame_label_tag().show(ui, |ui| {
+        ui.label(RichText::new(text).size(font_size).color(text_color));
     });
 }
 
@@ -1692,21 +1714,23 @@ pub fn status_restore_chip(ui: &mut Ui, theme: &Theme, name: &str, count: usize)
 pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> bool {
     let trailing_w = panel_header_trailing_width(ui, theme, &[]);
     let title = title.to_string();
-    let close = dock_panel_title_row(
-        ui,
-        theme,
-        |ui| {
-            ui.label(
-                RichText::new(&title)
-                    .size(title_px)
-                    .strong()
-                    .color(theme.color_section_title()),
-            );
-        },
-        "关闭",
-        trailing_w,
-        |ui, theme| dock_panel_title_close_trailing(ui, theme, "关闭"),
-    );
+    let close = theme.frame_modal_title_band().show(ui, |ui| {
+        dock_panel_title_row(
+            ui,
+            theme,
+            |ui| {
+                ui.label(
+                    RichText::new(&title)
+                        .size(title_px)
+                        .strong()
+                        .color(theme.text_primary()),
+                );
+            },
+            "关闭",
+            trailing_w,
+            |ui, theme| dock_panel_title_close_trailing(ui, theme, "关闭"),
+        )
+    }).inner;
     ui.add_space(theme.spacing_modal_header_after_title());
     ui.separator();
     ui.add_space(theme.spacing_modal_header_after_sep());
@@ -1808,7 +1832,7 @@ fn paint_modal_primary_button(
     } else if hovered {
         (
             theme.color_modal_primary_fill_hover().gamma_multiply(0.75),
-            theme.fg_high_color(),
+            theme.text_primary(),
         )
     } else {
         (
@@ -1854,7 +1878,7 @@ fn paint_modal_secondary_button(ui: &mut Ui, theme: &Theme, label: &str) -> Resp
         ui.painter().rect_filled(rect, rounding, fill);
     }
     let text_color = if hovered || pressed {
-        theme.fg_high_color()
+        theme.text_primary()
     } else {
         theme.color_modal_secondary_text()
     };

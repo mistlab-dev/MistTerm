@@ -2,6 +2,7 @@
 //!
 //! 网络与 SFTP 在后台线程执行，通过 `Receiver` 回传结果，避免阻塞 egui。
 
+use crate::core::{AuditCategory, AuditEvent, AuditLogger, AuditOutcome};
 use crate::ssh::SshSessionId;
 use crate::ssh::{SftpClient, SftpEntry, SshManager};
 use crate::ui::terminal::TerminalView;
@@ -36,6 +37,8 @@ pub struct SftpPanel {
     pending_refresh_after_op: bool,
     /// 面板打开后与切换标签时为 true，触发一次列表加载
     pending_auto_list: bool,
+    /// 后台操作成功后待写入审计
+    pending_audit: Option<(&'static str, String)>,
 }
 
 impl Default for SftpPanel {
@@ -60,6 +63,7 @@ impl SftpPanel {
             pending_delete: None,
             pending_refresh_after_op: false,
             pending_auto_list: false,
+            pending_audit: None,
         }
     }
 
@@ -81,9 +85,10 @@ impl SftpPanel {
         self.pending_delete = None;
         self.pending_refresh_after_op = false;
         self.pending_auto_list = false;
+        self.pending_audit = None;
     }
 
-    fn poll_rx(&mut self) {
+    fn poll_rx(&mut self, audit: &AuditLogger) {
         let Some(rx) = &self.rx else {
             return;
         };
@@ -106,10 +111,33 @@ impl SftpPanel {
             Ok(SftpJobResult::Msg(result)) => {
                 match result {
                     Ok(msg) => {
+                        if let Some((action, resource)) = self.pending_audit.take() {
+                            audit.record(
+                                AuditEvent::new(
+                                    AuditCategory::Session,
+                                    action,
+                                    AuditOutcome::Success,
+                                )
+                                .with_resource(resource),
+                            );
+                        }
                         self.toast_ok = Some(msg);
                         self.pending_refresh_after_op = true;
                     }
-                    Err(e) => self.toast_err = Some(e),
+                    Err(e) => {
+                        if let Some((action, resource)) = self.pending_audit.take() {
+                            audit.record(
+                                AuditEvent::new(
+                                    AuditCategory::Session,
+                                    action,
+                                    AuditOutcome::Failure,
+                                )
+                                .with_resource(resource)
+                                .with_detail(serde_json::json!({ "error": e })),
+                            );
+                        }
+                        self.toast_err = Some(e);
+                    }
                 }
                 self.busy = false;
                 self.rx = None;
@@ -156,6 +184,10 @@ impl SftpPanel {
             return;
         }
         self.busy = true;
+        self.pending_audit = Some((
+            "sftp.upload",
+            remote.to_string_lossy().into_owned(),
+        ));
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let ctx = ctx.clone();
@@ -187,6 +219,10 @@ impl SftpPanel {
             return;
         }
         self.busy = true;
+        self.pending_audit = Some((
+            "sftp.download",
+            remote.to_string_lossy().into_owned(),
+        ));
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let ctx = ctx.clone();
@@ -211,6 +247,7 @@ impl SftpPanel {
             return;
         }
         self.busy = true;
+        self.pending_audit = Some(("sftp.mkdir", path.to_string_lossy().into_owned()));
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let ctx = ctx.clone();
@@ -231,6 +268,7 @@ impl SftpPanel {
             return;
         }
         self.busy = true;
+        self.pending_audit = Some(("sftp.delete", path.to_string_lossy().into_owned()));
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let ctx = ctx.clone();
@@ -258,6 +296,7 @@ impl SftpPanel {
             return;
         }
         self.busy = true;
+        self.pending_audit = Some(("sftp.upload_batch", cwd.to_string_lossy().into_owned()));
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let ctx = ctx.clone();
@@ -306,6 +345,7 @@ impl SftpPanel {
         ctx: &egui::Context,
         theme: &Theme,
         terminal: Option<&TerminalView>,
+        audit: &AuditLogger,
         close_panel: &mut bool,
         right_dock_outer_left: &mut Option<f32>,
     ) {
@@ -319,7 +359,7 @@ impl SftpPanel {
             .show(ctx, |ui| {
                 let panel_w = layout_util::dock_panel_content_width(ui, s_min, s_max);
                 ui.set_max_width(panel_w);
-                self.show_content(ui, ctx, theme, terminal, close_panel);
+                self.show_content(ui, ctx, theme, terminal, audit, close_panel);
             });
         layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
     }
@@ -330,9 +370,10 @@ impl SftpPanel {
         ctx: &egui::Context,
         theme: &Theme,
         terminal: Option<&TerminalView>,
+        audit: &AuditLogger,
         close_panel: &mut bool,
     ) {
-        self.poll_rx();
+        self.poll_rx(audit);
 
         if crate::ui::chrome::dock_panel_title_close_only(
             ui,
@@ -349,7 +390,7 @@ impl SftpPanel {
         let Some(t) = terminal else {
             ui.label(
                 egui::RichText::new("请打开会话并连接后可使用 SFTP。")
-                    .color(theme.fg_low_color()),
+                    .color(theme.text_tertiary()),
             );
             return;
         };
@@ -398,13 +439,13 @@ impl SftpPanel {
         ui.label(
             egui::RichText::new(format!("本机默认保存目录（ZMODEM）：{}", download_dir_hint))
                 .small()
-                .color(theme.fg_low_color()),
+                .color(theme.text_tertiary()),
         );
         ui.add_space(theme.spacing_md());
 
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("路径").small().color(theme.fg_low_color()),
+                egui::RichText::new("路径").small().color(theme.text_tertiary()),
             );
             ui.add(
                 egui::TextEdit::singleline(&mut self.path_edit)
@@ -521,7 +562,7 @@ impl SftpPanel {
 
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("新建目录").small().color(theme.fg_low_color()),
+                egui::RichText::new("新建目录").small().color(theme.text_tertiary()),
             );
             ui.add(
                 egui::TextEdit::singleline(&mut self.mkdir_name).hint_text(crate::ui::chrome::hint_rich(
@@ -586,14 +627,14 @@ impl SftpPanel {
                         egui::Align2::CENTER_CENTER,
                         "释放以上传文件",
                         egui::FontId::proportional(theme.font_size_body()),
-                        theme.fg_high_color(),
+                        theme.text_primary(),
                     );
                 }
 
                 ui.label(
                     egui::RichText::new(format!("{} 项（拖入文件上传，拖出文件下载）", self.entries.len()))
                         .small()
-                        .color(theme.fg_low_color()),
+                        .color(theme.text_tertiary()),
                 );
 
                 let mut enter_dir: Option<PathBuf> = None;
@@ -610,7 +651,7 @@ impl SftpPanel {
                         let px = theme.font_size_body();
                         let (r, _) =
                             ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
-                        crate::ui::icons::paint_icon(ui, r, icon, theme.fg_medium_color(), px);
+                        crate::ui::icons::paint_icon(ui, r, icon, theme.text_secondary(), px);
                         ui.add(egui::SelectableLabel::new(
                             is_sel,
                             format!("{} · {}", &e.name, e.size_human()),
@@ -659,7 +700,7 @@ impl SftpPanel {
 
         if self.busy {
             ui.add_space(theme.spacing_panel_gap());
-            ui.label(egui::RichText::new("SFTP 处理中…").small().color(theme.fg_low_color()));
+            ui.label(egui::RichText::new("SFTP 处理中…").small().color(theme.text_tertiary()));
         }
     }
 }

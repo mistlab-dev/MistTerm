@@ -55,6 +55,49 @@ impl CloudSyncPanel {
         }
     }
 
+    fn paint_capability_banner(ui: &mut egui::Ui, theme: &Theme) {
+        egui::Frame::none()
+            .fill(theme.color_subtle_inset_fill())
+            .rounding(theme.radius_list_item())
+            .inner_margin(egui::Margin::symmetric(10.0, 8.0))
+            .show(ui, |ui| {
+                ui.label(
+                    chrome::rich_caption(theme, "当前可用")
+                        .strong()
+                        .color(theme.green_color()),
+                );
+                ui.label(
+                    chrome::rich_caption(
+                        theme,
+                        "手动导出 / 导入文件夹包：会话、片段、主题、凭证加密文件。",
+                    ),
+                );
+                ui.add_space(4.0);
+                ui.label(
+                    chrome::rich_caption(theme, "尚未接入")
+                        .strong()
+                        .color(theme.text_tertiary()),
+                );
+                ui.label(chrome::rich_caption(theme, "远程账户、定时自动同步、团队与快捷键。"));
+            });
+    }
+
+    fn paint_sync_status(ui: &mut egui::Ui, theme: &Theme, settings: &CloudSyncSettings) {
+        if let Some(ts) = settings.last_sync_unix {
+            let t = chrono::DateTime::from_timestamp(ts, 0)
+                .map(|x| x.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "—".to_string());
+            ui.label(chrome::rich_caption(theme, &format!("最近操作：{t}")));
+        } else {
+            ui.label(chrome::rich_caption(theme, "最近操作：尚未记录"));
+        }
+        if !settings.last_error.is_empty() {
+            ui.label(
+                chrome::rich_caption(theme, &settings.last_error).color(theme.red_color()),
+            );
+        }
+    }
+
     fn package_requires_import_confirm(dir: &Path, settings: &CloudSyncSettings) -> bool {
         let sessions = dir.join("sessions.json");
         let credentials = dir.join("credentials.json");
@@ -304,133 +347,137 @@ impl CloudSyncPanel {
                 ) {
                     close_me = true;
                 }
-                ui.small(
-                    egui::RichText::new("本地同步包 · 勾选控制导出/导入范围")
-                        .color(theme.fg_low_color()),
+                ui.label(
+                    chrome::rich_caption(
+                        theme,
+                        "本地同步包：在文件夹间备份/恢复配置（非在线云盘）",
+                    ),
                 );
-                ui.small(
-                    egui::RichText::new("FUNCTIONAL_SPEC §6：同步会话/片段等非敏感字段；SSH 密码不参与导出，各设备本地录入。")
-                        .color(theme.fg_low_color()),
-                );
-                ui.separator();
+                ui.add_space(theme.spacing_sm());
 
                 let cloud_scroll_h = layout_util::scroll_area_fill_height(ui, 140.0);
                 egui::ScrollArea::vertical()
                     .max_height(cloud_scroll_h)
                     .show(ui, |ui| {
-                        ui.label(egui::RichText::new("账号（展示）").color(theme.fg_medium_color()));
-                        ui.add(
-                            egui::TextEdit::singleline(&mut self.settings.account_hint)
-                                .hint_text(crate::ui::chrome::hint_rich(
-                                    theme,
-                                    "未登录 — 后续对接账户",
-                                    theme.font_size_normal(),
-                                ))
-                                .desired_width(layout_util::finite_content_width(ui)),
+                        ui.set_width(ui.max_rect().width());
+                        Self::paint_capability_banner(ui, theme);
+
+                        ui.add_space(theme.spacing_panel_gap());
+                        chrome::form_field_label(ui, theme, "远程账户");
+                        ui.add_enabled_ui(false, |ui| {
+                            ui.label(
+                                chrome::rich_body(theme, "未登录（后续版本对接）")
+                                    .weak(),
+                            );
+                        });
+
+                        ui.add_space(theme.spacing_panel_gap());
+                        chrome::form_field_label(ui, theme, "包内包含项");
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            if chrome::chrome_small_button(ui, theme, "全选").clicked() {
+                                self.settings.sync_sessions = true;
+                                self.settings.sync_fragments = true;
+                                self.settings.sync_themes = true;
+                                self.settings.sync_credentials = true;
+                            }
+                            if chrome::chrome_small_button(ui, theme, "仅核心").clicked() {
+                                self.settings.sync_sessions = true;
+                                self.settings.sync_fragments = true;
+                                self.settings.sync_themes = true;
+                                self.settings.sync_credentials = false;
+                                self.settings.sync_shortcuts = false;
+                            }
+                            if chrome::chrome_small_button(ui, theme, "清空").clicked() {
+                                self.settings.sync_sessions = false;
+                                self.settings.sync_fragments = false;
+                                self.settings.sync_themes = false;
+                                self.settings.sync_credentials = false;
+                                self.settings.sync_shortcuts = false;
+                            }
+                        });
+                        ui.add_space(4.0);
+                        ui.columns(2, |cols| {
+                            cols[0].checkbox(&mut self.settings.sync_sessions, "会话");
+                            cols[1].checkbox(&mut self.settings.sync_fragments, "命令片段");
+                            cols[0].checkbox(&mut self.settings.sync_themes, "主题");
+                            cols[1].checkbox(&mut self.settings.sync_credentials, "凭证库");
+                        });
+                        ui.label(
+                            chrome::rich_caption(theme, "凭证为加密文件副本，换机需相同设备密钥。")
+                                .weak(),
+                        );
+                        ui.add_enabled_ui(false, |ui| {
+                            let mut off = false;
+                            ui.checkbox(&mut off, "快捷键");
+                            ui.checkbox(&mut off, "团队配置");
+                        });
+                        ui.label(
+                            chrome::rich_caption(theme, "快捷键 / 团队：尚未实现，勾选无效。")
+                                .weak(),
+                        );
+                        ui.label(
+                            chrome::rich_caption(
+                                theme,
+                                "SSH 密码不会写入包内，导入后请在各设备本地填写。",
+                            )
+                            .weak(),
                         );
 
                         ui.add_space(theme.spacing_panel_gap());
-                        ui.collapsing("同步内容与频率", |ui| {
-                            ui.horizontal(|ui| {
-                                if crate::ui::chrome::chrome_small_button(ui, theme, "全选").clicked() {
-                                    self.settings.sync_sessions = true;
-                                    self.settings.sync_fragments = true;
-                                    self.settings.sync_themes = true;
-                                    self.settings.sync_shortcuts = true;
-                                    self.settings.sync_credentials = true;
-                                    self.settings.sync_team_config = true;
-                                }
-                                if crate::ui::chrome::chrome_small_button(ui, theme, "仅核心").clicked() {
-                                    self.settings.sync_sessions = true;
-                                    self.settings.sync_fragments = true;
-                                    self.settings.sync_themes = true;
-                                    self.settings.sync_shortcuts = false;
-                                    self.settings.sync_credentials = false;
-                                    self.settings.sync_team_config = false;
-                                }
-                                if crate::ui::chrome::chrome_small_button(ui, theme, "全部取消").clicked() {
-                                    self.settings.sync_sessions = false;
-                                    self.settings.sync_fragments = false;
-                                    self.settings.sync_themes = false;
-                                    self.settings.sync_shortcuts = false;
-                                    self.settings.sync_credentials = false;
-                                    self.settings.sync_team_config = false;
-                                }
-                            });
-
-                            ui.checkbox(&mut self.settings.sync_sessions, "会话配置");
-                            ui.checkbox(&mut self.settings.sync_fragments, "命令片段");
-                            ui.checkbox(&mut self.settings.sync_themes, "主题配置");
-                            ui.checkbox(&mut self.settings.sync_shortcuts, "快捷键（占位）");
-                            ui.checkbox(&mut self.settings.sync_credentials, "凭证库（加密文件）");
-                            ui.checkbox(&mut self.settings.sync_team_config, "团队配置（占位）");
-
-                            ui.add_space(theme.spacing_panel_gap());
-                            ui.label(
-                                egui::RichText::new("同步频率（分钟，0=仅手动）")
-                                    .color(theme.fg_medium_color()),
+                        chrome::form_field_label(ui, theme, "自动同步间隔");
+                        ui.horizontal(|ui| {
+                            ui.add(
+                                egui::DragValue::new(&mut self.settings.frequency_minutes)
+                                    .speed(1.0)
+                                    .prefix("每 "),
                             );
-                            ui.add(egui::DragValue::new(&mut self.settings.frequency_minutes).speed(1.0));
-                            ui.small(
-                                egui::RichText::new("提示：勾选项同时作用于「导出包」与「从包导入」。")
-                                    .color(theme.fg_low_color()),
-                            );
+                            ui.label(chrome::rich_caption(theme, "分钟（0 = 仅手动）"));
                         });
-
-                        ui.collapsing("备份包导入选项", |ui| {
-                            ui.checkbox(
-                                &mut self.merge_fragments_on_package_import,
-                                "片段：合并（按 id 跳过已有；关闭则整库替换）",
-                            );
-                            ui.small(
-                                egui::RichText::new("会话与凭证在勾选且无确认弹窗时为直接覆盖默认路径文件。")
-                                    .color(theme.fg_low_color()),
-                            );
-                        });
+                        ui.label(
+                            chrome::rich_caption(
+                                theme,
+                                "当前版本不会按间隔自动导出，请用下方按钮手动操作。",
+                            )
+                            .weak(),
+                        );
 
                         ui.add_space(theme.spacing_panel_gap());
-                        if let Some(ts) = self.settings.last_sync_unix {
-                            let t = chrono::DateTime::from_timestamp(ts, 0)
-                                .map(|x| x.format("%Y-%m-%d %H:%M").to_string())
-                                .unwrap_or_else(|| "—".to_string());
-                            ui.label(
-                                egui::RichText::new(format!("最近同步：{}", t))
-                                    .small()
-                                    .color(theme.fg_low_color()),
-                            );
-                        } else {
-                            ui.label(
-                                egui::RichText::new("最近同步：尚未记录")
-                                    .small()
-                                    .color(theme.fg_low_color()),
-                            );
-                        }
+                        chrome::form_field_label(ui, theme, "导入片段");
+                        ui.checkbox(
+                            &mut self.merge_fragments_on_package_import,
+                            "与现有库合并（按 id 跳过重复）",
+                        );
+                        ui.label(
+                            chrome::rich_caption(
+                                theme,
+                                "关闭上项则整库替换。会话/凭证导入可能覆盖本机文件。",
+                            )
+                            .weak(),
+                        );
 
-                        if !self.settings.last_error.is_empty() {
-                            ui.label(
-                                egui::RichText::new(&self.settings.last_error)
-                                    .small()
-                                    .color(theme.red_color()),
-                            );
-                        }
+                        ui.add_space(theme.spacing_panel_gap());
+                        Self::paint_sync_status(ui, theme, &self.settings);
 
-                        ui.separator();
-                        ui.horizontal_wrapped(|ui| {
-                            if ui.button("保存设置").clicked() {
+                        ui.add_space(theme.spacing_panel_gap());
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 6.0;
+                            if ui.button("保存勾选与间隔").clicked() {
                                 self.save_settings();
                             }
                             if ui
-                                .add(egui::Button::new("立即导出包…").fill(theme.green_color()))
-                                .on_hover_text("按上方勾选导出到新建的 mistterm-sync-时间戳 目录")
+                                .add(
+                                    egui::Button::new(
+                                        chrome::rich_body(theme, "导出同步包…").strong(),
+                                    )
+                                    .fill(theme.green_color()),
+                                )
+                                .on_hover_text("新建 mistterm-sync-时间戳 目录并复制勾选文件")
                                 .clicked()
                             {
                                 self.run_export(deps);
                             }
-                            if ui
-                                .button("从包导入…")
-                                .on_hover_text("按勾选导入包内文件（可能覆盖会话/凭证）")
-                                .clicked()
-                            {
+                            if ui.button("从同步包导入…").clicked() {
                                 self.pick_import_folder(deps);
                             }
                         });
@@ -484,18 +531,17 @@ impl CloudSyncPanel {
 
                 if !self.message.is_empty() {
                     ui.add_space(theme.spacing_sm());
-                    ui.label(
-                        egui::RichText::new(&self.message)
-                            .small()
-                            .color(theme.fg_low_color()),
-                    );
+                    egui::Frame::none()
+                        .fill(theme.color_subtle_inset_fill())
+                        .rounding(theme.radius_list_item())
+                        .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                        .show(ui, |ui| {
+                            ui.label(
+                                chrome::rich_caption(theme, &self.message)
+                                    .color(theme.text_secondary()),
+                            );
+                        });
                 }
-
-                ui.collapsing("说明", |ui| {
-                    ui.label(
-                        "导出包为新建的子目录。\n远端账户、增量同步与端到端密钥将在后续版本接入。\n凭证库迁移到 v2 后使用 HKDF + 随机盐封装，仍绑定本机密钥。",
-                    );
-                });
             });
         layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
 

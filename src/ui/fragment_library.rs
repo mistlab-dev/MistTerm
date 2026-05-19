@@ -131,7 +131,7 @@ impl FragmentLibraryState {
                             "新建片段：请在右侧填写标题、分类与命令，再点「保存」".to_string();
                     }
                     ui.separator();
-                    ui.label(egui::RichText::new("搜索").color(theme.fg_medium_color()));
+                    ui.label(egui::RichText::new("搜索").color(theme.text_secondary()));
                     let search_w = finite_avail_minus(ui, 10.0, 140.0, 280.0);
                     ui.add(
                         egui::TextEdit::singleline(&mut self.search_query)
@@ -295,7 +295,7 @@ impl FragmentLibraryState {
                                             "新片段：在下面填写标题、分类与命令，完成后点「保存」。",
                                         )
                                         .size(theme.font_size_medium())
-                                        .color(theme.fg_high_color()),
+                                        .color(theme.text_primary()),
                                     );
                                 });
                             ui.add_space(theme.spacing_sm());
@@ -416,7 +416,7 @@ impl FragmentLibraryState {
                                             keys.join(", ")
                                         ))
                                         .small()
-                                        .color(theme.fg_low_color()),
+                                        .color(theme.text_tertiary()),
                                     );
                                 }
 
@@ -522,9 +522,9 @@ impl FragmentLibraryState {
                                         egui::RichText::new(&self.status_msg)
                                             .size(if accent_hint { 13.0 } else { 12.0 })
                                             .color(if accent_hint {
-                                                theme.fg_medium_color()
+                                                theme.text_secondary()
                                             } else {
-                                                theme.fg_low_color()
+                                                theme.text_tertiary()
                                             }),
                                     );
                                 }

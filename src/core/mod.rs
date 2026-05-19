@@ -51,8 +51,9 @@ pub use credential::{
     Credential, CredentialAuthKind, CredentialCategory, CredentialVault, SecretBackend,
 };
 pub use audit::{
-    command_preview, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, AuditSettings,
-    HttpSinkSettings, SyslogSinkSettings,
+    command_preview, format_audit_jsonl_for_display, list_audit_log_files,
+    read_audit_log_tail, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, AuditSettings,
+    HttpSinkSettings, SyslogSinkSettings, AUDIT_LOG_TAIL_READ_BYTES,
 };
 pub use app_settings::AppSettings;
 pub use vault::{
