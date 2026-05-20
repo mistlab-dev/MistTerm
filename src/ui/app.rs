@@ -955,6 +955,19 @@ impl MistTermApp {
         }
     }
 
+    fn flush_session_log_buffers_for_session(&mut self, session_id: &str) {
+        if !self.session_log_enabled {
+            return;
+        }
+        for tab in &mut self.tabs {
+            if tab.session_id == session_id {
+                if let Some(writer) = tab.log_writer.as_mut() {
+                    writer.flush_pending_output();
+                }
+            }
+        }
+    }
+
     fn active_tab_log_status(&self) -> Option<String> {
         let idx = self.active_tab?;
         let tab = self.tabs.get(idx)?;
@@ -1590,6 +1603,7 @@ impl MistTermApp {
             .get_session(&session_id)
             .map(|s| s.name.clone())
             .unwrap_or(session_id.clone());
+        self.flush_session_log_buffers_for_session(&session_id);
         self.session_log_dialog
             .open_for(&session_id, &name, &self.session_log_settings);
     }
@@ -2329,6 +2343,7 @@ impl MistTermApp {
                             self.session_manager.get_session(id).map(|s| s.name.clone())
                         });
                         if let (Some(id), Some(n)) = (sid, name) {
+                            self.flush_session_log_buffers_for_session(&id);
                             self.session_log_dialog.open_for(&id, &n, &self.session_log_settings);
                         }
                     }

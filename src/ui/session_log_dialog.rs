@@ -103,29 +103,36 @@ impl SessionLogDialog {
         } else {
             display
         };
-        egui::Window::new("session_log_viewer")
+        let r = ctx.screen_rect();
+        let sw = r.width().max(360.0);
+        let sh = r.height().max(280.0);
+        let modal_size = egui::vec2(
+            (sw * 0.52).clamp(520.0, 860.0),
+            (sh * 0.60).clamp(420.0, 700.0),
+        );
+        let default_pos = egui::pos2(
+            r.min.x + (sw - modal_size.x) * 0.5,
+            r.min.y + (sh - modal_size.y) * 0.5,
+        );
+        let title = format!("会话日志 — {}", self.session_name);
+        egui::Window::new(&title)
+            .id(egui::Id::new("session_log_viewer_window"))
             .open(&mut self.open)
             .title_bar(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .default_pos(default_pos)
             .movable(true)
-            .resizable(true)
+            .resizable(false)
             .collapsible(false)
-            .default_size(layout_util::modal_edit_size(ctx))
+            .fixed_size(modal_size)
             .frame(chrome::modal_window_frame(theme))
             .show(ctx, |ui| {
                 chrome::modal_content_frame(theme).show(ui, |ui| {
-                    let title = format!("会话日志 — {}", self.session_name);
+                    let content_w = layout_util::textedit_width_in_parent(ui, 24.0);
+                    ui.set_width(content_w);
                     if chrome::modal_header(ui, theme, &title, chrome::modal_title_font_size(theme)) {
                         should_close = true;
                     }
-                    ui.label(
-                        egui::RichText::new(
-                            "本地录制的终端输出（非实时）。已去除颜色控制符；完整原始内容见日志文件。",
-                        )
-                        .size(theme.font_size_small())
-                        .color(theme.text_tertiary()),
-                    );
-                    let search_w = layout_util::finite_content_width(ui);
+                    let search_w = content_w;
                     crate::ui::chrome::search_field(
                         ui,
                         theme,
@@ -174,13 +181,15 @@ impl SessionLogDialog {
                         .rounding(4.0)
                         .inner_margin(egui::Margin::symmetric(8.0, 6.0))
                         .show(ui, |ui| {
+                            ui.set_width(content_w);
                             egui::ScrollArea::vertical()
+                                .id_source("session_log_body_scroll")
                                 .max_height(log_h)
                                 .stick_to_bottom(false)
-                                .auto_shrink([false, false])
+                                .auto_shrink([true, false])
                                 .show(ui, |ui| {
-                                    let w = ui.available_width();
-                                    ui.set_min_width(w);
+                                    let w = layout_util::textedit_width_in_parent(ui, 12.0);
+                                    ui.set_width(w);
                                     chrome::selectable_readonly_monospace(
                                         ui,
                                         theme,
@@ -191,13 +200,36 @@ impl SessionLogDialog {
                                 });
                         });
                     ui.add_space(theme.spacing_md());
-                    chrome::modal_footer_actions(ui, theme, |ui, th| {
-                        if chrome::modal_secondary_button(ui, th, "关闭").clicked() {
-                            should_close = true;
-                        }
-                        if chrome::modal_secondary_button(ui, th, "复制全部").clicked() {
-                            copy_all = true;
-                        }
+                    ui.horizontal(|ui| {
+                        ui.set_width(content_w);
+                        let btn_reserve = theme.size_modal_footer_btn_min_w_secondary() * 2.0
+                            + ui.spacing().item_spacing.x * 2.0;
+                        let caption_w = (content_w - btn_reserve).max(80.0);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(caption_w, ui.spacing().interact_size.y),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_max_width(caption_w);
+                                ui.add(
+                                    egui::Label::new(chrome::rich_caption(
+                                        theme,
+                                        "本地录制的终端输出（非实时）。已去除颜色控制符；完整原始内容见日志文件。",
+                                    ))
+                                    .wrap(true),
+                                );
+                            },
+                        );
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if chrome::modal_secondary_button(ui, theme, "关闭").clicked() {
+                                    should_close = true;
+                                }
+                                if chrome::modal_secondary_button(ui, theme, "复制全部").clicked() {
+                                    copy_all = true;
+                                }
+                            },
+                        );
                     });
                 });
             });

@@ -22,6 +22,7 @@ pub mod icons;
 pub mod chrome;
 pub mod app;
 pub mod terminal;
+mod terminal_keys;
 pub mod sidebar;
 pub mod dialogs;
 pub mod git_sync;

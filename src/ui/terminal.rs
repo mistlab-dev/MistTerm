@@ -817,11 +817,14 @@ impl TerminalView {
                                     response.request_focus();
                                 }
                                 if self.pending_focus_terminal {
+                                    // 同步写 memory，避免帧初 Esc 清空焦点后本帧无法输入
+                                    ui.memory_mut(|m| m.request_focus(response.id));
                                     response.request_focus();
                                     self.pending_focus_terminal = false;
                                 }
                             }
-                            self.terminal_focused = response.has_focus();
+                            self.terminal_focused =
+                                response.has_focus() || self.pending_focus_terminal;
 
                             // 滚轮浏览 scrollback（与 alacritty 一致：Delta>0 向上翻历史）
                             if (response.hovered() || response.has_focus())
@@ -1389,37 +1392,10 @@ impl TerminalView {
             if tab_plain || tab_shift {
                 self.append_offline_bytes(b"\t");
             }
-            let up = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp);
-            let down = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown);
-            let left = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft);
-            let right = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight);
-            let home = i.consume_key(egui::Modifiers::NONE, egui::Key::Home);
-            let end = i.consume_key(egui::Modifiers::NONE, egui::Key::End);
-            let page_up = i.consume_key(egui::Modifiers::NONE, egui::Key::PageUp);
-            let page_down = i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown);
-            if up {
-                self.append_offline_bytes(b"\x1b[A");
-            }
-            if down {
-                self.append_offline_bytes(b"\x1b[B");
-            }
-            if right {
-                self.append_offline_bytes(b"\x1b[C");
-            }
-            if left {
-                self.append_offline_bytes(b"\x1b[D");
-            }
-            if home {
-                self.append_offline_bytes(b"\x1b[H");
-            }
-            if end {
-                self.append_offline_bytes(b"\x1b[F");
-            }
-            if page_up {
-                self.append_offline_bytes(b"\x1b[5~");
-            }
-            if page_down {
-                self.append_offline_bytes(b"\x1b[6~");
+            if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
+                self.append_offline_bytes(bytes);
+            }) {
+                self.pending_focus_terminal = true;
             }
 
             let mut backspace_key = false;
@@ -1446,7 +1422,15 @@ impl TerminalView {
                         if text == "\n" || text == "\r" {
                             continue;
                         }
-                        if i.modifiers.command || i.modifiers.ctrl {
+                        if i.modifiers.command {
+                            continue;
+                        }
+                        if i.modifiers.ctrl && text.as_bytes() == [0x1b] {
+                            self.append_offline_bytes(b"\x1b");
+                            self.pending_focus_terminal = true;
+                            continue;
+                        }
+                        if i.modifiers.ctrl {
                             continue;
                         }
                         if text == "\t" {
@@ -1625,38 +1609,12 @@ impl TerminalView {
             if tab_plain || tab_shift {
                 let _ = handle.send_input(b"\t");
             }
-            // 历史命令 / 光标移动等：方向键与常见导航键映射为 ANSI 序列
-            let up = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp);
-            let down = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown);
-            let left = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft);
-            let right = i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight);
-            let home = i.consume_key(egui::Modifiers::NONE, egui::Key::Home);
-            let end = i.consume_key(egui::Modifiers::NONE, egui::Key::End);
-            let page_up = i.consume_key(egui::Modifiers::NONE, egui::Key::PageUp);
-            let page_down = i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown);
-            if up {
-                let _ = handle.send_input(b"\x1b[A");
-            }
-            if down {
-                let _ = handle.send_input(b"\x1b[B");
-            }
-            if right {
-                let _ = handle.send_input(b"\x1b[C");
-            }
-            if left {
-                let _ = handle.send_input(b"\x1b[D");
-            }
-            if home {
-                let _ = handle.send_input(b"\x1b[H");
-            }
-            if end {
-                let _ = handle.send_input(b"\x1b[F");
-            }
-            if page_up {
-                let _ = handle.send_input(b"\x1b[5~");
-            }
-            if page_down {
-                let _ = handle.send_input(b"\x1b[6~");
+            // Esc / F1–F12 / Insert / 带修饰方向键等（egui 常无 Text 事件）
+            if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
+                let _ = handle.send_input(bytes);
+            }) {
+                // egui 帧初会把 Esc 当作「取消焦点」；转发 vim 后须抢回终端焦点
+                self.pending_focus_terminal = true;
             }
             // 同一帧内可能既有 Key 又有 Text（如 Delete / 退格），避免重复或错发
             let mut backspace_key = false;
@@ -1684,7 +1642,16 @@ impl TerminalView {
                         if text == "\n" || text == "\r" {
                             continue;
                         }
-                        if i.modifiers.command || i.modifiers.ctrl {
+                        if i.modifiers.command {
+                            continue;
+                        }
+                        // 部分平台 Ctrl+[ 仅以 Text(ESC) 送达，无 Key 事件
+                        if i.modifiers.ctrl && text.as_bytes() == [0x1b] {
+                            let _ = handle.send_input(b"\x1b");
+                            self.pending_focus_terminal = true;
+                            continue;
+                        }
+                        if i.modifiers.ctrl {
                             continue;
                         }
                         // Tab 已在 consume_key 阶段处理，避免重复

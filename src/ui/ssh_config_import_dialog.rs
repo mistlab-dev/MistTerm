@@ -76,7 +76,7 @@ impl SshConfigImportDialog {
             .open(&mut self.open)
             .title_bar(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-            .movable(false)
+            .movable(true)
             .resizable(false)
             .collapsible(false)
             .fixed_size(layout_util::modal_edit_size(ctx))

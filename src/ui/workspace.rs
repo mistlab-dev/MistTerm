@@ -222,10 +222,15 @@ impl MistTermApp {
                                             self.open_edit_session_dialog(&session_id);
                                         }
                                         if let Some(session_id) = sidebar_output.view_log_session_id {
-                                            if let Some(s) = self.session_manager.get_session(&session_id) {
+                                            let log_name = self
+                                                .session_manager
+                                                .get_session(&session_id)
+                                                .map(|s| s.name.clone());
+                                            if let Some(name) = log_name {
+                                                self.flush_session_log_buffers_for_session(&session_id);
                                                 self.session_log_dialog.open_for(
                                                     &session_id,
-                                                    &s.name,
+                                                    &name,
                                                     &self.session_log_settings,
                                                 );
                                             }
@@ -554,7 +559,7 @@ impl MistTermApp {
             let modal_resp = crate::ui::chrome::modal_window("new_session_modal", &theme)
                 .open(&mut open)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
+                .movable(true)
                 .resizable(false)
                 .fixed_size(layout_util::modal_edit_size(ctx))
                 .show(ctx, |ui| {
@@ -744,7 +749,7 @@ impl MistTermApp {
                 .open(&mut open)
                 .title_bar(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
+                .movable(true)
                 .resizable(false)
                 .collapsible(false)
                 .fixed_size(layout_util::modal_pref_size(ctx))
@@ -809,7 +814,7 @@ impl MistTermApp {
                 .open(&mut open)
                 .title_bar(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
+                .movable(true)
                 .resizable(false)
                 .collapsible(false)
                 .fixed_size(layout_util::modal_about_size(ctx))
@@ -1263,7 +1268,7 @@ impl MistTermApp {
                 .open(&mut open)
                 .title_bar(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
+                .movable(true)
                 .resizable(false)
                 .collapsible(false)
                 .fixed_size(layout_util::modal_quick_fragment_size(ctx))
@@ -1344,7 +1349,7 @@ impl MistTermApp {
                 .open(&mut open)
                 .title_bar(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
+                .movable(true)
                 .resizable(false)
                 .collapsible(false)
                 .fixed_size(layout_util::modal_confirm_size(ctx))
@@ -1392,7 +1397,7 @@ impl MistTermApp {
                     .open(&mut open)
                     .title_bar(false)
                     .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                    .movable(false)
+                    .movable(true)
                     .resizable(false)
                     .collapsible(false)
                     .fixed_size(layout_util::modal_clone_size(ctx))
@@ -1450,7 +1455,7 @@ impl MistTermApp {
                 .open(&mut open)
                 .title_bar(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
+                .movable(true)
                 .resizable(false)
                 .collapsible(false)
                 .fixed_size(layout_util::modal_edit_size(ctx))
@@ -1684,7 +1689,7 @@ impl MistTermApp {
                 .open(&mut open)
                 .title_bar(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
+                .movable(true)
                 .resizable(false)
                 .fixed_size(layout_util::modal_confirm_size(ctx))
                 .frame(crate::ui::chrome::modal_window_frame(&theme))
@@ -1736,7 +1741,7 @@ impl MistTermApp {
                 .open(&mut open)
                 .title_bar(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .movable(false)
+                .movable(true)
                 .resizable(false)
                 .collapsible(false)
                 .fixed_size(layout_util::fragment_vars_modal_size(ctx))

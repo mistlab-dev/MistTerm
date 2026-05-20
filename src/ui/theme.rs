@@ -417,6 +417,18 @@ impl Theme {
         }
     }
 
+    /// 底栏状态徽章底（贴 chrome 条；勿用 [`color_chip_fill`] 的 accent 淡紫）
+    #[inline]
+    pub fn color_status_chip_fill(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 10)
+        } else if self.uses_solid_fg_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 8)
+        } else {
+            self.fg_high_alpha(10)
+        }
+    }
+
     /// 面板标题条底（侧栏 / 右 dock / 居中弹窗共用）
     #[inline]
     pub fn color_panel_header_band_fill(&self) -> Color32 {
@@ -1134,10 +1146,20 @@ impl Theme {
             .inner_margin(egui::Margin::ZERO)
     }
 
-    /// 状态徽章（底栏统计等）
+    /// 状态徽章（底栏连接、通知、片段统计等）
     pub fn frame_status_chip(&self) -> egui::Frame {
+        let border = self.divider_stroke_color();
         egui::Frame::none()
-            .fill(self.color_chip_fill())
+            .fill(self.color_status_chip_fill())
+            .stroke(egui::Stroke::new(
+                1.0,
+                Color32::from_rgba_unmultiplied(
+                    border.r(),
+                    border.g(),
+                    border.b(),
+                    border.a() / 2,
+                ),
+            ))
             .rounding(egui::Rounding::same(self.radius_list_item()))
             .inner_margin(self.margin_status_chip())
     }
