@@ -417,6 +417,18 @@ impl Theme {
         }
     }
 
+    /// Slider 滑轨底色（egui 用 `widgets.inactive.bg_fill` 绘制轨道）
+    #[inline]
+    pub fn color_slider_rail_fill(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 52)
+        } else if self.uses_solid_fg_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 28)
+        } else {
+            self.fg_high_alpha(22)
+        }
+    }
+
     /// 底栏状态徽章底（贴 chrome 条；勿用 [`color_chip_fill`] 的 accent 淡紫）
     #[inline]
     pub fn color_status_chip_fill(&self) -> Color32 {
@@ -1422,6 +1434,10 @@ impl Theme {
     pub fn spacing_status_left_gap(&self) -> f32 { 8.0 }     // 状态栏左侧 gap
     pub fn spacing_status_right_gap(&self) -> f32 { 4.0 }    // 状态栏右侧 gap
     pub fn spacing_tool_btn_gap(&self) -> f32 { 3.0 }        // 工具按钮间距
+    /// 右 dock 标题行「＋ / ×」距面板右缘（避免贴边被裁切）
+    pub fn spacing_dock_panel_trailing_pad(&self) -> f32 { 4.0 }
+    /// 筛选芯片行与排序按钮间距
+    pub fn spacing_filter_sort_gap(&self) -> f32 { 8.0 }
     pub fn spacing_title_bar_x(&self) -> f32 { 16.0 }        // 标题栏左右 padding
     /// 顶栏菜单行左内边距（macOS 系统已占左侧，窗口内菜单更靠左）
     pub fn spacing_menu_bar_left(&self) -> f32 {
@@ -1601,22 +1617,22 @@ impl Theme {
         Self {
             name: "晨曦".to_string(),
             // === 背景色 ===
-            bg_body: Color32Serializable::new(235, 235, 235),        // #ebebeb
-            bg_window: Color32Serializable::new(245, 245, 245),      // #f5f5f5
-            bg_terminal: Color32Serializable::new(252, 252, 252),    // #fcfcfc
-            bg_tab_bar: Color32Serializable::new(242, 242, 242),     // 略高于 window，区分顶底栏
-            bg_hover: Color32Serializable::with_alpha(0, 0, 0, 18),
-            bg_selected: Color32Serializable::with_alpha(102, 126, 234, 40),
-            // === 文字（实色，勿依赖 fg_high_alpha）===
-            fg_high: Color32Serializable::new(26, 26, 26),             // #1a1a1a
-            fg_medium: Color32Serializable::new(58, 58, 58),         // #3a3a3a
-            fg_low: Color32Serializable::new(92, 92, 92),            // #5c5c5c
+            bg_body: Color32Serializable::new(224, 226, 230),        // #e0e2e6 外框略深，层次更清晰
+            bg_window: Color32Serializable::new(248, 248, 250),      // #f8f8fa 面板
+            bg_terminal: Color32Serializable::new(255, 255, 255),    // #ffffff 终端区最亮
+            bg_tab_bar: Color32Serializable::new(238, 240, 244),     // 顶/底栏与面板区分
+            bg_hover: Color32Serializable::with_alpha(0, 0, 0, 22),
+            bg_selected: Color32Serializable::with_alpha(102, 126, 234, 48),
+            // === 文字（实色，浅底须更深以保证侧栏/监控可读）===
+            fg_high: Color32Serializable::new(20, 22, 26),             // #14161a
+            fg_medium: Color32Serializable::new(46, 50, 56),         // #2e3238
+            fg_low: Color32Serializable::new(72, 78, 86),            // #484e56
             // === 主色调 ===
-            accent: Color32Serializable::new(88, 106, 210),          // 略深于 #667eea，浅底可读
-            accent_dim: Color32Serializable::new(210, 218, 248),     // #d2daf8
+            accent: Color32Serializable::new(72, 92, 200),          // 浅底上 accent 略加深
+            accent_dim: Color32Serializable::new(198, 208, 242),     // #c6d0f2
             // === 边框 ===
-            border: Color32Serializable::new(196, 196, 196),         // #c4c4c4
-            border_divider: Color32Serializable::new(220, 220, 220), // #dcdcdc
+            border: Color32Serializable::new(168, 172, 180),         // #a8acb4
+            border_divider: Color32Serializable::new(198, 202, 210), // #c6cad2
             // === 状态色 ===
             green: Color32Serializable::new(76, 175, 80),            // #4CAF50
             green_dim: Color32Serializable::with_alpha(76, 175, 80, 64),
@@ -1782,10 +1798,20 @@ impl ThemeManager {
 
         // 文字颜色（语义 token；占位符仍建议 RichText + color_form_hint）
         style.visuals.override_text_color = Some(theme.text_primary());
+        let widget_label = if is_dark {
+            theme.text_primary()
+        } else {
+            theme.fg_medium_color()
+        };
+        let widget_label_secondary = if is_dark {
+            theme.text_secondary()
+        } else {
+            theme.fg_medium_color()
+        };
         style.visuals.widgets.noninteractive.fg_stroke =
-            egui::Stroke::new(1.0, theme.text_primary());
+            egui::Stroke::new(1.0, widget_label);
         style.visuals.widgets.inactive.fg_stroke =
-            egui::Stroke::new(1.0, theme.text_secondary());
+            egui::Stroke::new(1.0, widget_label_secondary);
         style.visuals.widgets.hovered.fg_stroke =
             egui::Stroke::new(1.0, theme.text_primary());
         style.visuals.widgets.active.fg_stroke =
@@ -2078,22 +2104,24 @@ mod theme_semantic_tests {
                     name,
                     contrast_ratio(theme.text_primary(), bg)
                 );
+                let sec_min = if theme.is_light_theme() { 3.5 } else { 2.8 };
+                let ter_min = if theme.is_light_theme() { 3.0 } else { 2.2 };
                 assert!(
-                    contrast_ratio(theme.text_secondary(), bg) >= 2.8,
+                    contrast_ratio(theme.text_secondary(), bg) >= sec_min,
                     "{} {}: secondary {:.2}",
                     theme.name,
                     name,
                     contrast_ratio(theme.text_secondary(), bg)
                 );
                 assert!(
-                    contrast_ratio(theme.text_tertiary(), bg) >= 2.2,
+                    contrast_ratio(theme.text_tertiary(), bg) >= ter_min,
                     "{} {}: tertiary {:.2}",
                     theme.name,
                     name,
                     contrast_ratio(theme.text_tertiary(), bg)
                 );
                 assert!(
-                    contrast_ratio(theme.color_caption_text(), bg) >= 2.8,
+                    contrast_ratio(theme.color_caption_text(), bg) >= sec_min,
                     "{} {}: caption {:.2}",
                     theme.name,
                     name,

@@ -1958,7 +1958,6 @@ impl MistTermApp {
         };
 
         theme.frame_panel_header_band().show(ui, |ui| {
-                ui.set_max_width(panel_w);
                 let header = crate::ui::chrome::dock_panel_title_bar(
                     ui,
                     theme,
@@ -1994,7 +1993,6 @@ impl MistTermApp {
             theme,
             &["常用", "Docker", "K8s", "全部"],
             self.fragment_filter_category.as_str(),
-            panel_w,
             sort_icon,
             sort_label,
         );

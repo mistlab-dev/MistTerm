@@ -48,6 +48,7 @@ fn main() -> eframe::Result<()> {
         initial_window_size: Some(egui::vec2(1200.0, 820.0)),
         max_window_size: None,
         app_id: Some("mistterm".to_string()),
+        icon_data: Some(mistterm::ui::icons::app_window_icon_data()),
         ..Default::default()
     };
     

@@ -30,6 +30,10 @@ path = "src/bin/rz_upload_smoke.rs"
 name = "Mist"
 path = "src/main.rs"
 
+[[bin]]
+name = "export_app_icon"
+path = "src/bin/export_app_icon.rs"
+
 [dependencies]
 md5 = "0.7"
 eframe = { version = "0.23", features = ["wgpu", "persistence"] }

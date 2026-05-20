@@ -375,9 +375,13 @@ impl MonitorPanel {
                 }
             });
             if self.auto_refresh {
-                ui.add(
-                    egui::Slider::new(&mut self.refresh_interval_secs, 1.0..=30.0)
-                        .text("间隔 (秒)"),
+                crate::ui::chrome::labeled_slider_f32(
+                    ui,
+                    theme,
+                    &mut self.refresh_interval_secs,
+                    1.0..=30.0,
+                    "间隔 (秒)",
+                    "",
                 );
             }
         });
@@ -402,10 +406,13 @@ impl MonitorPanel {
                 (&mut self.alert_mem_pct, "内存告警 %"),
                 (&mut self.alert_disk_pct, "磁盘告警 %"),
             ] {
-                ui.add(
-                    egui::Slider::new(pct, 50.0..=100.0)
-                        .text(label)
-                        .suffix("%"),
+                crate::ui::chrome::labeled_slider_f32(
+                    ui,
+                    theme,
+                    pct,
+                    50.0..=100.0,
+                    label,
+                    "%",
                 );
             }
         });

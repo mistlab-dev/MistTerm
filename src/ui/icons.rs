@@ -429,12 +429,7 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
             &[(0.5, 0.18, 0.22, 0.78), (0.5, 0.18, 0.78, 0.78), (0.38, 0.62, 0.62, 0.62)],
             w,
         ),
-        IconId::Brand => {
-            for i in 0..4 {
-                let a = std::f32::consts::FRAC_PI_2 * i as f32 - std::f32::consts::FRAC_PI_4;
-                p.line(0.5 + 0.28 * a.cos(), 0.5 + 0.28 * a.sin(), 0.5, 0.5, w);
-            }
-        }
+        IconId::Brand => draw_m_letter_cell(&mut p, w),
         IconId::Refresh => {
             p.circle(0.5, 0.5, 0.28, w);
             p.segs(&[(0.62, 0.28, 0.78, 0.18), (0.78, 0.18, 0.68, 0.38)], w);
@@ -555,6 +550,434 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
         }
         IconId::ChevronLeft => p.segs(&[(0.65, 0.22, 0.32, 0.5), (0.65, 0.78, 0.32, 0.5)], w),
     }
+}
+
+/// Mist 字母 M 笔画（0..1 归一化坐标）
+const M_LETTER_SEGS: &[Seg] = &[
+    (0.24, 0.78, 0.24, 0.22),
+    (0.24, 0.22, 0.5, 0.58),
+    (0.76, 0.22, 0.5, 0.58),
+    (0.76, 0.78, 0.76, 0.22),
+];
+
+fn draw_m_letter_cell(p: &mut CellPainter<'_>, stroke_w: f32) {
+    p.segs(M_LETTER_SEGS, stroke_w);
+}
+
+const APP_ICON_FONT: &[u8] = include_bytes!("../../assets/fonts/NotoSansSC-Regular.otf");
+
+/// 霓虹青（参考图地平面 / 外发光）
+const APP_ICON_CYAN: [u8; 3] = [55, 175, 255];
+/// 字标核心高光白
+const APP_ICON_TEXT_CORE: [u8; 4] = [238, 246, 255, 255];
+
+/// 窗口 / Dock / 任务栏图标（霓虹 Mist 字标 + 圆角底板）。
+pub fn app_window_icon_data() -> eframe::IconData {
+    const SIZE: u32 = 256;
+    /// 透明外圈留白（系统叠 squircle 时与邻图标体量接近）
+    const PAD_FRAC: f32 = 0.08;
+    let pad = (SIZE as f32 * PAD_FRAC).round() as u32;
+    let mut img = RgbaImage::from_pixel(SIZE, SIZE, Rgba([0, 0, 0, 0]));
+    let edge = SIZE - pad;
+    paint_mist_app_icon(&mut img, pad, edge, edge);
+    eframe::IconData {
+        rgba: img.into_raw(),
+        width: SIZE,
+        height: SIZE,
+    }
+}
+
+/// 导出 PNG 预览（`cargo run --bin export_app_icon`）。
+pub fn export_app_icon_png(path: &std::path::Path) -> Result<(), image::ImageError> {
+    let icon = app_window_icon_data();
+    let img = image::RgbaImage::from_raw(icon.width, icon.height, icon.rgba)
+        .expect("app icon buffer size mismatch");
+    img.save(path)
+}
+
+/// 在 `[x0,x1)×[y0,y1)` 内绘制 Mist 品牌图标（参考霓虹字标 + 底部地光）。
+fn paint_mist_app_icon(img: &mut RgbaImage, x0: u32, x1: u32, y1: u32) {
+    let y0 = x0;
+    let w = (x1 - x0) as f32;
+    let h = (y1 - y0) as f32;
+    let ox = x0 as f32;
+    let oy = y0 as f32;
+    let cx = ox + w * 0.5;
+    let cy = oy + h * 0.35;
+    let tw = w * 0.72;
+    let text_bottom = wordmark_metrics("Mist", cx, cy, tw)
+        .map(|m| m.text_bottom)
+        .unwrap_or(cy + 18.0);
+    // 镜面线：落在正文与倒影之间的中部
+    const TEXT_MIRROR_GAP: f32 = 24.0;
+    let mirror_y = text_bottom + TEXT_MIRROR_GAP * 0.86;
+
+    fill_vertical_gradient(img, x0, y0, x1, y1, [10, 14, 32], [3, 5, 16]);
+    paint_bottom_floor_glow(img, ox, oy, w, h);
+    draw_wordmark_reflection(img, "Mist", cx, cy, mirror_y, tw);
+    paint_mirror_surface_line(img, ox + w * 0.12, ox + w * 0.88, mirror_y);
+    draw_neon_wordmark(img, "Mist", cx, cy, tw);
+
+    // 圆角遮罩（接近 macOS 应用图标连续圆角比例）
+    let radius = w.min(h) * 0.165;
+    apply_rounded_alpha_mask(img, ox, oy, ox + w, oy + h, radius);
+}
+
+/// 圆角矩形 SDF（负值 = 内侧）
+fn sdf_rounded_rect(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> f32 {
+    let cx = (x0 + x1) * 0.5;
+    let cy = (y0 + y1) * 0.5;
+    let hx = (x1 - x0) * 0.5 - r;
+    let hy = (y1 - y0) * 0.5 - r;
+    let qx = (px - cx).abs() - hx;
+    let qy = (py - cy).abs() - hy;
+    let ax = qx.max(0.0);
+    let ay = qy.max(0.0);
+    (ax * ax + ay * ay).sqrt() - r + qx.min(qy).min(0.0)
+}
+
+fn rounded_rect_coverage(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> f32 {
+    let d = sdf_rounded_rect(px, py, x0, y0, x1, y1, r);
+    (0.5 - d).clamp(0.0, 1.0)
+}
+
+/// 将图标内容裁切为圆角方形（外侧透明）
+fn apply_rounded_alpha_mask(img: &mut RgbaImage, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32) {
+    let w = img.width();
+    let h = img.height();
+    for y in 0..h {
+        for x in 0..w {
+            let cov = rounded_rect_coverage(x as f32 + 0.5, y as f32 + 0.5, x0, y0, x1, y1, radius);
+            if cov <= 0.0 {
+                img.put_pixel(x, y, Rgba([0, 0, 0, 0]));
+            } else if cov < 1.0 {
+                let p = img.get_pixel(x, y);
+                let a = (p[3] as f32 * cov).round() as u8;
+                img.put_pixel(x, y, Rgba([p[0], p[1], p[2], a]));
+            }
+        }
+    }
+}
+
+/// 底部径向地光（参考图蓝色光池）
+fn paint_bottom_floor_glow(img: &mut RgbaImage, ox: f32, oy: f32, w: f32, h: f32) {
+    let c = APP_ICON_CYAN;
+    draw_soft_ellipse(img, ox + w * 0.5, oy + h * 0.92, w * 0.62, h * 0.28, [c[0], c[1], c[2], 48]);
+    draw_soft_ellipse(img, ox + w * 0.5, oy + h * 0.82, w * 0.48, h * 0.20, [c[0], c[1], c[2], 100]);
+    draw_soft_ellipse(img, ox + w * 0.5, oy + h * 0.72, w * 0.36, h * 0.14, [c[0], c[1], c[2], 130]);
+    draw_soft_ellipse(img, ox + w * 0.5, oy + h * 0.64, w * 0.22, h * 0.08, [200, 230, 255, 40]);
+}
+
+/// 霓虹「Mist」：外发光 + 下半青 + 核心白
+fn draw_neon_wordmark(img: &mut RgbaImage, text: &str, cx: f32, cy: f32, target_width: f32) {
+    const GLOW: &[(f32, f32, u8)] = &[
+        (0.0, 0.0, 42),
+        (-2.0, 0.0, 28),
+        (2.0, 0.0, 28),
+        (0.0, -2.0, 28),
+        (0.0, 2.0, 28),
+        (-3.0, -1.0, 18),
+        (3.0, 1.0, 18),
+        (-1.0, 2.0, 16),
+        (1.0, -2.0, 16),
+        (-4.0, 0.0, 10),
+        (4.0, 0.0, 10),
+        (0.0, -4.0, 10),
+        (0.0, 4.0, 10),
+    ];
+    let glow_color = [APP_ICON_CYAN[0], APP_ICON_CYAN[1], APP_ICON_CYAN[2]];
+    for &(dx, dy, a) in GLOW {
+        let _ = draw_wordmark(
+            img,
+            text,
+            cx + dx,
+            cy + dy,
+            target_width,
+            [glow_color[0], glow_color[1], glow_color[2], a],
+            WordmarkDrawOpts::default(),
+        );
+    }
+    let _ = draw_wordmark(
+        img,
+        text,
+        cx,
+        cy + 2.0,
+        target_width,
+        [APP_ICON_CYAN[0], APP_ICON_CYAN[1], APP_ICON_CYAN[2], 210],
+        WordmarkDrawOpts::default(),
+    );
+    let _ = draw_wordmark(img, text, cx, cy, target_width, APP_ICON_TEXT_CORE, WordmarkDrawOpts::default());
+}
+
+/// 镜面地平面亮线（在字标下方，作为反射分界）
+fn paint_mirror_surface_line(img: &mut RgbaImage, x0: f32, x1: f32, y: f32) {
+    let core = [140, 230, 255, 155];
+    let glow = [APP_ICON_CYAN[0], APP_ICON_CYAN[1], APP_ICON_CYAN[2]];
+    for dy in -3i32..=2 {
+        let t = dy.unsigned_abs();
+        let a = match t {
+            0 => 155u8,
+            1 => 95,
+            2 => 48,
+            _ => 22,
+        };
+        let row = (y + dy as f32).round() as i32;
+        let x_start = x0.round() as i32;
+        let x_end = x1.round() as i32;
+        for x in x_start..=x_end {
+            let c = if t == 0 { core } else { [glow[0], glow[1], glow[2], a] };
+            blend_pixel(img, x, row, c);
+        }
+    }
+}
+
+/// 字标在镜面下方的倒影（随深度衰减）
+fn draw_wordmark_reflection(
+    img: &mut RgbaImage,
+    text: &str,
+    center_x: f32,
+    center_y: f32,
+    mirror_y: f32,
+    target_width: f32,
+) {
+    let color = [APP_ICON_CYAN[0], APP_ICON_CYAN[1], APP_ICON_CYAN[2], 140];
+    let _ = draw_wordmark(
+        img,
+        text,
+        center_x,
+        center_y,
+        target_width,
+        color,
+        WordmarkDrawOpts {
+            mirror_y: Some(mirror_y),
+            mirror_fade_depth: REFLECT_DEPTH,
+            mirror_strength: 0.26,
+            mirror_peak_boost: 0.09,
+            ..WordmarkDrawOpts::default()
+        },
+    );
+}
+
+const REFLECT_DEPTH: f32 = 46.0;
+
+struct WordmarkMetrics {
+    text_bottom: f32,
+}
+
+struct WordmarkDrawOpts {
+    mirror_y: Option<f32>,
+    mirror_fade_depth: f32,
+    mirror_strength: f32,
+    /// 贴近视平线处略提亮，镜面更清晰
+    mirror_peak_boost: f32,
+    /// 首字母 M 相对其余字号的放大倍率
+    cap_m_scale: f32,
+}
+
+impl Default for WordmarkDrawOpts {
+    fn default() -> Self {
+        Self {
+            mirror_y: None,
+            mirror_fade_depth: 36.0,
+            mirror_strength: 0.4,
+            mirror_peak_boost: 0.0,
+            cap_m_scale: 1.14,
+        }
+    }
+}
+
+#[inline]
+fn wordmark_char_size(ch: char, base: f32, cap_m_scale: f32) -> f32 {
+    if ch == 'M' {
+        base * cap_m_scale
+    } else {
+        base
+    }
+}
+
+fn wordmark_metrics(text: &str, _center_x: f32, center_y: f32, target_width: f32) -> Option<WordmarkMetrics> {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
+
+    let font = FontRef::try_from_slice(APP_ICON_FONT).ok()?;
+    let cap_m = WordmarkDrawOpts::default().cap_m_scale;
+    let mut size = target_width / measure_text_width(&font, text, 1.0, cap_m);
+    size = size.clamp(18.0, 128.0);
+    let scaled = font.as_scaled(PxScale::from(size));
+    let ascent = scaled.ascent();
+    let descent = scaled.descent();
+    let baseline_y = center_y + (ascent + descent) * 0.5 - descent;
+    let m_extra = size * (cap_m - 1.0) * 0.35;
+    Some(WordmarkMetrics {
+        text_bottom: baseline_y + descent + m_extra,
+    })
+}
+
+fn fill_vertical_gradient(
+    img: &mut RgbaImage,
+    x0: u32,
+    y0: u32,
+    x1: u32,
+    y1: u32,
+    top: [u8; 3],
+    bottom: [u8; 3],
+) {
+    let h = (y1 - y0).max(1) as f32;
+    for y in y0..y1 {
+        let t = (y - y0) as f32 / h;
+        let r = lerp_u8(top[0], bottom[0], t);
+        let g = lerp_u8(top[1], bottom[1], t);
+        let b = lerp_u8(top[2], bottom[2], t);
+        for x in x0..x1 {
+            img.put_pixel(x, y, Rgba([r, g, b, 255]));
+        }
+    }
+}
+
+fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
+    (a as f32 + (b as f32 - a as f32) * t).round() as u8
+}
+
+fn draw_soft_ellipse(
+    img: &mut RgbaImage,
+    cx: f32,
+    cy: f32,
+    rx: f32,
+    ry: f32,
+    color: [u8; 4],
+) {
+    if rx < 1.0 || ry < 1.0 || color[3] == 0 {
+        return;
+    }
+    let x0 = (cx - rx - 2.0).floor().max(0.0) as i32;
+    let x1 = (cx + rx + 2.0).ceil().min(img.width() as f32 - 1.0) as i32;
+    let y0 = (cy - ry - 2.0).floor().max(0.0) as i32;
+    let y1 = (cy + ry + 2.0).ceil().min(img.height() as f32 - 1.0) as i32;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let nx = (x as f32 + 0.5 - cx) / rx;
+            let ny = (y as f32 + 0.5 - cy) / ry;
+            let d2 = nx * nx + ny * ny;
+            if d2 <= 1.0 {
+                let edge = (1.0 - d2).powf(1.35);
+                let a = ((color[3] as f32) * edge).round() as u8;
+                if a > 0 {
+                    blend_pixel(img, x, y, [color[0], color[1], color[2], a]);
+                }
+            }
+        }
+    }
+}
+
+fn blend_pixel(img: &mut RgbaImage, x: i32, y: i32, fg: [u8; 4]) {
+    if fg[3] == 0 || x < 0 || y < 0 {
+        return;
+    }
+    let (w, h) = (img.width() as i32, img.height() as i32);
+    if x >= w || y >= h {
+        return;
+    }
+    let p = img.get_pixel_mut(x as u32, y as u32);
+    let fa = fg[3] as f32 / 255.0;
+    let ba = p[3] as f32 / 255.0;
+    let out_a = fa + ba * (1.0 - fa);
+    if out_a < 1.0 / 255.0 {
+        return;
+    }
+    let blend = |fc: u8, bc: u8| -> u8 {
+        ((fc as f32 * fa + bc as f32 * ba * (1.0 - fa)) / out_a).round() as u8
+    };
+    *p = Rgba([
+        blend(fg[0], p[0]),
+        blend(fg[1], p[1]),
+        blend(fg[2], p[2]),
+        (out_a * 255.0).round() as u8,
+    ]);
+}
+
+fn draw_wordmark(
+    img: &mut RgbaImage,
+    text: &str,
+    center_x: f32,
+    center_y: f32,
+    target_width: f32,
+    color: [u8; 4],
+    opts: WordmarkDrawOpts,
+) -> bool {
+    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
+
+    let font = match FontRef::try_from_slice(APP_ICON_FONT) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let cap_m = opts.cap_m_scale;
+    let mut size = target_width / measure_text_width(&font, text, 1.0, cap_m);
+    size = size.clamp(18.0, 128.0);
+    let base_scale = PxScale::from(size);
+    let base_scaled = font.as_scaled(base_scale);
+    let width = measure_text_width(&font, text, size, cap_m);
+    let ascent = base_scaled.ascent();
+    let descent = base_scaled.descent();
+    let baseline_x = center_x - width * 0.5;
+    let baseline_y = center_y + (ascent + descent) * 0.5 - descent;
+
+    let mut pen_x = baseline_x;
+    let mut prev: Option<(ab_glyph::GlyphId, f32)> = None;
+    for ch in text.chars() {
+        let ch_size = wordmark_char_size(ch, size, cap_m);
+        let ch_scale = PxScale::from(ch_size);
+        let ch_scaled = font.as_scaled(ch_scale);
+        let gid = ch_scaled.glyph_id(ch);
+        if let Some((p, _)) = prev {
+            pen_x += base_scaled.kern(p, gid);
+        }
+        let glyph = gid.with_scale_and_position(ch_scale, point(pen_x, baseline_y));
+        if let Some(outline) = font.outline_glyph(glyph) {
+            let b = outline.px_bounds();
+            outline.draw(|gx, gy, cov| {
+                let px = (b.min.x + gx as f32).round() as i32;
+                let py = (b.min.y + gy as f32).round() as i32;
+                if let Some(mirror_y) = opts.mirror_y {
+                    let py_ref = (2.0 * mirror_y - (b.min.y + gy as f32)).round() as i32;
+                    if py_ref as f32 > mirror_y + 0.5 {
+                        let depth = py_ref as f32 - mirror_y;
+                        let t = (1.0 - depth / opts.mirror_fade_depth).clamp(0.0, 1.0);
+                        let fade = t * t * opts.mirror_strength + t * opts.mirror_peak_boost;
+                        let a = (cov * color[3] as f32 * fade).round() as u8;
+                        if a > 0 {
+                            blend_pixel(img, px, py_ref, [color[0], color[1], color[2], a]);
+                        }
+                    }
+                    return;
+                }
+                let a = (cov * color[3] as f32).round() as u8;
+                if a == 0 {
+                    return;
+                }
+                blend_pixel(img, px, py, [color[0], color[1], color[2], a]);
+            });
+        }
+        pen_x += ch_scaled.h_advance(gid);
+        prev = Some((gid, ch_size));
+    }
+    true
+}
+
+fn measure_text_width(font: &impl ab_glyph::Font, text: &str, size: f32, cap_m_scale: f32) -> f32 {
+    use ab_glyph::{PxScale, ScaleFont};
+    let base_scaled = font.as_scaled(PxScale::from(size));
+    let mut w = 0.0;
+    let mut prev: Option<ab_glyph::GlyphId> = None;
+    for ch in text.chars() {
+        let ch_size = wordmark_char_size(ch, size, cap_m_scale);
+        let ch_scaled = font.as_scaled(PxScale::from(ch_size));
+        let gid = ch_scaled.glyph_id(ch);
+        if let Some(p) = prev {
+            w += base_scaled.kern(p, gid);
+        }
+        w += ch_scaled.h_advance(gid);
+        prev = Some(gid);
+    }
+    w
 }
 
 fn put_px(img: &mut RgbaImage, x: i32, y: i32, a: u8) {

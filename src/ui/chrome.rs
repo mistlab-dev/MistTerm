@@ -1248,6 +1248,7 @@ pub fn dock_panel_title_bar(
     ui.horizontal(|ui| {
         panel_header_title_leading(ui, theme, IconId::Fragment, title);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(theme.spacing_dock_panel_trailing_pad());
             ui.spacing_mut().item_spacing.x = theme.spacing_tool_btn_gap();
             if dock_panel_title_close_trailing(ui, theme, close_tooltip) {
                 out.closed = true;
@@ -1274,7 +1275,6 @@ pub fn filter_chip_row_with_sort(
     theme: &Theme,
     labels: &[&str],
     active: &str,
-    panel_w: f32,
     sort_icon: IconId,
     sort_label: &str,
 ) -> FilterChipRowWithSortResult {
@@ -1282,38 +1282,44 @@ pub fn filter_chip_row_with_sort(
         picked: None,
         cycle_sort: false,
     };
-    let pad_x = theme.spacing_panel_title_pad_x();
-    let row_w = (panel_w - pad_x * 2.0).max(96.0);
     let chip_h = theme.size_panel_filter_chip_h();
     let chip_gap = theme.spacing_panel_gap();
-    let sort_w = panel_sort_chip_width(ui, theme, sort_label);
+    let sort_gap = theme.spacing_filter_sort_gap();
     let sort_hover = format!(
         "排序：{sort_label}（点击切换：次数 → 成功率 → 最近 → 名称）"
     );
 
-    ui.horizontal(|ui| {
-        ui.set_max_width(row_w);
-        ui.spacing_mut().item_spacing = egui::vec2(chip_gap, 0.0);
-        let chips_w = (ui.available_width() - sort_w - chip_gap).max(96.0);
-        ui.scope(|ui| {
-            ui.set_max_width(chips_w);
-            let n = labels.len().max(1) as f32;
-            let item_w =
-                ((chips_w - chip_gap * (n - 1.0)) / n).max(theme.size_panel_header_btn_min_w());
-            for label in labels {
-                let is_active = active == *label;
-                if filter_chip_button(ui, theme, label, is_active, egui::vec2(item_w, chip_h)).clicked()
-                {
-                    out.picked = Some((*label).to_string());
-                }
-            }
+    egui::Frame::none()
+        .outer_margin(theme.spacing_sidebar_filter_outer())
+        .show(ui, |ui| {
+            let row_w = ui.available_width().max(96.0);
+            let sort_w = panel_sort_chip_width(ui, theme, sort_label);
+            ui.horizontal(|ui| {
+                ui.set_max_width(row_w);
+                ui.spacing_mut().item_spacing = egui::vec2(chip_gap, 0.0);
+                let chips_w = (ui.available_width() - sort_w - sort_gap).max(96.0);
+                ui.scope(|ui| {
+                    ui.set_max_width(chips_w);
+                    let n = labels.len().max(1) as f32;
+                    let item_w = ((chips_w - chip_gap * (n - 1.0)) / n)
+                        .max(theme.size_panel_header_btn_min_w());
+                    for label in labels {
+                        let is_active = active == *label;
+                        if filter_chip_button(ui, theme, label, is_active, egui::vec2(item_w, chip_h))
+                            .clicked()
+                        {
+                            out.picked = Some((*label).to_string());
+                        }
+                    }
+                });
+                ui.add_space(sort_gap);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if panel_sort_chip(ui, theme, sort_icon, sort_label, &sort_hover).clicked() {
+                        out.cycle_sort = true;
+                    }
+                });
+            });
         });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if panel_sort_chip(ui, theme, sort_icon, sort_label, &sort_hover).clicked() {
-                out.cycle_sort = true;
-            }
-        });
-    });
     out
 }
 
@@ -1697,6 +1703,46 @@ pub fn form_multiline_field(
 }
 
 /// 只读多行文本：支持鼠标拖选与 Ctrl/Cmd+C（`&str` 缓冲不可编辑）。
+/// 带可见滑轨的水平滑块（全局 `inactive.bg_fill` 为透明时仍绘制轨道）。
+pub fn labeled_slider_f32(
+    ui: &mut Ui,
+    theme: &Theme,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    label: &str,
+    suffix: &str,
+) -> Response {
+    let prev_inactive = ui.visuals().widgets.inactive.bg_fill;
+    ui.visuals_mut().widgets.inactive.bg_fill = theme.color_slider_rail_fill();
+    let resp = ui.add(
+        egui::Slider::new(value, range)
+            .text(label)
+            .suffix(suffix)
+            .trailing_fill(true),
+    );
+    ui.visuals_mut().widgets.inactive.bg_fill = prev_inactive;
+    resp
+}
+
+/// 带可见滑轨的水平滑块（`f64` 版本，如刷新间隔秒数）。
+pub fn labeled_slider_f64(
+    ui: &mut Ui,
+    theme: &Theme,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+    label: &str,
+) -> Response {
+    let prev_inactive = ui.visuals().widgets.inactive.bg_fill;
+    ui.visuals_mut().widgets.inactive.bg_fill = theme.color_slider_rail_fill();
+    let resp = ui.add(
+        egui::Slider::new(value, range)
+            .text(label)
+            .trailing_fill(true),
+    );
+    ui.visuals_mut().widgets.inactive.bg_fill = prev_inactive;
+    resp
+}
+
 pub fn selectable_readonly_monospace(
     ui: &mut Ui,
     theme: &Theme,
