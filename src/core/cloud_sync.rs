@@ -1,4 +1,5 @@
-//! 云端同步配置（MVP：本地设置 + 导出/导入包，真实账户后续对接）
+//! 云端同步配置（MVP：本地导出/导入包，个人备份用）。
+//! 团队片段正式能力走团队 API，见 `docs/tech/TEAM-PLATFORM-DEV-PLAN.md`。
 
 use serde::{Deserialize, Serialize};
 use std::fs;
