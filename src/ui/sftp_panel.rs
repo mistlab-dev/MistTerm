@@ -6,7 +6,7 @@ use crate::core::{AuditCategory, AuditEvent, AuditLogger, AuditOutcome};
 use crate::ssh::SshSessionId;
 use crate::ssh::{SftpClient, SftpEntry, SshManager};
 use crate::ui::terminal::TerminalView;
-use crate::ui::layout_util::{self, SidePanelProfile};
+use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 use eframe::egui;
 use rfd::FileDialog;
@@ -39,6 +39,8 @@ pub struct SftpPanel {
     pending_auto_list: bool,
     /// 后台操作成功后待写入审计
     pending_audit: Option<(&'static str, String)>,
+    /// 右 dock 槽位（用于 Central 之后前景重绘）
+    last_panel_slot_rect: Option<egui::Rect>,
 }
 
 impl Default for SftpPanel {
@@ -64,6 +66,7 @@ impl SftpPanel {
             pending_refresh_after_op: false,
             pending_auto_list: false,
             pending_audit: None,
+            last_panel_slot_rect: None,
         }
     }
 
@@ -86,6 +89,7 @@ impl SftpPanel {
         self.pending_refresh_after_op = false;
         self.pending_auto_list = false;
         self.pending_audit = None;
+        self.last_panel_slot_rect = None;
     }
 
     fn poll_rx(&mut self, audit: &AuditLogger) {
@@ -344,24 +348,59 @@ impl SftpPanel {
         &mut self,
         ctx: &egui::Context,
         theme: &Theme,
+        right_dock_outer_left: &mut Option<f32>,
+        dock_col_w: f32,
+    ) {
+        let panel = egui::SidePanel::right("sftp_browser_panel")
+            .exact_width(dock_col_w)
+            .resizable(false)
+            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
+            .show(ctx, |ui| {
+                self.last_panel_slot_rect = Some(ui.max_rect());
+                let h = ui.available_height().max(1.0);
+                ui.allocate_exact_size(egui::vec2(dock_col_w, h), egui::Sense::hover());
+            });
+        if let Some(slot) = self.last_panel_slot_rect {
+            layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
+        } else {
+            layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
+        }
+        let _ = theme;
+    }
+
+    /// Central 之后绘制 SFTP 前景正文（与 AI/监控一致，避免列壳层风格不一致）。
+    pub fn show_foreground_panel(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
         terminal: Option<&TerminalView>,
         audit: &AuditLogger,
         close_panel: &mut bool,
-        right_dock_outer_left: &mut Option<f32>,
     ) {
-        let (s_def, s_min, s_max) = layout_util::side_panel_widths(ctx, SidePanelProfile::Standard);
-        let panel = egui::SidePanel::right("sftp_browser_panel")
-            .default_width(s_def)
-            .min_width(s_min)
-            .max_width(s_max)
-            .resizable(true)
-            .frame(crate::ui::chrome::right_dock_panel_frame(theme))
-            .show(ctx, |ui| {
-                let panel_w = layout_util::dock_panel_content_width(ui, s_min, s_max);
-                ui.set_max_width(panel_w);
+        let screen = ctx.screen_rect();
+        let dock_inset = theme.spacing_right_dock_screen_inset();
+        let Some(slot) = layout_util::right_dock_foreground_slot(
+            self.last_panel_slot_rect,
+            ctx,
+            "sftp_browser_panel",
+            layout_util::SidePanelProfile::Standard,
+            None,
+            dock_inset,
+        ) else {
+            return;
+        };
+        let geom = crate::ui::chrome::prepare_right_dock_foreground_geom(slot, screen, theme);
+        let layer_id = crate::ui::chrome::right_dock_foreground_layer_id("mistterm_sftp_fg");
+        crate::ui::chrome::paint_right_dock_foreground_shell(ctx, layer_id, geom.paint, theme);
+        crate::ui::chrome::show_right_dock_foreground_body(
+            "mistterm_sftp_fg",
+            ctx,
+            &geom,
+            layout_util::SidePanelProfile::Standard,
+            |ui, _body_w| {
                 self.show_content(ui, ctx, theme, terminal, audit, close_panel);
-            });
-        layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
+            },
+        );
     }
 
     fn show_content(
@@ -376,6 +415,8 @@ impl SftpPanel {
         self.poll_rx(audit);
 
         let mut header_closed = false;
+        let prev_gap_y = ui.spacing().item_spacing.y;
+        ui.spacing_mut().item_spacing.y = 0.0;
         theme.frame_panel_header_band().show(ui, |ui| {
             header_closed = crate::ui::chrome::dock_panel_title_close_only(
                 ui,
@@ -389,6 +430,8 @@ impl SftpPanel {
             *close_panel = true;
         }
         crate::ui::chrome::panel_header_divider(ui, theme);
+        ui.spacing_mut().item_spacing.y = prev_gap_y;
+        ui.add_space(theme.spacing_xs());
 
         let Some(t) = terminal else {
             ui.label(

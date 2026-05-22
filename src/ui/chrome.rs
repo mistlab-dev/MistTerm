@@ -82,6 +82,12 @@ pub fn close_icon_button(ui: &mut Ui, theme: &Theme) -> Response {
         .on_hover_text("关闭")
 }
 
+/// 右 dock 标题栏关闭（与左侧「连接」标题栏同尺寸）。
+pub fn dock_close_icon_button(ui: &mut Ui, theme: &Theme) -> Response {
+    sidebar_header_icon_button(ui, theme, IconId::Close, theme.color_sidebar_header_icon())
+        .on_hover_text("关闭")
+}
+
 /// 侧栏标题行方形图标按钮（与排序下拉同高）。
 pub fn sidebar_header_icon_button(ui: &mut Ui, theme: &Theme, id: IconId, color: Color32) -> Response {
     theme_icon_hit(
@@ -404,6 +410,25 @@ pub fn rich_modal_title(theme: &Theme, text: &str) -> RichText {
     rich_panel_header_title(theme, text)
 }
 
+/// 区域外框：左、上、右（不画底边，避免与底栏顶部分隔线叠成双行）
+pub fn paint_rect_border_ltr(painter: &Painter, rect: egui::Rect, stroke: Stroke) {
+    if rect.width() < 1.0 || rect.height() < 1.0 {
+        return;
+    }
+    painter.vline(rect.min.x, rect.y_range(), stroke);
+    painter.hline(rect.x_range(), rect.min.y, stroke);
+    painter.vline(rect.max.x - 0.5, rect.y_range(), stroke);
+}
+
+/// 区域外框：仅左右（顶线由 Tab 条底部分隔线承担，避免与 PTY 顶行叠线）
+pub fn paint_rect_border_lr(painter: &Painter, rect: egui::Rect, stroke: Stroke) {
+    if rect.width() < 1.0 || rect.height() < 1.0 {
+        return;
+    }
+    painter.vline(rect.min.x, rect.y_range(), stroke);
+    painter.vline(rect.max.x - 0.5, rect.y_range(), stroke);
+}
+
 /// 标题行与正文之间的横线
 pub fn panel_header_divider(ui: &mut Ui, theme: &Theme) {
     let w = ui.available_width().max(1.0);
@@ -431,6 +456,14 @@ pub fn raise_window_response(ctx: &egui::Context, response: &egui::Response) {
 /// 右侧 dock / 左侧连接栏外框：统一底色与内容区内边距。
 pub fn region_panel_frame(theme: &Theme) -> egui::Frame {
     theme.frame_region_panel()
+}
+
+/// 左连接栏外框（底缘贴状态栏顶线，底角不圆）
+pub fn sidebar_panel_frame(theme: &Theme) -> egui::Frame {
+    // 与右 dock 使用同一内容内边距，避免左栏看起来更“厚”。
+    theme
+        .frame_region_panel()
+        .inner_margin(theme.right_dock_content_margin())
 }
 
 /// 右 `SidePanel` 占位槽（透明，屏右缘留 `bg_body` 缝）。
@@ -473,7 +506,7 @@ pub fn paint_right_dock_screen_gutter(
 }
 
 /// 左缘略向左扩 2px，盖住 Central `bg_body` 可能压到侧栏左缘的细缝。
-pub const RIGHT_DOCK_SHELL_LEFT_BLEED: f32 = 2.0;
+pub const RIGHT_DOCK_SHELL_LEFT_BLEED: f32 = 0.0;
 
 /// 右 dock Foreground：先铺满整个槽位（`Frame` 仅包住内容时左侧会透出中央 `bg_body`）。
 pub fn paint_right_dock_slot_shell(ui: &mut egui::Ui, slot: egui::Rect, theme: &Theme) {
@@ -481,18 +514,46 @@ pub fn paint_right_dock_slot_shell(ui: &mut egui::Ui, slot: egui::Rect, theme: &
 }
 
 /// 与 [`paint_right_dock_slot_shell`] 相同，用于在 `Area` 外先铺底色（避免可点层盖住整块槽位）。
-pub fn paint_right_dock_slot_shell_with_painter(painter: &Painter, slot: egui::Rect, theme: &Theme) {
+/// 右 dock 壳层圆角：贴底栏时底角为 0，避免与状态栏顶线叠成双线。
+pub fn right_dock_shell_rounding(theme: &Theme, flush_bottom: bool) -> egui::Rounding {
+    let r = theme.radius_panel();
+    if flush_bottom {
+        egui::Rounding {
+            nw: r,
+            ne: r,
+            sw: 0.0,
+            se: 0.0,
+        }
+    } else {
+        egui::Rounding::same(r)
+    }
+}
+
+pub fn paint_right_dock_slot_shell_with_painter(
+    painter: &Painter,
+    slot: egui::Rect,
+    theme: &Theme,
+) {
+    paint_right_dock_slot_shell_with_painter_ex(painter, slot, theme, false);
+}
+
+pub fn paint_right_dock_slot_shell_with_painter_ex(
+    painter: &Painter,
+    slot: egui::Rect,
+    theme: &Theme,
+    flush_bottom: bool,
+) {
     let mut fill = slot;
     fill.min.x -= RIGHT_DOCK_SHELL_LEFT_BLEED;
-    let rounding = egui::Rounding::same(theme.radius_panel());
+    let rounding = right_dock_shell_rounding(theme, flush_bottom);
     painter.rect_filled(fill, rounding, theme.color_panel_surface());
-    painter.rect_stroke(slot, rounding, theme.panel_stroke());
+    // 外框描边在浅色主题下容易在圆角处产生抗锯齿白缝，先关闭描边保稳定。
 }
 
 /// 槽位扣除 region panel 内边距后的内容矩形（须用 `Margin::shrink_rect`，勿 `shrink2(left+right)`）。
 #[inline]
 pub fn right_dock_slot_content_rect(slot: egui::Rect, theme: &Theme) -> egui::Rect {
-    theme.region_content_margin().shrink_rect(slot)
+    theme.right_dock_content_margin().shrink_rect(slot)
 }
 
 /// Central 之后 Foreground 重绘右 dock 用的图层（仅绘制壳层，勿在此注册可点 `Area`）。
@@ -525,8 +586,23 @@ pub fn prepare_right_dock_foreground_geom(
     theme: &Theme,
 ) -> RightDockForegroundGeom {
     let inset = theme.spacing_right_dock_screen_inset();
-    let paint = crate::ui::layout_util::inset_slot_for_foreground_paint(slot, screen, inset);
-    let inner = right_dock_slot_content_rect(paint, theme);
+    let status_h = theme.status_bar_height();
+    let work_pad = theme.spacing_work_area_pad().max(0.0);
+    const WORK_BOTTOM_GAP: f32 = 1.0;
+    let mut slot = crate::ui::layout_util::clamp_rect_above_status_bar(slot, screen, status_h);
+    // 终端与右 dock 交界不再额外留缝，避免出现黑色接缝。
+    slot.min.y = (slot.min.y + work_pad).min(slot.max.y);
+    slot.max.y = (slot.max.y - WORK_BOTTOM_GAP).max(slot.min.y + 1.0);
+    let paint = crate::ui::layout_util::clamp_rect_above_status_bar(
+        crate::ui::layout_util::inset_slot_for_foreground_paint(slot, screen, inset),
+        screen,
+        status_h,
+    );
+    let inner = crate::ui::layout_util::clamp_rect_above_status_bar(
+        right_dock_slot_content_rect(paint, theme),
+        screen,
+        status_h,
+    );
     RightDockForegroundGeom { paint, inner }
 }
 
@@ -538,8 +614,7 @@ pub fn paint_right_dock_foreground_shell(
     theme: &Theme,
 ) {
     let painter = egui::Painter::new(ctx.clone(), layer_id, paint);
-    paint_right_dock_slot_shell_with_painter(&painter, paint, theme);
-    painter.vline(paint.max.x - 0.5, paint.y_range(), theme.panel_stroke());
+    paint_right_dock_slot_shell_with_painter_ex(&painter, paint, theme, false);
 }
 
 /// 标准 Foreground 正文宿主：固定 `inner`、clip，正文宽 = 槽位 `inner.width()`（随 SidePanel 拖拽，非 ∞ avail）。
@@ -547,14 +622,12 @@ pub fn show_right_dock_foreground_body<R>(
     area_id: &'static str,
     ctx: &egui::Context,
     geom: &RightDockForegroundGeom,
-    profile: crate::ui::layout_util::SidePanelProfile,
+    _profile: crate::ui::layout_util::SidePanelProfile,
     add_body: impl FnOnce(&mut Ui, f32) -> R,
 ) -> egui::InnerResponse<R> {
-    let body_w = crate::ui::layout_util::right_dock_foreground_content_width(
-        ctx,
-        geom.inner.width(),
-        profile,
-    );
+    // 右 dock 槽位宽已在 SidePanel 阶段统一；Foreground 不再按 profile 二次夹宽，
+    // 否则不同面板会出现“看起来列宽不一致”。
+    let body_w = geom.inner.width().max(48.0);
     right_dock_foreground_body_area(area_id)
         .constrain_to(geom.inner)
         .fixed_pos(geom.inner.min)
@@ -1198,7 +1271,7 @@ fn dock_panel_title_close_trailing(
     theme: &Theme,
     close_tooltip: &str,
 ) -> bool {
-    close_icon_button(ui, theme)
+    dock_close_icon_button(ui, theme)
         .on_hover_text(close_tooltip)
         .clicked()
 }
@@ -1218,7 +1291,7 @@ pub fn dock_panel_title_close_only(
         ui.with_layout(
             egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
-                if close_icon_button(ui, theme).on_hover_text(close_tooltip).clicked() {
+                if dock_close_icon_button(ui, theme).on_hover_text(close_tooltip).clicked() {
                     closed = true;
                 }
             },
@@ -1290,7 +1363,12 @@ pub fn filter_chip_row_with_sort(
     );
 
     egui::Frame::none()
-        .outer_margin(theme.spacing_sidebar_filter_outer())
+        .outer_margin(egui::Margin {
+            left: 0.0,
+            right: 0.0,
+            top: 2.0,
+            bottom: 4.0,
+        })
         .show(ui, |ui| {
             let row_w = ui.available_width().max(96.0);
             let sort_w = panel_sort_chip_width(ui, theme, sort_label);
@@ -1829,7 +1907,16 @@ pub fn panel_search_row(
     hint: &str,
     content_w: Option<f32>,
 ) -> Response {
-    let margin = theme.spacing_sidebar_search_outer();
+    let margin = if content_w.is_some() {
+        egui::Margin {
+            left: 0.0,
+            right: 0.0,
+            top: 4.0,
+            bottom: 6.0,
+        }
+    } else {
+        theme.spacing_sidebar_search_outer()
+    };
     let inset_x = margin.left + margin.right;
     let stroke_pad = theme.stroke_width_panel() * 2.0 + 1.0;
     let cap = content_w.unwrap_or_else(|| {

@@ -99,6 +99,7 @@ pub const EGUI_SIDE_PANEL_FRAME_MARGIN_X: f32 = 8.0;
 /// 命令片段 `SidePanel` 的 id（与 `egui::SidePanel::right` 一致，供 [`side_panel_state_rect`] 读取）。
 pub const FRAGMENT_PANEL_ID: &str = "fragment_panel";
 pub const MONITOR_PANEL_ID: &str = "monitor_panel";
+pub const AI_PANEL_ID: &str = "ai_panel";
 
 /// 读取上一帧 `SidePanel` 落盘的槽位矩形（用于 Central 之后 Foreground 重绘）。
 #[inline]
@@ -171,11 +172,12 @@ pub fn right_dock_slot_rect(
     screen_inset: f32,
 ) -> Option<egui::Rect> {
     let screen = ctx.screen_rect();
-    let (_def, min_w, max_w) = side_panel_widths(ctx, profile);
+    let _ = profile;
     let content = layout_content_rect
         .filter(|r| r.is_positive())
         .or_else(|| side_panel_state_rect(ctx, panel_id))?;
-    let w = clamp_f32(content.width(), min_w, max_w);
+    // 右 dock 若已使用 exact_width/统一列宽，不应再按 profile 二次夹取。
+    let w = content.width().max(1.0);
     if w < 48.0 || !w.is_finite() {
         return None;
     }
@@ -292,6 +294,30 @@ pub fn clip_ui_before_right_dock(ui: &mut egui::Ui, right_dock_outer_left_x: Opt
     }
 }
 
+/// 主内容区底缘 y（状态栏顶线；主区/右 dock 不得越过）。
+#[inline]
+pub fn workspace_bottom_y(screen: egui::Rect, status_bar_height: f32) -> f32 {
+    (screen.max.y - status_bar_height.max(0.0)).max(screen.min.y)
+}
+
+/// 将矩形底缘裁到状态栏之上（防止侧栏/终端/右 dock 盖住底栏）。
+#[inline]
+pub fn clamp_rect_above_status_bar(
+    mut rect: egui::Rect,
+    screen: egui::Rect,
+    status_bar_height: f32,
+) -> egui::Rect {
+    let bottom = workspace_bottom_y(screen, status_bar_height);
+    if rect.max.y > bottom {
+        rect.max.y = bottom;
+    }
+    if rect.min.y >= bottom {
+        rect.max.y = bottom;
+        rect.min.y = (bottom - 1.0).max(screen.min.y);
+    }
+    rect
+}
+
 /// 工作区内缩一圈 padding（列布局与终端宽度以此矩形为准）。
 #[inline]
 pub fn work_area_inner_rect(work: egui::Rect, pad: f32) -> egui::Rect {
@@ -337,16 +363,20 @@ pub fn finite_content_width_in_panel(ui: &egui::Ui, inset_each_side: f32, fallba
     finite_content_width_inset(ui, inset_each_side, fallback, cap)
 }
 
-/// 中央区工作矩形：须在 `CentralPanel::show` 回调内用 `ui.max_rect()`，再按右栏外缘收紧
+/// 中央区工作矩形：须在 `CentralPanel::show` 回调内用 `ui.max_rect()`，再按右栏外缘与底栏顶线收紧
 #[inline]
-pub fn central_work_rect_in_ui(ui: &egui::Ui, right_dock_outer_left_x: Option<f32>) -> egui::Rect {
+pub fn central_work_rect_in_ui(
+    ui: &egui::Ui,
+    right_dock_outer_left_x: Option<f32>,
+    status_bar_height: f32,
+) -> egui::Rect {
     let mut r = ui.max_rect().intersect(ui.clip_rect());
     if let Some(dock_left) = right_dock_outer_left_x {
         if dock_left.is_finite() && dock_left > r.min.x {
             r.max.x = r.max.x.min(dock_left);
         }
     }
-    r
+    clamp_rect_above_status_bar(r, ui.ctx().screen_rect(), status_bar_height)
 }
 
 /// 兼容旧调用；优先 [`central_work_rect_in_ui`]

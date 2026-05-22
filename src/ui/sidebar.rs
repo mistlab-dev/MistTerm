@@ -64,12 +64,15 @@ impl Sidebar {
                 }
             }
         }
-        let output = crate::ui::chrome::region_panel_frame(theme)
-            .stroke(egui::Stroke::NONE)
+        let panel_h = ui.available_height().max(120.0);
+        let output = crate::ui::chrome::sidebar_panel_frame(theme)
             .show(ui, |ui| {
                 ui.set_width(sidebar_width);
+                ui.set_min_height(panel_h);
+                ui.set_height(panel_h);
                 Self::show(
                     ui,
+                    panel_h,
                     session_manager,
                     selected_id,
                     search_query,
@@ -89,6 +92,7 @@ impl Sidebar {
     /// 返回双击事件响应
     pub fn show<'a>(
         ui: &mut egui::Ui,
+        panel_h: f32,
         session_manager: &'a SessionManager,
         selected_id: &Option<String>,
         search_query: &mut String,
@@ -112,13 +116,13 @@ impl Sidebar {
         let mut collapse_clicked = false;
         let mut view_log_session_id = None;
         
+        let body_h = panel_h.max(120.0);
         let response = ui.allocate_ui_with_layout(
-            egui::vec2(
-                width,
-                layout_util::finite_content_height(ui, 400.0, 8000.0),
-            ),
+            egui::vec2(width, body_h),
             egui::Layout::top_down(egui::Align::Min),
             |ui| {
+                ui.set_min_height(body_h);
+                ui.set_height(body_h);
                 theme.frame_panel_header_band().show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = theme.spacing_status_left_gap();
@@ -155,43 +159,54 @@ impl Sidebar {
                         });
                     });
                 crate::ui::chrome::panel_header_divider(ui, theme);
+                // 与命令片段面板一致：分隔线后留出一段呼吸空间，再进入搜索区
+                ui.add_space(theme.spacing_sm());
 
-                crate::ui::chrome::panel_search_row(
+                crate::ui::chrome::form_singleline_field(
                     ui,
                     theme,
                     search_field_id,
                     search_query,
                     "搜索会话…",
-                    None,
+                    width,
+                    false,
                 );
-                egui::Frame::none()
-                    .outer_margin(theme.spacing_sidebar_filter_outer())
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
-                            let sort_w = crate::ui::chrome::panel_sort_chip_width(
-                                ui,
-                                theme,
-                                sort_by.short_label(),
-                            );
-                            let chip_row_w =
-                                (ui.available_width() - sort_w - theme.spacing_panel_gap())
-                                    .max(96.0);
-                            if let Some(picked) = crate::ui::chrome::filter_chip_row(
-                                ui,
-                                theme,
-                                &["全部", "在线", "离线"],
-                                filter.as_str(),
-                                chip_row_w,
-                            ) {
-                                *filter = picked;
-                            }
-                            crate::ui::chrome::sidebar_list_sort_button(ui, theme, sort_by);
-                        });
-                    });
+                ui.add_space(2.0);
+                let sort_icon = match *sort_by {
+                    SessionSortBy::Name | SessionSortBy::NameDesc => {
+                        crate::ui::icons::IconId::SortName
+                    }
+                    SessionSortBy::LastConnected => crate::ui::icons::IconId::SortRecent,
+                    SessionSortBy::CreatedAt => crate::ui::icons::IconId::SortUsage,
+                };
+                let row = crate::ui::chrome::filter_chip_row_with_sort(
+                    ui,
+                    theme,
+                    &["全部", "在线", "离线"],
+                    filter.as_str(),
+                    sort_icon,
+                    "",
+                );
+                if let Some(picked) = row.picked {
+                    *filter = picked;
+                }
+                if row.cycle_sort {
+                    *sort_by = match *sort_by {
+                        SessionSortBy::Name => SessionSortBy::NameDesc,
+                        SessionSortBy::NameDesc => SessionSortBy::LastConnected,
+                        SessionSortBy::LastConnected => SessionSortBy::CreatedAt,
+                        SessionSortBy::CreatedAt => SessionSortBy::Name,
+                    };
+                }
 
-                // 会话列表
-                ui.vertical(|ui| {
+                // 会话列表（占满标题/搜索/筛选下方的剩余高度）
+                let list_h = ui.available_height().max(80.0);
+                egui::ScrollArea::vertical()
+                    .id_source("mistterm_sidebar_sessions")
+                    .max_height(list_h)
+                    .auto_shrink([false; 2])
+                    .show(ui, |ui| {
+                    ui.set_min_width(width);
                     let mut sessions = session_manager
                         .list_sessions()
                         .iter()

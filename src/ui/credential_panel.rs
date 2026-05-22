@@ -8,7 +8,7 @@ use crate::core::{
     VaultSettings,
 };
 use crate::ui::chrome;
-use crate::ui::layout_util::{self, SidePanelProfile};
+use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 
 #[derive(Clone, Debug)]
@@ -587,21 +587,19 @@ impl CredentialPanel {
         audit: &AuditLogger,
         action_out: &mut Option<CredentialPanelAction>,
         right_dock_outer_left: &mut Option<f32>,
+        dock_col_w: f32,
     ) -> bool {
         if !self.open {
             return false;
         }
 
         let mut close_panel = false;
-        let (c_def, c_min, c_max) = layout_util::side_panel_widths(ctx, SidePanelProfile::Standard);
         let panel = egui::SidePanel::right("credential_panel")
-            .default_width(c_def)
-            .min_width(c_min)
-            .max_width(c_max)
-            .resizable(true)
+            .exact_width(dock_col_w)
+            .resizable(false)
             .frame(crate::ui::chrome::right_dock_panel_frame(theme))
             .show(ctx, |ui| {
-                let panel_w = layout_util::dock_panel_content_width(ui, c_min, c_max);
+                let panel_w = dock_col_w;
                 ui.set_max_width(panel_w);
 
                 let mut header_closed = false;

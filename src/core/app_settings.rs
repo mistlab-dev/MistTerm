@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+use crate::core::ai_settings::AiSettings;
 use crate::core::audit::AuditSettings;
 use crate::core::vault::VaultSettings;
 
@@ -13,6 +14,8 @@ pub struct AppSettings {
     pub vault: VaultSettings,
     #[serde(default)]
     pub audit: AuditSettings,
+    #[serde(default)]
+    pub ai: AiSettings,
 }
 
 impl Default for AppSettings {
@@ -20,6 +23,7 @@ impl Default for AppSettings {
         Self {
             vault: VaultSettings::default(),
             audit: AuditSettings::default(),
+            ai: AiSettings::default(),
         }
     }
 }
@@ -37,10 +41,14 @@ impl AppSettings {
         if !path.exists() {
             return Self::default();
         }
-        match fs::read_to_string(&path) {
+        let mut settings: Self = match fs::read_to_string(&path) {
             Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
             Err(_) => Self::default(),
+        };
+        if settings.ai.migrate_keyring_to_local() {
+            let _ = settings.save();
         }
+        settings
     }
 
     pub fn save(&self) -> std::io::Result<()> {

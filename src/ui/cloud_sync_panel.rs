@@ -12,7 +12,7 @@ use crate::core::{
 };
 use crate::ui::credential_panel::CredentialPanel;
 use crate::ui::chrome;
-use crate::ui::layout_util::{self, SidePanelProfile};
+use crate::ui::layout_util;
 use crate::ui::theme::{Theme, ThemeManager};
 
 /// 导出/导入所需的本地路径与可变引用（由主窗口注入）
@@ -321,21 +321,19 @@ impl CloudSyncPanel {
         theme: &Theme,
         deps: &mut CloudSyncDeps<'_>,
         right_dock_outer_left: &mut Option<f32>,
+        dock_col_w: f32,
     ) {
         if !self.open {
             return;
         }
 
         let mut close_me = false;
-        let (cl_def, cl_min, cl_max) = layout_util::side_panel_widths(ctx, SidePanelProfile::Standard);
         let panel = egui::SidePanel::right("cloud_sync_panel")
-            .default_width(cl_def)
-            .min_width(cl_min)
-            .max_width(cl_max)
-            .resizable(true)
+            .exact_width(dock_col_w)
+            .resizable(false)
             .frame(crate::ui::chrome::right_dock_panel_frame(theme))
             .show(ctx, |ui| {
-                let panel_w = layout_util::dock_panel_content_width(ui, cl_min, cl_max);
+                let panel_w = dock_col_w;
                 ui.set_max_width(panel_w);
                 let mut header_closed = false;
                 theme.frame_panel_header_band().show(ui, |ui| {

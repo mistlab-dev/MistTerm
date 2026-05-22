@@ -229,25 +229,21 @@ impl MonitorPanel {
         theme: &Theme,
         open: &mut bool,
         right_dock_outer_left: &mut Option<f32>,
+        dock_col_w: f32,
     ) {
         if !*open {
             self.last_panel_slot_rect = None;
             return;
         }
 
-        let (m_def, m_min, m_max) =
-            crate::ui::layout_util::side_panel_widths(ctx, crate::ui::layout_util::SidePanelProfile::Monitor);
         let panel = egui::SidePanel::right(layout_util::MONITOR_PANEL_ID)
-            .default_width(m_def)
-            .min_width(m_min)
-            .max_width(m_max)
-            .resizable(true)
+            .exact_width(dock_col_w)
+            .resizable(false)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
                 self.last_panel_slot_rect = Some(ui.max_rect());
-                let w = layout_util::dock_panel_content_width(ui, m_min, m_max);
                 let h = ui.available_height().max(1.0);
-                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                ui.allocate_exact_size(egui::vec2(dock_col_w, h), egui::Sense::hover());
             });
         if let Some(slot) = self.last_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
@@ -301,6 +297,8 @@ impl MonitorPanel {
                             Some(alerts.len())
                         }
                     });
+                    let prev_gap_y = ui.spacing().item_spacing.y;
+                    ui.spacing_mut().item_spacing.y = 0.0;
                     theme.frame_panel_header_band().show(ui, |ui| {
                             layout_util::set_width_to_available(ui);
                             ui.horizontal(|ui| {
@@ -328,7 +326,7 @@ impl MonitorPanel {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        if crate::ui::chrome::close_icon_button(ui, theme)
+                                        if crate::ui::chrome::dock_close_icon_button(ui, theme)
                                             .on_hover_text("隐藏侧栏 · 也可用底部「监控」切换")
                                             .clicked()
                                         {
@@ -339,6 +337,8 @@ impl MonitorPanel {
                             });
                         });
                     crate::ui::chrome::panel_header_divider(ui, theme);
+                    ui.spacing_mut().item_spacing.y = prev_gap_y;
+                    ui.add_space(theme.spacing_xs());
 
                     let scroll_h = ui.available_height().max(120.0);
                     let prev_extreme = ui.visuals().extreme_bg_color;

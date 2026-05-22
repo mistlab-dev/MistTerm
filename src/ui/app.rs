@@ -28,6 +28,7 @@ use crate::ui::sidebar::Sidebar;
 use crate::ui::terminal::TerminalView;
 use crate::ui::git_sync::GitSyncPanel;
 use crate::ui::monitor_panel::MonitorPanel;
+use crate::ui::ai_panel::AiPanel;
 use crate::ui::sftp_panel::SftpPanel;
 use crate::ui::theme::ThemeManager;
 use crate::ui::fragment_library::FragmentLibraryState;
@@ -266,6 +267,8 @@ pub struct MistTermApp {
     right_dock_outer_left_x: Option<f32>,
     show_git_sync_panel: bool,  // Git 同步面板
     show_monitor_panel: bool,   // 监控面板
+    show_ai_panel: bool,
+    show_ai_settings_dialog: bool,
     /// 终端视口搜索（当前屏缓冲，不含卷动历史）
     show_terminal_search: bool,
     /// 打开查找条后首帧聚焦输入框
@@ -322,6 +325,7 @@ pub struct MistTermApp {
 
     git_sync_panel: GitSyncPanel,
     monitor_panel: MonitorPanel,
+    ai_panel: AiPanel,
     sftp_panel: SftpPanel,
     fragment_library: FragmentLibraryState,
     credential_panel: CredentialPanel,
@@ -472,6 +476,7 @@ impl MistTermApp {
         self.show_fragment_panel = false;
         self.show_git_sync_panel = false;
         self.show_monitor_panel = false;
+        self.show_ai_panel = false;
         self.show_sftp_panel = false;
         self.credential_panel.open = false;
         self.cloud_sync_panel.open = false;
@@ -574,6 +579,8 @@ impl MistTermApp {
             right_dock_outer_left_x: None,
             show_git_sync_panel: false,
             show_monitor_panel: false,
+            show_ai_panel: false,
+            show_ai_settings_dialog: false,
             show_terminal_search: false,
             terminal_search_pending_focus: false,
             terminal_search_query: String::new(),
@@ -585,6 +592,7 @@ impl MistTermApp {
             monitor_last_tab: None,
             git_sync_panel: GitSyncPanel::new(),
             monitor_panel: MonitorPanel::new(),
+            ai_panel: AiPanel::new(),
             sftp_panel: SftpPanel::new(),
             fragment_library: FragmentLibraryState::new(),
             credential_panel: CredentialPanel::new(),
@@ -1005,6 +1013,7 @@ impl MistTermApp {
             || self.session_log_dialog.open
             || self.audit_log_dialog.open
             || self.help_docs_dialog.open
+            || self.show_ai_settings_dialog
     }
 
     /// 是否将键盘输入交给 PTY（弹窗打开或终端未聚焦时不抢键）
@@ -1543,6 +1552,44 @@ impl MistTermApp {
         }
     }
 
+    pub(crate) fn toggle_ai_panel(&mut self, ctx: &egui::Context) {
+        if self.show_ai_panel {
+            self.show_ai_panel = false;
+        } else if self.ensure_right_dock_allowed_or_warn(ctx) {
+            self.show_ai_panel = true;
+            if !self.app_settings.ai.enabled {
+                self.app_settings.ai.enabled = true;
+                let _ = self.app_settings.save();
+            }
+        }
+    }
+
+    /// 终端「发送到 AI」与 AI 面板「用到终端」桥接。
+    pub(crate) fn process_ai_bridge(&mut self, ctx: &egui::Context) {
+        if let Some(idx) = self.active_tab {
+            if let Some(tab) = self.tabs.get_mut(idx) {
+                if tab.terminal.take_pending_send_to_ai() {
+                    let text = tab.terminal.selected_text();
+                    self.ai_panel.attach_context(text);
+                    if self.ensure_right_dock_allowed_or_warn(ctx) {
+                        self.show_ai_panel = true;
+                    }
+                }
+            }
+        }
+        if let Some(cmd) = self.ai_panel.take_command_for_terminal() {
+            if let Some(idx) = self.active_tab {
+                if let Some(tab) = self.tabs.get_mut(idx) {
+                    tab.terminal.send_command(&cmd);
+                    self.status_message = format!("已发送到终端：{cmd}");
+                    ctx.request_repaint();
+                }
+            } else {
+                self.status_message = "无活动终端标签，无法执行命令".into();
+            }
+        }
+    }
+
     pub(crate) fn menu_open_command_history(&mut self) {
         if self
             .current_terminal()
@@ -1871,22 +1918,22 @@ impl MistTermApp {
     }
 
     /// 注册命令片段栏槽位（须在 Central 之前）。实际 UI 见 [`show_fragment_panel_foreground`]。
-    fn show_fragment_panel(&mut self, ctx: &egui::Context, theme: &crate::ui::theme::Theme) {
-        let (frag_def, frag_min, frag_max) =
-            layout_util::side_panel_widths(ctx, layout_util::SidePanelProfile::Fragment);
+    fn show_fragment_panel(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+        dock_col_w: f32,
+    ) {
         let fragment_panel = egui::SidePanel::right(layout_util::FRAGMENT_PANEL_ID)
-            .default_width(frag_def)
-            .min_width(frag_min)
-            .max_width(frag_max)
-            .resizable(true)
+            .exact_width(dock_col_w)
+            .resizable(false)
             .show_separator_line(false)
             // 仅占布局宽；勿在此绘制内容（CentralPanel 后绘会盖住）。内容在 Foreground Area 重绘。
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
                 self.fragment_panel_slot_rect = Some(ui.max_rect());
-                let w = layout_util::dock_panel_content_width(ui, frag_min, frag_max);
                 let h = ui.available_height().max(1.0);
-                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                ui.allocate_exact_size(egui::vec2(dock_col_w, h), egui::Sense::hover());
             });
         if let Some(slot) = self.fragment_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, &mut self.right_dock_outer_left_x);
@@ -1949,43 +1996,35 @@ impl MistTermApp {
         }
         ui.set_max_width(panel_w);
 
-        let sort_icon = crate::ui::icons::fragment_sort_icon(self.fragment_sort_by);
-        let sort_label = match self.fragment_sort_by {
-            SortBy::UsageCount => "次数",
-            SortBy::SuccessRate => "成功率",
-            SortBy::LastUsed => "最近",
-            SortBy::Name => "名称",
-        };
-
+        let prev_gap_y = ui.spacing().item_spacing.y;
+        ui.spacing_mut().item_spacing.y = 0.0;
         theme.frame_panel_header_band().show(ui, |ui| {
-                let header = crate::ui::chrome::dock_panel_title_bar(
-                    ui,
-                    theme,
-                    "命令片段",
-                    theme.color_panel_header_title(),
-                    "打开片段库：自建命令、占位符与变量",
-                    "关闭命令片段侧栏",
-                );
-                if header.closed {
-                    self.show_fragment_panel = false;
-                }
-                if header.new_fragment {
-                    self.fragment_library.open = true;
-                }
-            });
+            if crate::ui::chrome::dock_panel_title_close_only(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Fragment,
+                "命令片段",
+                "关闭命令片段侧栏",
+            ) {
+                self.show_fragment_panel = false;
+            }
+        });
         crate::ui::chrome::panel_header_divider(ui, theme);
+        ui.spacing_mut().item_spacing.y = prev_gap_y;
+        ui.add_space(theme.spacing_xs());
 
-        // SPEC §3.3：搜索框区域 padding 上 4、左右与侧栏搜索一致，下 6
-        ui.add_space(theme.spacing_sm());
-        crate::ui::chrome::panel_search_row(
+        // 这里必须用 `form_singleline_field`（有框）且不要走 `panel_search_row/search_field`：
+        // 后两者会引入额外外边距或行高壳层，导致「命令片段」顶部节奏与 SFTP 不一致。
+        crate::ui::chrome::form_singleline_field(
             ui,
             theme,
             Self::id_fragment_panel_search(),
             &mut self.fragment_search_query,
             "搜索片段…",
-            Some(panel_w),
+            panel_w,
+            false,
         );
-        ui.add_space(theme.spacing_panel_gap());
+        ui.add_space(2.0);
 
         // §5.3：分类筛选 + 右侧排序（与芯片同排，不再单独占「片段列表」行）
         let chip_row = crate::ui::chrome::filter_chip_row_with_sort(
@@ -1993,8 +2032,8 @@ impl MistTermApp {
             theme,
             &["常用", "Docker", "K8s", "全部"],
             self.fragment_filter_category.as_str(),
-            sort_icon,
-            sort_label,
+            crate::ui::icons::fragment_sort_icon(self.fragment_sort_by),
+            "",
         );
         if let Some(picked) = chip_row.picked {
             self.fragment_filter_category = picked;
@@ -2231,18 +2270,18 @@ impl MistTermApp {
     }
 
     /// 显示 Git 同步面板
-    fn show_git_sync_panel(&mut self, ctx: &egui::Context, theme: &crate::ui::theme::Theme) {
-        let (g_def, g_min, g_max) =
-            layout_util::side_panel_widths(ctx, layout_util::SidePanelProfile::GitSync);
+    fn show_git_sync_panel(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+        dock_col_w: f32,
+    ) {
         let git_panel = egui::SidePanel::right("git_sync_panel")
-            .default_width(g_def)
-            .min_width(g_min)
-            .max_width(g_max)
-            .resizable(true)
+            .exact_width(dock_col_w)
+            .resizable(false)
             .frame(crate::ui::chrome::right_dock_panel_frame(theme))
             .show(ctx, |ui| {
-                let panel_w = layout_util::dock_panel_content_width(ui, g_min, g_max);
-                ui.set_max_width(panel_w);
+                ui.set_max_width(dock_col_w);
                 let mut close_git = false;
                 self.git_sync_panel.show(ui, theme, &mut close_git);
                 if close_git {
@@ -2426,19 +2465,27 @@ impl MistTermApp {
             .exact_height(status_h)
             .frame(theme.frame_chrome_bar())
             .show(ctx, |ui| {
-                let outer = ui.max_rect();
-                ui.painter()
-                    .rect_filled(outer, 0.0, theme.chrome_bar_fill());
-                ui.painter().hline(
-                    outer.x_range(),
-                    outer.top(),
-                    egui::Stroke::new(1.0, theme.border_divider_color()),
+                let screen = ui.ctx().screen_rect();
+                let inner = ui.max_rect();
+                let m = theme.margin_chrome_bar();
+                let panel_top = inner.min.y - m.top;
+                let panel_rect = egui::Rect::from_min_max(
+                    egui::pos2(screen.min.x, panel_top),
+                    egui::pos2(screen.max.x, inner.max.y + m.bottom),
                 );
+                // 分隔线由 Central 工作区底缘绘制；底栏只铺底色，避免与徽章顶边叠线
+                ui.painter()
+                    .rect_filled(panel_rect, 0.0, theme.chrome_bar_fill());
+                let content_clip = egui::Rect::from_min_max(
+                    egui::pos2(screen.min.x, panel_top + 2.0),
+                    egui::pos2(screen.max.x, inner.max.y),
+                );
+                ui.set_clip_rect(content_clip);
                 let content_h = ui
                     .available_height()
                     .min(theme.chrome_bar_content_height(status_h));
                 let status_ctx = ui.interact(
-                    ui.max_rect(),
+                    inner,
                     egui::Id::new("status_bar_context"),
                     egui::Sense::click(),
                 );
@@ -2448,15 +2495,18 @@ impl MistTermApp {
                         self.open_ssh_import_dialog();
                     }
                 });
-                ui.horizontal(|ui| {
+                ui.with_layout(
+                    egui::Layout::left_to_right(egui::Align::TOP),
+                    |ui| {
                     ui.set_min_height(content_h);
+                    ui.set_max_height(content_h);
                     ui.spacing_mut().item_spacing =
                         egui::vec2(theme.spacing_status_left_gap(), 0.0);
 
                     self.status_bar_info_cluster(ui, &theme);
 
                     ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
+                        egui::Layout::right_to_left(egui::Align::TOP),
                         |ui| {
                         ui.spacing_mut().item_spacing =
                             egui::vec2(theme.spacing_tool_btn_gap(), 0.0);
@@ -2519,6 +2569,16 @@ impl MistTermApp {
                                 self.sync_monitor_panel_to_active_tab();
                                 self.monitor_last_tab = self.active_tab;
                             }
+                        }
+                        if crate::ui::chrome::status_tool_icon(
+                            ui,
+                            &theme,
+                            crate::ui::icons::IconId::Api,
+                        )
+                            .on_hover_text("AI 助手")
+                            .clicked()
+                        {
+                            self.toggle_ai_panel(ctx);
                         }
                     });
                 });
@@ -3005,6 +3065,7 @@ impl eframe::App for MistTermApp {
         }
 
         self.render_workspace_shell(ctx, frame, &theme);
+        self.process_ai_bridge(ctx);
     }
 }
 
@@ -3346,6 +3407,17 @@ mod menu {
                     self.toggle_monitor_panel(ctx);
                     ui.close_menu();
                 }
+                if crate::ui::chrome::menu_toggle_item(
+                    ui,
+                    theme,
+                    self.show_ai_panel,
+                    "AI 助手",
+                )
+                .clicked()
+                {
+                    self.toggle_ai_panel(ctx);
+                    ui.close_menu();
+                }
                 ui.separator();
                 ui.menu_button(label("主题"), |ui| {
                     crate::ui::chrome::apply_menu_popup_style(ui, theme);
@@ -3370,6 +3442,10 @@ mod menu {
             });
             egui::menu::menu_button(ui, label("工具"), |ui| {
                 crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                if crate::ui::chrome::popup_menu_button(ui, theme, "AI 设置…").clicked() {
+                    self.show_ai_settings_dialog = true;
+                    ui.close_menu();
+                }
                 if crate::ui::chrome::popup_menu_button(ui, theme, "命令片段库…").clicked() {
                     self.fragment_library.open = true;
                     ui.close_menu();

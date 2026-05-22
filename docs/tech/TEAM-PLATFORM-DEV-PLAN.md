@@ -299,7 +299,7 @@
 | SSH、终端 UI、监控面板展示 | 托管团队片段权威数据 |
 | 个人片段/审计本地读写 | 代替服务端做团队 RBAC 最终裁决 |
 | 调用第 4 章 API、本地缓存与冲突 UI | 托管或代发用户的大模型请求 |
-| AI 配置、OpenAI 兼容调用、场景 UI、脱敏与结果展示 | 未经用户确认自动执行 AI 生成的命令 |
+| 右侧 AI 面板、OpenAI 兼容调用、脱敏、「用到终端」 | 未点击「用到终端」即向 SSH 发命令 |
 | — | 默认上传 `session_logger` 全文 |
 
 ### 5.1 设置与账号
@@ -380,29 +380,16 @@ Content-Type: application/json
 - `response_format: { "type": "json_object" }`（仅当接口支持时）
 - 流式 `stream: true` 用于长回答展示（可选，非验收必需）
 
-#### 5.5.3 场景与 UI（对应 3.4）
+#### 5.5.3 交互（UI）
 
-| 用户入口 | scenario | 说明 |
-|----------|----------|------|
-| 自然语言生成命令 | `command_generate` | 输出可执行命令，填入输入框，不自动执行 |
-| 输入补全 / AI 建议 | `command_suggest` | 根据前缀与可选 excerpt 给候选 |
-| 解释选中输出 | `error_explain` | 报错与排查建议 |
-| 总结日志 | `output_summarize` | 长输出摘要 |
-| 分析表格 / 监控数据 | `data_analyze` | 可将 `df`/`du` 输出或监控快照编入 user 消息 |
-| 片段 AI 起草 | `fragment_draft` | 生成片段草稿，保存走本地或 FRAG API |
-| 片段推荐 | `fragment_recommend` | 可纯本地规则；若用模型则仅传 `hint_ids`，不传命令明文 |
+> **见** [AI-INTERACTION-DESIGN.md](./AI-INTERACTION-DESIGN.md)（v0.2）：右侧 **AI 面板** 统一生成/解析；终端可选「发送到 AI」附带选区；回复中命令点击 **「用到终端」** 写入左侧当前会话并发送。
 
-**共性：**
-
-1. 发送前 **excerpt 预览**，用户确认后再请求。  
-2. 客户端 **脱敏** 后再写入 `messages`。  
-3. 可选本机保存最近 N 轮对话（不含 api_key）。  
-4. 未配置 `api_key` 或 `enabled=false` 时隐藏 AI 入口。
+实现层仍可按 §3.4 的 `scenario` 区分 prompt，但**不**再做多入口、预览弹窗、`#` 输入模式。
 
 #### 5.5.4 与片段 / 审计
 
 - 保存团队片段仍走第 4 章 FRAG API（与 AI 配置无关）。  
-- 可选本地审计 `ai.invoke` / `ai.suggestion_accept`；**默认不向团队上报 AI 请求体**。
+- 可选本地审计 `ai.invoke`、用户点击「用到终端」时 `ai.suggestion_accept`；**默认不向团队上报 AI 请求体**。
 
 ---
 
@@ -418,9 +405,9 @@ Content-Type: application/json
 | V-4 | 审计离线 | 断网期间事件入本地队列，恢复网络后补报且不重复（`event_id` 幂等） |
 | V-5 | 个人无回归 | 未登录用户正常使用个人片段与 SSH，无团队入口阻断 |
 | V-6 | AI 配置 | 填写 OpenAI 兼容 `base_url` + Key + model，「测试连接」成功 |
-| V-7 | AI 生成命令 | 自然语言意图 → 返回命令；仅填入输入框，不自动执行 |
-| V-8 | AI 数据分析 | 勾选 `du`/`df` 或监控快照 → `data_analyze` 返回可读结论 |
-| V-9 | AI 与团队解耦 | 未登录团队时，配置 AI 后仍可调用用户自有接口 |
+| V-7 | AI 用到终端 | 面板生成命令后点击「用到终端」，左侧当前会话执行 |
+| V-8 | AI 解析 | 终端选区「发送到 AI」后，面板内得到解读 |
+| V-9 | AI 与团队解耦 | 未登录团队时 AI 面板仍可用 |
 
 **服务端最低交付**：AUTH-1～4、FRAG-1～6、AUD-1～2、NFR-1～5、4.6 错误码约定、OpenAPI（或等价物）、测试环境与三组角色账号（**不含 AI 接口**）。
 

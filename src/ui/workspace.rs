@@ -52,14 +52,15 @@ impl MistTermApp {
 
         // 右侧 dock：须先于底栏与 Central 注册（见下方 show_bottom_chrome 注释）
         self.right_dock_outer_left_x = None;
+        let dock_col_w = layout_util::clamp_sidebar_width(self.sidebar_width);
 
         if self.show_fragment_panel {
-            self.show_fragment_panel(ctx, &theme);
+            self.show_fragment_panel(ctx, &theme, dock_col_w);
         }
 
         // Git 同步面板
         if self.show_git_sync_panel {
-            self.show_git_sync_panel(ctx, &theme);
+            self.show_git_sync_panel(ctx, &theme, dock_col_w);
         }
 
         let mut cred_action: Option<CredentialPanelAction> = None;
@@ -73,6 +74,7 @@ impl MistTermApp {
                     &self.audit_logger,
                     &mut cred_action,
                     &mut self.right_dock_outer_left_x,
+                    dock_col_w,
                 )
             {
                 self.credential_panel.open = false;
@@ -93,34 +95,31 @@ impl MistTermApp {
             audit: Some(&self.audit_logger),
         };
         self.cloud_sync_panel
-            .show(ctx, &theme, &mut deps, &mut self.right_dock_outer_left_x);
+            .show(
+                ctx,
+                &theme,
+                &mut deps,
+                &mut self.right_dock_outer_left_x,
+                dock_col_w,
+            );
 
         if let Some(CredentialPanelAction::UseForQuickConnect(c)) = cred_action {
             self.apply_credential_to_new_session_form(c);
         }
 
         // SFTP（右侧面板；切换终端标签时重置远端路径并重新拉列表）
-        let mut close_sftp_panel = false;
         if self.show_sftp_panel {
             if self.sftp_last_tab != self.active_tab {
                 self.sftp_last_tab = self.active_tab;
                 self.sftp_panel.reset();
                 self.sftp_panel.request_list_on_open();
             }
-            let current_terminal_ref = self
-                .active_tab
-                .and_then(|idx| self.tabs.get(idx).map(|t| &t.terminal));
             self.sftp_panel.show_side_panel(
                 ctx,
                 &theme,
-                current_terminal_ref,
-                &self.audit_logger,
-                &mut close_sftp_panel,
                 &mut self.right_dock_outer_left_x,
+                dock_col_w,
             );
-        }
-        if close_sftp_panel {
-            self.show_sftp_panel = false;
         }
 
         // 系统监控：切换终端标签时改为采集当前 SSH 会话（与 SFTP 侧栏一致）
@@ -134,6 +133,17 @@ impl MistTermApp {
                 &theme,
                 &mut self.show_monitor_panel,
                 &mut self.right_dock_outer_left_x,
+                dock_col_w,
+            );
+        }
+
+        if self.show_ai_panel {
+            self.ai_panel.show_side_panel(
+                ctx,
+                &theme,
+                &mut self.show_ai_panel,
+                &mut self.right_dock_outer_left_x,
+                dock_col_w,
             );
         }
 
@@ -147,21 +157,35 @@ impl MistTermApp {
             .show(ctx, |ui| {
                 layout_util::clip_ui_before_right_dock(ui, self.right_dock_outer_left_x);
                 // Central 后绘制；用 max_rect∩clip + 右栏左缘收紧，避免终端白底盖住命令片段等
-                let work =
-                    layout_util::central_work_rect_in_ui(ui, self.right_dock_outer_left_x);
+                let status_h = theme.status_bar_height();
+                let work = layout_util::central_work_rect_in_ui(
+                    ui,
+                    self.right_dock_outer_left_x,
+                    status_h,
+                );
                 if work.width() < 1.0 || work.height() < 1.0 {
                     return;
                 }
                 ui.set_clip_rect(work);
-                let work_inner =
-                    layout_util::work_area_inner_rect(work, theme.spacing_work_area_pad());
+                let pad = theme.spacing_work_area_pad();
+                let work_inner = layout_util::work_area_inner_rect(work, pad);
+                const WORK_BOTTOM_GAP: f32 = 1.0;
+                let work_bottom = work.max.y - WORK_BOTTOM_GAP;
+                // 列布局垂直铺满到 work 底缘（仅水平留白），避免底栏顶线下方露出 bg_body 带
+                let work_body = egui::Rect::from_min_max(
+                    egui::pos2(work_inner.min.x, work_inner.min.y),
+                    egui::pos2(work_inner.max.x, work_bottom),
+                );
                 // 仅铺中央槽位 bg_body（clip=work，不越过右栏）；右栏正文在 Central 后以 Foreground 绘制
-                ui.painter()
-                    .with_clip_rect(work)
-                    .rect_filled(work, 0.0, theme.bg_body_color());
-                ui.allocate_ui_at_rect(work_inner, |ui| {
+                let work_painter = ui.painter().with_clip_rect(work);
+                work_painter.rect_filled(work, 0.0, theme.bg_body_color());
+                let seam_y = work.max.y - WORK_BOTTOM_GAP;
+                if seam_y > work.min.y {
+                    work_painter.hline(work.x_range(), seam_y, theme.divider_stroke());
+                }
+                ui.allocate_ui_at_rect(work_body, |ui| {
                 ui.set_clip_rect(work);
-                let layout_h = ui.available_height();
+                let layout_h = ui.available_height().max(1.0);
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing =
                         egui::vec2(theme.spacing_region_gap(), 0.0);
@@ -276,13 +300,15 @@ impl MistTermApp {
                         self.right_dock_outer_left_x,
                     );
                     let term_top = ui.max_rect().min.y;
+                    let term_bottom = (term_top + layout_h).min(work_bottom);
                     let term_rect = egui::Rect::from_min_max(
                         egui::pos2(col_left, term_top),
-                        egui::pos2(col_left + term_col_w, term_top + layout_h),
+                        egui::pos2(col_left + term_col_w, term_bottom),
                     );
+                    let term_h = (term_bottom - term_top).max(1.0);
                     // 须先 allocate 固定宽，勿把 frame_terminal_column 直接挂在 horizontal 上（会吃满剩余宽并后绘盖住右栏）
                     ui.allocate_ui_with_layout(
-                        egui::vec2(term_col_w, layout_h),
+                        egui::vec2(term_col_w, term_h),
                         egui::Layout::top_down(egui::Align::LEFT),
                         |ui| {
                             ui.set_clip_rect(term_rect);
@@ -295,9 +321,21 @@ impl MistTermApp {
                             ui.vertical(|ui| {
                             ui.set_max_width(term_col_w);
                             egui::Frame::none()
-                                .fill(theme.chrome_bar_fill())
+                                .fill(theme.color_panel_header_band_fill())
                                 .stroke(egui::Stroke::NONE)
-                                .inner_margin(theme.margin_tab_bar())
+                                .rounding(egui::Rounding {
+                                    nw: theme.radius_panel(),
+                                    ne: theme.radius_panel(),
+                                    sw: 0.0,
+                                    se: 0.0,
+                                })
+                                .inner_margin(egui::Margin {
+                                    // 终端 Tab 区按需求：左/上/下清零，仅保留右侧最小留白。
+                                    left: 0.0,
+                                    right: theme.spacing_panel_title_pad_x(),
+                                    top: 0.0,
+                                    bottom: 0.0,
+                                })
                                 .show(ui, |ui| {
                                     // Frame 背景只画在 content min_rect 外扩 inner_margin 上；不拉满宽整行会露出 bg_body，像标签栏下一条灰
                                     // 勿固定 min_height=36：会在 Tab 行下方垫一行空白，终端顶上像「多一条缝」
@@ -309,8 +347,9 @@ impl MistTermApp {
                                         egui::vec2(theme.spacing_tab_x(), theme.spacing_tab_y());
                                     ui.spacing_mut().item_spacing =
                                         egui::vec2(theme.spacing_region_gap(), 0.0);
+                                    let terminal_header_row_h = theme.size_tab_bar_row_h();
                                     ui.horizontal(|ui| {
-                                        ui.set_min_height(theme.size_tab_bar_row_h());
+                                        ui.set_min_height(terminal_header_row_h);
                                         let mut to_close = None;
                                         let mut close_others = None;
                                         let mut close_right = None;
@@ -444,6 +483,9 @@ impl MistTermApp {
                                     ui.spacing_mut().button_padding = prev_padding;
                                     ui.spacing_mut().item_spacing = prev_item_spacing;
                                 });
+                            crate::ui::chrome::panel_header_divider(ui, &theme);
+                            // 继续上收正文起点：去掉分隔线后额外空隙。
+                            ui.add_space(0.0);
 
                             let search_h = if self.show_terminal_search {
                                 theme.size_terminal_search_bar_h()
@@ -519,6 +561,19 @@ impl MistTermApp {
                             }
                             ui.spacing_mut().item_spacing = saved_col_item_spacing;
                             });
+                            if self.right_dock_outer_left_x.is_some() {
+                                // 有右 dock 时不画终端右边框，避免交界处叠出黑线。
+                                ui.painter()
+                                    .vline(term_rect.min.x, term_rect.y_range(), theme.panel_stroke());
+                                ui.painter()
+                                    .hline(term_rect.x_range(), term_rect.min.y, theme.panel_stroke());
+                            } else {
+                                crate::ui::chrome::paint_rect_border_ltr(
+                                    ui.painter(),
+                                    term_rect,
+                                    theme.panel_stroke(),
+                                );
+                            }
                             });
                         },
                     );
@@ -532,6 +587,41 @@ impl MistTermApp {
         if self.show_monitor_panel {
             self.monitor_panel
                 .show_foreground_panel(ctx, &theme, &mut self.show_monitor_panel);
+        }
+        if self.show_sftp_panel {
+            let mut close_sftp_panel = false;
+            let current_terminal_ref = self
+                .active_tab
+                .and_then(|idx| self.tabs.get(idx).map(|t| &t.terminal));
+            self.sftp_panel.show_foreground_panel(
+                ctx,
+                &theme,
+                current_terminal_ref,
+                &self.audit_logger,
+                &mut close_sftp_panel,
+            );
+            if close_sftp_panel {
+                self.show_sftp_panel = false;
+            }
+        }
+        if self.show_ai_panel || self.show_ai_settings_dialog {
+            self.ai_panel.poll_background(ctx);
+        }
+        if self.show_ai_panel {
+            self.ai_panel.show_foreground_panel(
+                ctx,
+                &theme,
+                &mut self.show_ai_panel,
+                &mut self.app_settings,
+            );
+        }
+        if self.show_ai_settings_dialog {
+            self.ai_panel.show_settings_dialog(
+                ctx,
+                &theme,
+                &mut self.show_ai_settings_dialog,
+                &mut self.app_settings,
+            );
         }
         self.show_fragment_panel_foreground(ctx, &theme);
 

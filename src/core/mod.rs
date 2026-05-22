@@ -24,6 +24,8 @@ pub mod command_history;
 pub mod session_logger;
 pub mod session_sort;
 pub mod audit;
+pub mod ai_settings;
+pub mod ai_client;
 pub mod app_settings;
 pub mod vault;
 pub mod secret_resolver;
@@ -54,6 +56,11 @@ pub use audit::{
     command_preview, format_audit_jsonl_for_display, list_audit_log_files,
     read_audit_log_tail, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, AuditSettings,
     HttpSinkSettings, SyslogSinkSettings, AUDIT_LOG_TAIL_READ_BYTES,
+};
+pub use ai_settings::AiSettings;
+pub use ai_client::{
+    chat_completions, chat_completions_with_key, extract_shell_commands, redact_for_ai,
+    test_connection, test_connection_with_key, ChatMessage,
 };
 pub use app_settings::AppSettings;
 pub use vault::{

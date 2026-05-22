@@ -444,13 +444,8 @@ impl Theme {
     /// 面板标题条底（侧栏 / 右 dock / 居中弹窗共用）
     #[inline]
     pub fn color_panel_header_band_fill(&self) -> Color32 {
-        if self.is_light_theme() {
-            Color32::from_rgba_unmultiplied(0, 0, 0, 12)
-        } else if self.uses_solid_fg_palette() {
-            Color32::from_rgba_unmultiplied(255, 255, 255, 10)
-        } else {
-            self.accent_alpha(36)
-        }
+        // 使用不透明底色，避免标题带下方正文文字透出。
+        self.bg_tab_bar_color()
     }
 
     #[inline]
@@ -1142,18 +1137,32 @@ impl Theme {
 
     /// 左连接栏 / 右 dock 外框（§7 圆角 6px + 半透明描边）
     pub fn frame_region_panel(&self) -> egui::Frame {
+        self.frame_region_panel_rounding(egui::Rounding::same(self.radius_panel()))
+    }
+
+    /// 贴底栏的侧栏/面板：底角不圆，避免与状态栏顶线之间露缝
+    pub fn frame_region_panel_flush_bottom(&self) -> egui::Frame {
+        let r = self.radius_panel();
+        self.frame_region_panel_rounding(egui::Rounding {
+            nw: r,
+            ne: r,
+            sw: 0.0,
+            se: 0.0,
+        })
+    }
+
+    fn frame_region_panel_rounding(&self, rounding: egui::Rounding) -> egui::Frame {
         egui::Frame::none()
             .fill(self.color_panel_surface())
             .stroke(self.panel_stroke())
-            .rounding(egui::Rounding::same(self.radius_panel()))
+            .rounding(rounding)
             .inner_margin(self.region_content_margin())
     }
 
-    /// 终端列外框（圆角 6px，与原型 `.terminal-area` 一致）
+    /// 终端列外框（圆角 6px，与原型 `.terminal-area` 一致；底边由 [`crate::ui::chrome::paint_rect_border_ltr`] 单独绘制）
     pub fn frame_terminal_column(&self) -> egui::Frame {
         egui::Frame::none()
             .fill(self.bg_terminal_color())
-            .stroke(self.panel_stroke())
             .rounding(egui::Rounding::same(self.radius_panel()))
             .inner_margin(egui::Margin::ZERO)
     }
@@ -1187,9 +1196,18 @@ impl Theme {
 
     /// 面板标题行底带（侧栏 / 右 dock / 弹窗共用内边距与底色）
     pub fn frame_panel_header_band(&self) -> egui::Frame {
+        let r = self.radius_panel();
         egui::Frame::none()
             .fill(self.color_panel_header_band_fill())
-            .stroke(egui::Stroke::new(1.0, self.color_panel_header_divider()))
+            // 标题带只负责底色；分隔线由 `panel_header_divider` 单独绘制，
+            // 避免与外层 dock 圆角描边在左上角叠加出白色接缝。
+            .stroke(egui::Stroke::NONE)
+            .rounding(egui::Rounding {
+                nw: r,
+                ne: r,
+                sw: 0.0,
+                se: 0.0,
+            })
             .inner_margin(egui::Margin::symmetric(
                 self.spacing_panel_title_pad_x(),
                 self.spacing_panel_title_pad_y(),
@@ -1360,13 +1378,13 @@ impl Theme {
 
     // ── 间距系统（按设计规范 §8） ──
     pub fn spacing_panel_gap(&self) -> f32 { 6.0 }           // 面板间 gap
-    pub fn spacing_panel_title_pad_x(&self) -> f32 { 10.0 }  // 面板标题左右 padding
+    pub fn spacing_panel_title_pad_x(&self) -> f32 { 6.0 }   // 面板标题左右 padding（收紧）
     pub fn spacing_panel_title_pad_y(&self) -> f32 { 9.0 }   // 面板标题上下 padding
     pub fn spacing_panel_content_x(&self) -> f32 { 4.0 }     // 面板内容左右 padding
     pub fn spacing_panel_content_y(&self) -> f32 { 4.0 }     // 面板内容上下 padding
     pub fn spacing_search_area_x(&self) -> f32 { 8.0 }       // 搜索框区域左右 padding
     pub fn spacing_search_area_y(&self) -> f32 { 6.0 }       // 搜索框区域上下 padding
-    pub fn spacing_search_input_x(&self) -> f32 { 8.0 }      // 搜索框输入左右 padding
+    pub fn spacing_search_input_x(&self) -> f32 { 6.0 }      // 搜索框输入左右 padding（收紧）
     pub fn spacing_search_input_y(&self) -> f32 { 5.0 }      // 搜索框输入上下 padding
     pub fn spacing_list_item_x(&self) -> f32 { 10.0 }        // 列表条目左右 padding
     pub fn spacing_list_item_y(&self) -> f32 { 8.0 }         // 列表条目上下 padding
@@ -1395,19 +1413,23 @@ impl Theme {
     pub fn spacing_tab_y(&self) -> f32 { 7.0 }               // Tab 上下 padding
     pub fn spacing_tab_dot_text(&self) -> f32 { 6.0 }        // Tab 圆点与文字间距
     pub fn spacing_tab_icon_gap(&self) -> f32 { 8.0 }        // Tab 标题与 × 间距
-    pub fn spacing_terminal_pad_x(&self) -> f32 { 16.0 }     // 终端滚动区左右 padding
-    pub fn spacing_terminal_pad_y(&self) -> f32 { 10.0 }     // 终端滚动区上下 padding
+    pub fn spacing_terminal_pad_x(&self) -> f32 { 4.0 }      // 终端滚动区左右 padding
+    pub fn spacing_terminal_pad_y(&self) -> f32 { 8.0 }     // 终端滚动区上下 padding
     /// 主工作区左栏 / 右 dock 外框内容区内边距
-    pub fn spacing_region_pad_x(&self) -> f32 { 12.0 }
-    pub fn spacing_region_pad_y(&self) -> f32 { 10.0 }
+    pub fn spacing_region_pad_x(&self) -> f32 { 8.0 }
+    pub fn spacing_region_pad_y(&self) -> f32 { 8.0 }
+    /// 右 dock 正文区内边距（比通用 region 更紧凑）
+    pub fn spacing_right_dock_pad_x(&self) -> f32 { 4.0 }
+    pub fn spacing_right_dock_pad_y(&self) -> f32 { 4.0 }
     /// 左栏｜终端｜右栏之间的缝隙（露出 Central 底色）
     pub fn spacing_region_gap(&self) -> f32 { 6.0 }
     /// 右 dock 面板与窗口右缘缝宽（细缝即可；小于 [`spacing_work_area_pad`]）
     pub fn spacing_right_dock_screen_inset(&self) -> f32 {
-        4.0
+        // 统一左/右列宽：右 dock 不再额外吃掉可视宽度
+        0.0
     }
     /// 主工作区相对 `central_work_rect` 的外圈内边距（对齐原型 `.main { padding: 8px }`）
-    pub fn spacing_work_area_pad(&self) -> f32 { self.spacing_body_pad() }
+    pub fn spacing_work_area_pad(&self) -> f32 { 4.0 }
 
     /// 右 `SidePanel` 外框：在屏右缘留出 `bg_body` 缝（仅 `right` 非零）
     pub fn margin_right_dock_screen_outer(&self) -> egui::Margin {
@@ -1422,6 +1444,10 @@ impl Theme {
 
     pub fn region_content_margin(&self) -> egui::Margin {
         egui::Margin::symmetric(self.spacing_region_pad_x(), self.spacing_region_pad_y())
+    }
+
+    pub fn right_dock_content_margin(&self) -> egui::Margin {
+        egui::Margin::symmetric(self.spacing_right_dock_pad_x(), self.spacing_right_dock_pad_y())
     }
 
     pub fn terminal_content_margin(&self) -> egui::Margin {
@@ -1586,9 +1612,9 @@ impl Theme {
         Self {
             name: "暗夜".to_string(),
             // === 背景色 ===
-            bg_body: Color32Serializable::new(13, 13, 20),            // #0d0d14 — 窗口外背景
-            bg_window: Color32Serializable::new(21, 21, 32),          // #151520 — 面板/窗口底色
-            bg_terminal: Color32Serializable::new(10, 10, 18),        // #0a0a12 — 终端区域/激活 Tab
+            bg_body: Color32Serializable::new(18, 20, 30),            // 提亮底色，减弱“纯黑”观感
+            bg_window: Color32Serializable::new(24, 28, 40),          // 面板/窗口底色
+            bg_terminal: Color32Serializable::new(20, 24, 36),        // 终端区域/激活 Tab（不再发黑）
             bg_tab_bar: Color32Serializable::new(18, 18, 28), // 顶栏/底栏/Tab 条
             bg_hover: Color32Serializable::with_alpha(10, 10, 10, 10),   // rgba(255,255,255,~0.04) — 悬停
             bg_selected: Color32Serializable::with_alpha(5, 6, 12, 13), // rgba(102,126,234,0.05) — 选中背景
@@ -1602,8 +1628,8 @@ impl Theme {
             accent_dim: Color32Serializable::with_alpha(36, 44, 82, 89), // rgba(102,126,234,0.35)
             // === 边框 ===
             // 实色描边（WCAG 对比测试按 RGB；半透明白边在测试中与底色差过小）
-            border: Color32Serializable::new(58, 58, 72),       // 面板外框，相对 #151520 可辨 1px
-            border_divider: Color32Serializable::new(44, 44, 56), // 内部分隔
+            border: Color32Serializable::new(82, 92, 114),      // 外框对比度提升
+            border_divider: Color32Serializable::new(66, 74, 92), // 内部分隔提升
             // === 状态色 ===
             green: Color32Serializable::new(76, 175, 80),             // #4CAF50 — 成功/连接
             green_dim: Color32Serializable::with_alpha(19, 44, 20, 64), // rgba(76,175,80,0.25)
@@ -1646,9 +1672,9 @@ impl Theme {
         Self {
             name: "海洋".to_string(),
             // === 背景色 ===
-            bg_body: Color32Serializable::new(35, 55, 75),           // #23374b
-            bg_window: Color32Serializable::new(28, 45, 62),         // #1c2d3e
-            bg_terminal: Color32Serializable::new(22, 36, 50),       // #162432
+            bg_body: Color32Serializable::new(39, 61, 82),           // 提亮主背景，减少黑线错觉
+            bg_window: Color32Serializable::new(31, 49, 67),         // 面板底
+            bg_terminal: Color32Serializable::new(30, 48, 66),       // 终端/空白区去黑化
             bg_tab_bar: Color32Serializable::new(35, 55, 75),        // #23374b
             bg_hover: Color32Serializable::with_alpha(255, 255, 255, 12), // rgba(255,255,255,~0.05)
             bg_selected: Color32Serializable::with_alpha(70, 130, 180, 13),
@@ -1660,8 +1686,8 @@ impl Theme {
             accent: Color32Serializable::new(70, 130, 180),          // steel blue
             accent_dim: Color32Serializable::new(50, 90, 130),       // dim steel blue
             // === 边框 ===
-            border: Color32Serializable::new(74, 106, 136),           // #4a6a88 实色外框
-            border_divider: Color32Serializable::with_alpha(255, 255, 255, 38), // ~15% 白分隔
+            border: Color32Serializable::new(100, 138, 172),          // 提高 dock 边框可见度
+            border_divider: Color32Serializable::with_alpha(255, 255, 255, 62), // 分隔更清晰
             // === 状态色 ===
             green: Color32Serializable::new(80, 200, 120),           // teal green
             green_dim: Color32Serializable::with_alpha(80, 200, 120, 64),

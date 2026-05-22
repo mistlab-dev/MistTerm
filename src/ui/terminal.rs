@@ -185,6 +185,8 @@ pub struct TerminalView {
     zmodem_upload_after_rz_path: Option<PathBuf>,
     /// 终端文本选择状态
     selection: Selection,
+    /// 右键「发送到 AI」后置位，由 `app` 读取选区并打开 AI 面板。
+    pending_send_to_ai: bool,
     /// 当前行已键入字节（用于 Ctrl+R 命令历史，近似 PTY 行缓冲）
     typed_line_buffer: String,
     /// Enter 提交后待取走的整行命令（供命令历史 / 会话日志）
@@ -450,6 +452,7 @@ impl TerminalView {
             pending_drop_upload_paths: Vec::new(),
             zmodem_upload_after_rz_path: None,
             selection: Selection::default(),
+            pending_send_to_ai: false,
             typed_line_buffer: String::new(),
             submitted_line: None,
             pending_log_commands: Vec::new(),
@@ -765,8 +768,6 @@ impl TerminalView {
                             if pre.width() > 0.0 && pre.height() > 0.0 {
                                 ui.painter().rect_filled(pre, 0.0, shell.terminal_bg);
                             }
-                            // 与 TextEdit 同宽：Scroll 内容区已不含纵向条，勿再扣 SCROLL_VBAR_RESERVE（否则会窄一截、右侧露 extreme_bg）
-                            self.sync_pty_size_with_ui(ui, egui::vec2(vw, scroll_h.max(1.0)), theme);
                             let edit_w = Self::text_width_in_scroll_viewport(vw);
                             let (cell_w, cell_h) =
                                 Self::terminal_cell_metrics(ui, self.font_size, theme.text_primary());
@@ -782,26 +783,35 @@ impl TerminalView {
                             let prev_sel_fg = ui.visuals().selection.stroke.color;
                             ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
                             ui.visuals_mut().selection.stroke.color = egui::Color32::TRANSPARENT;
-                            // Scroll 内短内容时 galley 高度 < 视口，底下会留一块「纯黑」；强制最小高度铺满视口
-                            let response = ui.add(
-                                egui::TextEdit::multiline(&mut display_view)
-                                    .id_source("terminal_text_area")
-                                    // egui 默认 margin (4,2)，文本不会贴齐 Scroll 内缘；终端须为 0
-                                    .margin(egui::vec2(0.0, 0.0))
-                                    .horizontal_align(egui::Align::LEFT)
-                                    // min_size 拉高控件后默认 TOP 对齐，底下一大块「纯黑」；终端内容贴底更贴近真实 shell
-                                    .vertical_align(egui::Align::BOTTOM)
-                                    .font(egui::TextStyle::Monospace)
-                                    // 必须与父 Scroll/Frame 同宽；过大 min 宽会把 Central 撑到盖住右侧栏
-                                    .desired_width(edit_w)
-                                    .min_size(egui::vec2(vw, scroll_h))
-                                    .code_editor()
-                                    // 查找条打开时释放 lock，否则无法聚焦搜索框输入。
-                                    .lock_focus(!terminal_search_open)
-                                    .interactive(true)
-                                    .frame(false)
-                                    .layouter(&mut layouter),
-                            );
+                            // ScrollArea 默认自上而下排布，短会话时会把提示符顶在视口上方；用 bottom_up 占满视口高
+                            let response = ui
+                                .allocate_ui_with_layout(
+                                    egui::vec2(vw, scroll_h),
+                                    egui::Layout::bottom_up(egui::Align::LEFT),
+                                    |ui| {
+                                        ui.set_min_width(vw);
+                                        ui.set_min_height(scroll_h);
+                                        self.sync_pty_size_with_ui(
+                                            ui,
+                                            egui::vec2(vw, scroll_h.max(1.0)),
+                                            theme,
+                                        );
+                                        ui.add(
+                                            egui::TextEdit::multiline(&mut display_view)
+                                                .id_source("terminal_text_area")
+                                                .margin(egui::vec2(0.0, 0.0))
+                                                .horizontal_align(egui::Align::LEFT)
+                                                .font(egui::TextStyle::Monospace)
+                                                .desired_width(edit_w)
+                                                .code_editor()
+                                                .lock_focus(!terminal_search_open)
+                                                .interactive(true)
+                                                .frame(false)
+                                                .layouter(&mut layouter),
+                                        )
+                                    },
+                                )
+                                .inner;
                             ui.visuals_mut().selection.bg_fill = prev_sel_bg;
                             ui.visuals_mut().selection.stroke.color = prev_sel_fg;
                             if let Some(mut te_state) =
@@ -863,16 +873,6 @@ impl TerminalView {
                                     self.selection.end_line = line;
                                     self.selection.end_col = col;
                                     self.selection.active = true;
-                                }
-                            }
-
-                            // 松开鼠标时复制选中内容到剪贴板
-                            if response.drag_released() && !self.selection.is_empty() {
-                                let text = self.get_selected_text();
-                                if !text.is_empty() {
-                                    if let Ok(mut clip) = Clipboard::new() {
-                                        let _ = clip.set_text(text);
-                                    }
                                 }
                             }
 
@@ -959,6 +959,12 @@ impl TerminalView {
                                                 let _ = clip.set_text(text);
                                             }
                                         }
+                                        ui.close_menu();
+                                    }
+                                    if crate::ui::chrome::popup_menu_button(ui, theme, "发送到 AI")
+                                        .clicked()
+                                    {
+                                        self.pending_send_to_ai = true;
                                         ui.close_menu();
                                     }
                                     ui.separator();
@@ -1848,6 +1854,17 @@ impl TerminalView {
         self.selection.end_line = rows.saturating_sub(1);
         self.selection.end_col = cols.saturating_sub(1);
         self.selection.active = true;
+    }
+
+    pub fn take_pending_send_to_ai(&mut self) -> bool {
+        let v = self.pending_send_to_ai;
+        self.pending_send_to_ai = false;
+        v
+    }
+
+    /// 当前选区文本（无选区时为空）。
+    pub fn selected_text(&self) -> String {
+        self.get_selected_text()
     }
 
     /// 获取选中的文本
