@@ -1569,7 +1569,10 @@ impl MistTermApp {
         if let Some(idx) = self.active_tab {
             if let Some(tab) = self.tabs.get_mut(idx) {
                 if tab.terminal.take_pending_send_to_ai() {
-                    let text = tab.terminal.selected_text();
+                    let text = tab
+                        .terminal
+                        .take_pending_send_to_ai_text()
+                        .unwrap_or_else(|| tab.terminal.selected_text());
                     self.ai_panel.attach_context(text);
                     if self.ensure_right_dock_allowed_or_warn(ctx) {
                         self.show_ai_panel = true;
@@ -1581,7 +1584,7 @@ impl MistTermApp {
             if let Some(idx) = self.active_tab {
                 if let Some(tab) = self.tabs.get_mut(idx) {
                     tab.terminal.send_command(&cmd);
-                    self.status_message = format!("已发送到终端：{cmd}");
+                    self.status_message = terminal_command_status_message(&cmd);
                     ctx.request_repaint();
                 }
             } else {
@@ -2313,26 +2316,6 @@ impl MistTermApp {
         })
     }
 
-    /// README §2.4 状态徽章：淡色底，内边距 2px 8px，圆角 4px，11px 高对比字色
-    fn status_chip(ui: &mut egui::Ui, text: &str, theme: &crate::ui::theme::Theme) {
-        Self::status_chip_colored(ui, text, theme, theme.text_primary());
-    }
-
-    fn status_chip_colored(
-        ui: &mut egui::Ui,
-        text: &str,
-        theme: &crate::ui::theme::Theme,
-        color: egui::Color32,
-    ) {
-        theme.frame_status_chip().show(ui, |ui| {
-            ui.label(
-                egui::RichText::new(text)
-                    .size(theme.font_size_status_bar())
-                    .color(color),
-            );
-        });
-    }
-
     /// 底栏左侧：连接 / 侧栏会话 / 日志等状态信息成组排列（不拉满整行）。
     fn status_bar_info_cluster(&mut self, ui: &mut egui::Ui, theme: &crate::ui::theme::Theme) {
         ui.spacing_mut().item_spacing = egui::vec2(theme.spacing_sm(), 0.0);
@@ -2355,24 +2338,26 @@ impl MistTermApp {
                     .get_session(sid)
                     .map(|s| format!("侧栏：{}", s.name))
                     .unwrap_or_else(|| "侧栏：未命名".to_string());
-                Self::status_chip(ui, &label, theme);
+                crate::ui::chrome::status_text_chip(ui, theme, &label, theme.text_primary());
             }
         }
 
         if self.session_log_enabled {
             if let Some(log_label) = self.active_tab_log_status() {
-                let chip = theme.frame_status_chip().show(ui, |ui| {
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(log_label)
-                                .size(theme.font_size_status_bar_stats())
-                                .color(theme.text_primary()),
+                let chip = theme
+                    .frame_status_chip()
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(log_label)
+                                    .size(theme.font_size_status_bar())
+                                    .color(theme.text_primary()),
+                            )
+                            .sense(egui::Sense::click()),
                         )
-                        .sense(egui::Sense::click()),
-                    )
-                })
-                .inner
-                .on_hover_text("查看本会话的终端输出录制（本地日志文件）");
+                    })
+                    .inner
+                    .on_hover_text("查看本会话的终端输出录制（本地日志文件）");
                 if chip.clicked() {
                     if let Some(idx) = self.active_tab {
                         let sid = self.tabs.get(idx).map(|t| t.session_id.clone());
@@ -2389,7 +2374,7 @@ impl MistTermApp {
         }
 
         if let Some(metrics) = self.monitor_panel.status_bar_metrics_line() {
-            Self::status_chip(ui, &metrics, theme);
+            crate::ui::chrome::status_text_chip(ui, theme, &metrics, theme.text_primary());
         }
 
         if self.auto_reconnect_enabled {
@@ -2412,10 +2397,10 @@ impl MistTermApp {
         }
 
         if !self.status_message.is_empty() {
-            Self::status_chip_colored(
+            crate::ui::chrome::status_text_chip(
                 ui,
-                &truncate_status(&self.status_message, 36),
                 theme,
+                &truncate_status(&self.status_message, 36),
                 status_message_text_color(&self.status_message, theme),
             );
         }
@@ -2427,22 +2412,24 @@ impl MistTermApp {
         status: &crate::ui::terminal::ConnectionBarStatus,
         theme: &crate::ui::theme::Theme,
     ) {
+        let host = truncate_status(&status.host_line, 40);
         theme.frame_status_chip().show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = theme.spacing_sm();
+                let sz = theme.font_size_status_bar();
                 ui.label(
-                    egui::RichText::new(&status.host_line)
-                        .size(theme.font_size_status_bar())
+                    egui::RichText::new(host)
+                        .size(sz)
                         .color(theme.text_primary()),
                 );
                 ui.label(
                     egui::RichText::new("·")
-                        .size(theme.font_size_status_bar())
+                        .size(sz)
                         .color(theme.text_tertiary()),
                 );
                 ui.label(
                     egui::RichText::new(&status.state_line)
-                        .size(theme.font_size_status_bar())
+                        .size(sz)
                         .color(status.state_color),
                 );
             });
@@ -2473,7 +2460,6 @@ impl MistTermApp {
                     egui::pos2(screen.min.x, panel_top),
                     egui::pos2(screen.max.x, inner.max.y + m.bottom),
                 );
-                // 分隔线由 Central 工作区底缘绘制；底栏只铺底色，避免与徽章顶边叠线
                 ui.painter()
                     .rect_filled(panel_rect, 0.0, theme.chrome_bar_fill());
                 let content_clip = egui::Rect::from_min_max(
@@ -2481,9 +2467,8 @@ impl MistTermApp {
                     egui::pos2(screen.max.x, inner.max.y),
                 );
                 ui.set_clip_rect(content_clip);
-                let content_h = ui
-                    .available_height()
-                    .min(theme.chrome_bar_content_height(status_h));
+                let content_h = theme.chrome_bar_content_height(status_h);
+
                 let status_ctx = ui.interact(
                     inner,
                     egui::Id::new("status_bar_context"),
@@ -2495,93 +2480,98 @@ impl MistTermApp {
                         self.open_ssh_import_dialog();
                     }
                 });
+
                 ui.with_layout(
-                    egui::Layout::left_to_right(egui::Align::TOP),
+                    egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
-                    ui.set_min_height(content_h);
-                    ui.set_max_height(content_h);
-                    ui.spacing_mut().item_spacing =
-                        egui::vec2(theme.spacing_status_left_gap(), 0.0);
-
-                    self.status_bar_info_cluster(ui, &theme);
-
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::TOP),
-                        |ui| {
+                        ui.set_min_height(content_h);
+                        ui.set_max_height(content_h);
                         ui.spacing_mut().item_spacing =
-                            egui::vec2(theme.spacing_tool_btn_gap(), 0.0);
-                        Self::status_chip(
-                            ui,
-                            &format!("{}片段 · {}次", fragment_count, total_runs),
-                            &theme,
-                        );
-                        ui.add_space(theme.spacing_status_right_gap());
-                        ui.label(
-                            egui::RichText::new("|")
-                                .size(theme.font_size_status_bar_stats())
-                                .color(theme.color_caption_text()),
-                        );
+                            egui::vec2(theme.spacing_status_left_gap(), 0.0);
 
-                        if crate::ui::chrome::status_tool_icon(
-                            ui,
-                            &theme,
-                            crate::ui::icons::IconId::Fragment,
-                        )
-                            .on_hover_text(format!(
-                                "命令片段 · {}",
-                                crate::platform::accel("K")
-                            ))
-                            .clicked()
-                        {
-                            if self.show_fragment_panel {
-                                self.show_fragment_panel = false;
-                            } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                self.show_fragment_panel = true;
-                            }
-                        }
-                        if crate::ui::chrome::status_tool_icon(
-                            ui,
-                            &theme,
-                            crate::ui::icons::IconId::Folder,
-                        )
-                            .on_hover_text("SFTP 文件 · 浏览/上传/下载")
-                            .clicked()
-                        {
-                            if self.show_sftp_panel {
-                                self.show_sftp_panel = false;
-                            } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                self.toggle_sftp_panel(ctx);
-                            }
-                        }
-                        if crate::ui::chrome::status_tool_icon(
-                            ui,
-                            &theme,
-                            crate::ui::icons::IconId::Monitor,
-                        )
-                            .on_hover_text("系统监控")
-                            .clicked()
-                        {
-                            if self.show_monitor_panel {
-                                self.show_monitor_panel = false;
-                                self.monitor_last_tab = None;
-                            } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                self.show_monitor_panel = true;
-                                self.sync_monitor_panel_to_active_tab();
-                                self.monitor_last_tab = self.active_tab;
-                            }
-                        }
-                        if crate::ui::chrome::status_tool_icon(
-                            ui,
-                            &theme,
-                            crate::ui::icons::IconId::Api,
-                        )
-                            .on_hover_text("AI 助手")
-                            .clicked()
-                        {
-                            self.toggle_ai_panel(ctx);
-                        }
-                    });
-                });
+                        self.status_bar_info_cluster(ui, &theme);
+
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.spacing_mut().item_spacing =
+                                    egui::vec2(theme.spacing_tool_btn_gap(), 0.0);
+
+                                crate::ui::chrome::status_text_chip(
+                                    ui,
+                                    &theme,
+                                    &format!("{} 片段 · {} 次", fragment_count, total_runs),
+                                    theme.text_primary(),
+                                );
+                                ui.label(
+                                    egui::RichText::new("|")
+                                        .size(theme.font_size_status_bar())
+                                        .color(theme.color_caption_text()),
+                                );
+                                ui.add_space(theme.spacing_status_right_gap());
+
+                                if crate::ui::chrome::status_tool_icon(
+                                    ui,
+                                    &theme,
+                                    crate::ui::icons::IconId::Fragment,
+                                )
+                                .on_hover_text(format!(
+                                    "命令片段 · {}",
+                                    crate::platform::accel("K")
+                                ))
+                                .clicked()
+                                {
+                                    if self.show_fragment_panel {
+                                        self.show_fragment_panel = false;
+                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
+                                        self.show_fragment_panel = true;
+                                    }
+                                }
+                                if crate::ui::chrome::status_tool_icon(
+                                    ui,
+                                    &theme,
+                                    crate::ui::icons::IconId::Folder,
+                                )
+                                .on_hover_text("SFTP 文件 · 浏览/上传/下载")
+                                .clicked()
+                                {
+                                    if self.show_sftp_panel {
+                                        self.show_sftp_panel = false;
+                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
+                                        self.toggle_sftp_panel(ctx);
+                                    }
+                                }
+                                if crate::ui::chrome::status_tool_icon(
+                                    ui,
+                                    &theme,
+                                    crate::ui::icons::IconId::Monitor,
+                                )
+                                .on_hover_text("系统监控")
+                                .clicked()
+                                {
+                                    if self.show_monitor_panel {
+                                        self.show_monitor_panel = false;
+                                        self.monitor_last_tab = None;
+                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
+                                        self.show_monitor_panel = true;
+                                        self.sync_monitor_panel_to_active_tab();
+                                        self.monitor_last_tab = self.active_tab;
+                                    }
+                                }
+                                if crate::ui::chrome::status_tool_icon(
+                                    ui,
+                                    &theme,
+                                    crate::ui::icons::IconId::Api,
+                                )
+                                .on_hover_text("AI 助手")
+                                .clicked()
+                                {
+                                    self.toggle_ai_panel(ctx);
+                                }
+                            },
+                        );
+                    },
+                );
             });
     }
 
@@ -3532,6 +3522,22 @@ mod menu {
                 }
             });
         }
+    }
+}
+
+fn terminal_command_status_message(cmd: &str) -> String {
+    let lines: Vec<&str> = cmd.lines().filter(|l| !l.trim().is_empty()).collect();
+    let first = lines.first().map(|l| l.trim()).unwrap_or("");
+    let preview = if first.chars().count() > 56 {
+        let head: String = first.chars().take(56).collect();
+        format!("{head}…")
+    } else {
+        first.to_string()
+    };
+    if lines.len() > 1 {
+        format!("已发送到终端（{} 行）：{preview}", lines.len())
+    } else {
+        format!("已发送到终端：{preview}")
     }
 }
 

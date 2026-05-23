@@ -2060,9 +2060,33 @@ pub fn title_bar_traffic_lights(ui: &mut Ui, theme: &Theme) {
     }
 }
 
+/// 状态栏内容区可用高度（与底栏 Panel 内边距一致）。
+pub fn status_bar_content_height(theme: &Theme) -> f32 {
+    theme.chrome_bar_content_height(theme.status_bar_height())
+}
+
+/// 状态栏文字徽章（统一字号；由父级 `Align::Center` 负责垂直对齐）。
+pub fn status_text_chip(
+    ui: &mut Ui,
+    theme: &Theme,
+    text: &str,
+    color: Color32,
+) -> Response {
+    theme
+        .frame_status_chip()
+        .show(ui, |ui| {
+            ui.label(
+                RichText::new(text)
+                    .size(theme.font_size_status_bar())
+                    .color(color),
+            );
+        })
+        .response
+}
+
 /// 状态栏工具图标
 pub fn status_tool_icon(ui: &mut Ui, theme: &Theme, id: IconId) -> Response {
-    let h = theme.chrome_bar_content_height(theme.status_bar_height());
+    let h = status_bar_content_height(theme);
     let hit = theme.size_icon_glyph().max(20.0);
     ui.allocate_ui_with_layout(
         egui::vec2(hit, h),
@@ -2087,12 +2111,12 @@ pub fn status_icon_chip(ui: &mut Ui, theme: &Theme, id: IconId, text: &str) {
     theme.frame_status_chip().show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            let px = theme.font_size_status_bar_stats();
+            let px = theme.font_size_status_bar();
             let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
             icons::paint_icon(ui, r, id, theme.color_caption_text(), px);
             ui.label(
                 RichText::new(text)
-                    .size(theme.font_size_status_bar_stats())
+                    .size(theme.font_size_status_bar())
                     .color(theme.text_primary()),
             );
         });

@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::core::AiSettings;
 
 const SYSTEM_PROMPT: &str = "你是 MistTerm 终端里的运维助手。用户会提问或附上终端输出。\
-请用简洁中文回答。若给出 shell 命令，请用 markdown 代码块包裹（```bash ... ```），每行一条可执行命令。\
-不要编造未提供的输出。";
+请用简洁中文回答。若给出完整 shell 脚本，请用单个 ```bash 代码块包裹整段脚本；若给出若干条可直接执行的命令，\
+用 ```bash 代码块列出，每行一条命令，不要与完整脚本混在同一提取逻辑里。不要编造未提供的输出。";
 
 #[derive(Clone, Debug)]
 pub struct ChatMessage {
@@ -79,35 +79,152 @@ pub fn redact_for_ai(text: &str) -> String {
     out
 }
 
-/// 从回复中提取 ``` 代码块内的 shell 命令行。
+/// 从回复中提取可在终端单独执行的 shell 命令（跳过整段脚本类代码块）。
 pub fn extract_shell_commands(reply: &str) -> Vec<String> {
     let mut cmds = Vec::new();
     let mut in_fence = false;
+    let mut block: Vec<String> = Vec::new();
+
     for line in reply.lines() {
         let t = line.trim();
         if t.starts_with("```") {
+            if in_fence {
+                cmds.extend(commands_from_fence_block(&block));
+                block.clear();
+            }
             in_fence = !in_fence;
             continue;
         }
-        if in_fence && !t.is_empty() && !t.starts_with('#') {
-            cmds.push(t.to_string());
+        if in_fence {
+            block.push(t.to_string());
+            continue;
+        }
+        if let Some(c) = prompt_line_to_command(t) {
+            cmds.push(c);
         }
     }
-    if cmds.is_empty() {
-        for line in reply.lines() {
-            let t = line.trim();
-            if (t.starts_with('$') || t.starts_with('#'))
-                && t.len() > 2
-            {
-                let cmd = t.trim_start_matches(['$', '#', ' ']);
-                if !cmd.is_empty() {
-                    cmds.push(cmd.to_string());
-                }
-            }
-        }
+    if in_fence && !block.is_empty() {
+        cmds.extend(commands_from_fence_block(&block));
     }
+    cmds.sort();
     cmds.dedup();
     cmds
+}
+
+fn commands_from_fence_block(lines: &[String]) -> Vec<String> {
+    if lines.is_empty() || is_whole_script_block(lines) {
+        return Vec::new();
+    }
+    lines
+        .iter()
+        .filter(|l| {
+            let t = l.trim();
+            !t.is_empty() && !t.starts_with('#') && looks_like_runnable_line(t)
+        })
+        .cloned()
+        .collect()
+}
+
+fn is_whole_script_block(lines: &[String]) -> bool {
+    if lines.iter().any(|l| l.starts_with("#!")) {
+        return true;
+    }
+    if lines.iter().any(|l| l.contains("<<") && l.contains("EOF")) {
+        return true;
+    }
+    if lines.len() >= 6 {
+        return true;
+    }
+    if lines.len() >= 3 {
+        let has_control = lines.iter().any(|l| {
+            let t = l.trim();
+            t.starts_with("if ") || t.starts_with("elif ") || t == "fi"
+                || t.starts_with("for ") || t.starts_with("while ")
+                || t.starts_with("case ") || t.starts_with("function ")
+                || t.ends_with(" do") || t == "done"
+        });
+        if has_control {
+            return true;
+        }
+    }
+    false
+}
+
+fn looks_like_runnable_line(line: &str) -> bool {
+    if matches!(line, "fi" | "done" | "esac" | "then" | "else" | "do") {
+        return false;
+    }
+    if line.starts_with("if ") || line.starts_with("elif ") || line.starts_with("for ")
+        || line.starts_with("while ") || line.starts_with("case ") || line.starts_with("function ")
+    {
+        return false;
+    }
+    if line.starts_with("cat ") && line.contains("<<") {
+        return false;
+    }
+    let first = line.split_whitespace().next().unwrap_or("");
+    if first.is_empty() {
+        return false;
+    }
+    if first.contains('=') && !first.starts_with("export") && !first.starts_with("./") {
+        return false;
+    }
+    const RUNNABLE: &[&str] = &[
+        "echo", "chmod", "chown", "cp", "mv", "rm", "mkdir", "touch", "cd", "pwd", "ls", "cat",
+        "dig", "curl", "wget", "ping", "whois", "nslookup", "host", "bash", "sh", "zsh", "python",
+        "python3", "node", "npm", "yarn", "pip", "pip3", "apt", "apt-get", "yum", "dnf", "brew",
+        "systemctl", "docker", "podman", "kubectl", "ssh", "scp", "rsync", "tar", "grep", "awk",
+        "sed", "tee", "sudo", "export",
+    ];
+    if first.starts_with("./") {
+        return true;
+    }
+    RUNNABLE.contains(&first)
+}
+
+fn prompt_line_to_command(t: &str) -> Option<String> {
+    if (t.starts_with('$') || t.starts_with('#')) && t.len() > 2 {
+        let cmd = t.trim_start_matches(['$', '#', ' ']);
+        if !cmd.is_empty() {
+            return Some(cmd.to_string());
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skips_whole_script_in_fence() {
+        let reply = r#"说明
+```bash
+#!/bin/bash
+DOMAIN=$1
+if [ -z "$DOMAIN" ]; then
+  echo usage
+  exit 1
+fi
+dig +short A $DOMAIN
+```
+"#;
+        assert!(extract_shell_commands(reply).is_empty());
+    }
+
+    #[test]
+    fn extracts_short_runnable_block() {
+        let reply = r#"运行：
+```bash
+chmod +x check_domain.sh
+./check_domain.sh example.com
+```
+"#;
+        let cmds = extract_shell_commands(reply);
+        assert_eq!(cmds.len(), 2);
+        assert!(cmds.iter().any(|c| c.starts_with("chmod")));
+        assert!(cmds.iter().any(|c| c.starts_with("./")));
+    }
 }
 
 pub fn chat_completions(

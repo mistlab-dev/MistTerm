@@ -1109,7 +1109,7 @@ impl Theme {
     }
 
     pub fn margin_status_chip(&self) -> egui::Margin {
-        egui::Margin::symmetric(8.0, 2.0)
+        egui::Margin::symmetric(8.0, 3.0)
     }
 
     /// 顶栏 / 底栏 Panel 内边距（水平留白 + 垂直居中余量，避免字形被裁切）
@@ -1364,7 +1364,7 @@ impl Theme {
         self.font_size_ui_control()
     }
     pub fn font_size_status_bar_stats(&self) -> f32 {
-        self.font_size_caption()
+        self.font_size_status_bar()
     }
     pub fn font_size_restore_btn(&self) -> f32 {
         self.font_size_caption()

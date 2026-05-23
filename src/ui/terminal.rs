@@ -187,6 +187,8 @@ pub struct TerminalView {
     selection: Selection,
     /// 右键「发送到 AI」后置位，由 `app` 读取选区并打开 AI 面板。
     pending_send_to_ai: bool,
+    /// 点击「发送到 AI」当帧快照的选中文本，避免后续选区变化导致桥接拿到空串。
+    pending_send_to_ai_text: Option<String>,
     /// 当前行已键入字节（用于 Ctrl+R 命令历史，近似 PTY 行缓冲）
     typed_line_buffer: String,
     /// Enter 提交后待取走的整行命令（供命令历史 / 会话日志）
@@ -237,23 +239,50 @@ impl TerminalView {
     }
 
     fn terminal_row_col_at_pointer(
-        galley: &egui::Galley,
         text_top: f32,
-        response: &egui::Response,
+        rect: &egui::Rect,
         pos: egui::Pos2,
+        cell_w: f32,
+        cell_h: f32,
+        line_count: usize,
+        line_char_len: Option<usize>,
     ) -> (usize, usize) {
-        let rel_y = (pos.y - text_top).max(0.0);
-        let row_i = galley
-            .rows
-            .iter()
-            .enumerate()
-            .find(|(_, r)| rel_y >= r.rect.min.y && rel_y < r.rect.max.y)
-            .map(|(i, _)| i)
-            .unwrap_or_else(|| galley.rows.len().saturating_sub(1));
-        let row = galley.rows.get(row_i);
-        let col = row
-            .map(|r| r.char_at((pos.x - response.rect.min.x).max(0.0)))
-            .unwrap_or(0);
+        let rows = line_count.max(1);
+        let row_i = ((pos.y - text_top) / cell_h.max(1.0))
+            .floor()
+            .clamp(0.0, rows.saturating_sub(1) as f32) as usize;
+        let mut col = ((pos.x - rect.min.x).max(0.0) / cell_w.max(1.0)).floor() as usize;
+        if let Some(len) = line_char_len {
+            col = col.min(len);
+        }
+        (row_i, col)
+    }
+
+    #[inline]
+    fn line_char_len(lines: &[&str], line: usize) -> Option<usize> {
+        lines.get(line).map(|s| s.chars().count())
+    }
+
+    fn terminal_pointer_row_col(
+        text_top: f32,
+        rect: &egui::Rect,
+        pos: egui::Pos2,
+        cell_w: f32,
+        cell_h: f32,
+        lines: &[&str],
+    ) -> (usize, usize) {
+        let (row_i, mut col) = Self::terminal_row_col_at_pointer(
+            text_top,
+            rect,
+            pos,
+            cell_w,
+            cell_h,
+            lines.len(),
+            None,
+        );
+        if let Some(len) = Self::line_char_len(lines, row_i) {
+            col = col.min(len);
+        }
         (row_i, col)
     }
 
@@ -288,11 +317,45 @@ impl TerminalView {
         let y = text_top + row.rect.min.y;
         let h = row.height().max(1.0);
         let x_start = response.rect.min.x + row.x_offset(c_start);
-        let x_end = response.rect.min.x + row.x_offset(c_end).max(x_start + cell_w * 0.5);
+        let x_end = (response.rect.min.x + row.x_offset(c_end)).max(x_start + cell_w * 0.5);
         Some(egui::Rect::from_min_max(
             egui::pos2(x_start, y),
             egui::pos2(x_end, y + h),
         ))
+    }
+
+    #[inline]
+    fn is_terminal_token_char(ch: char) -> bool {
+        ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '\\' | ':' | '@' | '+')
+    }
+
+    /// 双击时按终端 token 规则选中一个词元。
+    /// 规则：字母数字与 `_-.\\/ :@+` 视作同一词；空白/分隔符不纳入。
+    fn terminal_token_range_at(line: &str, col: usize) -> Option<(usize, usize)> {
+        let chars: Vec<char> = line.chars().collect();
+        if chars.is_empty() {
+            return None;
+        }
+        let len = chars.len();
+        // 严格模式：只允许命中“当前字符”或“紧邻左侧字符”，绝不跨空格跳词。
+        let mut idx = col.min(len.saturating_sub(1));
+        if !Self::is_terminal_token_char(chars[idx]) {
+            if idx > 0 && Self::is_terminal_token_char(chars[idx - 1]) {
+                idx -= 1;
+            } else {
+                return None;
+            }
+        }
+
+        while idx > 0 && Self::is_terminal_token_char(chars[idx - 1]) {
+            idx -= 1;
+        }
+        let start = idx;
+        let mut end = start;
+        while end < len && Self::is_terminal_token_char(chars[end]) {
+            end += 1;
+        }
+        Some((start, end))
     }
 
     /// 本机状态行：truecolor ANSI（随主题），避免被 §2.3.2 输出压暗后在黑底上几乎看不见。
@@ -453,6 +516,7 @@ impl TerminalView {
             zmodem_upload_after_rz_path: None,
             selection: Selection::default(),
             pending_send_to_ai: false,
+            pending_send_to_ai_text: None,
             typed_line_buffer: String::new(),
             submitted_line: None,
             pending_log_commands: Vec::new(),
@@ -796,6 +860,7 @@ impl TerminalView {
                                             egui::vec2(vw, scroll_h.max(1.0)),
                                             theme,
                                         );
+                                        // 鼠标选区走独立 interact 层；TextEdit 仅负责键盘焦点与 PTY 输入。
                                         ui.add(
                                             egui::TextEdit::multiline(&mut display_view)
                                                 .id_source("terminal_text_area")
@@ -805,13 +870,25 @@ impl TerminalView {
                                                 .desired_width(edit_w)
                                                 .code_editor()
                                                 .lock_focus(!terminal_search_open)
-                                                .interactive(true)
+                                                .interactive(false)
                                                 .frame(false)
                                                 .layouter(&mut layouter),
                                         )
                                     },
                                 )
                                 .inner;
+                            let text_rect = response.rect;
+                            let select_id = response.id.with("terminal_select");
+                            let select_resp =
+                                ui.interact(text_rect, select_id, egui::Sense::click_and_drag());
+                            let primary_clicked =
+                                select_resp.clicked_by(egui::PointerButton::Primary);
+                            let primary_double_clicked =
+                                select_resp.double_clicked_by(egui::PointerButton::Primary);
+                            let primary_drag_started =
+                                select_resp.drag_started_by(egui::PointerButton::Primary);
+                            let primary_dragged =
+                                select_resp.dragged_by(egui::PointerButton::Primary);
                             ui.visuals_mut().selection.bg_fill = prev_sel_bg;
                             ui.visuals_mut().selection.stroke.color = prev_sel_fg;
                             if let Some(mut te_state) =
@@ -822,19 +899,22 @@ impl TerminalView {
                             }
                             let galley = Self::layout_terminal_galley(ui, &layout_job);
                             let text_top = Self::terminal_text_top(&response, &galley);
+                            let display_lines: Vec<&str> = display_owned.lines().collect();
                             if !terminal_search_open {
-                                if response.clicked() {
-                                    response.request_focus();
+                                if primary_clicked || primary_drag_started {
+                                    ui.memory_mut(|m| m.request_focus(select_id));
+                                    select_resp.request_focus();
                                 }
                                 if self.pending_focus_terminal {
                                     // 同步写 memory，避免帧初 Esc 清空焦点后本帧无法输入
-                                    ui.memory_mut(|m| m.request_focus(response.id));
-                                    response.request_focus();
+                                    ui.memory_mut(|m| m.request_focus(select_id));
+                                    select_resp.request_focus();
                                     self.pending_focus_terminal = false;
                                 }
                             }
-                            self.terminal_focused =
-                                response.has_focus() || self.pending_focus_terminal;
+                            self.terminal_focused = select_resp.has_focus()
+                                || response.has_focus()
+                                || self.pending_focus_terminal;
 
                             // 滚轮浏览 scrollback（与 alacritty 一致：Delta>0 向上翻历史）
                             if (response.hovered() || response.has_focus())
@@ -848,31 +928,67 @@ impl TerminalView {
                                 }
                             }
 
-                            // === 文本选择处理 ===
-
-                            // 点击时清除选择或开始选择
-                            if response.clicked() {
-                                if let Some(pos) = response.interact_pointer_pos() {
-                                    let (line, col) = Self::terminal_row_col_at_pointer(
-                                        &galley, text_top, &response, pos,
+                            // === 文本选择（独立 interact 层，避免 TextEdit 抢鼠标） ===
+                            if primary_double_clicked {
+                                if let Some(pos) = select_resp.interact_pointer_pos() {
+                                    let (row_i, col) = Self::terminal_pointer_row_col(
+                                        text_top,
+                                        &text_rect,
+                                        pos,
+                                        cell_w,
+                                        cell_h,
+                                        &display_lines,
                                     );
-                                    self.selection.start_line = line;
+                                    if let Some(line_text) = display_lines.get(row_i) {
+                                        if let Some((start, end)) =
+                                            Self::terminal_token_range_at(line_text, col)
+                                        {
+                                            self.selection.start_line = row_i;
+                                            self.selection.start_col = start;
+                                            self.selection.end_line = row_i;
+                                            self.selection.end_col = end;
+                                            self.selection.active = true;
+                                        }
+                                    }
+                                }
+                            } else if primary_drag_started {
+                                if let Some(pos) = select_resp.interact_pointer_pos() {
+                                    let (row_i, col) = Self::terminal_pointer_row_col(
+                                        text_top,
+                                        &text_rect,
+                                        pos,
+                                        cell_w,
+                                        cell_h,
+                                        &display_lines,
+                                    );
+                                    self.selection.start_line = row_i;
                                     self.selection.start_col = col;
-                                    self.selection.end_line = line;
+                                    self.selection.end_line = row_i;
                                     self.selection.end_col = col;
                                     self.selection.active = true;
                                 }
-                            }
-
-                            // 拖拽更新选择范围
-                            if response.dragged() {
-                                if let Some(pos) = response.interact_pointer_pos() {
-                                    let (line, col) = Self::terminal_row_col_at_pointer(
-                                        &galley, text_top, &response, pos,
-                                    );
-                                    self.selection.end_line = line;
-                                    self.selection.end_col = col;
-                                    self.selection.active = true;
+                            } else if primary_dragged {
+                                let drag_distance = ui.input(|i| {
+                                    i.pointer
+                                        .press_origin()
+                                        .zip(i.pointer.interact_pos())
+                                        .map(|(o, p)| o.distance(p))
+                                        .unwrap_or(0.0)
+                                });
+                                if drag_distance >= 3.0 {
+                                    if let Some(pos) = select_resp.interact_pointer_pos() {
+                                        let (row_i, col) = Self::terminal_pointer_row_col(
+                                            text_top,
+                                            &text_rect,
+                                            pos,
+                                            cell_w,
+                                            cell_h,
+                                            &display_lines,
+                                        );
+                                        self.selection.end_line = row_i;
+                                        self.selection.end_col = col;
+                                        self.selection.active = true;
+                                    }
                                 }
                             }
 
@@ -947,7 +1063,7 @@ impl TerminalView {
                                     }
                                 }
                             }
-                            response.context_menu(|ui| {
+                            select_resp.context_menu(|ui| {
                                 crate::ui::chrome::apply_context_menu_style(ui, theme);
                                 if !self.selection.is_empty() {
                                     if crate::ui::chrome::popup_menu_button(ui, theme, "复制选中")
@@ -964,6 +1080,9 @@ impl TerminalView {
                                     if crate::ui::chrome::popup_menu_button(ui, theme, "发送到 AI")
                                         .clicked()
                                     {
+                                        let text = self.get_selected_text();
+                                        self.pending_send_to_ai_text =
+                                            if text.trim().is_empty() { None } else { Some(text) };
                                         self.pending_send_to_ai = true;
                                         ui.close_menu();
                                     }
@@ -1860,6 +1979,10 @@ impl TerminalView {
         let v = self.pending_send_to_ai;
         self.pending_send_to_ai = false;
         v
+    }
+
+    pub fn take_pending_send_to_ai_text(&mut self) -> Option<String> {
+        self.pending_send_to_ai_text.take()
     }
 
     /// 当前选区文本（无选区时为空）。

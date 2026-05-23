@@ -153,7 +153,7 @@ impl SessionLogWriter {
         if !self.settings.enabled || self.disabled {
             return "日志关".to_string();
         }
-        "📝 日志".to_string()
+        "日志".to_string()
     }
 
     fn write_system_line(&mut self, msg: &str) {

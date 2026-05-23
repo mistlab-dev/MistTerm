@@ -1,6 +1,7 @@
 //! 右侧 AI 面板：对话、附带终端上下文、「用到终端」。
 
 use eframe::egui;
+use arboard::Clipboard;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::thread;
 
@@ -94,13 +95,16 @@ impl AiPanel {
             return;
         }
         let panel = egui::SidePanel::right(layout_util::AI_PANEL_ID)
-            .exact_width(dock_col_w)
-            .resizable(false)
+            .default_width(dock_col_w)
+            .min_width((dock_col_w * 0.75).max(320.0))
+            .max_width((dock_col_w * 1.9).max(760.0))
+            .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
                 self.last_panel_slot_rect = Some(ui.max_rect());
                 let h = ui.available_height().max(1.0);
-                ui.allocate_exact_size(egui::vec2(dock_col_w, h), egui::Sense::hover());
+                let w = ui.available_width().max(1.0);
+                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
             });
         if let Some(slot) = self.last_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
@@ -500,6 +504,7 @@ impl AiPanel {
             .max_height(scroll_h)
             .auto_shrink([false; 2])
             .stick_to_bottom(true)
+            .drag_to_scroll(false)
             .show(ui, |ui| {
                 bind_row_width(ui);
                 if self.messages.is_empty() && !self.busy {
@@ -510,53 +515,99 @@ impl AiPanel {
                     );
                 }
                 for (i, msg) in self.messages.iter().enumerate() {
-                    let apply = self.render_message(ui, theme, msg);
-                    if let Some(cmd) = apply {
+                    let mut picked = None;
+                    self.render_message(ui, theme, msg, &mut picked);
+                    if let Some(cmd) = picked {
                         self.command_for_terminal = Some(cmd);
                     }
                     if i + 1 < self.messages.len() {
-                        ui.add_space(theme.spacing_sm());
-                        ui.separator();
-                        ui.add_space(theme.spacing_sm());
+                        ui.add_space(theme.spacing_xs());
                     }
                 }
             });
     }
 
-    /// 渲染单条消息；若点击「用到终端」图标则返回对应命令。
+    /// 渲染单条消息；`command_pick` 收集本帧内「执行」或命令卡片的点击。
     fn render_message(
         &self,
         ui: &mut egui::Ui,
         theme: &Theme,
         msg: &UiMessage,
-    ) -> Option<String> {
-        let mut picked = None;
+        command_pick: &mut Option<String>,
+    ) {
         let bubble_fill = if msg.role == "user" {
-            theme.accent_alpha(40)
+            theme.accent_alpha(28)
         } else {
             theme.color_subtle_inset_fill()
         };
-        egui::Frame::none()
-            .fill(bubble_fill)
-            .rounding(theme.radius_list_item())
-            .inner_margin(egui::vec2(10.0, 8.0))
-            .show(ui, |ui| {
-                let _ = bind_row_width(ui);
-                let prev_gap_y = ui.spacing().item_spacing.y;
-                ui.spacing_mut().item_spacing.y = theme.spacing_sm();
-                markdown_view::show_markdown(ui, theme, &msg.content);
-                if msg.role == "assistant" && !msg.commands.is_empty() {
-                    ui.add_space(theme.spacing_md());
-                    for cmd in &msg.commands {
-                        if show_command_card(ui, theme, cmd) {
-                            picked = Some(cmd.clone());
-                        }
-                        ui.add_space(theme.spacing_sm());
+        let bubble_stroke = if msg.role == "user" {
+            egui::Stroke::NONE
+        } else {
+            theme.divider_stroke()
+        };
+        let rounding = egui::Rounding::same(theme.radius_list_item());
+        let mut render_bubble = |ui: &mut egui::Ui| {
+            egui::Frame::none()
+                .fill(bubble_fill)
+                .stroke(bubble_stroke)
+                .rounding(rounding)
+                .inner_margin(egui::vec2(10.0, 9.0))
+                .show(ui, |ui| {
+                    if msg.role != "user" {
+                        let _ = bind_row_width(ui);
+                    } else {
+                        ui.set_max_width(ui.available_width());
                     }
-                }
-                ui.spacing_mut().item_spacing.y = prev_gap_y;
+                    let prev_gap_y = ui.spacing().item_spacing.y;
+                    ui.spacing_mut().item_spacing.y = theme.spacing_xs();
+                    markdown_view::show_markdown(
+                        ui,
+                        theme,
+                        &msg.content,
+                        command_pick,
+                        msg.role != "user",
+                    );
+                    if msg.role == "assistant" && !msg.commands.is_empty() {
+                        ui.add_space(theme.spacing_xs());
+                        ui.label(
+                            egui::RichText::new("可执行命令")
+                                .size(theme.font_size_small())
+                                .color(theme.color_form_hint()),
+                        );
+                        for cmd in &msg.commands {
+                            if show_command_card(ui, theme, cmd) {
+                                *command_pick = Some(cmd.clone());
+                            }
+                            ui.add_space(theme.spacing_xs());
+                        }
+                    }
+                    ui.spacing_mut().item_spacing.y = prev_gap_y;
+                })
+                .response
+                .context_menu(|ui| {
+                    crate::ui::chrome::apply_context_menu_style(ui, theme);
+                    if crate::ui::chrome::popup_menu_button(ui, theme, "复制全文").clicked() {
+                        if let Ok(mut clip) = Clipboard::new() {
+                            let _ = clip.set_text(msg.content.clone());
+                        }
+                        ui.close_menu();
+                    }
+                });
+        };
+        if msg.role == "user" {
+            ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                let max_w = (ui.available_width() * 0.88).max(120.0);
+                ui.set_max_width(max_w);
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                        ui.set_max_width(max_w);
+                        render_bubble(ui);
+                    });
+                });
             });
-        picked
+        } else {
+            render_bubble(ui);
+        }
     }
 
     fn show_input_bar(
@@ -835,31 +886,45 @@ fn bind_row_width(ui: &mut egui::Ui) -> f32 {
 
 fn show_command_card(ui: &mut egui::Ui, theme: &Theme, cmd: &str) -> bool {
     let mut clicked = false;
+    let preview = compact_command_preview(cmd);
     egui::Frame::none()
-        .fill(theme.bg_terminal_color())
+        .fill(theme.color_text_input_fill())
+        .stroke(theme.stroke_input())
         .rounding(theme.radius_list_item())
-        .inner_margin(egui::vec2(8.0, 8.0))
+        .inner_margin(egui::vec2(8.0, 5.0))
         .show(ui, |ui| {
-            let row_w = bind_row_width(ui);
+            let row_w = layout_util::set_width_to_available(ui);
             ui.horizontal(|ui| {
-                ui.set_min_width(row_w);
                 ui.set_max_width(row_w);
-                ui.vertical(|ui| {
-                    let text_w = (row_w - theme.size_tab_bar_icon_btn() - theme.spacing_sm())
-                        .max(48.0);
-                    ui.set_max_width(text_w);
-                    ui.label(
-                        egui::RichText::new(cmd)
-                            .monospace()
-                            .size(theme.font_size_small()),
-                    );
-                });
+                ui.label(
+                    egui::RichText::new(preview)
+                        .monospace()
+                        .size(theme.font_size_small()),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     clicked = ai_panel_icon_button(ui, theme, IconId::TerminalPrompt, true)
-                        .on_hover_text("用到终端")
+                        .on_hover_text("发送该命令到终端")
                         .clicked();
                 });
             });
         });
     clicked
+}
+
+fn compact_command_preview(cmd: &str) -> String {
+    let first = cmd
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("")
+        .trim();
+    if first.is_empty() {
+        return String::new();
+    }
+    let mut chars = first.chars();
+    let head: String = chars.by_ref().take(72).collect();
+    if chars.next().is_some() || cmd.lines().skip_while(|l| l.trim().is_empty()).nth(1).is_some() {
+        format!("{head} ...")
+    } else {
+        head
+    }
 }
