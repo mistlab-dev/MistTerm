@@ -22,21 +22,21 @@ pub fn select_abc_keyboard_layout() {
 
     let array_raw = unsafe { TISCreateInputSourceList(dict.as_concrete_TypeRef(), 0) };
     if array_raw.is_null() {
-        log::debug!("TISCreateInputSourceList(ABC) 返回空，可能未在系统设置中启用 ABC");
+        log::debug!("TISCreateInputSourceList(ABC) returned empty; ABC may be disabled in System Settings");
         return;
     }
 
     let array = unsafe { CFArray::<*const c_void>::wrap_under_create_rule(array_raw) };
     let vals = array.get_all_values();
     let Some(&src) = vals.first() else {
-        log::debug!("未找到 com.apple.keylayout.ABC 输入源");
+        log::debug!("Input source com.apple.keylayout.ABC not found");
         return;
     };
 
     let status = unsafe { TISSelectInputSource(src as TISInputSourceRef) };
     if status != 0 {
-        log::debug!("TISSelectInputSource(ABC) 返回 {}", status);
+        log::debug!("TISSelectInputSource(ABC) returned {}", status);
     } else {
-        log::info!("已尝试切换到英文键盘布局 (com.apple.keylayout.ABC)");
+        log::info!("Switched input source to com.apple.keylayout.ABC (English)");
     }
 }

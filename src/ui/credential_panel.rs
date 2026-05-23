@@ -7,6 +7,7 @@ use crate::core::{
     CredentialCategory, CredentialVault, HashiCorpVaultClient, SecretBackend, VaultKvRef,
     VaultSettings,
 };
+use crate::i18n::{self, UiLanguage};
 use crate::ui::chrome;
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
@@ -40,6 +41,8 @@ pub struct CredentialPanel {
     vault_list_busy: bool,
     search: String,
     status_msg: String,
+    /// 本帧 `SidePanel` 槽位（Central 之后 Foreground 重绘用）。
+    last_panel_slot_rect: Option<egui::Rect>,
 }
 
 impl CredentialPanel {
@@ -66,6 +69,7 @@ impl CredentialPanel {
             vault_list_busy: false,
             search: String::new(),
             status_msg: String::new(),
+            last_panel_slot_rect: None,
         }
     }
 
@@ -152,11 +156,14 @@ impl CredentialPanel {
         }
     }
 
-    fn refresh_vault_list(&mut self, vault_settings: &VaultSettings) {
+    fn refresh_vault_list(&mut self, vault_settings: &VaultSettings, lang: UiLanguage) {
+        let loc = i18n::Locale::from(lang);
         self.vault_list_busy = true;
         self.vault_list_entries.clear();
         if !vault_settings.enabled {
-            self.status_msg = "HashiCorp Vault 未启用".to_string();
+            self.status_msg = loc
+                .tr("HashiCorp Vault is disabled", "HashiCorp Vault 未启用")
+                .to_string();
             self.vault_list_busy = false;
             return;
         }
@@ -169,12 +176,27 @@ impl CredentialPanel {
             Ok(client) => match client.list_kv(&mount, &self.vault_list_prefix) {
                 Ok(entries) => {
                     self.vault_list_entries = entries;
-                    self.status_msg =
-                        format!("Vault 密钥列表：{} 项", self.vault_list_entries.len());
+                    let n = self.vault_list_entries.len();
+                    self.status_msg = match lang {
+                        UiLanguage::En => format!("Listed {} Vault KV paths", n),
+                        UiLanguage::Zh => format!("Vault 密钥列表：{n} 项"),
+                    };
                 }
-                Err(e) => self.status_msg = format!("拉取 Vault 列表失败：{e}"),
+                Err(e) => {
+                    self.status_msg = format!(
+                        "{}{}",
+                        loc.tr("Failed to fetch Vault list: ", "拉取 Vault 列表失败："),
+                        e
+                    )
+                }
             },
-            Err(e) => self.status_msg = format!("Vault 客户端错误：{e}"),
+            Err(e) => {
+                self.status_msg = format!(
+                    "{}{}",
+                    loc.tr("Vault client error: ", "Vault 客户端错误："),
+                    e
+                )
+            }
         }
         self.vault_list_busy = false;
     }
@@ -223,7 +245,7 @@ impl CredentialPanel {
                             px,
                         );
                         ui.vertical(|ui| {
-                            ui.collapsing(cat.label_zh(), |ui| {
+                            ui.collapsing(i18n::credential_category(ui.ctx(), cat), |ui| {
                                 for c in subs {
                                     let sel = selected_id.as_deref() == Some(c.id.as_str());
                                     if ui.selectable_label(sel, &c.name).clicked() {
@@ -236,7 +258,11 @@ impl CredentialPanel {
                 }
                 if !any {
                     ui.label(
-                        egui::RichText::new("暂无凭证，点「新建」添加")
+                        egui::RichText::new(i18n::tr(
+                            ui.ctx(),
+                            "No credentials yet — tap New",
+                            "暂无凭证，点「新建」添加",
+                        ))
                             .color(theme.text_tertiary()),
                     );
                 }
@@ -253,7 +279,7 @@ impl CredentialPanel {
         panel: &mut CredentialPanel,
         action_out: &mut Option<CredentialPanelAction>,
     ) {
-        chrome::form_field_label(ui, theme, "名称");
+        chrome::form_field_label(ui, theme, i18n::tr(ui.ctx(), "Name", "名称"));
         chrome::form_singleline_field(
             ui,
             theme,
@@ -264,9 +290,9 @@ impl CredentialPanel {
             false,
         );
         ui.horizontal(|ui| {
-            chrome::form_field_label(ui, theme, "类别");
+            chrome::form_field_label(ui, theme, i18n::tr(ui.ctx(), "Category", "类别"));
             egui::ComboBox::from_id_source("cred_cat")
-                .selected_text(panel.form_category.label_zh())
+                .selected_text(i18n::credential_category(ui.ctx(), panel.form_category))
                 .show_ui(ui, |ui| {
                     crate::ui::chrome::apply_menu_popup_style(ui, theme);
                     for v in [
@@ -277,7 +303,7 @@ impl CredentialPanel {
                         CredentialCategory::Other,
                     ] {
                         if ui
-                            .selectable_label(panel.form_category == v, v.label_zh())
+                            .selectable_label(panel.form_category == v, i18n::credential_category(ui.ctx(), v))
                             .clicked()
                         {
                             panel.form_category = v;
@@ -286,9 +312,9 @@ impl CredentialPanel {
                 });
         });
         ui.horizontal(|ui| {
-            chrome::form_field_label(ui, theme, "认证");
+            chrome::form_field_label(ui, theme, i18n::tr(ui.ctx(), "Auth", "认证"));
             egui::ComboBox::from_id_source("cred_auth")
-                .selected_text(panel.form_auth.label_zh())
+                .selected_text(i18n::credential_auth_kind(ui.ctx(), panel.form_auth))
                 .show_ui(ui, |ui| {
                     crate::ui::chrome::apply_menu_popup_style(ui, theme);
                     for v in [
@@ -297,7 +323,7 @@ impl CredentialPanel {
                         CredentialAuthKind::Token,
                     ] {
                         if ui
-                            .selectable_label(panel.form_auth == v, v.label_zh())
+                            .selectable_label(panel.form_auth == v, i18n::credential_auth_kind(ui.ctx(), v))
                             .clicked()
                         {
                             panel.form_auth = v;
@@ -305,7 +331,7 @@ impl CredentialPanel {
                     }
                 });
         });
-        chrome::form_field_label(ui, theme, "主机");
+        chrome::form_field_label(ui, theme, i18n::tr(ui.ctx(), "Host", "主机"));
         chrome::form_singleline_field(
             ui,
             theme,
@@ -316,27 +342,40 @@ impl CredentialPanel {
             false,
         );
         ui.horizontal(|ui| {
-            chrome::form_field_label(ui, theme, "端口");
+            chrome::form_field_label(ui, theme, i18n::tr(ui.ctx(), "Port", "端口"));
             chrome::form_drag_value_field(ui, theme, egui::Id::new("cred_form_port"), |ui| {
                 ui.add(egui::DragValue::new(&mut panel.form_port).speed(0.0))
             });
         });
-        chrome::form_field_label(ui, theme, "用户名（可选）");
+        chrome::form_field_label(
+            ui,
+            theme,
+            i18n::tr(ui.ctx(), "Username (optional)", "用户名（可选）"),
+        );
         chrome::form_singleline_field(
             ui,
             theme,
             egui::Id::new("cred_form_username"),
             &mut panel.form_username,
-            "如 root",
+            i18n::tr(ui.ctx(), "e.g. root", "如 root"),
             field_w,
             false,
         );
-        ui.checkbox(&mut panel.form_use_vault, "机密存于 HashiCorp Vault（KV）");
+        chrome::form_checkbox(
+            ui,
+            theme,
+            &mut panel.form_use_vault,
+            i18n::tr(ui.ctx(), "Secret stored in HashiCorp Vault (KV)", "机密存于 HashiCorp Vault（KV）"),
+        );
         if panel.form_use_vault {
             if panel.form_vault_mount.is_empty() {
                 panel.form_vault_mount = vault_settings.default_mount.clone();
             }
-            chrome::form_field_label(ui, theme, "Vault mount");
+            chrome::form_field_label(
+                ui,
+                theme,
+                i18n::tr(ui.ctx(), "Vault mount", "Vault 挂载"),
+            );
             chrome::form_singleline_field(
                 ui,
                 theme,
@@ -346,7 +385,11 @@ impl CredentialPanel {
                 field_w,
                 false,
             );
-            chrome::form_field_label(ui, theme, "路径 path");
+            chrome::form_field_label(
+                ui,
+                theme,
+                i18n::tr(ui.ctx(), "KV path", "路径 path"),
+            );
             chrome::form_singleline_field(
                 ui,
                 theme,
@@ -356,7 +399,11 @@ impl CredentialPanel {
                 field_w,
                 false,
             );
-            chrome::form_field_label(ui, theme, "字段 field");
+            chrome::form_field_label(
+                ui,
+                theme,
+                i18n::tr(ui.ctx(), "KV field", "字段 field"),
+            );
             chrome::form_singleline_field(
                 ui,
                 theme,
@@ -367,8 +414,14 @@ impl CredentialPanel {
                 false,
             );
             ui.horizontal(|ui| {
-                if chrome::panel_action_button_ex(ui, theme, "测试读取", vault_settings.enabled)
-                    .clicked()
+                if chrome::panel_action_icon_button_ex(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::Key,
+                    i18n::tr(ui.ctx(), "Try read from Vault", "测试从 Vault 读取"),
+                    vault_settings.enabled,
+                )
+                .clicked()
                     && vault_settings.enabled
                 {
                     match HashiCorpVaultClient::new(vault_settings.clone()) {
@@ -392,7 +445,9 @@ impl CredentialPanel {
                                             "path": reference.path,
                                         })),
                                     );
-                                    panel.status_msg = "已从 Vault 读取机密".to_string();
+                                    panel.status_msg =
+                                        i18n::tr(ui.ctx(), "Vault secret read OK", "已从 Vault 读取机密")
+                                            .to_string();
                                 }
                                 Err(e) => {
                                     audit.record(
@@ -407,14 +462,30 @@ impl CredentialPanel {
                                             "error": e.to_string(),
                                         })),
                                     );
-                                    panel.status_msg = format!("Vault 读取失败：{e}");
+                                    panel.status_msg = format!(
+                                        "{}{}",
+                                        i18n::tr(ui.ctx(), "Vault read failed: ", "Vault 读取失败："),
+                                        e
+                                    );
                                 }
                             }
                         }
-                        Err(e) => panel.status_msg = format!("Vault 客户端错误：{e}"),
+                        Err(e) => {
+                            panel.status_msg = format!(
+                                "{}{}",
+                                i18n::tr(ui.ctx(), "Vault client error: ", "Vault 客户端错误："),
+                                e
+                            )
+                        }
                     }
                 }
-                if chrome::panel_action_button(ui, theme, "写入 Vault").clicked()
+                if chrome::panel_action_icon_button(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::Cloud,
+                    i18n::tr(ui.ctx(), "Write to Vault", "写入 Vault"),
+                )
+                    .clicked()
                     && vault_settings.enabled
                     && !panel.form_secret.trim().is_empty()
                 {
@@ -439,7 +510,12 @@ impl CredentialPanel {
                                             "path": reference.path,
                                         })),
                                     );
-                                    panel.status_msg = "已写入 Vault（本地条目仅存引用）".to_string();
+                                    panel.status_msg = i18n::tr(
+                                        ui.ctx(),
+                                        "Written to Vault (local entry references only)",
+                                        "已写入 Vault（本地条目仅存引用）",
+                                    )
+                                    .to_string();
                                     panel.form_secret.clear();
                                 }
                                 Err(e) => {
@@ -455,11 +531,21 @@ impl CredentialPanel {
                                             "error": e.to_string(),
                                         })),
                                     );
-                                    panel.status_msg = format!("Vault 写入失败：{e}");
+                                    panel.status_msg = format!(
+                                        "{}{}",
+                                        i18n::tr(ui.ctx(), "Vault write failed: ", "Vault 写入失败："),
+                                        e
+                                    );
                                 }
                             }
                         }
-                        Err(e) => panel.status_msg = format!("Vault 客户端错误：{e}"),
+                        Err(e) => {
+                            panel.status_msg = format!(
+                                "{}{}",
+                                i18n::tr(ui.ctx(), "Vault client error: ", "Vault 客户端错误："),
+                                e
+                            )
+                        }
                     }
                 }
             });
@@ -467,7 +553,11 @@ impl CredentialPanel {
             chrome::form_field_label(
                 ui,
                 theme,
-                &format!("密钥 / {}", panel.form_auth.label_zh()),
+                &format!(
+                    "{} / {}",
+                    i18n::tr(ui.ctx(), "Secret", "密钥"),
+                    i18n::credential_auth_kind(ui.ctx(), panel.form_auth),
+                ),
             );
             chrome::form_multiline_field(
                 ui,
@@ -479,7 +569,11 @@ impl CredentialPanel {
                 !matches!(panel.form_auth, CredentialAuthKind::SshKey),
             );
         }
-        chrome::form_field_label(ui, theme, "标签（逗号分隔）");
+        chrome::form_field_label(
+            ui,
+            theme,
+            i18n::tr(ui.ctx(), "Tags (comma-separated)", "标签（逗号分隔）"),
+        );
         chrome::form_singleline_field(
             ui,
             theme,
@@ -489,7 +583,7 @@ impl CredentialPanel {
             field_w,
             false,
         );
-        chrome::form_field_label(ui, theme, "备注");
+        chrome::form_field_label(ui, theme, i18n::tr(ui.ctx(), "Notes", "备注"));
         chrome::form_multiline_field(
             ui,
             theme,
@@ -501,7 +595,12 @@ impl CredentialPanel {
         );
 
         ui.horizontal(|ui| {
-            if chrome::panel_action_primary_button(ui, theme, "保存")
+            if chrome::panel_action_primary_icon_button(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Check,
+                i18n::tr(ui.ctx(), "Save", "保存"),
+            )
                 .clicked()
                 && !panel.form_name.trim().is_empty()
             {
@@ -543,14 +642,20 @@ impl CredentialPanel {
                             .with_resource(&id)
                             .with_host(&c.host),
                     );
-                    panel.status_msg = "已保存".to_string();
+                    panel.status_msg = i18n::tr(ui.ctx(), "Saved", "已保存").to_string();
                     panel.selected_id = Some(id);
                     panel.reload_vault();
                 } else {
-                    panel.status_msg = "保存失败".to_string();
+                    panel.status_msg = i18n::tr(ui.ctx(), "Save failed", "保存失败").to_string();
                 }
             }
-            if chrome::panel_action_button(ui, theme, "删除").clicked() {
+            if chrome::panel_action_icon_button(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Trash,
+                i18n::tr(ui.ctx(), "Delete", "删除"),
+            )
+            .clicked() {
                 if let Some(id) = panel.selected_id.clone() {
                     if panel.vault.remove(&id).unwrap_or(false) {
                         audit.record(
@@ -562,11 +667,17 @@ impl CredentialPanel {
                             .with_resource(&id),
                         );
                         panel.clear_form();
-                        panel.status_msg = "已删除".to_string();
+                        panel.status_msg = i18n::tr(ui.ctx(), "Deleted", "已删除").to_string();
                     }
                 }
             }
-            if chrome::panel_action_button(ui, theme, "用于连接…").clicked() {
+            if chrome::panel_action_icon_button(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Plug,
+                i18n::tr(ui.ctx(), "Use for connect…", "用于连接…"),
+            )
+                .clicked() {
                 if let Some(id) = &panel.selected_id {
                     if let Some(c) = panel.vault.get(id) {
                         *action_out = Some(CredentialPanelAction::UseForQuickConnect(c));
@@ -579,54 +690,116 @@ impl CredentialPanel {
         }
     }
 
+    /// 仅占右栏布局槽（正文在 Central 之后 [`show_foreground_panel`] 绘制）。
     pub fn show_side_panel(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        right_dock_outer_left: &mut Option<f32>,
+        dock_col_w: f32,
+    ) {
+        if !self.open {
+            self.last_panel_slot_rect = None;
+            return;
+        }
+
+        let (def_w, min_w, max_w) =
+            crate::ui::layout_util::right_dock_resize_bounds(dock_col_w);
+        let panel = egui::SidePanel::right("credential_panel")
+            .default_width(def_w)
+            .min_width(min_w)
+            .max_width(max_w)
+            .resizable(true)
+            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
+            .show(ctx, |ui| {
+                crate::ui::chrome::paint_right_dock_left_gap(ui, theme);
+                self.last_panel_slot_rect = Some(ui.max_rect());
+                let h = ui.available_height().max(1.0);
+                let w = ui.available_width().max(1.0);
+                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+            });
+        if let Some(slot) = self.last_panel_slot_rect {
+            layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
+        } else {
+            layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
+        }
+        let _ = theme;
+    }
+
+    /// Central 之后绘制凭证库正文（避免被 CentralPanel 盖住）。
+    pub fn show_foreground_panel(
         &mut self,
         ctx: &egui::Context,
         theme: &Theme,
         vault_settings: &VaultSettings,
         audit: &AuditLogger,
         action_out: &mut Option<CredentialPanelAction>,
-        right_dock_outer_left: &mut Option<f32>,
-        dock_col_w: f32,
-    ) -> bool {
+        close_panel: &mut bool,
+    ) {
         if !self.open {
-            return false;
+            return;
         }
 
-        let mut close_panel = false;
-        let panel = egui::SidePanel::right("credential_panel")
-            .exact_width(dock_col_w)
-            .resizable(false)
-            .frame(crate::ui::chrome::right_dock_panel_frame(theme))
-            .show(ctx, |ui| {
-                let panel_w = dock_col_w;
+        let screen = ctx.screen_rect();
+        let dock_inset = theme.spacing_right_dock_screen_inset();
+        let Some(slot) = layout_util::right_dock_foreground_slot(
+            self.last_panel_slot_rect,
+            ctx,
+            "credential_panel",
+            layout_util::SidePanelProfile::Standard,
+            None,
+            dock_inset,
+        ) else {
+            return;
+        };
+        let geom = chrome::prepare_right_dock_foreground_geom(slot, screen, theme);
+        let layer_id = chrome::right_dock_foreground_layer_id("mistterm_credential_fg");
+        chrome::paint_right_dock_foreground_shell(ctx, layer_id, geom.paint, theme);
+        chrome::show_right_dock_foreground_body(
+            "mistterm_credential_fg",
+            ctx,
+            &geom,
+            layout_util::SidePanelProfile::Standard,
+            |ui, _body_w| {
+                let panel_w = ui.available_width();
                 ui.set_max_width(panel_w);
+                let lang = i18n::language(ctx);
 
                 let mut header_closed = false;
-                theme.frame_panel_header_band().show(ui, |ui| {
+                theme.frame_right_dock_header_band().show(ui, |ui| {
                     header_closed = chrome::dock_panel_title_close_only(
                         ui,
                         theme,
                         crate::ui::icons::IconId::Key,
-                        "凭证库",
-                        "关闭凭证库",
+                        i18n::tr(ctx, "Credentials vault", "凭证库"),
+                        i18n::tr(ctx, "Close credentials vault", "关闭凭证库"),
                     );
                 });
                 if header_closed {
-                    close_panel = true;
+                    *close_panel = true;
                 }
-                chrome::panel_header_divider(ui, theme);
+                chrome::right_dock_header_divider(ui, theme);
                 ui.small(
-                    egui::RichText::new(format!("存储：{}", self.vault.path().display()))
+                    egui::RichText::new(format!(
+                        "{}{}",
+                        i18n::tr(ctx, "Stored at: ", "存储："),
+                        self.vault.path().display()
+                    ))
                         .color(theme.text_tertiary()),
                 );
 
                 ui.horizontal(|ui| {
-                    if chrome::panel_toolbar_icon_button(ui, theme, Some(crate::ui::icons::IconId::Plus), "新建")
-                        .clicked()
+                    if chrome::panel_toolbar_primary_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Plus,
+                        i18n::tr(ui.ctx(), "New", "新建"),
+                    )
+                    .clicked()
                     {
                         self.clear_form();
-                        self.status_msg = "新建凭证".to_string();
+                        self.status_msg =
+                            i18n::tr(ctx, "New credential", "新建凭证").to_string();
                     }
                     let search_w = (panel_w - 88.0).max(120.0);
                     chrome::form_singleline_field(
@@ -634,7 +807,7 @@ impl CredentialPanel {
                         theme,
                         egui::Id::new("credential_panel_search"),
                         &mut self.search,
-                        "搜索凭证…",
+                        i18n::tr(ui.ctx(), "Search credentials…", "搜索凭证…"),
                         search_w,
                         false,
                     );
@@ -655,7 +828,7 @@ impl CredentialPanel {
 
                 ui.label(crate::ui::chrome::rich_section_title(
                     theme,
-                    "凭证列表",
+                    i18n::tr(ui.ctx(), "Credential list", "凭证列表"),
                     theme.color_section_title(),
                 ));
                 let selected_id = self.selected_id.clone();
@@ -679,11 +852,15 @@ impl CredentialPanel {
                     ui.add_space(theme.spacing_panel_gap());
                     ui.label(crate::ui::chrome::rich_section_title(
                         theme,
-                        "浏览 Vault",
+                        i18n::tr(ui.ctx(), "Browse Vault", "浏览 Vault"),
                         theme.color_section_title(),
                     ));
                     ui.horizontal(|ui| {
-                        chrome::form_field_label(ui, theme, "前缀");
+                        chrome::form_field_label(
+                            ui,
+                            theme,
+                            i18n::tr(ui.ctx(), "Prefix", "前缀"),
+                        );
                         let prefix_w = (panel_w - 120.0).max(100.0);
                         chrome::form_singleline_field(
                             ui,
@@ -694,12 +871,23 @@ impl CredentialPanel {
                             prefix_w,
                             false,
                         );
-                        if chrome::panel_action_button(ui, theme, "刷新列表").clicked() {
-                            self.refresh_vault_list(vault_settings);
+                        if chrome::panel_action_icon_button(
+                            ui,
+                            theme,
+                            crate::ui::icons::IconId::Refresh,
+                            i18n::tr(ui.ctx(), "Refresh list", "刷新列表"),
+                        )
+                        .clicked()
+                        {
+                            self.refresh_vault_list(vault_settings, lang);
                         }
                     });
                     if self.vault_list_busy {
-                        chrome::busy_row(ui, theme, "正在拉取 Vault 列表…");
+                        chrome::busy_row(
+                            ui,
+                            theme,
+                            i18n::tr(ui.ctx(), "Fetching Vault list…", "正在拉取 Vault 列表…"),
+                        );
                     } else if !self.vault_list_entries.is_empty() {
                         let browse_h =
                             layout_util::clamp_f32(ui.available_height() * 0.2, 48.0, 140.0);
@@ -730,7 +918,7 @@ impl CredentialPanel {
                 ui.separator();
                 ui.label(crate::ui::chrome::rich_section_title(
                     theme,
-                    "编辑",
+                    i18n::tr(ui.ctx(), "Edit", "编辑"),
                     theme.color_section_title(),
                 ));
 
@@ -755,9 +943,7 @@ impl CredentialPanel {
                         );
                     });
                 ui.visuals_mut().extreme_bg_color = prev_extreme;
-            });
-        layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
-
-        close_panel
+            },
+        );
     }
 }

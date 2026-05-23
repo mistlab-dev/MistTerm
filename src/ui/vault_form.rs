@@ -78,13 +78,27 @@ impl VaultSecretForm {
         vault_settings: &VaultSettings,
         id_prefix: &str,
     ) {
-        ui.checkbox(&mut self.use_vault, "密码/密钥存于 HashiCorp Vault（KV）");
+        let ctx_owned = ui.ctx().clone();
+        chrome::form_checkbox(
+            ui,
+            theme,
+            &mut self.use_vault,
+            crate::i18n::tr(
+                &ctx_owned,
+                "Store password/key in HashiCorp Vault (KV)",
+                "密码/密钥存于 HashiCorp Vault（KV）",
+            ),
+        );
         if !self.use_vault {
             return;
         }
         if !vault_settings.enabled {
             ui.label(
-                egui::RichText::new("请先在偏好设置中启用 Vault 并配置地址")
+                egui::RichText::new(crate::i18n::tr(
+                    ui.ctx(),
+                    "Enable Vault in Preferences and set server URL first.",
+                    "请先在偏好设置中启用 Vault 并配置地址",
+                ))
                     .size(theme.font_size_caption())
                     .color(theme.red_color()),
             );
@@ -102,7 +116,11 @@ impl VaultSecretForm {
             field_w,
             false,
         );
-        chrome::form_field_label(ui, theme, "路径 path");
+        chrome::form_field_label(
+            ui,
+            theme,
+            crate::i18n::tr(ui.ctx(), "path", "路径 path"),
+        );
         chrome::form_singleline_field(
             ui,
             theme,
@@ -112,7 +130,11 @@ impl VaultSecretForm {
             field_w,
             false,
         );
-        chrome::form_field_label(ui, theme, "字段 field");
+        chrome::form_field_label(
+            ui,
+            theme,
+            crate::i18n::tr(ui.ctx(), "field", "字段 field"),
+        );
         chrome::form_singleline_field(
             ui,
             theme,

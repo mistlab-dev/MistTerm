@@ -10,6 +10,7 @@
 //! - security 层 (security/): 密钥链管理
 
 pub mod core;
+pub mod i18n;
 pub mod platform;
 pub mod ssh;
 pub mod terminal;
@@ -33,7 +34,7 @@ fn main() -> eframe::Result<()> {
         .with_thread_ids(true)
         .init();
     
-    log::info!("Mist 启动");
+    log::info!("Mist starting");
 
     // macOS：菜单栏显示名（避免显示可执行文件名 mistterm）
     #[cfg(target_os = "macos")]
@@ -57,7 +58,7 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|cc| {
             if !mistterm::platform::configure_egui_fonts(&cc.egui_ctx) {
-                log::warn!("CJK 字体未加载，界面中文可能显示为方框");
+                log::warn!("CJK font not loaded; Chinese UI text may show as tofu");
             }
             mistterm::ui::icons::UiIcons::install(&cc.egui_ctx);
             Box::new(MistTermApp::new(cc))

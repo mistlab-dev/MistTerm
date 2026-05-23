@@ -2,6 +2,7 @@
 
 use crate::platform::{docs, shortcuts};
 use crate::ui::chrome;
+use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 use eframe::egui::{self, FontId, RichText, Ui};
 use std::path::PathBuf;
@@ -12,31 +13,51 @@ struct QuickStep {
     keys: Vec<String>,
 }
 
-fn quick_steps() -> Vec<QuickStep> {
+fn quick_steps(ctx: &egui::Context) -> Vec<QuickStep> {
     vec![
         QuickStep {
-            title: "连接与标签",
-            detail: "左侧选择或新建连接；双击 / 回车打开终端标签。",
+            title: crate::i18n::tr(ctx, "Connections & tabs", "连接与标签"),
+            detail: crate::i18n::tr(
+                ctx,
+                "Pick or create a connection on the left; double-click / Enter opens a terminal tab.",
+                "左侧选择或新建连接；双击 / 回车打开终端标签。",
+            ),
             keys: vec![shortcuts::accel("N"), shortcuts::accel("T")],
         },
         QuickStep {
-            title: "底栏工具",
-            detail: "SFTP 文件、命令片段、系统监控等底栏图标入口；终端搜索见菜单或快捷键 F。",
+            title: crate::i18n::tr(ctx, "Bottom bar tools", "底栏工具"),
+            detail: crate::i18n::tr(
+                ctx,
+                "SFTP, command snippets, system monitor… from the bottom bar; terminal search uses the menu or the F shortcut.",
+                "SFTP 文件、命令片段、系统监控等底栏图标入口；终端搜索见菜单或快捷键 F。",
+            ),
             keys: vec![],
         },
         QuickStep {
-            title: "视图与面板",
-            detail: "菜单「视图」可开关右侧 SFTP、片段侧栏、监控面板。",
+            title: crate::i18n::tr(ctx, "View & panels", "视图与面板"),
+            detail: crate::i18n::tr(
+                ctx,
+                "Use the View menu to toggle SFTP, the fragment sidebar, and the monitor panel.",
+                "菜单「视图」可开关右侧 SFTP、片段侧栏、监控面板。",
+            ),
             keys: vec![],
         },
         QuickStep {
-            title: "工具与数据",
-            detail: "片段库、凭证管理、云端同步、会话日志在「工具」菜单。",
+            title: crate::i18n::tr(ctx, "Tools & data", "工具与数据"),
+            detail: crate::i18n::tr(
+                ctx,
+                "Fragment library, credentials, cloud sync, and session logs are under Tools.",
+                "片段库、凭证管理、云端同步、会话日志在「工具」菜单。",
+            ),
             keys: vec![],
         },
         QuickStep {
-            title: "终端内操作",
-            detail: "搜索当前屏输出；已连接时可用命令历史。",
+            title: crate::i18n::tr(ctx, "In the terminal", "终端内操作"),
+            detail: crate::i18n::tr(
+                ctx,
+                "Search visible output; when connected use command history.",
+                "搜索当前屏输出；已连接时可用命令历史。",
+            ),
             keys: vec![
                 shortcuts::accel("F"),
                 shortcuts::terminal_history_accel().to_string(),
@@ -53,10 +74,10 @@ pub enum HelpPage {
 }
 
 impl HelpPage {
-    fn label(self) -> &'static str {
+    fn label(self, ctx: &egui::Context) -> &'static str {
         match self {
-            Self::QuickStart => "快速入门",
-            Self::Shortcuts => "键盘快捷键",
+            Self::QuickStart => crate::i18n::tr(ctx, "Quick start", "快速入门"),
+            Self::Shortcuts => crate::i18n::tr(ctx, "Keyboard shortcuts", "键盘快捷键"),
         }
     }
 }
@@ -98,26 +119,24 @@ impl HelpDocsDialog {
         }
         let mut open = self.open;
         let mut should_close = false;
-        egui::Window::new("help_docs_modal")
+        let modal_sz = egui::vec2(560.0, 480.0);
+        chrome::modal_window("help_docs_modal", theme, ctx)
             .open(&mut open)
-            .title_bar(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
             .movable(true)
             .resizable(true)
-            .collapsible(false)
-            .default_size(egui::vec2(560.0, 480.0))
-            .frame(chrome::modal_window_frame(theme))
+            .default_size(modal_sz)
             .show(ctx, |ui| {
                 chrome::modal_content_frame(theme).show(ui, |ui| {
                     if chrome::modal_header(
                         ui,
                         theme,
-                        "帮助",
+                        crate::i18n::tr(ctx, "Help", "帮助"),
                         theme.font_size_prominent(),
                     ) {
                         should_close = true;
                     }
-                    render_help_tabs(ui, theme, &mut self.page);
+                    render_help_tabs(ui, theme, ctx, &mut self.page);
                     ui.add_space(theme.spacing_md());
                     egui::Frame::none()
                         .fill(theme.color_subtle_inset_fill())
@@ -133,7 +152,7 @@ impl HelpDocsDialog {
                                 .auto_shrink([false; 2])
                                 .show(ui, |ui| {
                                     match self.page {
-                                        HelpPage::QuickStart => render_quick_start(ui, theme),
+                                        HelpPage::QuickStart => render_quick_start(ui, theme, ctx),
                                         HelpPage::Shortcuts => {
                                             render_shortcuts(ui, theme, shortcuts_text)
                                         }
@@ -142,19 +161,42 @@ impl HelpDocsDialog {
                         });
                     ui.add_space(theme.spacing_md());
                     ui.horizontal(|ui| {
-                        if chrome::modal_secondary_button(ui, theme, "打开完整说明").clicked()
+                        if chrome::modal_secondary_icon_button(
+                            ui,
+                            theme,
+                            crate::ui::icons::IconId::File,
+                            crate::i18n::tr(ctx, "Open full spec", "打开完整说明"),
+                        )
+                            .clicked()
                         {
                             match Self::open_markdown_in_system("product/FUNCTIONAL_SPEC.md") {
                                 Ok(()) => {
-                                    *status_message = "已在系统默认应用中打开说明文档".to_string();
+                                    *status_message = crate::i18n::tr(
+                                        ctx,
+                                        "Opened the doc in your default app",
+                                        "已在系统默认应用中打开说明文档",
+                                    )
+                                    .to_string();
                                 }
                                 Err(e) => *status_message = e,
                             }
                         }
-                        if chrome::modal_secondary_button(ui, theme, "打开文档索引").clicked() {
+                        if chrome::modal_secondary_icon_button(
+                            ui,
+                            theme,
+                            crate::ui::icons::IconId::Folder,
+                            crate::i18n::tr(ctx, "Open docs index", "打开文档索引"),
+                        )
+                            .clicked()
+                        {
                             match Self::open_markdown_in_system("README.md") {
                                 Ok(()) => {
-                                    *status_message = "已在系统默认应用中打开文档索引".to_string();
+                                    *status_message = crate::i18n::tr(
+                                        ctx,
+                                        "Opened the docs index in your default app",
+                                        "已在系统默认应用中打开文档索引",
+                                    )
+                                    .to_string();
                                 }
                                 Err(e) => *status_message = e,
                             }
@@ -162,7 +204,13 @@ impl HelpDocsDialog {
                     });
                     ui.add_space(theme.spacing_list_item_x());
                     chrome::modal_footer_actions(ui, theme, |ui, th| {
-                        if chrome::modal_secondary_button(ui, th, "关闭").clicked() {
+                        if chrome::modal_secondary_icon_button(
+                            ui,
+                            th,
+                            crate::ui::icons::IconId::Close,
+                            crate::i18n::tr(ctx, "Close", "关闭"),
+                        )
+                            .clicked() {
                             should_close = true;
                         }
                     });
@@ -172,12 +220,12 @@ impl HelpDocsDialog {
     }
 }
 
-fn render_help_tabs(ui: &mut Ui, theme: &Theme, page: &mut HelpPage) {
+fn render_help_tabs(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, page: &mut HelpPage) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = theme.spacing_sm();
         for tab in [HelpPage::QuickStart, HelpPage::Shortcuts] {
             let selected = *page == tab;
-            let label = RichText::new(tab.label())
+            let label = RichText::new(tab.label(ctx))
                 .size(theme.font_size_connection_name())
                 .color(if selected {
                     theme.text_primary()
@@ -192,7 +240,7 @@ fn render_help_tabs(ui: &mut Ui, theme: &Theme, page: &mut HelpPage) {
     });
 }
 
-fn render_quick_start(ui: &mut Ui, theme: &Theme) {
+fn render_quick_start(ui: &mut Ui, theme: &Theme, ctx: &egui::Context) {
     ui.label(
         RichText::new("Mist")
             .size(theme.font_size_empty_state())
@@ -200,12 +248,16 @@ fn render_quick_start(ui: &mut Ui, theme: &Theme) {
             .color(theme.text_primary()),
     );
     ui.label(
-        RichText::new("SSH 终端 · 快速上手")
+        RichText::new(crate::i18n::tr(
+            ctx,
+            "SSH terminal · Quick start",
+            "SSH 终端 · 快速上手",
+        ))
             .size(theme.font_size_panel_title())
             .color(theme.color_form_hint()),
     );
     ui.add_space(theme.spacing_lg());
-    let steps = quick_steps();
+    let steps = quick_steps(ctx);
     for (i, step) in steps.iter().enumerate() {
         render_step_row(ui, theme, i + 1, step);
         if i + 1 < steps.len() {
@@ -213,11 +265,35 @@ fn render_quick_start(ui: &mut Ui, theme: &Theme) {
         }
     }
     ui.add_space(theme.spacing_lg());
+    let menu_path = match crate::i18n::language(ctx) {
+        crate::i18n::UiLanguage::En => crate::platform::reveal_docs_folder_menu_hint_en(),
+        crate::i18n::UiLanguage::Zh => crate::platform::reveal_docs_folder_menu_hint_zh(),
+    };
+    let menu_snippet = match crate::i18n::language(ctx) {
+        crate::i18n::UiLanguage::En => menu_path,
+        crate::i18n::UiLanguage::Zh => format!("「{menu_path}」"),
+    };
     let docs_menu_hint = format!(
-        "产品规格与详细设计在 docs/ 目录；也可通过菜单「{}」查看。",
-        crate::platform::reveal_docs_folder_menu_hint()
+        "{}{}{}{}",
+        crate::i18n::tr(
+            ctx,
+            "Product spec and detailed design are under docs/. ",
+            "产品规格与详细设计在 docs/ 目录；",
+        ),
+        crate::i18n::tr(
+            ctx,
+            "You can also open them via the menu ",
+            "也可通过菜单",
+        ),
+        menu_snippet,
+        crate::i18n::tr(ctx, ".", "查看。"),
     );
-    render_tip_box(ui, theme, "完整说明", &docs_menu_hint);
+    render_tip_box(
+        ui,
+        theme,
+        crate::i18n::tr(ctx, "Full documentation", "完整说明"),
+        &docs_menu_hint,
+    );
 }
 
 fn render_step_row(ui: &mut Ui, theme: &Theme, index: usize, step: &QuickStep) {

@@ -123,14 +123,15 @@ impl Sidebar {
             |ui| {
                 ui.set_min_height(body_h);
                 ui.set_height(body_h);
-                theme.frame_panel_header_band().show(ui, |ui| {
+                    theme.frame_right_dock_header_band().show(ui, |ui| {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = theme.spacing_status_left_gap();
+                            let ctx = ui.ctx().clone();
                             crate::ui::chrome::panel_header_title_leading(
                                 ui,
                                 theme,
                                 crate::ui::icons::IconId::Plug,
-                                "连接",
+                                crate::i18n::tr(&ctx, "Connections", "连接"),
                             );
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.spacing_mut().item_spacing.x = theme.spacing_tool_btn_gap();
@@ -140,7 +141,11 @@ impl Sidebar {
                                     crate::ui::icons::IconId::SidebarCollapse,
                                     theme.color_sidebar_header_icon(),
                                 )
-                                .on_hover_text("收起连接栏")
+                                .on_hover_text(crate::i18n::tr(
+                                    &ctx,
+                                    "Collapse connection panel",
+                                    "收起连接栏",
+                                ))
                                 .clicked()
                                 {
                                     collapse_clicked = true;
@@ -148,17 +153,18 @@ impl Sidebar {
                                 ui.add_space(theme.spacing_panel_gap());
                                 if crate::ui::chrome::panel_header_new_button(ui, theme)
                                     .on_hover_text(format!(
-                                        "新建会话 · {}",
+                                        "{} · {}",
+                                        crate::i18n::tr(&ctx, "New session", "新建会话"),
                                         crate::platform::accel("N")
                                     ))
                                     .clicked()
-                                {
+                                    {
                                     create_session_clicked = true;
                                 }
                             });
                         });
                     });
-                crate::ui::chrome::panel_header_divider(ui, theme);
+                crate::ui::chrome::right_dock_header_divider(ui, theme);
                 // 与命令片段面板一致：分隔线后留出一段呼吸空间，再进入搜索区
                 ui.add_space(theme.spacing_sm());
 
@@ -167,7 +173,7 @@ impl Sidebar {
                     theme,
                     search_field_id,
                     search_query,
-                    "搜索会话…",
+                    crate::i18n::tr(ui.ctx(), "Search sessions…", "搜索会话…"),
                     width,
                     false,
                 );
@@ -179,13 +185,22 @@ impl Sidebar {
                     SessionSortBy::LastConnected => crate::ui::icons::IconId::SortRecent,
                     SessionSortBy::CreatedAt => crate::ui::icons::IconId::SortUsage,
                 };
+                let ctx_owned = ui.ctx().clone();
+                let chip_defs: [(&str, &str); 3] = [
+                    ("all", crate::i18n::tr(&ctx_owned, "All", "全部")),
+                    ("online", crate::i18n::tr(&ctx_owned, "Online", "在线")),
+                    ("offline", crate::i18n::tr(&ctx_owned, "Offline", "离线")),
+                ];
+                let sort_lbl = crate::i18n::session_sort_chip_short(&ctx_owned, *sort_by);
+                let sort_hint = crate::i18n::filter_sort_cycle_hint_sessions(&ctx_owned);
                 let row = crate::ui::chrome::filter_chip_row_with_sort(
                     ui,
                     theme,
-                    &["全部", "在线", "离线"],
+                    &chip_defs,
                     filter.as_str(),
                     sort_icon,
-                    "",
+                    sort_lbl,
+                    sort_hint,
                 );
                 if let Some(picked) = row.picked {
                     *filter = picked;
@@ -221,8 +236,8 @@ impl Sidebar {
                         })
                         .cloned()
                         .filter(|s| match filter.as_str() {
-                            "在线" => connected_sessions.contains(&s.id),
-                            "离线" => !connected_sessions.contains(&s.id),
+                            "online" => connected_sessions.contains(&s.id),
+                            "offline" => !connected_sessions.contains(&s.id),
                             _ => true,
                         })
                         .collect::<Vec<_>>();
@@ -233,11 +248,16 @@ impl Sidebar {
                         ui.centered_and_justified(|ui| {
                             let hint_font = theme.font_size_sidebar_control();
                             let hint_color = theme.text_tertiary();
+                            let ctx = ui.ctx().clone();
                             if search_query.trim().is_empty() {
                                 ui.label(
-                                    egui::RichText::new("暂无会话")
-                                        .size(hint_font)
-                                        .color(hint_color),
+                                    egui::RichText::new(crate::i18n::tr(
+                                        &ctx,
+                                        "No sessions yet",
+                                        "暂无会话",
+                                    ))
+                                    .size(hint_font)
+                                    .color(hint_color),
                                 );
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 4.0;
@@ -254,16 +274,24 @@ impl Sidebar {
                                         px,
                                     );
                                     ui.label(
-                                        egui::RichText::new("点击 创建")
-                                            .size(hint_font)
-                                            .color(hint_color),
+                                        egui::RichText::new(crate::i18n::tr(
+                                            &ctx,
+                                            "Click to create one",
+                                            "点击 创建",
+                                        ))
+                                        .size(hint_font)
+                                        .color(hint_color),
                                     );
                                 });
                             } else {
                                 ui.label(
-                                    egui::RichText::new("没有匹配的会话")
-                                        .size(hint_font)
-                                        .color(hint_color),
+                                    egui::RichText::new(crate::i18n::tr(
+                                        &ctx,
+                                        "No matching sessions",
+                                        "没有匹配的会话",
+                                    ))
+                                    .size(hint_font)
+                                    .color(hint_color),
                                 );
                             }
                         });
@@ -315,9 +343,9 @@ impl Sidebar {
                             }
 
                             let status_text = if connected_sessions.contains(&session.id) {
-                                relative_last_connected(session.last_connected_at)
+                                relative_last_connected(ui.ctx(), session.last_connected_at)
                             } else {
-                                "离线".to_string()
+                                crate::i18n::tr(ui.ctx(), "Offline", "离线").to_string()
                             };
                             let mut row_ui = ui.child_ui(
                                 row_rect.shrink2(egui::vec2(
@@ -373,15 +401,32 @@ impl Sidebar {
                             // 右键菜单
                             response.context_menu(|ui| {
                                 crate::ui::chrome::apply_context_menu_style(ui, theme);
-                                if crate::ui::chrome::popup_menu_button(ui, theme, "编辑").clicked() {
+                                let ctx = ui.ctx().clone();
+                                if crate::ui::chrome::popup_menu_button(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(&ctx, "Edit", "编辑"),
+                                )
+                                .clicked()
+                                {
                                     edit_session_id = Some(session.id.clone());
                                     ui.close_menu();
                                 }
-                                if crate::ui::chrome::popup_menu_button(ui, theme, "删除").clicked() {
+                                if crate::ui::chrome::popup_menu_button(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(&ctx, "Delete", "删除"),
+                                )
+                                .clicked()
+                                {
                                     delete_session_id = Some(session.id.clone());
                                     ui.close_menu();
                                 }
-                                if crate::ui::chrome::popup_menu_button(ui, theme, "查看日志…")
+                                if crate::ui::chrome::popup_menu_button(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(&ctx, "View logs…", "查看日志…"),
+                                )
                                     .clicked()
                                 {
                                     view_log_session_id = Some(session.id.clone());
@@ -408,9 +453,9 @@ impl Sidebar {
     }
 }
 
-fn relative_last_connected(ts: Option<i64>) -> String {
+fn relative_last_connected(ctx: &egui::Context, ts: Option<i64>) -> String {
     let Some(last) = ts else {
-        return "刚刚".to_string();
+        return crate::i18n::tr(ctx, "Just now", "刚刚").to_string();
     };
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -418,7 +463,7 @@ fn relative_last_connected(ts: Option<i64>) -> String {
         .unwrap_or(last);
     let diff = now.saturating_sub(last).max(0);
     if diff < 60 {
-        "刚刚".to_string()
+        crate::i18n::tr(ctx, "Just now", "刚刚").to_string()
     } else if diff < 3600 {
         format!("{}m", diff / 60)
     } else if diff < 86_400 {

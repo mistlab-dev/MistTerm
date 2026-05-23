@@ -14,10 +14,19 @@ pub struct TabReconnectSchedule {
     pub attempts: u8,
 }
 
-/// 写入状态栏的提示
-#[derive(Clone, Debug)]
-pub struct ReconnectStatus {
-    pub message: String,
+/// 写入状态栏的提示（本地化在 UI 层按语言格式化）
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReconnectStatus {
+    /// 已达自动重连次数上限，不再重试
+    GaveUp {
+        max_attempts: u8,
+    },
+    /// 安排了下一次指数退避重连
+    Scheduled {
+        delay_secs: u64,
+        attempt: u8,
+        max_attempts: u8,
+    },
 }
 
 /// 收集本帧应触发 `reconnect_tab` 的标签下标
@@ -49,11 +58,8 @@ pub fn schedule_after_unexpected_disconnect(
     if schedule.attempts >= max_attempts {
         return (
             schedule,
-            Some(ReconnectStatus {
-                message: format!(
-                    "连接已断开；自动重连已达 {} 次上限",
-                    max_attempts
-                ),
+            Some(ReconnectStatus::GaveUp {
+                max_attempts,
             }),
         );
     }
@@ -65,13 +71,10 @@ pub fn schedule_after_unexpected_disconnect(
             next_fire: Some(now + delay),
             attempts,
         },
-        Some(ReconnectStatus {
-            message: format!(
-                "连接已断开，{} 秒后将自动重连（{}/{}）",
-                delay.as_secs(),
-                attempts,
-                max_attempts
-            ),
+        Some(ReconnectStatus::Scheduled {
+            delay_secs: delay.as_secs(),
+            attempt: attempts,
+            max_attempts,
         }),
     )
 }

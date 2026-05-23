@@ -89,7 +89,7 @@ pub(super) fn run_upload_external_sz(
                 Ok(true) => {}
                 Ok(false) => thread::sleep(Duration::from_millis(1)),
                 Err(e) => {
-                    log::debug!("外部 sz stdin 写结束: {}", e);
+                    log::debug!("external sz stdin write finished: {}", e);
                     break;
                 }
             }
@@ -129,7 +129,7 @@ pub(super) fn run_upload_external_sz(
                     String::from_utf8_lossy(&err_tail)
                 );
             }
-            return Err("传输已由用户取消".to_string());
+            return Err("Transfer cancelled by user".to_string());
         }
         if Instant::now() > deadline {
             let _ = child.kill();
@@ -180,7 +180,7 @@ pub(super) fn run_upload_external_sz(
     if !err_tail.is_empty() {
         let s = String::from_utf8_lossy(&err_tail);
         if !s.trim().is_empty() {
-            log::info!("外部 sz stderr: {}", s.trim());
+            log::info!("external sz stderr: {}", s.trim());
         }
     }
 

@@ -76,6 +76,16 @@ pub fn clamp_sidebar_width(w: f32) -> f32 {
     clamp_f32(w, LEFT_SIDEBAR_MIN_PX, LEFT_SIDEBAR_MAX_PX)
 }
 
+/// 右 dock 拖拽尺寸：所有右侧面板共用同一上下界，default 取布局给定值后夹紧。
+/// 返回 `(default, min, max)`，与 [`egui::SidePanel`] 的 `default_width` / `min_width` / `max_width` 顺序一致。
+#[inline]
+pub fn right_dock_resize_bounds(default: f32) -> (f32, f32, f32) {
+    const MIN_W: f32 = 280.0;
+    const MAX_W: f32 = 720.0;
+    let def = clamp_f32(default, MIN_W, MAX_W);
+    (def, MIN_W, MAX_W)
+}
+
 /// `f32::clamp` 在 `lo > hi` 时会 panic；布局窄窗/∞ 宽度时比例算出的上下界可能颠倒。
 #[inline]
 pub fn clamp_f32(v: f32, lo: f32, hi: f32) -> f32 {
@@ -517,6 +527,35 @@ pub fn fragment_library_window_bounds(ctx: &egui::Context) -> ([f32; 2], [f32; 2
     (default, min_sz)
 }
 
+/// 弹窗**首次**打开时在 `screen_rect` 内居中的左上角坐标。
+/// 须配合 [`egui::Window::default_pos`] 使用；勿用 [`.anchor`](egui::Window::anchor)，
+/// anchor 每帧按约束区重算，拖拽后会弹回居中。
+#[inline]
+pub fn modal_center_pos(ctx: &egui::Context, size: egui::Vec2) -> egui::Pos2 {
+    modal_center_pos_clamped(ctx, size, 0.0, 0.0)
+}
+
+/// 在 [`modal_center_pos`] 基础上把窗口钳在顶栏/底边安全区内，避免标题被裁切。
+#[inline]
+pub fn modal_center_pos_clamped(
+    ctx: &egui::Context,
+    size: egui::Vec2,
+    top_inset: f32,
+    bottom_inset: f32,
+) -> egui::Pos2 {
+    let r = ctx.screen_rect();
+    let w = size.x.max(1.0);
+    let h = size.y.max(1.0);
+    let side = 8.0;
+    let mut x = r.min.x + (r.width() - w) * 0.5;
+    let mut y = r.min.y + (r.height() - h) * 0.5;
+    x = x.clamp(r.min.x + side, (r.max.x - w - side).max(r.min.x + side));
+    let y_min = r.min.y + top_inset.max(0.0);
+    let y_max = (r.max.y - h - bottom_inset.max(0.0)).max(y_min);
+    y = y.clamp(y_min, y_max);
+    egui::pos2(x, y)
+}
+
 /// 快速选择器 / 变量对话框等居中窗口的默认尺寸。
 #[inline]
 pub fn centered_window_default_size(ctx: &egui::Context, w_frac: f32, h_frac: f32) -> [f32; 2] {
@@ -538,16 +577,28 @@ pub fn modal_edit_size(ctx: &egui::Context) -> egui::Vec2 {
     )
 }
 
-/// 偏好设置弹窗（§8.4.2）。
+/// 偏好设置弹窗（§8.4.2）：高度不超过视口减去 `top_inset` / `bottom_inset`。
 #[inline]
-pub fn modal_pref_size(ctx: &egui::Context) -> egui::Vec2 {
+pub fn modal_pref_size_in_viewport(
+    ctx: &egui::Context,
+    top_inset: f32,
+    bottom_inset: f32,
+) -> egui::Vec2 {
     let r = ctx.screen_rect();
     let sw = r.width().max(360.0);
     let sh = r.height().max(280.0);
+    let max_h = (sh - top_inset.max(0.0) - bottom_inset.max(0.0)).max(280.0);
+    let ideal_h = (sh * 0.62).clamp(480.0, 780.0);
     egui::vec2(
-        (sw * 0.40).clamp(380.0, 560.0),
-        (sh * 0.42).clamp(320.0, 560.0),
+        (sw * 0.44).clamp(420.0, 600.0),
+        ideal_h.min(max_h),
     )
+}
+
+/// 偏好设置弹窗默认尺寸（关于等复用；含基础边距）。
+#[inline]
+pub fn modal_pref_size(ctx: &egui::Context) -> egui::Vec2 {
+    modal_pref_size_in_viewport(ctx, 24.0, 24.0)
 }
 
 /// 关于弹窗（§8.4.3）。

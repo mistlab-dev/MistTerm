@@ -227,7 +227,7 @@ impl CredentialVault {
         let mut vault = Self::new_empty_salted(file_path, device_root_key);
         if vault.file_path.exists() {
             if let Err(e) = vault.load_from_disk() {
-                tracing::warn!("凭证库加载失败（将使用空库）：{}", e);
+                tracing::warn!("Failed to load credential vault (using empty vault): {}", e);
             }
         }
         vault
@@ -316,7 +316,10 @@ impl CredentialVault {
                     new_entries.push(stored);
                 }
                 None => {
-                    tracing::warn!("凭证「{}」解密失败，已跳过（可能密钥变更或数据损坏）", s.id);
+                    tracing::warn!(
+                        "Skipped credential \"{}\" (decrypt failed; key change or corrupt data)",
+                        s.id
+                    );
                 }
             }
         }
@@ -324,7 +327,7 @@ impl CredentialVault {
         self.vault_data_key = vk;
         self.entries = new_entries;
         self.save()?;
-        tracing::info!("凭证库已从旧版数组格式迁移到 v2（HKDF + 文件盐）");
+        tracing::info!("Credential vault migrated from legacy array format to v2 (HKDF + file salt)");
         Ok(())
     }
 

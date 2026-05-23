@@ -8,6 +8,7 @@ use std::thread;
 use crate::core::{
     extract_shell_commands, redact_for_ai, AppSettings, ChatMessage,
 };
+use crate::i18n::{self};
 use crate::ui::icons::{self, IconId};
 use crate::ui::layout_util;
 use crate::ui::markdown_view;
@@ -94,13 +95,15 @@ impl AiPanel {
             self.last_panel_slot_rect = None;
             return;
         }
+        let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
         let panel = egui::SidePanel::right(layout_util::AI_PANEL_ID)
-            .default_width(dock_col_w)
-            .min_width((dock_col_w * 0.75).max(320.0))
-            .max_width((dock_col_w * 1.9).max(760.0))
+            .default_width(def_w)
+            .min_width(min_w)
+            .max_width(max_w)
             .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
+                crate::ui::chrome::paint_right_dock_left_gap(ui, theme);
                 self.last_panel_slot_rect = Some(ui.max_rect());
                 let h = ui.available_height().max(1.0);
                 let w = ui.available_width().max(1.0);
@@ -131,34 +134,34 @@ impl AiPanel {
         self.key_configured_stored = app_settings.ai.has_api_key();
         let mut should_close = false;
         let text_low = theme.color_form_hint();
-        egui::Window::new("ai_settings_modal")
+        let modal_sz = layout_util::modal_edit_size(ctx);
+        crate::ui::chrome::modal_window("ai_settings_modal", theme, ctx)
             .open(open)
-            .title_bar(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
             .movable(true)
             .resizable(false)
-            .collapsible(false)
-            .default_size(layout_util::modal_edit_size(ctx))
-            .frame(crate::ui::chrome::modal_window_frame(theme))
+            .default_size(modal_sz)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                     if crate::ui::chrome::modal_header(
                         ui,
                         theme,
-                        "AI 设置",
+                        i18n::tr(ctx, "AI settings", "AI 设置"),
                         crate::ui::chrome::modal_title_font_size(theme),
                     ) {
                         should_close = true;
                     }
                     ui.label(
-                        egui::RichText::new(
+                        egui::RichText::new(i18n::tr(
+                            ctx,
+                            "OpenAI-compatible APIs; API Key is encrypted locally in settings.json and not routed through team servers.",
                             "OpenAI 兼容接口；API Key 加密保存在本机 settings.json，不经团队服务器。",
-                        )
+                        ))
                         .size(theme.font_size_small())
                         .color(text_low),
                     );
                     ui.add_space(theme.spacing_sm());
-                    self.show_setup_fields(ui, theme, app_settings);
+                    self.show_setup_fields(ui, ctx, theme, app_settings);
                 });
             });
         if should_close {
@@ -199,18 +202,18 @@ impl AiPanel {
             |ui, _body_w| {
                 let prev_gap_y = ui.spacing().item_spacing.y;
                 ui.spacing_mut().item_spacing.y = 0.0;
-                theme.frame_panel_header_band().show(ui, |ui| {
+                theme.frame_right_dock_header_band().show(ui, |ui| {
                     layout_util::set_width_to_available(ui);
                     ui.horizontal(|ui| {
                         crate::ui::chrome::panel_header_title_leading(
                             ui,
                             theme,
                             crate::ui::icons::IconId::Api,
-                            "AI 助手",
+                            i18n::tr(ctx, "AI Assistant", "AI 助手"),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if crate::ui::chrome::dock_close_icon_button(ui, theme)
-                                .on_hover_text("关闭 AI 面板")
+                                .on_hover_text(i18n::tr(ctx, "Close AI panel", "关闭 AI 面板"))
                                 .clicked()
                             {
                                 *open = false;
@@ -218,7 +221,7 @@ impl AiPanel {
                         });
                     });
                 });
-                crate::ui::chrome::panel_header_divider(ui, theme);
+                crate::ui::chrome::right_dock_header_divider(ui, theme);
                 ui.spacing_mut().item_spacing.y = prev_gap_y;
                 ui.add_space(theme.spacing_xs());
                 self.key_configured_stored = app_settings.ai.has_api_key();
@@ -227,14 +230,14 @@ impl AiPanel {
         );
     }
 
-    fn status_line(&self) -> Option<&str> {
+    fn status_line(&self, ctx: &egui::Context) -> Option<String> {
         if self.busy {
-            return Some("AI 回复生成中…");
+            return Some(i18n::tr(ctx, "Generating AI reply…", "AI 回复生成中…").to_string());
         }
         if self.is_background_busy() {
-            return self.test_status.as_deref();
+            return self.test_status.clone();
         }
-        self.input_status.as_deref()
+        self.input_status.clone()
     }
 
     fn show_panel_body(
@@ -245,7 +248,7 @@ impl AiPanel {
         app_settings: &mut AppSettings,
     ) {
         let ready = self.can_chat(app_settings);
-        if let Some(status) = self.status_line() {
+        if let Some(status) = self.status_line(ctx) {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(
@@ -256,13 +259,21 @@ impl AiPanel {
         } else if !ready {
             ui.colored_label(
                 theme.amber_color(),
-                "请先在菜单「工具 → AI 设置」中配置 API Key 与模型，再在下方输入问题。",
+                i18n::tr(
+                    ctx,
+                    "Configure API Key & model via Tools → AI Settings, then enter your question below.",
+                    "请先在菜单「工具 → AI 设置」中配置 API Key 与模型，再在下方输入问题。",
+                ),
             );
             ui.add_space(theme.spacing_sm());
         } else if !app_settings.ai.enabled {
             ui.colored_label(
                 theme.amber_color(),
-                "请在「工具 → AI 设置」中勾选「启用 AI」。",
+                i18n::tr(
+                    ctx,
+                    "Turn on “Enable AI” in Tools → AI Settings.",
+                    "请在「工具 → AI 设置」中勾选「启用 AI」。",
+                ),
             );
             ui.add_space(theme.spacing_sm());
         }
@@ -290,7 +301,7 @@ impl AiPanel {
         if chat_rect.height() > 1.0 {
             ui.allocate_ui_at_rect(chat_rect, |ui| {
                 bind_row_width(ui);
-                self.show_conversation(ui, theme, chat_h);
+                self.show_conversation(ui, ctx, theme, chat_h);
             });
         }
         ui.allocate_ui_at_rect(input_rect, |ui| {
@@ -326,15 +337,21 @@ impl AiPanel {
     fn show_setup_fields(
         &mut self,
         ui: &mut egui::Ui,
+        ctx: &egui::Context,
         theme: &Theme,
         app_settings: &mut AppSettings,
     ) {
         let settings = &mut app_settings.ai;
         let label = theme.color_form_hint();
-        ui.checkbox(&mut settings.enabled, "启用 AI");
+        crate::ui::chrome::form_checkbox(
+            ui,
+            theme,
+            &mut settings.enabled,
+            i18n::tr(ctx, "Enable AI", "启用 AI"),
+        );
         ui.add_space(theme.spacing_sm());
         ui.label(
-            egui::RichText::new("API 地址")
+            egui::RichText::new(i18n::tr(ctx, "API base URL", "API 地址"))
                 .size(theme.font_size_small())
                 .color(label),
         );
@@ -344,7 +361,7 @@ impl AiPanel {
                 .desired_width(f32::INFINITY),
         );
         ui.label(
-            egui::RichText::new("模型")
+            egui::RichText::new(i18n::tr(ctx, "Model", "模型"))
                 .size(theme.font_size_small())
                 .color(label),
         );
@@ -361,11 +378,13 @@ impl AiPanel {
         if self.key_configured_stored && self.settings_key_input.is_empty() {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new("已加密保存在本机配置")
+                    egui::RichText::new(i18n::tr(ctx, "Saved encrypted locally", "已加密保存在本机配置"))
                         .size(theme.font_size_small())
                         .color(theme.green_color()),
                 );
-                if ui.small_button("更换 Key").clicked() {
+                if ui
+                    .small_button(i18n::tr(ctx, "Change Key", "更换 Key"))
+                    .clicked() {
                     self.key_configured_stored = false;
                 }
             });
@@ -374,7 +393,7 @@ impl AiPanel {
             egui::TextEdit::singleline(&mut self.settings_key_input)
                 .password(true)
                 .hint_text(if self.key_configured_stored {
-                    "输入新 Key 后点保存"
+                    i18n::tr(ctx, "Enter new key, then Save", "输入新 Key 后点保存")
                 } else {
                     "sk-..."
                 })
@@ -385,21 +404,33 @@ impl AiPanel {
         let mut do_test = false;
         ui.horizontal(|ui| {
             if !setup_busy
-                && crate::ui::chrome::panel_action_primary_button(ui, theme, "保存").clicked()
+                && crate::ui::chrome::panel_action_primary_icon_button(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::Check,
+                    i18n::tr(ctx, "Save", "保存"),
+                )
+                .clicked()
             {
                 do_save = true;
             }
             if !setup_busy
-                && crate::ui::chrome::panel_action_button(ui, theme, "测试连接").clicked()
+                && crate::ui::chrome::panel_action_icon_button(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::Plug,
+                    i18n::tr(ctx, "Test connection", "测试连接"),
+                )
+                    .clicked()
             {
                 do_test = true;
             }
         });
         if do_save {
-            self.start_save_background(app_settings);
+            self.start_save_background(ctx, app_settings);
         }
         if do_test {
-            self.start_test_background(app_settings);
+            self.start_test_background(ctx, app_settings);
         }
         if let Some(ref s) = self.test_status {
             ui.horizontal(|ui| {
@@ -415,16 +446,19 @@ impl AiPanel {
         }
     }
 
-    fn start_save_background(&mut self, app_settings: &mut AppSettings) {
+    fn start_save_background(&mut self, ctx: &egui::Context, app_settings: &mut AppSettings) {
         if self.is_background_busy() {
             return;
         }
-        self.test_status = Some("保存中…".into());
+        self.test_status = Some(i18n::tr(ctx, "Saving…", "保存中…").into());
         self.last_error = None;
         let key = self.settings_key_input.clone();
         if !key.trim().is_empty() {
             if let Err(e) = app_settings.ai.set_api_key(&key) {
-                self.test_status = Some(format!("保存失败：{e}"));
+                self.test_status = Some(format!(
+                    "{}{e}",
+                    i18n::tr(ctx, "Save failed: ", "保存失败："),
+                ));
                 return;
             }
             self.settings_key_input.clear();
@@ -432,32 +466,39 @@ impl AiPanel {
         }
         let settings = app_settings.clone();
         let saved_key = !key.trim().is_empty();
+        let lang = i18n::language(ctx);
         let (tx, rx) = std::sync::mpsc::channel();
         self.background = Some(BackgroundJob::Save(rx));
         thread::spawn(move || {
-            let result = settings
-                .save()
-                .map(|_| {
-                    if saved_key {
-                        "已加密保存 API Key，可在下方输入问题".to_string()
-                    } else {
-                        "已保存地址与模型".to_string()
-                    }
-                })
-                .map_err(|e| e.to_string());
+            let loc = i18n::Locale::from(lang);
+            let result = settings.save().map(|_| {
+                if saved_key {
+                    loc.tr(
+                        "API Key encrypted and saved — you can ask below",
+                        "已加密保存 API Key，可在下方输入问题",
+                    )
+                    .to_string()
+                } else {
+                    loc.tr(
+                        "Saved endpoint and model",
+                        "已保存地址与模型",
+                    )
+                    .to_string()
+                }
+            }).map_err(|e| e.to_string());
             let _ = tx.send(result);
         });
     }
 
-    fn start_test_background(&mut self, app_settings: &AppSettings) {
+    fn start_test_background(&mut self, ctx: &egui::Context, app_settings: &AppSettings) {
         if self.is_background_busy() {
             return;
         }
         let Some(key) = self.effective_api_key(app_settings) else {
-            self.test_status = Some("请先填写 API Key".into());
+            self.test_status = Some(i18n::tr(ctx, "Fill in API Key first", "请先填写 API Key").into());
             return;
         };
-        self.test_status = Some("测试连接中…".into());
+        self.test_status = Some(i18n::tr(ctx, "Testing connection…", "测试连接中…").into());
         self.last_error = None;
         let ai = app_settings.ai.clone();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -468,12 +509,22 @@ impl AiPanel {
         });
     }
 
-    fn show_conversation(&mut self, ui: &mut egui::Ui, theme: &Theme, scroll_h: f32) {
+    fn show_conversation(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+        scroll_h: f32,
+    ) {
         if !self.attached_context.is_empty() {
             ui.group(|ui| {
                 let _ = bind_row_width(ui);
                 ui.label(
-                    egui::RichText::new("附带的终端上下文")
+                    egui::RichText::new(i18n::tr(
+                        ctx,
+                        "Attached terminal context",
+                        "附带的终端上下文",
+                    ))
                         .size(theme.font_size_small())
                         .strong(),
                 );
@@ -493,7 +544,13 @@ impl AiPanel {
                     .monospace()
                     .size(theme.font_size_small()),
                 );
-                if crate::ui::chrome::panel_action_button(ui, theme, "清除上下文").clicked() {
+                if crate::ui::chrome::panel_action_icon_button(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::Trash,
+                    i18n::tr(ctx, "Clear context", "清除上下文"),
+                )
+                    .clicked() {
                     self.clear_context();
                 }
             });
@@ -509,14 +566,18 @@ impl AiPanel {
                 bind_row_width(ui);
                 if self.messages.is_empty() && !self.busy {
                     ui.label(
-                        egui::RichText::new("在下方输入问题；附带终端选区可请求解读输出。")
+                        egui::RichText::new(i18n::tr(
+                            ctx,
+                            "Type below; attach terminal selections to interpret output.",
+                            "在下方输入问题；附带终端选区可请求解读输出。",
+                        ))
                             .size(theme.font_size_small())
                             .color(theme.color_form_hint()),
                     );
                 }
                 for (i, msg) in self.messages.iter().enumerate() {
                     let mut picked = None;
-                    self.render_message(ui, theme, msg, &mut picked);
+                    self.render_message(ui, ctx, theme, msg, &mut picked);
                     if let Some(cmd) = picked {
                         self.command_for_terminal = Some(cmd);
                     }
@@ -531,6 +592,7 @@ impl AiPanel {
     fn render_message(
         &self,
         ui: &mut egui::Ui,
+        ctx: &egui::Context,
         theme: &Theme,
         msg: &UiMessage,
         command_pick: &mut Option<String>,
@@ -570,12 +632,12 @@ impl AiPanel {
                     if msg.role == "assistant" && !msg.commands.is_empty() {
                         ui.add_space(theme.spacing_xs());
                         ui.label(
-                            egui::RichText::new("可执行命令")
+                            egui::RichText::new(i18n::tr(ctx, "Runnable commands", "可执行命令"))
                                 .size(theme.font_size_small())
                                 .color(theme.color_form_hint()),
                         );
                         for cmd in &msg.commands {
-                            if show_command_card(ui, theme, cmd) {
+                            if show_command_card(ui, ctx, theme, cmd) {
                                 *command_pick = Some(cmd.clone());
                             }
                             ui.add_space(theme.spacing_xs());
@@ -586,7 +648,12 @@ impl AiPanel {
                 .response
                 .context_menu(|ui| {
                     crate::ui::chrome::apply_context_menu_style(ui, theme);
-                    if crate::ui::chrome::popup_menu_button(ui, theme, "复制全文").clicked() {
+                    if crate::ui::chrome::popup_menu_button(
+                        ui,
+                        theme,
+                        i18n::tr(ctx, "Copy full message", "复制全文"),
+                    )
+                        .clicked() {
                         if let Ok(mut clip) = Clipboard::new() {
                             let _ = clip.set_text(msg.content.clone());
                         }
@@ -641,7 +708,7 @@ impl AiPanel {
                     .interactive(can_type)
                     .hint_text(crate::ui::chrome::hint_rich(
                         theme,
-                        "输入问题，Ctrl+Enter 发送",
+                        i18n::tr(ctx, "Ask a question, Ctrl+Enter to send", "输入问题，Ctrl+Enter 发送"),
                         theme.font_size_control_input(),
                     ))
                     .desired_rows(2)
@@ -650,12 +717,13 @@ impl AiPanel {
                     .font(egui::FontId::proportional(theme.font_size_control_input())),
             );
             ui.style_mut().visuals.override_text_color = prev_override;
-            ui.add_space(theme.spacing_xs());
+            // 把按钮行往下推一截：原 spacing_xs(2px) 让发送/清空贴在多行输入下沿，按起来逼仄。
+            ui.add_space(theme.spacing_sm() + 4.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 send_clicked = ui
                     .add_enabled_ui(can_send, |ui| {
                         ai_panel_icon_button(ui, theme, IconId::Upload, true)
-                            .on_hover_text("发送 (Ctrl+Enter)")
+                            .on_hover_text(i18n::tr(ctx, "Send (Ctrl+Enter)", "发送 (Ctrl+Enter)"))
                             .clicked()
                     })
                     .inner;
@@ -663,7 +731,7 @@ impl AiPanel {
                 clear_clicked = ui
                     .add_enabled_ui(can_type, |ui| {
                         ai_panel_icon_button(ui, theme, IconId::Trash, false)
-                            .on_hover_text("清空对话")
+                            .on_hover_text(i18n::tr(ctx, "Clear conversation", "清空对话"))
                             .clicked()
                     })
                     .inner;
@@ -675,14 +743,20 @@ impl AiPanel {
             self.input_status = None;
         }
         if (send_clicked || ctrl_enter) && can_send {
-            match self.send_message(app_settings) {
+            match self.send_message(ctx, app_settings) {
                 SendOutcome::Sent => {
                     self.input_status = None;
                     ctx.request_repaint();
                 }
                 SendOutcome::Empty => {
-                    self.input_status =
-                        Some("请输入问题（灰字为示例，非已输入内容）".into());
+                    self.input_status = Some(
+                        i18n::tr(
+                            ctx,
+                            "Enter a question (gray text is hint, not your input)",
+                            "请输入问题（灰字为示例，非已输入内容）",
+                        )
+                        .to_string(),
+                    );
                 }
                 SendOutcome::NotReady(msg) => {
                     self.input_status = Some(msg);
@@ -695,15 +769,23 @@ impl AiPanel {
         let _ = app_settings;
     }
 
-    fn send_message(&mut self, app_settings: &AppSettings) -> SendOutcome {
+    fn send_message(&mut self, ctx: &egui::Context, app_settings: &AppSettings) -> SendOutcome {
         if !self.can_chat(app_settings) {
-            return SendOutcome::NotReady("请先配置 API Key 与模型并保存".into());
+            return SendOutcome::NotReady(
+                i18n::tr(ctx, "Configure API Key & model and save first", "请先配置 API Key 与模型并保存")
+                    .to_string(),
+            );
         }
         if !app_settings.ai.enabled {
-            return SendOutcome::NotReady("请先勾选「启用 AI」".into());
+            return SendOutcome::NotReady(
+                i18n::tr(ctx, "Enable AI first", "请先勾选「启用 AI」").to_string(),
+            );
         }
         if self.busy || self.is_background_busy() {
-            return SendOutcome::NotReady("请等待当前操作完成".into());
+            return SendOutcome::NotReady(
+                i18n::tr(ctx, "Wait for the current operation to finish", "请等待当前操作完成")
+                    .to_string(),
+            );
         }
         let question = self.draft_input.trim().to_string();
         if question.is_empty() {
@@ -712,7 +794,11 @@ impl AiPanel {
         self.draft_input.clear();
         let mut user_body = question.clone();
         if !self.attached_context.is_empty() {
-            user_body.push_str("\n\n--- 终端上下文 ---\n");
+            user_body.push_str(i18n::tr(
+                ctx,
+                "\n\n--- Terminal context ---\n",
+                "\n\n--- 终端上下文 ---\n",
+            ));
             user_body.push_str(&self.attached_context);
         }
         self.messages.push(UiMessage {
@@ -742,7 +828,8 @@ impl AiPanel {
         let api_key = match self.effective_api_key(app_settings) {
             Some(k) => k,
             None => {
-                let msg = "请先填写并保存 API Key".to_string();
+                let msg = i18n::tr(ctx, "Fill in and save API Key first", "请先填写并保存 API Key")
+                    .to_string();
                 self.last_error = Some(msg.clone());
                 return SendOutcome::NotReady(msg);
             }
@@ -778,7 +865,7 @@ impl AiPanel {
                     ctx.request_repaint();
                 }
                 Ok(Err(e)) => {
-                    self.last_error = Some(e);
+                    self.last_error = Some(i18n::localize_backend_error(i18n::language(ctx), &e));
                     self.input_status = None;
                     self.background = None;
                     self.busy = false;
@@ -788,7 +875,9 @@ impl AiPanel {
                     ctx.request_repaint_after(std::time::Duration::from_millis(120));
                 }
                 Err(TryRecvError::Disconnected) => {
-                    self.last_error = Some("请求已中断".into());
+                    self.last_error = Some(
+                        i18n::tr(ctx, "Request interrupted", "请求已中断").to_string(),
+                    );
                     self.background = None;
                     self.busy = false;
                 }
@@ -800,7 +889,10 @@ impl AiPanel {
                     ctx.request_repaint();
                 }
                 Ok(Err(e)) => {
-                    self.test_status = Some(format!("保存失败：{e}"));
+                    self.test_status = Some(format!(
+                        "{}{e}",
+                        i18n::tr(ctx, "Save failed: ", "保存失败："),
+                    ));
                     self.background = None;
                     ctx.request_repaint();
                 }
@@ -808,13 +900,17 @@ impl AiPanel {
                     ctx.request_repaint_after(std::time::Duration::from_millis(120));
                 }
                 Err(TryRecvError::Disconnected) => {
-                    self.test_status = Some("保存已中断".into());
+                    self.test_status = Some(
+                        i18n::tr(ctx, "Save interrupted", "保存已中断").to_string(),
+                    );
                     self.background = None;
                 }
             },
             BackgroundJob::Test(rx) => match rx.try_recv() {
                 Ok(Ok(())) => {
-                    self.test_status = Some("连接成功".into());
+                    self.test_status = Some(
+                        i18n::tr(ctx, "Connection OK", "连接成功").to_string(),
+                    );
                     self.background = None;
                     ctx.request_repaint();
                 }
@@ -827,7 +923,9 @@ impl AiPanel {
                     ctx.request_repaint_after(std::time::Duration::from_millis(120));
                 }
                 Err(TryRecvError::Disconnected) => {
-                    self.test_status = Some("测试已中断".into());
+                    self.test_status = Some(
+                        i18n::tr(ctx, "Test interrupted", "测试已中断").to_string(),
+                    );
                     self.background = None;
                 }
             },
@@ -842,8 +940,9 @@ enum SendOutcome {
 }
 
 fn ai_panel_icon_button(ui: &mut egui::Ui, theme: &Theme, id: IconId, primary: bool) -> egui::Response {
-    let hit = theme.size_tab_bar_icon_btn();
-    let icon_px = theme.size_icon_glyph();
+    // 比通用 dock 图标按钮放大一档：原 24px 命中 / 18px 字形太小，鼠标不好点。
+    let hit = (theme.size_tab_bar_icon_btn() + 8.0).max(30.0);
+    let icon_px = (theme.size_icon_glyph() + 4.0).max(22.0);
     let (idle, hover) = if primary {
         (theme.accent_color(), theme.accent_color())
     } else {
@@ -870,10 +969,13 @@ fn ai_panel_icon_button(ui: &mut egui::Ui, theme: &Theme, id: IconId, primary: b
 }
 
 /// 底部输入区占用高度（多行框 + 按钮行 + 间距，供 `allocate_ui_at_rect` 切分）。
+/// `toolbar` 的 hit/spacing 必须与 [`ai_panel_icon_button`] 与 `show_input_bar` 里
+/// 多行框→按钮行之间的 `add_space` 保持一致，否则会与上方滚动区错位。
 fn ai_input_block_height(theme: &Theme) -> f32 {
     let line = theme.font_size_control_input() * 1.45;
     let field = line * 2.0 + theme.spacing_search_input_y() * 2.0 + 12.0;
-    let toolbar = theme.size_tab_bar_icon_btn() + theme.spacing_xs() + 2.0;
+    let btn_hit = (theme.size_tab_bar_icon_btn() + 8.0).max(30.0);
+    let toolbar = btn_hit + (theme.spacing_sm() + 4.0) + 2.0;
     field + toolbar + theme.spacing_xs() + 6.0
 }
 
@@ -884,7 +986,12 @@ fn bind_row_width(ui: &mut egui::Ui) -> f32 {
     w
 }
 
-fn show_command_card(ui: &mut egui::Ui, theme: &Theme, cmd: &str) -> bool {
+fn show_command_card(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    theme: &Theme,
+    cmd: &str,
+) -> bool {
     let mut clicked = false;
     let preview = compact_command_preview(cmd);
     egui::Frame::none()
@@ -903,7 +1010,11 @@ fn show_command_card(ui: &mut egui::Ui, theme: &Theme, cmd: &str) -> bool {
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     clicked = ai_panel_icon_button(ui, theme, IconId::TerminalPrompt, true)
-                        .on_hover_text("发送该命令到终端")
+                        .on_hover_text(i18n::tr(
+                            ctx,
+                            "Send this command to the terminal",
+                            "发送该命令到终端",
+                        ))
                         .clicked();
                 });
             });

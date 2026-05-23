@@ -547,7 +547,7 @@ mod shell_pump {
                     upload_bypass_slot,
                     mgr,
                 );
-                log::warn!("shell 泵线程退出 session_id={}", session_id);
+                log::warn!("shell pump thread exited session_id={}", session_id);
             })
             .expect("spawn shell pump thread");
     }
@@ -774,7 +774,7 @@ mod shell_pump {
                         let cmd = String::from_utf8_lossy(line_buf).trim().to_string();
                         // 过滤残留控制序列碎片，避免把全屏程序内部按键当命令。
                         if !cmd.is_empty() && !cmd.contains('[') && !cmd.contains('\u{1b}') {
-                            log::info!("shell 输入命令 session={} cmd={}", session_id, cmd);
+                            log::info!("shell input session={} cmd={}", session_id, cmd);
                             commands.push(cmd);
                         }
                         line_buf.clear();

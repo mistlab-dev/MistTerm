@@ -5,6 +5,7 @@
 use crate::core::{AuditCategory, AuditEvent, AuditLogger, AuditOutcome};
 use crate::ssh::SshSessionId;
 use crate::ssh::{SftpClient, SftpEntry, SshManager};
+use crate::i18n::UiLanguage;
 use crate::ui::terminal::TerminalView;
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
@@ -92,7 +93,7 @@ impl SftpPanel {
         self.last_panel_slot_rect = None;
     }
 
-    fn poll_rx(&mut self, audit: &AuditLogger) {
+    fn poll_rx(&mut self, audit: &AuditLogger, lang: UiLanguage) {
         let Some(rx) = &self.rx else {
             return;
         };
@@ -150,7 +151,14 @@ impl SftpPanel {
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.busy = false;
                 self.rx = None;
-                self.toast_err = Some("SFTP 后台任务异常中断".into());
+                self.toast_err = Some(
+                    crate::i18n::Locale::from(lang)
+                        .tr(
+                            "SFTP background worker stopped unexpectedly",
+                            "SFTP 后台任务异常中断",
+                        )
+                        .to_string(),
+                );
             }
         }
     }
@@ -163,11 +171,16 @@ impl SftpPanel {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let ctx = ctx.clone();
+        let lang = crate::i18n::language(&ctx);
         thread::spawn(move || {
+            let loc = crate::i18n::Locale::from(lang);
             let result = (|| -> Result<Vec<SftpEntry>, String> {
                 let session = mgr
                     .get_session(sid)
-                    .ok_or_else(|| "SSH 会话不可用".to_string())?;
+                    .ok_or_else(|| {
+                        loc.tr("SSH session unavailable", "SSH 会话不可用")
+                            .to_string()
+                    })?;
                 let client = SftpClient::new(&session)?;
                 client.list_dir(&dir)
             })();
@@ -195,16 +208,28 @@ impl SftpPanel {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let ctx = ctx.clone();
+        let lang = crate::i18n::language(&ctx);
         thread::spawn(move || {
+            let loc = crate::i18n::Locale::from(lang);
             let msg = (|| -> Result<String, String> {
-                let session = mgr.get_session(sid).ok_or_else(|| "SSH 会话不可用".to_string())?;
+                let session = mgr.get_session(sid).ok_or_else(|| {
+                    loc.tr("SSH session unavailable", "SSH 会话不可用")
+                        .to_string()
+                })?;
                 let client = SftpClient::new(&session)?;
                 let n = client.upload(&local, &remote)?;
-                Ok(format!(
-                    "已上传 {} bytes → {}",
-                    n,
-                    remote.to_string_lossy()
-                ))
+                Ok(match lang {
+                    UiLanguage::En => format!(
+                        "Uploaded {} bytes → {}",
+                        n,
+                        remote.to_string_lossy()
+                    ),
+                    UiLanguage::Zh => format!(
+                        "已上传 {} bytes → {}",
+                        n,
+                        remote.to_string_lossy()
+                    ),
+                })
             })();
             let _ = tx.send(SftpJobResult::Msg(msg));
             ctx.request_repaint();
@@ -230,16 +255,28 @@ impl SftpPanel {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let ctx = ctx.clone();
+        let lang = crate::i18n::language(&ctx);
         thread::spawn(move || {
+            let loc = crate::i18n::Locale::from(lang);
             let msg = (|| -> Result<String, String> {
-                let session = mgr.get_session(sid).ok_or_else(|| "SSH 会话不可用".to_string())?;
+                let session = mgr.get_session(sid).ok_or_else(|| {
+                    loc.tr("SSH session unavailable", "SSH 会话不可用")
+                        .to_string()
+                })?;
                 let client = SftpClient::new(&session)?;
                 let n = client.download(&remote, &local)?;
-                Ok(format!(
-                    "已下载 {} → {} bytes",
-                    remote.to_string_lossy(),
-                    n
-                ))
+                Ok(match lang {
+                    UiLanguage::En => format!(
+                        "Downloaded {} → {} bytes",
+                        remote.to_string_lossy(),
+                        n
+                    ),
+                    UiLanguage::Zh => format!(
+                        "已下载 {} → {} bytes",
+                        remote.to_string_lossy(),
+                        n
+                    ),
+                })
             })();
             let _ = tx.send(SftpJobResult::Msg(msg));
             ctx.request_repaint();
@@ -255,12 +292,20 @@ impl SftpPanel {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let ctx = ctx.clone();
+        let lang = crate::i18n::language(&ctx);
         thread::spawn(move || {
+            let loc = crate::i18n::Locale::from(lang);
             let msg = (|| -> Result<String, String> {
-                let session = mgr.get_session(sid).ok_or_else(|| "SSH 会话不可用".to_string())?;
+                let session = mgr.get_session(sid).ok_or_else(|| {
+                    loc.tr("SSH session unavailable", "SSH 会话不可用")
+                        .to_string()
+                })?;
                 let client = SftpClient::new(&session)?;
                 client.mkdir(&path)?;
-                Ok(format!("已创建目录 {}", path.to_string_lossy()))
+                Ok(match lang {
+                    UiLanguage::En => format!("Created directory {}", path.to_string_lossy()),
+                    UiLanguage::Zh => format!("已创建目录 {}", path.to_string_lossy()),
+                })
             })();
             let _ = tx.send(SftpJobResult::Msg(msg));
             ctx.request_repaint();
@@ -276,12 +321,20 @@ impl SftpPanel {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let ctx = ctx.clone();
+        let lang = crate::i18n::language(&ctx);
         thread::spawn(move || {
+            let loc = crate::i18n::Locale::from(lang);
             let msg = (|| -> Result<String, String> {
-                let session = mgr.get_session(sid).ok_or_else(|| "SSH 会话不可用".to_string())?;
+                let session = mgr.get_session(sid).ok_or_else(|| {
+                    loc.tr("SSH session unavailable", "SSH 会话不可用")
+                        .to_string()
+                })?;
                 let client = SftpClient::new(&session)?;
                 client.remove(&path)?;
-                Ok(format!("已删除 {}", path.to_string_lossy()))
+                Ok(match lang {
+                    UiLanguage::En => format!("Deleted {}", path.to_string_lossy()),
+                    UiLanguage::Zh => format!("已删除 {}", path.to_string_lossy()),
+                })
             })();
             let _ = tx.send(SftpJobResult::Msg(msg));
             ctx.request_repaint();
@@ -304,9 +357,14 @@ impl SftpPanel {
         let (tx, rx) = mpsc::channel();
         self.rx = Some(rx);
         let ctx = ctx.clone();
+        let lang = crate::i18n::language(&ctx);
         thread::spawn(move || {
+            let loc = crate::i18n::Locale::from(lang);
             let msg = (|| -> Result<String, String> {
-                let session = mgr.get_session(sid).ok_or_else(|| "SSH 会话不可用".to_string())?;
+                let session = mgr.get_session(sid).ok_or_else(|| {
+                    loc.tr("SSH session unavailable", "SSH 会话不可用")
+                        .to_string()
+                })?;
                 let client = SftpClient::new(&session)?;
                 let mut ok_n = 0usize;
                 let mut total_bytes = 0u64;
@@ -328,12 +386,21 @@ impl SftpPanel {
                 if ok_n == 0 && !err_lines.is_empty() {
                     return Err(err_lines.join("\n"));
                 }
-                let mut s = format!(
-                    "已上传 {} 个文件，合计 {} bytes",
-                    ok_n, total_bytes
-                );
+                let mut s = match lang {
+                    UiLanguage::En => format!(
+                        "Uploaded {} file(s), {} bytes total",
+                        ok_n, total_bytes
+                    ),
+                    UiLanguage::Zh => format!(
+                        "已上传 {} 个文件，合计 {} bytes",
+                        ok_n, total_bytes
+                    ),
+                };
                 if !err_lines.is_empty() {
-                    s.push_str("\n部分失败：\n");
+                    s.push_str(match lang {
+                        UiLanguage::En => "\nSome uploads failed:\n",
+                        UiLanguage::Zh => "\n部分失败：\n",
+                    });
                     s.push_str(&err_lines.join("\n"));
                 }
                 Ok(s)
@@ -351,14 +418,19 @@ impl SftpPanel {
         right_dock_outer_left: &mut Option<f32>,
         dock_col_w: f32,
     ) {
+        let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
         let panel = egui::SidePanel::right("sftp_browser_panel")
-            .exact_width(dock_col_w)
-            .resizable(false)
+            .default_width(def_w)
+            .min_width(min_w)
+            .max_width(max_w)
+            .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
+                crate::ui::chrome::paint_right_dock_left_gap(ui, theme);
                 self.last_panel_slot_rect = Some(ui.max_rect());
                 let h = ui.available_height().max(1.0);
-                ui.allocate_exact_size(egui::vec2(dock_col_w, h), egui::Sense::hover());
+                let w = ui.available_width().max(1.0);
+                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
             });
         if let Some(slot) = self.last_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
@@ -412,42 +484,46 @@ impl SftpPanel {
         audit: &AuditLogger,
         close_panel: &mut bool,
     ) {
-        self.poll_rx(audit);
+        self.poll_rx(audit, crate::i18n::language(ctx));
 
         let mut header_closed = false;
         let prev_gap_y = ui.spacing().item_spacing.y;
         ui.spacing_mut().item_spacing.y = 0.0;
-        theme.frame_panel_header_band().show(ui, |ui| {
+        theme.frame_right_dock_header_band().show(ui, |ui| {
             header_closed = crate::ui::chrome::dock_panel_title_close_only(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Folder,
                 "SFTP",
-                "隐藏侧栏 · 也可用底部 SFTP 切换",
+                crate::i18n::tr(ctx, "Hide sidebar · or use bottom SFTP toggle", "隐藏侧栏 · 也可用底部 SFTP 切换"),
             );
         });
         if header_closed {
             *close_panel = true;
         }
-        crate::ui::chrome::panel_header_divider(ui, theme);
+        crate::ui::chrome::right_dock_header_divider(ui, theme);
         ui.spacing_mut().item_spacing.y = prev_gap_y;
         ui.add_space(theme.spacing_xs());
 
         let Some(t) = terminal else {
             ui.label(
-                egui::RichText::new("请打开会话并连接后可使用 SFTP。")
+                egui::RichText::new(crate::i18n::tr(
+                    ctx,
+                    "Connect a session before using SFTP.",
+                    "请打开会话并连接后可使用 SFTP。",
+                ))
                     .color(theme.text_tertiary()),
             );
             return;
         };
 
         if !t.is_connected() {
-            crate::ui::chrome::busy_row(ui, theme, "连接建立中…");
+            crate::ui::chrome::busy_row(ui, theme, crate::i18n::tr(ctx, "Connecting…", "连接建立中…"));
             return;
         }
 
         let Some((sid, mgr)) = t.sftp_session_for_ops() else {
-            ui.label(egui::RichText::new("会话不可用").color(theme.red_color()));
+            ui.label(egui::RichText::new(crate::i18n::tr(ctx, "Session unavailable", "会话不可用")).color(theme.red_color()));
             return;
         };
 
@@ -465,14 +541,18 @@ impl SftpPanel {
 
         if let Some(ok) = &self.toast_ok {
             ui.label(egui::RichText::new(ok).color(theme.green_color()));
-            if crate::ui::chrome::chrome_small_button(ui, theme, "关闭提示").clicked() {
+            if crate::ui::chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Close)
+                .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss", "关闭提示"))
+                .clicked() {
                 self.toast_ok = None;
             }
             ui.separator();
         }
         if let Some(err) = &self.toast_err {
             ui.label(egui::RichText::new(err).color(theme.red_color()));
-            if crate::ui::chrome::chrome_small_button(ui, theme, "关闭").clicked() {
+            if crate::ui::chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Close)
+                .on_hover_text(crate::i18n::tr(ui.ctx(), "Close", "关闭"))
+                .clicked() {
                 self.toast_err = None;
             }
             ui.separator();
@@ -483,36 +563,60 @@ impl SftpPanel {
         }
 
         ui.label(
-            egui::RichText::new(format!("本机默认保存目录（ZMODEM）：{}", download_dir_hint))
+            egui::RichText::new(format!(
+                "{} {}",
+                crate::i18n::tr(ctx, "Local download folder (ZMODEM):", "本机默认保存目录（ZMODEM）："),
+                download_dir_hint
+            ))
                 .small()
                 .color(theme.text_tertiary()),
         );
         ui.add_space(theme.spacing_md());
 
         ui.horizontal(|ui| {
-            crate::ui::chrome::form_field_label(ui, theme, "路径");
+            crate::ui::chrome::form_field_label(ui, theme, crate::i18n::tr(ui.ctx(), "Path", "路径"));
             let path_w = layout_util::finite_avail_minus(ui, 200.0, 120.0, 480.0);
             crate::ui::chrome::form_singleline_field(
                 ui,
                 theme,
                 egui::Id::new("sftp_path_edit"),
                 &mut self.path_edit,
-                "/tmp 或 .",
+                crate::i18n::tr(ui.ctx(), "/tmp or .", "/tmp 或 ."),
                 path_w,
                 false,
             );
-            if crate::ui::chrome::panel_action_button_ex(ui, theme, "前往", !self.busy).clicked() {
+            if crate::ui::chrome::panel_action_icon_button_ex(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Search,
+                crate::i18n::tr(ui.ctx(), "Go", "前往"),
+                !self.busy,
+            )
+            .clicked() {
                 let p = PathBuf::from(self.path_edit.trim());
                 self.spawn_list(sid, mgr.clone(), p, ctx);
             }
-            if crate::ui::chrome::panel_action_button_ex(ui, theme, "刷新", !self.busy).clicked() {
+            if crate::ui::chrome::panel_action_icon_button_ex(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Refresh,
+                crate::i18n::tr(ui.ctx(), "Refresh", "刷新"),
+                !self.busy,
+            )
+            .clicked() {
                 self.spawn_list(sid, mgr.clone(), self.cwd.clone(), ctx);
             }
         });
 
         ui.horizontal(|ui| {
-            if crate::ui::chrome::panel_action_button_ex(ui, theme, "上层目录", !self.busy)
-                .clicked()
+            if crate::ui::chrome::panel_action_icon_button_ex(
+                ui,
+                theme,
+                crate::ui::icons::IconId::ChevronLeft,
+                crate::i18n::tr(ui.ctx(), "Parent directory", "上层目录"),
+                !self.busy,
+            )
+            .clicked()
             {
                 let parent = self
                     .cwd
@@ -521,10 +625,11 @@ impl SftpPanel {
                     .unwrap_or_else(|| PathBuf::from("/"));
                 self.spawn_list(sid, mgr.clone(), parent, ctx);
             }
-            if crate::ui::chrome::panel_action_button_ex(
+            if crate::ui::chrome::panel_action_icon_button_ex(
                 ui,
                 theme,
-                "另存为…",
+                crate::ui::icons::IconId::File,
+                crate::i18n::tr(ui.ctx(), "Save As…", "另存为…"),
                 !self.busy && self.selected.is_some(),
             )
             .clicked()
@@ -536,11 +641,12 @@ impl SftpPanel {
                         .unwrap_or_else(|| "remote-file".into());
                     if let Some(e) = self.entries.iter().find(|x| x.path == *rem) {
                         if e.is_dir {
-                            self.toast_err = Some("请选文件而非目录".into());
+                            self.toast_err = Some(crate::i18n::tr(ctx, "Select a file, not a folder", "请选文件而非目录").to_string());
                             return;
                         }
                     }
                     if let Some(save) = FileDialog::new()
+                        .set_title(crate::i18n::tr(ctx, "Save remote file as…", "另存远端文件"))
                         .set_directory(&download_dir_path)
                         .set_file_name(&name)
                         .save_file()
@@ -549,13 +655,18 @@ impl SftpPanel {
                     }
                 }
             }
-            if crate::ui::chrome::panel_action_button_ex(
+            if crate::ui::chrome::panel_action_icon_button_ex(
                 ui,
                 theme,
-                "下载到默认目录",
+                crate::ui::icons::IconId::Package,
+                crate::i18n::tr(ui.ctx(), "Download to default folder", "下载到默认目录"),
                 !self.busy && self.selected.is_some(),
             )
-            .on_hover_text(format!("写入：{}", download_dir_hint))
+            .on_hover_text(format!(
+                "{} {}",
+                crate::i18n::tr(ctx, "Write to:", "写入："),
+                download_dir_hint
+            ))
             .clicked()
             {
                 if let Some(rem) = self.selected.clone() {
@@ -565,12 +676,16 @@ impl SftpPanel {
                         .unwrap_or_else(|| "remote-file".into());
                     if let Some(e) = self.entries.iter().find(|x| x.path == rem) {
                         if e.is_dir {
-                            self.toast_err = Some("请选文件而非目录".into());
+                            self.toast_err = Some(crate::i18n::tr(ctx, "Select a file, not a folder", "请选文件而非目录").to_string());
                             return;
                         }
                     }
                     if let Err(e) = std::fs::create_dir_all(&download_dir_path) {
-                        self.toast_err = Some(format!("无法创建本机目录：{}", e));
+                        self.toast_err = Some(format!(
+                            "{} {}",
+                            crate::i18n::tr(ctx, "Could not create local folder:", "无法创建本机目录："),
+                            e
+                        ));
                         return;
                     }
                     let save = download_dir_path.join(&name);
@@ -580,9 +695,14 @@ impl SftpPanel {
         });
 
         ui.horizontal(|ui| {
-            if crate::ui::chrome::panel_action_button_ex(ui, theme, "上传…", !self.busy)
-                .on_hover_text("可多选；文件名保持与本地一致，写入当前远端目录")
-                .clicked()
+            if crate::ui::chrome::panel_action_icon_button_ex(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Upload,
+                crate::i18n::tr(ui.ctx(), "Upload… (multi-select; keep local filenames)", "上传…（可多选；文件名保持与本地一致）"),
+                !self.busy,
+            )
+            .clicked()
             {
                 if let Some(files) = FileDialog::new().pick_files() {
                     if files.is_empty() {
@@ -601,10 +721,11 @@ impl SftpPanel {
                     }
                 }
             }
-            if crate::ui::chrome::panel_action_button_ex(
+            if crate::ui::chrome::panel_action_icon_button_ex(
                 ui,
                 theme,
-                "删除选中…",
+                crate::ui::icons::IconId::Trash,
+                crate::i18n::tr(ui.ctx(), "Delete selected…", "删除选中…"),
                 !self.busy && self.selected.is_some(),
             )
             .clicked()
@@ -616,21 +737,22 @@ impl SftpPanel {
         });
 
         ui.horizontal(|ui| {
-            crate::ui::chrome::form_field_label(ui, theme, "新建目录");
+            crate::ui::chrome::form_field_label(ui, theme, crate::i18n::tr(ui.ctx(), "New folder", "新建目录"));
             let mkdir_w = layout_util::finite_avail_minus(ui, 120.0, 80.0, 200.0);
             crate::ui::chrome::form_singleline_field(
                 ui,
                 theme,
                 egui::Id::new("sftp_mkdir_name"),
                 &mut self.mkdir_name,
-                "名称",
+                crate::i18n::tr(ui.ctx(), "Name", "名称"),
                 mkdir_w,
                 false,
             );
-            if crate::ui::chrome::panel_action_button_ex(
+            if crate::ui::chrome::panel_action_icon_button_ex(
                 ui,
                 theme,
-                "创建",
+                crate::ui::icons::IconId::Plus,
+                crate::i18n::tr(ui.ctx(), "Create folder", "创建目录"),
                 !self.mkdir_name.trim().is_empty(),
             )
             .clicked()
@@ -644,13 +766,24 @@ impl SftpPanel {
 
         if let Some(p) = self.pending_delete.clone() {
             ui.group(|ui| {
-                ui.label(format!("确认删除？\n{}", p.to_string_lossy()));
+                ui.label(format!(
+                    "{}\n{}",
+                    crate::i18n::tr(ui.ctx(), "Delete this?", "确认删除？"),
+                    p.to_string_lossy()
+                ));
                 ui.horizontal(|ui| {
-                    if crate::ui::chrome::panel_action_primary_button(ui, theme, "删除").clicked() {
+                    if crate::ui::chrome::panel_action_primary_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Trash,
+                        crate::i18n::tr(ui.ctx(), "Confirm delete", "确认删除"),
+                    )
+                    .clicked() {
                         let path = self.pending_delete.take().unwrap();
                         self.spawn_remove(sid, mgr.clone(), path, ctx);
                     }
-                    if crate::ui::chrome::panel_action_button(ui, theme, "取消").clicked() {
+                    if crate::ui::chrome::panel_action_icon_button(ui, theme, crate::ui::icons::IconId::Cross, crate::i18n::tr(ui.ctx(), "Cancel", "取消"))
+                        .clicked() {
                         self.pending_delete = None;
                     }
                 });
@@ -687,16 +820,24 @@ impl SftpPanel {
                     ui.painter().text(
                         center,
                         egui::Align2::CENTER_CENTER,
-                        "释放以上传文件",
+                        crate::i18n::tr(ui.ctx(), "Release to upload", "释放以上传文件"),
                         egui::FontId::proportional(theme.font_size_body()),
                         theme.text_primary(),
                     );
                 }
 
                 ui.label(
-                    egui::RichText::new(format!("{} 项（拖入文件上传，拖出文件下载）", self.entries.len()))
-                        .small()
-                        .color(theme.text_tertiary()),
+                    egui::RichText::new(format!(
+                        "{} {}",
+                        self.entries.len(),
+                        crate::i18n::tr(
+                            ctx,
+                            "items (drag in to upload, drag out to download)",
+                            "项（拖入文件上传，拖出文件下载）",
+                        ),
+                    ))
+                    .small()
+                    .color(theme.text_tertiary()),
                 );
 
                 let mut enter_dir: Option<PathBuf> = None;
@@ -732,7 +873,11 @@ impl SftpPanel {
                     if !e.is_dir && response.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                         egui::popup::show_tooltip(ui.ctx(), ui.id().with("drag_tip"), |ui| {
-                            ui.label(format!("拖出后选择位置下载: {}", e.name));
+                            ui.label(format!(
+                                "{} {}",
+                                crate::i18n::tr(ui.ctx(), "Choose save location:", "拖出后选择位置下载："),
+                                e.name
+                            ));
                         });
                     }
                     if !e.is_dir && response.drag_released() {
@@ -752,6 +897,7 @@ impl SftpPanel {
                 // 处理下载（在循环外，避免 borrow checker 问题）
                 if let Some((remote_path, file_name)) = download_path {
                     if let Some(save) = FileDialog::new()
+                        .set_title(crate::i18n::tr(ctx, "Save downloaded file…", "保存下载的文件"))
                         .set_file_name(&file_name)
                         .save_file()
                     {
@@ -762,7 +908,7 @@ impl SftpPanel {
 
         if self.busy {
             ui.add_space(theme.spacing_panel_gap());
-            ui.label(egui::RichText::new("SFTP 处理中…").small().color(theme.text_tertiary()));
+            ui.label(egui::RichText::new(crate::i18n::tr(ui.ctx(), "SFTP busy…", "SFTP 处理中…")).small().color(theme.text_tertiary()));
         }
     }
 }

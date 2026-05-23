@@ -392,7 +392,7 @@ impl LrzszTransfer {
     /// 开始接收（被动）：等 PTY 上出现 ZRQINIT 后再建 `zmodem2::Receiver` 并回 ZRINIT。
     pub fn start_receive(&self, channel: Arc<Mutex<Channel>>) -> Result<(), String> {
         if self.is_active.load(Ordering::Relaxed) {
-            return Err("传输已在进行中".to_string());
+            return Err("Transfer already in progress".to_string());
         }
 
         self.is_active.store(true, Ordering::Relaxed);
@@ -402,14 +402,14 @@ impl LrzszTransfer {
         *self.recv_side.lock().unwrap() = Some(RecvSide::Passive {
             pending: Vec::new(),
         });
-        log::info!("开始 ZMODEM 接收（被动，等 ZRQINIT）");
+        log::info!("ZMODEM receive started (passive, waiting for ZRQINIT)");
         Ok(())
     }
 
     /// 主动开始接收：立即建 `zmodem2::Receiver`（排队 ZRINIT）并刷到 SSH 通道。
     pub fn start_receive_active(&self, channel: Arc<Mutex<Channel>>) -> Result<(), String> {
         if self.is_active.load(Ordering::Relaxed) {
-            return Err("传输已在进行中".to_string());
+            return Err("Transfer already in progress".to_string());
         }
 
         self.is_active.store(true, Ordering::Relaxed);
@@ -425,7 +425,7 @@ impl LrzszTransfer {
         };
         self.flush_receiver_outgoing(&mut session.receiver)?;
         *self.recv_side.lock().unwrap() = Some(RecvSide::Active(session));
-        log::info!("开始 ZMODEM 接收（主动，已发 ZRINIT）");
+        log::info!("ZMODEM receive started (active, ZRINIT sent)");
         Ok(())
     }
 
@@ -436,7 +436,7 @@ impl LrzszTransfer {
                 if let Ok(mut c) = chan.lock() {
                     let _ = c.write_all(data);
                     let _ = c.flush();
-                    log::debug!("ZMODEM 向通道写入 {} bytes", data.len());
+                    log::debug!("ZMODEM wrote {} bytes to channel", data.len());
                 }
             }
         }
@@ -654,11 +654,11 @@ impl LrzszTransfer {
     pub fn start_send(&self, file_path: &str, pump_tx: ShellPumpTx) -> Result<(), String> {
         let path = PathBuf::from(file_path);
         if !path.exists() {
-            return Err(format!("文件不存在：{}", file_path));
+            return Err(format!("File does not exist: {}", file_path));
         }
 
         if self.is_active.load(Ordering::Relaxed) {
-            return Err("传输已在进行中".to_string());
+            return Err("Transfer already in progress".to_string());
         }
 
         let file_path_clone = path.clone();
@@ -727,7 +727,7 @@ impl LrzszTransfer {
                     Err(e) => {
                         let _ = tx.send(TransferEvent::FileError {
                             filename: file_name.clone(),
-                            error: format!("读取文件失败：{}", e),
+                            error: format!("Failed to read file: {}", e),
                         });
                         finish(
                             &is_active,
@@ -766,7 +766,7 @@ impl LrzszTransfer {
                 return;
             }
 
-            log::info!("ZMODEM 上传完成 {}", file_name);
+            log::info!("ZMODEM upload finished {}", file_name);
 
             thread::sleep(Duration::from_millis(100));
 
@@ -795,11 +795,11 @@ impl LrzszTransfer {
 /// 检测 ZRQINIT 包
 fn parse_zrqinit_packet(data: &[u8]) -> bool {
     if hex_scan_for_type(data, zmodem::ZRQINIT) {
-        log::info!("检测到 ZRQINIT（HEX 头）");
+        log::info!("Detected ZRQINIT (HEX header)");
         return true;
     }
     if binary_frame_type(data, zmodem::ZRQINIT) {
-        log::info!("检测到 ZRQINIT（BIN16 头）");
+        log::info!("Detected ZRQINIT (BIN16 header)");
         return true;
     }
     false

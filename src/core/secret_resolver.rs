@@ -37,9 +37,9 @@ impl TempKeyFile {
         path.push(format!("mistterm_key_{}.pem", uuid::Uuid::new_v4()));
         {
             let mut f = fs::File::create(&path)
-                .map_err(|e| ResolveError::Message(format!("创建临时密钥失败: {e}")))?;
+                .map_err(|e| ResolveError::Message(format!("Failed to create temp key file: {e}")))?;
             f.write_all(pem.as_bytes())
-                .map_err(|e| ResolveError::Message(format!("写入临时密钥失败: {e}")))?;
+                .map_err(|e| ResolveError::Message(format!("Failed to write temp key file: {e}")))?;
         }
         restrict_key_permissions(&path);
         Ok(Self(path))
@@ -161,7 +161,7 @@ impl SecretResolver {
         field: &str,
     ) -> Result<String, ResolveError> {
         if !self.vault_settings.enabled {
-            return Err(ResolveError::Message("Vault 未启用".into()));
+            return Err(ResolveError::Message("Vault is not enabled".into()));
         }
         let client = HashiCorpVaultClient::new(self.vault_settings.clone())?;
         let reference = VaultKvRef {

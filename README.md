@@ -17,6 +17,22 @@
 
 ## 🚀 快速开始
 
+### 安装（macOS / Linux / Windows）
+
+```bash
+git clone https://github.com/c-wind/MistTerm.git
+cd MistTerm
+chmod +x scripts/install.sh && ./scripts/install.sh   # macOS / Linux
+# Windows: .\scripts\install.ps1
+```
+
+详见 [docs/INSTALL.md](docs/INSTALL.md)。可执行文件名：**Mist**（`target/release/Mist`）。
+
+### 界面语言
+
+- 默认 **English**
+- **Preferences → Language** 可切换 **简体中文**，写入 `settings.json` 并持久化
+
 ### 构建与运行
 
 ```bash
@@ -25,10 +41,10 @@ git clone https://github.com/c-wind/MistTerm.git
 cd MistTerm
 
 # 构建 release 版本
-cargo build --release
+cargo build --release --bin Mist
 
 # 运行
-./target/release/mistterm
+./target/release/Mist
 ```
 
 ### 使用流程

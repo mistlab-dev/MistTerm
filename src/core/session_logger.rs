@@ -149,11 +149,13 @@ impl SessionLogWriter {
         self.current_path.clone()
     }
 
-    pub fn status_label(&self) -> String {
+    /// Short status for UI; translate with `i18n::tr` at display site.
+    pub fn status_label_key(&self) -> &'static str {
         if !self.settings.enabled || self.disabled {
-            return "日志关".to_string();
+            "log_off"
+        } else {
+            "log_on"
         }
-        "日志".to_string()
     }
 
     fn write_system_line(&mut self, msg: &str) {
@@ -169,7 +171,7 @@ impl SessionLogWriter {
     }
 
     pub fn write_connected(&mut self) {
-        self.write_system_line("← 连接建立");
+        self.write_system_line("<- session connected");
         if !self.host_line.is_empty() {
             let line = format!(
                 "[MistTerm {}] {}\n",
@@ -223,7 +225,7 @@ impl SessionLogWriter {
             + count_subsequence(raw, b"\x1b8");
         for _ in 0..enters {
             if self.alt_screen_depth == 0 {
-                self.write_system_line("[vim/全屏 TUI 开始 — 期间屏幕刷新不写入日志]");
+                self.write_system_line("[fullscreen TUI started — screen refresh omitted from log]");
             }
             self.alt_screen_depth = self.alt_screen_depth.saturating_add(1);
         }
@@ -231,7 +233,7 @@ impl SessionLogWriter {
             if self.alt_screen_depth > 0 {
                 self.alt_screen_depth -= 1;
                 if self.alt_screen_depth == 0 {
-                    self.write_system_line("[vim/全屏 TUI 结束]");
+                    self.write_system_line("[fullscreen TUI ended]");
                 }
             }
         }
@@ -245,7 +247,7 @@ impl SessionLogWriter {
             // 单条 `~` 多为 shell 行尾碎片，不落盘（避免每条命令后出现孤立 ~）
         } else {
             let line = format!(
-                "[MistTerm {}] [略过 vim 空行填充 ×{}]\n",
+                "[MistTerm {}] [skipped vim tilde padding x{}]\n",
                 Local::now().format("%Y-%m-%d %H:%M:%S"),
                 self.tilde_pad_run
             );
@@ -261,7 +263,7 @@ impl SessionLogWriter {
             return;
         }
         let line = format!(
-            "[MistTerm {}] [略过重复行 ×{}]\n",
+            "[MistTerm {}] [skipped duplicate lines x{}]\n",
             Local::now().format("%Y-%m-%d %H:%M:%S"),
             self.dedupe_count
         );
@@ -476,7 +478,7 @@ impl SessionLogWriter {
         self.flush_pty_buffer(true);
         self.flush_line_compress_state();
         self.alt_screen_depth = 0;
-        self.write_system_line("← 连接断开");
+        self.write_system_line("<- session disconnected");
         if let Some(ref mut w) = self.writer {
             let _ = w.flush();
         }
@@ -684,11 +686,11 @@ mod tests {
         w.stop_log();
         let body = fs::read_to_string(&path).unwrap();
         assert!(
-            body.contains("全屏 TUI 开始") && body.contains("全屏 TUI 结束"),
+            body.contains("fullscreen TUI started") && body.contains("fullscreen TUI ended"),
             "{body}"
         );
         assert!(
-            !body.contains("~\n~\n") || body.contains("略过 vim 空行"),
+            !body.contains("~\n~\n") || body.contains("skipped vim tilde padding"),
             "tilde flood should be collapsed: {body}"
         );
         assert!(body.contains("a.txt"), "{body}");

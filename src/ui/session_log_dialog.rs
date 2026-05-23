@@ -36,39 +36,62 @@ impl Default for SessionLogDialog {
 }
 
 impl SessionLogDialog {
-    pub fn open_for(&mut self, session_id: &str, session_name: &str, settings: &SessionLogSettings) {
+    pub fn open_for(
+        &mut self,
+        ctx: &egui::Context,
+        session_id: &str,
+        session_name: &str,
+        settings: &SessionLogSettings,
+    ) {
         self.session_id = session_id.to_string();
         self.session_name = session_name.to_string();
         self.log_files = list_session_log_files(&settings.base_dir, session_id);
         self.selected_file = 0;
         self.search_query.clear();
-        self.reload_content(settings);
+        self.reload_content(ctx, settings);
         self.open = true;
     }
 
-    fn reload_content(&mut self, settings: &SessionLogSettings) {
+    fn reload_content(&mut self, ctx: &egui::Context, settings: &SessionLogSettings) {
         self.content.clear();
         if let Some(path) = self.log_files.get(self.selected_file) {
             match read_log_tail(path, LOG_TAIL_READ_BYTES) {
                 Ok(text) if text.trim().is_empty() => {
-                    self.content =
-                        "日志文件存在但尚无内容；请在终端产生输出后再查看。".to_string();
+                    self.content = crate::i18n::tr(
+                        ctx,
+                        "The log file exists but is empty; produce terminal output before viewing.",
+                        "日志文件存在但尚无内容；请在终端产生输出后再查看。",
+                    )
+                    .to_string();
                 }
                 Ok(text) => {
                     let cleaned = log_text_for_display(&text);
                     self.content = if cleaned.trim().is_empty() {
-                        "日志主要为终端控制符，清洗后无可见文本。请直接在终端查看。".to_string()
+                        crate::i18n::tr(
+                            ctx,
+                            "Logs are mostly terminal control sequences; stripping left nothing visible—check the terminal or raw log file.",
+                            "日志主要为终端控制符，清洗后无可见文本。请直接在终端查看。",
+                        )
+                        .to_string()
                     } else {
                         cleaned
                     };
                 }
                 Err(e) => {
-                    self.content = format!("无法读取日志：{}\n路径：{}", e, path.display());
+                    self.content = format!(
+                        "{}{}\n{}{}",
+                        crate::i18n::tr(ctx, "Failed to read log: ", "无法读取日志："),
+                        e,
+                        crate::i18n::tr(ctx, "Path: ", "路径："),
+                        path.display()
+                    );
                 }
             }
         } else if self.log_files.is_empty() {
             self.content = format!(
-                "暂无日志文件。\n目录：{}",
+                "{}\n{}{}",
+                crate::i18n::tr(ctx, "No session log files yet.", "暂无日志文件。"),
+                crate::i18n::tr(ctx, "Directory: ", "目录："),
                 settings
                     .base_dir
                     .join(sanitize_dir_hint(&self.session_id))
@@ -99,7 +122,7 @@ impl SessionLogDialog {
         let mut copy_all = false;
         let display = self.filtered_content();
         let display_for_view = if display.is_empty() {
-            "（无匹配内容）".to_string()
+            crate::i18n::tr(ctx, "(No matches)", "（无匹配内容）").to_string()
         } else {
             display
         };
@@ -114,17 +137,18 @@ impl SessionLogDialog {
             r.min.x + (sw - modal_size.x) * 0.5,
             r.min.y + (sh - modal_size.y) * 0.5,
         );
-        let title = format!("会话日志 — {}", self.session_name);
-        egui::Window::new(&title)
+        let title = format!(
+            "{}{}",
+            crate::i18n::tr(ctx, "Session log — ", "会话日志 — "),
+            self.session_name
+        );
+        chrome::modal_window("session_log_viewer", theme, ctx)
             .id(egui::Id::new("session_log_viewer_window"))
             .open(&mut self.open)
-            .title_bar(false)
             .default_pos(default_pos)
             .movable(true)
             .resizable(false)
-            .collapsible(false)
             .fixed_size(modal_size)
-            .frame(chrome::modal_window_frame(theme))
             .show(ctx, |ui| {
                 chrome::modal_content_frame(theme).show(ui, |ui| {
                     let content_w = layout_util::textedit_width_in_parent(ui, 24.0);
@@ -138,12 +162,16 @@ impl SessionLogDialog {
                         theme,
                         egui::Id::new("session_log_search"),
                         &mut self.search_query,
-                        "过滤日志内容…",
+                        crate::i18n::tr(ctx, "Filter log…", "过滤日志内容…"),
                         search_w,
                     );
                     if !self.log_files.is_empty() {
                         ui.horizontal(|ui| {
-                            crate::ui::chrome::form_field_label(ui, theme, "日期");
+                            crate::ui::chrome::form_field_label(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Date", "日期"),
+                            );
                             let names: Vec<String> = self
                                 .log_files
                                 .iter()
@@ -167,7 +195,13 @@ impl SessionLogDialog {
                                         }
                                     }
                                 });
-                            if chrome::panel_action_button(ui, theme, "刷新").clicked() {
+                            if chrome::panel_action_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Refresh,
+                                crate::i18n::tr(ctx, "Refresh", "刷新"),
+                            )
+                                .clicked() {
                                 self.log_files =
                                     list_session_log_files(&settings.base_dir, &self.session_id);
                                 reload = true;
@@ -213,7 +247,11 @@ impl SessionLogDialog {
                                 ui.add(
                                     egui::Label::new(chrome::rich_caption(
                                         theme,
-                                        "本地录制的终端输出（非实时）。已去除颜色控制符；完整原始内容见日志文件。",
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "Locally recorded terminal output (not live). Color codes are stripped; see the log file for raw content.",
+                                            "本地录制的终端输出（非实时）。已去除颜色控制符；完整原始内容见日志文件。",
+                                        ),
                                     ))
                                     .wrap(true),
                                 );
@@ -222,10 +260,22 @@ impl SessionLogDialog {
                         ui.with_layout(
                             egui::Layout::right_to_left(egui::Align::Center),
                             |ui| {
-                                if chrome::modal_secondary_button(ui, theme, "关闭").clicked() {
+                                if chrome::modal_secondary_icon_button(
+                                    ui,
+                                    theme,
+                                    crate::ui::icons::IconId::Close,
+                                    crate::i18n::tr(ctx, "Close", "关闭"),
+                                )
+                                    .clicked() {
                                     should_close = true;
                                 }
-                                if chrome::modal_secondary_button(ui, theme, "复制全部").clicked() {
+                                if chrome::modal_secondary_icon_button(
+                                    ui,
+                                    theme,
+                                    crate::ui::icons::IconId::Copy,
+                                    crate::i18n::tr(ctx, "Copy all", "复制全部"),
+                                )
+                                    .clicked() {
                                     copy_all = true;
                                 }
                             },
@@ -234,7 +284,7 @@ impl SessionLogDialog {
                 });
             });
         if reload {
-            self.reload_content(settings);
+            self.reload_content(ctx, settings);
         }
         if copy_all {
             let _ = Clipboard::new().and_then(|mut c| c.set_text(display_for_view));

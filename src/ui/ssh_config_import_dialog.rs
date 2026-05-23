@@ -72,28 +72,33 @@ impl SshConfigImportDialog {
         let page_start = page * PAGE_SIZE;
         let page_end = (page_start + PAGE_SIZE).min(self.candidates.len());
 
-        egui::Window::new("ssh_config_import")
+        let modal_sz = layout_util::modal_edit_size(ctx);
+        chrome::modal_window("ssh_config_import", theme, ctx)
             .open(&mut self.open)
-            .title_bar(false)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
             .movable(true)
             .resizable(false)
-            .collapsible(false)
-            .fixed_size(layout_util::modal_edit_size(ctx))
-            .frame(chrome::modal_window_frame(theme))
+            .fixed_size(modal_sz)
             .show(ctx, |ui| {
                 chrome::modal_content_frame(theme).show(ui, |ui| {
                     let mut close_hdr = false;
-                    if chrome::modal_header(ui, theme, "SSH Config 导入", chrome::modal_title_font_size(theme)) {
+                    if chrome::modal_header(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Import SSH Config", "SSH Config 导入"),
+                        chrome::modal_title_font_size(theme),
+                    ) {
                         close_hdr = true;
                     }
                     ui.label(
                         egui::RichText::new(format!(
-                            "找到以下 SSH 配置，共 {} 个：",
-                            self.candidates.len()
+                            "{}{}{}",
+                            crate::i18n::tr(ctx, "Found ", "找到以下 SSH 配置，共 "),
+                            self.candidates.len(),
+                            crate::i18n::tr(ctx, " SSH host entries:", " 个："),
                         ))
-                        .size(theme.font_size_normal())
-                        .color(theme.text_secondary()),
+                            .size(theme.font_size_normal())
+                            .color(theme.text_secondary()),
                     );
                     if !self.parse_warnings.is_empty() {
                         ui.add_space(theme.spacing_sm());
@@ -106,12 +111,14 @@ impl SshConfigImportDialog {
                         }
                         if self.parse_warnings.len() > 5 {
                             ui.label(
-                                egui::RichText::new(format!(
-                                    "… 另有 {} 条解析提示",
-                                    self.parse_warnings.len() - 5
+                                egui::RichText::new(                                format!(
+                                    "{} {} {}",
+                                    crate::i18n::tr(ctx, "… ", "… 另有"),
+                                    self.parse_warnings.len() - 5,
+                                    crate::i18n::tr(ctx, " more parse hints", " 条解析提示"),
                                 ))
-                                .size(theme.font_size_small())
-                                .color(theme.text_tertiary()),
+                                    .size(theme.font_size_small())
+                                    .color(theme.text_tertiary()),
                             );
                         }
                     }
@@ -127,7 +134,7 @@ impl SshConfigImportDialog {
                                     let mut sel = self.selected.get(i).copied().unwrap_or(false);
                                     if !can {
                                         ui.add_enabled(false, egui::Checkbox::without_text(&mut false));
-                                    } else if ui.checkbox(&mut sel, "").changed() {
+                                    } else if chrome::form_checkbox(ui, theme, &mut sel, "").changed() {
                                         if let Some(s) = self.selected.get_mut(i) {
                                             *s = sel;
                                         }
@@ -145,7 +152,11 @@ impl SshConfigImportDialog {
                                     );
                                     if imported {
                                         ui.label(
-                                            egui::RichText::new("(已导入)")
+                                            egui::RichText::new(crate::i18n::tr(
+                                                ctx,
+                                                "(already imported)",
+                                                "(已导入)",
+                                            ))
                                                 .size(theme.font_size_small())
                                                 .color(theme.text_tertiary()),
                                         );
@@ -161,16 +172,29 @@ impl SshConfigImportDialog {
                         });
                     if total_pages > 1 {
                         ui.horizontal(|ui| {
-                            if chrome::panel_action_button_ex(ui, theme, "上一页", page > 0)
-                                .clicked()
+                            if chrome::panel_action_icon_button_ex(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::ChevronLeft,
+                                crate::i18n::tr(ctx, "Previous", "上一页"),
+                                page > 0,
+                            )
+                            .clicked()
                             {
                                 self.page = page.saturating_sub(1);
                             }
-                            ui.label(format!("第 {}/{} 页", page + 1, total_pages));
-                            if chrome::panel_action_button_ex(
+                            ui.label(format!(
+                                "{}{}/{}{}",
+                                crate::i18n::tr(ctx, "Page ", "第 "),
+                                page + 1,
+                                total_pages,
+                                crate::i18n::tr(ctx, "", " 页"),
+                            ));
+                            if chrome::panel_action_icon_button_ex(
                                 ui,
                                 theme,
-                                "下一页",
+                                crate::ui::icons::IconId::ChevronRight,
+                                crate::i18n::tr(ctx, "Next", "下一页"),
                                 page + 1 < total_pages,
                             )
                             .clicked()
@@ -182,11 +206,16 @@ impl SshConfigImportDialog {
                     ui.add_space(theme.spacing_lg());
                     chrome::modal_footer_actions(ui, theme, |ui, th| {
                         let label = if importable_count > 0 {
-                            format!("导入所选 ({})", importable_count)
+                            format!(
+                                "{}{})",
+                                crate::i18n::tr(ctx, "Import selected (", "导入所选 ("),
+                                importable_count,
+                            )
                         } else {
-                            "导入所选".to_string()
+                            crate::i18n::tr(ctx, "Import selected", "导入所选").to_string()
                         };
-                        if chrome::modal_primary_button(ui, th, &label).clicked()
+                        if chrome::modal_primary_icon_button(ui, th, crate::ui::icons::IconId::Check, &label)
+                            .clicked()
                             && importable_count > 0
                         {
                             import_indices = Some(
@@ -203,7 +232,13 @@ impl SshConfigImportDialog {
                             );
                             should_close = true;
                         }
-                        if chrome::modal_secondary_button(ui, th, "取消").clicked() {
+                        if chrome::modal_secondary_icon_button(
+                            ui,
+                            th,
+                            crate::ui::icons::IconId::Cross,
+                            crate::i18n::tr(ctx, "Cancel", "取消"),
+                        )
+                            .clicked() {
                             should_close = true;
                         }
                     });

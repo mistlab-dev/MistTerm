@@ -6,7 +6,6 @@ use std::io::Write;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
-use super::format_ssh_connect_error;
 
 /// SSH 配置
 #[derive(Debug, Clone)]
@@ -57,14 +56,12 @@ impl SshClient {
 
         let mut addrs = (&self.config.host as &str, self.config.port)
             .to_socket_addrs()
-            .map_err(|e| {
-                format_ssh_connect_error(&format!("无法解析主机地址: {}", e))
-            })?;
+            .map_err(|e| format!("Failed to resolve host address: {}", e))?;
         let sock = addrs.next().ok_or_else(|| {
-            format_ssh_connect_error("无可解析的地址（请检查主机名与端口）")
+            "No resolvable address — check hostname and port".to_string()
         })?;
         let stream = TcpStream::connect_timeout(&sock, Duration::from_secs(30)).map_err(|e| {
-            format_ssh_connect_error(&format!("TCP 连接失败（30 秒内未建立）: {}", e))
+            format!("TCP connect failed (30s timeout): {}", e)
         })?;
         log::info!("TCP connected");
 
@@ -78,9 +75,9 @@ impl SshClient {
         session.set_tcp_stream(stream);
 
         // SSH 握手
-        session.handshake().map_err(|e| {
-            format_ssh_connect_error(&format!("SSH handshake failed: {}", e))
-        })?;
+        session
+            .handshake()
+            .map_err(|e| format!("SSH handshake failed: {}", e))?;
         log::info!("SSH handshake completed");
 
         if self.config.keepalive_interval_secs > 0 {
@@ -148,9 +145,9 @@ impl SshClient {
         }
 
         if !authenticated {
-            return Err(format_ssh_connect_error(
-                "Authentication failed (password and SSH keys failed)",
-            ));
+            return Err(
+                "Authentication failed (password and SSH keys failed)".to_string(),
+            );
         }
 
         // 认证完成后再切到非阻塞，供 shell 读写线程轮询

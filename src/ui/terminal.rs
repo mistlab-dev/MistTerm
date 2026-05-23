@@ -21,6 +21,8 @@ use crate::terminal::{Terminal as VtTerminal, TerminalShellStyle};
 use crate::terminal::style::{
     format_user_error_line, format_user_info_line, format_user_success_line, format_user_warn_line,
 };
+use crate::i18n::UiLanguage;
+use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 
 /// 与 [`VtTerminal::content_epoch`] 组合，避免 PTY 无输出帧重复构建整屏 [`egui::text::LayoutJob`]。
@@ -199,6 +201,8 @@ pub struct TerminalView {
     pending_log_output: Vec<Vec<u8>>,
     /// 查找命中高亮：`(行, 列, 长度)` 均为 1-based 字符下标
     search_highlight: Option<(usize, usize, usize)>,
+    /// `show()` 每帧同步，用于无 `Context` 入参的路径（不影响 `process_ssh_messages` 内语言的一帧滞后）。
+    ui_lang_last: UiLanguage,
 }
 
 impl TerminalView {
@@ -423,11 +427,22 @@ impl TerminalView {
         Self::is_would_block_text(&err.to_string())
     }
 
-    fn retry_sftp_op<T, E, F>(mut op: F, context: &str) -> Result<T, String>
+    #[inline]
+    fn locale_last(&self) -> crate::i18n::Locale {
+        crate::i18n::Locale::from(self.ui_lang_last)
+    }
+
+    fn retry_sftp_op<T, E, F>(
+        locale: crate::i18n::Locale,
+        mut op: F,
+        label_en: &'static str,
+        label_zh: &'static str,
+    ) -> Result<T, String>
     where
         F: FnMut() -> Result<T, E>,
         E: std::fmt::Display,
     {
+        let label = locale.tr(label_en, label_zh);
         let mut last_err: Option<E> = None;
         for _ in 0..Self::SFTP_RETRY_ATTEMPTS {
             match op() {
@@ -439,14 +454,27 @@ impl TerminalView {
                         thread::sleep(Duration::from_millis(Self::SFTP_RETRY_SLEEP_MS));
                         continue;
                     }
-                    return Err(format!("{}：{}", context, msg));
+                    return Err(match locale.lang {
+                        UiLanguage::Zh => format!("{}：{}", label, msg),
+                        UiLanguage::En => format!("{}: {}", label, msg),
+                    });
                 }
             }
         }
         if let Some(e) = last_err {
-            return Err(format!("{}：重试超时（最后错误：{}）", context, e));
+            let last = e.to_string();
+            return Err(match locale.lang {
+                UiLanguage::Zh => format!("{}：重试超时（最后错误：{}）", label, last),
+                UiLanguage::En => format!(
+                    "{}: retry timed out (last error: {})",
+                    label, last
+                ),
+            });
         }
-        Err(format!("{}：重试失败", context))
+        Err(match locale.lang {
+            UiLanguage::Zh => format!("{}：重试失败", label),
+            UiLanguage::En => format!("{}: retry failed", label),
+        })
     }
 
     fn contains_shell_prompt_fragment(text: &str) -> bool {
@@ -522,6 +550,7 @@ impl TerminalView {
             pending_log_commands: Vec::new(),
             pending_log_output: Vec::new(),
             search_highlight: None,
+            ui_lang_last: UiLanguage::default(),
         }
     }
 
@@ -633,10 +662,10 @@ impl TerminalView {
                 self.connection_target = Some((username.to_string(), host.to_string()));
             }
             Err(e) => {
-                self.error_message = Some(format_ssh_connect_error(&format!(
-                    "Failed to create session: {}",
-                    e
-                )));
+                self.error_message = Some(format_ssh_connect_error(
+                    self.ui_lang_last,
+                    &format!("Failed to create session: {}", e),
+                ));
             }
         }
     }
@@ -650,6 +679,7 @@ impl TerminalView {
         terminal_search_open: bool,
         capture_pty_keyboard: bool,
     ) {
+        self.ui_lang_last = crate::i18n::language(ui.ctx());
         // 先处理网络与键盘，再绘制，避免输入/输出滞后一帧
         self.process_ssh_messages(theme);
         self.flush_paste_queue(ui.ctx());
@@ -1066,7 +1096,11 @@ impl TerminalView {
                             select_resp.context_menu(|ui| {
                                 crate::ui::chrome::apply_context_menu_style(ui, theme);
                                 if !self.selection.is_empty() {
-                                    if crate::ui::chrome::popup_menu_button(ui, theme, "复制选中")
+                                    if crate::ui::chrome::popup_menu_button(
+                                        ui,
+                                        theme,
+                                        crate::i18n::tr(ui.ctx(), "Copy selection", "复制选中"),
+                                    )
                                         .clicked()
                                     {
                                         let text = self.get_selected_text();
@@ -1077,7 +1111,11 @@ impl TerminalView {
                                         }
                                         ui.close_menu();
                                     }
-                                    if crate::ui::chrome::popup_menu_button(ui, theme, "发送到 AI")
+                                    if crate::ui::chrome::popup_menu_button(
+                                        ui,
+                                        theme,
+                                        crate::i18n::tr(ui.ctx(), "Send to AI", "发送到 AI"),
+                                    )
                                         .clicked()
                                     {
                                         let text = self.get_selected_text();
@@ -1088,14 +1126,25 @@ impl TerminalView {
                                     }
                                     ui.separator();
                                 }
-                                if crate::ui::chrome::popup_menu_button(ui, theme, "复制全部").clicked()
+                                if crate::ui::chrome::popup_menu_button(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(ui.ctx(), "Copy all", "复制全部"),
+                                )
+                                .clicked()
                                 {
                                     if let Ok(mut clip) = Clipboard::new() {
                                         let _ = clip.set_text(self.terminal.get_formatted_output());
                                     }
                                     ui.close_menu();
                                 }
-                                if crate::ui::chrome::popup_menu_button(ui, theme, "粘贴").clicked() {
+                                if crate::ui::chrome::popup_menu_button(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(ui.ctx(), "Paste", "粘贴"),
+                                )
+                                .clicked()
+                                {
                                     if let Ok(mut clip) = Clipboard::new() {
                                         if let Ok(text) = clip.get_text() {
                                             self.paste_text(&text, ui.ctx());
@@ -1104,16 +1153,32 @@ impl TerminalView {
                                     ui.close_menu();
                                 }
                                 ui.separator();
-                                if crate::ui::chrome::popup_menu_button(ui, theme, "清屏").clicked() {
+                                if crate::ui::chrome::popup_menu_button(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(ui.ctx(), "Clear screen", "清屏"),
+                                )
+                                .clicked()
+                                {
                                     self.clear_screen();
                                     ui.close_menu();
                                 }
-                                if crate::ui::chrome::popup_menu_button(ui, theme, "字体 +").clicked()
+                                if crate::ui::chrome::popup_menu_button(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(ui.ctx(), "Font +", "字体 +"),
+                                )
+                                .clicked()
                                 {
                                     self.set_font_size(self.font_size + 1.0);
                                     ui.close_menu();
                                 }
-                                if crate::ui::chrome::popup_menu_button(ui, theme, "字体 -").clicked()
+                                if crate::ui::chrome::popup_menu_button(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(ui.ctx(), "Font −", "字体 -"),
+                                )
+                                .clicked()
                                 {
                                     self.set_font_size(self.font_size - 1.0);
                                     ui.close_menu();
@@ -1132,9 +1197,9 @@ impl TerminalView {
                         ui.add_space(theme.spacing_sm());
                         ui.separator();
                         let dir = if self.transfer_outgoing {
-                            "本机 → 远端"
+                            crate::i18n::tr(ui.ctx(), "Local → remote", "本机 → 远端")
                         } else {
-                            "远端 → 本机"
+                            crate::i18n::tr(ui.ctx(), "Remote → local", "远端 → 本机")
                         };
                         ui.horizontal(|ui| {
                             crate::ui::icons::icon_label_row(
@@ -1269,7 +1334,7 @@ impl TerminalView {
                         if is_rz_prompt && self.connected {
                             if let Some(path) = self.zmodem_upload_after_rz_path.take() {
                                 log::info!(
-                                    "rz 握手就绪，开始 ZMODEM 上传（预排队）{}",
+                                    "rz handshake ready; starting queued ZMODEM upload: {}",
                                     path.display()
                                 );
                                 self.pending_rz_upload = false;
@@ -1287,13 +1352,16 @@ impl TerminalView {
                                     vte_dirty = true;
                                 }
                                 if let Err(e) = self.start_rz_upload(path.as_path()) {
-                                    self.error_message = Some(e);
+                                    self.error_message = Some(crate::i18n::localize_backend_error(
+                                        self.ui_lang_last,
+                                        &e,
+                                    ));
                                     self.lrzsz.end_rz_handshake_capture();
                                 }
                                 continue;
                             }
                             if !self.pending_rz_upload {
-                            log::info!("检测到 rz 命令，弹出上传文件选择");
+                            log::info!("Detected rz command; opening upload file picker");
                             self.pending_rz_upload = true;
                             self.rz_control_mode_until = Some(Instant::now() + Duration::from_secs(20));
                             self.lrzsz.begin_rz_handshake_capture();
@@ -1366,17 +1434,17 @@ impl TerminalView {
                                         }
                                     }
                                     Err(e) => {
-                                        self.error_message = Some(format_ssh_connect_error(&format!(
-                                            "Failed to start shell: {}",
-                                            e
-                                        )));
+                                        self.error_message = Some(format_ssh_connect_error(
+                                            self.ui_lang_last,
+                                            &format!("Failed to start shell: {}", e),
+                                        ));
                                     }
                                 }
                             }
                         }
                     }
                     SshMessage::Error { error, .. } => {
-                        let msg = format_ssh_connect_error(&error);
+                        let msg = format_ssh_connect_error(self.ui_lang_last, &error);
                         if let Some((_, host)) = &self.connection_target {
                             self.pending_connect_audit = Some((false, host.clone()));
                         }
@@ -1434,19 +1502,24 @@ impl TerminalView {
                 }
                 TransferEvent::FileComplete { filename, path } => {
                     self.transfer_progress = None;
-                    let title = if self.transfer_outgoing {
-                        "上传完成"
+                    let line = if self.transfer_outgoing {
+                        format!(
+                            "{}{} -> {}",
+                            crate::i18n::tr(ctx, "Upload complete: ", "上传完成："),
+                            filename,
+                            path.display()
+                        )
                     } else {
-                        "接收完成"
+                        format!(
+                            "{}{} -> {}",
+                            crate::i18n::tr(ctx, "Receive complete: ", "接收完成："),
+                            filename,
+                            path.display()
+                        )
                     };
                     self.transfer_outgoing = false;
                     // 完成后多一空行，与后续 shell 提示符/命令拉开
-                    self.feed_user_success_line(theme, &format!(
-                        "OK {}：{} -> {}",
-                        title,
-                        filename,
-                        path.display()
-                    ));
+                    self.feed_user_success_line(theme, &line);
                 }
                 TransferEvent::FileError { filename, error } => {
                     if let Some(ref h) = self.ssh_handle {
@@ -1454,7 +1527,12 @@ impl TerminalView {
                     }
                     self.transfer_progress = None;
                     self.transfer_outgoing = false;
-                    self.feed_user_error_line(theme, &format!("传输失败 {}: {}", filename, error));
+                    self.feed_user_error_line(theme, &format!(
+                        "{} {}: {}",
+                        crate::i18n::tr(ctx, "Transfer failed", "传输失败"),
+                        filename,
+                        error
+                    ));
                     self.flush_ssh_pty_size_after_transfer();
                 }
                 TransferEvent::TransferComplete => {
@@ -1641,29 +1719,44 @@ impl TerminalView {
 
         let mut open = true;
         let mut close_via_header = false;
-        crate::ui::chrome::modal_window("resend_offline_input", theme)
+        let modal_sz = layout_util::modal_confirm_size(ctx);
+        crate::ui::chrome::modal_window("resend_offline_input", theme, ctx)
             .open(&mut open)
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
             .resizable(false)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                 if crate::ui::chrome::modal_header(
                     ui,
                     theme,
-                    "断线期间暂存的输入",
+                    crate::i18n::tr(ctx, "Queued input while offline", "断线期间暂存的输入"),
                     crate::ui::chrome::modal_title_font_size(theme),
                 ) {
                     close_via_header = true;
                 }
+                let body_line = match crate::i18n::language(ctx) {
+                    UiLanguage::En => format!(
+                        "{} bytes queued. Send to the remote shell now?",
+                        n
+                    ),
+                    UiLanguage::Zh => format!(
+                        "共 {} 字节，是否发送到当前远程 shell？",
+                        n
+                    ),
+                };
                 ui.label(
-                    egui::RichText::new(format!("共 {} 字节，是否发送到当前远程 shell？", n))
+                    egui::RichText::new(body_line)
                         .size(theme.font_size_medium())
                         .color(theme.text_secondary()),
                 );
                 if !preview_esc.is_empty() {
                     ui.add_space(theme.spacing_sm());
                     ui.label(
-                        egui::RichText::new(format!("预览：{}", preview_esc))
+                        egui::RichText::new(format!(
+                            "{}{}",
+                            crate::i18n::tr(ctx, "Preview: ", "预览："),
+                            preview_esc
+                        ))
                             .monospace()
                             .size(theme.font_size_panel_title())
                             .color(theme.text_tertiary()),
@@ -1671,7 +1764,13 @@ impl TerminalView {
                 }
                 ui.add_space(theme.spacing_list_item_x());
                 ui.horizontal(|ui| {
-                    if crate::ui::chrome::modal_primary_button(ui, theme, "发送到远端").clicked() {
+                    if crate::ui::chrome::modal_primary_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Upload,
+                        crate::i18n::tr(ui.ctx(), "Send to remote", "发送到远端"),
+                    )
+                    .clicked() {
                         if let Some(handle) = self.ssh_handle.clone() {
                             for chunk in self.disconnected_input_buffer.chunks(4096) {
                                 let _ = handle.send_input(chunk);
@@ -1681,7 +1780,13 @@ impl TerminalView {
                         self.buffer_input_while_disconnected = false;
                         self.resend_offline_input_dialog_open = false;
                     }
-                    if crate::ui::chrome::modal_secondary_button(ui, theme, "丢弃缓存").clicked() {
+                    if crate::ui::chrome::modal_secondary_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Trash,
+                        crate::i18n::tr(ui.ctx(), "Discard buffer", "丢弃缓存"),
+                    )
+                        .clicked() {
                         self.disconnected_input_buffer.clear();
                         self.buffer_input_while_disconnected = false;
                         self.resend_offline_input_dialog_open = false;
@@ -2025,11 +2130,12 @@ impl TerminalView {
     }
 
     pub fn send_ctrl_c(&self) -> Result<(), String> {
+        let loc = self.locale_last();
         if !self.connected {
-            return Err("当前未连接".to_string());
+            return Err(loc.tr("Not connected", "当前未连接").to_string());
         }
         let Some(handle) = self.ssh_handle.as_ref() else {
-            return Err("PTY 未就绪".to_string());
+            return Err(loc.tr("PTY not ready", "PTY 未就绪").to_string());
         };
         if self.lrzsz.is_active() {
             self.lrzsz.cancel_active_transfer();
@@ -2070,16 +2176,17 @@ impl TerminalView {
 
     /// 基于当前交互式 PTY 通道执行 rz 对端对应的 ZMODEM 发送
     pub fn start_rz_upload(&mut self, path: &Path) -> Result<(), String> {
+        let loc = self.locale_last();
         if !self.connected {
-            return Err("当前未连接".to_string());
+            return Err(loc.tr("Not connected", "当前未连接").to_string());
         }
         let path_str = path
             .to_str()
-            .ok_or_else(|| "文件路径包含非法字符".to_string())?;
+            .ok_or_else(|| loc.tr("File path contains invalid characters", "文件路径包含非法字符").to_string())?;
         let handle = self
             .ssh_handle
             .as_ref()
-            .ok_or_else(|| "PTY 未就绪".to_string())?;
+            .ok_or_else(|| loc.tr("PTY not ready", "PTY 未就绪").to_string())?;
         let pump_tx = handle.shell_pump_tx();
         self.rz_control_mode_until = Some(Instant::now() + Duration::from_secs(90));
         log::info!(
@@ -2109,24 +2216,47 @@ impl TerminalView {
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.upload_result_rx = None;
-                Some(Err("上传任务异常中断".to_string()))
+                Some(Err(
+                    self.locale_last()
+                        .tr("Upload task ended unexpectedly", "上传任务异常中断")
+                        .to_string(),
+                ))
             }
         }
     }
 
     pub fn start_upload(&mut self, path: &Path) -> Result<(), String> {
+        let loc_ui = self.locale_last();
         if self.upload_result_rx.is_some() {
-            return Err("已有上传任务正在进行中".to_string());
+            return Err(
+                loc_ui
+                    .tr("An upload task is already in progress", "已有上传任务正在进行中")
+                    .to_string(),
+            );
         }
 
-        let session_id = self.session_id
-            .ok_or_else(|| "没有 SSH 会话".to_string())?;
-        let session = self.ssh_manager.as_ref()
+        let session_id = self.session_id.ok_or_else(|| {
+            loc_ui
+                .tr("No SSH session", "没有 SSH 会话")
+                .to_string()
+        })?;
+        let session = self
+            .ssh_manager
+            .as_ref()
             .and_then(|m| m.get_session(session_id))
-            .ok_or_else(|| "获取 SSH 会话失败".to_string())?;
+            .ok_or_else(|| {
+                loc_ui
+                    .tr("Could not acquire SSH session", "获取 SSH 会话失败")
+                    .to_string()
+            })?;
 
-        let file_name = path.file_name()
-            .ok_or_else(|| "无效的文件路径".to_string())?
+        let file_name = path
+            .file_name()
+            .ok_or_else(|| {
+                loc_ui
+                    .tr("Invalid file path", "无效的文件路径")
+                    .to_string()
+            })?
             .to_string_lossy()
             .to_string();
 
@@ -2134,32 +2264,70 @@ impl TerminalView {
         let remote_path = format!("./{}", file_name);
         let (tx, rx) = mpsc::channel::<Result<String, String>>();
         self.upload_result_rx = Some(rx);
+        let lang = self.ui_lang_last;
 
         thread::spawn(move || {
+            let locale = crate::i18n::Locale::from(lang);
             let result = (|| -> Result<String, String> {
-                let data = std::fs::read(&path_buf)
-                    .map_err(|e| format!("读取文件失败：{}", e))?;
+                let data = std::fs::read(&path_buf).map_err(|e| {
+                    format!(
+                        "{} {}",
+                        locale.tr("Failed to read file:", "读取文件失败："),
+                        e
+                    )
+                })?;
                 let total_size = data.len();
                 log::info!(
-                    "开始 SSH SCP 直传上传: {} ({} bytes)",
+                    "Starting SSH SCP upload: {} ({} bytes)",
                     path_buf.display(),
                     total_size
                 );
                 // 用 SCP 直传替代 cat >，避免 wait_close 卡住导致无回执
                 let mut scp = session
                     .scp_send(Path::new(&remote_path), 0o644, total_size as u64, None)
-                    .map_err(|e| format!("创建 SCP 通道失败：{}", e))?;
+                    .map_err(|e| {
+                        format!(
+                            "{} {}",
+                            locale.tr("Failed to open SCP channel:", "创建 SCP 通道失败："),
+                            e
+                        )
+                    })?;
                 use std::io::Write;
-                scp.write_all(&data)
-                    .map_err(|e| format!("SCP 写入失败：{}", e))?;
-                scp.send_eof()
-                    .map_err(|e| format!("SCP 发送 EOF 失败：{}", e))?;
-                scp.wait_eof()
-                    .map_err(|e| format!("SCP 等待 EOF 失败：{}", e))?;
-                scp.close()
-                    .map_err(|e| format!("SCP 关闭失败：{}", e))?;
-                scp.wait_close()
-                    .map_err(|e| format!("SCP 等待关闭失败：{}", e))?;
+                scp.write_all(&data).map_err(|e| {
+                    format!(
+                        "{} {}",
+                        locale.tr("SCP write failed:", "SCP 写入失败："),
+                        e
+                    )
+                })?;
+                scp.send_eof().map_err(|e| {
+                    format!(
+                        "{} {}",
+                        locale.tr("SCP send_eof failed:", "SCP 发送 EOF 失败："),
+                        e
+                    )
+                })?;
+                scp.wait_eof().map_err(|e| {
+                    format!(
+                        "{} {}",
+                        locale.tr("SCP wait_eof failed:", "SCP 等待 EOF 失败："),
+                        e
+                    )
+                })?;
+                scp.close().map_err(|e| {
+                    format!(
+                        "{} {}",
+                        locale.tr("SCP close failed:", "SCP 关闭失败："),
+                        e
+                    )
+                })?;
+                scp.wait_close().map_err(|e| {
+                    format!(
+                        "{} {}",
+                        locale.tr("SCP wait_close failed:", "SCP 等待关闭失败："),
+                        e
+                    )
+                })?;
                 Ok(remote_path.clone())
             })();
 
@@ -2170,17 +2338,36 @@ impl TerminalView {
     }
 
     pub fn start_upload_to_remote(&mut self, local_path: &Path, remote_path: &str) -> Result<(), String> {
-        let session_id = self.session_id
-            .ok_or_else(|| "没有 SSH 会话".to_string())?;
-        let session = self.ssh_manager.as_ref()
+        let loc = self.locale_last();
+        let session_id = self.session_id.ok_or_else(|| {
+            loc.tr("No SSH session", "没有 SSH 会话").to_string()
+        })?;
+        let session = self
+            .ssh_manager
+            .as_ref()
             .and_then(|m| m.get_session(session_id))
-            .ok_or_else(|| "获取 SSH 会话失败".to_string())?;
+            .ok_or_else(|| {
+                loc.tr("Could not acquire SSH session", "获取 SSH 会话失败")
+                    .to_string()
+            })?;
 
-        let data = std::fs::read(local_path)
-            .map_err(|e| format!("读取本地文件失败：{}", e))?;
-        let sftp = Self::retry_sftp_op(|| session.sftp(), "创建 SFTP 通道失败")?;
+        let data = std::fs::read(local_path).map_err(|e| {
+            format!(
+                "{} {}",
+                loc.tr("Failed to read local file:", "读取本地文件失败："),
+                e
+            )
+        })?;
+        let sftp = Self::retry_sftp_op(
+            loc,
+            || session.sftp(),
+            "Failed to open SFTP channel",
+            "创建 SFTP 通道失败",
+        )?;
         let mut remote = Self::retry_sftp_op(
+            loc,
             || sftp.create(Path::new(remote_path)),
+            "Failed to create remote file",
             "创建远端文件失败",
         )?;
 
@@ -2188,18 +2375,35 @@ impl TerminalView {
         let mut written = 0usize;
         while written < data.len() {
             match remote.write(&data[written..]) {
-                Ok(0) => return Err("SFTP 上传中断：远端未继续接收数据".to_string()),
+                Ok(0) => {
+                    return Err(
+                        loc.tr(
+                            "SFTP upload stalled: peer stopped accepting data",
+                            "SFTP 上传中断：远端未继续接收数据",
+                        )
+                        .to_string(),
+                    );
+                }
                 Ok(n) => written += n,
                 Err(e) => {
                     if Self::is_would_block_like(&e) {
                         thread::sleep(Duration::from_millis(8));
                         continue;
                     }
-                    return Err(format!("SFTP 上传写入失败：{}", e));
+                    return Err(format!(
+                        "{} {}",
+                        loc.tr("SFTP write failed:", "SFTP 上传写入失败："),
+                        e
+                    ));
                 }
             }
         }
-        Self::retry_sftp_op(|| remote.flush(), "SFTP 上传 flush 失败")?;
+        Self::retry_sftp_op(
+            loc,
+            || remote.flush(),
+            "SFTP upload flush failed",
+            "SFTP 上传 flush 失败",
+        )?;
         Ok(())
     }
 
@@ -2269,9 +2473,19 @@ impl TerminalView {
                 theme.green_color(),
             )
         } else if self.is_connecting() {
-            ("正在连接…".to_string(), theme.accent_color())
+            (
+                self.locale_last()
+                    .tr("Connecting…", "正在连接…")
+                    .to_string(),
+                theme.accent_color(),
+            )
         } else {
-            ("已断开".to_string(), theme.amber_color())
+            (
+                self.locale_last()
+                    .tr("Disconnected", "已断开")
+                    .to_string(),
+                theme.amber_color(),
+            )
         };
         Some(ConnectionBarStatus {
             host_line,
@@ -2282,21 +2496,37 @@ impl TerminalView {
 
     /// README §2.6 连接时长格式
     pub fn connection_duration_text(&self) -> String {
+        let loc = self.locale_last();
         let Some(connected_at) = self.connected_at else {
-            return "未连接".to_string();
+            return loc.tr("Not connected", "未连接").to_string();
         };
         let elapsed = connected_at.elapsed().as_secs();
         let mins = elapsed / 60;
         let hours = elapsed / 3600;
         let days = hours / 24;
         if days > 0 {
-            format!("已连接 {}d {}h", days, hours % 24)
+            format!(
+                "{} {}d {}h",
+                loc.tr("Connected", "已连接"),
+                days,
+                hours % 24
+            )
         } else if hours > 0 {
-            format!("已连接 {}h {}m", hours, mins % 60)
+            format!(
+                "{} {}h {}m",
+                loc.tr("Connected", "已连接"),
+                hours,
+                mins % 60
+            )
         } else if mins > 0 {
-            format!("已连接 {} 分钟", mins)
+            format!(
+                "{} {} {}",
+                loc.tr("Connected", "已连接"),
+                mins,
+                loc.tr("min", "分钟")
+            )
         } else {
-            "刚连接".to_string()
+            loc.tr("Just connected", "刚连接").to_string()
         }
     }
 
@@ -2309,17 +2539,19 @@ impl TerminalView {
         if let Some((username, host)) = &self.connection_target {
             return format!("{}@{}", username, host);
         }
-        "未选择会话".to_string()
+        self.locale_last()
+            .tr("No session selected", "未选择会话")
+            .to_string()
     }
 
     /// 将当前 `cols`/`rows` 同步到 SSH PTY（上传中跳过 `resize_pty` 后由传输结束路径调用）
     fn flush_ssh_pty_size_after_transfer(&mut self) {
         if let Some(ref handle) = self.ssh_handle {
             if let Err(e) = handle.resize_pty(self.cols, self.rows) {
-                log::error!("传输结束后 resize_pty 失败: {}", e);
+                log::error!("resize_pty after transfer failed: {}", e);
             } else {
                 log::debug!(
-                    "传输结束后已同步 resize_pty {}x{}",
+                    "Synced resize_pty after transfer: {}x{}",
                     self.cols,
                     self.rows
                 );
@@ -2338,7 +2570,7 @@ impl TerminalView {
             // 远端 `rz` 易在握手中被 SIGWINCH 打乱，表现为约 10s 无入站再续（见用户日志）。
             if self.lrzsz.is_upload_pty_capture() {
                 log::debug!(
-                    "暂缓 resize_pty（ZMODEM→rz 上传中），UI 已切到 {}x{}，待传输结束后再同步",
+                    "Deferring resize_pty during ZMODEM rz upload; UI is {}x{}, will sync after transfer",
                     cols,
                     rows
                 );
@@ -2404,24 +2636,42 @@ impl TerminalView {
         self.paste_next_chunk_at = None;
         self.buffer_input_while_disconnected = true;
         self.resend_offline_input_dialog_open = false;
-        self.terminal.feed(
-            "\r\n\x1b[33m[已断开 SSH；键盘输入将暂存，重连后可选择是否发送到远端]\x1b[0m\r\n"
-                .as_bytes(),
-        );
+        let disconnected_banner = match self.ui_lang_last {
+            UiLanguage::Zh => concat!(
+                "\r\n\x1b[33m[已断开 SSH；键盘输入将暂存，重连后可选择是否发送到远端]",
+                "\x1b[0m\r\n"
+            ),
+            UiLanguage::En => concat!(
+                "\r\n\x1b[33m[SSH disconnected; keystrokes will be queued and can be resent after reconnecting]",
+                "\x1b[0m\r\n"
+            ),
+        };
+        self.terminal.feed(disconnected_banner.as_bytes());
     }
+
+    pub const ERR_FRAGMENT_NOT_CONNECTED: &'static str = "__mistterm_fragment_not_connected";
+    pub const ERR_FRAGMENT_NO_SSH_HANDLE: &'static str = "__mistterm_fragment_no_ssh_handle";
+    pub const FRAGMENT_SEND_FAILED_PREFIX: &'static str = "__mistterm_fragment_send_failed:";
 
     /// 插入命令片段（自动添加回车）
     pub fn insert_fragment(&mut self, command: &str) -> Result<(), String> {
         if !self.connected {
-            return Err("终端未连接".to_string());
+            return Err(Self::ERR_FRAGMENT_NOT_CONNECTED.to_string());
         }
+        let loc = self.locale_last();
         let Some(handle) = self.ssh_handle.as_ref() else {
-            return Err("连接句柄不可用".to_string());
+            return Err(loc
+                .tr("SSH session handle unavailable", "连接句柄不可用")
+                .to_string());
         };
         let input = format!("{}\r", command);
-        handle
-            .send_input(input.as_bytes())
-            .map_err(|e| format!("发送失败: {}", e))
+        handle.send_input(input.as_bytes()).map_err(|e| {
+            format!(
+                "{}: {}",
+                loc.tr("Send failed", "发送失败"),
+                e
+            )
+        })
     }
 
     /// 取走拖入终端区域的上传路径（宿主每帧至多处理一次）。

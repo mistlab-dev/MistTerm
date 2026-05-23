@@ -288,7 +288,7 @@ fn flush_sender_out(
                 pump_tx
                     .send(ShellPumpCommand::ZmodemWrite(out[..split].to_vec()))
                     .map_err(|e| {
-                        log::error!("flush_sender_out: pump_tx.send 失败: {}", e);
+                        log::error!("flush_sender_out: pump_tx.send failed: {}", e);
                         format!("SSH shell 泵已关闭或队列断开: {}", e)
                     })?;
                 sender.advance_outgoing(split);
@@ -303,7 +303,7 @@ fn flush_sender_out(
                 pump_tx
                     .send(ShellPumpCommand::ZmodemWrite(rest.to_vec()))
                     .map_err(|e| {
-                        log::error!("flush_sender_out: pump_tx.send 失败: {}", e);
+                        log::error!("flush_sender_out: pump_tx.send failed: {}", e);
                         format!("SSH shell 泵已关闭或队列断开: {}", e)
                     })?;
                 sender.advance_outgoing(rn);
@@ -339,7 +339,7 @@ fn flush_sender_out(
         pump_tx
             .send(ShellPumpCommand::ZmodemWrite(out.to_vec()))
             .map_err(|e| {
-                log::error!("flush_sender_out: pump_tx.send 失败: {}", e);
+                log::error!("flush_sender_out: pump_tx.send failed: {}", e);
                 format!("SSH shell 泵已关闭或队列断开: {}", e)
             })?;
         sender.advance_outgoing(n);
@@ -467,7 +467,7 @@ pub(super) fn run_upload_zmodem2(
             if dump_tx && !tx_dump_buf.is_empty() {
                 log_tx_dump_accum("用户取消", &tx_dump_buf);
             }
-            return Err("传输已由用户取消（Ctrl+C）".to_string());
+            return Err("Transfer cancelled by user (Ctrl+C)".to_string());
         }
 
         flush_sender_out(
@@ -489,7 +489,7 @@ pub(super) fn run_upload_zmodem2(
         };
         let n = ingress.preprocess_for_phase(ingress_phase);
         if n > 0 && !file_data_started {
-            log::info!("ZMODEM 握手续剥 {} B（含内嵌 CSI/纯提示符丢弃）", n);
+            log::info!("ZMODEM handshake stripped {} B (embedded CSI/prompt discarded)", n);
         }
 
         while !ingress.buf.is_empty() {
@@ -605,7 +605,7 @@ pub(super) fn run_upload_zmodem2(
                             filename: file_name.to_string(),
                             path: file_path.clone(),
                         });
-                        log::debug!("ZMODEM 文件协议层完成 {}", file_name);
+                        log::debug!("ZMODEM file protocol finished {}", file_name);
                     }
                     sender
                         .finish_session()
@@ -620,7 +620,7 @@ pub(super) fn run_upload_zmodem2(
                 }
                 SenderEvent::SessionComplete => {
                     session_done = true;
-                    log::debug!("ZMODEM 会话结束");
+                    log::debug!("ZMODEM session finished");
                 }
             }
         }

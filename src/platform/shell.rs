@@ -14,11 +14,11 @@ pub fn reveal_directory(path: &Path) -> bool {
 /// 用系统默认应用打开文件。
 pub fn open_file(path: &Path) -> Result<(), String> {
     if !path.is_file() {
-        return Err(format!("未找到文件：{}", path.display()));
+        return Err(format!("File not found: {}", path.display()));
     }
     open_with_system(path)
         .then_some(())
-        .ok_or_else(|| format!("无法打开：{}", path.display()))
+        .ok_or_else(|| format!("Could not open: {}", path.display()))
 }
 
 fn open_with_system(path: &Path) -> bool {

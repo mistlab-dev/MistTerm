@@ -45,6 +45,15 @@ pub fn tab_bar_icon_button(ui: &mut Ui, theme: &Theme, id: IconId, tooltip: &str
 pub fn tab_bar_new_tab_button(ui: &mut Ui, theme: &Theme) -> Response {
     let row_h = theme.size_tab_bar_row_h();
     let icon = theme.size_tab_bar_icon_btn();
+    let accel = crate::platform::accel("T");
+    let tooltip = match crate::i18n::language(ui.ctx()) {
+        crate::i18n::UiLanguage::En => format!(
+            "New tab: select a session on the left, then click here or {accel}; opens new session dialog if none selected.",
+        ),
+        crate::i18n::UiLanguage::Zh => format!(
+            "新标签：左侧选中连接后点此或 {accel}；无选中时打开新建会话配置",
+        ),
+    };
     ui.allocate_ui_with_layout(
         egui::vec2(icon, row_h),
         egui::Layout::left_to_right(egui::Align::Center),
@@ -53,10 +62,7 @@ pub fn tab_bar_new_tab_button(ui: &mut Ui, theme: &Theme) -> Response {
                 ui,
                 theme,
                 IconId::Plus,
-                &format!(
-                    "新标签：左侧选中连接后点此或 {}；无选中时打开新建会话配置",
-                    crate::platform::accel("T")
-                ),
+                tooltip.as_str(),
             )
         },
     )
@@ -78,14 +84,15 @@ pub fn icon_button(ui: &mut Ui, theme: &Theme, id: IconId, color: Color32) -> Re
 
 /// 弹窗 / 侧栏标题栏关闭
 pub fn close_icon_button(ui: &mut Ui, theme: &Theme) -> Response {
-    icon_button(ui, theme, IconId::Close, theme.color_sidebar_header_icon())
-        .on_hover_text("关闭")
+    let ht = crate::i18n::tr(ui.ctx(), "Close", "关闭");
+    icon_button(ui, theme, IconId::Close, theme.color_sidebar_header_icon()).on_hover_text(ht)
 }
 
 /// 右 dock 标题栏关闭（与左侧「连接」标题栏同尺寸）。
 pub fn dock_close_icon_button(ui: &mut Ui, theme: &Theme) -> Response {
+    let ht = crate::i18n::tr(ui.ctx(), "Close", "关闭");
     sidebar_header_icon_button(ui, theme, IconId::Close, theme.color_sidebar_header_icon())
-        .on_hover_text("关闭")
+        .on_hover_text(ht)
 }
 
 /// 侧栏标题行方形图标按钮（与排序下拉同高）。
@@ -329,11 +336,18 @@ pub fn sidebar_list_sort_button(
     sort_by: &mut crate::core::session_sort::SessionSortBy,
 ) {
     use crate::core::session_sort::SessionSortBy;
+    let ctx = ui.ctx();
     let popup_id = ui.auto_id_with("session_list_sort");
     let icon = session_sort_icon(*sort_by);
-    let hover = format!("排序：{}（点击选择）", sort_by.label());
-    let response =
-        panel_sort_chip(ui, theme, icon, sort_by.short_label(), &hover);
+    let row_lbl = crate::i18n::session_sort_popup_row(ctx, *sort_by);
+    let hover = format!(
+        "{}{}{}",
+        crate::i18n::tr(ctx, "Sort: ", "排序："),
+        row_lbl,
+        crate::i18n::tr(ctx, " (click to pick)", "（点击选择）"),
+    );
+    let short = crate::i18n::session_sort_chip_short(ctx, *sort_by);
+    let response = panel_sort_chip(ui, theme, icon, short, &hover);
     if response.clicked() {
         ui.memory_mut(|mem| mem.toggle_popup(popup_id));
     }
@@ -349,7 +363,8 @@ pub fn sidebar_list_sort_button(
                 if ui
                     .selectable_label(
                         *sort_by == *mode,
-                        RichText::new(mode.label()).size(theme.font_size_sidebar_control()),
+                        RichText::new(crate::i18n::session_sort_popup_row(ui.ctx(), *mode))
+                            .size(theme.font_size_sidebar_control()),
                     )
                     .clicked()
                 {
@@ -440,12 +455,32 @@ pub fn panel_header_divider(ui: &mut Ui, theme: &Theme) {
     );
 }
 
+/// 右 dock 标题行与正文之间的横线（与 [`Theme::frame_right_dock_header_band`] 同宽）。
+/// 使用 `accent_color`，与终端激活 Tab 底部高光线视觉一致。
+pub fn right_dock_header_divider(ui: &mut Ui, theme: &Theme) {
+    let bleed = theme.spacing_right_dock_pad_x();
+    let w = ui.available_width().max(1.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 1.0), egui::Sense::hover());
+    ui.painter().hline(
+        (rect.min.x - bleed)..=(rect.max.x + bleed),
+        rect.center().y,
+        egui::Stroke::new(1.0, theme.accent_color()),
+    );
+}
+
 /// 标准弹窗 `Window`：无系统标题栏、不可折叠、统一外框（须再 `.open()` / `.show()` / 尺寸）
-pub fn modal_window<'a>(window_id: &'a str, theme: &Theme) -> egui::Window<'a> {
+/// 统一弹窗入口：去掉默认 title_bar / collapse，应用 [`modal_window_frame`]，
+/// 并把约束放宽到整屏（`ctx.screen_rect()`），否则默认 `constrain(true)` 会把弹窗夹在
+/// `ctx.available_rect()` 内，右 dock 打开后无法把弹窗拖到 dock 上方。
+///
+/// 首次居中请用 [`layout_util::modal_center_pos`] + `.default_pos(...)`，勿 `.anchor(...)`（拖拽会弹回）。
+pub fn modal_window<'a>(window_id: &'a str, theme: &Theme, ctx: &egui::Context) -> egui::Window<'a> {
     egui::Window::new(window_id)
         .title_bar(false)
         .collapsible(false)
         .frame(modal_window_frame(theme))
+        // egui 0.27 系列方法名是 `constraint_to`（拼写问题，但 API 就是这样）。
+        .constraint_to(ctx.screen_rect())
 }
 
 /// 将刚绘制的弹窗提到最前，避免被右 dock Foreground 盖住或误点底层关闭钮。
@@ -466,16 +501,50 @@ pub fn sidebar_panel_frame(theme: &Theme) -> egui::Frame {
         .inner_margin(theme.right_dock_content_margin())
 }
 
+/// 右 dock 左侧让出的 `bg_body` 缝（单 dock 与终端之间、多 dock 之间都看得见）。
+fn right_dock_outer_margin(theme: &Theme) -> egui::Margin {
+    let mut m = theme.margin_right_dock_screen_outer();
+    m.left = theme.spacing_dock_gap();
+    m
+}
+
 /// 右 `SidePanel` 占位槽（透明，屏右缘留 `bg_body` 缝）。
 pub fn right_dock_placeholder_frame(theme: &Theme) -> egui::Frame {
-    egui::Frame::none().outer_margin(theme.margin_right_dock_screen_outer())
+    egui::Frame::none().outer_margin(right_dock_outer_margin(theme))
 }
 
 /// 右 `SidePanel` 可见外框（SFTP / 凭证等直绘 dock）。
 pub fn right_dock_panel_frame(theme: &Theme) -> egui::Frame {
     theme
         .frame_region_panel()
-        .outer_margin(theme.margin_right_dock_screen_outer())
+        .outer_margin(right_dock_outer_margin(theme))
+}
+
+/// 在右 dock 槽位（含左侧 `outer_margin.left` 的 gap）铺一层 `bg_body`：
+/// 1. 盖住 egui canvas 的默认黑底，否则圆角外的四角会透出"黑底色漏光"；
+/// 2. 顺手把左侧 `spacing_dock_gap` 那条缝隙漆成 `bg_body`，避免与 dock 同色看不出 gap。
+///
+/// 圆角面板（`right_dock_panel_frame` 直绘 / Foreground shell）画在更上层，遮住槽位中央，
+/// 只剩四角与 gap 露出 `bg_body`，形成"圆角卡片浮在 bg_body 底上"的统一效果。
+///
+/// 须在每个右 `SidePanel::show` 回调里调用一次。
+pub fn paint_right_dock_left_gap(ui: &egui::Ui, theme: &Theme) {
+    let gap = theme.spacing_dock_gap().max(0.0);
+    let inner = ui.max_rect();
+    let bg = egui::Rect::from_min_max(
+        egui::pos2(inner.min.x - gap, inner.min.y),
+        egui::pos2(inner.max.x, inner.max.y),
+    );
+    if !bg.is_positive() {
+        return;
+    }
+    let layer_id = egui::LayerId::new(
+        egui::Order::Background,
+        egui::Id::new("mistterm_right_dock_slot_bg"),
+    );
+    ui.ctx()
+        .layer_painter(layer_id)
+        .rect_filled(bg, 0.0, theme.bg_body_color());
 }
 
 /// 右 dock `outer_margin` 与窗口右缘之间的竖条（须铺 `bg_body`，否则会露系统/窗口黑底）。
@@ -547,7 +616,8 @@ pub fn paint_right_dock_slot_shell_with_painter_ex(
     fill.min.x -= RIGHT_DOCK_SHELL_LEFT_BLEED;
     let rounding = right_dock_shell_rounding(theme, flush_bottom);
     painter.rect_filled(fill, rounding, theme.color_panel_surface());
-    // 外框描边在浅色主题下容易在圆角处产生抗锯齿白缝，先关闭描边保稳定。
+    // Dock 壳层仅画左/上/右描边，避免与状态栏顶线叠成双线。
+    paint_rect_border_ltr(painter, fill, theme.panel_stroke());
 }
 
 /// 槽位扣除 region panel 内边距后的内容矩形（须用 `Margin::shrink_rect`，勿 `shrink2(left+right)`）。
@@ -562,9 +632,7 @@ pub fn right_dock_foreground_layer_id(id: &'static str) -> egui::LayerId {
     egui::LayerId::new(egui::Order::Middle, egui::Id::new(id))
 }
 
-/// 右 dock 正文区 `Area`：须 `interactable(true)` 且只包住 [`right_dock_slot_content_rect`]，
-/// 否则 egui 的 `layer_id_at` 在指针处为 `None`，同层按钮/输入会全部点不动。
-/// 勿用整块 `paint` 槽位作可点层，否则会挡住左侧连接栏/终端。
+/// 右 dock Foreground `Area`（可点层）；正文仍在 `inner` 子区域布局。
 pub fn right_dock_foreground_body_area(id: &'static str) -> egui::Area {
     egui::Area::new(egui::Id::new(id))
         .order(egui::Order::Middle)
@@ -587,11 +655,9 @@ pub fn prepare_right_dock_foreground_geom(
 ) -> RightDockForegroundGeom {
     let inset = theme.spacing_right_dock_screen_inset();
     let status_h = theme.status_bar_height();
-    let work_pad = theme.spacing_work_area_pad().max(0.0);
     const WORK_BOTTOM_GAP: f32 = 1.0;
     let mut slot = crate::ui::layout_util::clamp_rect_above_status_bar(slot, screen, status_h);
-    // 终端与右 dock 交界不再额外留缝，避免出现黑色接缝。
-    slot.min.y = (slot.min.y + work_pad).min(slot.max.y);
+    // 顶部贴齐 top_chrome 下沿，避免出现 4px 黑条；底部仅留 1px 与状态栏接缝
     slot.max.y = (slot.max.y - WORK_BOTTOM_GAP).max(slot.min.y + 1.0);
     let paint = crate::ui::layout_util::clamp_rect_above_status_bar(
         crate::ui::layout_util::inset_slot_for_foreground_paint(slot, screen, inset),
@@ -617,7 +683,8 @@ pub fn paint_right_dock_foreground_shell(
     paint_right_dock_slot_shell_with_painter_ex(&painter, paint, theme, false);
 }
 
-/// 标准 Foreground 正文宿主：固定 `inner`、clip，正文宽 = 槽位 `inner.width()`（随 SidePanel 拖拽，非 ∞ avail）。
+/// 标准 Foreground 正文宿主：`Area` 覆盖 `paint`，正文布局在 `inner`。
+/// 这样标题带可横向铺满 dock 壳层，而正文仍保持内容边距。
 pub fn show_right_dock_foreground_body<R>(
     area_id: &'static str,
     ctx: &egui::Context,
@@ -629,12 +696,15 @@ pub fn show_right_dock_foreground_body<R>(
     // 否则不同面板会出现“看起来列宽不一致”。
     let body_w = geom.inner.width().max(48.0);
     right_dock_foreground_body_area(area_id)
-        .constrain_to(geom.inner)
-        .fixed_pos(geom.inner.min)
+        .constrain_to(geom.paint)
+        .fixed_pos(geom.paint.min)
         .show(ctx, |ui| {
-            ui.set_clip_rect(geom.inner);
-            let w = crate::ui::layout_util::constrain_ui_to_right_dock_body(ui, body_w);
-            add_body(ui, w)
+            ui.set_clip_rect(geom.paint);
+            ui.allocate_ui_at_rect(geom.inner, |ui| {
+                let w = crate::ui::layout_util::constrain_ui_to_right_dock_body(ui, body_w);
+                add_body(ui, w)
+            })
+            .inner
         })
 }
 
@@ -732,9 +802,8 @@ fn ssh_import_chip_actions(
     pending_ssh_imports: usize,
 ) -> TitleBarChromeResult {
     let mut out = TitleBarChromeResult::default();
-    if close_icon_button(ui, theme)
-        .on_hover_text("关闭导入提示")
-        .clicked()
+    let ht_dismiss = crate::i18n::tr(ui.ctx(), "Dismiss SSH import banner", "关闭导入提示");
+    if close_icon_button(ui, theme).on_hover_text(ht_dismiss).clicked()
     {
         out.dismiss_ssh_import = true;
     }
@@ -752,9 +821,17 @@ fn ssh_import_chip_actions(
                         egui::Sense::hover(),
                     );
                 icons::paint_icon(ui, r, IconId::Alert, theme.amber_color(), theme.size_icon_glyph());
+                let label = match crate::i18n::language(ui.ctx()) {
+                    crate::i18n::UiLanguage::En => {
+                        format!("{pending_ssh_imports} pending imports")
+                    }
+                    crate::i18n::UiLanguage::Zh => {
+                        format!("{pending_ssh_imports} 个待导入")
+                    }
+                };
                 ui.add(
                     Button::new(
-                        RichText::new(format!("{pending_ssh_imports} 个待导入"))
+                        RichText::new(label)
                             .size(theme.font_size_title_bar_info())
                             .color(theme.amber_color()),
                     )
@@ -870,7 +947,11 @@ pub fn session_tab_chip(
                     ui,
                     theme,
                     IconId::Close,
-                    &format!("关闭标签 · {}", crate::platform::accel("W")),
+                    &format!(
+                        "{} · {}",
+                        crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
+                        crate::platform::accel("W")
+                    ),
                 )
                 .clicked()
                 {
@@ -903,6 +984,7 @@ pub fn paint_sidebar_selection_accent(
 enum ControlButtonVariant {
     Primary,
     Secondary,
+    Danger,
 }
 
 fn control_button_size(ui: &Ui, theme: &Theme, label: &str, with_icon: bool, min_w: f32) -> egui::Vec2 {
@@ -943,11 +1025,14 @@ fn paint_control_button(
 
     let stroke = match variant {
         ControlButtonVariant::Primary => egui::Stroke::NONE,
-        ControlButtonVariant::Secondary => {
+        ControlButtonVariant::Secondary | ControlButtonVariant::Danger => {
             egui::Stroke::new(1.0, theme.color_text_input_stroke())
         }
     };
     let (fill, text_color, icon_color) = match variant {
+        ControlButtonVariant::Danger => {
+            unreachable!("danger buttons use paint_icon_only_button")
+        }
         ControlButtonVariant::Primary => {
             if !can_activate {
                 if hovered {
@@ -1053,6 +1138,119 @@ fn paint_control_button(
     response
 }
 
+fn icon_only_button_size(theme: &Theme, min_w: f32) -> egui::Vec2 {
+    let h = theme.size_control_btn_h();
+    let pad_x = theme.spacing_panel_header_btn_pad_x();
+    let icon_px = theme.size_icon_glyph();
+    let side = (icon_px + 2.0 * pad_x).max(min_w).max(h);
+    egui::vec2(side, h)
+}
+
+/// 仅图标（方形容器），悬停显示 `tooltip`。
+fn paint_icon_only_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    variant: ControlButtonVariant,
+    min_w: f32,
+    can_activate: bool,
+) -> Response {
+    let size = icon_only_button_size(theme, min_w);
+    let rounding = theme.radius_list_item();
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    if hovered || pressed {
+        ui.ctx().request_repaint();
+    }
+
+    let stroke = match variant {
+        ControlButtonVariant::Primary => egui::Stroke::NONE,
+        ControlButtonVariant::Secondary | ControlButtonVariant::Danger => {
+            egui::Stroke::new(1.0, theme.color_text_input_stroke())
+        }
+    };
+    let (fill, icon_color) = match variant {
+        ControlButtonVariant::Primary => {
+            if !can_activate {
+                if hovered {
+                    (
+                        theme.color_modal_primary_fill_hover().gamma_multiply(0.75),
+                        theme.color_modal_secondary_text(),
+                    )
+                } else {
+                    (
+                        theme.accent_alpha(89),
+                        theme.color_modal_secondary_text(),
+                    )
+                }
+            } else if pressed {
+                (
+                    theme.accent_dim_color(),
+                    theme.color_modal_primary_text(),
+                )
+            } else if hovered {
+                (
+                    theme.color_modal_primary_fill_hover(),
+                    theme.color_modal_primary_text(),
+                )
+            } else {
+                (
+                    theme.color_modal_primary_fill(),
+                    theme.color_modal_primary_text(),
+                )
+            }
+        }
+        ControlButtonVariant::Secondary => {
+            let base_fill = theme.color_panel_toolbar_btn_fill();
+            if !can_activate {
+                (
+                    base_fill.gamma_multiply(0.55),
+                    theme.text_tertiary(),
+                )
+            } else if pressed {
+                (theme.accent_alpha(51), theme.text_primary())
+            } else if hovered {
+                (
+                    base_fill.gamma_multiply(1.35),
+                    theme.text_primary(),
+                )
+            } else {
+                (
+                    base_fill,
+                    theme.color_body_text_muted(),
+                )
+            }
+        }
+        ControlButtonVariant::Danger => {
+            if hovered || pressed {
+                (
+                    theme.red_color().gamma_multiply(if pressed { 0.22 } else { 0.14 }),
+                    theme.red_color(),
+                )
+            } else {
+                (
+                    theme.color_panel_toolbar_btn_fill(),
+                    theme.red_color().gamma_multiply(0.85),
+                )
+            }
+        }
+    };
+
+    ui.painter().rect(rect, rounding, fill, stroke);
+    let icon_px = theme.size_icon_glyph();
+    let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(icon_px, icon_px));
+    icons::paint_icon(ui, icon_rect, icon, icon_color, icon_px);
+    if hovered {
+        ui.ctx().set_cursor_icon(if can_activate {
+            CursorIcon::PointingHand
+        } else {
+            CursorIcon::NotAllowed
+        });
+    }
+    response
+}
+
 /// 侧栏 / 右 dock 标题行次要工具按钮（浅底 + 描边；宽度按文字测量）。
 pub fn panel_toolbar_button_widget<'a>(theme: &'a Theme, text: RichText) -> Button<'a> {
     Button::new(text)
@@ -1072,42 +1270,51 @@ fn panel_toolbar_button_size(ui: &Ui, theme: &Theme, label: &str, with_icon: boo
 }
 
 pub fn panel_toolbar_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
-    panel_toolbar_icon_button(ui, theme, None, label)
-}
-
-pub fn panel_toolbar_icon_button(
-    ui: &mut Ui,
-    theme: &Theme,
-    icon: Option<IconId>,
-    label: &str,
-) -> Response {
     paint_control_button(
         ui,
         theme,
         label,
-        icon,
+        None,
         ControlButtonVariant::Secondary,
         theme.size_panel_header_btn_min_w(),
         true,
     )
 }
 
-/// 标题行主操作（如「+ 新建」），与弹窗主按钮同款 accent 底。
-pub fn panel_toolbar_primary_button(
+/// 标题行 / 工具栏纯图标按钮（悬停文案见 `tooltip`）。
+pub fn panel_toolbar_icon_button(
     ui: &mut Ui,
     theme: &Theme,
     icon: IconId,
-    label: &str,
+    tooltip: &str,
 ) -> Response {
-    paint_control_button(
+    paint_icon_only_button(
         ui,
         theme,
-        label,
-        Some(icon),
+        icon,
+        ControlButtonVariant::Secondary,
+        theme.size_panel_header_btn_min_w(),
+        true,
+    )
+    .on_hover_text(tooltip)
+}
+
+/// 标题行主操作（accent 底，纯图标）。
+pub fn panel_toolbar_primary_icon_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    tooltip: &str,
+) -> Response {
+    paint_icon_only_button(
+        ui,
+        theme,
+        icon,
         ControlButtonVariant::Primary,
         theme.size_panel_header_btn_min_w(),
         true,
     )
+    .on_hover_text(tooltip)
 }
 
 /// 工具栏图标按钮或采集中态：槽位尺寸与 [`panel_toolbar_icon_button`] 一致，避免刷新时行高跳动。
@@ -1115,13 +1322,13 @@ pub fn panel_toolbar_icon_button_or_busy(
     ui: &mut Ui,
     theme: &Theme,
     icon: IconId,
-    label: &str,
+    tooltip: &str,
     busy: bool,
 ) -> Response {
     if !busy {
-        return panel_toolbar_icon_button(ui, theme, Some(icon), label);
+        return panel_toolbar_icon_button(ui, theme, icon, tooltip);
     }
-    let size = panel_toolbar_button_size(ui, theme, label, true);
+    let size = icon_only_button_size(theme, theme.size_panel_header_btn_min_w());
     let rounding = theme.radius_list_item();
     let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
     ui.painter().rect(
@@ -1135,7 +1342,11 @@ pub fn panel_toolbar_icon_button_or_busy(
         egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
     );
     child.add(egui::Spinner::new());
-    response.on_hover_text("采集中…")
+    response.on_hover_text(crate::i18n::tr(
+        ui.ctx(),
+        "Collecting metrics…",
+        "采集中…",
+    ))
 }
 
 /// 面板标题行左侧：图标 + 文案（侧栏 / dock / 弹窗统一）
@@ -1199,6 +1410,28 @@ pub fn rich_caption(theme: &Theme, text: &str) -> RichText {
 
 pub fn form_field_label(ui: &mut Ui, theme: &Theme, text: &str) {
     ui.label(rich_form_label(theme, text));
+}
+
+/// 统一复选框：未选中时浅底 + 描边始终可见；勾选为 accent 底 + 浅色勾。
+/// 全局 `inactive.bg_fill = TRANSPARENT` 下裸 `ui.checkbox` 往往只有悬停才看得出方框。
+pub fn form_checkbox(ui: &mut Ui, theme: &Theme, value: &mut bool, text: &str) -> Response {
+    ui.scope(|ui| {
+        let rounding = egui::Rounding::same(theme.radius_checkbox());
+        let off_border = theme.color_checkbox_off_stroke_color();
+        let w = &mut ui.style_mut().visuals.widgets;
+        w.inactive.bg_fill = theme.color_checkbox_off_fill();
+        w.inactive.bg_stroke = egui::Stroke::new(1.0, off_border);
+        w.inactive.rounding = rounding;
+        w.hovered.bg_fill = theme.color_checkbox_hover_fill();
+        w.hovered.bg_stroke = egui::Stroke::new(1.0, theme.accent_dim_color());
+        w.hovered.rounding = rounding;
+        w.active.bg_fill = theme.accent_color();
+        w.active.bg_stroke = egui::Stroke::new(1.0, theme.accent_color());
+        w.active.rounding = rounding;
+        w.active.fg_stroke = egui::Stroke::new(1.8, theme.color_checkbox_checkmark());
+        ui.checkbox(value, text)
+    })
+    .inner
 }
 
 /// 标题行右侧操作区宽度（工具按钮 + 关闭 ×；RTL 顺序为 close, …tools）
@@ -1346,10 +1579,11 @@ pub struct FilterChipRowWithSortResult {
 pub fn filter_chip_row_with_sort(
     ui: &mut Ui,
     theme: &Theme,
-    labels: &[&str],
-    active: &str,
+    chips: &[(&str, &str)],
+    active_value: &str,
     sort_icon: IconId,
-    sort_label: &str,
+    sort_chip_display: &str,
+    sort_hover_tooltip: &str,
 ) -> FilterChipRowWithSortResult {
     let mut out = FilterChipRowWithSortResult {
         picked: None,
@@ -1358,9 +1592,6 @@ pub fn filter_chip_row_with_sort(
     let chip_h = theme.size_panel_filter_chip_h();
     let chip_gap = theme.spacing_panel_gap();
     let sort_gap = theme.spacing_filter_sort_gap();
-    let sort_hover = format!(
-        "排序：{sort_label}（点击切换：次数 → 成功率 → 最近 → 名称）"
-    );
 
     egui::Frame::none()
         .outer_margin(egui::Margin {
@@ -1371,28 +1602,47 @@ pub fn filter_chip_row_with_sort(
         })
         .show(ui, |ui| {
             let row_w = ui.available_width().max(96.0);
-            let sort_w = panel_sort_chip_width(ui, theme, sort_label);
+            let sort_w = panel_sort_chip_width(ui, theme, sort_chip_display);
             ui.horizontal(|ui| {
                 ui.set_max_width(row_w);
                 ui.spacing_mut().item_spacing = egui::vec2(chip_gap, 0.0);
                 let chips_w = (ui.available_width() - sort_w - sort_gap).max(96.0);
                 ui.scope(|ui| {
                     ui.set_max_width(chips_w);
-                    let n = labels.len().max(1) as f32;
-                    let item_w = ((chips_w - chip_gap * (n - 1.0)) / n)
+                    let n = chips.len().max(1) as f32;
+                    // 平铺得到的"等分宽"作为下界（窄 dock 时按钮挤在一起仍可读），
+                    // 但封顶 [`size_panel_filter_chip_max_w`]，否则 dock 一拉宽，
+                    // 短标签按钮也跟着无脑撑开（如 "K8s" 长出半屏）。
+                    let max_w = theme.size_panel_filter_chip_max_w();
+                    let even_w = ((chips_w - chip_gap * (n - 1.0)) / n)
                         .max(theme.size_panel_header_btn_min_w());
-                    for label in labels {
-                        let is_active = active == *label;
-                        if filter_chip_button(ui, theme, label, is_active, egui::vec2(item_w, chip_h))
-                            .clicked()
+                    let item_w = even_w.min(max_w);
+                    for (value, chip_label) in chips {
+                        let is_active = active_value == *value;
+                        if filter_chip_button(
+                            ui,
+                            theme,
+                            chip_label,
+                            is_active,
+                            egui::vec2(item_w, chip_h),
+                        )
+                        .clicked()
                         {
-                            out.picked = Some((*label).to_string());
+                            out.picked = Some((*value).to_string());
                         }
                     }
                 });
                 ui.add_space(sort_gap);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if panel_sort_chip(ui, theme, sort_icon, sort_label, &sort_hover).clicked() {
+                    if panel_sort_chip(
+                        ui,
+                        theme,
+                        sort_icon,
+                        sort_chip_display,
+                        sort_hover_tooltip,
+                    )
+                    .clicked()
+                    {
                         out.cycle_sort = true;
                     }
                 });
@@ -1991,7 +2241,16 @@ pub fn ssh_import_sidebar_banner(
         theme.divider_stroke(),
     );
 
-    let msg = format!("检测到 {} 个未导入的 SSH 配置", pending_count);
+    let msg = match crate::i18n::language(ui.ctx()) {
+        crate::i18n::UiLanguage::En => format!(
+            "Detected {} pending SSH Host block(s)",
+            pending_count,
+        ),
+        crate::i18n::UiLanguage::Zh => format!(
+            "检测到 {} 个未导入的 SSH 配置",
+            pending_count,
+        ),
+    };
     let inner = rect.shrink2(egui::vec2(10.0, 0.0));
     ui.allocate_ui_at_rect(inner, |ui| {
         ui.set_height(BAR_H);
@@ -2014,14 +2273,22 @@ pub fn ssh_import_sidebar_banner(
             label.on_hover_text(&msg);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if icon_button(ui, theme, IconId::Close, theme.color_caption_text())
-                    .on_hover_text("关闭提示")
+                    .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss hint", "关闭提示"))
                     .clicked()
                 {
                     action.dismiss = true;
                 }
                 ui.add_space(theme.spacing_region_gap());
-                if chrome_small_accent_button(ui, theme, "导入")
-                    .on_hover_text("打开 SSH 配置导入")
+                if chrome_small_accent_button(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ui.ctx(), "Import", "导入"),
+                )
+                    .on_hover_text(crate::i18n::tr(
+                        ui.ctx(),
+                        "Open SSH config import",
+                        "打开 SSH 配置导入",
+                    ))
                     .clicked()
                 {
                     action.import = true;
@@ -2174,11 +2441,21 @@ pub fn status_restore_chip(ui: &mut Ui, theme: &Theme, name: &str, count: usize)
     response
 }
 
-/// 弹窗标题行 + 分隔线；返回 `true` 表示点了关闭 ×。
+/// 弹窗标题行（无独立分隔线，靠 `frame_modal_title_band` 的 stroke 描边收尾）。
 pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> bool {
     let _ = title_px;
+    let mx = theme.spacing_modal_content_x();
+    let my = theme.spacing_modal_content_y();
     let mut closed = false;
-    theme.frame_modal_title_band().show(ui, |ui| {
+    theme.frame_modal_title_band()
+        .stroke(egui::Stroke::new(1.0, theme.color_panel_header_divider()))
+        .outer_margin(egui::Margin {
+            left: -mx,
+            right: -mx,
+            top: -my,
+            bottom: 0.0,
+        })
+        .show(ui, |ui| {
         ui.horizontal(|ui| {
             panel_header_title_leading(ui, theme, IconId::Plus, title);
             ui.with_layout(
@@ -2191,8 +2468,6 @@ pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> b
             );
         });
     });
-    ui.add_space(theme.spacing_modal_header_after_title());
-    panel_header_divider(ui, theme);
     ui.add_space(theme.spacing_modal_header_after_sep());
     closed
 }
@@ -2200,7 +2475,13 @@ pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> b
 /// 右侧 dock 标题行（标题 + 关闭 ×）。
 #[inline]
 pub fn side_panel_title_row(ui: &mut Ui, theme: &Theme, title: &str) -> bool {
-    dock_panel_title_close_only(ui, theme, IconId::Plug, title, "关闭")
+    dock_panel_title_close_only(
+        ui,
+        theme,
+        IconId::Plug,
+        title,
+        crate::i18n::tr(ui.ctx(), "Close", "关闭"),
+    )
 }
 
 /// 侧栏小标题 + 右侧关闭（与 [`dock_panel_title_close_only`] 相同布局）。
@@ -2211,7 +2492,13 @@ pub fn side_panel_section_title(
     title: &str,
     _title_color: Color32,
 ) -> bool {
-    dock_panel_title_close_only(ui, theme, IconId::Plug, title, "关闭")
+    dock_panel_title_close_only(
+        ui,
+        theme,
+        IconId::Plug,
+        title,
+        crate::i18n::tr(ui.ctx(), "Close", "关闭"),
+    )
 }
 
 /// 弹窗主按钮（自绘三态；勿 `add_enabled` 灰化，否则悬停不可见）
@@ -2316,6 +2603,142 @@ pub fn modal_primary_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response
 
 pub fn modal_danger_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
     paint_modal_danger_button(ui, theme, label)
+}
+
+pub fn modal_secondary_icon_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    tooltip: &str,
+) -> Response {
+    paint_icon_only_button(
+        ui,
+        theme,
+        icon,
+        ControlButtonVariant::Secondary,
+        theme.size_modal_footer_btn_min_w_secondary(),
+        true,
+    )
+    .on_hover_text(tooltip)
+}
+
+pub fn modal_primary_icon_button(ui: &mut Ui, theme: &Theme, icon: IconId, tooltip: &str) -> Response {
+    modal_primary_icon_button_ex(ui, theme, icon, tooltip, true)
+}
+
+pub fn modal_primary_icon_button_ex(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    tooltip: &str,
+    can_activate: bool,
+) -> Response {
+    paint_icon_only_button(
+        ui,
+        theme,
+        icon,
+        ControlButtonVariant::Primary,
+        theme.size_modal_footer_btn_min_w_primary(),
+        can_activate,
+    )
+    .on_hover_text(tooltip)
+}
+
+/// 弹窗底栏主操作（纯图标），用于 `ui.add(...)`。
+pub struct ModalPrimaryIconButton<'a> {
+    theme: &'a Theme,
+    icon: IconId,
+    tooltip: &'a str,
+    can_activate: bool,
+}
+
+impl Widget for ModalPrimaryIconButton<'_> {
+    fn ui(self, ui: &mut Ui) -> Response {
+        modal_primary_icon_button_ex(
+            ui,
+            self.theme,
+            self.icon,
+            self.tooltip,
+            self.can_activate,
+        )
+    }
+}
+
+impl ModalPrimaryIconButton<'_> {
+    pub fn can_activate(mut self, can: bool) -> Self {
+        self.can_activate = can;
+        self
+    }
+}
+
+pub fn modal_primary_icon_button_widget<'a>(
+    theme: &'a Theme,
+    icon: IconId,
+    tooltip: &'a str,
+) -> ModalPrimaryIconButton<'a> {
+    ModalPrimaryIconButton {
+        theme,
+        icon,
+        tooltip,
+        can_activate: true,
+    }
+}
+
+pub fn modal_danger_icon_button(ui: &mut Ui, theme: &Theme, icon: IconId, tooltip: &str) -> Response {
+    paint_icon_only_button(
+        ui,
+        theme,
+        icon,
+        ControlButtonVariant::Danger,
+        theme.size_modal_footer_btn_min_w_secondary(),
+        true,
+    )
+    .on_hover_text(tooltip)
+}
+
+/// 面板 / dock 内行内次要按钮（与排序芯片、弹窗「取消」同族）
+pub fn panel_action_icon_button(ui: &mut Ui, theme: &Theme, icon: IconId, tooltip: &str) -> Response {
+    panel_action_icon_button_ex(ui, theme, icon, tooltip, true)
+}
+
+pub fn panel_action_icon_button_ex(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    tooltip: &str,
+    enabled: bool,
+) -> Response {
+    paint_icon_only_button(
+        ui,
+        theme,
+        icon,
+        ControlButtonVariant::Secondary,
+        theme.size_control_btn_min_w(),
+        enabled,
+    )
+    .on_hover_text(tooltip)
+}
+
+pub fn panel_action_primary_icon_button(ui: &mut Ui, theme: &Theme, icon: IconId, tooltip: &str) -> Response {
+    panel_action_primary_icon_button_ex(ui, theme, icon, tooltip, true)
+}
+
+pub fn panel_action_primary_icon_button_ex(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    tooltip: &str,
+    enabled: bool,
+) -> Response {
+    paint_icon_only_button(
+        ui,
+        theme,
+        icon,
+        ControlButtonVariant::Primary,
+        theme.size_control_btn_min_w(),
+        enabled,
+    )
+    .on_hover_text(tooltip)
 }
 
 /// 面板 / dock 内行内次要按钮（与排序芯片、弹窗「取消」同族）

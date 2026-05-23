@@ -244,7 +244,9 @@ impl SessionManager {
         self.sessions = sessions;
         self.save();
         if had_plaintext {
-            log::warn!("导入的包中含明文会话密码，已载入并重新加密写入本地文件");
+            log::warn!(
+                "Imported package contained plaintext session passwords; loaded and re-encrypted locally"
+            );
         }
         Ok(())
     }
@@ -291,7 +293,7 @@ impl SessionManager {
                 }
                 Err(e) if attempt < 2 => {
                     log::warn!(
-                        "读取 sessions 失败（第 {} 次）：{}，100ms 后重试",
+                        "Failed to read sessions (attempt {}): {}; retrying in 100ms",
                         attempt + 1,
                         e
                     );

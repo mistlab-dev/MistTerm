@@ -243,7 +243,7 @@ pub fn chat_completions_with_key(
     messages: &[ChatMessage],
 ) -> Result<String, String> {
     if api_key.trim().is_empty() {
-        return Err("API Key 为空".to_string());
+        return Err("API Key is empty".to_string());
     }
     let url = settings.chat_completions_url();
     let api_messages: Vec<ApiMessage> = std::iter::once(ApiMessage {

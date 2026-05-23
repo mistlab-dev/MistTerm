@@ -7,6 +7,7 @@ use egui_plot::{AxisBools, Corner, Legend, Line, LineStyle, Plot, PlotPoints, VL
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
+use crate::i18n::{self, Locale, UiLanguage};
 use crate::monitor::{Monitor, ServerStats, format_bytes};
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
@@ -119,7 +120,11 @@ impl MonitorPanel {
             Some(Ok(Err(e))) => {
                 self.pending_raw = None;
                 self.last_ui_refresh = ctx.input(|i| i.time);
-                self.last_error = Some(format!("监控采集失败：{}", e));
+                self.last_error = Some(format!(
+                    "{}{}",
+                    i18n::tr(ctx, "Monitor collection failed: ", "监控采集失败："),
+                    e
+                ));
                 ctx.request_repaint();
             }
             Some(Err(TryRecvError::Empty)) => {
@@ -128,7 +133,10 @@ impl MonitorPanel {
             Some(Err(TryRecvError::Disconnected)) => {
                 self.pending_raw = None;
                 self.last_ui_refresh = ctx.input(|i| i.time);
-                self.last_error = Some("采集结果通道已断开".to_string());
+                self.last_error = Some(
+                    i18n::tr(ctx, "Collection channel disconnected", "采集结果通道已断开")
+                        .to_string(),
+                );
                 ctx.request_repaint();
             }
         }
@@ -145,16 +153,16 @@ impl MonitorPanel {
     }
 
     /// 底栏摘要：CPU / 内存（无有效采集数据时返回 None）
-    pub fn status_bar_metrics_line(&self) -> Option<String> {
+    pub fn status_bar_metrics_line(&self, egui_ctx: &egui::Context) -> Option<String> {
         let monitor = self.monitor.as_ref()?;
         let stats = monitor.last_stats();
         if stats.memory_total == 0 && stats.disk_total == 0 && stats.uptime_secs == 0 {
             return None;
         }
+        let cpu_lbl = i18n::tr(egui_ctx, "CPU", "CPU");
         Some(format!(
-            "CPU {:.0}% · {}",
-            stats.cpu_percent,
-            stats.format_memory()
+            "{} {:.0}% · {}",
+            cpu_lbl, stats.cpu_percent, stats.format_memory()
         ))
     }
 
@@ -165,6 +173,7 @@ impl MonitorPanel {
 
     /// 当前采样下超过阈值的告警文案（本地规则，Week 10 告警设置的最小可用版）。
     fn collect_alerts_with(
+        loc: Locale,
         cpu_th: f32,
         mem_th: f32,
         disk_th: f32,
@@ -173,23 +182,43 @@ impl MonitorPanel {
         if !Self::stats_look_valid(stats) {
             return Vec::new();
         }
+        let th = loc.tr("threshold", "阈值");
         let mut v = Vec::new();
         if stats.cpu_percent >= cpu_th {
-            v.push(format!("CPU {:.1}% ≥ 阈值 {:.0}%", stats.cpu_percent, cpu_th));
+            v.push(format!(
+                "{} {:.1}% ≥ {} {:.0}%",
+                loc.tr("CPU", "CPU"),
+                stats.cpu_percent,
+                th,
+                cpu_th
+            ));
         }
         let mem = stats.memory_percent();
         if mem >= mem_th {
-            v.push(format!("内存 {:.1}% ≥ 阈值 {:.0}%", mem, mem_th));
+            v.push(format!(
+                "{} {:.1}% ≥ {} {:.0}%",
+                loc.tr("Memory", "内存"),
+                mem,
+                th,
+                mem_th
+            ));
         }
         let disk = stats.disk_percent();
         if disk >= disk_th {
-            v.push(format!("磁盘 {:.1}% ≥ 阈值 {:.0}%", disk, disk_th));
+            v.push(format!(
+                "{} {:.1}% ≥ {} {:.0}%",
+                loc.tr("Disk", "磁盘"),
+                disk,
+                th,
+                disk_th
+            ));
         }
         v
     }
 
-    fn collect_alerts(&self, stats: &ServerStats) -> Vec<String> {
+    fn collect_alerts(&self, loc: Locale, stats: &ServerStats) -> Vec<String> {
         Self::collect_alerts_with(
+            loc,
             self.alert_cpu_pct,
             self.alert_mem_pct,
             self.alert_disk_pct,
@@ -236,14 +265,19 @@ impl MonitorPanel {
             return;
         }
 
+        let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
         let panel = egui::SidePanel::right(layout_util::MONITOR_PANEL_ID)
-            .exact_width(dock_col_w)
-            .resizable(false)
+            .default_width(def_w)
+            .min_width(min_w)
+            .max_width(max_w)
+            .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
+                crate::ui::chrome::paint_right_dock_left_gap(ui, theme);
                 self.last_panel_slot_rect = Some(ui.max_rect());
                 let h = ui.available_height().max(1.0);
-                ui.allocate_exact_size(egui::vec2(dock_col_w, h), egui::Sense::hover());
+                let w = ui.available_width().max(1.0);
+                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
             });
         if let Some(slot) = self.last_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
@@ -284,8 +318,10 @@ impl MonitorPanel {
             &geom,
             crate::ui::layout_util::SidePanelProfile::Monitor,
             |ui, _body_w| {
+                let loc_fg = i18n::locale(ctx);
                 let alert_count = self.monitor.as_ref().and_then(|mon| {
                         let alerts = Self::collect_alerts_with(
+                            loc_fg,
                             self.alert_cpu_pct,
                             self.alert_mem_pct,
                             self.alert_disk_pct,
@@ -299,7 +335,7 @@ impl MonitorPanel {
                     });
                     let prev_gap_y = ui.spacing().item_spacing.y;
                     ui.spacing_mut().item_spacing.y = 0.0;
-                    theme.frame_panel_header_band().show(ui, |ui| {
+                    theme.frame_right_dock_header_band().show(ui, |ui| {
                             layout_util::set_width_to_available(ui);
                             ui.horizontal(|ui| {
                                 ui.horizontal(|ui| {
@@ -307,13 +343,21 @@ impl MonitorPanel {
                                         ui,
                                         theme,
                                         crate::ui::icons::IconId::Monitor,
-                                        "系统监控",
+                                        crate::i18n::tr(
+                                            ui.ctx(),
+                                            "System Monitor",
+                                            "系统监控",
+                                        ),
                                     );
                                     if let Some(n) = alert_count {
                                         crate::ui::icons::icon_label_row(
                                             ui,
                                             crate::ui::icons::IconId::Warning,
-                                            &format!("{n} 项告警"),
+                                            &format!(
+                                                "{}{}",
+                                                n,
+                                                i18n::tr(ui.ctx(), " alerts", " 项告警"),
+                                            ),
                                             theme.font_size_medium(),
                                             5.0,
                                             |t| {
@@ -327,7 +371,11 @@ impl MonitorPanel {
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
                                         if crate::ui::chrome::dock_close_icon_button(ui, theme)
-                                            .on_hover_text("隐藏侧栏 · 也可用底部「监控」切换")
+                                            .on_hover_text(crate::i18n::tr(
+                                                ui.ctx(),
+                                                "Hide side panel · switch with footer Monitor",
+                                                "隐藏侧栏 · 也可用底部「监控」切换",
+                                            ))
                                             .clicked()
                                         {
                                             *open = false;
@@ -336,7 +384,7 @@ impl MonitorPanel {
                                 );
                             });
                         });
-                    crate::ui::chrome::panel_header_divider(ui, theme);
+                    crate::ui::chrome::right_dock_header_divider(ui, theme);
                     ui.spacing_mut().item_spacing.y = prev_gap_y;
                     ui.add_space(theme.spacing_xs());
 
@@ -358,15 +406,21 @@ impl MonitorPanel {
 
     fn show_content(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         layout_util::set_width_to_available(ui);
+        let loc = i18n::locale(ui.ctx());
         ui.vertical(|ui| {
             layout_util::set_width_to_available(ui);
             ui.horizontal(|ui| {
-                ui.checkbox(&mut self.auto_refresh, "自动刷新");
+                crate::ui::chrome::form_checkbox(
+                    ui,
+                    theme,
+                    &mut self.auto_refresh,
+                    crate::i18n::tr(ui.ctx(), "Auto refresh", "自动刷新"),
+                );
                 if crate::ui::chrome::panel_toolbar_icon_button_or_busy(
                     ui,
                     theme,
                     crate::ui::icons::IconId::Refresh,
-                    "刷新",
+                    crate::i18n::tr(ui.ctx(), "Refresh", "刷新"),
                     self.pending_raw.is_some(),
                 )
                 .clicked()
@@ -380,7 +434,7 @@ impl MonitorPanel {
                     theme,
                     &mut self.refresh_interval_secs,
                     1.0..=30.0,
-                    "间隔 (秒)",
+                    crate::i18n::tr(ui.ctx(), "Interval (s)", "间隔 (秒)"),
                     "",
                 );
             }
@@ -388,7 +442,7 @@ impl MonitorPanel {
         ui.add_space(theme.spacing_sm());
 
         egui::CollapsingHeader::new(
-            egui::RichText::new("告警阈值")
+            egui::RichText::new(i18n::tr(ui.ctx(), "Alert thresholds", "告警阈值"))
                 .size(theme.font_size_medium())
                 .color(theme.text_secondary()),
         )
@@ -396,15 +450,28 @@ impl MonitorPanel {
         .show(ui, |ui| {
             layout_util::set_width_to_available(ui);
             ui.label(
-                egui::RichText::new("超出阈值时在标题与下方显示告警（仅当前会话）。")
+                egui::RichText::new(i18n::tr(
+                    ui.ctx(),
+                    "When exceeded, show alerts in header and below (this session only).",
+                    "超出阈值时在标题与下方显示告警（仅当前会话）。",
+                ))
                     .size(theme.font_size_small())
                     .color(theme.text_tertiary()),
             );
             ui.add_space(4.0);
             for (pct, label) in [
-                (&mut self.alert_cpu_pct, "CPU 告警 %"),
-                (&mut self.alert_mem_pct, "内存告警 %"),
-                (&mut self.alert_disk_pct, "磁盘告警 %"),
+                (
+                    &mut self.alert_cpu_pct,
+                    i18n::tr(ui.ctx(), "CPU alert %", "CPU 告警 %"),
+                ),
+                (
+                    &mut self.alert_mem_pct,
+                    i18n::tr(ui.ctx(), "Memory alert %", "内存告警 %"),
+                ),
+                (
+                    &mut self.alert_disk_pct,
+                    i18n::tr(ui.ctx(), "Disk alert %", "磁盘告警 %"),
+                ),
             ] {
                 crate::ui::chrome::labeled_slider_f32(
                     ui,
@@ -422,12 +489,12 @@ impl MonitorPanel {
             let stats = monitor.last_stats();
             let history = monitor.get_history();
             let (rx_rate, tx_rate) = monitor.network_rate();
-            let alerts = self.collect_alerts(stats);
+            let alerts = self.collect_alerts(loc, stats);
             if !alerts.is_empty() {
                 theme.frame_monitor_alert()
                     .show(ui, |ui| {
                         ui.label(
-                            egui::RichText::new("当前告警")
+                            egui::RichText::new(i18n::tr(ui.ctx(), "Current alerts", "当前告警"))
                                 .size(theme.font_size_medium())
                                 .color(theme.red_color()),
                         );
@@ -447,7 +514,7 @@ impl MonitorPanel {
                 ui,
                 theme,
                 crate::ui::icons::IconId::Timer,
-                "运行时间",
+                loc.tr("Uptime", "运行时间"),
                 stats.format_uptime(),
             );
             ui.add_space(theme.spacing_sm());
@@ -457,7 +524,7 @@ impl MonitorPanel {
                 ui,
                 theme,
                 crate::ui::icons::IconId::Cpu,
-                "CPU",
+                loc.tr("CPU", "CPU"),
                 stats.cpu_percent,
                 format!("{:.1}%", stats.cpu_percent),
                 cpu_color(stats.cpu_percent, theme),
@@ -467,7 +534,7 @@ impl MonitorPanel {
                 ui,
                 theme,
                 crate::ui::icons::IconId::Memory,
-                "内存",
+                loc.tr("Memory", "内存"),
                 stats.memory_percent(),
                 stats.format_memory(),
                 mem_color(stats.memory_percent(), theme),
@@ -477,7 +544,7 @@ impl MonitorPanel {
                 ui,
                 theme,
                 crate::ui::icons::IconId::Disk,
-                "磁盘",
+                loc.tr("Disk", "磁盘"),
                 stats.disk_percent(),
                 stats.format_disk(),
                 disk_color(stats.disk_percent(), theme),
@@ -491,7 +558,7 @@ impl MonitorPanel {
             crate::ui::icons::icon_label_row(
                 ui,
                 crate::ui::icons::IconId::Chart,
-                "系统负载",
+                loc.tr("Load average", "系统负载"),
                 theme.font_size_medium(),
                 6.0,
                 |t| t.size(theme.font_size_medium()).color(theme.text_secondary()),
@@ -508,7 +575,7 @@ impl MonitorPanel {
             crate::ui::icons::icon_label_row(
                 ui,
                 crate::ui::icons::IconId::Network,
-                "网络速率",
+                loc.tr("Network throughput", "网络速率"),
                 theme.font_size_monitor_section(),
                 6.0,
                 |t| {
@@ -540,7 +607,7 @@ impl MonitorPanel {
             crate::ui::icons::icon_label_row(
                 ui,
                 crate::ui::icons::IconId::Chart,
-                "历史趋势",
+                loc.tr("Trend", "历史趋势"),
                 theme.font_size_medium(),
                 6.0,
                 |t| t.size(theme.font_size_medium()).color(theme.text_secondary()),
@@ -554,12 +621,20 @@ impl MonitorPanel {
             ui.vertical_centered(|ui| {
                 ui.add_space(40.0);
                 ui.label(
-                    egui::RichText::new("当前标签无可用 SSH 会话")
+                    egui::RichText::new(i18n::tr(
+                        ui.ctx(),
+                        "No SSH session on this tab",
+                        "当前标签无可用 SSH 会话",
+                    ))
                         .size(theme.font_size_large())
                         .color(theme.text_tertiary()),
                 );
                 ui.label(
-                    egui::RichText::new("请先连接服务器，或切换到已连接的标签")
+                    egui::RichText::new(i18n::tr(
+                        ui.ctx(),
+                        "Connect to a server, or switch to a connected tab.",
+                        "请先连接服务器，或切换到已连接的标签",
+                    ))
                         .size(theme.font_size_normal())
                         .color(theme.text_secondary()),
                 );
@@ -660,6 +735,7 @@ impl MonitorPanel {
         theme: &Theme,
         history: &[ServerStats],
     ) {
+        let loc = i18n::locale(ui.ctx());
         const CHART_HEIGHT: f32 = 110.0;
         let width = layout_util::set_width_to_available(ui);
         let plot_margin = egui::vec2(0.14, 0.14);
@@ -673,16 +749,27 @@ impl MonitorPanel {
 
         if history.len() < 2 {
             ui.label(
-                egui::RichText::new("等待数据采集…（至少两次刷新后显示曲线）")
+                egui::RichText::new(i18n::tr(
+                    ui.ctx(),
+                    "Waiting for samples… (curve needs at least two refreshes)",
+                    "等待数据采集…（至少两次刷新后显示曲线）",
+                ))
                     .size(theme.font_size_menu_item())
                     .color(theme.text_tertiary()),
             );
             return;
         }
 
+        let pct_y = loc.tr("Usage %", "使用率 %").to_string();
+        let time_x = loc.tr("Time (s)", "时间 (s)").to_string();
+        let load_y = loc.tr("Load", "负载").to_string();
         let n = history.len();
         let t0 = history[0].collected_at;
         let t_end = (history[n - 1].collected_at - t0).as_secs_f64().max(0.0);
+
+        let name_cpu = loc.tr("CPU", "CPU");
+        let name_mem = loc.tr("Memory", "内存");
+        let name_disk = loc.tr("Disk", "磁盘");
 
         let cpu_points: PlotPoints = history
             .iter()
@@ -712,20 +799,25 @@ impl MonitorPanel {
             .collect();
 
         let cpu_line = Line::new(cpu_points)
-            .name("CPU")
+            .name(name_cpu)
             .color(theme.green_color())
             .width(1.6);
         let mem_line = Line::new(mem_points)
-            .name("内存")
+            .name(name_mem)
             .color(theme.accent_color())
             .width(1.6);
         let disk_line = Line::new(disk_points)
-            .name("磁盘")
+            .name(name_disk)
             .color(disk_color(72.0_f32, theme))
             .width(1.6);
 
         ui.label(
-            egui::RichText::new("CPU / 内存 / 磁盘")
+            egui::RichText::new(format!(
+                "{} / {} / {}",
+                loc.tr("CPU", "CPU"),
+                loc.tr("Memory", "内存"),
+                loc.tr("Disk", "磁盘")
+            ))
                 .size(theme.font_size_normal())
                 .color(theme.text_tertiary()),
         );
@@ -747,8 +839,8 @@ impl MonitorPanel {
             .include_y(0.0)
             .include_y(100.0)
             .set_margin_fraction(plot_margin)
-            .y_axis_label("使用率 %")
-            .x_axis_label("时间 (s)")
+            .y_axis_label(pct_y.clone())
+            .x_axis_label(time_x.clone())
             .legend(legend(Corner::LeftTop))
             .show_axes([true, true])
             .show_grid([true, true])
@@ -784,24 +876,44 @@ impl MonitorPanel {
             if let Some(idx) = hover_idx {
                 let s = &history[idx];
                 let (l1, l5, l15) = s.load_avg;
-                let tip = format!(
-                    "样本 {}/{}\n\
-                     t = {:.1} s · CPU {:.1}%\n\
-                     内存 {:.1}%({})\n\
-                     磁盘 {:.1}%({})\n\
-                     负载 {:.2} / {:.2} / {:.2}",
-                    idx + 1,
-                    n,
-                    (s.collected_at - t0).as_secs_f64(),
-                    s.cpu_percent,
-                    s.memory_percent(),
-                    s.format_memory(),
-                    s.disk_percent(),
-                    s.format_disk(),
-                    l1,
-                    l5,
-                    l15,
-                );
+                let tip = match loc.lang {
+                    UiLanguage::En => format!(
+                        "Sample {}/{}\n\
+                         t = {:.1} s · CPU {:.1}%\n\
+                         Memory {:.1}% ({})\n\
+                         Disk {:.1}% ({})\n\
+                         Load {:.2} / {:.2} / {:.2}",
+                        idx + 1,
+                        n,
+                        (s.collected_at - t0).as_secs_f64(),
+                        s.cpu_percent,
+                        s.memory_percent(),
+                        s.format_memory(),
+                        s.disk_percent(),
+                        s.format_disk(),
+                        l1,
+                        l5,
+                        l15,
+                    ),
+                    UiLanguage::Zh => format!(
+                        "样本 {}/{}\n\
+                         t = {:.1} s · CPU {:.1}%\n\
+                         内存 {:.1}%({})\n\
+                         磁盘 {:.1}%({})\n\
+                         负载 {:.2} / {:.2} / {:.2}",
+                        idx + 1,
+                        n,
+                        (s.collected_at - t0).as_secs_f64(),
+                        s.cpu_percent,
+                        s.memory_percent(),
+                        s.format_memory(),
+                        s.disk_percent(),
+                        s.format_disk(),
+                        l1,
+                        l5,
+                        l15,
+                    ),
+                };
                 egui::show_tooltip_text(ui.ctx(), tip_id, tip);
             }
         }
@@ -834,7 +946,10 @@ impl MonitorPanel {
             .collect();
 
         ui.label(
-            egui::RichText::new("负载 (load average)")
+            egui::RichText::new(loc.tr(
+                "Load average",
+                "负载 (load average)",
+            ))
                 .size(theme.font_size_normal())
                 .color(theme.text_tertiary()),
         );
@@ -854,8 +969,8 @@ impl MonitorPanel {
             .include_y(0.0)
             .auto_bounds_y()
             .set_margin_fraction(plot_margin)
-            .y_axis_label("负载")
-            .x_axis_label("时间 (s)")
+            .y_axis_label(load_y.clone())
+            .x_axis_label(time_x.clone())
             .legend(legend(Corner::LeftTop))
             .show_axes([true, true])
             .show_grid([true, true])
@@ -869,19 +984,19 @@ impl MonitorPanel {
             .show(ui, |plot_ui| {
                 plot_ui.line(
                     Line::new(load1_points)
-                        .name("1 分钟")
+                        .name(loc.tr("1 min", "1 分钟"))
                         .color(theme.green_color())
                         .width(1.6),
                 );
                 plot_ui.line(
                     Line::new(load5_points)
-                        .name("5 分钟")
+                        .name(loc.tr("5 min", "5 分钟"))
                         .color(theme.amber_color())
                         .width(1.6),
                 );
                 plot_ui.line(
                     Line::new(load15_points)
-                        .name("15 分钟")
+                        .name(loc.tr("15 min", "15 分钟"))
                         .color(theme.text_primary())
                         .width(1.6),
                 );
@@ -906,7 +1021,10 @@ impl MonitorPanel {
         }
 
         ui.label(
-            egui::RichText::new("网络速率")
+            egui::RichText::new(loc.tr(
+                "Network throughput",
+                "网络速率",
+            ))
                 .size(theme.font_size_normal())
                 .color(theme.text_tertiary()),
         );
@@ -914,7 +1032,11 @@ impl MonitorPanel {
 
         if rx_pts.is_empty() {
             ui.label(
-                egui::RichText::new("暂无有效采样间隔...")
+                egui::RichText::new(i18n::tr(
+                    ui.ctx(),
+                    "No valid sampling interval yet…",
+                    "暂无有效采样间隔...",
+                ))
                     .size(theme.font_size_small())
                     .color(theme.text_tertiary()),
             );
@@ -937,7 +1059,7 @@ impl MonitorPanel {
                 .auto_bounds_y()
                 .set_margin_fraction(plot_margin)
                 .y_axis_label("B/s")
-                .x_axis_label("时间 (s)")
+                .x_axis_label(time_x.clone())
                 .y_axis_formatter(|v, _max_chars, _range| format_bytes_per_sec(v))
                 .legend(legend(Corner::LeftTop))
                 .show_axes([true, true])
@@ -952,13 +1074,13 @@ impl MonitorPanel {
                 .show(ui, |plot_ui| {
                     plot_ui.line(
                         Line::new(rx_line)
-                            .name("下行")
+                            .name(loc.tr("Download", "下行"))
                             .color(theme.green_color())
                             .width(1.6),
                     );
                     plot_ui.line(
                         Line::new(tx_line)
-                            .name("上行")
+                            .name(loc.tr("Upload", "上行"))
                             .color(theme.accent_color())
                             .width(1.6),
                     );
@@ -967,7 +1089,11 @@ impl MonitorPanel {
 
         ui.add_space(4.0);
         ui.label(
-            egui::RichText::new("提示:至多保留 60 个采样;双击复位视图;各图横向联动。")
+            egui::RichText::new(i18n::tr(
+                ui.ctx(),
+                "Tip: up to 60 samples; double‑click resets view; plots share horizontal pan/zoom.",
+                "提示：至多保留 60 个采样；双击复位视图；各图横向联动。",
+            ))
                 .size(theme.font_size_small())
                 .color(theme.text_tertiary()),
         );

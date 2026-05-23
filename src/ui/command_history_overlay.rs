@@ -104,8 +104,18 @@ impl CommandHistoryOverlay {
                         ui.set_width(inner.width() - 24.0);
                         ui.label(
                             egui::RichText::new(format!(
-                                "搜索命令历史 ({} 继续 · Esc 关闭)",
-                                crate::platform::terminal_history_accel()
+                                "{}{}{}",
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Search command history (",
+                                    "搜索命令历史 (",
+                                ),
+                                crate::platform::terminal_history_accel(),
+                                crate::i18n::tr(
+                                    ctx,
+                                    " next · Esc to close)",
+                                    " 继续 · Esc 关闭)",
+                                ),
                             ))
                                 .size(theme.font_size_small())
                                 .color(theme.text_tertiary()),
@@ -117,7 +127,7 @@ impl CommandHistoryOverlay {
                             theme,
                             egui::Id::new("cmd_history_search"),
                             &mut self.query,
-                            "搜索历史命令…",
+                            crate::i18n::tr(ctx, "Search history…", "搜索历史命令…"),
                             search_w,
                         );
                         if self.open {
@@ -129,12 +139,16 @@ impl CommandHistoryOverlay {
                             .show(ui, |ui| {
                                 if results.is_empty() {
                                     ui.label(
-                                        egui::RichText::new("无匹配记录")
+                                        egui::RichText::new(crate::i18n::tr(
+                                            ctx,
+                                            "No matches",
+                                            "无匹配记录",
+                                        ))
                                             .color(theme.text_tertiary()),
                                     );
                                 } else {
                                     for (i, entry) in results.iter().enumerate() {
-                                        let row = row_button(ui, theme, entry, i == self.selected);
+                                        let row = row_button(ui, ctx, theme, entry, i == self.selected);
                                         if row.clicked() {
                                             action = CommandHistoryAction::Apply(entry.command.clone());
                                         }
@@ -147,7 +161,11 @@ impl CommandHistoryOverlay {
                                                     crate::ui::icons::IconId::Trash,
                                                     theme.color_body_text_muted(),
                                                 )
-                                                    .on_hover_text("从历史删除")
+                                                    .on_hover_text(crate::i18n::tr(
+                                                        ctx,
+                                                        "Remove from history",
+                                                        "从历史删除",
+                                                    ))
                                                     .clicked()
                                                 {
                                                     action = CommandHistoryAction::Delete(entry.command.clone());
@@ -160,12 +178,19 @@ impl CommandHistoryOverlay {
                         ui.add_space(4.0);
                         ui.horizontal(|ui| {
                             ui.label(
-                                egui::RichText::new(format!("共 {} 条结果", results.len()))
+                                egui::RichText::new(format!(
+                                    "{}{}{}",
+                                    crate::i18n::tr(ctx, "Total ", "共 "),
+                                    results.len(),
+                                    crate::i18n::tr(ctx, " results", " 条结果"),
+                                ))
                                     .size(theme.font_size_small())
                                     .color(theme.text_tertiary()),
                             );
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if crate::ui::chrome::chrome_small_button(ui, theme, "Esc 关闭").clicked() {
+                                if crate::ui::chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Close)
+                                    .on_hover_text(crate::i18n::tr(ctx, "Esc to close", "Esc 关闭"))
+                                    .clicked() {
                                     action = CommandHistoryAction::Close;
                                 }
                             });
@@ -177,14 +202,24 @@ impl CommandHistoryOverlay {
     }
 }
 
-fn row_button(ui: &mut egui::Ui, theme: &Theme, entry: &HistoryEntry, selected: bool) -> egui::Response {
+fn row_button(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    theme: &Theme,
+    entry: &HistoryEntry,
+    selected: bool,
+) -> egui::Response {
     let suffix = entry
         .session_name
         .as_deref()
         .map(|n| format!(" # {}", n))
         .unwrap_or_default();
     let cmd = entry.display_command();
-    let status = if entry.success { "" } else { " · 失败" };
+    let status = if entry.success {
+        ""
+    } else {
+        crate::i18n::tr(ctx, " · failed", " · 失败")
+    };
     let label = format!("{}{}{}", cmd, suffix, status);
     let fill = if selected {
         theme.accent_alpha(51)

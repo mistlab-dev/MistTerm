@@ -192,11 +192,11 @@ fn expand_rhai_blocks_with_eff(
             break;
         };
         let Some(close_idx) = find_closing_double_brace(&s, start) else {
-            return Err("未闭合的 {{ … }}（缺少 }}）".to_string());
+            return Err("Unclosed {{ … }} (missing `}}`)".to_string());
         };
         let expr = s[start + 2..close_idx].trim();
         if expr.is_empty() {
-            return Err("{{ }} 内表达式不能为空".to_string());
+            return Err("{{ }} expression cannot be empty".to_string());
         }
         let tail_start = close_idx + 2;
 
@@ -224,7 +224,7 @@ fn expand_rhai_blocks_with_eff(
                     e
                 );
                 format!(
-                    "表达式错误：{}（完整表达式已写入日志）",
+                    "Expression error: {} (full expression logged)",
                     truncate_dbg(&e.to_string(), 72)
                 )
             })?;

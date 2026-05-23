@@ -417,6 +417,46 @@ impl Theme {
         }
     }
 
+    /// 未勾选复选框填充（与输入框底一致，须在面板底上可见；勿用全透明）
+    #[inline]
+    pub fn color_checkbox_off_fill(&self) -> Color32 {
+        self.color_text_input_fill()
+    }
+
+    /// 未勾选复选框描边色（比分割线略强，避免「只有悬停才看得见方框」）
+    #[inline]
+    pub fn color_checkbox_off_stroke_color(&self) -> Color32 {
+        if self.is_light_theme() {
+            self.stroke_input_color()
+        } else if self.uses_solid_fg_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 90)
+        } else {
+            self.fg_high_alpha(72)
+        }
+    }
+
+    /// 未勾选复选框悬停底
+    #[inline]
+    pub fn color_checkbox_hover_fill(&self) -> Color32 {
+        self.accent_alpha(28)
+    }
+
+    /// 勾选标记颜色（叠在 accent 底上）
+    #[inline]
+    pub fn color_checkbox_checkmark(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::WHITE
+        } else {
+            Color32::from_rgb(248, 250, 255)
+        }
+    }
+
+    /// 复选框圆角
+    #[inline]
+    pub fn radius_checkbox(&self) -> f32 {
+        3.0
+    }
+
     /// Slider 滑轨底色（egui 用 `widgets.inactive.bg_fill` 绘制轨道）
     #[inline]
     pub fn color_slider_rail_fill(&self) -> Color32 {
@@ -1008,6 +1048,9 @@ impl Theme {
         self.size_sidebar_filter_chip_h()
     }
 
+    /// 片段面板分类筛选芯片固定宽度上限：dock 拉宽时按钮不应跟着撑开。
+    pub fn size_panel_filter_chip_max_w(&self) -> f32 { 72.0 }
+
     pub fn size_bottom_tool_btn_fragment_w(&self) -> f32 {
         108.0
     }
@@ -1214,10 +1257,37 @@ impl Theme {
             ))
     }
 
-    /// 弹窗标题行底带（在通用条带上保留圆角）
+    /// 弹窗标题行底带（仅顶部圆角，与底部分隔线齐平）
     pub fn frame_modal_title_band(&self) -> egui::Frame {
+        let r = self.radius_list_item();
         self.frame_panel_header_band()
-            .rounding(egui::Rounding::same(self.radius_list_item()))
+            .rounding(egui::Rounding {
+                nw: r,
+                ne: r,
+                sw: 0.0,
+                se: 0.0,
+            })
+    }
+
+    /// 右 dock Foreground 标题带：抵消 [`right_dock_content_margin`]，横向铺满 dock 壳层。
+    pub fn frame_right_dock_header_band(&self) -> egui::Frame {
+        let px = self.spacing_right_dock_pad_x();
+        let py = self.spacing_right_dock_pad_y();
+        let shell_r = self.radius_panel();
+        self.frame_panel_header_band()
+            .stroke(egui::Stroke::new(1.0, self.color_panel_header_divider()))
+            .rounding(egui::Rounding {
+                nw: shell_r,
+                ne: shell_r,
+                sw: 0.0,
+                se: 0.0,
+            })
+            .outer_margin(egui::Margin {
+                left: -px,
+                right: -px,
+                top: -py,
+                bottom: 0.0,
+            })
     }
 
     /// 监控告警汇总块
@@ -1423,6 +1493,8 @@ impl Theme {
     pub fn spacing_right_dock_pad_y(&self) -> f32 { 4.0 }
     /// 左栏｜终端｜右栏之间的缝隙（露出 Central 底色）
     pub fn spacing_region_gap(&self) -> f32 { 6.0 }
+    /// 右 dock 与终端、相邻 dock 之间的 `bg_body` 缝宽（独立于 [`spacing_region_gap`]）。
+    pub fn spacing_dock_gap(&self) -> f32 { 5.0 }
     /// 右 dock 面板与窗口右缘缝宽（细缝即可；小于 [`spacing_work_area_pad`]）
     pub fn spacing_right_dock_screen_inset(&self) -> f32 {
         // 统一左/右列宽：右 dock 不再额外吃掉可视宽度
@@ -1757,7 +1829,7 @@ impl ThemeManager {
             if let Ok(manager) = serde_json::from_str(&content) {
                 return manager;
             }
-            log::warn!("主题配置文件解析失败，使用默认主题");
+            log::warn!("Failed to parse theme config; using default theme");
         }
         
         Self::new()
@@ -1769,16 +1841,16 @@ impl ThemeManager {
         
         if let Some(parent) = config_path.parent() {
             if let Err(e) = std::fs::create_dir_all(parent) {
-                log::error!("创建主题配置目录失败: {}", e);
+                log::error!("Failed to create theme config directory: {}", e);
                 return;
             }
         }
         
         if let Ok(content) = serde_json::to_string_pretty(self) {
             if let Err(e) = std::fs::write(&config_path, content) {
-                log::error!("保存主题配置失败: {}", e);
+                log::error!("Failed to save theme config: {}", e);
             } else {
-                log::info!("主题配置已保存到 {}", config_path.display());
+                log::info!("Theme config saved to {}", config_path.display());
             }
         }
     }
@@ -1813,11 +1885,13 @@ impl ThemeManager {
         style.visuals.window_stroke = theme.panel_stroke();
         style.visuals.widgets.noninteractive.weak_bg_fill = theme.surface_body();
 
-        // 按钮样式：默认透明底 + 悬停 accent 弱底
+        // 按钮样式：默认透明底 + 悬停 accent 弱底（裸 `ui.checkbox` 会几乎隐形，请用 [`crate::ui::chrome::form_checkbox`]）
         style.visuals.widgets.noninteractive.bg_fill = theme.color_subtle_inset_fill();
         style.visuals.widgets.noninteractive.bg_stroke = theme.divider_stroke();
         style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
         style.visuals.widgets.inactive.weak_bg_fill = theme.color_subtle_inset_fill();
+        style.visuals.widgets.inactive.bg_stroke =
+            egui::Stroke::new(1.0, theme.color_checkbox_off_stroke_color());
         style.visuals.widgets.hovered.bg_fill = theme.accent_alpha(38);
         style.visuals.widgets.hovered.weak_bg_fill = theme.accent_alpha(51);
         style.visuals.widgets.active.bg_fill = theme.accent_color();

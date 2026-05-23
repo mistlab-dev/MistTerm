@@ -7,9 +7,13 @@ use std::path::PathBuf;
 use crate::core::ai_settings::AiSettings;
 use crate::core::audit::AuditSettings;
 use crate::core::vault::VaultSettings;
+use crate::i18n::UiLanguage;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
+    /// UI language (default English).
+    #[serde(default)]
+    pub ui_language: UiLanguage,
     #[serde(default)]
     pub vault: VaultSettings,
     #[serde(default)]
@@ -21,6 +25,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            ui_language: UiLanguage::default(),
             vault: VaultSettings::default(),
             audit: AuditSettings::default(),
             ai: AiSettings::default(),

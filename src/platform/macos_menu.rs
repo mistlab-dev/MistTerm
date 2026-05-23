@@ -8,6 +8,7 @@
 //! - **帮助**：内嵌文档与关于
 
 use super::macos_app_name::APP_DISPLAY_NAME;
+use crate::i18n::{menu, UiLanguage};
 use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{
     CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
@@ -50,32 +51,68 @@ pub enum MacMenuAction {
 /// 持有 muda 菜单句柄与条目 id，供事件分发与状态同步。
 pub struct NativeAppMenu {
     _root: Menu,
+    _terminal_menu: Submenu,
+    _edit_menu: Submenu,
+    _view_menu: Submenu,
+    _tools_menu: Submenu,
+    _help_menu: Submenu,
+    about: MenuItem,
+    preferences: MenuItem,
+    quit: MenuItem,
+    new_session: MenuItem,
+    new_tab: MenuItem,
     import_ssh: MenuItem,
+    close_tab: MenuItem,
+    disconnect: MenuItem,
+    reconnect: MenuItem,
+    copy_terminal: MenuItem,
+    paste_terminal: MenuItem,
+    select_terminal: MenuItem,
+    terminal_search: MenuItem,
     toggle_sidebar: MenuItem,
     toggle_maximize: MenuItem,
     sftp_panel: CheckMenuItem,
     fragment_panel: CheckMenuItem,
     monitor_panel: CheckMenuItem,
+    theme_submenu: Submenu,
+    theme_stored_names: Vec<String>,
     theme_items: Vec<CheckMenuItem>,
+    fragments: MenuItem,
+    quick_fragments: MenuItem,
+    command_history: MenuItem,
+    credentials: MenuItem,
+    cloud: MenuItem,
+    session_logs: MenuItem,
+    help_guide: MenuItem,
+    help_spec: MenuItem,
+    help_keys: MenuItem,
+    help_folder: MenuItem,
+    help_about: MenuItem,
+    last_lang: Option<UiLanguage>,
 }
 
 impl NativeAppMenu {
-    pub fn install(theme_names: &[String]) -> muda::Result<Self> {
+    pub fn install(
+        theme_display_names: &[String],
+        theme_stored_names: &[String],
+        lang: UiLanguage,
+    ) -> muda::Result<Self> {
+        let l = menu::labels(lang);
         super::macos_app_name::set_application_display_name();
 
         let root = Menu::new();
 
         let app_menu = Submenu::new(APP_DISPLAY_NAME, true);
-        let about = MenuItem::with_id("mistterm.app.about", "关于 Mist", true, None);
+        let about = MenuItem::with_id("mistterm.app.about", l.about, true, None);
         let preferences = MenuItem::with_id(
             "mistterm.app.preferences",
-            "偏好设置…",
+            l.preferences,
             true,
             Some(Accelerator::new(Some(Modifiers::SUPER), Code::Comma)),
         );
         let quit = MenuItem::with_id(
             "mistterm.app.quit",
-            "退出 Mist",
+            l.quit,
             true,
             Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyQ)),
         );
@@ -86,35 +123,35 @@ impl NativeAppMenu {
         app_menu.append(&quit)?;
 
         // ── 终端 ──
-        let terminal_menu = Submenu::new("终端", true);
+        let terminal_menu = Submenu::new(l.terminal_menu, true);
         let new_session = MenuItem::with_id(
             "mistterm.terminal.new_session",
-            "新建会话",
+            l.new_session,
             true,
             Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyN)),
         );
         let new_tab = MenuItem::with_id(
             "mistterm.terminal.new_tab",
-            "新建标签",
+            l.new_tab,
             true,
             Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyT)),
         );
         let import_ssh =
-            MenuItem::with_id("mistterm.terminal.import_ssh", "导入 SSH 配置", true, None);
+            MenuItem::with_id("mistterm.terminal.import_ssh", l.import_ssh, true, None);
         let close_tab = MenuItem::with_id(
             "mistterm.terminal.close_tab",
-            "关闭标签",
+            l.close_tab,
             true,
             Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyW)),
         );
         let disconnect = MenuItem::with_id(
             "mistterm.terminal.disconnect",
-            "断开 SSH（保留输出）",
+            l.disconnect,
             true,
             None,
         );
         let reconnect =
-            MenuItem::with_id("mistterm.terminal.reconnect", "重连当前标签", true, None);
+            MenuItem::with_id("mistterm.terminal.reconnect", l.reconnect, true, None);
         terminal_menu.append(&new_session)?;
         terminal_menu.append(&new_tab)?;
         terminal_menu.append(&import_ssh)?;
@@ -127,25 +164,25 @@ impl NativeAppMenu {
         // ── 编辑 ──
         // 勿使用 PredefinedMenuItem::copy/paste/select_all：与下方终端项重复，
         // 且 macOS 会在标准 Edit 项后注入 AutoFill / 听写 / 表情等系统菜单。
-        let edit = Submenu::new("编辑", true);
-        edit.append(&PredefinedMenuItem::undo(Some("撤销")))?;
-        edit.append(&PredefinedMenuItem::redo(Some("重做")))?;
+        let edit = Submenu::new(l.edit_menu, true);
+        edit.append(&PredefinedMenuItem::undo(Some(l.undo)))?;
+        edit.append(&PredefinedMenuItem::redo(Some(l.redo)))?;
         edit.append(&PredefinedMenuItem::separator())?;
         let copy_terminal = MenuItem::with_id(
             "mistterm.edit.copy_terminal",
-            "复制",
+            l.copy,
             true,
             Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyC)),
         );
         let paste_terminal = MenuItem::with_id(
             "mistterm.edit.paste_terminal",
-            "粘贴",
+            l.paste,
             true,
             Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyV)),
         );
         let select_terminal = MenuItem::with_id(
             "mistterm.edit.select_all_terminal",
-            "全选",
+            l.select_all,
             true,
             Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyA)),
         );
@@ -155,40 +192,41 @@ impl NativeAppMenu {
         edit.append(&PredefinedMenuItem::separator())?;
         let terminal_search = MenuItem::with_id(
             "mistterm.edit.find",
-            "在终端中搜索",
+            l.find_in_terminal,
             true,
             Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyF)),
         );
         edit.append(&terminal_search)?;
 
         // ── 视图：布局 / 面板 / 外观 ──
-        let view = Submenu::new("视图", true);
+        let view = Submenu::new(l.view_menu, true);
         let toggle_sidebar =
-            MenuItem::with_id("mistterm.view.toggle_sidebar", "折叠侧边栏", true, None);
+            MenuItem::with_id("mistterm.view.toggle_sidebar", l.collapse_sidebar, true, None);
         let toggle_maximize =
-            MenuItem::with_id("mistterm.view.toggle_maximize", "最大化窗口", true, None);
+            MenuItem::with_id("mistterm.view.toggle_maximize", l.maximize_window, true, None);
         let sftp_panel = CheckMenuItem::with_id(
             "mistterm.view.panel.sftp",
-            "SFTP 文件",
+            l.sftp_panel,
             true,
             false,
             None,
         );
         let fragment_panel = CheckMenuItem::with_id(
             "mistterm.view.panel.fragments",
-            "命令片段侧栏",
+            l.fragment_panel,
             true,
             false,
             None,
         );
         let monitor_panel = CheckMenuItem::with_id(
             "mistterm.view.panel.monitor",
-            "系统监控",
+            l.monitor_panel,
             true,
             false,
             None,
         );
-        let (theme_submenu, theme_items) = build_theme_submenu(theme_names)?;
+        let (theme_submenu, theme_items) =
+            build_theme_submenu(theme_display_names, l.theme_menu)?;
         view.append(&toggle_sidebar)?;
         view.append(&toggle_maximize)?;
         view.append(&PredefinedMenuItem::separator())?;
@@ -199,12 +237,12 @@ impl NativeAppMenu {
         view.append(&theme_submenu)?;
 
         // ── 工具 ──
-        let tools = Submenu::new("工具", true);
+        let tools = Submenu::new(l.tools_menu, true);
         let fragments =
-            MenuItem::with_id("mistterm.tools.fragments", "命令片段库…", true, None);
+            MenuItem::with_id("mistterm.tools.fragments", l.fragment_library, true, None);
         let quick_fragments = MenuItem::with_id(
             "mistterm.tools.quick_fragments",
-            "快速片段选择器",
+            l.quick_fragments,
             true,
             Some(Accelerator::new(
                 Some(Modifiers::SUPER | Modifiers::SHIFT),
@@ -213,15 +251,15 @@ impl NativeAppMenu {
         );
         let command_history = MenuItem::with_id(
             "mistterm.tools.command_history",
-            "命令历史…",
+            l.command_history,
             true,
             Some(Accelerator::new(Some(Modifiers::CONTROL), Code::KeyR)),
         );
         let credentials =
-            MenuItem::with_id("mistterm.tools.credentials", "凭证管理", true, None);
-        let cloud = MenuItem::with_id("mistterm.tools.cloud", "云端同步", true, None);
+            MenuItem::with_id("mistterm.tools.credentials", l.credentials, true, None);
+        let cloud = MenuItem::with_id("mistterm.tools.cloud", l.cloud_sync, true, None);
         let session_logs =
-            MenuItem::with_id("mistterm.tools.session_logs", "浏览会话日志…", true, None);
+            MenuItem::with_id("mistterm.tools.session_logs", l.session_logs, true, None);
         tools.append(&fragments)?;
         tools.append(&quick_fragments)?;
         tools.append(&command_history)?;
@@ -232,13 +270,13 @@ impl NativeAppMenu {
         tools.append(&session_logs)?;
 
         // ── 帮助 ──
-        let help = Submenu::new("帮助", true);
-        let help_guide = MenuItem::with_id("mistterm.help.guide", "快速入门…", true, None);
-        let help_spec = MenuItem::with_id("mistterm.help.spec", "说明文档（系统打开）", true, None);
-        let help_keys = MenuItem::with_id("mistterm.help.shortcuts", "键盘快捷键…", true, None);
+        let help = Submenu::new(l.help_menu, true);
+        let help_guide = MenuItem::with_id("mistterm.help.guide", l.help_guide, true, None);
+        let help_spec = MenuItem::with_id("mistterm.help.spec", l.help_spec, true, None);
+        let help_keys = MenuItem::with_id("mistterm.help.shortcuts", l.help_shortcuts, true, None);
         let help_folder =
-            MenuItem::with_id("mistterm.help.open_docs", "在 Finder 中打开文档文件夹", true, None);
-        let help_about = MenuItem::with_id("mistterm.help.about", "关于 Mist", true, None);
+            MenuItem::with_id("mistterm.help.open_docs", l.help_open_docs, true, None);
+        let help_about = MenuItem::with_id("mistterm.help.about", l.help_about, true, None);
         help.append(&help_guide)?;
         help.append(&help_spec)?;
         help.append(&help_keys)?;
@@ -260,18 +298,88 @@ impl NativeAppMenu {
 
         Ok(Self {
             _root: root,
+            _terminal_menu: terminal_menu,
+            _edit_menu: edit,
+            _view_menu: view,
+            _tools_menu: tools,
+            _help_menu: help,
+            about,
+            preferences,
+            quit,
+            new_session,
+            new_tab,
             import_ssh,
+            close_tab,
+            disconnect,
+            reconnect,
+            copy_terminal,
+            paste_terminal,
+            select_terminal,
+            terminal_search,
             toggle_sidebar,
             toggle_maximize,
             sftp_panel,
             fragment_panel,
             monitor_panel,
+            theme_submenu,
+            theme_stored_names: theme_stored_names.to_vec(),
             theme_items,
+            fragments,
+            quick_fragments,
+            command_history,
+            credentials,
+            cloud,
+            session_logs,
+            help_guide,
+            help_spec,
+            help_keys,
+            help_folder,
+            help_about,
+            last_lang: Some(lang),
         })
+    }
+
+    fn apply_locale(&self, lang: UiLanguage) {
+        let l = menu::labels(lang);
+        let _ = self.about.set_text(l.about);
+        let _ = self.preferences.set_text(l.preferences);
+        let _ = self.quit.set_text(l.quit);
+        let _ = self._terminal_menu.set_text(l.terminal_menu);
+        let _ = self.new_session.set_text(l.new_session);
+        let _ = self.new_tab.set_text(l.new_tab);
+        let _ = self.import_ssh.set_text(l.import_ssh);
+        let _ = self.close_tab.set_text(l.close_tab);
+        let _ = self.disconnect.set_text(l.disconnect);
+        let _ = self.reconnect.set_text(l.reconnect);
+        let _ = self._edit_menu.set_text(l.edit_menu);
+        let _ = self.copy_terminal.set_text(l.copy);
+        let _ = self.paste_terminal.set_text(l.paste);
+        let _ = self.select_terminal.set_text(l.select_all);
+        let _ = self.terminal_search.set_text(l.find_in_terminal);
+        let _ = self._view_menu.set_text(l.view_menu);
+        let _ = self.sftp_panel.set_text(l.sftp_panel);
+        let _ = self.fragment_panel.set_text(l.fragment_panel);
+        let _ = self.monitor_panel.set_text(l.monitor_panel);
+        let _ = self.theme_submenu.set_text(l.theme_menu);
+        let _ = self._tools_menu.set_text(l.tools_menu);
+        let _ = self.fragments.set_text(l.fragment_library);
+        let _ = self.quick_fragments.set_text(l.quick_fragments);
+        let _ = self.command_history.set_text(l.command_history);
+        let _ = self.credentials.set_text(l.credentials);
+        let _ = self.cloud.set_text(l.cloud_sync);
+        let _ = self.session_logs.set_text(l.session_logs);
+        let _ = self._help_menu.set_text(l.help_menu);
+        let _ = self.help_guide.set_text(l.help_guide);
+        let _ = self.help_spec.set_text(l.help_spec);
+        let _ = self.help_keys.set_text(l.help_shortcuts);
+        let _ = self.help_folder.set_text(l.help_open_docs);
+        let _ = self.help_about.set_text(l.help_about);
     }
 
     pub fn sync(
         &mut self,
+        ctx: &eframe::egui::Context,
+        lang: UiLanguage,
         ssh_import_enabled: bool,
         sidebar_collapsed: bool,
         window_maximized: bool,
@@ -280,6 +388,17 @@ impl NativeAppMenu {
         show_monitor_panel: bool,
         theme_index: usize,
     ) {
+        if self.last_lang != Some(lang) {
+            self.apply_locale(lang);
+            self.last_lang = Some(lang);
+        }
+        for (i, stored) in self.theme_stored_names.iter().enumerate() {
+            if let Some(item) = self.theme_items.get(i) {
+                let label = crate::i18n::theme_display_name(ctx, stored);
+                let _ = item.set_text(label.as_ref());
+            }
+        }
+        let l = menu::labels(lang);
         let _ = self.import_ssh.set_enabled(ssh_import_enabled);
         let _ = self.sftp_panel.set_checked(show_sftp_panel);
         let _ = self.fragment_panel.set_checked(show_fragment_panel);
@@ -288,15 +407,15 @@ impl NativeAppMenu {
             let _ = item.set_checked(i == theme_index);
         }
         let sidebar_label = if sidebar_collapsed {
-            "展开侧边栏"
+            l.expand_sidebar
         } else {
-            "折叠侧边栏"
+            l.collapse_sidebar
         };
         let _ = self.toggle_sidebar.set_text(sidebar_label);
         let maximize_label = if window_maximized {
-            "还原窗口大小"
+            l.restore_window
         } else {
-            "最大化窗口"
+            l.maximize_window
         };
         let _ = self.toggle_maximize.set_text(maximize_label);
     }
@@ -312,8 +431,11 @@ impl NativeAppMenu {
     }
 }
 
-fn build_theme_submenu(theme_names: &[String]) -> muda::Result<(Submenu, Vec<CheckMenuItem>)> {
-    let submenu = Submenu::new("主题", true);
+fn build_theme_submenu(
+    theme_names: &[String],
+    title: &str,
+) -> muda::Result<(Submenu, Vec<CheckMenuItem>)> {
+    let submenu = Submenu::new(title, true);
     let mut items = Vec::with_capacity(theme_names.len());
     for (i, name) in theme_names.iter().enumerate() {
         let id = format!("mistterm.view.theme.{i}");

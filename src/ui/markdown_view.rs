@@ -24,7 +24,7 @@ pub fn show_markdown(
         return;
     }
     if bind_full_width {
-        layout_util::set_width_to_available(ui);
+    layout_util::set_width_to_available(ui);
     } else {
         let w = ui.available_width();
         if w.is_finite() && w > 1.0 {
@@ -377,10 +377,10 @@ fn paint_code_block(
                 ui.push_id(block_id, |ui| {
                     ui.horizontal(|ui| {
                         if let Some(l) = lang.map(str::trim).filter(|s| !s.is_empty()) {
-                            ui.label(
+                ui.label(
                                 egui::RichText::new(l)
                                     .monospace()
-                                    .size(theme.font_size_small())
+                        .size(theme.font_size_small())
                                     .color(theme.color_form_hint()),
                             );
                         }
@@ -390,14 +390,22 @@ fn paint_code_block(
                                 ui.set_min_width(rest);
                                 ui.set_max_width(rest);
                             }
-                            if chrome::chrome_small_accent_button(ui, theme, "执行")
-                                .on_hover_text("发送到活动终端执行")
+                            if chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::TerminalPrompt)
+                                .on_hover_text(crate::i18n::tr(
+                                    ui.ctx(),
+                                    "Send to active terminal",
+                                    "发送到活动终端执行",
+                                ))
                                 .clicked()
                             {
                                 *command_for_terminal = Some(code.to_string());
                             }
-                            if chrome::chrome_small_button(ui, theme, "复制")
-                                .on_hover_text("复制代码到剪贴板")
+                            if chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Copy)
+                                .on_hover_text(crate::i18n::tr(
+                                    ui.ctx(),
+                                    "Copy code to clipboard",
+                                    "复制代码到剪贴板",
+                                ))
                                 .clicked()
                             {
                                 if let Ok(mut clip) = Clipboard::new() {
@@ -456,10 +464,15 @@ fn paint_code_block(
     ui.add_space(1.0);
 }
 
-fn show_selectable_layout_job(ui: &mut egui::Ui, job: LayoutJob, width: f32) {
-    ui.set_max_width(width.max(1.0));
+fn show_selectable_layout_job(ui: &mut egui::Ui, mut job: LayoutJob, width: f32) {
+    let w = width.max(1.0);
+    ui.set_max_width(w);
+    // 让 LayoutJob 在容器宽度处自动断行；缺省情况下 build_*_layout_job 不会设置 wrap.max_width，
+    // 又不能给 Label 单独传 wrap，长行会径直画出 frame 被裁。
+    job.wrap.max_width = w;
+    job.wrap.break_anywhere = true;
     // 用 Label 展示高亮 galley，避免 TextEdit+code_editor 在窄宽下左缘裁切。
-    ui.add(egui::Label::new(job).wrap(false));
+    ui.add(egui::Label::new(job).wrap(true));
 }
 
 #[derive(Copy, Clone)]

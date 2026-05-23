@@ -13,7 +13,7 @@ pub fn cjk_font_loaded() -> bool {
 /// 为 egui 注册 CJK 回退字体（拉丁仍用 egui 自带字体）。成功返回 `true`。
 pub fn configure_egui_fonts(ctx: &egui::Context) -> bool {
     let ppp = ctx.pixels_per_point();
-    log::info!("egui pixels_per_point = {ppp:.2}（HiDPI 验收参考）");
+    log::info!("egui pixels_per_point = {ppp:.2} (HiDPI reference)");
 
     let mut fonts = egui::FontDefinitions::default();
     let loaded = if let Some(cjk_font) = load_cjk_font() {
@@ -38,7 +38,7 @@ pub fn configure_egui_fonts(ctx: &egui::Context) -> bool {
     CJK_FONT_LOADED.store(loaded, Ordering::Relaxed);
     ctx.set_fonts(fonts);
     if !loaded {
-        log::warn!("未加载 CJK 字体，中文可能显示为方框");
+        log::warn!("CJK font not loaded; Chinese UI text may show as tofu");
         ctx.data_mut(|d| {
             d.insert_temp(egui::Id::new("mist_cjk_font_missing"), ());
         });
@@ -60,10 +60,10 @@ fn load_cjk_font() -> Option<egui::FontData> {
     for path in cjk_font_candidates() {
         match std::fs::read(&path) {
             Ok(bytes) => {
-                log::info!("已加载系统 CJK 字体: {}", path.display());
+                log::info!("Loaded system CJK font: {}", path.display());
                 return Some(tune_cjk_font(egui::FontData::from_owned(bytes)));
             }
-            Err(e) => log::debug!("跳过 CJK 字体 {}: {e}", path.display()),
+            Err(e) => log::debug!("Skipped CJK font {}: {e}", path.display()),
         }
     }
     None
@@ -74,7 +74,7 @@ fn load_embedded_cjk_font() -> Option<egui::FontData> {
     if BYTES.is_empty() {
         return None;
     }
-    log::info!("已加载内置 CJK 字体 NotoSansSC-Regular.otf ({} bytes)", BYTES.len());
+    log::info!("Loaded embedded CJK font NotoSansSC-Regular.otf ({} bytes)", BYTES.len());
     Some(tune_cjk_font(egui::FontData::from_static(BYTES)))
 }
 

@@ -264,7 +264,7 @@ impl GitRepo {
             .map_err(|e| GitError::PullError(format!("分析合并失败：{}", e)))?;
 
         if analysis.0.is_up_to_date() {
-            tracing::info!("已经是最新的");
+            tracing::info!("Already up to date");
             return Ok(());
         }
 
