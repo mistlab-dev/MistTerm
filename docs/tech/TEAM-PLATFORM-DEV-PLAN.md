@@ -1,7 +1,7 @@
 # 团队片段、命令审计与 AI 辅助 — 需求与设计
 
-> **版本**: 0.6  
-> **更新**: 2026-05-20  
+> **版本**: 0.7  
+> **更新**: 2026-05-24  
 > **读者**: MistTerm 客户端、团队服务端、产品  
 > **说明**: 本文仅描述**需求、行为与接口契约**；第 3 章界定职责边界，第 4 / 5 章分别只写服务端与客户端；服务端技术选型与存储实现不在本文范围。
 
@@ -451,3 +451,522 @@ Content-Type: application/json
 ---
 
 **文档维护**：接口契约冻结后，更新文首版本号并标注「契约已冻结」。
+
+---
+
+## 附录 A：服务端实现细节（客户端对接参考）
+
+> 版本：0.7 | 更新：2026-05-24
+> 本附录记录 `mist-team-server` 的**实际实现**，供客户端开发直接参照。与正文如有冲突，以本附录为准。
+
+### A.1 Base URL 与通用约定
+
+| 项目 | 说明 |
+|------|------|
+| Base URL | 配置项 `api_base`，如 `https://api.mistterm.dev` 或 `http://localhost:8080` |
+| 协议 | HTTPS（生产）；HTTP（开发） |
+| 认证 | 除 `/health`、`/v1/auth/*`、`/v1/oauth/*`、`/v1/billing/webhook` 外，所有接口需 `Authorization: Bearer <access_token>` |
+| Content-Type | `application/json` |
+| CORS | 已配置，允许 `https://mistterm.dev` 和 `http://localhost:8765` |
+| 限流 | 默认启用，120 req/min/IP |
+
+### A.2 认证（Auth）
+
+#### A.2.1 注册
+
+```
+POST /v1/auth/register
+```
+
+**请求体：**
+```json
+{
+  "email": "user@example.com",
+  "username": "zhangsan",
+  "display_name": "张三",       // 可选，缺省用 username
+  "password": "mypassword"      // ≥6 字符
+}
+```
+
+**响应 `201`：**
+```json
+{
+  "user": {
+    "id": "u_abc123def456",
+    "email": "user@example.com",
+    "username": "zhangsan",
+    "display_name": "张三",
+    "email_verified": false,
+    "created_at": "2026-05-24T00:00:00Z",
+    "updated_at": "2026-05-24T00:00:00Z"
+  },
+  "message": "Account created! Enjoy 30 days Pro trial. Please verify your email."
+}
+```
+
+**错误：**
+- `400` — 参数校验失败
+- `409` — email 或 username 已存在
+
+> **注意**：注册不返回 token，需另行调用 `/v1/auth/login`。
+
+#### A.2.2 登录
+
+```
+POST /v1/auth/login
+```
+
+**请求体（二选一）：**
+```json
+{
+  "email": "user@example.com",   // email 和 username 至少填一个
+  "password": "mypassword"
+}
+```
+或
+```json
+{
+  "username": "zhangsan",
+  "password": "mypassword"
+}
+```
+
+**响应 `200`：**
+```json
+{
+  "access_token": "eyJhbG...",
+  "refresh_token": "eyJhbG...",
+  "user": {
+    "id": "u_abc123def456",
+    "email": "user@example.com",
+    "username": "zhangsan",
+    "display_name": "张三",
+    "email_verified": true,
+    "created_at": "2026-05-24T00:00:00Z",
+    "updated_at": "2026-05-24T00:00:00Z"
+  }
+}
+```
+
+**错误：** `401` — 凭证无效
+
+> **JWT 有效期**：access 30 分钟，refresh 7 天（配置项 `jwt.access_duration_min` / `jwt.refresh_duration_min`）。
+
+#### A.2.3 刷新 Token
+
+```
+POST /v1/auth/refresh
+```
+
+**请求体：**
+```json
+{
+  "refresh_token": "eyJhbG..."
+}
+```
+
+**响应 `200`：**
+```json
+{
+  "access_token": "eyJhbG...（新的）",
+  "refresh_token": "eyJhbG...（新的）"
+}
+```
+
+**错误：** `401` — refresh token 无效或过期
+
+#### A.2.4 邮箱验证
+
+```
+GET /v1/auth/verify-email?token=xxx
+```
+
+无需认证。开发模式下验证链接打印在服务端日志中。
+
+#### A.2.5 获取当前用户
+
+```
+GET /v1/me
+Authorization: Bearer <access_token>
+```
+
+**响应 `200`：** 返回 User 对象（同登录响应中的 `user` 字段）。
+
+> **注意**：当前 `/v1/me` 只返回 user 本身，**不返回 teams 列表**。如需获取团队列表，调用 `GET /v1/teams`。
+
+#### A.2.6 OAuth 登录
+
+```
+GET /v1/oauth/google      → 重定向到 Google 授权页
+GET /v1/oauth/github       → 重定向到 GitHub 授权页
+GET /v1/oauth/google/callback?code=xxx
+GET /v1/oauth/github/callback?code=xxx
+```
+
+Callback 成功后返回与登录相同的 `TokenResponse` 结构。
+
+> **注意**：这是浏览器跳转流程，客户端（桌面应用）需用系统浏览器打开，监听本地 redirect 或手动粘贴 code。具体流程待联调确认。
+
+### A.3 团队（Team）
+
+#### A.3.1 创建团队
+
+```
+POST /v1/teams
+Authorization: Bearer <access_token>
+```
+
+**请求体：**
+```json
+{
+  "name": "运维组",
+  "description": "运维团队"     // 可选
+}
+```
+
+**响应 `201`：**
+```json
+{
+  "id": "team_abc123def456",
+  "name": "运维组",
+  "description": "运维团队",
+  "created_at": "2026-05-24T00:00:00Z",
+  "updated_at": "2026-05-24T00:00:00Z"
+}
+```
+
+> 创建者自动成为该团队的 `admin`。
+
+#### A.3.2 获取我的团队列表
+
+```
+GET /v1/teams
+Authorization: Bearer <access_token>
+```
+
+**响应 `200`：**
+```json
+{
+  "teams": [
+    {
+      "team": {
+        "id": "team_abc123def456",
+        "name": "运维组",
+        "description": "运维团队",
+        "created_at": "2026-05-24T00:00:00Z",
+        "updated_at": "2026-05-24T00:00:00Z"
+      },
+      "role": "admin"
+    }
+  ]
+}
+```
+
+> **客户端应缓存此列表**，用于切换当前团队上下文。role 值为 `viewer` / `editor` / `admin`。
+
+#### A.3.3 获取团队详情
+
+```
+GET /v1/teams/{team_id}
+Authorization: Bearer <access_token>
+```
+
+**响应 `200`：** Team 对象。需为该团队成员（viewer+）。
+
+#### A.3.4 添加团队成员
+
+```
+POST /v1/teams/{team_id}/members
+Authorization: Bearer <access_token>
+```
+
+**请求体：**
+```json
+{
+  "user_id": "u_xyz789",
+  "role": "editor"
+}
+```
+
+> 需要 admin 权限。`role` 取值 `viewer` / `editor` / `admin`。
+
+### A.4 团队片段（Fragment）
+
+#### A.4.1 片段数据模型
+
+```json
+{
+  "id": "frag_abc123def456",
+  "team_id": "team_abc123def456",
+  "title": "查看磁盘",
+  "command": "df -h",
+  "category": "disk",            // 可选
+  "tags": "[\"disk\", \"system\"]",  // JSON 字符串，默认 "[]"
+  "variables": "{\"path\": \"/\"}",  // JSON 字符串，默认 "{}"
+  "scope": "team",              // 固定为 "team"
+  "status": "published",         // published / draft / archived
+  "revision": 1,                // 单调递增，乐观锁
+  "created_by": "u_abc123def456",
+  "updated_by": "u_abc123def456",
+  "created_at": "2026-05-24T00:00:00Z",
+  "updated_at": "2026-05-24T00:00:00Z"
+}
+```
+
+> **重要**：`tags` 和 `variables` 在服务端存储为 JSON 字符串，客户端序列化/反序列化时需注意。
+
+#### A.4.2 列表查询
+
+```
+GET /v1/teams/{team_id}/fragments?limit=100&offset=0
+Authorization: Bearer <access_token>
+```
+
+**权限**：viewer+
+
+**响应 `200`：**
+```json
+{
+  "fragments": [ { /* Fragment */ } ]
+}
+```
+
+#### A.4.3 创建片段
+
+```
+POST /v1/teams/{team_id}/fragments
+Authorization: Bearer <access_token>
+```
+
+**请求体：**
+```json
+{
+  "title": "查看磁盘",
+  "command": "df -h",
+  "category": "disk",           // 可选
+  "tags": "[\"disk\"]",          // 可选，默认 []
+  "variables": "{}"             // 可选，默认 {}
+}
+```
+
+**权限**：editor+
+
+**响应 `201`：** 完整 Fragment 对象（含服务端生成的 `id`、`revision: 1`、`scope: "team"`、`status: "published"` 等）。
+
+#### A.4.4 获取单条片段
+
+```
+GET /v1/fragments/{id}
+Authorization: Bearer <access_token>
+```
+
+**响应 `200`：** Fragment 对象。
+
+#### A.4.5 更新片段
+
+```
+PUT /v1/fragments/{id}
+Authorization: Bearer <access_token>
+```
+
+**请求体：**
+```json
+{
+  "title": "查看磁盘使用",
+  "command": "df -h && du -sh /*",
+  "category": "disk",
+  "tags": "[\"disk\", \"du\"]",
+  "variables": "{}",
+  "status": "published",
+  "revision": 1              // 必填：客户端当前持有的 revision
+}
+```
+
+**权限**：editor+
+
+**响应 `200`：** 更新后的 Fragment 对象（`revision` 已递增）。
+
+**冲突 `409`：**
+```json
+{
+  "error": "revision conflict",
+  "server_version": { /* 服务端当前 Fragment */ }
+}
+```
+> 客户端需实现冲突解决 UI：以服务端为准 / 保留本地 / 合并 / 取消。
+
+#### A.4.6 删除片段（软删）
+
+```
+DELETE /v1/fragments/{id}
+Authorization: Bearer <access_token>
+```
+
+**权限**：admin
+
+**响应 `200`：**
+```json
+{ "message": "deleted" }
+```
+
+> 软删除，后续 sync 会返回 `deleted_ids` 列表。
+
+#### A.4.7 增量同步（推荐）
+
+```
+POST /v1/teams/{team_id}/fragments:sync
+Authorization: Bearer <access_token>
+```
+
+**请求体：**
+```json
+{
+  "cursor": "上次 sync 返回的 cursor，首次传空字符串",
+  "limit": 500               // 可选，默认 500
+}
+```
+
+**权限**：viewer+
+
+**响应 `200`：**
+```json
+{
+  "cursor": "新 cursor（客户端保存用于下次请求）",
+  "fragments": [ { /* 新增或变更的 Fragment */ } ],
+  "deleted_ids": [ "frag_xxx", "frag_yyy" ],
+  "server_time": "2026-05-24T12:00:00Z"
+}
+```
+
+> **客户端同步逻辑建议**：
+> 1. 首次同步传空 cursor，拿到全量
+> 2. 保存返回的 cursor
+> 3. 下次同步用保存的 cursor 拿增量
+> 4. `fragments` 数组合并到本地缓存（按 id upsert）
+> 5. `deleted_ids` 从本地缓存移除
+> 6. 新 cursor 替换旧 cursor
+
+### A.5 命令审计（Audit）
+
+#### A.5.1 批量上报
+
+```
+POST /v1/audit/events
+Authorization: Bearer <access_token>
+```
+
+**请求体：**
+```json
+{
+  "events": [
+    {
+      "event_id": "evt_001",           // 幂等键，重复忽略
+      "user_id": "",                    // 可选，为空时服务端自动填当前用户
+      "team_id": "team_xxx",            // 可选
+      "ts": "2026-05-24T12:00:00Z",      // 可选，为空时服务端填当前时间
+      "category": "fragment",
+      "action": "fragment.execute",
+      "outcome": "success",
+      "session_id": "sess_001",          // 可选
+      "host": "192.168.1.100",          // 可选
+      "resource": "frag_abc123",         // 可选
+      "detail": "{\"command\": \"df -h\"}"  // JSON 字符串，可选
+    }
+  ]
+}
+```
+
+**响应 `202`：**
+```json
+{
+  "accepted": 5,
+  "duplicate": 1
+}
+```
+
+> `event_id` 幂等：相同的 `event_id` 重复上报会被忽略（计入 `duplicate`）。
+> 服务端会自动补全缺失的 `user_id`、`ts`、`event_id`。
+
+#### A.5.2 查询审计
+
+```
+GET /v1/teams/{team_id}/audit/events?category=fragment&action=fragment.execute&user_id=u_xxx&from=2026-05-01T00:00:00Z&to=2026-05-24T00:00:00Z&limit=100&offset=0
+Authorization: Bearer <access_token>
+```
+
+**权限**：admin
+
+**查询参数（均可选）：**
+| 参数 | 说明 |
+|------|------|
+| `category` | 按分类过滤 |
+| `action` | 按动作过滤 |
+| `user_id` | 按用户过滤 |
+| `from` | 起始时间 RFC3339 |
+| `to` | 结束时间 RFC3339 |
+| `limit` | 分页大小，默认 100 |
+| `offset` | 偏移量 |
+
+**响应 `200`：**
+```json
+{
+  "events": [ { /* AuditEvent */ } ]
+}
+```
+
+### A.6 订阅与付费（Billing）
+
+> 客户端目前**无需对接**此部分。官网 (`mist-website`) 直接处理 Stripe Checkout 跳转。
+
+| 接口 | 方法 | 认证 |
+|------|------|------|
+| `/v1/billing/plan` | GET | Bearer |
+| `/v1/billing/checkout` | POST | Bearer |
+| `/v1/billing/portal` | POST | Bearer |
+| `/v1/billing/webhook` | POST | 无（Stripe 回调） |
+
+### A.7 错误响应格式
+
+所有错误响应统一为：
+```json
+{
+  "error": "具体错误信息"
+}
+```
+
+部分接口有额外字段（如 409 冲突带 `server_version`）。
+
+### A.8 健康检查
+
+```
+GET /health
+```
+
+无需认证。
+```json
+{
+  "status": "ok",
+  "service": "mist-team-server",
+  "time": "2026-05-24T12:00:00Z"
+}
+```
+
+### A.9 ID 生成规则
+
+| 实体 | 前缀 | 示例 |
+|------|------|------|
+| 用户 | `u_` | `u_abc123def456` |
+| 团队 | `team_` | `team_abc123def456` |
+| 片段 | `frag_` | `frag_abc123def456` |
+| 审计事件 | `evt_` | 服务端自动生成（如果客户端未提供） |
+
+### A.10 客户端对接建议（优先级排序）
+
+1. **设置页**：添加 `api_base` 配置项 + 登录/注册 UI
+2. **Token 管理**：登录后存 access/refresh token 到密钥链；access 过期前自动 refresh
+3. **团队选择**：`GET /v1/teams` 拿列表，切换当前 team_id
+4. **片段同步**：`fragments:sync` 增量拉取 → 合并到本地 FragmentManager（区分 team scope）
+5. **片段 CRUD**：编辑/创建/删除走 API（editor/admin 权限）
+6. **审计上报**：`POST /v1/audit/events` 批量上报（复用现有 AuditLogger 的 HTTP sink 逻辑）
+7. **冲突解决**：409 时弹出选择 UI
+8. **离线队列**：断网时本地暂存操作，恢复后重试
