@@ -6,6 +6,10 @@ autobins = false
 default-run = "Mist"
 description = "A modern SSH terminal with lrzsz support and Git sync"
 
+[features]
+# 让 ssh2 / openssl-sys 自带源码编译 OpenSSL，便于 CI 跨平台构建（macOS universal 等）。
+vendored-openssl = ["ssh2/vendored-openssl"]
+
 [lib]
 name = "mistterm"
 path = "src/lib.rs"

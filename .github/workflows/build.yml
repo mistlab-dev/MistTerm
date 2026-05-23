@@ -1,0 +1,156 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  BIN_NAME: Mist
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            rust_targets: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+            cargo_features: ""
+
+          # macOS 同时编译 aarch64 + x86_64 后用 lipo 合成通用二进制
+          - platform: macos-universal
+            os: macos-latest
+            target: universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            archive_ext: tar.gz
+            cargo_features: vendored-openssl
+
+          - platform: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rust_targets: x86_64-pc-windows-msvc
+            archive_ext: zip
+            cargo_features: ""
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libssl-dev libssh2-1-dev \
+            libx11-dev libxkbcommon-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libfontconfig1-dev libgtk-3-dev libdbus-1-dev
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install libssh2 pkg-config
+
+      - name: Build release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          features="${{ matrix.cargo_features }}"
+          features_arg=()
+          if [ -n "$features" ]; then
+            features_arg=(--features "$features")
+          fi
+
+          if [ "${{ matrix.target }}" = "universal-apple-darwin" ]; then
+            cargo build --release --bin "$BIN_NAME" --target aarch64-apple-darwin "${features_arg[@]}"
+            cargo build --release --bin "$BIN_NAME" --target x86_64-apple-darwin "${features_arg[@]}"
+            mkdir -p "target/${{ matrix.target }}/release"
+            lipo -create -output \
+              "target/${{ matrix.target }}/release/$BIN_NAME" \
+              "target/aarch64-apple-darwin/release/$BIN_NAME" \
+              "target/x86_64-apple-darwin/release/$BIN_NAME"
+            file "target/${{ matrix.target }}/release/$BIN_NAME"
+          else
+            cargo build --release --bin "$BIN_NAME" --target "${{ matrix.target }}" "${features_arg[@]}"
+          fi
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="$BIN_NAME-${{ matrix.platform }}"
+          STAGE="dist/$NAME"
+          mkdir -p "$STAGE"
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/$BIN_NAME.exe" "$STAGE/"
+          else
+            cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
+          fi
+          [ -f README.md ] && cp README.md "$STAGE/" || true
+          [ -f docs/INSTALL.md ] && cp docs/INSTALL.md "$STAGE/" || true
+          [ -f LICENSE ] && cp LICENSE "$STAGE/" || true
+
+          cd dist
+          if [ "${{ matrix.archive_ext }}" = "zip" ]; then
+            7z a -tzip "$NAME.zip" "$NAME" >/dev/null
+            artifact="$NAME.zip"
+          else
+            tar -czf "$NAME.tar.gz" "$NAME"
+            artifact="$NAME.tar.gz"
+          fi
+          echo "ARTIFACT_PATH=dist/$artifact" >> "$GITHUB_ENV"
+          echo "ARTIFACT_NAME=$artifact" >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_PATH }}
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
