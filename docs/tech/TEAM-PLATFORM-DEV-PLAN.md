@@ -605,7 +605,11 @@ GET /v1/oauth/github/callback?code=xxx
 
 Callback 成功后返回与登录相同的 `TokenResponse` 结构。
 
-> **注意**：这是浏览器跳转流程，客户端（桌面应用）需用系统浏览器打开，监听本地 redirect 或手动粘贴 code。具体流程待联调确认。
+> **注意**：这是浏览器跳转流程。MistTerm 桌面端实现为：打开  
+> `GET /v1/oauth/{google|github}?redirect_uri=http://127.0.0.1:{port}/callback`，  
+> 用户在系统浏览器完成授权后，服务端将浏览器重定向到上述 `redirect_uri`，并携带 `code`（或 `access_token`+`refresh_token`）；桌面端再调用  
+> `GET /v1/oauth/{provider}/callback?code=...&redirect_uri=...` 换取 `TokenResponse`（若回调已直接带 token 则省略）。  
+> 服务端须将 `http://127.0.0.1:*` 类 redirect 列入 OAuth 白名单。
 
 ### A.3 团队（Team）
 

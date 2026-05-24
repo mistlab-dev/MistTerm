@@ -660,6 +660,9 @@ impl MistTermApp {
                 &theme,
                 &mut cloud_sync_deps,
                 &mut close_cloud,
+                Some(&mut self.team_service),
+                Some(&mut self.team_login_form),
+                Some(&mut self.app_settings),
             );
         }
 
@@ -697,6 +700,7 @@ impl MistTermApp {
                     let form_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
 
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
+                            ui.push_id("new_session_form", |ui| {
                             let mut close_via_header = false;
                             Self::modal_header(
                                 ui,
@@ -914,6 +918,7 @@ impl MistTermApp {
                                         ui.ctx().input_mut(|i| i.pointer = egui::PointerState::default());
                                     }
                                 });
+                            });
                             });
                     });
                     if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !required_missing {
@@ -1297,6 +1302,7 @@ impl MistTermApp {
                     let form_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
 
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
+                            ui.push_id("edit_session_form", |ui| {
                             Self::modal_header(ui, &theme, crate::i18n::tr(ctx, "Edit session", "编辑会话"), &mut should_close);
 
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
@@ -1435,9 +1441,10 @@ impl MistTermApp {
                                     .strong()
                                     .color(theme.color_form_label()),
                             );
-                            crate::ui::chrome::form_checkbox(
+                            crate::ui::chrome::form_checkbox_with_id(
                                 ui,
                                 &theme,
+                                "edit_session_keepalive_enabled",
                                 &mut self.edit_session_keepalive_enabled,
                                 crate::i18n::tr(ctx, "Enable keepalive pings", "启用心跳保持"),
                             );
@@ -1481,9 +1488,10 @@ impl MistTermApp {
                                     );
                                 });
                             }
-                            crate::ui::chrome::form_checkbox(
+                            crate::ui::chrome::form_checkbox_with_id(
                                 ui,
                                 &theme,
+                                "edit_session_keepalive_auto_reconnect",
                                 &mut self.edit_session_keepalive_auto_reconnect,
                                 crate::i18n::tr(ctx, "Reconnect automatically after disconnect", "断开后自动重连"),
                             );
@@ -1542,6 +1550,7 @@ impl MistTermApp {
                                 .clicked() {
                                     should_close = true;
                                 }
+                            });
                             });
                     });
                     if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !required_missing {

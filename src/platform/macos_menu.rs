@@ -39,6 +39,7 @@ pub enum MacMenuAction {
     QuickFragmentSelector,
     CommandHistory,
     CredentialPanel,
+    TeamAccount,
     CloudSync,
     SessionLogBrowser,
     HelpUserGuide,
@@ -81,6 +82,7 @@ pub struct NativeAppMenu {
     quick_fragments: MenuItem,
     command_history: MenuItem,
     credentials: MenuItem,
+    team_account: MenuItem,
     cloud: MenuItem,
     session_logs: MenuItem,
     help_guide: MenuItem,
@@ -257,6 +259,12 @@ impl NativeAppMenu {
         );
         let credentials =
             MenuItem::with_id("mistterm.tools.credentials", l.credentials, true, None);
+        let team_account = MenuItem::with_id(
+            "mistterm.tools.team_account",
+            l.team_account,
+            true,
+            None,
+        );
         let cloud = MenuItem::with_id("mistterm.tools.cloud", l.cloud_sync, true, None);
         let session_logs =
             MenuItem::with_id("mistterm.tools.session_logs", l.session_logs, true, None);
@@ -265,6 +273,7 @@ impl NativeAppMenu {
         tools.append(&command_history)?;
         tools.append(&PredefinedMenuItem::separator())?;
         tools.append(&credentials)?;
+        tools.append(&team_account)?;
         tools.append(&cloud)?;
         tools.append(&PredefinedMenuItem::separator())?;
         tools.append(&session_logs)?;
@@ -328,6 +337,7 @@ impl NativeAppMenu {
             quick_fragments,
             command_history,
             credentials,
+            team_account,
             cloud,
             session_logs,
             help_guide,
@@ -366,6 +376,7 @@ impl NativeAppMenu {
         let _ = self.quick_fragments.set_text(l.quick_fragments);
         let _ = self.command_history.set_text(l.command_history);
         let _ = self.credentials.set_text(l.credentials);
+        let _ = self.team_account.set_text(l.team_account);
         let _ = self.cloud.set_text(l.cloud_sync);
         let _ = self.session_logs.set_text(l.session_logs);
         let _ = self._help_menu.set_text(l.help_menu);
@@ -470,6 +481,7 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.tools.quick_fragments" => Some(MacMenuAction::QuickFragmentSelector),
         "mistterm.tools.command_history" => Some(MacMenuAction::CommandHistory),
         "mistterm.tools.credentials" => Some(MacMenuAction::CredentialPanel),
+        "mistterm.tools.team_account" => Some(MacMenuAction::TeamAccount),
         "mistterm.tools.cloud" => Some(MacMenuAction::CloudSync),
         "mistterm.tools.session_logs" => Some(MacMenuAction::SessionLogBrowser),
         "mistterm.help.guide" => Some(MacMenuAction::HelpUserGuide),

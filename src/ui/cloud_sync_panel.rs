@@ -7,9 +7,10 @@ use eframe::egui;
 use rfd::FileDialog;
 
 use crate::core::{
-    AuditCategory, AuditEvent, AuditLogger, AuditOutcome, CloudSyncSettings, CredentialVault,
-    FragmentManager, FragmentMergeReport, SessionManager, SortBy,
+    AppSettings, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, CloudSyncSettings,
+    CredentialVault, FragmentManager, FragmentMergeReport, SessionManager, SortBy, TeamService,
 };
+use crate::ui::team_ui::{paint_team_controls, TeamLoginForm, TeamUiAction};
 use crate::i18n::{self, UiLanguage};
 use crate::ui::credential_panel::CredentialPanel;
 use crate::ui::chrome;
@@ -502,6 +503,9 @@ impl CloudSyncPanel {
         theme: &Theme,
         deps: &mut CloudSyncDeps<'_>,
         close_panel: &mut bool,
+        team_service: Option<&mut TeamService>,
+        team_form: Option<&mut TeamLoginForm>,
+        app_settings: Option<&mut AppSettings>,
     ) {
         if !self.open {
             return;
@@ -564,13 +568,30 @@ impl CloudSyncPanel {
                         Self::paint_capability_banner(ui, theme, lang);
 
                         ui.add_space(theme.spacing_panel_gap());
-                        chrome::form_field_label(ui, theme, i18n::tr(ctx, "Remote account", "远程账户"));
-                        ui.add_enabled_ui(false, |ui| {
-                            ui.label(
-                                chrome::rich_body(theme, i18n::tr(ctx, "Not signed in (coming later)", "未登录（后续版本对接）"))
-                                    .weak(),
+                        if let (Some(service), Some(form), Some(settings)) =
+                            (team_service, team_form, app_settings)
+                        {
+                            chrome::form_field_label(
+                                ui,
+                                theme,
+                                i18n::tr(ctx, "Team account", "团队账户"),
                             );
-                        });
+                            let pref_w = ui.available_width();
+                            let action = paint_team_controls(
+                                ui,
+                                ctx,
+                                theme,
+                                service,
+                                form,
+                                deps.audit,
+                                pref_w,
+                                "cloud_sync_team",
+                            );
+                            if matches!(action, TeamUiAction::LoggedOut) {
+                                let _ = settings.save();
+                            }
+                            ui.add_space(theme.spacing_panel_gap());
+                        }
 
                         ui.add_space(theme.spacing_panel_gap());
                         chrome::form_field_label(ui, theme, i18n::tr(ctx, "Pack contents", "包内包含项"));

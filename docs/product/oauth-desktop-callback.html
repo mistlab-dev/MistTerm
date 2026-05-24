@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>MistTerm 登录</title>
+</head>
+<body style="font-family:system-ui;text-align:center;padding:3rem">
+  <h2 id="title">正在完成登录…</h2>
+  <p id="msg"></p>
+  <script>
+    (function () {
+      var params = new URLSearchParams(location.search);
+      var access = params.get('access_token');
+      var refresh = params.get('refresh_token');
+      var code = params.get('code');
+      var err = params.get('error') || params.get('error_description');
+      var title = document.getElementById('title');
+      var msg = document.getElementById('msg');
+
+      function done(ok, text) {
+        title.textContent = ok ? '登录成功' : '登录失败';
+        msg.textContent = text;
+      }
+
+      if (err) {
+        done(false, err);
+        return;
+      }
+
+      var q = location.search || ('?code=' + encodeURIComponent(code || ''));
+      if (access) {
+        q = '?access_token=' + encodeURIComponent(access) +
+            '&refresh_token=' + encodeURIComponent(refresh || '');
+      }
+
+      var ports = [8765, 8766, 8767, 8768, 8769, 8770];
+      var i = 0;
+      function tryPort() {
+        if (i >= ports.length) {
+          done(false, '未能连接 MistTerm，请确认应用已打开并重试 Google/GitHub 登录。');
+          return;
+        }
+        var port = ports[i++];
+        fetch('http://127.0.0.1:' + port + '/callback' + q, { mode: 'no-cors' })
+          .then(function () {
+            done(true, '可以关闭此窗口并返回 MistTerm。');
+          })
+          .catch(tryPort);
+      }
+      tryPort();
+    })();
+  </script>
+</body>
+</html>

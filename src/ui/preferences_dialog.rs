@@ -94,6 +94,9 @@ impl MistTermApp {
                                             self.preferences_section_audit(
                                                 ui, ctx, theme, label_color, text_low,
                                             );
+                                            self.preferences_section_team(
+                                                ui, ctx, theme, label_color, text_low,
+                                            );
                                             self.preferences_section_sync(
                                                 ui, ctx, theme, label_color, &mut should_close,
                                             );
@@ -810,6 +813,53 @@ impl MistTermApp {
                     .size(theme.font_size_small())
                     .color(text_low),
                 );
+            },
+        );
+    }
+
+    fn preferences_section_team(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+        label_color: egui::Color32,
+        text_low: egui::Color32,
+    ) {
+        Self::preferences_collapsing(
+            ui,
+            theme,
+            "team",
+            crate::i18n::tr(ctx, "Team platform", "团队平台"),
+            label_color,
+            true,
+            |ui| {
+                let pref_w = layout_util::finite_content_width(ui);
+                ui.label(
+                    RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Connect to Mist team server (mistlab.dev).",
+                        "对接 Mist 团队服务端（mistlab.dev）。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(text_low),
+                );
+                ui.add_space(theme.spacing_sm());
+                let action = crate::ui::team_ui::paint_team_controls(
+                    ui,
+                    ctx,
+                    theme,
+                    &mut self.team_service,
+                    &mut self.team_login_form,
+                    Some(&self.audit_logger),
+                    pref_w,
+                    "preferences_team",
+                );
+                if matches!(action, crate::ui::team_ui::TeamUiAction::LoggedOut) {
+                    let _ = self.app_settings.save();
+                }
+                if matches!(action, crate::ui::team_ui::TeamUiAction::TeamChanged) {
+                    self.team_service.spawn_sync_current_team();
+                }
             },
         );
     }

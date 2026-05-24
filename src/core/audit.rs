@@ -200,6 +200,9 @@ pub struct HttpSinkSettings {
     pub url: String,
     #[serde(default)]
     pub bearer_token: String,
+    /// 团队审计上报时附带 `team_id`（`POST /v1/audit/events`）
+    #[serde(default)]
+    pub team_id: String,
     #[serde(default = "default_http_batch")]
     pub batch_size: usize,
     #[serde(default = "default_http_interval_ms")]
@@ -219,6 +222,7 @@ impl Default for HttpSinkSettings {
             enabled: false,
             url: String::new(),
             bearer_token: String::new(),
+            team_id: String::new(),
             batch_size: default_http_batch(),
             flush_interval_ms: default_http_interval_ms(),
         }
@@ -389,7 +393,14 @@ fn audit_worker(rx: Receiver<AuditWorkerMsg>, settings: Arc<Mutex<AuditSettings>
             if http_pending.len() >= batch || last_http_flush.elapsed() >= interval {
                 let take = http_pending.len().min(batch);
                 let batch_events: Vec<AuditEvent> = http_pending.drain(..take).collect();
-                let _ = flush_http(&cfg.http, &batch_events);
+                if flush_http(&cfg.http, &batch_events).is_err() {
+                    for ev in batch_events.into_iter().rev() {
+                        http_pending.push_front(ev);
+                    }
+                    while http_pending.len() > HTTP_QUEUE_CAP {
+                        http_pending.pop_back();
+                    }
+                }
                 last_http_flush = std::time::Instant::now();
             }
             while http_pending.len() > HTTP_QUEUE_CAP {
@@ -494,13 +505,64 @@ fn flush_http(cfg: &HttpSinkSettings, events: &[AuditEvent]) -> Result<(), Strin
         .timeout(Duration::from_secs(15))
         .build()
         .map_err(|e| e.to_string())?;
-    let body = json!({ "events": events });
+    let body = if cfg.url.contains("/v1/audit/events") {
+        audit_events_team_api_body(events, &cfg.team_id)
+    } else {
+        json!({ "events": events })
+    };
     let mut req = client.post(&cfg.url).json(&body);
     if !cfg.bearer_token.is_empty() {
         req = req.bearer_auth(&cfg.bearer_token);
     }
     req.send().map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Mist 团队平台 `POST /v1/audit/events` 请求体格式。
+fn audit_events_team_api_body(events: &[AuditEvent], team_id: &str) -> Value {
+    let team_opt = if team_id.is_empty() {
+        None
+    } else {
+        Some(team_id)
+    };
+    let mapped: Vec<Value> = events
+        .iter()
+        .map(|ev| {
+            json!({
+                "event_id": ev.event_id,
+                "category": audit_category_name(ev.category),
+                "action": ev.action,
+                "outcome": audit_outcome_name(ev.outcome),
+                "team_id": team_opt,
+                "ts": ev.ts,
+                "session_id": ev.session_id,
+                "host": ev.host,
+                "resource": ev.resource,
+                "detail": ev.detail,
+            })
+        })
+        .collect();
+    json!({ "events": mapped })
+}
+
+fn audit_category_name(c: AuditCategory) -> &'static str {
+    match c {
+        AuditCategory::Auth => "auth",
+        AuditCategory::Session => "session",
+        AuditCategory::Credential => "credential",
+        AuditCategory::Vault => "vault",
+        AuditCategory::Config => "config",
+        AuditCategory::Fragment => "fragment",
+        AuditCategory::Command => "command",
+    }
+}
+
+fn audit_outcome_name(o: AuditOutcome) -> &'static str {
+    match o {
+        AuditOutcome::Success => "success",
+        AuditOutcome::Failure => "failure",
+        AuditOutcome::Denied => "denied",
+    }
 }
 
 /// 命令预览：截断 + 不含换行（审计用，非 session_log）

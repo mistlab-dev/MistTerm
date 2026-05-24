@@ -134,7 +134,15 @@ impl SshConfigImportDialog {
                                     let mut sel = self.selected.get(i).copied().unwrap_or(false);
                                     if !can {
                                         ui.add_enabled(false, egui::Checkbox::without_text(&mut false));
-                                    } else if chrome::form_checkbox(ui, theme, &mut sel, "").changed() {
+                                    } else if chrome::form_checkbox_with_id(
+                                        ui,
+                                        theme,
+                                        ("ssh_import_sel", i),
+                                        &mut sel,
+                                        "",
+                                    )
+                                    .changed()
+                                    {
                                         if let Some(s) = self.selected.get_mut(i) {
                                             *s = sel;
                                         }

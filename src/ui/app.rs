@@ -16,7 +16,7 @@ use crate::core::{
     TempKeyFile, spawn_cleanup_old_logs, DEFAULT_RETENTION_DAYS,
     SessionSortBy, SshConfigCandidate, command_preview, expand_command_template,
     expand_fragment_command_stages, expand_rhai_blocks, list_placeholder_keys, merge_rhai_context,
-    FragmentManager, FragmentStats, SessionConfig, SessionManager, SortBy,
+    FragmentManager, FragmentStats, SessionConfig, SessionManager, SortBy, TeamService,
 };
 use crate::ui::command_history_overlay::{CommandHistoryAction, CommandHistoryOverlay};
 use crate::ui::help_docs_dialog::{HelpDocsDialog, HelpPage};
@@ -34,10 +34,23 @@ use crate::ui::theme::ThemeManager;
 use crate::ui::fragment_library::FragmentLibraryState;
 use crate::ui::credential_panel::{CredentialPanel, CredentialPanelAction};
 use crate::ui::cloud_sync_panel::{CloudSyncPanel, CloudSyncDeps};
+use crate::ui::team_fragment_dialog::{
+    open_create_editor, open_edit_editor, show_team_fragment_conflict_modal,
+    show_team_fragment_editor_modal, TeamFragmentConflictState, TeamFragmentEditorState,
+};
+use crate::ui::team_ui::TeamLoginForm;
 use crate::ui::layout_util;
 
 /// eframe 自定义持久化键（RON）；与 egui 自带的窗口几何持久化并存（FUNCTIONAL_SPEC §8.1）
 const MISTTERM_UI_STORAGE_KEY: &str = "mistterm_ui_v1";
+
+/// 命令片段侧栏：个人库 vs 团队同步库。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum FragmentListScope {
+    #[default]
+    Personal,
+    Team,
+}
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct MistTermUiPersist {
@@ -430,6 +443,12 @@ pub struct MistTermApp {
     fragment_library: FragmentLibraryState,
     credential_panel: CredentialPanel,
     cloud_sync_panel: CloudSyncPanel,
+    team_service: TeamService,
+    team_login_form: TeamLoginForm,
+    team_fragment_editor: TeamFragmentEditorState,
+    team_fragment_conflict: Option<TeamFragmentConflictState>,
+    team_fragment_selected_id: Option<String>,
+    fragment_list_scope: FragmentListScope,
 
     pending_fragment_id: Option<String>,
     pending_fragment_name: String,
@@ -510,7 +529,7 @@ impl MistTermApp {
         crate::ui::chrome::form_singleline_field(
             ui,
             theme,
-            egui::Id::new(id),
+            ui.make_persistent_id(id),
             text,
             hint,
             desired_width,
@@ -530,7 +549,7 @@ impl MistTermApp {
         let response = crate::ui::chrome::form_singleline_field(
             ui,
             theme,
-            egui::Id::new(id),
+            ui.make_persistent_id(id),
             port_str,
             "22",
             desired_width,
@@ -680,6 +699,7 @@ impl MistTermApp {
     /// 创建新的应用实例
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let app_settings = AppSettings::load();
+        let team_service = TeamService::new(app_settings.team.clone());
         let boot_loc = crate::i18n::Locale::from(app_settings.ui_language);
         let audit_logger = AuditLogger::new(app_settings.audit.clone());
         let mut session_manager = SessionManager::new();
@@ -755,6 +775,12 @@ impl MistTermApp {
             fragment_library: FragmentLibraryState::new(),
             credential_panel: CredentialPanel::new(),
             cloud_sync_panel: CloudSyncPanel::new(),
+            team_service,
+            team_login_form: TeamLoginForm::default(),
+            team_fragment_editor: TeamFragmentEditorState::default(),
+            team_fragment_conflict: None,
+            team_fragment_selected_id: None,
+            fragment_list_scope: FragmentListScope::Personal,
             pending_fragment_id: None,
             pending_fragment_name: String::new(),
             pending_fragment_command: String::new(),
@@ -852,8 +878,69 @@ impl MistTermApp {
             spawn_cleanup_old_logs(base, days);
         }
         app.refresh_ssh_config_candidates();
+        if app.team_service.is_logged_in() {
+            app.configure_team_audit_sink();
+            app.team_service.refresh_current_team_detail();
+        }
 
         app
+    }
+
+    fn configure_team_audit_sink(&mut self) {
+        if !self.team_service.is_logged_in() {
+            self.app_settings.audit.http.team_id.clear();
+            return;
+        }
+        self.app_settings.audit.http.enabled = true;
+        self.app_settings.audit.http.url = self.team_service.audit_events_url();
+        if let Some(tok) = self.team_service.current_access_token() {
+            self.app_settings.audit.http.bearer_token = tok;
+        }
+        self.app_settings.audit.http.team_id = self
+            .team_service
+            .state
+            .current_team_id
+            .clone()
+            .unwrap_or_default();
+        self.audit_logger
+            .update_settings(self.app_settings.audit.clone());
+    }
+
+    fn poll_team_service(&mut self, ctx: &egui::Context) {
+        let freq = self.cloud_sync_panel.settings.frequency_minutes;
+        if self.team_service.poll(freq) {
+            if self.team_service.pending_audit_login {
+                self.team_service.pending_audit_login = false;
+                self.audit_logger.record(AuditEvent::new(
+                    AuditCategory::Auth,
+                    "team.login",
+                    AuditOutcome::Success,
+                ));
+            }
+            if self.team_service.pending_audit_sync {
+                self.team_service.pending_audit_sync = false;
+                self.audit_logger.record(AuditEvent::new(
+                    AuditCategory::Fragment,
+                    "fragment.sync_pull",
+                    AuditOutcome::Success,
+                ));
+            }
+            if self.team_service.take_pending_initial_sync() {
+                self.configure_team_audit_sink();
+                self.team_service.spawn_sync_current_team();
+            }
+            if self.team_service.auth_expired {
+                self.status_message = crate::i18n::tr(
+                    ctx,
+                    "Team session expired — sign in again in Preferences",
+                    "团队登录已过期，请在偏好设置中重新登录",
+                )
+                .to_string();
+                self.team_service.auth_expired = false;
+            }
+            self.configure_team_audit_sink();
+            ctx.request_repaint();
+        }
     }
 
     fn refresh_ssh_config_candidates(&mut self) {
@@ -976,6 +1063,17 @@ impl MistTermApp {
                         .with_host(&host)
                         .with_session(&tab.session_id),
                 );
+                if ok {
+                    self.audit_logger.record(
+                        AuditEvent::new(
+                            AuditCategory::Session,
+                            "session.connect",
+                            AuditOutcome::Success,
+                        )
+                        .with_host(&host)
+                        .with_session(&tab.session_id),
+                );
+                }
             }
         }
     }
@@ -2303,6 +2401,149 @@ impl MistTermApp {
         );
         ui.add_space(2.0);
 
+        if self.team_service.is_configured() && self.team_service.is_logged_in() {
+            let ctx_scope = ui.ctx().clone();
+            let personal_lbl =
+                crate::i18n::tr(&ctx_scope, "Personal", "个人");
+            let team_lbl = crate::i18n::tr(&ctx_scope, "Team", "团队");
+            let scope_key = match self.fragment_list_scope {
+                FragmentListScope::Personal => "personal",
+                FragmentListScope::Team => "team",
+            };
+            let scope_defs: [(&str, &str); 2] =
+                [("personal", personal_lbl), ("team", team_lbl)];
+            let chip_h = theme.size_panel_filter_chip_h();
+            let chip_min = egui::vec2(
+                theme.size_panel_header_btn_min_w(),
+                chip_h,
+            );
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
+                for (key, label) in &scope_defs {
+                    let selected = scope_key == *key;
+                    if crate::ui::chrome::filter_chip_button(
+                        ui,
+                        theme,
+                        label,
+                        selected,
+                        chip_min,
+                    )
+                    .clicked()
+                    {
+                        self.fragment_list_scope = if *key == "team" {
+                            FragmentListScope::Team
+                        } else {
+                            FragmentListScope::Personal
+                        };
+                    }
+                }
+            });
+            ui.add_space(theme.spacing_xs());
+        }
+
+        if self.fragment_list_scope == FragmentListScope::Team
+            && self.team_service.is_logged_in()
+        {
+            let role = self.team_service.state.current_role();
+            let role_name = self
+                .team_service
+                .state
+                .current_membership()
+                .map(|m| m.role.as_str())
+                .unwrap_or("viewer");
+            let role_lbl = format!(
+                "{}: {role_name}",
+                crate::i18n::tr(ui.ctx(), "Role", "角色"),
+            );
+            ui.label(
+                crate::ui::chrome::rich_caption(theme, &role_lbl).weak(),
+            );
+            if let Some(detail) = &self.team_service.current_team_detail {
+                if !detail.description.is_empty() {
+                    ui.label(
+                        crate::ui::chrome::rich_caption(theme, &detail.description).weak(),
+                    );
+                }
+            }
+            let can_edit = role.can_edit();
+            let can_delete = role.can_delete();
+            ui.horizontal(|ui| {
+                if can_edit
+                    && crate::ui::chrome::panel_action_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Plus,
+                        crate::i18n::tr(ui.ctx(), "New team snippet", "新建团队片段"),
+                    )
+                    .clicked()
+                {
+                    open_create_editor(&mut self.team_fragment_editor);
+                }
+                if can_edit
+                    && self.team_fragment_selected_id.is_some()
+                    && crate::ui::chrome::panel_action_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Fragment,
+                        crate::i18n::tr(ui.ctx(), "Edit", "编辑"),
+                    )
+                    .clicked()
+                {
+                    if let Some(id) = self.team_fragment_selected_id.clone() {
+                        if let Some(frag) = self.team_service.find_team_fragment(&id) {
+                            open_edit_editor(&mut self.team_fragment_editor, &frag);
+                        }
+                    }
+                }
+                if can_delete
+                    && self.team_fragment_selected_id.is_some()
+                    && crate::ui::chrome::panel_action_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Trash,
+                        crate::i18n::tr(ui.ctx(), "Delete", "删除"),
+                    )
+                    .clicked()
+                {
+                    if let Some(id) = self.team_fragment_selected_id.take() {
+                        match crate::core::team::delete_team_fragment_blocking(
+                            &mut self.team_service,
+                            &id,
+                        ) {
+                            Ok(()) => {
+                                self.audit_logger.record(
+                                    AuditEvent::new(
+                                        AuditCategory::Fragment,
+                                        "fragment.delete",
+                                        AuditOutcome::Success,
+                                    )
+                                    .with_resource(&id),
+                                );
+                                self.status_message = crate::i18n::tr(
+                                    ui.ctx(),
+                                    "Team snippet deleted",
+                                    "已删除团队片段",
+                                )
+                                .to_string();
+                            }
+                            Err(e) => self.status_message = e,
+                        }
+                    }
+                }
+                if crate::ui::chrome::panel_action_icon_button(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::Cloud,
+                    crate::i18n::tr(ui.ctx(), "Sync", "同步"),
+                )
+                .clicked()
+                {
+                    self.team_service.spawn_sync_current_team();
+                }
+            });
+            ui.add_space(theme.spacing_xs());
+        }
+
         // §5.3：分类筛选 + 右侧排序（与芯片同排，不再单独占「片段列表」行）
         let ctx_owned = ui.ctx().clone();
         let chip_defs: [(&str, &str); 4] = [
@@ -2343,9 +2584,17 @@ impl MistTermApp {
                 || f.command.to_lowercase().contains(&search_lower)
         };
 
-        let mut work: Vec<FragmentStats> = self
-            .fragment_manager
-            .get_all()
+        let source: Vec<FragmentStats> = match self.fragment_list_scope {
+            FragmentListScope::Personal => self
+                .fragment_manager
+                .get_all()
+                .iter()
+                .cloned()
+                .collect(),
+            FragmentListScope::Team => self.team_service.team_fragments_as_stats(),
+        };
+
+        let mut work: Vec<FragmentStats> = source
             .iter()
             .filter(|f| search_match(f))
             .cloned()
@@ -2357,9 +2606,7 @@ impl MistTermApp {
             "frequent" => {
                 work.retain(|f| f.usage_count > 0);
                 if work.is_empty() {
-                    work = self
-                        .fragment_manager
-                        .get_all()
+                    work = source
                         .iter()
                         .filter(|f| search_match(f))
                         .cloned()
@@ -2428,8 +2675,23 @@ impl MistTermApp {
                                     tag_label: &tag_label,
                                 },
                             );
+                            let is_team_scope =
+                                self.fragment_list_scope == FragmentListScope::Team;
+                            let selected = self
+                                .team_fragment_selected_id
+                                .as_deref()
+                                == Some(frag.id.as_str());
+                            if is_team_scope && selected {
+                                ui.painter().rect_stroke(
+                                    row_resp.row.rect,
+                                    theme.radius_card(),
+                                    egui::Stroke::new(1.5, theme.accent_color()),
+                                );
+                            }
                             if row_resp.title.clicked() {
                                 self.begin_fragment_insert(ui.ctx(), frag);
+                            } else if is_team_scope && row_resp.row.clicked() {
+                                self.team_fragment_selected_id = Some(frag.id.clone());
                             }
                             ui.add_space(theme.spacing_list_item_gap());
                         }
@@ -3035,6 +3297,9 @@ impl MistTermApp {
                     self.credential_panel.open = true;
                 }
             }
+            MacMenuAction::TeamAccount => {
+                self.show_preferences_dialog = true;
+            }
             MacMenuAction::CloudSync => {
                 if self.ensure_right_dock_allowed_or_warn(ctx) {
                     self.cloud_sync_panel.open = true;
@@ -3198,6 +3463,22 @@ impl eframe::App for MistTermApp {
 
         // 监控：`exec` 由 shell 泵串行执行，在此处轮询结果并驱动自动刷新
         self.monitor_panel.update(ctx, self.show_monitor_panel);
+        self.poll_team_service(ctx);
+        show_team_fragment_editor_modal(
+            ctx,
+            &theme,
+            &mut self.team_service,
+            &mut self.team_fragment_editor,
+            &mut self.team_fragment_conflict,
+            &self.audit_logger,
+        );
+        show_team_fragment_conflict_modal(
+            ctx,
+            &theme,
+            &mut self.team_service,
+            &mut self.team_fragment_conflict,
+            &self.audit_logger,
+        );
         self.try_flush_pending_fragment_insert(ctx);
         if self.command_history.poll_background_load() {
             ctx.request_repaint();
@@ -3938,6 +4219,10 @@ mod menu {
                     if self.ensure_right_dock_allowed_or_warn(ctx) {
                         self.credential_panel.open = true;
                     }
+                    ui.close_menu();
+                }
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.team_account).clicked() {
+                    self.show_preferences_dialog = true;
                     ui.close_menu();
                 }
                 if crate::ui::chrome::popup_menu_button(ui, theme, l.cloud_sync).clicked() {

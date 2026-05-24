@@ -27,6 +27,7 @@ pub mod audit;
 pub mod ai_settings;
 pub mod ai_client;
 pub mod app_settings;
+pub mod team;
 pub mod vault;
 pub mod secret_resolver;
 
@@ -63,6 +64,11 @@ pub use ai_client::{
     test_connection, test_connection_with_key, ChatMessage,
 };
 pub use app_settings::AppSettings;
+pub use team::{
+    OAuthProvider, TeamAsyncResult, TeamFragment, TeamMembership, TeamRole, TeamService,
+    TeamSettings, TeamState, TeamUser, DEFAULT_TEAM_API_BASE, DEFAULT_TEAM_WEB_ORIGIN,
+    team_web_forgot_password_url, team_web_register_url,
+};
 pub use vault::{
     HashiCorpVaultClient, VaultAuthSettings, VaultKvRef, VaultListEntry, VaultSettings,
 };

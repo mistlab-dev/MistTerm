@@ -34,6 +34,8 @@ pub mod sftp_panel;
 pub mod fragment_library;
 pub mod credential_panel;
 pub mod cloud_sync_panel;
+pub mod team_ui;
+mod team_fragment_dialog;
 pub mod ssh_config_import_dialog;
 pub mod command_history_overlay;
 pub mod session_log_dialog;

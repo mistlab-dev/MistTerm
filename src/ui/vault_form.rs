@@ -79,9 +79,10 @@ impl VaultSecretForm {
         id_prefix: &str,
     ) {
         let ctx_owned = ui.ctx().clone();
-        chrome::form_checkbox(
+        chrome::form_checkbox_with_id(
             ui,
             theme,
+            format!("{id_prefix}_use_vault"),
             &mut self.use_vault,
             crate::i18n::tr(
                 &ctx_owned,
@@ -110,7 +111,7 @@ impl VaultSecretForm {
         chrome::form_singleline_field(
             ui,
             theme,
-            egui::Id::new(format!("{id_prefix}_vault_mount")),
+            ui.make_persistent_id((id_prefix, "vault_mount")),
             &mut self.mount,
             "secret",
             field_w,
@@ -124,7 +125,7 @@ impl VaultSecretForm {
         chrome::form_singleline_field(
             ui,
             theme,
-            egui::Id::new(format!("{id_prefix}_vault_path")),
+            ui.make_persistent_id((id_prefix, "vault_path")),
             &mut self.path,
             "ssh/prod/app",
             field_w,
@@ -138,7 +139,7 @@ impl VaultSecretForm {
         chrome::form_singleline_field(
             ui,
             theme,
-            egui::Id::new(format!("{id_prefix}_vault_field")),
+            ui.make_persistent_id((id_prefix, "vault_field")),
             &mut self.field,
             "password",
             field_w,

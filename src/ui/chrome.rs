@@ -1415,7 +1415,17 @@ pub fn form_field_label(ui: &mut Ui, theme: &Theme, text: &str) {
 /// 统一复选框：未选中时浅底 + 描边始终可见；勾选为 accent 底 + 浅色勾。
 /// 全局 `inactive.bg_fill = TRANSPARENT` 下裸 `ui.checkbox` 往往只有悬停才看得出方框。
 pub fn form_checkbox(ui: &mut Ui, theme: &Theme, value: &mut bool, text: &str) -> Response {
-    ui.scope(|ui| {
+    form_checkbox_with_id(ui, theme, text, value, text)
+}
+
+pub fn form_checkbox_with_id(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: impl std::hash::Hash,
+    value: &mut bool,
+    text: &str,
+) -> Response {
+    ui.push_id(id, |ui| {
         let rounding = egui::Rounding::same(theme.radius_checkbox());
         let off_border = theme.color_checkbox_off_stroke_color();
         let w = &mut ui.style_mut().visuals.widgets;

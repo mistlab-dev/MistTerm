@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use crate::core::ai_settings::AiSettings;
 use crate::core::audit::AuditSettings;
+use crate::core::team::TeamSettings;
 use crate::core::vault::VaultSettings;
 use crate::i18n::UiLanguage;
 
@@ -20,6 +21,8 @@ pub struct AppSettings {
     pub audit: AuditSettings,
     #[serde(default)]
     pub ai: AiSettings,
+    #[serde(default)]
+    pub team: TeamSettings,
 }
 
 impl Default for AppSettings {
@@ -29,6 +32,7 @@ impl Default for AppSettings {
             vault: VaultSettings::default(),
             audit: AuditSettings::default(),
             ai: AiSettings::default(),
+            team: TeamSettings::default(),
         }
     }
 }
@@ -53,6 +57,7 @@ impl AppSettings {
         if settings.ai.migrate_keyring_to_local() {
             let _ = settings.save();
         }
+        settings.team.lock_to_product_defaults();
         settings
     }
 

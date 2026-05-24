@@ -21,6 +21,34 @@ pub fn open_file(path: &Path) -> Result<(), String> {
         .ok_or_else(|| format!("Could not open: {}", path.display()))
 }
 
+/// 用系统默认浏览器打开 URL。
+pub fn open_url(url: &str) -> bool {
+    let url = url.trim();
+    if url.is_empty() {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return Command::new("open").arg(url).spawn().is_ok();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return Command::new("cmd")
+            .args(["/C", "start", "", url])
+            .spawn()
+            .is_ok();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        return Command::new("xdg-open").arg(url).spawn().is_ok();
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows", unix)))]
+    {
+        let _ = url;
+        false
+    }
+}
+
 fn open_with_system(path: &Path) -> bool {
     #[cfg(target_os = "macos")]
     {
