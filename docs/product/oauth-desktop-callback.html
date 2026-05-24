@@ -38,6 +38,7 @@
       fetch('http://127.0.0.1:' + port + '/callback' + q, { mode: 'no-cors' })
         .then(function () {
           done(true, '可以关闭此窗口并返回 MistTerm。');
+          setTimeout(function () { window.close(); }, 800);
         })
         .catch(function () {
           done(false, '未能连接 MistTerm (端口 ' + port + ')，请确认应用已打开并重试登录。');
