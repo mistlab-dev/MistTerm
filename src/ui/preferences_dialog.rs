@@ -52,10 +52,7 @@ impl MistTermApp {
                         );
                         ui.add_space(theme.spacing_sm());
 
-                        let footer_reserve = theme.size_modal_footer_btn_h()
-                            + theme.spacing_list_item_x()
-                            + theme.spacing_sm();
-                        let scroll_h = (ui.available_height() - footer_reserve).max(120.0);
+                        let scroll_h = (ui.available_height() - theme.spacing_sm()).max(120.0);
 
                         ui.allocate_ui(egui::vec2(ui.available_width(), scroll_h), |ui| {
                             egui::Frame::none()
@@ -104,19 +101,6 @@ impl MistTermApp {
                                 });
                         });
 
-                        ui.add_space(theme.spacing_list_item_x());
-                        crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
-                            if crate::ui::chrome::modal_secondary_icon_button(
-                                ui,
-                                th,
-                                crate::ui::icons::IconId::Close,
-                                crate::i18n::tr(ctx, "Close", "关闭"),
-                            )
-                            .clicked()
-                            {
-                                should_close = true;
-                            }
-                        });
                     });
                 });
             });
@@ -440,7 +424,27 @@ impl MistTermApp {
                     )
                     .changed()
                 {
+                    self.app_settings.vault.team_auto_apply = false;
+                    self.app_settings.vault.managed_by_team_id = None;
                     let _ = self.app_settings.save();
+                }
+                if self.app_settings.vault.managed_by_team_id.is_some()
+                    && self.app_settings.vault.team_auto_apply
+                {
+                    let name = self.team_service.current_team_name();
+                    let vault_hint = match crate::i18n::language(ctx) {
+                        crate::i18n::UiLanguage::En => format!(
+                            "Vault settings from team «{name}» (read-only until you change them)"
+                        ),
+                        crate::i18n::UiLanguage::Zh => format!(
+                            "Vault 由团队「{name}」自动配置（修改任意项后将不再自动覆盖）"
+                        ),
+                    };
+                    ui.label(
+                        RichText::new(vault_hint)
+                            .size(theme.font_size_sidebar_control())
+                            .color(text_low),
+                    );
                 }
                 crate::ui::chrome::form_field_label(
                     ui,
@@ -457,6 +461,8 @@ impl MistTermApp {
                     false,
                 );
                 if vault_addr.lost_focus() {
+                    self.app_settings.vault.team_auto_apply = false;
+                    self.app_settings.vault.managed_by_team_id = None;
                     let _ = self.app_settings.save();
                 }
                 crate::ui::chrome::form_field_label(
@@ -535,6 +541,8 @@ impl MistTermApp {
                     });
                 if auth != self.app_settings.vault.auth {
                     self.app_settings.vault.auth = auth;
+                    self.app_settings.vault.team_auto_apply = false;
+                    self.app_settings.vault.managed_by_team_id = None;
                     let _ = self.app_settings.save();
                 }
                 let mut vault_token_buf = String::new();
@@ -858,7 +866,8 @@ impl MistTermApp {
                     let _ = self.app_settings.save();
                 }
                 if matches!(action, crate::ui::team_ui::TeamUiAction::TeamChanged) {
-                    self.team_service.spawn_sync_current_team();
+                    self.apply_team_vault_from_sync();
+                    self.team_service.spawn_config_sync();
                 }
             },
         );

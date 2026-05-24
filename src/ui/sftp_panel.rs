@@ -123,8 +123,18 @@ impl SftpPanel {
                                     action,
                                     AuditOutcome::Success,
                                 )
-                                .with_resource(resource),
+                                .with_resource(&resource),
                             );
+                            if let Some(scp_action) = action.strip_prefix("sftp.") {
+                                audit.record(
+                                    AuditEvent::new(
+                                        AuditCategory::Session,
+                                        format!("file.scp.{scp_action}"),
+                                        AuditOutcome::Success,
+                                    )
+                                    .with_resource(resource),
+                                );
+                            }
                         }
                         self.toast_ok = Some(msg);
                         self.pending_refresh_after_op = true;
@@ -137,9 +147,20 @@ impl SftpPanel {
                                     action,
                                     AuditOutcome::Failure,
                                 )
-                                .with_resource(resource)
+                                .with_resource(&resource)
                                 .with_detail(serde_json::json!({ "error": e })),
                             );
+                            if let Some(scp_action) = action.strip_prefix("sftp.") {
+                                audit.record(
+                                    AuditEvent::new(
+                                        AuditCategory::Session,
+                                        format!("file.scp.{scp_action}"),
+                                        AuditOutcome::Failure,
+                                    )
+                                    .with_resource(resource)
+                                    .with_detail(serde_json::json!({ "error": e })),
+                                );
+                            }
                         }
                         self.toast_err = Some(e);
                     }
@@ -161,6 +182,31 @@ impl SftpPanel {
                 );
             }
         }
+    }
+
+    fn toolbar_icon(
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        icon: crate::ui::icons::IconId,
+        tooltip: &str,
+        enabled: bool,
+    ) -> egui::Response {
+        ui.add_enabled_ui(enabled, |ui| {
+            crate::ui::chrome::panel_toolbar_icon_button(ui, theme, icon, tooltip)
+        })
+        .inner
+    }
+
+    fn localize_list_error(ctx: &egui::Context, msg: &str) -> String {
+        if crate::ssh::sftp::is_sftp_would_block_message(msg) {
+            return crate::i18n::tr(
+                ctx,
+                "SFTP channel busy (shell is using the connection). Wait a moment and tap Refresh.",
+                "SFTP 通道繁忙（终端正在占用连接），请稍候再点「刷新」重试。",
+            )
+            .to_string();
+        }
+        msg.to_string()
     }
 
     fn spawn_list(&mut self, sid: SshSessionId, mgr: SshManager, dir: PathBuf, ctx: &egui::Context) {
@@ -539,230 +585,307 @@ impl SftpPanel {
         let download_dir_hint = t.download_dir().to_string();
         let download_dir_path = PathBuf::from(&download_dir_hint);
 
-        if let Some(ok) = &self.toast_ok {
-            ui.label(egui::RichText::new(ok).color(theme.green_color()));
-            if crate::ui::chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Close)
-                .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss", "关闭提示"))
-                .clicked() {
-                self.toast_ok = None;
-            }
-            ui.separator();
+        layout_util::set_width_to_available(ui);
+
+        if let Some(ok) = self.toast_ok.clone() {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(&ok).color(theme.green_color()));
+                if crate::ui::chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Close)
+                    .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss", "关闭提示"))
+                    .clicked()
+                {
+                    self.toast_ok = None;
+                }
+            });
         }
-        if let Some(err) = &self.toast_err {
-            ui.label(egui::RichText::new(err).color(theme.red_color()));
-            if crate::ui::chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Close)
-                .on_hover_text(crate::i18n::tr(ui.ctx(), "Close", "关闭"))
-                .clicked() {
-                self.toast_err = None;
-            }
-            ui.separator();
+        if let Some(err) = self.toast_err.clone() {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(&err).color(theme.red_color()));
+                if crate::ui::chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Close)
+                    .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss", "关闭"))
+                    .clicked()
+                {
+                    self.toast_err = None;
+                }
+            });
         }
         if let Some(err) = &self.list_err {
-            ui.label(egui::RichText::new(err).color(theme.red_color()));
-            ui.separator();
+            let msg = Self::localize_list_error(ctx, err);
+            egui::Frame::none()
+                .fill(theme.color_subtle_inset_fill())
+                .stroke(egui::Stroke::new(1.0, theme.red_a128()))
+                .rounding(theme.radius_list_item())
+                .inner_margin(egui::Margin::symmetric(
+                    theme.spacing_search_input_x(),
+                    theme.spacing_search_input_y(),
+                ))
+                .show(ui, |ui| {
+                    ui.label(egui::RichText::new(msg).color(theme.red_color()));
+                    ui.horizontal(|ui| {
+                        if crate::ui::chrome::panel_action_primary_icon_button(
+                            ui,
+                            theme,
+                            crate::ui::icons::IconId::Refresh,
+                            crate::i18n::tr(ui.ctx(), "Retry", "重试"),
+                        )
+                        .clicked()
+                        {
+                            self.list_err = None;
+                            self.spawn_list(sid, mgr.clone(), self.cwd.clone(), ctx);
+                        }
+                    });
+                });
         }
 
         ui.label(
-            egui::RichText::new(format!(
-                "{} {}",
-                crate::i18n::tr(ctx, "Local download folder (ZMODEM):", "本机默认保存目录（ZMODEM）："),
-                download_dir_hint
-            ))
-                .small()
-                .color(theme.text_tertiary()),
+            crate::ui::chrome::rich_caption(
+                theme,
+                &format!(
+                    "{} {}",
+                    crate::i18n::tr(ctx, "Local downloads:", "本机下载目录："),
+                    download_dir_hint
+                ),
+            ),
         );
-        ui.add_space(theme.spacing_md());
+        ui.add_space(theme.spacing_xs());
 
-        ui.horizontal(|ui| {
-            crate::ui::chrome::form_field_label(ui, theme, crate::i18n::tr(ui.ctx(), "Path", "路径"));
-            let path_w = layout_util::finite_avail_minus(ui, 200.0, 120.0, 480.0);
-            crate::ui::chrome::form_singleline_field(
-                ui,
-                theme,
-                egui::Id::new("sftp_path_edit"),
-                &mut self.path_edit,
-                crate::i18n::tr(ui.ctx(), "/tmp or .", "/tmp 或 ."),
-                path_w,
-                false,
-            );
-            if crate::ui::chrome::panel_action_icon_button_ex(
-                ui,
-                theme,
-                crate::ui::icons::IconId::Search,
-                crate::i18n::tr(ui.ctx(), "Go", "前往"),
-                !self.busy,
-            )
-            .clicked() {
-                let p = PathBuf::from(self.path_edit.trim());
-                self.spawn_list(sid, mgr.clone(), p, ctx);
-            }
-            if crate::ui::chrome::panel_action_icon_button_ex(
-                ui,
-                theme,
-                crate::ui::icons::IconId::Refresh,
-                crate::i18n::tr(ui.ctx(), "Refresh", "刷新"),
-                !self.busy,
-            )
-            .clicked() {
-                self.spawn_list(sid, mgr.clone(), self.cwd.clone(), ctx);
-            }
-        });
-
-        ui.horizontal(|ui| {
-            if crate::ui::chrome::panel_action_icon_button_ex(
-                ui,
-                theme,
-                crate::ui::icons::IconId::ChevronLeft,
-                crate::i18n::tr(ui.ctx(), "Parent directory", "上层目录"),
-                !self.busy,
-            )
-            .clicked()
-            {
-                let parent = self
-                    .cwd
-                    .parent()
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("/"));
-                self.spawn_list(sid, mgr.clone(), parent, ctx);
-            }
-            if crate::ui::chrome::panel_action_icon_button_ex(
-                ui,
-                theme,
-                crate::ui::icons::IconId::File,
-                crate::i18n::tr(ui.ctx(), "Save As…", "另存为…"),
-                !self.busy && self.selected.is_some(),
-            )
-            .clicked()
-            {
-                if let Some(rem) = &self.selected {
-                    let name = rem
-                        .file_name()
-                        .map(|x| x.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "remote-file".into());
-                    if let Some(e) = self.entries.iter().find(|x| x.path == *rem) {
-                        if e.is_dir {
-                            self.toast_err = Some(crate::i18n::tr(ctx, "Select a file, not a folder", "请选文件而非目录").to_string());
-                            return;
-                        }
-                    }
-                    if let Some(save) = FileDialog::new()
-                        .set_title(crate::i18n::tr(ctx, "Save remote file as…", "另存远端文件"))
-                        .set_directory(&download_dir_path)
-                        .set_file_name(&name)
-                        .save_file()
-                    {
-                        self.spawn_download(sid, mgr.clone(), rem.clone(), save, ctx);
-                    }
-                }
-            }
-            if crate::ui::chrome::panel_action_icon_button_ex(
-                ui,
-                theme,
-                crate::ui::icons::IconId::Package,
-                crate::i18n::tr(ui.ctx(), "Download to default folder", "下载到默认目录"),
-                !self.busy && self.selected.is_some(),
-            )
-            .on_hover_text(format!(
-                "{} {}",
-                crate::i18n::tr(ctx, "Write to:", "写入："),
-                download_dir_hint
+        let panel_w = ui.available_width();
+        egui::Frame::none()
+            .fill(theme.color_subtle_inset_fill())
+            .stroke(egui::Stroke::new(1.0, theme.border_divider_color()))
+            .rounding(theme.radius_panel())
+            .inner_margin(egui::Margin::symmetric(
+                theme.spacing_body_pad(),
+                theme.spacing_body_pad(),
             ))
-            .clicked()
-            {
-                if let Some(rem) = self.selected.clone() {
-                    let name = rem
-                        .file_name()
-                        .map(|x| x.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "remote-file".into());
-                    if let Some(e) = self.entries.iter().find(|x| x.path == rem) {
-                        if e.is_dir {
-                            self.toast_err = Some(crate::i18n::tr(ctx, "Select a file, not a folder", "请选文件而非目录").to_string());
-                            return;
+            .show(ui, |ui| {
+                layout_util::set_width_to_available(ui);
+                ui.label(
+                    crate::ui::chrome::rich_caption(theme, crate::i18n::tr(ui.ctx(), "Remote path", "远端路径")),
+                );
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
+                    let path_w = (panel_w - 96.0).max(100.0);
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        egui::Id::new("sftp_path_edit"),
+                        &mut self.path_edit,
+                        crate::i18n::tr(ui.ctx(), "/home/user", "/home/user"),
+                        path_w,
+                        false,
+                    );
+                    if Self::toolbar_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Search,
+                        crate::i18n::tr(ui.ctx(), "Go to path", "前往"),
+                        !self.busy,
+                    )
+                    .clicked()
+                    {
+                        let p = PathBuf::from(self.path_edit.trim());
+                        self.spawn_list(sid, mgr.clone(), p, ctx);
+                    }
+                    if Self::toolbar_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Refresh,
+                        crate::i18n::tr(ui.ctx(), "Refresh", "刷新"),
+                        !self.busy,
+                    )
+                    .clicked()
+                    {
+                        self.spawn_list(sid, mgr.clone(), self.cwd.clone(), ctx);
+                    }
+                });
+
+                ui.add_space(theme.spacing_sm());
+                ui.label(
+                    crate::ui::chrome::rich_caption(theme, crate::i18n::tr(ui.ctx(), "Actions", "操作")),
+                );
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = theme.spacing_tool_btn_gap();
+                    if Self::toolbar_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::ChevronLeft,
+                        crate::i18n::tr(ui.ctx(), "Parent directory", "上层目录"),
+                        !self.busy,
+                    )
+                    .clicked()
+                    {
+                        let parent = self
+                            .cwd
+                            .parent()
+                            .map(PathBuf::from)
+                            .unwrap_or_else(|| PathBuf::from("/"));
+                        self.spawn_list(sid, mgr.clone(), parent, ctx);
+                    }
+                    if Self::toolbar_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Folder,
+                        crate::i18n::tr(ui.ctx(), "Root directory", "根目录 /"),
+                        !self.busy,
+                    )
+                    .clicked()
+                    {
+                        self.spawn_list(sid, mgr.clone(), PathBuf::from("/"), ctx);
+                    }
+                    ui.separator();
+                    if Self::toolbar_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Upload,
+                        crate::i18n::tr(ui.ctx(), "Upload files…", "上传文件…"),
+                        !self.busy,
+                    )
+                    .clicked()
+                    {
+                        if let Some(files) = FileDialog::new().pick_files() {
+                            if files.is_empty() {
+                                return;
+                            }
+                            if files.len() == 1 {
+                                let picked = files.into_iter().next().expect("len checked");
+                                let fname = picked
+                                    .file_name()
+                                    .map(PathBuf::from)
+                                    .unwrap_or_else(|| PathBuf::from("upload.bin"));
+                                let remote_path = self.cwd.join(fname);
+                                self.spawn_upload(sid, mgr.clone(), remote_path, picked, ctx);
+                            } else {
+                                self.spawn_upload_many(sid, mgr.clone(), self.cwd.clone(), files, ctx);
+                            }
                         }
                     }
-                    if let Err(e) = std::fs::create_dir_all(&download_dir_path) {
-                        self.toast_err = Some(format!(
-                            "{} {}",
-                            crate::i18n::tr(ctx, "Could not create local folder:", "无法创建本机目录："),
-                            e
-                        ));
-                        return;
+                    if Self::toolbar_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Package,
+                        crate::i18n::tr(ui.ctx(), "Download to default folder", "下载到默认目录"),
+                        !self.busy && self.selected.is_some(),
+                    )
+                    .on_hover_text(format!(
+                        "{} {}",
+                        crate::i18n::tr(ctx, "Save to:", "保存到："),
+                        download_dir_hint
+                    ))
+                    .clicked()
+                    {
+                        if let Some(rem) = self.selected.clone() {
+                            let name = rem
+                                .file_name()
+                                .map(|x| x.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "remote-file".into());
+                            if let Some(e) = self.entries.iter().find(|x| x.path == rem) {
+                                if e.is_dir {
+                                    self.toast_err = Some(crate::i18n::tr(
+                                        ctx,
+                                        "Select a file, not a folder",
+                                        "请选文件而非目录",
+                                    ).to_string());
+                                    return;
+                                }
+                            }
+                            if let Err(e) = std::fs::create_dir_all(&download_dir_path) {
+                                self.toast_err = Some(format!(
+                                    "{} {}",
+                                    crate::i18n::tr(ctx, "Could not create local folder:", "无法创建本机目录："),
+                                    e
+                                ));
+                                return;
+                            }
+                            let save = download_dir_path.join(&name);
+                            self.spawn_download(sid, mgr.clone(), rem, save, ctx);
+                        }
                     }
-                    let save = download_dir_path.join(&name);
-                    self.spawn_download(sid, mgr.clone(), rem, save, ctx);
-                }
-            }
-        });
+                    if Self::toolbar_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::File,
+                        crate::i18n::tr(ui.ctx(), "Save as…", "另存为…"),
+                        !self.busy && self.selected.is_some(),
+                    )
+                    .clicked()
+                    {
+                        if let Some(rem) = &self.selected {
+                            let name = rem
+                                .file_name()
+                                .map(|x| x.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "remote-file".into());
+                            if let Some(e) = self.entries.iter().find(|x| x.path == *rem) {
+                                if e.is_dir {
+                                    self.toast_err = Some(crate::i18n::tr(
+                                        ctx,
+                                        "Select a file, not a folder",
+                                        "请选文件而非目录",
+                                    ).to_string());
+                                    return;
+                                }
+                            }
+                            if let Some(save) = FileDialog::new()
+                                .set_title(crate::i18n::tr(ctx, "Save remote file as…", "另存远端文件"))
+                                .set_directory(&download_dir_path)
+                                .set_file_name(&name)
+                                .save_file()
+                            {
+                                self.spawn_download(sid, mgr.clone(), rem.clone(), save, ctx);
+                            }
+                        }
+                    }
+                    if Self::toolbar_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Trash,
+                        crate::i18n::tr(ui.ctx(), "Delete selected", "删除选中"),
+                        !self.busy && self.selected.is_some(),
+                    )
+                    .clicked()
+                    {
+                        if let Some(p) = self.selected.clone() {
+                            self.pending_delete = Some(p);
+                        }
+                    }
+                });
 
-        ui.horizontal(|ui| {
-            if crate::ui::chrome::panel_action_icon_button_ex(
-                ui,
-                theme,
-                crate::ui::icons::IconId::Upload,
-                crate::i18n::tr(ui.ctx(), "Upload… (multi-select; keep local filenames)", "上传…（可多选；文件名保持与本地一致）"),
-                !self.busy,
-            )
-            .clicked()
-            {
-                if let Some(files) = FileDialog::new().pick_files() {
-                    if files.is_empty() {
-                        return;
+                ui.add_space(theme.spacing_sm());
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
+                    crate::ui::chrome::form_field_label(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ui.ctx(), "New folder", "新建目录"),
+                    );
+                    let mkdir_w = (panel_w * 0.55).clamp(100.0, 220.0);
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        egui::Id::new("sftp_mkdir_name"),
+                        &mut self.mkdir_name,
+                        crate::i18n::tr(ui.ctx(), "folder name", "目录名"),
+                        mkdir_w,
+                        false,
+                    );
+                    if Self::toolbar_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Plus,
+                        crate::i18n::tr(ui.ctx(), "Create", "创建"),
+                        !self.busy && !self.mkdir_name.trim().is_empty(),
+                    )
+                    .clicked()
+                        && !self.mkdir_name.trim().is_empty()
+                    {
+                        let p = self.cwd.join(self.mkdir_name.trim());
+                        self.mkdir_name.clear();
+                        self.spawn_mkdir(sid, mgr.clone(), p, ctx);
                     }
-                    if files.len() == 1 {
-                        let picked = files.into_iter().next().expect("len checked");
-                        let fname = picked
-                            .file_name()
-                            .map(PathBuf::from)
-                            .unwrap_or_else(|| PathBuf::from("upload.bin"));
-                        let remote_path = self.cwd.join(fname);
-                        self.spawn_upload(sid, mgr.clone(), remote_path, picked, ctx);
-                    } else {
-                        self.spawn_upload_many(sid, mgr.clone(), self.cwd.clone(), files, ctx);
-                    }
-                }
-            }
-            if crate::ui::chrome::panel_action_icon_button_ex(
-                ui,
-                theme,
-                crate::ui::icons::IconId::Trash,
-                crate::i18n::tr(ui.ctx(), "Delete selected…", "删除选中…"),
-                !self.busy && self.selected.is_some(),
-            )
-            .clicked()
-            {
-                if let Some(p) = self.selected.clone() {
-                    self.pending_delete = Some(p);
-                }
-            }
-        });
+                });
+            });
 
-        ui.horizontal(|ui| {
-            crate::ui::chrome::form_field_label(ui, theme, crate::i18n::tr(ui.ctx(), "New folder", "新建目录"));
-            let mkdir_w = layout_util::finite_avail_minus(ui, 120.0, 80.0, 200.0);
-            crate::ui::chrome::form_singleline_field(
-                ui,
-                theme,
-                egui::Id::new("sftp_mkdir_name"),
-                &mut self.mkdir_name,
-                crate::i18n::tr(ui.ctx(), "Name", "名称"),
-                mkdir_w,
-                false,
-            );
-            if crate::ui::chrome::panel_action_icon_button_ex(
-                ui,
-                theme,
-                crate::ui::icons::IconId::Plus,
-                crate::i18n::tr(ui.ctx(), "Create folder", "创建目录"),
-                !self.mkdir_name.trim().is_empty(),
-            )
-            .clicked()
-                && !self.mkdir_name.trim().is_empty()
-            {
-                let p = self.cwd.join(self.mkdir_name.trim());
-                self.mkdir_name.clear();
-                self.spawn_mkdir(sid, mgr.clone(), p, ctx);
-            }
-        });
+        ui.add_space(theme.spacing_sm());
 
         if let Some(p) = self.pending_delete.clone() {
             ui.group(|ui| {

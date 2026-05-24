@@ -55,9 +55,15 @@ pub fn derive_key_from_fingerprint(fingerprint: &str) -> [u8; 32] {
     key
 }
 
-/// 当前设备的本地加密密钥（与会话 `sessions.json` 一致）
+/// 当前设备的本地加密密钥（会话、凭证库、配置文件等统一使用）
 pub fn device_key() -> [u8; 32] {
     derive_key_from_fingerprint(&build_device_fingerprint())
+}
+
+/// 与 [`device_key`] 相同；配置与敏感字段加密统一入口。
+#[inline]
+pub fn config_aes_key() -> [u8; 32] {
+    device_key()
 }
 
 /// HKDF-SHA256：从设备根密钥派生凭证库专用数据密钥（与文件内随机盐绑定）

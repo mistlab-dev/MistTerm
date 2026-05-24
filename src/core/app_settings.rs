@@ -1,7 +1,6 @@
 //! 应用级设置（Vault、审计等），与 egui 窗口几何持久化分离。
 
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::PathBuf;
 
 use crate::core::ai_settings::AiSettings;
@@ -47,26 +46,16 @@ impl AppSettings {
 
     pub fn load() -> Self {
         let path = Self::default_path();
-        if !path.exists() {
-            return Self::default();
-        }
-        let mut settings: Self = match fs::read_to_string(&path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-            Err(_) => Self::default(),
-        };
-        if settings.ai.migrate_keyring_to_local() {
+        let mut settings: Self = crate::security::encrypted_file::load_encrypted_json(&path);
+        let mut changed = settings.ai.migrate_legacy_secrets();
+        settings.team.lock_to_product_defaults();
+        if changed {
             let _ = settings.save();
         }
-        settings.team.lock_to_product_defaults();
         settings
     }
 
     pub fn save(&self) -> std::io::Result<()> {
-        let path = Self::default_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let json = serde_json::to_string_pretty(self)?;
-        fs::write(path, json)
+        crate::security::encrypted_file::save_encrypted_json(&Self::default_path(), self)
     }
 }

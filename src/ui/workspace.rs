@@ -195,6 +195,7 @@ impl MistTermApp {
                                     &mut self.sidebar_filter,
                                     &mut self.session_sort_by,
                                     &connected_sessions,
+                                    &self.team_service.current_team_servers(),
                                     Self::id_sidebar_connection_search(),
                                     &theme,
                                 );
@@ -214,6 +215,11 @@ impl MistTermApp {
                                         }
                                         if let Some(session_id) = sidebar_output.selected_session_id {
                                             self.select_session(ctx, &session_id);
+                                        }
+                                        if let Some(server_key) =
+                                            sidebar_output.connect_team_server_key
+                                        {
+                                            self.connect_team_server(ctx, &server_key);
                                         }
                                         if let Some(session_id) = sidebar_output.delete_session_id {
                                             if let Some(s) = self.session_manager.get_session(&session_id) {
@@ -581,11 +587,13 @@ impl MistTermApp {
         crate::ui::chrome::paint_right_dock_screen_gutter(ctx, &theme, top_chrome_height);
 
         // egui：CentralPanel 同层后绘会盖住 SidePanel；右 dock 须在 Central 之后 Foreground 重绘（靠左的先画）
-        if self.show_monitor_panel {
+        // 居中模态窗打开时跳过 Foreground，避免 dock 标题栏 × 与弹窗关闭钮叠在同一位置。
+        let paint_right_dock_fg = !self.suppress_right_dock_foreground();
+        if paint_right_dock_fg && self.show_monitor_panel {
             self.monitor_panel
                 .show_foreground_panel(ctx, &theme, &mut self.show_monitor_panel);
         }
-        if self.show_sftp_panel {
+        if paint_right_dock_fg && self.show_sftp_panel {
             let mut close_sftp_panel = false;
             let current_terminal_ref = self
                 .active_tab
@@ -604,7 +612,7 @@ impl MistTermApp {
         if self.show_ai_panel || self.show_ai_settings_dialog {
             self.ai_panel.poll_background(ctx);
         }
-        if self.show_ai_panel {
+        if paint_right_dock_fg && self.show_ai_panel {
             self.ai_panel.show_foreground_panel(
                 ctx,
                 &theme,
@@ -620,9 +628,11 @@ impl MistTermApp {
                 &mut self.app_settings,
             );
         }
-        self.show_fragment_panel_foreground(ctx, &theme);
+        if paint_right_dock_fg {
+            self.show_fragment_panel_foreground(ctx, &theme);
+        }
 
-        if self.credential_panel.open {
+        if paint_right_dock_fg && self.credential_panel.open {
             let mut close_cred = false;
             self.credential_panel.show_foreground_panel(
                 ctx,
@@ -640,7 +650,7 @@ impl MistTermApp {
             self.apply_credential_to_new_session_form(ctx, c);
         }
 
-        if self.cloud_sync_panel.open {
+        if paint_right_dock_fg && self.cloud_sync_panel.open {
             let fragments_export_path = FragmentManager::default_config_path();
             let sessions_export_path = self.session_manager.storage_path().clone();
             let theme_export_path = ThemeManager::config_path();
@@ -701,18 +711,11 @@ impl MistTermApp {
 
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
                             ui.push_id("new_session_form", |ui| {
-                            let mut close_via_header = false;
-                            Self::modal_header(
+                            Self::modal_header_title_only(
                                 ui,
                                 &theme,
                                 crate::i18n::tr(ctx, "New session", "新建会话"),
-                                &mut close_via_header,
                             );
-                            if close_via_header {
-                                self.reset_new_session_form();
-                                should_close = true;
-                                ui.ctx().input_mut(|i| i.pointer = egui::PointerState::default());
-                            }
 
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
                             Self::ui_field_label(
@@ -999,18 +1002,6 @@ impl MistTermApp {
                                             );
                                         });
                                 });
-                            ui.add_space(theme.spacing_list_item_x());
-                            crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
-                                if crate::ui::chrome::modal_secondary_icon_button(
-                                    ui,
-                                    th,
-                                    crate::ui::icons::IconId::Close,
-                                    crate::i18n::tr(ctx, "Close", "关闭"),
-                                )
-                                .clicked() {
-                                    should_close = true;
-                                }
-                            });
                     });
                 });
             self.show_about_dialog = open && !should_close;
@@ -1043,16 +1034,11 @@ impl MistTermApp {
                 .fixed_size(modal_sz)
                 .show(ctx, |ui| {
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                        let mut should_close_hdr = false;
-                        Self::modal_header(
+                        Self::modal_header_title_only(
                             ui,
                             &theme,
                             crate::i18n::tr(ctx, "Large file upload", "大文件上传"),
-                            &mut should_close_hdr,
                         );
-                        if should_close_hdr {
-                            pick = Some(LargePick::Dismiss);
-                        }
                         ui.label(
                             egui::RichText::new(
                                 crate::i18n::tr(
@@ -1164,7 +1150,7 @@ impl MistTermApp {
                 .fixed_size(modal_sz)
                 .show(ctx, |ui| {
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                        Self::modal_header(ui, &theme, crate::i18n::tr(ctx, "Delete session", "删除会话"), &mut should_close);
+                        Self::modal_header_title_only(ui, &theme, crate::i18n::tr(ctx, "Delete session", "删除会话"));
                         ui.label(
                             egui::RichText::new(
                                 crate::i18n::tr(
@@ -1226,7 +1212,7 @@ impl MistTermApp {
                     .fixed_size(modal_sz)
                     .show(ctx, |ui| {
                         crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                            Self::modal_header(ui, &theme, crate::i18n::tr(ctx, "Close tab", "关闭标签"), &mut should_close);
+                            Self::modal_header_title_only(ui, &theme, crate::i18n::tr(ctx, "Close tab", "关闭标签"));
                             ui.label(
                                 egui::RichText::new(
                                     crate::i18n::tr(
@@ -1303,7 +1289,7 @@ impl MistTermApp {
 
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
                             ui.push_id("edit_session_form", |ui| {
-                            Self::modal_header(ui, &theme, crate::i18n::tr(ctx, "Edit session", "编辑会话"), &mut should_close);
+                            Self::modal_header_title_only(ui, &theme, crate::i18n::tr(ctx, "Edit session", "编辑会话"));
 
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
                             Self::ui_field_label(ui, &theme, crate::i18n::tr(ctx, "Session name", "会话名称"));
@@ -1573,7 +1559,12 @@ impl MistTermApp {
                 .fixed_size(modal_sz)
                 .show(ctx, |ui| {
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                            Self::modal_header(ui, &theme, crate::i18n::tr(ctx, "Command snippets", "命令片段"), &mut should_close);
+                            Self::modal_header(
+                                ui,
+                                &theme,
+                                crate::i18n::tr(ctx, "Command snippets", "命令片段"),
+                                &mut should_close,
+                            );
                             ui.label(
                                 egui::RichText::new(crate::i18n::tr(
                                     ctx,
@@ -1609,18 +1600,6 @@ impl MistTermApp {
                                         },
                                     );
                                 });
-                            ui.add_space(theme.spacing_list_item_x());
-                            crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
-                                if crate::ui::chrome::modal_secondary_icon_button(
-                                    ui,
-                                    th,
-                                    crate::ui::icons::IconId::Close,
-                                    crate::i18n::tr(ctx, "Close", "关闭"),
-                                )
-                                .clicked() {
-                                    should_close = true;
-                                }
-                            });
                     });
                 });
             self.show_fragments_dialog = open && !should_close;
@@ -1638,7 +1617,11 @@ impl MistTermApp {
                 .fixed_size(modal_sz)
                 .show(ctx, |ui| {
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                            Self::modal_header(ui, &theme, crate::i18n::tr(ctx, "Snippet placeholders", "填写片段变量"), &mut should_close);
+                            Self::modal_header_title_only(
+                                ui,
+                                &theme,
+                                crate::i18n::tr(ctx, "Snippet placeholders", "填写片段变量"),
+                            );
                             ui.add_space(-2.0);
                             ui.label(
                                 egui::RichText::new(format!(
@@ -1839,7 +1822,6 @@ impl MistTermApp {
             let qsz = layout_util::centered_window_default_size(ctx, 0.40, 0.48);
             let qsz_v = egui::vec2(qsz[0], qsz[1]);
             let q_scroll_max = layout_util::dialog_scroll_max_height(ctx, 220.0);
-            let mut quick_close_hdr = false;
             crate::ui::chrome::modal_window("quick_fragment_selector", &theme, ctx)
                 .movable(true)
                 .resizable(true)
@@ -1847,14 +1829,11 @@ impl MistTermApp {
                 .default_size(qsz)
                 .show(ctx, |ui| {
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                    if crate::ui::chrome::modal_header(
+                    Self::modal_header_title_only(
                         ui,
                         &theme,
                         crate::i18n::tr(ctx, "Quick snippet picker", "快速选择片段"),
-                        crate::ui::chrome::modal_title_font_size(&theme),
-                    ) {
-                        quick_close_hdr = true;
-                    }
+                    );
                     let q_search_w = layout_util::finite_content_width(ui);
                     crate::ui::chrome::search_field(
                         ui,
@@ -1907,9 +1886,6 @@ impl MistTermApp {
                     });
                     });
                 });
-            if quick_close_hdr {
-                self.quick_selector.open = false;
-            }
         }
 
         // 变量输入对话框（片段库定义的变量；与命令里的 `<pod>` 等占位符可串联）
@@ -1923,7 +1899,6 @@ impl MistTermApp {
             let var_sz = layout_util::centered_window_default_size(ctx, 0.36, 0.38);
             let var_sz_v = egui::vec2(var_sz[0], var_sz[1]);
             let scroll_h = layout_util::dialog_scroll_max_height(ctx, 240.0);
-            let mut var_close_hdr = false;
             crate::ui::chrome::modal_window("fragment_variable_modal", &theme, ctx)
                 .id(egui::Id::new("mistterm_fragment_variable_dialog"))
                 .movable(true)
@@ -1932,14 +1907,11 @@ impl MistTermApp {
                 .default_size(var_sz)
                 .show(ctx, |ui| {
                     crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
-                    if crate::ui::chrome::modal_header(
+                    Self::modal_header_title_only(
                         ui,
                         &theme,
                         crate::i18n::tr(ui.ctx(), "Fill variables", "填写变量"),
-                        crate::ui::chrome::modal_title_font_size(&theme),
-                    ) {
-                        var_close_hdr = true;
-                    }
+                    );
                     ui.label(
                         crate::ui::chrome::rich_caption(
                             &theme,
@@ -2114,11 +2086,6 @@ impl MistTermApp {
                     });
                     });
                 });
-            if var_close_hdr {
-                self.variable_dialog.open = false;
-                self.variable_dialog.paste_after_fill = false;
-                self.variable_dialog.last_finalize_error = None;
-            }
             ctx.move_to_top(egui::LayerId::new(
                 egui::Order::Middle,
                 egui::Id::new("mistterm_fragment_variable_dialog"),

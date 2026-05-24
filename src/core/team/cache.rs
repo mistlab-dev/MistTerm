@@ -1,7 +1,6 @@
 //! 团队片段本地缓存（与 personal `fragments.json` 分离）。
 
 use std::collections::HashMap;
-use std::fs;
 use std::io;
 use std::path::PathBuf;
 
@@ -26,23 +25,11 @@ impl TeamFragmentCache {
     }
 
     pub fn load() -> Self {
-        let path = Self::cache_path();
-        if !path.exists() {
-            return Self::default();
-        }
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        crate::security::encrypted_file::load_encrypted_json(&Self::cache_path())
     }
 
     pub fn save(&self) -> io::Result<()> {
-        let path = Self::cache_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let json = serde_json::to_string_pretty(self)?;
-        fs::write(path, json)
+        crate::security::encrypted_file::save_encrypted_json(&Self::cache_path(), self)
     }
 
     pub fn apply_sync(&mut self, team_id: &str, resp: &FragmentSyncResponse) {

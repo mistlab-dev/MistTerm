@@ -1700,8 +1700,8 @@ impl Theme {
             accent_dim: Color32Serializable::with_alpha(36, 44, 82, 89), // rgba(102,126,234,0.35)
             // === 边框 ===
             // 实色描边（WCAG 对比测试按 RGB；半透明白边在测试中与底色差过小）
-            border: Color32Serializable::new(82, 92, 114),      // 外框对比度提升
-            border_divider: Color32Serializable::new(66, 74, 92), // 内部分隔提升
+            border: Color32Serializable::new(98, 110, 136),      // dock 外框（暗夜须略高于面板底）
+            border_divider: Color32Serializable::new(78, 88, 108), // 底缘/缝分隔
             // === 状态色 ===
             green: Color32Serializable::new(76, 175, 80),             // #4CAF50 — 成功/连接
             green_dim: Color32Serializable::with_alpha(19, 44, 20, 64), // rgba(76,175,80,0.25)

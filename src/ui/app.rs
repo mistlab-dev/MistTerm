@@ -16,7 +16,8 @@ use crate::core::{
     TempKeyFile, spawn_cleanup_old_logs, DEFAULT_RETENTION_DAYS,
     SessionSortBy, SshConfigCandidate, command_preview, expand_command_template,
     expand_fragment_command_stages, expand_rhai_blocks, list_placeholder_keys, merge_rhai_context,
-    FragmentManager, FragmentStats, SessionConfig, SessionManager, SortBy, TeamService,
+    apply_vault_for_team, parse_vault_credential_path, FragmentManager, FragmentStats,
+    SessionConfig, SessionManager, SortBy, TeamService,
 };
 use crate::ui::command_history_overlay::{CommandHistoryAction, CommandHistoryOverlay};
 use crate::ui::help_docs_dialog::{HelpDocsDialog, HelpPage};
@@ -927,6 +928,15 @@ impl MistTermApp {
             }
             if self.team_service.take_pending_initial_sync() {
                 self.configure_team_audit_sink();
+                self.team_service.spawn_config_sync();
+            }
+            if self.team_service.take_pending_vault_apply() {
+                self.apply_team_vault_from_sync();
+            }
+            if self.team_service.pending_fragment_sync_after_config
+                && !self.team_service.is_busy()
+            {
+                self.team_service.pending_fragment_sync_after_config = false;
                 self.team_service.spawn_sync_current_team();
             }
             if self.team_service.auth_expired {
@@ -1086,7 +1096,7 @@ impl MistTermApp {
         temp_key: &mut Option<TempKeyFile>,
     ) {
         self.audit_logger.record(
-            AuditEvent::new(AuditCategory::Session, "connect.start", AuditOutcome::Success)
+            AuditEvent::new(AuditCategory::Session, "shell.connect", AuditOutcome::Success)
                 .with_host(&session.host)
                 .with_session(&session.id),
         );
@@ -1191,13 +1201,19 @@ impl MistTermApp {
         };
         if let Some(command) = cmd {
             let preview = command_preview(&command, 120);
+            let detail = serde_json::json!({
+                "preview": preview,
+                "len": command.len(),
+            });
             self.audit_logger.record(
                 AuditEvent::new(AuditCategory::Command, "command.submit", AuditOutcome::Success)
                     .with_session(&sid)
-                    .with_detail(serde_json::json!({
-                        "preview": preview,
-                        "len": command.len(),
-                    })),
+                    .with_detail(detail.clone()),
+            );
+            self.audit_logger.record(
+                AuditEvent::new(AuditCategory::Command, "shell.exec", AuditOutcome::Success)
+                    .with_session(&sid)
+                    .with_detail(detail),
             );
             self.command_history.record(
                 &command,
@@ -1604,6 +1620,38 @@ impl MistTermApp {
         }
     }
 
+    fn modal_header_title_only(ui: &mut egui::Ui, theme: &crate::ui::theme::Theme, title: &str) {
+        crate::ui::chrome::modal_header_title_only(
+            ui,
+            theme,
+            title,
+            crate::ui::chrome::modal_title_font_size(theme),
+        );
+    }
+
+    /// 居中模态窗打开时不绘制右 dock Foreground，避免与弹窗标题栏 × 叠成「两个关闭」。
+    fn suppress_right_dock_foreground(&self) -> bool {
+        self.show_new_session_dialog
+            || self.show_edit_session_dialog
+            || self.show_about_dialog
+            || self.show_preferences_dialog
+            || self.show_fragments_dialog
+            || self.show_fragment_vars_dialog
+            || self.show_ai_settings_dialog
+            || self.variable_dialog.open
+            || self.fragment_library.open
+            || self.ssh_import_dialog.open
+            || self.delete_session_confirm.is_some()
+            || self.close_tab_confirm_idx.is_some()
+            || self.quick_selector.open
+            || self.session_log_dialog.open
+            || self.audit_log_dialog.open
+            || self.help_docs_dialog.open
+            || self.git_sync_panel.is_clone_dialog_open()
+            || self.team_fragment_editor.open
+            || self.team_fragment_conflict.is_some()
+    }
+
     /// 合并 `<占位符>` 替换与 `{{ … }}` 得到「填写片段变量」弹窗中的初值。
     fn sync_pending_fragment_command_edit(&mut self) {
         let session = self
@@ -1680,6 +1728,87 @@ impl MistTermApp {
     }
 
     /// 为给定会话配置追加一个新终端标签并发起连接（不检查是否已有同会话标签）
+    fn apply_team_vault_from_sync(&mut self) {
+        let Some(tid) = self.team_service.state.current_team_id.clone() else {
+            return;
+        };
+        let Some(entry) = self
+            .team_service
+            .state
+            .sync_entry_for(&tid)
+            .cloned()
+        else {
+            return;
+        };
+        match apply_vault_for_team(&mut self.app_settings.vault, &entry) {
+            Ok(()) => {
+                let _ = self.app_settings.save();
+                self.audit_logger.record(
+                    AuditEvent::new(AuditCategory::Config, "config.vault_apply", AuditOutcome::Success)
+                        .with_detail(serde_json::json!({ "team_id": tid })),
+                );
+            }
+            Err(e) => {
+                self.team_service.state.last_error = e.clone();
+                let _ = self.team_service.state.save();
+            }
+        }
+    }
+
+    fn connect_team_server(&mut self, ctx: &egui::Context, server_key: &str) {
+        let Some(server) = self
+            .team_service
+            .current_team_servers()
+            .into_iter()
+            .find(|s| s.list_key() == server_key)
+        else {
+            return;
+        };
+        let team_id = self
+            .team_service
+            .state
+            .current_team_id
+            .clone()
+            .unwrap_or_default();
+        let mut session = SessionConfig::default();
+        session.name = server.name.clone();
+        session.host = server.host.clone();
+        session.port = server.port;
+        session.username = server.username.clone();
+        session.group = crate::i18n::tr(ctx, "Team", "团队").to_string();
+        if !server.vault_credential_path.is_empty() {
+            if let Some((mount, path, field)) = parse_vault_credential_path(
+                &server.vault_credential_path,
+                &self.app_settings.vault.default_mount,
+            ) {
+                session.secret_backend = SecretBackend::VaultKv {
+                    mount,
+                    path,
+                    field,
+                    version: None,
+                };
+                self.audit_logger.record(
+                    AuditEvent::new(AuditCategory::Vault, "config.vault_read", AuditOutcome::Success)
+                        .with_resource(&server.vault_credential_path)
+                        .with_detail(serde_json::json!({
+                            "team_id": team_id,
+                            "server_id": server.id,
+                        })),
+                );
+            }
+        }
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Session, "shell.connect", AuditOutcome::Success)
+                .with_host(&server.host)
+                .with_detail(serde_json::json!({
+                    "team_id": team_id,
+                    "server_id": server.id,
+                    "port": server.port,
+                })),
+        );
+        self.push_tab_connecting(ctx, &session);
+    }
+
     fn push_tab_connecting(&mut self, ctx: &egui::Context, session: &SessionConfig) {
         let mut terminal = TerminalView::new();
         let mut temp_key = None;
@@ -2971,6 +3100,8 @@ impl MistTermApp {
             crate::ui::chrome::status_text_chip(ui, theme, &metrics, theme.text_primary());
         }
 
+        self.paint_team_account_status_chip(ui, theme, &bar_ctx);
+
         if self.auto_reconnect_enabled {
             crate::ui::chrome::status_icon_chip(
                 ui,
@@ -3006,6 +3137,92 @@ impl MistTermApp {
                 &truncate_status(status_message_body(&self.status_message), 36),
                 status_message_text_color(&self.status_message, theme),
             );
+        }
+    }
+
+    /// 底栏团队账户：已登录时显示用户与当前团队，点击打开偏好设置。
+    fn paint_team_account_status_chip(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &crate::ui::theme::Theme,
+        bar_ctx: &egui::Context,
+    ) {
+        if !self.team_service.is_configured() || !self.team_service.is_logged_in() {
+            return;
+        }
+        let team_name = self.team_service.current_team_name();
+        let (display, email) = self
+            .team_service
+            .state
+            .user
+            .as_ref()
+            .map(|u| {
+                let name = if !u.display_name.is_empty() {
+                    u.display_name.as_str()
+                } else if !u.username.is_empty() {
+                    u.username.as_str()
+                } else {
+                    u.email.as_str()
+                };
+                (name.to_string(), u.email.clone())
+            })
+            .unwrap_or_else(|| {
+                (
+                    crate::i18n::tr(bar_ctx, "Signed in", "已登录").to_string(),
+                    String::new(),
+                )
+            });
+
+        let chip_text = format!(
+            "{} · {} @ {}",
+            crate::i18n::tr(bar_ctx, "Team", "团队"),
+            truncate_status(&display, 14),
+            truncate_status(&team_name, 12),
+        );
+        let hover = if email.is_empty() {
+            format!(
+                "{}\n{}",
+                team_name,
+                crate::i18n::tr(
+                    bar_ctx,
+                    "Click to open team account settings",
+                    "点击打开团队账户设置",
+                ),
+            )
+        } else {
+            format!(
+                "{}\n{}\n{}",
+                email,
+                team_name,
+                crate::i18n::tr(
+                    bar_ctx,
+                    "Click to open team account settings",
+                    "点击打开团队账户设置",
+                ),
+            )
+        };
+
+        let resp = theme.frame_status_chip().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let px = theme.font_size_status_bar();
+                let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                crate::ui::icons::paint_icon(
+                    ui,
+                    r,
+                    crate::ui::icons::IconId::Cloud,
+                    theme.green_color(),
+                    px,
+                );
+                ui.label(
+                    egui::RichText::new(chip_text)
+                        .size(theme.font_size_status_bar())
+                        .color(theme.green_color()),
+                );
+            });
+        });
+        if resp.response.on_hover_text(hover).clicked() {
+            self.show_preferences_dialog = true;
         }
     }
 

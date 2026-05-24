@@ -1,13 +1,12 @@
 //! 团队本地状态（用户、团队列表、同步 cursor）。
 
 use std::collections::HashMap;
-use std::fs;
 use std::io;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::models::{TeamMembership, TeamUser};
+use super::models::{TeamMembership, TeamServer, TeamSyncEntry, TeamUser};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamState {
@@ -24,6 +23,9 @@ pub struct TeamState {
     pub last_sync_unix: Option<i64>,
     #[serde(default)]
     pub last_error: String,
+    /// `GET /v1/team/sync` 缓存（team_id → 条目）
+    #[serde(default)]
+    pub sync_entries: HashMap<String, TeamSyncEntry>,
 }
 
 impl TeamState {
@@ -35,23 +37,11 @@ impl TeamState {
     }
 
     pub fn load() -> Self {
-        let path = Self::config_path();
-        if !path.exists() {
-            return Self::default();
-        }
-        fs::read_to_string(&path)
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default()
+        crate::security::encrypted_file::load_encrypted_json(&Self::config_path())
     }
 
     pub fn save(&self) -> io::Result<()> {
-        let path = Self::config_path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let json = serde_json::to_string_pretty(self)?;
-        fs::write(path, json)
+        crate::security::encrypted_file::save_encrypted_json(&Self::config_path(), self)
     }
 
     pub fn clear_session(&mut self) {
@@ -59,8 +49,20 @@ impl TeamState {
         self.teams.clear();
         self.current_team_id = None;
         self.sync_cursors.clear();
+        self.sync_entries.clear();
         self.last_error.clear();
         let _ = self.save();
+    }
+
+    pub fn servers_for_team(&self, team_id: &str) -> Vec<TeamServer> {
+        self.sync_entries
+            .get(team_id)
+            .map(|e| e.servers.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn sync_entry_for(&self, team_id: &str) -> Option<&TeamSyncEntry> {
+        self.sync_entries.get(team_id)
     }
 
     pub fn current_membership(&self) -> Option<&TeamMembership> {

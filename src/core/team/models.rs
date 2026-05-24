@@ -74,6 +74,86 @@ pub struct TeamsListResponse {
     pub teams: Vec<TeamMembership>,
 }
 
+/// `GET /v1/team/sync` 响应（见 `team-platform-integration.md`）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct TeamSyncResponse {
+    #[serde(default)]
+    pub teams: Vec<TeamSyncEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamSyncEntry {
+    pub team_id: String,
+    #[serde(default)]
+    pub team_name: String,
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub vault_config: Option<TeamVaultConfig>,
+    #[serde(default)]
+    pub credential: Option<TeamVaultCredential>,
+    #[serde(default)]
+    pub servers: Vec<TeamServer>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamVaultConfig {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub team_id: String,
+    pub address: String,
+    #[serde(default)]
+    pub kv_mount: String,
+    #[serde(default)]
+    pub auth_type: String,
+    #[serde(default)]
+    pub namespace: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamVaultCredential {
+    #[serde(default)]
+    pub role: String,
+    #[serde(default)]
+    pub vault_token: String,
+    #[serde(default)]
+    pub approle_role_id: String,
+    #[serde(default)]
+    pub approle_secret_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamServer {
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    pub host: String,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub vault_credential_path: String,
+    #[serde(default)]
+    pub sort_order: i32,
+}
+
+fn default_ssh_port() -> u16 {
+    22
+}
+
+impl TeamServer {
+    pub fn list_key(&self) -> String {
+        if !self.id.is_empty() {
+            return self.id.clone();
+        }
+        format!("{}:{}:{}", self.host, self.port, self.name)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TokenResponse {
     pub access_token: String,

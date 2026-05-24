@@ -6,6 +6,7 @@ use eframe::egui;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::core::session::{session_color_tag_rgb, SessionManager};
+use crate::core::team::TeamServer;
 use crate::core::session_sort::{sort_sessions, SessionSortBy};
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
@@ -18,6 +19,7 @@ pub struct SidebarOutput {
     pub create_session_clicked: bool,
     pub collapse_clicked: bool,
     pub view_log_session_id: Option<String>,
+    pub connect_team_server_key: Option<String>,
 }
 
 /// 左栏整列（导入条 + 圆角面板）的附加动作
@@ -43,6 +45,7 @@ impl Sidebar {
         filter: &mut String,
         sort_by: &mut SessionSortBy,
         connected_sessions: &HashSet<String>,
+        team_servers: &[TeamServer],
         search_field_id: egui::Id,
         theme: &Theme,
     ) -> (SidebarOutput, SidebarColumnActions) {
@@ -65,26 +68,27 @@ impl Sidebar {
             }
         }
         let panel_h = ui.available_height().max(120.0);
-        let output = crate::ui::chrome::sidebar_panel_frame(theme)
-            .show(ui, |ui| {
-                ui.set_width(sidebar_width);
-                ui.set_min_height(panel_h);
-                ui.set_height(panel_h);
-                Self::show(
-                    ui,
-                    panel_h,
-                    session_manager,
-                    selected_id,
-                    search_query,
-                    filter,
-                    sort_by,
-                    connected_sessions,
-                    search_field_id,
-                    theme,
-                )
-            })
-            .inner;
-        (output, actions)
+        let panel = crate::ui::chrome::sidebar_panel_frame(theme).show(ui, |ui| {
+            ui.set_width(sidebar_width);
+            ui.set_min_height(panel_h);
+            ui.set_height(panel_h);
+            Self::show(
+                ui,
+                panel_h,
+                session_manager,
+                selected_id,
+                search_query,
+                filter,
+                sort_by,
+                connected_sessions,
+                team_servers,
+                search_field_id,
+                theme,
+            )
+        });
+        let shell = panel.response.rect;
+        crate::ui::chrome::paint_region_panel_shell_border(ui.painter(), shell, theme, true);
+        (panel.inner, actions)
     }
 
     /// 显示侧边栏
@@ -99,6 +103,7 @@ impl Sidebar {
         filter: &mut String,
         sort_by: &mut SessionSortBy,
         connected_sessions: &HashSet<String>,
+        team_servers: &[TeamServer],
         search_field_id: egui::Id,
         theme: &Theme,
     ) -> SidebarOutput {
@@ -115,7 +120,8 @@ impl Sidebar {
         let mut create_session_clicked = false;
         let mut collapse_clicked = false;
         let mut view_log_session_id = None;
-        
+        let mut connect_team_server_key: Option<String> = None;
+
         let body_h = panel_h.max(120.0);
         let response = ui.allocate_ui_with_layout(
             egui::vec2(width, body_h),
@@ -212,6 +218,61 @@ impl Sidebar {
                         SessionSortBy::LastConnected => SessionSortBy::CreatedAt,
                         SessionSortBy::CreatedAt => SessionSortBy::Name,
                     };
+                }
+
+                if !team_servers.is_empty() {
+                    ui.add_space(theme.spacing_panel_gap());
+                    crate::ui::chrome::label_tag_chip(
+                        ui,
+                        theme,
+                        &crate::i18n::tr(ui.ctx(), "Team servers", "团队服务器"),
+                        theme.font_size_connection_meta(),
+                        theme.color_section_title(),
+                    );
+                    for server in team_servers {
+                        let row_h = theme.size_session_list_row_h();
+                        let row_inner_w = layout_util::finite_avail_minus(ui, 0.0, 80.0, width);
+                        let (row_rect, response) = ui.allocate_exact_size(
+                            egui::vec2(row_inner_w, row_h),
+                            egui::Sense::click(),
+                        );
+                        let bg = if response.hovered() {
+                            theme.list_row_hover_bg()
+                        } else {
+                            egui::Color32::TRANSPARENT
+                        };
+                        ui.painter().rect_filled(row_rect, theme.radius_list_item(), bg);
+                        let mut row_ui = ui.child_ui(
+                            row_rect.shrink2(egui::vec2(
+                                theme.spacing_list_item_x(),
+                                theme.spacing_list_item_y(),
+                            )),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                        );
+                        row_ui.label(
+                            egui::RichText::new(&server.name)
+                                .size(theme.font_size_connection_name())
+                                .color(theme.text_secondary()),
+                        );
+                        row_ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "{}@{}:{}",
+                                        server.username, server.host, server.port
+                                    ))
+                                    .size(theme.font_size_connection_meta())
+                                    .color(theme.text_tertiary()),
+                                );
+                            },
+                        );
+                        if response.clicked() {
+                            connect_team_server_key = Some(server.list_key());
+                        }
+                        ui.add_space(theme.spacing_list_item_gap());
+                    }
+                    ui.add_space(theme.spacing_panel_gap());
                 }
 
                 // 会话列表（占满标题/搜索/筛选下方的剩余高度）
@@ -449,6 +510,7 @@ impl Sidebar {
             create_session_clicked,
             collapse_clicked,
             view_log_session_id,
+            connect_team_server_key,
         }
     }
 }

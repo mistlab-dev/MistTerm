@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, BufReader, BufWriter};
+use std::io;
 use std::path::PathBuf;
 use uuid::Uuid;
 
@@ -377,26 +377,20 @@ impl FragmentManager {
 
     /// 从文件加载
     pub fn load(path: &PathBuf) -> io::Result<Self> {
-        if !path.exists() {
-            let manager = Self::new();
+        let mut manager: FragmentManager =
+            crate::security::encrypted_file::load_encrypted_json(path);
+        if manager.fragments.is_empty() && !path.exists() {
+            manager = Self::new();
             manager.save(path)?;
             return Ok(manager);
         }
-
-        let file = fs::File::open(path)?;
-        let reader = BufReader::new(file);
-        let mut manager: FragmentManager = serde_json::from_reader(reader)
-            .unwrap_or_else(|_| Self::new());
         manager.rebuild_id_map();
         Ok(manager)
     }
 
     /// 保存到文件
     pub fn save(&self, path: &PathBuf) -> io::Result<()> {
-        let file = fs::File::create(path)?;
-        let writer = BufWriter::new(file);
-        serde_json::to_writer_pretty(writer, self)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+        crate::security::encrypted_file::save_encrypted_json(path, self)
     }
 
     /// 获取所有片段

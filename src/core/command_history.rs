@@ -100,15 +100,7 @@ impl CommandHistory {
     }
 
     fn load_entries_from_disk(path: &PathBuf) -> VecDeque<HistoryEntry> {
-        if !path.exists() {
-            return VecDeque::new();
-        }
-        let Ok(content) = fs::read_to_string(path) else {
-            return VecDeque::new();
-        };
-        let Ok(file) = serde_json::from_str::<HistoryFile>(&content) else {
-            return VecDeque::new();
-        };
+        let file: HistoryFile = crate::security::encrypted_file::load_encrypted_json(path);
         let mut entries: VecDeque<HistoryEntry> = file.entries.into_iter().collect();
         let cutoff = Local::now().timestamp() - RETENTION_DAYS * 86400;
         entries.retain(|e| e.executed_at >= cutoff);
@@ -132,8 +124,7 @@ impl CommandHistory {
             all.drain(0..all.len() - FILE_CAP);
         }
         let file = HistoryFile { entries: all };
-        let content = serde_json::to_string_pretty(&file)?;
-        fs::write(&self.persist_path, content)?;
+        crate::security::encrypted_file::save_encrypted_json(&self.persist_path, &file)?;
         self.dirty = false;
         Ok(())
     }

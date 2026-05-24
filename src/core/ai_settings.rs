@@ -1,4 +1,4 @@
-//! 用户自配的 OpenAI 兼容 AI 设置（API Key 本地 AES-GCM 加密存 settings.json）。
+//! 用户自配的 OpenAI 兼容 AI 设置（明文仅存于 device_key 加密后的 `settings.json` 内）。
 
 use serde::{Deserialize, Serialize};
 
@@ -32,11 +32,14 @@ pub struct AiSettings {
     pub timeout_secs: u64,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
-    /// AES-GCM 密文（base64），与 [`api_key_nonce`] 成对
+    /// 仅存在于加密后的 settings 内层 JSON，勿写入审计日志。
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    encrypted_api_key: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    api_key_nonce: String,
+    api_key: String,
+    /// 旧版字段：加载后迁移到 [`api_key`]。
+    #[serde(default, skip_serializing, rename = "encrypted_api_key")]
+    legacy_encrypted_api_key: String,
+    #[serde(default, skip_serializing, rename = "api_key_nonce")]
+    legacy_api_key_nonce: String,
 }
 
 impl Default for AiSettings {
@@ -47,8 +50,9 @@ impl Default for AiSettings {
             model: default_model(),
             timeout_secs: default_timeout_secs(),
             max_tokens: default_max_tokens(),
-            encrypted_api_key: String::new(),
-            api_key_nonce: String::new(),
+            api_key: String::new(),
+            legacy_encrypted_api_key: String::new(),
+            legacy_api_key_nonce: String::new(),
         }
     }
 }
@@ -60,43 +64,55 @@ impl AiSettings {
     }
 
     pub fn has_api_key(&self) -> bool {
-        self.load_api_key()
-            .map(|k| !k.trim().is_empty())
-            .unwrap_or(false)
+        !self.api_key.trim().is_empty()
     }
 
     pub fn load_api_key(&self) -> Option<String> {
-        let key = crate::security::device_key::device_key();
-        let plain =
-            crate::security::device_key::decrypt_secret(&key, &self.encrypted_api_key, &self.api_key_nonce)?;
-        if plain.trim().is_empty() {
+        let k = self.api_key.trim();
+        if k.is_empty() {
             None
         } else {
-            Some(plain)
+            Some(k.to_string())
         }
     }
 
-    /// 加密写入 API Key（仅存于 `settings.json`，不使用系统钥匙串）。
     pub fn set_api_key(&mut self, key: &str) -> Result<(), String> {
-        let trimmed = key.trim();
-        if trimmed.is_empty() {
-            self.clear_api_key();
-            return Ok(());
-        }
-        let dk = crate::security::device_key::device_key();
-        let (enc, nonce) = crate::security::device_key::encrypt_secret(&dk, trimmed)
-            .ok_or_else(|| "加密 API Key 失败".to_string())?;
-        self.encrypted_api_key = enc;
-        self.api_key_nonce = nonce;
+        self.api_key = key.trim().to_string();
         Ok(())
     }
 
     pub fn clear_api_key(&mut self) {
-        self.encrypted_api_key.clear();
-        self.api_key_nonce.clear();
+        self.api_key.clear();
     }
 
-    /// 从旧版系统钥匙串迁入本地加密存储（一次性，成功后删除钥匙串条目）。
+    /// 旧版 per-field 加密或钥匙串 → 明文 `api_key`（在 `AppSettings::load` 内调用）。
+    pub fn migrate_legacy_secrets(&mut self) -> bool {
+        let mut changed = false;
+        if self.api_key.is_empty()
+            && !self.legacy_encrypted_api_key.is_empty()
+            && !self.legacy_api_key_nonce.is_empty()
+        {
+            let dk = crate::security::device_key::device_key();
+            if let Some(plain) = crate::security::device_key::decrypt_secret(
+                &dk,
+                &self.legacy_encrypted_api_key,
+                &self.legacy_api_key_nonce,
+            ) {
+                self.api_key = plain;
+                changed = true;
+            }
+            self.legacy_encrypted_api_key.clear();
+            self.legacy_api_key_nonce.clear();
+        }
+        if self.api_key.is_empty() {
+            if self.migrate_keyring_to_local() {
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// 从旧版系统钥匙串迁入（一次性）。
     pub fn migrate_keyring_to_local(&mut self) -> bool {
         if self.has_api_key() {
             return false;
@@ -108,28 +124,12 @@ impl AiSettings {
         if legacy.trim().is_empty() {
             return false;
         }
-        if self.set_api_key(&legacy).is_err() {
-            return false;
-        }
+        self.api_key = legacy;
         let _ = mgr.delete_password(KEYRING_LEGACY_USER);
         true
     }
 
     pub fn ready(&self) -> bool {
         self.enabled && self.has_api_key() && !self.model.trim().is_empty()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn api_key_encrypt_roundtrip() {
-        let mut s = AiSettings::default();
-        s.set_api_key("sk-test-123").unwrap();
-        assert_eq!(s.load_api_key().as_deref(), Some("sk-test-123"));
-        s.clear_api_key();
-        assert!(!s.has_api_key());
     }
 }

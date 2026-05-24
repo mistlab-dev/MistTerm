@@ -82,17 +82,28 @@ pub fn icon_button(ui: &mut Ui, theme: &Theme, id: IconId, color: Color32) -> Re
     )
 }
 
-/// 弹窗 / 侧栏标题栏关闭
-pub fn close_icon_button(ui: &mut Ui, theme: &Theme) -> Response {
-    let ht = crate::i18n::tr(ui.ctx(), "Close", "关闭");
-    icon_button(ui, theme, IconId::Close, theme.color_sidebar_header_icon()).on_hover_text(ht)
+/// 标题栏 / 右 dock 关闭 ×（28px 点击区 + 悬停底，与 Tab 栏 × 同级）
+pub fn close_icon_button_with_tooltip(ui: &mut Ui, theme: &Theme, tooltip: &str) -> Response {
+    theme_icon_hit(
+        ui,
+        theme,
+        IconId::Close,
+        theme.size_panel_header_control_h(),
+        theme.size_icon_glyph(),
+        theme.color_sidebar_header_icon(),
+        theme.text_primary(),
+    )
+    .on_hover_text(tooltip)
 }
 
-/// 右 dock 标题栏关闭（与左侧「连接」标题栏同尺寸）。
-pub fn dock_close_icon_button(ui: &mut Ui, theme: &Theme) -> Response {
-    let ht = crate::i18n::tr(ui.ctx(), "Close", "关闭");
-    sidebar_header_icon_button(ui, theme, IconId::Close, theme.color_sidebar_header_icon())
-        .on_hover_text(ht)
+/// 弹窗 / 侧栏标题栏关闭（默认提示「关闭」）
+pub fn close_icon_button(ui: &mut Ui, theme: &Theme) -> Response {
+    close_icon_button_with_tooltip(ui, theme, crate::i18n::tr(ui.ctx(), "Close", "关闭"))
+}
+
+/// 右 dock 标题栏关闭（与 [`close_icon_button_with_tooltip`] 相同尺寸；`tooltip` 仅设置一次，避免叠两条提示）
+pub fn dock_close_icon_button(ui: &mut Ui, theme: &Theme, tooltip: &str) -> Response {
+    close_icon_button_with_tooltip(ui, theme, tooltip)
 }
 
 /// 侧栏标题行方形图标按钮（与排序下拉同高）。
@@ -435,6 +446,27 @@ pub fn paint_rect_border_ltr(painter: &Painter, rect: egui::Rect, stroke: Stroke
     painter.vline(rect.max.x - 0.5, rect.y_range(), stroke);
 }
 
+/// 侧栏 / 右 dock 壳层描边：左、上、右 + 底部分隔线（底线用 divider，避免与状态栏叠粗线）。
+pub fn paint_region_panel_shell_border(
+    painter: &Painter,
+    rect: egui::Rect,
+    theme: &Theme,
+    flush_bottom: bool,
+) {
+    if rect.width() < 1.0 || rect.height() < 1.0 {
+        return;
+    }
+    let stroke = theme.panel_stroke();
+    paint_rect_border_ltr(painter, rect, stroke);
+    if flush_bottom {
+        painter.hline(
+            rect.x_range(),
+            rect.max.y - 0.5,
+            theme.divider_stroke(),
+        );
+    }
+}
+
 /// 区域外框：仅左右（顶线由 Tab 条底部分隔线承担，避免与 PTY 顶行叠线）
 pub fn paint_rect_border_lr(painter: &Painter, rect: egui::Rect, stroke: Stroke) {
     if rect.width() < 1.0 || rect.height() < 1.0 {
@@ -493,11 +525,11 @@ pub fn region_panel_frame(theme: &Theme) -> egui::Frame {
     theme.frame_region_panel()
 }
 
-/// 左连接栏外框（底缘贴状态栏顶线，底角不圆）
+/// 左连接栏外框（底缘贴状态栏顶线，底角不圆；描边由 [`paint_region_panel_shell_border`] 统一绘制）
 pub fn sidebar_panel_frame(theme: &Theme) -> egui::Frame {
-    // 与右 dock 使用同一内容内边距，避免左栏看起来更“厚”。
     theme
-        .frame_region_panel()
+        .frame_region_panel_flush_bottom()
+        .stroke(egui::Stroke::NONE)
         .inner_margin(theme.right_dock_content_margin())
 }
 
@@ -542,9 +574,10 @@ pub fn paint_right_dock_left_gap(ui: &egui::Ui, theme: &Theme) {
         egui::Order::Background,
         egui::Id::new("mistterm_right_dock_slot_bg"),
     );
-    ui.ctx()
-        .layer_painter(layer_id)
-        .rect_filled(bg, 0.0, theme.bg_body_color());
+    let painter = ui.ctx().layer_painter(layer_id);
+    painter.rect_filled(bg, 0.0, theme.bg_body_color());
+    // 缝左侧 1px 分隔线（终端/相邻 dock 与当前 dock 之间）
+    painter.vline(bg.min.x + 0.5, bg.y_range(), theme.divider_stroke());
 }
 
 /// 右 dock `outer_margin` 与窗口右缘之间的竖条（须铺 `bg_body`，否则会露系统/窗口黑底）。
@@ -616,8 +649,7 @@ pub fn paint_right_dock_slot_shell_with_painter_ex(
     fill.min.x -= RIGHT_DOCK_SHELL_LEFT_BLEED;
     let rounding = right_dock_shell_rounding(theme, flush_bottom);
     painter.rect_filled(fill, rounding, theme.color_panel_surface());
-    // Dock 壳层仅画左/上/右描边，避免与状态栏顶线叠成双线。
-    paint_rect_border_ltr(painter, fill, theme.panel_stroke());
+    paint_region_panel_shell_border(painter, fill, theme, flush_bottom);
 }
 
 /// 槽位扣除 region panel 内边距后的内容矩形（须用 `Margin::shrink_rect`，勿 `shrink2(left+right)`）。
@@ -680,7 +712,7 @@ pub fn paint_right_dock_foreground_shell(
     theme: &Theme,
 ) {
     let painter = egui::Painter::new(ctx.clone(), layer_id, paint);
-    paint_right_dock_slot_shell_with_painter_ex(&painter, paint, theme, false);
+    paint_right_dock_slot_shell_with_painter_ex(&painter, paint, theme, true);
 }
 
 /// 标准 Foreground 正文宿主：`Area` 覆盖 `paint`，正文布局在 `inner`。
@@ -803,7 +835,7 @@ fn ssh_import_chip_actions(
 ) -> TitleBarChromeResult {
     let mut out = TitleBarChromeResult::default();
     let ht_dismiss = crate::i18n::tr(ui.ctx(), "Dismiss SSH import banner", "关闭导入提示");
-    if close_icon_button(ui, theme).on_hover_text(ht_dismiss).clicked()
+    if close_icon_button_with_tooltip(ui, theme, ht_dismiss).clicked()
     {
         out.dismiss_ssh_import = true;
     }
@@ -1514,9 +1546,7 @@ fn dock_panel_title_close_trailing(
     theme: &Theme,
     close_tooltip: &str,
 ) -> bool {
-    dock_close_icon_button(ui, theme)
-        .on_hover_text(close_tooltip)
-        .clicked()
+    dock_close_icon_button(ui, theme, close_tooltip).clicked()
 }
 
 /// 仅标题 + 关闭 ×（右侧仅一个图标按钮，避免与 dock 工具栏混排重复）
@@ -1534,7 +1564,7 @@ pub fn dock_panel_title_close_only(
         ui.with_layout(
             egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
-                if dock_close_icon_button(ui, theme).on_hover_text(close_tooltip).clicked() {
+                if dock_close_icon_button(ui, theme, close_tooltip).clicked() {
                     closed = true;
                 }
             },
@@ -2451,7 +2481,27 @@ pub fn status_restore_chip(ui: &mut Ui, theme: &Theme, name: &str, count: usize)
     response
 }
 
-/// 弹窗标题行（无独立分隔线，靠 `frame_modal_title_band` 的 stroke 描边收尾）。
+/// 弹窗标题行（仅标题，无 ×）。与底部「取消」成对，避免与标题栏关闭重复。
+pub fn modal_header_title_only(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) {
+    let _ = title_px;
+    let mx = theme.spacing_modal_content_x();
+    let my = theme.spacing_modal_content_y();
+    theme
+        .frame_modal_title_band()
+        .stroke(egui::Stroke::new(1.0, theme.color_panel_header_divider()))
+        .outer_margin(egui::Margin {
+            left: -mx,
+            right: -mx,
+            top: -my,
+            bottom: 0.0,
+        })
+        .show(ui, |ui| {
+            panel_header_title_leading(ui, theme, IconId::Plus, title);
+        });
+    ui.add_space(theme.spacing_modal_header_after_sep());
+}
+
+/// 弹窗标题行（标题 + 右侧 ×，用于仅通过标题栏关闭的弹窗）。
 pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> bool {
     let _ = title_px;
     let mx = theme.spacing_modal_content_x();

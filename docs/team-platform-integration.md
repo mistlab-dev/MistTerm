@@ -284,8 +284,10 @@ pub struct AuditEvent {
 
 | Token | 有效期 | 存储 |
 |-------|--------|------|
-| \`access_token\` | 30 分钟 | 内存 + Keychain/SecretService |
-| \`refresh_token\` | 7 天 | Keychain/SecretService |
+| \`access_token\` | 30 分钟 | \`~/.config/mistterm/team_tokens.json\`（AES，密钥为 \`device_key\`） |
+| \`refresh_token\` | 7 天 | 同上 |
+
+> 客户端实现见 \`src/core/team/auth.rs\`（\`TeamTokenStore\`）与 \`docs/tech/security.md\`。Vault AppRole/Token 仍存系统钥匙串；团队 OAuth token **不**走 Keychain。
 
 ### Token 刷新
 

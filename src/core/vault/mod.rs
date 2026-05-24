@@ -23,6 +23,16 @@ pub struct VaultSettings {
     pub auth: VaultAuthSettings,
     #[serde(default)]
     pub tls_skip_verify: bool,
+    /// 由团队 sync 写入时记录来源团队 id（偏好设置只读提示）
+    #[serde(default)]
+    pub managed_by_team_id: Option<String>,
+    /// 为 false 时切换团队不再自动覆盖 Vault（用户已在偏好中改过）
+    #[serde(default = "default_team_auto_apply")]
+    pub team_auto_apply: bool,
+}
+
+fn default_team_auto_apply() -> bool {
+    true
 }
 
 fn default_kv_mount() -> String {
@@ -38,6 +48,8 @@ impl Default for VaultSettings {
             default_mount: default_kv_mount(),
             auth: VaultAuthSettings::default(),
             tls_skip_verify: false,
+            managed_by_team_id: None,
+            team_auto_apply: default_team_auto_apply(),
         }
     }
 }

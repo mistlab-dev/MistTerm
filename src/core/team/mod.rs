@@ -8,15 +8,18 @@ mod oauth;
 mod service;
 mod settings;
 mod state;
+mod sync_config;
 
 pub use auth::{jwt_exp_unix, token_needs_refresh, TeamTokenStore};
 pub use cache::TeamFragmentCache;
 pub use client::{TeamApiError, TeamClient};
 pub use oauth::OAuthProvider;
 pub use models::{
-    CreateTeamFragmentRequest, TeamFragment, TeamMembership, TeamRole, TeamUser,
-    TeamsListResponse, TokenResponse, UpdateTeamFragmentRequest,
+    CreateTeamFragmentRequest, TeamFragment, TeamMembership, TeamRole, TeamServer,
+    TeamSyncEntry, TeamSyncResponse, TeamUser, TeamsListResponse, TokenResponse,
+    UpdateTeamFragmentRequest,
 };
+pub use sync_config::{apply_sync_response, apply_vault_for_team, parse_vault_credential_path};
 pub use service::{
     create_team_fragment_blocking, delete_team_fragment_blocking,
     do_sync, ensure_access_token, sync_fragments_blocking, update_team_fragment_blocking,

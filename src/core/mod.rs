@@ -65,8 +65,9 @@ pub use ai_client::{
 };
 pub use app_settings::AppSettings;
 pub use team::{
-    OAuthProvider, TeamAsyncResult, TeamFragment, TeamMembership, TeamRole, TeamService,
-    TeamSettings, TeamState, TeamUser, DEFAULT_TEAM_API_BASE, DEFAULT_TEAM_WEB_ORIGIN,
+    apply_vault_for_team, parse_vault_credential_path, OAuthProvider, TeamAsyncResult,
+    TeamFragment, TeamMembership, TeamRole, TeamServer, TeamService, TeamSettings, TeamState,
+    TeamSyncResponse, TeamUser, DEFAULT_TEAM_API_BASE, DEFAULT_TEAM_WEB_ORIGIN,
     team_web_forgot_password_url, team_web_register_url,
 };
 pub use vault::{

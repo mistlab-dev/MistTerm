@@ -31,6 +31,10 @@ pub enum TeamAsyncResult {
         team_id: String,
         count: usize,
     },
+    ConfigSyncOk {
+        team_count: usize,
+        server_count: usize,
+    },
     CreateFragmentOk(TeamFragment),
     UpdateFragmentOk(TeamFragment),
     DeleteFragmentOk {
@@ -59,6 +63,9 @@ enum TeamJob {
     RefreshTeams {
         api_base: String,
     },
+    ConfigSync {
+        api_base: String,
+    },
     OAuth {
         api_base: String,
         provider: OAuthProvider,
@@ -82,6 +89,8 @@ pub struct TeamService {
     pub current_team_detail: Option<super::models::TeamInfo>,
     pub pending_audit_login: bool,
     pub pending_audit_sync: bool,
+    pending_vault_apply: bool,
+    pub pending_fragment_sync_after_config: bool,
     oauth_cancel: Arc<AtomicBool>,
 }
 
@@ -102,12 +111,27 @@ impl TeamService {
             current_team_detail: None,
             pending_audit_login: false,
             pending_audit_sync: false,
+            pending_vault_apply: false,
+            pending_fragment_sync_after_config: false,
             oauth_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn take_pending_initial_sync(&mut self) -> bool {
         std::mem::take(&mut self.pending_initial_sync)
+    }
+
+    pub fn take_pending_vault_apply(&mut self) -> bool {
+        std::mem::take(&mut self.pending_vault_apply)
+    }
+
+    pub fn current_team_servers(&self) -> Vec<super::models::TeamServer> {
+        let Some(tid) = self.state.current_team_id.as_deref() else {
+            return Vec::new();
+        };
+        let mut servers = self.state.servers_for_team(tid);
+        servers.sort_by_key(|s| s.sort_order);
+        servers
     }
 
     pub fn reload_settings(&mut self, settings: TeamSettings) {
@@ -274,10 +298,22 @@ impl TeamService {
     }
 
     pub fn set_current_team(&mut self, team_id: String) {
-        self.state.current_team_id = Some(team_id);
+        self.state.current_team_id = Some(team_id.clone());
         self.current_team_detail = None;
         let _ = self.state.save();
         self.refresh_current_team_detail();
+        self.pending_vault_apply = true;
+        self.spawn_config_sync();
+    }
+
+    pub fn spawn_config_sync(&mut self) {
+        if self.busy || !self.is_logged_in() {
+            return;
+        }
+        self.spawn_job(TeamJob::ConfigSync {
+            api_base: self.api_base(),
+        });
+        self.status_line = "Syncing team config…".into();
     }
 
     pub fn handle_auth_failure(&mut self, message: &str) {
@@ -315,6 +351,19 @@ impl TeamService {
                     }
                     TeamAsyncResult::RegisterOk { message } => {
                         self.status_line = message;
+                    }
+                    TeamAsyncResult::ConfigSyncOk {
+                        team_count,
+                        server_count,
+                    } => {
+                        self.state = TeamState::load();
+                        self.state.last_error.clear();
+                        self.status_line = format!(
+                            "Team config synced ({team_count} teams, {server_count} servers)"
+                        );
+                        self.pending_vault_apply = true;
+                        self.pending_fragment_sync_after_config = true;
+                        let _ = (team_count, server_count);
                     }
                     TeamAsyncResult::SyncOk { team_id, count } => {
                         self.state.last_sync_unix = Some(chrono::Utc::now().timestamp());
@@ -426,6 +475,13 @@ fn run_job(job: TeamJob, tokens: &TeamTokenStore) -> TeamAsyncResult {
             Ok((user, teams)) => TeamAsyncResult::LoginOk { user, teams },
             Err(e) => TeamAsyncResult::Err(e),
         },
+        TeamJob::ConfigSync { api_base } => match do_team_config_sync(&api_base, tokens) {
+            Ok((team_count, server_count)) => TeamAsyncResult::ConfigSyncOk {
+                team_count,
+                server_count,
+            },
+            Err(e) => TeamAsyncResult::Err(e),
+        },
         TeamJob::RefreshTeams { api_base } => match do_refresh_teams(&api_base, tokens) {
             Ok(teams) => {
                 // 返回 LoginOk 形态以便复用 UI 更新 teams 列表
@@ -524,6 +580,26 @@ fn do_refresh_teams(api_base: &str, tokens: &TeamTokenStore) -> Result<Vec<TeamM
         .map_err(|e| e.to_string())
 }
 
+fn do_team_config_sync(
+    api_base: &str,
+    tokens: &TeamTokenStore,
+) -> Result<(usize, usize), String> {
+    let resp = match with_auth_retry(api_base, tokens, |access, client| {
+        client.sync_team_config(access)
+    }) {
+        Ok(r) => r,
+        Err(e) if e.contains("404") || e.contains("Not Found") => super::models::TeamSyncResponse {
+            teams: vec![],
+        },
+        Err(e) => return Err(e),
+    };
+    let team_count = resp.teams.len();
+    let server_count: usize = resp.teams.iter().map(|t| t.servers.len()).sum();
+    let mut state = TeamState::load();
+    super::sync_config::apply_sync_response(&mut state, &resp);
+    Ok((team_count, server_count))
+}
+
 pub fn do_sync(api_base: &str, team_id: &str, tokens: &TeamTokenStore) -> Result<usize, String> {
     let mut state = TeamState::load();
     let cursor = state.cursor_for(team_id);
@@ -560,7 +636,27 @@ fn force_refresh_access_token(
         .load_refresh_token()
         .map_err(|_| "Refresh token missing".to_string())?;
     let client = TeamClient::new(api_base).map_err(|e| e.to_string())?;
-    let refreshed = client.refresh(&refresh).map_err(|e| {
+    let refreshed = client.refresh(&refresh);
+    match &refreshed {
+        Ok(_) => crate::core::audit::record_audit_blocking(
+            crate::core::audit::AuditEvent::new(
+                crate::core::audit::AuditCategory::Auth,
+                "team.token_refresh",
+                crate::core::audit::AuditOutcome::Success,
+            ),
+        ),
+        Err(e) => {
+            crate::core::audit::record_audit_blocking(
+                crate::core::audit::AuditEvent::new(
+                    crate::core::audit::AuditCategory::Auth,
+                    "team.token_refresh",
+                    crate::core::audit::AuditOutcome::Failure,
+                )
+                .with_detail(serde_json::json!({ "error": e.to_string() })),
+            );
+        }
+    }
+    let refreshed = refreshed.map_err(|e| {
         if e.status == 401 {
             tokens.clear();
             let mut state = TeamState::load();

@@ -2,6 +2,7 @@
 
 > 更新：2026-05-24  
 > 对接服务端 API 文档见：[TEAM-PLATFORM-DEV-PLAN.md](./TEAM-PLATFORM-DEV-PLAN.md) **附录 A**  
+> 新增集成指南：[team-platform-integration.md](../team-platform-integration.md)（`GET /v1/team/sync` 等）  
 > 默认 API：`https://api.mistlab.dev`（站点 `mistlab.dev`）
 
 ---
@@ -21,7 +22,7 @@
 - [x] 登录成功后存 access_token + refresh_token
 
 ### 1.3 Token 管理
-- [x] 密钥链 `MistTerm-Team`
+- [x] 本机加密 `~/.config/mistterm/team_tokens.json`（`device_key` + AES-GCM，**不用**系统钥匙串；旧版钥匙串一次性迁移）
 - [x] access 过期前 `POST /v1/auth/refresh`（JWT `exp` 判断）
 - [x] 刷新失败清除 token + 本地 session，提示重新登录
 - [x] API 401 时强制 refresh 并重试一次（`with_auth_retry`）
@@ -164,7 +165,7 @@ GET /v1/oauth/{google|github}?redirect_uri=<url_encoded>
 | 用途 | `redirect_uri` 值 |
 |------|-------------------|
 | 授权跳转（主路径） | `https://mistlab.dev/oauth/desktop-callback.html` |
-| 本机监听 | `http://127.0.0.1:8765/callback`（端口见 `OAUTH_LOCAL_PORT`，失败时尝试 8766–8770） |
+| 本机监听 | `http://127.0.0.1:{动态端口}/callback`（客户端 `127.0.0.1:0` 绑定；桥接页 URL 带 `?port=`） |
 
 **服务端须：**
 
@@ -172,6 +173,7 @@ GET /v1/oauth/{google|github}?redirect_uri=<url_encoded>
 2. 与 Google/GitHub 完成授权后，**302 到该 `redirect_uri`**，并携带下列之一：
    - **推荐（与现网网页一致）**：`?access_token=...&refresh_token=...`（JWT 与 `POST /v1/auth/login` 响应相同）
    - **或**：`?code=...`（桌面会再请求下方 callback 换 token）
+3. **Query 必须用 `&` 拼接**：`?port=54020&access_token=...`（禁止 `?port=54020?access_token=...`，否则桥接页端口解析失败）
 
 **白名单建议（至少包含）：**
 
@@ -179,9 +181,8 @@ GET /v1/oauth/{google|github}?redirect_uri=<url_encoded>
 https://mistlab.dev/login
 https://mistlab.dev/dashboard
 https://mistlab.dev/oauth/desktop-callback.html
-http://127.0.0.1:8765/callback
-http://127.0.0.1:8766/callback
-…（8767–8770，与桥接页一致）
+http://127.0.0.1:*/callback（任意高位端口，与客户端动态监听一致）
+https://mistlab.dev/oauth/desktop-callback.html?port={n}
 ```
 
 **换票接口（若回调只带 `code`）：**
@@ -208,7 +209,7 @@ GET /v1/oauth/{google|github}/callback?code=...&redirect_uri=...
 
 **部署到：** `https://mistlab.dev/oauth/desktop-callback.html`
 
-作用：当 Google/GitHub 回调到该页且 URL 带 `access_token` / `refresh_token`（或 `code`）时，用 JS 请求 `http://127.0.0.1:8765/callback?...`，把 token 交给已启动的 MistTerm。
+作用：当 Google/GitHub 回调到该页且 URL 带 `access_token` / `refresh_token`（或 `code`）时，从 `?port=` 读取本机端口，`fetch http://127.0.0.1:{port}/callback?...` 交给 MistTerm；成功后约 0.8s 自动 `window.close()`。
 
 > 若服务端能**直接** 302 到 `http://127.0.0.1:8765/callback?...`，桥接页可省略，但须在 Google Cloud / GitHub OAuth App 中允许 `http://127.0.0.1` 回调。
 
@@ -246,11 +247,74 @@ GET /v1/oauth/{google|github}/callback?code=...&redirect_uri=...
 
 ---
 
+## 八、集成指南落地（[team-platform-integration.md](../team-platform-integration.md)）
+
+> 2026-05-24 拉取的新文档；下列为**相对现有客户端**的缺口。服务端须先实现 `GET /v1/team/sync` 再联调。
+
+### 8.1 登录后一键同步 `GET /v1/team/sync`（P0）
+
+- [ ] **服务端**：实现并文档化 `GET /v1/team/sync`（响应含 `teams[]` → `vault_config` / `credential` / `servers[]` / `role`）
+- [x] **模型**：`src/core/team/models.rs` 增加 `TeamSyncResponse`、`TeamSyncEntry`、`TeamServer` 等结构体
+- [x] **客户端**：`TeamClient::sync_team_config()` → `GET /v1/team/sync`
+- [x] **流程**：OAuth/密码登录成功后调用 sync（404 降级为空列表，再拉片段）
+- [x] **状态**：将 sync 结果写入 `team_state.json`（`sync_entries` 缓存）
+- [x] **错误**：401 走现有 refresh；其它错误写入 `last_error`（保留上次 `sync_entries`）
+
+### 8.2 Vault 自动配置（P0）
+
+- [x] `apply_vault_for_team`（`sync_config.rs`）：`vault_config` + `credential` → `VaultSettings` + 钥匙串
+- [x] 支持 `auth_type`: `token` / `approle`；`kv_mount` → `default_mount`
+- [x] 多团队：以**当前选中团队**为准；切换团队时 `spawn_config_sync` + `apply_team_vault_from_sync`
+- [x] UI：偏好 Vault 区「来自团队 xxx」提示；`team_auto_apply=false` 后不再自动覆盖
+- [x] 审计：团队服务器连接前 `config.vault_read`；apply 时 `config.vault_apply`
+
+### 8.3 团队服务器列表（P0）
+
+- [x] 侧栏 **「团队服务器」** 分组（与个人 `sessions.json` 区分）
+- [x] 列表按 `sort_order` 排序（`tags` 展示待增强）
+- [x] 点击连接：临时 `SessionConfig` + `push_tab_connecting`
+- [x] `vault_credential_path` → `SecretBackend::VaultKv`
+- [x] 空路径：本地密码/密钥
+- [x] 审计：`shell.connect` + `team_id` / `server_id` in `detail`
+
+### 8.4 审计上报增强（P1）
+
+- [x] `shell.exec`（与 `command.submit` 并行）、`file.scp.*`（SFTP 成功时）
+- [x] HTTP sink 已带 `team_id` / `session_id` / `host` / `resource` / `detail`
+- [x] **离线持久化**：`audit/pending-team-events.jsonl`
+- [ ] 批量策略：30s 或满 50 条（当前 HTTP sink 默认 20 条 / 2s，可后续对齐）
+- [ ] `event_id` 去重：`evt_{ts}_{random}`（当前 UUID）
+- [x] `team.token_refresh` 成功/失败（`record_audit_blocking`）
+
+### 8.5 文档与现网对齐（P1）
+
+- [x] 更新 [team-platform-integration.md](../team-platform-integration.md) §5：token 存 **`team_tokens.json` + device_key**
+- [ ] 合并/交叉引用 [CLIENT-TEAM-TODO.md](./CLIENT-TEAM-TODO.md) 与集成指南，避免 OAuth 端口描述不一致
+- [ ] 确认 `oauth-desktop-callback.html` 已部署且 `?port=` 与授权 URL 一致
+
+### 8.6 本地待提交（与集成并行）
+
+- [ ] 提交：`device_key` 整文件加密（`encrypted_file.rs`、`settings`/`sessions`/凭证/团队状态等）
+- [ ] 提交：弹窗单关闭入口 + 模态打开时隐藏右 dock Foreground（避免叠双 ×）
+- [ ] 提交：dock 关闭钮尺寸与 tooltip 去重
+- [ ] `cargo test` 全绿（含 `layout_util` 等与 dock 相关用例）
+
+### 8.7 联调验收（sync 就绪后）
+
+1. 登录 → `GET /v1/team/sync` 返回至少 1 个 team + servers
+2. Vault 自动填入且能 `vault kv get` 团队路径下 SSH 密钥
+3. 点击团队服务器可 SSH 连接（Vault 路径 / 本地密钥两条路径）
+4. 执行命令、SCP → `POST /v1/audit/events` 后台可查
+5. 断网操作 → 恢复网络后 pending 事件上报
+
+---
+
 ## 部署服务端后建议联调顺序
 
 1. `GET https://api.mistlab.dev/health`（若有）
 2. 注册 → 登录 → `GET /v1/me` → `GET /v1/teams`
-3. `fragments:sync` 全量 + 增量
-4. 创建/编辑片段 → 故意双端编辑测 409
-5. `POST /v1/audit/events` 看 accepted/duplicate
-6. 等 access 过期或改短 JWT 测 refresh / 401 重登
+3. **`GET /v1/team/sync`**（新）→ Vault + 团队服务器落 UI
+4. `fragments:sync` 全量 + 增量
+5. 创建/编辑片段 → 故意双端编辑测 409
+6. `POST /v1/audit/events` 看 accepted/duplicate
+7. 等 access 过期或改短 JWT 测 refresh / 401 重登

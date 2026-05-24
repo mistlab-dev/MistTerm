@@ -9,7 +9,6 @@ use std::time::{Duration, Instant};
 
 use super::client::TeamClient;
 use super::models::TokenResponse;
-use super::settings::{team_web_oauth_desktop_callback_url, OAUTH_LOCAL_PORT};
 
 const OAUTH_TIMEOUT_SECS: u64 = 300;
 
@@ -55,18 +54,13 @@ pub fn run_browser_oauth(
     let local_addr = listener.local_addr().map_err(|e| e.to_string())?;
     let port = local_addr.port();
     let redirect_local = format!("http://127.0.0.1:{port}/callback");
-    let redirect_bridge = format!(
-        "{}?port={}",
-        team_web_oauth_desktop_callback_url(),
-        port
-    );
 
     if cancel.load(Ordering::Relaxed) {
         return Err("已取消登录".into());
     }
 
     probe_oauth_start(api_base, provider, &redirect_local)?;
-    let auth_url = TeamClient::oauth_authorize_url(api_base, provider, &redirect_bridge);
+    let auth_url = TeamClient::oauth_authorize_url(api_base, provider, &redirect_local);
 
     if !crate::platform::shell::open_url(&auth_url) {
         return Err("无法打开系统浏览器".into());
@@ -82,7 +76,6 @@ pub fn run_browser_oauth(
     match callback {
         OAuthCallback::Code(code) => client
             .oauth_exchange(provider, &code, &redirect_local)
-            .or_else(|_| client.oauth_exchange(provider, &code, &redirect_bridge))
             .map_err(|e| e.to_string()),
         OAuthCallback::Tokens {
             access_token,
@@ -215,11 +208,13 @@ fn parse_oauth_callback(request: &str) -> Result<OAuthCallback, String> {
         return Ok(OAuthCallback::Error(err));
     }
 
-    if let (Some(access), Some(refresh)) = (params.get("access_token"), params.get("refresh_token"))
-    {
+    if let Some(access) = params.get("access_token") {
         return Ok(OAuthCallback::Tokens {
             access_token: access.clone(),
-            refresh_token: refresh.clone(),
+            refresh_token: params
+                .get("refresh_token")
+                .cloned()
+                .unwrap_or_default(),
         });
     }
 

@@ -202,18 +202,6 @@ impl HelpDocsDialog {
                             }
                         }
                     });
-                    ui.add_space(theme.spacing_list_item_x());
-                    chrome::modal_footer_actions(ui, theme, |ui, th| {
-                        if chrome::modal_secondary_icon_button(
-                            ui,
-                            th,
-                            crate::ui::icons::IconId::Close,
-                            crate::i18n::tr(ctx, "Close", "关闭"),
-                        )
-                            .clicked() {
-                            should_close = true;
-                        }
-                    });
                 });
             });
         self.open = open && !should_close;

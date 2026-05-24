@@ -126,6 +126,13 @@ impl TeamClient {
         self.get_json("/v1/teams", Some(access_token))
     }
 
+    pub fn sync_team_config(
+        &self,
+        access_token: &str,
+    ) -> Result<super::models::TeamSyncResponse, TeamApiError> {
+        self.get_json("/v1/team/sync", Some(access_token))
+    }
+
     pub fn get_team(&self, access_token: &str, team_id: &str) -> Result<TeamInfo, TeamApiError> {
         self.get_json(&format!("/v1/teams/{team_id}"), Some(access_token))
     }

@@ -1,19 +1,16 @@
-//! 凭证库：本地加密存储服务器账号、密钥、令牌等
-//!
-//! 文件格式 v2：使用设备根密钥（`device_key`）经 HKDF-SHA256 与文件内随机盐派生独立数据密钥，
-//! 再对每条目的 `secret` 做 AES-256-GCM。旧版为纯 JSON 数组（密文直接用设备根密钥加密），首次加载时自动迁移。
+//! 凭证库：整文件 `device_key` AES-GCM（`mistterm-aes-v1`），条目内 `secret` 明文仅存于加密信封内。
 
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine as _;
-use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, BufWriter};
+use std::io;
 use std::path::PathBuf;
 
 use crate::security::device_key;
+use crate::security::encrypted_file::{self, ENVELOPE_FORMAT};
 
 /// 凭证分类（侧栏分组）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Hash)]
@@ -36,7 +33,6 @@ impl CredentialCategory {
             CredentialCategory::Other => "其他",
         }
     }
-
 }
 
 /// 机密存储后端
@@ -121,7 +117,12 @@ struct StoredCredential {
     notes: String,
     #[serde(default)]
     tags: Vec<String>,
+    /// 加密信封内的明文 secret（整文件已由 device_key 保护）
+    #[serde(default)]
+    secret: String,
+    #[serde(default)]
     secret_enc: String,
+    #[serde(default)]
     secret_nonce: String,
     #[serde(default)]
     secret_backend: SecretBackend,
@@ -130,13 +131,8 @@ struct StoredCredential {
 }
 
 impl StoredCredential {
-    fn from_credential(key: &[u8; 32], c: &Credential) -> Option<Self> {
-        let (secret_enc, secret_nonce) = if c.secret_backend.is_vault() {
-            (String::new(), String::new())
-        } else {
-            device_key::encrypt_secret(key, &c.secret)?
-        };
-        Some(StoredCredential {
+    fn from_credential(c: &Credential) -> Self {
+        StoredCredential {
             id: c.id.clone(),
             name: c.name.clone(),
             category: c.category,
@@ -146,22 +142,33 @@ impl StoredCredential {
             auth: c.auth,
             notes: c.notes.clone(),
             tags: c.tags.clone(),
-            secret_enc,
-            secret_nonce,
+            secret: if c.secret_backend.is_vault() {
+                String::new()
+            } else {
+                c.secret.clone()
+            },
+            secret_enc: String::new(),
+            secret_nonce: String::new(),
             secret_backend: c.secret_backend.clone(),
             created_at: c.created_at,
             updated_at: c.updated_at,
-        })
+        }
+    }
+
+    fn resolve_secret(&self, key: &[u8; 32]) -> String {
+        if self.secret_backend.is_vault() {
+            return String::new();
+        }
+        if !self.secret.is_empty() {
+            return self.secret.clone();
+        }
+        if self.secret_enc.is_empty() || self.secret_nonce.is_empty() {
+            return String::new();
+        }
+        device_key::decrypt_secret(key, &self.secret_enc, &self.secret_nonce).unwrap_or_default()
     }
 
     fn to_credential(&self, key: &[u8; 32]) -> Option<Credential> {
-        let secret = if self.secret_backend.is_vault() {
-            String::new()
-        } else if self.secret_enc.is_empty() && self.secret_nonce.is_empty() {
-            String::new()
-        } else {
-            device_key::decrypt_secret(key, &self.secret_enc, &self.secret_nonce)?
-        };
         Some(Credential {
             id: self.id.clone(),
             name: self.name.clone(),
@@ -170,7 +177,7 @@ impl StoredCredential {
             port: self.port,
             username: self.username.clone(),
             auth: self.auth,
-            secret,
+            secret: self.resolve_secret(key),
             notes: self.notes.clone(),
             tags: self.tags.clone(),
             created_at: self.created_at,
@@ -178,10 +185,29 @@ impl StoredCredential {
             secret_backend: self.secret_backend.clone(),
         })
     }
+
+    fn normalize_for_encrypted_file(&mut self, key: &[u8; 32]) {
+        if self.secret_backend.is_vault() {
+            self.secret.clear();
+            self.secret_enc.clear();
+            self.secret_nonce.clear();
+            return;
+        }
+        if self.secret.is_empty() {
+            self.secret = self.resolve_secret(key);
+        }
+        self.secret_enc.clear();
+        self.secret_nonce.clear();
+    }
 }
 
-const VAULT_FORMAT_V2: i32 = 2;
+#[derive(Debug, Default, Serialize, Deserialize)]
+struct CredentialVaultFile {
+    #[serde(default)]
+    entries: Vec<StoredCredential>,
+}
 
+/// 旧版 v2：HKDF + 盐（迁移用）
 #[derive(Debug, Serialize, Deserialize)]
 struct CredentialVaultFileV2 {
     #[serde(default)]
@@ -190,22 +216,11 @@ struct CredentialVaultFileV2 {
     entries: Vec<StoredCredential>,
 }
 
-fn random_vault_salt() -> [u8; 16] {
-    let mut s = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut s);
-    s
-}
-
-/// 凭证库（加密文件，v2 封装格式）
+/// 凭证库
 pub struct CredentialVault {
     entries: Vec<StoredCredential>,
     file_path: PathBuf,
-    /// 与 `sessions.json` 相同的设备根密钥（仅用于 HKDF 派生）
-    device_root_key: [u8; 32],
-    /// 与磁盘 `salt_b64` 对应
-    vault_salt: [u8; 16],
-    /// 实际用于加解密 `secret_*` 字段
-    vault_data_key: [u8; 32],
+    device_key: [u8; 32],
 }
 
 impl CredentialVault {
@@ -221,10 +236,13 @@ impl CredentialVault {
         Self::new_at(Self::default_path())
     }
 
-    /// 使用指定路径创建或加载凭证库（测试与自定义目录用）
     pub fn new_at(file_path: PathBuf) -> Self {
-        let device_root_key = device_key::device_key();
-        let mut vault = Self::new_empty_salted(file_path, device_root_key);
+        let device_key = device_key::device_key();
+        let mut vault = Self {
+            entries: Vec::new(),
+            file_path,
+            device_key,
+        };
         if vault.file_path.exists() {
             if let Err(e) = vault.load_from_disk() {
                 tracing::warn!("Failed to load credential vault (using empty vault): {}", e);
@@ -233,62 +251,82 @@ impl CredentialVault {
         vault
     }
 
-    fn new_empty_salted(file_path: PathBuf, device_root_key: [u8; 32]) -> Self {
-        let vault_salt = random_vault_salt();
-        let vault_data_key =
-            device_key::derive_credential_vault_data_key(&device_root_key, &vault_salt)
-                .expect("salt len > 0");
-        Self {
-            entries: Vec::new(),
-            file_path,
-            device_root_key,
-            vault_salt,
-            vault_data_key,
-        }
-    }
-
     pub fn path(&self) -> &PathBuf {
         &self.file_path
     }
 
     fn load_from_disk(&mut self) -> io::Result<()> {
         let text = fs::read_to_string(&self.file_path)?;
+        if let Ok(env) = serde_json::from_str::<encrypted_file::ConfigEnvelope>(&text) {
+            if env.format == ENVELOPE_FORMAT {
+                if let Some(plain) = device_key::decrypt_secret(
+                    &self.device_key,
+                    &env.ciphertext_b64,
+                    &env.nonce_b64,
+                ) {
+                    if let Ok(file) = serde_json::from_str::<CredentialVaultFile>(&plain) {
+                        self.entries = file.entries;
+                        self.normalize_entries();
+                        return Ok(());
+                    }
+                }
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "凭证库解密失败",
+                ));
+            }
+        }
+
         let val: Value = serde_json::from_str(&text)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
 
         match val {
             Value::Array(_) => {
                 let list: Vec<StoredCredential> = serde_json::from_value(val).unwrap_or_default();
-                self.migrate_legacy_array_to_v2(list)?;
+                self.entries = list;
+                self.normalize_entries();
+                self.save()?;
+                tracing::info!("Credential vault migrated from legacy array to device_key file encryption");
             }
             Value::Object(_) => {
-                let file: CredentialVaultFileV2 = serde_json::from_value(val).map_err(|e| {
-                    io::Error::new(io::ErrorKind::InvalidData, e)
-                })?;
-                if file.vault_format != VAULT_FORMAT_V2 {
+                if let Ok(v2) = serde_json::from_value::<CredentialVaultFileV2>(val.clone()) {
+                    if v2.vault_format == 2 && !v2.salt_b64.is_empty() {
+                        let raw = B64.decode(v2.salt_b64.as_bytes())
+                            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+                        if raw.len() == 16 {
+                            let mut salt = [0u8; 16];
+                            salt.copy_from_slice(&raw);
+                            let vk = device_key::derive_credential_vault_data_key(&self.device_key, &salt)
+                                .ok_or_else(|| {
+                                    io::Error::new(io::ErrorKind::InvalidData, "无法派生旧版凭证库密钥")
+                                })?;
+                            self.entries = v2.entries;
+                            for e in &mut self.entries {
+                                if e.secret.is_empty() && !e.secret_enc.is_empty() {
+                                    e.secret = e.resolve_secret(&vk);
+                                    e.secret_enc.clear();
+                                    e.secret_nonce.clear();
+                                }
+                            }
+                            self.save()?;
+                            tracing::info!(
+                                "Credential vault migrated from HKDF v2 to device_key file encryption"
+                            );
+                            return Ok(());
+                        }
+                    }
+                }
+                if let Ok(file) = serde_json::from_value::<CredentialVaultFile>(val) {
+                    self.entries = file.entries;
+                    self.normalize_entries();
+                    self.save()?;
+                    tracing::info!("Credential vault migrated to device_key file encryption");
+                } else {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
-                        "未知凭证库格式版本",
+                        "凭证库 JSON 格式无效",
                     ));
                 }
-                let raw = B64
-                    .decode(file.salt_b64.as_bytes())
-                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-                if raw.len() != 16 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "凭证库盐长度无效",
-                    ));
-                }
-                let mut salt = [0u8; 16];
-                salt.copy_from_slice(&raw);
-                let vk = device_key::derive_credential_vault_data_key(&self.device_root_key, &salt)
-                    .ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::InvalidData, "无法派生凭证库密钥")
-                    })?;
-                self.vault_salt = salt;
-                self.vault_data_key = vk;
-                self.entries = file.entries;
             }
             _ => {
                 return Err(io::Error::new(
@@ -300,56 +338,23 @@ impl CredentialVault {
         Ok(())
     }
 
-    /// 旧版：密文由设备根密钥直接加密；迁移为 v2 并写回磁盘
-    fn migrate_legacy_array_to_v2(&mut self, legacy: Vec<StoredCredential>) -> io::Result<()> {
-        let salt = random_vault_salt();
-        let vk = device_key::derive_credential_vault_data_key(&self.device_root_key, &salt)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "派生凭证库密钥失败"))?;
-
-        let mut new_entries = Vec::with_capacity(legacy.len());
-        for s in legacy {
-            match s.to_credential(&self.device_root_key) {
-                Some(c) => {
-                    let stored = StoredCredential::from_credential(&vk, &c).ok_or_else(|| {
-                        io::Error::new(io::ErrorKind::Other, "迁移时重加密失败")
-                    })?;
-                    new_entries.push(stored);
-                }
-                None => {
-                    tracing::warn!(
-                        "Skipped credential \"{}\" (decrypt failed; key change or corrupt data)",
-                        s.id
-                    );
-                }
-            }
+    fn normalize_entries(&mut self) {
+        for e in &mut self.entries {
+            e.normalize_for_encrypted_file(&self.device_key);
         }
-        self.vault_salt = salt;
-        self.vault_data_key = vk;
-        self.entries = new_entries;
-        self.save()?;
-        tracing::info!("Credential vault migrated from legacy array format to v2 (HKDF + file salt)");
-        Ok(())
     }
 
     pub fn save(&self) -> io::Result<()> {
-        if let Some(parent) = self.file_path.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let file = fs::File::create(&self.file_path)?;
-        let writer = BufWriter::new(file);
-        let envelope = CredentialVaultFileV2 {
-            vault_format: VAULT_FORMAT_V2,
-            salt_b64: B64.encode(self.vault_salt),
+        let file = CredentialVaultFile {
             entries: self.entries.clone(),
         };
-        serde_json::to_writer_pretty(writer, &envelope)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+        encrypted_file::save_encrypted_json(&self.file_path, &file)
     }
 
     pub fn list(&self) -> Vec<Credential> {
         self.entries
             .iter()
-            .filter_map(|s| s.to_credential(&self.vault_data_key))
+            .filter_map(|s| s.to_credential(&self.device_key))
             .collect()
     }
 
@@ -357,7 +362,7 @@ impl CredentialVault {
         self.entries
             .iter()
             .find(|e| e.id == id)
-            .and_then(|s| s.to_credential(&self.vault_data_key))
+            .and_then(|s| s.to_credential(&self.device_key))
     }
 
     pub fn upsert(&mut self, mut c: Credential) -> io::Result<()> {
@@ -366,9 +371,7 @@ impl CredentialVault {
             c.created_at = now;
         }
         c.updated_at = now;
-        let stored = StoredCredential::from_credential(&self.vault_data_key, &c).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::Other, "加密凭证失败")
-        })?;
+        let stored = StoredCredential::from_credential(&c);
         if let Some(pos) = self.entries.iter().position(|e| e.id == c.id) {
             self.entries[pos] = stored;
         } else {
@@ -392,7 +395,6 @@ impl CredentialVault {
         self.entries.len()
     }
 
-    /// 导出为按 id 映射（用于同步包）
     pub fn export_indexed(&self) -> HashMap<String, Credential> {
         self.list()
             .into_iter()
@@ -400,7 +402,6 @@ impl CredentialVault {
             .collect()
     }
 
-    /// 用备份文件覆盖默认路径下的凭证库（同步包与本机同源设备密钥可读）
     pub fn restore_from_file_into_default_location(src: &std::path::Path) -> io::Result<()> {
         let dest = Self::default_path();
         fs::copy(src, dest)?;
@@ -441,11 +442,13 @@ mod tests {
         vault.upsert(c).unwrap();
         drop(vault);
 
-        let v2 = CredentialVault::new_at(path);
+        let v2 = CredentialVault::new_at(path.clone());
         assert_eq!(v2.count(), 1);
         let got = v2.get("id1").unwrap();
         assert_eq!(got.secret, "secret");
-        assert_eq!(got.host, "1.2.3.4");
+
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains(ENVELOPE_FORMAT));
     }
 
     #[test]
@@ -468,14 +471,30 @@ mod tests {
             updated_at: 2,
             secret_backend: SecretBackend::default(),
         };
-        let stored = StoredCredential::from_credential(&dk, &c).unwrap();
+        let (enc, nonce) = device_key::encrypt_secret(&dk, "pw").unwrap();
+        let stored = StoredCredential {
+            id: c.id.clone(),
+            name: c.name.clone(),
+            category: c.category,
+            host: c.host.clone(),
+            port: c.port,
+            username: c.username.clone(),
+            auth: c.auth,
+            notes: String::new(),
+            tags: vec![],
+            secret: String::new(),
+            secret_enc: enc,
+            secret_nonce: nonce,
+            secret_backend: SecretBackend::default(),
+            created_at: 1,
+            updated_at: 2,
+        };
         fs::write(&path, serde_json::to_string(&vec![stored]).unwrap()).unwrap();
 
         let vault = CredentialVault::new_at(path.clone());
         assert_eq!(vault.get("legacy1").unwrap().secret, "pw");
 
         let text = fs::read_to_string(&path).unwrap();
-        assert!(text.contains("\"vault_format\""));
-        assert!(text.contains("\"salt_b64\""));
+        assert!(text.contains(ENVELOPE_FORMAT));
     }
 }

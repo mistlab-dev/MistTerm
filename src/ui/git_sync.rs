@@ -310,9 +310,12 @@ impl GitSyncPanel {
                     crate::i18n::tr(ui.ctx(), "Close Git Sync", "关闭 Git 同步"),
                     trailing_w,
                     |ui, theme| {
-                        let closed = crate::ui::chrome::close_icon_button(ui, theme)
-                            .on_hover_text(crate::i18n::tr(ui.ctx(), "Close Git Sync", "关闭 Git 同步"))
-                            .clicked();
+                        let closed = crate::ui::chrome::dock_close_icon_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(ui.ctx(), "Close Git Sync", "关闭 Git 同步"),
+                        )
+                        .clicked();
                         if crate::ui::chrome::panel_toolbar_icon_button(
                             ui,
                             theme,
@@ -580,7 +583,6 @@ impl GitSyncPanel {
             // 克隆对话框
             if self.show_clone_dialog {
                 let mut clone_open = self.show_clone_dialog;
-                let mut close_via_header = false;
                 let mut cancel_clone = false;
                 let modal_sz = layout_util::modal_clone_size(ui.ctx());
                 crate::ui::chrome::modal_window("clone_repo_modal", theme, ui.ctx())
@@ -590,14 +592,12 @@ impl GitSyncPanel {
                     .fixed_size(modal_sz)
                     .show(ui.ctx(), |ui| {
                         crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
-                            if crate::ui::chrome::modal_header(
+                            crate::ui::chrome::modal_header_title_only(
                                 ui,
                                 theme,
                                 crate::i18n::tr(ui.ctx(), "Clone repository", "克隆仓库"),
                                 crate::ui::chrome::modal_title_font_size(theme),
-                            ) {
-                                close_via_header = true;
-                            }
+                            );
                             ui.set_min_width(layout_util::finite_content_width(ui));
                             let field_w =
                                 layout_util::finite_content_width_inset(ui, 0.0, 280.0, ui.available_width());
@@ -652,7 +652,7 @@ impl GitSyncPanel {
                             });
                         });
                     });
-                if close_via_header || cancel_clone {
+                if cancel_clone {
                     clone_open = false;
                     self.clone_url.clear();
                     self.clone_path.clear();

@@ -212,9 +212,12 @@ impl AiPanel {
                             i18n::tr(ctx, "AI Assistant", "AI 助手"),
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if crate::ui::chrome::dock_close_icon_button(ui, theme)
-                                .on_hover_text(i18n::tr(ctx, "Close AI panel", "关闭 AI 面板"))
-                                .clicked()
+                            if crate::ui::chrome::dock_close_icon_button(
+                                ui,
+                                theme,
+                                i18n::tr(ctx, "Close AI panel", "关闭 AI 面板"),
+                            )
+                            .clicked()
                             {
                                 *open = false;
                             }

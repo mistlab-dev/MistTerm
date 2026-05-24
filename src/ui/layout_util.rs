@@ -857,7 +857,7 @@ mod tests {
         let slot =
             egui::Rect::from_min_max(egui::pos2(100.0, 20.0), egui::pos2(400.0, 320.0));
         let inner = right_dock_slot_content_rect(slot, &theme);
-        let m = theme.region_content_margin();
+        let m = theme.right_dock_content_margin();
         assert!((inner.min.x - (slot.min.x + m.left)).abs() < 0.01);
         assert!((inner.max.x - (slot.max.x - m.right)).abs() < 0.01);
         assert!((inner.width() - (slot.width() - m.left - m.right)).abs() < 0.01);
@@ -869,7 +869,7 @@ mod tests {
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1000.0, 600.0));
         let slot =
             egui::Rect::from_min_max(egui::pos2(700.0, 28.0), egui::pos2(1000.0, 572.0));
-        let inset = Theme::dark().spacing_right_dock_screen_inset();
+        let inset = 4.0;
         let paint = inset_slot_for_foreground_paint(slot, screen, inset);
         assert!((paint.max.x - (screen.max.x - inset)).abs() < 0.01);
         assert!(paint.max.x < slot.max.x);

@@ -5,7 +5,45 @@
 use ssh2::{Session, Sftp};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 use chrono::{DateTime, Utc, TimeZone};
+
+const SFTP_OPEN_RETRY_ATTEMPTS: usize = 160;
+const SFTP_OPEN_RETRY_SLEEP_MS: u64 = 8;
+
+/// libssh2 在 shell 占用会话时可能返回 Would block / EAGAIN，需短暂重试。
+pub fn is_sftp_would_block_message(msg: &str) -> bool {
+    let msg = msg.to_lowercase();
+    msg.contains("would block")
+        || msg.contains("eagain")
+        || msg.contains("resource temporarily unavailable")
+        || msg.contains("libssh2_error_eagain")
+        || msg.contains("try again")
+        || msg.contains("session(-37)")
+}
+
+fn open_sftp_channel(session: &Session) -> Result<Sftp, String> {
+    let mut last: Option<String> = None;
+    for _ in 0..SFTP_OPEN_RETRY_ATTEMPTS {
+        match session.sftp() {
+            Ok(sftp) => return Ok(sftp),
+            Err(e) => {
+                let msg = e.to_string();
+                if is_sftp_would_block_message(&msg) {
+                    last = Some(msg);
+                    thread::sleep(Duration::from_millis(SFTP_OPEN_RETRY_SLEEP_MS));
+                    continue;
+                }
+                return Err(format!("Failed to create SFTP channel: {}", e));
+            }
+        }
+    }
+    Err(format!(
+        "Failed to create SFTP channel: {}",
+        last.unwrap_or_else(|| "retry timed out".to_string())
+    ))
+}
 
 /// SFTP 文件条目信息
 #[derive(Debug, Clone)]
@@ -51,9 +89,7 @@ pub struct SftpClient {
 impl SftpClient {
     /// 从 SSH 会话创建 SFTP 客户端
     pub fn new(session: &Session) -> Result<Self, String> {
-        let sftp = session
-            .sftp()
-            .map_err(|e| format!("Failed to create SFTP channel: {}", e))?;
+        let sftp = open_sftp_channel(session)?;
         Ok(Self { sftp })
     }
 

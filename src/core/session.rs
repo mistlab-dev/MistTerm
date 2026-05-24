@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use crate::core::credential::SecretBackend;
 use crate::security::device_key;
+use crate::security::encrypted_file;
 
 /// 会话配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,19 +279,10 @@ impl SessionManager {
         std::mem::take(&mut self.load_diagnostics)
     }
 
-    /// 加载已保存的会话
-    fn load(&mut self) {
-        if !self.file_path.exists() {
-            return;
-        }
-
-        let mut content: Option<String> = None;
+    fn read_sessions_file_text(&mut self) -> Option<String> {
         for attempt in 0..3 {
             match fs::read_to_string(&self.file_path) {
-                Ok(c) => {
-                    content = Some(c);
-                    break;
-                }
+                Ok(c) => return Some(c),
                 Err(e) if attempt < 2 => {
                     log::warn!(
                         "Failed to read sessions (attempt {}): {}; retrying in 100ms",
@@ -304,17 +296,46 @@ impl SessionManager {
                         "读取会话文件失败（已重试 3 次）：{}",
                         e
                     ));
-                    return;
+                    return None;
                 }
             }
         }
+        None
+    }
 
-        let Some(content) = content else {
+    /// 解密 `mistterm-aes-v1` 信封，或返回原始明文 JSON（旧格式）。
+    fn unwrap_sessions_json_text(text: &str) -> Option<String> {
+        if let Ok(env) = serde_json::from_str::<crate::security::encrypted_file::ConfigEnvelope>(text)
+        {
+            if env.format == crate::security::encrypted_file::ENVELOPE_FORMAT {
+                return device_key::decrypt_secret(
+                    &device_key::device_key(),
+                    &env.ciphertext_b64,
+                    &env.nonce_b64,
+                );
+            }
+        }
+        Some(text.to_string())
+    }
+
+    /// 加载已保存的会话
+    fn load(&mut self) {
+        if !self.file_path.exists() {
+            return;
+        }
+
+        let Some(content) = self.read_sessions_file_text() else {
+            return;
+        };
+
+        let Some(inner) = Self::unwrap_sessions_json_text(&content) else {
+            self.load_diagnostics
+                .push("会话文件解密失败（设备密钥可能已变更）".to_string());
             return;
         };
 
         let Some((sessions, had_plaintext, mut warnings)) =
-            Self::parse_stored_sessions_json(&self.device_key, &content)
+            Self::parse_stored_sessions_json(&self.device_key, &inner)
         else {
             self.load_diagnostics.push(
                 "无法解析会话文件（JSON 损坏或格式错误）".to_string(),
@@ -324,19 +345,17 @@ impl SessionManager {
         self.load_diagnostics.append(&mut warnings);
         self.sessions = sessions;
         log::info!("Loaded {} saved sessions", self.sessions.len());
-        if had_plaintext {
-            log::warn!("Detected plaintext passwords in sessions.json; migrated to encrypted storage.");
+        let needs_migrate = had_plaintext || !content.contains(encrypted_file::ENVELOPE_FORMAT);
+        if needs_migrate {
+            log::info!("Migrating sessions.json to device_key file encryption");
             self.save();
         }
     }
 
-    /// 保存会话
+    /// 保存会话（整文件 device_key 加密）
     pub fn save(&self) {
         let mut stored = Vec::with_capacity(self.sessions.len());
         for cfg in &self.sessions {
-            let (encrypted_password, password_nonce) =
-                device_key::encrypt_secret(&self.device_key, &cfg.password)
-                    .unwrap_or((String::new(), String::new()));
             stored.push(StoredSessionConfig {
                 id: cfg.id.clone(),
                 name: cfg.name.clone(),
@@ -344,9 +363,13 @@ impl SessionManager {
                 host: cfg.host.clone(),
                 port: cfg.port,
                 username: cfg.username.clone(),
-                password: String::new(),
-                encrypted_password,
-                password_nonce,
+                password: if cfg.secret_backend.is_vault() {
+                    String::new()
+                } else {
+                    cfg.password.clone()
+                },
+                encrypted_password: String::new(),
+                password_nonce: String::new(),
                 private_key_path: cfg.private_key_path.clone(),
                 last_connected_at: cfg.last_connected_at,
                 created_at: cfg.created_at,
@@ -362,8 +385,9 @@ impl SessionManager {
             });
         }
 
-        if let Ok(content) = serde_json::to_string_pretty(&stored) {
-            let _ = fs::write(&self.file_path, content);
+        if let Err(e) = encrypted_file::save_encrypted_json(&self.file_path, &stored) {
+            log::error!("Failed to save sessions: {}", e);
+        } else {
             log::info!("Saved {} sessions", self.sessions.len());
         }
     }

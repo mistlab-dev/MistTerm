@@ -269,15 +269,6 @@ impl AuditLogDialog {
                             if chrome::modal_secondary_icon_button(
                                 ui,
                                 th,
-                                crate::ui::icons::IconId::Close,
-                                crate::i18n::tr(ctx, "Close", "关闭"),
-                            )
-                                .clicked() {
-                                should_close = true;
-                            }
-                            if chrome::modal_secondary_icon_button(
-                                ui,
-                                th,
                                 crate::ui::icons::IconId::Copy,
                                 crate::i18n::tr(ctx, "Copy all", "复制全部"),
                             )

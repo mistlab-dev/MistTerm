@@ -370,13 +370,16 @@ impl MonitorPanel {
                                 ui.with_layout(
                                     egui::Layout::right_to_left(egui::Align::Center),
                                     |ui| {
-                                        if crate::ui::chrome::dock_close_icon_button(ui, theme)
-                                            .on_hover_text(crate::i18n::tr(
+                                        if crate::ui::chrome::dock_close_icon_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(
                                                 ui.ctx(),
                                                 "Hide side panel · switch with footer Monitor",
                                                 "隐藏侧栏 · 也可用底部「监控」切换",
-                                            ))
-                                            .clicked()
+                                            ),
+                                        )
+                                        .clicked()
                                         {
                                             *open = false;
                                         }

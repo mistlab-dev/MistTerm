@@ -119,6 +119,64 @@ pub fn default_audit_dir() -> PathBuf {
     p
 }
 
+fn pending_team_events_path() -> PathBuf {
+    default_audit_dir().join("pending-team-events.jsonl")
+}
+
+/// 后台线程或 token 刷新等无 `AuditLogger` 时写入审计。
+pub fn record_audit_blocking(event: AuditEvent) {
+    let cfg = crate::core::AppSettings::load().audit;
+    if !cfg.enabled {
+        return;
+    }
+    let _ = write_event_file(&cfg, &event);
+    if cfg.http.enabled && !cfg.http.url.is_empty() {
+        let _ = append_pending_team_events(&[event]);
+    }
+}
+
+fn append_pending_team_events(events: &[AuditEvent]) -> std::io::Result<()> {
+    let path = pending_team_events_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut f = OpenOptions::new().create(true).append(true).open(&path)?;
+    for ev in events {
+        let line = serde_json::to_string(ev)? + "\n";
+        f.write_all(line.as_bytes())?;
+    }
+    f.sync_data()?;
+    Ok(())
+}
+
+fn load_pending_team_events() -> Vec<AuditEvent> {
+    let path = pending_team_events_path();
+    if !path.exists() {
+        return Vec::new();
+    }
+    let Ok(raw) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        let t = line.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if let Ok(ev) = serde_json::from_str::<AuditEvent>(t) {
+            out.push(ev);
+        }
+    }
+    out
+}
+
+fn clear_pending_team_events_file() {
+    let path = pending_team_events_path();
+    if path.exists() {
+        let _ = fs::remove_file(path);
+    }
+}
+
 /// 审计日志单文件尾部读取上限（查看器用）
 pub const AUDIT_LOG_TAIL_READ_BYTES: usize = 512 * 1024;
 
@@ -367,6 +425,12 @@ impl Drop for AuditLogger {
 
 fn audit_worker(rx: Receiver<AuditWorkerMsg>, settings: Arc<Mutex<AuditSettings>>) {
     let mut http_pending: VecDeque<AuditEvent> = VecDeque::new();
+    for ev in load_pending_team_events() {
+        http_pending.push_back(ev);
+    }
+    if !http_pending.is_empty() {
+        clear_pending_team_events_file();
+    }
     let mut last_http_flush = std::time::Instant::now();
     loop {
         let timeout = Duration::from_millis(200);
@@ -394,24 +458,36 @@ fn audit_worker(rx: Receiver<AuditWorkerMsg>, settings: Arc<Mutex<AuditSettings>
                 let take = http_pending.len().min(batch);
                 let batch_events: Vec<AuditEvent> = http_pending.drain(..take).collect();
                 if flush_http(&cfg.http, &batch_events).is_err() {
+                    let _ = append_pending_team_events(&batch_events);
                     for ev in batch_events.into_iter().rev() {
                         http_pending.push_front(ev);
                     }
                     while http_pending.len() > HTTP_QUEUE_CAP {
-                        http_pending.pop_back();
+                        if let Some(ev) = http_pending.pop_back() {
+                            let _ = append_pending_team_events(&[ev]);
+                        }
                     }
+                } else if http_pending.is_empty() {
+                    clear_pending_team_events_file();
                 }
                 last_http_flush = std::time::Instant::now();
             }
             while http_pending.len() > HTTP_QUEUE_CAP {
-                http_pending.pop_front();
+                let dropped = http_pending.pop_front();
+                if let Some(ev) = dropped {
+                    let _ = append_pending_team_events(&[ev]);
+                }
             }
         }
     }
     let cfg = settings.lock().unwrap().clone();
     if cfg.http.enabled && !http_pending.is_empty() {
         let batch_events: Vec<AuditEvent> = http_pending.drain(..).collect();
-        let _ = flush_http(&cfg.http, &batch_events);
+        if flush_http(&cfg.http, &batch_events).is_ok() {
+            clear_pending_team_events_file();
+        } else {
+            let _ = append_pending_team_events(&batch_events);
+        }
     }
 }
 
