@@ -50,16 +50,23 @@ pub fn run_browser_oauth(
     provider: OAuthProvider,
     cancel: Arc<AtomicBool>,
 ) -> Result<TokenResponse, String> {
-    let redirect_local = format!("http://127.0.0.1:{}/callback", OAUTH_LOCAL_PORT);
-    let redirect_bridge = team_web_oauth_desktop_callback_url().to_string();
-
-    probe_oauth_start(api_base, provider, &redirect_local)?;
-    let auth_url = TeamClient::oauth_authorize_url(api_base, provider, &redirect_bridge);
-
+    // 先绑定端口，获取实际监听端口后拼桥接 URL
     let listener = bind_oauth_listener()?;
+    let local_addr = listener.local_addr().map_err(|e| e.to_string())?;
+    let port = local_addr.port();
+    let redirect_local = format!("http://127.0.0.1:{port}/callback");
+    let redirect_bridge = format!(
+        "{}?port={}",
+        team_web_oauth_desktop_callback_url(),
+        port
+    );
+
     if cancel.load(Ordering::Relaxed) {
         return Err("已取消登录".into());
     }
+
+    probe_oauth_start(api_base, provider, &redirect_local)?;
+    let auth_url = TeamClient::oauth_authorize_url(api_base, provider, &redirect_bridge);
 
     if !crate::platform::shell::open_url(&auth_url) {
         return Err("无法打开系统浏览器".into());
@@ -98,10 +105,8 @@ pub fn run_browser_oauth(
 }
 
 fn bind_oauth_listener() -> Result<TcpListener, String> {
-    let addr = format!("127.0.0.1:{}", OAUTH_LOCAL_PORT);
-    TcpListener::bind(&addr)
-        .or_else(|_| TcpListener::bind("127.0.0.1:0"))
-        .map_err(|e| format!("无法启动本地回调服务 ({addr}): {e}"))
+    TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("无法启动本地回调服务: {e}"))
 }
 
 fn accept_oauth_connection(

@@ -33,21 +33,15 @@
             '&refresh_token=' + encodeURIComponent(refresh || '');
       }
 
-      var ports = [8765, 8766, 8767, 8768, 8769, 8770];
-      var i = 0;
-      function tryPort() {
-        if (i >= ports.length) {
-          done(false, '未能连接 MistTerm，请确认应用已打开并重试 Google/GitHub 登录。');
-          return;
-        }
-        var port = ports[i++];
-        fetch('http://127.0.0.1:' + port + '/callback' + q, { mode: 'no-cors' })
-          .then(function () {
-            done(true, '可以关闭此窗口并返回 MistTerm。');
-          })
-          .catch(tryPort);
-      }
-      tryPort();
+      // 从 URL 获取客户端动态端口
+      var port = params.get('port') || '8765';
+      fetch('http://127.0.0.1:' + port + '/callback' + q, { mode: 'no-cors' })
+        .then(function () {
+          done(true, '可以关闭此窗口并返回 MistTerm。');
+        })
+        .catch(function () {
+          done(false, '未能连接 MistTerm (端口 ' + port + ')，请确认应用已打开并重试登录。');
+        });
     })();
   </script>
 </body>
