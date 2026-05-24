@@ -463,11 +463,11 @@ Content-Type: application/json
 
 | 项目 | 说明 |
 |------|------|
-| Base URL | 配置项 `api_base`，如 `https://api.mistterm.dev` 或 `http://localhost:8080` |
+| Base URL | 配置项 `api_base`，如 `https://api.mistlab.dev` 或 `http://localhost:8080` |
 | 协议 | HTTPS（生产）；HTTP（开发） |
 | 认证 | 除 `/health`、`/v1/auth/*`、`/v1/oauth/*`、`/v1/billing/webhook` 外，所有接口需 `Authorization: Bearer <access_token>` |
 | Content-Type | `application/json` |
-| CORS | 已配置，允许 `https://mistterm.dev` 和 `http://localhost:8765` |
+| CORS | 已配置，允许 `https://mistlab.dev` 和 `http://localhost:8765` |
 | 限流 | 默认启用，120 req/min/IP |
 
 ### A.2 认证（Auth）
