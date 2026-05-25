@@ -74,7 +74,7 @@ pub struct TeamsListResponse {
     pub teams: Vec<TeamMembership>,
 }
 
-/// `GET /v1/team/sync` 响应（见 `team-platform-integration.md`）。
+/// `GET /v1/team/sync` 响应（见 `docs/tech/TEAM-PLATFORM-API.md`）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TeamSyncResponse {
     #[serde(default)]

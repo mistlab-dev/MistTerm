@@ -881,7 +881,8 @@ impl MistTermApp {
         app.refresh_ssh_config_candidates();
         if app.team_service.is_logged_in() {
             app.configure_team_audit_sink();
-            app.team_service.refresh_current_team_detail();
+            // 异步拉取团队详情，避免启动时阻塞 UI 线程；UI 渲染期间会先用本地缓存（current_team_detail = None 时回退到 state 名字）。
+            app.team_service.spawn_refresh_current_team_detail();
         }
 
         app

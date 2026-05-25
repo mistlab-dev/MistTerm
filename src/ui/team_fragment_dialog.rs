@@ -9,6 +9,7 @@ use crate::core::team::{
 use crate::core::{AuditCategory, AuditEvent, AuditOutcome, AuditLogger};
 use crate::i18n;
 use crate::ui::chrome;
+use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Default)]
@@ -72,16 +73,20 @@ pub fn show_team_fragment_editor_modal(
         i18n::tr(ctx, "New team snippet", "新建团队片段")
     };
 
+    let modal_sz = layout_util::modal_edit_size(ctx);
     crate::ui::chrome::modal_window("team_fragment_editor", theme, ctx)
         .open(&mut open)
-        .default_size(egui::vec2(480.0, 360.0))
-        .resizable(true)
+        .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
+        .movable(true)
+        .resizable(false)
+        .fixed_size(modal_sz)
         .show(ctx, |ui| {
             crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
-                crate::ui::layout_util::set_width_to_available(ui);
-                ui.vertical(|ui| {
+                ui.push_id("team_fragment_editor_form", |ui| {
                     modal_header_title(ui, theme, title);
-                    ui.add_space(theme.spacing_sm());
+
+                    let form_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 460.0);
+                    ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
 
                     chrome::form_field_label(ui, theme, i18n::tr(ctx, "Title", "标题"));
                     chrome::form_singleline_field(
@@ -90,14 +95,18 @@ pub fn show_team_fragment_editor_modal(
                         egui::Id::new("team_frag_title"),
                         &mut editor.title,
                         "",
-                        ui.available_width(),
+                        form_w,
                         false,
                     );
                     chrome::form_field_label(ui, theme, i18n::tr(ctx, "Command", "命令"));
-                    ui.add(
-                        egui::TextEdit::multiline(&mut editor.command)
-                            .desired_rows(4)
-                            .font(egui::TextStyle::Monospace),
+                    chrome::form_multiline_field(
+                        ui,
+                        theme,
+                        egui::Id::new("team_frag_command"),
+                        &mut editor.command,
+                        form_w,
+                        4,
+                        false,
                     );
                     chrome::form_field_label(ui, theme, i18n::tr(ctx, "Category", "分类"));
                     chrome::form_singleline_field(
@@ -106,7 +115,7 @@ pub fn show_team_fragment_editor_modal(
                         egui::Id::new("team_frag_cat"),
                         &mut editor.category,
                         "",
-                        ui.available_width(),
+                        form_w,
                         false,
                     );
 
@@ -240,24 +249,28 @@ pub fn show_team_fragment_conflict_modal(
     let mut open = true;
     let mut should_close = false;
 
+    let modal_sz = layout_util::modal_edit_size(ctx);
     crate::ui::chrome::modal_window("team_fragment_conflict", theme, ctx)
         .open(&mut open)
-        .default_size(egui::vec2(520.0, 420.0))
-        .resizable(true)
+        .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
+        .movable(true)
+        .resizable(false)
+        .fixed_size(modal_sz)
         .show(ctx, |ui| {
             crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
-                ui.vertical(|ui| {
+                ui.push_id("team_fragment_conflict_form", |ui| {
                     modal_header_title(
                         ui,
                         theme,
                         i18n::tr(ctx, "Revision conflict", "版本冲突"),
                     );
+                    ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
                     ui.label(i18n::tr(
                         ctx,
                         "Someone else updated this snippet. Choose how to proceed.",
                         "该片段已在服务端被他人更新，请选择处理方式。",
                     ));
-                    ui.separator();
+                    ui.add_space(theme.spacing_sm());
                     ui.label(
                         chrome::rich_caption(theme, i18n::tr(ctx, "Server version", "服务端版本"))
                             .strong(),
@@ -266,6 +279,7 @@ pub fn show_team_fragment_conflict_modal(
                         "{}: {}",
                         state.server.title, state.server.command
                     ));
+                    ui.add_space(theme.spacing_xs());
                     ui.label(
                         chrome::rich_caption(theme, i18n::tr(ctx, "Your edit", "你的编辑"))
                             .strong(),
@@ -280,12 +294,18 @@ pub fn show_team_fragment_conflict_modal(
                         );
                     }
                     ui.add_space(theme.spacing_sm());
-                    ui.horizontal_wrapped(|ui| {
-                        if ui
-                            .button(i18n::tr(ctx, "Use server", "以服务端为准"))
-                            .clicked()
-                        {
-                            let base = state.server.clone();
+                    crate::ui::chrome::modal_footer_actions(ui, theme, |ui, _th| {
+                        if ui.button(i18n::tr(ctx, "Cancel", "取消")).clicked() {
+                            should_close = true;
+                        }
+                        if ui.button(i18n::tr(ctx, "Merge", "合并")).clicked() {
+                            let mut base = state.server.clone();
+                            base.title = state.pending_title.clone();
+                            base.command = format!(
+                                "{}\n# --- merged ---\n{}",
+                                state.server.command.trim_end(),
+                                state.pending_command.trim()
+                            );
                             match apply_conflict_resolution(service, &base, audit) {
                                 Ok(()) => should_close = true,
                                 Err(e) => state.error = e,
@@ -303,21 +323,15 @@ pub fn show_team_fragment_conflict_modal(
                                 Err(e) => state.error = e,
                             }
                         }
-                        if ui.button(i18n::tr(ctx, "Merge", "合并")).clicked() {
-                            let mut base = state.server.clone();
-                            base.title = state.pending_title.clone();
-                            base.command = format!(
-                                "{}\n# --- merged ---\n{}",
-                                state.server.command.trim_end(),
-                                state.pending_command.trim()
-                            );
+                        if ui
+                            .button(i18n::tr(ctx, "Use server", "以服务端为准"))
+                            .clicked()
+                        {
+                            let base = state.server.clone();
                             match apply_conflict_resolution(service, &base, audit) {
                                 Ok(()) => should_close = true,
                                 Err(e) => state.error = e,
                             }
-                        }
-                        if ui.button(i18n::tr(ctx, "Cancel", "取消")).clicked() {
-                            should_close = true;
                         }
                     });
                 });

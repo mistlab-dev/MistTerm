@@ -10,7 +10,8 @@ use super::auth::{token_needs_refresh, TeamTokenStore};
 use super::cache::TeamFragmentCache;
 use super::client::{TeamApiError, TeamClient};
 use super::models::{
-    CreateTeamFragmentRequest, TeamFragment, TeamMembership, TeamUser, UpdateTeamFragmentRequest,
+    CreateTeamFragmentRequest, TeamFragment, TeamInfo, TeamMembership, TeamUser,
+    UpdateTeamFragmentRequest,
 };
 use super::oauth::{run_browser_oauth, OAuthProvider};
 use super::settings::TeamSettings;
@@ -34,6 +35,9 @@ pub enum TeamAsyncResult {
     ConfigSyncOk {
         team_count: usize,
         server_count: usize,
+    },
+    TeamDetailOk {
+        info: TeamInfo,
     },
     CreateFragmentOk(TeamFragment),
     UpdateFragmentOk(TeamFragment),
@@ -66,6 +70,10 @@ enum TeamJob {
     ConfigSync {
         api_base: String,
     },
+    TeamDetail {
+        api_base: String,
+        team_id: String,
+    },
     OAuth {
         api_base: String,
         provider: OAuthProvider,
@@ -91,6 +99,8 @@ pub struct TeamService {
     pub pending_audit_sync: bool,
     pending_vault_apply: bool,
     pub pending_fragment_sync_after_config: bool,
+    /// 等忙完之后再去拉 team detail
+    pending_team_detail: bool,
     oauth_cancel: Arc<AtomicBool>,
 }
 
@@ -104,7 +114,9 @@ impl TeamService {
             tokens: TeamTokenStore::default(),
             rx: None,
             busy: false,
-            last_auto_sync: None,
+            // 把首次"到期"自动同步推迟到 frequency_minutes 后，避免启动瞬间打一连串请求。
+            // 登录 / 切团队仍会通过 pending_initial_sync / spawn_config_sync 主动触发同步。
+            last_auto_sync: Some(Instant::now()),
             status_line: String::new(),
             pending_initial_sync: false,
             auth_expired: false,
@@ -113,6 +125,7 @@ impl TeamService {
             pending_audit_sync: false,
             pending_vault_apply: false,
             pending_fragment_sync_after_config: false,
+            pending_team_detail: false,
             oauth_cancel: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -180,21 +193,23 @@ impl TeamService {
         self.cache.find_fragment(team_id, fragment_id)
     }
 
-    pub fn refresh_current_team_detail(&mut self) {
+    /// 异步刷新当前团队详情；在后台线程中跑 HTTP，不阻塞 UI。
+    /// 如果当前已有任务在跑，会留下 pending 标记，等 poll() 中 busy 清掉后再触发。
+    pub fn spawn_refresh_current_team_detail(&mut self) {
+        if !self.is_logged_in() {
+            return;
+        }
         let Some(team_id) = self.state.current_team_id.clone() else {
             return;
         };
-        let api_base = self.api_base();
-        match with_auth_retry(&api_base, &self.tokens, |access, client| {
-            client.get_team(access, &team_id)
-        }) {
-            Ok(info) => self.current_team_detail = Some(info),
-            Err(e) => {
-                if e.contains("Not signed in") || e.contains("401") {
-                    self.handle_auth_failure(&e);
-                }
-            }
+        if self.busy {
+            self.pending_team_detail = true;
+            return;
         }
+        self.spawn_job(TeamJob::TeamDetail {
+            api_base: self.api_base(),
+            team_id,
+        });
     }
 
     pub fn is_busy(&self) -> bool {
@@ -301,8 +316,9 @@ impl TeamService {
         self.state.current_team_id = Some(team_id.clone());
         self.current_team_detail = None;
         let _ = self.state.save();
-        self.refresh_current_team_detail();
         self.pending_vault_apply = true;
+        // ConfigSync 会在 busy 清掉后由 poll() 收尾时触发，TeamDetail 标 pending 让 poll() 串行触发。
+        self.pending_team_detail = true;
         self.spawn_config_sync();
     }
 
@@ -393,6 +409,9 @@ impl TeamService {
                     TeamAsyncResult::DeleteFragmentOk { .. } => {
                         self.status_line = "Fragment deleted".into();
                     }
+                    TeamAsyncResult::TeamDetailOk { info } => {
+                        self.current_team_detail = Some(info);
+                    }
                     TeamAsyncResult::Err(e) => {
                         if e.contains("401") || e.contains("Not signed in") {
                             self.handle_auth_failure(&e);
@@ -403,6 +422,11 @@ impl TeamService {
                         }
                     }
                 }
+        }
+
+        if !self.busy && self.pending_team_detail && self.is_logged_in() {
+            self.pending_team_detail = false;
+            self.spawn_refresh_current_team_detail();
         }
 
         if self.is_logged_in()
@@ -482,6 +506,12 @@ fn run_job(job: TeamJob, tokens: &TeamTokenStore) -> TeamAsyncResult {
             },
             Err(e) => TeamAsyncResult::Err(e),
         },
+        TeamJob::TeamDetail { api_base, team_id } => {
+            match do_team_detail(&api_base, &team_id, tokens) {
+                Ok(info) => TeamAsyncResult::TeamDetailOk { info },
+                Err(e) => TeamAsyncResult::Err(e),
+            }
+        }
         TeamJob::RefreshTeams { api_base } => match do_refresh_teams(&api_base, tokens) {
             Ok(teams) => {
                 // 返回 LoginOk 形态以便复用 UI 更新 teams 列表
@@ -578,6 +608,16 @@ fn do_refresh_teams(api_base: &str, tokens: &TeamTokenStore) -> Result<Vec<TeamM
         .list_teams(&access)
         .map(|r| r.teams)
         .map_err(|e| e.to_string())
+}
+
+fn do_team_detail(
+    api_base: &str,
+    team_id: &str,
+    tokens: &TeamTokenStore,
+) -> Result<TeamInfo, String> {
+    with_auth_retry(api_base, tokens, |access, client| {
+        client.get_team(access, team_id)
+    })
 }
 
 fn do_team_config_sync(
