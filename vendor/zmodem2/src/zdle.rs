@@ -41,3 +41,97 @@ pub const UNZDLE_TABLE: [u8; 0x100] = [
     0xe0, 0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xeb, 0xec, 0xed, 0xee, 0xef,
     0xf0, 0xf1, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa, 0xfb, 0xfc, 0xfd, 0xfe, 0xff,
 ];
+
+/// ESCCTL 模式转义表：在 BASIC 之外，把 `0x00..0x1F` 与 `0x80..0x9F` 也一律 ZDLE-escape（`b ^ 0x40`）。
+/// 与 lrzsz `Zctlesc=1` 一致；当对端 `rz -e/-bye` 在 ZRINIT 里声明 `ESCCTL` 时启用。
+/// `0x7F`、`0xFF` 仍沿用 BASIC 的特殊编码 `ZRUB0=0x6C` / `ZRUB1=0x6D`。
+pub const ZDLE_TABLE_ESCCTL: [u8; 0x100] = compute_escctl_table();
+
+const fn compute_escctl_table() -> [u8; 0x100] {
+    let mut t = [0u8; 0x100];
+    let mut i: usize = 0;
+    while i < 0x100 {
+        let b = i as u8;
+        let basic = ZDLE_TABLE[i];
+        let needs_extra = (b < 0x20) || (b >= 0x80 && b < 0xA0);
+        t[i] = if needs_extra && basic == b {
+            b ^ 0x40
+        } else {
+            basic
+        };
+        i += 1;
+    }
+    t
+}
+
+/// 线程局部 `ESCCTL` 选择器：发送侧根据对端 ZRINIT 的 `ESCCTL` 位临时切换转义表。
+/// `Receiver` 输出全部为 ZHEX，转义表对其无副作用。
+#[cfg(feature = "std")]
+mod escctl_state {
+    use std::cell::Cell;
+
+    thread_local! {
+        static ESCCTL_ENABLED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub fn enabled() -> bool {
+        ESCCTL_ENABLED.with(|c| c.get())
+    }
+
+    pub fn set(on: bool) -> bool {
+        ESCCTL_ENABLED.with(|c| {
+            let prev = c.get();
+            c.set(on);
+            prev
+        })
+    }
+}
+
+#[cfg(feature = "std")]
+pub(crate) fn escctl_enabled() -> bool {
+    escctl_state::enabled()
+}
+
+#[cfg(feature = "std")]
+pub(crate) fn set_escctl(on: bool) -> bool {
+    escctl_state::set(on)
+}
+
+#[cfg(not(feature = "std"))]
+pub(crate) fn escctl_enabled() -> bool {
+    false
+}
+
+#[cfg(not(feature = "std"))]
+pub(crate) fn set_escctl(_on: bool) -> bool {
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn escctl_table_escapes_all_ctrl_bytes() {
+        for b in 0u8..0x20 {
+            let escaped = ZDLE_TABLE_ESCCTL[b as usize];
+            assert_ne!(escaped, b, "byte {:02x} must be escaped under ESCCTL", b);
+            assert_eq!(escaped, b ^ 0x40, "byte {:02x} expected XOR 0x40", b);
+        }
+        for b in 0x80u8..0xA0 {
+            let escaped = ZDLE_TABLE_ESCCTL[b as usize];
+            assert_ne!(escaped, b, "high ctrl byte {:02x} must be escaped", b);
+            assert_eq!(escaped, b ^ 0x40, "byte {:02x} expected XOR 0x40", b);
+        }
+        assert_eq!(ZDLE_TABLE_ESCCTL[0x7F], 0x6C);
+        assert_eq!(ZDLE_TABLE_ESCCTL[0xFF], 0x6D);
+        for b in 0x20u8..0x7F {
+            let escaped = ZDLE_TABLE_ESCCTL[b as usize];
+            assert_eq!(escaped, ZDLE_TABLE[b as usize]);
+        }
+        for b in 0xA0u8..0xFF {
+            let escaped = ZDLE_TABLE_ESCCTL[b as usize];
+            assert_eq!(escaped, ZDLE_TABLE[b as usize]);
+        }
+    }
+}

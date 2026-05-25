@@ -493,6 +493,7 @@ pub(super) fn run_upload_zmodem2(
         }
 
         while !ingress.buf.is_empty() {
+            let escctl_before = sender.escctl_enabled();
             let before = ingress.buf.len();
             let consumed = sender
                 .feed_incoming(&ingress.buf)
@@ -504,6 +505,12 @@ pub(super) fn run_upload_zmodem2(
             ingress.on_fed(consumed);
             let pending_out = sender.drain_outgoing().len();
             let slice = &ingress.buf[..consumed];
+            if !escctl_before && sender.escctl_enabled() {
+                log::info!(
+                    "ZMODEM 对端 ZRINIT 声明 ESCCTL（peer_caps=0x{:02x}），已切换到全控制字符 ZDLE 转义（rz -e/-bye 兼容）",
+                    sender.peer_caps()
+                );
+            }
             if !file_data_started {
                 let zhex_zrinit_cnt = count_peer_zrinit_hex_prefix(slice);
                 if zhex_zrinit_cnt > 0 {

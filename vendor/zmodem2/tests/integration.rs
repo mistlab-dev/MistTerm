@@ -187,12 +187,19 @@ fn setup_sz(test_files: &TestFiles) -> (Child, MockPort<ChildStdout, ChildStdin>
 
 /// Helper to set up a non-blocking `rz` process.
 fn setup_rz(dest_dir: &TempDir) -> (Child, MockPort<ChildStdout, ChildStdin>) {
-    let mut rz_process: Child = Command::new(env!("ZMODEM_RZ_BIN"))
+    setup_rz_with_args(dest_dir, &[])
+}
+
+fn setup_rz_with_args(
+    dest_dir: &TempDir,
+    extra_args: &[&str],
+) -> (Child, MockPort<ChildStdout, ChildStdin>) {
+    let mut cmd = Command::new(env!("ZMODEM_RZ_BIN"));
+    cmd.args(extra_args)
         .stdout(Stdio::piped())
         .stdin(Stdio::piped())
-        .current_dir(dest_dir.path())
-        .spawn()
-        .unwrap();
+        .current_dir(dest_dir.path());
+    let mut rz_process: Child = cmd.spawn().unwrap();
 
     let stdin = rz_process.stdin.take().unwrap();
     let stdout = rz_process.stdout.take().unwrap();
@@ -453,6 +460,146 @@ fn test_batch_to_rz() {
             sleep(Duration::from_millis(5));
         }
     }
+
+    rz_process.wait().unwrap();
+    for path in &test_files.paths {
+        let filename = path.file_name().unwrap();
+        let received_path = dest_dir.path().join(filename);
+        assert!(
+            received_path.exists(),
+            "File '{}' was not sent",
+            received_path.display()
+        );
+        assert_files_equal(path, &received_path);
+    }
+}
+
+/// `rz -bye` 模拟：`-b` 二进制、`-y` 覆盖、`-e` 在 ZRINIT 里要求 ESCCTL。
+/// 该测试覆盖 `update_receiver_caps` 切换到 `ZDLE_TABLE_ESCCTL` 后子包仍能通过 `rz` 校验的路径。
+#[test]
+#[cfg(has_lrzsz)]
+fn test_batch_to_rz_bye_escctl() {
+    let test_files = TestFiles::new();
+    let dest_dir = tempfile::Builder::new()
+        .prefix("zmodem_test_dest_bye_")
+        .tempdir()
+        .unwrap();
+
+    let (mut rz_process, mut port) = setup_rz_with_args(&dest_dir, &["-b", "-y", "-e"]);
+
+    let mut open_files: HashMap<String, File> = HashMap::new();
+    for path in &test_files.paths {
+        let filename = path.file_name().unwrap().to_str().unwrap().to_string();
+        let file = File::open(path).unwrap();
+        open_files.insert(filename, file);
+    }
+
+    let mut file_iter = test_files.paths.iter();
+
+    let first_path = file_iter.next().expect("No test files found");
+    let first_filename = first_path.file_name().unwrap().to_str().unwrap();
+    let first_size = first_path.metadata().unwrap().len() as u32;
+    let mut sender = zmodem2::Sender::new().unwrap();
+    sender
+        .start_file(first_filename.as_bytes(), first_size)
+        .unwrap();
+    let mut current_filename = first_filename.to_string();
+    let mut wire_buf = [0u8; 4096];
+    let mut input_buf: Vec<u8> = Vec::new();
+    let mut input_offset: usize = 0;
+    let mut file_buf = [0u8; 1024];
+    let mut session_done = false;
+    let mut escctl_seen = false;
+
+    while !session_done || !sender.drain_outgoing().is_empty() {
+        let mut progressed = false;
+
+        if !sender.drain_outgoing().is_empty() {
+            match port.write(sender.drain_outgoing()) {
+                Ok(0) => {}
+                Ok(n) => {
+                    sender.advance_outgoing(n);
+                    progressed = true;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(e) => panic!("wire write failed: {e}"),
+            }
+        }
+
+        if let Some(request) = sender.poll_file() {
+            let file = open_files
+                .get_mut(&current_filename)
+                .expect("File not found in map");
+            file.seek(std::io::SeekFrom::Start(u64::from(request.offset)))
+                .unwrap();
+            let n = file.read(&mut file_buf[..request.len]).unwrap();
+            sender.feed_file(&file_buf[..n]).unwrap();
+            progressed = true;
+        }
+
+        match port.read(&mut wire_buf) {
+            Ok(0) => {}
+            Ok(n) => {
+                input_buf.extend_from_slice(&wire_buf[..n]);
+                progressed = true;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+            Err(e) => panic!("wire read failed: {e}"),
+        }
+
+        if sender.drain_outgoing().is_empty() && input_offset < input_buf.len() {
+            let consumed = sender.feed_incoming(&input_buf[input_offset..]).unwrap();
+            if consumed > 0 {
+                input_offset += consumed;
+                progressed = true;
+                if !escctl_seen && sender.escctl_enabled() {
+                    escctl_seen = true;
+                    assert_ne!(
+                        sender.peer_caps() & 0x40,
+                        0,
+                        "rz -e should request ESCCTL in ZRINIT (peer_caps=0x{:02x})",
+                        sender.peer_caps()
+                    );
+                }
+                if input_offset == input_buf.len() {
+                    input_buf.clear();
+                    input_offset = 0;
+                } else if input_offset > 4096 {
+                    input_buf.drain(..input_offset);
+                    input_offset = 0;
+                }
+            }
+        }
+
+        if let Some(event) = sender.poll_event() {
+            match event {
+                zmodem2::SenderEvent::FileComplete => {
+                    if let Some(next_path) = file_iter.next() {
+                        let next_filename = next_path.file_name().unwrap().to_str().unwrap();
+                        let next_size = next_path.metadata().unwrap().len() as u32;
+                        sender
+                            .start_file(next_filename.as_bytes(), next_size)
+                            .unwrap();
+                        current_filename = next_filename.to_string();
+                    } else {
+                        sender.finish_session().unwrap();
+                    }
+                }
+                zmodem2::SenderEvent::SessionComplete => {
+                    session_done = true;
+                }
+            }
+        }
+
+        if !progressed {
+            sleep(Duration::from_millis(5));
+        }
+    }
+
+    assert!(
+        escctl_seen,
+        "expected sender to enable ESCCTL after rz -e ZRINIT"
+    );
 
     rz_process.wait().unwrap();
     for path in &test_files.paths {

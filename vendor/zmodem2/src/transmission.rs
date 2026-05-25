@@ -505,6 +505,9 @@ impl Sender {
     ///
     /// * [`Write`](crate::Error::Write) when the write I/O fails with the serial port
     pub fn new() -> Result<Self, Error> {
+        // 新会话从基础转义表开始；对端 ZRINIT 命中 `ESCCTL` 时再切换。
+        // 复位是必要的，因为线程局部状态可能保留自上次失败/取消会话。
+        zdle::set_escctl(false);
         let mut sender = Self {
             state: SendState::WaitReceiverInit,
             file_name: String::new(),
@@ -714,6 +717,19 @@ impl Sender {
     /// Returns the next pending sender event.
     pub fn poll_event(&mut self) -> Option<SenderEvent> {
         self.pending_event.take()
+    }
+
+    /// 对端最近一次 `ZRINIT`/`ZRQINIT` 的 capability 字节（`flags[2]|flags[3]`），
+    /// 用于客户端诊断（如判断 `ESCCTL`、`CANFC32`、`CANOVIO`）。
+    #[must_use]
+    pub fn peer_caps(&self) -> u8 {
+        self.peer_cap_byte
+    }
+
+    /// 当前发送侧是否在使用 `ESCCTL` 转义；由 `update_receiver_caps` 根据对端 ZRINIT 设置。
+    #[must_use]
+    pub fn escctl_enabled(&self) -> bool {
+        zdle::escctl_enabled()
     }
 
     /// In `WaitFilePos`, proactively retries handshake bytes when peer goes silent.
@@ -984,6 +1000,10 @@ impl Sender {
         let flags = header.count().to_le_bytes();
         let caps = flags[2] | flags[3];
         self.peer_cap_byte = caps;
+        // 对端 `rz -e/-bye` 在 ZRINIT 里声明 `ESCCTL`，要求发送端把所有控制字符 ZDLE-escape；
+        // 否则子包通过 PTY 时被 tty 截断、对端 CRC 失败、不停重发 ZRINIT 直至回退 X/YMODEM。
+        let want_escctl = (caps & Zrinit::ESCCTL.bits()) != 0;
+        zdle::set_escctl(want_escctl);
         let rx_buf_size = u16::from_le_bytes([flags[0], flags[1]]) as usize;
         let can_ovio = (caps & Zrinit::CANOVIO.bits()) != 0;
 

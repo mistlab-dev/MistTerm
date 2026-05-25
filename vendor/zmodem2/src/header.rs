@@ -379,7 +379,12 @@ pub(crate) fn write_byte_escaped<P>(port: &mut P, value: u8) -> Result<Option<()
 where
     P: Write + ?Sized,
 {
-    let escaped = zdle::ZDLE_TABLE[value as usize];
+    let table = if zdle::escctl_enabled() {
+        &zdle::ZDLE_TABLE_ESCCTL
+    } else {
+        &zdle::ZDLE_TABLE
+    };
+    let escaped = table[value as usize];
     if escaped != value && port.write_byte(ZDLE)?.is_none() {
         return Ok(None);
     }
