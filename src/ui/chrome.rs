@@ -2857,6 +2857,44 @@ pub fn panel_action_primary_button_ex(
     )
 }
 
+/// 图标 + 文字的次要按钮（侧栏 SFTP / 资源面板等比纯图标更易识别的工具按钮）。
+pub fn panel_action_button_with_icon_ex(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+    enabled: bool,
+) -> Response {
+    paint_control_button(
+        ui,
+        theme,
+        label,
+        Some(icon),
+        ControlButtonVariant::Secondary,
+        theme.size_control_btn_min_w(),
+        enabled,
+    )
+}
+
+/// 图标 + 文字的主按钮（最显眼的「上传」等正向操作）。
+pub fn panel_action_primary_button_with_icon_ex(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+    enabled: bool,
+) -> Response {
+    paint_control_button(
+        ui,
+        theme,
+        label,
+        Some(icon),
+        ControlButtonVariant::Primary,
+        theme.size_control_btn_min_w(),
+        enabled,
+    )
+}
+
 /// 数字框（`DragValue` 等）包进与单行输入相同的底+描边
 pub fn form_drag_value_field(
     ui: &mut Ui,

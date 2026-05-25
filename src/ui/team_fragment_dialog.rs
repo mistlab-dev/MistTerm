@@ -25,7 +25,6 @@ pub struct TeamFragmentEditorState {
 
 #[derive(Debug, Clone)]
 pub struct TeamFragmentConflictState {
-    pub local: TeamFragment,
     pub server: TeamFragment,
     pub pending_title: String,
     pub pending_command: String,
@@ -185,7 +184,6 @@ pub fn show_team_fragment_editor_modal(
                                             editor.error.clear();
                                             should_close = true;
                                             *conflict = Some(TeamFragmentConflictState {
-                                                local: existing.clone(),
                                                 server,
                                                 pending_title: title,
                                                 pending_command: command,

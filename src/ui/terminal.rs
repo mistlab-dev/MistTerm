@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
-use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, SshSessionId, LrzszTransfer, TransferEvent, format_ssh_connect_error};
+use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, LrzszTransfer, TransferEvent, format_ssh_connect_error};
 use alacritty_terminal::grid::Scroll;
 use crate::terminal::{Terminal as VtTerminal, TerminalShellStyle};
 use crate::terminal::style::{
@@ -2407,14 +2407,13 @@ impl TerminalView {
         Ok(())
     }
 
-    /// SFTP 等：`SshManager` 克隆后与后台线程配合使用（避免阻塞 UI）。
-    pub fn sftp_session_for_ops(&self) -> Option<(SshSessionId, SshManager)> {
+    /// SFTP 等：返回 [`SshSessionHandle`]。SFTP 必须经 shell 泵命令队列独占执行 Session，
+    /// 否则与 PTY 读循环争用 libssh2 内部 mutex 会出现 `Timeout waiting for status message`。
+    pub fn sftp_session_for_ops(&self) -> Option<SshSessionHandle> {
         if !self.connected {
             return None;
         }
-        let id = self.session_id?;
-        let mgr = self.ssh_manager.as_ref()?.clone();
-        Some((id, mgr))
+        self.ssh_handle.clone()
     }
 
     pub fn download_dir(&self) -> &str {

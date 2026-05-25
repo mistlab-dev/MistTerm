@@ -5,14 +5,11 @@
 use ssh2::{Session, Sftp};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::thread;
-use std::time::Duration;
 use chrono::{DateTime, Utc, TimeZone};
 
-const SFTP_OPEN_RETRY_ATTEMPTS: usize = 160;
-const SFTP_OPEN_RETRY_SLEEP_MS: u64 = 8;
-
-/// libssh2 在 shell 占用会话时可能返回 Would block / EAGAIN，需短暂重试。
+/// libssh2 在 shell 占用会话时可能返回 Would block / EAGAIN。
+/// 现在 SFTP 操作走 blocking 模式（见 `SftpClient`），正常路径上不会再出现，
+/// 该函数仅供 UI 识别遗留错误信息时复用。
 pub fn is_sftp_would_block_message(msg: &str) -> bool {
     let msg = msg.to_lowercase();
     msg.contains("would block")
@@ -21,28 +18,6 @@ pub fn is_sftp_would_block_message(msg: &str) -> bool {
         || msg.contains("libssh2_error_eagain")
         || msg.contains("try again")
         || msg.contains("session(-37)")
-}
-
-fn open_sftp_channel(session: &Session) -> Result<Sftp, String> {
-    let mut last: Option<String> = None;
-    for _ in 0..SFTP_OPEN_RETRY_ATTEMPTS {
-        match session.sftp() {
-            Ok(sftp) => return Ok(sftp),
-            Err(e) => {
-                let msg = e.to_string();
-                if is_sftp_would_block_message(&msg) {
-                    last = Some(msg);
-                    thread::sleep(Duration::from_millis(SFTP_OPEN_RETRY_SLEEP_MS));
-                    continue;
-                }
-                return Err(format!("Failed to create SFTP channel: {}", e));
-            }
-        }
-    }
-    Err(format!(
-        "Failed to create SFTP channel: {}",
-        last.unwrap_or_else(|| "retry timed out".to_string())
-    ))
 }
 
 /// SFTP 文件条目信息
@@ -81,17 +56,44 @@ impl SftpEntry {
     }
 }
 
-/// SFTP 客户端
+/// SFTP 客户端。
+///
+/// **必须**在 shell 泵线程通过 [`crate::ssh::SshSessionHandle::enqueue_session_job`]
+/// 调用，否则会与 PTY 读循环并发争用 libssh2 的 session 内部 mutex（症状：
+/// `[Session(-43)] Timeout waiting for status message` 或 `EAGAIN/-37`）。
+///
+/// 本结构构造时把会话切到 blocking 模式（SFTP 握手需要多个 RTT，非阻塞模式
+/// 单次调用推不动状态机），Drop 时复位 non-blocking 让 shell 泵继续非阻塞
+/// 读写——参考 `manager.rs::exec_on_cloned_session` 的相同模式。
 pub struct SftpClient {
     sftp: Sftp,
+    session: Session,
 }
 
 impl SftpClient {
-    /// 从 SSH 会话创建 SFTP 客户端
+    /// 从 SSH 会话创建 SFTP 客户端。`session` 必须由 shell 泵线程传入。
     pub fn new(session: &Session) -> Result<Self, String> {
-        let sftp = open_sftp_channel(session)?;
-        Ok(Self { sftp })
+        session.set_blocking(true);
+        match session.sftp() {
+            Ok(sftp) => Ok(Self {
+                sftp,
+                session: session.clone(),
+            }),
+            Err(e) => {
+                session.set_blocking(false);
+                Err(format!("Failed to create SFTP channel: {}", e))
+            }
+        }
     }
+}
+
+impl Drop for SftpClient {
+    fn drop(&mut self) {
+        self.session.set_blocking(false);
+    }
+}
+
+impl SftpClient {
 
     /// 列出目录内容
     pub fn list_dir(&self, path: &Path) -> Result<Vec<SftpEntry>, String> {
@@ -100,7 +102,7 @@ impl SftpClient {
             .readdir(path)
             .map_err(|e| format!("Failed to read directory {}: {}", path.display(), e))?;
 
-        let mut result: Vec<SftpEntry> = entries
+        let result: Vec<SftpEntry> = entries
             .into_iter()
             .filter_map(|(p, stat)| {
                 let name = p.file_name()?.to_string_lossy().to_string();
@@ -130,15 +132,6 @@ impl SftpClient {
                 })
             })
             .collect();
-
-        // 排序：目录优先，然后按名称排序
-        result.sort_by(|a, b| {
-            if a.is_dir != b.is_dir {
-                b.is_dir.cmp(&a.is_dir)
-            } else {
-                a.name.to_lowercase().cmp(&b.name.to_lowercase())
-            }
-        });
 
         Ok(result)
     }

@@ -47,7 +47,7 @@ impl AppSettings {
     pub fn load() -> Self {
         let path = Self::default_path();
         let mut settings: Self = crate::security::encrypted_file::load_encrypted_json(&path);
-        let mut changed = settings.ai.migrate_legacy_secrets();
+        let changed = settings.ai.migrate_legacy_secrets();
         settings.team.lock_to_product_defaults();
         if changed {
             let _ = settings.save();

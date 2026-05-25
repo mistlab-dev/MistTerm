@@ -261,22 +261,6 @@ pub struct UpdateTeamFragmentRequest {
     pub revision: u32,
 }
 
-pub fn tags_to_json(tags: &[String]) -> String {
-    serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string())
-}
-
-pub fn variables_to_json(vars: &[FragmentVariable]) -> String {
-    let mut map = serde_json::Map::new();
-    for v in vars {
-        let val = v
-            .default_value
-            .clone()
-            .unwrap_or_default();
-        map.insert(v.name.clone(), serde_json::Value::String(val));
-    }
-    serde_json::to_string(&map).unwrap_or_else(|_| "{}".to_string())
-}
-
 pub fn parse_tags_json(raw: &str) -> Vec<String> {
     if raw.trim().is_empty() {
         return Vec::new();

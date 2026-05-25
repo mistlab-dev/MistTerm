@@ -24,38 +24,6 @@ struct TestConfig {
     _test_dir: String,
 }
 
-impl TestConfig {
-    fn from_sessions_json() -> Self {
-        let config = Self {
-            host: "localhost".to_string(),
-            _port: 22,
-            username: "mistterm_test".to_string(),
-            _password: "test123456".to_string(),
-            _test_dir: "/tmp/zmodem_test".to_string(),
-        };
-        
-        let sessions_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("sessions.json");
-        if let Ok(content) = fs::read_to_string(&sessions_path) {
-            if let Ok(sessions) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
-                if let Some(session) = sessions.first() {
-                    if let (Some(host), Some(username)) = (
-                        session["host"].as_str(),
-                        session["username"].as_str(),
-                    ) {
-                        return Self {
-                            host: host.to_string(),
-                            username: username.to_string(),
-                            ..config
-                        };
-                    }
-                }
-            }
-        }
-        
-        config
-    }
-}
-
 /// 创建测试文件
 fn create_test_files(test_dir: &str) -> Result<Vec<PathBuf>, String> {
     fs::create_dir_all(test_dir)

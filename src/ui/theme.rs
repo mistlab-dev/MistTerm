@@ -824,6 +824,16 @@ impl Theme {
         }
     }
 
+    /// SFTP 文件列表区底色（表头 + 滚动列表，比面板略深）
+    #[inline]
+    pub fn color_file_list_bg(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgb(236, 238, 244)
+        } else {
+            self.surface_terminal()
+        }
+    }
+
     /// SFTP 文件行 hover
     #[inline]
     pub fn color_sftp_row_hover(&self) -> Color32 {

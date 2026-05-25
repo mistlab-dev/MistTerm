@@ -686,40 +686,8 @@ impl MistTermApp {
                         "记录命令预览（不含完整明文时可截断）",
                     ),
                 );
-                crate::ui::chrome::form_checkbox(
-                    ui,
-                    theme,
-                    &mut self.app_settings.audit.http.enabled,
-                    crate::i18n::tr(ctx, "HTTP batch forwarding", "HTTP 批量上报"),
-                );
-                crate::ui::chrome::form_field_label(
-                    ui,
-                    theme,
-                    crate::i18n::tr(ctx, "URL", "URL"),
-                );
-                crate::ui::chrome::form_singleline_field(
-                    ui,
-                    theme,
-                    egui::Id::new("pref_audit_http_url"),
-                    &mut self.app_settings.audit.http.url,
-                    "https://siem.example.com/ingest",
-                    pref_w,
-                    false,
-                );
-                crate::ui::chrome::form_field_label(
-                    ui,
-                    theme,
-                    crate::i18n::tr(ctx, "Bearer token", "Bearer"),
-                );
-                crate::ui::chrome::form_singleline_field(
-                    ui,
-                    theme,
-                    egui::Id::new("pref_audit_http_bearer"),
-                    &mut self.app_settings.audit.http.bearer_token,
-                    "",
-                    pref_w,
-                    true,
-                );
+                // 团队 HTTP 上报由登录后的 configure_team_audit_sink 自动配置
+                // （URL / Bearer / team_id），用户无需在偏好里手动维护。
                 crate::ui::chrome::form_checkbox(
                     ui,
                     theme,

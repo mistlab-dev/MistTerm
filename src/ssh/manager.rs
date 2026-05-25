@@ -28,6 +28,13 @@ pub enum ShellPumpCommand {
         cmd: String,
         reply: mpsc::Sender<Result<String, String>>,
     },
+    /// 在 shell 泵线程内独占执行的 Session 任务（SFTP 等）。
+    ///
+    /// shell 泵处理本命令时已 `drop(ch)` 释放 PTY channel 锁，并暂停 PTY 读循环，
+    /// 闭包在该期间独占 Session：可放心 `set_blocking(true)`，期间 libssh2 的
+    /// 内部 mutex 不会与 PTY 读争抢，避免 `Timeout waiting for status message`。
+    /// 闭包负责自己的失败回执（通过捕获的 `mpsc::Sender`）。
+    SessionJob(Box<dyn FnOnce(&::ssh2::Session) + Send>),
 }
 
 impl std::fmt::Debug for ShellPumpCommand {
@@ -41,6 +48,9 @@ impl std::fmt::Debug for ShellPumpCommand {
             }
             ShellPumpCommand::ExecRemote { cmd, .. } => {
                 f.debug_struct("ShellPumpCommand::ExecRemote").field("cmd", cmd).finish()
+            }
+            ShellPumpCommand::SessionJob(_) => {
+                f.debug_struct("ShellPumpCommand::SessionJob").finish_non_exhaustive()
             }
         }
     }
@@ -132,6 +142,18 @@ impl SshSessionHandle {
             reply: reply_tx,
         })?;
         Ok(reply_rx)
+    }
+
+    /// 将一段 Session 任务（如 SFTP 操作）排入 **shell 泵线程** 独占执行。
+    ///
+    /// shell 泵在处理本命令期间已 `drop(ch)` 释放 PTY channel 锁、并暂停 `channel.read` 轮询，
+    /// 闭包独占底层 `ssh2::Session`，可放心 `set_blocking(true)`，避免 `Timeout waiting for status message`。
+    /// 闭包应自行通过捕获的 `mpsc::Sender` 回传结果与错误。
+    pub fn enqueue_session_job<F>(&self, job: F) -> Result<(), String>
+    where
+        F: FnOnce(&::ssh2::Session) + Send + 'static,
+    {
+        self.pump_send(ShellPumpCommand::SessionJob(Box::new(job)))
     }
 
     /// ZMODEM→`rz` 上传：注册后 shell 泵在每次 `channel.read` 时同步旁路到 `upload_pty_rx`（见 [`crate::ssh::lrzsz::LrzszTransfer`]）。
@@ -703,6 +725,17 @@ mod shell_pump {
                 drop(ch);
                 let res = mgr.exec_remote(session_id, &cmd);
                 let _ = reply.send(res);
+            }
+            ShellPumpCommand::SessionJob(job) => {
+                drop(ch);
+                if let Some(session) = mgr.get_session(session_id) {
+                    job(&session);
+                } else {
+                    log::warn!(
+                        "shell 泵 session={} SessionJob 找不到会话，已丢弃",
+                        session_id
+                    );
+                }
             }
         }
         true
