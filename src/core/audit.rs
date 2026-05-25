@@ -11,7 +11,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
-use uuid::Uuid;
+use rand::Rng;
 
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
@@ -67,7 +67,7 @@ impl AuditEvent {
     pub fn new(category: AuditCategory, action: impl Into<String>, outcome: AuditOutcome) -> Self {
         Self {
             ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            event_id: Uuid::new_v4().to_string(),
+            event_id: new_audit_event_id(),
             actor: current_actor(),
             category,
             action: action.into(),
@@ -268,10 +268,17 @@ pub struct HttpSinkSettings {
 }
 
 fn default_http_batch() -> usize {
-    20
+    50
 }
 fn default_http_interval_ms() -> u64 {
-    2000
+    30_000
+}
+
+/// `evt_{unix_ms}_{hex}`，便于服务端按时间窗去重。
+fn new_audit_event_id() -> String {
+    let ts = Utc::now().timestamp_millis();
+    let r: u32 = rand::thread_rng().gen();
+    format!("evt_{ts}_{r:08x}")
 }
 
 impl Default for HttpSinkSettings {
@@ -668,5 +675,15 @@ mod tests {
     fn command_preview_truncates() {
         let s = command_preview("echo hello world", 8);
         assert!(s.ends_with('…'));
+    }
+
+    #[test]
+    fn audit_event_id_format() {
+        let id = new_audit_event_id();
+        assert!(id.starts_with("evt_"));
+        let parts: Vec<_> = id.split('_').collect();
+        assert_eq!(parts.len(), 3);
+        assert!(parts[1].parse::<i64>().is_ok());
+        assert_eq!(parts[2].len(), 8);
     }
 }

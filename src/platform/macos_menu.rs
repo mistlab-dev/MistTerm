@@ -4,6 +4,7 @@
 //! - **终端**：会话与连接
 //! - **编辑**：终端剪贴板 + 搜索（无系统预置复制/粘贴，避免重复项）
 //! - **视图**：布局、右侧面板、主题
+//! - **团队**：登录、成员、云端同步
 //! - **工具**：片段、历史、凭证与日志
 //! - **帮助**：内嵌文档与关于
 
@@ -40,6 +41,7 @@ pub enum MacMenuAction {
     CommandHistory,
     CredentialPanel,
     TeamAccount,
+    TeamMembers,
     CloudSync,
     SessionLogBrowser,
     HelpUserGuide,
@@ -55,6 +57,7 @@ pub struct NativeAppMenu {
     _terminal_menu: Submenu,
     _edit_menu: Submenu,
     _view_menu: Submenu,
+    _team_menu: Submenu,
     _tools_menu: Submenu,
     _help_menu: Submenu,
     about: MenuItem,
@@ -82,7 +85,8 @@ pub struct NativeAppMenu {
     quick_fragments: MenuItem,
     command_history: MenuItem,
     credentials: MenuItem,
-    team_account: MenuItem,
+    team_sign_in: MenuItem,
+    team_members: MenuItem,
     cloud: MenuItem,
     session_logs: MenuItem,
     help_guide: MenuItem,
@@ -238,6 +242,26 @@ impl NativeAppMenu {
         view.append(&PredefinedMenuItem::separator())?;
         view.append(&theme_submenu)?;
 
+        // ── 团队 ──
+        let team_menu = Submenu::new(l.team_menu, true);
+        let team_sign_in = MenuItem::with_id(
+            "mistterm.team.sign_in",
+            l.team_sign_in,
+            true,
+            None,
+        );
+        let team_members = MenuItem::with_id(
+            "mistterm.team.members",
+            l.team_members,
+            true,
+            None,
+        );
+        let cloud = MenuItem::with_id("mistterm.team.cloud", l.cloud_sync, true, None);
+        team_menu.append(&team_sign_in)?;
+        team_menu.append(&team_members)?;
+        team_menu.append(&PredefinedMenuItem::separator())?;
+        team_menu.append(&cloud)?;
+
         // ── 工具 ──
         let tools = Submenu::new(l.tools_menu, true);
         let fragments =
@@ -259,13 +283,6 @@ impl NativeAppMenu {
         );
         let credentials =
             MenuItem::with_id("mistterm.tools.credentials", l.credentials, true, None);
-        let team_account = MenuItem::with_id(
-            "mistterm.tools.team_account",
-            l.team_account,
-            true,
-            None,
-        );
-        let cloud = MenuItem::with_id("mistterm.tools.cloud", l.cloud_sync, true, None);
         let session_logs =
             MenuItem::with_id("mistterm.tools.session_logs", l.session_logs, true, None);
         tools.append(&fragments)?;
@@ -273,8 +290,6 @@ impl NativeAppMenu {
         tools.append(&command_history)?;
         tools.append(&PredefinedMenuItem::separator())?;
         tools.append(&credentials)?;
-        tools.append(&team_account)?;
-        tools.append(&cloud)?;
         tools.append(&PredefinedMenuItem::separator())?;
         tools.append(&session_logs)?;
 
@@ -298,6 +313,7 @@ impl NativeAppMenu {
         root.append(&terminal_menu)?;
         root.append(&edit)?;
         root.append(&view)?;
+        root.append(&team_menu)?;
         root.append(&tools)?;
         root.append(&help)?;
 
@@ -310,6 +326,7 @@ impl NativeAppMenu {
             _terminal_menu: terminal_menu,
             _edit_menu: edit,
             _view_menu: view,
+            _team_menu: team_menu,
             _tools_menu: tools,
             _help_menu: help,
             about,
@@ -337,7 +354,8 @@ impl NativeAppMenu {
             quick_fragments,
             command_history,
             credentials,
-            team_account,
+            team_sign_in,
+            team_members,
             cloud,
             session_logs,
             help_guide,
@@ -376,7 +394,8 @@ impl NativeAppMenu {
         let _ = self.quick_fragments.set_text(l.quick_fragments);
         let _ = self.command_history.set_text(l.command_history);
         let _ = self.credentials.set_text(l.credentials);
-        let _ = self.team_account.set_text(l.team_account);
+        let _ = self.team_sign_in.set_text(l.team_sign_in);
+        let _ = self.team_members.set_text(l.team_members);
         let _ = self.cloud.set_text(l.cloud_sync);
         let _ = self.session_logs.set_text(l.session_logs);
         let _ = self._help_menu.set_text(l.help_menu);
@@ -481,8 +500,9 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.tools.quick_fragments" => Some(MacMenuAction::QuickFragmentSelector),
         "mistterm.tools.command_history" => Some(MacMenuAction::CommandHistory),
         "mistterm.tools.credentials" => Some(MacMenuAction::CredentialPanel),
-        "mistterm.tools.team_account" => Some(MacMenuAction::TeamAccount),
-        "mistterm.tools.cloud" => Some(MacMenuAction::CloudSync),
+        "mistterm.team.sign_in" | "mistterm.tools.team_account" => Some(MacMenuAction::TeamAccount),
+        "mistterm.team.members" => Some(MacMenuAction::TeamMembers),
+        "mistterm.team.cloud" | "mistterm.tools.cloud" => Some(MacMenuAction::CloudSync),
         "mistterm.tools.session_logs" => Some(MacMenuAction::SessionLogBrowser),
         "mistterm.help.guide" => Some(MacMenuAction::HelpUserGuide),
         "mistterm.help.spec" => Some(MacMenuAction::HelpFunctionalSpec),

@@ -15,7 +15,8 @@ pub use cache::TeamFragmentCache;
 pub use client::{TeamApiError, TeamClient};
 pub use oauth::OAuthProvider;
 pub use models::{
-    CreateTeamFragmentRequest, TeamFragment, TeamMembership, TeamRole, TeamServer,
+    CreateTeamFragmentRequest, TeamFragment, TeamMember, TeamMembersResponse, TeamMembership,
+    TeamRole, TeamServer,
     TeamSyncEntry, TeamSyncResponse, TeamUser, TeamsListResponse, TokenResponse,
     UpdateTeamFragmentRequest,
 };

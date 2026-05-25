@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use super::client::TeamClient;
 use super::models::TokenResponse;
+use super::settings::team_web_oauth_desktop_callback_url;
 
 const OAUTH_TIMEOUT_SECS: u64 = 300;
 
@@ -54,13 +55,19 @@ pub fn run_browser_oauth(
     let local_addr = listener.local_addr().map_err(|e| e.to_string())?;
     let port = local_addr.port();
     let redirect_local = format!("http://127.0.0.1:{port}/callback");
+    let redirect_bridge = format!("{}?port={port}", team_web_oauth_desktop_callback_url());
+    let redirect_uri = if probe_desktop_oauth_bridge().is_ok() {
+        redirect_bridge.clone()
+    } else {
+        redirect_local.clone()
+    };
 
     if cancel.load(Ordering::Relaxed) {
         return Err("已取消登录".into());
     }
 
-    probe_oauth_start(api_base, provider, &redirect_local)?;
-    let auth_url = TeamClient::oauth_authorize_url(api_base, provider, &redirect_local);
+    probe_oauth_start(api_base, provider, &redirect_uri)?;
+    let auth_url = TeamClient::oauth_authorize_url(api_base, provider, &redirect_uri);
 
     if !crate::platform::shell::open_url(&auth_url) {
         return Err("无法打开系统浏览器".into());
@@ -75,7 +82,7 @@ pub fn run_browser_oauth(
     let client = TeamClient::new(api_base).map_err(|e| e.to_string())?;
     match callback {
         OAuthCallback::Code(code) => client
-            .oauth_exchange(provider, &code, &redirect_local)
+            .oauth_exchange(provider, &code, &redirect_uri)
             .map_err(|e| e.to_string()),
         OAuthCallback::Tokens {
             access_token,
@@ -129,6 +136,23 @@ fn accept_oauth_connection(
             Err(e) => return Err(e.to_string()),
         }
     }
+}
+
+/// 探测 mistlab.dev 桌面 OAuth 桥接页是否已部署。
+fn probe_desktop_oauth_bridge() -> Result<(), String> {
+    let url = team_web_oauth_desktop_callback_url();
+    let http = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = http.get(url).send().map_err(|e| e.to_string())?;
+    if resp.status().is_success() {
+        return Ok(());
+    }
+    Err(format!(
+        "OAuth bridge page not deployed (HTTP {})",
+        resp.status().as_u16()
+    ))
 }
 
 /// 启动前探测 OAuth 入口是否可达（避免打开 404 页面后空等）。

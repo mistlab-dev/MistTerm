@@ -23,6 +23,7 @@ use crate::ui::command_history_overlay::{CommandHistoryAction, CommandHistoryOve
 use crate::ui::help_docs_dialog::{HelpDocsDialog, HelpPage};
 use crate::ui::audit_log_dialog::AuditLogDialog;
 use crate::ui::session_log_dialog::SessionLogDialog;
+use crate::ui::team_members_dialog::TeamMembersDialog;
 use crate::ui::vault_form::VaultSecretForm;
 use crate::ui::ssh_config_import_dialog::SshConfigImportDialog;
 use crate::ui::sidebar::Sidebar;
@@ -486,6 +487,7 @@ pub struct MistTermApp {
     session_log_settings: SessionLogSettings,
     session_log_dialog: SessionLogDialog,
     audit_log_dialog: AuditLogDialog,
+    team_members_dialog: TeamMembersDialog,
     help_docs_dialog: HelpDocsDialog,
     session_log_enabled: bool,
     default_keepalive_enabled: bool,
@@ -841,6 +843,7 @@ impl MistTermApp {
             session_log_settings: SessionLogSettings::default(),
             session_log_dialog: SessionLogDialog::default(),
             audit_log_dialog: AuditLogDialog::default(),
+            team_members_dialog: TeamMembersDialog::default(),
             help_docs_dialog: HelpDocsDialog::default(),
             session_log_enabled: true,
             default_keepalive_enabled: true,
@@ -1304,6 +1307,7 @@ impl MistTermApp {
             || self.command_history_overlay.open
             || self.session_log_dialog.open
             || self.audit_log_dialog.open
+            || self.team_members_dialog.open
             || self.help_docs_dialog.open
             || self.show_ai_settings_dialog
     }
@@ -1651,6 +1655,7 @@ impl MistTermApp {
             || self.git_sync_panel.is_clone_dialog_open()
             || self.team_fragment_editor.open
             || self.team_fragment_conflict.is_some()
+            || self.team_members_dialog.open
     }
 
     /// 合并 `<占位符>` 替换与 `{{ … }}` 得到「填写片段变量」弹窗中的初值。
@@ -3518,6 +3523,9 @@ impl MistTermApp {
             MacMenuAction::TeamAccount => {
                 self.show_preferences_dialog = true;
             }
+            MacMenuAction::TeamMembers => {
+                self.team_members_dialog.open(&mut self.team_service);
+            }
             MacMenuAction::CloudSync => {
                 if self.ensure_right_dock_allowed_or_warn(ctx) {
                     self.cloud_sync_panel.open = true;
@@ -3697,6 +3705,7 @@ impl eframe::App for MistTermApp {
             &mut self.team_fragment_conflict,
             &self.audit_logger,
         );
+        self.team_members_dialog.show_modal(ctx, &theme, &mut self.team_service);
         self.try_flush_pending_fragment_insert(ctx);
         if self.command_history.poll_background_load() {
             ctx.request_repaint();

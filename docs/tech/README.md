@@ -33,7 +33,7 @@
 |---|---|
 | [TEAM-PLATFORM-DEV-PLAN.md](./TEAM-PLATFORM-DEV-PLAN.md) | 团队平台需求与设计（含服务端职责） |
 | [TEAM-PLATFORM-API.md](./TEAM-PLATFORM-API.md) | 客户端 ↔ 服务端 API 契约 |
-| [CLIENT-TEAM-TODO.md](./CLIENT-TEAM-TODO.md) | 客户端团队功能落地清单 + 待办 |
+| [CLIENT-TEAM-TODO.md](./CLIENT-TEAM-TODO.md) | 客户端团队功能清单 + **服务端/运维配合**对照表 |
 
 ### 运维与质量
 

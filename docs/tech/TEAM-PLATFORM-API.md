@@ -2,6 +2,18 @@
 
 MistTerm 客户端与 MistTeam 服务端（\`api.mistlab.dev\`）的集成方案。
 
+### 服务端 / 运维配合速查
+
+完整对照表（含 **客户端 ✅** / **服务端 🔴** / **运维 🟠** 标记、未配合时的降级行为、验收步骤）见 **[CLIENT-TEAM-TODO.md](./CLIENT-TEAM-TODO.md)** §1.2、§三、§四。
+
+| 主题 | 角色 | 文档锚点 |
+|------|------|----------|
+| 基线 API（登录、sync、审计 POST） | 服务端 🔴 | [CLIENT-TEAM-TODO §3.1](./CLIENT-TEAM-TODO.md) |
+| 审计批量 + `evt_{ms}_{hex}` 去重 | 服务端 🔴 | 下文 §4；[CLIENT-TEAM-TODO §1.2](./CLIENT-TEAM-TODO.md) |
+| `GET …/members` 成员列表 | **服务端 🔴 待实现** | [DEV-PLAN A.3.4](./TEAM-PLATFORM-DEV-PLAN.md)；客户端已对接 |
+| OAuth 桥接页部署 | 运维 🟠 | `docs/product/oauth-desktop-callback.html`；`scripts/verify-oauth-bridge.sh` |
+| OAuth redirect 白名单 / 302 | 服务端 🔴 | [CLIENT-TEAM-TODO §3.2](./CLIENT-TEAM-TODO.md) |
+
 ---
 
 ## 1. 登录后同步团队配置
@@ -191,6 +203,9 @@ pub struct TeamServer {
 
 ## 4. 审计事件上报
 
+> **服务端 🔴**：须实现 `POST /v1/audit/events`，接受客户端默认 **最多 50 条 / 30 秒** 一批；按 `event_id`（`evt_{unix_ms}_{8位hex}`）去重并返回 `duplicate` 计数。  
+> **客户端 ✅**：`src/core/audit.rs` 已按上述策略上报。
+
 用户的 shell 操作、文件传输等行为上报到服务端，管理员可在后台搜索审计。
 
 ### 上报接口
@@ -310,6 +325,29 @@ Authorization: Bearer <refresh_token>
 \`\`\`
 生产: https://api.mistlab.dev
 \`\`\`
+
+### 桌面 OAuth（服务端 🔴 + 运维 🟠）
+
+> **客户端 ✅**：`src/core/team/oauth.rs` 优先 `redirect_uri=https://mistlab.dev/oauth/desktop-callback.html?port={本机端口}`；探测桥接页失败则回退 `http://127.0.0.1:{port}/callback`。
+
+| 角色 | 必须项 |
+|------|--------|
+| **运维 🟠** | 将仓库 `docs/product/oauth-desktop-callback.html` 部署到 `https://mistlab.dev/oauth/desktop-callback.html`；验收：`./scripts/verify-oauth-bridge.sh` |
+| **服务端 🔴** | `GET /v1/oauth/{google\|github}?redirect_uri=…` 非 404；白名单含桥接页及 `?port=`；授权完成后 **302** 到 `redirect_uri`，query 用 `&` 连接 `port` 与 `access_token` |
+| **服务端 🔴** | 若仅回传 `code`：`GET /v1/oauth/{provider}/callback?code=…&redirect_uri=…` 换票 |
+
+详见 [CLIENT-TEAM-TODO.md §3.2–3.3](./CLIENT-TEAM-TODO.md)。
+
+### 团队成员列表（服务端 🔴 待实现）
+
+\`\`\`
+GET /v1/teams/{team_id}/members
+Authorization: Bearer <access_token>
+\`\`\`
+
+**响应 `200`：** `{ "members": [ { "user_id", "email", "username", "display_name", "role" } ] }`（viewer+）。
+
+**客户端 ✅**：菜单「团队 → 团队成员…」；接口 404 时提示「服务端尚未提供成员列表」。契约见 [TEAM-PLATFORM-DEV-PLAN.md A.3.4](./TEAM-PLATFORM-DEV-PLAN.md)。
 
 ---
 

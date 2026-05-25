@@ -74,6 +74,25 @@ pub struct TeamsListResponse {
     pub teams: Vec<TeamMembership>,
 }
 
+/// `GET /v1/teams/{team_id}/members`（viewer+）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamMember {
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub email: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub display_name: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamMembersResponse {
+    pub members: Vec<TeamMember>,
+}
+
 /// `GET /v1/team/sync` 响应（见 `docs/tech/TEAM-PLATFORM-API.md`）。
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TeamSyncResponse {

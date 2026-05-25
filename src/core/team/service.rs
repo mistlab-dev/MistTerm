@@ -10,7 +10,7 @@ use super::auth::{token_needs_refresh, TeamTokenStore};
 use super::cache::TeamFragmentCache;
 use super::client::{TeamApiError, TeamClient};
 use super::models::{
-    CreateTeamFragmentRequest, TeamFragment, TeamInfo, TeamMembership, TeamUser,
+    CreateTeamFragmentRequest, TeamFragment, TeamInfo, TeamMember, TeamMembership, TeamUser,
     UpdateTeamFragmentRequest,
 };
 use super::oauth::{run_browser_oauth, OAuthProvider};
@@ -38,6 +38,12 @@ pub enum TeamAsyncResult {
     },
     TeamDetailOk {
         info: TeamInfo,
+    },
+    MembersOk {
+        members: Vec<TeamMember>,
+    },
+    MembersErr {
+        message: String,
     },
     CreateFragmentOk(TeamFragment),
     UpdateFragmentOk(TeamFragment),
@@ -74,6 +80,10 @@ enum TeamJob {
         api_base: String,
         team_id: String,
     },
+    ListMembers {
+        api_base: String,
+        team_id: String,
+    },
     OAuth {
         api_base: String,
         provider: OAuthProvider,
@@ -95,6 +105,8 @@ pub struct TeamService {
     pub auth_expired: bool,
     /// 当前团队详情缓存（描述等）
     pub current_team_detail: Option<super::models::TeamInfo>,
+    pub team_members: Vec<TeamMember>,
+    pub team_members_error: Option<String>,
     pub pending_audit_login: bool,
     pub pending_audit_sync: bool,
     pending_vault_apply: bool,
@@ -121,6 +133,8 @@ impl TeamService {
             pending_initial_sync: false,
             auth_expired: false,
             current_team_detail: None,
+            team_members: Vec::new(),
+            team_members_error: None,
             pending_audit_login: false,
             pending_audit_sync: false,
             pending_vault_apply: false,
@@ -177,6 +191,8 @@ impl TeamService {
         self.tokens.clear();
         self.state.clear_session();
         self.current_team_detail = None;
+        self.team_members.clear();
+        self.team_members_error = None;
         self.auth_expired = false;
         self.status_line = "Logged out".into();
     }
@@ -195,6 +211,26 @@ impl TeamService {
 
     /// 异步刷新当前团队详情；在后台线程中跑 HTTP，不阻塞 UI。
     /// 如果当前已有任务在跑，会留下 pending 标记，等 poll() 中 busy 清掉后再触发。
+    pub fn spawn_list_team_members(&mut self) {
+        if !self.is_logged_in() {
+            self.team_members_error = Some("Not signed in".into());
+            return;
+        }
+        let Some(team_id) = self.state.current_team_id.clone() else {
+            self.team_members_error = Some("No team selected".into());
+            return;
+        };
+        if self.busy {
+            return;
+        }
+        self.team_members_error = None;
+        self.spawn_job(TeamJob::ListMembers {
+            api_base: self.api_base(),
+            team_id,
+        });
+        self.status_line = "Loading team members…".into();
+    }
+
     pub fn spawn_refresh_current_team_detail(&mut self) {
         if !self.is_logged_in() {
             return;
@@ -412,6 +448,16 @@ impl TeamService {
                     TeamAsyncResult::TeamDetailOk { info } => {
                         self.current_team_detail = Some(info);
                     }
+                    TeamAsyncResult::MembersOk { members } => {
+                        self.team_members = members;
+                        self.team_members_error = None;
+                        self.status_line.clear();
+                    }
+                    TeamAsyncResult::MembersErr { message } => {
+                        self.team_members.clear();
+                        self.team_members_error = Some(message);
+                        self.status_line.clear();
+                    }
                     TeamAsyncResult::Err(e) => {
                         if e.contains("401") || e.contains("Not signed in") {
                             self.handle_auth_failure(&e);
@@ -510,6 +556,12 @@ fn run_job(job: TeamJob, tokens: &TeamTokenStore) -> TeamAsyncResult {
             match do_team_detail(&api_base, &team_id, tokens) {
                 Ok(info) => TeamAsyncResult::TeamDetailOk { info },
                 Err(e) => TeamAsyncResult::Err(e),
+            }
+        }
+        TeamJob::ListMembers { api_base, team_id } => {
+            match do_list_team_members(&api_base, &team_id, tokens) {
+                Ok(members) => TeamAsyncResult::MembersOk { members },
+                Err(e) => TeamAsyncResult::MembersErr { message: e },
             }
         }
         TeamJob::RefreshTeams { api_base } => match do_refresh_teams(&api_base, tokens) {
@@ -618,6 +670,17 @@ fn do_team_detail(
     with_auth_retry(api_base, tokens, |access, client| {
         client.get_team(access, team_id)
     })
+}
+
+fn do_list_team_members(
+    api_base: &str,
+    team_id: &str,
+    tokens: &TeamTokenStore,
+) -> Result<Vec<TeamMember>, String> {
+    let resp = with_auth_retry(api_base, tokens, |access, client| {
+        client.list_team_members(access, team_id)
+    })?;
+    Ok(resp.members)
 }
 
 fn do_team_config_sync(

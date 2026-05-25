@@ -137,6 +137,17 @@ impl TeamClient {
         self.get_json(&format!("/v1/teams/{team_id}"), Some(access_token))
     }
 
+    pub fn list_team_members(
+        &self,
+        access_token: &str,
+        team_id: &str,
+    ) -> Result<super::models::TeamMembersResponse, TeamApiError> {
+        self.get_json(
+            &format!("/v1/teams/{team_id}/members"),
+            Some(access_token),
+        )
+    }
+
     pub fn sync_fragments(
         &self,
         access_token: &str,

@@ -677,7 +677,34 @@ Authorization: Bearer <access_token>
 
 **响应 `200`：** Team 对象。需为该团队成员（viewer+）。
 
-#### A.3.4 添加团队成员
+#### A.3.4 团队成员列表
+
+> **服务端 🔴 待实现** · **客户端 ✅ 已对接**（`team_members_dialog.rs` → `GET /v1/teams/{team_id}/members`；404 时提示未就绪）。  
+> 运维无额外部署；契约与验收见 [CLIENT-TEAM-TODO.md §1.2 / §四](./CLIENT-TEAM-TODO.md)。
+
+```
+GET /v1/teams/{team_id}/members
+Authorization: Bearer <access_token>
+```
+
+**响应 `200`：**
+```json
+{
+  "members": [
+    {
+      "user_id": "u_abc123",
+      "email": "user@example.com",
+      "username": "alice",
+      "display_name": "Alice",
+      "role": "editor"
+    }
+  ]
+}
+```
+
+> 需要 viewer+。**服务端须返回 200**；若尚未实现，桌面端「团队 → 团队成员」会提示 404。
+
+#### A.3.5 添加团队成员（服务端 🔴 · admin）
 
 ```
 POST /v1/teams/{team_id}/members
