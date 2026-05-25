@@ -721,9 +721,9 @@ sudo yum install libssh2-devel pkgconfig
 ## 📚 相关文档
 
 - [产品文档](../product/README.md)
-- [设计文档](../product/MistTerm-2.0-Design-Document.md)
-- [API 文档](./api.md) (待创建)
-- [数据库设计](./database.md) (待创建)
+- [模块设计](./MODULE-DESIGN.md)
+- [API 文档](./API.md)
+- [安全与审计](./SECURITY.md)
 
 ---
 

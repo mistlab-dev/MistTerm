@@ -1,137 +1,92 @@
 # MistTerm 文档中心
 
-> 产品文档与技术文档统一入口
+> 产品 / 技术文档统一入口  
+> **最后更新**：2026-05-25
 
 ---
 
-## 📁 目录结构
+## 目录结构
 
 ```
 docs/
-├── README.md                 # 本文档（文档索引）
-├── product/                  # 产品文档
-│   ├── README.md            # 产品详细设计文档
-│   ├── fragments-analytics.md  # ⭐ 命令片段 + 分析统计（核心功能）
-│   ├── MistTerm-Efficiency-First.md  # 效率优先版（推荐）
-│   ├── MistTerm-2.0-Design*.md      # 历史版本
-│   ├── team-collaboration.md        # 团队协同详细设计
-│   └── proto-*.html         # HTML 原型（可交互）
-├── tech/                     # 技术文档（待创建）
-│   ├── architecture.md      # 架构设计
-│   ├── api.md              # API 文档
-│   └── ...
-└── protos/                   # 原型图（PNG）
-    ├── terminal-main.png    # 主终端界面
-    ├── fragments-create.png # 命令片段创建
-    ├── fragments-list.png   # 命令片段列表
-    ├── sftp-main.png       # SFTP 文件传输
-    ├── credentials-list.png # 凭证管理
-    ├── monitor-dashboard.png # 实时监控
-    ├── team-manage.png     # 团队管理
-    ├── sync-settings.png   # 云端同步
-    └── theme-editor.png    # 主题编辑器
+├── README.md                  # 本文件（文档总入口）
+├── INSTALL.md                 # 安装说明（macOS / Linux / Windows）
+├── product/                   # 产品文档（功能、UI、原型）
+├── tech/                      # 技术文档（架构、模块、API、运维）
+├── archive/                   # 历史设计稿（已落地或已被取代）
+└── protos/                    # PNG 原型图
 ```
 
 ---
 
-## 📖 产品文档
+## 产品文档（[`product/`](product/)）
 
-### 推荐阅读顺序
+当前权威文档：
 
-1. **MistTerm-Efficiency-First.md** ⭐ 推荐
-   - 核心理念：一切为了效率
-   - 聚焦核心功能，砍掉冗余
-   - 适合：快速了解产品价值
-
-2. **README.md**（产品详细设计）
-   - 完整的功能设计
-   - 详细的交互说明
-   - 适合：深入了解产品细节
-
-3. **team-collaboration.md**
-   - 团队协同功能详细设计
-   - 权限模型、审计日志
-   - 适合：团队协作场景
-
-4. **HTML 原型**
-   - 可交互的原型页面
-   - 直接浏览器打开查看
-   - 适合：UI/UX 评审
-
-### 快速访问
-
-| 文档 | 说明 | 链接 |
-|-----|------|------|
-| 效率优先版 | 核心理念 + 优先级 | [product/MistTerm-Efficiency-First.md](product/MistTerm-Efficiency-First.md) |
-| 详细设计 | 完整功能规格 | [product/README.md](product/README.md) |
-| 团队协同 | 团队功能详细设计 | [product/team-collaboration.md](product/team-collaboration.md) |
-| HTML 原型 | 可交互原型 | [product/proto-terminal-main.html](product/proto-terminal-main.html) |
+| 文档 | 用途 |
+|---|---|
+| [`product/README.md`](product/README.md) | 功能详细设计（10 章，含主终端、片段、SFTP、监控、团队等） |
+| [`product/FUNCTIONAL_SPEC.md`](product/FUNCTIONAL_SPEC.md) | 产品视角的功能规范（背景、目标、边界、异常） |
+| [`product/SPECIFICATION_DETAILED.md`](product/SPECIFICATION_DETAILED.md) | 研发视角的视觉规格（颜色、字号、圆角、Token 真源） |
+| [`product/UI-GUIDELINES.md`](product/UI-GUIDELINES.md) | 界面设计规范（侧栏、面板、Tab、对话框、底栏） |
+| [`product/LAYOUT.md`](product/LAYOUT.md) | 布局真源（egui 区域注册顺序，**改 UI 必读**） |
+| [`product/fragments-analytics.md`](product/fragments-analytics.md) | 命令片段 + 分析统计的产品详细设计 |
+| [`product/proto-*.html`](product/) | 可交互 HTML 原型 |
+| [`protos/*.png`](protos/) | 原型 PNG 截图 |
 
 ---
 
-## 🔧 技术文档
+## 技术文档（[`tech/`](tech/)）
 
-技术文档正在整理中，预计包含：
-
-- 系统架构
-- 技术选型
-- 模块设计
-- API 文档
-- 数据库设计
-- 部署指南
-
----
-
-## 🖼️ 原型图索引
-
-| 功能 | PNG 原型 | HTML 原型 |
-|-----|---------|----------|
-| 主终端界面 | [terminal-main.png](protos/terminal-main.png) | [proto-terminal-main.html](product/proto-terminal-main.html) |
-| 命令片段创建 | [fragments-create.png](protos/fragments-create.png) | [proto-fragments-create.html](product/proto-fragments-create.html) |
-| 命令片段列表 | [fragments-analytics.png](protos/fragments-analytics.png) | [proto-terminal-main.html](product/proto-fragments-analytics.html) |
-| 命令分析仪表盘 | [analytics-dashboard.png](protos/analytics-dashboard.png) | [proto-analytics-dashboard.html](product/proto-analytics-dashboard.html) |
-| 命令片段列表 | [fragments-list.png](protos/fragments-list.png) | [proto-fragments-list.html](product/proto-fragments-list.html) |
-| SFTP 文件传输 | [sftp-main.png](protos/sftp-main.png) | [proto-sftp-main.html](product/proto-sftp-main.html) |
-| 凭证管理 | [credentials-list.png](protos/credentials-list.png) | [proto-credentials-list.html](product/proto-credentials-list.html) |
-| 实时监控 | [monitor-dashboard.png](protos/monitor-dashboard.png) | [proto-monitor-dashboard.html](product/proto-monitor-dashboard.html) |
-| 团队管理 | [team-manage.png](protos/team-manage.png) | [proto-team-manage.html](product/proto-team-manage.html) |
-| 云端同步 | [sync-settings.png](protos/sync-settings.png) | [proto-sync-settings.html](product/proto-sync-settings.html) |
-| 主题编辑器 | [theme-editor.png](protos/theme-editor.png) | [proto-theme-editor.html](product/proto-theme-editor.html) |
+| 文档 | 用途 |
+|---|---|
+| [`tech/README.md`](tech/README.md) | 技术文档导航 |
+| [`tech/ARCHITECTURE.md`](tech/ARCHITECTURE.md) | 系统架构、分层、数据流 |
+| [`tech/MODULE-DESIGN.md`](tech/MODULE-DESIGN.md) | 模块详细设计与接口 |
+| [`tech/IMPLEMENTATION-GUIDE.md`](tech/IMPLEMENTATION-GUIDE.md) | 实现指南（最厚的一份） |
+| [`tech/API.md`](tech/API.md) | 各层 API 文档 |
+| [`tech/TECH-STACK.md`](tech/TECH-STACK.md) | 技术选型 |
+| [`tech/TECHNICAL-ASSESSMENT.md`](tech/TECHNICAL-ASSESSMENT.md) | 技术可行性评估（最终版） |
+| [`tech/DEPLOYMENT.md`](tech/DEPLOYMENT.md) | 编译、打包、发布 |
+| [`tech/TESTING.md`](tech/TESTING.md) | 单元 / 集成 / 性能测试方案 |
+| [`tech/SMOKE.md`](tech/SMOKE.md) | 多平台手工冒烟清单 |
+| [`tech/CROSS_PLATFORM_QA.md`](tech/CROSS_PLATFORM_QA.md) | 跨平台 UI 验收清单 |
+| [`tech/TERMINAL-BEHAVIOR.md`](tech/TERMINAL-BEHAVIOR.md) | 终端 / VT / ANSI 行为约定 |
+| [`tech/ZMODEM.md`](tech/ZMODEM.md) | ZMODEM 实现 + `rz` 兼容性排障 + 兜底方案 |
+| [`tech/SECURITY.md`](tech/SECURITY.md) | 本地配置加密 + 审计 |
+| [`tech/AI-INTERACTION-DESIGN.md`](tech/AI-INTERACTION-DESIGN.md) | 右侧 AI 面板交互设计 |
+| [`tech/TEAM-PLATFORM-DEV-PLAN.md`](tech/TEAM-PLATFORM-DEV-PLAN.md) | 团队平台需求与设计（含服务端职责） |
+| [`tech/TEAM-PLATFORM-API.md`](tech/TEAM-PLATFORM-API.md) | 团队平台 API 契约（客户端 ↔ 服务端） |
+| [`tech/CLIENT-TEAM-TODO.md`](tech/CLIENT-TEAM-TODO.md) | 客户端团队功能落地清单 + 待办 |
 
 ---
 
-## 📝 文档版本
+## 历史归档（[`archive/`](archive/)）
 
-| 版本 | 日期 | 变更内容 | 作者 |
-|-----|------|---------|------|
-| 2.0 | 2026-04-24 | 效率优先版，重新整理文档结构 | 产品专家 |
-| 1.0 | 2026-04-24 | 初始版本，完整功能设计 | 产品专家 |
+下列文档已被取代或对应方案已落地，仅作背景参考：
 
----
-
-## 🚀 快速开始
-
-### 查看产品文档
-
-```bash
-# 打开效率优先版（推荐）
-open docs/product/MistTerm-Efficiency-First.md
-
-# 打开详细设计文档
-open docs/product/README.md
-
-# 打开 HTML 原型
-open docs/product/proto-terminal-main.html
-```
-
-### 开发参考
-
-1. 先阅读 **MistTerm-Efficiency-First.md** 了解核心理念
-2. 再阅读 **README.md** 了解详细功能
-3. 查看 **HTML 原型** 了解 UI 交互
-4. 技术文档待创建后查看架构设计
+- `MistTerm-2.0-Design.md` / `-Integrated.md` / `-Document.md`：2.0 重构设计三连
+- `MistTerm-Efficiency-First.md`：早期"效率优先"理念稿
+- `MistTerm-设计文档.md`：v1.1 旧版终端设计
+- `P0功能详细设计.md`：13 项 P0/P1/P2 详细设计（已落地）
+- `改造设计规范.md` + `改造后原型.html`：UI 改造方案 + 原型（已落地）
+- `team-collaboration.md`：团队协同初稿（被 `tech/TEAM-PLATFORM-DEV-PLAN.md` 取代）
+- `COMMAND-ANALYTICS.md`：命令分析需求初稿（合并入 `product/fragments-analytics.md`）
+- `FEASIBILITY-ANALYSIS.md`：早期可行性分析（被 `tech/TECHNICAL-ASSESSMENT.md` 取代）
+- `CLIENT-BILLING-TEAM-INTEGRATION.md`：客户端付费/团队对接改造方案（已落地，剩余事项见 `tech/CLIENT-TEAM-TODO.md`）
+- `CLIENT-GAP-ANALYSIS.md`：客户端 vs 竞品差距分析（结论已沉淀）
 
 ---
 
-**文档维护**: 产品专家  
-**最后更新**: 2026-04-24
+## 安装与冒烟
+
+- 安装：[`INSTALL.md`](INSTALL.md)
+- 多平台冒烟：[`tech/SMOKE.md`](tech/SMOKE.md) · `scripts/smoke.sh`
+
+---
+
+## 文档命名约定
+
+- 全部使用英文文件名（kebab-case 或 UPPER-KEBAB-CASE 都可，向已有风格靠拢即可）
+- 一份能力一个权威文档，新增前先看是否能扩写已有文档
+- 历史稿放 `archive/`，不要直接删除

@@ -5,4 +5,4 @@ echo "== MistTerm: cargo test =="
 cargo test -q
 echo "== MistTerm: cargo build --release =="
 cargo build --release -q
-echo "OK: 构建与测试通过。完整界面步骤见 docs/SMOKE.md"
+echo "OK: 构建与测试通过。完整界面步骤见 docs/tech/SMOKE.md"

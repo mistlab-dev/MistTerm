@@ -688,7 +688,7 @@ pub struct MonitorPanel {
 
 | 文档 | 关系 |
 |------|------|
-| `SPECIFICATION_DETAILED.md` | 定义颜色体系、字号、圆角的具体值；本文档引用 theme 令牌名 |
-| `FUNCTIONAL_SPEC.md` | 定义功能逻辑与边界条件；本文档描述 UI 布局与交互 |
-| `P0功能详细设计.md` | 定义新增功能（SSH Config 导入 / Ctrl+R / 自动重连等）的设计；本文档仅描述现有 UI |
-| `改造设计规范.md` | 定义自适应布局改造方案 |
+| [`SPECIFICATION_DETAILED.md`](./SPECIFICATION_DETAILED.md) | 定义颜色体系、字号、圆角的具体值；本文档引用 theme 令牌名 |
+| [`FUNCTIONAL_SPEC.md`](./FUNCTIONAL_SPEC.md) | 定义功能逻辑与边界条件；本文档描述 UI 布局与交互 |
+| [`LAYOUT.md`](./LAYOUT.md) | 当前布局真源（egui 区域注册顺序、间距、底栏） |
+| [`docs/archive/`](../archive/) | 历史稿：`P0功能详细设计.md`（已落地的新增功能设计）、`改造设计规范.md`（自适应布局改造方案） |

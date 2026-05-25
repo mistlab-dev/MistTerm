@@ -109,7 +109,7 @@ sz filename.txt  # 发送文件（从服务器到本地）
 
 ### 核心组件
 
-冒烟清单见 [docs/SMOKE.md](docs/SMOKE.md)；产品规格见 [docs/product/FUNCTIONAL_SPEC.md](docs/product/FUNCTIONAL_SPEC.md)。
+冒烟清单见 [docs/tech/SMOKE.md](docs/tech/SMOKE.md)；产品规格见 [docs/product/FUNCTIONAL_SPEC.md](docs/product/FUNCTIONAL_SPEC.md)。
 
 ```
 MistTerm/

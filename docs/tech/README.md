@@ -1,176 +1,92 @@
 # MistTerm 技术文档
 
-> **版本**: 1.0  
-> **最后更新**: 2026-04-24  
-> **维护**: 技术团队
+> **最后更新**：2026-05-25  
+> **维护**：技术团队
 
 ---
 
-## 📚 文档导航
+## 文档导航
 
-### 核心文档
+### 架构与实现
 
-| 文档 | 描述 | 状态 |
-|-----|------|-----|
-| [架构设计](./ARCHITECTURE.md) | 系统架构、分层设计、数据流 | ✅ 已完成 |
-| [技术栈](./TECH-STACK.md) | 技术选型、依赖库、版本管理 | ✅ 已完成 |
-| [模块设计](./MODULE-DESIGN.md) | 模块详细设计、接口说明 | ✅ 已完成 |
-| [API 文档](./API.md) | 各层 API 接口文档 | ✅ 已完成 |
-| [部署指南](./DEPLOYMENT.md) | 编译、打包、部署流程 | ✅ 已完成 |
-| [测试方案](./TESTING.md) | 单元测试、集成测试、性能测试 | ✅ 已完成 |
+| 文档 | 描述 |
+|---|---|
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | 系统架构、分层设计、数据流 |
+| [MODULE-DESIGN.md](./MODULE-DESIGN.md) | 模块详细设计与接口说明 |
+| [IMPLEMENTATION-GUIDE.md](./IMPLEMENTATION-GUIDE.md) | 实现指南（最厚的一份） |
+| [API.md](./API.md) | 各层 API 接口文档 |
+| [TECH-STACK.md](./TECH-STACK.md) | 技术选型与依赖管理 |
+| [TECHNICAL-ASSESSMENT.md](./TECHNICAL-ASSESSMENT.md) | 技术可行性评估（最终版） |
 
-### 规划文档
+### 平台能力
 
-| 文档 | 描述 | 状态 |
-|-----|------|-----|
-| [团队平台需求与设计](./TEAM-PLATFORM-DEV-PLAN.md) | 团队片段 + 审计；AI 为客户端自配 OpenAI 兼容接口 | 0.6 |
-| [AI 交互设计](./AI-INTERACTION-DESIGN.md) | 右侧 AI 面板；「用到终端」执行命令 | 0.2 |
+| 文档 | 描述 |
+|---|---|
+| [SECURITY.md](./SECURITY.md) | 本地配置加密 + 审计策略 |
+| [TERMINAL-BEHAVIOR.md](./TERMINAL-BEHAVIOR.md) | 终端 / VT / ANSI 行为约定 |
+| [ZMODEM.md](./ZMODEM.md) | ZMODEM 实现 + `rz -bye` 兼容性排障 + 兜底方案 |
+| [AI-INTERACTION-DESIGN.md](./AI-INTERACTION-DESIGN.md) | 右侧 AI 面板交互设计 |
 
-### 待创建文档
+### 团队平台
 
-| 文档 | 描述 | 优先级 |
-|-----|------|-------|
-| 数据库设计 | 数据存储设计 | 中 |
-| 安全设计 | 安全架构、加密方案 | 高 |
-| 性能优化 | 性能调优指南 | 中 |
-| 故障排查 | 常见问题解决方案 | 高 |
-| 开发指南 | 新手开发入门 | 中 |
+| 文档 | 描述 |
+|---|---|
+| [TEAM-PLATFORM-DEV-PLAN.md](./TEAM-PLATFORM-DEV-PLAN.md) | 团队平台需求与设计（含服务端职责） |
+| [TEAM-PLATFORM-API.md](./TEAM-PLATFORM-API.md) | 客户端 ↔ 服务端 API 契约 |
+| [CLIENT-TEAM-TODO.md](./CLIENT-TEAM-TODO.md) | 客户端团队功能落地清单 + 待办 |
+
+### 运维与质量
+
+| 文档 | 描述 |
+|---|---|
+| [DEPLOYMENT.md](./DEPLOYMENT.md) | 编译、打包、发布 |
+| [TESTING.md](./TESTING.md) | 单元 / 集成 / 性能测试方案 |
+| [SMOKE.md](./SMOKE.md) | 多平台手工冒烟清单 |
+| [CROSS_PLATFORM_QA.md](./CROSS_PLATFORM_QA.md) | 跨平台 UI 验收清单 |
 
 ---
 
-## 🏗️ 快速开始
-
-### 1. 了解架构
-
-如果你是第一次接触 MistTerm，建议按以下顺序阅读：
-
-```
-1. 架构设计 (ARCHITECTURE.md)
-   └─► 了解整体架构和分层
-
-2. 技术栈 (TECH-STACK.md)
-   └─► 了解使用的技术和工具
-
-3. 模块设计 (MODULE-DESIGN.md)
-   └─► 了解各模块的详细设计
-
-4. API 文档 (API.md)
-   └─► 了解各模块的接口
-```
-
-### 2. 开发环境
+## 快速开始
 
 ```bash
-# 1. 安装依赖
-brew install libssh2 pkg-config  # macOS
-# 或
-sudo apt install libssh2-1-dev   # Ubuntu
+# 1. 安装系统依赖（macOS）
+brew install libssh2 pkg-config
 
-# 2. 克隆代码
-git clone https://github.com/your-org/MistTerm.git
+# 2. 克隆并构建
+git clone https://github.com/c-wind/MistTerm.git
 cd MistTerm
+cargo build --release --bin Mist
 
-# 3. 编译运行
-cargo run
-```
-
-详细步骤见 [部署指南](./DEPLOYMENT.md)。
-
-### 3. 运行测试
-
-```bash
-# 运行所有测试
+# 3. 运行测试
 cargo test
-
-# 查看测试覆盖率
-cargo tarpaulin --out Html
 ```
 
-详细步骤见 [测试方案](./TESTING.md)。
+详细步骤见 [`DEPLOYMENT.md`](./DEPLOYMENT.md)；测试方案见 [`TESTING.md`](./TESTING.md)。
 
 ---
 
-## 📁 文档结构
+## 历史归档
 
-```
-docs/tech/
-├── README.md              # 本文档（索引）
-├── ARCHITECTURE.md        # 架构设计
-├── TECH-STACK.md          # 技术栈
-├── MODULE-DESIGN.md       # 模块设计
-├── API.md                 # API 文档
-├── DEPLOYMENT.md          # 部署指南
-├── TESTING.md             # 测试方案
-├── database.md            # 数据库设计（待创建）
-├── security.md            # 安全设计（待创建）
-├── performance.md         # 性能优化（待创建）
-└── troubleshooting.md     # 故障排查（待创建）
-```
+以下评估 / 改造方案的核心结论已沉淀到当前文档，原稿见 [`docs/archive/`](../archive/)：
+
+- `FEASIBILITY-ANALYSIS.md` → 被 [`TECHNICAL-ASSESSMENT.md`](./TECHNICAL-ASSESSMENT.md) 取代
+- `CLIENT-BILLING-TEAM-INTEGRATION.md` → 改造任务已落地，剩余事项见 [`CLIENT-TEAM-TODO.md`](./CLIENT-TEAM-TODO.md)
+- `CLIENT-GAP-ANALYSIS.md` → 差距分析结论已用于 P0/P1 规划
+- `team-collaboration.md` → 被 [`TEAM-PLATFORM-DEV-PLAN.md`](./TEAM-PLATFORM-DEV-PLAN.md) 覆盖
 
 ---
 
-## 🔗 相关文档
+## 相关文档
 
-- [产品文档](../product/README.md) - 产品功能和交互设计
-- [设计文档](../product/MistTerm-2.0-Design-Document.md) - 产品重构设计
-- [原型图](../protos/) - UI 原型图
-
----
-
-## 📝 贡献指南
-
-### 文档更新
-
-1. 修改对应的文档文件
-2. 更新文档版本和日期
-3. 提交 Pull Request
-
-### 文档规范
-
-- 使用 Markdown 格式
-- 中文描述，代码/术语用英文
-- 包含示例代码
-- 更新版本号
-
-### 版本管理
-
-| 版本 | 日期 | 更新内容 |
-|-----|------|---------|
-| 1.0 | 2026-04-24 | 初始版本，完成核心文档 |
+- 顶层入口：[`docs/README.md`](../README.md)
+- 产品文档：[`docs/product/`](../product/)
+- 安装：[`docs/INSTALL.md`](../INSTALL.md)
 
 ---
 
-## ❓ 常见问题
+## 贡献规范
 
-### Q: 从哪里开始？
-
-A: 建议按以下顺序：
-1. 先看 [架构设计](./ARCHITECTURE.md) 了解整体
-2. 再看 [技术栈](./TECH-STACK.md) 了解技术选型
-3. 然后看 [部署指南](./DEPLOYMENT.md) 搭建环境
-
-### Q: 如何贡献文档？
-
-A: 
-1. Fork 仓库
-2. 修改文档
-3. 提交 Pull Request
-4. 等待 Review
-
-### Q: 文档过时了怎么办？
-
-A: 请提交 Issue 或 PR，我们会及时更新。
-
----
-
-## 📞 联系方式
-
-- **问题反馈**: 提交 GitHub Issue
-- **文档建议**: 提交 GitHub PR
-- **技术讨论**: 提交 GitHub Discussion
-
----
-
-**文档维护**: 技术团队  
-**最后更新**: 2026-04-24  
-**状态**: 持续维护中
+- 一份能力 → 一个权威文档；新增前先看是否能扩写既有文档
+- 文件名使用英文（kebab-case 或 UPPER-KEBAB-CASE 与同目录风格保持一致）
+- 历史稿放 `docs/archive/`，**不要直接删除**
+- 文档前置 `> **更新**：YYYY-MM-DD` 元信息保持更新

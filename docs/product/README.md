@@ -1,9 +1,15 @@
 # MistTerm - 功能详细设计文档
 
-> **文档版本**: 1.0  
-> **最后更新**: 2026-04-24  
-> **状态**: 目标设计  
-> **作者**: 产品专家
+> **文档版本**: 1.1  
+> **最后更新**: 2026-05-25  
+> **状态**: 目标设计 / 大部分已实现  
+
+> **配套文档**：
+> - 视觉规格：[`SPECIFICATION_DETAILED.md`](./SPECIFICATION_DETAILED.md)
+> - 功能规范：[`FUNCTIONAL_SPEC.md`](./FUNCTIONAL_SPEC.md)
+> - 界面规范：[`UI-GUIDELINES.md`](./UI-GUIDELINES.md)
+> - 布局真源：[`LAYOUT.md`](./LAYOUT.md)
+> - 命令片段 + 分析统计：[`fragments-analytics.md`](./fragments-analytics.md)
 
 ---
 
