@@ -23,6 +23,7 @@
 | 文档 | 描述 |
 |---|---|
 | [SECURITY.md](./SECURITY.md) | 本地配置加密 + 审计策略 |
+| [COMMAND-AUDIT.md](./COMMAND-AUDIT.md) | 命令审计客户端集成（策略同步、实时拦截、告警上报） |
 | [TERMINAL-BEHAVIOR.md](./TERMINAL-BEHAVIOR.md) | 终端 / VT / ANSI 行为约定 |
 | [ZMODEM.md](./ZMODEM.md) | ZMODEM 实现 + `rz -bye` 兼容性排障 + 兜底方案 |
 | [AI-INTERACTION-DESIGN.md](./AI-INTERACTION-DESIGN.md) | 右侧 AI 面板交互设计 |
