@@ -331,37 +331,53 @@ impl FragmentManager {
         }
     }
 
-    /// 添加默认片段
+    /// 添加默认片段（极简兜底，正常从市场加载）
     fn add_default_fragments(&mut self) {
         let defaults = vec![
-            // 系统监控
             ("磁盘使用", "df -h", "系统监控"),
             ("内存使用", "free -h", "系统监控"),
-            ("CPU 负载", "uptime", "系统监控"),
-            ("系统信息", "uname -a", "系统监控"),
-            // 进程管理
             ("查看进程", "ps aux", "进程管理"),
-            ("top 监控", "top", "进程管理"),
-            ("查找进程", "ps aux | grep ", "进程管理"),
-            ("杀死进程", "kill -9 ", "进程管理"),
-            // 网络
             ("网络连接", "netstat -tulpn", "网络"),
-            ("DNS 查询", "dig google.com", "网络"),
-            ("Ping 测试", "ping -c 4 google.com", "网络"),
-            // Docker
             ("查看容器", "docker ps -a", "Docker"),
-            ("容器日志", "docker logs -f ", "Docker"),
-            ("重启容器", "docker restart ", "Docker"),
-            // Nginx
-            ("重启 Nginx", "sudo systemctl restart nginx", "Nginx"),
-            ("Nginx 状态", "sudo systemctl status nginx", "Nginx"),
-            ("错误日志", "tail -f /var/log/nginx/error.log", "Nginx"),
         ];
 
         for (title, command, category) in defaults {
             let id = Uuid::new_v4().to_string();
             self.fragments.push(FragmentStats::new(id, title.to_string(), command.to_string(), category.to_string()));
         }
+    }
+
+    /// Initialize from market catalog if available, otherwise use built-in defaults.
+    pub fn init_from_market_or_defaults(market: Option<&crate::core::market::MarketFragmentCache>) -> Self {
+        let mut manager = Self {
+            fragments: Vec::new(),
+            id_map: HashMap::new(),
+        };
+        if let Some(cache) = market {
+            if !cache.fragments.is_empty() {
+                for item in &cache.fragments {
+                    let mut frag = FragmentStats::new(
+                        item.id.clone(),
+                        item.title.clone(),
+                        item.command.clone(),
+                        if item.category.is_empty() { "market".to_string() } else { item.category.clone() },
+                    );
+                    frag.tags = crate::core::team::parse_tags_json(&item.tags);
+                    if !frag.tags.iter().any(|t| t.eq_ignore_ascii_case("market")) {
+                        frag.tags.push("market".into());
+                    }
+                    frag.tags.push(format!("mkt:{}", item.id));
+                    frag.variables = crate::core::team::parse_variables_json(&item.variables);
+                    manager.fragments.push(frag);
+                }
+                manager.rebuild_id_map();
+                return manager;
+            }
+        }
+        // Fallback: minimal built-in defaults
+        manager.add_default_fragments();
+        manager.rebuild_id_map();
+        manager
     }
 
     /// 获取默认配置文件路径

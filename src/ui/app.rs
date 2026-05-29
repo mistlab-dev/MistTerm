@@ -748,8 +748,10 @@ impl MistTermApp {
 
         let mut app = Self {
             session_manager,
+            // Load market cache first, then init fragments from market or fallback to defaults
+            let _market_cache = crate::core::market::MarketFragmentCache::load();
             fragment_manager: FragmentManager::load(&FragmentManager::default_config_path())
-                .unwrap_or_else(|_| FragmentManager::new()),
+                .unwrap_or_else(|_| FragmentManager::init_from_market_or_defaults(Some(&_market_cache))),
             selected_session_id,
             sidebar_collapsed: false,
             sidebar_width: layout_util::default_sidebar_width(&cc.egui_ctx),
