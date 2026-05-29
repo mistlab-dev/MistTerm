@@ -7,9 +7,9 @@ use crate::ui::theme::Theme;
 use eframe::egui::{self, FontId, RichText, Ui};
 
 const WEBSITE_URL: &str = "https://mistlab.dev";
-const DOCS_URL: &str = "https://docs.mistlab.dev";
-const MARKET_URL: &str = "https://mistlab.dev/market";
+const DOCS_URL: &str = "https://github.com/c-wind/MistTerm/tree/main/docs";
 const GITHUB_URL: &str = "https://github.com/c-wind/MistTerm";
+const GITHUB_ISSUES_URL: &str = "https://github.com/c-wind/MistTerm/issues";
 
 struct QuickStep {
     title: &'static str,
@@ -415,8 +415,8 @@ fn render_features(ui: &mut Ui, theme: &Theme, ctx: &egui::Context) {
     ui.add_space(theme.spacing_sm());
     let more = crate::i18n::tr(
         ctx,
-        &format!("Full documentation: {} — Report issues: {}", DOCS_URL, GITHUB_URL),
-        &format!("完整文档：{} — 问题反馈：{}", DOCS_URL, GITHUB_URL),
+        &format!("Docs: {}\nIssues: {}", DOCS_URL, GITHUB_ISSUES_URL),
+        &format!("文档：{}\n问题反馈：{}", DOCS_URL, GITHUB_ISSUES_URL),
     );
     render_tip_box(
         ui,
@@ -484,6 +484,24 @@ fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_m
             .clicked()
         {
             if !crate::platform::open_url(WEBSITE_URL) {
+                *status_message = crate::i18n::tr(
+                    ctx,
+                    "Failed to open browser",
+                    "无法打开浏览器",
+                ).to_string();
+            }
+        }
+
+        // GitHub link
+        if chrome::modal_secondary_icon_button(
+            ui,
+            theme,
+            crate::ui::icons::IconId::Brand,
+            crate::i18n::tr(ctx, "GitHub", "GitHub"),
+        )
+            .clicked()
+        {
+            if !crate::platform::open_url(GITHUB_URL) {
                 *status_message = crate::i18n::tr(
                     ctx,
                     "Failed to open browser",
