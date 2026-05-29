@@ -61,7 +61,8 @@ pub use fragment_analytics::{
 };
 pub use fragment_usage_log::{FragmentUsageEvent, FragmentUsageLog, MemberPeriodStats};
 pub use fragment_recommendations::{
-    build_efficiency_report_markdown, recommend_from_history, FragmentRecommendation,
+    build_efficiency_report_markdown, recommend_from_history, merge_recommendations,
+    FragmentRecommendation,
 };
 pub use ssh_keygen::generate_ed25519;
 pub use market::{
@@ -78,7 +79,7 @@ pub use credential::{
     Credential, CredentialAuthKind, CredentialCategory, CredentialVault, SecretBackend,
 };
 pub use cmd_audit::{
-    CmdAuditAction, CmdAuditAlertRequest, CmdAuditCacheStore, CmdAuditEngine, CmdAuditMatch,
+    CmdAuditAction, CmdAuditAlertRequest, CmdAuditCacheEntry, CmdAuditCacheStore, CmdAuditEngine, CmdAuditMatch,
     CmdAuditPolicy, CmdAuditResult, CmdAuditRule, CmdAuditSyncPayload, CommandSendResult,
 };
 pub use audit::{

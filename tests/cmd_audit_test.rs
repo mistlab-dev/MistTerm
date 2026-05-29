@@ -12,10 +12,10 @@ fn cmd_audit_action_parse_all_variants() {
 
 #[test]
 fn cmd_audit_action_parse_case_insensitive() {
-    assert_eq!(CmdAuditAction::parse("BLOCK"), CmdAuditAction::Allow);
-    assert_eq!(CmdAuditAction::parse("Block"), CmdAuditAction::Allow);
-    assert_eq!(CmdAuditAction::parse("CONFIRM"), CmdAuditAction::Allow);
-    assert_eq!(CmdAuditAction::parse("Confirm"), CmdAuditAction::Allow);
+    assert_eq!(CmdAuditAction::parse("BLOCK"), CmdAuditAction::Block);
+    assert_eq!(CmdAuditAction::parse("Block"), CmdAuditAction::Block);
+    assert_eq!(CmdAuditAction::parse("CONFIRM"), CmdAuditAction::Confirm);
+    assert_eq!(CmdAuditAction::parse("Confirm"), CmdAuditAction::Confirm);
 }
 
 #[test]

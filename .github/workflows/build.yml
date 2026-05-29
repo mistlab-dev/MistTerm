@@ -27,7 +27,7 @@ jobs:
 
           - platform: windows-x86_64
             os: windows-latest
-            cargo_features: ""
+            cargo_features: "vendored-openssl"
 
     steps:
       - name: Checkout
@@ -52,8 +52,19 @@ jobs:
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libfontconfig1-dev libgtk-3-dev libdbus-1-dev
 
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Run unit tests
-        run: cargo test --all-features
+        shell: bash
+        run: |
+          features="${{ matrix.cargo_features }}"
+          features_arg=()
+          if [ -n "$features" ]; then
+            features_arg=(--features "$features")
+          fi
+          cargo test "${features_arg[@]}"
 
   integration-test:
     name: Integration Test
@@ -116,7 +127,7 @@ jobs:
             target: x86_64-pc-windows-msvc
             rust_targets: x86_64-pc-windows-msvc
             archive_ext: zip
-            cargo_features: ""
+            cargo_features: "vendored-openssl"
 
     steps:
       - name: Checkout
@@ -146,6 +157,10 @@ jobs:
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         run: brew install libssh2 pkg-config
+
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Build release binary
         shell: bash
