@@ -314,13 +314,10 @@ impl Default for FragmentManager {
 impl FragmentManager {
     /// 创建新的片段管理器
     pub fn new() -> Self {
-        let mut manager = Self {
+        Self {
             fragments: Vec::new(),
             id_map: HashMap::new(),
-        };
-        manager.add_default_fragments();
-        manager.rebuild_id_map();
-        manager
+        }
     }
 
     /// 重建 ID 映射
@@ -331,23 +328,7 @@ impl FragmentManager {
         }
     }
 
-    /// 添加默认片段（极简兜底，正常从市场加载）
-    fn add_default_fragments(&mut self) {
-        let defaults = vec![
-            ("磁盘使用", "df -h", "系统监控"),
-            ("内存使用", "free -h", "系统监控"),
-            ("查看进程", "ps aux", "进程管理"),
-            ("网络连接", "netstat -tulpn", "网络"),
-            ("查看容器", "docker ps -a", "Docker"),
-        ];
-
-        for (title, command, category) in defaults {
-            let id = Uuid::new_v4().to_string();
-            self.fragments.push(FragmentStats::new(id, title.to_string(), command.to_string(), category.to_string()));
-        }
-    }
-
-    /// Initialize from market catalog if available, otherwise use built-in defaults.
+    /// Initialize from market catalog if available, otherwise start empty.
     pub fn init_from_market_or_defaults(market: Option<&crate::core::market::MarketFragmentCache>) -> Self {
         let mut manager = Self {
             fragments: Vec::new(),
@@ -371,12 +352,8 @@ impl FragmentManager {
                     manager.fragments.push(frag);
                 }
                 manager.rebuild_id_map();
-                return manager;
             }
         }
-        // Fallback: minimal built-in defaults
-        manager.add_default_fragments();
-        manager.rebuild_id_map();
         manager
     }
 
