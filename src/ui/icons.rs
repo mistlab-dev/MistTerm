@@ -577,12 +577,21 @@ const APP_ICON_CYAN: [u8; 3] = [55, 175, 255];
 /// 字标核心高光白
 const APP_ICON_TEXT_CORE: [u8; 4] = [238, 246, 255, 255];
 
+/// 图标透明外圈比例：macOS Dock squircle 需留白；Windows 任务栏为方角缩放，留白会显得更小。
+fn app_icon_outer_pad_frac() -> f32 {
+    if cfg!(windows) {
+        0.02
+    } else if cfg!(target_os = "macos") {
+        0.08
+    } else {
+        0.05
+    }
+}
+
 /// 窗口 / Dock / 任务栏图标（霓虹 Mist 字标 + 圆角底板）。
 pub fn app_window_icon_data() -> eframe::IconData {
     const SIZE: u32 = 256;
-    /// 透明外圈留白（系统叠 squircle 时与邻图标体量接近）
-    const PAD_FRAC: f32 = 0.08;
-    let pad = (SIZE as f32 * PAD_FRAC).round() as u32;
+    let pad = (SIZE as f32 * app_icon_outer_pad_frac()).round() as u32;
     let mut img = RgbaImage::from_pixel(SIZE, SIZE, Rgba([0, 0, 0, 0]));
     let edge = SIZE - pad;
     paint_mist_app_icon(&mut img, pad, edge, edge);
@@ -610,7 +619,7 @@ fn paint_mist_app_icon(img: &mut RgbaImage, x0: u32, x1: u32, y1: u32) {
     let oy = y0 as f32;
     let cx = ox + w * 0.5;
     let cy = oy + h * 0.35;
-    let tw = w * 0.72;
+    let tw = if cfg!(windows) { w * 0.80 } else { w * 0.72 };
     let text_bottom = wordmark_metrics("Mist", cx, cy, tw)
         .map(|m| m.text_bottom)
         .unwrap_or(cy + 18.0);
@@ -624,8 +633,8 @@ fn paint_mist_app_icon(img: &mut RgbaImage, x0: u32, x1: u32, y1: u32) {
     paint_mirror_surface_line(img, ox + w * 0.12, ox + w * 0.88, mirror_y);
     draw_neon_wordmark(img, "Mist", cx, cy, tw);
 
-    // 圆角遮罩（接近 macOS 应用图标连续圆角比例）
-    let radius = w.min(h) * 0.165;
+    // 圆角遮罩：macOS 连续圆角；Windows 任务栏再套方角缩放，圆角过大会吃掉有效面积
+    let radius = w.min(h) * if cfg!(windows) { 0.10 } else { 0.165 };
     apply_rounded_alpha_mask(img, ox, oy, ox + w, oy + h, radius);
 }
 

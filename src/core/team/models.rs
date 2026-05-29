@@ -229,6 +229,34 @@ pub struct TeamFragment {
     pub created_at: Option<String>,
     #[serde(default)]
     pub updated_at: Option<String>,
+    #[serde(default)]
+    pub usage_count: u32,
+    #[serde(default)]
+    pub success_count: u32,
+    #[serde(default)]
+    pub total_time_ms: u64,
+    #[serde(default)]
+    pub last_used_at: Option<i64>,
+}
+
+/// `GET /v1/teams/{team_id}/fragments/analytics`（未部署时客户端用本地聚合）
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FragmentAnalyticsResponse {
+    #[serde(default)]
+    pub fragments: Vec<FragmentAnalyticsRow>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FragmentAnalyticsRow {
+    pub fragment_id: String,
+    #[serde(default)]
+    pub usage_count: u32,
+    #[serde(default)]
+    pub success_count: u32,
+    #[serde(default)]
+    pub total_time_ms: u64,
+    #[serde(default)]
+    pub last_used_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -331,6 +359,10 @@ impl TeamFragment {
             }
         }
         f.variables = parse_variables_json(&self.variables);
+        f.usage_count = self.usage_count;
+        f.success_count = self.success_count;
+        f.total_time_ms = self.total_time_ms;
+        f.last_used = self.last_used_at;
         f
     }
 }

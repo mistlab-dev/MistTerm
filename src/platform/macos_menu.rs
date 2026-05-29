@@ -39,6 +39,7 @@ pub enum MacMenuAction {
     FragmentLibrary,
     QuickFragmentSelector,
     CommandHistory,
+    BatchExec,
     CredentialPanel,
     TeamAccount,
     TeamMembers,
@@ -84,6 +85,7 @@ pub struct NativeAppMenu {
     fragments: MenuItem,
     quick_fragments: MenuItem,
     command_history: MenuItem,
+    batch_exec: MenuItem,
     credentials: MenuItem,
     team_sign_in: MenuItem,
     team_members: MenuItem,
@@ -281,6 +283,8 @@ impl NativeAppMenu {
             true,
             Some(Accelerator::new(Some(Modifiers::CONTROL), Code::KeyR)),
         );
+        let batch_exec =
+            MenuItem::with_id("mistterm.tools.batch_exec", l.batch_exec, true, None);
         let credentials =
             MenuItem::with_id("mistterm.tools.credentials", l.credentials, true, None);
         let session_logs =
@@ -288,6 +292,7 @@ impl NativeAppMenu {
         tools.append(&fragments)?;
         tools.append(&quick_fragments)?;
         tools.append(&command_history)?;
+        tools.append(&batch_exec)?;
         tools.append(&PredefinedMenuItem::separator())?;
         tools.append(&credentials)?;
         tools.append(&PredefinedMenuItem::separator())?;
@@ -353,6 +358,7 @@ impl NativeAppMenu {
             fragments,
             quick_fragments,
             command_history,
+            batch_exec,
             credentials,
             team_sign_in,
             team_members,
@@ -393,6 +399,7 @@ impl NativeAppMenu {
         let _ = self.fragments.set_text(l.fragment_library);
         let _ = self.quick_fragments.set_text(l.quick_fragments);
         let _ = self.command_history.set_text(l.command_history);
+        let _ = self.batch_exec.set_text(l.batch_exec);
         let _ = self.credentials.set_text(l.credentials);
         let _ = self.team_sign_in.set_text(l.team_sign_in);
         let _ = self.team_members.set_text(l.team_members);
@@ -499,6 +506,7 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.tools.fragments" => Some(MacMenuAction::FragmentLibrary),
         "mistterm.tools.quick_fragments" => Some(MacMenuAction::QuickFragmentSelector),
         "mistterm.tools.command_history" => Some(MacMenuAction::CommandHistory),
+        "mistterm.tools.batch_exec" => Some(MacMenuAction::BatchExec),
         "mistterm.tools.credentials" => Some(MacMenuAction::CredentialPanel),
         "mistterm.team.sign_in" | "mistterm.tools.team_account" => Some(MacMenuAction::TeamAccount),
         "mistterm.team.members" => Some(MacMenuAction::TeamMembers),

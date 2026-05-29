@@ -10,10 +10,21 @@ use super::models::{FragmentSyncResponse, TeamFragment};
 use crate::core::FragmentStats;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FragmentUsageOverlay {
+    pub usage_count: u32,
+    pub success_count: u32,
+    pub total_time_ms: u64,
+    pub last_used_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TeamFragmentCache {
     /// team_id → fragments
     #[serde(default)]
     pub by_team: HashMap<String, Vec<TeamFragment>>,
+    /// 本机执行团队片段的统计（fragment_id → overlay）
+    #[serde(default)]
+    pub usage_overlay: HashMap<String, FragmentUsageOverlay>,
 }
 
 impl TeamFragmentCache {
@@ -53,10 +64,58 @@ impl TeamFragmentCache {
             .unwrap_or(&[])
     }
 
+    pub fn record_usage(&mut self, fragment_id: &str, success: bool, dur_ms: u64) {
+        let entry = self.usage_overlay.entry(fragment_id.to_string()).or_default();
+        entry.usage_count = entry.usage_count.saturating_add(1);
+        if success {
+            entry.success_count = entry.success_count.saturating_add(1);
+        }
+        entry.total_time_ms = entry.total_time_ms.saturating_add(dur_ms);
+        entry.last_used_at = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0),
+        );
+    }
+
+    pub fn apply_analytics_rows(&mut self, rows: &[super::models::FragmentAnalyticsRow]) {
+        for row in rows {
+            let entry = self
+                .usage_overlay
+                .entry(row.fragment_id.clone())
+                .or_default();
+            if row.usage_count > entry.usage_count {
+                entry.usage_count = row.usage_count;
+            }
+            if row.success_count > entry.success_count {
+                entry.success_count = row.success_count;
+            }
+            if row.total_time_ms > entry.total_time_ms {
+                entry.total_time_ms = row.total_time_ms;
+            }
+            if row.last_used_at.is_some() {
+                entry.last_used_at = row.last_used_at;
+            }
+        }
+    }
+
+    fn merge_overlay(&self, mut stats: FragmentStats) -> FragmentStats {
+        if let Some(o) = self.usage_overlay.get(&stats.id) {
+            stats.usage_count = stats.usage_count.max(o.usage_count);
+            stats.success_count = stats.success_count.max(o.success_count);
+            stats.total_time_ms = stats.total_time_ms.max(o.total_time_ms);
+            if stats.last_used.is_none() {
+                stats.last_used = o.last_used_at;
+            }
+        }
+        stats
+    }
+
     pub fn to_fragment_stats(&self, team_id: &str, team_name: &str) -> Vec<FragmentStats> {
         self.fragments_for_team(team_id)
             .iter()
-            .map(|f| f.to_fragment_stats(team_name))
+            .map(|f| self.merge_overlay(f.to_fragment_stats(team_name)))
             .collect()
     }
 

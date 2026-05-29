@@ -15,13 +15,29 @@
   <p id="msg"></p>
   <script>
     (function () {
-      var params = new URLSearchParams(location.search);
-      var access = params.get('access_token');
-      var refresh = params.get('refresh_token');
-      var code = params.get('code');
-      var err = params.get('error') || params.get('error_description');
+      var search = location.search || '';
+      var params = new URLSearchParams(search);
       var title = document.getElementById('title');
       var msg = document.getElementById('msg');
+
+      /** 从 query 提取参数；兼容服务端误用 ?port=54020?access_token=…（第二个 ? 应为 &） */
+      function queryParam(name) {
+        var fromParams = params.get(name);
+        if (fromParams && name !== 'port') return fromParams;
+        var re = new RegExp('[?&]' + name + '=([^&]*)');
+        var m = search.match(re);
+        if (m) return decodeURIComponent(m[1].replace(/\+/g, ' '));
+        if (name === 'port' && fromParams) {
+          var digits = /^(\d{1,5})/.exec(fromParams);
+          if (digits) return digits[1];
+        }
+        return fromParams;
+      }
+
+      var access = queryParam('access_token');
+      var refresh = queryParam('refresh_token');
+      var code = queryParam('code');
+      var err = queryParam('error') || queryParam('error_description');
 
       function done(ok, text) {
         title.textContent = ok ? '登录成功' : '登录失败';
@@ -34,7 +50,11 @@
       }
 
       // 从 URL 获取客户端动态端口（须在拼 callback query 前读取）
-      var port = params.get('port') || '8765';
+      var port = queryParam('port') || '8765';
+      if (!/^\d{1,5}$/.test(port)) {
+        var portDigits = /^(\d{1,5})/.exec(String(port));
+        port = portDigits ? portDigits[1] : '8765';
+      }
 
       var q;
       if (access) {

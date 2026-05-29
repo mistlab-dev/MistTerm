@@ -626,6 +626,12 @@ impl TerminalView {
         keepalive_enabled: bool,
         keepalive_interval_secs: u32,
         keepalive_count_max: u8,
+        proxy_jump: &str,
+        proxy_command: &str,
+        jump_hops: Vec<crate::ssh::JumpHop>,
+        local_forwards: Vec<crate::ssh::LocalPortForward>,
+        remote_forwards: Vec<crate::ssh::RemotePortForward>,
+        dynamic_forwards: Vec<crate::ssh::DynamicPortForward>,
     ) {
         let interval = if keepalive_enabled {
             keepalive_interval_secs.max(1)
@@ -640,6 +646,12 @@ impl TerminalView {
             private_key_path: private_key_path.to_string(),
             keepalive_interval_secs: interval,
             keepalive_count_max: keepalive_count_max.max(1),
+            proxy_jump: proxy_jump.to_string(),
+            proxy_command: proxy_command.to_string(),
+            jump_hops,
+            local_forwards,
+            remote_forwards,
+            dynamic_forwards,
         };
 
         let (manager, rx) = SshManager::new();
@@ -890,7 +902,6 @@ impl TerminalView {
                                             egui::vec2(vw, scroll_h.max(1.0)),
                                             theme,
                                         );
-                                        // 鼠标选区走独立 interact 层；TextEdit 仅负责键盘焦点与 PTY 输入。
                                         ui.add(
                                             egui::TextEdit::multiline(&mut display_view)
                                                 .id_source("terminal_text_area")

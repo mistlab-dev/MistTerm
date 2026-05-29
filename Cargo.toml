@@ -92,6 +92,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 log = "0.4"
 
+# Command audit pattern matching
+regex = "1.10"
+
 # Misc
 parking_lot = "0.12"
 shellexpand = "3.1"

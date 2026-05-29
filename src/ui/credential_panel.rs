@@ -550,6 +550,69 @@ impl CredentialPanel {
                 }
             });
         } else {
+            if matches!(panel.form_auth, CredentialAuthKind::SshKey) {
+                ui.horizontal(|ui| {
+                    if chrome::panel_action_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Key,
+                        i18n::tr(
+                            ui.ctx(),
+                            "Generate Ed25519 key pair",
+                            "生成 Ed25519 密钥对",
+                        ),
+                    )
+                    .clicked()
+                    {
+                        let default_name = if panel.form_name.trim().is_empty() {
+                            "mistterm_ed25519".to_string()
+                        } else {
+                            format!(
+                                "{}_ed25519",
+                                panel.form_name.trim().replace(' ', "_")
+                            )
+                        };
+                        if let Some(path) = rfd::FileDialog::new()
+                            .set_file_name(&default_name)
+                            .save_file()
+                        {
+                            let comment = panel
+                                .form_username
+                                .trim()
+                                .to_string();
+                            let comment = if comment.is_empty() {
+                                "mistterm@local".to_string()
+                            } else {
+                                format!("{comment}@mistterm")
+                            };
+                            match crate::core::generate_ed25519(&path, &comment, "") {
+                                Ok(pub_path) => {
+                                    panel.form_secret = path.to_string_lossy().into();
+                                    panel.form_auth = CredentialAuthKind::SshKey;
+                                    panel.form_category = CredentialCategory::SshKey;
+                                    panel.status_msg = format!(
+                                        "{} {} + {}",
+                                        i18n::tr(
+                                            ui.ctx(),
+                                            "Key pair created:",
+                                            "已生成密钥：",
+                                        ),
+                                        path.display(),
+                                        pub_path.display()
+                                    );
+                                }
+                                Err(e) => {
+                                    panel.status_msg = format!(
+                                        "{}{}",
+                                        i18n::tr(ui.ctx(), "Keygen failed: ", "生成失败："),
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                    }
+                });
+            }
             chrome::form_field_label(
                 ui,
                 theme,

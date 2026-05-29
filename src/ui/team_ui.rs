@@ -98,6 +98,16 @@ pub fn paint_team_controls(
             }
 
             ui.horizontal(|ui| {
+                if chrome::panel_action_icon_button(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::Server,
+                    i18n::tr(ctx, "Team members…", "团队成员…"),
+                )
+                .clicked()
+                {
+                    action = TeamUiAction::OpenMembers;
+                }
                 if chrome::panel_action_primary_icon_button(
                     ui,
                     theme,
@@ -325,4 +335,5 @@ pub enum TeamUiAction {
     SyncRequested,
     TeamChanged,
     LoggedOut,
+    OpenMembers,
 }

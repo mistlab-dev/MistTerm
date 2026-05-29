@@ -15,9 +15,9 @@ pub use cache::TeamFragmentCache;
 pub use client::{TeamApiError, TeamClient};
 pub use oauth::OAuthProvider;
 pub use models::{
-    CreateTeamFragmentRequest, TeamFragment, TeamMember, TeamMembersResponse, TeamMembership,
-    TeamRole, TeamServer,
-    TeamSyncEntry, TeamSyncResponse, TeamUser, TeamsListResponse, TokenResponse,
+    parse_tags_json, parse_variables_json, CreateTeamFragmentRequest, FragmentAnalyticsResponse,
+    FragmentAnalyticsRow, TeamFragment, TeamMember, TeamMembersResponse, TeamMembership, TeamRole,
+    TeamServer, TeamSyncEntry, TeamSyncResponse, TeamUser, TeamsListResponse, TokenResponse,
     UpdateTeamFragmentRequest,
 };
 pub use sync_config::{apply_sync_response, apply_vault_for_team, parse_vault_credential_path};

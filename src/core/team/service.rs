@@ -45,6 +45,9 @@ pub enum TeamAsyncResult {
     MembersErr {
         message: String,
     },
+    CmdAuditSyncOk {
+        payload: crate::core::cmd_audit::CmdAuditSyncPayload,
+    },
     CreateFragmentOk(TeamFragment),
     UpdateFragmentOk(TeamFragment),
     DeleteFragmentOk {
@@ -84,6 +87,10 @@ enum TeamJob {
         api_base: String,
         team_id: String,
     },
+    CmdAuditSync {
+        api_base: String,
+        team_id: String,
+    },
     OAuth {
         api_base: String,
         provider: OAuthProvider,
@@ -114,6 +121,7 @@ pub struct TeamService {
     /// 等忙完之后再去拉 team detail
     pending_team_detail: bool,
     oauth_cancel: Arc<AtomicBool>,
+    pending_cmd_audit_payload: Option<crate::core::cmd_audit::CmdAuditSyncPayload>,
 }
 
 impl TeamService {
@@ -141,7 +149,42 @@ impl TeamService {
             pending_fragment_sync_after_config: false,
             pending_team_detail: false,
             oauth_cancel: Arc::new(AtomicBool::new(false)),
+            pending_cmd_audit_payload: None,
         }
+    }
+
+    pub fn take_cmd_audit_sync_payload(&mut self) -> Option<crate::core::cmd_audit::CmdAuditSyncPayload> {
+        self.pending_cmd_audit_payload.take()
+    }
+
+    pub fn spawn_cmd_audit_sync(&mut self) {
+        if self.busy || !self.is_logged_in() {
+            return;
+        }
+        let Some(team_id) = self.state.current_team_id.clone() else {
+            return;
+        };
+        self.spawn_job(TeamJob::CmdAuditSync {
+            api_base: self.api_base(),
+            team_id,
+        });
+    }
+
+    /// 命令审计告警上报（不占用 `busy`，避免阻塞其它团队任务）
+    pub fn spawn_cmd_audit_report_alert(
+        &self,
+        team_id: &str,
+        request: crate::core::cmd_audit::CmdAuditAlertRequest,
+    ) {
+        if !self.is_logged_in() || team_id.is_empty() {
+            return;
+        }
+        let api_base = self.api_base();
+        let team_id = team_id.to_string();
+        thread::spawn(move || {
+            let tokens = TeamTokenStore::default();
+            let _ = do_cmd_audit_report_alert(&api_base, &team_id, &request, &tokens);
+        });
     }
 
     pub fn take_pending_initial_sync(&mut self) -> bool {
@@ -458,6 +501,9 @@ impl TeamService {
                         self.team_members_error = Some(message);
                         self.status_line.clear();
                     }
+                    TeamAsyncResult::CmdAuditSyncOk { payload } => {
+                        self.pending_cmd_audit_payload = Some(payload);
+                    }
                     TeamAsyncResult::Err(e) => {
                         if e.contains("401") || e.contains("Not signed in") {
                             self.handle_auth_failure(&e);
@@ -499,6 +545,63 @@ impl TeamService {
         };
         let name = self.current_team_name();
         self.cache.to_fragment_stats(tid, &name)
+    }
+
+    pub fn record_fragment_usage(&mut self, fragment_id: &str, success: bool, dur_ms: u64) {
+        self.cache.record_usage(fragment_id, success, dur_ms);
+        let _ = self.cache.save();
+    }
+
+    /// 尝试拉取团队分析 API 并合并到本地 overlay；失败静默。
+    pub fn refresh_fragment_analytics_from_api(&mut self) -> bool {
+        let Some(tid) = self.state.current_team_id.clone() else {
+            return false;
+        };
+        let api_base = self.api_base();
+        let Ok(token) = ensure_access_token(&api_base, &self.tokens) else {
+            return false;
+        };
+        let client = match TeamClient::new(&api_base) {
+            Ok(c) => c,
+            Err(_) => return false,
+        };
+        match client.fetch_fragment_analytics(&token, &tid) {
+            Ok(Some(resp)) => {
+                self.cache.apply_analytics_rows(&resp.fragments);
+                let _ = self.cache.save();
+                true
+            }
+            Ok(None) => false,
+            Err(e) => {
+                log::debug!("fragment analytics API: {}", e);
+                false
+            }
+        }
+    }
+
+    pub fn build_fragment_analytics_dashboard(
+        &mut self,
+        personal: &[crate::core::FragmentStats],
+        range: crate::core::FragmentAnalyticsTimeRange,
+        usage_log: &crate::core::FragmentUsageLog,
+    ) -> crate::core::FragmentAnalyticsDashboard {
+        let api_ok = self.refresh_fragment_analytics_from_api();
+        let team_all = self.team_fragments_as_stats();
+        if range.cutoff_unix().is_some() {
+            let team_id = self.state.current_team_id.clone();
+            return crate::core::build_dashboard_with_events(
+                personal,
+                &team_all,
+                usage_log.all_events(),
+                range,
+                api_ok,
+                team_id.as_deref(),
+                &self.team_members,
+            );
+        }
+        let personal = range.filter_fragments(personal);
+        let team = range.filter_fragments(&team_all);
+        crate::core::build_dashboard(&personal, &team, api_ok)
     }
 
     fn spawn_job(&mut self, job: TeamJob) {
@@ -562,6 +665,12 @@ fn run_job(job: TeamJob, tokens: &TeamTokenStore) -> TeamAsyncResult {
             match do_list_team_members(&api_base, &team_id, tokens) {
                 Ok(members) => TeamAsyncResult::MembersOk { members },
                 Err(e) => TeamAsyncResult::MembersErr { message: e },
+            }
+        }
+        TeamJob::CmdAuditSync { api_base, team_id } => {
+            match do_cmd_audit_sync(&api_base, &team_id, tokens) {
+                Ok(payload) => TeamAsyncResult::CmdAuditSyncOk { payload },
+                Err(e) => TeamAsyncResult::Err(e),
             }
         }
         TeamJob::RefreshTeams { api_base } => match do_refresh_teams(&api_base, tokens) {
@@ -681,6 +790,25 @@ fn do_list_team_members(
         client.list_team_members(access, team_id)
     })?;
     Ok(resp.members)
+}
+
+fn do_cmd_audit_sync(
+    api_base: &str,
+    team_id: &str,
+    tokens: &TeamTokenStore,
+) -> Result<crate::core::cmd_audit::CmdAuditSyncPayload, String> {
+    with_auth_retry(api_base, tokens, |access, client| client.cmd_audit_sync(access, team_id))
+}
+
+fn do_cmd_audit_report_alert(
+    api_base: &str,
+    team_id: &str,
+    request: &crate::core::cmd_audit::CmdAuditAlertRequest,
+    tokens: &TeamTokenStore,
+) -> Result<(), String> {
+    with_auth_retry(api_base, tokens, |access, client| {
+        client.cmd_audit_report_alert(access, team_id, request)
+    })
 }
 
 fn do_team_config_sync(

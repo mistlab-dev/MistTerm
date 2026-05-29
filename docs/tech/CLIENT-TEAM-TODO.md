@@ -1,7 +1,8 @@
 # 客户端团队功能
 
-> **更新**：2026-05-25  
+> **更新**：2026-05-29  
 > 服务端 API 契约：[TEAM-PLATFORM-API.md](./TEAM-PLATFORM-API.md)  
+> **P4 后端待实现（市场 / 片段分析）**：[SERVER-API-BACKEND.md](./SERVER-API-BACKEND.md)  
 > 整体方案与服务端职责：[TEAM-PLATFORM-DEV-PLAN.md](./TEAM-PLATFORM-DEV-PLAN.md)  
 > 数据/审计加密：[security.md](./security.md)  
 > **API Base**：`https://api.mistlab.dev`
@@ -57,6 +58,8 @@
 
 #### 服务端 / 运维待办（请后端与运维跟踪）
 
+- [ ] **服务端 🔴** 片段市场 `GET /v1/market/fragments/catalog`、可选 `POST .../install`（契约 [SERVER-API-BACKEND §2](./SERVER-API-BACKEND.md)）
+- [ ] **服务端 🔴** 团队片段分析 `GET /v1/teams/{team_id}/fragments/analytics`；sync 返回 `usage_count` 等（[§3](./SERVER-API-BACKEND.md)）
 - [ ] **服务端 🔴** 实现 `GET /v1/teams/{team_id}/members`（viewer+）
 - [ ] **服务端 🔴** 审计接口支持批量 50 条 / 30s 节奏，并按 `evt_{unix_ms}_{hex}` 去重
 - [ ] **运维 🟠** 部署 OAuth 桥接页（见 §3.3）

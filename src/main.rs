@@ -1,5 +1,8 @@
 //! MistTerm - 异步 SSH 终端
-//! 
+//!
+//! Windows 使用 GUI 子系统，避免启动时额外弹出控制台窗口（见 `windows_subsystem`）。
+#![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
+
 //! 架构分层:
 //! - UI 层 (ui/): egui 界面
 //! - 核心层 (core/): 会话管理、连接管理

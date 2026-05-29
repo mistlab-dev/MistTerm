@@ -175,8 +175,8 @@ impl MistTermApp {
                         let connected_sessions: HashSet<String> = self
                             .tabs
                             .iter()
-                            .filter(|t| t.terminal.is_connected())
-                            .map(|t| t.session_id.clone())
+                            .filter(|t| t.any_connected())
+                            .map(|t| t.primary_session_id())
                             .collect();
 
                         ui.allocate_ui_with_layout(
@@ -307,47 +307,54 @@ impl MistTermApp {
                             ui.spacing_mut().item_spacing.y = 0.0;
                             ui.vertical(|ui| {
                             ui.set_max_width(term_col_w);
-                            egui::Frame::none()
-                                .fill(theme.color_panel_header_band_fill())
-                                .stroke(egui::Stroke::NONE)
-                                .rounding(egui::Rounding {
-                                    nw: theme.radius_panel(),
-                                    ne: theme.radius_panel(),
-                                    sw: 0.0,
-                                    se: 0.0,
-                                })
-                                .inner_margin(egui::Margin {
-                                    // 终端 Tab 区按需求：左/上/下清零，仅保留右侧最小留白。
-                                    left: 0.0,
-                                    right: theme.spacing_panel_title_pad_x(),
-                                    top: 0.0,
-                                    bottom: 0.0,
-                                })
-                                .show(ui, |ui| {
-                                    // Frame 背景只画在 content min_rect 外扩 inner_margin 上；不拉满宽整行会露出 bg_body，像标签栏下一条灰
-                                    // 勿固定 min_height=36：会在 Tab 行下方垫一行空白，终端顶上像「多一条缝」
-                                    ui.set_min_width(ui.available_width());
-                                    let prev_padding = ui.spacing().button_padding;
-                                    let prev_item_spacing = ui.spacing().item_spacing;
-                                    // SPEC §4.3 / §8：Tab 内边距与 Tab 间距（终端区勿动此项）
-                                    ui.spacing_mut().button_padding =
-                                        egui::vec2(theme.spacing_tab_x(), theme.spacing_tab_y());
-                                    ui.spacing_mut().item_spacing =
-                                        egui::vec2(theme.spacing_region_gap(), 0.0);
-                                    let terminal_header_row_h = theme.size_tab_bar_row_h();
-                                    ui.horizontal(|ui| {
-                                        ui.set_min_height(terminal_header_row_h);
+                            let terminal_header_row_h = theme.size_tab_bar_row_h();
+                            let tab_row_w = ui.available_width().max(term_col_w);
+                            // 先在布局流里占住 Tab 行高度，再绘制内容（勿用 col_left 的 allocate_ui_at_rect，会与局部坐标错位）
+                            let tab_row_rect = egui::Rect::from_min_size(
+                                ui.cursor().min,
+                                egui::vec2(tab_row_w, terminal_header_row_h),
+                            );
+                            let (_tab_slot, _) = ui.allocate_exact_size(
+                                tab_row_rect.size(),
+                                egui::Sense::hover(),
+                            );
+                            let tab_rounding = egui::Rounding {
+                                nw: theme.radius_panel(),
+                                ne: theme.radius_panel(),
+                                sw: 0.0,
+                                se: 0.0,
+                            };
+                            ui.painter().rect_filled(
+                                tab_row_rect,
+                                tab_rounding,
+                                theme.color_panel_header_band_fill(),
+                            );
+                            ui.allocate_ui_at_rect(tab_row_rect, |ui| {
+                                ui.set_clip_rect(tab_row_rect);
+                                ui.set_min_width(tab_row_w);
+                                let prev_padding = ui.spacing().button_padding;
+                                let prev_item_spacing = ui.spacing().item_spacing;
+                                ui.spacing_mut().button_padding =
+                                    egui::vec2(theme.spacing_tab_x(), theme.spacing_tab_y());
+                                ui.spacing_mut().item_spacing =
+                                    egui::vec2(theme.spacing_region_gap(), 0.0);
+                                ui.horizontal(|ui| {
+                                    ui.set_min_height(terminal_header_row_h);
                                         let mut to_close = None;
                                         let mut close_others = None;
                                         let mut close_right = None;
                                         let mut disconnect_ssh_idx = None;
                                         let mut reconnect_idx = None;
+                                        let mut split_h_idx = None;
+                                        let mut split_v_idx = None;
+                                        let mut unsplit_idx = None;
+                                        let mut close_pane_tab = None;
                                         for (idx, tab) in self.tabs.iter().enumerate() {
                                             let active = self.active_tab == Some(idx);
-                                            let tab_label = tab.title.clone();
+                                            let tab_label = tab.display_title();
                                             let tab_hover = self
                                                 .session_manager
-                                                .get_session(&tab.session_id)
+                                                .get_session(&tab.primary_session_id())
                                                 .map(|s| {
                                                     format!(
                                                         "{} · {}@{}",
@@ -360,7 +367,7 @@ impl MistTermApp {
                                                 &theme,
                                                 &tab_label,
                                                 active,
-                                                tab.terminal.is_connected(),
+                                                tab.any_connected(),
                                                 false,
                                             );
                                             let tab_resp = tab_chip
@@ -371,14 +378,13 @@ impl MistTermApp {
                                             } else if tab_resp.clicked() {
                                                 self.active_tab = Some(idx);
                                                 self.selected_session_id =
-                                                    Some(tab.session_id.clone());
+                                                    Some(tab.primary_session_id());
                                             }
                                             tab_resp.context_menu(|ui| {
                                                     crate::ui::chrome::apply_context_menu_style(
                                                         ui, &theme,
                                                     );
-                                                    if tab.terminal.is_connected()
-                                                        || tab.terminal.is_connecting()
+                                                    if tab.any_connected_or_connecting()
                                                     {
                                                     if crate::ui::chrome::popup_menu_button(
                                                         ui,
@@ -408,6 +414,68 @@ impl MistTermApp {
                                                     {
                                                         reconnect_idx = Some(idx);
                                                         ui.close_menu();
+                                                    }
+                                                    ui.separator();
+                                                    if tab.can_split() {
+                                                        if crate::ui::chrome::popup_menu_button(
+                                                            ui,
+                                                            &theme,
+                                                            crate::i18n::tr(
+                                                                ctx,
+                                                                "Split left / right",
+                                                                "左右分屏",
+                                                            ),
+                                                        )
+                                                        .clicked()
+                                                        {
+                                                            split_h_idx = Some(idx);
+                                                            ui.close_menu();
+                                                        }
+                                                        if crate::ui::chrome::popup_menu_button(
+                                                            ui,
+                                                            &theme,
+                                                            crate::i18n::tr(
+                                                                ctx,
+                                                                "Split top / bottom",
+                                                                "上下分屏",
+                                                            ),
+                                                        )
+                                                        .clicked()
+                                                        {
+                                                            split_v_idx = Some(idx);
+                                                            ui.close_menu();
+                                                        }
+                                                    }
+                                                    if tab.is_split() {
+                                                        if crate::ui::chrome::popup_menu_button(
+                                                            ui,
+                                                            &theme,
+                                                            crate::i18n::tr(
+                                                                ctx,
+                                                                "Close active pane",
+                                                                "关闭当前窗格",
+                                                            ),
+                                                        )
+                                                        .clicked()
+                                                        {
+                                                            close_pane_tab =
+                                                                Some((idx, tab.active_pane));
+                                                            ui.close_menu();
+                                                        }
+                                                        if crate::ui::chrome::popup_menu_button(
+                                                            ui,
+                                                            &theme,
+                                                            crate::i18n::tr(
+                                                                ctx,
+                                                                "Merge split panes",
+                                                                "合并分屏",
+                                                            ),
+                                                        )
+                                                        .clicked()
+                                                        {
+                                                            unsplit_idx = Some(idx);
+                                                            ui.close_menu();
+                                                        }
                                                     }
                                                     ui.separator();
                                                     if crate::ui::chrome::popup_menu_button(
@@ -458,37 +526,61 @@ impl MistTermApp {
                                         if let Some(idx) = reconnect_idx {
                                             self.reconnect_tab_at(ctx, idx);
                                         }
+                                        if let Some(idx) = split_h_idx {
+                                            self.active_tab = Some(idx);
+                                            self.split_tab_at(
+                                                ctx,
+                                                idx,
+                                                crate::ui::tab_pane::TabLayout::SplitHorizontal,
+                                            );
+                                        }
+                                        if let Some(idx) = split_v_idx {
+                                            self.active_tab = Some(idx);
+                                            self.split_tab_at(
+                                                ctx,
+                                                idx,
+                                                crate::ui::tab_pane::TabLayout::SplitVertical,
+                                            );
+                                        }
+                                        if let Some(idx) = unsplit_idx {
+                                            self.active_tab = Some(idx);
+                                            self.unsplit_tab_at(ctx, idx);
+                                        }
+                                        if let Some((ti, pi)) = close_pane_tab {
+                                            self.active_tab = Some(ti);
+                                            self.close_pane_tab_at(ctx, ti, pi);
+                                        }
                                         if let Some(idx) = close_others {
                                             if idx < self.tabs.len() {
                                                 let kept = self.tabs.remove(idx);
                                                 for t in self.tabs.iter_mut() {
-                                                    t.terminal.disconnect();
+                                                    t.disconnect_all_panes();
                                                 }
                                                 self.tabs.clear();
                                                 self.tabs.push(kept);
                                                 self.active_tab = Some(0);
                                                 self.selected_session_id =
-                                                    self.tabs.first().map(|t| t.session_id.clone());
+                                                    self.tabs.first().map(|t| t.primary_session_id());
                                             }
                                         }
                                         if let Some(idx) = close_right {
                                             if idx + 1 < self.tabs.len() {
                                                 for t in self.tabs.iter_mut().skip(idx + 1) {
-                                                    t.terminal.disconnect();
+                                                    t.disconnect_all_panes();
                                                 }
                                                 self.tabs.truncate(idx + 1);
                                                 self.active_tab = Some(idx);
-                                                self.selected_session_id =
-                                                    self.tabs.get(idx).map(|t| t.session_id.clone());
+                                                self.selected_session_id = self
+                                                    .tabs
+                                                    .get(idx)
+                                                    .map(|t| t.primary_session_id());
                                             }
                                         }
                                     });
-                                    ui.spacing_mut().button_padding = prev_padding;
-                                    ui.spacing_mut().item_spacing = prev_item_spacing;
-                                });
+                                ui.spacing_mut().button_padding = prev_padding;
+                                ui.spacing_mut().item_spacing = prev_item_spacing;
+                            });
                             crate::ui::chrome::panel_header_divider(ui, &theme);
-                            // 继续上收正文起点：去掉分隔线后额外空隙。
-                            ui.add_space(0.0);
 
                             let search_h = if self.show_terminal_search {
                                 theme.size_terminal_search_bar_h()
@@ -496,34 +588,64 @@ impl MistTermApp {
                                 0.0
                             };
                             let term_body_h = (ui.available_height() - search_h).max(1.0);
-                            let term_body_top = ui.max_rect().min.y;
                             let terminal_search_open = self.show_terminal_search;
                             ui.allocate_ui_with_layout(
                                 egui::vec2(term_col_w, term_body_h),
                                 egui::Layout::top_down(egui::Align::LEFT),
                                 |ui| {
+                                    let body_rect = ui.max_rect();
+                                    ui.set_clip_rect(body_rect);
                                     ui.set_min_height(term_body_h);
                                     ui.set_max_width(term_col_w);
-                                    let capture_pty_keyboard = self.should_capture_pty_keyboard();
-                                    if let Some(terminal) = self.current_terminal_mut() {
-                                        terminal.show(
-                                            ui,
-                                            &theme,
-                                            term_col_w,
-                                            terminal_search_open,
-                                            capture_pty_keyboard,
-                                        );
+                                    if let Some(idx) = self.active_tab {
+                                    self.maybe_collapse_narrow_split(idx, term_col_w);
+                                    let kb_capture = self.should_capture_pty_keyboard();
+                                    let active_pane = self.tabs.get(idx).map(|t| t.active_pane);
+                                    let pane_capture = |pane_idx: usize| {
+                                        active_pane == Some(pane_idx) && kb_capture
+                                    };
+                                    let mut close_pane_req = None;
+                                    if let Some(tab) = self.tabs.get_mut(idx) {
+                                        if tab.panes.is_empty() {
+                                            self.show_welcome(ui);
+                                        } else {
+                                            let mut swap_panes_req = None;
+                                            crate::ui::tab_pane::render_split_body(
+                                                ui,
+                                                tab,
+                                                &theme,
+                                                term_col_w,
+                                                term_body_h,
+                                                terminal_search_open,
+                                                pane_capture,
+                                                |ui, term, w, search_open, capture| {
+                                                    term.show(
+                                                        ui,
+                                                        &theme,
+                                                        w,
+                                                        search_open,
+                                                        capture,
+                                                    );
+                                                },
+                                                |pane_idx| {
+                                                    close_pane_req = Some(pane_idx);
+                                                },
+                                                |a, b| {
+                                                    swap_panes_req = Some((a, b));
+                                                },
+                                            );
+                                            if let Some((a, b)) = swap_panes_req {
+                                                tab.swap_panes(a, b);
+                                            }
+                                        }
                                     } else {
                                         self.show_welcome(ui);
                                     }
-                                    let body_rect = egui::Rect::from_min_max(
-                                        egui::pos2(col_left, term_body_top),
-                                        egui::pos2(col_left + term_col_w, term_body_top + term_body_h),
-                                    );
-                                    if let Some(idx) = self.active_tab {
-                                        if let Some(tab) = self.tabs.get_mut(idx) {
-                                            tab.last_term_rect = body_rect;
-                                        }
+                                    if let Some(pi) = close_pane_req {
+                                        self.close_pane_tab_at(ctx, idx, pi);
+                                    }
+                                    } else {
+                                        self.show_welcome(ui);
                                     }
                                 },
                             );
@@ -536,18 +658,24 @@ impl MistTermApp {
                             if self.command_history_overlay.open {
                                 if let Some(idx) = self.active_tab {
                                     if let Some(tab) = self.tabs.get(idx) {
+                                        let rect = tab
+                                            .active_pane()
+                                            .map(|p| p.last_term_rect)
+                                            .unwrap_or(egui::Rect::NOTHING);
                                         match self.command_history_overlay.show(
                                             ctx,
                                             &theme,
                                             &self.command_history,
-                                            tab.last_term_rect,
+                                            rect,
                                         ) {
                                             CommandHistoryAction::Close => {
                                                 self.command_history_overlay.open = false;
                                             }
                                             CommandHistoryAction::Apply(cmd) => {
-                                                if let Some(t) = self.current_terminal_mut() {
-                                                    t.send_command(&cmd);
+                                                if let Some(idx) = self.active_tab {
+                                                    let _ = self.send_audited_command_at(
+                                                        ctx, idx, &cmd,
+                                                    );
                                                 }
                                                 self.command_history_overlay.open = false;
                                             }
@@ -597,7 +725,7 @@ impl MistTermApp {
             let mut close_sftp_panel = false;
             let current_terminal_ref = self
                 .active_tab
-                .and_then(|idx| self.tabs.get(idx).map(|t| &t.terminal));
+                .and_then(|idx| self.tabs.get(idx).and_then(|t| t.active_terminal()));
             self.sftp_panel.show_foreground_panel(
                 ctx,
                 &theme,
@@ -665,7 +793,7 @@ impl MistTermApp {
                 audit: Some(&self.audit_logger),
             };
             let mut close_cloud = false;
-            self.cloud_sync_panel.show_foreground_panel(
+            let team_action = self.cloud_sync_panel.show_foreground_panel(
                 ctx,
                 &theme,
                 &mut cloud_sync_deps,
@@ -674,6 +802,9 @@ impl MistTermApp {
                 Some(&mut self.team_login_form),
                 Some(&mut self.app_settings),
             );
+            if matches!(team_action, crate::ui::team_ui::TeamUiAction::OpenMembers) {
+                self.team_members_dialog.open(&mut self.team_service);
+            }
         }
 
         let session_for_fragments = self
@@ -829,6 +960,104 @@ impl MistTermApp {
                                 ),
                                 form_w,
                                 false,
+                            );
+
+                            Self::ui_field_label(
+                                ui,
+                                &theme,
+                                crate::i18n::tr(ctx, "ProxyJump", "跳板 ProxyJump"),
+                            );
+                            Self::ui_form_singleline(
+                                ui,
+                                &theme,
+                                "new_session_proxy_jump",
+                                &mut self.new_session_proxy_jump,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "bastion or user@bastion:22 (comma-separated hops)",
+                                    "bastion 或 user@bastion:22（多跳逗号分隔；匹配已保存会话名）",
+                                ),
+                                form_w,
+                                false,
+                            );
+
+                            Self::ui_field_label(
+                                ui,
+                                &theme,
+                                crate::i18n::tr(ctx, "ProxyCommand", "代理命令 ProxyCommand"),
+                            );
+                            Self::ui_form_singleline(
+                                ui,
+                                &theme,
+                                "new_session_proxy_command",
+                                &mut self.new_session_proxy_command,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "e.g. ssh -W %h:%p jump",
+                                    "例：ssh -W %h:%p jump",
+                                ),
+                                form_w,
+                                false,
+                            );
+
+                            Self::ui_field_label(
+                                ui,
+                                &theme,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Local forwards (-L)",
+                                    "本地端口转发 (-L)",
+                                ),
+                            );
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.new_session_local_forwards_text)
+                                    .desired_width(form_w)
+                                    .desired_rows(2)
+                                    .hint_text(crate::i18n::tr(
+                                        ctx,
+                                        "8080:127.0.0.1:80 (one per line)",
+                                        "8080:127.0.0.1:80（每行一条）",
+                                    )),
+                            );
+
+                            Self::ui_field_label(
+                                ui,
+                                &theme,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Remote forwards (-R)",
+                                    "远程端口转发 (-R)",
+                                ),
+                            );
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.new_session_remote_forwards_text)
+                                    .desired_width(form_w)
+                                    .desired_rows(2)
+                                    .hint_text(crate::i18n::tr(
+                                        ctx,
+                                        "8080:127.0.0.1:3000 (one per line)",
+                                        "8080:127.0.0.1:3000（每行一条）",
+                                    )),
+                            );
+
+                            Self::ui_field_label(
+                                ui,
+                                &theme,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Dynamic forwards (-D / SOCKS5)",
+                                    "动态转发 (-D / SOCKS5)",
+                                ),
+                            );
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.new_session_dynamic_forwards_text)
+                                    .desired_width(form_w)
+                                    .desired_rows(2)
+                                    .hint_text(crate::i18n::tr(
+                                        ctx,
+                                        "1080 or 0.0.0.0:1080 (one per line)",
+                                        "1080 或 0.0.0.0:1080（每行一条）",
+                                    )),
                             );
 
                             Self::ui_field_label(
@@ -1195,11 +1424,112 @@ impl MistTermApp {
             }
         }
 
+        if let Some(confirm) = self.cmd_audit_confirm.clone() {
+            let mut open = true;
+            let mut should_close = false;
+            let mut proceed = false;
+            let timeout_secs = self.cmd_audit_engine.confirm_timeout_secs();
+            let timed_out = confirm.started.elapsed()
+                >= std::time::Duration::from_secs(timeout_secs.max(30));
+            if timed_out {
+                should_close = true;
+            }
+            let command = confirm.command.clone();
+            let audit = confirm.audit.clone();
+            let modal_sz = layout_util::modal_confirm_size(ctx);
+            crate::ui::chrome::modal_window("cmd_audit_confirm", &theme, ctx)
+                .open(&mut open)
+                .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
+                .movable(true)
+                .resizable(false)
+                .fixed_size(modal_sz)
+                .show(ctx, |ui| {
+                    crate::ui::chrome::modal_content_frame(&theme).show(ui, |ui| {
+                        Self::modal_header_title_only(
+                            ui,
+                            &theme,
+                            crate::i18n::tr(ctx, "Command needs confirmation", "命令需要确认"),
+                        );
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr(
+                                ctx,
+                                "Sensitive operation detected:",
+                                "检测到敏感操作：",
+                            ))
+                            .size(theme.font_size_normal())
+                            .color(theme.color_body_text_muted()),
+                        );
+                        ui.add_space(theme.spacing_sm());
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} {}",
+                                crate::i18n::tr(ctx, "Command:", "命令:"),
+                                command_preview(&command, 120),
+                            ))
+                            .size(theme.font_size_normal())
+                            .color(theme.color_body_text_muted()),
+                        );
+                        if let Some(m) = audit.matches.first() {
+                            ui.add_space(theme.spacing_sm());
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} {} ({})",
+                                    crate::i18n::tr(ctx, "Rule:", "匹配规则:"),
+                                    m.rule_id,
+                                    m.level,
+                                ))
+                                .size(theme.font_size_small())
+                                .color(theme.color_body_text_muted()),
+                            );
+                            if !m.message.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(&m.message)
+                                        .size(theme.font_size_small())
+                                        .color(theme.color_body_text_muted()),
+                                );
+                            }
+                        }
+                        ui.add_space(theme.spacing_lg());
+                        crate::ui::chrome::modal_footer_actions(ui, &theme, |ui, th| {
+                            if crate::ui::chrome::modal_primary_icon_button(
+                                ui,
+                                th,
+                                crate::ui::icons::IconId::Check,
+                                crate::i18n::tr(ctx, "Run anyway", "确认执行"),
+                            )
+                            .clicked()
+                            {
+                                proceed = true;
+                                should_close = true;
+                            }
+                            if crate::ui::chrome::modal_secondary_icon_button(
+                                ui,
+                                th,
+                                crate::ui::icons::IconId::Cross,
+                                crate::i18n::tr(ctx, "Cancel", "取消"),
+                            )
+                            .clicked()
+                            {
+                                should_close = true;
+                            }
+                        });
+                    });
+                });
+            if timed_out && self.cmd_audit_confirm.is_some() {
+                self.confirm_cmd_audit(ctx, false);
+            } else if should_close {
+                self.confirm_cmd_audit(ctx, proceed);
+            }
+            if !open && self.cmd_audit_confirm.is_some() {
+                self.cmd_audit_confirm = None;
+            }
+        }
+
         if let Some(pending_idx) = self.close_tab_confirm_idx {
             if pending_idx >= self.tabs.len() {
                 self.close_tab_confirm_idx = None;
             } else {
-                let tab_title = self.tabs[pending_idx].title.clone();
+                let tab_title = self.tabs[pending_idx].display_title();
                 let mut open = true;
                 let mut should_close = false;
                 let mut confirmed = false;
@@ -1383,6 +1713,96 @@ impl MistTermApp {
                                 ),
                                 form_w,
                                 false,
+                            );
+
+                            Self::ui_field_label(ui, &theme, crate::i18n::tr(ctx, "ProxyJump", "跳板 ProxyJump"));
+                            Self::ui_form_singleline(
+                                ui,
+                                &theme,
+                                "edit_session_proxy_jump",
+                                &mut self.edit_session_proxy_jump,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "bastion or user@bastion:22 (comma-separated hops)",
+                                    "bastion 或 user@bastion:22（多跳逗号分隔；匹配已保存会话名）",
+                                ),
+                                form_w,
+                                false,
+                            );
+
+                            Self::ui_field_label(ui, &theme, crate::i18n::tr(ctx, "ProxyCommand", "代理命令 ProxyCommand"));
+                            Self::ui_form_singleline(
+                                ui,
+                                &theme,
+                                "edit_session_proxy_command",
+                                &mut self.edit_session_proxy_command,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "e.g. ssh -W %h:%p jump",
+                                    "例：ssh -W %h:%p jump",
+                                ),
+                                form_w,
+                                false,
+                            );
+
+                            Self::ui_field_label(
+                                ui,
+                                &theme,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Local forwards (-L)",
+                                    "本地端口转发 (-L)",
+                                ),
+                            );
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.edit_session_local_forwards_text)
+                                    .desired_width(form_w)
+                                    .desired_rows(2)
+                                    .hint_text(crate::i18n::tr(
+                                        ctx,
+                                        "8080:127.0.0.1:80 (one per line)",
+                                        "8080:127.0.0.1:80（每行一条）",
+                                    )),
+                            );
+
+                            Self::ui_field_label(
+                                ui,
+                                &theme,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Remote forwards (-R)",
+                                    "远程端口转发 (-R)",
+                                ),
+                            );
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.edit_session_remote_forwards_text)
+                                    .desired_width(form_w)
+                                    .desired_rows(2)
+                                    .hint_text(crate::i18n::tr(
+                                        ctx,
+                                        "8080:127.0.0.1:3000 (one per line)",
+                                        "8080:127.0.0.1:3000（每行一条）",
+                                    )),
+                            );
+
+                            Self::ui_field_label(
+                                ui,
+                                &theme,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Dynamic forwards (-D / SOCKS5)",
+                                    "动态转发 (-D / SOCKS5)",
+                                ),
+                            );
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.edit_session_dynamic_forwards_text)
+                                    .desired_width(form_w)
+                                    .desired_rows(2)
+                                    .hint_text(crate::i18n::tr(
+                                        ctx,
+                                        "1080 or 0.0.0.0:1080 (one per line)",
+                                        "1080 或 0.0.0.0:1080（每行一条）",
+                                    )),
                             );
 
                             Self::ui_field_label(ui, &theme, crate::i18n::tr(ctx, "Group", "分组"));
@@ -1734,20 +2154,29 @@ impl MistTermApp {
                                                                 .active_tab
                                                                 .filter(|&i| {
                                                                     i < self.tabs.len()
-                                                                        && self.tabs[i].session_id
+                                                                        && self.tabs[i]
+                                                                            .primary_session_id()
                                                                             == *session_id
                                                                 })
                                                                 .or_else(|| {
                                                                     self.tabs.iter().position(|t| {
-                                                                        t.session_id == *session_id
+                                                                        t.primary_session_id()
+                                                                            == *session_id
                                                                     })
                                                                 });
                                                             if let Some(idx) = idx {
-                                                                if self.tabs[idx].terminal.is_connected()
+                                                                if self
+                                                                    .tabs[idx]
+                                                                    .active_terminal()
+                                                                    .map(|t| t.is_connected())
+                                                                    .unwrap_or(false)
                                                                 {
-                                                                    self.tabs[idx]
-                                                                        .terminal
-                                                                        .send_command(&filled);
+                                                                    if self.send_audited_command_at(
+                                                                        ctx, idx, &filled,
+                                                                    ) != crate::core::CommandSendResult::Sent
+                                                                    {
+                                                                        return;
+                                                                    }
                                                                     if let Some(ref fid) =
                                                                         self.pending_fragment_id
                                                                     {
@@ -1756,17 +2185,13 @@ impl MistTermApp {
                                                                             .as_millis()
                                                                             .max(1)
                                                                             as u64;
-                                                                        self.fragment_manager
-                                                                            .record_execution(
-                                                                                fid,
-                                                                                true,
-                                                                                dur_ms,
-                                                                            );
-                                                                        let _ = self
-                                                                            .fragment_manager
-                                                                            .save(
-                                                                                &FragmentManager::default_config_path(),
-                                                                            );
+                                                                        let fid_owned =
+                                                                            fid.clone();
+                                                                        self.record_fragment_execution(
+                                                                            &fid_owned,
+                                                                            true,
+                                                                            dur_ms,
+                                                                        );
                                                                     }
                                                                 } else if let Some(fid) =
                                                                     self.pending_fragment_id.clone()
@@ -2023,12 +2448,16 @@ impl MistTermApp {
                                                 } else if let Some(session_id) =
                                                     &self.selected_session_id
                                                 {
-                                                    if let Some(tab) = self
+                                                    if self
                                                         .tabs
-                                                        .iter_mut()
-                                                        .find(|t| t.session_id == *session_id)
+                                                        .iter()
+                                                        .any(|t| {
+                                                            t.primary_session_id() == *session_id
+                                                        })
                                                     {
-                                                        let _ = tab.terminal.send_command(&cmd);
+                                                        let _ = self.send_audited_command_active(
+                                                            ctx, &cmd,
+                                                        );
                                                     }
                                                     self.quick_selector.open = false;
                                                 }

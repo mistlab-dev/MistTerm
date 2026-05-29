@@ -10,6 +10,7 @@ use crate::core::{
     AppSettings, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, CloudSyncSettings,
     CredentialVault, FragmentManager, FragmentMergeReport, SessionManager, SortBy, TeamService,
 };
+use crate::core::team::{TeamFragmentCache, TeamState};
 use crate::ui::team_ui::{paint_team_controls, TeamLoginForm, TeamUiAction};
 use crate::i18n::{self, UiLanguage};
 use crate::ui::credential_panel::CredentialPanel;
@@ -106,8 +107,8 @@ impl CloudSyncPanel {
                 ui.label(chrome::rich_caption(
                     theme,
                     loc.tr(
-                        "Remote account, scheduled sync, teams, and shortcuts.",
-                        "远程账户、定时自动同步、团队与快捷键。",
+                        "Team account sign-in below; pack export does not include team tokens.",
+                        "下方可登录团队账户；同步包不含 team_tokens（安全）。",
                     ),
                 ));
             });
@@ -211,18 +212,31 @@ impl CloudSyncPanel {
         }
 
         if err.is_none() && self.settings.sync_shortcuts {
-            if fs::write(
-                dest.join("shortcuts.json"),
-                r#"{"note":"shortcuts placeholder"}"#,
-            )
-            .is_ok()
-            {
-                wrote.push(
-                    format!(
-                        "shortcuts.json{}",
-                        loc.tr(" (placeholder)", "（占位）")
-                    ),
-                );
+            let settings_path = AppSettings::default_path();
+            if settings_path.exists() {
+                match fs::copy(&settings_path, dest.join("settings_snapshot.json")) {
+                    Ok(_) => wrote.push("settings_snapshot.json".into()),
+                    Err(e) => {
+                        err = Some(format!("settings_snapshot.json：{}", e));
+                    }
+                }
+            }
+        }
+
+        if err.is_none() && self.settings.sync_team_config {
+            let team_state = TeamState::config_path();
+            if team_state.exists() {
+                match fs::copy(&team_state, dest.join("team_state.json")) {
+                    Ok(_) => wrote.push("team_state.json".into()),
+                    Err(e) => err = Some(format!("team_state.json：{}", e)),
+                }
+            }
+            let team_frag = TeamFragmentCache::cache_path();
+            if err.is_none() && team_frag.exists() {
+                match fs::copy(&team_frag, dest.join("team_fragments_cache.json")) {
+                    Ok(_) => wrote.push("team_fragments_cache.json".into()),
+                    Err(e) => err = Some(format!("team_fragments_cache.json：{}", e)),
+                }
             }
         }
 
@@ -287,7 +301,12 @@ impl CloudSyncPanel {
         }
     }
 
-    fn pick_import_folder(&mut self, deps: &mut CloudSyncDeps<'_>, lang: UiLanguage) {
+    fn pick_import_folder(
+        &mut self,
+        deps: &mut CloudSyncDeps<'_>,
+        lang: UiLanguage,
+        team_service: &mut Option<&mut TeamService>,
+    ) {
         let loc = i18n::Locale::from(lang);
         let Some(dir) = FileDialog::new()
             .set_title(loc.tr(
@@ -313,6 +332,7 @@ impl CloudSyncPanel {
                 &mut self.settings,
                 deps,
                 lang,
+                team_service,
             );
         }
     }
@@ -323,6 +343,7 @@ impl CloudSyncPanel {
         settings: &mut CloudSyncSettings,
         deps: &mut CloudSyncDeps<'_>,
         lang: UiLanguage,
+        team_service: &mut Option<&mut TeamService>,
     ) -> String {
         let loc = i18n::Locale::from(lang);
         let mut parts = Vec::<String>::new();
@@ -405,6 +426,67 @@ impl CloudSyncPanel {
                     parts.push(
                         loc.tr("Theme: restored from pack", "主题：已从包还原")
                             .to_string(),
+                    );
+                }
+            }
+        }
+
+        let settings_src = dir.join("settings_snapshot.json");
+        if settings.sync_shortcuts && settings_src.exists() {
+            match fs::copy(&settings_src, AppSettings::default_path()) {
+                Ok(_) => {
+                    parts.push(
+                        loc.tr(
+                            "Settings: restored from pack (restart may be needed for some options)",
+                            "偏好设置：已从包还原（部分选项可能需重启生效）",
+                        )
+                        .to_string(),
+                    );
+                }
+                Err(e) => {
+                    return format!(
+                        "{}{}",
+                        loc.tr("Import settings failed: ", "导入 settings 失败："),
+                        e
+                    );
+                }
+            }
+        }
+
+        let team_state_src = dir.join("team_state.json");
+        if settings.sync_team_config && team_state_src.exists() {
+            match fs::copy(&team_state_src, TeamState::config_path()) {
+                Ok(_) => {
+                    if let Some(svc) = team_service.as_mut() {
+                        svc.state = TeamState::load();
+                    }
+                    parts.push(
+                        loc.tr("Team state: restored (tokens not in pack)", "团队状态：已还原（包内不含令牌）")
+                            .to_string(),
+                    );
+                }
+                Err(e) => {
+                    return format!(
+                        "{}{}",
+                        loc.tr("Import team_state failed: ", "导入 team_state 失败："),
+                        e
+                    );
+                }
+            }
+        }
+
+        let team_frag_src = dir.join("team_fragments_cache.json");
+        if settings.sync_team_config && team_frag_src.exists() {
+            match fs::copy(&team_frag_src, TeamFragmentCache::cache_path()) {
+                Ok(_) => parts.push(
+                    loc.tr("Team fragments cache: restored", "团队片段缓存：已还原")
+                        .to_string(),
+                ),
+                Err(e) => {
+                    return format!(
+                        "{}{}",
+                        loc.tr("Import team_fragments_cache failed: ", "导入团队片段缓存失败："),
+                        e
                     );
                 }
             }
@@ -503,13 +585,15 @@ impl CloudSyncPanel {
         theme: &Theme,
         deps: &mut CloudSyncDeps<'_>,
         close_panel: &mut bool,
-        team_service: Option<&mut TeamService>,
-        team_form: Option<&mut TeamLoginForm>,
-        app_settings: Option<&mut AppSettings>,
-    ) {
+        mut team_service: Option<&mut TeamService>,
+        mut team_form: Option<&mut TeamLoginForm>,
+        mut app_settings: Option<&mut AppSettings>,
+    ) -> TeamUiAction {
         if !self.open {
-            return;
+            return TeamUiAction::None;
         }
+
+        let mut team_action = TeamUiAction::None;
 
         let screen = ctx.screen_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
@@ -521,7 +605,7 @@ impl CloudSyncPanel {
             None,
             dock_inset,
         ) else {
-            return;
+            return team_action;
         };
         let geom = chrome::prepare_right_dock_foreground_geom(slot, screen, theme);
         let layer_id = chrome::right_dock_foreground_layer_id("mistterm_cloud_sync_fg");
@@ -568,9 +652,9 @@ impl CloudSyncPanel {
                         Self::paint_capability_banner(ui, theme, lang);
 
                         ui.add_space(theme.spacing_panel_gap());
-                        if let (Some(service), Some(form), Some(settings)) =
-                            (team_service, team_form, app_settings)
-                        {
+                        if let Some(service) = team_service.as_mut() {
+                          if let Some(form) = team_form.as_mut() {
+                            if let Some(settings) = app_settings.as_mut() {
                             chrome::form_field_label(
                                 ui,
                                 theme,
@@ -587,10 +671,15 @@ impl CloudSyncPanel {
                                 pref_w,
                                 "cloud_sync_team",
                             );
+                            if action != TeamUiAction::None {
+                                team_action = action;
+                            }
                             if matches!(action, TeamUiAction::LoggedOut) {
                                 let _ = settings.save();
                             }
                             ui.add_space(theme.spacing_panel_gap());
+                            }
+                          }
                         }
 
                         ui.add_space(theme.spacing_panel_gap());
@@ -604,6 +693,8 @@ impl CloudSyncPanel {
                                 self.settings.sync_fragments = true;
                                 self.settings.sync_themes = true;
                                 self.settings.sync_credentials = true;
+                                self.settings.sync_shortcuts = true;
+                                self.settings.sync_team_config = true;
                             }
                             if chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Server)
                                 .on_hover_text(i18n::tr(ctx, "Core only", "仅核心"))
@@ -613,6 +704,7 @@ impl CloudSyncPanel {
                                 self.settings.sync_themes = true;
                                 self.settings.sync_credentials = false;
                                 self.settings.sync_shortcuts = false;
+                                self.settings.sync_team_config = false;
                             }
                             if chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Trash)
                                 .on_hover_text(i18n::tr(ctx, "Clear", "清空"))
@@ -622,6 +714,7 @@ impl CloudSyncPanel {
                                 self.settings.sync_themes = false;
                                 self.settings.sync_credentials = false;
                                 self.settings.sync_shortcuts = false;
+                                self.settings.sync_team_config = false;
                             }
                         });
                         ui.add_space(4.0);
@@ -650,6 +743,18 @@ impl CloudSyncPanel {
                                 &mut self.settings.sync_credentials,
                                 loc.tr("Credentials", "凭证库"),
                             );
+                            chrome::form_checkbox(
+                                &mut cols[0],
+                                theme,
+                                &mut self.settings.sync_shortcuts,
+                                loc.tr("Preferences (settings.json)", "偏好设置 (settings.json)"),
+                            );
+                            chrome::form_checkbox(
+                                &mut cols[1],
+                                theme,
+                                &mut self.settings.sync_team_config,
+                                loc.tr("Team config (no tokens)", "团队配置（不含令牌）"),
+                            );
                         });
                         ui.label(chrome::rich_caption(
                             theme,
@@ -659,24 +764,11 @@ impl CloudSyncPanel {
                             ),
                         )
                         .weak());
-                        ui.add_enabled_ui(false, |ui| {
-                            let mut off = false;
-                            chrome::form_checkbox(ui, theme, &mut off, loc.tr("Shortcuts", "快捷键"));
-                            chrome::form_checkbox(ui, theme, &mut off, loc.tr("Team config", "团队配置"));
-                        });
                         ui.label(chrome::rich_caption(
                             theme,
                             loc.tr(
-                                "Shortcuts / team: not implemented; checkboxes have no effect.",
-                                "快捷键 / 团队：尚未实现，勾选无效。",
-                            ),
-                        )
-                        .weak());
-                        ui.label(chrome::rich_caption(
-                            theme,
-                            loc.tr(
-                                "SSH passwords are not included in the pack; enter them locally after import.",
-                                "SSH 密码不会写入包内，导入后请在各设备本地填写。",
+                                "Sessions in the pack are encrypted; passwords stay in the envelope. Team tokens are never exported.",
+                                "包内 sessions 为加密信封；team_tokens 永不导出。换机需相同设备密钥。",
                             ),
                         )
                         .weak());
@@ -708,8 +800,8 @@ impl CloudSyncPanel {
                         ui.label(chrome::rich_caption(
                             theme,
                             loc.tr(
-                                "This version does not auto-export on a schedule; use the buttons below.",
-                                "当前版本不会按间隔自动导出，请用下方按钮手动操作。",
+                                "Interval applies to team fragment sync when signed in; local pack export is manual only.",
+                                "间隔仅用于已登录时的团队片段同步；本地同步包请用手动导出/导入。",
                             ),
                         )
                         .weak());
@@ -771,7 +863,7 @@ impl CloudSyncPanel {
                                 loc.tr("Import from sync pack…", "从同步包导入…"),
                             )
                             .clicked() {
-                                self.pick_import_folder(deps, lang);
+                                self.pick_import_folder(deps, lang, &mut team_service);
                             }
                         });
                     });
@@ -832,6 +924,7 @@ impl CloudSyncPanel {
                                     &mut self.settings,
                                     deps,
                                     lang,
+                                    &mut team_service,
                                 );
                                 self.message = msg;
                                 self.pending_import_dir = None;
@@ -860,5 +953,7 @@ impl CloudSyncPanel {
             self.pending_import_dir = None;
             self.open = false;
         }
+
+        team_action
     }
 }

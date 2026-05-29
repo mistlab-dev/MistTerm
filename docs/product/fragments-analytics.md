@@ -1,9 +1,30 @@
 # MistTerm - 命令片段与分析统计 - 产品详细设计
 
 > **文档版本**: 2.0  
-> **最后更新**: 2026-04-29  
-> **状态**: 产品设计  
+> **最后更新**: 2026-05-29  
+> **状态**: 产品设计（**客户端 MVP 已落地**，见下表）  
 > **作者**: 产品专家
+
+### 客户端实现对照（2026-05-29）
+
+| 产品模块 | MVP 状态 | 实现位置 |
+|---------|----------|----------|
+| 个人/团队片段、变量、scope | ✅ | `FragmentManager`、`TeamFragmentCache` |
+| 个人 Top5、执行统计字段 | ✅ | 片段侧栏、`FragmentStats` |
+| 分析大盘（KPI + Top5 + 慢/错） | ✅ | `fragment_analytics_dialog.rs`、`fragment_analytics.rs` |
+| 团队统计 API | ✅ 可选 | `GET .../fragments/analytics`；404 本地回退 |
+| 片段市场 catalog | ✅ | `src/core/market/`、侧栏「市场」scope |
+| 时间范围筛选（7/30/90 天） | ✅ | `FragmentAnalyticsTimeRange` |
+| 区间内增量统计 | ✅ | `fragment_usage_log.rs` + 执行事件 |
+| 成员对比（本机） | ✅ | 分析弹窗「团队成员（本区间）」 |
+| JSON 导出 | ✅ | 分析弹窗 → 剪贴板 |
+| 智能推荐（命令历史） | ✅ | `fragment_recommendations.rs`、分析弹窗 |
+| 效率报告 Markdown | ✅ | 分析弹窗「效率报告」→ 剪贴板 |
+| 效率报告 PDF | ⬜ 后续 | — |
+| 分屏树形 ≤8 + 拖放换位 | ✅ | `tab_pane.rs` `SplitNode` |
+| 市场 catalog 分页 | ✅ | `cursor` +「加载更多」 |
+
+服务端契约：[SERVER-API-BACKEND.md](../tech/SERVER-API-BACKEND.md) §2–§3。
 
 ---
 

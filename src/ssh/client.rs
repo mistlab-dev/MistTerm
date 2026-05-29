@@ -3,9 +3,8 @@
 
 use ssh2::Session;
 use std::io::Write;
-use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
 
+use super::jump;
 
 /// SSH 配置
 #[derive(Debug, Clone)]
@@ -18,6 +17,18 @@ pub struct SshConfig {
     /// `ServerAliveInterval`（秒）；0 表示不启用
     pub keepalive_interval_secs: u32,
     pub keepalive_count_max: u8,
+    /// OpenSSH `ProxyJump`（逗号分隔多跳）
+    pub proxy_jump: String,
+    /// OpenSSH `ProxyCommand`（Phase 1 仅检测，未实现）
+    pub proxy_command: String,
+    /// 与 `proxy_jump` 各跳对应的凭据（由 UI 从已保存会话解析）
+    pub jump_hops: Vec<jump::JumpHop>,
+    /// 本地端口转发（`-L`）
+    pub local_forwards: Vec<super::port_forward::LocalPortForward>,
+    /// 远程端口转发（`-R`）
+    pub remote_forwards: Vec<super::port_forward::RemotePortForward>,
+    /// 动态 SOCKS 转发（`-D`）
+    pub dynamic_forwards: Vec<super::socks_proxy::DynamicPortForward>,
 }
 
 impl Default for SshConfig {
@@ -30,7 +41,89 @@ impl Default for SshConfig {
             private_key_path: String::new(),
             keepalive_interval_secs: 0,
             keepalive_count_max: 3,
+            proxy_jump: String::new(),
+            proxy_command: String::new(),
+            jump_hops: Vec::new(),
+            local_forwards: Vec::new(),
+            remote_forwards: Vec::new(),
+            dynamic_forwards: Vec::new(),
         }
+    }
+}
+
+/// 认证 SSH 会话（密码 / 指定密钥 / 默认 `~/.ssh` 密钥）。
+pub fn authenticate_session(session: &mut Session, config: &SshConfig) -> Result<(), String> {
+    let mut authenticated = false;
+
+    if !config.private_key_path.is_empty() {
+        let p = std::path::Path::new(&config.private_key_path);
+        if p.is_file() {
+            match session.userauth_pubkey_file(&config.username, None, p, None) {
+                Ok(_) => {
+                    log::info!(
+                        "Authenticated with user-specified SSH key: {}",
+                        config.private_key_path
+                    );
+                    authenticated = true;
+                }
+                Err(e) => {
+                    log::warn!("User-specified SSH key auth failed: {}", e);
+                }
+            }
+        } else {
+            log::warn!(
+                "User-specified SSH key not found: {}",
+                config.private_key_path
+            );
+        }
+    }
+
+    if !authenticated && !config.password.is_empty() {
+        match session.userauth_password(&config.username, &config.password) {
+            Ok(_) => {
+                log::info!("Authenticated with password");
+                authenticated = true;
+            }
+            Err(e) => {
+                log::info!("Password auth failed: {}", e);
+            }
+        }
+    }
+
+    if !authenticated {
+        log::info!("Trying default SSH keys under ~/.ssh ...");
+        if let Some(home) = dirs::home_dir() {
+            let ssh_dir = home.join(".ssh");
+            for key_name in ["id_ed25519", "id_rsa", "id_ecdsa"] {
+                let p = ssh_dir.join(key_name);
+                if p.is_file()
+                    && session
+                        .userauth_pubkey_file(&config.username, None, &p, None)
+                        .is_ok()
+                {
+                    log::info!("Authenticated with SSH key {}", p.display());
+                    authenticated = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    if !authenticated {
+        return Err("Authentication failed (password and SSH keys failed)".to_string());
+    }
+    Ok(())
+}
+
+pub fn apply_keepalive(session: &mut Session, config: &SshConfig) {
+    if config.keepalive_interval_secs > 0 {
+        let want = config.keepalive_interval_secs;
+        let _ = session.set_keepalive(true, want);
+        log::info!(
+            "SSH keepalive enabled: interval={}s count_max={}",
+            want,
+            config.keepalive_count_max
+        );
     }
 }
 
@@ -54,108 +147,18 @@ impl SshClient {
         let addr = format!("{}:{}", self.config.host, self.config.port);
         log::info!("Connecting to {}...", addr);
 
-        let mut addrs = (&self.config.host as &str, self.config.port)
-            .to_socket_addrs()
-            .map_err(|e| format!("Failed to resolve host address: {}", e))?;
-        let sock = addrs.next().ok_or_else(|| {
-            "No resolvable address — check hostname and port".to_string()
-        })?;
-        let stream = TcpStream::connect_timeout(&sock, Duration::from_secs(30)).map_err(|e| {
-            format!("TCP connect failed (30s timeout): {}", e)
-        })?;
-        log::info!("TCP connected");
-
-        stream.set_read_timeout(Some(Duration::from_secs(30))).ok();
-
-        // 创建 SSH 会话
-        let mut session = Session::new()
-            .map_err(|e| format!("Failed to create SSH session: {}", e))?;
-        log::info!("SSH session created");
-
-        session.set_tcp_stream(stream);
-
-        // SSH 握手
-        session
-            .handshake()
-            .map_err(|e| format!("SSH handshake failed: {}", e))?;
-        log::info!("SSH handshake completed");
-
-        if self.config.keepalive_interval_secs > 0 {
-            let want = self.config.keepalive_interval_secs;
-            let _ = session.set_keepalive(true, want);
-            log::info!(
-                "SSH keepalive enabled: interval={}s count_max={}",
-                want,
-                self.config.keepalive_count_max
-            );
+        let session = jump::connect_ssh_session(&self.config)?;
+        if !self.config.local_forwards.is_empty() {
+            super::port_forward::spawn_local_forwards(&session, &self.config.local_forwards);
         }
-
-        // 认证策略：优先使用用户指定的私钥，然后尝试密码，最后尝试默认系统密钥
-        let mut authenticated = false;
-
-        // 1. 优先尝试用户指定的私钥路径
-        if !self.config.private_key_path.is_empty() {
-            let p = std::path::Path::new(&self.config.private_key_path);
-            if p.is_file() {
-                match session.userauth_pubkey_file(&self.config.username, None, p, None) {
-                    Ok(_) => {
-                        log::info!("Authenticated with user-specified SSH key: {}", self.config.private_key_path);
-                        authenticated = true;
-                    }
-                    Err(e) => {
-                        log::warn!("User-specified SSH key auth failed: {}", e);
-                    }
-                }
-            } else {
-                log::warn!("User-specified SSH key not found: {}", self.config.private_key_path);
-            }
+        if !self.config.remote_forwards.is_empty() {
+            super::port_forward::spawn_remote_forwards(&session, &self.config.remote_forwards);
         }
-
-        // 2. 尝试密码认证
-        if !authenticated && !self.config.password.is_empty() {
-            match session.userauth_password(&self.config.username, &self.config.password) {
-                Ok(_) => {
-                    log::info!("Authenticated with password");
-                    authenticated = true;
-                }
-                Err(e) => {
-                    log::info!("Password auth failed: {}", e);
-                }
-            }
+        if !self.config.dynamic_forwards.is_empty() {
+            super::socks_proxy::spawn_dynamic_forwards(&session, &self.config.dynamic_forwards);
         }
-
-        // 3. 尝试默认系统密钥
-        if !authenticated {
-            log::info!("Trying default SSH keys under ~/.ssh ...");
-            if let Some(home) = dirs::home_dir() {
-                let ssh_dir = home.join(".ssh");
-                for key_name in ["id_ed25519", "id_rsa", "id_ecdsa"] {
-                    let p = ssh_dir.join(key_name);
-                    if p.is_file()
-                        && session
-                            .userauth_pubkey_file(&self.config.username, None, &p, None)
-                            .is_ok()
-                    {
-                        log::info!("Authenticated with SSH key {}", p.display());
-                        authenticated = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if !authenticated {
-            return Err(
-                "Authentication failed (password and SSH keys failed)".to_string(),
-            );
-        }
-
-        // 认证完成后再切到非阻塞，供 shell 读写线程轮询
-        session.set_blocking(false);
-
         self.session = Some(session);
         log::info!("SSH connected successfully");
-
         Ok(())
     }
 
@@ -232,6 +235,31 @@ impl SshClient {
     pub fn disconnect(&mut self) {
         self.session = None;
         log::info!("SSH disconnected");
+    }
+
+    /// 非交互 `exec`（独立 channel，不占用已打开的 shell）。
+    pub fn exec_command(&mut self, command: &str) -> Result<(String, i32), String> {
+        use std::io::Read;
+        let session = self.session.as_mut().ok_or("Not connected")?;
+        session.set_blocking(true);
+        let result = (|| {
+            let mut channel = session
+                .channel_session()
+                .map_err(|e| format!("打开 exec 通道失败: {e}"))?;
+            channel
+                .exec(command)
+                .map_err(|e| format!("exec 失败: {e}"))?;
+            let mut output = Vec::new();
+            channel
+                .read_to_end(&mut output)
+                .map_err(|e| format!("读取输出失败: {e}"))?;
+            let code = channel.exit_status().unwrap_or(-1);
+            let _ = channel.wait_close();
+            let stdout = String::from_utf8_lossy(&output).into_owned();
+            Ok((stdout, code))
+        })();
+        session.set_blocking(false);
+        result
     }
 
     /// 获取 SSH 会话（用于文件传输等高级操作）

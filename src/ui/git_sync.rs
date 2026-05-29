@@ -5,8 +5,11 @@
 use eframe::egui;
 use std::path::PathBuf;
 
+use crate::core::session::{sessions_json_for_git_export, SessionConfig};
 use crate::sync::{GitRepo, RepoStatus};
 use crate::i18n::UiLanguage;
+use std::fs;
+use crate::ui::chrome;
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 
@@ -40,6 +43,8 @@ pub struct GitSyncPanel {
     _last_commit: String,
     /// 操作状态
     operation_status: OperationStatus,
+    /// Pull 成功后待合并 `sessions.json`
+    pending_sessions_merge: bool,
     /// [`show`] 起始同步，用于 `open_repo` 等分支的用户提示文案
     ui_lang_last: UiLanguage,
 }
@@ -74,8 +79,17 @@ impl GitSyncPanel {
             remote_url: String::new(),
             _last_commit: String::new(),
             operation_status: OperationStatus::Idle,
+            pending_sessions_merge: false,
             ui_lang_last: UiLanguage::default(),
         }
+    }
+
+    pub fn take_pending_sessions_merge(&mut self) -> bool {
+        std::mem::take(&mut self.pending_sessions_merge)
+    }
+
+    pub fn sessions_json_path(&self) -> PathBuf {
+        PathBuf::from(&self.repo_path).join("sessions.json")
     }
 
     #[inline]
@@ -150,6 +164,7 @@ impl GitSyncPanel {
             self.operation_status = OperationStatus::Loading;
             match repo.pull() {
                 Ok(()) => {
+                    self.pending_sessions_merge = true;
                     self.operation_status = OperationStatus::Success(
                         self.loc().tr("Pull succeeded", "拉取成功").to_string(),
                     );
@@ -189,6 +204,40 @@ impl GitSyncPanel {
     }
 
     /// 执行 Commit 操作
+    /// 将 MistTerm 会话写入当前仓库根目录的 `sessions.json`（密码占位，可安全 push）。
+    pub fn export_redacted_sessions(&mut self, sessions: &[SessionConfig]) {
+        if self.repo.is_none() {
+            self.error_message = self
+                .loc()
+                .tr("Open a Git repository first", "请先打开 Git 仓库")
+                .to_string();
+            return;
+        }
+        let dest = PathBuf::from(&self.repo_path).join("sessions.json");
+        match sessions_json_for_git_export(sessions) {
+            Ok(json) => match fs::write(&dest, json) {
+                Ok(()) => {
+                    self.status_message = format!(
+                        "{}{}",
+                        self.loc()
+                            .tr("Wrote redacted sessions to ", "已写入脱敏 sessions 至 "),
+                        dest.display()
+                    );
+                    self.error_message.clear();
+                    self.refresh_status();
+                }
+                Err(e) => {
+                    self.error_message = format!(
+                        "{}{}",
+                        self.loc().tr("Write failed: ", "写入失败："),
+                        e
+                    );
+                }
+            },
+            Err(e) => self.error_message = e,
+        }
+    }
+
     fn commit(&mut self) {
         if let Some(ref repo) = self.repo {
             if self.commit_message.is_empty() {
@@ -283,7 +332,13 @@ impl GitSyncPanel {
     }
 
     /// 显示 Git 同步面板；`close_panel` 为 true 时由宿主关闭侧栏。
-    pub fn show(&mut self, ui: &mut egui::Ui, theme: &Theme, close_panel: &mut bool) {
+    pub fn show(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        close_panel: &mut bool,
+        sessions: &[SessionConfig],
+    ) {
         self.ui_lang_last = crate::i18n::language(ui.ctx());
         ui.vertical(|ui| {
             let trailing_w = crate::ui::chrome::panel_header_trailing_width_tools(
@@ -441,27 +496,30 @@ impl GitSyncPanel {
                 // 操作按钮
                 ui.group(|ui| {
                     ui.label(egui::RichText::new(crate::i18n::tr(ui.ctx(), "Actions", "操作")).strong());
+                    let has_remote = !self.remote_url.trim().is_empty();
                     ui.horizontal(|ui| {
-                        if crate::ui::chrome::panel_toolbar_icon_button(
-                            ui,
-                            theme,
-                            crate::ui::icons::IconId::GitPull,
-                            crate::i18n::tr(ui.ctx(), "Pull from remote", "从远程拉取更新"),
-                        )
-                        .clicked()
-                        {
-                            self.pull();
-                        }
-                        if crate::ui::chrome::panel_toolbar_icon_button(
-                            ui,
-                            theme,
-                            crate::ui::icons::IconId::GitPush,
-                            crate::i18n::tr(ui.ctx(), "Push to remote", "推送到远程"),
-                        )
-                        .clicked()
-                        {
-                            self.push();
-                        }
+                        ui.add_enabled_ui(has_remote, |ui| {
+                            if crate::ui::chrome::panel_toolbar_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::GitPull,
+                                crate::i18n::tr(ui.ctx(), "Pull from remote", "从远程拉取更新"),
+                            )
+                            .clicked()
+                            {
+                                self.pull();
+                            }
+                            if crate::ui::chrome::panel_toolbar_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::GitPush,
+                                crate::i18n::tr(ui.ctx(), "Push to remote", "推送到远程"),
+                            )
+                            .clicked()
+                            {
+                                self.push();
+                            }
+                        });
                         if crate::ui::chrome::panel_toolbar_icon_button(
                             ui,
                             theme,
@@ -473,6 +531,34 @@ impl GitSyncPanel {
                             self.commit();
                         }
                     });
+                    if !has_remote {
+                        ui.label(
+                            chrome::rich_caption(
+                                theme,
+                                crate::i18n::tr(
+                                    ui.ctx(),
+                                    "Configure remote URL to enable pull/push.",
+                                    "配置远程 URL 后可拉取/推送。",
+                                ),
+                            )
+                            .weak(),
+                        );
+                    }
+                    ui.add_space(theme.spacing_sm());
+                    if crate::ui::chrome::panel_action_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Server,
+                        crate::i18n::tr(
+                            ui.ctx(),
+                            "Write redacted sessions.json to repo",
+                            "写入脱敏 sessions.json 到仓库",
+                        ),
+                    )
+                    .clicked()
+                    {
+                        self.export_redacted_sessions(sessions);
+                    }
                 });
 
                 ui.add_space(theme.spacing_md());

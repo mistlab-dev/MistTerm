@@ -8,7 +8,8 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use super::models::{
-    ApiErrorBody, CreateTeamFragmentRequest, FragmentSyncRequest, FragmentSyncResponse,
+    ApiErrorBody, CreateTeamFragmentRequest, FragmentAnalyticsResponse, FragmentSyncRequest,
+    FragmentSyncResponse,
     RefreshResponse, RegisterResponse, TeamFragment, TeamInfo, TeamsListResponse, TokenResponse,
     TeamUser, UpdateTeamFragmentRequest,
 };
@@ -146,6 +147,55 @@ impl TeamClient {
             &format!("/v1/teams/{team_id}/members"),
             Some(access_token),
         )
+    }
+
+    pub fn cmd_audit_sync(
+        &self,
+        access_token: &str,
+        team_id: &str,
+    ) -> Result<crate::core::cmd_audit::CmdAuditSyncPayload, TeamApiError> {
+        self.get_json(
+            &format!("/v1/teams/{team_id}/command-audit/sync"),
+            Some(access_token),
+        )
+    }
+
+    pub fn cmd_audit_report_alert(
+        &self,
+        access_token: &str,
+        team_id: &str,
+        body: &crate::core::cmd_audit::CmdAuditAlertRequest,
+    ) -> Result<(), TeamApiError> {
+        self.post_json_empty(
+            &format!("/v1/teams/{team_id}/command-audit/alerts"),
+            Some(access_token),
+            body,
+        )
+    }
+
+    /// 团队片段聚合统计；404/未实现时返回 `Ok(None)` 供客户端本地回退。
+    pub fn fetch_fragment_analytics(
+        &self,
+        access_token: &str,
+        team_id: &str,
+    ) -> Result<Option<FragmentAnalyticsResponse>, TeamApiError> {
+        let path = format!("/v1/teams/{team_id}/fragments/analytics");
+        let req = self.http.get(self.url(&path)).bearer_auth(access_token);
+        let resp = req.send().map_err(|e| TeamApiError {
+            status: 0,
+            message: e.to_string(),
+            conflict_fragment: None,
+        })?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if resp.status().is_success() {
+            return Self::decode_response(resp).map(Some);
+        }
+        Err(Self::decode_error(
+            resp.status(),
+            resp.text().unwrap_or_default(),
+        ))
     }
 
     pub fn sync_fragments(

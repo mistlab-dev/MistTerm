@@ -13,6 +13,11 @@
 pub mod session;
 mod connection;
 pub mod fragment;
+pub mod fragment_analytics;
+pub mod fragment_usage_log;
+pub mod fragment_recommendations;
+pub mod batch_exec;
+pub mod ssh_keygen;
 pub mod fragment_expr;
 pub mod fragment_command;
 pub mod credential;
@@ -24,14 +29,21 @@ pub mod command_history;
 pub mod session_logger;
 pub mod session_sort;
 pub mod audit;
+pub mod cmd_audit;
 pub mod ai_settings;
 pub mod ai_client;
 pub mod app_settings;
 pub mod team;
+pub mod market;
 pub mod vault;
 pub mod secret_resolver;
 
-pub use session::{SessionConfig, SessionManager, SESSION_COLOR_TAGS, session_color_tag_rgb};
+pub use session::{
+    parse_dynamic_forwards_text, parse_local_forwards_text, parse_remote_forwards_text,
+    SessionConfig, SessionManager,
+    SESSION_COLOR_TAGS,
+    session_color_tag_rgb,
+};
 pub use ssh_config_importer::{
     candidate_to_session, default_ssh_config_path, is_already_imported, parse_ssh_config_file,
     parse_ssh_config_str, pending_imports, SshConfigCandidate, SshConfigParseResult,
@@ -43,6 +55,18 @@ pub use session_logger::{
     DEFAULT_MAX_FILE_BYTES, DEFAULT_RETENTION_DAYS, LOG_TAIL_READ_BYTES,
 };
 pub use session_sort::{sort_sessions, SessionSortBy};
+pub use fragment_analytics::{
+    build_dashboard, build_dashboard_with_events, export_dashboard_json, FragmentAnalyticsDashboard,
+    FragmentAnalyticsTimeRange,
+};
+pub use fragment_usage_log::{FragmentUsageEvent, FragmentUsageLog, MemberPeriodStats};
+pub use fragment_recommendations::{
+    build_efficiency_report_markdown, recommend_from_history, FragmentRecommendation,
+};
+pub use ssh_keygen::generate_ed25519;
+pub use market::{
+    install_into_personal_library, MarketCatalogQuery, MarketCatalogState, MarketFragment,
+};
 pub use fragment::{
     expand_command_template, expand_fragment_command_stages, list_placeholder_keys,
     substitute_angle_placeholders, FragmentManager, FragmentMergeReport, FragmentStats,
@@ -52,6 +76,10 @@ pub use fragment_expr::{expand_rhai_blocks, merge_rhai_context};
 pub use fragment_command::{build_fragment_command_preview, finalize_fragment_command_text};
 pub use credential::{
     Credential, CredentialAuthKind, CredentialCategory, CredentialVault, SecretBackend,
+};
+pub use cmd_audit::{
+    CmdAuditAction, CmdAuditAlertRequest, CmdAuditCacheStore, CmdAuditEngine, CmdAuditMatch,
+    CmdAuditPolicy, CmdAuditResult, CmdAuditRule, CmdAuditSyncPayload, CommandSendResult,
 };
 pub use audit::{
     command_preview, format_audit_jsonl_for_display, list_audit_log_files,

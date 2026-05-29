@@ -51,6 +51,15 @@ pub struct SessionConfig {
     /// 密码/密钥来源（Vault 引用时不落盘明文）
     #[serde(default)]
     pub secret_backend: SecretBackend,
+    /// 本地端口转发（每行 `local_port:remote_host:remote_port`，例 `8080:127.0.0.1:80`）
+    #[serde(default)]
+    pub local_forwards_text: String,
+    /// 远程端口转发（每行 `remote_port:target_host:target_port`，例 `8080:127.0.0.1:3000`）
+    #[serde(default)]
+    pub remote_forwards_text: String,
+    /// 动态 SOCKS 转发（每行 `port` 或 `bind:port`，例 `1080`）
+    #[serde(default)]
+    pub dynamic_forwards_text: String,
 }
 
 fn default_keepalive_enabled() -> bool {
@@ -111,7 +120,124 @@ impl Default for SessionConfig {
             keepalive_count_max: default_keepalive_count_max(),
             keepalive_auto_reconnect: default_keepalive_auto_reconnect(),
             secret_backend: SecretBackend::default(),
+            local_forwards_text: String::new(),
+            remote_forwards_text: String::new(),
+            dynamic_forwards_text: String::new(),
         }
+    }
+}
+
+/// 解析 `local_forwards_text`（每行 `local_port:remote_host:remote_port`）。
+pub fn parse_local_forwards_text(text: &str) -> Vec<crate::ssh::LocalPortForward> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() != 3 {
+                return None;
+            }
+            let local_port: u16 = parts[0].trim().parse().ok()?;
+            let remote_host = parts[1].trim().to_string();
+            let remote_port: u16 = parts[2].trim().parse().ok()?;
+            if remote_host.is_empty() {
+                return None;
+            }
+            Some(crate::ssh::LocalPortForward {
+                local_port,
+                remote_host,
+                remote_port,
+                bind_address: "127.0.0.1".into(),
+            })
+        })
+        .collect()
+}
+
+/// 解析 `remote_forwards_text`（每行 `remote_port:target_host:target_port`）。
+pub fn parse_remote_forwards_text(text: &str) -> Vec<crate::ssh::RemotePortForward> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let parts: Vec<&str> = line.split(':').collect();
+            if parts.len() != 3 {
+                return None;
+            }
+            let remote_port: u16 = parts[0].trim().parse().ok()?;
+            let target_host = parts[1].trim().to_string();
+            let target_port: u16 = parts[2].trim().parse().ok()?;
+            if target_host.is_empty() {
+                return None;
+            }
+            Some(crate::ssh::RemotePortForward {
+                remote_port,
+                target_host,
+                target_port,
+                remote_bind_address: None,
+            })
+        })
+        .collect()
+}
+
+/// 解析 `dynamic_forwards_text`（每行 `port` 或 `bind_address:port`）。
+pub fn parse_dynamic_forwards_text(text: &str) -> Vec<crate::ssh::DynamicPortForward> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let parts: Vec<&str> = line.split(':').collect();
+            match parts.len() {
+                1 => {
+                    let local_port: u16 = parts[0].trim().parse().ok()?;
+                    Some(crate::ssh::DynamicPortForward {
+                        local_port,
+                        bind_address: "127.0.0.1".into(),
+                    })
+                }
+                2 => {
+                    let bind_address = parts[0].trim().to_string();
+                    let local_port: u16 = parts[1].trim().parse().ok()?;
+                    if bind_address.is_empty() {
+                        return None;
+                    }
+                    Some(crate::ssh::DynamicPortForward {
+                        local_port,
+                        bind_address,
+                    })
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod forward_parse_tests {
+    use super::*;
+
+    #[test]
+    fn parse_remote_forwards_skips_bad_lines() {
+        let text = "8080:127.0.0.1:3000\n# comment\nbad\n9000:localhost:22";
+        let fwd = parse_remote_forwards_text(text);
+        assert_eq!(fwd.len(), 2);
+        assert_eq!(fwd[0].remote_port, 8080);
+        assert_eq!(fwd[1].target_port, 22);
+    }
+
+    #[test]
+    fn parse_dynamic_forwards_port_and_bind() {
+        let text = "1080\n0.0.0.0:1081\n# x";
+        let fwd = parse_dynamic_forwards_text(text);
+        assert_eq!(fwd.len(), 2);
+        assert_eq!(fwd[0].local_port, 1080);
+        assert_eq!(fwd[1].bind_address, "0.0.0.0");
+        assert_eq!(fwd[1].local_port, 1081);
     }
 }
 
@@ -155,10 +281,84 @@ struct StoredSessionConfig {
     keepalive_auto_reconnect: bool,
     #[serde(default)]
     secret_backend: SecretBackend,
+    #[serde(default)]
+    local_forwards_text: String,
+    #[serde(default)]
+    remote_forwards_text: String,
+    #[serde(default)]
+    dynamic_forwards_text: String,
 }
 
 fn default_group() -> String {
     "默认".to_string()
+}
+
+/// Git 同步时写入仓库的密码占位符（FUNCTIONAL_SPEC §6.3）。
+pub const GIT_SESSION_PASSWORD_PLACEHOLDER: &str = "<encrypted_local>";
+
+/// 将会话列表序列化为可提交 Git 的 JSON（密码字段替换为占位符，保留加密信封结构）。
+pub fn sessions_json_for_git_export(sessions: &[SessionConfig]) -> Result<String, String> {
+    #[derive(Serialize)]
+    struct GitStoredSession<'a> {
+        id: &'a str,
+        name: &'a str,
+        group: &'a str,
+        host: &'a str,
+        port: u16,
+        username: &'a str,
+        password: &'static str,
+        encrypted_password: &'a str,
+        password_nonce: &'a str,
+        private_key_path: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        last_connected_at: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        created_at: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ssh_config_marker: Option<&'a str>,
+        proxy_jump: &'a str,
+        proxy_command: &'a str,
+        color_tag: &'a str,
+        keepalive_enabled: bool,
+        keepalive_interval_secs: u32,
+        keepalive_count_max: u8,
+        keepalive_auto_reconnect: bool,
+        secret_backend: crate::core::credential::SecretBackend,
+        local_forwards_text: &'a str,
+        remote_forwards_text: &'a str,
+        dynamic_forwards_text: &'a str,
+    }
+
+    let rows: Vec<GitStoredSession<'_>> = sessions
+        .iter()
+        .map(|s| GitStoredSession {
+            id: &s.id,
+            name: &s.name,
+            group: &s.group,
+            host: &s.host,
+            port: s.port,
+            username: &s.username,
+            password: GIT_SESSION_PASSWORD_PLACEHOLDER,
+            encrypted_password: "",
+            password_nonce: "",
+            private_key_path: &s.private_key_path,
+            last_connected_at: s.last_connected_at,
+            created_at: s.created_at,
+            ssh_config_marker: s.ssh_config_marker.as_deref(),
+            proxy_jump: &s.proxy_jump,
+            proxy_command: &s.proxy_command,
+            color_tag: &s.color_tag,
+            keepalive_enabled: s.keepalive_enabled,
+            keepalive_interval_secs: s.keepalive_interval_secs,
+            keepalive_count_max: s.keepalive_count_max,
+            keepalive_auto_reconnect: s.keepalive_auto_reconnect,
+            secret_backend: s.secret_backend.clone(),
+            local_forwards_text: &s.local_forwards_text,
+            remote_forwards_text: &s.remote_forwards_text,
+            dynamic_forwards_text: &s.dynamic_forwards_text,
+        })
+        .collect();
+    serde_json::to_string_pretty(&rows).map_err(|e| format!("serialize sessions for git: {e}"))
 }
 
 /// 会话管理器
@@ -225,9 +425,67 @@ impl SessionManager {
                 keepalive_count_max: cfg.keepalive_count_max,
                 keepalive_auto_reconnect: cfg.keepalive_auto_reconnect,
                 secret_backend: cfg.secret_backend,
+                local_forwards_text: cfg.local_forwards_text,
+                remote_forwards_text: cfg.remote_forwards_text,
+                dynamic_forwards_text: cfg.dynamic_forwards_text,
             });
         }
         Some((sessions, had_plaintext, warnings))
+    }
+
+    /// Git pull 后合并 `sessions.json`：按 id 更新；`<encrypted_local>` 不覆盖本机密码。
+    pub fn merge_sessions_from_git_path(&mut self, path: &std::path::Path) -> io::Result<usize> {
+        let content = fs::read_to_string(path)?;
+        let Some((incoming, had_plaintext, warnings)) =
+            Self::parse_stored_sessions_json(&self.device_key, &content)
+        else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "无法解析 Git 仓库中的 sessions.json",
+            ));
+        };
+        self.load_diagnostics.extend(warnings);
+        let mut count = 0usize;
+        for inc in incoming {
+            if let Some(existing) = self.sessions.iter_mut().find(|s| s.id == inc.id) {
+                let keep_password = inc.password == GIT_SESSION_PASSWORD_PLACEHOLDER
+                    || (inc.password.is_empty() && existing.password.len() > 1);
+                existing.name = inc.name;
+                existing.group = inc.group;
+                existing.host = inc.host;
+                existing.port = inc.port;
+                existing.username = inc.username;
+                if !keep_password && !inc.password.is_empty() {
+                    existing.password = inc.password;
+                }
+                existing.private_key_path = inc.private_key_path;
+                existing.last_connected_at = inc.last_connected_at;
+                existing.ssh_config_marker = inc.ssh_config_marker;
+                existing.proxy_jump = inc.proxy_jump;
+                existing.proxy_command = inc.proxy_command;
+                existing.color_tag = inc.color_tag;
+                existing.keepalive_enabled = inc.keepalive_enabled;
+                existing.keepalive_interval_secs = inc.keepalive_interval_secs;
+                existing.keepalive_count_max = inc.keepalive_count_max;
+                existing.keepalive_auto_reconnect = inc.keepalive_auto_reconnect;
+                existing.secret_backend = inc.secret_backend;
+                existing.local_forwards_text = inc.local_forwards_text;
+                existing.remote_forwards_text = inc.remote_forwards_text;
+                existing.dynamic_forwards_text = inc.dynamic_forwards_text;
+            } else {
+                let mut s = inc;
+                if s.password == GIT_SESSION_PASSWORD_PLACEHOLDER {
+                    s.password.clear();
+                }
+                self.sessions.push(s);
+            }
+            count += 1;
+        }
+        let _ = self.save();
+        if had_plaintext {
+            log::warn!("Git sessions.json contained plaintext passwords");
+        }
+        Ok(count)
     }
 
     /// 从会话备份 JSON 替换当前会话（路径可为同步包内的 `sessions.json`）
@@ -382,6 +640,9 @@ impl SessionManager {
                 keepalive_count_max: cfg.keepalive_count_max,
                 keepalive_auto_reconnect: cfg.keepalive_auto_reconnect,
                 secret_backend: cfg.secret_backend.clone(),
+                local_forwards_text: cfg.local_forwards_text.clone(),
+                remote_forwards_text: cfg.remote_forwards_text.clone(),
+                dynamic_forwards_text: cfg.dynamic_forwards_text.clone(),
             });
         }
 
@@ -419,6 +680,14 @@ impl SessionManager {
     /// 根据 ID 获取会话
     pub fn get_session(&self, id: &str) -> Option<&SessionConfig> {
         self.sessions.iter().find(|s| s.id == id)
+    }
+
+    /// 按 ProxyJump token 匹配已保存会话（名称或主机）。
+    pub fn find_session_for_jump_token(&self, token: &str) -> Option<&SessionConfig> {
+        let token = token.trim();
+        self.sessions
+            .iter()
+            .find(|s| s.name == token || s.host == token)
     }
 
     /// 创建新会话

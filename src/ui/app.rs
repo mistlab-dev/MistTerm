@@ -11,14 +11,23 @@ use std::time::{Duration, Instant};
 use crate::core::{
     candidate_to_session, default_ssh_config_path, is_already_imported, parse_ssh_config_file,
     pending_imports, SshConfigParseResult,
-    AppSettings, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, CommandHistory, Credential,
+    AppSettings, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, CmdAuditAction,
+    CmdAuditAlertRequest, CmdAuditCacheStore, CmdAuditEngine, CmdAuditResult, CommandHistory,
+    CommandSendResult, Credential,
     CredentialAuthKind, SecretResolver, SessionLogSettings, SessionLogWriter, SecretBackend,
     TempKeyFile, spawn_cleanup_old_logs, DEFAULT_RETENTION_DAYS,
     SessionSortBy, SshConfigCandidate, command_preview, expand_command_template,
     expand_fragment_command_stages, expand_rhai_blocks, list_placeholder_keys, merge_rhai_context,
-    apply_vault_for_team, parse_vault_credential_path, FragmentManager, FragmentStats,
+    apply_vault_for_team, parse_dynamic_forwards_text, parse_local_forwards_text,
+    parse_remote_forwards_text, parse_vault_credential_path, FragmentManager,
+    FragmentStats,
     SessionConfig, SessionManager, SortBy, TeamService,
 };
+use crate::core::batch_exec::{
+    run_batch_parallel, BatchExecJob, BatchExecRow, BatchTarget, TEAM_TARGET_PREFIX,
+};
+use crate::ssh::{JumpHop, SshConfig, parse_jump_chain, parse_jump_endpoint};
+use crate::ui::batch_exec_dialog::{BatchExecDialog, BatchExecUiAction};
 use crate::ui::command_history_overlay::{CommandHistoryAction, CommandHistoryOverlay};
 use crate::ui::help_docs_dialog::{HelpDocsDialog, HelpPage};
 use crate::ui::audit_log_dialog::AuditLogDialog;
@@ -42,6 +51,7 @@ use crate::ui::team_fragment_dialog::{
 };
 use crate::ui::team_ui::TeamLoginForm;
 use crate::ui::layout_util;
+use crate::ui::tab_pane::{TabLayout, TerminalPane, TerminalTab};
 
 /// eframe 自定义持久化键（RON）；与 egui 自带的窗口几何持久化并存（FUNCTIONAL_SPEC §8.1）
 const MISTTERM_UI_STORAGE_KEY: &str = "mistterm_ui_v1";
@@ -52,6 +62,7 @@ enum FragmentListScope {
     #[default]
     Personal,
     Team,
+    Market,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -289,19 +300,6 @@ pub(crate) fn placeholders_needing_user(template: &str) -> Vec<String> {
         .collect()
 }
 
-struct TerminalTab {
-    session_id: String,
-    title: String,
-    terminal: TerminalView,
-    /// 自动重连：计划执行时间；与 `ssh_auto_reconnect_attempts` 配合（§1.4 可选行为）
-    ssh_auto_reconnect_next: Option<Instant>,
-    ssh_auto_reconnect_attempts: u8,
-    /// Vault/内存 PEM 临时私钥，断开或关闭标签时删除
-    ssh_temp_key: Option<TempKeyFile>,
-    log_writer: Option<SessionLogWriter>,
-    last_term_rect: egui::Rect,
-}
-
 /// 变量输入对话框状态
 #[derive(Clone, Debug, Default)]
 pub struct FragmentVariableDialog {
@@ -407,6 +405,11 @@ pub struct MistTermApp {
     new_session_password: String,
     new_session_group: String,
     new_session_private_key_path: String,
+    new_session_proxy_jump: String,
+    new_session_proxy_command: String,
+    new_session_local_forwards_text: String,
+    new_session_remote_forwards_text: String,
+    new_session_dynamic_forwards_text: String,
     new_session_vault: VaultSecretForm,
 
     edit_session_id: Option<String>,
@@ -423,6 +426,11 @@ pub struct MistTermApp {
     edit_session_keepalive_interval_secs: u32,
     edit_session_keepalive_count_max: u8,
     edit_session_keepalive_auto_reconnect: bool,
+    edit_session_proxy_jump: String,
+    edit_session_proxy_command: String,
+    edit_session_local_forwards_text: String,
+    edit_session_remote_forwards_text: String,
+    edit_session_dynamic_forwards_text: String,
     edit_session_vault: VaultSecretForm,
     sidebar_search_query: String,
     sidebar_filter: String,
@@ -451,6 +459,16 @@ pub struct MistTermApp {
     team_fragment_conflict: Option<TeamFragmentConflictState>,
     team_fragment_selected_id: Option<String>,
     fragment_list_scope: FragmentListScope,
+    show_fragment_analytics_dialog: bool,
+    fragment_analytics_snapshot: crate::core::FragmentAnalyticsDashboard,
+    fragment_analytics_range: crate::core::FragmentAnalyticsTimeRange,
+    fragment_usage_log: crate::core::FragmentUsageLog,
+    fragment_recommendations: Vec<crate::core::FragmentRecommendation>,
+    market_catalog: crate::core::MarketCatalogState,
+    market_catalog_refresh_pending: bool,
+    market_catalog_refresh_rx: Option<std::sync::mpsc::Receiver<crate::core::MarketCatalogState>>,
+    market_catalog_query_fingerprint: (String, String),
+    market_catalog_debounce_deadline: Option<std::time::Instant>,
 
     pending_fragment_id: Option<String>,
     pending_fragment_name: String,
@@ -498,6 +516,22 @@ pub struct MistTermApp {
     delete_session_confirm: Option<(String, String)>,
     /// §2.3.5：关闭仍连接/握手中的标签前确认
     close_tab_confirm_idx: Option<usize>,
+    /// 团队命令审计本地引擎
+    cmd_audit_engine: CmdAuditEngine,
+    /// 敏感命令二次确认（标签索引、命令、匹配详情）
+    cmd_audit_confirm: Option<CmdAuditConfirmState>,
+    /// 批量多机 SSH 执行
+    batch_exec_dialog: BatchExecDialog,
+    batch_exec_rx: Option<std::sync::mpsc::Receiver<Vec<BatchExecRow>>>,
+}
+
+/// 命令审计确认弹窗状态
+#[derive(Clone)]
+struct CmdAuditConfirmState {
+    tab_idx: usize,
+    command: String,
+    audit: CmdAuditResult,
+    started: Instant,
 }
 
 impl MistTermApp {
@@ -784,6 +818,16 @@ impl MistTermApp {
             team_fragment_conflict: None,
             team_fragment_selected_id: None,
             fragment_list_scope: FragmentListScope::Personal,
+            show_fragment_analytics_dialog: false,
+            fragment_analytics_snapshot: crate::core::FragmentAnalyticsDashboard::default(),
+            fragment_analytics_range: crate::core::FragmentAnalyticsTimeRange::default(),
+            fragment_usage_log: crate::core::FragmentUsageLog::load(),
+            fragment_recommendations: Vec::new(),
+            market_catalog: crate::core::MarketCatalogState::load(),
+            market_catalog_refresh_pending: false,
+            market_catalog_refresh_rx: None,
+            market_catalog_query_fingerprint: (String::new(), String::new()),
+            market_catalog_debounce_deadline: None,
             pending_fragment_id: None,
             pending_fragment_name: String::new(),
             pending_fragment_command: String::new(),
@@ -800,6 +844,11 @@ impl MistTermApp {
             new_session_password: String::new(),
             new_session_group: boot_loc.tr("Default", "默认").to_string(),
             new_session_private_key_path: String::new(),
+            new_session_proxy_jump: String::new(),
+            new_session_proxy_command: String::new(),
+            new_session_local_forwards_text: String::new(),
+            new_session_remote_forwards_text: String::new(),
+            new_session_dynamic_forwards_text: String::new(),
             new_session_vault: VaultSecretForm::default(),
             edit_session_id: None,
             edit_session_name: String::new(),
@@ -815,6 +864,11 @@ impl MistTermApp {
             edit_session_keepalive_interval_secs: 30,
             edit_session_keepalive_count_max: 3,
             edit_session_keepalive_auto_reconnect: true,
+            edit_session_proxy_jump: String::new(),
+            edit_session_proxy_command: String::new(),
+            edit_session_local_forwards_text: String::new(),
+            edit_session_remote_forwards_text: String::new(),
+            edit_session_dynamic_forwards_text: String::new(),
             edit_session_vault: VaultSecretForm::default(),
             sidebar_search_query: String::new(),
             sidebar_filter: "all".to_string(),
@@ -829,6 +883,10 @@ impl MistTermApp {
             audit_logger,
             delete_session_confirm: None,
             close_tab_confirm_idx: None,
+            cmd_audit_engine: CmdAuditEngine::new(),
+            cmd_audit_confirm: None,
+            batch_exec_dialog: BatchExecDialog::default(),
+            batch_exec_rx: None,
             auto_reconnect_enabled: false,
             large_upload_pending_path: None,
             command_history: CommandHistory::new(),
@@ -884,11 +942,30 @@ impl MistTermApp {
         app.refresh_ssh_config_candidates();
         if app.team_service.is_logged_in() {
             app.configure_team_audit_sink();
+            app.apply_cmd_audit_cache_for_current_team();
             // 异步拉取团队详情，避免启动时阻塞 UI 线程；UI 渲染期间会先用本地缓存（current_team_detail = None 时回退到 state 名字）。
             app.team_service.spawn_refresh_current_team_detail();
+            app.team_service.spawn_cmd_audit_sync();
         }
 
         app
+    }
+
+    fn apply_cmd_audit_cache_for_current_team(&mut self) {
+        let Some(tid) = self.team_service.state.current_team_id.as_deref() else {
+            return;
+        };
+        if let Some(payload) = CmdAuditCacheStore::load().payload_for_team(tid) {
+            self.cmd_audit_engine.apply_sync(payload);
+        }
+    }
+
+    fn persist_cmd_audit_cache(&self, team_id: &str, payload: &crate::core::CmdAuditSyncPayload) {
+        let mut store = CmdAuditCacheStore::load();
+        store.upsert_team(team_id, payload);
+        if let Err(e) = store.save() {
+            log::warn!("cmd_audit cache save failed: {}", e);
+        }
     }
 
     fn configure_team_audit_sink(&mut self) {
@@ -911,6 +988,182 @@ impl MistTermApp {
             .update_settings(self.app_settings.audit.clone());
     }
 
+    fn report_cmd_audit_alert_to_team(
+        &self,
+        command: &str,
+        audit: &CmdAuditResult,
+        action_taken: &str,
+    ) {
+        let Some(team_id) = self.team_service.state.current_team_id.as_deref() else {
+            return;
+        };
+        let (matched_rule, match_level) = audit
+            .matches
+            .first()
+            .map(|m| (m.rule_id.clone(), m.level.clone()))
+            .unwrap_or_else(|| (String::new(), "unknown".into()));
+        self.team_service.spawn_cmd_audit_report_alert(
+            team_id,
+            CmdAuditAlertRequest {
+                command: command.to_string(),
+                matched_rule,
+                match_level,
+                action_taken: action_taken.to_string(),
+            },
+        );
+    }
+
+    fn record_cmd_audit_event(
+        &mut self,
+        action: &str,
+        command: &str,
+        audit: &CmdAuditResult,
+        outcome: AuditOutcome,
+    ) {
+        let preview = command_preview(command, 200);
+        let matches: Vec<serde_json::Value> = audit
+            .matches
+            .iter()
+            .map(|m| {
+                serde_json::json!({
+                    "rule_id": m.rule_id,
+                    "source": m.source,
+                    "level": m.level,
+                    "message": m.message,
+                    "action": format!("{:?}", m.action).to_lowercase(),
+                })
+            })
+            .collect();
+        let mut ev = AuditEvent::new(AuditCategory::Command, action, outcome)
+            .with_detail(serde_json::json!({
+                "command_preview": preview,
+                "policy_action": format!("{:?}", audit.action).to_lowercase(),
+                "matches": matches,
+            }));
+        if let Some(idx) = self.active_tab {
+            if let Some(tab) = self.tabs.get(idx) {
+                let sid = tab.primary_session_id();
+                ev = ev.with_resource(&sid);
+                if let Some(s) = self.session_manager.get_session(&sid) {
+                    ev = ev.with_detail(serde_json::json!({
+                        "command_preview": command_preview(command, 200),
+                        "host": s.host,
+                        "policy_action": format!("{:?}", audit.action).to_lowercase(),
+                        "matches": matches,
+                    }));
+                }
+            }
+        }
+        self.audit_logger.record(ev);
+
+        let action_taken = match action {
+            "command.confirmed" => "confirmed",
+            "command.alert" => "alert",
+            _ => "blocked",
+        };
+        self.report_cmd_audit_alert_to_team(command, audit, action_taken);
+    }
+
+    /// 经命令审计后发送到指定标签的 PTY（拦截/确认在 UI 层处理）。
+    pub(crate) fn send_audited_command_at(
+        &mut self,
+        ctx: &egui::Context,
+        tab_idx: usize,
+        command: &str,
+    ) -> CommandSendResult {
+        if tab_idx >= self.tabs.len() {
+            return CommandSendResult::NotConnected;
+        }
+        let Some(pane) = self.tabs.get(tab_idx).and_then(|t| t.active_pane()) else {
+            return CommandSendResult::NotConnected;
+        };
+        if !pane.terminal.is_connected() {
+            return CommandSendResult::NotConnected;
+        }
+        let audit = self.cmd_audit_engine.check(command);
+        match audit.action {
+            CmdAuditAction::Block => {
+                self.record_cmd_audit_event("command.blocked", command, &audit, AuditOutcome::Denied);
+                let hint = audit
+                    .matches
+                    .first()
+                    .map(|m| m.message.as_str())
+                    .unwrap_or("");
+                self.status_message = status_message_wrap_error(format!(
+                    "{}: {} — {}",
+                    crate::i18n::tr(ctx, "Command blocked", "命令已拦截"),
+                    command_preview(command, 80),
+                    if hint.is_empty() {
+                        crate::i18n::tr(ctx, "blocked by team policy", "已被团队策略阻止")
+                    } else {
+                        hint
+                    },
+                ));
+                return CommandSendResult::Blocked(audit);
+            }
+            CmdAuditAction::Confirm => {
+                self.cmd_audit_confirm = Some(CmdAuditConfirmState {
+                    tab_idx,
+                    command: command.to_string(),
+                    audit: audit.clone(),
+                    started: Instant::now(),
+                });
+                return CommandSendResult::NeedsConfirm {
+                    command: command.to_string(),
+                    audit,
+                };
+            }
+            CmdAuditAction::Alert => {
+                self.record_cmd_audit_event("command.alert", command, &audit, AuditOutcome::Success);
+            }
+            CmdAuditAction::Allow => {}
+        }
+        if let Some(pane) = self.tabs.get_mut(tab_idx).and_then(|t| t.active_pane_mut()) {
+            pane.terminal.send_command(command);
+        }
+        CommandSendResult::Sent
+    }
+
+    pub(crate) fn send_audited_command_active(
+        &mut self,
+        ctx: &egui::Context,
+        command: &str,
+    ) -> CommandSendResult {
+        let Some(idx) = self.active_tab else {
+            return CommandSendResult::NotConnected;
+        };
+        self.send_audited_command_at(ctx, idx, command)
+    }
+
+    fn confirm_cmd_audit(&mut self, ctx: &egui::Context, proceed: bool) {
+        let Some(state) = self.cmd_audit_confirm.take() else {
+            return;
+        };
+        if proceed {
+            self.record_cmd_audit_event(
+                "command.confirmed",
+                &state.command,
+                &state.audit,
+                AuditOutcome::Success,
+            );
+            if let Some(pane) = self
+                .tabs
+                .get_mut(state.tab_idx)
+                .and_then(|t| t.active_pane_mut())
+            {
+                pane.terminal.send_command(&state.command);
+                self.status_message = terminal_command_status_message(ctx, &state.command);
+            }
+        } else {
+            self.record_cmd_audit_event(
+                "command.cancelled",
+                &state.command,
+                &state.audit,
+                AuditOutcome::Denied,
+            );
+        }
+    }
+
     fn poll_team_service(&mut self, ctx: &egui::Context) {
         let freq = self.cloud_sync_panel.settings.frequency_minutes;
         if self.team_service.poll(freq) {
@@ -930,9 +1183,22 @@ impl MistTermApp {
                     AuditOutcome::Success,
                 ));
             }
+            if let Some(payload) = self.team_service.take_cmd_audit_sync_payload() {
+                if let Some(tid) = self.team_service.state.current_team_id.clone() {
+                    self.persist_cmd_audit_cache(&tid, &payload);
+                }
+                self.cmd_audit_engine.apply_sync(payload);
+            }
+            if self.team_service.is_logged_in()
+                && !self.team_service.is_busy()
+                && self.cmd_audit_engine.needs_sync()
+            {
+                self.team_service.spawn_cmd_audit_sync();
+            }
             if self.team_service.take_pending_initial_sync() {
                 self.configure_team_audit_sink();
                 self.team_service.spawn_config_sync();
+                self.team_service.spawn_cmd_audit_sync();
             }
             if self.team_service.take_pending_vault_apply() {
                 self.apply_team_vault_from_sync();
@@ -1061,7 +1327,8 @@ impl MistTermApp {
 
     fn poll_connect_audit_from_tabs(&mut self) {
         for tab in &mut self.tabs {
-            if let Some((ok, host)) = tab.terminal.take_connect_audit() {
+            for pane in tab.panes.iter_mut() {
+            if let Some((ok, host)) = pane.terminal.take_connect_audit() {
                 let action = if ok {
                     "connect.success"
                 } else {
@@ -1075,7 +1342,7 @@ impl MistTermApp {
                 self.audit_logger.record(
                     AuditEvent::new(AuditCategory::Session, action, outcome)
                         .with_host(&host)
-                        .with_session(&tab.session_id),
+                        .with_session(&pane.session_id),
                 );
                 if ok {
                     self.audit_logger.record(
@@ -1085,9 +1352,10 @@ impl MistTermApp {
                             AuditOutcome::Success,
                         )
                         .with_host(&host)
-                        .with_session(&tab.session_id),
+                        .with_session(&pane.session_id),
                 );
                 }
+            }
             }
         }
     }
@@ -1129,6 +1397,17 @@ impl MistTermApp {
         *temp_key = resolved.temp_key_file;
         let theme = self.theme_manager.current_theme();
         let (ka_on, ka_int, ka_max) = Self::session_keepalive_params(session);
+        let jump_hops = match self.resolve_proxy_jump_hops(session) {
+            Ok(h) => h,
+            Err(e) => {
+                self.status_message = format!(
+                    "{} {}",
+                    crate::i18n::tr(ctx, "ProxyJump resolve failed:", "跳板解析失败："),
+                    crate::i18n::localize_backend_error(crate::i18n::language(ctx), &e)
+                );
+                return;
+            }
+        };
         terminal.connect(
             theme,
             &session.host,
@@ -1139,7 +1418,47 @@ impl MistTermApp {
             ka_on,
             ka_int,
             ka_max,
+            &session.proxy_jump,
+            &session.proxy_command,
+            jump_hops,
+            parse_local_forwards_text(&session.local_forwards_text),
+            parse_remote_forwards_text(&session.remote_forwards_text),
+            parse_dynamic_forwards_text(&session.dynamic_forwards_text),
         );
+    }
+
+    /// 将 `ProxyJump` 各跳解析为连接凭据（匹配已保存会话名/主机，或 `user@host:port`）。
+    fn resolve_proxy_jump_hops(&self, session: &SessionConfig) -> Result<Vec<JumpHop>, String> {
+        let chain = parse_jump_chain(&session.proxy_jump);
+        if chain.is_empty() {
+            return Ok(Vec::new());
+        }
+        let resolver = SecretResolver::new(self.app_settings.vault.clone());
+        let mut hops = Vec::with_capacity(chain.len());
+        for token in &chain {
+            if let Some(js) = self.session_manager.find_session_for_jump_token(token) {
+                let resolved = resolver
+                    .resolve_session(js)
+                    .map_err(|e| format!("{} ({}): {}", token, js.name, e))?;
+                hops.push(JumpHop {
+                    host: js.host.clone(),
+                    port: js.port,
+                    username: js.username.clone(),
+                    password: resolved.password,
+                    private_key_path: resolved.private_key_path,
+                });
+            } else {
+                let ep = parse_jump_endpoint(token, &session.username)?;
+                hops.push(JumpHop {
+                    host: ep.host,
+                    port: ep.port,
+                    username: ep.username,
+                    password: String::new(),
+                    private_key_path: String::new(),
+                });
+            }
+        }
+        Ok(hops)
     }
 
     fn session_keepalive_params(session: &SessionConfig) -> (bool, u32, u8) {
@@ -1155,28 +1474,31 @@ impl MistTermApp {
     }
 
     fn ensure_tab_log_writer(&mut self, tab_idx: usize) {
-        let Some(tab) = self.tabs.get(tab_idx) else {
-            return;
-        };
-        if tab.log_writer.is_some() {
+        if !self.session_log_enabled {
             return;
         }
-        let sid = tab.session_id.clone();
-        let (name, host_line) = self
-            .session_manager
-            .get_session(&sid)
-            .map(|s| {
-                (
-                    s.name.clone(),
-                    format!("{}@{}:{}", s.username, s.host, s.port),
-                )
-            })
-            .unwrap_or_else(|| (tab.title.clone(), String::new()));
         let settings = self.session_log_settings.clone();
-        if let Some(tab) = self.tabs.get_mut(tab_idx) {
-            let mut writer = SessionLogWriter::new(sid, name, host_line, settings);
+        let Some(tab) = self.tabs.get_mut(tab_idx) else {
+            return;
+        };
+        for pane in &mut tab.panes {
+            if pane.log_writer.is_some() {
+                continue;
+            }
+            let sid = pane.session_id.clone();
+            let (name, host_line) = self
+                .session_manager
+                .get_session(&sid)
+                .map(|s| {
+                    (
+                        s.name.clone(),
+                        format!("{}@{}:{}", s.username, s.host, s.port),
+                    )
+                })
+                .unwrap_or_else(|| (pane.title.clone(), String::new()));
+            let mut writer = SessionLogWriter::new(sid, name, host_line, settings.clone());
             writer.write_connected();
-            tab.log_writer = Some(writer);
+            pane.log_writer = Some(writer);
         }
     }
 
@@ -1195,8 +1517,11 @@ impl MistTermApp {
             let Some(tab) = self.tabs.get_mut(idx) else {
                 return;
             };
-            let cmd = tab.terminal.take_submitted_line();
-            let sid = tab.session_id.clone();
+            let Some(pane) = tab.active_pane_mut() else {
+                return;
+            };
+            let cmd = pane.terminal.take_submitted_line();
+            let sid = pane.session_id.clone();
             let sname = self
                 .session_manager
                 .get_session(&sid)
@@ -1237,9 +1562,11 @@ impl MistTermApp {
             self.ensure_tab_log_writer(i);
         }
         for tab in &mut self.tabs {
-            if let Some(writer) = tab.log_writer.as_mut() {
-                while let Some(command) = tab.terminal.take_pending_log_command() {
-                    writer.write_prompt_marker(&command);
+            for pane in tab.panes.iter_mut() {
+                if let Some(writer) = pane.log_writer.as_mut() {
+                    while let Some(command) = pane.terminal.take_pending_log_command() {
+                        writer.write_prompt_marker(&command);
+                    }
                 }
             }
         }
@@ -1250,9 +1577,11 @@ impl MistTermApp {
             return;
         }
         for tab in &mut self.tabs {
-            if let Some(writer) = tab.log_writer.as_mut() {
-                while let Some(chunk) = tab.terminal.take_pending_log_output() {
-                    writer.append_output(&chunk);
+            for pane in tab.panes.iter_mut() {
+                if let Some(writer) = pane.log_writer.as_mut() {
+                    while let Some(chunk) = pane.terminal.take_pending_log_output() {
+                        writer.append_output(&chunk);
+                    }
                 }
             }
         }
@@ -1263,9 +1592,11 @@ impl MistTermApp {
             return;
         }
         for tab in &mut self.tabs {
-            if tab.session_id == session_id {
-                if let Some(writer) = tab.log_writer.as_mut() {
-                    writer.flush_pending_output();
+            for pane in tab.panes.iter_mut() {
+                if pane.session_id == session_id {
+                    if let Some(writer) = pane.log_writer.as_mut() {
+                        writer.flush_pending_output();
+                    }
                 }
             }
         }
@@ -1274,7 +1605,7 @@ impl MistTermApp {
     fn active_tab_log_status(&self, ctx: &egui::Context) -> Option<String> {
         let idx = self.active_tab?;
         let tab = self.tabs.get(idx)?;
-        tab.log_writer.as_ref().map(|w| {
+        tab.active_pane()?.log_writer.as_ref().map(|w| {
             crate::i18n::session_log_status(ctx, w.status_label_key()).to_string()
         })
     }
@@ -1295,12 +1626,15 @@ impl MistTermApp {
             || self.show_preferences_dialog
             || self.show_fragments_dialog
             || self.show_fragment_vars_dialog
+            || self.show_fragment_analytics_dialog
             || self.variable_dialog.open
             || self.fragment_library.open
             || self.show_terminal_search
             || self.git_sync_panel.is_clone_dialog_open()
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
+            || self.cmd_audit_confirm.is_some()
+            || self.batch_exec_dialog.open
             || self.quick_selector.open
             || self.large_upload_pending_path.is_some()
             || self.ssh_import_dialog.open
@@ -1319,7 +1653,8 @@ impl MistTermApp {
         }
         self.active_tab
             .and_then(|i| self.tabs.get(i))
-            .map(|t| t.terminal.is_terminal_focused())
+            .and_then(|t| t.active_terminal())
+            .map(|term| term.is_terminal_focused())
             .unwrap_or(false)
     }
 
@@ -1329,7 +1664,8 @@ impl MistTermApp {
             && self
                 .active_tab
                 .and_then(|i| self.tabs.get(i))
-                .map(|t| t.terminal.is_terminal_focused())
+                .and_then(|t| t.active_terminal())
+                .map(|term| term.is_terminal_focused())
                 .unwrap_or(false)
     }
 
@@ -1401,7 +1737,7 @@ impl MistTermApp {
     fn switch_tab_to_index(&mut self, idx: usize) {
         if idx < self.tabs.len() {
             self.active_tab = Some(idx);
-            self.selected_session_id = Some(self.tabs[idx].session_id.clone());
+            self.selected_session_id = Some(self.tabs[idx].primary_session_id());
         }
     }
 
@@ -1438,10 +1774,8 @@ impl MistTermApp {
         if idx >= self.tabs.len() {
             return;
         }
-        if let Some(w) = self.tabs[idx].log_writer.as_mut() {
-            w.stop_log();
-        }
-        self.tabs[idx].terminal.disconnect();
+        self.tabs[idx].stop_all_logs();
+        self.tabs[idx].disconnect_all_panes();
         self.tabs.remove(idx);
         if let Some(active) = self.active_tab {
             if active == idx {
@@ -1453,15 +1787,14 @@ impl MistTermApp {
         self.selected_session_id = self
             .active_tab
             .and_then(|i| self.tabs.get(i))
-            .map(|t| t.session_id.clone());
+            .map(|t| t.primary_session_id());
     }
 
     fn request_close_tab_at(&mut self, idx: usize) {
         if idx >= self.tabs.len() {
             return;
         }
-        let need_confirm = self.tabs[idx].terminal.is_connected()
-            || self.tabs[idx].terminal.is_connecting();
+        let need_confirm = self.tabs[idx].any_connected_or_connecting();
         if need_confirm {
             self.close_tab_confirm_idx = Some(idx);
         } else {
@@ -1481,16 +1814,19 @@ impl MistTermApp {
         if idx >= self.tabs.len() {
             return;
         }
-        if let Some(w) = self.tabs[idx].log_writer.as_mut() {
+        let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) else {
+            return;
+        };
+        if let Some(w) = pane.log_writer.as_mut() {
             w.stop_log();
         }
-        let sid = self.tabs[idx].session_id.clone();
+        let sid = pane.session_id.clone();
         let host = self
             .session_manager
             .get_session(&sid)
             .map(|s| s.host.clone())
             .unwrap_or_default();
-        self.tabs[idx].terminal.disconnect_ssh_keep_buffer();
+        pane.terminal.disconnect_ssh_keep_buffer();
         self.sync_monitor_panel_to_active_tab();
         self.audit_logger.record(
             AuditEvent::new(AuditCategory::Session, "session.disconnect", AuditOutcome::Success)
@@ -1518,9 +1854,17 @@ impl MistTermApp {
         if idx >= self.tabs.len() {
             return;
         }
-        self.tabs[idx].ssh_auto_reconnect_next = None;
-        self.tabs[idx].ssh_auto_reconnect_attempts = 0;
-        let sid = self.tabs[idx].session_id.clone();
+        let (sid, offline) = {
+            let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) else {
+                return;
+            };
+            pane.ssh_auto_reconnect_next = None;
+            pane.ssh_auto_reconnect_attempts = 0;
+            let sid = pane.session_id.clone();
+            let offline = pane.terminal.offline_input_snapshot();
+            pane.terminal.disconnect();
+            (sid, offline)
+        };
         let Some(session) = self.session_manager.get_session(&sid).cloned() else {
             self.status_message = crate::i18n::tr(
                 ctx,
@@ -1530,19 +1874,17 @@ impl MistTermApp {
             .to_string();
             return;
         };
-        let offline = self.tabs[idx].terminal.offline_input_snapshot();
-        self.tabs[idx].terminal.disconnect();
         let mut temp_key = None;
-        let mut terminal = std::mem::replace(&mut self.tabs[idx].terminal, TerminalView::new());
+        let mut terminal = TerminalView::new();
         self.terminal_connect_session(ctx, &mut terminal, &session, &mut temp_key);
-        self.tabs[idx].terminal = terminal;
-        self.tabs[idx].ssh_temp_key = temp_key;
-        self.tabs[idx]
-            .terminal
+        let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) else {
+            return;
+        };
+        pane.terminal = terminal;
+        pane.ssh_temp_key = temp_key;
+        pane.terminal
             .restore_offline_input_snapshot(offline.0, offline.1);
-        if let Some(t) = self.tabs.get_mut(idx) {
-            t.title = session.name.clone();
-        }
+        pane.title = session.name.clone();
         self.session_manager.mark_session_connected(&sid);
         self.sync_monitor_panel_to_active_tab();
         self.status_message = format!(
@@ -1648,6 +1990,8 @@ impl MistTermApp {
             || self.ssh_import_dialog.open
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
+            || self.cmd_audit_confirm.is_some()
+            || self.batch_exec_dialog.open
             || self.quick_selector.open
             || self.session_log_dialog.open
             || self.audit_log_dialog.open
@@ -1701,12 +2045,12 @@ impl MistTermApp {
 
     fn current_terminal_mut(&mut self) -> Option<&mut TerminalView> {
         let idx = self.active_tab?;
-        self.tabs.get_mut(idx).map(|t| &mut t.terminal)
+        self.tabs.get_mut(idx)?.active_terminal_mut()
     }
 
     fn current_terminal(&self) -> Option<&TerminalView> {
         let idx = self.active_tab?;
-        self.tabs.get(idx).map(|t| &t.terminal)
+        self.tabs.get(idx)?.active_terminal()
     }
 
     /// 监控侧栏跟随当前标签：重新绑定 SSH 会话上的 exec；未连接则清空展示。
@@ -1715,13 +2059,15 @@ impl MistTermApp {
             self.monitor_panel.clear();
             return;
         };
-        if tab.terminal.is_connected() {
-            if let (Some(h), Some(mgr)) = (
-                tab.terminal.ssh_session_handle(),
-                tab.terminal.ssh_manager_clone(),
-            ) {
-                self.monitor_panel.init(h, mgr);
-                return;
+        if let Some(term) = tab.active_terminal() {
+            if term.is_connected() {
+                if let (Some(h), Some(mgr)) = (
+                    term.ssh_session_handle(),
+                    term.ssh_manager_clone(),
+                ) {
+                    self.monitor_panel.init(h, mgr);
+                    return;
+                }
             }
         }
         self.monitor_panel.clear();
@@ -1819,20 +2165,568 @@ impl MistTermApp {
         let mut terminal = TerminalView::new();
         let mut temp_key = None;
         self.terminal_connect_session(ctx, &mut terminal, session, &mut temp_key);
-        self.tabs.push(TerminalTab {
-            session_id: session.id.clone(),
-            title: session.name.clone(),
+        self.tabs.push(TerminalTab::single(TerminalPane::new(
+            session.id.clone(),
+            session.name.clone(),
             terminal,
-            ssh_auto_reconnect_next: None,
-            ssh_auto_reconnect_attempts: 0,
-            ssh_temp_key: temp_key,
-            log_writer: None,
-            last_term_rect: egui::Rect::NOTHING,
-        });
+        )));
+        if let Some(tab) = self.tabs.last_mut() {
+            tab.panes[0].ssh_temp_key = temp_key;
+        }
         let idx = self.tabs.len() - 1;
         self.ensure_tab_log_writer(idx);
         self.active_tab = Some(idx);
         self.session_manager.mark_session_connected(&session.id);
+    }
+
+    fn menu_open_batch_exec(&mut self, ctx: &egui::Context) {
+        let mut preselect = Vec::new();
+        for tab in &self.tabs {
+            for pane in &tab.panes {
+                if pane.terminal.is_connected() {
+                    preselect.push(pane.session_id.clone());
+                }
+            }
+        }
+        self.batch_exec_dialog.open(&preselect);
+        ctx.request_repaint();
+    }
+
+    fn build_batch_targets(&self, ctx: &egui::Context, include_team: bool) -> Vec<BatchTarget> {
+        let mut out = Vec::new();
+        for s in self.session_manager.list_sessions() {
+            out.push(BatchTarget {
+                id: s.id.clone(),
+                label: format!("{} · {}", s.name, s.host),
+                group: if s.group.is_empty() {
+                    crate::i18n::tr(ctx, "Default", "默认").to_string()
+                } else {
+                    s.group.clone()
+                },
+            });
+        }
+        if include_team {
+            for srv in self.team_service.current_team_servers() {
+                out.push(BatchTarget {
+                    id: format!("{TEAM_TARGET_PREFIX}{}", srv.list_key()),
+                    label: format!("{} · {}", srv.name, srv.host),
+                    group: crate::i18n::tr(ctx, "Team", "团队").to_string(),
+                });
+            }
+        }
+        out
+    }
+
+    fn team_server_to_session(&self, ctx: &egui::Context, server: &crate::core::team::TeamServer) -> SessionConfig {
+        let mut session = SessionConfig::default();
+        session.name = server.name.clone();
+        session.host = server.host.clone();
+        session.port = server.port;
+        session.username = server.username.clone();
+        session.group = crate::i18n::tr(ctx, "Team", "团队").to_string();
+        if !server.vault_credential_path.is_empty() {
+            if let Some((mount, path, field)) = parse_vault_credential_path(
+                &server.vault_credential_path,
+                &self.app_settings.vault.default_mount,
+            ) {
+                session.secret_backend = SecretBackend::VaultKv {
+                    mount,
+                    path,
+                    field,
+                    version: None,
+                };
+            }
+        }
+        session
+    }
+
+    fn session_to_ssh_config(&self, session: &SessionConfig) -> Result<SshConfig, String> {
+        let resolver = SecretResolver::new(self.app_settings.vault.clone());
+        let resolved = resolver
+            .resolve_session(session)
+            .map_err(|e| e.to_string())?;
+        let jump_hops = self.resolve_proxy_jump_hops(session)?;
+        let (ka_on, ka_int, ka_max) = Self::session_keepalive_params(session);
+        let interval = if ka_on {
+            ka_int.max(1)
+        } else {
+            0
+        };
+        Ok(SshConfig {
+            host: session.host.clone(),
+            port: session.port,
+            username: session.username.clone(),
+            password: resolved.password,
+            private_key_path: resolved.private_key_path,
+            keepalive_interval_secs: interval,
+            keepalive_count_max: ka_max,
+            proxy_jump: session.proxy_jump.clone(),
+            proxy_command: session.proxy_command.clone(),
+            jump_hops,
+            local_forwards: parse_local_forwards_text(&session.local_forwards_text),
+            remote_forwards: parse_remote_forwards_text(&session.remote_forwards_text),
+            dynamic_forwards: parse_dynamic_forwards_text(&session.dynamic_forwards_text),
+        })
+    }
+
+    fn batch_exec_allowed(&mut self, ctx: &egui::Context, command: &str) -> bool {
+        let audit = self.cmd_audit_engine.check(command);
+        match audit.action {
+            CmdAuditAction::Block => {
+                self.record_cmd_audit_event("command.blocked", command, &audit, AuditOutcome::Denied);
+                self.status_message = format!(
+                    "{}: {}",
+                    crate::i18n::tr(ctx, "Command blocked", "命令已拦截"),
+                    command_preview(command, 80)
+                );
+                false
+            }
+            CmdAuditAction::Confirm => {
+                self.status_message = crate::i18n::tr(
+                    ctx,
+                    "Batch run cannot proceed: command requires confirmation in an interactive terminal.",
+                    "无法批量执行：该命令需在交互终端中二次确认。",
+                )
+                .to_string();
+                false
+            }
+            CmdAuditAction::Alert => {
+                self.record_cmd_audit_event("command.alert", command, &audit, AuditOutcome::Success);
+                true
+            }
+            CmdAuditAction::Allow => true,
+        }
+    }
+
+    fn start_batch_exec(&mut self, ctx: &egui::Context) {
+        let command = self.batch_exec_dialog.command.trim().to_string();
+        if command.is_empty() || self.batch_exec_dialog.selected.is_empty() {
+            return;
+        }
+        if !self.batch_exec_allowed(ctx, &command) {
+            return;
+        }
+        let parallel = self.batch_exec_dialog.max_parallel as usize;
+        let selected: Vec<String> = self.batch_exec_dialog.selected.iter().cloned().collect();
+        let mut jobs = Vec::new();
+        for id in selected {
+            if let Some(key) = id.strip_prefix(TEAM_TARGET_PREFIX) {
+                let Some(server) = self
+                    .team_service
+                    .current_team_servers()
+                    .into_iter()
+                    .find(|s| s.list_key() == key)
+                else {
+                    continue;
+                };
+                let session = self.team_server_to_session(ctx, &server);
+                let label = format!("{} · {}", server.name, server.host);
+                match self.session_to_ssh_config(&session) {
+                    Ok(config) => jobs.push(BatchExecJob {
+                        target_id: id,
+                        label,
+                        config,
+                    }),
+                    Err(e) => {
+                        self.status_message = format!(
+                            "{} {}: {}",
+                            crate::i18n::tr(ctx, "Credential error for", "凭据错误："),
+                            label,
+                            e
+                        );
+                        return;
+                    }
+                }
+            } else if let Some(session) = self.session_manager.get_session(&id) {
+                let label = format!("{} · {}", session.name, session.host);
+                match self.session_to_ssh_config(session) {
+                    Ok(config) => jobs.push(BatchExecJob {
+                        target_id: id,
+                        label,
+                        config,
+                    }),
+                    Err(e) => {
+                        self.status_message = format!(
+                            "{} {}: {}",
+                            crate::i18n::tr(ctx, "Credential error for", "凭据错误："),
+                            label,
+                            e
+                        );
+                        return;
+                    }
+                }
+            }
+        }
+        if jobs.is_empty() {
+            return;
+        }
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Session, "batch.exec", AuditOutcome::Success)
+                .with_detail(serde_json::json!({
+                    "hosts": jobs.len(),
+                    "command_preview": command_preview(&command, 120),
+                })),
+        );
+        self.batch_exec_dialog.running = true;
+        self.batch_exec_dialog.results.clear();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.batch_exec_rx = Some(rx);
+        std::thread::spawn(move || {
+            let rows = run_batch_parallel(jobs, command, parallel);
+            let _ = tx.send(rows);
+        });
+        ctx.request_repaint();
+    }
+
+    fn record_fragment_execution(&mut self, fragment_id: &str, success: bool, dur_ms: u64) {
+        let ts = chrono::Utc::now().timestamp();
+        let (scope, team_id) = if self.team_service.find_team_fragment(fragment_id).is_some() {
+            (
+                "team".to_string(),
+                self.team_service.state.current_team_id.clone(),
+            )
+        } else {
+            ("personal".to_string(), None)
+        };
+        let user = self.team_service.state.user.as_ref();
+        let display_name = user.map(|u| {
+            if !u.display_name.is_empty() {
+                u.display_name.clone()
+            } else if !u.username.is_empty() {
+                u.username.clone()
+            } else {
+                u.email.clone()
+            }
+        });
+        self.fragment_usage_log.append(crate::core::FragmentUsageEvent {
+            ts,
+            fragment_id: fragment_id.to_string(),
+            scope,
+            team_id: team_id.clone(),
+            user_id: user.map(|u| u.id.clone()),
+            display_name,
+            success,
+            duration_ms: dur_ms,
+        });
+        let _ = self.fragment_usage_log.save_if_dirty();
+
+        if self.fragment_manager.get_by_id(fragment_id).is_some() {
+            self.fragment_manager
+                .record_execution(fragment_id, success, dur_ms);
+            let _ = self
+                .fragment_manager
+                .save(&FragmentManager::default_config_path());
+        } else if self.team_service.find_team_fragment(fragment_id).is_some() {
+            self.team_service
+                .record_fragment_usage(fragment_id, success, dur_ms);
+        }
+    }
+
+    fn market_item_for_stats(
+        &self,
+        frag: &FragmentStats,
+    ) -> Option<crate::core::MarketFragment> {
+        let id = frag
+            .tags
+            .iter()
+            .find_map(|t| t.strip_prefix("mkt:"))?;
+        self.market_catalog
+            .fragments()
+            .iter()
+            .find(|f| f.id == id)
+            .cloned()
+    }
+
+    fn poll_market_catalog_refresh(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.market_catalog_refresh_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(state) => {
+                self.market_catalog = state;
+                self.market_catalog_refresh_rx = None;
+                self.market_catalog_refresh_pending = false;
+                ctx.request_repaint();
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.market_catalog_refresh_rx = None;
+                self.market_catalog_refresh_pending = false;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    fn start_market_catalog_refresh(&mut self) {
+        if self.market_catalog_refresh_rx.is_some() {
+            return;
+        }
+        let api_base = self.app_settings.team.normalized_api_base();
+        let token = self.team_service.current_access_token();
+        let query = crate::core::MarketCatalogQuery {
+            category: self.fragment_filter_category.clone(),
+            search: self.fragment_search_query.clone(),
+            limit: 200,
+            cursor: String::new(),
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.market_catalog_refresh_rx = Some(rx);
+        self.market_catalog_refresh_pending = true;
+        let mut state = self.market_catalog.clone();
+        std::thread::spawn(move || {
+            state.refresh_blocking(&api_base, token.as_deref(), &query);
+            let _ = tx.send(state);
+        });
+    }
+
+    fn start_market_catalog_load_more(&mut self) {
+        if self.market_catalog_refresh_rx.is_some() || !self.market_catalog.has_more() {
+            return;
+        }
+        let api_base = self.app_settings.team.normalized_api_base();
+        let token = self.team_service.current_access_token();
+        let query = crate::core::MarketCatalogQuery {
+            category: self.fragment_filter_category.clone(),
+            search: self.fragment_search_query.clone(),
+            limit: 200,
+            cursor: self.market_catalog.cache.cursor.clone(),
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.market_catalog_refresh_rx = Some(rx);
+        let mut state = self.market_catalog.clone();
+        std::thread::spawn(move || {
+            state.load_more_blocking(&api_base, token.as_deref(), &query);
+            let _ = tx.send(state);
+        });
+    }
+
+    fn install_market_fragment(&mut self, ctx: &egui::Context, item: &crate::core::MarketFragment) {
+        let api_base = self.app_settings.team.normalized_api_base();
+        let token = self.team_service.current_access_token();
+        match crate::core::install_into_personal_library(&mut self.fragment_manager, item) {
+            Ok(()) => {
+                self.market_catalog
+                    .report_install_blocking(&api_base, token.as_deref(), &item.id);
+                let _ = self
+                    .fragment_manager
+                    .save(&FragmentManager::default_config_path());
+                self.status_message = format!(
+                    "{} {}",
+                    crate::i18n::tr(ctx, "Added to personal library:", "已添加到个人库："),
+                    item.title
+                );
+            }
+            Err(e) if e == "already_installed" => {
+                self.status_message = crate::i18n::tr(
+                    ctx,
+                    "This market snippet is already in your library",
+                    "该市场片段已在个人库中",
+                )
+                .to_string();
+            }
+            Err(e) => {
+                self.status_message = format!(
+                    "{} {}",
+                    crate::i18n::tr(ctx, "Install failed:", "安装失败："),
+                    e
+                );
+            }
+        }
+    }
+
+    fn refresh_fragment_analytics_dashboard(&mut self) {
+        let personal: Vec<_> = self.fragment_manager.get_all().iter().cloned().collect();
+        self.fragment_analytics_snapshot = self.team_service.build_fragment_analytics_dashboard(
+            &personal,
+            self.fragment_analytics_range,
+            &self.fragment_usage_log,
+        );
+        let cutoff = self.fragment_analytics_range.cutoff_unix();
+        self.fragment_recommendations = crate::core::recommend_from_history(
+            &self.command_history,
+            &personal,
+            cutoff,
+            8,
+        );
+    }
+
+    fn export_efficiency_report(&mut self, ctx: &egui::Context) {
+        let md = crate::core::build_efficiency_report_markdown(
+            &self.fragment_analytics_snapshot,
+            self.fragment_analytics_range,
+            &self.fragment_recommendations,
+        );
+        if let Ok(mut clip) = arboard::Clipboard::new() {
+            if clip.set_text(&md).is_ok() {
+                self.status_message = crate::i18n::tr(
+                    ctx,
+                    "Efficiency report (Markdown) copied to clipboard",
+                    "效率报告（Markdown）已复制到剪贴板",
+                )
+                .to_string();
+                return;
+            }
+        }
+        self.status_message = crate::i18n::tr(
+            ctx,
+            "Failed to copy efficiency report",
+            "复制效率报告失败",
+        )
+        .to_string();
+    }
+
+    fn add_fragment_from_recommendation(&mut self, ctx: &egui::Context, index: usize) {
+        let Some(rec) = self.fragment_recommendations.get(index) else {
+            return;
+        };
+        let title: String = rec.command.chars().take(40).collect();
+        let cmd = rec.command.clone();
+        self.fragment_manager.add_fragment(
+            title.clone(),
+            cmd,
+            "recommended".to_string(),
+        );
+        let _ = self
+            .fragment_manager
+            .save(&FragmentManager::default_config_path());
+        self.refresh_fragment_analytics_dashboard();
+        self.status_message = format!(
+            "{} {}",
+            crate::i18n::tr(ctx, "Snippet added:", "已添加片段："),
+            title
+        );
+    }
+
+    fn open_fragment_analytics_dialog(&mut self) {
+        if self.team_service.is_logged_in() && self.team_service.team_members.is_empty() {
+            self.team_service.spawn_list_team_members();
+        }
+        self.refresh_fragment_analytics_dashboard();
+        self.show_fragment_analytics_dialog = true;
+    }
+
+    fn export_fragment_analytics_json(&mut self, ctx: &egui::Context) {
+        match crate::core::export_dashboard_json(
+            &self.fragment_analytics_snapshot,
+            self.fragment_analytics_range,
+        ) {
+            Ok(json) => {
+                if let Ok(mut clip) = arboard::Clipboard::new() {
+                    if clip.set_text(&json).is_ok() {
+                        self.status_message = crate::i18n::tr(
+                            ctx,
+                            "Analytics JSON copied to clipboard",
+                            "分析 JSON 已复制到剪贴板",
+                        )
+                        .to_string();
+                        return;
+                    }
+                }
+                self.status_message = crate::i18n::tr(
+                    ctx,
+                    "Failed to copy analytics JSON",
+                    "复制分析 JSON 失败",
+                )
+                .to_string();
+            }
+            Err(e) => {
+                self.status_message = format!(
+                    "{}: {e}",
+                    crate::i18n::tr(ctx, "Export failed", "导出失败")
+                );
+            }
+        }
+    }
+
+    fn schedule_market_catalog_debounce(&mut self) {
+        if self.fragment_list_scope != FragmentListScope::Market {
+            return;
+        }
+        self.market_catalog_debounce_deadline = Some(
+            std::time::Instant::now() + std::time::Duration::from_millis(450),
+        );
+    }
+
+    fn poll_market_catalog_debounce(&mut self) {
+        let Some(deadline) = self.market_catalog_debounce_deadline else {
+            return;
+        };
+        if std::time::Instant::now() < deadline {
+            return;
+        }
+        self.market_catalog_debounce_deadline = None;
+        if self.fragment_list_scope == FragmentListScope::Market {
+            self.start_market_catalog_refresh();
+        }
+    }
+
+    fn sync_market_catalog_query_fingerprint(&mut self) {
+        if self.fragment_list_scope != FragmentListScope::Market {
+            return;
+        }
+        let fp = (
+            self.fragment_filter_category.clone(),
+            self.fragment_search_query.clone(),
+        );
+        if fp != self.market_catalog_query_fingerprint {
+            self.market_catalog_query_fingerprint = fp;
+            self.schedule_market_catalog_debounce();
+        }
+    }
+
+    fn split_tab_at(&mut self, ctx: &egui::Context, idx: usize, layout: TabLayout) {
+        if idx >= self.tabs.len() || !self.tabs[idx].can_split() {
+            return;
+        }
+        let active = self.tabs[idx].active_pane.min(self.tabs[idx].panes.len().saturating_sub(1));
+        let session_id = self.tabs[idx].panes[active].session_id.clone();
+        let Some(session) = self.session_manager.get_session(&session_id).cloned() else {
+            return;
+        };
+        let mut terminal = TerminalView::new();
+        let mut temp_key = None;
+        self.terminal_connect_session(ctx, &mut terminal, &session, &mut temp_key);
+        let n = self.tabs[idx].panes.len() + 1;
+        let title2 = format!("{} ({n})", session.name);
+        let mut pane2 = TerminalPane::new(session.id.clone(), title2, terminal);
+        pane2.ssh_temp_key = temp_key;
+        let tab = &mut self.tabs[idx];
+        tab.add_pane_with_layout(pane2, layout);
+        self.ensure_tab_log_writer(idx);
+        self.status_message = crate::i18n::tr(
+            ctx,
+            "Split terminal pane",
+            "已分屏",
+        )
+        .to_string();
+    }
+
+    fn close_pane_tab_at(&mut self, ctx: &egui::Context, tab_idx: usize, pane_idx: usize) {
+        if tab_idx >= self.tabs.len() {
+            return;
+        }
+        if self.tabs[tab_idx].close_pane(pane_idx) {
+            self.status_message =
+                crate::i18n::tr(ctx, "Closed terminal pane", "已关闭该窗格").to_string();
+        }
+    }
+
+    fn maybe_collapse_narrow_split(&mut self, tab_idx: usize, column_w: f32) {
+        if column_w >= crate::ui::tab_pane::NARROW_SPLIT_COLLAPSE_W {
+            return;
+        }
+        if let Some(tab) = self.tabs.get_mut(tab_idx) {
+            if tab.is_split() {
+                tab.unsplit_keep_active();
+            }
+        }
+    }
+
+    fn unsplit_tab_at(&mut self, ctx: &egui::Context, idx: usize) {
+        if idx >= self.tabs.len() || !self.tabs[idx].is_split() {
+            return;
+        }
+        self.tabs[idx].unsplit_keep_active();
+        self.status_message = crate::i18n::tr(ctx, "Merged split panes", "已合并分屏").to_string();
     }
 
     /// ⌘T / Ctrl+T：为左侧当前选中会话新开标签；未选中时提示（与 ⌘N 新建配置区分）
@@ -2037,23 +2931,26 @@ impl MistTermApp {
     pub(crate) fn process_ai_bridge(&mut self, ctx: &egui::Context) {
         if let Some(idx) = self.active_tab {
             if let Some(tab) = self.tabs.get_mut(idx) {
-                if tab.terminal.take_pending_send_to_ai() {
-                    let text = tab
+                if let Some(pane) = tab.active_pane_mut() {
+                if pane.terminal.take_pending_send_to_ai() {
+                    let text = pane
                         .terminal
                         .take_pending_send_to_ai_text()
-                        .unwrap_or_else(|| tab.terminal.selected_text());
+                        .unwrap_or_else(|| pane.terminal.selected_text());
                     self.ai_panel.attach_context(text);
                     if self.ensure_right_dock_allowed_or_warn(ctx) {
                         self.show_ai_panel = true;
                     }
                 }
+                }
             }
         }
         if let Some(cmd) = self.ai_panel.take_command_for_terminal() {
             if let Some(idx) = self.active_tab {
-                if let Some(tab) = self.tabs.get_mut(idx) {
-                    tab.terminal.send_command(&cmd);
-                    self.status_message = terminal_command_status_message(ctx, &cmd);
+                if self.tabs.get_mut(idx).is_some() {
+                    if self.send_audited_command_active(ctx, &cmd) == CommandSendResult::Sent {
+                        self.status_message = terminal_command_status_message(ctx, &cmd);
+                    }
                     ctx.request_repaint();
                 }
             } else {
@@ -2090,10 +2987,10 @@ impl MistTermApp {
                 .to_string();
             return;
         };
-        let Some(tab) = self.tabs.get_mut(idx) else {
+        let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) else {
             return;
         };
-        if tab.terminal.menu_copy_to_clipboard() {
+        if pane.terminal.menu_copy_to_clipboard() {
             self.status_message =
                 crate::i18n::tr(ctx, "Copied to clipboard", "已复制到剪贴板").to_string();
         } else {
@@ -2109,18 +3006,17 @@ impl MistTermApp {
                 .to_string();
             return;
         };
-        let Some(tab) = self.tabs.get_mut(idx) else {
-            return;
-        };
-        tab.terminal.menu_paste_from_clipboard(ctx);
+        if let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) {
+            pane.terminal.menu_paste_from_clipboard(ctx);
+        }
     }
 
     pub(crate) fn menu_select_all_terminal(&mut self, ctx: &egui::Context) {
         let Some(idx) = self.active_tab else {
             return;
         };
-        if let Some(tab) = self.tabs.get_mut(idx) {
-            tab.terminal.menu_select_all();
+        if let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) {
+            pane.terminal.menu_select_all();
             ctx.request_repaint();
         }
     }
@@ -2131,7 +3027,7 @@ impl MistTermApp {
                 .to_string();
             return;
         };
-        let session_id = self.tabs[idx].session_id.clone();
+        let session_id = self.tabs[idx].primary_session_id();
         let name = self
             .session_manager
             .get_session(&session_id)
@@ -2214,7 +3110,11 @@ impl MistTermApp {
     pub fn select_session(&mut self, ctx: &egui::Context, session_id: &str) {
         self.selected_session_id = Some(session_id.to_string());
 
-        if let Some(idx) = self.tabs.iter().position(|t| t.session_id == session_id) {
+        if let Some(idx) = self
+            .tabs
+            .iter()
+            .position(|t| t.primary_session_id() == session_id)
+        {
             self.active_tab = Some(idx);
             return;
         }
@@ -2247,14 +3147,24 @@ impl MistTermApp {
         let backend = self
             .new_session_vault
             .to_backend(&self.app_settings.vault);
-        if !matches!(backend, SecretBackend::LocalEncrypted) {
-            self.session_manager.patch_session(&sid, |s| {
+        let proxy_jump = self.new_session_proxy_jump.trim().to_string();
+        let proxy_command = self.new_session_proxy_command.trim().to_string();
+        let local_forwards_text = self.new_session_local_forwards_text.clone();
+        let remote_forwards_text = self.new_session_remote_forwards_text.clone();
+        let dynamic_forwards_text = self.new_session_dynamic_forwards_text.clone();
+        self.session_manager.patch_session(&sid, |s| {
+            s.proxy_jump = proxy_jump.clone();
+            s.proxy_command = proxy_command.clone();
+            s.local_forwards_text = local_forwards_text;
+            s.remote_forwards_text = remote_forwards_text;
+            s.dynamic_forwards_text = dynamic_forwards_text;
+            if !matches!(backend, SecretBackend::LocalEncrypted) {
                 s.secret_backend = backend.clone();
                 if backend.is_vault() {
                     s.password.clear();
                 }
-            });
-        }
+            }
+        });
         self.audit_logger.record(
             AuditEvent::new(AuditCategory::Session, "session.create", AuditOutcome::Success)
                 .with_session(&sid)
@@ -2279,6 +3189,11 @@ impl MistTermApp {
             .tr("Default", "默认")
             .to_string();
         self.new_session_private_key_path.clear();
+        self.new_session_proxy_jump.clear();
+        self.new_session_proxy_command.clear();
+        self.new_session_local_forwards_text.clear();
+        self.new_session_remote_forwards_text.clear();
+        self.new_session_dynamic_forwards_text.clear();
         self.new_session_vault = VaultSecretForm::default();
     }
 
@@ -2290,8 +3205,10 @@ impl MistTermApp {
             .map(|s| s.name.clone())
             .unwrap_or_else(|| session_id.to_string());
         for t in &mut self.tabs {
-            if t.session_id == session_id {
-                t.terminal.disconnect();
+            for pane in t.panes.iter_mut() {
+                if pane.session_id == session_id {
+                    pane.terminal.disconnect();
+                }
             }
         }
         self.audit_logger.record(
@@ -2300,7 +3217,8 @@ impl MistTermApp {
                 .with_detail(serde_json::json!({ "name": display })),
         );
         self.session_manager.delete_session(session_id);
-        self.tabs.retain(|t| t.session_id != session_id);
+        self.tabs
+            .retain(|t| !t.panes.iter().any(|p| p.session_id == session_id));
         if let Some(idx) = self.active_tab {
             if idx >= self.tabs.len() {
                 self.active_tab = self.tabs.len().checked_sub(1);
@@ -2309,7 +3227,7 @@ impl MistTermApp {
         if self.selected_session_id.as_ref() == Some(&session_id.to_string()) {
             self.selected_session_id = None;
             if let Some(active) = self.active_tab {
-                self.selected_session_id = self.tabs.get(active).map(|t| t.session_id.clone());
+                self.selected_session_id = self.tabs.get(active).map(|t| t.primary_session_id());
             }
         }
         self.status_message = format!(
@@ -2336,6 +3254,11 @@ impl MistTermApp {
             self.edit_session_keepalive_interval_secs = session.keepalive_interval_secs;
             self.edit_session_keepalive_count_max = session.keepalive_count_max;
             self.edit_session_keepalive_auto_reconnect = session.keepalive_auto_reconnect;
+            self.edit_session_proxy_jump = session.proxy_jump.clone();
+            self.edit_session_proxy_command = session.proxy_command.clone();
+            self.edit_session_local_forwards_text = session.local_forwards_text.clone();
+            self.edit_session_remote_forwards_text = session.remote_forwards_text.clone();
+            self.edit_session_dynamic_forwards_text = session.dynamic_forwards_text.clone();
             self.edit_session_vault = VaultSecretForm::from_backend(
                 &session.secret_backend,
                 &self.app_settings.vault.default_mount,
@@ -2394,6 +3317,11 @@ impl MistTermApp {
                 s.keepalive_interval_secs = ka_int;
                 s.keepalive_count_max = ka_max;
                 s.keepalive_auto_reconnect = ka_ar;
+                s.proxy_jump = self.edit_session_proxy_jump.trim().to_string();
+                s.proxy_command = self.edit_session_proxy_command.trim().to_string();
+                s.local_forwards_text = self.edit_session_local_forwards_text.clone();
+                s.remote_forwards_text = self.edit_session_remote_forwards_text.clone();
+                s.dynamic_forwards_text = self.edit_session_dynamic_forwards_text.clone();
                 s.secret_backend = backend.clone();
                 if backend.is_vault() {
                     s.password.clear();
@@ -2536,17 +3464,36 @@ impl MistTermApp {
         );
         ui.add_space(2.0);
 
+        ui.horizontal(|ui| {
+            if crate::ui::chrome::panel_action_icon_button(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Fragment,
+                crate::i18n::tr(ui.ctx(), "Analytics dashboard", "分析大盘"),
+            )
+            .clicked()
+            {
+                self.open_fragment_analytics_dialog();
+            }
+        });
+        ui.add_space(theme.spacing_xs());
+
         if self.team_service.is_configured() && self.team_service.is_logged_in() {
             let ctx_scope = ui.ctx().clone();
             let personal_lbl =
                 crate::i18n::tr(&ctx_scope, "Personal", "个人");
             let team_lbl = crate::i18n::tr(&ctx_scope, "Team", "团队");
+            let market_lbl = crate::i18n::tr(&ctx_scope, "Market", "市场");
             let scope_key = match self.fragment_list_scope {
                 FragmentListScope::Personal => "personal",
                 FragmentListScope::Team => "team",
+                FragmentListScope::Market => "market",
             };
-            let scope_defs: [(&str, &str); 2] =
-                [("personal", personal_lbl), ("team", team_lbl)];
+            let scope_defs: [(&str, &str); 3] = [
+                ("personal", personal_lbl),
+                ("team", team_lbl),
+                ("market", market_lbl),
+            ];
             let chip_h = theme.size_panel_filter_chip_h();
             let chip_min = egui::vec2(
                 theme.size_panel_header_btn_min_w(),
@@ -2565,14 +3512,93 @@ impl MistTermApp {
                     )
                     .clicked()
                     {
-                        self.fragment_list_scope = if *key == "team" {
-                            FragmentListScope::Team
-                        } else {
-                            FragmentListScope::Personal
+                        self.fragment_list_scope = match *key {
+                            "team" => FragmentListScope::Team,
+                            "market" => {
+                                self.market_catalog_query_fingerprint = (
+                                    self.fragment_filter_category.clone(),
+                                    self.fragment_search_query.clone(),
+                                );
+                                self.start_market_catalog_refresh();
+                                FragmentListScope::Market
+                            }
+                            _ => FragmentListScope::Personal,
                         };
                     }
                 }
             });
+            ui.add_space(theme.spacing_xs());
+        }
+
+        if self.fragment_list_scope == FragmentListScope::Market {
+            ui.horizontal(|ui| {
+                if crate::ui::chrome::panel_action_icon_button(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::Refresh,
+                    crate::i18n::tr(ui.ctx(), "Refresh market catalog", "刷新市场目录"),
+                )
+                .clicked()
+                {
+                    self.start_market_catalog_refresh();
+                }
+            });
+            if self.market_catalog_refresh_rx.is_some() {
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ui.ctx(),
+                        "Refreshing market catalog…",
+                        "正在刷新市场目录…",
+                    ))
+                    .size(theme.font_size_caption())
+                    .color(theme.text_tertiary()),
+                );
+            } else if let Some(err) = &self.market_catalog.last_error {
+                let hint = if err.starts_with("catalog_not_deployed") {
+                    crate::i18n::tr(
+                        ui.ctx(),
+                        "Market API not deployed on server; showing cached catalog.",
+                        "服务端尚未部署市场接口，当前显示本地缓存。",
+                    )
+                    .to_string()
+                } else {
+                    err.clone()
+                };
+                ui.label(
+                    egui::RichText::new(hint)
+                        .size(theme.font_size_caption())
+                        .color(theme.text_tertiary()),
+                );
+            } else if self.market_catalog.api_available {
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ui.ctx(),
+                        "Synced from market catalog",
+                        "已从市场目录同步",
+                    ))
+                    .size(theme.font_size_caption())
+                    .color(theme.text_tertiary()),
+                );
+            }
+            if self.market_catalog.has_more() {
+                let loading = self.market_catalog_refresh_rx.is_some()
+                    || self.market_catalog.loading_more;
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(!loading, egui::Button::new(crate::i18n::tr(
+                            ui.ctx(),
+                            "Load more",
+                            "加载更多",
+                        )))
+                        .clicked()
+                    {
+                        self.start_market_catalog_load_more();
+                    }
+                    if loading {
+                        ui.spinner();
+                    }
+                });
+            }
             ui.add_space(theme.spacing_xs());
         }
 
@@ -2712,6 +3738,8 @@ impl MistTermApp {
         }
         ui.add_space(theme.spacing_panel_gap());
 
+        self.sync_market_catalog_query_fingerprint();
+
         let search_lower = self.fragment_search_query.to_lowercase();
         let search_match = |f: &FragmentStats| {
             search_lower.is_empty()
@@ -2727,7 +3755,92 @@ impl MistTermApp {
                 .cloned()
                 .collect(),
             FragmentListScope::Team => self.team_service.team_fragments_as_stats(),
+            FragmentListScope::Market => {
+                if self.market_catalog_refresh_pending && self.market_catalog_refresh_rx.is_none() {
+                    self.start_market_catalog_refresh();
+                }
+                let mut list = self.market_catalog.to_fragment_stats_list();
+                if list.is_empty() {
+                    list = self
+                        .fragment_manager
+                        .get_all()
+                        .iter()
+                        .filter(|f| {
+                            f.tags
+                                .iter()
+                                .any(|t| t.eq_ignore_ascii_case("market"))
+                        })
+                        .cloned()
+                        .collect();
+                }
+                list
+            }
         };
+
+        match self.fragment_list_scope {
+            FragmentListScope::Personal => {
+                let mut top: Vec<_> = self
+                    .fragment_manager
+                    .get_all()
+                    .iter()
+                    .filter(|f| f.usage_count > 0)
+                    .cloned()
+                    .collect();
+                top.sort_by(|a, b| b.usage_count.cmp(&a.usage_count));
+                top.truncate(5);
+                if !top.is_empty() {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            ui.ctx(),
+                            "Top snippets (local usage)",
+                            "常用片段（本地统计）",
+                        ))
+                        .size(theme.font_size_small())
+                        .color(theme.text_tertiary()),
+                    );
+                    for f in &top {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "· {} — {}×",
+                                f.title, f.usage_count
+                            ))
+                            .size(theme.font_size_small())
+                            .color(theme.color_body_text_muted()),
+                        );
+                    }
+                    ui.add_space(theme.spacing_sm());
+                }
+            }
+            FragmentListScope::Team if self.team_service.is_logged_in() => {
+                let mut top = self.team_service.team_fragments_as_stats();
+                top.retain(|f| f.usage_count > 0);
+                top.sort_by(|a, b| b.usage_count.cmp(&a.usage_count));
+                top.truncate(5);
+                if !top.is_empty() {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            ui.ctx(),
+                            "Team Top snippets",
+                            "团队常用片段",
+                        ))
+                        .size(theme.font_size_small())
+                        .color(theme.text_tertiary()),
+                    );
+                    for f in &top {
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "· {} — {}×",
+                                f.title, f.usage_count
+                            ))
+                            .size(theme.font_size_small())
+                            .color(theme.color_body_text_muted()),
+                        );
+                    }
+                    ui.add_space(theme.spacing_sm());
+                }
+            }
+            _ => {}
+        }
 
         let mut work: Vec<FragmentStats> = source
             .iter()
@@ -2812,6 +3925,8 @@ impl MistTermApp {
                             );
                             let is_team_scope =
                                 self.fragment_list_scope == FragmentListScope::Team;
+                            let is_market_scope =
+                                self.fragment_list_scope == FragmentListScope::Market;
                             let selected = self
                                 .team_fragment_selected_id
                                 .as_deref()
@@ -2827,6 +3942,30 @@ impl MistTermApp {
                                 self.begin_fragment_insert(ui.ctx(), frag);
                             } else if is_team_scope && row_resp.row.clicked() {
                                 self.team_fragment_selected_id = Some(frag.id.clone());
+                            }
+                            if is_market_scope {
+                                let frag_clone = frag.clone();
+                                row_resp.row.context_menu(|ui| {
+                                    crate::ui::chrome::apply_context_menu_style(ui, theme);
+                                    if crate::ui::chrome::popup_menu_button(
+                                        ui,
+                                        theme,
+                                        crate::i18n::tr(
+                                            ui.ctx(),
+                                            "Add to personal library",
+                                            "添加到个人库",
+                                        ),
+                                    )
+                                    .clicked()
+                                    {
+                                        if let Some(item) =
+                                            self.market_item_for_stats(&frag_clone)
+                                        {
+                                            self.install_market_fragment(ui.ctx(), &item);
+                                        }
+                                        ui.close_menu();
+                                    }
+                                });
                             }
                             ui.add_space(theme.spacing_list_item_gap());
                         }
@@ -2913,13 +4052,13 @@ impl MistTermApp {
             return;
         };
         let start = std::time::Instant::now();
-        match tab.terminal.insert_fragment(command) {
+        let Some(pane) = tab.active_pane_mut() else { return };
+        match pane.terminal.insert_fragment(command) {
             Ok(_) => {
                 let dur_ms = start.elapsed().as_millis().max(1) as u64;
                 if let Some(fid) = fragment_id {
-                    self.fragment_manager.record_execution(fid, true, dur_ms);
+                    self.record_fragment_execution(fid, true, dur_ms);
                 }
-                let _ = self.fragment_manager.save(&FragmentManager::default_config_path());
                 self.status_message = format!(
                     "{} {}",
                     crate::i18n::tr(ctx, "Inserted command:", "插入命令："),
@@ -2927,7 +4066,7 @@ impl MistTermApp {
                 );
             }
             Err(e) => {
-                if e == TerminalView::ERR_FRAGMENT_NOT_CONNECTED && tab.terminal.is_connecting() {
+                if e == TerminalView::ERR_FRAGMENT_NOT_CONNECTED && pane.terminal.is_connecting() {
                     self.pending_fragment_insert = Some((
                         tab_idx,
                         fragment_id.map(|id| id.to_string()),
@@ -2942,9 +4081,8 @@ impl MistTermApp {
                 } else {
                     let dur_ms = start.elapsed().as_millis().max(1) as u64;
                     if let Some(fid) = fragment_id {
-                        self.fragment_manager.record_execution(fid, false, dur_ms);
+                        self.record_fragment_execution(fid, false, dur_ms);
                     }
-                    let _ = self.fragment_manager.save(&FragmentManager::default_config_path());
                     self.status_message = status_message_wrap_error(format!(
                         "{} {}",
                         crate::i18n::tr(ctx, "Insert failed:", "插入失败："),
@@ -2962,7 +4100,11 @@ impl MistTermApp {
         let Some(tab) = self.tabs.get(idx) else {
             return;
         };
-        if !tab.terminal.is_connected() {
+        if !tab
+            .active_terminal()
+            .map(|t| t.is_connected())
+            .unwrap_or(false)
+        {
             self.pending_fragment_insert = Some((idx, fid_opt, cmd));
             return;
         }
@@ -2997,11 +4139,34 @@ impl MistTermApp {
                 let panel_w = ui.available_width();
                 ui.set_max_width(panel_w);
                 let mut close_git = false;
-                self.git_sync_panel.show(ui, theme, &mut close_git);
+                let sessions = self.session_manager.list_sessions().to_vec();
+                self.git_sync_panel.show(ui, theme, &mut close_git, &sessions);
                 if close_git {
                     self.show_git_sync_panel = false;
                 }
             });
+        if self.git_sync_panel.take_pending_sessions_merge() {
+            let path = self.git_sync_panel.sessions_json_path();
+            match self.session_manager.merge_sessions_from_git_path(&path) {
+                Ok(n) => {
+                    self.status_message = format!(
+                        "{} ({})",
+                        crate::i18n::tr(
+                            ctx,
+                            "Merged sessions from Git pull",
+                            "已从 Git 拉取合并会话",
+                        ),
+                        n
+                    );
+                }
+                Err(e) => {
+                    self.status_message = status_message_wrap_error(format!(
+                        "{}: {e}",
+                        crate::i18n::tr(ctx, "Git sessions merge failed", "Git 会话合并失败"),
+                    ));
+                }
+            }
+        }
         layout_util::record_right_dock_panel(&git_panel.response, &mut self.right_dock_outer_left_x);
     }
 
@@ -3034,7 +4199,10 @@ impl MistTermApp {
 
         if let Some(idx) = self.active_tab {
             if let Some(tab) = self.tabs.get(idx) {
-                if let Some(conn) = tab.terminal.connection_status_for_bar(theme) {
+                if let Some(conn) = tab
+                    .active_terminal()
+                    .and_then(|t| t.connection_status_for_bar(theme))
+                {
                     Self::status_connection_chip(ui, &conn, theme);
                 }
             }
@@ -3043,8 +4211,8 @@ impl MistTermApp {
         if let Some(sid) = &self.selected_session_id {
             let active_sid = self
                 .active_tab
-                .and_then(|i| self.tabs.get(i).map(|t| t.session_id.as_str()));
-            if active_sid != Some(sid.as_str()) {
+                .and_then(|i| self.tabs.get(i).map(|t| t.primary_session_id()));
+            if active_sid.as_ref() != Some(sid) {
                 let label = self
                     .session_manager
                     .get_session(sid)
@@ -3084,7 +4252,7 @@ impl MistTermApp {
                     ));
                 if chip.clicked() {
                     if let Some(idx) = self.active_tab {
-                        let sid = self.tabs.get(idx).map(|t| t.session_id.clone());
+                        let sid = self.tabs.get(idx).map(|t| t.primary_session_id());
                         let name = sid.as_deref().and_then(|id| {
                             self.session_manager.get_session(id).map(|s| s.name.clone())
                         });
@@ -3375,6 +4543,24 @@ impl MistTermApp {
                                 if crate::ui::chrome::status_tool_icon(
                                     ui,
                                     &theme,
+                                    crate::ui::icons::IconId::GitBranch,
+                                )
+                                .on_hover_text(crate::i18n::tr(
+                                    ctx,
+                                    "Git sync · sessions/config repo",
+                                    "Git 同步 · 会话/配置仓库",
+                                ))
+                                .clicked()
+                                {
+                                    if self.show_git_sync_panel {
+                                        self.show_git_sync_panel = false;
+                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
+                                        self.show_git_sync_panel = true;
+                                    }
+                                }
+                                if crate::ui::chrome::status_tool_icon(
+                                    ui,
+                                    &theme,
                                     crate::ui::icons::IconId::Folder,
                                 )
                                 .on_hover_text(crate::i18n::tr(
@@ -3505,6 +4691,7 @@ impl MistTermApp {
             MacMenuAction::ToggleFragmentSidebar => self.toggle_fragment_sidebar(ctx),
             MacMenuAction::ToggleMonitorPanel => self.toggle_monitor_panel(ctx),
             MacMenuAction::CommandHistory => self.menu_open_command_history(ctx),
+            MacMenuAction::BatchExec => self.menu_open_batch_exec(ctx),
             MacMenuAction::SessionLogBrowser => self.menu_open_session_log_browser(ctx),
             MacMenuAction::Theme(i) => {
                 if i < self.theme_manager.list_themes().len() {
@@ -3653,6 +4840,8 @@ impl eframe::App for MistTermApp {
         crate::ui::icons::UiIcons::reload_if_ppp_changed(ctx);
         self.apply_current_theme(ctx);
         self.apply_responsive_layout(ctx);
+        self.poll_market_catalog_refresh(ctx);
+        self.poll_market_catalog_debounce();
 
         #[cfg(target_os = "macos")]
         self.poll_native_menu_bar(ctx, frame);
@@ -3705,6 +4894,52 @@ impl eframe::App for MistTermApp {
             &mut self.team_fragment_conflict,
             &self.audit_logger,
         );
+        let mut analytics_action =
+            crate::ui::fragment_analytics_dialog::FragmentAnalyticsUiAction::None;
+        crate::ui::fragment_analytics_dialog::show_fragment_analytics_modal(
+            ctx,
+            &theme,
+            &mut self.show_fragment_analytics_dialog,
+            &mut self.fragment_analytics_range,
+            &self.fragment_analytics_snapshot,
+            &self.fragment_recommendations,
+            &mut analytics_action,
+        );
+        match analytics_action {
+            crate::ui::fragment_analytics_dialog::FragmentAnalyticsUiAction::Refresh => {
+                self.refresh_fragment_analytics_dashboard();
+            }
+            crate::ui::fragment_analytics_dialog::FragmentAnalyticsUiAction::ExportJson => {
+                self.export_fragment_analytics_json(ctx);
+            }
+            crate::ui::fragment_analytics_dialog::FragmentAnalyticsUiAction::ExportEfficiencyReport => {
+                self.export_efficiency_report(ctx);
+            }
+            crate::ui::fragment_analytics_dialog::FragmentAnalyticsUiAction::AddRecommendation(i) => {
+                self.add_fragment_from_recommendation(ctx, i);
+            }
+            crate::ui::fragment_analytics_dialog::FragmentAnalyticsUiAction::None => {}
+        }
+        let batch_targets = self.build_batch_targets(
+            ctx,
+            self.batch_exec_dialog.include_team_servers,
+        );
+        let batch_action = self.batch_exec_dialog.show_modal(
+            ctx,
+            &theme,
+            &batch_targets,
+            self.batch_exec_rx.as_ref(),
+        );
+        match batch_action {
+            BatchExecUiAction::Run => self.start_batch_exec(ctx),
+            BatchExecUiAction::CopyResults => {
+                let text = crate::core::batch_exec::format_batch_results_for_clipboard(
+                    &self.batch_exec_dialog.results,
+                );
+                ctx.copy_text(text);
+            }
+            BatchExecUiAction::None => {}
+        }
         self.team_members_dialog.show_modal(ctx, &theme, &mut self.team_service);
         self.try_flush_pending_fragment_insert(ctx);
         if self.command_history.poll_background_load() {
@@ -3716,8 +4951,8 @@ impl eframe::App for MistTermApp {
         self.append_terminal_output_logs();
 
         if let Some(ti) = self.active_tab {
-            if let Some(tab) = self.tabs.get_mut(ti) {
-                for p in tab.terminal.take_drop_upload_paths() {
+            if let Some(pane) = self.tabs.get_mut(ti).and_then(|t| t.active_pane_mut()) {
+                for p in pane.terminal.take_drop_upload_paths() {
                     self.enqueue_upload_for_active_tab(ctx, p);
                 }
             }
@@ -3731,55 +4966,74 @@ impl eframe::App for MistTermApp {
         let schedules: Vec<TabReconnectSchedule> = self
             .tabs
             .iter()
-            .map(|t| TabReconnectSchedule {
-                next_fire: t.ssh_auto_reconnect_next,
-                attempts: t.ssh_auto_reconnect_attempts,
+            .map(|t| {
+                let p = t.active_pane();
+                TabReconnectSchedule {
+                    next_fire: p.and_then(|p| p.ssh_auto_reconnect_next),
+                    attempts: p.map(|p| p.ssh_auto_reconnect_attempts).unwrap_or(0),
+                }
             })
             .collect();
         let due: Vec<usize> = schedules
             .iter()
             .enumerate()
             .filter_map(|(i, s)| {
-                if !self.tab_auto_reconnect_enabled(&self.tabs[i].session_id) {
+                if !self.tab_auto_reconnect_enabled(&self.tabs[i].primary_session_id()) {
                     return None;
                 }
                 s.next_fire.filter(|t| now >= *t).map(|_| i)
             })
             .collect();
         for i in due {
-            self.tabs[i].ssh_auto_reconnect_next = None;
+            if let Some(pane) = self.tabs.get_mut(i).and_then(|t| t.active_pane_mut()) {
+                pane.ssh_auto_reconnect_next = None;
+            }
             self.reconnect_tab_at(ctx, i);
         }
         for i in 0..self.tabs.len() {
-            let sid = self.tabs[i].session_id.clone();
+            let sid = self.tabs[i].primary_session_id();
             if !self.tab_auto_reconnect_enabled(&sid) {
-                let _ = self.tabs[i].terminal.take_unexpected_disconnect_notified();
+                if let Some(pane) = self.tabs.get_mut(i).and_then(|t| t.active_pane_mut()) {
+                    let _ = pane.terminal.take_unexpected_disconnect_notified();
+                }
                 continue;
             }
-            if self.tabs[i].terminal.take_unexpected_disconnect_notified() {
+            let notified = self
+                .tabs
+                .get_mut(i)
+                .and_then(|t| t.active_pane_mut())
+                .map(|p| p.terminal.take_unexpected_disconnect_notified());
+            if notified == Some(true) {
+                let pane = self.tabs[i].active_pane();
                 let sched = TabReconnectSchedule {
-                    next_fire: self.tabs[i].ssh_auto_reconnect_next,
-                    attempts: self.tabs[i].ssh_auto_reconnect_attempts,
+                    next_fire: pane.and_then(|p| p.ssh_auto_reconnect_next),
+                    attempts: pane.map(|p| p.ssh_auto_reconnect_attempts).unwrap_or(0),
                 };
                 let (new_sched, status) = schedule_after_unexpected_disconnect(
                     sched,
                     DEFAULT_MAX_RECONNECT_ATTEMPTS,
                     now,
                 );
-                self.tabs[i].ssh_auto_reconnect_next = new_sched.next_fire;
-                self.tabs[i].ssh_auto_reconnect_attempts = new_sched.attempts;
+                if let Some(pane) = self.tabs.get_mut(i).and_then(|t| t.active_pane_mut()) {
+                    pane.ssh_auto_reconnect_next = new_sched.next_fire;
+                    pane.ssh_auto_reconnect_attempts = new_sched.attempts;
+                }
                 if let Some(s) = status {
                     self.status_message = Self::format_reconnect_status(ctx, s);
                 }
             }
         }
 
-        // FUNCTIONAL_SPEC §2.4：非当前标签仍消费 SSH 输出；有 VTE 更新时用低频重绘，避免与活动 Tab 抢同一帧节奏。
-        let active = self.active_tab;
+        // FUNCTIONAL_SPEC §2.4：非当前标签/窗格仍消费 SSH 输出。
+        let active_tab = self.active_tab;
         let mut inactive_tab_vte_dirty = false;
-        for (i, tab) in self.tabs.iter_mut().enumerate() {
-            if Some(i) != active && tab.terminal.pump_ssh_only(&theme) {
-                inactive_tab_vte_dirty = true;
+        for (ti, tab) in self.tabs.iter_mut().enumerate() {
+            for (pi, pane) in tab.panes.iter_mut().enumerate() {
+                let focused =
+                    active_tab == Some(ti) && tab.active_pane == pi;
+                if !focused && pane.terminal.pump_ssh_only(&theme) {
+                    inactive_tab_vte_dirty = true;
+                }
             }
         }
         if inactive_tab_vte_dirty {
@@ -3788,7 +5042,8 @@ impl eframe::App for MistTermApp {
 
         // SCP 直传结果（`TerminalView::start_upload` 后台线程）
         for tab in &mut self.tabs {
-            if let Some(res) = tab.terminal.poll_upload_result() {
+            for pane in tab.panes.iter_mut() {
+            if let Some(res) = pane.terminal.poll_upload_result() {
                 match res {
                     Ok(path) => {
                         self.status_message = format!(
@@ -3806,6 +5061,7 @@ impl eframe::App for MistTermApp {
                     }
                 }
                 break;
+            }
             }
         }
 
@@ -3873,6 +5129,39 @@ impl eframe::App for MistTermApp {
             }
             if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::W)) {
                 self.request_close_active_tab();
+            }
+            if ctx.input(|i| {
+                i.modifiers.alt
+                    && !i.modifiers.ctrl
+                    && !i.modifiers.command
+                    && !i.modifiers.shift
+                    && (i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowRight))
+            }) {
+                if let Some(idx) = self.active_tab {
+                    if self.tabs.get(idx).is_some_and(|t| t.is_split()) {
+                        self.tabs[idx].cycle_active_pane();
+                        ctx.request_repaint();
+                    }
+                }
+            }
+            // 分屏：⌘⇧D / Ctrl+Shift+D 左右，⌘⇧U / Ctrl+Shift+U 上下
+            if ctx.input(|i| {
+                Self::input_primary_mod(i)
+                    && i.modifiers.shift
+                    && i.key_pressed(egui::Key::D)
+            }) {
+                if let Some(idx) = self.active_tab {
+                    self.split_tab_at(ctx, idx, crate::ui::tab_pane::TabLayout::SplitHorizontal);
+                }
+            }
+            if ctx.input(|i| {
+                Self::input_primary_mod(i)
+                    && i.modifiers.shift
+                    && i.key_pressed(egui::Key::U)
+            }) {
+                if let Some(idx) = self.active_tab {
+                    self.split_tab_at(ctx, idx, crate::ui::tab_pane::TabLayout::SplitVertical);
+                }
             }
             if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::E)) {
                 if let Some(ref sid) = self.selected_session_id.clone() {
@@ -3972,7 +5261,7 @@ impl eframe::App for MistTermApp {
         let terminal_wants_delete_for_pty = self
             .active_tab
             .and_then(|i| self.tabs.get(i))
-            .map(|t| t.terminal.is_terminal_focused())
+            .and_then(|t| t.active_terminal().map(|term| term.is_terminal_focused()))
             .unwrap_or(false);
 
         if !self.global_shortcuts_blocked()
@@ -4051,15 +5340,29 @@ impl MistTermApp {
             if let Some(session_id) = &self.selected_session_id {
                 let idx = self
                     .active_tab
-                    .filter(|&i| i < self.tabs.len() && self.tabs[i].session_id == *session_id)
-                    .or_else(|| self.tabs.iter().position(|t| t.session_id == *session_id));
+                    .filter(|&i| {
+                        i < self.tabs.len() && self.tabs[i].primary_session_id() == *session_id
+                    })
+                    .or_else(|| {
+                        self
+                            .tabs
+                            .iter()
+                            .position(|t| t.primary_session_id() == *session_id)
+                    });
                 if let Some(idx) = idx {
-                    if self.tabs[idx].terminal.is_connected() {
-                        self.tabs[idx].terminal.send_command(&expanded);
+                    if self
+                        .tabs[idx]
+                        .active_terminal()
+                        .map(|t| t.is_connected())
+                        .unwrap_or(false)
+                    {
+                        if self.send_audited_command_at(ctx, idx, &expanded)
+                            != CommandSendResult::Sent
+                        {
+                            return;
+                        }
                         let dur_ms = start.elapsed().as_millis().max(1) as u64;
-                        self.fragment_manager
-                            .record_execution(fragment.id.as_str(), true, dur_ms);
-                        let _ = self.fragment_manager.save(&FragmentManager::default_config_path());
+                        self.record_fragment_execution(fragment.id.as_str(), true, dur_ms);
                         self.status_message = format!(
                             "{} {}",
                             crate::i18n::tr(ctx, "Executed snippet:", "已执行片段："),
@@ -4439,6 +5742,10 @@ mod menu {
                     .clicked()
                 {
                     self.menu_open_command_history(ctx);
+                    ui.close_menu();
+                }
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.batch_exec).clicked() {
+                    self.menu_open_batch_exec(ctx);
                     ui.close_menu();
                 }
                 ui.separator();

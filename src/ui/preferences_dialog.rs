@@ -835,7 +835,12 @@ impl MistTermApp {
                 }
                 if matches!(action, crate::ui::team_ui::TeamUiAction::TeamChanged) {
                     self.apply_team_vault_from_sync();
+                    self.apply_cmd_audit_cache_for_current_team();
                     self.team_service.spawn_config_sync();
+                    self.team_service.spawn_cmd_audit_sync();
+                }
+                if matches!(action, crate::ui::team_ui::TeamUiAction::OpenMembers) {
+                    self.team_members_dialog.open(&mut self.team_service);
                 }
             },
         );

@@ -56,7 +56,10 @@ pub fn run_browser_oauth(
     let port = local_addr.port();
     let redirect_local = format!("http://127.0.0.1:{port}/callback");
     let redirect_bridge = format!("{}?port={port}", team_web_oauth_desktop_callback_url());
-    let redirect_uri = if probe_desktop_oauth_bridge().is_ok() {
+    // 优先本机回调：token 直达客户端，且规避桥接页上 ?port=…?access_token=… 的错误拼接。
+    let redirect_uri = if probe_oauth_start(api_base, provider, &redirect_local).is_ok() {
+        redirect_local.clone()
+    } else if probe_desktop_oauth_bridge().is_ok() {
         redirect_bridge.clone()
     } else {
         redirect_local.clone()
@@ -66,7 +69,6 @@ pub fn run_browser_oauth(
         return Err("已取消登录".into());
     }
 
-    probe_oauth_start(api_base, provider, &redirect_uri)?;
     let auth_url = TeamClient::oauth_authorize_url(api_base, provider, &redirect_uri);
 
     if !crate::platform::shell::open_url(&auth_url) {
