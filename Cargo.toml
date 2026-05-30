@@ -1,0 +1,145 @@
+[package]
+name = "mistterm"
+version = "0.2.2"
+edition = "2021"
+autobins = false
+default-run = "Mist"
+description = "A modern SSH terminal with lrzsz support and Git sync"
+homepage = "https://mistlab.dev"
+documentation = "https://github.com/mistlab-dev/MistTerm/tree/main/docs"
+repository = "https://github.com/mistlab-dev/MistTerm"
+license = "MIT"
+
+[features]
+# 让 ssh2 / openssl-sys 自带源码编译 OpenSSL，便于 CI 跨平台构建（macOS universal 等）。
+vendored-openssl = ["ssh2/vendored-openssl"]
+
+[lib]
+name = "mistterm"
+path = "src/lib.rs"
+
+[[bin]]
+name = "test_file_transfer_md5"
+path = "src/bin/test_file_transfer_md5.rs"
+
+[[bin]]
+name = "test_file_transfer"
+path = "src/bin/test_file_transfer.rs"
+
+[[bin]]
+name = "test_zmodem"
+path = "src/bin/test_zmodem.rs"
+
+[[bin]]
+name = "rz_upload_smoke"
+path = "src/bin/rz_upload_smoke.rs"
+
+[[bin]]
+name = "Mist"
+path = "src/main.rs"
+
+[[bin]]
+name = "export_app_icon"
+path = "src/bin/export_app_icon.rs"
+
+[dependencies]
+md5 = "0.7"
+eframe = { version = "0.23", features = ["wgpu", "persistence"] }
+# GUI - eframe with wgpu for GPU acceleration
+egui = "0.23"
+egui_extras = { version = "0.24", features = ["all_loaders"] }
+
+# Async runtime - tokio with full features
+tokio = { version = "1.35", features = ["full"] }
+async-trait = "0.1"
+
+# SSH - Pure Rust implementation
+ssh2 = "0.9"
+
+# Terminal emulation - vte for ANSI parsing
+vte = "0.11"
+unicode-width = "0.1"
+
+# Clipboard - Pure Rust
+arboard = "3.3"
+
+# Git sync
+git2 = "0.18"
+
+# Cross-platform keyring for password storage
+keyring = "2.3"
+
+# File dialogs (cross-platform)
+rfd = "0.12"
+
+# Config
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.6", features = ["v4", "serde"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Encryption for password storage
+aes-gcm = "0.10"
+rand = "0.8"
+base64 = "0.21"
+hkdf = "0.12"
+sha2 = "0.10"
+
+# HTTP（Vault API、审计远程 sink）
+reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+log = "0.4"
+
+# Command audit pattern matching
+regex = "1.10"
+
+# Misc
+parking_lot = "0.12"
+shellexpand = "3.1"
+dirs = "5.0"
+chrono = "0.4"
+# 片段命令中 {{ ... }} 表达式（md5/base64 等），默认沙箱、无 IO
+rhai = "1.19"
+
+# Font support
+ab_glyph = "0.2"
+image = "0.24"
+alacritty_terminal = "0.26.0"
+# ZMODEM 协议（lrzsz 路径专用；与 SFTP / cat 直传无关）
+zmodem2 = { path = "vendor/zmodem2" }
+egui_plot = "0.23"
+pulldown-cmark = "0.11"
+
+[dev-dependencies]
+tempfile = "3.9"
+mockall = "0.12"
+ssh2 = "0.9"
+dirs = "5.0"
+serde_json = "1.0"
+
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3", features = ["winuser"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.9"
+embed_plist = "1.2"
+muda = "0.19"
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+# 用 thin LTO：链接时间显著降低（CI ~2-3x），二进制体积比 fat LTO 大 ~10-20%，
+# 运行性能差异基本无感。GUI / IO 类应用切 thin 性价比最高。
+lto = "thin"
+strip = true

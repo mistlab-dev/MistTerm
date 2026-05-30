@@ -1,0 +1,30 @@
+version: '3.8'
+
+services:
+  ssh-server:
+    image: panubo/sshd:1.3.0
+    ports:
+      - "2222:22"
+    environment:
+      - SSH_USERS=mistterm_test:1000:1000:test123456
+    restart: unless-stopped
+
+  test:
+    image: rust:latest
+    working_dir: /app
+    volumes:
+      - .:/app
+      - cargo-cache:/usr/local/cargo/registry
+      - cargo-target:/app/target
+    environment:
+      - SSH_HOST=ssh-server
+      - SSH_PORT=22
+      - SSH_USER=mistterm_test
+      - SSH_PASS=test123456
+    depends_on:
+      - ssh-server
+    command: ["cargo", "test", "--all-features"]
+
+volumes:
+  cargo-cache:
+  cargo-target:

@@ -1,0 +1,58 @@
+[
+  {
+    "id": "384781c1-2ae5-44b4-ba69-e0cfcea999e4",
+    "name": "磁盘使用",
+    "command": "df -h",
+    "tags": [
+      "disk"
+    ],
+    "category": "系统监控",
+    "execution_count": 0,
+    "success_count": 0,
+    "failure_count": 0,
+    "total_duration_ms": 0,
+    "last_executed_at": null
+  },
+  {
+    "id": "351fe9f9-41b1-4e01-a272-3566c41dccee",
+    "name": "内存使用",
+    "command": "free -h",
+    "tags": [
+      "memory"
+    ],
+    "category": "系统监控",
+    "execution_count": 1,
+    "success_count": 1,
+    "failure_count": 0,
+    "total_duration_ms": 1,
+    "last_executed_at": 1777957939
+  },
+  {
+    "id": "bee657c6-b09f-4e9b-8869-7e2a04a6d9b6",
+    "name": "查看进程",
+    "command": "ps aux",
+    "tags": [
+      "process"
+    ],
+    "category": "进程管理",
+    "execution_count": 0,
+    "success_count": 0,
+    "failure_count": 0,
+    "total_duration_ms": 0,
+    "last_executed_at": null
+  },
+  {
+    "id": "103494ee-6839-4755-8342-b80e391c8563",
+    "name": "Docker 容器",
+    "command": "docker ps -a",
+    "tags": [
+      "docker"
+    ],
+    "category": "Docker",
+    "execution_count": 2,
+    "success_count": 2,
+    "failure_count": 0,
+    "total_duration_ms": 2,
+    "last_executed_at": 1777965605
+  }
+]

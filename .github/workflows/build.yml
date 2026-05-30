@@ -1,0 +1,297 @@
+name: Build & Test
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  BIN_NAME: Mist
+
+jobs:
+  test:
+    name: Test (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-latest
+            cargo_features: ""
+
+          - platform: windows-x86_64
+            os: windows-latest
+            cargo_features: "vendored-openssl"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: test-${{ matrix.platform }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libssl-dev libssh2-1-dev \
+            libx11-dev libxkbcommon-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libfontconfig1-dev libgtk-3-dev libdbus-1-dev
+
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Run unit tests (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          features="${{ matrix.cargo_features }}"
+          features_arg=()
+          if [ -n "$features" ]; then
+            features_arg=(--features "$features")
+          fi
+          cargo test --lib --tests "${features_arg[@]}"
+          cargo test --examples "${features_arg[@]}"
+          cargo build --bins "${features_arg[@]}"
+
+      - name: Run unit tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $features = "${{ matrix.cargo_features }}"
+          $featuresArg = @()
+          if ($features) { $featuresArg = @("--features", $features) }
+          cargo test --lib --tests @featuresArg
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --examples @featuresArg
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --bins @featuresArg
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+  integration-test:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: integration-test
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libssl-dev libssh2-1-dev \
+            libx11-dev libxkbcommon-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libfontconfig1-dev libgtk-3-dev libdbus-1-dev \
+            openssh-server lrzsz
+
+      - name: Setup SSH test server
+        run: |
+          sudo mkdir -p /var/run/sshd
+          sudo useradd -m -s /bin/bash mistterm_test
+          echo "mistterm_test:test123456" | sudo chpasswd
+          sudo service ssh start
+
+      - name: Run integration tests (skip SSH)
+        run: cargo test --test zmodem_integration_test
+
+      - name: Run SSH integration test
+        run: cargo test --test zmodem_integration_test test_ssh_connect -- --ignored --exact
+
+  build:
+    name: Build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            rust_targets: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+            cargo_features: ""
+
+          - platform: macos-universal
+            os: macos-latest
+            target: universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            archive_ext: tar.gz
+            cargo_features: vendored-openssl
+
+          - platform: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rust_targets: x86_64-pc-windows-msvc
+            archive_ext: zip
+            cargo_features: "vendored-openssl"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.platform }}
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libssl-dev libssh2-1-dev \
+            libx11-dev libxkbcommon-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libfontconfig1-dev libgtk-3-dev libdbus-1-dev
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install libssh2 pkg-config
+
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build release binary (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          features="${{ matrix.cargo_features }}"
+          features_arg=()
+          if [ -n "$features" ]; then
+            features_arg=(--features "$features")
+          fi
+
+          if [ "${{ matrix.target }}" = "universal-apple-darwin" ]; then
+            cargo build --release --bin "$BIN_NAME" --target aarch64-apple-darwin "${features_arg[@]}"
+            cargo build --release --bin "$BIN_NAME" --target x86_64-apple-darwin "${features_arg[@]}"
+            mkdir -p "target/${{ matrix.target }}/release"
+            lipo -create -output \
+              "target/${{ matrix.target }}/release/$BIN_NAME" \
+              "target/aarch64-apple-darwin/release/$BIN_NAME" \
+              "target/x86_64-apple-darwin/release/$BIN_NAME"
+            file "target/${{ matrix.target }}/release/$BIN_NAME"
+          else
+            cargo build --release --bin "$BIN_NAME" --target "${{ matrix.target }}" "${features_arg[@]}"
+          fi
+
+      - name: Build release binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $features = "${{ matrix.cargo_features }}"
+          $featuresArg = @()
+          if ($features) { $featuresArg = @("--features", $features) }
+          cargo build --release --bin $env:BIN_NAME --target "${{ matrix.target }}" @featuresArg
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="$BIN_NAME-${{ matrix.platform }}"
+          STAGE="dist/$NAME"
+          mkdir -p "$STAGE"
+
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "target/${{ matrix.target }}/release/$BIN_NAME.exe" "$STAGE/"
+          else
+            cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
+          fi
+          [ -f README.md ] && cp README.md "$STAGE/" || true
+          [ -f docs/en/INSTALL.md ] && cp docs/en/INSTALL.md "$STAGE/INSTALL.md" || true
+          [ -f docs/zh/INSTALL.md ] && cp docs/zh/INSTALL.md "$STAGE/INSTALL.zh.md" || true
+          [ -f LICENSE ] && cp LICENSE "$STAGE/" || true
+
+          cd dist
+          if [ "${{ matrix.archive_ext }}" = "zip" ]; then
+            7z a -tzip "$NAME.zip" "$NAME" >/dev/null
+            artifact="$NAME.zip"
+          else
+            tar -czf "$NAME.tar.gz" "$NAME"
+            artifact="$NAME.tar.gz"
+          fi
+          echo "ARTIFACT_PATH=dist/$artifact" >> "$GITHUB_ENV"
+          echo "ARTIFACT_NAME=$artifact" >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_PATH }}
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            ## Downloads
+
+            Pick the archive for your platform (`linux-x86_64`, `macos-universal`, or `windows-x86_64`).
+
+            - Website: https://mistlab.dev
+            - Documentation: https://github.com/mistlab-dev/MistTerm/tree/main/docs
+            - Issues: https://github.com/mistlab-dev/MistTerm/issues

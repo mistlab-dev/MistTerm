@@ -1,0 +1,653 @@
+//! 命令片段库窗口：新建 / 编辑 / 删除（设计文档 §2）
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use eframe::egui;
+use rfd::FileDialog;
+
+use crate::core::{
+    FragmentManager, FragmentMergeReport, FragmentStats, FragmentVariable, SortBy,
+    expand_command_template, expand_rhai_blocks, list_placeholder_keys, merge_rhai_context,
+};
+use crate::core::session::SessionConfig;
+use crate::i18n::{self, UiLanguage};
+use crate::ui::chrome;
+use crate::ui::layout_util::{
+    clamp_f32, finite_avail_minus, finite_content_width_inset, fragment_library_window_bounds,
+    modal_center_pos,
+};
+
+/// 片段库编辑器状态（不与 `FragmentStats` 强绑定便于表单编辑）
+#[derive(Clone, Debug, Default)]
+pub struct FragmentLibraryState {
+    pub open: bool,
+    pub search_query: String,
+    pub editing_id: Option<String>,
+    pub form_title: String,
+    pub form_command: String,
+    pub form_category: String,
+    pub form_tags: String,
+    /// 变量表单：(name, description, default_value)
+    pub form_variables: Vec<(String, String, String)>,
+    pub status_msg: String,
+    /// 从 JSON 文件导入片段时是否与现有条目按 id 合并
+    pub import_merge: bool,
+    /// 点击「➕ 新建」后，在下一帧把焦点落在标题框，避免用户以为没有反应
+    focus_title_next_frame: bool,
+}
+
+impl FragmentLibraryState {
+    pub fn new() -> Self {
+        Self {
+            import_merge: true,
+            ..Self::default()
+        }
+    }
+
+    fn clear_form(&mut self) {
+        self.editing_id = None;
+        self.form_title.clear();
+        self.form_command.clear();
+        self.form_category.clear();
+        self.form_tags.clear();
+        self.form_variables.clear();
+        self.focus_title_next_frame = false;
+    }
+
+    fn load_from_fragment(&mut self, f: &FragmentStats) {
+        self.focus_title_next_frame = false;
+        self.editing_id = Some(f.id.clone());
+        self.form_title = f.title.clone();
+        self.form_command = f.command.clone();
+        self.form_category = f.category.clone();
+        self.form_tags = f.tags.join(", ");
+        self.form_variables = f.variables.iter().map(|v| {
+            (v.name.clone(), v.description.clone(), v.default_value.clone().unwrap_or_default())
+        }).collect();
+    }
+
+    fn parse_tags(&self) -> Vec<String> {
+        self.form_tags
+            .split(&[',', '，', ';', '；'][..])
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+
+    /// 显示窗口；`session_hint` 用于变量预览。返回是否写入了 `fragments.json`。
+    pub fn show_window(
+        &mut self,
+        ctx: &egui::Context,
+        manager: &mut FragmentManager,
+        sort_by: &mut SortBy,
+        fragment_cfg_path: &PathBuf,
+        session_hint: Option<&SessionConfig>,
+        theme: &crate::ui::theme::Theme,
+    ) -> bool {
+        let mut saved = false;
+        if !self.open {
+            return false;
+        }
+
+        let mut win_open = self.open;
+        let (lib_def, lib_min) = fragment_library_window_bounds(ctx);
+        let mut close_via_header = false;
+        let lib_sz = egui::vec2(lib_def[0], lib_def[1]);
+        crate::ui::chrome::modal_window("fragment_library_modal", theme, ctx)
+            .id(egui::Id::new("mistterm_fragment_library_window"))
+            .open(&mut win_open)
+            .default_pos(modal_center_pos(ctx, lib_sz))
+            .default_size(lib_def)
+            .min_width(lib_min[0])
+            .min_height(lib_min[1])
+            .resizable(true)
+            .show(ctx, |ui| {
+                let lang = i18n::language(ctx);
+                crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
+                if crate::ui::chrome::modal_header(
+                    ui,
+                    theme,
+                    i18n::tr(ctx, "Command fragments", "命令片段库"),
+                    crate::ui::chrome::modal_title_font_size(theme),
+                ) {
+                    close_via_header = true;
+                }
+                let sw = ctx.screen_rect().width().max(360.0);
+                let fill_w = finite_content_width_inset(
+                    ui,
+                    16.0,
+                    (sw * 0.52).clamp(420.0, 800.0),
+                    (sw * 0.92).min(1200.0),
+                );
+                ui.set_min_width(fill_w);
+                ui.horizontal(|ui| {
+                    if crate::ui::chrome::panel_header_new_button(ui, theme)
+                        .on_hover_text(i18n::tr(ctx, "New fragment", "新建片段"))
+                        .clicked()
+                    {
+                        self.clear_form();
+                        self.focus_title_next_frame = true;
+                        self.status_msg = i18n::tr(
+                            ctx,
+                            "New fragment: fill in title, category, and command on the right, then Save.",
+                            "新建片段：请在右侧填写标题、分类与命令，再点「保存」",
+                        )
+                        .to_string();
+                    }
+                    ui.separator();
+                    crate::ui::chrome::form_field_label(ui, theme, i18n::tr(ctx, "Search", "搜索"));
+                    let search_w = finite_avail_minus(ui, 10.0, 140.0, 280.0);
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        egui::Id::new("fragment_lib_search"),
+                        &mut self.search_query,
+                        i18n::tr(ctx, "Title / command / tags", "标题 / 命令 / 标签"),
+                        search_w,
+                        false,
+                    );
+                    ui.separator();
+                    if crate::ui::chrome::panel_action_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Upload,
+                        i18n::tr(ctx, "Export JSON…", "导出 JSON…"),
+                    )
+                    .on_hover_text(i18n::tr(
+                        ctx,
+                        "Save current library to any path",
+                        "将当前片段库保存为用户选择的任意路径",
+                    ))
+                    .clicked()
+                    {
+                        let stem = format!(
+                            "mistterm-fragments-{}",
+                            chrono::Utc::now().format("%Y%m%d-%H%M%S")
+                        );
+                        if let Some(dest) = FileDialog::new()
+                            .set_title(i18n::tr(ctx, "Export fragments JSON", "导出片段 JSON"))
+                            .add_filter("JSON", &["json"])
+                            .set_file_name(format!("{}.json", stem))
+                            .save_file()
+                        {
+                            match manager.save(&dest) {
+                                Ok(()) => {
+                                    self.status_msg = match lang {
+                                        UiLanguage::En => format!("Exported {}", dest.display()),
+                                        UiLanguage::Zh => format!("已导出 {}", dest.display()),
+                                    };
+                                    saved = true;
+                                }
+                                Err(e) => {
+                                    self.status_msg = format!(
+                                        "{}{e}",
+                                        i18n::tr(ctx, "Export failed: ", "导出失败："),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    if crate::ui::chrome::panel_action_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Package,
+                        i18n::tr(ctx, "Import JSON…", "导入 JSON…"),
+                    )
+                    .on_hover_text(i18n::tr(
+                        ctx,
+                        "Merge/replace library from JSON; merge keeps duplicate ids locally",
+                        "从文件合并或替换当前库；合并时相同 id 的条目保留本地",
+                    ))
+                    .clicked()
+                    {
+                        if let Some(src) =
+                            FileDialog::new().add_filter("JSON", &["json"]).pick_file()
+                        {
+                            let src_label = src.display().to_string();
+                            let path = PathBuf::from(&src);
+                            match FragmentManager::import_from_json_path(
+                                &path,
+                                self.import_merge,
+                                manager,
+                            ) {
+                                Ok(FragmentMergeReport {
+                                    added,
+                                    skipped_duplicate_id,
+                                }) => {
+                                    if manager.save(fragment_cfg_path).is_ok() {
+                                        if self.import_merge {
+                                            self.status_msg = match lang {
+                                                UiLanguage::En => format!(
+                                                    "Merged from {}: +{} skipped {}",
+                                                    src_label,
+                                                    added,
+                                                    skipped_duplicate_id
+                                                ),
+                                                UiLanguage::Zh => format!(
+                                                    "已从 {} 合并：新增 {}，跳过 {}",
+                                                    src_label,
+                                                    added,
+                                                    skipped_duplicate_id
+                                                ),
+                                            };
+                                        } else {
+                                            self.status_msg = match lang {
+                                                UiLanguage::En => format!(
+                                                    "Replaced from {} with {} entries",
+                                                    src_label,
+                                                    added
+                                                ),
+                                                UiLanguage::Zh => format!(
+                                                    "已从 {} 替换为 {} 条",
+                                                    src_label,
+                                                    added
+                                                ),
+                                            };
+                                        }
+                                        saved = true;
+                                    } else {
+                                        self.status_msg = i18n::tr(ctx, "Write to config folder failed", "写入配置目录失败").to_string();
+                                    }
+                                }
+                                Err(e) => {
+                                    self.status_msg = format!(
+                                        "{}{e}",
+                                        i18n::tr(ctx, "Import failed: ", "导入失败："),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    ui.separator();
+                    chrome::form_checkbox(ui, theme, &mut self.import_merge, i18n::tr(ctx, "Merge on import", "合并导入"));
+                    ui.separator();
+                    let sort_icon = crate::ui::icons::fragment_sort_icon(*sort_by);
+                    let sort_label = format!(
+                        "{}{}",
+                        i18n::tr(ui.ctx(), "Sort: ", "排序："),
+                        i18n::fragment_sort_chip_short(ui.ctx(), *sort_by),
+                    );
+                    if crate::ui::chrome::panel_sort_chip(
+                        ui,
+                        theme,
+                        sort_icon,
+                        &sort_label,
+                        crate::i18n::filter_sort_cycle_hint_fragments(ui.ctx()),
+                    )
+                    .clicked()
+                    {
+                        *sort_by = match sort_by {
+                            SortBy::UsageCount => SortBy::SuccessRate,
+                            SortBy::SuccessRate => SortBy::LastUsed,
+                            SortBy::LastUsed => SortBy::Name,
+                            SortBy::Name => SortBy::UsageCount,
+                        };
+                        manager.sort(*sort_by);
+                    }
+                });
+                ui.separator();
+
+                // 主内容区占满窗口剩余高度；左列固定宽度，右列用 row_w 显式占满，避免出现窗体右侧大块空白。
+                let body_h = ui.available_height().max(180.0);
+                let list_scroll_h = (body_h - 52.0).max(100.0);
+                let row_w = finite_content_width_inset(ui, 16.0, 680.0, 1150.0);
+                let left_col = clamp_f32(row_w * 0.355, 120.0, 340.0_f32.min(row_w.max(120.0)));
+                ui.horizontal(|ui| {
+                    ui.set_min_width(row_w);
+                    ui.set_min_height(body_h);
+                    ui.vertical(|ui| {
+                        ui.set_width(left_col);
+                        ui.label(egui::RichText::new(i18n::tr(ui.ctx(), "List", "列表")).strong());
+                        ui.separator();
+
+                        let results: Vec<&FragmentStats> = if self.search_query.is_empty() {
+                            manager.get_all().iter().collect()
+                        } else {
+                            manager.search(&self.search_query)
+                        };
+
+                        egui::ScrollArea::vertical()
+                            .id_source("mistterm_fragment_lib_list_scroll")
+                            .max_height(list_scroll_h)
+                            .show(ui, |ui| {
+                                for f in results {
+                                    let selected = self.editing_id.as_deref() == Some(f.id.as_str());
+                                    let label = format!("{} · {}", f.title, f.category);
+                                    if ui
+                                        .selectable_label(selected, label)
+                                        .on_hover_text(&f.command)
+                                        .clicked()
+                                    {
+                                        self.load_from_fragment(f);
+                                    }
+                                }
+                            });
+                    });
+
+                    ui.separator();
+
+                        ui.vertical(|ui| {
+                        ui.set_min_width((row_w - left_col - 12.0).max(200.0));
+                        ui.label(egui::RichText::new(i18n::tr(ui.ctx(), "Edit", "编辑")).strong());
+                        if self.editing_id.is_none() {
+                            egui::Frame::none()
+                                .fill(theme.color_fragment_tag_fill())
+                                .inner_margin(egui::Margin::same(theme.spacing_card_x()))
+                                .rounding(theme.radius_list_item())
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(i18n::tr(
+                                            ui.ctx(),
+                                            "New fragment: fill title, category, and command below, then tap Save.",
+                                            "新片段：在下面填写标题、分类与命令，完成后点「保存」。",
+                                        ))
+                                        .size(theme.font_size_medium())
+                                        .color(theme.text_primary()),
+                                    );
+                                });
+                            ui.add_space(theme.spacing_sm());
+                        }
+
+                        // 表单在列内纵向滚动；高度用布局分配后的剩余空间（优于固定像素）。
+                        let scroll_h = ui.available_height().max(120.0);
+                        egui::ScrollArea::vertical()
+                            .id_source("mistterm_fragment_lib_form_scroll")
+                            .max_height(scroll_h)
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                let edit_w = finite_content_width_inset(ui, 12.0, 360.0, 840.0);
+
+                                crate::ui::chrome::form_field_label(
+                                    ui,
+                                    theme,
+                                    i18n::tr(ui.ctx(), "Title", "标题"),
+                                );
+                                let title_resp = crate::ui::chrome::form_singleline_field(
+                                    ui,
+                                    theme,
+                                    egui::Id::new("fragment_library_form_title"),
+                                    &mut self.form_title,
+                                    i18n::tr(ui.ctx(), "e.g. disk usage", "例如：查看磁盘占用"),
+                                    edit_w,
+                                    false,
+                                );
+                                if self.focus_title_next_frame {
+                                    title_resp.request_focus();
+                                    self.focus_title_next_frame = false;
+                                }
+                                crate::ui::chrome::form_field_label(
+                                    ui,
+                                    theme,
+                                    i18n::tr(ui.ctx(), "Category", "分类"),
+                                );
+                                crate::ui::chrome::form_singleline_field(
+                                    ui,
+                                    theme,
+                                    egui::Id::new("fragment_library_form_category"),
+                                    &mut self.form_category,
+                                    i18n::tr(ui.ctx(), "e.g. ops · host", "例如：运维 · 主机"),
+                                    edit_w,
+                                    false,
+                                );
+                                crate::ui::chrome::form_field_label(
+                                    ui,
+                                    theme,
+                                    i18n::tr(ui.ctx(), "Tags (comma-separated)", "标签（逗号分隔）"),
+                                );
+                                crate::ui::chrome::form_singleline_field(
+                                    ui,
+                                    theme,
+                                    egui::Id::new("fragment_library_form_tags"),
+                                    &mut self.form_tags,
+                                    "prod, nginx",
+                                    edit_w,
+                                    false,
+                                );
+                                crate::ui::chrome::form_field_label(
+                                    ui,
+                                    theme,
+                                    i18n::tr(ui.ctx(),"Command (`<host>` placeholder; `{{ md5(a) }}` via Rhai)","命令（`<host>` 占位符；`{{ md5(a) }}` 见 Rhai）"),
+                                );
+                                crate::ui::chrome::form_multiline_field(
+                                    ui,
+                                    theme,
+                                    egui::Id::new("fragment_library_form_command"),
+                                    &mut self.form_command,
+                                    edit_w,
+                                    5,
+                                    false,
+                                );
+
+                                ui.label(egui::RichText::new(i18n::tr(ui.ctx(), "Variables", "变量定义")).strong());
+                                let mut var_to_remove = None;
+                                for (idx, (name, desc, default)) in
+                                    self.form_variables.iter_mut().enumerate()
+                                {
+                                    ui.push_id(idx, |ui| {
+                                    ui.group(|ui| {
+                                        ui.set_width(edit_w + 8.0);
+                                        crate::ui::chrome::form_field_label(
+                                            ui,
+                                            theme,
+                                            i18n::tr(ui.ctx(), "Name", "名称"),
+                                        );
+                                        crate::ui::chrome::form_singleline_field(
+                                            ui,
+                                            theme,
+                                            egui::Id::new(("frag_var_name", idx)),
+                                            name,
+                                            "",
+                                            edit_w,
+                                            false,
+                                        );
+                                        crate::ui::chrome::form_field_label(
+                                            ui,
+                                            theme,
+                                            i18n::tr(ui.ctx(), "Description", "描述"),
+                                        );
+                                        crate::ui::chrome::form_singleline_field(
+                                            ui,
+                                            theme,
+                                            egui::Id::new(("frag_var_desc", idx)),
+                                            desc,
+                                            "",
+                                            edit_w,
+                                            false,
+                                        );
+                                        ui.horizontal(|ui| {
+                                            crate::ui::chrome::form_field_label(ui, theme, i18n::tr(ui.ctx(), "Default", "默认"));
+                                            crate::ui::chrome::form_singleline_field(
+                                                ui,
+                                                theme,
+                                                egui::Id::new(("frag_var_default", idx)),
+                                                default,
+                                                "",
+                                                (edit_w - 56.0).max(72.0),
+                                                false,
+                                            );
+                                            if crate::ui::chrome::icon_button(
+                                                ui,
+                                                theme,
+                                                crate::ui::icons::IconId::Trash,
+                                                theme.color_body_text_muted(),
+                                            )
+                                            .clicked()
+                                            {
+                                                var_to_remove = Some(idx);
+                                            }
+                                        });
+                                    });
+                                    });
+                                }
+                                if let Some(idx) = var_to_remove {
+                                    self.form_variables.remove(idx);
+                                }
+                                if crate::ui::chrome::panel_action_icon_button(
+                                    ui,
+                                    theme,
+                                    crate::ui::icons::IconId::Plus,
+                                    i18n::tr(ui.ctx(), "Add variable", "添加变量"),
+                                )
+                                .clicked()
+                                {
+                                    self.form_variables.push((String::new(), String::new(), String::new()));
+                                }
+
+                                let keys = list_placeholder_keys(&self.form_command);
+                                if !keys.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(format!(
+                                            "{}{}",
+                                            i18n::tr(ui.ctx(), "Placeholders: ", "占位符："),
+                                            keys.join(", ")
+                                        ))
+                                        .small()
+                                        .color(theme.text_tertiary()),
+                                    );
+                                }
+
+                                let mut preview_map = HashMap::new();
+                                for (name, _, def) in &self.form_variables {
+                                    let n = name.trim();
+                                    if n.is_empty() || def.is_empty() {
+                                        continue;
+                                    }
+                                    preview_map.insert(n.to_string(), def.clone());
+                                }
+                                let rhai_ctx = merge_rhai_context(session_hint, &preview_map);
+                                let after_rhai = match expand_rhai_blocks(&self.form_command, &rhai_ctx) {
+                                    Ok(s) => s,
+                                    Err(_) => self.form_command.clone(),
+                                };
+                                let expanded = expand_command_template(
+                                    &after_rhai,
+                                    session_hint,
+                                    &preview_map,
+                                );
+                                egui::CollapsingHeader::new(i18n::tr(
+                                    ctx,
+                                    "Preview resolved (session context)",
+                                    "预览替换后（当前会话上下文）",
+                                ))
+                                    .id_source("mistterm_fragment_lib_preview_expand")
+                                    .show(ui, |ui| {
+                                    ui.add(
+                                        egui::Label::new(
+                                            egui::RichText::new(expanded)
+                                                .monospace()
+                                                .color(theme.green_color()),
+                                        )
+                                        .wrap(true),
+                                    );
+                                });
+
+                                ui.horizontal(|ui| {
+                                    if crate::ui::chrome::panel_action_primary_icon_button(
+                                        ui,
+                                        theme,
+                                        crate::ui::icons::IconId::Check,
+                                        i18n::tr(ctx, "Save", "保存"),
+                                    )
+                                    .clicked()
+                                        && !self.form_title.trim().is_empty()
+                                        && !self.form_category.trim().is_empty()
+                                    {
+                                        let tags = self.parse_tags();
+                                        let variables: Vec<FragmentVariable> = self.form_variables
+                                            .iter()
+                                            .filter(|(name, _, _)| !name.trim().is_empty())
+                                            .map(|(name, desc, default)| {
+                                                FragmentVariable {
+                                                    name: name.trim().to_string(),
+                                                    description: desc.clone(),
+                                                    default_value: if default.is_empty() {
+                                                        None
+                                                    } else {
+                                                        Some(default.clone())
+                                                    },
+                                                }
+                                            })
+                                            .collect();
+
+                                        if let Some(id) = &self.editing_id {
+                                            let ok = manager.update_fragment_with_vars(
+                                                id,
+                                                self.form_title.trim().to_string(),
+                                                self.form_command.clone(),
+                                                self.form_category.trim().to_string(),
+                                                tags,
+                                                variables,
+                                            );
+                                            if ok {
+                                                if manager.save(fragment_cfg_path).is_ok() {
+                                                    self.status_msg =
+                                                        i18n::tr(ctx, "Saved", "已保存").to_string();
+                                                    saved = true;
+                                                } else {
+                                                    self.status_msg = i18n::tr(ctx, "Failed to write file", "写入文件失败")
+                                                        .to_string();
+                                                }
+                                            }
+                                        } else {
+                                            manager.add_fragment_with_all(
+                                                self.form_title.trim().to_string(),
+                                                self.form_command.clone(),
+                                                self.form_category.trim().to_string(),
+                                                tags,
+                                                variables,
+                                            );
+                                            if manager.save(fragment_cfg_path).is_ok() {
+                                                self.status_msg =
+                                                    i18n::tr(ctx, "Fragment added", "已添加片段")
+                                                        .to_string();
+                                                saved = true;
+                                            }
+                                        }
+                                    }
+                                    if crate::ui::chrome::panel_action_icon_button(
+                                        ui,
+                                        theme,
+                                        crate::ui::icons::IconId::Trash,
+                                        i18n::tr(ctx, "Delete", "删除"),
+                                    )
+                                    .clicked() {
+                                        if let Some(id) = self.editing_id.clone() {
+                                            if manager.remove_fragment(&id)
+                                                && manager.save(fragment_cfg_path).is_ok()
+                                            {
+                                                self.clear_form();
+                                                self.status_msg =
+                                                    i18n::tr(ctx, "Deleted", "已删除").to_string();
+                                                saved = true;
+                                            }
+                                        }
+                                    }
+                                });
+                                if !self.status_msg.is_empty() {
+                                    let accent_hint =
+                                        self.status_msg.starts_with(i18n::tr(ctx, "New fragment:", "新建片段："));
+                                    ui.label(
+                                        egui::RichText::new(&self.status_msg)
+                                            .size(if accent_hint { 13.0 } else { 12.0 })
+                                            .color(if accent_hint {
+                                                theme.text_secondary()
+                                            } else {
+                                                theme.text_tertiary()
+                                            }),
+                                    );
+                                }
+                            });
+                    });
+                });
+                });
+            });
+
+        if close_via_header {
+            win_open = false;
+        }
+        self.open = win_open;
+
+        saved
+    }
+}

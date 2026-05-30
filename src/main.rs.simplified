@@ -1,0 +1,165 @@
+use eframe::egui;
+use parking_lot::Mutex;
+use ssh2::Session;
+use std::net::TcpStream;
+use std::sync::Arc;
+use std::time::Duration;
+
+/// Session configuration
+#[derive(Debug, Clone)]
+struct SessionConfig {
+    name: String,
+    host: String,
+    port: u16,
+    username: String,
+}
+
+/// SSH Session
+struct SshSession {
+    config: SessionConfig,
+    connected: bool,
+    session: Option<Session>,
+    output: String,
+    error: Option<String>,
+}
+
+impl SshSession {
+    fn new(config: SessionConfig) -> Self {
+        Self {
+            config,
+            connected: false,
+            session: None,
+            output: String::new(),
+            error: None,
+        }
+    }
+
+    fn connect(&mut self) -> Result<(), String> {
+        let addr = format!("{}:{}", self.config.host, self.config.port)
+            .parse::<std::net::SocketAddr>()
+            .map_err(|e| format!("Invalid address: {}", e))?;
+
+        let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(5))
+            .map_err(|e| format!("Failed to connect: {}", e))?;
+
+        let mut session = Session::new().unwrap();
+        session.set_tcp_stream(tcp);
+        session.handshake().unwrap();
+
+        self.session = Some(session);
+        self.connected = true;
+        self.output.push_str("Connected!\r\n");
+        self.error = None;
+
+        Ok(())
+    }
+
+    fn disconnect(&mut self) {
+        self.session = None;
+        self.connected = false;
+        self.output.push_str("Disconnected\r\n");
+    }
+}
+
+/// App configuration
+#[derive(Debug, Clone, Default)]
+struct AppConfig {
+    sessions: Vec<SessionConfig>,
+}
+
+/// Main application
+struct MistTermApp {
+    config: AppConfig,
+    sessions: Vec<Arc<Mutex<SshSession>>>,
+}
+
+impl Default for MistTermApp {
+    fn default() -> Self {
+        // 添加一个测试会话
+        let test_config = SessionConfig {
+            name: "Test Server".to_string(),
+            host: "192.168.1.1".to_string(),
+            port: 22,
+            username: "root".to_string(),
+        };
+        
+        Self {
+            config: AppConfig {
+                sessions: vec![test_config.clone()],
+            },
+            sessions: vec![Arc::new(Mutex::new(SshSession::new(test_config)))],
+        }
+    }
+}
+
+fn main() -> eframe::Result<()> {
+    eprintln!("Starting MistTerm...");
+    
+    let options = eframe::NativeOptions {
+        ..Default::default()
+    };
+
+    eprintln!("Running native app...");
+    
+    eframe::run_native(
+        "MistTerm",
+        options,
+        Box::new(|_cc| {
+            eprintln!("Creating app...");
+            let app = MistTermApp::default();
+            eprintln!("App created successfully! Sessions: {}", app.sessions.len());
+            Box::new(app)
+        }),
+    )
+}
+
+impl eframe::App for MistTermApp {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 强制请求重绘
+        ctx.request_repaint();
+        
+        // 显示一个主面板
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.heading("🖥️ MistTerm - SSH Terminal");
+            ui.separator();
+            
+            // 显示会话列表
+            ui.label("Sessions:");
+            for session in &self.sessions {
+                let mut session_locked = session.lock();
+                let status = if session_locked.connected { "✓ Connected" } else { "✗ Disconnected" };
+                ui.label(format!(
+                    "  - {} ({}:{}) - {}",
+                    session_locked.config.name,
+                    session_locked.config.host,
+                    session_locked.config.port,
+                    status
+                ));
+                
+                if !session_locked.connected {
+                    if ui.button("Connect").clicked() {
+                        let result = session_locked.connect();
+                        if let Err(e) = result {
+                            eprintln!("Connection error: {}", e);
+                        }
+                    }
+                } else {
+                    if ui.button("Disconnect").clicked() {
+                        session_locked.disconnect();
+                    }
+                }
+                drop(session_locked);
+            }
+            
+            ui.separator();
+            ui.label("Ctrl+Q to quit");
+        });
+
+        // 读取会话数据（非阻塞）
+        for session in &self.sessions {
+            let mut session_locked = session.lock();
+            // 模拟读取
+            drop(session_locked);
+        }
+    }
+}

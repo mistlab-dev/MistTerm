@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<!--
+  运维 🟠 必须部署：https://mistlab.dev/oauth/desktop-callback.html
+  服务端 🔴 须将上述 URL（及 ?port= 变体）加入 OAuth redirect_uri 白名单，并在授权后 302 回传 token/code。
+  验收：MistTerm 仓库 scripts/verify-oauth-bridge.sh
+  说明：docs/tech/TEAM.md §四
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>MistTerm 登录</title>
+</head>
+<body style="font-family:system-ui;text-align:center;padding:3rem">
+  <h2 id="title">正在完成登录…</h2>
+  <p id="msg"></p>
+  <script>
+    (function () {
+      var search = location.search || '';
+      var params = new URLSearchParams(search);
+      var title = document.getElementById('title');
+      var msg = document.getElementById('msg');
+
+      /** 从 query 提取参数；兼容服务端误用 ?port=54020?access_token=…（第二个 ? 应为 &） */
+      function queryParam(name) {
+        var fromParams = params.get(name);
+        if (fromParams && name !== 'port') return fromParams;
+        var re = new RegExp('[?&]' + name + '=([^&]*)');
+        var m = search.match(re);
+        if (m) return decodeURIComponent(m[1].replace(/\+/g, ' '));
+        if (name === 'port' && fromParams) {
+          var digits = /^(\d{1,5})/.exec(fromParams);
+          if (digits) return digits[1];
+        }
+        return fromParams;
+      }
+
+      var access = queryParam('access_token');
+      var refresh = queryParam('refresh_token');
+      var code = queryParam('code');
+      var err = queryParam('error') || queryParam('error_description');
+
+      function done(ok, text) {
+        title.textContent = ok ? '登录成功' : '登录失败';
+        msg.textContent = text;
+      }
+
+      if (err) {
+        done(false, err);
+        return;
+      }
+
+      // 从 URL 获取客户端动态端口（须在拼 callback query 前读取）
+      var port = queryParam('port') || '8765';
+      if (!/^\d{1,5}$/.test(port)) {
+        var portDigits = /^(\d{1,5})/.exec(String(port));
+        port = portDigits ? portDigits[1] : '8765';
+      }
+
+      var q;
+      if (access) {
+        var tok = new URLSearchParams();
+        tok.set('access_token', access);
+        if (refresh) tok.set('refresh_token', refresh);
+        q = '?' + tok.toString();
+      } else if (location.search) {
+        q = location.search;
+      } else if (code) {
+        q = '?code=' + encodeURIComponent(code);
+      } else {
+        q = '';
+      }
+      fetch('http://127.0.0.1:' + port + '/callback' + q, { mode: 'no-cors' })
+        .then(function () {
+          done(true, '可以关闭此窗口并返回 MistTerm。');
+          setTimeout(function () { window.close(); }, 800);
+        })
+        .catch(function () {
+          done(false, '未能连接 MistTerm (端口 ' + port + ')，请确认应用已打开并重试登录。');
+        });
+    })();
+  </script>
+</body>
+</html>

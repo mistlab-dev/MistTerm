@@ -1,0 +1,58 @@
+# 系统文件
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Node 依赖
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 媒体文件（保留 protos 目录）
+media/
+!protos/
+*.jpg
+*.jpeg
+*.gif
+
+# 日志文件
+*.log
+logs/
+
+# 临时文件
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+
+# 配置文件（敏感信息）
+*.env
+.env.local
+.env.*.local
+
+# 构建输出
+dist/
+build/
+*.dmg
+*.pkg
+
+# Rust
+/target
+Cargo.lock
+sessions.json
+*.bak
+tarpaulin-report.html
+
+# OpenClaw 个人配置
+.joyclaw/
+AGENTS.md
+BOOTSTRAP.md
+HEARTBEAT.md
+IDENTITY.md
+SOUL.md
+TOOLS.md
+USER.md
+.aider*
