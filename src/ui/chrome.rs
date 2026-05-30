@@ -548,7 +548,7 @@ pub fn right_dock_placeholder_frame(theme: &Theme) -> egui::Frame {
 /// 右 `SidePanel` 可见外框（SFTP / 凭证等直绘 dock）。
 pub fn right_dock_panel_frame(theme: &Theme) -> egui::Frame {
     theme
-        .frame_region_panel()
+        .frame_region_panel_flush_bottom()
         .outer_margin(right_dock_outer_margin(theme))
 }
 
@@ -616,18 +616,18 @@ pub fn paint_right_dock_slot_shell(ui: &mut egui::Ui, slot: egui::Rect, theme: &
 }
 
 /// 与 [`paint_right_dock_slot_shell`] 相同，用于在 `Area` 外先铺底色（避免可点层盖住整块槽位）。
-/// 右 dock 壳层圆角：贴底栏时底角为 0，避免与状态栏顶线叠成双线。
+/// 右 dock 壳层圆角：顶角不圆（与终端 Tab 条齐平）；贴底栏时底角也为 0。
 pub fn right_dock_shell_rounding(theme: &Theme, flush_bottom: bool) -> egui::Rounding {
-    let r = theme.radius_panel();
     if flush_bottom {
-        egui::Rounding {
-            nw: r,
-            ne: r,
-            sw: 0.0,
-            se: 0.0,
-        }
+        egui::Rounding::ZERO
     } else {
-        egui::Rounding::same(r)
+        let r = theme.radius_panel();
+        egui::Rounding {
+            nw: 0.0,
+            ne: 0.0,
+            sw: r,
+            se: r,
+        }
     }
 }
 
@@ -780,11 +780,6 @@ pub struct TitleBarConnection {
 
 fn paint_top_strip(ui: &mut Ui, rect: egui::Rect, theme: &Theme) {
     ui.painter().rect_filled(rect, 0.0, theme.chrome_bar_fill());
-    ui.painter().hline(
-        rect.x_range(),
-        rect.bottom() - 1.0,
-        theme.divider_stroke(),
-    );
 }
 
 /// 顶栏：仅菜单行（连接信息在 Tab / 底栏，避免与顶栏重复）
@@ -812,8 +807,6 @@ pub fn render_top_chrome_panel(
         egui::menu::bar(ui, |ui| {
             if show_in_window_menu {
                 ui.spacing_mut().item_spacing.x = theme.spacing_menu_bar_gap();
-                ui.add_space(theme.spacing_menu_bar_left());
-                menu_bar_brand(ui, theme);
                 draw_menu(ui);
             }
             if show_ssh_import_chip && pending_ssh_imports > 0 {
@@ -879,25 +872,6 @@ fn ssh_import_chip_actions(
     }
     out
 }
-
-/// 菜单行左侧品牌（macOS 系统标题栏已显示应用名，不再重复）
-#[cfg(not(target_os = "macos"))]
-pub fn menu_bar_brand(ui: &mut Ui, theme: &Theme) {
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 5.0;
-        let px = theme.size_icon_glyph();
-        let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
-        icons::paint_icon(ui, r, IconId::Brand, theme.text_tertiary(), px);
-        ui.label(
-            RichText::new("Mist")
-                .size(theme.font_size_menu_item())
-                .color(theme.text_tertiary()),
-        );
-    });
-}
-
-#[cfg(target_os = "macos")]
-pub fn menu_bar_brand(_ui: &mut Ui, _theme: &Theme) {}
 
 /// 顶栏菜单行上的 SSH 导入 chip 等动作
 #[derive(Default)]
@@ -1549,6 +1523,18 @@ fn dock_panel_title_close_trailing(
     dock_close_icon_button(ui, theme, close_tooltip).clicked()
 }
 
+/// 右 dock 标题行内容区（固定高度，与终端 Tab 条 [`Theme::size_panel_header_row_h`] 对齐）
+pub fn dock_header_horizontal<R>(ui: &mut Ui, theme: &Theme, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    let row_h = theme.size_panel_header_row_h();
+    let row_w = ui.available_width().max(1.0);
+    ui.allocate_ui_with_layout(
+        egui::vec2(row_w, row_h),
+        egui::Layout::left_to_right(egui::Align::Center),
+        add_contents,
+    )
+    .inner
+}
+
 /// 仅标题 + 关闭 ×（右侧仅一个图标按钮，避免与 dock 工具栏混排重复）
 pub fn dock_panel_title_close_only(
     ui: &mut Ui,
@@ -1559,7 +1545,7 @@ pub fn dock_panel_title_close_only(
 ) -> bool {
     let _ = close_tooltip;
     let mut closed = false;
-    ui.horizontal(|ui| {
+    dock_header_horizontal(ui, theme, |ui| {
         panel_header_title_leading(ui, theme, icon, title);
         ui.with_layout(
             egui::Layout::right_to_left(egui::Align::Center),
@@ -1591,7 +1577,7 @@ pub fn dock_panel_title_bar(
         closed: false,
         new_fragment: false,
     };
-    ui.horizontal(|ui| {
+    dock_header_horizontal(ui, theme, |ui| {
         panel_header_title_leading(ui, theme, IconId::Fragment, title);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(theme.spacing_dock_panel_trailing_pad());
@@ -1946,7 +1932,7 @@ pub fn menu_theme_item(ui: &mut Ui, theme: &Theme, selected: bool, name: &str) -
     .inner
 }
 
-/// 顶栏 / 菜单项文字（可选快捷键后缀）
+/// 顶栏 / 菜单项文字（可选快捷键后缀；仅用于无布局需求的简单标签）
 pub fn menu_item_label(theme: &Theme, title: &str, shortcut: Option<&str>) -> RichText {
     let text = if let Some(sc) = shortcut {
         format!("{}  {}", title, sc)
@@ -1958,13 +1944,132 @@ pub fn menu_item_label(theme: &Theme, title: &str, shortcut: Option<&str>) -> Ri
         .color(theme.text_secondary())
 }
 
+fn layout_menu_line(ui: &Ui, text: &str, px: f32, color: Color32) -> std::sync::Arc<egui::Galley> {
+    let font_id = egui::FontId::proportional(px);
+    ui.fonts(|fonts| fonts.layout_no_wrap(text.to_owned(), font_id, color))
+}
+
+/// 测量下拉菜单行内容宽（标题 + 可选快捷键）
+pub fn measure_popup_menu_row_width(
+    ui: &Ui,
+    theme: &Theme,
+    title: &str,
+    shortcut: Option<&str>,
+) -> f32 {
+    let px = theme.font_size_menu_item();
+    let pad = ui.spacing().button_padding;
+    let title_w = layout_menu_line(ui, title, px, Color32::WHITE).size().x;
+    let shortcut_w = shortcut
+        .map(|s| layout_menu_line(ui, s, px, Color32::WHITE).size().x)
+        .unwrap_or(0.0);
+    let gap = if shortcut.is_some() {
+        theme.spacing_menu_shortcut_gap()
+    } else {
+        0.0
+    };
+    pad.x * 2.0 + title_w + gap + shortcut_w
+}
+
+/// 统一菜单弹出层宽度，避免无快捷键项悬停背景只铺半行
+pub fn prime_menu_popup_width(ui: &mut Ui, min_content_width: f32) {
+    if min_content_width.is_finite() && min_content_width > 0.0 {
+        ui.set_min_width(min_content_width);
+    }
+}
+
+/// 下拉菜单行：标题居左、快捷键居右（整行可点）
+pub fn popup_menu_button_shortcut_enabled(
+    ui: &mut Ui,
+    theme: &Theme,
+    title: &str,
+    shortcut: Option<&str>,
+    enabled: bool,
+) -> Response {
+    let px = theme.font_size_menu_item();
+    let pad = ui.spacing().button_padding;
+    let title_color = if enabled {
+        theme.text_secondary()
+    } else {
+        theme.text_tertiary()
+    };
+    let title_g = layout_menu_line(ui, title, px, title_color);
+    let shortcut_w = shortcut
+        .map(|s| layout_menu_line(ui, s, px, theme.text_tertiary()).size().x)
+        .unwrap_or(0.0);
+    let gap = if shortcut.is_some() {
+        theme.spacing_menu_shortcut_gap()
+    } else {
+        0.0
+    };
+    let content_w = pad.x * 2.0 + title_g.size().x + gap + shortcut_w;
+    let row_w = ui.available_width().max(content_w);
+    let content_h = title_g.size().y;
+    let row_h = (content_h + pad.y * 2.0).max(ui.spacing().interact_size.y);
+
+    let sense = if enabled { Sense::click() } else { Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(row_w, row_h), sense);
+
+    if ui.is_enabled() {
+        let visuals = ui.style().interact_selectable(&response, enabled);
+        if enabled && (response.hovered() || response.has_focus()) {
+            ui.painter().rect_filled(rect, 0.0, visuals.bg_fill);
+        }
+        let title_pos = egui::pos2(
+            rect.min.x + pad.x,
+            rect.center().y - title_g.size().y * 0.5,
+        );
+        ui.painter().galley(title_pos, title_g);
+        if let Some(sc) = shortcut {
+            let sc_color = if enabled {
+                theme.text_tertiary()
+            } else {
+                theme.color_form_hint()
+            };
+            let sg = layout_menu_line(ui, sc, px, sc_color);
+            let shortcut_pos = egui::pos2(
+                rect.max.x - pad.x - sg.size().x,
+                rect.center().y - sg.size().y * 0.5,
+            );
+            ui.painter().galley(shortcut_pos, sg);
+        }
+    }
+
+    if response.hovered() && enabled && ui.is_enabled() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+
+    response
+}
+
+/// 下拉菜单行（默认可点）
+pub fn popup_menu_button_shortcut(
+    ui: &mut Ui,
+    theme: &Theme,
+    title: &str,
+    shortcut: Option<&str>,
+) -> Response {
+    popup_menu_button_shortcut_enabled(ui, theme, title, shortcut, true)
+}
+
 /// 菜单项 + 当前平台主修饰键快捷键（`⌘N` / `Ctrl+N`）。
+pub fn popup_menu_button_accel(ui: &mut Ui, theme: &Theme, title: &str, key: &str) -> Response {
+    let shortcut = crate::platform::accel(key);
+    popup_menu_button_shortcut(ui, theme, title, Some(&shortcut))
+}
+
+/// 菜单项 + `⌘⇧J` / `Ctrl+Shift+J`。
+pub fn popup_menu_button_accel_shift(ui: &mut Ui, theme: &Theme, title: &str, key: &str) -> Response {
+    let shortcut = crate::platform::accel_shift(key);
+    popup_menu_button_shortcut(ui, theme, title, Some(&shortcut))
+}
+
+/// 菜单项 + 当前平台主修饰键快捷键（`⌘N` / `Ctrl+N`）— 仅文案，供旧调用。
 pub fn menu_item_label_accel(theme: &Theme, title: &str, key: &str) -> RichText {
     let shortcut = crate::platform::accel(key);
     menu_item_label(theme, title, Some(&shortcut))
 }
 
-/// 菜单项 + `⌘⇧J` / `Ctrl+Shift+J`。
+/// 菜单项 + `⌘⇧J` / `Ctrl+Shift+J` — 仅文案，供旧调用。
 pub fn menu_item_label_accel_shift(theme: &Theme, title: &str, key: &str) -> RichText {
     let shortcut = crate::platform::accel_shift(key);
     menu_item_label(theme, title, Some(&shortcut))
@@ -1972,7 +2077,7 @@ pub fn menu_item_label_accel_shift(theme: &Theme, title: &str, key: &str) -> Ric
 
 /// 弹出菜单 / 右键 / Tab 菜单项（与顶栏菜单同字号，非面板灰钮）
 pub fn popup_menu_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
-    ui.button(menu_item_label(theme, label, None))
+    popup_menu_button_shortcut(ui, theme, label, None)
 }
 
 /// 带启用态的弹出菜单项
@@ -1982,12 +2087,7 @@ pub fn popup_menu_button_enabled(
     label: &str,
     enabled: bool,
 ) -> Response {
-    ui.add_enabled(
-        enabled,
-        Button::new(menu_item_label(theme, label, None))
-            .fill(Color32::TRANSPARENT)
-            .stroke(Stroke::NONE),
-    )
+    popup_menu_button_shortcut_enabled(ui, theme, label, None, enabled)
 }
 
 /// 偏好 / 设置区小节标题（与表单标签区分层级）

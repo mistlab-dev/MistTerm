@@ -92,18 +92,10 @@ impl HelpPage {
     }
 }
 
+#[derive(Default)]
 pub struct HelpDocsDialog {
     pub open: bool,
     pub page: HelpPage,
-}
-
-impl Default for HelpDocsDialog {
-    fn default() -> Self {
-        Self {
-            open: false,
-            page: HelpPage::default(),
-        }
-    }
 }
 
 impl HelpDocsDialog {
@@ -470,6 +462,40 @@ fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_m
             }
         }
 
+        if chrome::modal_secondary_icon_button(
+            ui,
+            theme,
+            crate::ui::icons::IconId::File,
+            crate::i18n::tr(ctx, "Online docs", "在线文档"),
+        )
+        .clicked()
+            && !crate::platform::open_url(DOCS_URL)
+        {
+            *status_message = crate::i18n::tr(
+                ctx,
+                "Failed to open browser",
+                "无法打开浏览器",
+            )
+            .to_string();
+        }
+
+        if chrome::modal_secondary_icon_button(
+            ui,
+            theme,
+            crate::ui::icons::IconId::Alert,
+            crate::i18n::tr(ctx, "Issues", "问题反馈"),
+        )
+        .clicked()
+            && !crate::platform::open_url(GITHUB_ISSUES_URL)
+        {
+            *status_message = crate::i18n::tr(
+                ctx,
+                "Failed to open browser",
+                "无法打开浏览器",
+            )
+            .to_string();
+        }
+
         // Website link
         if chrome::modal_secondary_icon_button(
             ui,
@@ -477,15 +503,14 @@ fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_m
             crate::ui::icons::IconId::Brand,
             crate::i18n::tr(ctx, "Website", "官网"),
         )
-            .clicked()
+        .clicked()
+            && !crate::platform::open_url(WEBSITE_URL)
         {
-            if !crate::platform::open_url(WEBSITE_URL) {
-                *status_message = crate::i18n::tr(
-                    ctx,
-                    "Failed to open browser",
-                    "无法打开浏览器",
-                ).to_string();
-            }
+            *status_message = crate::i18n::tr(
+                ctx,
+                "Failed to open browser",
+                "无法打开浏览器",
+            ).to_string();
         }
 
         // GitHub link
@@ -495,15 +520,14 @@ fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_m
             crate::ui::icons::IconId::Brand,
             crate::i18n::tr(ctx, "GitHub", "GitHub"),
         )
-            .clicked()
+        .clicked()
+            && !crate::platform::open_url(GITHUB_URL)
         {
-            if !crate::platform::open_url(GITHUB_URL) {
-                *status_message = crate::i18n::tr(
-                    ctx,
-                    "Failed to open browser",
-                    "无法打开浏览器",
-                ).to_string();
-            }
+            *status_message = crate::i18n::tr(
+                ctx,
+                "Failed to open browser",
+                "无法打开浏览器",
+            ).to_string();
         }
     });
 }
@@ -511,14 +535,16 @@ fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_m
 // ── Shared widgets ─────────────────────────────────────────────────
 
 fn render_step_row(ui: &mut Ui, theme: &Theme, index: usize, step: &QuickStep) {
-    ui.horizontal_top(|ui| {
+    ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = theme.spacing_md();
-        let size = egui::vec2(26.0, 26.0);
-        let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+        let circle_r = 13.0;
+        let circle_d = circle_r * 2.0;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(circle_d, circle_d), egui::Sense::hover());
         let center = rect.center();
-        ui.painter().circle_filled(center, 13.0, theme.accent_a13());
-        ui.painter().circle_stroke(center, 13.0, egui::Stroke::new(1.0, theme.accent_alpha(89)));
-        ui.painter().text(
+        let painter = ui.painter().with_clip_rect(ui.max_rect());
+        painter.circle_filled(center, circle_r, theme.accent_a13());
+        painter.circle_stroke(center, circle_r, egui::Stroke::new(1.0, theme.accent_alpha(89)));
+        painter.text(
             center,
             egui::Align2::CENTER_CENTER,
             format!("{index}"),

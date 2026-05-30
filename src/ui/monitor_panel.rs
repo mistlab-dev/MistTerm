@@ -337,7 +337,7 @@ impl MonitorPanel {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     theme.frame_right_dock_header_band().show(ui, |ui| {
                             layout_util::set_width_to_available(ui);
-                            ui.horizontal(|ui| {
+                            crate::ui::chrome::dock_header_horizontal(ui, theme, |ui| {
                                 ui.horizontal(|ui| {
                                     crate::ui::chrome::panel_header_title_leading(
                                         ui,
@@ -659,6 +659,7 @@ impl MonitorPanel {
     }
 
     /// 显示指标进度条
+    #[allow(clippy::too_many_arguments)]
     fn show_metric_bar(
         &self,
         ui: &mut egui::Ui,

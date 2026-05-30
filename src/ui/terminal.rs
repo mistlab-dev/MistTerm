@@ -495,7 +495,7 @@ impl TerminalView {
         }
         data.iter().all(|&b| {
             matches!(b, b'\n' | b'\r' | b'\t' | b'\x08' | b'\x1b')
-                || (b >= 0x20 && b < 0x7f)
+                || (0x20..0x7f).contains(&b)
         })
     }
 
@@ -729,7 +729,7 @@ impl TerminalView {
             }
         }
 
-        let column_width = column_width.max(1.0).min(16_384.0);
+        let column_width = column_width.clamp(1.0, 16_384.0);
         // 宿主传入的列宽（已扣右侧 dock）；勿仅用 available_width，否则中央区 max_rect 仍可能盖住右栏。
         ui.set_max_width(column_width);
 
@@ -1270,7 +1270,10 @@ impl TerminalView {
         });
 
         let cols = (usable_width / cell_w).floor().clamp(20.0, 512.0) as u32;
-        let rows = (usable_height / cell_h).floor().clamp(5.0, 256.0) as u32;
+        // 2px 余量即可；少算整行会在 bottom_up 布局下顶留一整行空白
+        let rows = ((usable_height - 2.0) / cell_h)
+            .floor()
+            .clamp(5.0, 256.0) as u32;
 
         if cols != self.cols || rows != self.rows {
             self.resize(cols, rows);

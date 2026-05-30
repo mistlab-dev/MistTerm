@@ -33,13 +33,13 @@ pub struct Sidebar;
 
 impl Sidebar {
     /// 左栏整列：SSH 导入条（可选）→ 圆角连接面板（[`Sidebar::show`]）
-    pub fn show_column<'a>(
+    pub fn show_column(
         ui: &mut egui::Ui,
         layout_h: f32,
         sidebar_width: f32,
         ssh_import_banner_dismissed: bool,
         ssh_pending_imports: usize,
-        session_manager: &'a SessionManager,
+        session_manager: &SessionManager,
         selected_id: &Option<String>,
         search_query: &mut String,
         filter: &mut String,
@@ -94,10 +94,10 @@ impl Sidebar {
     /// 显示侧边栏
     /// 
     /// 返回双击事件响应
-    pub fn show<'a>(
+    pub fn show(
         ui: &mut egui::Ui,
         panel_h: f32,
-        session_manager: &'a SessionManager,
+        session_manager: &SessionManager,
         selected_id: &Option<String>,
         search_query: &mut String,
         filter: &mut String,
@@ -130,7 +130,7 @@ impl Sidebar {
                 ui.set_min_height(body_h);
                 ui.set_height(body_h);
                     theme.frame_right_dock_header_band().show(ui, |ui| {
-                        ui.horizontal(|ui| {
+                        crate::ui::chrome::dock_header_horizontal(ui, theme, |ui| {
                             ui.spacing_mut().item_spacing.x = theme.spacing_status_left_gap();
                             let ctx = ui.ctx().clone();
                             crate::ui::chrome::panel_header_title_leading(
@@ -225,7 +225,7 @@ impl Sidebar {
                     crate::ui::chrome::label_tag_chip(
                         ui,
                         theme,
-                        &crate::i18n::tr(ui.ctx(), "Team servers", "团队服务器"),
+                        crate::i18n::tr(ui.ctx(), "Team servers", "团队服务器"),
                         theme.font_size_connection_meta(),
                         theme.color_section_title(),
                     );
@@ -295,12 +295,12 @@ impl Sidebar {
                                 || s.host.to_lowercase().contains(&query)
                                 || s.group.to_lowercase().contains(&query)
                         })
-                        .cloned()
                         .filter(|s| match filter.as_str() {
                             "online" => connected_sessions.contains(&s.id),
                             "offline" => !connected_sessions.contains(&s.id),
                             _ => true,
                         })
+                        .cloned()
                         .collect::<Vec<_>>();
 
                     sort_sessions(&mut sessions, *sort_by);

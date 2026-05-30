@@ -10,7 +10,6 @@
 
 use super::macos_app_name::APP_DISPLAY_NAME;
 use crate::i18n::{menu, UiLanguage};
-use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{
     CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
 };
@@ -116,13 +115,13 @@ impl NativeAppMenu {
             "mistterm.app.preferences",
             l.preferences,
             true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::Comma)),
+            None,
         );
         let quit = MenuItem::with_id(
             "mistterm.app.quit",
             l.quit,
             true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyQ)),
+            None,
         );
         app_menu.append(&about)?;
         app_menu.append(&PredefinedMenuItem::separator())?;
@@ -136,13 +135,13 @@ impl NativeAppMenu {
             "mistterm.terminal.new_session",
             l.new_session,
             true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyN)),
+            None,
         );
         let new_tab = MenuItem::with_id(
             "mistterm.terminal.new_tab",
             l.new_tab,
             true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyT)),
+            None,
         );
         let import_ssh =
             MenuItem::with_id("mistterm.terminal.import_ssh", l.import_ssh, true, None);
@@ -150,7 +149,7 @@ impl NativeAppMenu {
             "mistterm.terminal.close_tab",
             l.close_tab,
             true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyW)),
+            None,
         );
         let disconnect = MenuItem::with_id(
             "mistterm.terminal.disconnect",
@@ -180,19 +179,19 @@ impl NativeAppMenu {
             "mistterm.edit.copy_terminal",
             l.copy,
             true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyC)),
+            None,
         );
         let paste_terminal = MenuItem::with_id(
             "mistterm.edit.paste_terminal",
             l.paste,
             true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyV)),
+            None,
         );
         let select_terminal = MenuItem::with_id(
             "mistterm.edit.select_all_terminal",
             l.select_all,
             true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyA)),
+            None,
         );
         edit.append(&copy_terminal)?;
         edit.append(&paste_terminal)?;
@@ -202,7 +201,7 @@ impl NativeAppMenu {
             "mistterm.edit.find",
             l.find_in_terminal,
             true,
-            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyF)),
+            None,
         );
         edit.append(&terminal_search)?;
 
@@ -272,16 +271,13 @@ impl NativeAppMenu {
             "mistterm.tools.quick_fragments",
             l.quick_fragments,
             true,
-            Some(Accelerator::new(
-                Some(Modifiers::SUPER | Modifiers::SHIFT),
-                Code::KeyJ,
-            )),
+            None,
         );
         let command_history = MenuItem::with_id(
             "mistterm.tools.command_history",
             l.command_history,
             true,
-            Some(Accelerator::new(Some(Modifiers::CONTROL), Code::KeyR)),
+            None,
         );
         let batch_exec =
             MenuItem::with_id("mistterm.tools.batch_exec", l.batch_exec, true, None);

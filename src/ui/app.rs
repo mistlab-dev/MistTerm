@@ -123,7 +123,7 @@ pub(crate) fn status_message_body(msg: &str) -> &str {
 
 pub(crate) fn status_message_wrap_error(display: impl Into<String>) -> String {
     let s = display.into();
-    if s.chars().next() == Some(STATUS_ERROR_MARKER) {
+    if s.starts_with(STATUS_ERROR_MARKER) {
         return s;
     }
     format!("{STATUS_ERROR_MARKER}{s}")
@@ -212,7 +212,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
 /// 底栏 / 提示文案颜色：错误类用主题红，其余用弱文字色（避免顶栏大块告警色）
 fn status_message_text_color(msg: &str, theme: &crate::ui::theme::Theme) -> egui::Color32 {
     let body = status_message_body(msg);
-    if msg.chars().next() == Some(STATUS_ERROR_MARKER)
+    if msg.starts_with(STATUS_ERROR_MARKER)
         || body.starts_with("Expression error")
         || body.starts_with("表达式错误")
         || body.starts_with("Insert failed")
@@ -293,9 +293,7 @@ pub(crate) fn placeholders_needing_user(template: &str) -> Vec<String> {
     list_placeholder_keys(template)
         .into_iter()
         .filter(|k| {
-            !SESSION_PLACEHOLDER_KEYS
-                .iter()
-                .any(|&sk| sk == k.as_str())
+            !SESSION_PLACEHOLDER_KEYS.contains(&k.as_str())
         })
         .collect()
 }
@@ -2537,7 +2535,7 @@ impl MistTermApp {
     }
 
     fn refresh_fragment_analytics_dashboard(&mut self) {
-        let personal: Vec<_> = self.fragment_manager.get_all().iter().cloned().collect();
+        let personal: Vec<_> = self.fragment_manager.get_all().to_vec();
         self.fragment_analytics_snapshot = self.team_service.build_fragment_analytics_dashboard(
             &personal,
             self.fragment_analytics_range,
@@ -3751,12 +3749,7 @@ impl MistTermApp {
         };
 
         let source: Vec<FragmentStats> = match self.fragment_list_scope {
-            FragmentListScope::Personal => self
-                .fragment_manager
-                .get_all()
-                .iter()
-                .cloned()
-                .collect(),
+            FragmentListScope::Personal => self.fragment_manager.get_all().to_vec(),
             FragmentListScope::Team => self.team_service.team_fragments_as_stats(),
             FragmentListScope::Market => {
                 if self.market_catalog_refresh_pending && self.market_catalog_refresh_rx.is_none() {
@@ -3789,7 +3782,7 @@ impl MistTermApp {
                     .filter(|f| f.usage_count > 0)
                     .cloned()
                     .collect();
-                top.sort_by(|a, b| b.usage_count.cmp(&a.usage_count));
+                top.sort_by_key(|f| std::cmp::Reverse(f.usage_count));
                 top.truncate(5);
                 if !top.is_empty() {
                     ui.label(
@@ -3817,7 +3810,7 @@ impl MistTermApp {
             FragmentListScope::Team if self.team_service.is_logged_in() => {
                 let mut top = self.team_service.team_fragments_as_stats();
                 top.retain(|f| f.usage_count > 0);
-                top.sort_by(|a, b| b.usage_count.cmp(&a.usage_count));
+                top.sort_by_key(|f| std::cmp::Reverse(f.usage_count));
                 top.truncate(5);
                 if !top.is_empty() {
                     ui.label(
@@ -3863,13 +3856,13 @@ impl MistTermApp {
                         .cloned()
                         .collect();
                 }
-                work.sort_by(|a, b| b.usage_count.cmp(&a.usage_count));
+                work.sort_by_key(|f| std::cmp::Reverse(f.usage_count));
             }
             _ => {
                 let sort = self.fragment_sort_by;
                 match sort {
                     SortBy::UsageCount => {
-                        work.sort_by(|a, b| b.usage_count.cmp(&a.usage_count))
+                        work.sort_by_key(|f| std::cmp::Reverse(f.usage_count))
                     }
                     SortBy::SuccessRate => work.sort_by(|a, b| {
                         b.success_rate()
@@ -3877,7 +3870,7 @@ impl MistTermApp {
                             .unwrap_or(std::cmp::Ordering::Equal)
                     }),
                     SortBy::LastUsed => {
-                        work.sort_by(|a, b| b.last_used.cmp(&a.last_used))
+                        work.sort_by_key(|f| std::cmp::Reverse(f.last_used))
                     }
                     SortBy::Name => work.sort_by(|a, b| a.title.cmp(&b.title)),
                 }
@@ -4123,31 +4116,78 @@ impl MistTermApp {
         self.insert_fragment_at_tab_index(ctx, idx, Some(id), expanded);
     }
 
-    /// 显示 Git 同步面板
+    /// 注册 Git 同步栏槽位（须在 Central 之前）。正文见 [`show_git_sync_panel_foreground`]。
     fn show_git_sync_panel(
         &mut self,
         ctx: &egui::Context,
         theme: &crate::ui::theme::Theme,
         dock_col_w: f32,
     ) {
+        if !self.show_git_sync_panel {
+            self.git_sync_panel.clear_panel_slot_rect();
+            return;
+        }
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
         let git_panel = egui::SidePanel::right("git_sync_panel")
             .default_width(def_w)
             .min_width(min_w)
             .max_width(max_w)
             .resizable(true)
-            .frame(crate::ui::chrome::right_dock_panel_frame(theme))
+            .show_separator_line(false)
+            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
                 crate::ui::chrome::paint_right_dock_left_gap(ui, theme);
-                let panel_w = ui.available_width();
-                ui.set_max_width(panel_w);
-                let mut close_git = false;
-                let sessions = self.session_manager.list_sessions().to_vec();
-                self.git_sync_panel.show(ui, theme, &mut close_git, &sessions);
-                if close_git {
-                    self.show_git_sync_panel = false;
-                }
+                self.git_sync_panel.set_panel_slot_rect(ui.max_rect());
+                let h = ui.available_height().max(1.0);
+                let w = ui.available_width().max(1.0);
+                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
             });
+        if let Some(slot) = self.git_sync_panel.panel_slot_rect() {
+            layout_util::record_right_dock_panel_rect(&slot, &mut self.right_dock_outer_left_x);
+        } else {
+            layout_util::record_right_dock_panel(&git_panel.response, &mut self.right_dock_outer_left_x);
+        }
+    }
+
+    /// Central 之后绘制 Git 同步正文（避免被 CentralPanel 盖住）。
+    pub(crate) fn show_git_sync_panel_foreground(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+    ) {
+        if !self.show_git_sync_panel {
+            return;
+        }
+        let screen = ctx.screen_rect();
+        let dock_inset = theme.spacing_right_dock_screen_inset();
+        let Some(slot) = layout_util::right_dock_foreground_slot(
+            self.git_sync_panel.panel_slot_rect(),
+            ctx,
+            "git_sync_panel",
+            layout_util::SidePanelProfile::GitSync,
+            None,
+            dock_inset,
+        ) else {
+            return;
+        };
+        let geom = crate::ui::chrome::prepare_right_dock_foreground_geom(slot, screen, theme);
+        let layer_id = crate::ui::chrome::right_dock_foreground_layer_id("mistterm_git_sync_fg");
+        crate::ui::chrome::paint_right_dock_foreground_shell(ctx, layer_id, geom.paint, theme);
+        let sessions = self.session_manager.list_sessions().to_vec();
+        let mut close_git = false;
+        crate::ui::chrome::show_right_dock_foreground_body(
+            "mistterm_git_sync_fg",
+            ctx,
+            &geom,
+            layout_util::SidePanelProfile::GitSync,
+            |ui, panel_w| {
+                ui.set_max_width(panel_w);
+                self.git_sync_panel.show(ui, theme, &mut close_git, &sessions);
+            },
+        );
+        if close_git {
+            self.show_git_sync_panel = false;
+        }
         if self.git_sync_panel.take_pending_sessions_merge() {
             let path = self.git_sync_panel.sessions_json_path();
             match self.session_manager.merge_sessions_from_git_path(&path) {
@@ -4170,7 +4210,6 @@ impl MistTermApp {
                 }
             }
         }
-        layout_util::record_right_dock_panel(&git_panel.response, &mut self.right_dock_outer_left_x);
     }
 
     #[allow(dead_code)]
@@ -4288,8 +4327,8 @@ impl MistTermApp {
             );
         }
 
-        if self.sidebar_collapsed {
-            if crate::ui::chrome::status_restore_chip(
+        if self.sidebar_collapsed
+            && crate::ui::chrome::status_restore_chip(
                 ui,
                 theme,
                 crate::i18n::tr(&bar_ctx, "Connections", "连接"),
@@ -4301,10 +4340,9 @@ impl MistTermApp {
                 "展开左侧连接栏",
             ))
             .clicked()
-            {
-                self.sidebar_collapsed = false;
-                self.sidebar_user_dismissed_responsive = false;
-            }
+        {
+            self.sidebar_collapsed = false;
+            self.sidebar_user_dismissed_responsive = false;
         }
 
         if !self.status_message.is_empty() {
@@ -5504,41 +5542,29 @@ mod menu {
 
             egui::menu::menu_button(ui, label(l.terminal_menu), |ui| {
                 crate::ui::chrome::apply_menu_popup_style(ui, theme);
-                if ui
-                    .button(crate::ui::chrome::menu_item_label_accel(theme, l.new_session, "N"))
-                    .clicked()
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.new_session).clicked()
                 {
                     self.show_new_session_dialog = true;
                     ui.close_menu();
                 }
-                if ui
-                    .button(crate::ui::chrome::menu_item_label_accel(theme, l.new_tab, "T"))
-                    .clicked()
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.new_tab).clicked()
                 {
                     self.open_new_tab_from_selection(ctx);
                     ui.close_menu();
                 }
-                if ui
-                    .add_enabled(
-                        ssh_import_enabled,
-                        egui::Button::new(crate::ui::chrome::menu_item_label(
-                            theme,
-                            l.import_ssh,
-                            None,
-                        )),
-                    )
-                    .clicked()
+                if crate::ui::chrome::popup_menu_button_enabled(
+                    ui,
+                    theme,
+                    l.import_ssh,
+                    ssh_import_enabled,
+                )
+                .clicked()
                 {
                     self.open_ssh_import_dialog(ctx);
                     ui.close_menu();
                 }
                 ui.separator();
-                if crate::ui::chrome::popup_menu_button(
-                    ui,
-                    theme,
-                    &format!("{} {}", l.close_tab, crate::platform::accel("W")),
-                )
-                .clicked()
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.close_tab).clicked()
                 {
                     self.request_close_active_tab();
                     ui.close_menu();
@@ -5554,12 +5580,7 @@ mod menu {
                     ui.close_menu();
                 }
                 ui.separator();
-                if crate::ui::chrome::popup_menu_button(
-                    ui,
-                    theme,
-                    &format!("{} {}", l.preferences, crate::platform::accel(",")),
-                )
-                .clicked()
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.preferences).clicked()
                 {
                     self.show_preferences_dialog = true;
                     ui.close_menu();
@@ -5577,35 +5598,23 @@ mod menu {
             });
             egui::menu::menu_button(ui, label(l.edit_menu), |ui| {
                 crate::ui::chrome::apply_menu_popup_style(ui, theme);
-                if ui
-                    .button(crate::ui::chrome::menu_item_label_accel(theme, l.copy, "C"))
-                    .clicked()
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.copy).clicked()
                 {
                     self.menu_copy_for_context(ctx);
                     ui.close_menu();
                 }
-                if ui
-                    .button(crate::ui::chrome::menu_item_label_accel(theme, l.paste, "V"))
-                    .clicked()
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.paste).clicked()
                 {
                     self.menu_paste_for_context(ctx);
                     ui.close_menu();
                 }
-                if ui
-                    .button(crate::ui::chrome::menu_item_label_accel(theme, l.select_all, "A"))
-                    .clicked()
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.select_all).clicked()
                 {
                     self.menu_select_all_for_context(ctx);
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui
-                    .button(crate::ui::chrome::menu_item_label_accel(
-                        theme,
-                        l.find_in_terminal,
-                        "F",
-                    ))
-                    .clicked()
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.find_in_terminal).clicked()
                 {
                     self.toggle_terminal_search();
                     ui.close_menu();
@@ -5625,11 +5634,7 @@ mod menu {
                 .clicked()
                 {
                     self.sidebar_collapsed = !self.sidebar_collapsed;
-                    if self.sidebar_collapsed {
-                        self.sidebar_user_dismissed_responsive = true;
-                    } else {
-                        self.sidebar_user_dismissed_responsive = false;
-                    }
+                    self.sidebar_user_dismissed_responsive = self.sidebar_collapsed;
                     ui.close_menu();
                 }
                 let maximized = frame.info().window_info.maximized;
@@ -5725,24 +5730,12 @@ mod menu {
                     self.fragment_library.open = true;
                     ui.close_menu();
                 }
-                if ui
-                    .button(crate::ui::chrome::menu_item_label_accel_shift(
-                        theme,
-                        l.quick_fragments,
-                        "J",
-                    ))
-                    .clicked()
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.quick_fragments).clicked()
                 {
                     self.quick_selector.open = true;
                     ui.close_menu();
                 }
-                if ui
-                    .button(crate::ui::chrome::menu_item_label(
-                        theme,
-                        l.command_history,
-                        Some(crate::platform::terminal_history_accel()),
-                    ))
-                    .clicked()
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.command_history).clicked()
                 {
                     self.menu_open_command_history(ctx);
                     ui.close_menu();

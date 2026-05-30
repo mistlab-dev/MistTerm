@@ -240,18 +240,45 @@ impl FileTableCols {
     const ROW_H: f32 = 24.0;
 
     fn from_panel_width(panel_w: f32) -> Self {
+        let panel_w = panel_w.max(1.0);
         let icon = Self::ICON_W;
-        let size = Self::SIZE_W;
-        let time = Self::TIME_W;
-        let name = (panel_w - icon - size - time).max(56.0);
-        let total = icon + name + size + time;
+        let mut size = Self::SIZE_W;
+        let mut time = Self::TIME_W;
+        const MIN_NAME: f32 = 32.0;
+
+        let fixed = icon + size + time;
+        if panel_w >= fixed + MIN_NAME {
+            let name = panel_w - fixed;
+            return Self {
+                total: panel_w,
+                icon,
+                name,
+                size,
+                time,
+            };
+        }
+
+        let budget = (panel_w - icon - MIN_NAME).max(0.0);
+        let flex = size + time;
+        if flex > 0.0 && budget < flex {
+            let scale = budget / flex;
+            size = (size * scale).max(36.0);
+            time = (time * scale).max(56.0);
+        }
+        let name = (panel_w - icon - size - time).max(0.0);
         Self {
-            total,
+            total: panel_w,
             icon,
             name,
             size,
             time,
         }
+    }
+
+    /// 按列表视口当前可用宽度计算列宽（须在进入 [`Self::paint_file_list_viewport_frame`] 后调用）。
+    fn for_list_ui(ui: &mut egui::Ui) -> Self {
+        layout_util::set_width_to_available(ui);
+        Self::from_panel_width(ui.available_width())
     }
 
     fn col_width(self, col: usize) -> f32 {
@@ -317,6 +344,19 @@ impl Default for SftpPanel {
 }
 
 impl SftpPanel {
+    /// 右 dock 正文区可用宽（与 Git 同步等面板并排时须随槽位收缩）。
+    fn dock_field_width(ui: &mut egui::Ui) -> f32 {
+        layout_util::set_width_to_available(ui);
+        layout_util::finite_content_width_inset(ui, 0.0, 64.0, ui.available_width())
+    }
+
+    fn begin_dock_row(ui: &mut egui::Ui) -> f32 {
+        layout_util::set_width_to_available(ui);
+        let w = ui.available_width();
+        ui.set_max_width(w);
+        w
+    }
+
     pub fn new() -> Self {
         let local_root = std::env::temp_dir().join("mistterm_downloads");
         let _ = std::fs::create_dir_all(&local_root);
@@ -667,6 +707,7 @@ impl SftpPanel {
                     };
                     let resp = cell.add(
                         egui::Label::new(RichText::new(text).font(cap_font.clone()).color(color))
+                            .truncate(col >= 2)
                             .sense(Sense::click()),
                     );
                     if resp.clicked() {
@@ -732,17 +773,23 @@ impl SftpPanel {
                     );
                 }
                 2 => {
-                    cell.label(
-                        RichText::new(size_label)
-                            .font(egui::FontId::proportional(small_px))
-                            .color(meta_color),
+                    cell.add(
+                        egui::Label::new(
+                            RichText::new(size_label)
+                                .font(egui::FontId::proportional(small_px))
+                                .color(meta_color),
+                        )
+                        .truncate(true),
                     );
                 }
                 _ => {
-                    cell.label(
-                        RichText::new(time_label)
-                            .font(egui::FontId::proportional(small_px))
-                            .color(meta_color),
+                    cell.add(
+                        egui::Label::new(
+                            RichText::new(time_label)
+                                .font(egui::FontId::proportional(small_px))
+                                .color(meta_color),
+                        )
+                        .truncate(true),
                     );
                 }
             });
@@ -1102,7 +1149,7 @@ impl SftpPanel {
         }
 
         layout_util::set_width_to_available(ui);
-        let panel_w = ui.available_width();
+        ui.set_max_width(ui.available_width());
 
         if let Some(ok) = self.toast_ok.clone() {
             ui.horizontal(|ui| {
@@ -1173,9 +1220,10 @@ impl SftpPanel {
         let download_ready = download_job.clone();
 
         ui.horizontal_wrapped(|ui| {
+            Self::begin_dock_row(ui);
             ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
-            let upload_lbl = crate::i18n::tr(ctx, "Upload →", "上传 →").to_string();
-            let download_lbl = crate::i18n::tr(ctx, "← Download", "← 下载").to_string();
+            let upload_lbl = crate::i18n::tr(ctx, "Upload", "上传").to_string();
+            let download_lbl = crate::i18n::tr(ctx, "Download", "下载").to_string();
             let delete_lbl = crate::i18n::tr(ctx, "Delete remote", "删除远端").to_string();
             if crate::ui::chrome::panel_action_primary_button_with_icon_ex(
                 ui,
@@ -1233,7 +1281,6 @@ impl SftpPanel {
         let files_h = ui.available_height();
         let local_list_h = (files_h * 0.42).clamp(88.0, 200.0);
         let remote_list_h = (files_h - local_list_h - theme.spacing_sm() * 2.0).max(88.0);
-        let path_field_w = (panel_w - 200.0).max(80.0);
 
         Self::paint_browser_section_frame(theme).show(ui, |ui| {
             layout_util::set_width_to_available(ui);
@@ -1241,23 +1288,26 @@ impl SftpPanel {
                 theme,
                 crate::i18n::tr(ui.ctx(), "Local", "本机"),
             ));
-            ui.horizontal(|ui| {
+            let local_path_id = egui::Id::new("sftp_local_path");
+            let field_w = Self::dock_field_width(ui);
+            let path_resp = crate::ui::chrome::form_singleline_field(
+                ui,
+                theme,
+                local_path_id,
+                &mut self.local_path_edit,
+                crate::i18n::tr(ui.ctx(), "/Users/me", "/Users/me"),
+                field_w,
+                false,
+            );
+            let enter_local_path = ui.ctx().input(|i| i.key_pressed(egui::Key::Enter))
+                && ui.memory(|m| m.has_focus(local_path_id));
+            if enter_local_path {
+                self.try_navigate_local_path(ctx);
+            }
+            let _path_resp = path_resp;
+            ui.horizontal_wrapped(|ui| {
+                Self::begin_dock_row(ui);
                 ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
-                let local_path_id = egui::Id::new("sftp_local_path");
-                let path_resp = crate::ui::chrome::form_singleline_field(
-                    ui,
-                    theme,
-                    local_path_id,
-                    &mut self.local_path_edit,
-                    crate::i18n::tr(ui.ctx(), "/Users/me", "/Users/me"),
-                    path_field_w,
-                    false,
-                );
-                let enter_local_path = ui.ctx().input(|i| i.key_pressed(egui::Key::Enter))
-                    && ui.memory(|m| m.has_focus(local_path_id));
-                if enter_local_path {
-                    self.try_navigate_local_path(ctx);
-                }
                 if crate::ui::chrome::panel_action_button_with_icon_ex(
                     ui,
                     theme,
@@ -1269,7 +1319,6 @@ impl SftpPanel {
                 {
                     self.try_navigate_local_path(ctx);
                 }
-                let _path_resp = path_resp;
                 if crate::ui::chrome::panel_action_button_with_icon_ex(
                     ui,
                     theme,
@@ -1316,10 +1365,10 @@ impl SftpPanel {
                 let msg = Self::localize_local_list_error(ctx, err);
                 ui.label(egui::RichText::new(msg).small().color(theme.red_color()));
             }
-            let table_cols = FileTableCols::from_panel_width(panel_w);
             let mut enter_local: Option<PathBuf> = None;
             Self::paint_file_list_viewport_frame(theme).show(ui, |ui| {
                 layout_util::set_width_to_available(ui);
+                let table_cols = FileTableCols::for_list_ui(ui);
                 if Self::paint_file_table_header(ui, theme, ctx, table_cols, &mut self.local_sort) {
                     self.apply_local_sort();
                 }
@@ -1372,17 +1421,19 @@ impl SftpPanel {
                 theme,
                 crate::i18n::tr(ui.ctx(), "Remote", "远端"),
             ));
-            ui.horizontal(|ui| {
+            let remote_path_w = Self::dock_field_width(ui);
+            crate::ui::chrome::form_singleline_field(
+                ui,
+                theme,
+                egui::Id::new("sftp_path_edit"),
+                &mut self.path_edit,
+                crate::i18n::tr(ui.ctx(), "/home/user", "/home/user"),
+                remote_path_w,
+                false,
+            );
+            ui.horizontal_wrapped(|ui| {
+                Self::begin_dock_row(ui);
                 ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
-                crate::ui::chrome::form_singleline_field(
-                    ui,
-                    theme,
-                    egui::Id::new("sftp_path_edit"),
-                    &mut self.path_edit,
-                    crate::i18n::tr(ui.ctx(), "/home/user", "/home/user"),
-                    path_field_w,
-                    false,
-                );
                 if crate::ui::chrome::panel_action_button_with_icon_ex(
                     ui,
                     theme,
@@ -1433,17 +1484,18 @@ impl SftpPanel {
                     self.spawn_list(&handle, PathBuf::from("/"), ctx);
                 }
             });
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
-                crate::ui::chrome::form_singleline_field(
-                    ui,
-                    theme,
-                    egui::Id::new("sftp_mkdir_name"),
-                    &mut self.mkdir_name,
-                    crate::i18n::tr(ui.ctx(), "New folder name", "新建目录名"),
-                    path_field_w,
-                    false,
-                );
+            let mkdir_w = Self::dock_field_width(ui);
+            crate::ui::chrome::form_singleline_field(
+                ui,
+                theme,
+                egui::Id::new("sftp_mkdir_name"),
+                &mut self.mkdir_name,
+                crate::i18n::tr(ui.ctx(), "New folder name", "新建目录名"),
+                mkdir_w,
+                false,
+            );
+            ui.horizontal_wrapped(|ui| {
+                Self::begin_dock_row(ui);
                 if crate::ui::chrome::panel_action_button_with_icon_ex(
                     ui,
                     theme,
@@ -1492,10 +1544,10 @@ impl SftpPanel {
                     }
                 });
             }
-            let table_cols = FileTableCols::from_panel_width(panel_w);
             let mut enter_remote: Option<PathBuf> = None;
             Self::paint_file_list_viewport_frame(theme).show(ui, |ui| {
                 layout_util::set_width_to_available(ui);
+                let table_cols = FileTableCols::for_list_ui(ui);
                 if Self::paint_file_table_header(ui, theme, ctx, table_cols, &mut self.remote_sort) {
                     self.apply_remote_sort();
                 }

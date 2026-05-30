@@ -328,13 +328,16 @@ pub fn clamp_rect_above_status_bar(
     rect
 }
 
-/// 工作区内缩一圈 padding（列布局与终端宽度以此矩形为准）。
+/// 工作区内缩 padding（列布局与终端宽度以此矩形为准）；**顶部不缩**，Tab/侧栏标题栏贴齐顶栏下沿。
 #[inline]
 pub fn work_area_inner_rect(work: egui::Rect, pad: f32) -> egui::Rect {
     if pad <= 0.0 || !pad.is_finite() {
         return work;
     }
-    work.shrink(pad)
+    egui::Rect::from_min_max(
+        egui::pos2(work.min.x + pad, work.min.y),
+        egui::pos2(work.max.x - pad, work.max.y - pad),
+    )
 }
 
 /// 右/左 SidePanel 内一行可用宽：`max_rect` 为槽位宽；`clip_rect` 在根 Ui 常为整窗，不可优先取 clip。
@@ -601,7 +604,7 @@ pub fn modal_pref_size(ctx: &egui::Context) -> egui::Vec2 {
     modal_pref_size_in_viewport(ctx, 24.0, 24.0)
 }
 
-/// 关于弹窗（§8.4.3）。
+/// 关于弹窗（§8.4.3）默认尺寸（无内容测量时的回退）。
 #[inline]
 pub fn modal_about_size(ctx: &egui::Context) -> egui::Vec2 {
     let r = ctx.screen_rect();
@@ -611,6 +614,92 @@ pub fn modal_about_size(ctx: &egui::Context) -> egui::Vec2 {
         (sw * 0.38).clamp(360.0, 520.0),
         (sh * 0.44).clamp(340.0, 540.0),
     )
+}
+
+/// 关于弹窗：按标题、版本与快捷键最长行测量宽高，避免灰色内容区过宽或过窄。
+pub fn modal_about_size_for_content(
+    ctx: &egui::Context,
+    theme: &crate::ui::theme::Theme,
+    about_title: &str,
+    subtitle: &str,
+    version_line: &str,
+    shortcuts: &str,
+) -> egui::Vec2 {
+    let screen = ctx.screen_rect();
+    let sw = screen.width().max(360.0);
+    let sh = screen.height().max(280.0);
+
+    let measure = |text: &str, font: egui::FontId| -> egui::Vec2 {
+        ctx.fonts(|fonts| {
+            fonts
+                .layout_no_wrap(text.to_owned(), font, egui::Color32::WHITE)
+                .size()
+        })
+    };
+
+    let header_title_font = egui::FontId::proportional(theme.font_size_panel_header_title());
+    let prominent_font = egui::FontId::proportional(theme.font_size_prominent());
+    let panel_font = egui::FontId::proportional(theme.font_size_panel_title());
+    let mono_font = egui::FontId::monospace(10.0);
+
+    let shortcuts_lines: Vec<&str> = shortcuts.lines().collect();
+    let shortcuts_line_sizes: Vec<egui::Vec2> = shortcuts_lines
+        .iter()
+        .map(|line| measure(line, mono_font.clone()))
+        .collect();
+
+    let shortcuts_content_w = shortcuts_line_sizes
+        .iter()
+        .map(|size| size.x)
+        .fold(0.0_f32, f32::max);
+
+    let content_text_w = shortcuts_content_w
+        .max(measure("Mist", prominent_font.clone()).x)
+        .max(measure(subtitle, panel_font.clone()).x)
+        .max(measure(version_line, panel_font.clone()).x);
+
+    let inset_mx = theme.spacing_search_input_x() * 2.0;
+    let modal_mx = theme.spacing_modal_content_x() * 2.0;
+    let content_w = content_text_w + inset_mx + modal_mx;
+
+    let header_title_w = theme.size_icon_glyph()
+        + theme.spacing_sm()
+        + measure(about_title, header_title_font).x;
+    let header_min_w = header_title_w + theme.size_panel_header_control_h() + modal_mx;
+
+    let width = content_w.max(header_min_w).clamp(280.0, sw - 48.0);
+
+    let item_spacing_y = ctx.style().spacing.item_spacing.y;
+    let line_h = shortcuts_line_sizes
+        .first()
+        .map(|size| size.y)
+        .unwrap_or(12.0);
+    let shortcuts_h = if shortcuts_lines.is_empty() {
+        0.0
+    } else {
+        shortcuts_lines.len() as f32 * line_h
+            + shortcuts_lines.len().saturating_sub(1) as f32 * item_spacing_y
+    };
+    const SHORTCUTS_SCROLL_MAX_H: f32 = 200.0;
+    let scroll_h = shortcuts_h.min(SHORTCUTS_SCROLL_MAX_H);
+
+    let modal_my = theme.spacing_modal_content_y() * 2.0;
+    let inset_my = theme.spacing_search_input_y() * 2.0;
+    let height = modal_my
+        + theme.size_panel_header_row_h()
+        + theme.spacing_modal_header_after_sep()
+        + measure("Mist", prominent_font).y
+        + item_spacing_y
+        + measure(subtitle, panel_font.clone()).y
+        + theme.spacing_md()
+        + inset_my
+        + measure(version_line, panel_font).y
+        + theme.spacing_panel_gap()
+        + scroll_h
+        + 2.0;
+
+    let max_h = modal_about_size(ctx).y.min(sh - 48.0);
+    egui::vec2(width, height.clamp(220.0, max_h))
 }
 
 /// 快速片段选择器（§8.4.4）。
@@ -812,7 +901,7 @@ mod tests {
     fn work_area_inner_rect_shrinks_by_pad() {
         let work = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1000.0, 800.0));
         let inner = work_area_inner_rect(work, 8.0);
-        assert_eq!(inner.min, egui::pos2(8.0, 8.0));
+        assert_eq!(inner.min, egui::pos2(8.0, 0.0));
         assert_eq!(inner.max, egui::pos2(992.0, 792.0));
     }
 

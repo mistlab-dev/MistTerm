@@ -521,9 +521,9 @@ impl Theme {
         } else if self.uses_solid_fg_palette() {
             let w = self.bg_window_color();
             Color32::from_rgb(
-                w.r().saturating_add(10).min(255),
-                w.g().saturating_add(10).min(255),
-                w.b().saturating_add(10).min(255),
+                w.r().saturating_add(10),
+                w.g().saturating_add(10),
+                w.b().saturating_add(10),
             )
         } else {
             // 暗夜：实色阶梯 #151520 → #222236，比 fg_high_alpha 叠层更可辨
@@ -598,9 +598,9 @@ impl Theme {
     pub fn color_modal_primary_fill_hover(&self) -> Color32 {
         let c = self.accent_color();
         Color32::from_rgb(
-            c.r().saturating_add(36).min(255),
-            c.g().saturating_add(36).min(255),
-            c.b().saturating_add(36).min(255),
+            c.r().saturating_add(36),
+            c.g().saturating_add(36),
+            c.b().saturating_add(36),
         )
     }
 
@@ -641,11 +641,7 @@ impl Theme {
     /// 侧栏筛选芯片：选中底
     #[inline]
     pub fn color_filter_chip_active_fill(&self) -> Color32 {
-        if self.is_light_theme() {
-            self.accent_alpha(51)
-        } else {
-            self.accent_alpha(51)
-        }
+        self.accent_alpha(51)
     }
 
     /// 侧栏标题区图标按钮
@@ -1028,9 +1024,19 @@ impl Theme {
         4.0
     }
 
-    /// 右 dock / 片段面板标题行：工具按钮与关闭 × 统一高度
+    /// 右 dock / 片段面板标题行：工具按钮与关闭 × 统一高度（与 Tab 栏 × 同尺寸）
     pub fn size_panel_header_control_h(&self) -> f32 {
-        self.size_control_btn_h()
+        self.size_tab_bar_icon_btn()
+    }
+
+    /// 面板 / dock 标题行总高（与终端 Tab 条 [`size_tab_bar_row_h`] 一致）
+    pub fn size_panel_header_row_h(&self) -> f32 {
+        self.size_tab_bar_row_h()
+    }
+
+    /// 标题行上下内边距（dock 标题行由 [`dock_header_horizontal`] 固定总高，此处为 0）
+    pub fn spacing_panel_header_pad_y(&self) -> f32 {
+        0.0
     }
 
     #[inline]
@@ -1193,15 +1199,9 @@ impl Theme {
         self.frame_region_panel_rounding(egui::Rounding::same(self.radius_panel()))
     }
 
-    /// 贴底栏的侧栏/面板：底角不圆，避免与状态栏顶线之间露缝
+    /// 贴底栏的侧栏/面板：顶角与底角均不圆（与终端 Tab 条顶缘齐平）
     pub fn frame_region_panel_flush_bottom(&self) -> egui::Frame {
-        let r = self.radius_panel();
-        self.frame_region_panel_rounding(egui::Rounding {
-            nw: r,
-            ne: r,
-            sw: 0.0,
-            se: 0.0,
-        })
+        self.frame_region_panel_rounding(egui::Rounding::ZERO)
     }
 
     fn frame_region_panel_rounding(&self, rounding: egui::Rounding) -> egui::Frame {
@@ -1212,11 +1212,16 @@ impl Theme {
             .inner_margin(self.region_content_margin())
     }
 
-    /// 终端列外框（圆角 6px，与原型 `.terminal-area` 一致；底边由 [`crate::ui::chrome::paint_rect_border_ltr`] 单独绘制）
+    /// 终端列外框：顶部与 Tab 条平齐（无上圆角），底部圆角；外框描边由 [`crate::ui::chrome::paint_rect_border_ltr`] 单独绘制。
     pub fn frame_terminal_column(&self) -> egui::Frame {
         egui::Frame::none()
             .fill(self.bg_terminal_color())
-            .rounding(egui::Rounding::same(self.radius_panel()))
+            .rounding(egui::Rounding {
+                nw: 0.0,
+                ne: 0.0,
+                sw: self.radius_panel(),
+                se: self.radius_panel(),
+            })
             .inner_margin(egui::Margin::ZERO)
     }
 
@@ -1234,7 +1239,7 @@ impl Theme {
                     border.a() / 2,
                 ),
             ))
-            .rounding(egui::Rounding::same(self.radius_list_item()))
+            .rounding(egui::Rounding::ZERO)
             .inner_margin(self.margin_status_chip())
     }
 
@@ -1249,28 +1254,28 @@ impl Theme {
 
     /// 面板标题行底带（侧栏 / 右 dock / 弹窗共用内边距与底色）
     pub fn frame_panel_header_band(&self) -> egui::Frame {
-        let r = self.radius_panel();
         egui::Frame::none()
             .fill(self.color_panel_header_band_fill())
             // 标题带只负责底色；分隔线由 `panel_header_divider` 单独绘制，
             // 避免与外层 dock 圆角描边在左上角叠加出白色接缝。
             .stroke(egui::Stroke::NONE)
-            .rounding(egui::Rounding {
-                nw: r,
-                ne: r,
-                sw: 0.0,
-                se: 0.0,
+            .rounding(egui::Rounding::ZERO)
+            .inner_margin(egui::Margin {
+                left: self.spacing_panel_title_pad_x(),
+                right: self.spacing_panel_title_pad_x(),
+                top: 0.0,
+                bottom: 0.0,
             })
-            .inner_margin(egui::Margin::symmetric(
-                self.spacing_panel_title_pad_x(),
-                self.spacing_panel_title_pad_y(),
-            ))
     }
 
     /// 弹窗标题行底带（仅顶部圆角，与底部分隔线齐平）
     pub fn frame_modal_title_band(&self) -> egui::Frame {
         let r = self.radius_list_item();
         self.frame_panel_header_band()
+            .inner_margin(egui::Margin::symmetric(
+                self.spacing_panel_title_pad_x(),
+                6.0,
+            ))
             .rounding(egui::Rounding {
                 nw: r,
                 ne: r,
@@ -1283,15 +1288,8 @@ impl Theme {
     pub fn frame_right_dock_header_band(&self) -> egui::Frame {
         let px = self.spacing_right_dock_pad_x();
         let py = self.spacing_right_dock_pad_y();
-        let shell_r = self.radius_panel();
         self.frame_panel_header_band()
             .stroke(egui::Stroke::new(1.0, self.color_panel_header_divider()))
-            .rounding(egui::Rounding {
-                nw: shell_r,
-                ne: shell_r,
-                sw: 0.0,
-                se: 0.0,
-            })
             .outer_margin(egui::Margin {
                 left: -px,
                 right: -px,
@@ -1440,6 +1438,11 @@ impl Theme {
     pub fn font_size_menu_item(&self) -> f32 {
         self.font_size_ui_control()
     }
+
+    /// 菜单项标题与右侧快捷键之间的最小空隙
+    pub fn spacing_menu_shortcut_gap(&self) -> f32 {
+        16.0
+    }
     pub fn font_size_status_bar(&self) -> f32 {
         self.font_size_ui_control()
     }
@@ -1459,7 +1462,9 @@ impl Theme {
     // ── 间距系统（按设计规范 §8） ──
     pub fn spacing_panel_gap(&self) -> f32 { 6.0 }           // 面板间 gap
     pub fn spacing_panel_title_pad_x(&self) -> f32 { 6.0 }   // 面板标题左右 padding（收紧）
-    pub fn spacing_panel_title_pad_y(&self) -> f32 { 9.0 }   // 面板标题上下 padding
+    pub fn spacing_panel_title_pad_y(&self) -> f32 {
+        self.spacing_panel_header_pad_y()
+    }   // 面板标题上下 padding（与 Tab 条对齐）
     pub fn spacing_panel_content_x(&self) -> f32 { 4.0 }     // 面板内容左右 padding
     pub fn spacing_panel_content_y(&self) -> f32 { 4.0 }     // 面板内容上下 padding
     pub fn spacing_search_area_x(&self) -> f32 { 8.0 }       // 搜索框区域左右 padding
@@ -1533,7 +1538,12 @@ impl Theme {
     }
 
     pub fn terminal_content_margin(&self) -> egui::Margin {
-        egui::Margin::symmetric(self.spacing_terminal_pad_x(), self.spacing_terminal_pad_y())
+        egui::Margin {
+            left: self.spacing_terminal_pad_x(),
+            right: self.spacing_terminal_pad_x(),
+            top: 4.0,
+            bottom: self.spacing_terminal_pad_y(),
+        }
     }
     pub fn spacing_card_x(&self) -> f32 { 8.0 }              // 卡片左右 padding
     pub fn spacing_card_y(&self) -> f32 { 7.0 }              // 卡片上下 padding
@@ -1600,7 +1610,9 @@ impl Theme {
 
     // ── 组件尺寸 ──
     pub fn progress_bar_height(&self) -> f32 { 8.0 }         // 进度条高度
-    pub fn panel_title_height(&self) -> f32 { 28.0 }         // 面板标题栏高度
+    pub fn panel_title_height(&self) -> f32 {
+        self.size_panel_header_row_h()
+    }         // 面板标题栏高度
     pub fn status_bar_height(&self) -> f32 { 36.0 }          // 状态栏（含上下内边距）
     /// 顶栏菜单行（终端 / 编辑 / 视图 / 工具 / 帮助）
     pub fn menu_bar_height(&self) -> f32 { 32.0 }
