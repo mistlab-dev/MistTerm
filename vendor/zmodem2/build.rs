@@ -18,7 +18,9 @@ fn main() {
             println!("cargo:rustc-env=ZMODEM_SZ_BIN={}", sz_path.display());
         }
         _ => {
-            println!("cargo:warning=lrzsz not found");
+            // lrzsz on PATH is optional: only enables `#[cfg(has_lrzsz)]` integration tests
+            // in this crate. MistTerm uses the Rust zmodem2 library at runtime and does not
+            // require a local rz/sz install to build or run.
         }
     }
 }
