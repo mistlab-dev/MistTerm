@@ -1,6 +1,6 @@
-//! ssh_config_importer 单元测试
+//! Unit tests for ssh_config_importer
 //!
-//! 测试 OpenSSH config 文件解析逻辑。
+//! Tests OpenSSH config file parsing logic.
 
 use mistterm::core::ssh_config_importer::*;
 
@@ -173,7 +173,7 @@ fn ssh_config_candidate_not_importable_with_skip_reason() {
         identity_file: String::new(),
         proxy_jump: String::new(),
         proxy_command: String::new(),
-        skip_reason: Some("HostName 缺失".into()),
+        skip_reason: Some("HostName missing".into()),
     };
     assert!(!candidate.importable());
 }
@@ -235,7 +235,7 @@ fn ssh_config_candidate_display_target_without_hostname() {
         proxy_command: String::new(),
         skip_reason: None,
     };
-    assert_eq!(candidate.display_target(), "(HostName 缺失)");
+    assert_eq!(candidate.display_target(), "(HostName missing)");
 }
 
 #[test]

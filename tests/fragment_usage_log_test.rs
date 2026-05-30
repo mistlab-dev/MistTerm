@@ -1,4 +1,4 @@
-//! fragment_usage_log 单元测试
+//! Unit tests for fragment_usage_log
 
 use mistterm::core::fragment_usage_log::*;
 use chrono::Utc;

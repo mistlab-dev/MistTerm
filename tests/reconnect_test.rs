@@ -1,6 +1,6 @@
-//! reconnect 单元测试
+//! Unit tests for reconnect
 //!
-//! 测试 SSH 自动重连调度逻辑。
+//! Tests SSH auto-reconnect scheduling logic.
 
 use mistterm::core::reconnect::*;
 use std::time::{Duration, Instant};

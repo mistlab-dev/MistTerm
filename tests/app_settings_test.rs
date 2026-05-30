@@ -1,6 +1,6 @@
-//! app_settings 单元测试
+//! Unit tests for app_settings
 //!
-//! 测试应用设置的序列化。
+//! Tests app settings serialization.
 
 use mistterm::core::app_settings::AppSettings;
 

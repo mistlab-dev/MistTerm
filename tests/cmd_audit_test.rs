@@ -1,4 +1,4 @@
-//! cmd_audit 单元测试
+//! Unit tests for cmd_audit
 
 use mistterm::core::cmd_audit::*;
 

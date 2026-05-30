@@ -1,4 +1,4 @@
-//! 仅测试 mistterm 公开 API 的单元测试
+//! Unit tests for fragment_analytics (public API only)
 
 use mistterm::core::FragmentStats;
 use mistterm::core::fragment_analytics::FragmentAnalyticsTimeRange as FR;

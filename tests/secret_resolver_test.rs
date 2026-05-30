@@ -1,6 +1,6 @@
-//! secret_resolver 单元测试
+//! Unit tests for secret_resolver
 //!
-//! 测试密钥解析器的错误类型和临时文件处理。
+//! Tests secret resolver error types and temporary file handling.
 
 use mistterm::core::secret_resolver::*;
 

@@ -1,6 +1,6 @@
-//! Monitor 集成测试
+//! Monitor integration tests
 //!
-//! 测试 SSH 远程命令执行和输出解析
+//! Tests SSH remote command execution and output parsing
 
 use ssh2::Session;
 use std::net::TcpStream;
@@ -32,7 +32,7 @@ fn test_parse_free_output() {
     let session = connect_ssh();
     let output = exec_command(&session, "free -b");
     
-    // 解析内存信息
+    // Parse memory info
     let lines: Vec<&str> = output.lines().collect();
     assert!(lines.len() >= 2, "free output should have header and data");
     

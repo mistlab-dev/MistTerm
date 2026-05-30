@@ -1,4 +1,4 @@
-//! fragment_recommendations 单元测试
+//! Unit tests for fragment_recommendations
 
 use mistterm::core::fragment_recommendations::*;
 

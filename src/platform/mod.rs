@@ -20,7 +20,7 @@ pub use docs::{
 };
 pub use fonts::{cjk_font_loaded, configure_egui_fonts};
 pub use paths::{default_ssh_config_path, home_dir};
-pub use shell::{open_file, reveal_directory};
+pub use shell::{open_file, open_url, reveal_directory};
 pub use shortcuts::{accel, accel_shift, help_line, primary_modifier_label, terminal_history_accel};
 #[cfg(target_os = "macos")]
 pub use macos_app_name::{

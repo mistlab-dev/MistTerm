@@ -1,4 +1,4 @@
-//! command_history 单元测试
+//! Unit tests for command_history
 
 use mistterm::core::command_history::*;
 

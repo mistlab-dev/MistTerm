@@ -746,10 +746,11 @@ impl MistTermApp {
         // 自动选择第一个会话
         let selected_session_id = sessions.first().map(|s| s.id.clone());
 
+        // Load market cache first, then init fragments from market or fallback to defaults
+        let _market_cache = crate::core::market::MarketFragmentCache::load();
+
         let mut app = Self {
             session_manager,
-            // Load market cache first, then init fragments from market or fallback to defaults
-            let _market_cache = crate::core::market::MarketFragmentCache::load();
             fragment_manager: FragmentManager::load(&FragmentManager::default_config_path())
                 .unwrap_or_else(|_| FragmentManager::init_from_market_or_defaults(Some(&_market_cache))),
             selected_session_id,

@@ -1,6 +1,6 @@
-//! audit 单元测试
+//! Unit tests for audit
 //!
-//! 测试审计事件的创建和结构。
+//! Tests audit event creation and structure.
 
 use mistterm::core::audit::{AuditCategory, AuditEvent, AuditOutcome};
 use serde_json::Value;

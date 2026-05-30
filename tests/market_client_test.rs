@@ -1,6 +1,6 @@
-//! market 模块单元测试
+//! Unit tests for market module
 //!
-//! 测试市场相关类型的序列化。
+//! Tests serialization of market-related types.
 
 use mistterm::core::market::{MarketCatalogQuery, MarketFragment};
 

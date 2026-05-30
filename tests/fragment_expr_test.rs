@@ -1,6 +1,6 @@
-//! fragment_expr 单元测试
+//! Unit tests for fragment_expr
 //!
-//! 测试 `{{ ... }}` Rhai 表达式展开、上下文合并、时间戳注入等功能。
+//! Tests `{{ ... }}` Rhai expression expansion, context merging, timestamp injection, etc.
 
 use mistterm::core::fragment_expr::*;
 use mistterm::core::session::SessionConfig;

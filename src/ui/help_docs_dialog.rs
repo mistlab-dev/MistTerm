@@ -10,6 +10,10 @@ const WEBSITE_URL: &str = "https://mistlab.dev";
 const DOCS_URL: &str = "https://github.com/c-wind/MistTerm/tree/main/docs";
 const GITHUB_URL: &str = "https://github.com/c-wind/MistTerm";
 const GITHUB_ISSUES_URL: &str = "https://github.com/c-wind/MistTerm/issues";
+const WEBSITE_TIP_EN: &str = "Visit https://mistlab.dev for docs, updates, and the fragment marketplace.";
+const WEBSITE_TIP_ZH: &str = "访问 https://mistlab.dev 获取文档、更新和片段市场。";
+const LINKS_TIP_EN: &str = "Docs: https://github.com/c-wind/MistTerm/tree/main/docs\nIssues: https://github.com/c-wind/MistTerm/issues";
+const LINKS_TIP_ZH: &str = "文档：https://github.com/c-wind/MistTerm/tree/main/docs\n问题反馈：https://github.com/c-wind/MistTerm/issues";
 
 struct QuickStep {
     title: &'static str,
@@ -222,16 +226,12 @@ fn render_quick_start(ui: &mut Ui, theme: &Theme, ctx: &egui::Context) {
     ui.add_space(theme.spacing_lg());
 
     // Website link
-    let tip = crate::i18n::tr(
-        ctx,
-        &format!("Visit {} for docs, updates, and the fragment marketplace.", WEBSITE_URL),
-        &format!("访问 {} 获取文档、更新和片段市场。", WEBSITE_URL),
-    );
+    let tip = crate::i18n::tr(ctx, WEBSITE_TIP_EN, WEBSITE_TIP_ZH);
     render_tip_box(
         ui,
         theme,
         crate::i18n::tr(ctx, "Official site", "官网"),
-        &tip,
+        tip,
     );
 }
 
@@ -413,16 +413,12 @@ fn render_features(ui: &mut Ui, theme: &Theme, ctx: &egui::Context) {
     }
 
     ui.add_space(theme.spacing_sm());
-    let more = crate::i18n::tr(
-        ctx,
-        &format!("Docs: {}\nIssues: {}", DOCS_URL, GITHUB_ISSUES_URL),
-        &format!("文档：{}\n问题反馈：{}", DOCS_URL, GITHUB_ISSUES_URL),
-    );
+    let more = crate::i18n::tr(ctx, LINKS_TIP_EN, LINKS_TIP_ZH);
     render_tip_box(
         ui,
         theme,
         crate::i18n::tr(ctx, "Links", "相关链接"),
-        &more,
+        more,
     );
 }
 

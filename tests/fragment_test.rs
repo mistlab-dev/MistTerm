@@ -1,4 +1,4 @@
-//! fragment 模型单元测试
+//! Unit tests for fragment model
 
 use mistterm::core::fragment::*;
 use mistterm::core::session::SessionConfig;

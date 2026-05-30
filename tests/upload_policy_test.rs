@@ -1,4 +1,4 @@
-//! upload_policy 单元测试
+//! Unit tests for upload_policy
 
 use mistterm::core::upload_policy::*;
 

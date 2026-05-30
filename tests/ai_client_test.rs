@@ -1,6 +1,6 @@
-//! ai_client 单元测试
+//! Unit tests for ai_client
 //!
-//! 测试 AI 客户端的脱敏和命令提取功能。
+//! Tests AI client redaction and command extraction functions.
 
 use mistterm::core::ai_client::{redact_for_ai, extract_shell_commands};
 

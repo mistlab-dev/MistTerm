@@ -1,6 +1,6 @@
-//! credential 单元测试
+//! Unit tests for credential
 //!
-//! 测试凭证库的类型、分类和后端。
+//! Tests credential library types, categories, and backends.
 
 use mistterm::core::credential::{
     CredentialAuthKind, CredentialCategory, SecretBackend,

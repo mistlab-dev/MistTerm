@@ -1,6 +1,6 @@
-//! ai_settings 单元测试
+//! Unit tests for ai_settings
 //!
-//! 测试 AI 设置的序列化、反序列化和方法。
+//! Tests AI settings serialization, deserialization, and methods.
 
 use mistterm::core::ai_settings::AiSettings;
 
