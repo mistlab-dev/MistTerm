@@ -293,74 +293,6 @@ fn default_group() -> String {
     "默认".to_string()
 }
 
-/// Git 同步时写入仓库的密码占位符（FUNCTIONAL_SPEC §6.3）。
-pub const GIT_SESSION_PASSWORD_PLACEHOLDER: &str = "<encrypted_local>";
-
-/// 将会话列表序列化为可提交 Git 的 JSON（密码字段替换为占位符，保留加密信封结构）。
-pub fn sessions_json_for_git_export(sessions: &[SessionConfig]) -> Result<String, String> {
-    #[derive(Serialize)]
-    struct GitStoredSession<'a> {
-        id: &'a str,
-        name: &'a str,
-        group: &'a str,
-        host: &'a str,
-        port: u16,
-        username: &'a str,
-        password: &'static str,
-        encrypted_password: &'a str,
-        password_nonce: &'a str,
-        private_key_path: &'a str,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        last_connected_at: Option<i64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        created_at: Option<i64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        ssh_config_marker: Option<&'a str>,
-        proxy_jump: &'a str,
-        proxy_command: &'a str,
-        color_tag: &'a str,
-        keepalive_enabled: bool,
-        keepalive_interval_secs: u32,
-        keepalive_count_max: u8,
-        keepalive_auto_reconnect: bool,
-        secret_backend: crate::core::credential::SecretBackend,
-        local_forwards_text: &'a str,
-        remote_forwards_text: &'a str,
-        dynamic_forwards_text: &'a str,
-    }
-
-    let rows: Vec<GitStoredSession<'_>> = sessions
-        .iter()
-        .map(|s| GitStoredSession {
-            id: &s.id,
-            name: &s.name,
-            group: &s.group,
-            host: &s.host,
-            port: s.port,
-            username: &s.username,
-            password: GIT_SESSION_PASSWORD_PLACEHOLDER,
-            encrypted_password: "",
-            password_nonce: "",
-            private_key_path: &s.private_key_path,
-            last_connected_at: s.last_connected_at,
-            created_at: s.created_at,
-            ssh_config_marker: s.ssh_config_marker.as_deref(),
-            proxy_jump: &s.proxy_jump,
-            proxy_command: &s.proxy_command,
-            color_tag: &s.color_tag,
-            keepalive_enabled: s.keepalive_enabled,
-            keepalive_interval_secs: s.keepalive_interval_secs,
-            keepalive_count_max: s.keepalive_count_max,
-            keepalive_auto_reconnect: s.keepalive_auto_reconnect,
-            secret_backend: s.secret_backend.clone(),
-            local_forwards_text: &s.local_forwards_text,
-            remote_forwards_text: &s.remote_forwards_text,
-            dynamic_forwards_text: &s.dynamic_forwards_text,
-        })
-        .collect();
-    serde_json::to_string_pretty(&rows).map_err(|e| format!("serialize sessions for git: {e}"))
-}
-
 /// 会话管理器
 pub struct SessionManager {
     sessions: Vec<SessionConfig>,
@@ -431,61 +363,6 @@ impl SessionManager {
             });
         }
         Some((sessions, had_plaintext, warnings))
-    }
-
-    /// Git pull 后合并 `sessions.json`：按 id 更新；`<encrypted_local>` 不覆盖本机密码。
-    pub fn merge_sessions_from_git_path(&mut self, path: &std::path::Path) -> io::Result<usize> {
-        let content = fs::read_to_string(path)?;
-        let Some((incoming, had_plaintext, warnings)) =
-            Self::parse_stored_sessions_json(&self.device_key, &content)
-        else {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "无法解析 Git 仓库中的 sessions.json",
-            ));
-        };
-        self.load_diagnostics.extend(warnings);
-        let mut count = 0usize;
-        for inc in incoming {
-            if let Some(existing) = self.sessions.iter_mut().find(|s| s.id == inc.id) {
-                let keep_password = inc.password == GIT_SESSION_PASSWORD_PLACEHOLDER
-                    || (inc.password.is_empty() && existing.password.len() > 1);
-                existing.name = inc.name;
-                existing.group = inc.group;
-                existing.host = inc.host;
-                existing.port = inc.port;
-                existing.username = inc.username;
-                if !keep_password && !inc.password.is_empty() {
-                    existing.password = inc.password;
-                }
-                existing.private_key_path = inc.private_key_path;
-                existing.last_connected_at = inc.last_connected_at;
-                existing.ssh_config_marker = inc.ssh_config_marker;
-                existing.proxy_jump = inc.proxy_jump;
-                existing.proxy_command = inc.proxy_command;
-                existing.color_tag = inc.color_tag;
-                existing.keepalive_enabled = inc.keepalive_enabled;
-                existing.keepalive_interval_secs = inc.keepalive_interval_secs;
-                existing.keepalive_count_max = inc.keepalive_count_max;
-                existing.keepalive_auto_reconnect = inc.keepalive_auto_reconnect;
-                existing.secret_backend = inc.secret_backend;
-                existing.local_forwards_text = inc.local_forwards_text;
-                existing.remote_forwards_text = inc.remote_forwards_text;
-                existing.dynamic_forwards_text = inc.dynamic_forwards_text;
-            } else {
-                let mut s = inc;
-                if s.password == GIT_SESSION_PASSWORD_PLACEHOLDER {
-                    s.password.clear();
-                }
-                self.sessions.push(s);
-            }
-            count += 1;
-        }
-        let _ = self.save();
-        if had_plaintext {
-            log::warn!("Git sessions.json contained plaintext passwords");
-        }
-        Ok(count)
     }
 
     /// 从会话备份 JSON 替换当前会话（路径可为同步包内的 `sessions.json`）

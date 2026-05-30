@@ -1,10 +1,10 @@
 [package]
 name = "mistterm"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 autobins = false
 default-run = "Mist"
-description = "A modern SSH terminal with lrzsz support and Git sync"
+description = "A modern SSH terminal with lrzsz support"
 homepage = "https://mistlab.dev"
 documentation = "https://github.com/mistlab-dev/MistTerm/tree/main/docs"
 repository = "https://github.com/mistlab-dev/MistTerm"
@@ -62,9 +62,6 @@ unicode-width = "0.1"
 
 # Clipboard - Pure Rust
 arboard = "3.3"
-
-# Git sync
-git2 = "0.18"
 
 # Cross-platform keyring for password storage
 keyring = "2.3"

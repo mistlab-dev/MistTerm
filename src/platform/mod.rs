@@ -13,15 +13,11 @@ mod macos_ime;
 #[cfg(target_os = "macos")]
 pub mod macos_menu;
 
-pub use docs::{
-    docs_directory, reveal_docs_directory, reveal_docs_folder_menu_action_label_pair,
-    reveal_docs_folder_menu_hint_en, reveal_docs_folder_menu_hint_zh,
-    reveal_docs_folder_success_pair,
-};
+pub use docs::DOCS_INDEX_URL;
 pub use fonts::{cjk_font_loaded, configure_egui_fonts};
 pub use paths::{default_ssh_config_path, home_dir};
 pub use shell::{open_file, open_url, reveal_directory};
-pub use shortcuts::{accel, accel_shift, help_line, primary_modifier_label, terminal_history_accel};
+pub use shortcuts::{accel, accel_enter, accel_literal, accel_shift, help_line, primary_modifier_label, terminal_history_accel, terminal_interrupt_accel};
 #[cfg(target_os = "macos")]
 pub use macos_app_name::{
     fix_menu_bar_application_title, set_application_display_name, APP_DISPLAY_NAME,

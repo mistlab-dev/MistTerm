@@ -443,8 +443,6 @@ pub enum SidePanelProfile {
     Standard,
     /// 系统监控（图表略宽）
     Monitor,
-    /// Git 同步（中等略窄）
-    GitSync,
 }
 
 #[inline]
@@ -491,11 +489,6 @@ pub fn side_panel_widths(ctx: &egui::Context, profile: SidePanelProfile) -> (f32
             default_frac: 0.215,
             min_frac: 0.165,
             max_frac: 0.50,
-        },
-        SidePanelProfile::GitSync => PanelWidthSpec {
-            default_frac: 0.205,
-            min_frac: 0.155,
-            max_frac: 0.44,
         },
     };
     panel_widths_from_spec(w, spec)
@@ -611,7 +604,7 @@ pub fn modal_about_size(ctx: &egui::Context) -> egui::Vec2 {
     let sw = r.width().max(360.0);
     let sh = r.height().max(280.0);
     egui::vec2(
-        (sw * 0.38).clamp(360.0, 520.0),
+        (sw * 0.44).clamp(520.0, 680.0),
         (sh * 0.44).clamp(340.0, 540.0),
     )
 }
@@ -640,7 +633,7 @@ pub fn modal_about_size_for_content(
     let header_title_font = egui::FontId::proportional(theme.font_size_panel_header_title());
     let prominent_font = egui::FontId::proportional(theme.font_size_prominent());
     let panel_font = egui::FontId::proportional(theme.font_size_panel_title());
-    let mono_font = egui::FontId::monospace(10.0);
+    let mono_font = egui::FontId::monospace(theme.font_size_small());
 
     let shortcuts_lines: Vec<&str> = shortcuts.lines().collect();
     let shortcuts_line_sizes: Vec<egui::Vec2> = shortcuts_lines
@@ -667,7 +660,10 @@ pub fn modal_about_size_for_content(
         + measure(about_title, header_title_font).x;
     let header_min_w = header_title_w + theme.size_panel_header_control_h() + modal_mx;
 
-    let width = content_w.max(header_min_w).clamp(280.0, sw - 48.0);
+    let width = content_w
+        .max(header_min_w)
+        .max(modal_about_size(ctx).x)
+        .clamp(520.0, (sw - 48.0).min(680.0));
 
     let item_spacing_y = ctx.style().spacing.item_spacing.y;
     let line_h = shortcuts_line_sizes

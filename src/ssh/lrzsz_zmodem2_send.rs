@@ -467,7 +467,10 @@ pub(super) fn run_upload_zmodem2(
             if dump_tx && !tx_dump_buf.is_empty() {
                 log_tx_dump_accum("用户取消", &tx_dump_buf);
             }
-            return Err("Transfer cancelled by user (Ctrl+C)".to_string());
+            return Err(format!(
+                "Transfer cancelled by user ({})",
+                crate::platform::terminal_interrupt_accel()
+            ));
         }
 
         flush_sender_out(

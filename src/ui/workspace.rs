@@ -64,11 +64,6 @@ impl MistTermApp {
             self.show_fragment_panel(ctx, theme, dock_col_w);
         }
 
-        // Git 同步面板
-        if self.show_git_sync_panel {
-            self.show_git_sync_panel(ctx, theme, dock_col_w);
-        }
-
         let mut cred_action: Option<CredentialPanelAction> = None;
         if self.credential_panel.open {
             self.credential_panel.show_side_panel(
@@ -745,9 +740,6 @@ impl MistTermApp {
         if paint_right_dock_fg {
             self.show_fragment_panel_foreground(ctx, theme);
         }
-        if paint_right_dock_fg && self.show_git_sync_panel {
-            self.show_git_sync_panel_foreground(ctx, theme);
-        }
 
         if paint_right_dock_fg && self.credential_panel.open {
             let mut close_cred = false;
@@ -1183,9 +1175,9 @@ impl MistTermApp {
             crate::ui::chrome::modal_window("about_modal", theme, ctx)
                 .open(&mut open)
                 .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
+                .default_size(modal_sz)
                 .movable(true)
-                .resizable(false)
-                .fixed_size(modal_sz)
+                .resizable(true)
                 .show(ctx, |ui| {
                     crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                             Self::modal_header(
@@ -1228,7 +1220,9 @@ impl MistTermApp {
                                             for line in shortcuts.lines() {
                                                 ui.label(
                                                     egui::RichText::new(line)
-                                                        .font(egui::FontId::monospace(10.0))
+                                                        .font(egui::FontId::monospace(
+                                                            theme.font_size_small(),
+                                                        ))
                                                         .color(theme.color_sidebar_icon()),
                                                 );
                                             }

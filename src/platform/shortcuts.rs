@@ -14,26 +14,46 @@ pub fn primary_modifier_label() -> &'static str {
     }
 }
 
-/// 如 `⌘N` / `Ctrl+N`（不含 `+`，与现有菜单排版一致）。
+fn display_key(key: &str) -> String {
+    if key.len() == 1 {
+        key.to_ascii_lowercase()
+    } else {
+        key.to_string()
+    }
+}
+
+/// 如 `⌘ + n` / `Ctrl + n`。
 pub fn accel(key: &str) -> String {
-    format!("{}{}", primary_modifier_label(), key)
+    format!("{} + {}", primary_modifier_label(), display_key(key))
 }
 
-/// 如 `⌘⇧J` / `Ctrl+Shift+J`。
+/// 主修饰键 + 字面后缀（如 `1–9`、`Tab`、`,`）。
+pub fn accel_literal(suffix: &str) -> String {
+    format!("{} + {}", primary_modifier_label(), suffix)
+}
+
+/// 如 `⌘ + Shift + j` / `Ctrl + Shift + j`。
 pub fn accel_shift(key: &str) -> String {
-    #[cfg(target_os = "macos")]
-    {
-        format!("⌘⇧{}", key)
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        format!("Ctrl+Shift+{}", key)
-    }
+    format!(
+        "{} + Shift + {}",
+        primary_modifier_label(),
+        display_key(key)
+    )
 }
 
-/// 终端命令历史：各平台均为 Ctrl+R（与 shell 习惯一致，不用 ⌘）。
+/// 终端命令历史：各平台均为 Ctrl + R（与 shell 习惯一致，不用 ⌘）。
 pub fn terminal_history_accel() -> &'static str {
-    "Ctrl+R"
+    "Ctrl + R"
+}
+
+/// 主修饰键 + Enter（如 AI 输入框发送）。
+pub fn accel_enter() -> String {
+    format!("{} + Enter", primary_modifier_label())
+}
+
+/// 终端中断（Ctrl + C，各平台一致）。
+pub fn terminal_interrupt_accel() -> &'static str {
+    "Ctrl + C"
 }
 
 /// 帮助/关于中的「主修饰键 + 单键」说明行。

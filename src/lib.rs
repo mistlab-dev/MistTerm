@@ -8,6 +8,5 @@ pub mod platform;
 pub mod ssh;
 pub mod terminal;
 pub mod ui;
-pub mod sync;
 pub mod security;
 pub mod monitor;

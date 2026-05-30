@@ -344,7 +344,7 @@ impl Default for SftpPanel {
 }
 
 impl SftpPanel {
-    /// 右 dock 正文区可用宽（与 Git 同步等面板并排时须随槽位收缩）。
+    /// 右 dock 正文区可用宽（与其它侧栏并排时须随槽位收缩）。
     fn dock_field_width(ui: &mut egui::Ui) -> f32 {
         layout_util::set_width_to_available(ui);
         layout_util::finite_content_width_inset(ui, 0.0, 64.0, ui.available_width())

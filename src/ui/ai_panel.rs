@@ -711,7 +711,11 @@ impl AiPanel {
                     .interactive(can_type)
                     .hint_text(crate::ui::chrome::hint_rich(
                         theme,
-                        i18n::tr(ctx, "Ask a question, Ctrl+Enter to send", "输入问题，Ctrl+Enter 发送"),
+                        i18n::tr(
+                            ctx,
+                            "Ask a question, Ctrl + Enter to send",
+                            "输入问题，Ctrl + Enter 发送",
+                        ),
                         theme.font_size_control_input(),
                     ))
                     .desired_rows(2)
@@ -726,7 +730,11 @@ impl AiPanel {
                 send_clicked = ui
                     .add_enabled_ui(can_send, |ui| {
                         ai_panel_icon_button(ui, theme, IconId::Upload, true)
-                            .on_hover_text(i18n::tr(ctx, "Send (Ctrl+Enter)", "发送 (Ctrl+Enter)"))
+                            .on_hover_text(i18n::tr(
+                                ctx,
+                                "Send (Ctrl + Enter)",
+                                "发送 (Ctrl + Enter)",
+                            ))
                             .clicked()
                     })
                     .inner;

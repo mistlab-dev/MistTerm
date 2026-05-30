@@ -2051,25 +2051,25 @@ pub fn popup_menu_button_shortcut(
     popup_menu_button_shortcut_enabled(ui, theme, title, shortcut, true)
 }
 
-/// 菜单项 + 当前平台主修饰键快捷键（`⌘N` / `Ctrl+N`）。
+/// 菜单项 + 当前平台主修饰键快捷键（`⌘ + n` / `Ctrl + n`）。
 pub fn popup_menu_button_accel(ui: &mut Ui, theme: &Theme, title: &str, key: &str) -> Response {
     let shortcut = crate::platform::accel(key);
     popup_menu_button_shortcut(ui, theme, title, Some(&shortcut))
 }
 
-/// 菜单项 + `⌘⇧J` / `Ctrl+Shift+J`。
+/// 菜单项 + `⌘ + Shift + j` / `Ctrl + Shift + j`。
 pub fn popup_menu_button_accel_shift(ui: &mut Ui, theme: &Theme, title: &str, key: &str) -> Response {
     let shortcut = crate::platform::accel_shift(key);
     popup_menu_button_shortcut(ui, theme, title, Some(&shortcut))
 }
 
-/// 菜单项 + 当前平台主修饰键快捷键（`⌘N` / `Ctrl+N`）— 仅文案，供旧调用。
+/// 菜单项 + 当前平台主修饰键快捷键（`⌘ + n` / `Ctrl + n`）— 仅文案，供旧调用。
 pub fn menu_item_label_accel(theme: &Theme, title: &str, key: &str) -> RichText {
     let shortcut = crate::platform::accel(key);
     menu_item_label(theme, title, Some(&shortcut))
 }
 
-/// 菜单项 + `⌘⇧J` / `Ctrl+Shift+J` — 仅文案，供旧调用。
+/// 菜单项 + `⌘ + Shift + j` / `Ctrl + Shift + j` — 仅文案，供旧调用。
 pub fn menu_item_label_accel_shift(theme: &Theme, title: &str, key: &str) -> RichText {
     let shortcut = crate::platform::accel_shift(key);
     menu_item_label(theme, title, Some(&shortcut))

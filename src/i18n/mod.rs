@@ -185,8 +185,11 @@ pub fn localize_backend_error(lang: UiLanguage, err: &str) -> String {
     if s == "Transfer cancelled by user" {
         return "传输已由用户取消".to_string();
     }
-    if s == "Transfer cancelled by user (Ctrl+C)" {
-        return "传输已由用户取消（Ctrl+C）".to_string();
+    if s.starts_with("Transfer cancelled by user (") {
+        return format!(
+            "传输已由用户取消（{}）",
+            crate::platform::terminal_interrupt_accel()
+        );
     }
     if s == "Transfer already in progress" {
         return "传输已在进行中".to_string();

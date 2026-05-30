@@ -45,9 +45,8 @@ pub struct MacMenuLabels {
     pub session_logs: &'static str,
     pub help_menu: &'static str,
     pub help_guide: &'static str,
-    pub help_spec: &'static str,
     pub help_shortcuts: &'static str,
-    pub help_open_docs: &'static str,
+    pub help_online_docs: &'static str,
     pub help_about: &'static str,
 }
 
@@ -96,12 +95,8 @@ pub fn labels(lang: UiLanguage) -> MacMenuLabels {
         session_logs: loc.tr("Browse Session Logs", "浏览会话日志"),
         help_menu: loc.tr("Help", "帮助"),
         help_guide: loc.tr("Quick Start", "快速入门"),
-        help_spec: loc.tr("Open Docs in System Viewer", "说明文档（系统打开）"),
         help_shortcuts: loc.tr("Keyboard Shortcuts", "键盘快捷键"),
-        help_open_docs: loc.tr(
-            "Reveal docs folder in file manager",
-            "在文件管理器中打开文档文件夹",
-        ),
+        help_online_docs: loc.tr("Online Documentation", "在线文档"),
         help_about: loc.tr("About Mist", "关于 Mist"),
     }
 }

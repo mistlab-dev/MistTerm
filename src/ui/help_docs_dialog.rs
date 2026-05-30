@@ -1,13 +1,12 @@
-//! 帮助弹窗：结构化排版（快速入门 / 快捷键 / 功能指南），完整文档用系统应用打开。
+//! 帮助弹窗：结构化排版（快速入门 / 快捷键 / 功能指南），外链文档在浏览器打开。
 
-use crate::platform::{docs, shortcuts};
+use crate::platform::{shortcuts, DOCS_INDEX_URL};
 use crate::ui::chrome;
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 use eframe::egui::{self, FontId, RichText, Ui};
 
 const WEBSITE_URL: &str = "https://mistlab.dev";
-const DOCS_URL: &str = "https://github.com/mistlab-dev/MistTerm/tree/main/docs";
 const GITHUB_URL: &str = "https://github.com/mistlab-dev/MistTerm";
 const GITHUB_ISSUES_URL: &str = "https://github.com/mistlab-dev/MistTerm/issues";
 const WEBSITE_TIP_EN: &str = "Visit https://mistlab.dev for the team platform and fragment marketplace.";
@@ -102,11 +101,6 @@ impl HelpDocsDialog {
     pub fn open_page(&mut self, page: HelpPage) {
         self.page = page;
         self.open = true;
-    }
-
-    pub fn open_markdown_in_system(doc_rel_path: &str) -> Result<(), String> {
-        let path: std::path::PathBuf = docs::docs_directory().join(doc_rel_path);
-        crate::platform::open_file(&path)
     }
 
     pub fn show(
@@ -327,8 +321,8 @@ fn feature_sections() -> Vec<FeatureSection> {
         FeatureSection {
             icon: "☁️",
             title: "Cloud Sync",
-            desc_en: "Sync sessions, snippets, and credentials across devices via Git. Tools → Cloud Sync to set up.",
-            desc_zh: "通过 Git 跨设备同步会话、片段和凭证。菜单「工具」→ 云端同步。",
+            desc_en: "Sync sessions, snippets, and credentials across devices via the team server. Tools → Cloud Sync to set up.",
+            desc_zh: "通过团队服务器跨设备同步会话、片段和凭证。菜单「工具」→ 云端同步。",
         },
         FeatureSection {
             icon: "🔐",
@@ -418,50 +412,6 @@ fn render_features(ui: &mut Ui, theme: &Theme, ctx: &egui::Context) {
 
 fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_message: &mut String) {
     ui.horizontal(|ui| {
-        // Open full spec button
-        if chrome::modal_secondary_icon_button(
-            ui,
-            theme,
-            crate::ui::icons::IconId::File,
-            crate::i18n::tr(ctx, "Full spec", "完整说明"),
-        )
-            .clicked()
-        {
-            match HelpDocsDialog::open_markdown_in_system("product/FUNCTIONAL_SPEC.md") {
-                Ok(()) => {
-                    *status_message = crate::i18n::tr(
-                        ctx,
-                        "Opened the doc in your default app",
-                        "已在系统默认应用中打开说明文档",
-                    )
-                    .to_string();
-                }
-                Err(e) => *status_message = e,
-            }
-        }
-
-        // Open docs folder button
-        if chrome::modal_secondary_icon_button(
-            ui,
-            theme,
-            crate::ui::icons::IconId::Folder,
-            crate::i18n::tr(ctx, "Docs index", "文档索引"),
-        )
-            .clicked()
-        {
-            match HelpDocsDialog::open_markdown_in_system("README.md") {
-                Ok(()) => {
-                    *status_message = crate::i18n::tr(
-                        ctx,
-                        "Opened the docs index in your default app",
-                        "已在系统默认应用中打开文档索引",
-                    )
-                    .to_string();
-                }
-                Err(e) => *status_message = e,
-            }
-        }
-
         if chrome::modal_secondary_icon_button(
             ui,
             theme,
@@ -469,7 +419,7 @@ fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_m
             crate::i18n::tr(ctx, "Online docs", "在线文档"),
         )
         .clicked()
-            && !crate::platform::open_url(DOCS_URL)
+            && !crate::platform::open_url(DOCS_INDEX_URL)
         {
             *status_message = crate::i18n::tr(
                 ctx,

@@ -26,7 +26,6 @@ pub mod tab_pane;
 mod terminal_keys;
 pub mod sidebar;
 pub mod dialogs;
-pub mod git_sync;
 pub mod monitor_panel;
 pub mod ai_panel;
 mod markdown_view;

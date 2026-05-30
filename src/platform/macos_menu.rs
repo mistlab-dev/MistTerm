@@ -45,9 +45,8 @@ pub enum MacMenuAction {
     CloudSync,
     SessionLogBrowser,
     HelpUserGuide,
-    HelpFunctionalSpec,
+    HelpOnlineDocs,
     HelpShortcuts,
-    HelpRevealDocsFolder,
     About,
 }
 
@@ -91,9 +90,8 @@ pub struct NativeAppMenu {
     cloud: MenuItem,
     session_logs: MenuItem,
     help_guide: MenuItem,
-    help_spec: MenuItem,
+    help_online_docs: MenuItem,
     help_keys: MenuItem,
-    help_folder: MenuItem,
     help_about: MenuItem,
     last_lang: Option<UiLanguage>,
 }
@@ -297,16 +295,14 @@ impl NativeAppMenu {
         // ── 帮助 ──
         let help = Submenu::new(l.help_menu, true);
         let help_guide = MenuItem::with_id("mistterm.help.guide", l.help_guide, true, None);
-        let help_spec = MenuItem::with_id("mistterm.help.spec", l.help_spec, true, None);
+        let help_online_docs =
+            MenuItem::with_id("mistterm.help.online_docs", l.help_online_docs, true, None);
         let help_keys = MenuItem::with_id("mistterm.help.shortcuts", l.help_shortcuts, true, None);
-        let help_folder =
-            MenuItem::with_id("mistterm.help.open_docs", l.help_open_docs, true, None);
         let help_about = MenuItem::with_id("mistterm.help.about", l.help_about, true, None);
         help.append(&help_guide)?;
-        help.append(&help_spec)?;
         help.append(&help_keys)?;
         help.append(&PredefinedMenuItem::separator())?;
-        help.append(&help_folder)?;
+        help.append(&help_online_docs)?;
         help.append(&PredefinedMenuItem::separator())?;
         help.append(&help_about)?;
 
@@ -361,9 +357,8 @@ impl NativeAppMenu {
             cloud,
             session_logs,
             help_guide,
-            help_spec,
+            help_online_docs,
             help_keys,
-            help_folder,
             help_about,
             last_lang: Some(lang),
         })
@@ -403,9 +398,8 @@ impl NativeAppMenu {
         let _ = self.session_logs.set_text(l.session_logs);
         let _ = self._help_menu.set_text(l.help_menu);
         let _ = self.help_guide.set_text(l.help_guide);
-        let _ = self.help_spec.set_text(l.help_spec);
+        let _ = self.help_online_docs.set_text(l.help_online_docs);
         let _ = self.help_keys.set_text(l.help_shortcuts);
-        let _ = self.help_folder.set_text(l.help_open_docs);
         let _ = self.help_about.set_text(l.help_about);
     }
 
@@ -509,9 +503,8 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.team.cloud" | "mistterm.tools.cloud" => Some(MacMenuAction::CloudSync),
         "mistterm.tools.session_logs" => Some(MacMenuAction::SessionLogBrowser),
         "mistterm.help.guide" => Some(MacMenuAction::HelpUserGuide),
-        "mistterm.help.spec" => Some(MacMenuAction::HelpFunctionalSpec),
+        "mistterm.help.online_docs" => Some(MacMenuAction::HelpOnlineDocs),
         "mistterm.help.shortcuts" => Some(MacMenuAction::HelpShortcuts),
-        "mistterm.help.open_docs" => Some(MacMenuAction::HelpRevealDocsFolder),
         _ if id.starts_with("mistterm.view.theme.") => {
             id.strip_prefix("mistterm.view.theme.")
                 .and_then(|n| n.parse().ok())

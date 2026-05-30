@@ -37,7 +37,6 @@ use crate::ui::vault_form::VaultSecretForm;
 use crate::ui::ssh_config_import_dialog::SshConfigImportDialog;
 use crate::ui::sidebar::Sidebar;
 use crate::ui::terminal::TerminalView;
-use crate::ui::git_sync::GitSyncPanel;
 use crate::ui::monitor_panel::MonitorPanel;
 use crate::ui::ai_panel::AiPanel;
 use crate::ui::sftp_panel::SftpPanel;
@@ -141,31 +140,28 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {}\n\
              {}\n\
              {}\n\
-             {}1–9 — switch to tab N\n\
-             {}Tab — next tab (Shift reverses)\n\
+             {} — switch to tab N\n\
+             {} — next tab (Shift reverses)\n\
              {}\n\
              {}\n\
              {}\n\
-             {}F — search in terminal viewport\n\
-             {}, — Preferences\n\
-             {}H — About & this cheatsheet\n\
+             {} — search in terminal viewport\n\
+             {} — Preferences\n\
+             {} — About & this cheatsheet\n\
              {} — command history (in terminal)",
             s::primary_modifier_label(),
             s::help_line("N", "New session"),
             s::help_line("E", "Edit selected session"),
             s::help_line("T", "New terminal tab"),
             s::help_line("W", "Close current tab"),
-            s::primary_modifier_label(),
-            s::primary_modifier_label(),
+            s::accel_literal("1–9"),
+            s::accel_literal("Tab"),
             s::help_line("J", "Focus connection search"),
             s::help_line("K", "Focus snippet search"),
-            format!(
-                "{} — Quick snippet picker",
-                s::accel_shift("J")
-            ),
-            s::primary_modifier_label(),
-            s::primary_modifier_label(),
-            s::primary_modifier_label(),
+            format!("{} — Quick snippet picker", s::accel_shift("J")),
+            s::accel("F"),
+            s::accel_literal(","),
+            s::accel("H"),
             s::terminal_history_accel(),
         )
     }
@@ -177,28 +173,28 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {}\n\
              {}\n\
              {}\n\
-             {}1–9 — 切换第 N 个标签\n\
-             {}Tab — 下一标签；加 Shift 为上一标签\n\
+             {} — 切换第 N 个标签\n\
+             {} — 下一标签；加 Shift 为上一标签\n\
              {}\n\
              {}\n\
              {}\n\
-             {}F — 终端内搜索\n\
-             {}, — 偏好设置\n\
-             {}H — 关于与本说明\n\
+             {} — 终端内搜索\n\
+             {} — 偏好设置\n\
+             {} — 关于与本说明\n\
              {} — 命令历史（终端内）",
             s::primary_modifier_label(),
             s::help_line("N", "新建会话"),
             s::help_line("E", "编辑所选会话"),
             s::help_line("T", "新终端标签"),
             s::help_line("W", "关闭当前标签"),
-            s::primary_modifier_label(),
-            s::primary_modifier_label(),
+            s::accel_literal("1–9"),
+            s::accel_literal("Tab"),
             s::help_line("J", "聚焦连接搜索"),
             s::help_line("K", "聚焦片段搜索"),
             s::accel_shift("J").to_owned() + " — 快速片段选择器",
-            s::primary_modifier_label(),
-            s::primary_modifier_label(),
-            s::primary_modifier_label(),
+            s::accel("F"),
+            s::accel_literal(","),
+            s::accel("H"),
             s::terminal_history_accel(),
         )
     }
@@ -376,7 +372,6 @@ pub struct MistTermApp {
     fragment_panel_slot_rect: Option<egui::Rect>,
     /// 本帧任意右侧 dock（片段/SFTP/监控等）与主区交界的最左 **屏幕 x**（多栏时取 min，即贴主区的那条边）
     right_dock_outer_left_x: Option<f32>,
-    show_git_sync_panel: bool,  // Git 同步面板
     show_monitor_panel: bool,   // 监控面板
     show_ai_panel: bool,
     show_ai_settings_dialog: bool,
@@ -444,7 +439,6 @@ pub struct MistTermApp {
     /// 快速片段选择器
     quick_selector: FragmentQuickSelector,
 
-    git_sync_panel: GitSyncPanel,
     monitor_panel: MonitorPanel,
     ai_panel: AiPanel,
     sftp_panel: SftpPanel,
@@ -628,7 +622,6 @@ impl MistTermApp {
     /// 关闭所有右侧 `SidePanel`（不含居中 `Window` 如片段库弹窗）
     fn close_all_right_dock_panels(&mut self) {
         self.show_fragment_panel = false;
-        self.show_git_sync_panel = false;
         self.show_monitor_panel = false;
         self.show_ai_panel = false;
         self.show_sftp_panel = false;
@@ -793,7 +786,6 @@ impl MistTermApp {
             show_fragment_panel: false,
             fragment_panel_slot_rect: None,
             right_dock_outer_left_x: None,
-            show_git_sync_panel: false,
             show_monitor_panel: false,
             show_ai_panel: false,
             show_ai_settings_dialog: false,
@@ -806,7 +798,6 @@ impl MistTermApp {
             show_sftp_panel: false,
             sftp_last_tab: None,
             monitor_last_tab: None,
-            git_sync_panel: GitSyncPanel::new(),
             monitor_panel: MonitorPanel::new(),
             ai_panel: AiPanel::new(),
             sftp_panel: SftpPanel::new(),
@@ -1631,7 +1622,6 @@ impl MistTermApp {
             || self.variable_dialog.open
             || self.fragment_library.open
             || self.show_terminal_search
-            || self.git_sync_panel.is_clone_dialog_open()
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
             || self.cmd_audit_confirm.is_some()
@@ -1997,7 +1987,6 @@ impl MistTermApp {
             || self.session_log_dialog.open
             || self.audit_log_dialog.open
             || self.help_docs_dialog.open
-            || self.git_sync_panel.is_clone_dialog_open()
             || self.team_fragment_editor.open
             || self.team_fragment_conflict.is_some()
             || self.team_members_dialog.open
@@ -2854,7 +2843,7 @@ impl MistTermApp {
                     theme,
                     crate::ui::icons::IconId::ChevronLeft,
                 )
-                .on_hover_text(crate::i18n::tr(&ctx, "Previous (Shift+F3)", "上一个 (Shift+F3)"))
+                .on_hover_text(crate::i18n::tr(&ctx, "Previous (Shift + F3)", "上一个 (Shift + F3)"))
                 .clicked()
                 {
                     self.terminal_search_step(-1);
@@ -4116,102 +4105,6 @@ impl MistTermApp {
         self.insert_fragment_at_tab_index(ctx, idx, Some(id), expanded);
     }
 
-    /// 注册 Git 同步栏槽位（须在 Central 之前）。正文见 [`show_git_sync_panel_foreground`]。
-    fn show_git_sync_panel(
-        &mut self,
-        ctx: &egui::Context,
-        theme: &crate::ui::theme::Theme,
-        dock_col_w: f32,
-    ) {
-        if !self.show_git_sync_panel {
-            self.git_sync_panel.clear_panel_slot_rect();
-            return;
-        }
-        let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let git_panel = egui::SidePanel::right("git_sync_panel")
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
-            .resizable(true)
-            .show_separator_line(false)
-            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-            .show(ctx, |ui| {
-                crate::ui::chrome::paint_right_dock_left_gap(ui, theme);
-                self.git_sync_panel.set_panel_slot_rect(ui.max_rect());
-                let h = ui.available_height().max(1.0);
-                let w = ui.available_width().max(1.0);
-                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-            });
-        if let Some(slot) = self.git_sync_panel.panel_slot_rect() {
-            layout_util::record_right_dock_panel_rect(&slot, &mut self.right_dock_outer_left_x);
-        } else {
-            layout_util::record_right_dock_panel(&git_panel.response, &mut self.right_dock_outer_left_x);
-        }
-    }
-
-    /// Central 之后绘制 Git 同步正文（避免被 CentralPanel 盖住）。
-    pub(crate) fn show_git_sync_panel_foreground(
-        &mut self,
-        ctx: &egui::Context,
-        theme: &crate::ui::theme::Theme,
-    ) {
-        if !self.show_git_sync_panel {
-            return;
-        }
-        let screen = ctx.screen_rect();
-        let dock_inset = theme.spacing_right_dock_screen_inset();
-        let Some(slot) = layout_util::right_dock_foreground_slot(
-            self.git_sync_panel.panel_slot_rect(),
-            ctx,
-            "git_sync_panel",
-            layout_util::SidePanelProfile::GitSync,
-            None,
-            dock_inset,
-        ) else {
-            return;
-        };
-        let geom = crate::ui::chrome::prepare_right_dock_foreground_geom(slot, screen, theme);
-        let layer_id = crate::ui::chrome::right_dock_foreground_layer_id("mistterm_git_sync_fg");
-        crate::ui::chrome::paint_right_dock_foreground_shell(ctx, layer_id, geom.paint, theme);
-        let sessions = self.session_manager.list_sessions().to_vec();
-        let mut close_git = false;
-        crate::ui::chrome::show_right_dock_foreground_body(
-            "mistterm_git_sync_fg",
-            ctx,
-            &geom,
-            layout_util::SidePanelProfile::GitSync,
-            |ui, panel_w| {
-                ui.set_max_width(panel_w);
-                self.git_sync_panel.show(ui, theme, &mut close_git, &sessions);
-            },
-        );
-        if close_git {
-            self.show_git_sync_panel = false;
-        }
-        if self.git_sync_panel.take_pending_sessions_merge() {
-            let path = self.git_sync_panel.sessions_json_path();
-            match self.session_manager.merge_sessions_from_git_path(&path) {
-                Ok(n) => {
-                    self.status_message = format!(
-                        "{} ({})",
-                        crate::i18n::tr(
-                            ctx,
-                            "Merged sessions from Git pull",
-                            "已从 Git 拉取合并会话",
-                        ),
-                        n
-                    );
-                }
-                Err(e) => {
-                    self.status_message = status_message_wrap_error(format!(
-                        "{}: {e}",
-                        crate::i18n::tr(ctx, "Git sessions merge failed", "Git 会话合并失败"),
-                    ));
-                }
-            }
-        }
-    }
-
     #[allow(dead_code)]
     fn title_bar_connection(&self, ctx: &egui::Context) -> Option<crate::ui::chrome::TitleBarConnection> {
         let terminal = self.current_terminal()?;
@@ -4584,24 +4477,6 @@ impl MistTermApp {
                                 if crate::ui::chrome::status_tool_icon(
                                     ui,
                                     &theme,
-                                    crate::ui::icons::IconId::GitBranch,
-                                )
-                                .on_hover_text(crate::i18n::tr(
-                                    ctx,
-                                    "Git sync · sessions/config repo",
-                                    "Git 同步 · 会话/配置仓库",
-                                ))
-                                .clicked()
-                                {
-                                    if self.show_git_sync_panel {
-                                        self.show_git_sync_panel = false;
-                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                        self.show_git_sync_panel = true;
-                                    }
-                                }
-                                if crate::ui::chrome::status_tool_icon(
-                                    ui,
-                                    &theme,
                                     crate::ui::icons::IconId::Folder,
                                 )
                                 .on_hover_text(crate::i18n::tr(
@@ -4762,34 +4637,18 @@ impl MistTermApp {
             MacMenuAction::HelpUserGuide => {
                 self.help_docs_dialog.open_page(HelpPage::QuickStart);
             }
-            MacMenuAction::HelpFunctionalSpec => {
-                match HelpDocsDialog::open_markdown_in_system("product/FUNCTIONAL_SPEC.md") {
-                    Ok(()) => {
-                        self.status_message = crate::i18n::tr(
-                            ctx,
-                            "Opened the documentation in your default application.",
-                            "已在系统默认应用中打开说明文档",
-                        )
-                        .to_string()
-                    }
-                    Err(e) => self.status_message = e,
+            MacMenuAction::HelpOnlineDocs => {
+                if !crate::platform::open_url(crate::platform::DOCS_INDEX_URL) {
+                    self.status_message = crate::i18n::tr(
+                        ctx,
+                        "Failed to open browser",
+                        "无法打开浏览器",
+                    )
+                    .to_string();
                 }
             }
             MacMenuAction::HelpShortcuts => {
                 self.help_docs_dialog.open_page(HelpPage::Shortcuts);
-            }
-            MacMenuAction::HelpRevealDocsFolder => {
-                if crate::platform::docs::reveal_docs_directory() {
-                    let p = crate::platform::reveal_docs_folder_success_pair();
-                    self.status_message = crate::i18n::tr(ctx, p.0, p.1).to_string();
-                } else {
-                    self.status_message = crate::i18n::tr(
-                        ctx,
-                        "docs folder not found (expects repo root when developing).",
-                        "未找到 docs 目录（开发构建时位于仓库根目录）",
-                    )
-                    .to_string();
-                }
             }
             MacMenuAction::About => self.show_about_dialog = true,
         }
@@ -5773,35 +5632,17 @@ mod menu {
                     self.help_docs_dialog.open_page(HelpPage::QuickStart);
                     ui.close_menu();
                 }
-                if crate::ui::chrome::popup_menu_button(ui, theme, l.help_spec).clicked()
-                {
-                    match HelpDocsDialog::open_markdown_in_system("product/FUNCTIONAL_SPEC.md") {
-                        Ok(()) => {
-                            self.status_message = crate::i18n::tr(
-                                ctx,
-                                "Opened the documentation in your default application.",
-                                "已在系统默认应用中打开说明文档",
-                            )
-                            .to_string()
-                        }
-                        Err(e) => self.status_message = e,
-                    }
-                    ui.close_menu();
-                }
                 if crate::ui::chrome::popup_menu_button(ui, theme, l.help_shortcuts).clicked() {
                     self.help_docs_dialog.open_page(HelpPage::Shortcuts);
                     ui.close_menu();
                 }
                 ui.separator();
-                if crate::ui::chrome::popup_menu_button(ui, theme, l.help_open_docs).clicked() {
-                    if crate::platform::docs::reveal_docs_directory() {
-                        let p = crate::platform::reveal_docs_folder_success_pair();
-                        self.status_message = crate::i18n::tr(ctx, p.0, p.1).to_string();
-                    } else {
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.help_online_docs).clicked() {
+                    if !crate::platform::open_url(crate::platform::DOCS_INDEX_URL) {
                         self.status_message = crate::i18n::tr(
                             ctx,
-                            "docs folder not found.",
-                            "未找到 docs 目录",
+                            "Failed to open browser",
+                            "无法打开浏览器",
                         )
                         .to_string();
                     }
