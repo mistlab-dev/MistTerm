@@ -1167,9 +1167,9 @@ impl MistTermApp {
                 "一个现代化 SSH 终端工具",
             );
             let version_line = format!(
-                "{} {}",
+                "{} v{}",
                 crate::i18n::tr(ctx, "Version:", "版本："),
-                "v0.1.0"
+                env!("CARGO_PKG_VERSION")
             );
             let shortcuts = mistterm_functional_spec_shortcuts(ctx);
             let modal_sz = layout_util::modal_about_size_for_content(
