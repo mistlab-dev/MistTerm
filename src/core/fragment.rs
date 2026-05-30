@@ -792,18 +792,29 @@ mod tests {
     #[test]
     fn test_fragment_manager() {
         let mut manager = FragmentManager::new();
-        
-        // 检查默认片段
+
+        manager.fragments.push(FragmentStats::new(
+            "test-1".to_string(),
+            "Docker PS".to_string(),
+            "docker ps".to_string(),
+            "docker".to_string(),
+        ));
+        manager.fragments.push(FragmentStats::new(
+            "test-2".to_string(),
+            "Docker Images".to_string(),
+            "docker images".to_string(),
+            "docker".to_string(),
+        ));
+        manager.rebuild_id_map();
+
         assert!(!manager.get_all().is_empty());
-        
-        // 获取分类
+
         let categories = manager.get_categories();
         assert!(!categories.is_empty());
-        
-        // 记录使用 - 先克隆 ID，避免借用冲突
+
         let first_id = manager.get_all().first().unwrap().id.clone();
         manager.record_usage(&first_id, true, 1000);
-        
+
         let first_updated = manager.get_by_id(&first_id).unwrap();
         assert_eq!(first_updated.usage_count, 1);
         assert_eq!(first_updated.success_count, 1);
@@ -831,11 +842,25 @@ mod tests {
 
     #[test]
     fn test_fragment_manager_search() {
-        let manager = FragmentManager::new();
-        
+        let mut manager = FragmentManager::new();
+
+        manager.fragments.push(FragmentStats::new(
+            "docker-1".to_string(),
+            "Docker PS".to_string(),
+            "docker ps".to_string(),
+            "containers".to_string(),
+        ));
+        manager.fragments.push(FragmentStats::new(
+            "docker-2".to_string(),
+            "Docker Images".to_string(),
+            "docker images".to_string(),
+            "images".to_string(),
+        ));
+        manager.rebuild_id_map();
+
         let results = manager.search("docker");
         assert!(!results.is_empty());
-        
+
         for frag in results {
             let found = frag.title.to_lowercase().contains("docker")
                 || frag.command.to_lowercase().contains("docker")
