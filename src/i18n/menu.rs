@@ -47,6 +47,7 @@ pub struct MacMenuLabels {
     pub help_guide: &'static str,
     pub help_shortcuts: &'static str,
     pub help_online_docs: &'static str,
+    pub help_report_issue: &'static str,
     pub help_about: &'static str,
 }
 
@@ -97,6 +98,7 @@ pub fn labels(lang: UiLanguage) -> MacMenuLabels {
         help_guide: loc.tr("Quick Start", "快速入门"),
         help_shortcuts: loc.tr("Keyboard Shortcuts", "键盘快捷键"),
         help_online_docs: loc.tr("Online Documentation", "在线文档"),
+        help_report_issue: loc.tr("Report an Issue", "问题反馈"),
         help_about: loc.tr("About Mist", "关于 Mist"),
     }
 }

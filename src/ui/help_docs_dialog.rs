@@ -8,7 +8,6 @@ use eframe::egui::{self, FontId, RichText, Ui};
 
 const WEBSITE_URL: &str = "https://mistlab.dev";
 const GITHUB_URL: &str = "https://github.com/mistlab-dev/MistTerm";
-const GITHUB_ISSUES_URL: &str = "https://github.com/mistlab-dev/MistTerm/issues";
 const WEBSITE_TIP_EN: &str = "Visit https://mistlab.dev for the team platform and fragment marketplace.";
 const WEBSITE_TIP_ZH: &str = "访问 https://mistlab.dev 使用团队平台与片段市场。";
 const LINKS_TIP_EN: &str = "Docs: https://github.com/mistlab-dev/MistTerm/tree/main/docs\nIssues: https://github.com/mistlab-dev/MistTerm/issues";
@@ -433,17 +432,19 @@ fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_m
             ui,
             theme,
             crate::ui::icons::IconId::Alert,
-            crate::i18n::tr(ctx, "Issues", "问题反馈"),
+            crate::i18n::tr(ctx, "Report issue", "问题反馈"),
         )
         .clicked()
-            && !crate::platform::open_url(GITHUB_ISSUES_URL)
         {
-            *status_message = crate::i18n::tr(
-                ctx,
-                "Failed to open browser",
-                "无法打开浏览器",
-            )
-            .to_string();
+            let url = crate::platform::github_new_issue_url(env!("CARGO_PKG_VERSION"));
+            if !crate::platform::open_url(&url) {
+                *status_message = crate::i18n::tr(
+                    ctx,
+                    "Failed to open browser",
+                    "无法打开浏览器",
+                )
+                .to_string();
+            }
         }
 
         // Website link

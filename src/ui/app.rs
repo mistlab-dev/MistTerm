@@ -3011,6 +3011,18 @@ impl MistTermApp {
         }
     }
 
+    pub(crate) fn open_report_issue(&mut self, ctx: &egui::Context) {
+        let url = crate::platform::github_new_issue_url(env!("CARGO_PKG_VERSION"));
+        if !crate::platform::open_url(&url) {
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "Failed to open browser",
+                "无法打开浏览器",
+            )
+            .to_string();
+        }
+    }
+
     pub(crate) fn menu_open_session_log_browser(&mut self, ctx: &egui::Context) {
         let Some(idx) = self.active_tab else {
             self.status_message = crate::i18n::tr(ctx, "Open a terminal tab first", "请先打开终端标签")
@@ -4650,6 +4662,9 @@ impl MistTermApp {
             MacMenuAction::HelpShortcuts => {
                 self.help_docs_dialog.open_page(HelpPage::Shortcuts);
             }
+            MacMenuAction::HelpReportIssue => {
+                self.open_report_issue(ctx);
+            }
             MacMenuAction::About => self.show_about_dialog = true,
         }
     }
@@ -5646,6 +5661,10 @@ mod menu {
                         )
                         .to_string();
                     }
+                    ui.close_menu();
+                }
+                if crate::ui::chrome::popup_menu_button(ui, theme, l.help_report_issue).clicked() {
+                    self.open_report_issue(ctx);
                     ui.close_menu();
                 }
                 ui.separator();

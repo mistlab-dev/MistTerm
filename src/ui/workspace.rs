@@ -1228,6 +1228,17 @@ impl MistTermApp {
                                             }
                                         });
                                 });
+                            ui.add_space(theme.spacing_md());
+                            if crate::ui::chrome::modal_secondary_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Alert,
+                                crate::i18n::tr(ctx, "Report an issue", "问题反馈"),
+                            )
+                            .clicked()
+                            {
+                                self.open_report_issue(ctx);
+                            }
                     });
                 });
             self.show_about_dialog = open && !should_close;

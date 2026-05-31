@@ -8,7 +8,7 @@ description = "A modern SSH terminal with lrzsz support"
 homepage = "https://mistlab.dev"
 documentation = "https://github.com/mistlab-dev/MistTerm/tree/main/docs"
 repository = "https://github.com/mistlab-dev/MistTerm"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 
 [features]
 # 让 ssh2 / openssl-sys 自带源码编译 OpenSSL，便于 CI 跨平台构建（macOS universal 等）。

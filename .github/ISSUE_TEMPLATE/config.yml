@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/mistlab-dev/MistTerm/tree/main/docs
+    about: Install guide, features, and troubleshooting docs
+  - name: MistLab Website
+    url: https://mistlab.dev
+    about: Team platform and fragment marketplace

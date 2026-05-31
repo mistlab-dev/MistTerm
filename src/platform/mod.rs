@@ -13,7 +13,7 @@ mod macos_ime;
 #[cfg(target_os = "macos")]
 pub mod macos_menu;
 
-pub use docs::DOCS_INDEX_URL;
+pub use docs::{github_feature_request_url, github_new_issue_url, DOCS_INDEX_URL, GITHUB_ISSUES_URL};
 pub use fonts::{cjk_font_loaded, configure_egui_fonts};
 pub use paths::{default_ssh_config_path, home_dir};
 pub use shell::{open_file, open_url, reveal_directory};

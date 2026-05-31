@@ -1,0 +1,80 @@
+name: Bug Report
+description: Report something that is broken or behaves unexpectedly
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug.
+
+        You can also use **Help → Report an Issue** in MistTerm to open this form with your version prefilled.
+
+        也可在 MistTerm 内通过 **帮助 → 问题反馈** 打开此页面（会预填版本号）。
+
+  - type: input
+    id: version
+    attributes:
+      label: MistTerm version
+      description: Help → About, or the window title
+      placeholder: "e.g. 0.2.3"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "e.g. Windows 11, macOS 14.5, Ubuntu 24.04"
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: What did you do before the problem appeared?
+      placeholder: |
+        1. Open MistTerm
+        2. Connect to ...
+        3. Click ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Screenshots / logs
+      description: Paste terminal output, status bar messages, or attach screenshots
+      render: shell
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Terminal / SSH
+        - SFTP / file transfer
+        - ZMODEM
+        - Snippets / fragments
+        - Team / cloud sync
+        - AI assistant
+        - UI / theme
+        - Other
+    validations:
+      required: true

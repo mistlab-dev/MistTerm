@@ -4,6 +4,10 @@ Thanks for your interest! We welcome bug reports, feature requests, and pull req
 
 ## Reporting Issues
 
+**In the app:** **Help → Report an Issue** (帮助 → 问题反馈) opens GitHub with the bug report template and your version in the title.
+
+**On GitHub:** [New issue](https://github.com/mistlab-dev/MistTerm/issues/new/choose) — pick **Bug Report** or **Feature Request**.
+
 **Bug reports** should include:
 
 - OS and MistTerm version (`Help → About` or check window title)
@@ -72,4 +76,4 @@ Example: `feat: add scrollback buffer search`
 
 ## License
 
-By contributing, you agree that your code will be licensed under the [MIT License](LICENSE).
+By contributing, you agree that your code will be licensed under the [GNU Affero General Public License v3.0 or later](LICENSE) (AGPL-3.0-or-later).
