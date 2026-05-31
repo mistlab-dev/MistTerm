@@ -157,7 +157,11 @@ impl Sidebar {
                                     collapse_clicked = true;
                                 }
                                 ui.add_space(theme.spacing_panel_gap());
-                                if crate::ui::chrome::panel_header_new_button(ui, theme)
+                                if crate::ui::chrome::panel_header_new_button_with_label(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(&ctx, "New", "新建"),
+                                )
                                     .on_hover_text(format!(
                                         "{} · {}",
                                         crate::i18n::tr(&ctx, "New session", "新建会话"),

@@ -121,36 +121,52 @@ pub fn sidebar_header_icon_button(ui: &mut Ui, theme: &Theme, id: IconId, color:
 
 /// 面板标题栏「＋」新建（连接栏 / 命令片段库统一：小方钮 + 浅紫底）
 pub fn panel_header_new_button(ui: &mut Ui, theme: &Theme) -> Response {
-    let size = egui::vec2(
-        theme.size_sidebar_header_icon(),
-        theme.size_sidebar_header_icon(),
-    );
-    let rounding = theme.radius_list_item();
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = response.hovered();
-    let pressed = response.is_pointer_button_down_on();
-    if hovered || pressed {
-        ui.ctx().request_repaint();
+    panel_header_new_button_with_label(ui, theme, "")
+}
+
+/// 带可见标签的新建按钮；`label` 为空时仅显示「＋」。
+pub fn panel_header_new_button_with_label(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
+    if label.is_empty() {
+        let size = egui::vec2(
+            theme.size_sidebar_header_icon(),
+            theme.size_sidebar_header_icon(),
+        );
+        let rounding = theme.radius_list_item();
+        let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+        let hovered = response.hovered();
+        let pressed = response.is_pointer_button_down_on();
+        if hovered || pressed {
+            ui.ctx().request_repaint();
+        }
+        let fill = if pressed {
+            theme.accent_alpha(64)
+        } else if hovered {
+            theme.accent_alpha(51)
+        } else {
+            theme.accent_alpha(38)
+        };
+        ui.painter().rect(rect, rounding, fill, egui::Stroke::NONE);
+        icons::paint_icon(
+            ui,
+            rect,
+            IconId::Plus,
+            theme.accent_color(),
+            theme.font_size_sidebar_icon_glyph(),
+        );
+        if hovered {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+        return response;
     }
-    let fill = if pressed {
-        theme.accent_alpha(64)
-    } else if hovered {
-        theme.accent_alpha(51)
-    } else {
-        theme.accent_alpha(38)
-    };
-    ui.painter().rect(rect, rounding, fill, egui::Stroke::NONE);
-    icons::paint_icon(
+    paint_control_button(
         ui,
-        rect,
-        IconId::Plus,
-        theme.accent_color(),
-        theme.font_size_sidebar_icon_glyph(),
-    );
-    if hovered {
-        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-    }
-    response
+        theme,
+        label,
+        Some(IconId::Plus),
+        ControlButtonVariant::Primary,
+        theme.size_panel_header_btn_min_w(),
+        true,
+    )
 }
 
 /// [`panel_header_new_button`] 别名（侧栏）
@@ -1305,6 +1321,66 @@ pub fn panel_toolbar_icon_button(
     .on_hover_text(tooltip)
 }
 
+/// 标题行 / 工具栏：图标 + 可见文字。
+pub fn panel_toolbar_button_with_icon(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+) -> Response {
+    paint_control_button(
+        ui,
+        theme,
+        label,
+        Some(icon),
+        ControlButtonVariant::Secondary,
+        theme.size_panel_header_btn_min_w(),
+        true,
+    )
+}
+
+/// 工具栏图标按钮或采集中态（带可见标签）。
+pub fn panel_toolbar_button_with_icon_or_busy(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+    busy_label: &str,
+    busy: bool,
+) -> Response {
+    if !busy {
+        return panel_toolbar_button_with_icon(ui, theme, icon, label);
+    }
+    let size = control_button_size(
+        ui,
+        theme,
+        busy_label,
+        true,
+        theme.size_panel_header_btn_min_w(),
+    );
+    let rounding = theme.radius_list_item();
+    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+    ui.painter().rect(
+        rect,
+        rounding,
+        theme.color_panel_toolbar_btn_fill(),
+        theme.divider_stroke(),
+    );
+    let mut child = ui.child_ui(
+        rect,
+        egui::Layout::left_to_right(egui::Align::Center),
+    );
+    child.add_space(6.0);
+    child.add(egui::Spinner::new());
+    child.add_space(4.0);
+    child.label(
+        RichText::new(busy_label)
+            .size(theme.font_size_control_btn())
+            .color(theme.text_tertiary()),
+    );
+    response.on_hover_text(busy_label)
+}
+
 /// 标题行主操作（accent 底，纯图标）。
 pub fn panel_toolbar_primary_icon_button(
     ui: &mut Ui,
@@ -1312,15 +1388,15 @@ pub fn panel_toolbar_primary_icon_button(
     icon: IconId,
     tooltip: &str,
 ) -> Response {
-    paint_icon_only_button(
+    paint_control_button(
         ui,
         theme,
-        icon,
+        tooltip,
+        Some(icon),
         ControlButtonVariant::Primary,
         theme.size_panel_header_btn_min_w(),
         true,
     )
-    .on_hover_text(tooltip)
 }
 
 /// 工具栏图标按钮或采集中态：槽位尺寸与 [`panel_toolbar_icon_button`] 一致，避免刷新时行高跳动。
@@ -1585,7 +1661,8 @@ pub fn dock_panel_title_bar(
             if dock_panel_title_close_trailing(ui, theme, close_tooltip) {
                 out.closed = true;
             }
-            if panel_header_new_button(ui, theme)
+            let new_label = crate::i18n::tr(ui.ctx(), "New", "新建");
+            if panel_header_new_button_with_label(ui, theme, new_label)
                 .on_hover_text(new_tooltip)
                 .clicked()
             {
@@ -2513,6 +2590,62 @@ pub fn status_tool_icon(ui: &mut Ui, theme: &Theme, id: IconId) -> Response {
     .inner
 }
 
+/// 状态栏工具按钮：图标 + 短标签（比纯图标更易识别）。
+pub fn status_tool_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: IconId,
+    label: &str,
+    tooltip: &str,
+) -> Response {
+    let bar_h = status_bar_content_height(theme);
+    let icon_px = theme.size_icon_glyph().max(18.0);
+    let font = egui::FontId::proportional(theme.font_size_status_bar());
+    let idle = theme.color_toolbar_glyph_idle();
+    let text_w = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font.clone(), idle)
+        .size()
+        .x;
+    let pad_x = 6.0;
+    let w = pad_x + icon_px + 4.0 + text_w + pad_x;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(w, bar_h), Sense::click());
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    let color = if hovered || pressed {
+        theme.color_toolbar_glyph_hover()
+    } else {
+        idle
+    };
+    if hovered || pressed {
+        ui.painter().rect_filled(
+            rect,
+            theme.radius_list_item(),
+            theme.accent_alpha(if pressed { 45 } else { 25 }),
+        );
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    let cy = rect.center().y;
+    icons::paint_icon(
+        ui,
+        egui::Rect::from_center_size(
+            egui::pos2(rect.left() + pad_x + icon_px * 0.5, cy),
+            egui::vec2(icon_px, icon_px),
+        ),
+        id,
+        color,
+        icon_px,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + pad_x + icon_px + 4.0, cy),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font,
+        color,
+    );
+    response.on_hover_text(tooltip)
+}
+
 /// 状态栏带小图标的文字 chip（如自动重连）
 pub fn status_icon_chip(ui: &mut Ui, theme: &Theme, id: IconId, text: &str) {
     theme.frame_status_chip().show(ui, |ui| {
@@ -2855,6 +2988,74 @@ pub fn modal_primary_icon_button_widget<'a>(
     }
 }
 
+/// 弹窗底栏主操作：图标 + 可见文字。
+pub fn modal_primary_button_with_icon_ex(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+    can_activate: bool,
+) -> Response {
+    paint_control_button(
+        ui,
+        theme,
+        label,
+        Some(icon),
+        ControlButtonVariant::Primary,
+        theme.size_modal_footer_btn_min_w_primary(),
+        can_activate,
+    )
+}
+
+pub fn modal_primary_button_with_icon(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+) -> Response {
+    modal_primary_button_with_icon_ex(ui, theme, icon, label, true)
+}
+
+/// 弹窗底栏主操作（图标 + 文字），用于 `ui.add(...)`。
+pub struct ModalPrimaryButtonWithIcon<'a> {
+    theme: &'a Theme,
+    icon: IconId,
+    label: &'a str,
+    can_activate: bool,
+}
+
+impl Widget for ModalPrimaryButtonWithIcon<'_> {
+    fn ui(self, ui: &mut Ui) -> Response {
+        modal_primary_button_with_icon_ex(
+            ui,
+            self.theme,
+            self.icon,
+            self.label,
+            self.can_activate,
+        )
+    }
+}
+
+impl ModalPrimaryButtonWithIcon<'_> {
+    pub fn can_activate(mut self, can: bool) -> Self {
+        self.can_activate = can;
+        self
+    }
+}
+
+pub fn modal_primary_button_with_icon_widget<'a>(
+    theme: &'a Theme,
+    icon: IconId,
+    label: &'a str,
+) -> ModalPrimaryButtonWithIcon<'a> {
+    ModalPrimaryButtonWithIcon {
+        theme,
+        icon,
+        label,
+        can_activate: true,
+    }
+}
+
 pub fn modal_danger_icon_button(ui: &mut Ui, theme: &Theme, icon: IconId, tooltip: &str) -> Response {
     paint_icon_only_button(
         ui,
@@ -2869,7 +3070,7 @@ pub fn modal_danger_icon_button(ui: &mut Ui, theme: &Theme, icon: IconId, toolti
 
 /// 面板 / dock 内行内次要按钮（与排序芯片、弹窗「取消」同族）
 pub fn panel_action_icon_button(ui: &mut Ui, theme: &Theme, icon: IconId, tooltip: &str) -> Response {
-    panel_action_icon_button_ex(ui, theme, icon, tooltip, true)
+    panel_action_button_with_icon_ex(ui, theme, icon, tooltip, true)
 }
 
 pub fn panel_action_icon_button_ex(
@@ -2879,19 +3080,11 @@ pub fn panel_action_icon_button_ex(
     tooltip: &str,
     enabled: bool,
 ) -> Response {
-    paint_icon_only_button(
-        ui,
-        theme,
-        icon,
-        ControlButtonVariant::Secondary,
-        theme.size_control_btn_min_w(),
-        enabled,
-    )
-    .on_hover_text(tooltip)
+    panel_action_button_with_icon_ex(ui, theme, icon, tooltip, enabled)
 }
 
 pub fn panel_action_primary_icon_button(ui: &mut Ui, theme: &Theme, icon: IconId, tooltip: &str) -> Response {
-    panel_action_primary_icon_button_ex(ui, theme, icon, tooltip, true)
+    panel_action_primary_button_with_icon_ex(ui, theme, icon, tooltip, true)
 }
 
 pub fn panel_action_primary_icon_button_ex(
@@ -2901,15 +3094,7 @@ pub fn panel_action_primary_icon_button_ex(
     tooltip: &str,
     enabled: bool,
 ) -> Response {
-    paint_icon_only_button(
-        ui,
-        theme,
-        icon,
-        ControlButtonVariant::Primary,
-        theme.size_control_btn_min_w(),
-        enabled,
-    )
-    .on_hover_text(tooltip)
+    panel_action_primary_button_with_icon_ex(ui, theme, icon, tooltip, enabled)
 }
 
 /// 面板 / dock 内行内次要按钮（与排序芯片、弹窗「取消」同族）

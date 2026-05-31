@@ -421,11 +421,12 @@ impl MonitorPanel {
                     &mut self.auto_refresh,
                     crate::i18n::tr(ui.ctx(), "Auto refresh", "自动刷新"),
                 );
-                if crate::ui::chrome::panel_toolbar_icon_button_or_busy(
+                if crate::ui::chrome::panel_toolbar_button_with_icon_or_busy(
                     ui,
                     theme,
                     crate::ui::icons::IconId::Refresh,
                     crate::i18n::tr(ui.ctx(), "Refresh", "刷新"),
+                    crate::i18n::tr(ui.ctx(), "Collecting…", "采集中…"),
                     self.pending_raw.is_some(),
                 )
                 .clicked()

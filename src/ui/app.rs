@@ -1967,29 +1967,23 @@ impl MistTermApp {
         );
     }
 
-    /// 居中模态窗打开时不绘制右 dock Foreground，避免与弹窗标题栏 × 叠成「两个关闭」。
+    /// 居中模态窗打开时不绘制右 dock Foreground，避免与弹窗标题栏 × 叠在同一位置。
+    /// 偏好设置等视口居中弹窗不抑制：弹窗在终端区，不与右侧 dock 关闭钮重叠。
     fn suppress_right_dock_foreground(&self) -> bool {
         self.show_new_session_dialog
             || self.show_edit_session_dialog
-            || self.show_about_dialog
-            || self.show_preferences_dialog
             || self.show_fragments_dialog
             || self.show_fragment_vars_dialog
             || self.show_ai_settings_dialog
             || self.variable_dialog.open
-            || self.fragment_library.open
             || self.ssh_import_dialog.open
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
             || self.cmd_audit_confirm.is_some()
             || self.batch_exec_dialog.open
             || self.quick_selector.open
-            || self.session_log_dialog.open
-            || self.audit_log_dialog.open
-            || self.help_docs_dialog.open
             || self.team_fragment_editor.open
             || self.team_fragment_conflict.is_some()
-            || self.team_members_dialog.open
     }
 
     /// 合并 `<占位符>` 替换与 `{{ … }}` 得到「填写片段变量」弹窗中的初值。
@@ -3470,8 +3464,18 @@ impl MistTermApp {
             if crate::ui::chrome::panel_action_icon_button(
                 ui,
                 theme,
+                crate::ui::icons::IconId::Plus,
+                crate::i18n::tr(ui.ctx(), "New snippet", "新建片段"),
+            )
+            .clicked()
+            {
+                self.fragment_library.open = true;
+            }
+            if crate::ui::chrome::panel_action_icon_button(
+                ui,
+                theme,
                 crate::ui::icons::IconId::Fragment,
-                crate::i18n::tr(ui.ctx(), "Analytics dashboard", "分析大盘"),
+                crate::i18n::tr(ui.ctx(), "Analytics", "分析"),
             )
             .clicked()
             {
@@ -4468,16 +4472,18 @@ impl MistTermApp {
                                 );
                                 ui.add_space(theme.spacing_status_right_gap());
 
-                                if crate::ui::chrome::status_tool_icon(
+                                let menu = crate::i18n::menu::labels(crate::i18n::language(ctx));
+                                if crate::ui::chrome::status_tool_button(
                                     ui,
                                     &theme,
                                     crate::ui::icons::IconId::Fragment,
+                                    crate::i18n::tr(ctx, "Snippets", "片段"),
+                                    &format!(
+                                        "{} · {}",
+                                        menu.fragment_panel,
+                                        crate::platform::accel("K")
+                                    ),
                                 )
-                                .on_hover_text(format!(
-                                    "{} · {}",
-                                    crate::i18n::tr(ctx, "Command snippets", "命令片段"),
-                                    crate::platform::accel("K")
-                                ))
                                 .clicked()
                                 {
                                     if self.show_fragment_panel {
@@ -4486,16 +4492,17 @@ impl MistTermApp {
                                         self.show_fragment_panel = true;
                                     }
                                 }
-                                if crate::ui::chrome::status_tool_icon(
+                                if crate::ui::chrome::status_tool_button(
                                     ui,
                                     &theme,
                                     crate::ui::icons::IconId::Folder,
+                                    crate::i18n::tr(ctx, "Files", "文件"),
+                                    crate::i18n::tr(
+                                        ctx,
+                                        "SFTP files · browse / upload / download",
+                                        "SFTP 文件 · 浏览/上传/下载",
+                                    ),
                                 )
-                                .on_hover_text(crate::i18n::tr(
-                                    ctx,
-                                    "SFTP files · browse / upload / download",
-                                    "SFTP 文件 · 浏览/上传/下载",
-                                ))
                                 .clicked()
                                 {
                                     if self.show_sftp_panel {
@@ -4504,12 +4511,13 @@ impl MistTermApp {
                                         self.toggle_sftp_panel(ctx);
                                     }
                                 }
-                                if crate::ui::chrome::status_tool_icon(
+                                if crate::ui::chrome::status_tool_button(
                                     ui,
                                     &theme,
                                     crate::ui::icons::IconId::Monitor,
+                                    crate::i18n::tr(ctx, "Monitor", "监控"),
+                                    menu.monitor_panel,
                                 )
-                                .on_hover_text(crate::i18n::menu::labels(crate::i18n::language(ctx)).monitor_panel)
                                 .clicked()
                                 {
                                     if self.show_monitor_panel {
@@ -4521,12 +4529,13 @@ impl MistTermApp {
                                         self.monitor_last_tab = self.active_tab;
                                     }
                                 }
-                                if crate::ui::chrome::status_tool_icon(
+                                if crate::ui::chrome::status_tool_button(
                                     ui,
                                     &theme,
                                     crate::ui::icons::IconId::Api,
+                                    "AI",
+                                    menu.ai_panel,
                                 )
-                                .on_hover_text(crate::i18n::menu::labels(crate::i18n::language(ctx)).ai_panel)
                                 .clicked()
                                 {
                                     self.toggle_ai_panel(ctx);

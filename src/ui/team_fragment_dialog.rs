@@ -136,7 +136,7 @@ pub fn show_team_fragment_editor_modal(
                         {
                             should_close = true;
                         }
-                        if crate::ui::chrome::modal_primary_icon_button(
+                        if crate::ui::chrome::modal_primary_button_with_icon(
                             ui,
                             th,
                             crate::ui::icons::IconId::Check,
