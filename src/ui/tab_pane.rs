@@ -2,6 +2,7 @@
 
 use eframe::egui;
 
+use crate::i18n;
 use crate::ui::terminal::TerminalView;
 
 pub const MAX_PANES_PER_TAB: usize = 8;
@@ -547,6 +548,11 @@ fn render_one_pane(
                 );
                 if ui
                     .put(close_rect, egui::Button::new("×").small())
+                    .on_hover_text(i18n::tr(
+                        ui.ctx(),
+                        "Close split pane",
+                        "关闭分屏窗格",
+                    ))
                     .clicked()
                 {
                     close_pane(pane_idx);

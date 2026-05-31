@@ -102,7 +102,7 @@ pub fn paint_team_controls(
                     ui,
                     theme,
                     crate::ui::icons::IconId::Server,
-                    i18n::tr(ctx, "Team members…", "团队成员…"),
+                    i18n::tr(ctx, "Members", "成员"),
                 )
                 .clicked()
                 {
@@ -112,7 +112,7 @@ pub fn paint_team_controls(
                     ui,
                     theme,
                     crate::ui::icons::IconId::Cloud,
-                    i18n::tr(ctx, "Sync team fragments now", "立即同步团队片段"),
+                    i18n::tr(ctx, "Sync", "同步"),
                 )
                 .clicked()
                 {
@@ -123,7 +123,7 @@ pub fn paint_team_controls(
                     ui,
                     theme,
                     crate::ui::icons::IconId::Close,
-                    i18n::tr(ctx, "Sign out", "退出登录"),
+                    i18n::tr(ctx, "Sign out", "退出"),
                 )
                 .clicked()
                 {
@@ -180,7 +180,7 @@ pub fn paint_team_controls(
                 if chrome::panel_action_button_ex(
                     ui,
                     theme,
-                    i18n::tr(ctx, "Google", "Google 登录"),
+                    i18n::tr(ctx, "Google", "Google"),
                     !oauth_busy,
                 )
                 .clicked()
@@ -191,7 +191,7 @@ pub fn paint_team_controls(
                 if chrome::panel_action_button_ex(
                     ui,
                     theme,
-                    i18n::tr(ctx, "GitHub", "GitHub 登录"),
+                    i18n::tr(ctx, "GitHub", "GitHub"),
                     !oauth_busy,
                 )
                 .clicked()

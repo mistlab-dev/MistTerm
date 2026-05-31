@@ -558,8 +558,8 @@ impl MistTermApp {
                     &mut vault_token_buf,
                     crate::i18n::tr(
                         ctx,
-                        "Enter token, then click Save to Keychain",
-                        "输入后点「存钥匙串」",
+                        "Enter token, then click Save",
+                        "输入 Token 后点「保存」",
                     ),
                     pref_w,
                     true,
@@ -569,7 +569,7 @@ impl MistTermApp {
                         ui,
                         theme,
                         crate::ui::icons::IconId::Key,
-                        crate::i18n::tr(ctx, "Save to Keychain", "存钥匙串"),
+                        crate::i18n::tr(ctx, "Save", "保存"),
                     )
                     .clicked()
                         && !vault_token_buf.is_empty()
@@ -584,7 +584,7 @@ impl MistTermApp {
                         ui,
                         theme,
                         crate::ui::icons::IconId::Plug,
-                        crate::i18n::tr(ctx, "Test Vault connection", "测试 Vault 连接"),
+                        crate::i18n::tr(ctx, "Test", "测试"),
                     )
                     .clicked()
                     {
@@ -737,7 +737,7 @@ impl MistTermApp {
                         ui,
                         theme,
                         crate::ui::icons::IconId::Check,
-                        crate::i18n::tr(ctx, "Save audit & Vault settings", "保存审计/Vault 设置"),
+                        crate::i18n::tr(ctx, "Save", "保存"),
                     )
                     .clicked()
                     {
@@ -772,7 +772,7 @@ impl MistTermApp {
                         ui,
                         theme,
                         crate::ui::icons::IconId::Search,
-                        crate::i18n::tr(ctx, "View audit log…", "查看审计日志…"),
+                        crate::i18n::tr(ctx, "Audit log", "审计日志"),
                     )
                     .clicked()
                     {
@@ -866,7 +866,7 @@ impl MistTermApp {
                     ui,
                     theme,
                     crate::ui::icons::IconId::Cloud,
-                    crate::i18n::tr(ctx, "Open cloud sync…", "打开云端同步…"),
+                    crate::i18n::tr(ctx, "Cloud sync", "云同步"),
                 )
                 .clicked()
                 {

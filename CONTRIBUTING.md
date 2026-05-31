@@ -68,6 +68,18 @@ Example: `feat: add scrollback buffer search`
 - Base your PR on `main`
 - Use a descriptive branch name: `fix/reconnect-crash`, `feat/snippet-search`
 
+## Releases
+
+**All releases must be cut from `main`.** Do not tag feature branches.
+
+1. Merge your changes into `main` (via PR or direct merge after review).
+2. Bump `version` in `Cargo.toml` and `Info.plist` on `main`.
+3. Commit, e.g. `chore: release v0.2.x`.
+4. Create an annotated tag on **`main`**: `git tag -a v0.2.x -m "v0.2.x"`.
+5. Push `main` and the tag: `git push origin main && git push origin v0.2.x`.
+
+Pushing a `v*` tag triggers [Build & Test](.github/workflows/build.yml), which builds platform artifacts and publishes the GitHub Release. CI fails if the tagged commit is not on `origin/main`.
+
 ## Code Style
 
 - Follow standard Rust conventions (`cargo fmt`)

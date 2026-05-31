@@ -122,7 +122,11 @@ impl FragmentLibraryState {
                 );
                 ui.set_min_width(fill_w);
                 ui.horizontal(|ui| {
-                    if crate::ui::chrome::panel_header_new_button(ui, theme)
+                    if crate::ui::chrome::panel_header_new_button_with_label(
+                        ui,
+                        theme,
+                        i18n::tr(ctx, "New", "新建"),
+                    )
                         .on_hover_text(i18n::tr(ctx, "New fragment", "新建片段"))
                         .clicked()
                     {
@@ -472,6 +476,7 @@ impl FragmentLibraryState {
                                                 crate::ui::icons::IconId::Trash,
                                                 theme.color_body_text_muted(),
                                             )
+                                            .on_hover_text(i18n::tr(ctx, "Remove variable", "删除变量"))
                                             .clicked()
                                             {
                                                 var_to_remove = Some(idx);
@@ -543,11 +548,13 @@ impl FragmentLibraryState {
                                 });
 
                                 ui.horizontal(|ui| {
-                                    if crate::ui::chrome::panel_action_primary_icon_button(
+                                    if crate::ui::chrome::panel_action_primary_button_with_icon_ex(
                                         ui,
                                         theme,
                                         crate::ui::icons::IconId::Check,
                                         i18n::tr(ctx, "Save", "保存"),
+                                        !self.form_title.trim().is_empty()
+                                            && !self.form_category.trim().is_empty(),
                                     )
                                     .clicked()
                                         && !self.form_title.trim().is_empty()

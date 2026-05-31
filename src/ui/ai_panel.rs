@@ -9,7 +9,7 @@ use crate::core::{
     extract_shell_commands, redact_for_ai, AppSettings, ChatMessage,
 };
 use crate::i18n::{self};
-use crate::ui::icons::{self, IconId};
+use crate::ui::icons::IconId;
 use crate::ui::layout_util;
 use crate::ui::markdown_view;
 use crate::ui::theme::Theme;
@@ -407,11 +407,12 @@ impl AiPanel {
         let mut do_test = false;
         ui.horizontal(|ui| {
             if !setup_busy
-                && crate::ui::chrome::panel_action_primary_icon_button(
+                && crate::ui::chrome::panel_action_primary_button_with_icon_ex(
                     ui,
                     theme,
                     crate::ui::icons::IconId::Check,
                     i18n::tr(ctx, "Save", "保存"),
+                    true,
                 )
                 .clicked()
             {
@@ -727,23 +728,37 @@ impl AiPanel {
             // 把按钮行往下推一截：原 spacing_xs(2px) 让发送/清空贴在多行输入下沿，按起来逼仄。
             ui.add_space(theme.spacing_sm() + 4.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let send_label = i18n::tr(ctx, "Send", "发送");
+                let clear_label = i18n::tr(ctx, "Clear", "清空");
                 send_clicked = ui
                     .add_enabled_ui(can_send, |ui| {
-                        ai_panel_icon_button(ui, theme, IconId::Upload, true)
-                            .on_hover_text(i18n::tr(
-                                ctx,
-                                "Send (Ctrl + Enter)",
-                                "发送 (Ctrl + Enter)",
-                            ))
-                            .clicked()
+                        crate::ui::chrome::panel_action_primary_button_with_icon_ex(
+                            ui,
+                            theme,
+                            IconId::Upload,
+                            send_label,
+                            true,
+                        )
+                        .on_hover_text(i18n::tr(
+                            ctx,
+                            "Send (Ctrl + Enter)",
+                            "发送 (Ctrl + Enter)",
+                        ))
+                        .clicked()
                     })
                     .inner;
                 ui.add_space(theme.spacing_xs());
                 clear_clicked = ui
                     .add_enabled_ui(can_type, |ui| {
-                        ai_panel_icon_button(ui, theme, IconId::Trash, false)
-                            .on_hover_text(i18n::tr(ctx, "Clear conversation", "清空对话"))
-                            .clicked()
+                        crate::ui::chrome::panel_action_button_with_icon_ex(
+                            ui,
+                            theme,
+                            IconId::Trash,
+                            clear_label,
+                            true,
+                        )
+                        .on_hover_text(i18n::tr(ctx, "Clear conversation", "清空对话"))
+                        .clicked()
                     })
                     .inner;
             });
@@ -950,43 +965,11 @@ enum SendOutcome {
     NotReady(String),
 }
 
-fn ai_panel_icon_button(ui: &mut egui::Ui, theme: &Theme, id: IconId, primary: bool) -> egui::Response {
-    // 比通用 dock 图标按钮放大一档：原 24px 命中 / 18px 字形太小，鼠标不好点。
-    let hit = (theme.size_tab_bar_icon_btn() + 8.0).max(30.0);
-    let icon_px = (theme.size_icon_glyph() + 4.0).max(22.0);
-    let (idle, hover) = if primary {
-        (theme.accent_color(), theme.accent_color())
-    } else {
-        (
-            theme.color_tab_bar_icon(),
-            theme.color_tab_bar_icon_hover(),
-        )
-    };
-    icons::icon_hit_button(
-        ui,
-        id,
-        hit,
-        icon_px,
-        idle,
-        hover,
-        theme.color_tab_bar_icon_btn_hover_fill(),
-        if primary {
-            theme.accent_alpha(80)
-        } else {
-            theme.accent_alpha(45)
-        },
-        theme.radius_list_item(),
-    )
-}
-
 /// 底部输入区占用高度（多行框 + 按钮行 + 间距，供 `allocate_ui_at_rect` 切分）。
-/// `toolbar` 的 hit/spacing 必须与 [`ai_panel_icon_button`] 与 `show_input_bar` 里
-/// 多行框→按钮行之间的 `add_space` 保持一致，否则会与上方滚动区错位。
 fn ai_input_block_height(theme: &Theme) -> f32 {
     let line = theme.font_size_control_input() * 1.45;
     let field = line * 2.0 + theme.spacing_search_input_y() * 2.0 + 12.0;
-    let btn_hit = (theme.size_tab_bar_icon_btn() + 8.0).max(30.0);
-    let toolbar = btn_hit + (theme.spacing_sm() + 4.0) + 2.0;
+    let toolbar = theme.size_control_btn_h() + (theme.spacing_sm() + 4.0) + 2.0;
     field + toolbar + theme.spacing_xs() + 6.0
 }
 
@@ -1020,13 +1003,19 @@ fn show_command_card(
                         .size(theme.font_size_small()),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    clicked = ai_panel_icon_button(ui, theme, IconId::TerminalPrompt, true)
-                        .on_hover_text(i18n::tr(
-                            ctx,
-                            "Send this command to the terminal",
-                            "发送该命令到终端",
-                        ))
-                        .clicked();
+                    clicked = crate::ui::chrome::panel_action_primary_button_with_icon_ex(
+                        ui,
+                        theme,
+                        IconId::TerminalPrompt,
+                        i18n::tr(ctx, "Send", "发送"),
+                        true,
+                    )
+                    .on_hover_text(i18n::tr(
+                        ctx,
+                        "Send this command to the terminal",
+                        "发送该命令到终端",
+                    ))
+                    .clicked();
                 });
             });
         });

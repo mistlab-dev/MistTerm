@@ -45,9 +45,9 @@ mod tests {
 
     #[test]
     fn new_issue_url_uses_bug_template() {
-        let url = github_new_issue_url("0.2.3");
+        let url = github_new_issue_url("0.2.4");
         assert!(url.contains("template=bug_report.yml"));
-        assert!(url.contains("0.2.3"));
+        assert!(url.contains("0.2.4"));
     }
 
     #[test]

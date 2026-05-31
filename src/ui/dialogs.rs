@@ -149,7 +149,7 @@ impl NewSessionDialog {
                     ui.separator();
 
                     crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
-                        if crate::ui::chrome::modal_primary_icon_button(
+                        if crate::ui::chrome::modal_primary_button_with_icon(
                             ui,
                             th,
                             crate::ui::icons::IconId::Plus,

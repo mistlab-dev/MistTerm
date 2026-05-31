@@ -235,6 +235,9 @@ pub fn theme_display_name(ctx: &egui::Context, stored_name: &str) -> Cow<'static
         "晨曦" => Cow::Borrowed(tr(ctx, "Dawn", "晨曦")),
         "海洋" => Cow::Borrowed(tr(ctx, "Ocean", "海洋")),
         "森林" => Cow::Borrowed(tr(ctx, "Forest", "森林")),
+        other if crate::ui::theme::is_deprecated_dark_theme_storage_name(other) => {
+            Cow::Borrowed(tr(ctx, "Midnight", "暗夜"))
+        }
         other => Cow::Owned(other.to_string()),
     }
 }

@@ -1778,7 +1778,7 @@ impl TerminalView {
                 }
                 ui.add_space(theme.spacing_list_item_x());
                 ui.horizontal(|ui| {
-                    if crate::ui::chrome::modal_primary_icon_button(
+                    if crate::ui::chrome::modal_primary_button_with_icon(
                         ui,
                         theme,
                         crate::ui::icons::IconId::Upload,

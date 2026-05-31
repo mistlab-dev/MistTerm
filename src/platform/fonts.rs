@@ -46,13 +46,6 @@ pub fn configure_egui_fonts(ctx: &egui::Context) -> bool {
     loaded
 }
 
-/// 略提高字形视觉权重，减轻小字号发虚（仅视觉，不影响布局字号）。
-fn tune_cjk_font(mut data: egui::FontData) -> egui::FontData {
-    data.tweak.scale = 1.02;
-    data.tweak.y_offset_factor = -0.02;
-    data
-}
-
 fn load_cjk_font() -> Option<egui::FontData> {
     if let Some(data) = load_embedded_cjk_font() {
         return Some(data);
@@ -61,7 +54,7 @@ fn load_cjk_font() -> Option<egui::FontData> {
         match std::fs::read(&path) {
             Ok(bytes) => {
                 log::info!("Loaded system CJK font: {}", path.display());
-                return Some(tune_cjk_font(egui::FontData::from_owned(bytes)));
+                return Some(egui::FontData::from_owned(bytes));
             }
             Err(e) => log::debug!("Skipped CJK font {}: {e}", path.display()),
         }
@@ -75,7 +68,7 @@ fn load_embedded_cjk_font() -> Option<egui::FontData> {
         return None;
     }
     log::info!("Loaded embedded CJK font NotoSansSC-Regular.otf ({} bytes)", BYTES.len());
-    Some(tune_cjk_font(egui::FontData::from_static(BYTES)))
+    Some(egui::FontData::from_static(BYTES))
 }
 
 /// 各平台系统自带中文字体路径（按优先级，内置失败时使用）。

@@ -157,7 +157,11 @@ impl Sidebar {
                                     collapse_clicked = true;
                                 }
                                 ui.add_space(theme.spacing_panel_gap());
-                                if crate::ui::chrome::panel_header_new_button(ui, theme)
+                                if crate::ui::chrome::panel_header_new_button_with_label(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(&ctx, "New", "新建"),
+                                )
                                     .on_hover_text(format!(
                                         "{} · {}",
                                         crate::i18n::tr(&ctx, "New session", "新建会话"),
@@ -172,7 +176,7 @@ impl Sidebar {
                     });
                 crate::ui::chrome::right_dock_header_divider(ui, theme);
                 // 与命令片段面板一致：分隔线后留出一段呼吸空间，再进入搜索区
-                ui.add_space(theme.spacing_sm());
+                ui.add_space(theme.spacing_dock_section_gap());
 
                 crate::ui::chrome::form_singleline_field(
                     ui,
@@ -183,7 +187,7 @@ impl Sidebar {
                     width,
                     false,
                 );
-                ui.add_space(2.0);
+                ui.add_space(theme.spacing_dock_control_gap());
                 let sort_icon = match *sort_by {
                     SessionSortBy::Name | SessionSortBy::NameDesc => {
                         crate::ui::icons::IconId::SortName
@@ -220,6 +224,8 @@ impl Sidebar {
                     };
                 }
 
+                ui.add_space(theme.spacing_dock_control_gap());
+
                 if !team_servers.is_empty() {
                     ui.add_space(theme.spacing_panel_gap());
                     crate::ui::chrome::label_tag_chip(
@@ -229,6 +235,7 @@ impl Sidebar {
                         theme.font_size_connection_meta(),
                         theme.color_section_title(),
                     );
+                    ui.add_space(theme.spacing_dock_control_gap());
                     for server in team_servers {
                         let row_h = theme.size_session_list_row_h();
                         let row_inner_w = layout_util::finite_avail_minus(ui, 0.0, 80.0, width);
@@ -369,6 +376,7 @@ impl Sidebar {
                                     theme.font_size_connection_meta(),
                                     theme.color_section_title(),
                                 );
+                                ui.add_space(theme.spacing_dock_control_gap());
                             }
                             let is_selected = selected_id.as_ref() == Some(&session.id);
                             let row_inner_w = {

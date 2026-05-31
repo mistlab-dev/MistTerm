@@ -686,9 +686,14 @@ impl CloudSyncPanel {
                         chrome::form_field_label(ui, theme, i18n::tr(ctx, "Pack contents", "包内包含项"));
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 6.0;
-                            if chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Check)
-                                .on_hover_text(i18n::tr(ctx, "Select all", "全选"))
-                                .clicked() {
+                            if chrome::panel_action_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Check,
+                                i18n::tr(ctx, "Select all", "全选"),
+                            )
+                                .clicked()
+                            {
                                 self.settings.sync_sessions = true;
                                 self.settings.sync_fragments = true;
                                 self.settings.sync_themes = true;
@@ -696,9 +701,14 @@ impl CloudSyncPanel {
                                 self.settings.sync_shortcuts = true;
                                 self.settings.sync_team_config = true;
                             }
-                            if chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Server)
-                                .on_hover_text(i18n::tr(ctx, "Core only", "仅核心"))
-                                .clicked() {
+                            if chrome::panel_action_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Server,
+                                i18n::tr(ctx, "Core only", "仅核心"),
+                            )
+                                .clicked()
+                            {
                                 self.settings.sync_sessions = true;
                                 self.settings.sync_fragments = true;
                                 self.settings.sync_themes = true;
@@ -706,9 +716,14 @@ impl CloudSyncPanel {
                                 self.settings.sync_shortcuts = false;
                                 self.settings.sync_team_config = false;
                             }
-                            if chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Trash)
-                                .on_hover_text(i18n::tr(ctx, "Clear", "清空"))
-                                .clicked() {
+                            if chrome::panel_action_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Trash,
+                                i18n::tr(ctx, "Clear", "清空"),
+                            )
+                                .clicked()
+                            {
                                 self.settings.sync_sessions = false;
                                 self.settings.sync_fragments = false;
                                 self.settings.sync_themes = false;

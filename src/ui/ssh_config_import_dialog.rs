@@ -222,7 +222,7 @@ impl SshConfigImportDialog {
                         } else {
                             crate::i18n::tr(ctx, "Import selected", "导入所选").to_string()
                         };
-                        if chrome::modal_primary_icon_button(ui, th, crate::ui::icons::IconId::Check, &label)
+                        if chrome::modal_primary_button_with_icon(ui, th, crate::ui::icons::IconId::Check, &label)
                             .clicked()
                             && importable_count > 0
                         {

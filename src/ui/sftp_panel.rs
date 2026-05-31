@@ -89,6 +89,13 @@ fn file_kind_name_color(theme: &Theme, kind: SftpFileKind, selected: bool) -> Co
     if selected {
         return theme.text_primary();
     }
+    if theme.uses_modern_palette() {
+        return match kind {
+            SftpFileKind::Hidden => theme.text_tertiary(),
+            SftpFileKind::Executable => theme.red_color(),
+            _ => theme.text_primary(),
+        };
+    }
     match kind {
         SftpFileKind::Dir => theme.accent_color(),
         SftpFileKind::Hidden => theme.text_tertiary(),
@@ -106,6 +113,10 @@ fn file_kind_meta_color(theme: &Theme, kind: SftpFileKind, selected: bool) -> Co
     if selected {
         return theme.text_secondary();
     }
+    if theme.uses_modern_palette() {
+        let _ = kind;
+        return theme.text_tertiary();
+    }
     match kind {
         SftpFileKind::Dir | SftpFileKind::Hidden | SftpFileKind::Document | SftpFileKind::Plain => {
             theme.text_tertiary()
@@ -116,6 +127,20 @@ fn file_kind_meta_color(theme: &Theme, kind: SftpFileKind, selected: bool) -> Co
         SftpFileKind::Config => theme.amber_color().gamma_multiply(0.72),
         SftpFileKind::Executable => theme.red_color().gamma_multiply(0.78),
     }
+}
+
+fn file_kind_icon_color(theme: &Theme, kind: SftpFileKind, selected: bool) -> Color32 {
+    if theme.uses_modern_palette() {
+        if selected {
+            return theme.text_primary();
+        }
+        return match kind {
+            SftpFileKind::Dir => theme.amber_color(),
+            SftpFileKind::Executable => theme.red_color(),
+            _ => theme.text_secondary(),
+        };
+    }
+    file_kind_name_color(theme, kind, selected)
 }
 
 fn file_kind_icon(kind: SftpFileKind) -> crate::ui::icons::IconId {
@@ -237,7 +262,6 @@ impl FileTableCols {
     const ICON_W: f32 = 22.0;
     const SIZE_W: f32 = 56.0;
     const TIME_W: f32 = 110.0;
-    const ROW_H: f32 = 24.0;
 
     fn from_panel_width(panel_w: f32) -> Self {
         let panel_w = panel_w.max(1.0);
@@ -682,9 +706,9 @@ impl SftpPanel {
         sort: &mut FileSortState,
     ) -> bool {
         let mut clicked_col: Option<FileSortColumn> = None;
-        let cap_default = theme.text_tertiary();
-        let cap_font = egui::FontId::proportional(theme.font_size_small());
-        let h = FileTableCols::ROW_H;
+        let cap_default = theme.color_table_header_inactive();
+        let cap_font = egui::FontId::proportional(theme.font_size_file_list_meta());
+        let h = theme.size_file_list_row_h();
         ui.allocate_ui_with_layout(
             egui::vec2(cols.total, h),
             egui::Layout::top_down(egui::Align::LEFT),
@@ -701,7 +725,11 @@ impl SftpPanel {
                     };
                     let text = format!("{}{}", base_label, sort_header_suffix(*sort, col_enum));
                     let color = if sort.column == col_enum {
-                        theme.accent_color()
+                        if theme.uses_modern_palette() {
+                            theme.text_primary()
+                        } else {
+                            theme.accent_color()
+                        }
                     } else {
                         cap_default
                     };
@@ -716,7 +744,9 @@ impl SftpPanel {
                 });
             },
         );
-        ui.separator();
+        if !theme.uses_modern_palette() {
+            ui.separator();
+        }
         if let Some(c) = clicked_col {
             sort.toggle_column(c);
             true
@@ -736,7 +766,7 @@ impl SftpPanel {
         selected: bool,
         tooltip: &str,
     ) -> egui::Response {
-        let h = FileTableCols::ROW_H;
+        let h = theme.size_file_list_row_h();
         let (row_rect, response) =
             ui.allocate_exact_size(egui::vec2(cols.total, h), Sense::click());
         let rounding = theme.radius_list_item();
@@ -748,12 +778,12 @@ impl SftpPanel {
                 .rect_filled(row_rect, rounding, theme.list_row_hover_bg());
         }
         let icon = file_kind_icon(file_kind);
-        let icon_px = theme.font_size_body().min(16.0);
+        let icon_px = theme.size_file_list_icon();
         let name_color = file_kind_name_color(theme, file_kind, selected);
-        let icon_color = name_color;
+        let icon_color = file_kind_icon_color(theme, file_kind, selected);
         let meta_color = file_kind_meta_color(theme, file_kind, selected);
-        let body_px = theme.font_size_body();
-        let small_px = theme.font_size_small();
+        let body_px = theme.font_size_file_list_name();
+        let small_px = theme.font_size_file_list_meta();
 
         ui.allocate_ui_at_rect(row_rect, |ui| {
             Self::paint_file_table_row_strip(ui, cols, h, |cell, col| match col {
@@ -1109,7 +1139,7 @@ impl SftpPanel {
         }
         crate::ui::chrome::right_dock_header_divider(ui, theme);
         ui.spacing_mut().item_spacing.y = prev_gap_y;
-        ui.add_space(theme.spacing_xs());
+        ui.add_space(theme.spacing_dock_section_gap());
 
         let Some(t) = terminal else {
             ui.label(
@@ -1633,8 +1663,8 @@ impl SftpPanel {
 
     fn paint_browser_section_frame(theme: &Theme) -> egui::Frame {
         egui::Frame::none()
-            .fill(theme.color_subtle_inset_fill())
-            .stroke(egui::Stroke::new(1.0, theme.border_divider_color()))
+            .fill(theme.color_sftp_section_fill())
+            .stroke(theme.sftp_section_stroke())
             .rounding(theme.radius_panel())
             .inner_margin(egui::Margin::symmetric(
                 theme.spacing_body_pad(),
@@ -1645,7 +1675,7 @@ impl SftpPanel {
     fn paint_file_list_viewport_frame(theme: &Theme) -> egui::Frame {
         egui::Frame::none()
             .fill(theme.color_file_list_bg())
-            .stroke(egui::Stroke::new(1.0, theme.border_divider_color()))
+            .stroke(theme.sftp_list_viewport_stroke())
             .rounding(theme.radius_list_item())
             .inner_margin(egui::Margin::symmetric(
                 theme.spacing_sm(),
