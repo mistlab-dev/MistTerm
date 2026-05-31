@@ -3,7 +3,9 @@
 //! 实时显示服务器资源使用状态
 
 use eframe::egui;
-use egui_plot::{AxisBools, Corner, Legend, Line, LineStyle, Plot, PlotPoints, VLine};
+use egui_plot::{
+    AxisBools, AxisHints, GridMark, Line, LineStyle, Plot, PlotPoints, Points, VLine,
+};
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
 
@@ -740,13 +742,11 @@ impl MonitorPanel {
         history: &[ServerStats],
     ) {
         let loc = i18n::locale(ui.ctx());
-        const CHART_HEIGHT: f32 = 110.0;
+        const CHART_HEIGHT: f32 = 136.0;
+        const Y_AXIS_DIGITS: usize = 4;
         let width = layout_util::set_width_to_available(ui);
-        // 侧栏较窄时 LeftTop 图例会盖住 Y 轴与曲线；加大左右边距并固定图例在右上。
-        let plot_margin = egui::vec2(0.22, 0.10);
-        let legend = Legend::default()
-            .position(Corner::RightTop)
-            .background_alpha(0.85);
+        let plot_margin = egui::vec2(0.05, 0.0);
+        let y_axis = vec![AxisHints::default().max_digits(Y_AXIS_DIGITS)];
         let link_x_id = ui.id().with("monitor_hist_time_axis");
         let tip_id = ui.id().with("monitor_history_tooltip");
 
@@ -763,9 +763,7 @@ impl MonitorPanel {
             return;
         }
 
-        let pct_y = loc.tr("Usage %", "使用率 %").to_string();
         let time_x = loc.tr("Time (s)", "时间 (s)").to_string();
-        let load_y = loc.tr("Load", "负载").to_string();
         let n = history.len();
         let t0 = history[0].collected_at;
         let t_end = (history[n - 1].collected_at - t0).as_secs_f64().max(0.0);
@@ -814,45 +812,42 @@ impl MonitorPanel {
             .color(disk_color(72.0_f32, theme))
             .width(1.6);
 
-        ui.label(
-            egui::RichText::new(format!(
-                "{} / {} / {}",
-                loc.tr("CPU", "CPU"),
-                loc.tr("Memory", "内存"),
-                loc.tr("Disk", "磁盘")
-            ))
-                .size(theme.font_size_normal())
-                .color(theme.text_tertiary()),
+        show_chart_caption(
+            ui,
+            theme,
+            loc.tr(
+                "Usage rate (0–100%) · hover for details",
+                "使用率 (0–100%) · 悬停查看详情",
+            ),
         );
-        ui.add_space(2.0);
+        show_chart_legend(
+            ui,
+            theme,
+            &[
+                (name_cpu, theme.green_color()),
+                (name_mem, theme.accent_color()),
+                (name_disk, disk_color(72.0_f32, theme)),
+            ],
+        );
 
         let mut hover_idx: Option<usize> = None;
 
-        let pct_resp = Plot::new(ui.id().with("mist_monitor_pct"))
-            .height(CHART_HEIGHT)
-            .width(width)
-            .link_axis(link_x_id, true, false)
-            .allow_zoom(AxisBools::new(true, true))
-            .allow_drag(AxisBools::new(true, true))
-            .allow_scroll(true)
-            .allow_boxed_zoom(false)
+        let pct_resp = monitor_hist_plot(
+            ui.id().with("mist_monitor_pct"),
+            width,
+            CHART_HEIGHT,
+            link_x_id,
+            plot_margin,
+            &y_axis,
+            false,
+            "",
+        )
             .include_x(0.0)
             .include_x(t_end.max(1.0))
             .include_y(0.0)
             .include_y(100.0)
-            .set_margin_fraction(plot_margin)
-            .y_axis_label(pct_y.clone())
-            .x_axis_label(time_x.clone())
-            .legend(legend.clone())
-            .show_axes([true, true])
-            .show_grid([true, true])
-            .label_formatter(|name, value| {
-                if name.is_empty() {
-                    format!("t={:.1}s  {:.1}%", value.x, value.y)
-                } else {
-                    format!("{}  t={:.1}s  {:.1}%", name, value.x, value.y)
-                }
-            })
+            .y_grid_spacer(|_| pct_y_grid_marks())
+            .y_axis_formatter(|value, _digits, _range| format!("{:.0}%", value))
             .show(ui, |plot_ui| {
                 plot_ui.line(cpu_line);
                 plot_ui.line(mem_line);
@@ -863,13 +858,33 @@ impl MonitorPanel {
                         let xi = pp.x.clamp(0.0, t_end.max(1e-6));
                         let idx = nearest_history_index(history, t0, xi);
                         hover_idx = Some(idx);
-                        let snap_x = (history[idx].collected_at - t0).as_secs_f64();
+                        let s = &history[idx];
+                        let snap_x = (s.collected_at - t0).as_secs_f64();
                         plot_ui.vline(
                             VLine::new(snap_x)
                                 .color(theme.subtle_line_color())
                                 .width(1.0)
                                 .style(LineStyle::Dotted { spacing: 4.0 }),
                         );
+                        for (y, color) in [
+                            (f64::from(s.cpu_percent.clamp(0.0, 100.0)), theme.green_color()),
+                            (
+                                f64::from(s.memory_percent().clamp(0.0, 100.0)),
+                                theme.accent_color(),
+                            ),
+                            (
+                                f64::from(s.disk_percent().clamp(0.0, 100.0)),
+                                disk_color(72.0_f32, theme),
+                            ),
+                        ] {
+                            plot_ui.points(
+                                Points::new(vec![[snap_x, y]])
+                                    .radius(4.0)
+                                    .color(color)
+                                    .filled(true)
+                                    .highlight(true),
+                            );
+                        }
                     }
                 }
             });
@@ -878,16 +893,15 @@ impl MonitorPanel {
             if let Some(idx) = hover_idx {
                 let s = &history[idx];
                 let (l1, l5, l15) = s.load_avg;
+                let t_sec = (s.collected_at - t0).as_secs_f64();
                 let tip = match loc.lang {
                     UiLanguage::En => format!(
-                        "Sample {}/{}\n\
-                         t = {:.1} s · CPU {:.1}%\n\
-                         Memory {:.1}% ({})\n\
-                         Disk {:.1}% ({})\n\
-                         Load {:.2} / {:.2} / {:.2}",
-                        idx + 1,
-                        n,
-                        (s.collected_at - t0).as_secs_f64(),
+                        "Time {:.1} s\n\
+                         CPU    {:.1}%\n\
+                         Memory {:.1}%  {}\n\
+                         Disk   {:.1}%  {}\n\
+                         Load   {:.2} / {:.2} / {:.2}",
+                        t_sec,
                         s.cpu_percent,
                         s.memory_percent(),
                         s.format_memory(),
@@ -898,14 +912,12 @@ impl MonitorPanel {
                         l15,
                     ),
                     UiLanguage::Zh => format!(
-                        "样本 {}/{}\n\
-                         t = {:.1} s · CPU {:.1}%\n\
-                         内存 {:.1}%({})\n\
-                         磁盘 {:.1}%({})\n\
+                        "时间 {:.1} s\n\
+                         CPU  {:.1}%\n\
+                         内存 {:.1}%  {}\n\
+                         磁盘 {:.1}%  {}\n\
                          负载 {:.2} / {:.2} / {:.2}",
-                        idx + 1,
-                        n,
-                        (s.collected_at - t0).as_secs_f64(),
+                        t_sec,
                         s.cpu_percent,
                         s.memory_percent(),
                         s.format_memory(),
@@ -947,41 +959,38 @@ impl MonitorPanel {
             })
             .collect();
 
-        ui.label(
-            egui::RichText::new(loc.tr(
-                "Load average",
-                "负载 (load average)",
-            ))
-                .size(theme.font_size_normal())
-                .color(theme.text_tertiary()),
-        );
-        ui.add_space(2.0);
+        let load_max = history_load_y_max(history);
 
-        Plot::new(ui.id().with("mist_monitor_load"))
-            .height(CHART_HEIGHT)
-            .width(width)
-            .link_axis(link_x_id, true, false)
-            .allow_zoom(AxisBools::new(true, true))
-            .allow_drag(AxisBools::new(true, true))
-            .allow_scroll(true)
-            .allow_boxed_zoom(false)
+        show_chart_caption(
+            ui,
+            theme,
+            loc.tr("Load average", "负载 (load average)"),
+        );
+        show_chart_legend(
+            ui,
+            theme,
+            &[
+                (loc.tr("1 min", "1 分钟"), theme.green_color()),
+                (loc.tr("5 min", "5 分钟"), theme.amber_color()),
+                (loc.tr("15 min", "15 分钟"), theme.text_primary()),
+            ],
+        );
+
+        monitor_hist_plot(
+            ui.id().with("mist_monitor_load"),
+            width,
+            CHART_HEIGHT,
+            link_x_id,
+            plot_margin,
+            &y_axis,
+            false,
+            "",
+        )
             .include_x(0.0)
             .include_x(t_end.max(1.0))
             .include_y(0.0)
-            .auto_bounds_y()
-            .set_margin_fraction(plot_margin)
-            .y_axis_label(load_y.clone())
-            .x_axis_label(time_x.clone())
-            .legend(legend.clone())
-            .show_axes([true, true])
-            .show_grid([true, true])
-            .label_formatter(|name, value| {
-                if name.is_empty() {
-                    format!("t={:.1}s  {:.2}", value.x, value.y)
-                } else {
-                    format!("{}  t={:.1}s  {:.2}", name, value.x, value.y)
-                }
-            })
+            .include_y(load_max)
+            .y_axis_formatter(|value, _digits, _range| format!("{:.1}", value.max(0.0)))
             .show(ui, |plot_ui| {
                 plot_ui.line(
                     Line::new(load1_points)
@@ -1021,15 +1030,19 @@ impl MonitorPanel {
             tx_pts.push([x, tx.max(0.0)]);
         }
 
-        ui.label(
-            egui::RichText::new(loc.tr(
-                "Network throughput",
-                "网络速率",
-            ))
-                .size(theme.font_size_normal())
-                .color(theme.text_tertiary()),
+        show_chart_caption(
+            ui,
+            theme,
+            loc.tr("Network throughput (B/s)", "网络速率 (B/s)"),
         );
-        ui.add_space(2.0);
+        show_chart_legend(
+            ui,
+            theme,
+            &[
+                (loc.tr("Download", "下行"), theme.green_color()),
+                (loc.tr("Upload", "上行"), theme.accent_color()),
+            ],
+        );
 
         if rx_pts.is_empty() {
             ui.label(
@@ -1044,32 +1057,24 @@ impl MonitorPanel {
         } else {
             let rx_line: PlotPoints = rx_pts.into();
             let tx_line: PlotPoints = tx_pts.into();
+            let net_max = net_y_max(&rx_line, &tx_line);
 
-            Plot::new(ui.id().with("mist_monitor_net"))
-                .height(CHART_HEIGHT)
-                .width(width)
-                .link_axis(link_x_id, true, false)
-                .allow_zoom(AxisBools::new(true, true))
-                .allow_drag(AxisBools::new(true, true))
-                .allow_scroll(true)
-                .allow_boxed_zoom(false)
+            monitor_hist_plot(
+                ui.id().with("mist_monitor_net"),
+                width,
+                CHART_HEIGHT,
+                link_x_id,
+                plot_margin,
+                &y_axis,
+                true,
+                &time_x,
+            )
                 .include_x(0.0)
                 .include_x(t_end.max(1.0))
                 .include_y(0.0)
-                .auto_bounds_y()
-                .set_margin_fraction(plot_margin)
-                .y_axis_label("B/s")
-                .x_axis_label(time_x.clone())
-                .y_axis_formatter(|v, _max_chars, _range| format_bytes_per_sec(v))
-                .legend(legend)
-                .show_axes([true, true])
-                .show_grid([true, true])
-                .label_formatter(|name, value| {
-                    if name.is_empty() {
-                        format!("t={:.1}s  {}", value.x, format_bytes_per_sec(value.y))
-                    } else {
-                        format!("{}  t={:.1}s  {}", name, value.x, format_bytes_per_sec(value.y))
-                    }
+                .include_y(net_max)
+                .y_axis_formatter(|value, _max_chars, _range| {
+                    format_bytes_per_sec(value.max(0.0))
                 })
                 .show(ui, |plot_ui| {
                     plot_ui.line(
@@ -1100,7 +1105,89 @@ impl MonitorPanel {
     }
 }
 
-/// CPU 使用率颜色
+/// 历史趋势图公共配置：统一 Y 轴宽度、交互与边距；仅最下图显示 X 轴。
+fn monitor_hist_plot(
+    id: egui::Id,
+    width: f32,
+    height: f32,
+    link_x_id: egui::Id,
+    plot_margin: egui::Vec2,
+    y_axis: &[AxisHints],
+    show_x_axis: bool,
+    x_axis_label: &str,
+) -> Plot {
+    Plot::new(id)
+        .height(height)
+        .width(width)
+        .link_axis(link_x_id, true, false)
+        .allow_zoom(AxisBools::new(true, false))
+        .allow_drag(AxisBools::new(true, false))
+        .allow_scroll(false)
+        .allow_boxed_zoom(false)
+        .set_margin_fraction(plot_margin)
+        .custom_y_axes(y_axis.to_vec())
+        .x_axis_label(x_axis_label.to_string())
+        .show_axes([show_x_axis, true])
+        .show_grid([true, true])
+        .label_formatter(|_name, _value| String::new())
+}
+
+fn show_chart_caption(ui: &mut egui::Ui, theme: &Theme, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(theme.font_size_normal())
+            .color(theme.text_tertiary()),
+    );
+    ui.add_space(4.0);
+}
+
+fn show_chart_legend(ui: &mut egui::Ui, theme: &Theme, items: &[(&str, egui::Color32)]) {
+    ui.horizontal(|ui| {
+        for (label, color) in items {
+            ui.label(
+                egui::RichText::new(format!("● {label}"))
+                    .size(theme.font_size_menu_item())
+                    .color(*color),
+            );
+            ui.add_space(theme.spacing_sm());
+        }
+    });
+    ui.add_space(2.0);
+}
+
+fn history_load_y_max(history: &[ServerStats]) -> f64 {
+    let peak = history
+        .iter()
+        .flat_map(|s| [s.load_avg.0, s.load_avg.1, s.load_avg.2])
+        .fold(0.0_f32, f32::max) as f64;
+    (peak * 1.25).max(0.5)
+}
+
+fn net_y_max(rx: &PlotPoints, tx: &PlotPoints) -> f64 {
+    let peak = rx
+        .points()
+        .iter()
+        .chain(tx.points().iter())
+        .map(|p| p.y)
+        .fold(0.0_f64, f64::max);
+    if peak <= f64::EPSILON {
+        1.0
+    } else {
+        peak * 1.25
+    }
+}
+
+/// 使用率图固定 Y 轴刻度：0 / 25 / 50 / 75 / 100。
+fn pct_y_grid_marks() -> Vec<GridMark> {
+    [0.0, 25.0, 50.0, 75.0, 100.0]
+        .into_iter()
+        .map(|value| GridMark {
+            value,
+            step_size: 25.0,
+        })
+        .collect()
+}
+
 fn cpu_color(pct: f32, theme: &Theme) -> egui::Color32 {
     if pct < 50.0 {
         theme.green_color()
