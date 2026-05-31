@@ -155,9 +155,14 @@ impl Theme {
         self.bg_body.r >= 128
     }
 
-    /// 前景为实色档位（晨曦、海洋、森林）；暗夜 `fg_*` 的 RGB 承载 alpha 曲线，须用 `fg_high_alpha` 派生。
+    /// 前景为实色档位（暗夜、晨曦、海洋、森林）；自定义主题若 `fg_high.a < 250` 则走 [`fg_high_alpha`]。
     pub fn uses_solid_fg_palette(&self) -> bool {
         self.fg_high.a >= 250
+    }
+
+    /// 暗夜默认中性灰控件样式（实色底、无硬边框等）。
+    pub fn uses_modern_palette(&self) -> bool {
+        self.name == "暗夜"
     }
 
     /// 次要正文（标签、侧栏图标、Tab ×/+ 等）— 与 [`fg_medium_color`] 同一档位
@@ -234,12 +239,20 @@ impl Theme {
 
     /// 面板外框线宽（逻辑 px）
     pub fn stroke_width_panel(&self) -> f32 {
-        1.0
+        if self.uses_modern_palette() {
+            0.0
+        } else {
+            1.0
+        }
     }
 
     #[inline]
     pub fn panel_stroke_color(&self) -> Color32 {
-        self.border_color()
+        if self.uses_modern_palette() {
+            self.border_divider_color()
+        } else {
+            self.border_color()
+        }
     }
 
     #[inline]
@@ -285,6 +298,130 @@ impl Theme {
 
     pub fn amber_color(&self) -> Color32 {
         self.amber.to_color32()
+    }
+
+    /// 监控进度条轨道底（暗夜用 inset，彩色主题用 border）
+    #[inline]
+    pub fn metric_bar_track_fill(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.color_subtle_inset_fill()
+        } else {
+            self.border_color()
+        }
+    }
+
+    /// CPU 使用率进度条 / 图例色
+    pub fn metric_cpu_bar_color(&self, pct: f32) -> Color32 {
+        if self.uses_modern_palette() {
+            self.metric_stress_bar_color(pct)
+        } else if pct < 50.0 {
+            self.green_color()
+        } else if pct < 80.0 {
+            self.amber_color()
+        } else {
+            self.red_color()
+        }
+    }
+
+    /// 内存使用率进度条 / 图例色
+    pub fn metric_mem_bar_color(&self, pct: f32) -> Color32 {
+        if self.uses_modern_palette() {
+            self.metric_stress_bar_color(pct)
+        } else if pct < 70.0 {
+            self.accent_color()
+        } else if pct < 90.0 {
+            self.amber_color()
+        } else {
+            self.red_color()
+        }
+    }
+
+    /// 磁盘使用率进度条 / 图例色
+    pub fn metric_disk_bar_color(&self, pct: f32) -> Color32 {
+        if self.uses_modern_palette() {
+            self.metric_stress_bar_color(pct)
+        } else if pct < 70.0 {
+            self.accent_color()
+        } else if pct < 90.0 {
+            self.amber_color()
+        } else {
+            self.red_color()
+        }
+    }
+
+    /// 暗夜：常态 accent，高负载才 amber/red
+    fn metric_stress_bar_color(&self, pct: f32) -> Color32 {
+        if pct >= 90.0 {
+            self.red_color()
+        } else if pct >= 70.0 {
+            self.amber_color()
+        } else {
+            self.accent_alpha(180)
+        }
+    }
+
+    /// 历史图 CPU 折线
+    #[inline]
+    pub fn chart_cpu_color(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.accent_color()
+        } else {
+            self.green_color()
+        }
+    }
+
+    /// 历史图内存折线
+    #[inline]
+    pub fn chart_mem_color(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.amber_color()
+        } else {
+            self.accent_color()
+        }
+    }
+
+    /// 历史图磁盘折线
+    #[inline]
+    pub fn chart_disk_color(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.text_primary()
+        } else {
+            self.metric_disk_bar_color(72.0)
+        }
+    }
+
+    /// 历史图网络下行
+    #[inline]
+    pub fn chart_net_rx_color(&self) -> Color32 {
+        self.green_color()
+    }
+
+    /// 历史图网络上行
+    #[inline]
+    pub fn chart_net_tx_color(&self) -> Color32 {
+        self.accent_color()
+    }
+
+    /// 负载图 1 分钟
+    #[inline]
+    pub fn chart_load_1m_color(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.accent_color()
+        } else {
+            self.green_color()
+        }
+    }
+
+    /// 负载图 5 分钟
+    #[inline]
+    pub fn chart_load_5m_color(&self) -> Color32 {
+        self.amber_color()
+    }
+
+    /// 负载图 15 分钟
+    #[inline]
+    pub fn chart_load_15m_color(&self) -> Color32 {
+        self.text_primary()
     }
 
     /// FUNCTIONAL_SPEC §2.3.2：提示行命令段相对默认前景亮度（设计稿 `.cmd` ≈ 0.9）。
@@ -519,12 +656,16 @@ impl Theme {
                 w.b().saturating_sub(6),
             )
         } else if self.uses_solid_fg_palette() {
-            let w = self.bg_window_color();
-            Color32::from_rgb(
-                w.r().saturating_add(10),
-                w.g().saturating_add(10),
-                w.b().saturating_add(10),
-            )
+            if self.uses_modern_palette() {
+                Color32::from_rgb(45, 45, 45)
+            } else {
+                let w = self.bg_window_color();
+                Color32::from_rgb(
+                    w.r().saturating_add(10),
+                    w.g().saturating_add(10),
+                    w.b().saturating_add(10),
+                )
+            }
         } else {
             // 暗夜：实色阶梯 #151520 → #222236，比 fg_high_alpha 叠层更可辨
             Color32::from_rgb(34, 34, 52)
@@ -556,6 +697,8 @@ impl Theme {
     pub fn frame_form_text_input(&self, focused: bool) -> egui::Frame {
         let stroke = if focused {
             egui::Stroke::new(self.stroke_width_panel(), self.stroke_focus_color())
+        } else if self.uses_modern_palette() {
+            egui::Stroke::NONE
         } else {
             egui::Stroke::new(self.stroke_width_panel(), self.color_text_input_stroke())
         };
@@ -574,6 +717,8 @@ impl Theme {
     pub fn color_panel_toolbar_btn_fill(&self) -> Color32 {
         if self.is_light_theme() {
             Color32::from_rgba_unmultiplied(0, 0, 0, 20)
+        } else if self.uses_modern_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 28)
         } else if self.uses_solid_fg_palette() {
             Color32::from_rgba_unmultiplied(255, 255, 255, 18)
         } else {
@@ -590,29 +735,42 @@ impl Theme {
     /// 弹窗主按钮底
     #[inline]
     pub fn color_modal_primary_fill(&self) -> Color32 {
-        self.accent_color()
+        if self.uses_modern_palette() {
+            self.accent_dim_color()
+        } else {
+            self.accent_color()
+        }
     }
 
     /// 弹窗主按钮悬停底（须明显亮于 [`color_modal_primary_fill`]）
     #[inline]
     pub fn color_modal_primary_fill_hover(&self) -> Color32 {
-        let c = self.accent_color();
-        Color32::from_rgb(
-            c.r().saturating_add(36),
-            c.g().saturating_add(36),
-            c.b().saturating_add(36),
-        )
+        if self.uses_modern_palette() {
+            self.accent_color()
+        } else {
+            let c = self.accent_color();
+            Color32::from_rgb(
+                c.r().saturating_add(36),
+                c.g().saturating_add(36),
+                c.b().saturating_add(36),
+            )
+        }
     }
 
     /// 弹窗主按钮字（与 accent 底高对比）
     #[inline]
     pub fn color_modal_primary_text(&self) -> Color32 {
-        let a = self.accent_color();
-        let lum = 0.299 * f32::from(a.r()) + 0.587 * f32::from(a.g()) + 0.114 * f32::from(a.b());
-        if lum > 136.0 {
-            Color32::from_rgb(22, 28, 24)
-        } else {
+        if self.uses_modern_palette() {
             Color32::WHITE
+        } else {
+            let a = self.accent_color();
+            let lum =
+                0.299 * f32::from(a.r()) + 0.587 * f32::from(a.g()) + 0.114 * f32::from(a.b());
+            if lum > 136.0 {
+                Color32::from_rgb(22, 28, 24)
+            } else {
+                Color32::WHITE
+            }
         }
     }
 
@@ -631,7 +789,9 @@ impl Theme {
     /// 侧栏筛选芯片：选中文字
     #[inline]
     pub fn color_filter_chip_active_text(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
+        if self.uses_modern_palette() {
+            self.text_primary()
+        } else if self.is_light_theme() || self.uses_solid_fg_palette() {
             self.accent_color()
         } else {
             self.accent_a128()
@@ -641,7 +801,31 @@ impl Theme {
     /// 侧栏筛选芯片：选中底
     #[inline]
     pub fn color_filter_chip_active_fill(&self) -> Color32 {
-        self.accent_alpha(51)
+        if self.uses_modern_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 22)
+        } else {
+            self.accent_alpha(51)
+        }
+    }
+
+    /// egui 裸控件悬停底（暗夜中性灰，非 accent 紫）
+    #[inline]
+    pub fn color_widget_hover_fill(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 16)
+        } else {
+            self.accent_alpha(38)
+        }
+    }
+
+    /// egui 裸控件按下底
+    #[inline]
+    pub fn color_widget_active_fill(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 22)
+        } else {
+            self.accent_color()
+        }
     }
 
     /// 侧栏标题区图标按钮
@@ -653,7 +837,9 @@ impl Theme {
     /// 片段 team 标签字色
     #[inline]
     pub fn color_fragment_tag_text(&self) -> Color32 {
-        if self.is_light_theme() || self.uses_solid_fg_palette() {
+        if self.uses_modern_palette() {
+            self.text_secondary()
+        } else if self.is_light_theme() || self.uses_solid_fg_palette() {
             self.accent_color()
         } else {
             self.accent_alpha(115)
@@ -663,7 +849,11 @@ impl Theme {
     /// 片段 team 标签淡底
     #[inline]
     pub fn color_fragment_tag_fill(&self) -> Color32 {
-        self.accent_alpha(48)
+        if self.uses_modern_palette() {
+            self.color_overlay_fill_subtle()
+        } else {
+            self.accent_alpha(48)
+        }
     }
 
     /// 终端内联选区高亮
@@ -756,6 +946,124 @@ impl Theme {
         self.text_secondary()
     }
 
+    /// 表格 / 列表非选中列头
+    #[inline]
+    pub fn color_table_header_inactive(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.text_secondary()
+        } else {
+            self.text_tertiary()
+        }
+    }
+
+    /// 面板次要操作按钮（未禁用）文字
+    #[inline]
+    pub fn color_control_secondary_idle_text(&self) -> Color32 {
+        self.text_secondary()
+    }
+
+    /// 面板次要操作按钮（未禁用）图标
+    #[inline]
+    pub fn color_control_secondary_idle_icon(&self) -> Color32 {
+        self.text_secondary()
+    }
+
+    /// 面板次要按钮悬停/按下时前景
+    #[inline]
+    pub fn color_control_secondary_active_text(&self) -> Color32 {
+        self.text_primary()
+    }
+
+    /// 面板工具按钮常态浅底（略亮于面板，可辨认为按钮）
+    #[inline]
+    pub fn color_control_button_fill_idle(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgb(55, 55, 55)
+        } else {
+            self.color_panel_toolbar_btn_fill()
+        }
+    }
+
+    /// 面板次要按钮常态底
+    #[inline]
+    pub fn color_control_secondary_fill_idle(&self) -> Color32 {
+        self.color_control_button_fill_idle()
+    }
+
+    /// 面板次要按钮悬停底
+    #[inline]
+    pub fn color_control_secondary_fill_hover(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgb(68, 68, 68)
+        } else {
+            self.color_panel_toolbar_btn_fill().gamma_multiply(1.35)
+        }
+    }
+
+    /// 面板次要按钮按下底
+    #[inline]
+    pub fn color_control_secondary_fill_pressed(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgb(78, 78, 78)
+        } else {
+            self.accent_alpha(51)
+        }
+    }
+
+    /// 面板次要按钮禁用底
+    #[inline]
+    pub fn color_control_secondary_fill_disabled(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgb(45, 45, 45)
+        } else {
+            self.color_panel_toolbar_btn_fill()
+                .gamma_multiply(self.color_control_secondary_disabled_fill_gamma())
+        }
+    }
+
+    /// 面板次要按钮描边（暗夜无硬边框，与芯片一致）
+    #[inline]
+    pub fn color_control_secondary_stroke(&self, enabled: bool) -> egui::Stroke {
+        if self.uses_modern_palette() {
+            egui::Stroke::NONE
+        } else {
+            egui::Stroke::new(
+                1.0,
+                if enabled {
+                    self.color_text_input_stroke()
+                } else {
+                    self.color_text_input_stroke().gamma_multiply(0.75)
+                },
+            )
+        }
+    }
+
+    /// 禁用控件文字/图标
+    #[inline]
+    pub fn color_control_disabled_text(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.text_secondary()
+        } else {
+            self.text_tertiary()
+        }
+    }
+
+    /// 禁用主按钮底色（暗夜勿用 accent 淡底 + 灰字）
+    #[inline]
+    pub fn color_control_primary_disabled_fill(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.color_subtle_inset_fill()
+        } else {
+            self.accent_alpha(89)
+        }
+    }
+
+    /// 禁用次按钮底色相对 [`color_panel_toolbar_btn_fill`] 的 gamma 缩放
+    #[inline]
+    pub fn color_control_secondary_disabled_fill_gamma(&self) -> f32 {
+        0.55
+    }
+
     /// 更弱说明/标签（版本号、底栏统计、状态 chip）
     #[inline]
     pub fn color_caption_text(&self) -> Color32 {
@@ -825,6 +1133,8 @@ impl Theme {
     pub fn color_file_list_bg(&self) -> Color32 {
         if self.is_light_theme() {
             Color32::from_rgb(236, 238, 244)
+        } else if self.uses_modern_palette() {
+            self.surface_panel()
         } else {
             self.surface_terminal()
         }
@@ -833,7 +1143,79 @@ impl Theme {
     /// SFTP 文件行 hover
     #[inline]
     pub fn color_sftp_row_hover(&self) -> Color32 {
-        self.accent_alpha(30)
+        if self.uses_modern_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 14)
+        } else {
+            self.accent_alpha(30)
+        }
+    }
+
+    /// SFTP 本机/远端分区容器底（暗夜与面板齐平，无嵌套灰框）
+    #[inline]
+    pub fn color_sftp_section_fill(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::TRANSPARENT
+        } else {
+            self.color_subtle_inset_fill()
+        }
+    }
+
+    #[inline]
+    pub fn sftp_section_stroke(&self) -> egui::Stroke {
+        if self.uses_modern_palette() {
+            egui::Stroke::NONE
+        } else {
+            egui::Stroke::new(1.0, self.border_divider_color())
+        }
+    }
+
+    #[inline]
+    pub fn sftp_list_viewport_stroke(&self) -> egui::Stroke {
+        if self.uses_modern_palette() {
+            egui::Stroke::NONE
+        } else {
+            egui::Stroke::new(1.0, self.border_divider_color())
+        }
+    }
+
+    /// SFTP / 文件列表：名称列字号
+    #[inline]
+    pub fn font_size_file_list_name(&self) -> f32 {
+        if self.uses_modern_palette() {
+            self.font_size_caption()
+        } else {
+            self.font_size_body()
+        }
+    }
+
+    /// SFTP / 文件列表：大小、时间列字号
+    #[inline]
+    pub fn font_size_file_list_meta(&self) -> f32 {
+        if self.uses_modern_palette() {
+            self.font_size_tag()
+        } else {
+            self.font_size_caption()
+        }
+    }
+
+    /// SFTP / 文件列表行高
+    #[inline]
+    pub fn size_file_list_row_h(&self) -> f32 {
+        if self.uses_modern_palette() {
+            28.0
+        } else {
+            24.0
+        }
+    }
+
+    /// SFTP / 文件列表行内图标边长
+    #[inline]
+    pub fn size_file_list_icon(&self) -> f32 {
+        if self.uses_modern_palette() {
+            14.0
+        } else {
+            16.0
+        }
     }
 
     /// 危险强调字（断开、删除提示等）
@@ -904,14 +1286,18 @@ impl Theme {
         self.font_size_body()
     }
 
-    /// 次要 / 工具按钮统一字号
+    /// 次要 / 工具按钮统一字号（比正文小一档，减轻面板内按钮的生硬感）
     pub fn font_size_control_btn(&self) -> f32 {
-        self.font_size_body()
+        self.font_size_ui_control()
     }
 
     /// 搜索框、表单单行、标题栏工具、弹窗底栏按钮统一高度
     pub fn size_control_btn_h(&self) -> f32 {
-        28.0
+        if self.uses_modern_palette() {
+            26.0
+        } else {
+            28.0
+        }
     }
 
     /// 次要按钮最小宽度（取消、刷新等）
@@ -1461,6 +1847,37 @@ impl Theme {
 
     // ── 间距系统（按设计规范 §8） ──
     pub fn spacing_panel_gap(&self) -> f32 { 6.0 }           // 面板间 gap
+
+    /// Dock 标题区分隔线到首行控件（搜索框等）
+    #[inline]
+    pub fn spacing_dock_section_gap(&self) -> f32 {
+        if self.uses_modern_palette() {
+            12.0
+        } else {
+            8.0
+        }
+    }
+
+    /// Dock 内相邻控件行（搜索框 ↔ 芯片 ↔ 工具按钮）
+    #[inline]
+    pub fn spacing_dock_control_gap(&self) -> f32 {
+        if self.uses_modern_palette() {
+            10.0
+        } else {
+            6.0
+        }
+    }
+
+    /// Dock 监控等指标行间距
+    #[inline]
+    pub fn spacing_dock_metric_row_gap(&self) -> f32 {
+        if self.uses_modern_palette() {
+            10.0
+        } else {
+            6.0
+        }
+    }
+
     pub fn spacing_panel_title_pad_x(&self) -> f32 { 6.0 }   // 面板标题左右 padding（收紧）
     pub fn spacing_panel_title_pad_y(&self) -> f32 {
         self.spacing_panel_header_pad_y()
@@ -1473,7 +1890,13 @@ impl Theme {
     pub fn spacing_search_input_y(&self) -> f32 { 5.0 }      // 搜索框输入上下 padding
     pub fn spacing_list_item_x(&self) -> f32 { 10.0 }        // 列表条目左右 padding
     pub fn spacing_list_item_y(&self) -> f32 { 8.0 }         // 列表条目上下 padding
-    pub fn spacing_list_item_gap(&self) -> f32 { 1.0 }       // 列表条目间距
+    pub fn spacing_list_item_gap(&self) -> f32 {
+        if self.uses_modern_palette() {
+            4.0
+        } else {
+            1.0
+        }
+    }
     /// 片段列表行左右内边距
     pub fn spacing_fragment_row_pad_x(&self) -> f32 {
         self.spacing_list_item_x()
@@ -1575,10 +1998,28 @@ impl Theme {
 
     // ── 圆角系统（按设计规范 §7） ──
     pub fn radius_window(&self) -> f32 { 10.0 }              // 窗口
-    pub fn radius_panel(&self) -> f32 { 6.0 }                // 面板
-    pub fn radius_list_item(&self) -> f32 { 4.0 }            // 连接条目
+    pub fn radius_panel(&self) -> f32 {
+        if self.uses_modern_palette() {
+            8.0
+        } else {
+            6.0
+        }
+    }
+    pub fn radius_list_item(&self) -> f32 {
+        if self.uses_modern_palette() {
+            6.0
+        } else {
+            4.0
+        }
+    }
     pub fn radius_card(&self) -> f32 { 4.0 }                 // 片段卡片
-    pub fn radius_search_input(&self) -> f32 { 4.0 }         // 搜索框
+    pub fn radius_search_input(&self) -> f32 {
+        if self.uses_modern_palette() {
+            6.0
+        } else {
+            4.0
+        }
+    }
     pub fn radius_status_btn(&self) -> f32 { 3.0 }           // 状态栏按钮
     pub fn radius_tag(&self) -> f32 { 3.0 }                  // 标签（team/personal）
     pub fn radius_category(&self) -> f32 { 3.0 }             // 分类标签
@@ -1701,34 +2142,27 @@ impl Theme {
         self.bg_selected_color()
     }
 
-    /// 创建暗夜主题（Dark）- Token v2：加强描边与表面阶梯
+    /// 创建暗夜主题 — 中性灰表面、蓝色 accent
     pub fn dark() -> Self {
         Self {
             name: "暗夜".to_string(),
-            // === 背景色 ===
-            bg_body: Color32Serializable::new(18, 20, 30),            // 提亮底色，减弱“纯黑”观感
-            bg_window: Color32Serializable::new(24, 28, 40),          // 面板/窗口底色
-            bg_terminal: Color32Serializable::new(20, 24, 36),        // 终端区域/激活 Tab（不再发黑）
-            bg_tab_bar: Color32Serializable::new(18, 18, 28), // 顶栏/底栏/Tab 条
-            bg_hover: Color32Serializable::with_alpha(10, 10, 10, 10),   // rgba(255,255,255,~0.04) — 悬停
-            bg_selected: Color32Serializable::with_alpha(5, 6, 12, 13), // rgba(102,126,234,0.05) — 选中背景
-            // === 文字 ===
-            // 暗夜 fg_* 仅使用 .a 作为白字 alpha 档位；RGB 在解析时由 fg_high_alpha 统一为白
-            fg_high: Color32Serializable::with_alpha(255, 255, 255, 230), // ~90%
-            fg_medium: Color32Serializable::with_alpha(255, 255, 255, 128), // ~50%
-            fg_low: Color32Serializable::with_alpha(255, 255, 255, 100),  // ~39% hint/弱字
-            // === 主色调 ===
-            accent: Color32Serializable::new(102, 126, 234),          // #667eea
-            accent_dim: Color32Serializable::with_alpha(36, 44, 82, 89), // rgba(102,126,234,0.35)
-            // === 边框 ===
-            // 实色描边（WCAG 对比测试按 RGB；半透明白边在测试中与底色差过小）
-            border: Color32Serializable::new(98, 110, 136),      // dock 外框（暗夜须略高于面板底）
-            border_divider: Color32Serializable::new(78, 88, 108), // 底缘/缝分隔
-            // === 状态色 ===
-            green: Color32Serializable::new(76, 175, 80),             // #4CAF50 — 成功/连接
-            green_dim: Color32Serializable::with_alpha(19, 44, 20, 64), // rgba(76,175,80,0.25)
-            red: Color32Serializable::new(244, 67, 54),               // #f44336
-            amber: Color32Serializable::new(255, 200, 50),
+            bg_body: Color32Serializable::new(32, 32, 32), // #202020
+            bg_window: Color32Serializable::new(37, 37, 37), // #252525
+            bg_terminal: Color32Serializable::new(32, 32, 32),
+            bg_tab_bar: Color32Serializable::new(28, 28, 28), // #1c1c1c
+            bg_hover: Color32Serializable::with_alpha(255, 255, 255, 10),
+            bg_selected: Color32Serializable::with_alpha(255, 255, 255, 16),
+            fg_high: Color32Serializable::new(255, 255, 255),
+            fg_medium: Color32Serializable::new(200, 200, 200),
+            fg_low: Color32Serializable::new(160, 160, 160),
+            accent: Color32Serializable::new(96, 205, 255), // #60CDFF
+            accent_dim: Color32Serializable::new(0, 120, 212), // #0078D4
+            border: Color32Serializable::new(61, 61, 61), // #3d3d3d
+            border_divider: Color32Serializable::new(45, 45, 45), // #2d2d2d
+            green: Color32Serializable::new(108, 203, 95),
+            green_dim: Color32Serializable::with_alpha(108, 203, 95, 64),
+            red: Color32Serializable::new(255, 138, 128),
+            amber: Color32Serializable::new(255, 196, 72),
         }
     }
 
@@ -1820,6 +2254,18 @@ impl Theme {
     }
 }
 
+/// 曾用其它存储名保存的内置暗色主题（加载配置时迁移到「暗夜」）
+const LEGACY_DARK_THEME_STORAGE_NAMES: &[&str] = &["Win11暗色", "现代暗色"];
+
+fn is_legacy_dark_theme_storage_name(name: &str) -> bool {
+    LEGACY_DARK_THEME_STORAGE_NAMES.contains(&name)
+}
+
+/// 主题存储名是否为已废弃的内置暗色项（偏好/迁移用）
+pub fn is_deprecated_dark_theme_storage_name(name: &str) -> bool {
+    is_legacy_dark_theme_storage_name(name)
+}
+
 /// 主题管理器
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThemeManager {
@@ -1839,7 +2285,41 @@ impl ThemeManager {
                 Theme::ocean(),
                 Theme::forest(),
             ],
-            current: 0, // 默认暗夜主题
+            current: 0, // 默认暗夜
+        }
+    }
+
+    fn builtin_themes() -> [Theme; 4] {
+        [
+            Theme::dark(),
+            Theme::light(),
+            Theme::ocean(),
+            Theme::forest(),
+        ]
+    }
+
+    /// 补全/刷新内置主题；移除已废弃的暗色存储项并统一到「暗夜」
+    fn merge_builtin_themes(&mut self) {
+        let current_name = self.themes.get(self.current).map(|t| t.name.clone());
+        self.themes
+            .retain(|t| !is_legacy_dark_theme_storage_name(&t.name));
+        for builtin in Self::builtin_themes() {
+            if let Some(existing) = self.themes.iter_mut().find(|t| t.name == builtin.name) {
+                *existing = builtin;
+            } else {
+                self.themes.push(builtin);
+            }
+        }
+        if current_name.as_deref() == Some("暗夜")
+            || current_name
+                .as_deref()
+                .is_some_and(is_legacy_dark_theme_storage_name)
+        {
+            if let Some(i) = self.themes.iter().position(|t| t.name == "暗夜") {
+                self.current = i;
+            }
+        } else if self.current >= self.themes.len() {
+            self.current = 0;
         }
     }
 
@@ -1848,7 +2328,8 @@ impl ThemeManager {
         let config_path = Self::config_path();
         
         if let Ok(content) = std::fs::read_to_string(&config_path) {
-            if let Ok(manager) = serde_json::from_str(&content) {
+            if let Ok(mut manager) = serde_json::from_str::<Self>(&content) {
+                manager.merge_builtin_themes();
                 return manager;
             }
             log::warn!("Failed to parse theme config; using default theme");
@@ -1907,16 +2388,32 @@ impl ThemeManager {
         style.visuals.window_stroke = theme.panel_stroke();
         style.visuals.widgets.noninteractive.weak_bg_fill = theme.surface_body();
 
-        // 按钮样式：默认透明底 + 悬停 accent 弱底（裸 `ui.checkbox` 会几乎隐形，请用 [`crate::ui::chrome::form_checkbox`]）
+        // 按钮 / ComboBox：暗夜浅灰实底；其它主题透明底 + 悬停 accent 弱底（裸 checkbox 请用 form_checkbox）
         style.visuals.widgets.noninteractive.bg_fill = theme.color_subtle_inset_fill();
         style.visuals.widgets.noninteractive.bg_stroke = theme.divider_stroke();
-        style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
-        style.visuals.widgets.inactive.weak_bg_fill = theme.color_subtle_inset_fill();
-        style.visuals.widgets.inactive.bg_stroke =
-            egui::Stroke::new(1.0, theme.color_checkbox_off_stroke_color());
-        style.visuals.widgets.hovered.bg_fill = theme.accent_alpha(38);
-        style.visuals.widgets.hovered.weak_bg_fill = theme.accent_alpha(51);
-        style.visuals.widgets.active.bg_fill = theme.accent_color();
+        if theme.uses_modern_palette() {
+            let control_fill = theme.color_text_input_fill();
+            let rounding = egui::Rounding::same(theme.radius_search_input());
+            style.visuals.widgets.inactive.bg_fill = control_fill;
+            style.visuals.widgets.inactive.weak_bg_fill = control_fill;
+            style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+            style.visuals.widgets.inactive.rounding = rounding;
+            style.visuals.widgets.hovered.bg_fill = theme.color_control_secondary_fill_hover();
+            style.visuals.widgets.hovered.weak_bg_fill = theme.color_control_secondary_fill_hover();
+            style.visuals.widgets.active.bg_fill = theme.color_control_secondary_fill_pressed();
+            style.visuals.widgets.open.bg_fill = control_fill;
+            style.visuals.widgets.open.weak_bg_fill = control_fill;
+            style.visuals.widgets.open.bg_stroke = egui::Stroke::NONE;
+            style.visuals.widgets.open.rounding = rounding;
+        } else {
+            style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+            style.visuals.widgets.inactive.weak_bg_fill = theme.color_subtle_inset_fill();
+            style.visuals.widgets.inactive.bg_stroke =
+                egui::Stroke::new(1.0, theme.color_checkbox_off_stroke_color());
+            style.visuals.widgets.hovered.bg_fill = theme.color_widget_hover_fill();
+            style.visuals.widgets.hovered.weak_bg_fill = theme.color_widget_hover_fill();
+            style.visuals.widgets.active.bg_fill = theme.color_widget_active_fill();
+        }
 
         // 文字颜色（语义 token；占位符仍建议 RichText + color_form_hint）
         style.visuals.override_text_color = Some(theme.text_primary());
@@ -2055,6 +2552,15 @@ impl Default for ThemeManager {
 mod theme_semantic_tests {
     use super::Theme;
 
+    fn all_builtin_themes() -> [Theme; 4] {
+        [
+            Theme::dark(),
+            Theme::light(),
+            Theme::ocean(),
+            Theme::forest(),
+        ]
+    }
+
     fn contrast_ratio(fg: egui::Color32, bg: egui::Color32) -> f32 {
         fn chan(c: u8) -> f32 {
             let x = f32::from(c) / 255.0;
@@ -2076,12 +2582,7 @@ mod theme_semantic_tests {
 
     #[test]
     fn all_builtin_themes_form_hint_readable() {
-        for theme in [
-            Theme::dark(),
-            Theme::light(),
-            Theme::ocean(),
-            Theme::forest(),
-        ] {
+        for theme in all_builtin_themes() {
             let hint = theme.color_form_hint();
             let fill = theme.color_text_input_fill();
             assert!(
@@ -2095,12 +2596,7 @@ mod theme_semantic_tests {
 
     #[test]
     fn all_builtin_themes_input_text_brighter_than_hint() {
-        for theme in [
-            Theme::dark(),
-            Theme::light(),
-            Theme::ocean(),
-            Theme::forest(),
-        ] {
+        for theme in all_builtin_themes() {
             let input = theme.color_text_input_text();
             let hint = theme.color_form_hint();
             let fill = theme.color_text_input_fill();
@@ -2124,7 +2620,8 @@ mod theme_semantic_tests {
 
     #[test]
     fn solid_palette_classification() {
-        assert!(!Theme::dark().uses_solid_fg_palette());
+        assert!(Theme::dark().uses_solid_fg_palette());
+        assert!(Theme::dark().uses_modern_palette());
         assert!(Theme::light().uses_solid_fg_palette());
         assert!(Theme::ocean().uses_solid_fg_palette());
         assert!(Theme::forest().uses_solid_fg_palette());
@@ -2132,16 +2629,12 @@ mod theme_semantic_tests {
 
     #[test]
     fn modal_primary_text_contrast_on_accent() {
-        for theme in [
-            Theme::dark(),
-            Theme::light(),
-            Theme::ocean(),
-            Theme::forest(),
-        ] {
+        for theme in all_builtin_themes() {
             let text = theme.color_modal_primary_text();
             let fill = theme.color_modal_primary_fill();
+            let min_cr = if theme.uses_modern_palette() { 2.8 } else { 3.0 };
             assert!(
-                contrast_ratio(text, fill) >= 3.0,
+                contrast_ratio(text, fill) >= min_cr,
                 "{}: primary button contrast {:.2}",
                 theme.name,
                 contrast_ratio(text, fill)
@@ -2151,12 +2644,7 @@ mod theme_semantic_tests {
 
     #[test]
     fn all_builtin_themes_caption_and_icon_readable() {
-        for theme in [
-            Theme::dark(),
-            Theme::light(),
-            Theme::ocean(),
-            Theme::forest(),
-        ] {
+        for theme in all_builtin_themes() {
             let bg = theme.bg_window_color();
             assert!(
                 contrast_ratio(theme.color_caption_text(), bg) >= 2.5,
@@ -2181,12 +2669,7 @@ mod theme_semantic_tests {
 
     #[test]
     fn all_builtin_themes_panel_stroke_nonzero() {
-        for theme in [
-            Theme::dark(),
-            Theme::light(),
-            Theme::ocean(),
-            Theme::forest(),
-        ] {
+        for theme in all_builtin_themes() {
             assert!(
                 theme.panel_stroke_color().a() > 0,
                 "{}: panel stroke alpha",
@@ -2209,12 +2692,7 @@ mod theme_semantic_tests {
 
     #[test]
     fn all_builtin_themes_text_tiers_readable_on_chrome() {
-        for theme in [
-            Theme::dark(),
-            Theme::light(),
-            Theme::ocean(),
-            Theme::forest(),
-        ] {
+        for theme in all_builtin_themes() {
             for (name, bg) in [
                 ("panel", theme.surface_panel()),
                 ("tab_bar", theme.surface_elevated()),
@@ -2255,12 +2733,7 @@ mod theme_semantic_tests {
 
     #[test]
     fn all_builtin_themes_body_text_contrast() {
-        for theme in [
-            Theme::dark(),
-            Theme::light(),
-            Theme::ocean(),
-            Theme::forest(),
-        ] {
+        for theme in all_builtin_themes() {
             let bg = theme.surface_panel();
             assert!(
                 contrast_ratio(theme.text_primary(), bg) >= 4.5,
@@ -2273,12 +2746,7 @@ mod theme_semantic_tests {
 
     #[test]
     fn all_builtin_themes_primary_hover_brighter_than_idle() {
-        for theme in [
-            Theme::dark(),
-            Theme::light(),
-            Theme::ocean(),
-            Theme::forest(),
-        ] {
+        for theme in all_builtin_themes() {
             let idle = theme.color_modal_primary_fill();
             let hover = theme.color_modal_primary_fill_hover();
             let idle_lum = f32::from(idle.r()) + f32::from(idle.g()) + f32::from(idle.b());

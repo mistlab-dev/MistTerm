@@ -695,8 +695,7 @@ impl MistTermApp {
 
         crate::ui::chrome::paint_right_dock_screen_gutter(ctx, theme, top_chrome_height);
 
-        // egui：CentralPanel 同层后绘会盖住 SidePanel；右 dock 须在 Central 之后 Foreground 重绘（靠左的先画）
-        // 居中模态窗打开时跳过 Foreground，避免 dock 标题栏 × 与弹窗关闭钮叠在同一位置。
+        // 仅抑制会与右 dock 标题栏 × 重叠的模态窗；偏好/关于/帮助等视口居中窗仍保留 dock。
         let paint_right_dock_fg = !self.suppress_right_dock_foreground();
         if paint_right_dock_fg && self.show_monitor_panel {
             self.monitor_panel
@@ -1095,7 +1094,7 @@ impl MistTermApp {
                                     let can_save = !required_missing;
                                     let save_connect = ui
                                         .add(
-                                            crate::ui::chrome::modal_primary_icon_button_widget(
+                                            crate::ui::chrome::modal_primary_button_with_icon_widget(
                                                 th,
                                                 crate::ui::icons::IconId::Rocket,
                                                 crate::i18n::tr(ctx, "Save & connect", "保存并连接"),
@@ -1499,7 +1498,7 @@ impl MistTermApp {
                         }
                         ui.add_space(theme.spacing_lg());
                         crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
-                            if crate::ui::chrome::modal_primary_icon_button(
+                            if crate::ui::chrome::modal_primary_button_with_icon(
                                 ui,
                                 th,
                                 crate::ui::icons::IconId::Check,
@@ -1565,7 +1564,7 @@ impl MistTermApp {
                             );
                             ui.add_space(theme.spacing_lg());
                             crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
-                                if crate::ui::chrome::modal_primary_icon_button(
+                                if crate::ui::chrome::modal_primary_button_with_icon(
                                     ui,
                                     th,
                                     crate::ui::icons::IconId::Check,
@@ -1937,7 +1936,7 @@ impl MistTermApp {
                                 let can_save = !required_missing;
                                 if ui
                                     .add(
-                                        crate::ui::chrome::modal_primary_icon_button_widget(
+                                        crate::ui::chrome::modal_primary_button_with_icon_widget(
                                             th,
                                             crate::ui::icons::IconId::Check,
                                             crate::i18n::tr(ctx, "Save", "保存"),
@@ -2132,7 +2131,7 @@ impl MistTermApp {
                                         }
                                     };
                                     if ui
-                                        .add(crate::ui::chrome::modal_primary_icon_button_widget(
+                                        .add(crate::ui::chrome::modal_primary_button_with_icon_widget(
                                             theme,
                                             crate::ui::icons::IconId::TerminalPrompt,
                                             insert_label,
@@ -2432,7 +2431,7 @@ impl MistTermApp {
                     ui.add_space(theme.spacing_list_item_x());
                     crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
                         if ui
-                            .add(crate::ui::chrome::modal_primary_icon_button_widget(
+                            .add(crate::ui::chrome::modal_primary_button_with_icon_widget(
                                 th,
                                 crate::ui::icons::IconId::Check,
                                 ok_label_static,

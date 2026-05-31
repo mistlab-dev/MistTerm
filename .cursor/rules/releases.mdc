@@ -1,0 +1,15 @@
+---
+description: Release and versioning must always go through main
+alwaysApply: true
+---
+
+# Releases (main only)
+
+When the user asks to commit a release, bump version, create a tag, or publish GitHub Release:
+
+1. **Never tag a feature branch.** The release commit and `v*` tag must be on `main`.
+2. Merge or ensure all release changes are on `main` first (PR preferred).
+3. On `main`: bump `Cargo.toml` and `Info.plist`, commit (`chore: release vX.Y.Z`), tag, push `main` + tag.
+4. Do not push a release tag until `main` contains the release commit.
+
+CI rejects releases whose tagged commit is not contained in `origin/main`.
