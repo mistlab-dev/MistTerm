@@ -742,12 +742,11 @@ impl MonitorPanel {
         let loc = i18n::locale(ui.ctx());
         const CHART_HEIGHT: f32 = 110.0;
         let width = layout_util::set_width_to_available(ui);
-        let plot_margin = egui::vec2(0.14, 0.14);
-        let legend = |corner: Corner| {
-            Legend::default()
-                .position(corner)
-                .background_alpha(0.55)
-        };
+        // 侧栏较窄时 LeftTop 图例会盖住 Y 轴与曲线；加大左右边距并固定图例在右上。
+        let plot_margin = egui::vec2(0.22, 0.10);
+        let legend = Legend::default()
+            .position(Corner::RightTop)
+            .background_alpha(0.85);
         let link_x_id = ui.id().with("monitor_hist_time_axis");
         let tip_id = ui.id().with("monitor_history_tooltip");
 
@@ -837,7 +836,6 @@ impl MonitorPanel {
             .allow_drag(AxisBools::new(true, true))
             .allow_scroll(true)
             .allow_boxed_zoom(false)
-            .view_aspect(2.5)
             .include_x(0.0)
             .include_x(t_end.max(1.0))
             .include_y(0.0)
@@ -845,7 +843,7 @@ impl MonitorPanel {
             .set_margin_fraction(plot_margin)
             .y_axis_label(pct_y.clone())
             .x_axis_label(time_x.clone())
-            .legend(legend(Corner::LeftTop))
+            .legend(legend.clone())
             .show_axes([true, true])
             .show_grid([true, true])
             .label_formatter(|name, value| {
@@ -967,7 +965,6 @@ impl MonitorPanel {
             .allow_drag(AxisBools::new(true, true))
             .allow_scroll(true)
             .allow_boxed_zoom(false)
-            .view_aspect(2.5)
             .include_x(0.0)
             .include_x(t_end.max(1.0))
             .include_y(0.0)
@@ -975,7 +972,7 @@ impl MonitorPanel {
             .set_margin_fraction(plot_margin)
             .y_axis_label(load_y.clone())
             .x_axis_label(time_x.clone())
-            .legend(legend(Corner::LeftTop))
+            .legend(legend.clone())
             .show_axes([true, true])
             .show_grid([true, true])
             .label_formatter(|name, value| {
@@ -1056,7 +1053,6 @@ impl MonitorPanel {
                 .allow_drag(AxisBools::new(true, true))
                 .allow_scroll(true)
                 .allow_boxed_zoom(false)
-                .view_aspect(2.5)
                 .include_x(0.0)
                 .include_x(t_end.max(1.0))
                 .include_y(0.0)
@@ -1065,7 +1061,7 @@ impl MonitorPanel {
                 .y_axis_label("B/s")
                 .x_axis_label(time_x.clone())
                 .y_axis_formatter(|v, _max_chars, _range| format_bytes_per_sec(v))
-                .legend(legend(Corner::LeftTop))
+                .legend(legend)
                 .show_axes([true, true])
                 .show_grid([true, true])
                 .label_formatter(|name, value| {
