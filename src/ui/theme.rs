@@ -2680,13 +2680,16 @@ mod theme_semantic_tests {
                 "{}: divider stroke alpha",
                 theme.name
             );
-            let bg = theme.surface_panel();
-            assert!(
-                contrast_ratio(theme.panel_stroke_color(), bg) >= 1.15,
-                "{}: panel border vs panel bg {:.2}",
-                theme.name,
-                contrast_ratio(theme.panel_stroke_color(), bg)
-            );
+            // 暗夜等现代主题 stroke_width=0，外框色仅作 token 保留，不测可见对比度
+            if theme.stroke_width_panel() > 0.0 {
+                let bg = theme.surface_panel();
+                assert!(
+                    contrast_ratio(theme.panel_stroke_color(), bg) >= 1.15,
+                    "{}: panel border vs panel bg {:.2}",
+                    theme.name,
+                    contrast_ratio(theme.panel_stroke_color(), bg)
+                );
+            }
         }
     }
 
