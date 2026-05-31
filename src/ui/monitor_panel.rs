@@ -391,7 +391,7 @@ impl MonitorPanel {
                         });
                     crate::ui::chrome::right_dock_header_divider(ui, theme);
                     ui.spacing_mut().item_spacing.y = prev_gap_y;
-                    ui.add_space(theme.spacing_xs());
+                    ui.add_space(theme.spacing_dock_section_gap());
 
                     let scroll_h = ui.available_height().max(120.0);
                     let prev_extreme = ui.visuals().extreme_bg_color;
@@ -445,7 +445,7 @@ impl MonitorPanel {
                 );
             }
         });
-        ui.add_space(theme.spacing_sm());
+        ui.add_space(theme.spacing_dock_control_gap());
 
         egui::CollapsingHeader::new(
             egui::RichText::new(i18n::tr(ui.ctx(), "Alert thresholds", "告警阈值"))
@@ -523,7 +523,7 @@ impl MonitorPanel {
                 loc.tr("Uptime", "运行时间"),
                 stats.format_uptime(),
             );
-            ui.add_space(theme.spacing_sm());
+            ui.add_space(theme.spacing_dock_metric_row_gap());
 
             // CPU 使用率
             self.show_metric_bar(
@@ -533,7 +533,7 @@ impl MonitorPanel {
                 loc.tr("CPU", "CPU"),
                 stats.cpu_percent,
                 format!("{:.1}%", stats.cpu_percent),
-                cpu_color(stats.cpu_percent, theme),
+                theme.metric_cpu_bar_color(stats.cpu_percent),
             );
 
             self.show_metric_bar(
@@ -543,7 +543,7 @@ impl MonitorPanel {
                 loc.tr("Memory", "内存"),
                 stats.memory_percent(),
                 stats.format_memory(),
-                mem_color(stats.memory_percent(), theme),
+                theme.metric_mem_bar_color(stats.memory_percent()),
             );
 
             self.show_metric_bar(
@@ -553,7 +553,7 @@ impl MonitorPanel {
                 loc.tr("Disk", "磁盘"),
                 stats.disk_percent(),
                 stats.format_disk(),
-                disk_color(stats.disk_percent(), theme),
+                theme.metric_disk_bar_color(stats.disk_percent()),
             );
 
             ui.add_space(theme.spacing_md());
@@ -594,14 +594,14 @@ impl MonitorPanel {
                     egui::RichText::new(format!("↓ {}", format_bytes_per_sec(rx_rate)))
                         .monospace()
                         .size(theme.font_size_normal())
-                        .color(theme.green_color()),
+                        .color(theme.chart_net_rx_color()),
                 );
                 ui.add_space(theme.spacing_lg());
                 ui.label(
                     egui::RichText::new(format!("↑ {}", format_bytes_per_sec(tx_rate)))
                         .monospace()
                         .size(theme.font_size_normal())
-                        .color(theme.accent_color()),
+                        .color(theme.chart_net_tx_color()),
                 );
             });
 
@@ -677,7 +677,7 @@ impl MonitorPanel {
 
         let bar_height = theme.progress_bar_height();
         let available_width = layout_util::set_width_to_available(ui);
-        let bg_color = theme.border_color();
+        let bg_color = theme.metric_bar_track_fill();
 
         ui.allocate_ui_with_layout(
             egui::vec2(available_width, bar_height + 2.0),
@@ -701,7 +701,7 @@ impl MonitorPanel {
             },
         );
 
-        ui.add_space(4.0);
+        ui.add_space(theme.spacing_dock_metric_row_gap());
     }
 
     /// 显示负载标签
@@ -715,7 +715,7 @@ impl MonitorPanel {
         };
 
         egui::Frame::none()
-            .fill(theme.border_color())
+            .fill(theme.metric_bar_track_fill())
             .rounding(4.0)
             .inner_margin(theme.margin_monitor_metric_row())
             .show(ui, |ui| {
@@ -802,15 +802,15 @@ impl MonitorPanel {
 
         let cpu_line = Line::new(cpu_points)
             .name(name_cpu)
-            .color(theme.green_color())
+            .color(theme.chart_cpu_color())
             .width(1.6);
         let mem_line = Line::new(mem_points)
             .name(name_mem)
-            .color(theme.accent_color())
+            .color(theme.chart_mem_color())
             .width(1.6);
         let disk_line = Line::new(disk_points)
             .name(name_disk)
-            .color(disk_color(72.0_f32, theme))
+            .color(theme.chart_disk_color())
             .width(1.6);
 
         show_chart_caption(
@@ -825,9 +825,9 @@ impl MonitorPanel {
             ui,
             theme,
             &[
-                (name_cpu, theme.green_color()),
-                (name_mem, theme.accent_color()),
-                (name_disk, disk_color(72.0_f32, theme)),
+                (name_cpu, theme.chart_cpu_color()),
+                (name_mem, theme.chart_mem_color()),
+                (name_disk, theme.chart_disk_color()),
             ],
         );
 
@@ -868,14 +868,17 @@ impl MonitorPanel {
                                 .style(LineStyle::Dotted { spacing: 4.0 }),
                         );
                         for (y, color) in [
-                            (f64::from(s.cpu_percent.clamp(0.0, 100.0)), theme.green_color()),
+                            (
+                                f64::from(s.cpu_percent.clamp(0.0, 100.0)),
+                                theme.chart_cpu_color(),
+                            ),
                             (
                                 f64::from(s.memory_percent().clamp(0.0, 100.0)),
-                                theme.accent_color(),
+                                theme.chart_mem_color(),
                             ),
                             (
                                 f64::from(s.disk_percent().clamp(0.0, 100.0)),
-                                disk_color(72.0_f32, theme),
+                                theme.chart_disk_color(),
                             ),
                         ] {
                             plot_ui.points(
@@ -971,9 +974,9 @@ impl MonitorPanel {
             ui,
             theme,
             &[
-                (loc.tr("1 min", "1 分钟"), theme.green_color()),
-                (loc.tr("5 min", "5 分钟"), theme.amber_color()),
-                (loc.tr("15 min", "15 分钟"), theme.text_primary()),
+                (loc.tr("1 min", "1 分钟"), theme.chart_load_1m_color()),
+                (loc.tr("5 min", "5 分钟"), theme.chart_load_5m_color()),
+                (loc.tr("15 min", "15 分钟"), theme.chart_load_15m_color()),
             ],
         );
 
@@ -996,19 +999,19 @@ impl MonitorPanel {
                 plot_ui.line(
                     Line::new(load1_points)
                         .name(loc.tr("1 min", "1 分钟"))
-                        .color(theme.green_color())
+                        .color(theme.chart_load_1m_color())
                         .width(1.6),
                 );
                 plot_ui.line(
                     Line::new(load5_points)
                         .name(loc.tr("5 min", "5 分钟"))
-                        .color(theme.amber_color())
+                        .color(theme.chart_load_5m_color())
                         .width(1.6),
                 );
                 plot_ui.line(
                     Line::new(load15_points)
                         .name(loc.tr("15 min", "15 分钟"))
-                        .color(theme.text_primary())
+                        .color(theme.chart_load_15m_color())
                         .width(1.6),
                 );
             });
@@ -1040,8 +1043,8 @@ impl MonitorPanel {
             ui,
             theme,
             &[
-                (loc.tr("Download", "下行"), theme.green_color()),
-                (loc.tr("Upload", "上行"), theme.accent_color()),
+                (loc.tr("Download", "下行"), theme.chart_net_rx_color()),
+                (loc.tr("Upload", "上行"), theme.chart_net_tx_color()),
             ],
         );
 
@@ -1081,13 +1084,13 @@ impl MonitorPanel {
                     plot_ui.line(
                         Line::new(rx_line)
                             .name(loc.tr("Download", "下行"))
-                            .color(theme.green_color())
+                            .color(theme.chart_net_rx_color())
                             .width(1.6),
                     );
                     plot_ui.line(
                         Line::new(tx_line)
                             .name(loc.tr("Upload", "上行"))
-                            .color(theme.accent_color())
+                            .color(theme.chart_net_tx_color())
                             .width(1.6),
                     );
                 });
@@ -1187,38 +1190,6 @@ fn pct_y_grid_marks() -> Vec<GridMark> {
             step_size: 25.0,
         })
         .collect()
-}
-
-fn cpu_color(pct: f32, theme: &Theme) -> egui::Color32 {
-    if pct < 50.0 {
-        theme.green_color()
-    } else if pct < 80.0 {
-        theme.amber_color()
-    } else {
-        theme.red_color()
-    }
-}
-
-/// 内存使用率颜色
-fn mem_color(pct: f32, theme: &Theme) -> egui::Color32 {
-    if pct < 70.0 {
-        theme.accent_color()
-    } else if pct < 90.0 {
-        theme.amber_color()
-    } else {
-        theme.red_color()
-    }
-}
-
-/// 磁盘使用率颜色
-fn disk_color(pct: f32, theme: &Theme) -> egui::Color32 {
-    if pct < 70.0 {
-        theme.accent_color()
-    } else if pct < 90.0 {
-        theme.amber_color()
-    } else {
-        theme.red_color()
-    }
 }
 
 /// 与横轴采样时间最接近的历史点索引(用于悬浮提示)。

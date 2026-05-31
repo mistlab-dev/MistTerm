@@ -138,19 +138,36 @@ pub fn panel_header_new_button_with_label(ui: &mut Ui, theme: &Theme, label: &st
         if hovered || pressed {
             ui.ctx().request_repaint();
         }
-        let fill = if pressed {
+        let fill = if theme.uses_modern_palette() {
+            if pressed {
+                theme.color_control_secondary_fill_pressed()
+            } else if hovered {
+                theme.color_control_secondary_fill_hover()
+            } else {
+                theme.color_control_button_fill_idle()
+            }
+        } else if pressed {
             theme.accent_alpha(64)
         } else if hovered {
             theme.accent_alpha(51)
         } else {
             theme.accent_alpha(38)
         };
+        let icon_color = if theme.uses_modern_palette() {
+            if hovered || pressed {
+                theme.text_primary()
+            } else {
+                theme.text_secondary()
+            }
+        } else {
+            theme.accent_color()
+        };
         ui.painter().rect(rect, rounding, fill, egui::Stroke::NONE);
         icons::paint_icon(
             ui,
             rect,
             IconId::Plus,
-            theme.accent_color(),
+            icon_color,
             theme.font_size_sidebar_icon_glyph(),
         );
         if hovered {
@@ -163,7 +180,7 @@ pub fn panel_header_new_button_with_label(ui: &mut Ui, theme: &Theme, label: &st
         theme,
         label,
         Some(IconId::Plus),
-        ControlButtonVariant::Primary,
+        ControlButtonVariant::ToolbarPrimary,
         theme.size_panel_header_btn_min_w(),
         true,
     )
@@ -204,7 +221,6 @@ pub fn panel_sort_chip(
     let icon_px = theme.size_icon_glyph();
     let gap = 4.0;
     let pad_x = theme.spacing_panel_header_btn_pad_x();
-    let font = egui::FontId::proportional(theme.font_size_category_label());
     let text_color = theme.color_filter_chip_inactive_text();
     let w = panel_sort_chip_width(ui, theme, sort_label);
     let size = egui::vec2(w, chip_h);
@@ -228,18 +244,18 @@ pub fn panel_sort_chip(
         egui::Stroke::NONE
     };
     ui.painter().rect(rect, rounding, fill, stroke);
-    let mut x = rect.left() + pad_x;
-    let cy = rect.center().y;
-    let icon_rect =
-        egui::Rect::from_center_size(egui::pos2(x + icon_px * 0.5, cy), egui::vec2(icon_px, icon_px));
-    icons::paint_icon(ui, icon_rect, sort_icon, text_color, icon_px);
-    x += icon_px + gap;
-    ui.painter().text(
-        egui::pos2(x, cy),
-        egui::Align2::LEFT_CENTER,
+    paint_icon_caption_row_in_rect(
+        ui,
+        rect,
+        sort_icon,
         sort_label,
-        font,
+        icon_px,
+        gap,
+        theme.font_size_category_label(),
         text_color,
+        text_color,
+        pad_x,
+        false,
     );
     if hovered {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
@@ -405,16 +421,33 @@ pub fn sidebar_list_sort_button(
 
 /// 下拉 / 右键 / ComboBox 弹出层共用的控件色（含 `widgets.open`，避免子菜单发黑底）。
 pub fn apply_popup_widget_visuals(visuals: &mut egui::Visuals, theme: &Theme) {
-    visuals.widgets.inactive.bg_fill = theme.bg_window_color();
-    visuals.widgets.hovered.bg_fill = theme.accent_alpha(38);
-    visuals.widgets.active.bg_fill = theme.accent_alpha(64);
-    visuals.widgets.inactive.fg_stroke.color = theme.text_secondary();
-    visuals.widgets.hovered.fg_stroke.color = theme.text_primary();
-    let open = &mut visuals.widgets.open;
-    open.weak_bg_fill = theme.accent_alpha(38);
-    open.bg_fill = theme.accent_alpha(38);
-    open.bg_stroke = egui::Stroke::NONE;
-    open.fg_stroke.color = theme.text_primary();
+    if theme.uses_modern_palette() {
+        let menu_bg = theme.color_control_button_fill_idle();
+        visuals.window_fill = menu_bg;
+        visuals.widgets.inactive.bg_fill = menu_bg;
+        visuals.widgets.inactive.weak_bg_fill = menu_bg;
+        visuals.widgets.hovered.bg_fill = theme.color_control_secondary_fill_hover();
+        visuals.widgets.active.bg_fill = theme.color_control_secondary_fill_pressed();
+        visuals.widgets.inactive.fg_stroke.color = theme.text_secondary();
+        visuals.widgets.hovered.fg_stroke.color = theme.text_primary();
+        visuals.widgets.active.fg_stroke.color = theme.text_primary();
+        let open = &mut visuals.widgets.open;
+        open.weak_bg_fill = theme.color_control_secondary_fill_pressed();
+        open.bg_fill = theme.color_control_secondary_fill_pressed();
+        open.bg_stroke = egui::Stroke::NONE;
+        open.fg_stroke.color = theme.text_primary();
+    } else {
+        visuals.widgets.inactive.bg_fill = theme.bg_window_color();
+        visuals.widgets.hovered.bg_fill = theme.accent_alpha(38);
+        visuals.widgets.active.bg_fill = theme.accent_alpha(64);
+        visuals.widgets.inactive.fg_stroke.color = theme.text_secondary();
+        visuals.widgets.hovered.fg_stroke.color = theme.text_primary();
+        let open = &mut visuals.widgets.open;
+        open.weak_bg_fill = theme.accent_alpha(38);
+        open.bg_fill = theme.accent_alpha(38);
+        open.bg_stroke = egui::Stroke::NONE;
+        open.fg_stroke.color = theme.text_primary();
+    }
     visuals.selection.bg_fill = theme.color_text_selection_bg();
     visuals.selection.stroke.color = theme.color_text_selection_fg();
 }
@@ -1005,8 +1038,66 @@ pub fn paint_sidebar_selection_accent(
 #[derive(Clone, Copy, PartialEq)]
 enum ControlButtonVariant {
     Primary,
+    ToolbarPrimary,
     Secondary,
     Danger,
+}
+
+fn paint_caption_in_rect_center(
+    ui: &mut Ui,
+    rect: egui::Rect,
+    label: &str,
+    font_size: f32,
+    color: Color32,
+) {
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        egui::FontId::proportional(font_size),
+        color,
+    );
+    let pos = rect.center() - galley.size() * 0.5;
+    ui.painter().galley(pos, galley);
+}
+
+/// `center_row`: 工具按钮等在槽内居中；`false` 时自左 `pad_x` 起排（排序芯片、状态栏）。
+fn paint_icon_caption_row_in_rect(
+    ui: &mut Ui,
+    rect: egui::Rect,
+    icon: IconId,
+    label: &str,
+    icon_px: f32,
+    gap: f32,
+    font_size: f32,
+    text_color: Color32,
+    icon_color: Color32,
+    pad_x: f32,
+    center_row: bool,
+) {
+    let painter = ui.painter();
+    let galley = painter.layout_no_wrap(
+        label.to_owned(),
+        egui::FontId::proportional(font_size),
+        text_color,
+    );
+    let text_w = galley.size().x;
+    let text_h = galley.size().y;
+    let icon_cy = rect.center().y;
+    let (text_x, icon_cx) = if center_row {
+        let total_w = icon_px + gap + text_w;
+        let start_x = rect.center().x - total_w * 0.5;
+        (start_x + icon_px + gap, start_x + icon_px * 0.5)
+    } else {
+        let start_x = rect.left() + pad_x;
+        (start_x + icon_px + gap, start_x + icon_px * 0.5)
+    };
+    icons::paint_icon(
+        ui,
+        egui::Rect::from_center_size(egui::pos2(icon_cx, icon_cy), egui::vec2(icon_px, icon_px)),
+        icon,
+        icon_color,
+        icon_px,
+    );
+    painter.galley(egui::pos2(text_x, icon_cy - text_h * 0.5), galley);
 }
 
 fn control_button_size(ui: &Ui, theme: &Theme, label: &str, with_icon: bool, min_w: f32) -> egui::Vec2 {
@@ -1025,6 +1116,123 @@ fn control_button_size(ui: &Ui, theme: &Theme, label: &str, with_icon: bool, min
     };
     let w = (text_w + icon_extra + 2.0 * pad_x).max(min_w);
     egui::vec2(w, h)
+}
+
+fn secondary_control_button_colors(
+    theme: &Theme,
+    can_activate: bool,
+    hovered: bool,
+    pressed: bool,
+) -> (Color32, Color32, Color32) {
+    if !can_activate {
+        (
+            theme.color_control_secondary_fill_disabled(),
+            theme.color_control_disabled_text(),
+            theme.color_control_disabled_text(),
+        )
+    } else if pressed {
+        let c = theme.color_control_secondary_active_text();
+        (
+            theme.color_control_secondary_fill_pressed(),
+            c,
+            c,
+        )
+    } else if hovered {
+        let c = theme.color_control_secondary_active_text();
+        (
+            theme.color_control_secondary_fill_hover(),
+            c,
+            c,
+        )
+    } else {
+        (
+            theme.color_control_secondary_fill_idle(),
+            theme.color_control_secondary_idle_text(),
+            theme.color_control_secondary_idle_icon(),
+        )
+    }
+}
+
+fn primary_control_button_colors(
+    theme: &Theme,
+    can_activate: bool,
+    hovered: bool,
+    pressed: bool,
+) -> (Color32, Color32, Color32) {
+    if !can_activate {
+        if hovered {
+            return (
+                theme
+                    .color_control_primary_disabled_fill()
+                    .gamma_multiply(1.12),
+                theme.color_control_disabled_text(),
+                theme.color_control_disabled_text(),
+            );
+        }
+        return (
+            theme.color_control_primary_disabled_fill(),
+            theme.color_control_disabled_text(),
+            theme.color_control_disabled_text(),
+        );
+    }
+    if pressed {
+        let c = theme.color_modal_primary_text();
+        return (
+            theme.accent_dim_color(),
+            c,
+            c,
+        );
+    }
+    if hovered {
+        let c = theme.color_modal_primary_text();
+        return (
+            theme.color_modal_primary_fill_hover(),
+            c,
+            c,
+        );
+    }
+    let c = theme.color_modal_primary_text();
+    (
+        theme.color_modal_primary_fill(),
+        c,
+        c,
+    )
+}
+
+/// 面板命令栏主按钮（暗夜：浅底 ghost；彩色主题：与弹窗主按钮同族）
+fn toolbar_primary_control_button_colors(
+    theme: &Theme,
+    can_activate: bool,
+    hovered: bool,
+    pressed: bool,
+) -> (Color32, Color32, Color32) {
+    if theme.uses_modern_palette() {
+        if !can_activate {
+            return (
+                theme.color_control_secondary_fill_disabled(),
+                theme.color_control_disabled_text(),
+                theme.color_control_disabled_text(),
+            );
+        }
+        if pressed {
+            let c = theme.text_primary();
+            return (
+                theme.color_control_secondary_fill_pressed(),
+                c,
+                c,
+            );
+        }
+        if hovered {
+            let c = theme.text_primary();
+            return (theme.color_control_secondary_fill_hover(), c, c);
+        }
+        return (
+            theme.color_control_button_fill_idle(),
+            theme.text_primary(),
+            theme.text_secondary(),
+        );
+    }
+    primary_control_button_colors(theme, can_activate, hovered, pressed)
 }
 
 fn paint_control_button(
@@ -1046,8 +1254,9 @@ fn paint_control_button(
     }
 
     let stroke = match variant {
-        ControlButtonVariant::Primary => egui::Stroke::NONE,
-        ControlButtonVariant::Secondary | ControlButtonVariant::Danger => {
+        ControlButtonVariant::Primary | ControlButtonVariant::ToolbarPrimary => egui::Stroke::NONE,
+        ControlButtonVariant::Secondary => theme.color_control_secondary_stroke(can_activate),
+        ControlButtonVariant::Danger => {
             egui::Stroke::new(1.0, theme.color_text_input_stroke())
         }
     };
@@ -1056,97 +1265,38 @@ fn paint_control_button(
             unreachable!("danger buttons use paint_icon_only_button")
         }
         ControlButtonVariant::Primary => {
-            if !can_activate {
-                if hovered {
-                    (
-                        theme.color_modal_primary_fill_hover().gamma_multiply(0.75),
-                        theme.text_primary(),
-                        theme.text_primary(),
-                    )
-                } else {
-                    (
-                        theme.accent_alpha(89),
-                        theme.color_modal_secondary_text(),
-                        theme.color_modal_secondary_text(),
-                    )
-                }
-            } else if pressed {
-                (
-                    theme.accent_dim_color(),
-                    theme.color_modal_primary_text(),
-                    theme.color_modal_primary_text(),
-                )
-            } else if hovered {
-                (
-                    theme.color_modal_primary_fill_hover(),
-                    theme.color_modal_primary_text(),
-                    theme.color_modal_primary_text(),
-                )
-            } else {
-                (
-                    theme.color_modal_primary_fill(),
-                    theme.color_modal_primary_text(),
-                    theme.color_modal_primary_text(),
-                )
-            }
+            primary_control_button_colors(theme, can_activate, hovered, pressed)
+        }
+        ControlButtonVariant::ToolbarPrimary => {
+            toolbar_primary_control_button_colors(theme, can_activate, hovered, pressed)
         }
         ControlButtonVariant::Secondary => {
-            let base_fill = theme.color_panel_toolbar_btn_fill();
-            if !can_activate {
-                (
-                    base_fill.gamma_multiply(0.55),
-                    theme.text_tertiary(),
-                    theme.text_tertiary(),
-                )
-            } else if pressed {
-                (theme.accent_alpha(51), theme.text_primary(), theme.text_primary())
-            } else if hovered {
-                (
-                    base_fill.gamma_multiply(1.35),
-                    theme.text_primary(),
-                    theme.text_primary(),
-                )
-            } else {
-                (
-                    base_fill,
-                    theme.color_modal_secondary_text(),
-                    theme.color_body_text_muted(),
-                )
-            }
+            secondary_control_button_colors(theme, can_activate, hovered, pressed)
         }
     };
 
     ui.painter().rect(rect, rounding, fill, stroke);
-
-    let font = egui::FontId::proportional(theme.font_size_control_btn());
     if let Some(id) = icon {
         let icon_px = theme.size_icon_glyph();
-        let gap = 4.0;
-        let text_w = ui
-            .painter()
-            .layout_no_wrap(label.to_owned(), font.clone(), text_color)
-            .size()
-            .x;
-        let total_w = icon_px + gap + text_w;
-        let mut x = rect.center().x - total_w * 0.5;
-        let cy = rect.center().y;
-        let icon_rect =
-            egui::Rect::from_center_size(egui::pos2(x + icon_px * 0.5, cy), egui::vec2(icon_px, icon_px));
-        icons::paint_icon(ui, icon_rect, id, icon_color, icon_px);
-        x += icon_px + gap;
-        ui.painter().text(
-            egui::pos2(x, cy),
-            egui::Align2::LEFT_CENTER,
+        paint_icon_caption_row_in_rect(
+            ui,
+            rect,
+            id,
             label,
-            font,
+            icon_px,
+            4.0,
+            theme.font_size_control_btn(),
             text_color,
+            icon_color,
+            0.0,
+            true,
         );
     } else {
-        ui.painter().text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
+        paint_caption_in_rect_center(
+            ui,
+            rect,
             label,
-            font,
+            theme.font_size_control_btn(),
             text_color,
         );
     }
@@ -1187,62 +1337,30 @@ fn paint_icon_only_button(
     }
 
     let stroke = match variant {
-        ControlButtonVariant::Primary => egui::Stroke::NONE,
-        ControlButtonVariant::Secondary | ControlButtonVariant::Danger => {
+        ControlButtonVariant::Primary | ControlButtonVariant::ToolbarPrimary => egui::Stroke::NONE,
+        ControlButtonVariant::Secondary => theme.color_control_secondary_stroke(can_activate),
+        ControlButtonVariant::Danger => {
             egui::Stroke::new(1.0, theme.color_text_input_stroke())
         }
     };
     let (fill, icon_color) = match variant {
         ControlButtonVariant::Primary => {
-            if !can_activate {
-                if hovered {
-                    (
-                        theme.color_modal_primary_fill_hover().gamma_multiply(0.75),
-                        theme.color_modal_secondary_text(),
-                    )
-                } else {
-                    (
-                        theme.accent_alpha(89),
-                        theme.color_modal_secondary_text(),
-                    )
-                }
-            } else if pressed {
-                (
-                    theme.accent_dim_color(),
-                    theme.color_modal_primary_text(),
-                )
-            } else if hovered {
-                (
-                    theme.color_modal_primary_fill_hover(),
-                    theme.color_modal_primary_text(),
-                )
-            } else {
-                (
-                    theme.color_modal_primary_fill(),
-                    theme.color_modal_primary_text(),
-                )
-            }
+            let (fill, text, icon) =
+                primary_control_button_colors(theme, can_activate, hovered, pressed);
+            let _ = text;
+            (fill, icon)
+        }
+        ControlButtonVariant::ToolbarPrimary => {
+            let (fill, text, icon) =
+                toolbar_primary_control_button_colors(theme, can_activate, hovered, pressed);
+            let _ = text;
+            (fill, icon)
         }
         ControlButtonVariant::Secondary => {
-            let base_fill = theme.color_panel_toolbar_btn_fill();
-            if !can_activate {
-                (
-                    base_fill.gamma_multiply(0.55),
-                    theme.text_tertiary(),
-                )
-            } else if pressed {
-                (theme.accent_alpha(51), theme.text_primary())
-            } else if hovered {
-                (
-                    base_fill.gamma_multiply(1.35),
-                    theme.text_primary(),
-                )
-            } else {
-                (
-                    base_fill,
-                    theme.color_body_text_muted(),
-                )
-            }
+            let (fill, text, icon) =
+                secondary_control_button_colors(theme, can_activate, hovered, pressed);
+            let _ = text;
+            (fill, icon)
         }
         ControlButtonVariant::Danger => {
             if hovered || pressed {
@@ -1393,7 +1511,7 @@ pub fn panel_toolbar_primary_icon_button(
         theme,
         tooltip,
         Some(icon),
-        ControlButtonVariant::Primary,
+        ControlButtonVariant::ToolbarPrimary,
         theme.size_panel_header_btn_min_w(),
         true,
     )
@@ -1939,17 +2057,17 @@ pub fn filter_chip_button(
     } else {
         theme.color_overlay_fill_subtle()
     };
-    ui.add(
-        Button::new(
-            RichText::new(label)
-                .size(theme.font_size_category_label())
-                .color(text_color),
-        )
-        .fill(fill)
-        .stroke(egui::Stroke::NONE)
-        .rounding(theme.radius_category())
-        .min_size(min_size),
-    )
+    let rounding = theme.radius_category();
+    let (rect, response) = ui.allocate_exact_size(min_size, Sense::click());
+    ui.painter().rect(rect, rounding, fill, egui::Stroke::NONE);
+    paint_caption_in_rect_center(
+        ui,
+        rect,
+        label,
+        theme.font_size_category_label(),
+        text_color,
+    );
+    response
 }
 
 /// 顶栏菜单弹出层（§2：圆角、内边距、悬停色）
@@ -2625,23 +2743,18 @@ pub fn status_tool_button(
         );
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
-    let cy = rect.center().y;
-    icons::paint_icon(
+    paint_icon_caption_row_in_rect(
         ui,
-        egui::Rect::from_center_size(
-            egui::pos2(rect.left() + pad_x + icon_px * 0.5, cy),
-            egui::vec2(icon_px, icon_px),
-        ),
+        rect,
         id,
-        color,
-        icon_px,
-    );
-    ui.painter().text(
-        egui::pos2(rect.left() + pad_x + icon_px + 4.0, cy),
-        egui::Align2::LEFT_CENTER,
         label,
-        font,
+        icon_px,
+        4.0,
+        theme.font_size_status_bar(),
         color,
+        color,
+        pad_x,
+        false,
     );
     response.on_hover_text(tooltip)
 }
@@ -2690,23 +2803,18 @@ pub fn status_restore_chip(ui: &mut Ui, theme: &Theme, name: &str, count: usize)
         .x;
     let w = icon_px + 4.0 + text_w + 6.0;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(w, bar_h), Sense::click());
-    let cy = rect.center().y;
-    icons::paint_icon(
+    paint_icon_caption_row_in_rect(
         ui,
-        egui::Rect::from_center_size(
-            egui::pos2(rect.left() + icon_px * 0.5 + 2.0, cy),
-            egui::vec2(icon_px, icon_px),
-        ),
+        rect,
         IconId::ChevronRight,
-        color,
+        &label,
         icon_px,
-    );
-    ui.painter().text(
-        egui::pos2(rect.left() + icon_px + 6.0, cy),
-        egui::Align2::LEFT_CENTER,
-        label,
-        font,
+        4.0,
+        theme.font_size_restore_btn(),
         color,
+        color,
+        2.0,
+        false,
     );
     if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
@@ -2884,11 +2992,11 @@ fn paint_modal_danger_button(ui: &mut Ui, theme: &Theme, label: &str) -> Respons
     } else {
         theme.red_color().gamma_multiply(0.85)
     };
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
+    paint_caption_in_rect_center(
+        ui,
+        rect,
         label,
-        egui::FontId::proportional(theme.font_size_normal()),
+        theme.font_size_normal(),
         text_color,
     );
     if hovered {
@@ -3136,7 +3244,7 @@ pub fn panel_action_primary_button_ex(
         theme,
         label,
         None,
-        ControlButtonVariant::Primary,
+        ControlButtonVariant::ToolbarPrimary,
         theme.size_control_btn_min_w(),
         enabled,
     )
@@ -3174,7 +3282,7 @@ pub fn panel_action_primary_button_with_icon_ex(
         theme,
         label,
         Some(icon),
-        ControlButtonVariant::Primary,
+        ControlButtonVariant::ToolbarPrimary,
         theme.size_control_btn_min_w(),
         enabled,
     )

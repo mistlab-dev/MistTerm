@@ -3445,7 +3445,7 @@ impl MistTermApp {
         });
         crate::ui::chrome::right_dock_header_divider(ui, theme);
         ui.spacing_mut().item_spacing.y = prev_gap_y;
-        ui.add_space(theme.spacing_xs());
+        ui.add_space(theme.spacing_dock_section_gap());
 
         // 这里必须用 `form_singleline_field`（有框）且不要走 `panel_search_row/search_field`：
         // 后两者会引入额外外边距或行高壳层，导致「命令片段」顶部节奏与 SFTP 不一致。
@@ -3458,7 +3458,7 @@ impl MistTermApp {
             panel_w,
             false,
         );
-        ui.add_space(2.0);
+        ui.add_space(theme.spacing_dock_control_gap());
 
         ui.horizontal(|ui| {
             if crate::ui::chrome::panel_action_icon_button(
@@ -3482,7 +3482,7 @@ impl MistTermApp {
                 self.open_fragment_analytics_dialog();
             }
         });
-        ui.add_space(theme.spacing_xs());
+        ui.add_space(theme.spacing_dock_control_gap());
 
         if self.team_service.is_configured() && self.team_service.is_logged_in() {
             let ctx_scope = ui.ctx().clone();
@@ -3533,7 +3533,7 @@ impl MistTermApp {
                     }
                 }
             });
-            ui.add_space(theme.spacing_xs());
+            ui.add_space(theme.spacing_dock_control_gap());
         }
 
         if self.fragment_list_scope == FragmentListScope::Market {
@@ -3605,7 +3605,7 @@ impl MistTermApp {
                     }
                 });
             }
-            ui.add_space(theme.spacing_xs());
+            ui.add_space(theme.spacing_dock_control_gap());
         }
 
         if self.fragment_list_scope == FragmentListScope::Team
@@ -3708,7 +3708,7 @@ impl MistTermApp {
                     self.team_service.spawn_sync_current_team();
                 }
             });
-            ui.add_space(theme.spacing_xs());
+            ui.add_space(theme.spacing_dock_control_gap());
         }
 
         // §5.3：分类筛选 + 右侧排序（与芯片同排，不再单独占「片段列表」行）
@@ -3742,7 +3742,7 @@ impl MistTermApp {
             };
             self.fragment_manager.sort(self.fragment_sort_by);
         }
-        ui.add_space(theme.spacing_panel_gap());
+        ui.add_space(theme.spacing_dock_control_gap());
 
         self.sync_market_catalog_query_fingerprint();
 
