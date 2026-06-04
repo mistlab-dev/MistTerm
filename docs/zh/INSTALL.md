@@ -45,6 +45,17 @@ cd MistTerm
 cargo run --release --bin Mist
 ```
 
+### macOS：直接启动 GUI（推荐）
+
+避免在 Terminal.app 里 `cargo run` 占用终端窗口，可打包为 `.app` 并用 `open` 启动：
+
+```bash
+chmod +x scripts/run-macos-gui.sh
+./scripts/run-macos-gui.sh
+```
+
+等价于 `scripts/bundle-macos.sh` 后执行 `open target/release/Mist.app`。
+
 中文界面可选 CJK 字体（发布构建在字体存在时会嵌入）：
 
 ```bash

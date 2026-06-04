@@ -258,6 +258,40 @@ impl TeamClient {
         self.post_json_empty("/v1/audit/events", Some(access_token), body)
     }
 
+    /// 片段执行统计上报；404/未实现时静默成功。
+    pub fn report_fragment_usage(
+        &self,
+        access_token: &str,
+        team_id: &str,
+        fragment_id: &str,
+        success: bool,
+        duration_ms: u64,
+    ) -> Result<(), TeamApiError> {
+        let path = format!("/v1/teams/{team_id}/fragments/{fragment_id}/usage");
+        let body = serde_json::json!({
+            "success": success,
+            "duration_ms": duration_ms,
+        });
+        let req = self
+            .http
+            .post(self.url(&path))
+            .bearer_auth(access_token)
+            .json(&body);
+        let resp = req.send().map_err(|e| TeamApiError {
+            status: 0,
+            message: e.to_string(),
+            conflict_fragment: None,
+        })?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(());
+        }
+        let status = resp.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        Err(Self::decode_error(status, resp.text().unwrap_or_default()))
+    }
+
     fn url(&self, path: &str) -> String {
         format!("{}{}", self.base_url, path)
     }

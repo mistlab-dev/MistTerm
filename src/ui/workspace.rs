@@ -113,6 +113,18 @@ impl MistTermApp {
             );
         }
 
+        if self.show_port_forward_panel {
+            if self.port_forward_last_tab != self.active_tab {
+                self.port_forward_last_tab = self.active_tab;
+            }
+            self.port_forward_panel.show_side_panel(
+                ctx,
+                theme,
+                &mut self.right_dock_outer_left_x,
+                dock_col_w,
+            );
+        }
+
         if self.show_ai_panel {
             self.ai_panel.show_side_panel(
                 ctx,
@@ -715,6 +727,24 @@ impl MistTermApp {
             );
             if close_sftp_panel {
                 self.show_sftp_panel = false;
+            }
+        }
+        if paint_right_dock_fg && self.show_port_forward_panel {
+            let mut close_port_forward = false;
+            let current_terminal_ref = self
+                .active_tab
+                .and_then(|idx| self.tabs.get(idx).and_then(|t| t.active_terminal()));
+            let session_profile = self.active_tab_session_profile();
+            self.port_forward_panel.show_foreground_panel(
+                ctx,
+                theme,
+                current_terminal_ref,
+                session_profile.as_ref(),
+                &mut close_port_forward,
+            );
+            if close_port_forward {
+                self.show_port_forward_panel = false;
+                self.port_forward_last_tab = None;
             }
         }
         if self.show_ai_panel || self.show_ai_settings_dialog {

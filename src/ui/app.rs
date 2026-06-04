@@ -18,8 +18,10 @@ use crate::core::{
     TempKeyFile, spawn_cleanup_old_logs, DEFAULT_RETENTION_DAYS,
     SessionSortBy, SshConfigCandidate, command_preview, expand_command_template,
     expand_fragment_command_stages, expand_rhai_blocks, list_placeholder_keys, merge_rhai_context,
-    apply_vault_for_team, parse_dynamic_forwards_text, parse_local_forwards_text,
-    parse_remote_forwards_text, parse_vault_credential_path, FragmentManager,
+    apply_vault_for_team, append_dynamic_forward_line, append_local_forward_line,
+    append_remote_forward_line, parse_dynamic_forwards_text, parse_local_forwards_text,
+    parse_remote_forwards_text, parse_vault_credential_path, PortForwardKind,
+    status_bar_summary, FragmentManager,
     FragmentStats,
     SessionConfig, SessionManager, SortBy, TeamService,
 };
@@ -40,6 +42,7 @@ use crate::ui::terminal::TerminalView;
 use crate::ui::monitor_panel::MonitorPanel;
 use crate::ui::ai_panel::AiPanel;
 use crate::ui::sftp_panel::SftpPanel;
+use crate::ui::port_forward_panel::PortForwardPanel;
 use crate::ui::theme::ThemeManager;
 use crate::ui::fragment_library::FragmentLibraryState;
 use crate::ui::credential_panel::{CredentialPanel, CredentialPanelAction};
@@ -392,8 +395,10 @@ pub struct MistTermApp {
     terminal_search_hits: Vec<crate::terminal::SearchHit>,
     terminal_search_cur: usize,
     show_sftp_panel: bool,       // SFTP 文件浏览器
+    show_port_forward_panel: bool,
     /// 上次已同步 SFTP 列表的终端标签索引（切换标签时重置远端浏览状态）
     sftp_last_tab: Option<usize>,
+    port_forward_last_tab: Option<usize>,
     /// 监控面板绑定的终端标签（切换标签时重新绑定当前 SSH 会话）
     monitor_last_tab: Option<usize>,
     
@@ -452,6 +457,7 @@ pub struct MistTermApp {
     monitor_panel: MonitorPanel,
     ai_panel: AiPanel,
     sftp_panel: SftpPanel,
+    port_forward_panel: PortForwardPanel,
     fragment_library: FragmentLibraryState,
     credential_panel: CredentialPanel,
     cloud_sync_panel: CloudSyncPanel,
@@ -635,10 +641,12 @@ impl MistTermApp {
         self.show_monitor_panel = false;
         self.show_ai_panel = false;
         self.show_sftp_panel = false;
+        self.show_port_forward_panel = false;
         self.credential_panel.open = false;
         self.cloud_sync_panel.open = false;
         self.monitor_last_tab = None;
         self.sftp_last_tab = None;
+        self.port_forward_last_tab = None;
     }
 
     /// FUNCTIONAL_SPEC §8.2：按窗口宽度收折左栏与右侧 dock
@@ -806,11 +814,14 @@ impl MistTermApp {
             terminal_search_hits: Vec::new(),
             terminal_search_cur: 0,
             show_sftp_panel: false,
+            show_port_forward_panel: false,
             sftp_last_tab: None,
+            port_forward_last_tab: None,
             monitor_last_tab: None,
             monitor_panel: MonitorPanel::new(),
             ai_panel: AiPanel::new(),
             sftp_panel: SftpPanel::new(),
+            port_forward_panel: PortForwardPanel::new(),
             fragment_library: FragmentLibraryState::new(),
             credential_panel: CredentialPanel::new(),
             cloud_sync_panel: CloudSyncPanel::new(),
@@ -2419,6 +2430,14 @@ impl MistTermApp {
         } else if self.team_service.find_team_fragment(fragment_id).is_some() {
             self.team_service
                 .record_fragment_usage(fragment_id, success, dur_ms);
+            if let Some(tid) = team_id {
+                self.team_service.spawn_report_fragment_usage(
+                    &tid,
+                    fragment_id,
+                    success,
+                    dur_ms,
+                );
+            }
         }
     }
 
@@ -2958,6 +2977,86 @@ impl MistTermApp {
             self.sync_monitor_panel_to_active_tab();
             self.monitor_last_tab = self.active_tab;
         }
+    }
+
+    /// 切换右侧端口转发面板。
+    pub(crate) fn toggle_port_forward_panel(&mut self, ctx: &egui::Context) {
+        if self.show_port_forward_panel {
+            self.show_port_forward_panel = false;
+            self.port_forward_last_tab = None;
+        } else if self.ensure_right_dock_allowed_or_warn(ctx) {
+            self.show_port_forward_panel = true;
+            self.port_forward_last_tab = self.active_tab;
+        }
+    }
+
+    fn active_tab_session_profile(&self) -> Option<SessionConfig> {
+        let sid = self
+            .active_tab
+            .and_then(|i| self.tabs.get(i))
+            .map(|t| t.primary_session_id())?;
+        self.session_manager.get_session(&sid).cloned()
+    }
+
+    fn poll_port_forward_panel(&mut self) {
+        if let Some(save) = self.port_forward_panel.take_pending_save() {
+            self.apply_port_forward_save(save);
+        }
+        for audit in self.port_forward_panel.take_pending_audits() {
+            self.record_port_forward_audit(audit);
+        }
+        if let Some(t) = self.current_terminal() {
+            if t.is_connected() {
+                if let (Some(ssh_id), Some(profile)) = (
+                    t.ssh_session_id(),
+                    self.active_tab_session_profile(),
+                ) {
+                    self.port_forward_panel
+                        .register_profile_forwards(ssh_id, &profile);
+                }
+            } else if let Some(sid) = t.ssh_session_id() {
+                self.port_forward_panel.clear_ssh_session(sid);
+            }
+        }
+    }
+
+    fn record_port_forward_audit(
+        &mut self,
+        req: crate::ui::port_forward_panel::PortForwardAuditRequest,
+    ) {
+        let action = if req.started {
+            req.kind.audit_action_start()
+        } else {
+            req.kind.audit_action_stop()
+        };
+        let mut ev = AuditEvent::new(AuditCategory::Session, action, AuditOutcome::Success)
+            .with_detail(req.kind.audit_detail());
+        if let Some(host) = req.host {
+            ev = ev.with_host(host);
+        }
+        if let Some(sid) = req.session_profile_id {
+            ev = ev.with_session(sid);
+        }
+        self.audit_logger.record(ev);
+    }
+
+    fn apply_port_forward_save(
+        &mut self,
+        save: crate::ui::port_forward_panel::PortForwardSaveRequest,
+    ) {
+        let kind = save.kind;
+        let id = save.session_profile_id;
+        self.session_manager.patch_session(&id, |session| match kind {
+            PortForwardKind::Local(f) => {
+                append_local_forward_line(&mut session.local_forwards_text, &f);
+            }
+            PortForwardKind::Remote(f) => {
+                append_remote_forward_line(&mut session.remote_forwards_text, &f);
+            }
+            PortForwardKind::Dynamic(f) => {
+                append_dynamic_forward_line(&mut session.dynamic_forwards_text, &f);
+            }
+        });
     }
 
     pub(crate) fn toggle_ai_panel(&mut self, ctx: &egui::Context) {
@@ -4323,6 +4422,21 @@ impl MistTermApp {
                 {
                     Self::status_connection_chip(ui, &conn, theme);
                 }
+                if let Some(ssh_id) = tab
+                    .active_terminal()
+                    .and_then(|t| t.ssh_session_id())
+                {
+                    let n = self.port_forward_panel.active_count_for(ssh_id);
+                    let en = crate::i18n::language(&bar_ctx) == crate::i18n::UiLanguage::En;
+                    if let Some(label) = status_bar_summary(n, en) {
+                        crate::ui::chrome::status_text_chip(
+                            ui,
+                            theme,
+                            &label,
+                            theme.accent_color(),
+                        );
+                    }
+                }
             }
         }
 
@@ -4678,6 +4792,47 @@ impl MistTermApp {
                                         self.toggle_sftp_panel(ctx);
                                     }
                                 }
+                                let fwd_count = self
+                                    .active_tab
+                                    .and_then(|idx| self.tabs.get(idx))
+                                    .and_then(|tab| tab.active_terminal())
+                                    .and_then(|t| t.ssh_session_id())
+                                    .map(|id| self.port_forward_panel.active_count_for(id))
+                                    .unwrap_or(0);
+                                let fwd_tip = if fwd_count > 0 {
+                                    format!(
+                                        "{} · {}",
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "Port forwarding · active",
+                                            "端口转发 · 运行中",
+                                        ),
+                                        fwd_count
+                                    )
+                                } else {
+                                    crate::i18n::tr(
+                                        ctx,
+                                        "Port forwarding · -L / -R / SOCKS",
+                                        "端口转发 · 本地/远程/SOCKS",
+                                    )
+                                    .to_string()
+                                };
+                                if crate::ui::chrome::status_tool_button(
+                                    ui,
+                                    &theme,
+                                    crate::ui::icons::IconId::Network,
+                                    crate::i18n::tr(ctx, "Forward", "转发"),
+                                    &fwd_tip,
+                                )
+                                .clicked()
+                                {
+                                    if self.show_port_forward_panel {
+                                        self.show_port_forward_panel = false;
+                                        self.port_forward_last_tab = None;
+                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
+                                        self.toggle_port_forward_panel(ctx);
+                                    }
+                                }
                                 if crate::ui::chrome::status_tool_button(
                                     ui,
                                     &theme,
@@ -4970,6 +5125,7 @@ impl eframe::App for MistTermApp {
         // 监控：`exec` 由 shell 泵串行执行，在此处轮询结果并驱动自动刷新
         self.monitor_panel.update(ctx, self.show_monitor_panel);
         self.poll_team_service(ctx);
+        self.poll_port_forward_panel();
         show_team_fragment_editor_modal(
             ctx,
             &theme,
@@ -5725,6 +5881,17 @@ mod menu {
                 .clicked()
                 {
                     self.toggle_sftp_panel(ctx);
+                    ui.close_menu();
+                }
+                if crate::ui::chrome::menu_toggle_item(
+                    ui,
+                    theme,
+                    self.show_port_forward_panel,
+                    crate::i18n::tr(ctx, "Port Forwarding", "端口转发"),
+                )
+                .clicked()
+                {
+                    self.toggle_port_forward_panel(ctx);
                     ui.close_menu();
                 }
                 if crate::ui::chrome::menu_toggle_item(

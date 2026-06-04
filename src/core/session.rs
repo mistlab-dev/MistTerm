@@ -191,6 +191,64 @@ pub fn parse_remote_forwards_text(text: &str) -> Vec<crate::ssh::RemotePortForwa
         .collect()
 }
 
+pub fn format_local_forward_line(fwd: &crate::ssh::LocalPortForward) -> String {
+    format!(
+        "{}:{}:{}",
+        fwd.local_port, fwd.remote_host, fwd.remote_port
+    )
+}
+
+pub fn format_remote_forward_line(fwd: &crate::ssh::RemotePortForward) -> String {
+    format!(
+        "{}:{}:{}",
+        fwd.remote_port, fwd.target_host, fwd.target_port
+    )
+}
+
+pub fn format_dynamic_forward_line(fwd: &crate::ssh::DynamicPortForward) -> String {
+    if fwd.bind_address.is_empty() || fwd.bind_address == "127.0.0.1" {
+        fwd.local_port.to_string()
+    } else {
+        format!("{}:{}", fwd.bind_address, fwd.local_port)
+    }
+}
+
+pub fn append_local_forward_line(text: &mut String, fwd: &crate::ssh::LocalPortForward) {
+    let line = format_local_forward_line(fwd);
+    if text.lines().any(|l| l.trim() == line) {
+        return;
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&line);
+    text.push('\n');
+}
+
+pub fn append_remote_forward_line(text: &mut String, fwd: &crate::ssh::RemotePortForward) {
+    let line = format_remote_forward_line(fwd);
+    if text.lines().any(|l| l.trim() == line) {
+        return;
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&line);
+    text.push('\n');
+}
+
+pub fn append_dynamic_forward_line(text: &mut String, fwd: &crate::ssh::DynamicPortForward) {
+    let line = format_dynamic_forward_line(fwd);
+    if text.lines().any(|l| l.trim() == line) {
+        return;
+    }
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text.push_str(&line);
+    text.push('\n');
+}
+
 /// 解析 `dynamic_forwards_text`（每行 `port` 或 `bind_address:port`）。
 pub fn parse_dynamic_forwards_text(text: &str) -> Vec<crate::ssh::DynamicPortForward> {
     text.lines()

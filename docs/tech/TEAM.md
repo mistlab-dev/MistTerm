@@ -1570,16 +1570,18 @@ Authorization: Bearer <access_token>
 
 未实现时客户端仅汇总**本机** `fragment_usage_events.json` 中的团队执行记录。
 
-### 3.4 统计上报（后续可选，当前客户端未调用）
+### 3.4 统计上报（客户端 ✅ 异步）
 
-客户端目前在本地记录执行（`record_fragment_execution`），团队维度依赖 sync/analytics 拉取。若需实时上报，可后续增加例如：
+团队片段执行成功后，客户端在本地记录（`record_fragment_execution`）并**后台**上报：
 
 ```
 POST /v1/teams/{team_id}/fragments/{fragment_id}/usage
 { "success": true, "duration_ms": 1200 }
 ```
 
-**非阻塞**：未实现不影响现有客户端。
+- 实现：`TeamClient::report_fragment_usage` + `TeamService::spawn_report_fragment_usage`
+- **404 / 未实现**：静默忽略，不影响现有客户端
+- **非阻塞**：失败仅 `debug` 日志，不弹窗
 
 ---
 

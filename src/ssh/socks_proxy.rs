@@ -3,9 +3,11 @@
 use ssh2::Session;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
+use std::thread;
 
-use super::port_forward::bridge_tcp_channel;
+use super::port_forward::{self, bridge_tcp_channel, ForwardControl};
 
 const SOCKS_VER: u8 = 0x05;
 const CMD_CONNECT: u8 = 0x01;
@@ -16,7 +18,7 @@ const REP_SUCCESS: u8 = 0x00;
 const REP_CMD_UNSUPPORTED: u8 = 0x07;
 const REP_HOST_UNREACHABLE: u8 = 0x04;
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct DynamicPortForward {
     pub local_port: u16,
     #[serde(default = "default_bind")]
@@ -32,22 +34,36 @@ pub fn spawn_dynamic_forwards(session: &Session, forwards: &[DynamicPortForward]
         if fwd.local_port == 0 {
             continue;
         }
-        let sess = session.clone();
-        let fwd = fwd.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = run_dynamic_forward(sess, &fwd) {
-                log::warn!(
-                    "dynamic forward {}:{} stopped: {}",
-                    fwd.bind_address,
-                    fwd.local_port,
-                    e
-                );
-            }
-        });
+        let _ = spawn_dynamic_forward_controllable(session.clone(), fwd.clone());
     }
 }
 
-fn run_dynamic_forward(session: Session, fwd: &DynamicPortForward) -> Result<(), String> {
+pub fn spawn_dynamic_forward_controllable(
+    session: Session,
+    fwd: DynamicPortForward,
+) -> Result<ForwardControl, String> {
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let control = ForwardControl {
+        shutdown: shutdown.clone(),
+    };
+    thread::spawn(move || {
+        if let Err(e) = run_dynamic_forward(session, &fwd, shutdown) {
+            log::warn!(
+                "dynamic forward {}:{} stopped: {}",
+                fwd.bind_address,
+                fwd.local_port,
+                e
+            );
+        }
+    });
+    Ok(control)
+}
+
+fn run_dynamic_forward(
+    session: Session,
+    fwd: &DynamicPortForward,
+    shutdown: Arc<AtomicBool>,
+) -> Result<(), String> {
     let bind = if fwd.bind_address.is_empty() {
         "127.0.0.1"
     } else {
@@ -55,19 +71,19 @@ fn run_dynamic_forward(session: Session, fwd: &DynamicPortForward) -> Result<(),
     };
     let addr = format!("{bind}:{}", fwd.local_port);
     let listener = TcpListener::bind(&addr).map_err(|e| format!("bind {addr}: {e}"))?;
+    listener
+        .set_nonblocking(true)
+        .map_err(|e| format!("set_nonblocking {addr}: {e}"))?;
     log::info!("SOCKS5 dynamic forward listening on {addr}");
     let session = Arc::new(Mutex::new(session));
-    loop {
-        let (client, _) = listener
-            .accept()
-            .map_err(|e| format!("SOCKS accept: {e}"))?;
+    port_forward::accept_loop(&listener, &shutdown, |client| {
         let session = Arc::clone(&session);
-        std::thread::spawn(move || {
+        thread::spawn(move || {
             if let Err(e) = serve_socks5_client(client, session) {
                 log::debug!("SOCKS client ended: {e}");
             }
         });
-    }
+    })
 }
 
 fn serve_socks5_client(mut client: TcpStream, session: Arc<Mutex<Session>>) -> Result<(), String> {

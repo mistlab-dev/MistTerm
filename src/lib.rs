@@ -10,3 +10,6 @@ pub mod terminal;
 pub mod ui;
 pub mod security;
 pub mod monitor;
+
+#[doc(hidden)]
+pub mod test_support;

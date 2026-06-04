@@ -552,6 +552,33 @@ impl TeamService {
         let _ = self.cache.save();
     }
 
+    /// 异步上报片段执行统计（不占用 `busy`；404 静默）。
+    pub fn spawn_report_fragment_usage(
+        &self,
+        team_id: &str,
+        fragment_id: &str,
+        success: bool,
+        dur_ms: u64,
+    ) {
+        if !self.is_logged_in() || team_id.is_empty() || fragment_id.is_empty() {
+            return;
+        }
+        let api_base = self.api_base();
+        let team_id = team_id.to_string();
+        let fragment_id = fragment_id.to_string();
+        thread::spawn(move || {
+            let tokens = TeamTokenStore::default();
+            let _ = do_report_fragment_usage(
+                &api_base,
+                &team_id,
+                &fragment_id,
+                success,
+                dur_ms,
+                &tokens,
+            );
+        });
+    }
+
     /// 尝试拉取团队分析 API 并合并到本地 overlay；失败静默。
     pub fn refresh_fragment_analytics_from_api(&mut self) -> bool {
         let Some(tid) = self.state.current_team_id.clone() else {
@@ -809,6 +836,26 @@ fn do_cmd_audit_report_alert(
     with_auth_retry(api_base, tokens, |access, client| {
         client.cmd_audit_report_alert(access, team_id, request)
     })
+}
+
+fn do_report_fragment_usage(
+    api_base: &str,
+    team_id: &str,
+    fragment_id: &str,
+    success: bool,
+    duration_ms: u64,
+    tokens: &TeamTokenStore,
+) -> Result<(), String> {
+    match with_auth_retry(api_base, tokens, |access, client| {
+        client.report_fragment_usage(access, team_id, fragment_id, success, duration_ms)
+    }) {
+        Ok(()) => Ok(()),
+        Err(e) if e.contains("404") || e.contains("Not Found") => Ok(()),
+        Err(e) => {
+            log::debug!("fragment usage report: {}", e);
+            Ok(())
+        }
+    }
 }
 
 fn do_team_config_sync(
