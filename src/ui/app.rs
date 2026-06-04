@@ -2943,27 +2943,78 @@ impl MistTermApp {
 
     /// 终端「发送到 AI」与 AI 面板「用到终端」桥接。
     pub(crate) fn process_ai_bridge(&mut self, ctx: &egui::Context) {
+        self.sync_ai_chat_session();
+        let mut open_ai = false;
+        let mut attach_text: Option<String> = None;
+        let mut tail_empty = false;
         if let Some(idx) = self.active_tab {
             if let Some(tab) = self.tabs.get_mut(idx) {
                 if let Some(pane) = tab.active_pane_mut() {
-                if pane.terminal.take_pending_send_to_ai() {
-                    let text = pane
-                        .terminal
-                        .take_pending_send_to_ai_text()
-                        .unwrap_or_else(|| pane.terminal.selected_text());
-                    self.ai_panel.attach_context(text);
-                    if self.ensure_right_dock_allowed_or_warn(ctx) {
-                        self.show_ai_panel = true;
+                    let session_name = self
+                        .session_manager
+                        .get_session(&pane.session_id)
+                        .map(|s| s.name.clone());
+                    self.ai_panel.attach_session_meta(
+                        pane.terminal.ai_session_meta(session_name),
+                    );
+                    if pane.terminal.take_pending_send_to_ai() {
+                        let text = pane
+                            .terminal
+                            .take_pending_send_to_ai_text()
+                            .unwrap_or_else(|| pane.terminal.selected_text());
+                        attach_text = Some(text);
+                        open_ai = true;
+                    }
+                    if pane.terminal.take_pending_send_tail_to_ai() {
+                        let text = pane.terminal.tail_plain_text(50);
+                        if text.trim().is_empty() {
+                            tail_empty = true;
+                        } else {
+                            attach_text = Some(text);
+                            open_ai = true;
+                        }
                     }
                 }
-                }
             }
+        }
+        if tail_empty {
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "Terminal buffer is empty",
+                "终端缓冲区为空",
+            )
+            .to_string();
+        }
+        if let Some(text) = attach_text {
+            self.ai_panel.attach_context(text);
+            open_ai = true;
+        }
+        if open_ai && self.ensure_right_dock_allowed_or_warn(ctx) {
+            self.show_ai_panel = true;
         }
         if let Some(cmd) = self.ai_panel.take_command_for_terminal() {
             if let Some(idx) = self.active_tab {
                 if self.tabs.get_mut(idx).is_some() {
-                    if self.send_audited_command_active(ctx, &cmd) == CommandSendResult::Sent {
-                        self.status_message = terminal_command_status_message(ctx, &cmd);
+                    let audit = self.cmd_audit_engine.check(&cmd);
+                    match self.send_audited_command_active(ctx, &cmd) {
+                        CommandSendResult::Sent => {
+                            self.record_cmd_audit_event(
+                                "command.ai_suggested",
+                                &cmd,
+                                &audit,
+                                crate::core::AuditOutcome::Success,
+                            );
+                            self.status_message = terminal_command_status_message(ctx, &cmd);
+                        }
+                        CommandSendResult::Blocked(_) | CommandSendResult::NeedsConfirm { .. } => {}
+                        CommandSendResult::NotConnected => {
+                            self.status_message = crate::i18n::tr(
+                                ctx,
+                                "No active terminal tab; cannot run command",
+                                "无活动终端标签，无法执行命令",
+                            )
+                            .to_string();
+                        }
                     }
                     ctx.request_repaint();
                 }
@@ -2976,6 +3027,17 @@ impl MistTermApp {
                 .to_string();
             }
         }
+    }
+
+    fn sync_ai_chat_session(&mut self) {
+        let key = self
+            .active_tab
+            .and_then(|idx| self.tabs.get(idx))
+            .and_then(|tab| tab.active_pane())
+            .map(|pane| format!("session_{}", pane.session_id))
+            .unwrap_or_else(|| "global".to_string());
+        let persist = self.app_settings.ai.persist_chats;
+        self.ai_panel.set_chat_session_key(key, persist);
     }
 
     pub(crate) fn menu_open_command_history(&mut self, ctx: &egui::Context) {

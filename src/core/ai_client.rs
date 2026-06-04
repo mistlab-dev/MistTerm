@@ -1,10 +1,15 @@
 //! OpenAI 兼容 Chat Completions 客户端（阻塞 HTTP，供后台线程调用）。
 
+use std::io::{BufRead, BufReader, Read};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
+
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::core::AiSettings;
 
-const SYSTEM_PROMPT: &str = "你是 MistTerm 终端里的运维助手。用户会提问或附上终端输出。\
+pub const DEFAULT_SYSTEM_PROMPT: &str = "你是 MistTerm 终端里的运维助手。用户会提问或附上终端输出。\
 请用简洁中文回答。若给出完整 shell 脚本，请用单个 ```bash 代码块包裹整段脚本；若给出若干条可直接执行的命令，\
 用 ```bash 代码块列出，每行一条命令，不要与完整脚本混在同一提取逻辑里。不要编造未提供的输出。";
 
@@ -14,12 +19,23 @@ pub struct ChatMessage {
     pub content: String,
 }
 
+/// 流式或非流式对话进度（后台线程 → UI）。
+#[derive(Clone, Debug)]
+pub enum ChatEvent {
+    Delta(String),
+    Finished,
+    Failed(String),
+    Cancelled,
+}
+
 #[derive(Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
     messages: Vec<ApiMessage<'a>>,
     temperature: f32,
     max_tokens: u32,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
 }
 
 #[derive(Serialize)]
@@ -41,6 +57,21 @@ struct ChatChoice {
 #[derive(Deserialize)]
 struct ApiMessageOwned {
     content: String,
+}
+
+#[derive(Deserialize)]
+struct StreamChoice {
+    delta: Option<StreamDelta>,
+}
+
+#[derive(Deserialize)]
+struct StreamDelta {
+    content: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct StreamChunk {
+    choices: Vec<StreamChoice>,
 }
 
 #[derive(Deserialize)]
@@ -116,7 +147,7 @@ pub fn prepare_terminal_context(text: &str) -> PreparedTerminalContext {
     }
 }
 
-/// 脱敏后再发往模型。
+/// 脱敏后再发往模型（多轮替换 + 常见密钥模式）。
 pub fn redact_for_ai(text: &str) -> String {
     let mut out = text.to_string();
     const NEEDLES: &[&str] = &[
@@ -129,17 +160,49 @@ pub fn redact_for_ai(text: &str) -> String {
         "API_KEY=",
         "token=",
         "TOKEN=",
+        "secret=",
+        "SECRET=",
     ];
-    for n in NEEDLES {
-        if let Some(i) = out.find(n) {
-            let end = out[i..]
-                .find(|c: char| c.is_whitespace() || c == '\n' || c == '"' || c == '\'')
-                .map(|o| i + o)
-                .unwrap_or(out.len().min(i + 48));
-            out.replace_range(i..end, "[REDACTED]");
+    for _ in 0..8 {
+        let mut changed = false;
+        for n in NEEDLES {
+            while let Some(i) = out.find(n) {
+                let end = out[i..]
+                    .find(|c: char| c.is_whitespace() || c == '\n' || c == '"' || c == '\'')
+                    .map(|o| i + o)
+                    .unwrap_or(out.len().min(i + 64));
+                out.replace_range(i..end, "[REDACTED]");
+                changed = true;
+            }
+        }
+        if let Ok(re) = Regex::new(r"AKIA[0-9A-Z]{16}") {
+            out = re.replace_all(&out, "[REDACTED_AWS_KEY]").into_owned();
+            changed = true;
+        }
+        if let Ok(re) = Regex::new(r"eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}") {
+            out = re.replace_all(&out, "[REDACTED_JWT]").into_owned();
+            changed = true;
+        }
+        if let Ok(re) = Regex::new(
+            r"-----BEGIN (?:OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----",
+        ) {
+            out = re.replace_all(&out, "[REDACTED_PRIVATE_KEY]").into_owned();
+            changed = true;
+        }
+        if !changed {
+            break;
         }
     }
     out
+}
+
+pub fn resolve_system_prompt(settings: &AiSettings) -> String {
+    let custom = settings.system_prompt.trim();
+    if custom.is_empty() {
+        DEFAULT_SYSTEM_PROMPT.to_string()
+    } else {
+        custom.to_string()
+    }
 }
 
 /// 从回复中提取可在终端单独执行的 shell 命令（跳过整段脚本类代码块）。
@@ -300,6 +363,14 @@ chmod +x check_domain.sh
         assert!(cmds.iter().any(|c| c.starts_with("chmod")));
         assert!(cmds.iter().any(|c| c.starts_with("./")));
     }
+
+    #[test]
+    fn redact_jwt_and_aws_key() {
+        let raw = "key=AKIAIOSFODNN7EXAMPLE token=eyJhbGciOiJIUzI1NiJ9.abc.def";
+        let out = redact_for_ai(raw);
+        assert!(!out.contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(!out.contains("eyJhbGci"));
+    }
 }
 
 pub fn chat_completions(
@@ -320,10 +391,63 @@ pub fn chat_completions_with_key(
     if api_key.trim().is_empty() {
         return Err("API Key is empty".to_string());
     }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let cancel = AtomicBool::new(false);
+    run_chat_with_key(settings, api_key, messages, &cancel, &tx, true);
+    let mut full = String::new();
+    loop {
+        match rx.recv() {
+            Ok(ChatEvent::Delta(d)) => full.push_str(&d),
+            Ok(ChatEvent::Finished) => return Ok(full),
+            Ok(ChatEvent::Failed(e)) => return Err(e),
+            Ok(ChatEvent::Cancelled) => return Err("Request cancelled".to_string()),
+            Err(_) => return Err("Request interrupted".to_string()),
+        }
+    }
+}
+
+/// 后台线程入口：按设置走流式或整段响应。
+pub fn run_chat_with_key(
+    settings: &AiSettings,
+    api_key: &str,
+    messages: &[ChatMessage],
+    cancel: &AtomicBool,
+    tx: &Sender<ChatEvent>,
+    force_blocking: bool,
+) {
+    let result = if settings.stream_responses && !force_blocking {
+        chat_streaming_with_key(settings, api_key, messages, cancel, tx)
+    } else {
+        chat_blocking_with_key(settings, api_key, messages, cancel, tx)
+    };
+    if let Err(e) = result {
+        let _ = tx.send(ChatEvent::Failed(e));
+    }
+}
+
+fn http_client(settings: &AiSettings) -> Result<reqwest::blocking::Client, String> {
+    reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(settings.timeout_secs.max(5)))
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+fn chat_blocking_with_key(
+    settings: &AiSettings,
+    api_key: &str,
+    messages: &[ChatMessage],
+    cancel: &AtomicBool,
+    tx: &Sender<ChatEvent>,
+) -> Result<(), String> {
+    if cancel.load(Ordering::Relaxed) {
+        let _ = tx.send(ChatEvent::Cancelled);
+        return Ok(());
+    }
     let url = settings.chat_completions_url();
+    let system = resolve_system_prompt(settings);
     let api_messages: Vec<ApiMessage> = std::iter::once(ApiMessage {
         role: "system",
-        content: SYSTEM_PROMPT,
+        content: system.as_str(),
     })
     .chain(messages.iter().map(|m| ApiMessage {
         role: m.role.as_str(),
@@ -335,33 +459,127 @@ pub fn chat_completions_with_key(
         messages: api_messages,
         temperature: 0.2,
         max_tokens: settings.max_tokens,
+        stream: false,
     };
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(settings.timeout_secs.max(5)))
-        .build()
-        .map_err(|e| e.to_string())?;
+    let client = http_client(settings)?;
     let resp = client
         .post(&url)
         .header("Authorization", format!("Bearer {api_key}"))
         .json(&body)
         .send()
         .map_err(|e| format!("网络错误：{e}"))?;
+    if cancel.load(Ordering::Relaxed) {
+        let _ = tx.send(ChatEvent::Cancelled);
+        return Ok(());
+    }
     let status = resp.status();
     let text = resp.text().map_err(|e| e.to_string())?;
     if !status.is_success() {
-        if let Ok(err) = serde_json::from_str::<ApiErrorBody>(&text) {
-            if let Some(msg) = err.error.and_then(|e| e.message) {
-                return Err(format!("API {}：{msg}", status.as_u16()));
-            }
-        }
-        return Err(format!("API {}：{text}", status.as_u16()));
+        return Err(parse_api_error(status.as_u16(), &text));
     }
     let parsed: ChatResponse = serde_json::from_str(&text).map_err(|e| format!("解析响应失败：{e}"))?;
-    parsed
+    let reply = parsed
         .choices
         .first()
         .map(|c| c.message.content.clone())
-        .ok_or_else(|| "模型返回为空".to_string())
+        .ok_or_else(|| "模型返回为空".to_string())?;
+    if !reply.is_empty() {
+        let _ = tx.send(ChatEvent::Delta(reply));
+    }
+    let _ = tx.send(ChatEvent::Finished);
+    Ok(())
+}
+
+fn chat_streaming_with_key(
+    settings: &AiSettings,
+    api_key: &str,
+    messages: &[ChatMessage],
+    cancel: &AtomicBool,
+    tx: &Sender<ChatEvent>,
+) -> Result<(), String> {
+    if cancel.load(Ordering::Relaxed) {
+        let _ = tx.send(ChatEvent::Cancelled);
+        return Ok(());
+    }
+    let url = settings.chat_completions_url();
+    let system = resolve_system_prompt(settings);
+    let api_messages: Vec<ApiMessage> = std::iter::once(ApiMessage {
+        role: "system",
+        content: system.as_str(),
+    })
+    .chain(messages.iter().map(|m| ApiMessage {
+        role: m.role.as_str(),
+        content: m.content.as_str(),
+    }))
+    .collect();
+    let body = ChatRequest {
+        model: settings.model.trim(),
+        messages: api_messages,
+        temperature: 0.2,
+        max_tokens: settings.max_tokens,
+        stream: true,
+    };
+    let client = http_client(settings)?;
+    let mut resp = client
+        .post(&url)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .json(&body)
+        .send()
+        .map_err(|e| format!("网络错误：{e}"))?;
+    if cancel.load(Ordering::Relaxed) {
+        let _ = tx.send(ChatEvent::Cancelled);
+        return Ok(());
+    }
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().map_err(|e| e.to_string())?;
+        return Err(parse_api_error(status.as_u16(), &text));
+    }
+    let mut reader = BufReader::new(resp.by_ref());
+    let mut line = String::new();
+    let mut got_delta = false;
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            let _ = tx.send(ChatEvent::Cancelled);
+            return Ok(());
+        }
+        line.clear();
+        let n = reader.read_line(&mut line).map_err(|e| e.to_string())?;
+        if n == 0 {
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with(':') {
+            continue;
+        }
+        let payload = trimmed.strip_prefix("data:").map(str::trim).unwrap_or(trimmed);
+        if payload == "[DONE]" {
+            break;
+        }
+        if let Ok(chunk) = serde_json::from_str::<StreamChunk>(payload) {
+            for choice in chunk.choices {
+                if let Some(delta) = choice.delta.and_then(|d| d.content).filter(|s| !s.is_empty()) {
+                    got_delta = true;
+                    let _ = tx.send(ChatEvent::Delta(delta));
+                }
+            }
+        }
+    }
+    if !got_delta {
+        // 部分网关忽略 stream，回退整段请求
+        return chat_blocking_with_key(settings, api_key, messages, cancel, tx);
+    }
+    let _ = tx.send(ChatEvent::Finished);
+    Ok(())
+}
+
+fn parse_api_error(status: u16, text: &str) -> String {
+    if let Ok(err) = serde_json::from_str::<ApiErrorBody>(text) {
+        if let Some(msg) = err.error.and_then(|e| e.message) {
+            return format!("API {status}：{msg}");
+        }
+    }
+    format!("API {status}：{text}")
 }
 
 pub fn test_connection(settings: &AiSettings) -> Result<(), String> {
@@ -372,12 +590,24 @@ pub fn test_connection(settings: &AiSettings) -> Result<(), String> {
 }
 
 pub fn test_connection_with_key(settings: &AiSettings, api_key: &str) -> Result<(), String> {
+    if api_key.trim().is_empty() {
+        return Err("API Key is empty".to_string());
+    }
+    let client = http_client(settings)?;
+    let resp = client
+        .get(settings.models_url())
+        .header("Authorization", format!("Bearer {api_key}"))
+        .send()
+        .map_err(|e| format!("网络错误：{e}"))?;
+    if resp.status().is_success() {
+        return Ok(());
+    }
     chat_completions_with_key(
         settings,
         api_key,
         &[ChatMessage {
             role: "user".to_string(),
-            content: "reply with ok".to_string(),
+            content: "ping".to_string(),
         }],
     )
     .map(|_| ())

@@ -718,7 +718,7 @@ impl MistTermApp {
             }
         }
         if self.show_ai_panel || self.show_ai_settings_dialog {
-            self.ai_panel.poll_background(ctx);
+            self.ai_panel.poll_background(ctx, &self.app_settings);
         }
         if paint_right_dock_fg && self.show_ai_panel {
             self.ai_panel.show_foreground_panel(

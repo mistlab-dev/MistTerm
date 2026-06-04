@@ -32,6 +32,8 @@ pub mod audit;
 pub mod cmd_audit;
 pub mod ai_settings;
 pub mod ai_client;
+pub mod ai_chat_store;
+pub mod ai_session_meta;
 pub mod app_settings;
 pub mod team;
 pub mod market;
@@ -90,9 +92,12 @@ pub use audit::{
 pub use ai_settings::AiSettings;
 pub use ai_client::{
     chat_completions, chat_completions_with_key, extract_shell_commands, prepare_terminal_context,
-    redact_for_ai, test_connection, test_connection_with_key, ChatMessage, PreparedTerminalContext,
-    AI_CONTEXT_MAX_CHARS, AI_CONTEXT_MAX_LINES,
+    redact_for_ai, resolve_system_prompt, run_chat_with_key, test_connection,
+    test_connection_with_key, ChatEvent, ChatMessage, PreparedTerminalContext,
+    AI_CONTEXT_MAX_CHARS, AI_CONTEXT_MAX_LINES, DEFAULT_SYSTEM_PROMPT,
 };
+pub use ai_chat_store::{delete_chat, load_chat, save_chat, StoredAiMessage, StoredContextRef};
+pub use ai_session_meta::TerminalSessionMeta;
 pub use app_settings::AppSettings;
 pub use team::{
     apply_vault_for_team, parse_vault_credential_path, OAuthProvider, TeamAsyncResult,

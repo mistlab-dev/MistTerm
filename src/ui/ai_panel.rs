@@ -2,11 +2,15 @@
 
 use eframe::egui;
 use arboard::Clipboard;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::Arc;
 use std::thread;
 
 use crate::core::{
-    extract_shell_commands, prepare_terminal_context, AppSettings, ChatMessage, PreparedTerminalContext,
+    delete_chat, extract_shell_commands, load_chat, prepare_terminal_context, save_chat,
+    AppSettings, ChatEvent, ChatMessage, PreparedTerminalContext, StoredAiMessage,
+    StoredContextRef, TerminalSessionMeta, run_chat_with_key,
 };
 use crate::i18n::{self};
 use crate::ui::icons::IconId;
@@ -36,8 +40,16 @@ impl TerminalContextRef {
         }
     }
 
-    fn chip_label(&self, ctx: &egui::Context) -> String {
-        let title = i18n::tr(ctx, "Terminal selection", "终端选区");
+    fn chip_label(&self, ctx: &egui::Context, index: usize) -> String {
+        let title = if self.line_count <= 3 && self.char_count <= 120 && index == 0 {
+            i18n::tr(ctx, "Terminal selection", "终端选区").to_string()
+        } else {
+            format!(
+                "{} {}",
+                i18n::tr(ctx, "Terminal selection", "终端选区"),
+                index + 1
+            )
+        };
         let unit = if self.line_count == 1 {
             i18n::tr(ctx, "line", "行")
         } else {
@@ -53,10 +65,10 @@ impl TerminalContextRef {
         label
     }
 
-    fn hover_detail(&self, ctx: &egui::Context) -> String {
+    fn hover_detail(&self, ctx: &egui::Context, index: usize) -> String {
         let mut detail = format!(
             "{}\n{} · {}\n{}",
-            self.chip_label(ctx),
+            self.chip_label(ctx, index),
             self.char_count,
             i18n::tr(ctx, "characters", "字符"),
             i18n::tr(
@@ -87,13 +99,17 @@ struct UiMessage {
     content: String,
     /// 发往 API 的完整 user 正文（含终端上下文）；助手消息为 None。
     api_content: Option<String>,
-    /// 本条 user 消息附带的终端选区引用。
-    context_ref: Option<TerminalContextRef>,
+    /// 本条 user 消息附带的终端选区引用（可多条）。
+    context_refs: Vec<TerminalContextRef>,
     commands: Vec<String>,
 }
 
 enum BackgroundJob {
-    Chat(Receiver<Result<String, String>>),
+    Chat {
+        rx: Receiver<ChatEvent>,
+        #[allow(dead_code)]
+        cancel: Arc<AtomicBool>,
+    },
     Save(Receiver<Result<String, String>>),
     Test(Receiver<Result<(), String>>),
 }
@@ -101,9 +117,14 @@ enum BackgroundJob {
 pub struct AiPanel {
     messages: Vec<UiMessage>,
     draft_input: String,
-    attached_context: Option<TerminalContextRef>,
+    attached_contexts: Vec<TerminalContextRef>,
+    session_meta: Option<TerminalSessionMeta>,
+    chat_session_key: String,
+    chat_dirty: bool,
     background: Option<BackgroundJob>,
     busy: bool,
+    streaming: bool,
+    chat_cancel: Option<Arc<AtomicBool>>,
     last_error: Option<String>,
     command_for_terminal: Option<String>,
     settings_key_input: String,
@@ -128,9 +149,14 @@ impl AiPanel {
         Self {
             messages: Vec::new(),
             draft_input: String::new(),
-            attached_context: None,
+            attached_contexts: Vec::new(),
+            session_meta: None,
+            chat_session_key: "global".to_string(),
+            chat_dirty: false,
             background: None,
             busy: false,
+            streaming: false,
+            chat_cancel: None,
             last_error: None,
             command_for_terminal: None,
             settings_key_input: String::new(),
@@ -147,16 +173,70 @@ impl AiPanel {
         if prep.line_count == 0 {
             return;
         }
-        self.attached_context = Some(TerminalContextRef::from_prepared(prep));
+        let item = TerminalContextRef::from_prepared(prep);
+        if self
+            .attached_contexts
+            .iter()
+            .any(|c| c.text == item.text)
+        {
+            return;
+        }
+        self.attached_contexts.push(item);
         self.confirm_clear_chat = false;
     }
 
-    pub fn clear_context(&mut self) {
-        self.attached_context = None;
+    pub fn attach_session_meta(&mut self, meta: TerminalSessionMeta) {
+        if meta.host.is_some() || meta.username.is_some() || meta.session_name.is_some() {
+            self.session_meta = Some(meta);
+        }
+    }
+
+    pub fn set_chat_session_key(&mut self, key: String, persist: bool) {
+        if self.chat_session_key == key {
+            return;
+        }
+        if persist && self.chat_dirty {
+            self.flush_persisted_chat(false);
+        }
+        self.chat_session_key = key;
+        self.messages.clear();
+        self.last_error = None;
+        if persist {
+            self.load_persisted_chat();
+        }
+    }
+
+    pub fn cancel_generation(&mut self) {
+        if let Some(cancel) = &self.chat_cancel {
+            cancel.store(true, Ordering::Relaxed);
+        }
     }
 
     pub fn take_command_for_terminal(&mut self) -> Option<String> {
         self.command_for_terminal.take()
+    }
+
+    fn load_persisted_chat(&mut self) {
+        self.messages = load_chat(&self.chat_session_key)
+            .into_iter()
+            .map(stored_to_ui_message)
+            .collect();
+        self.chat_dirty = false;
+    }
+
+    fn flush_persisted_chat(&mut self, clear: bool) {
+        if clear {
+            delete_chat(&self.chat_session_key);
+            self.chat_dirty = false;
+            return;
+        }
+        let stored: Vec<StoredAiMessage> = self.messages.iter().map(ui_message_to_stored).collect();
+        let _ = save_chat(&self.chat_session_key, &stored);
+        self.chat_dirty = false;
+    }
+
+    pub fn clear_context(&mut self) {
+        self.attached_contexts.clear();
     }
 
     pub fn show_side_panel(
@@ -193,8 +273,8 @@ impl AiPanel {
     }
 
     /// 轮询后台保存 / 测试 / 对话请求（面板或设置窗打开时由 workspace 调用）。
-    pub fn poll_background(&mut self, ctx: &egui::Context) {
-        self.poll_pending(ctx);
+    pub fn poll_background(&mut self, ctx: &egui::Context, app_settings: &AppSettings) {
+        self.poll_pending(ctx, app_settings);
     }
 
     pub fn show_settings_dialog(
@@ -310,8 +390,11 @@ impl AiPanel {
     }
 
     fn status_line(&self, ctx: &egui::Context) -> Option<String> {
-        if self.busy {
+        if self.streaming {
             return Some(i18n::tr(ctx, "Generating AI reply…", "AI 回复生成中…").to_string());
+        }
+        if self.busy {
+            return Some(i18n::tr(ctx, "Waiting for AI…", "等待 AI 响应…").to_string());
         }
         if self.is_background_busy() {
             return self.test_status.clone();
@@ -329,10 +412,25 @@ impl AiPanel {
         let ready = self.can_chat(app_settings);
         if let Some(status) = self.status_line(ctx) {
             ui.horizontal(|ui| {
-                ui.spinner();
+                if self.busy || self.streaming {
+                    ui.spinner();
+                }
                 ui.label(
                     egui::RichText::new(status).size(theme.font_size_small()),
                 );
+                if self.streaming {
+                    if crate::ui::chrome::panel_action_button_with_icon_ex(
+                        ui,
+                        theme,
+                        IconId::Cross,
+                        i18n::tr(ctx, "Stop", "停止"),
+                        true,
+                    )
+                    .clicked()
+                    {
+                        self.cancel_generation();
+                    }
+                }
             });
             ui.add_space(theme.spacing_xs());
         } else if !ready {
@@ -380,7 +478,7 @@ impl AiPanel {
         if chat_rect.height() > 1.0 {
             ui.allocate_ui_at_rect(chat_rect, |ui| {
                 bind_row_width(ui);
-                self.show_conversation(ui, ctx, theme, chat_h);
+                self.show_conversation(ui, ctx, theme, chat_h, app_settings);
             });
         }
         ui.allocate_ui_at_rect(input_rect, |ui| {
@@ -404,7 +502,7 @@ impl AiPanel {
             && app_settings.ai.enabled
             && !self.busy
             && !self.is_background_busy()
-            && (!self.draft_input.trim().is_empty() || self.attached_context.is_some())
+            && (!self.draft_input.trim().is_empty() || !self.attached_contexts.is_empty())
     }
 
     fn effective_api_key<'a>(&'a self, app_settings: &'a AppSettings) -> Option<String> {
@@ -448,6 +546,53 @@ impl AiPanel {
         ui.add(
             egui::TextEdit::singleline(&mut settings.model)
                 .hint_text("gpt-4o-mini")
+                .desired_width(f32::INFINITY),
+        );
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(i18n::tr(ctx, "Max tokens", "最大 tokens"))
+                    .size(theme.font_size_small())
+                    .color(label),
+            );
+            ui.add(egui::DragValue::new(&mut settings.max_tokens).speed(32));
+            ui.label(
+                egui::RichText::new(i18n::tr(ctx, "Timeout (s)", "超时 (秒)"))
+                    .size(theme.font_size_small())
+                    .color(label),
+            );
+            ui.add(egui::DragValue::new(&mut settings.timeout_secs).speed(1));
+        });
+        crate::ui::chrome::form_checkbox(
+            ui,
+            theme,
+            &mut settings.stream_responses,
+            i18n::tr(ctx, "Stream responses", "流式输出"),
+        );
+        crate::ui::chrome::form_checkbox(
+            ui,
+            theme,
+            &mut settings.attach_session_meta,
+            i18n::tr(ctx, "Attach session info", "附带会话信息"),
+        );
+        crate::ui::chrome::form_checkbox(
+            ui,
+            theme,
+            &mut settings.persist_chats,
+            i18n::tr(ctx, "Persist chat history", "保存对话历史"),
+        );
+        ui.label(
+            egui::RichText::new(i18n::tr(ctx, "System prompt (optional)", "System prompt（可选）"))
+                .size(theme.font_size_small())
+                .color(label),
+        );
+        ui.add(
+            egui::TextEdit::multiline(&mut settings.system_prompt)
+                .hint_text(i18n::tr(
+                    ctx,
+                    "Leave empty for default ops assistant prompt",
+                    "留空使用默认运维助手提示词",
+                ))
+                .desired_rows(3)
                 .desired_width(f32::INFINITY),
         );
         ui.label(
@@ -596,31 +741,38 @@ impl AiPanel {
         ctx: &egui::Context,
         theme: &Theme,
         scroll_h: f32,
+        app_settings: &AppSettings,
     ) {
-        if self.attached_context.is_some() {
-            let context = self.attached_context.clone().expect("checked");
-            let mut remove = false;
-            ui.horizontal(|ui| {
-                show_terminal_context_chip(
-                    ui,
-                    ctx,
-                    theme,
-                    &context,
-                    egui::Id::new("mistterm_ai_attached_ctx"),
-                    true,
-                    &mut remove,
-                );
+        if !self.attached_contexts.is_empty() {
+            let mut remove_idx = None;
+            ui.horizontal_wrapped(|ui| {
+                for (i, context) in self.attached_contexts.iter().enumerate() {
+                    let mut remove = false;
+                    show_terminal_context_chip(
+                        ui,
+                        ctx,
+                        theme,
+                        context,
+                        egui::Id::new(("mistterm_ai_attached_ctx", i)),
+                        i,
+                        true,
+                        &mut remove,
+                    );
+                    if remove {
+                        remove_idx = Some(i);
+                    }
+                }
             });
-            if remove {
-                self.clear_context();
+            if let Some(i) = remove_idx {
+                self.attached_contexts.remove(i);
             }
-            if context.truncated {
+            if self.attached_contexts.iter().any(|c| c.truncated) {
                 ui.colored_label(
                     theme.amber_color(),
                     i18n::tr(
                         ctx,
-                        "Selection was truncated to fit model limits; click the chip to review.",
-                        "选区已截断以适配模型上限；点击芯片可查看已发送部分。",
+                        "Some selections were truncated to fit model limits.",
+                        "部分选区已截断以适配模型上限。",
                     ),
                 );
             }
@@ -644,16 +796,30 @@ impl AiPanel {
                             .size(theme.font_size_small())
                             .color(theme.color_form_hint()),
                     );
+                    ui.add_space(theme.spacing_xs());
+                    for sample in example_questions(ctx) {
+                        if ui
+                            .small_button(sample)
+                            .on_hover_text(i18n::tr(ctx, "Fill input", "填入输入框"))
+                            .clicked()
+                        {
+                            self.draft_input = sample.to_string();
+                        }
+                    }
                 }
+                let mut msg_action = None;
                 for (i, msg) in self.messages.iter().enumerate() {
                     let mut picked = None;
-                    self.render_message(ui, ctx, theme, msg, i, &mut picked);
+                    self.render_message(ui, ctx, theme, msg, i, &mut picked, &mut msg_action);
                     if let Some(cmd) = picked {
                         self.command_for_terminal = Some(cmd);
                     }
                     if i + 1 < self.messages.len() {
                         ui.add_space(theme.spacing_xs());
                     }
+                }
+                if let Some(action) = msg_action {
+                    self.handle_message_action(ctx, app_settings, action);
                 }
             });
     }
@@ -667,6 +833,7 @@ impl AiPanel {
         msg: &UiMessage,
         msg_index: usize,
         command_pick: &mut Option<String>,
+        msg_action: &mut Option<AiMessageAction>,
     ) {
         let bubble_fill = if msg.role == "user" {
             theme.accent_alpha(28)
@@ -693,17 +860,20 @@ impl AiPanel {
                     }
                     let prev_gap_y = ui.spacing().item_spacing.y;
                     ui.spacing_mut().item_spacing.y = theme.spacing_xs();
-                    if let Some(context) = &msg.context_ref {
-                        let mut remove = false;
-                        show_terminal_context_chip(
-                            ui,
-                            ctx,
-                            theme,
-                            context,
-                            ui.id().with(("msg_ctx", msg_index)),
-                            false,
-                            &mut remove,
-                        );
+                    if !msg.context_refs.is_empty() {
+                        for (ci, context) in msg.context_refs.iter().enumerate() {
+                            let mut remove = false;
+                            show_terminal_context_chip(
+                                ui,
+                                ctx,
+                                theme,
+                                context,
+                                ui.id().with(("msg_ctx", msg_index, ci)),
+                                ci,
+                                false,
+                                &mut remove,
+                            );
+                        }
                     }
                     markdown_view::show_markdown(
                         ui,
@@ -724,6 +894,48 @@ impl AiPanel {
                                 *command_pick = Some(cmd.clone());
                             }
                             ui.add_space(theme.spacing_xs());
+                        }
+                    }
+                    if msg.role == "assistant" {
+                        ui.add_space(theme.spacing_xs());
+                        ui.horizontal(|ui| {
+                            if crate::ui::chrome::panel_action_button_with_icon_ex(
+                                ui,
+                                theme,
+                                IconId::File,
+                                i18n::tr(ctx, "Copy", "复制"),
+                                true,
+                            )
+                            .clicked()
+                            {
+                                if let Ok(mut clip) = Clipboard::new() {
+                                    let _ = clip.set_text(msg.content.clone());
+                                }
+                            }
+                            if crate::ui::chrome::panel_action_button_with_icon_ex(
+                                ui,
+                                theme,
+                                IconId::Refresh,
+                                i18n::tr(ctx, "Regenerate", "重新生成"),
+                                true,
+                            )
+                            .clicked()
+                            {
+                                *msg_action = Some(AiMessageAction::Regenerate(msg_index));
+                            }
+                        });
+                    } else if msg.role == "user" {
+                        ui.add_space(theme.spacing_xs());
+                        if crate::ui::chrome::panel_action_button_with_icon_ex(
+                            ui,
+                            theme,
+                            IconId::Fragment,
+                            i18n::tr(ctx, "Edit", "编辑"),
+                            true,
+                        )
+                        .clicked()
+                        {
+                            *msg_action = Some(AiMessageAction::Edit(msg_index));
                         }
                     }
                     ui.spacing_mut().item_spacing.y = prev_gap_y;
@@ -877,6 +1089,8 @@ impl AiPanel {
                 self.last_error = None;
                 self.input_status = None;
                 self.confirm_clear_chat = false;
+                self.chat_dirty = true;
+                self.flush_persisted_chat(true);
             } else if !self.messages.is_empty() {
                 self.confirm_clear_chat = true;
                 self.input_status = Some(
@@ -937,7 +1151,7 @@ impl AiPanel {
             );
         }
         let question = self.draft_input.trim().to_string();
-        let has_context = self.attached_context.is_some();
+        let has_context = !self.attached_contexts.is_empty();
         if question.is_empty() && !has_context {
             return SendOutcome::Empty;
         }
@@ -952,23 +1166,27 @@ impl AiPanel {
             question
         };
         self.draft_input.clear();
-        let context_ref = self.attached_context.clone();
-        let mut user_body = display_question.clone();
-        if let Some(ctx_ref) = &context_ref {
-            user_body.push_str(i18n::tr(
-                ctx,
-                "\n\n--- Terminal context ---\n",
-                "\n\n--- 终端上下文 ---\n",
-            ));
-            user_body.push_str(&ctx_ref.text);
-        }
+        let context_refs = std::mem::take(&mut self.attached_contexts);
+        let user_body = build_user_api_body(
+            ctx,
+            &display_question,
+            &context_refs,
+            self.session_meta.as_ref(),
+            app_settings.ai.attach_session_meta,
+        );
         self.messages.push(UiMessage {
             role: "user",
             content: display_question,
-            api_content: Some(user_body.clone()),
-            context_ref,
+            api_content: Some(user_body),
+            context_refs,
             commands: vec![],
         });
+        self.chat_dirty = true;
+        self.start_chat_request(ctx, app_settings);
+        SendOutcome::Sent
+    }
+
+    fn start_chat_request(&mut self, ctx: &egui::Context, app_settings: &AppSettings) {
         let api_messages: Vec<ChatMessage> = self
             .messages
             .iter()
@@ -989,53 +1207,139 @@ impl AiPanel {
         let api_key = match self.effective_api_key(app_settings) {
             Some(k) => k,
             None => {
-                let msg = i18n::tr(ctx, "Fill in and save API Key first", "请先填写并保存 API Key")
-                    .to_string();
-                self.last_error = Some(msg.clone());
-                return SendOutcome::NotReady(msg);
+                self.last_error = Some(
+                    i18n::tr(ctx, "Fill in and save API Key first", "请先填写并保存 API Key")
+                        .to_string(),
+                );
+                return;
             }
         };
         let (tx, rx) = std::sync::mpsc::channel();
-        self.background = Some(BackgroundJob::Chat(rx));
-        self.busy = true;
-        self.last_error = None;
-        thread::spawn(move || {
-            let r = crate::core::chat_completions_with_key(&settings, &api_key, &api_messages);
-            let _ = tx.send(r);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.chat_cancel = Some(cancel.clone());
+        self.background = Some(BackgroundJob::Chat {
+            rx,
+            cancel: cancel.clone(),
         });
-        SendOutcome::Sent
+        self.busy = true;
+        self.streaming = settings.stream_responses;
+        self.last_error = None;
+        self.messages.push(UiMessage {
+            role: "assistant",
+            content: String::new(),
+            api_content: None,
+            context_refs: vec![],
+            commands: vec![],
+        });
+        thread::spawn(move || {
+            run_chat_with_key(&settings, &api_key, &api_messages, &cancel, &tx, false);
+        });
     }
 
-    fn poll_pending(&mut self, ctx: &egui::Context) {
+    fn handle_message_action(
+        &mut self,
+        ctx: &egui::Context,
+        app_settings: &AppSettings,
+        action: AiMessageAction,
+    ) {
+        match action {
+            AiMessageAction::Regenerate(idx) => {
+                if self.busy || self.is_background_busy() {
+                    return;
+                }
+                if idx >= self.messages.len() || self.messages[idx].role != "assistant" {
+                    return;
+                }
+                self.messages.truncate(idx);
+                if self.messages.last().is_some_and(|m| m.role == "user") {
+                    self.chat_dirty = true;
+                    self.start_chat_request(ctx, app_settings);
+                }
+            }
+            AiMessageAction::Edit(idx) => {
+                if self.busy || self.is_background_busy() {
+                    return;
+                }
+                if idx >= self.messages.len() || self.messages[idx].role != "user" {
+                    return;
+                }
+                let msg = self.messages[idx].clone();
+                self.draft_input = msg.content;
+                self.attached_contexts = msg.context_refs;
+                self.messages.truncate(idx);
+                self.chat_dirty = true;
+            }
+        }
+    }
+
+    fn poll_pending(&mut self, ctx: &egui::Context, app_settings: &AppSettings) {
         let Some(job) = &self.background else {
             return;
         };
         match job {
-            BackgroundJob::Chat(rx) => match rx.try_recv() {
-                Ok(Ok(reply)) => {
-                    let commands = extract_shell_commands(&reply);
-                    self.messages.push(UiMessage {
-                        role: "assistant",
-                        content: reply,
-                        api_content: None,
-                        context_ref: None,
-                        commands,
-                    });
-                    self.background = None;
-                    self.busy = false;
-                    self.input_status = None;
-                    self.attached_context = None;
+            BackgroundJob::Chat { rx, .. } => match rx.try_recv() {
+                Ok(ChatEvent::Delta(chunk)) => {
+                    if let Some(last) = self.messages.last_mut() {
+                        if last.role == "assistant" {
+                            last.content.push_str(&chunk);
+                        }
+                    }
+                    self.streaming = true;
                     ctx.request_repaint();
                 }
-                Ok(Err(e)) => {
+                Ok(ChatEvent::Finished) => {
+                    if let Some(last) = self.messages.last_mut() {
+                        if last.role == "assistant" {
+                            last.commands = extract_shell_commands(&last.content);
+                        }
+                    }
+                    self.background = None;
+                    self.busy = false;
+                    self.streaming = false;
+                    self.chat_cancel = None;
+                    self.input_status = None;
+                    self.attached_contexts.clear();
+                    self.chat_dirty = true;
+                    if app_settings.ai.persist_chats {
+                        self.flush_persisted_chat(false);
+                    }
+                    ctx.request_repaint();
+                }
+                Ok(ChatEvent::Failed(e)) => {
+                    if self
+                        .messages
+                        .last()
+                        .is_some_and(|m| m.role == "assistant" && m.content.is_empty())
+                    {
+                        self.messages.pop();
+                    }
                     self.last_error = Some(i18n::localize_backend_error(i18n::language(ctx), &e));
                     self.input_status = None;
                     self.background = None;
                     self.busy = false;
+                    self.streaming = false;
+                    self.chat_cancel = None;
+                    ctx.request_repaint();
+                }
+                Ok(ChatEvent::Cancelled) => {
+                    if self
+                        .messages
+                        .last()
+                        .is_some_and(|m| m.role == "assistant" && m.content.is_empty())
+                    {
+                        self.messages.pop();
+                    }
+                    self.input_status = Some(
+                        i18n::tr(ctx, "Generation stopped", "已停止生成").to_string(),
+                    );
+                    self.background = None;
+                    self.busy = false;
+                    self.streaming = false;
+                    self.chat_cancel = None;
                     ctx.request_repaint();
                 }
                 Err(TryRecvError::Empty) => {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(120));
+                    ctx.request_repaint_after(std::time::Duration::from_millis(80));
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.last_error = Some(
@@ -1043,6 +1347,8 @@ impl AiPanel {
                     );
                     self.background = None;
                     self.busy = false;
+                    self.streaming = false;
+                    self.chat_cancel = None;
                 }
             },
             BackgroundJob::Save(rx) => match rx.try_recv() {
@@ -1094,6 +1400,11 @@ impl AiPanel {
             },
         }
     }
+}
+
+enum AiMessageAction {
+    Regenerate(usize),
+    Edit(usize),
 }
 
 enum SendOutcome {
@@ -1178,13 +1489,109 @@ fn compact_command_preview(cmd: &str) -> String {
 }
 
 fn message_copy_text(msg: &UiMessage) -> String {
-    let Some(context) = &msg.context_ref else {
+    if msg.context_refs.is_empty() {
         return msg.content.clone();
-    };
-    format!(
-        "{}\n\n--- Terminal context ---\n{}",
-        msg.content, context.text,
-    )
+    }
+    let mut out = msg.content.clone();
+    for (i, context) in msg.context_refs.iter().enumerate() {
+        out.push_str(&format!(
+            "\n\n--- Terminal context {} ---\n{}",
+            i + 1,
+            context.text
+        ));
+    }
+    out
+}
+
+fn build_user_api_body(
+    ctx: &egui::Context,
+    question: &str,
+    contexts: &[TerminalContextRef],
+    meta: Option<&TerminalSessionMeta>,
+    attach_meta: bool,
+) -> String {
+    let mut body = question.to_string();
+    if attach_meta {
+        if let Some(m) = meta.and_then(|m| m.format_block()) {
+            body.push_str("\n\n");
+            body.push_str(&m);
+        }
+    }
+    if !contexts.is_empty() {
+        body.push_str(i18n::tr(
+            ctx,
+            "\n\n--- Terminal context ---\n",
+            "\n\n--- 终端上下文 ---\n",
+        ));
+        for (i, c) in contexts.iter().enumerate() {
+            if contexts.len() > 1 {
+                body.push_str(&format!("### {} {}\n", i + 1, i18n::tr(ctx, "Selection", "选区")));
+            }
+            body.push_str(&c.text);
+            if i + 1 < contexts.len() {
+                body.push('\n');
+            }
+        }
+    }
+    body
+}
+
+fn example_questions(ctx: &egui::Context) -> [&'static str; 3] {
+    [
+        i18n::tr(ctx, "Explain this error", "解释这条报错"),
+        i18n::tr(ctx, "What should I run next?", "接下来该运行什么？"),
+        i18n::tr(ctx, "Summarize this output", "总结这段输出"),
+    ]
+}
+
+fn context_ref_to_stored(c: &TerminalContextRef) -> StoredContextRef {
+    StoredContextRef {
+        text: c.text.clone(),
+        line_count: c.line_count,
+        char_count: c.char_count,
+        truncated: c.truncated,
+        original_line_count: c.original_line_count,
+        original_char_count: c.original_char_count,
+    }
+}
+
+fn stored_to_context_ref(c: StoredContextRef) -> TerminalContextRef {
+    TerminalContextRef {
+        text: c.text,
+        line_count: c.line_count,
+        char_count: c.char_count,
+        truncated: c.truncated,
+        original_line_count: c.original_line_count,
+        original_char_count: c.original_char_count,
+    }
+}
+
+fn ui_message_to_stored(m: &UiMessage) -> StoredAiMessage {
+    StoredAiMessage {
+        role: m.role.to_string(),
+        content: m.content.clone(),
+        api_content: m.api_content.clone(),
+        context_refs: m.context_refs.iter().map(context_ref_to_stored).collect(),
+        commands: m.commands.clone(),
+    }
+}
+
+fn stored_to_ui_message(m: StoredAiMessage) -> UiMessage {
+    UiMessage {
+        role: if m.role == "assistant" {
+            "assistant"
+        } else {
+            "user"
+        },
+        content: m.content,
+        api_content: m.api_content,
+        context_refs: m
+            .context_refs
+            .into_iter()
+            .map(stored_to_context_ref)
+            .collect(),
+        commands: m.commands,
+    }
 }
 
 /// 终端选区引用芯片：对话区只显示链接式摘要，全文在弹出层查看（类似 Cursor @ 引用）。
@@ -1194,11 +1601,12 @@ fn show_terminal_context_chip(
     theme: &Theme,
     context: &TerminalContextRef,
     popup_id: egui::Id,
+    index: usize,
     removable: bool,
     remove_clicked: &mut bool,
 ) {
-    let label = context.chip_label(ctx);
-    let hover = context.hover_detail(ctx);
+    let label = context.chip_label(ctx, index);
+    let hover = context.hover_detail(ctx, index);
     let chip_h = theme.size_panel_filter_chip_h();
     let font = egui::FontId::proportional(theme.font_size_small());
     let text_color = theme.accent_color();
@@ -1242,7 +1650,7 @@ fn show_terminal_context_chip(
         ui.memory_mut(|mem| mem.toggle_popup(popup_id));
     }
     egui::popup::popup_below_widget(ui, popup_id, &response, |ui| {
-        show_context_popup_body(ui, ctx, theme, context);
+        show_context_popup_body(ui, ctx, theme, context, index);
     });
     if removable {
         ui.add_space(theme.spacing_xs());
@@ -1264,12 +1672,13 @@ fn show_context_popup_body(
     ctx: &egui::Context,
     theme: &Theme,
     context: &TerminalContextRef,
+    index: usize,
 ) {
     crate::ui::chrome::apply_menu_popup_style(ui, theme);
     ui.set_min_width(280.0);
     ui.set_max_width(520.0);
     ui.label(
-        egui::RichText::new(context.chip_label(ctx))
+        egui::RichText::new(context.chip_label(ctx, index))
             .size(theme.font_size_small())
             .strong(),
     );
@@ -1317,11 +1726,12 @@ mod tests {
     #[test]
     fn message_copy_text_includes_context_block() {
         let prep = prepare_terminal_context("err: fail");
+        let ctx_ref = TerminalContextRef::from_prepared(prep);
         let msg = UiMessage {
             role: "user",
             content: "explain".to_string(),
             api_content: None,
-            context_ref: Some(TerminalContextRef::from_prepared(prep)),
+            context_refs: vec![ctx_ref],
             commands: vec![],
         };
         let copied = message_copy_text(&msg);
