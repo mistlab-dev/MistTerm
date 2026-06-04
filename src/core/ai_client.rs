@@ -3,6 +3,8 @@
 use std::io::{BufRead, BufReader, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::thread;
+use std::time::Duration;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -371,6 +373,12 @@ chmod +x check_domain.sh
         assert!(!out.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(!out.contains("eyJhbGci"));
     }
+
+    #[test]
+    fn retryable_transport_error_matches_network_prefix() {
+        assert!(super::is_retryable_transport_error("网络错误：connection refused"));
+        assert!(!super::is_retryable_transport_error("API 401：unauthorized"));
+    }
 }
 
 pub fn chat_completions(
@@ -432,6 +440,31 @@ fn http_client(settings: &AiSettings) -> Result<reqwest::blocking::Client, Strin
         .map_err(|e| e.to_string())
 }
 
+fn is_retryable_transport_error(err: &str) -> bool {
+    err.starts_with("网络错误：")
+}
+
+fn send_with_retries<F>(settings: &AiSettings, mut send_once: F) -> Result<reqwest::blocking::Response, String>
+where
+    F: FnMut() -> Result<reqwest::blocking::Response, reqwest::Error>,
+{
+    let max = settings.request_retries;
+    let mut attempt = 0u32;
+    loop {
+        match send_once() {
+            Ok(resp) => return Ok(resp),
+            Err(e) => {
+                let msg = format!("网络错误：{e}");
+                if attempt >= max || !is_retryable_transport_error(&msg) {
+                    return Err(msg);
+                }
+                attempt += 1;
+                thread::sleep(Duration::from_millis(400 * u64::from(attempt)));
+            }
+        }
+    }
+}
+
 fn chat_blocking_with_key(
     settings: &AiSettings,
     api_key: &str,
@@ -462,12 +495,13 @@ fn chat_blocking_with_key(
         stream: false,
     };
     let client = http_client(settings)?;
-    let resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {api_key}"))
-        .json(&body)
-        .send()
-        .map_err(|e| format!("网络错误：{e}"))?;
+    let resp = send_with_retries(settings, || {
+        client
+            .post(&url)
+            .header("Authorization", format!("Bearer {api_key}"))
+            .json(&body)
+            .send()
+    })?;
     if cancel.load(Ordering::Relaxed) {
         let _ = tx.send(ChatEvent::Cancelled);
         return Ok(());
@@ -520,12 +554,13 @@ fn chat_streaming_with_key(
         stream: true,
     };
     let client = http_client(settings)?;
-    let mut resp = client
-        .post(&url)
-        .header("Authorization", format!("Bearer {api_key}"))
-        .json(&body)
-        .send()
-        .map_err(|e| format!("网络错误：{e}"))?;
+    let mut resp = send_with_retries(settings, || {
+        client
+            .post(&url)
+            .header("Authorization", format!("Bearer {api_key}"))
+            .json(&body)
+            .send()
+    })?;
     if cancel.load(Ordering::Relaxed) {
         let _ = tx.send(ChatEvent::Cancelled);
         return Ok(());
@@ -594,11 +629,12 @@ pub fn test_connection_with_key(settings: &AiSettings, api_key: &str) -> Result<
         return Err("API Key is empty".to_string());
     }
     let client = http_client(settings)?;
-    let resp = client
-        .get(settings.models_url())
-        .header("Authorization", format!("Bearer {api_key}"))
-        .send()
-        .map_err(|e| format!("网络错误：{e}"))?;
+    let resp = send_with_retries(settings, || {
+        client
+            .get(settings.models_url())
+            .header("Authorization", format!("Bearer {api_key}"))
+            .send()
+    })?;
     if resp.status().is_success() {
         return Ok(());
     }

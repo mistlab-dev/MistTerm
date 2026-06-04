@@ -54,11 +54,10 @@
 |-----|---------|-----|--------|
 | main.rs | 应用启动 | ui::MistTermApp | - |
 | ui::app | UI 渲染、事件处理 | core, ssh, terminal | main |
-| core::session | 会话配置管理 | serde | ui, core::connection |
-| core::connection | 连接状态管理 | ssh, terminal | ui |
+| core::session | 会话配置管理 | serde | ui |
 | ssh::client | SSH 客户端实现 | libssh2 | ssh::manager |
-| ssh::manager | 连接池管理 | ssh::client | core::connection |
-| terminal::emulator | ANSI 解析 | - | core::connection |
+| ssh::manager | 连接池管理 | ssh::client | ui |
+| terminal::alacritty | 终端网格与选区 | alacritty_terminal | ui |
 
 ---
 

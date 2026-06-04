@@ -19,6 +19,7 @@ pub struct SessionLogDialog {
     selected_file: usize,
     content: String,
     search_query: String,
+    pending_send_to_ai: bool,
 }
 
 impl Default for SessionLogDialog {
@@ -31,11 +32,30 @@ impl Default for SessionLogDialog {
             selected_file: 0,
             content: String::new(),
             search_query: String::new(),
+            pending_send_to_ai: false,
         }
     }
 }
 
 impl SessionLogDialog {
+    pub fn take_pending_send_to_ai(&mut self) -> bool {
+        let v = self.pending_send_to_ai;
+        self.pending_send_to_ai = false;
+        v
+    }
+
+    pub fn content_for_ai(&self) -> Option<String> {
+        let body = self.filtered_content();
+        if body.trim().is_empty() {
+            return None;
+        }
+        let header = if self.session_name.trim().is_empty() {
+            format!("Session ID: {}", self.session_id)
+        } else {
+            format!("Session: {}", self.session_name)
+        };
+        Some(format!("{header}\n\n{body}"))
+    }
     pub fn open_for(
         &mut self,
         ctx: &egui::Context,
@@ -268,6 +288,21 @@ impl SessionLogDialog {
                                 )
                                     .clicked() {
                                     copy_all = true;
+                                }
+                                if chrome::modal_secondary_icon_button(
+                                    ui,
+                                    theme,
+                                    crate::ui::icons::IconId::Api,
+                                    crate::i18n::tr(ctx, "Send to AI", "发送到 AI"),
+                                )
+                                .on_hover_text(crate::i18n::tr(
+                                    ctx,
+                                    "Attach log content to the AI panel",
+                                    "将会话日志附带至 AI 面板",
+                                ))
+                                .clicked()
+                                {
+                                    self.pending_send_to_ai = true;
                                 }
                             },
                         );

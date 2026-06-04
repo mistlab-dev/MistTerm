@@ -24,6 +24,9 @@ pub struct SessionConfig {
     pub password: String,
     /// SSH 私钥文件路径（空表示用密码或系统默认密钥）
     pub private_key_path: String,
+    /// 尝试 ssh-agent / Pageant 认证（在指定密钥之后、密码之前）。
+    #[serde(default = "default_use_ssh_agent")]
+    pub use_ssh_agent: bool,
     pub last_connected_at: Option<i64>,
     /// 创建时间（排序用）
     #[serde(default)]
@@ -75,6 +78,10 @@ fn default_keepalive_auto_reconnect() -> bool {
     true
 }
 
+fn default_use_ssh_agent() -> bool {
+    true
+}
+
 /// 侧栏颜色标签 → egui 色（由 UI 层调用）
 pub fn session_color_tag_rgb(tag: &str) -> Option<(u8, u8, u8)> {
     match tag {
@@ -109,6 +116,7 @@ impl Default for SessionConfig {
             username: String::new(),
             password: String::new(),
             private_key_path: String::new(),
+            use_ssh_agent: default_use_ssh_agent(),
             last_connected_at: None,
             created_at: None,
             ssh_config_marker: None,
@@ -259,6 +267,8 @@ struct StoredSessionConfig {
     password_nonce: String,
     #[serde(default)]
     private_key_path: String,
+    #[serde(default = "default_use_ssh_agent")]
+    use_ssh_agent: bool,
     #[serde(default)]
     last_connected_at: Option<i64>,
     #[serde(default)]
@@ -346,6 +356,7 @@ impl SessionManager {
                 username: cfg.username,
                 password,
                 private_key_path: cfg.private_key_path,
+                use_ssh_agent: cfg.use_ssh_agent,
                 last_connected_at: cfg.last_connected_at,
                 created_at: cfg.created_at,
                 ssh_config_marker: cfg.ssh_config_marker,
@@ -506,6 +517,7 @@ impl SessionManager {
                 encrypted_password: String::new(),
                 password_nonce: String::new(),
                 private_key_path: cfg.private_key_path.clone(),
+                use_ssh_agent: cfg.use_ssh_agent,
                 last_connected_at: cfg.last_connected_at,
                 created_at: cfg.created_at,
                 ssh_config_marker: cfg.ssh_config_marker.clone(),

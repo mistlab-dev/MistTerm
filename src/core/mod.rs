@@ -6,12 +6,10 @@
 //! |------|------|
 //! | `session` / `fragment` / `credential` | 数据模型与持久化 |
 //! | `fragment_command` / `upload_policy` / `reconnect` | 纯业务规则与编排 |
-//! | `connection` | 预留：单会话 SSH+终端状态（尚未接入 UI） |
 //!
 //! UI（`crate::ui`）只应调用本层与 `ssh` / `terminal` 的公开 API，避免在面板里写策略分支。
 
 pub mod session;
-mod connection;
 pub mod fragment;
 pub mod fragment_analytics;
 pub mod fragment_usage_log;
@@ -63,8 +61,8 @@ pub use fragment_analytics::{
 };
 pub use fragment_usage_log::{FragmentUsageEvent, FragmentUsageLog, MemberPeriodStats};
 pub use fragment_recommendations::{
-    build_efficiency_report_markdown, recommend_from_history, merge_recommendations,
-    FragmentRecommendation,
+    build_efficiency_report_markdown, build_efficiency_report_pdf, recommend_from_history,
+    merge_recommendations, FragmentRecommendation,
 };
 pub use ssh_keygen::generate_ed25519;
 pub use market::{

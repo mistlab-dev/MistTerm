@@ -12,6 +12,7 @@ fn ai_settings_default() {
     assert_eq!(settings.model, "gpt-4o-mini");
     assert_eq!(settings.timeout_secs, 60);
     assert_eq!(settings.max_tokens, 2048);
+    assert_eq!(settings.request_retries, 2);
 }
 
 #[test]
@@ -78,6 +79,13 @@ fn ai_settings_serde_roundtrip() {
     assert_eq!(deserialized.base_url, "https://custom.api.com/v1");
     assert_eq!(deserialized.model, "gpt-4");
     assert!(deserialized.has_api_key());
+}
+
+#[test]
+fn ai_settings_request_retries_serde_default() {
+    let json = r#"{"enabled":true,"base_url":"https://api.openai.com/v1","model":"gpt-4o-mini"}"#;
+    let settings: AiSettings = serde_json::from_str(json).unwrap();
+    assert_eq!(settings.request_retries, 2);
 }
 
 #[test]

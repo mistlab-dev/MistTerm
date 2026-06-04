@@ -406,6 +406,7 @@ pub struct MistTermApp {
     new_session_password: String,
     new_session_group: String,
     new_session_private_key_path: String,
+    new_session_use_ssh_agent: bool,
     new_session_proxy_jump: String,
     new_session_proxy_command: String,
     new_session_local_forwards_text: String,
@@ -422,6 +423,7 @@ pub struct MistTermApp {
     edit_session_password: String,
     edit_session_group: String,
     edit_session_private_key_path: String,
+    edit_session_use_ssh_agent: bool,
     edit_session_color_tag: String,
     edit_session_keepalive_enabled: bool,
     edit_session_keepalive_interval_secs: u32,
@@ -844,6 +846,7 @@ impl MistTermApp {
             new_session_password: String::new(),
             new_session_group: boot_loc.tr("Default", "默认").to_string(),
             new_session_private_key_path: String::new(),
+            new_session_use_ssh_agent: true,
             new_session_proxy_jump: String::new(),
             new_session_proxy_command: String::new(),
             new_session_local_forwards_text: String::new(),
@@ -859,6 +862,7 @@ impl MistTermApp {
             edit_session_password: String::new(),
             edit_session_group: boot_loc.tr("Default", "默认").to_string(),
             edit_session_private_key_path: String::new(),
+            edit_session_use_ssh_agent: true,
             edit_session_color_tag: String::new(),
             edit_session_keepalive_enabled: true,
             edit_session_keepalive_interval_secs: 30,
@@ -1415,6 +1419,7 @@ impl MistTermApp {
             &session.username,
             &resolved.password,
             &resolved.private_key_path,
+            session.use_ssh_agent,
             ka_on,
             ka_int,
             ka_max,
@@ -1446,6 +1451,7 @@ impl MistTermApp {
                     username: js.username.clone(),
                     password: resolved.password,
                     private_key_path: resolved.private_key_path,
+                    use_ssh_agent: js.use_ssh_agent,
                 });
             } else {
                 let ep = parse_jump_endpoint(token, &session.username)?;
@@ -1455,6 +1461,7 @@ impl MistTermApp {
                     username: ep.username,
                     password: String::new(),
                     private_key_path: String::new(),
+                    use_ssh_agent: session.use_ssh_agent,
                 });
             }
         }
@@ -2250,6 +2257,7 @@ impl MistTermApp {
             username: session.username.clone(),
             password: resolved.password,
             private_key_path: resolved.private_key_path,
+            use_ssh_agent: session.use_ssh_agent,
             keepalive_interval_secs: interval,
             keepalive_count_max: ka_max,
             proxy_jump: session.proxy_jump.clone(),
@@ -2564,6 +2572,51 @@ impl MistTermApp {
             "复制效率报告失败",
         )
         .to_string();
+    }
+
+    fn export_efficiency_report_pdf(&mut self, ctx: &egui::Context) {
+        let pdf = match crate::core::build_efficiency_report_pdf(
+            &self.fragment_analytics_snapshot,
+            self.fragment_analytics_range,
+            &self.fragment_recommendations,
+        ) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                self.status_message = format!(
+                    "{} {}",
+                    crate::i18n::tr(ctx, "PDF export failed:", "PDF 导出失败："),
+                    e
+                );
+                return;
+            }
+        };
+        let default_name = format!(
+            "mistterm-efficiency-{}.pdf",
+            chrono::Local::now().format("%Y%m%d")
+        );
+        let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("PDF", &["pdf"])
+            .save_file()
+        else {
+            return;
+        };
+        match std::fs::write(&path, pdf) {
+            Ok(()) => {
+                self.status_message = format!(
+                    "{} {}",
+                    crate::i18n::tr(ctx, "Efficiency report saved:", "效率报告已保存："),
+                    path.display()
+                );
+            }
+            Err(e) => {
+                self.status_message = format!(
+                    "{} {}",
+                    crate::i18n::tr(ctx, "Failed to write PDF:", "写入 PDF 失败："),
+                    e
+                );
+            }
+        }
     }
 
     fn add_fragment_from_recommendation(&mut self, ctx: &egui::Context, index: usize) {
@@ -2946,7 +2999,10 @@ impl MistTermApp {
         self.sync_ai_chat_session();
         let mut open_ai = false;
         let mut attach_text: Option<String> = None;
+        let mut attach_source: Option<&str> = None;
         let mut tail_empty = false;
+        let mut monitor_empty = false;
+        let mut session_log_empty = false;
         if let Some(idx) = self.active_tab {
             if let Some(tab) = self.tabs.get_mut(idx) {
                 if let Some(pane) = tab.active_pane_mut() {
@@ -2977,6 +3033,26 @@ impl MistTermApp {
                 }
             }
         }
+        if self.monitor_panel.take_pending_send_to_ai() {
+            if let Some(text) = self.monitor_panel.snapshot_for_ai() {
+                attach_text = Some(text);
+                attach_source = Some("monitor");
+                open_ai = true;
+            } else {
+                monitor_empty = true;
+                open_ai = true;
+            }
+        }
+        if self.session_log_dialog.take_pending_send_to_ai() {
+            if let Some(text) = self.session_log_dialog.content_for_ai() {
+                attach_text = Some(text);
+                attach_source = Some("session_log");
+                open_ai = true;
+            } else {
+                session_log_empty = true;
+                open_ai = true;
+            }
+        }
         if tail_empty {
             self.status_message = crate::i18n::tr(
                 ctx,
@@ -2985,8 +3061,25 @@ impl MistTermApp {
             )
             .to_string();
         }
+        if monitor_empty {
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "No monitor data yet; wait for a refresh",
+                "尚无监控数据，请等待刷新",
+            )
+            .to_string();
+        }
+        if session_log_empty {
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "Session log is empty",
+                "会话日志为空",
+            )
+            .to_string();
+        }
         if let Some(text) = attach_text {
-            self.ai_panel.attach_context(text);
+            self.ai_panel
+                .attach_context_labeled(attach_source, text);
             open_ai = true;
         }
         if open_ai && self.ensure_right_dock_allowed_or_warn(ctx) {
@@ -3243,6 +3336,7 @@ impl MistTermApp {
         self.session_manager.patch_session(&sid, |s| {
             s.proxy_jump = proxy_jump.clone();
             s.proxy_command = proxy_command.clone();
+            s.use_ssh_agent = self.new_session_use_ssh_agent;
             s.local_forwards_text = local_forwards_text;
             s.remote_forwards_text = remote_forwards_text;
             s.dynamic_forwards_text = dynamic_forwards_text;
@@ -3277,6 +3371,7 @@ impl MistTermApp {
             .tr("Default", "默认")
             .to_string();
         self.new_session_private_key_path.clear();
+        self.new_session_use_ssh_agent = true;
         self.new_session_proxy_jump.clear();
         self.new_session_proxy_command.clear();
         self.new_session_local_forwards_text.clear();
@@ -3337,6 +3432,7 @@ impl MistTermApp {
             self.edit_session_password = "****".to_string();
             self.edit_session_group = session.group;
             self.edit_session_private_key_path = session.private_key_path;
+            self.edit_session_use_ssh_agent = session.use_ssh_agent;
             self.edit_session_color_tag = session.color_tag.clone();
             self.edit_session_keepalive_enabled = session.keepalive_enabled;
             self.edit_session_keepalive_interval_secs = session.keepalive_interval_secs;
@@ -3407,6 +3503,7 @@ impl MistTermApp {
                 s.keepalive_auto_reconnect = ka_ar;
                 s.proxy_jump = self.edit_session_proxy_jump.trim().to_string();
                 s.proxy_command = self.edit_session_proxy_command.trim().to_string();
+                s.use_ssh_agent = self.edit_session_use_ssh_agent;
                 s.local_forwards_text = self.edit_session_local_forwards_text.clone();
                 s.remote_forwards_text = self.edit_session_remote_forwards_text.clone();
                 s.dynamic_forwards_text = self.edit_session_dynamic_forwards_text.clone();
@@ -4213,28 +4310,6 @@ impl MistTermApp {
         self.insert_fragment_at_tab_index(ctx, idx, Some(id), expanded);
     }
 
-    #[allow(dead_code)]
-    fn title_bar_connection(&self, ctx: &egui::Context) -> Option<crate::ui::chrome::TitleBarConnection> {
-        let terminal = self.current_terminal()?;
-        let online = terminal.is_connected();
-        let connecting = terminal.is_connecting();
-        let status_label = if let Some(err) = terminal.connection_error_text() {
-            truncate_status(err, 24)
-        } else if online {
-            crate::i18n::tr(ctx, "Online", "在线").to_string()
-        } else if connecting {
-            crate::i18n::tr(ctx, "Connecting…", "连接中…").to_string()
-        } else {
-            crate::i18n::tr(ctx, "Disconnected", "已断开").to_string()
-        };
-        Some(crate::ui::chrome::TitleBarConnection {
-            server_text: terminal.connection_server_text(),
-            status_label,
-            online,
-            connecting,
-        })
-    }
-
     /// 底栏左侧：连接 / 侧栏会话 / 日志等状态信息成组排列（不拉满整行）。
     fn status_bar_info_cluster(&mut self, ui: &mut egui::Ui, theme: &crate::ui::theme::Theme) {
         let bar_ctx = ui.ctx().clone();
@@ -4930,6 +5005,9 @@ impl eframe::App for MistTermApp {
             }
             crate::ui::fragment_analytics_dialog::FragmentAnalyticsUiAction::ExportEfficiencyReport => {
                 self.export_efficiency_report(ctx);
+            }
+            crate::ui::fragment_analytics_dialog::FragmentAnalyticsUiAction::ExportEfficiencyReportPdf => {
+                self.export_efficiency_report_pdf(ctx);
             }
             crate::ui::fragment_analytics_dialog::FragmentAnalyticsUiAction::AddRecommendation(i) => {
                 self.add_fragment_from_recommendation(ctx, i);

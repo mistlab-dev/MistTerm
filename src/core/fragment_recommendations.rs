@@ -175,3 +175,127 @@ pub fn build_efficiency_report_markdown(
     }
     out
 }
+
+/// 将效率报告渲染为 PDF 字节（需可加载的 CJK TTF/TTC）。
+pub fn build_efficiency_report_pdf(
+    dash: &crate::core::FragmentAnalyticsDashboard,
+    range: crate::core::FragmentAnalyticsTimeRange,
+    recommendations: &[FragmentRecommendation],
+) -> Result<Vec<u8>, String> {
+    let font = load_pdf_cjk_font()?;
+    let family = genpdf::fonts::FontFamily {
+        regular: font.clone(),
+        bold: font.clone(),
+        italic: font.clone(),
+        bold_italic: font,
+    };
+    let mut doc = genpdf::Document::new(family);
+    doc.set_title("MistTerm Efficiency Report");
+    doc.set_line_spacing(1.15);
+    let mut decorator = genpdf::SimplePageDecorator::new();
+    decorator.set_margins(12);
+    doc.set_page_decorator(decorator);
+
+    let md = build_efficiency_report_markdown(dash, range, recommendations);
+    for line in md.lines() {
+        if line.is_empty() {
+            doc.push(genpdf::elements::Break::new(0.6));
+        } else {
+            doc.push(genpdf::elements::Paragraph::new(line.to_string()));
+        }
+    }
+
+    let mut buf = Vec::new();
+    doc.render(&mut buf).map_err(|e| e.to_string())?;
+    Ok(buf)
+}
+
+fn load_pdf_cjk_font() -> Result<genpdf::fonts::FontData, String> {
+    for path in pdf_cjk_font_paths() {
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        if let Some(font) = try_font_data(bytes) {
+            log::info!("PDF export using font: {}", path.display());
+            return Ok(font);
+        }
+    }
+    Err(
+        "未找到可用于 PDF 的中文字体（请安装 Noto Sans CJK / 微软雅黑，或运行 scripts/fetch-cjk-font.sh）"
+            .to_string(),
+    )
+}
+
+fn try_font_data(bytes: Vec<u8>) -> Option<genpdf::fonts::FontData> {
+    genpdf::fonts::FontData::new(bytes, None).ok()
+}
+
+fn pdf_cjk_font_paths() -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(windir) = std::env::var("WINDIR") {
+            let fonts = std::path::PathBuf::from(windir).join("Fonts");
+            for name in ["msyh.ttc", "msyhbd.ttc", "simhei.ttf", "simsun.ttc"] {
+                paths.push(fonts.join(name));
+            }
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        for p in [
+            "/System/Library/Fonts/PingFang.ttc",
+            "/System/Library/Fonts/STHeiti Light.ttc",
+            "/Library/Fonts/Arial Unicode.ttf",
+        ] {
+            paths.push(std::path::PathBuf::from(p));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        for p in [
+            "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+            "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        ] {
+            paths.push(std::path::PathBuf::from(p));
+        }
+    }
+    paths
+}
+
+#[cfg(test)]
+mod pdf_tests {
+    use super::*;
+    use crate::core::FragmentAnalyticsDashboard;
+
+    #[test]
+    fn efficiency_report_pdf_non_empty() {
+        let dash = FragmentAnalyticsDashboard {
+            personal_total_usage: 1,
+            personal_success_rate: 100.0,
+            personal_avg_ms: 10,
+            team_total_usage: 0,
+            team_success_rate: 0.0,
+            team_avg_ms: 0,
+            personal_top: vec![],
+            team_top: vec![],
+            slowest: vec![],
+            highest_error: vec![],
+            team_api_available: false,
+            member_rows: vec![],
+            period_stats_from_events: false,
+        };
+        let pdf = build_efficiency_report_pdf(
+            &dash,
+            crate::core::FragmentAnalyticsTimeRange::AllTime,
+            &[],
+        );
+        let Ok(pdf) = pdf else {
+            eprintln!("skip PDF test: no CJK font on this host");
+            return;
+        };
+        assert!(pdf.starts_with(b"%PDF"));
+        assert!(pdf.len() > 512);
+    }
+}

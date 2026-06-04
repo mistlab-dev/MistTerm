@@ -20,6 +20,10 @@ fn default_max_tokens() -> u32 {
     2048
 }
 
+fn default_request_retries() -> u32 {
+    2
+}
+
 fn default_system_prompt() -> String {
     String::new()
 }
@@ -40,6 +44,9 @@ pub struct AiSettings {
     pub timeout_secs: u64,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
+    /// 网络错误时的额外重试次数（不含首次请求）。
+    #[serde(default = "default_request_retries")]
+    pub request_retries: u32,
     /// 空字符串时使用内置默认 system prompt。
     #[serde(default = "default_system_prompt")]
     pub system_prompt: String,
@@ -70,6 +77,7 @@ impl Default for AiSettings {
             model: default_model(),
             timeout_secs: default_timeout_secs(),
             max_tokens: default_max_tokens(),
+            request_retries: default_request_retries(),
             system_prompt: default_system_prompt(),
             attach_session_meta: true,
             stream_responses: true,

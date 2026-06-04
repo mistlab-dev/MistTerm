@@ -21,6 +21,7 @@ pub struct JumpHop {
     pub username: String,
     pub password: String,
     pub private_key_path: String,
+    pub use_ssh_agent: bool,
 }
 
 /// 解析后的跳板链端点（尚未解析凭据）。
@@ -133,6 +134,7 @@ pub fn connect_ssh_session(config: &SshConfig) -> Result<Session, String> {
                     username: config.username.clone(),
                     password: config.password.clone(),
                     private_key_path: config.private_key_path.clone(),
+                    use_ssh_agent: config.use_ssh_agent,
                     keepalive_interval_secs: config.keepalive_interval_secs,
                     keepalive_count_max: config.keepalive_count_max,
                     proxy_jump: String::new(),
@@ -183,6 +185,7 @@ fn hop_to_config(hop: &JumpHop) -> SshConfig {
         username: hop.username.clone(),
         password: hop.password.clone(),
         private_key_path: hop.private_key_path.clone(),
+        use_ssh_agent: hop.use_ssh_agent,
         ..SshConfig::default()
     }
 }
@@ -349,5 +352,20 @@ mod tests {
         assert_eq!(e.username, "ops");
         assert_eq!(e.host, "jump");
         assert_eq!(e.port, 22);
+    }
+
+    #[test]
+    fn hop_to_config_propagates_use_ssh_agent() {
+        let hop = JumpHop {
+            host: "hop".into(),
+            port: 22,
+            username: "u".into(),
+            password: String::new(),
+            private_key_path: String::new(),
+            use_ssh_agent: false,
+        };
+        let cfg = hop_to_config(&hop);
+        assert!(!cfg.use_ssh_agent);
+        assert_eq!(cfg.host, "hop");
     }
 }

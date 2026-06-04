@@ -36,6 +36,7 @@ pub struct MonitorPanel {
     pending_raw: Option<Receiver<Result<String, String>>>,
     /// 本帧 `SidePanel` 槽位矩形（`ui.max_rect()`，与布局占位一致）
     last_panel_slot_rect: Option<egui::Rect>,
+    pending_send_to_ai: bool,
 }
 
 impl Default for MonitorPanel {
@@ -57,7 +58,35 @@ impl MonitorPanel {
             last_error: None,
             pending_raw: None,
             last_panel_slot_rect: None,
+            pending_send_to_ai: false,
         }
+    }
+
+    pub fn take_pending_send_to_ai(&mut self) -> bool {
+        let v = self.pending_send_to_ai;
+        self.pending_send_to_ai = false;
+        v
+    }
+
+    pub fn snapshot_for_ai(&self) -> Option<String> {
+        let monitor = self.monitor.as_ref()?;
+        let stats = monitor.last_stats();
+        if stats.memory_total == 0 && stats.disk_total == 0 && stats.cpu_percent == 0.0 {
+            return None;
+        }
+        let mut out = stats.format_for_ai();
+        let history = monitor.get_history();
+        if history.len() >= 2 {
+            let (rx_bps, tx_bps) = monitor.network_rate();
+            if rx_bps > 0.0 || tx_bps > 0.0 {
+                out.push_str(&format!(
+                    "\nNetwork rate (approx): {} / {}",
+                    format_bytes_per_sec(rx_bps),
+                    format_bytes_per_sec(tx_bps),
+                ));
+            }
+        }
+        Some(out)
     }
 
     /// 初始化监控器(使用现有 SSH 连接与对应的 `SshManager` 克隆以供 exec)
@@ -384,6 +413,27 @@ impl MonitorPanel {
                                         .clicked()
                                         {
                                             *open = false;
+                                        }
+                                        if self.monitor.is_some() {
+                                            if crate::ui::chrome::panel_action_icon_button(
+                                                ui,
+                                                theme,
+                                                crate::ui::icons::IconId::Api,
+                                                crate::i18n::tr(
+                                                    ui.ctx(),
+                                                    "Send snapshot to AI",
+                                                    "快照发送到 AI",
+                                                ),
+                                            )
+                                            .on_hover_text(crate::i18n::tr(
+                                                ui.ctx(),
+                                                "Attach current metrics to the AI panel",
+                                                "将当前监控指标附带至 AI 面板",
+                                            ))
+                                            .clicked()
+                                            {
+                                                self.pending_send_to_ai = true;
+                                            }
                                         }
                                     },
                                 );

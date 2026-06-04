@@ -11,6 +11,8 @@ pub struct StoredContextRef {
     pub truncated: bool,
     pub original_line_count: usize,
     pub original_char_count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +89,7 @@ mod tests {
                 truncated: false,
                 original_line_count: 1,
                 original_char_count: 3,
+                source_key: None,
             }],
             commands: vec![],
         };

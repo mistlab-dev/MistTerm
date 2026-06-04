@@ -14,12 +14,14 @@ pub struct SshConfig {
     pub username: String,
     pub password: String,
     pub private_key_path: String,
+    /// 在指定密钥之后尝试 ssh-agent / Pageant。
+    pub use_ssh_agent: bool,
     /// `ServerAliveInterval`（秒）；0 表示不启用
     pub keepalive_interval_secs: u32,
     pub keepalive_count_max: u8,
     /// OpenSSH `ProxyJump`（逗号分隔多跳）
     pub proxy_jump: String,
-    /// OpenSSH `ProxyCommand`（Phase 1 仅检测，未实现）
+    /// OpenSSH `ProxyCommand`（经子进程 stdio 桥接 TCP）
     pub proxy_command: String,
     /// 与 `proxy_jump` 各跳对应的凭据（由 UI 从已保存会话解析）
     pub jump_hops: Vec<jump::JumpHop>,
@@ -39,6 +41,7 @@ impl Default for SshConfig {
             username: String::new(),
             password: String::new(),
             private_key_path: String::new(),
+            use_ssh_agent: true,
             keepalive_interval_secs: 0,
             keepalive_count_max: 3,
             proxy_jump: String::new(),
@@ -78,6 +81,18 @@ pub fn authenticate_session(session: &mut Session, config: &SshConfig) -> Result
         }
     }
 
+    if !authenticated && config.use_ssh_agent {
+        match session.userauth_agent(&config.username) {
+            Ok(_) => {
+                log::info!("Authenticated with SSH agent");
+                authenticated = true;
+            }
+            Err(e) => {
+                log::debug!("SSH agent auth failed: {}", e);
+            }
+        }
+    }
+
     if !authenticated && !config.password.is_empty() {
         match session.userauth_password(&config.username, &config.password) {
             Ok(_) => {
@@ -110,7 +125,9 @@ pub fn authenticate_session(session: &mut Session, config: &SshConfig) -> Result
     }
 
     if !authenticated {
-        return Err("Authentication failed (password and SSH keys failed)".to_string());
+        return Err(
+            "Authentication failed (SSH keys, agent, password, and default keys failed)".to_string(),
+        );
     }
     Ok(())
 }
@@ -282,11 +299,13 @@ mod tests {
             username: "test".to_string(),
             password: "pass".to_string(),
             private_key_path: String::new(),
+            use_ssh_agent: true,
             ..SshConfig::default()
         };
         
         assert_eq!(config.host, "localhost");
         assert_eq!(config.port, 22);
+        assert!(config.use_ssh_agent);
     }
 
     #[test]
