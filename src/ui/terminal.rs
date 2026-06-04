@@ -189,6 +189,7 @@ pub struct TerminalView {
     selection: Selection,
     /// 右键「发送到 AI」后置位，由 `app` 读取选区并打开 AI 面板。
     pending_send_to_ai: bool,
+    pending_send_tail_to_ai: bool,
     /// 点击「发送到 AI」当帧快照的选中文本，避免后续选区变化导致桥接拿到空串。
     pending_send_to_ai_text: Option<String>,
     /// 当前行已键入字节（用于 Ctrl+R 命令历史，近似 PTY 行缓冲）
@@ -544,6 +545,7 @@ impl TerminalView {
             zmodem_upload_after_rz_path: None,
             selection: Selection::default(),
             pending_send_to_ai: false,
+            pending_send_tail_to_ai: false,
             pending_send_to_ai_text: None,
             typed_line_buffer: String::new(),
             submitted_line: None,
@@ -1136,6 +1138,20 @@ impl TerminalView {
                                         ui.close_menu();
                                     }
                                     ui.separator();
+                                }
+                                if crate::ui::chrome::popup_menu_button(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(
+                                        ui.ctx(),
+                                        "Send last 50 lines to AI",
+                                        "最近 50 行发送到 AI",
+                                    ),
+                                )
+                                .clicked()
+                                {
+                                    self.pending_send_tail_to_ai = true;
+                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button(
                                     ui,
@@ -2107,6 +2123,30 @@ impl TerminalView {
     /// 当前选区文本（无选区时为空）。
     pub fn selected_text(&self) -> String {
         self.get_selected_text()
+    }
+
+    /// 终端缓冲区底部最近 `max_lines` 行（含 scrollback）。
+    pub fn tail_plain_text(&self, max_lines: usize) -> String {
+        self.terminal.tail_plain_text(max_lines)
+    }
+
+    pub fn ai_session_meta(&self, session_name: Option<String>) -> crate::core::TerminalSessionMeta {
+        let (username, host) = self
+            .connection_target
+            .as_ref()
+            .map(|(u, h)| (Some(u.clone()), Some(h.clone())))
+            .unwrap_or((None, None));
+        crate::core::TerminalSessionMeta {
+            host,
+            username,
+            session_name,
+        }
+    }
+
+    pub fn take_pending_send_tail_to_ai(&mut self) -> bool {
+        let v = self.pending_send_tail_to_ai;
+        self.pending_send_tail_to_ai = false;
+        v
     }
 
     /// 获取选中的文本

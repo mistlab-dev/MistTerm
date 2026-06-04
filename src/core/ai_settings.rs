@@ -20,6 +20,14 @@ fn default_max_tokens() -> u32 {
     2048
 }
 
+fn default_system_prompt() -> String {
+    String::new()
+}
+
+fn default_true() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiSettings {
     #[serde(default)]
@@ -32,6 +40,18 @@ pub struct AiSettings {
     pub timeout_secs: u64,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
+    /// 空字符串时使用内置默认 system prompt。
+    #[serde(default = "default_system_prompt")]
+    pub system_prompt: String,
+    /// 发送时附带 host / 会话名等元信息。
+    #[serde(default = "default_true")]
+    pub attach_session_meta: bool,
+    /// 使用 SSE 流式输出（不支持时回退整段响应）。
+    #[serde(default = "default_true")]
+    pub stream_responses: bool,
+    /// 按会话持久化 AI 对话。
+    #[serde(default = "default_true")]
+    pub persist_chats: bool,
     /// 仅存在于加密后的 settings 内层 JSON，勿写入审计日志。
     #[serde(default, skip_serializing_if = "String::is_empty")]
     api_key: String,
@@ -50,6 +70,10 @@ impl Default for AiSettings {
             model: default_model(),
             timeout_secs: default_timeout_secs(),
             max_tokens: default_max_tokens(),
+            system_prompt: default_system_prompt(),
+            attach_session_meta: true,
+            stream_responses: true,
+            persist_chats: true,
             api_key: String::new(),
             legacy_encrypted_api_key: String::new(),
             legacy_api_key_nonce: String::new(),
@@ -61,6 +85,11 @@ impl AiSettings {
     pub fn chat_completions_url(&self) -> String {
         let base = self.base_url.trim().trim_end_matches('/');
         format!("{base}/chat/completions")
+    }
+
+    pub fn models_url(&self) -> String {
+        let base = self.base_url.trim().trim_end_matches('/');
+        format!("{base}/models")
     }
 
     pub fn has_api_key(&self) -> bool {

@@ -249,6 +249,25 @@ impl Terminal {
         }
         out
     }
+
+    /// 从缓冲区底部取最近 `max_lines` 行（含 scrollback）。
+    pub fn tail_plain_text(&self, max_lines: usize) -> String {
+        if max_lines == 0 {
+            return String::new();
+        }
+        let grid = self.term.grid();
+        let bottom = grid.bottommost_line().0;
+        let top = grid.topmost_line().0;
+        let start = bottom.saturating_sub(max_lines as i32 - 1).max(top);
+        let mut lines = Vec::new();
+        for line_idx in start..=bottom {
+            let row = self.row_chars(Line(line_idx));
+            let s: String = row.into_iter().collect();
+            lines.push(s.trim_end().to_string());
+        }
+        lines.join("\n")
+    }
+
     /// 返回带颜色信息的布局（保持等宽）。`shell` 须由 [`TerminalShellStyle::from_theme`] 生成，
     /// 且 `terminal_bg` 与 UI 外框一致，否则整块格子与外框底色色差会像「四周留白」。
     /// `highlight`: 当前命中 `(行, 列, 长度)`，均为 **1-based** 字符下标（与 [`Self::search_viewport`] 一致）。
