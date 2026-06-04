@@ -34,6 +34,7 @@
 **界面字体与图标**
 
 - **中文**：发布构建在编译期嵌入 `assets/fonts/NotoSansSC-Regular.otf`（OFL-1.1），不依赖系统是否安装微软雅黑等字体；若嵌入与系统字体均不可用，底栏会提示「未加载中文字体」。
+- **PDF 导出**：嵌入 `assets/fonts/NotoSansSC-Regular.ttf`（Fontsource 子集，约 2MB）；无系统字体时仍可导出中文效率报告。
 - **图标**：UI 工具栏/侧栏图标使用内置图集纹理（`src/ui/icons.rs`），不依赖系统 emoji 字体；克隆仓库后若缺少字体文件，请执行 `./scripts/fetch-cjk-font.sh` 再编译。
 
 ### 1.3 硬件要求

@@ -76,7 +76,7 @@ MistTerm 是一款基于 Rust 和 egui 构建的跨平台 SSH 终端工具，提
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │                     核心层 (core/)                         │  │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐       │  │
-│  │  │ session.rs  │  │connection.rs│  │  状态管理   │       │  │
+│  │  │ session.rs  │  │ team/ 等   │  │  状态管理   │       │  │
 │  │  │ (会话管理)  │  │ (连接管理)  │  │ (状态/消息) │       │  │
 │  │  └─────────────┘  └─────────────┘  └─────────────┘       │  │
 │  └──────────────────────────────────────────────────────────┘  │
@@ -125,7 +125,7 @@ MistTerm 是一款基于 Rust 和 egui 构建的跨平台 SSH 终端工具，提
 
 **核心模块**:
 - `session.rs` - 会话配置管理（保存/加载/删除）
-- `connection.rs` - 连接状态管理（连接/断开/错误）
+- `team/`、`fragment_*` 等 - 团队片段、审计、分析
 - 消息路由 - SSH 消息分发和处理
 
 **依赖**: SSH 层、终端层
@@ -164,7 +164,7 @@ MistTerm/
 │   ├── core/                # 核心层
 │   │   ├── mod.rs
 │   │   ├── session.rs       # 会话管理
-│   │   └── connection.rs    # 连接管理
+│   │   └── team/            # 团队平台客户端
 │   ├── ssh/                 # SSH 层
 │   │   ├── mod.rs
 │   │   ├── client.rs        # SSH 客户端
@@ -342,34 +342,9 @@ pub struct SessionManager {
 - 删除会话
 - 持久化到 JSON 文件
 
-#### 4.2.2 连接管理 (connection.rs)
+#### 4.2.2 SSH 连接与会话 (ssh/)
 
-```rust
-pub enum ConnectionState {
-    Disconnected,
-    Connecting,
-    Connected,
-    Error(String),
-}
-
-pub struct SshSessionState {
-    pub config: SessionConfig,
-    pub state: ConnectionState,
-    pub terminal: Terminal,
-    pub handle: Option<SshSessionHandle>,
-}
-
-pub struct ConnectionManager {
-    sessions: Vec<Arc<Mutex<SshSessionState>>>,
-    ssh_manager: SshManager,
-    message_rx: Option<Receiver<SshMessage>>,
-}
-```
-
-**核心功能**:
-- 管理多个 SSH 连接状态
-- 处理 SSH 消息路由
-- 连接生命周期管理
+连接状态与多会话并发由 **SSH 层**（`ssh/client.rs`、`ssh/manager.rs`）与 UI 中的 `SshSessionHandle` 管理，不再使用已移除的 `core/connection.rs`。
 
 ### 4.3 SSH 层 (ssh/)
 

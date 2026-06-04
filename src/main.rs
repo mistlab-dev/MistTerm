@@ -39,7 +39,10 @@ fn main() -> eframe::Result<()> {
 
     // macOS：菜单栏显示名（避免显示可执行文件名 mistterm）
     #[cfg(target_os = "macos")]
-    mistterm::platform::set_application_display_name();
+    {
+        mistterm::platform::set_application_display_name();
+        mistterm::platform::activate_gui_application();
+    }
 
     // macOS：启动时尝试切到「ABC」英文键盘布局（需在系统里启用过该输入源）
     mistterm::platform::apply_preferred_english_input_source();

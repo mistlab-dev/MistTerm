@@ -308,73 +308,13 @@ pub struct SessionManager {
 ]
 ```
 
-### 3.2 连接管理 (connection.rs)
+### 3.2 SSH 连接与会话 (ssh/)
 
-#### 3.2.1 连接状态枚举
+连接状态枚举与多会话管理见 `ssh/client.rs`、`ssh/manager.rs` 及 UI 层会话句柄；历史文档中的 `core/connection.rs` 已移除。
 
-```rust
-#[derive(Debug, Clone, PartialEq)]
-pub enum ConnectionState {
-    Disconnected,      // 未连接
-    Connecting,        // 连接中
-    Connected,         // 已连接
-    Error(String),     // 错误（带错误信息）
-}
-```
+### 3.3 终端模拟 (terminal/)
 
-#### 3.2.2 SshSessionState 结构
-
-```rust
-pub struct SshSessionState {
-    pub config: SessionConfig,      // 会话配置
-    pub state: ConnectionState,     // 连接状态
-    pub terminal: Terminal,         // 终端模拟器
-    pub handle: Option<SshSessionHandle>,  // SSH 通道句柄
-}
-```
-
-**方法**:
-```rust
-impl SshSessionState {
-    pub fn new(config: SessionConfig) -> Self
-    pub fn status_text(&self) -> String
-}
-```
-
-#### 3.2.3 ConnectionManager 类
-
-```rust
-pub struct ConnectionManager {
-    sessions: Vec<Arc<Mutex<SshSessionState>>>,
-    ssh_manager: SshManager,
-    message_rx: Option<Receiver<SshMessage>>,
-}
-```
-
-**核心方法**:
-
-| 方法 | 职责 |
-|-----|------|
-| `new()` | 创建管理器 |
-| `add_session()` | 添加新会话 |
-| `get_session()` | 获取会话引用 |
-| `get_sessions()` | 获取所有会话 |
-| `get_ssh_manager()` | 获取 SSH 管理器 |
-| `handle_ssh_message()` | 处理 SSH 消息 |
-| `remove_session()` | 删除会话 |
-
-**线程安全设计**:
-```rust
-// 使用 Arc<Mutex<T>> 实现线程安全
-let session = Arc::new(Mutex::new(state));
-sessions.push(session.clone());
-
-// 访问时加锁
-{
-    let mut sess = session.lock();
-    sess.state = ConnectionState::Connected;
-}
-```
+见下文 **§5 终端层模块**（`emulator.rs` 等）。
 
 ---
 

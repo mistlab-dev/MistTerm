@@ -211,17 +211,22 @@ pub fn build_efficiency_report_pdf(
 }
 
 fn load_pdf_cjk_font() -> Result<genpdf::fonts::FontData, String> {
+    const EMBEDDED: &[u8] = include_bytes!("../../assets/fonts/NotoSansSC-Regular.ttf");
+    if let Some(font) = try_font_data(EMBEDDED.to_vec()) {
+        log::debug!("PDF export using embedded NotoSansSC-Regular.ttf");
+        return Ok(font);
+    }
     for path in pdf_cjk_font_paths() {
         let Ok(bytes) = std::fs::read(&path) else {
             continue;
         };
         if let Some(font) = try_font_data(bytes) {
-            log::info!("PDF export using font: {}", path.display());
+            log::info!("PDF export using system font: {}", path.display());
             return Ok(font);
         }
     }
     Err(
-        "未找到可用于 PDF 的中文字体（请安装 Noto Sans CJK / 微软雅黑，或运行 scripts/fetch-cjk-font.sh）"
+        "未找到可用于 PDF 的中文字体（请运行 scripts/fetch-cjk-font.sh 下载嵌入字体）"
             .to_string(),
     )
 }
@@ -290,11 +295,8 @@ mod pdf_tests {
             &dash,
             crate::core::FragmentAnalyticsTimeRange::AllTime,
             &[],
-        );
-        let Ok(pdf) = pdf else {
-            eprintln!("skip PDF test: no CJK font on this host");
-            return;
-        };
+        )
+        .expect("embedded NotoSansSC-Regular.ttf should load");
         assert!(pdf.starts_with(b"%PDF"));
         assert!(pdf.len() > 512);
     }

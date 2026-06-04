@@ -531,6 +531,39 @@ impl SshManager {
         session.set_blocking(false);
         result
     }
+
+    pub fn spawn_local_forward(
+        &self,
+        session_id: SshSessionId,
+        fwd: super::port_forward::LocalPortForward,
+    ) -> Result<super::port_forward::ForwardControl, String> {
+        let session = self
+            .get_session(session_id)
+            .ok_or_else(|| format!("会话 {} 不可用", session_id))?;
+        super::port_forward::spawn_local_forward_controllable(session, fwd)
+    }
+
+    pub fn spawn_remote_forward(
+        &self,
+        session_id: SshSessionId,
+        fwd: super::port_forward::RemotePortForward,
+    ) -> Result<super::port_forward::ForwardControl, String> {
+        let session = self
+            .get_session(session_id)
+            .ok_or_else(|| format!("会话 {} 不可用", session_id))?;
+        super::port_forward::spawn_remote_forward_controllable(session, fwd)
+    }
+
+    pub fn spawn_dynamic_forward(
+        &self,
+        session_id: SshSessionId,
+        fwd: super::socks_proxy::DynamicPortForward,
+    ) -> Result<super::port_forward::ForwardControl, String> {
+        let session = self
+            .get_session(session_id)
+            .ok_or_else(|| format!("会话 {} 不可用", session_id))?;
+        super::socks_proxy::spawn_dynamic_forward_controllable(session, fwd)
+    }
 }
 
 /// Shell 泵：专用 OS 线程 + `sync_channel`，避免 Tokio `block_on`/`recv` 与上传线程的调度死锁。

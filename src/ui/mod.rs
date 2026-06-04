@@ -31,6 +31,7 @@ pub mod ai_panel;
 mod markdown_view;
 pub mod theme;
 pub mod sftp_panel;
+pub mod port_forward_panel;
 pub mod fragment_library;
 pub mod credential_panel;
 pub mod cloud_sync_panel;

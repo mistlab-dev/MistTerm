@@ -22,7 +22,7 @@ pub mod zmodem_pty_prefix;
 pub mod sftp;
 
 pub use client::{SshClient, SshConfig};
-pub use port_forward::{LocalPortForward, RemotePortForward};
+pub use port_forward::{ForwardControl, LocalPortForward, RemotePortForward};
 pub use socks_proxy::DynamicPortForward;
 pub use jump::{JumpHop, parse_jump_chain, parse_jump_endpoint};
 pub use user_facing::format_ssh_connect_error;

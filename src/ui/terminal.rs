@@ -2501,6 +2501,10 @@ impl TerminalView {
         self.ssh_handle.clone()
     }
 
+    pub fn ssh_session_id(&self) -> Option<usize> {
+        self.session_id
+    }
+
     /// 克隆 SSH 管理器，供监控面板 exec 采集等与 PTY 并行的操作使用。
     pub fn ssh_manager_clone(&self) -> Option<SshManager> {
         self.ssh_manager.as_ref().cloned()

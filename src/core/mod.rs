@@ -36,9 +36,15 @@ pub mod app_settings;
 pub mod team;
 pub mod market;
 pub mod vault;
+pub mod port_forward;
+pub use port_forward::{
+    parse_forward_form, status_bar_summary, ForwardFormInput, ForwardFormKind, PortForwardKind,
+};
 pub mod secret_resolver;
 
 pub use session::{
+    append_dynamic_forward_line, append_local_forward_line, append_remote_forward_line,
+    format_dynamic_forward_line, format_local_forward_line, format_remote_forward_line,
     parse_dynamic_forwards_text, parse_local_forwards_text, parse_remote_forwards_text,
     SessionConfig, SessionManager,
     SESSION_COLOR_TAGS,

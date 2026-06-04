@@ -78,7 +78,7 @@ src/
 │   └── app.rs          # 包含单元测试
 ├── core/
 │   ├── session.rs      # 包含单元测试
-│   └── connection.rs   # 包含单元测试
+│   └── session.rs      # 会话配置
 ├── ssh/
 │   ├── client.rs       # 包含单元测试
 │   └── manager.rs      # 包含单元测试
@@ -469,7 +469,33 @@ mod tests {
 }
 ```
 
-### 3.3 会话管理集成测试
+### 3.4 本地 OpenSSH 集成测试（SFTP / 监控 / ZMODEM）
+
+以下测试位于 `tests/*_integration_test.rs`，通过 `mistterm::test_support::ssh_local` 探测本地 sshd；**无 sshd 时自动 skip**（不失败），无需 `--ignored`。
+
+| 环境变量 | 默认 |
+|----------|------|
+| `MISTTERM_TEST_SSH_HOST` | `127.0.0.1` |
+| `MISTTERM_TEST_SSH_PORT` | `22` |
+| `MISTTERM_TEST_SSH_USER` | `root` |
+| `MISTTERM_TEST_SSH_PASSWORD` | `mistterm123` |
+
+```powershell
+# Windows（建议独立 target-dir，避免 Mist.exe 占用）
+$env:RUST_TEST_THREADS = "1"
+.\scripts\run-integration-tests.ps1
+```
+
+```bash
+# Linux / macOS
+./scripts/run-integration-tests.sh
+```
+
+ZMODEM 用例中 `test_remote_lrzsz_available` 会检查远端是否安装 `rz`/`sz`（lrzsz）；未安装时仅打印提示，不导致失败。
+
+**说明**：CI 默认不启动 sshd，上述集成测试不在 CI 中强制运行。
+
+### 3.3 会话管理集成测试（示例）
 
 ```rust
 // tests/integration/session_management.rs
