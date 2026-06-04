@@ -89,8 +89,9 @@ pub use audit::{
 };
 pub use ai_settings::AiSettings;
 pub use ai_client::{
-    chat_completions, chat_completions_with_key, extract_shell_commands, redact_for_ai,
-    test_connection, test_connection_with_key, ChatMessage,
+    chat_completions, chat_completions_with_key, extract_shell_commands, prepare_terminal_context,
+    redact_for_ai, test_connection, test_connection_with_key, ChatMessage, PreparedTerminalContext,
+    AI_CONTEXT_MAX_CHARS, AI_CONTEXT_MAX_LINES,
 };
 pub use app_settings::AppSettings;
 pub use team::{

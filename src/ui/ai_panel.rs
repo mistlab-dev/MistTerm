@@ -6,7 +6,7 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::thread;
 
 use crate::core::{
-    extract_shell_commands, redact_for_ai, AppSettings, ChatMessage,
+    extract_shell_commands, prepare_terminal_context, AppSettings, ChatMessage, PreparedTerminalContext,
 };
 use crate::i18n::{self};
 use crate::ui::icons::IconId;
@@ -15,9 +15,80 @@ use crate::ui::markdown_view;
 use crate::ui::theme::Theme;
 
 #[derive(Clone)]
+struct TerminalContextRef {
+    text: String,
+    line_count: usize,
+    char_count: usize,
+    truncated: bool,
+    original_line_count: usize,
+    original_char_count: usize,
+}
+
+impl TerminalContextRef {
+    fn from_prepared(prep: PreparedTerminalContext) -> Self {
+        Self {
+            text: prep.text,
+            line_count: prep.line_count,
+            char_count: prep.char_count,
+            truncated: prep.truncated,
+            original_line_count: prep.original_line_count,
+            original_char_count: prep.original_char_count,
+        }
+    }
+
+    fn chip_label(&self, ctx: &egui::Context) -> String {
+        let title = i18n::tr(ctx, "Terminal selection", "终端选区");
+        let unit = if self.line_count == 1 {
+            i18n::tr(ctx, "line", "行")
+        } else {
+            i18n::tr(ctx, "lines", "行")
+        };
+        let mut label = format!("{title} · {} {unit}", self.line_count);
+        if self.truncated {
+            label.push_str(&format!(
+                " ({})",
+                i18n::tr(ctx, "truncated", "已截断")
+            ));
+        }
+        label
+    }
+
+    fn hover_detail(&self, ctx: &egui::Context) -> String {
+        let mut detail = format!(
+            "{}\n{} · {}\n{}",
+            self.chip_label(ctx),
+            self.char_count,
+            i18n::tr(ctx, "characters", "字符"),
+            i18n::tr(
+                ctx,
+                "Click to view full text",
+                "点击查看完整内容",
+            ),
+        );
+        if self.truncated {
+            detail.push('\n');
+            detail.push_str(&format!(
+                "{}: {} {} · {} {}",
+                i18n::tr(ctx, "Original selection", "原始选区"),
+                self.original_line_count,
+                i18n::tr(ctx, "lines", "行"),
+                self.original_char_count,
+                i18n::tr(ctx, "characters", "字符"),
+            ));
+        }
+        detail
+    }
+}
+
+#[derive(Clone)]
 struct UiMessage {
     role: &'static str,
+    /// 气泡内展示的用户问题或助手回复（不含附带终端全文）。
     content: String,
+    /// 发往 API 的完整 user 正文（含终端上下文）；助手消息为 None。
+    api_content: Option<String>,
+    /// 本条 user 消息附带的终端选区引用。
+    context_ref: Option<TerminalContextRef>,
     commands: Vec<String>,
 }
 
@@ -30,7 +101,7 @@ enum BackgroundJob {
 pub struct AiPanel {
     messages: Vec<UiMessage>,
     draft_input: String,
-    attached_context: String,
+    attached_context: Option<TerminalContextRef>,
     background: Option<BackgroundJob>,
     busy: bool,
     last_error: Option<String>,
@@ -42,6 +113,8 @@ pub struct AiPanel {
     /// 输入区旁即时提示（空内容、未启用、请求中等）
     input_status: Option<String>,
     last_panel_slot_rect: Option<egui::Rect>,
+    /// 清空对话二次确认（防误触）。
+    confirm_clear_chat: bool,
 }
 
 impl Default for AiPanel {
@@ -55,7 +128,7 @@ impl AiPanel {
         Self {
             messages: Vec::new(),
             draft_input: String::new(),
-            attached_context: String::new(),
+            attached_context: None,
             background: None,
             busy: false,
             last_error: None,
@@ -65,18 +138,21 @@ impl AiPanel {
             test_status: None,
             input_status: None,
             last_panel_slot_rect: None,
+            confirm_clear_chat: false,
         }
     }
 
     pub fn attach_context(&mut self, text: String) {
-        if text.trim().is_empty() {
+        let prep = prepare_terminal_context(&text);
+        if prep.line_count == 0 {
             return;
         }
-        self.attached_context = redact_for_ai(&text);
+        self.attached_context = Some(TerminalContextRef::from_prepared(prep));
+        self.confirm_clear_chat = false;
     }
 
     pub fn clear_context(&mut self) {
-        self.attached_context.clear();
+        self.attached_context = None;
     }
 
     pub fn take_command_for_terminal(&mut self) -> Option<String> {
@@ -328,6 +404,7 @@ impl AiPanel {
             && app_settings.ai.enabled
             && !self.busy
             && !self.is_background_busy()
+            && (!self.draft_input.trim().is_empty() || self.attached_context.is_some())
     }
 
     fn effective_api_key<'a>(&'a self, app_settings: &'a AppSettings) -> Option<String> {
@@ -520,44 +597,33 @@ impl AiPanel {
         theme: &Theme,
         scroll_h: f32,
     ) {
-        if !self.attached_context.is_empty() {
-            ui.group(|ui| {
-                let _ = bind_row_width(ui);
-                ui.label(
-                    egui::RichText::new(i18n::tr(
-                        ctx,
-                        "Attached terminal context",
-                        "附带的终端上下文",
-                    ))
-                        .size(theme.font_size_small())
-                        .strong(),
-                );
-                let preview: String = self
-                    .attached_context
-                    .lines()
-                    .take(8)
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let more = self.attached_context.lines().count() > 8;
-                ui.label(
-                    egui::RichText::new(if more {
-                        format!("{preview}\n…")
-                    } else {
-                        preview
-                    })
-                    .monospace()
-                    .size(theme.font_size_small()),
-                );
-                if crate::ui::chrome::panel_action_icon_button(
+        if self.attached_context.is_some() {
+            let context = self.attached_context.clone().expect("checked");
+            let mut remove = false;
+            ui.horizontal(|ui| {
+                show_terminal_context_chip(
                     ui,
+                    ctx,
                     theme,
-                    crate::ui::icons::IconId::Trash,
-                    i18n::tr(ctx, "Clear context", "清除上下文"),
-                )
-                    .clicked() {
-                    self.clear_context();
-                }
+                    &context,
+                    egui::Id::new("mistterm_ai_attached_ctx"),
+                    true,
+                    &mut remove,
+                );
             });
+            if remove {
+                self.clear_context();
+            }
+            if context.truncated {
+                ui.colored_label(
+                    theme.amber_color(),
+                    i18n::tr(
+                        ctx,
+                        "Selection was truncated to fit model limits; click the chip to review.",
+                        "选区已截断以适配模型上限；点击芯片可查看已发送部分。",
+                    ),
+                );
+            }
             ui.add_space(theme.spacing_sm());
         }
         egui::ScrollArea::vertical()
@@ -581,7 +647,7 @@ impl AiPanel {
                 }
                 for (i, msg) in self.messages.iter().enumerate() {
                     let mut picked = None;
-                    self.render_message(ui, ctx, theme, msg, &mut picked);
+                    self.render_message(ui, ctx, theme, msg, i, &mut picked);
                     if let Some(cmd) = picked {
                         self.command_for_terminal = Some(cmd);
                     }
@@ -599,6 +665,7 @@ impl AiPanel {
         ctx: &egui::Context,
         theme: &Theme,
         msg: &UiMessage,
+        msg_index: usize,
         command_pick: &mut Option<String>,
     ) {
         let bubble_fill = if msg.role == "user" {
@@ -626,6 +693,18 @@ impl AiPanel {
                     }
                     let prev_gap_y = ui.spacing().item_spacing.y;
                     ui.spacing_mut().item_spacing.y = theme.spacing_xs();
+                    if let Some(context) = &msg.context_ref {
+                        let mut remove = false;
+                        show_terminal_context_chip(
+                            ui,
+                            ctx,
+                            theme,
+                            context,
+                            ui.id().with(("msg_ctx", msg_index)),
+                            false,
+                            &mut remove,
+                        );
+                    }
                     markdown_view::show_markdown(
                         ui,
                         theme,
@@ -658,8 +737,9 @@ impl AiPanel {
                         i18n::tr(ctx, "Copy full message", "复制全文"),
                     )
                         .clicked() {
+                        let copy_text = message_copy_text(msg);
                         if let Ok(mut clip) = Clipboard::new() {
-                            let _ = clip.set_text(msg.content.clone());
+                            let _ = clip.set_text(copy_text);
                         }
                         ui.close_menu();
                     }
@@ -698,7 +778,8 @@ impl AiPanel {
         let draft_id = egui::Id::new("mistterm_ai_draft");
         let focused = ui.memory(|m| m.has_focus(draft_id));
         let mut send_clicked = false;
-        let mut clear_clicked = false;
+        let mut clear_draft_clicked = false;
+        let mut clear_chat_clicked = false;
         theme.frame_form_text_input(focused).show(ui, |ui| {
             let inner_w =
                 (ui.available_width() - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0);
@@ -714,8 +795,8 @@ impl AiPanel {
                         theme,
                         i18n::tr(
                             ctx,
-                            "Ask a question, Ctrl + Enter to send",
-                            "输入问题，Ctrl + Enter 发送",
+                            "Ask a question or send attached selection (Ctrl + Enter)",
+                            "输入问题，或直接发送附带选区（Ctrl + Enter）",
                         ),
                         theme.font_size_control_input(),
                     ))
@@ -729,7 +810,8 @@ impl AiPanel {
             ui.add_space(theme.spacing_sm() + 4.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let send_label = i18n::tr(ctx, "Send", "发送");
-                let clear_label = i18n::tr(ctx, "Clear", "清空");
+                let clear_draft_label = i18n::tr(ctx, "Clear input", "清空输入");
+                let clear_chat_label = i18n::tr(ctx, "Clear chat", "清空对话");
                 send_clicked = ui
                     .add_enabled_ui(can_send, |ui| {
                         crate::ui::chrome::panel_action_primary_button_with_icon_ex(
@@ -748,25 +830,66 @@ impl AiPanel {
                     })
                     .inner;
                 ui.add_space(theme.spacing_xs());
-                clear_clicked = ui
+                clear_chat_clicked = ui
                     .add_enabled_ui(can_type, |ui| {
                         crate::ui::chrome::panel_action_button_with_icon_ex(
                             ui,
                             theme,
                             IconId::Trash,
-                            clear_label,
+                            clear_chat_label,
                             true,
                         )
-                        .on_hover_text(i18n::tr(ctx, "Clear conversation", "清空对话"))
+                        .on_hover_text(if self.confirm_clear_chat {
+                            i18n::tr(ctx, "Click again to confirm", "再次点击确认")
+                        } else {
+                            i18n::tr(
+                                ctx,
+                                "Clear all messages (click twice to confirm)",
+                                "清空全部对话（需点击两次确认）",
+                            )
+                        })
+                        .clicked()
+                    })
+                    .inner;
+                ui.add_space(theme.spacing_xs());
+                clear_draft_clicked = ui
+                    .add_enabled_ui(can_type && !self.draft_input.is_empty(), |ui| {
+                        crate::ui::chrome::panel_action_button_with_icon_ex(
+                            ui,
+                            theme,
+                            IconId::Cross,
+                            clear_draft_label,
+                            true,
+                        )
+                        .on_hover_text(i18n::tr(ctx, "Clear draft only", "仅清空输入框"))
                         .clicked()
                     })
                     .inner;
             });
         });
-        if clear_clicked {
-            self.messages.clear();
-            self.last_error = None;
+        if clear_draft_clicked {
+            self.draft_input.clear();
             self.input_status = None;
+        }
+        if clear_chat_clicked {
+            if self.confirm_clear_chat {
+                self.messages.clear();
+                self.last_error = None;
+                self.input_status = None;
+                self.confirm_clear_chat = false;
+            } else if !self.messages.is_empty() {
+                self.confirm_clear_chat = true;
+                self.input_status = Some(
+                    i18n::tr(
+                        ctx,
+                        "Click “Clear chat” again to delete all messages",
+                        "再次点击「清空对话」以删除全部消息",
+                    )
+                    .to_string(),
+                );
+            }
+        } else if !clear_draft_clicked && !send_clicked {
+            self.confirm_clear_chat = false;
         }
         if (send_clicked || ctrl_enter) && can_send {
             match self.send_message(ctx, app_settings) {
@@ -778,8 +901,8 @@ impl AiPanel {
                     self.input_status = Some(
                         i18n::tr(
                             ctx,
-                            "Enter a question (gray text is hint, not your input)",
-                            "请输入问题（灰字为示例，非已输入内容）",
+                            "Enter a question or attach terminal selection first",
+                            "请输入问题，或先从终端附带选区",
                         )
                         .to_string(),
                     );
@@ -814,37 +937,49 @@ impl AiPanel {
             );
         }
         let question = self.draft_input.trim().to_string();
-        if question.is_empty() {
+        let has_context = self.attached_context.is_some();
+        if question.is_empty() && !has_context {
             return SendOutcome::Empty;
         }
+        let display_question = if question.is_empty() {
+            i18n::tr(
+                ctx,
+                "Explain the attached terminal output",
+                "请解读附带的终端输出",
+            )
+            .to_string()
+        } else {
+            question
+        };
         self.draft_input.clear();
-        let mut user_body = question.clone();
-        if !self.attached_context.is_empty() {
+        let context_ref = self.attached_context.clone();
+        let mut user_body = display_question.clone();
+        if let Some(ctx_ref) = &context_ref {
             user_body.push_str(i18n::tr(
                 ctx,
                 "\n\n--- Terminal context ---\n",
                 "\n\n--- 终端上下文 ---\n",
             ));
-            user_body.push_str(&self.attached_context);
+            user_body.push_str(&ctx_ref.text);
         }
         self.messages.push(UiMessage {
             role: "user",
-            content: question,
+            content: display_question,
+            api_content: Some(user_body.clone()),
+            context_ref,
             commands: vec![],
         });
-        let last_idx = self.messages.len().saturating_sub(1);
         let api_messages: Vec<ChatMessage> = self
             .messages
             .iter()
-            .enumerate()
-            .map(|(i, m)| ChatMessage {
+            .map(|m| ChatMessage {
                 role: if m.role == "user" {
                     "user".to_string()
                 } else {
                     "assistant".to_string()
                 },
-                content: if i == last_idx && m.role == "user" {
-                    user_body.clone()
+                content: if m.role == "user" {
+                    m.api_content.as_ref().unwrap_or(&m.content).clone()
                 } else {
                     m.content.clone()
                 },
@@ -882,12 +1017,14 @@ impl AiPanel {
                     self.messages.push(UiMessage {
                         role: "assistant",
                         content: reply,
+                        api_content: None,
+                        context_ref: None,
                         commands,
                     });
                     self.background = None;
                     self.busy = false;
                     self.input_status = None;
-                    self.attached_context.clear();
+                    self.attached_context = None;
                     ctx.request_repaint();
                 }
                 Ok(Err(e)) => {
@@ -1037,5 +1174,158 @@ fn compact_command_preview(cmd: &str) -> String {
         format!("{head} ...")
     } else {
         head
+    }
+}
+
+fn message_copy_text(msg: &UiMessage) -> String {
+    let Some(context) = &msg.context_ref else {
+        return msg.content.clone();
+    };
+    format!(
+        "{}\n\n--- Terminal context ---\n{}",
+        msg.content, context.text,
+    )
+}
+
+/// 终端选区引用芯片：对话区只显示链接式摘要，全文在弹出层查看（类似 Cursor @ 引用）。
+fn show_terminal_context_chip(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    theme: &Theme,
+    context: &TerminalContextRef,
+    popup_id: egui::Id,
+    removable: bool,
+    remove_clicked: &mut bool,
+) {
+    let label = context.chip_label(ctx);
+    let hover = context.hover_detail(ctx);
+    let chip_h = theme.size_panel_filter_chip_h();
+    let font = egui::FontId::proportional(theme.font_size_small());
+    let text_color = theme.accent_color();
+    let icon_px = theme.font_size_small() + 1.0;
+    let icon_gap = 4.0;
+    let pad_x = 8.0;
+    let text_w = ui
+        .painter()
+        .layout_no_wrap(label.clone(), font.clone(), text_color)
+        .size()
+        .x;
+    let chip_w = pad_x * 2.0 + icon_px + icon_gap + text_w;
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(chip_w, chip_h), egui::Sense::click());
+    let fill = if response.hovered() {
+        theme.accent_alpha(36)
+    } else {
+        theme.accent_alpha(18)
+    };
+    ui.painter().rect(
+        rect,
+        theme.radius_category(),
+        fill,
+        egui::Stroke::new(1.0, theme.accent_alpha(48)),
+    );
+    let icon_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.min.x + pad_x, rect.center().y - icon_px * 0.5),
+        egui::vec2(icon_px, icon_px),
+    );
+    crate::ui::icons::paint_icon(ui, icon_rect, IconId::Attachment, text_color, icon_px);
+    let text_x = icon_rect.max.x + icon_gap;
+    ui.painter().galley(
+        egui::pos2(text_x, rect.center().y - theme.font_size_small() * 0.5),
+        ui.painter()
+            .layout_no_wrap(label, font, text_color),
+    );
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let response = response.on_hover_text(hover);
+    if response.clicked() {
+        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+    }
+    egui::popup::popup_below_widget(ui, popup_id, &response, |ui| {
+        show_context_popup_body(ui, ctx, theme, context);
+    });
+    if removable {
+        ui.add_space(theme.spacing_xs());
+        if crate::ui::chrome::panel_action_icon_button(
+            ui,
+            theme,
+            IconId::Trash,
+            i18n::tr(ctx, "Clear context", "清除上下文"),
+        )
+        .clicked()
+        {
+            *remove_clicked = true;
+        }
+    }
+}
+
+fn show_context_popup_body(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    theme: &Theme,
+    context: &TerminalContextRef,
+) {
+    crate::ui::chrome::apply_menu_popup_style(ui, theme);
+    ui.set_min_width(280.0);
+    ui.set_max_width(520.0);
+    ui.label(
+        egui::RichText::new(context.chip_label(ctx))
+            .size(theme.font_size_small())
+            .strong(),
+    );
+    ui.add_space(theme.spacing_xs());
+    egui::ScrollArea::vertical()
+        .max_height(320.0)
+        .auto_shrink([false; 2])
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(&context.text)
+                    .monospace()
+                    .size(theme.font_size_small()),
+            );
+        });
+    ui.add_space(theme.spacing_xs());
+    ui.horizontal(|ui| {
+        if crate::ui::chrome::panel_action_button_with_icon_ex(
+            ui,
+            theme,
+            IconId::File,
+            i18n::tr(ctx, "Copy", "复制"),
+            true,
+        )
+        .clicked()
+        {
+            if let Ok(mut clip) = Clipboard::new() {
+                let _ = clip.set_text(context.text.clone());
+            }
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_context_ref_counts_metadata() {
+        let prep = prepare_terminal_context("line one\nline two\n");
+        let r = TerminalContextRef::from_prepared(prep);
+        assert_eq!(r.line_count, 2);
+        assert!(r.char_count >= 16);
+    }
+
+    #[test]
+    fn message_copy_text_includes_context_block() {
+        let prep = prepare_terminal_context("err: fail");
+        let msg = UiMessage {
+            role: "user",
+            content: "explain".to_string(),
+            api_content: None,
+            context_ref: Some(TerminalContextRef::from_prepared(prep)),
+            commands: vec![],
+        };
+        let copied = message_copy_text(&msg);
+        assert!(copied.contains("explain"));
+        assert!(copied.contains("err: fail"));
     }
 }

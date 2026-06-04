@@ -53,6 +53,69 @@ struct ApiErrorDetail {
     message: Option<String>,
 }
 
+/// 发往模型的终端上下文行数上限（超出截断）。
+pub const AI_CONTEXT_MAX_LINES: usize = 400;
+/// 发往模型的终端上下文字符上限（超出截断）。
+pub const AI_CONTEXT_MAX_CHARS: usize = 24_000;
+
+/// 终端选区经脱敏与体积限制后的结果。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedTerminalContext {
+    pub text: String,
+    pub line_count: usize,
+    pub char_count: usize,
+    pub truncated: bool,
+    pub original_line_count: usize,
+    pub original_char_count: usize,
+}
+
+/// 脱敏并按 [`AI_CONTEXT_MAX_LINES`] / [`AI_CONTEXT_MAX_CHARS`] 截断。
+pub fn prepare_terminal_context(text: &str) -> PreparedTerminalContext {
+    let redacted = redact_for_ai(text);
+    let trimmed = redacted.trim();
+    let original_line_count = if trimmed.is_empty() {
+        0
+    } else {
+        trimmed.lines().count()
+    };
+    let original_char_count = trimmed.chars().count();
+    if original_line_count == 0 {
+        return PreparedTerminalContext {
+            text: String::new(),
+            line_count: 0,
+            char_count: 0,
+            truncated: false,
+            original_line_count: 0,
+            original_char_count: 0,
+        };
+    }
+    let mut lines: Vec<&str> = trimmed.lines().collect();
+    let mut truncated = false;
+    if lines.len() > AI_CONTEXT_MAX_LINES {
+        lines.truncate(AI_CONTEXT_MAX_LINES);
+        truncated = true;
+    }
+    let mut out = lines.join("\n");
+    if out.chars().count() > AI_CONTEXT_MAX_CHARS {
+        out = out.chars().take(AI_CONTEXT_MAX_CHARS).collect();
+        truncated = true;
+    }
+    let line_count = if out.is_empty() {
+        0
+    } else {
+        out.lines().count()
+    };
+    let char_count = out.chars().count();
+    PreparedTerminalContext {
+        text: out,
+        line_count,
+        char_count,
+        truncated,
+        original_line_count,
+        original_char_count,
+    }
+}
+
 /// 脱敏后再发往模型。
 pub fn redact_for_ai(text: &str) -> String {
     let mut out = text.to_string();
@@ -195,6 +258,18 @@ fn prompt_line_to_command(t: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncates_long_context() {
+        let body = (0..500)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let prep = prepare_terminal_context(&body);
+        assert!(prep.truncated);
+        assert_eq!(prep.line_count, AI_CONTEXT_MAX_LINES);
+        assert!(prep.original_line_count > AI_CONTEXT_MAX_LINES);
+    }
 
     #[test]
     fn skips_whole_script_in_fence() {

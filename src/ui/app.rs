@@ -148,7 +148,9 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — search in terminal viewport\n\
              {} — Preferences\n\
              {} — About & this cheatsheet\n\
-             {} — command history (in terminal)",
+             {} — command history (in terminal)\n\
+             {} — AI assistant panel\n\
+             {} — send terminal selection to AI",
             s::primary_modifier_label(),
             s::help_line("N", "New session"),
             s::help_line("E", "Edit selected session"),
@@ -163,6 +165,8 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::accel_literal(","),
             s::accel("H"),
             s::terminal_history_accel(),
+            s::accel_shift("A"),
+            s::accel_shift("L"),
         )
     }
 
@@ -181,7 +185,9 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — 终端内搜索\n\
              {} — 偏好设置\n\
              {} — 关于与本说明\n\
-             {} — 命令历史（终端内）",
+             {} — 命令历史（终端内）\n\
+             {} — AI 助手面板\n\
+             {} — 终端选区发送到 AI",
             s::primary_modifier_label(),
             s::help_line("N", "新建会话"),
             s::help_line("E", "编辑所选会话"),
@@ -196,6 +202,8 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::accel_literal(","),
             s::accel("H"),
             s::terminal_history_accel(),
+            s::accel_shift("A"),
+            s::accel_shift("L"),
         )
     }
 
@@ -2904,10 +2912,32 @@ impl MistTermApp {
             self.show_ai_panel = false;
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
             self.show_ai_panel = true;
-            if !self.app_settings.ai.enabled {
-                self.app_settings.ai.enabled = true;
-                let _ = self.app_settings.save();
-            }
+        }
+    }
+
+    pub(crate) fn send_terminal_selection_to_ai(&mut self, ctx: &egui::Context) {
+        let text = self
+            .current_terminal()
+            .map(|t| t.selected_text())
+            .unwrap_or_default();
+        if text.trim().is_empty() {
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "Select text in the terminal first",
+                "请先在终端选中内容",
+            )
+            .to_string();
+            return;
+        }
+        self.ai_panel.attach_context(text);
+        if self.ensure_right_dock_allowed_or_warn(ctx) {
+            self.show_ai_panel = true;
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "Terminal selection attached to AI",
+                "终端选区已附带至 AI",
+            )
+            .to_string();
         }
     }
 
@@ -5050,6 +5080,16 @@ impl eframe::App for MistTermApp {
             }
             if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::K)) {
                 self.focus_fragment_panel_search(ctx);
+            }
+            if ctx.input(|i| {
+                Self::input_primary_mod(i) && i.modifiers.shift && i.key_pressed(egui::Key::A)
+            }) {
+                self.toggle_ai_panel(ctx);
+            }
+            if ctx.input(|i| {
+                Self::input_primary_mod(i) && i.modifiers.shift && i.key_pressed(egui::Key::L)
+            }) {
+                self.send_terminal_selection_to_ai(ctx);
             }
             if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::W)) {
                 self.request_close_active_tab();
