@@ -15,7 +15,7 @@
 | JSON 导出 | ✅ | 分析弹窗 → 剪贴板 |
 | 智能推荐（命令历史） | ✅ | `fragment_recommendations.rs`、分析弹窗 |
 | 效率报告 Markdown | ✅ | 分析弹窗「效率报告」→ 剪贴板 |
-| 效率报告 PDF | ⬜ 后续 | — |
+| 效率报告 PDF | ✅ | 分析弹窗「导出 PDF」；系统 CJK 字体 |
 | 分屏树形 ≤8 + 拖放换位 | ✅ | `tab_pane.rs` `SplitNode` |
 | 市场 catalog 分页 | ✅ | `cursor` +「加载更多」 |
 

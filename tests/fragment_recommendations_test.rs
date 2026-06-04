@@ -108,3 +108,55 @@ fn fragment_recommendation_clone() {
     assert_eq!(cloned.count, rec.count);
     assert_eq!(cloned.source, rec.source);
 }
+
+fn sample_dashboard() -> mistterm::core::FragmentAnalyticsDashboard {
+    mistterm::core::FragmentAnalyticsDashboard {
+        personal_total_usage: 42,
+        personal_success_rate: 95.0,
+        personal_avg_ms: 120,
+        team_total_usage: 10,
+        team_success_rate: 80.0,
+        team_avg_ms: 200,
+        personal_top: vec![],
+        team_top: vec![],
+        slowest: vec![],
+        highest_error: vec![],
+        team_api_available: false,
+        member_rows: vec![],
+        period_stats_from_events: false,
+    }
+}
+
+#[test]
+fn efficiency_report_markdown_contains_summary() {
+    use mistterm::core::fragment_analytics::FragmentAnalyticsTimeRange;
+    use mistterm::core::build_efficiency_report_markdown;
+
+    let md = build_efficiency_report_markdown(
+        &sample_dashboard(),
+        FragmentAnalyticsTimeRange::Last7Days,
+        &[],
+    );
+    assert!(md.contains("# MistTerm 效率报告"));
+    assert!(md.contains("近 7 天"));
+    assert!(md.contains("个人"));
+    assert!(md.contains("42"));
+}
+
+#[test]
+fn efficiency_report_pdf_valid_when_cjk_font_available() {
+    use mistterm::core::fragment_analytics::FragmentAnalyticsTimeRange;
+    use mistterm::core::build_efficiency_report_pdf;
+
+    let pdf = build_efficiency_report_pdf(
+        &sample_dashboard(),
+        FragmentAnalyticsTimeRange::AllTime,
+        &[],
+    );
+    let Ok(bytes) = pdf else {
+        eprintln!("skip PDF integration test: no CJK font on host");
+        return;
+    };
+    assert!(bytes.starts_with(b"%PDF"));
+    assert!(bytes.len() > 400);
+}

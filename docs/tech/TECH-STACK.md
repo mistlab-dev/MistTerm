@@ -167,10 +167,11 @@ impl eframe::App for MistTermApp {
 **功能**:
 - SSH-2 协议完整实现
 - 密码认证
-- 密钥认证（待实现）
+- 密钥认证（已实现）
 - Shell 通道
-- SFTP 通道（待实现）
-- 端口转发（待实现）
+- SFTP 通道（已实现）
+- 端口转发（已实现）
+- SSH Agent（已实现）
 
 **核心 API**:
 

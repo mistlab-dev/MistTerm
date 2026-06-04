@@ -941,6 +941,16 @@ impl MistTermApp {
                                 form_w,
                                 false,
                             );
+                            crate::ui::chrome::form_checkbox(
+                                ui,
+                                theme,
+                                &mut self.new_session_use_ssh_agent,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Use SSH agent (ssh-agent / Pageant)",
+                                    "使用 SSH Agent（ssh-agent / Pageant）",
+                                ),
+                            );
 
                             Self::ui_field_label(
                                 ui,
@@ -1720,6 +1730,16 @@ impl MistTermApp {
                                 ),
                                 form_w,
                                 false,
+                            );
+                            crate::ui::chrome::form_checkbox(
+                                ui,
+                                theme,
+                                &mut self.edit_session_use_ssh_agent,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Use SSH agent (ssh-agent / Pageant)",
+                                    "使用 SSH Agent（ssh-agent / Pageant）",
+                                ),
                             );
 
                             Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "ProxyJump", "跳板 ProxyJump"));

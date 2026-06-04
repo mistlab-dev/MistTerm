@@ -111,6 +111,24 @@ impl ServerStats {
             format!("{:02}:{:02}:{:02}", hours, mins, self.uptime_secs % 60)
         }
     }
+
+    /// 供 AI 附带的纯文本快照。
+    pub fn format_for_ai(&self) -> String {
+        format!(
+            "CPU: {:.1}%\nMemory: {} ({:.1}%)\nDisk: {} ({:.1}%)\nLoad (1/5/15m): {:.2}, {:.2}, {:.2}\nUptime: {}\nNetwork RX/TX: {} / {}",
+            self.cpu_percent,
+            self.format_memory(),
+            self.memory_percent(),
+            self.format_disk(),
+            self.disk_percent(),
+            self.load_avg.0,
+            self.load_avg.1,
+            self.load_avg.2,
+            self.format_uptime(),
+            format_bytes(self.network_rx_bytes),
+            format_bytes(self.network_tx_bytes),
+        )
+    }
 }
 
 /// 格式化字节数为人类可读格式
@@ -321,5 +339,23 @@ mod tests {
 
         stats.uptime_secs = 90061; // 1天1小时1分1秒
         assert_eq!(stats.format_uptime(), "1天 01:01");
+    }
+
+    #[test]
+    fn test_format_for_ai() {
+        let mut stats = ServerStats::default();
+        stats.cpu_percent = 12.5;
+        stats.memory_used = 2 * 1024 * 1024 * 1024;
+        stats.memory_total = 8 * 1024 * 1024 * 1024;
+        stats.disk_used = 40 * 1024 * 1024 * 1024;
+        stats.disk_total = 100 * 1024 * 1024 * 1024;
+        stats.load_avg = (0.5, 0.6, 0.7);
+        stats.uptime_secs = 3661;
+        stats.network_rx_bytes = 1024;
+        stats.network_tx_bytes = 2048;
+        let text = stats.format_for_ai();
+        assert!(text.contains("CPU: 12.5%"));
+        assert!(text.contains("Memory:"));
+        assert!(text.contains("Load (1/5/15m):"));
     }
 }

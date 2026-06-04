@@ -26,6 +26,8 @@ struct TerminalContextRef {
     truncated: bool,
     original_line_count: usize,
     original_char_count: usize,
+    /// 非终端选区时的芯片标题键（如 `monitor`、`session_log`）。
+    source_key: Option<String>,
 }
 
 impl TerminalContextRef {
@@ -37,11 +39,22 @@ impl TerminalContextRef {
             truncated: prep.truncated,
             original_line_count: prep.original_line_count,
             original_char_count: prep.original_char_count,
+            source_key: None,
+        }
+    }
+
+    fn context_source_title(ctx: &egui::Context, key: &str) -> String {
+        match key {
+            "monitor" => i18n::tr(ctx, "Monitor snapshot", "监控快照").to_string(),
+            "session_log" => i18n::tr(ctx, "Session log", "会话日志").to_string(),
+            other => other.to_string(),
         }
     }
 
     fn chip_label(&self, ctx: &egui::Context, index: usize) -> String {
-        let title = if self.line_count <= 3 && self.char_count <= 120 && index == 0 {
+        let title = if let Some(key) = &self.source_key {
+            Self::context_source_title(ctx, key)
+        } else if self.line_count <= 3 && self.char_count <= 120 && index == 0 {
             i18n::tr(ctx, "Terminal selection", "终端选区").to_string()
         } else {
             format!(
@@ -107,8 +120,6 @@ struct UiMessage {
 enum BackgroundJob {
     Chat {
         rx: Receiver<ChatEvent>,
-        #[allow(dead_code)]
-        cancel: Arc<AtomicBool>,
     },
     Save(Receiver<Result<String, String>>),
     Test(Receiver<Result<(), String>>),
@@ -169,15 +180,20 @@ impl AiPanel {
     }
 
     pub fn attach_context(&mut self, text: String) {
+        self.attach_context_labeled(None, text);
+    }
+
+    pub fn attach_context_labeled(&mut self, source_key: Option<&str>, text: String) {
         let prep = prepare_terminal_context(&text);
         if prep.line_count == 0 {
             return;
         }
-        let item = TerminalContextRef::from_prepared(prep);
+        let mut item = TerminalContextRef::from_prepared(prep);
+        item.source_key = source_key.map(str::to_string);
         if self
             .attached_contexts
             .iter()
-            .any(|c| c.text == item.text)
+            .any(|c| c.text == item.text && c.source_key == item.source_key)
         {
             return;
         }
@@ -529,6 +545,37 @@ impl AiPanel {
         );
         ui.add_space(theme.spacing_sm());
         ui.label(
+            egui::RichText::new(i18n::tr(ctx, "Model preset", "模型预设"))
+                .size(theme.font_size_small())
+                .color(label),
+        );
+        let preset_labels: Vec<String> = AI_MODEL_PRESETS
+            .iter()
+            .map(|p| i18n::tr(ctx, p.label_en, p.label_zh).to_string())
+            .collect();
+        let mut selected_preset = ai_model_preset_index(settings);
+        egui::ComboBox::from_id_source("ai_model_preset")
+            .selected_text(
+                preset_labels
+                    .get(selected_preset)
+                    .cloned()
+                    .unwrap_or_else(|| i18n::tr(ctx, "Custom", "自定义").to_string()),
+            )
+            .show_ui(ui, |ui| {
+                crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                for (i, preset) in AI_MODEL_PRESETS.iter().enumerate() {
+                    let name = i18n::tr(ctx, preset.label_en, preset.label_zh);
+                    if ui.selectable_label(selected_preset == i, name).clicked() {
+                        selected_preset = i;
+                        if !preset.base_url.is_empty() {
+                            settings.base_url = preset.base_url.to_string();
+                            settings.model = preset.model.to_string();
+                        }
+                    }
+                }
+            });
+        ui.add_space(theme.spacing_sm());
+        ui.label(
             egui::RichText::new(i18n::tr(ctx, "API base URL", "API 地址"))
                 .size(theme.font_size_small())
                 .color(label),
@@ -561,6 +608,12 @@ impl AiPanel {
                     .color(label),
             );
             ui.add(egui::DragValue::new(&mut settings.timeout_secs).speed(1));
+            ui.label(
+                egui::RichText::new(i18n::tr(ctx, "Retries", "重试次数"))
+                    .size(theme.font_size_small())
+                    .color(label),
+            );
+            ui.add(egui::DragValue::new(&mut settings.request_retries).speed(1));
         });
         crate::ui::chrome::form_checkbox(
             ui,
@@ -1217,10 +1270,7 @@ impl AiPanel {
         let (tx, rx) = std::sync::mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         self.chat_cancel = Some(cancel.clone());
-        self.background = Some(BackgroundJob::Chat {
-            rx,
-            cancel: cancel.clone(),
-        });
+        self.background = Some(BackgroundJob::Chat { rx });
         self.busy = true;
         self.streaming = settings.stream_responses;
         self.last_error = None;
@@ -1552,6 +1602,7 @@ fn context_ref_to_stored(c: &TerminalContextRef) -> StoredContextRef {
         truncated: c.truncated,
         original_line_count: c.original_line_count,
         original_char_count: c.original_char_count,
+        source_key: c.source_key.clone(),
     }
 }
 
@@ -1563,7 +1614,53 @@ fn stored_to_context_ref(c: StoredContextRef) -> TerminalContextRef {
         truncated: c.truncated,
         original_line_count: c.original_line_count,
         original_char_count: c.original_char_count,
+        source_key: c.source_key,
     }
+}
+
+struct AiModelPreset {
+    label_en: &'static str,
+    label_zh: &'static str,
+    base_url: &'static str,
+    model: &'static str,
+}
+
+const AI_MODEL_PRESETS: &[AiModelPreset] = &[
+    AiModelPreset {
+        label_en: "OpenAI · gpt-4o-mini",
+        label_zh: "OpenAI · gpt-4o-mini",
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4o-mini",
+    },
+    AiModelPreset {
+        label_en: "OpenAI · gpt-4o",
+        label_zh: "OpenAI · gpt-4o",
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4o",
+    },
+    AiModelPreset {
+        label_en: "OpenAI · o3-mini",
+        label_zh: "OpenAI · o3-mini",
+        base_url: "https://api.openai.com/v1",
+        model: "o3-mini",
+    },
+    AiModelPreset {
+        label_en: "Custom",
+        label_zh: "自定义",
+        base_url: "",
+        model: "",
+    },
+];
+
+fn ai_model_preset_index(settings: &crate::core::AiSettings) -> usize {
+    AI_MODEL_PRESETS
+        .iter()
+        .position(|p| {
+            !p.base_url.is_empty()
+                && p.base_url == settings.base_url.trim()
+                && p.model == settings.model.trim()
+        })
+        .unwrap_or(AI_MODEL_PRESETS.len() - 1)
 }
 
 fn ui_message_to_stored(m: &UiMessage) -> StoredAiMessage {

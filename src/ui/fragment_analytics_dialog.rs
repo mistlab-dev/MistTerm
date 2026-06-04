@@ -12,6 +12,7 @@ pub enum FragmentAnalyticsUiAction {
     Refresh,
     ExportJson,
     ExportEfficiencyReport,
+    ExportEfficiencyReportPdf,
     AddRecommendation(usize),
 }
 
@@ -271,6 +272,16 @@ pub fn show_fragment_analytics_modal(
                         .clicked()
                     {
                         *action = FragmentAnalyticsUiAction::ExportEfficiencyReport;
+                    }
+                    if ui
+                        .button(crate::i18n::tr(
+                            ctx,
+                            "Export PDF",
+                            "导出 PDF",
+                        ))
+                        .clicked()
+                    {
+                        *action = FragmentAnalyticsUiAction::ExportEfficiencyReportPdf;
                     }
                     if ui
                         .button(crate::i18n::tr(ctx, "Close", "关闭"))

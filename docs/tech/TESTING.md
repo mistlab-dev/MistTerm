@@ -668,7 +668,7 @@ cargo audit --id CVE-2023-xxxx
 |-------|------|-----|
 | 密码存储 | 检查 sessions.json | 待加密 |
 | SSH 协议 | 检查协议版本 | SSH-2 |
-| 主机验证 | 检查主机密钥 | 待实现 |
+| 主机验证 | 检查主机密钥 | ✅ `ssh/known_hosts.rs` |
 | 输入验证 | 测试特殊字符 | 正常处理 |
 | 内存安全 | 运行 Miri | 无错误 |
 
@@ -696,7 +696,7 @@ cargo miri test
 | ssh::client | 80% | TBD |
 | ssh::manager | 70% | TBD |
 | core::session | 85% | TBD |
-| core::connection | 75% | TBD |
+| core::session | 90% | 80% |
 | terminal::emulator | 60% | TBD |
 | ui::app | 50% | TBD |
 
