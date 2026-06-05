@@ -26,6 +26,18 @@ mkdir -p "$INSTALL_DIR"
 cp "$SRC" "$INSTALL_DIR/$BIN_NAME"
 chmod +x "$INSTALL_DIR/$BIN_NAME"
 
+if [[ "$(uname -s)" == "Darwin" ]]; then
+  echo "==> Bundling Mist.app (GUI launch without Terminal)..."
+  bash "$ROOT/scripts/bundle-macos.sh"
+  APP_INSTALL="${APP_INSTALL_DIR:-$HOME/Applications}"
+  mkdir -p "$APP_INSTALL"
+  rm -rf "$APP_INSTALL/Mist.app"
+  cp -R "$ROOT/target/release/Mist.app" "$APP_INSTALL/Mist.app"
+  echo ""
+  echo "GUI app: $APP_INSTALL/Mist.app"
+  echo "Launch:  open -a Mist   (Spotlight / Dock — no Terminal window)"
+fi
+
 echo ""
 echo "Installed: $INSTALL_DIR/$BIN_NAME"
 echo "Ensure $INSTALL_DIR is on your PATH, then run: $BIN_NAME"

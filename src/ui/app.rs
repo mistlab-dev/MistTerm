@@ -3082,6 +3082,7 @@ impl MistTermApp {
             return;
         }
         self.ai_panel.attach_context(text);
+        self.ai_panel.focus_draft_input(ctx);
         if self.ensure_right_dock_allowed_or_warn(ctx) {
             self.show_ai_panel = true;
             self.status_message = crate::i18n::tr(
@@ -3179,6 +3180,7 @@ impl MistTermApp {
         if let Some(text) = attach_text {
             self.ai_panel
                 .attach_context_labeled(attach_source, text);
+            self.ai_panel.focus_draft_input(ctx);
             open_ai = true;
         }
         if open_ai && self.ensure_right_dock_allowed_or_warn(ctx) {

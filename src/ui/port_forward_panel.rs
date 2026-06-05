@@ -386,6 +386,7 @@ impl PortForwardPanel {
         );
         ui.add_space(4.0);
 
+        let prev_kind = self.form_kind;
         ui.horizontal(|ui| {
             ui.selectable_value(
                 &mut self.form_kind,
@@ -403,6 +404,9 @@ impl PortForwardPanel {
                 crate::i18n::tr(ctx, "SOCKS (-D)", "SOCKS (-D)"),
             );
         });
+        if self.form_kind != prev_kind {
+            self.form.fill_defaults_for(self.form_kind);
+        }
         ui.add_space(6.0);
         self.draw_form_fields(ui, ctx);
 
@@ -418,8 +422,7 @@ impl PortForwardPanel {
             self.last_error = None;
             match self.start_runtime_forward(ssh_session_id, mgr, session_profile) {
                 Ok(()) => {
-                    self.form.local_port.clear();
-                    self.form.remote_port.clear();
+                    self.form = ForwardFormInput::defaults_for(self.form_kind);
                 }
                 Err(e) => self.last_error = Some(e),
             }
@@ -495,6 +498,7 @@ impl PortForwardPanel {
         mgr: &SshManager,
         session_profile: Option<&SessionConfig>,
     ) -> Result<(), String> {
+        self.form.fill_defaults_for(self.form_kind);
         let kind = parse_forward_form(self.form_kind, &self.form)?;
         let control = match &kind {
             PortForwardKind::Local(f) => mgr.spawn_local_forward(ssh_session_id, f.clone())?,

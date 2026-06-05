@@ -144,21 +144,38 @@ pub fn parse_local_forwards_text(text: &str) -> Vec<crate::ssh::LocalPortForward
                 return None;
             }
             let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() != 3 {
-                return None;
+            match parts.len() {
+                3 => {
+                    let local_port: u16 = parts[0].trim().parse().ok()?;
+                    let remote_host = parts[1].trim().to_string();
+                    let remote_port: u16 = parts[2].trim().parse().ok()?;
+                    if remote_host.is_empty() {
+                        return None;
+                    }
+                    Some(crate::ssh::LocalPortForward {
+                        local_port,
+                        remote_host,
+                        remote_port,
+                        bind_address: "127.0.0.1".into(),
+                    })
+                }
+                4 => {
+                    let bind_address = parts[0].trim().to_string();
+                    let local_port: u16 = parts[1].trim().parse().ok()?;
+                    let remote_host = parts[2].trim().to_string();
+                    let remote_port: u16 = parts[3].trim().parse().ok()?;
+                    if bind_address.is_empty() || remote_host.is_empty() {
+                        return None;
+                    }
+                    Some(crate::ssh::LocalPortForward {
+                        local_port,
+                        remote_host,
+                        remote_port,
+                        bind_address,
+                    })
+                }
+                _ => None,
             }
-            let local_port: u16 = parts[0].trim().parse().ok()?;
-            let remote_host = parts[1].trim().to_string();
-            let remote_port: u16 = parts[2].trim().parse().ok()?;
-            if remote_host.is_empty() {
-                return None;
-            }
-            Some(crate::ssh::LocalPortForward {
-                local_port,
-                remote_host,
-                remote_port,
-                bind_address: "127.0.0.1".into(),
-            })
         })
         .collect()
 }
@@ -286,6 +303,17 @@ pub fn parse_dynamic_forwards_text(text: &str) -> Vec<crate::ssh::DynamicPortFor
 #[cfg(test)]
 mod forward_parse_tests {
     use super::*;
+
+    #[test]
+    fn parse_local_forwards_with_bind_prefix() {
+        let text = "127.0.0.1:8080:127.0.0.1:80\n8080:db.internal:5432";
+        let fwd = parse_local_forwards_text(text);
+        assert_eq!(fwd.len(), 2);
+        assert_eq!(fwd[0].bind_address, "127.0.0.1");
+        assert_eq!(fwd[0].local_port, 8080);
+        assert_eq!(fwd[1].local_port, 8080);
+        assert_eq!(fwd[1].remote_host, "db.internal");
+    }
 
     #[test]
     fn parse_remote_forwards_skips_bad_lines() {

@@ -201,6 +201,11 @@ impl AiPanel {
         self.confirm_clear_chat = false;
     }
 
+    /// 附带选区后聚焦输入框（便于直接输入问题）。
+    pub fn focus_draft_input(&self, ctx: &egui::Context) {
+        ctx.memory_mut(|m| m.request_focus(egui::Id::new("mistterm_ai_draft")));
+    }
+
     pub fn attach_session_meta(&mut self, meta: TerminalSessionMeta) {
         if meta.host.is_some() || meta.username.is_some() || meta.session_name.is_some() {
             self.session_meta = Some(meta);
@@ -481,7 +486,7 @@ impl AiPanel {
         );
         let gap = theme.spacing_xs();
         let bottom_pad = 0.0;
-        let input_h = ai_input_block_height(theme);
+        let input_h = ai_input_block_height(theme, self.attached_contexts.len());
         let input_rect = egui::Rect::from_min_max(
             egui::pos2(flex_rect.min.x, flex_rect.max.y - input_h - bottom_pad),
             egui::pos2(flex_rect.max.x, flex_rect.max.y - bottom_pad),
@@ -796,41 +801,6 @@ impl AiPanel {
         scroll_h: f32,
         app_settings: &AppSettings,
     ) {
-        if !self.attached_contexts.is_empty() {
-            let mut remove_idx = None;
-            ui.horizontal_wrapped(|ui| {
-                for (i, context) in self.attached_contexts.iter().enumerate() {
-                    let mut remove = false;
-                    show_terminal_context_chip(
-                        ui,
-                        ctx,
-                        theme,
-                        context,
-                        egui::Id::new(("mistterm_ai_attached_ctx", i)),
-                        i,
-                        true,
-                        &mut remove,
-                    );
-                    if remove {
-                        remove_idx = Some(i);
-                    }
-                }
-            });
-            if let Some(i) = remove_idx {
-                self.attached_contexts.remove(i);
-            }
-            if self.attached_contexts.iter().any(|c| c.truncated) {
-                ui.colored_label(
-                    theme.amber_color(),
-                    i18n::tr(
-                        ctx,
-                        "Some selections were truncated to fit model limits.",
-                        "部分选区已截断以适配模型上限。",
-                    ),
-                );
-            }
-            ui.add_space(theme.spacing_sm());
-        }
         egui::ScrollArea::vertical()
             .id_source("mistterm_ai_chat_scroll")
             .max_height(scroll_h)
@@ -843,8 +813,8 @@ impl AiPanel {
                     ui.label(
                         egui::RichText::new(i18n::tr(
                             ctx,
-                            "Type below; attach terminal selections to interpret output.",
-                            "在下方输入问题；附带终端选区可请求解读输出。",
+                            "Type below; attach terminal selections in the input area.",
+                            "在下方输入；终端选区会作为引用附在输入框中。",
                         ))
                             .size(theme.font_size_small())
                             .color(theme.color_form_hint()),
@@ -1048,6 +1018,20 @@ impl AiPanel {
         theme.frame_form_text_input(focused).show(ui, |ui| {
             let inner_w =
                 (ui.available_width() - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0);
+            if !self.attached_contexts.is_empty() {
+                self.show_attached_context_chip_row(ui, ctx, theme);
+                if self.attached_contexts.iter().any(|c| c.truncated) {
+                    ui.colored_label(
+                        theme.amber_color(),
+                        i18n::tr(
+                            ctx,
+                            "Some selections were truncated to fit model limits.",
+                            "部分选区已截断以适配模型上限。",
+                        ),
+                    );
+                }
+                ui.add_space(theme.spacing_xs());
+            }
             // 与全局输入框一致：占位符使用 hint 色，正文仍用输入正文色。
             let prev_override = ui.style_mut().visuals.override_text_color;
             ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
@@ -1134,6 +1118,7 @@ impl AiPanel {
         });
         if clear_draft_clicked {
             self.draft_input.clear();
+            self.attached_contexts.clear();
             self.input_status = None;
         }
         if clear_chat_clicked {
@@ -1183,6 +1168,37 @@ impl AiPanel {
             ui.colored_label(theme.red_color(), e);
         }
         let _ = app_settings;
+    }
+
+    /// 输入框内引用芯片（Cursor 式：附在 composer 上，不在对话区单独占行）。
+    fn show_attached_context_chip_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+    ) {
+        let mut remove_idx = None;
+        ui.horizontal_wrapped(|ui| {
+            for (i, context) in self.attached_contexts.iter().enumerate() {
+                let mut remove = false;
+                show_terminal_context_chip(
+                    ui,
+                    ctx,
+                    theme,
+                    context,
+                    egui::Id::new(("mistterm_ai_input_ctx", i)),
+                    i,
+                    true,
+                    &mut remove,
+                );
+                if remove {
+                    remove_idx = Some(i);
+                }
+            }
+        });
+        if let Some(i) = remove_idx {
+            self.attached_contexts.remove(i);
+        }
     }
 
     fn send_message(&mut self, ctx: &egui::Context, app_settings: &AppSettings) -> SendOutcome {
@@ -1463,12 +1479,16 @@ enum SendOutcome {
     NotReady(String),
 }
 
-/// 底部输入区占用高度（多行框 + 按钮行 + 间距，供 `allocate_ui_at_rect` 切分）。
-fn ai_input_block_height(theme: &Theme) -> f32 {
+/// 底部输入区占用高度（多行框 + 按钮行 + 可选引用芯片行）。
+fn ai_input_block_height(theme: &Theme, attached_count: usize) -> f32 {
     let line = theme.font_size_control_input() * 1.45;
     let field = line * 2.0 + theme.spacing_search_input_y() * 2.0 + 12.0;
     let toolbar = theme.size_control_btn_h() + (theme.spacing_sm() + 4.0) + 2.0;
-    field + toolbar + theme.spacing_xs() + 6.0
+    let mut h = field + toolbar + theme.spacing_xs() + 6.0;
+    if attached_count > 0 {
+        h += theme.size_panel_filter_chip_h() + theme.spacing_xs();
+    }
+    h
 }
 
 /// 子 Ui 占满**当前**可用行宽（勿把外层宽度传入 Frame/ScrollArea 内层，否则会左裁切）。
@@ -1751,7 +1771,7 @@ fn show_terminal_context_chip(
     });
     if removable {
         ui.add_space(theme.spacing_xs());
-        if crate::ui::chrome::panel_action_icon_button(
+        if crate::ui::chrome::panel_toolbar_icon_button(
             ui,
             theme,
             IconId::Trash,
