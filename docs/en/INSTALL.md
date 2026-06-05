@@ -45,6 +45,21 @@ Default install path: `%LOCALAPPDATA%\Programs\Mist\Mist.exe`.
 cargo run --release --bin Mist
 ```
 
+### macOS: launch as GUI (recommended)
+
+To avoid a Terminal window and console log spam, bundle as `.app` and use `open` — **do not** double-click the raw `target/release/Mist` binary in Finder (macOS will open Terminal first):
+
+```bash
+chmod +x scripts/run-macos-gui.sh
+./scripts/run-macos-gui.sh
+```
+
+Same as `scripts/bundle-macos.sh` then `open target/release/Mist.app`.
+
+On macOS, `./scripts/install.sh` also copies `Mist.app` to `~/Applications` for Spotlight / Dock launch.
+
+Debug logging: `MIST_LOG=1 ~/.local/bin/Mist` or `RUST_LOG=debug cargo run --release --bin Mist`.
+
 Optional CJK font for Chinese UI (release builds embed the font when present):
 
 ```bash

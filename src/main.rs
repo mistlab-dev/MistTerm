@@ -28,12 +28,7 @@ fn main() -> eframe::Result<()> {
     #[cfg(target_os = "macos")]
     embed_plist::embed_info_plist!("../Info.plist");
 
-    // 初始化日志 - 输出到控制台，包含 debug 级别
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_target(true)
-        .with_thread_ids(true)
-        .init();
+    mistterm::platform::init_runtime_logging();
     
     log::info!("Mist starting");
 

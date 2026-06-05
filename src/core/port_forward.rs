@@ -94,11 +94,48 @@ pub struct ForwardFormInput {
 
 impl Default for ForwardFormInput {
     fn default() -> Self {
-        Self {
-            bind_address: "127.0.0.1".into(),
-            local_port: String::new(),
-            remote_host: "127.0.0.1".into(),
-            remote_port: String::new(),
+        Self::defaults_for(ForwardFormKind::Local)
+    }
+}
+
+impl ForwardFormInput {
+    /// 各转发类型的常用默认端口（启动转发时若留空则自动补全）。
+    pub fn defaults_for(kind: ForwardFormKind) -> Self {
+        match kind {
+            ForwardFormKind::Local => Self {
+                bind_address: "127.0.0.1".into(),
+                local_port: "8080".into(),
+                remote_host: "127.0.0.1".into(),
+                remote_port: "80".into(),
+            },
+            ForwardFormKind::Remote => Self {
+                bind_address: String::new(),
+                local_port: "8080".into(),
+                remote_host: "127.0.0.1".into(),
+                remote_port: "3000".into(),
+            },
+            ForwardFormKind::Dynamic => Self {
+                bind_address: "127.0.0.1".into(),
+                local_port: "1080".into(),
+                remote_host: String::new(),
+                remote_port: String::new(),
+            },
+        }
+    }
+
+    pub fn fill_defaults_for(&mut self, kind: ForwardFormKind) {
+        let d = Self::defaults_for(kind);
+        if self.bind_address.trim().is_empty() {
+            self.bind_address = d.bind_address;
+        }
+        if self.local_port.trim().is_empty() {
+            self.local_port = d.local_port;
+        }
+        if self.remote_host.trim().is_empty() {
+            self.remote_host = d.remote_host;
+        }
+        if self.remote_port.trim().is_empty() {
+            self.remote_port = d.remote_port;
         }
     }
 }
@@ -193,6 +230,17 @@ mod tests {
         };
         let k = parse_forward_form(ForwardFormKind::Local, &input).unwrap();
         assert!(matches!(k, PortForwardKind::Local(_)));
+    }
+
+    #[test]
+    fn fill_defaults_enables_empty_form() {
+        let mut input = ForwardFormInput {
+            local_port: String::new(),
+            remote_port: String::new(),
+            ..Default::default()
+        };
+        input.fill_defaults_for(ForwardFormKind::Local);
+        assert!(parse_forward_form(ForwardFormKind::Local, &input).is_ok());
     }
 
     #[test]
