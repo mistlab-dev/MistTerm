@@ -11,7 +11,7 @@
 | 片段市场 catalog | ✅ | `src/core/market/`、侧栏「市场」scope |
 | 时间范围筛选（7/30/90 天） | ✅ | `FragmentAnalyticsTimeRange` |
 | 区间内增量统计 | ✅ | `fragment_usage_log.rs` + 执行事件 |
-| 成员对比（本机） | ✅ | 分析弹窗「团队成员（本区间）」 |
+| 成员对比 | ✅ 本机 + 可选全团队 | 本机 `fragment_usage_events`；全团队需 `GET .../analytics/members`（§三 P1） |
 | JSON 导出 | ✅ | 分析弹窗 → 剪贴板 |
 | 智能推荐（命令历史） | ✅ | `fragment_recommendations.rs`、分析弹窗 |
 | 效率报告 Markdown | ✅ | 分析弹窗「效率报告」→ 剪贴板 |

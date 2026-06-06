@@ -36,8 +36,8 @@
 
 ## 审计日志（与终端回放分离）
 
-- **目录**：`~/.config/mistterm/audit/audit-YYYY-MM-DD.jsonl`
-- **应用内查看**：偏好设置 → 安全审计 → **查看审计日志…**（按日筛选、搜索 action/类别）
+- **目录**：`~/.config/mistterm/audit/audit-YYYY-MM-DD.jsonl`（本地写入缓冲；**应用内不提供查看 UI**）
+- **团队上报**：登录团队后自动 `POST /v1/audit/events`（50 条/30s）；离线队列 `pending-team-events.jsonl`
 - **会话回放**：`~/.config/mistterm/logs/`（`session_logger`，可含完整终端输出）
 
 审计事件为 JSON 行，字段包括：

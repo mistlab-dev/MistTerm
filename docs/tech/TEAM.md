@@ -1,7 +1,17 @@
 ﻿# MistTerm 团队平台
 
----
+> **维护**：2026-05-30 · 字段与路径以 `src/core/team/client.rs`、`src/core/market/client.rs` 为准  
+> **结构**：§一 产品与需求 · §二 集成参考（`team/sync` 等） · **§三 服务端待办** · §四 客户端索引 · 附录 A API 契约
 
+| 章节 | 读者 | 内容 |
+|------|------|------|
+| §一 | 产品 / 架构 | 背景、职责划分、需求条目 |
+| §二 | 客户端开发 | `GET /v1/team/sync`、Vault/团队服务器映射 |
+| **§三** | **后端 / 运维** | **待实现接口、验收、降级行为** |
+| §四 | 客户端开发 | 模块路径、OAuth 部署、联调脚本 |
+| 附录 A | 联调 | 基线 API 请求/响应（auth、片段、审计 ingest） |
+
+命令审计（拦截/策略）：见 [COMMAND-AUDIT.md](./COMMAND-AUDIT.md)（服务端已实现，本文不重复）。
 
 ---
 
@@ -44,7 +54,7 @@
 | 个人命令片段 | 否 | 本地 `fragments.json`，本地增删改 |
 | 个人审计 | 否 | 本地 JSONL；可选自行对接 SIEM |
 | 跨设备迁移 | 否 | 设置内个人导出/导入包 |
-| 团队片段 / 团队审计查询 | 是 | 在下列「团队用户」能力上叠加 |
+| 团队片段 / 团队审计 | 是 | 片段同步 + **审计上报**（查询在服务端/管理端，桌面端不提供） |
 | AI 辅助 | 否 | 设置中配置 OpenAI 兼容 `base_url` + API Key；请求直达用户所选接口 |
 
 未配置团队服务地址、未登录时：**不出现团队入口，不阻断任何现有功能**。
@@ -56,7 +66,7 @@
 ────────────────────          ──────────────────
 终端 + 会话 + 个人片段         ＋ 查看/使用团队片段
 本地审计（可选）               ＋ 按权限编辑团队片段
-个人导出包（可选）             ＋ 审计上报与团队侧查询（可选）
+个人导出包（可选）             ＋ 审计上报（可选；团队侧查询在服务端）
 
 （AI 辅助与是否登录团队无关，均在客户端配置 OpenAI 兼容接口。）
 ```
@@ -82,7 +92,7 @@
 | 个人片段 | 本地 CRUD、`fragments.json` | — | 全部在客户端 |
 | 团队片段 | 缓存、同步触发、冲突 UI、调用 API | 权威存储、revision、RBAC、增量 sync | — |
 | 个人审计 | 本地 JSONL、可选 Syslog/HTTP 外推 | — | 全部在客户端 |
-| 团队审计 | 埋点、脱敏、批量上报、离线队列 | 接收、幂等、团队范围查询 | — |
+| 团队审计 | 埋点、脱敏、批量上报、离线队列 | 接收、幂等、存储与查询 | — |
 | AI 辅助 | 配置 OpenAI 兼容接口、组 prompt、调用、脱敏、展示、用户确认 | —（团队服务端不提供 AI API） | 用户自配接口，与团队登录无关 |
 | 账号 | 登录 UI、token 存密钥链、refresh 调度 | 认证、团队/角色、token 签发 | — |
 
@@ -99,7 +109,7 @@
 | 个人片段 | 客户端 | 读写 `fragments.json` | 不存储 |
 | 团队片段 | 服务端 | 只读缓存 + 上报变更 | CRUD + `fragments:sync` 下发 |
 | 个人审计 | 客户端 | 写本地 JSONL | 不存储（除非用户上报到团队） |
-| 团队审计 | 服务端 | 上报 `AuditEvent` | 存储与查询 AUD-2 |
+| 团队审计 | 服务端 | 上报 `AuditEvent`（ingest only） | 存储与查询（AUD-2，管理端/Web） |
 | AI 配置 | 客户端 | 读写本地设置；API Key 存系统密钥链 | 不存储 |
 | AI 请求/响应 | 用户 ↔ 模型供应商 | 组装请求、脱敏、预览、解析结果；可选本机历史 | 不参与 |
 
@@ -206,11 +216,11 @@
 
 ### 4.3 权限（RBAC）
 
-| 角色 | 读片段 | 写片段 | 删片段 | 查团队审计 |
-|------|--------|--------|--------|------------|
-| viewer | ✓ | | | 仅本人相关（可选） |
-| editor | ✓ | ✓ | | 仅本人相关（可选） |
-| admin | ✓ | ✓ | ✓ | 团队范围 |
+| 角色 | 读片段 | 写片段 | 删片段 | 查团队审计（管理端） |
+|------|--------|--------|--------|----------------------|
+| viewer | ✓ | | | — |
+| editor | ✓ | ✓ | | — |
+| admin | ✓ | ✓ | ✓ | ✓（服务端/Web，非 MistTerm 桌面端） |
 
 ### 4.4 命令审计
 
@@ -238,7 +248,7 @@
 | 编号 | 方法 | 路径 | 行为 |
 |------|------|------|------|
 | AUD-1 | POST | `/v1/audit/events` | 批量接收；`event_id` 幂等（重复忽略） |
-| AUD-2 | GET | `/v1/teams/{team_id}/audit/events` | 分页查询；时间范围、category 过滤 |
+| AUD-2 | GET | `/v1/teams/{team_id}/audit/events` | 分页查询；**管理端/Web**，MistTerm 桌面端不调用 |
 
 **上报请求示例：**
 
@@ -321,9 +331,10 @@
 
 ### 5.3 审计
 
-- 保留本地 JSONL。
-- 已登录团队且开启上报时，批量调用 `POST /v1/audit/events`；断网时本地队列暂存，恢复后补报。
+- 本地 JSONL 仅作写入缓冲与离线队列，**不提供查看/检索 UI**。
+- 已登录团队时，批量调用 `POST /v1/audit/events`；断网时本地队列暂存，恢复后补报。
 - 补全片段 CRUD、同步、执行等埋点（与 4.4.3 对齐）。
+- **不**实现团队审计查询（AUD-2）；管理员在服务端或 Web 控制台查看。
 
 ### 5.4 与个人路径兼容
 
@@ -405,7 +416,7 @@ Content-Type: application/json
 |---|------|----------|
 | V-1 | 团队片段共享 | 用户 A 创建团队片段，用户 B 同步后可见并可执行 |
 | V-2 | 片段冲突 | 并发修改触发 409 时，客户端可完成冲突解决并再次同步 |
-| V-3 | 命令审计 | 执行片段后，团队审计按时间可查到 `fragment.execute` |
+| V-3 | 命令审计上报 | 执行片段后，服务端团队审计可查到 `fragment.execute`（桌面端无查询 UI） |
 | V-4 | 审计离线 | 断网期间事件入本地队列，恢复网络后补报且不重复（`event_id` 幂等） |
 | V-5 | 个人无回归 | 未登录用户正常使用个人片段与 SSH，无团队入口阻断 |
 | V-6 | AI 配置 | 填写 OpenAI 兼容 `base_url` + Key + model，「测试连接」成功 |
@@ -682,8 +693,7 @@ Authorization: Bearer <access_token>
 
 #### A.3.4 团队成员列表
 
-> **服务端 ✅ 已实现** · **客户端 ✅ 已对接**（`team_members_dialog.rs` → `GET /v1/teams/{team_id}/members`；404 时提示未就绪）。  
-> 运维无额外部署；契约与验收见 [CLIENT-TEAM-TODO.md §1.2 / §四](./TEAM.md)。
+> **服务端 ✅** · **客户端 ✅**（`team_members_dialog.rs`）
 
 ```
 GET /v1/teams/{team_id}/members
@@ -705,7 +715,7 @@ Authorization: Bearer <access_token>
 }
 ```
 
-> 需要 viewer+。**服务端须返回 200**；若尚未实现，桌面端「团队 → 团队成员」会提示 404。
+权限：viewer+。404 时客户端提示「接口未就绪」。
 
 #### A.3.5 添加团队成员（服务端 ✅ · admin）
 
@@ -921,7 +931,9 @@ Authorization: Bearer <access_token>
 > `event_id` 幂等：相同的 `event_id` 重复上报会被忽略（计入 `duplicate`）。
 > 服务端会自动补全缺失的 `user_id`、`ts`、`event_id`。
 
-#### A.5.2 查询审计
+#### A.5.2 查询审计（管理端 · 非桌面客户端）
+
+> MistTerm **只上报**（A.5.1），**不调用**本接口。供 Web 管理端或 SIEM 对接。
 
 ```
 GET /v1/teams/{team_id}/audit/events?category=fragment&action=fragment.execute&user_id=u_xxx&from=2026-05-01T00:00:00Z&to=2026-05-24T00:00:00Z&limit=100&offset=0
@@ -994,37 +1006,24 @@ GET /health
 | 片段 | `frag_` | `frag_abc123def456` |
 | 审计事件 | `evt_` | 服务端自动生成（如果客户端未提供） |
 
-### A.10 客户端对接建议（优先级排序）
+---
 
-1. **设置页**：添加 `api_base` 配置项 + 登录/注册 UI
-2. **Token 管理**：登录后存 access/refresh token 到密钥链；access 过期前自动 refresh
-3. **团队选择**：`GET /v1/teams` 拿列表，切换当前 team_id
-4. **片段同步**：`fragments:sync` 增量拉取 → 合并到本地 FragmentManager（区分 team scope）
-5. **片段 CRUD**：编辑/创建/删除走 API（editor/admin 权限）
-6. **审计上报**：`POST /v1/audit/events` 批量上报（复用现有 AuditLogger 的 HTTP sink 逻辑）
-7. **冲突解决**：409 时弹出选择 UI
-8. **离线队列**：断网时本地暂存操作，恢复后重试
-
+> 客户端对上述基线 API 已全部对接；源码索引见 §四。
 
 ---
 
-## 二、API 契约
+## 二、集成参考
 
-# 团队平台集成指南
+MistTerm 与 `api.mistlab.dev` 的**增量集成说明**。认证、片段 CRUD、审计 ingest 等基线契约见 **附录 A**；**服务端待办**见 **§三**；命令审计见 [COMMAND-AUDIT.md](./COMMAND-AUDIT.md)。
 
-MistTerm 客户端与 MistTeam 服务端（\`api.mistlab.dev\`）的集成方案。
-
-### 服务端 / 运维配合速查
-
-完整对照表（含 **客户端 ✅** / **服务端 🔴** / **运维 🟠** 标记、未配合时的降级行为、验收步骤）见 **[TEAM.md §四](./TEAM.md)** §1.2、§三、§四。
-
-| 主题 | 角色 | 文档锚点 |
-|------|------|----------|
-| 基线 API（登录、sync、审计 POST） | 服务端 ✅ | [CLIENT-TEAM-TODO §3.1](./TEAM.md) |
-| 审计批量 + `evt_{ms}_{hex}` 去重 | 服务端 ✅ | 下文 §4；[CLIENT-TEAM-TODO §1.2](./TEAM.md) |
-| `GET …/members` 成员列表 | **服务端 ✅ 已实现** | [DEV-PLAN A.3.4](./TEAM.md)；客户端已对接 |
-| OAuth 桥接页部署 | 运维 🟠 | `docs/product/oauth-desktop-callback.html`；`scripts/verify-oauth-bridge.sh` |
-| OAuth redirect 白名单 / 302 | 服务端 ✅ | [CLIENT-TEAM-TODO §3.2](./TEAM.md) |
+| 主题 | 状态 | 文档 |
+|------|------|------|
+| 基线 API（登录、sync、片段、审计 POST） | 服务端 ✅ | 附录 A |
+| 命令审计 sync/alerts | 服务端 ✅ | [COMMAND-AUDIT.md](./COMMAND-AUDIT.md) |
+| 成员列表 | 服务端 ✅ | 附录 A.3.4 |
+| OAuth redirect 白名单 | 服务端 ✅ | §四 3.2 |
+| OAuth 桥接页 | 运维 🟠 | §四 3.3 |
+| 片段分析 / 市场上报 | 部分 🔴 | **§三** |
 
 ---
 
@@ -1213,347 +1212,84 @@ pub struct TeamServer {
 
 ---
 
-## 4. 审计事件上报
+## 4. 其他基线能力（不重复展开）
 
-> **服务端 ✅**：已实现 `POST /v1/audit/events`，接受客户端默认 **最多 50 条 / 30 秒** 一批；按 `event_id`（`evt_{unix_ms}_{8位hex}`）去重并返回 `duplicate` 计数。  
-> **客户端 ✅**：`src/core/audit.rs` 已按上述策略上报。
+| 能力 | 契约 | 客户端 |
+|------|------|--------|
+| 审计 ingest | 附录 A.5 · 50 条/30s · `evt_{ms}_{hex}` 去重 | `src/core/audit.rs` |
+| 认证 / refresh / OAuth | 附录 A.2 | `src/core/team/auth.rs`、`oauth.rs` |
+| 成员列表 | 附录 A.3.4 | `team_members_dialog.rs` |
+| 错误格式 | 附录 A.7 | 401→refresh；404→降级或提示 |
 
-用户的 shell 操作、文件传输等行为上报到服务端，管理员可在后台搜索审计。
-
-### 上报接口
-
-\`\`\`
-POST /v1/audit/events
-Authorization: Bearer <access_token>
-Content-Type: application/json
-\`\`\`
-
-### 请求体
-
-\`\`\`json
-{
-  "events": [
-    {
-      "team_id": "t_xxx",
-      "category": "shell",
-      "action": "exec",
-      "outcome": "success",
-      "session_id": "sess_abc123",
-      "host": "10.0.0.1",
-      "resource": "/home/deploy",
-      "detail": "{\"command\": \"ls -la /var/log/app.log\"}"
-    },
-    {
-      "category": "file",
-      "action": "scp",
-      "outcome": "success",
-      "host": "10.0.0.1",
-      "detail": "{\"direction\": \"upload\", \"local\": \"/tmp/config.yaml\", \"remote\": \"/etc/app/config.yaml\", \"bytes\": 2048}"
-    }
-  ]
-}
-\`\`\`
-
-### 响应
-
-\`\`\`json
-{
-  "accepted": 2,
-  "duplicate": 0
-}
-\`\`\`
-
-### 事件类型
-
-| category | action | 说明 |
-|----------|--------|------|
-| \`shell\` | \`exec\` | 执行命令 |
-| \`shell\` | \`connect\` | 建立 SSH 会话 |
-| \`shell\` | \`disconnect\` | 断开 SSH 会话 |
-| \`file\` | \`scp\` | SCP 文件传输 |
-| \`file\` | \`sftp\` | SFTP 操作 |
-| \`auth\` | \`login\` | 用户登录 |
-| \`auth\` | \`sudo\` | sudo 提权 |
-| \`session\` | \`start\` | 会话开始（录像） |
-| \`session\` | \`end\` | 会话结束 |
-| \`config\` | \`vault_read\` | 读取 Vault 密钥 |
-| \`config\` | \`vault_write\` | 写入 Vault 密钥 |
-
-### 客户端实现
-
-\`\`\`rust
-pub struct AuditEvent {
-    pub event_id: String,
-    pub user_id: String,
-    pub team_id: String,
-    pub timestamp: DateTime<Utc>,
-    pub category: String,
-    pub action: String,
-    pub outcome: String,
-    pub session_id: String,
-    pub host: String,
-    pub resource: String,
-    pub detail: String,  // JSON string
-}
-\`\`\`
-
-**上报策略：**
-- 本地缓存，每 30 秒或积累 50 条批量上报
-- 网络断开时持久化到本地文件，下次启动重试
-- \`event_id\` 格式：\`evt_\` + 时间戳 + 随机数，用于去重
-- \`user_id\` 和 \`timestamp\` 可省略，服务端会自动补充
+桌面 OAuth 部署与白名单：见 **§四 3.2–3.3**。
 
 ---
 
-## 5. 认证相关
+## 三、服务端待办
 
-### JWT Token
+> **API Base**：`https://api.mistlab.dev`（与 `TeamSettings.api_base` 一致，可配置）
 
-| Token | 有效期 | 存储 |
-|-------|--------|------|
-| \`access_token\` | 30 分钟 | \`~/.config/mistterm/team_tokens.json\`（AES，密钥为 \`device_key\`） |
-| \`refresh_token\` | 7 天 | 同上 |
+本文是**后端 / 运维**的主清单：列明 MistTerm 已对接但服务端仍须补齐的接口。基线契约见 **附录 A**；命令审计见 [COMMAND-AUDIT.md](./COMMAND-AUDIT.md)。
 
-> 客户端实现见 \`src/core/team/auth.rs\`（\`TeamTokenStore\`）与 \`docs/tech/SECURITY.md\`。Vault AppRole/Token 仍存系统钥匙串；团队 OAuth token **不**走 Keychain。
+### 状态总览（2026-05-30）
 
-### Token 刷新
+| 优先级 | 接口 / 事项 | 状态 | 未实现时客户端行为 |
+|--------|--------------|------|-------------------|
+| P1 | `POST /v1/teams/{team_id}/fragments/{fragment_id}/usage` | 🔴 **待实现** | 404 静默忽略；团队大盘无跨成员聚合 |
+| P1 | `GET /v1/teams/{team_id}/fragments/analytics/members?since={N}d` | 🔴 **待实现** | 404 时「团队成员」表仅本机 `fragment_usage_events.json` |
+| P2 | `fragments:sync` 的 `fragments[]` 内嵌 `usage_count` 等 | 🟡 **建议** | 缺字段时默认 0；需额外拉 analytics |
+| — | 认证、team/sync、片段 CRUD/sync、审计 POST、members、command-audit、市场 catalog、片段 analytics 聚合 | ✅ 已实现 | — |
+| 运维 | 部署 `oauth-desktop-callback.html` | 🟠 **待部署** | 自动回退 `127.0.0.1:{port}/callback` |
 
-\`\`\`
-POST /v1/auth/refresh
-Authorization: Bearer <refresh_token>
-\`\`\`
-
-\`\`\`json
-{
-  "access_token": "eyJ...",
-  "refresh_token": "eyJ..."
-}
-\`\`\`
-
-客户端应在 \`access_token\` 过期前（建议提前 5 分钟）自动刷新。
-
-### API Base URL
-
-\`\`\`
-生产: https://api.mistlab.dev
-\`\`\`
-
-### 桌面 OAuth（服务端 ✅ + 运维 🟠）
-
-> **客户端 ✅**：`src/core/team/oauth.rs` 优先 `redirect_uri=https://mistlab.dev/oauth/desktop-callback.html?port={本机端口}`；探测桥接页失败则回退 `http://127.0.0.1:{port}/callback`。
-
-| 角色 | 必须项 |
-|------|--------|
-| **运维 🟠** | 将仓库 `docs/product/oauth-desktop-callback.html` 部署到 `https://mistlab.dev/oauth/desktop-callback.html`；验收：`./scripts/verify-oauth-bridge.sh` |
-| **服务端 ✅** | `GET /v1/oauth/{google\|github}?redirect_uri=…` 非 404；白名单含桥接页及 `?port=`；授权完成后 **302** 到 `redirect_uri`，query 用 `&` 连接 `port` 与 `access_token` |
-| **服务端 ✅** | 若仅回传 `code`：`GET /v1/oauth/{provider}/callback?code=…&redirect_uri=…` 换票 |
-
-详见 [CLIENT-TEAM-TODO.md §3.2–3.3](./TEAM.md)。
-
-### 团队成员列表（服务端 ✅ 已实现）
-
-\`\`\`
-GET /v1/teams/{team_id}/members
-Authorization: Bearer <access_token>
-\`\`\`
-
-**响应 `200`：** `{ "members": [ { "user_id", "email", "username", "display_name", "role" } ] }`（viewer+）。
-
-**客户端 ✅**：菜单「团队 → 团队成员…」；接口 404 时提示「服务端尚未提供成员列表」。契约见 [TEAM.md §一 A.3.4](./TEAM.md)。
+**404 约定**：除登录/CRUD 等关键路径外，客户端将 404 视为「接口未部署」，走本地回退，不阻断终端。
 
 ---
 
-## 6. 错误处理
-
-所有 API 返回统一错误格式：
-
-\`\`\`json
-{
-  "error": "error message"
-}
-\`\`\`
-
-| HTTP 状态码 | 含义 | 客户端处理 |
-|------------|------|-----------|
-| 401 | Token 过期/无效 | 刷新 Token 或重新登录 |
-| 403 | 权限不足 | 提示用户无权限 |
-| 404 | 资源不存在 | 提示或忽略 |
-| 429 | 请求频率过高 | 退避重试 |
-| 500 | 服务端错误 | 提示稍后重试 |
-
-
----
-
-## 三、后端待实现
-
-# MistTerm 依赖的服务端 API（后端实现清单）
-
-> **API Base**：`https://api.mistlab.dev`（与客户端 `TeamSettings.api_base` 一致，可配置）
-
-本文只描述**需要服务端实现或补齐**的契约，与客户端 `src/core/team/client.rs`、`src/core/market/client.rs` 字段对齐。基线团队 API（登录、sync、片段 CRUD、审计 POST）见 [TEAM.md §二](./TEAM.md)；命令审计全量 API 见 [COMMAND-AUDIT.md](./COMMAND-AUDIT.md)。
-
----
-
-## 1. 通用约定
+### 1. 通用约定
 
 | 项 | 说明 |
 |----|------|
-| 鉴权 | 除注明「可选」外，均需 `Authorization: Bearer <access_token>` |
+| 鉴权 | `Authorization: Bearer <access_token>` |
 | Content-Type | `application/json` |
-| 错误体 | 建议 `{ "error": "human readable" }` 或 `{ "message": "..." }`（客户端会解析其一） |
-| 未实现 | 客户端对 **404** 视为「接口未部署」，不弹致命错误，走本地回退 |
-| 分页 | 片段 sync 使用 `cursor`；市场 catalog 使用 `cursor`（可选，客户端当前主要用 `limit`） |
+| 错误体 | `{ "error": "..." }` 或 `{ "message": "..." }` |
+| 分页 | 片段 sync 用 `cursor`；市场 catalog 可选 `cursor` |
 
 ---
 
-## 2. P4 新增：片段市场（Market）
+### 2. 🔴 片段执行上报（P1）
 
-客户端：`src/core/market/`；UI 为命令片段侧栏 **「市场」** scope。
-
-### 2.1 拉取目录
+客户端在团队片段执行成功后**异步**上报（`TeamClient::report_fragment_usage`），用于服务端聚合跨成员统计。
 
 ```
-GET /v1/market/fragments/catalog
-Authorization: Bearer <access_token>   # 可选：未登录也可浏览公开目录（若产品允许）
-```
-
-**Query（均可选）**
-
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| `category` | string | 分类筛选，空=全部 |
-| `search` | string | 标题/命令/描述模糊搜索 |
-| `limit` | int | 客户端默认 `200` |
-
-**响应 `200`**
-
-```json
-{
-  "catalog_version": "2026-05-29T12:00:00Z",
-  "cursor": "",
-  "fragments": [
-    {
-      "id": "mkt_abc123",
-      "title": "查看磁盘",
-      "command": "df -h",
-      "category": "ops",
-      "tags": "[\"linux\",\"disk\"]",
-      "variables": "[]",
-      "description": "常用磁盘检查",
-      "author": "mistlab",
-      "revision": 3,
-      "install_count": 1280,
-      "updated_at": "2026-05-20T08:00:00Z"
-    }
-  ]
-}
-```
-
-**字段说明**
-
-| 字段 | 必填 | 说明 |
-|------|------|------|
-| `id` | 是 | 市场片段全局 ID，客户端安装后写入个人库标签 `mkt:{id}` |
-| `title` / `command` | 是 | 与团队片段一致 |
-| `category` | 否 | 空时客户端展示为 `market` |
-| `tags` | 否 | **JSON 字符串数组**（与团队片段相同，不是原生 JSON 数组） |
-| `variables` | 否 | **JSON 字符串**，元素结构同团队片段变量 |
-| `description` / `author` | 否 | 展示用 |
-| `revision` | 否 | 版本号，默认 `0` |
-| `install_count` | 否 | 安装次数统计，默认 `0` |
-| `updated_at` | 否 | ISO8601 字符串 |
-| `catalog_version` | 否 | 目录版本标识，便于客户端缓存失效 |
-| `cursor` | 否 | 下一页游标（Query）；空表示无更多；客户端「加载更多」会带上次响应的 `cursor` |
-
-**客户端行为**
-
-- 成功：写入 `~/.config/mistterm/market_fragments_cache.json`（AES 加密）
-- **404**：提示「市场接口未部署」，继续显示本地缓存 + 个人库中带 `market` 标签的片段
-- 其他错误：显示错误文案，仍保留旧缓存
-
-### 2.2 安装计数（可选）
-
-```
-POST /v1/market/fragments/{fragment_id}/install
-Authorization: Bearer <access_token>   # 可选
+POST /v1/teams/{team_id}/fragments/{fragment_id}/usage
+Authorization: Bearer <access_token>
 Content-Type: application/json
 
-{}
+{ "success": true, "duration_ms": 1200 }
 ```
 
-**响应**
+| 响应 | 行为 |
+|------|------|
+| `200` / `204` | 服务端累加 `usage_count`、`success_count`、`total_time_ms`，更新 `last_used_at` |
+| `404` | 客户端静默成功 |
+| 其他 | 仅 `debug` 日志，不弹窗 |
 
-- `200` / `204`：成功
-- **404**：客户端忽略（视为未部署统计）
-- 其他 4xx/5xx：客户端忽略，不影响「添加到个人库」
-
-**服务端建议**：对 `fragment_id` 做 `install_count` 原子 +1；可记录 `user_id` 防刷（非 MVP 必需）。
+**服务端建议**：与 `GET .../fragments/analytics` 共用同一聚合表；按 `(team_id, fragment_id, user_id)` 可选做明细后再 rollup。
 
 ---
 
-## 3. P4 新增：团队片段分析（Analytics）
+### 3. 🔴 成员区间统计（P1）
 
-客户端：`GET` 后合并个人库 + 团队缓存，弹窗「分析大盘」。本地执行会通过 `usage_overlay` 叠加到团队片段统计。
-
-### 3.1 聚合接口
-
-```
-GET /v1/teams/{team_id}/fragments/analytics
-Authorization: Bearer <access_token>
-```
-
-**权限**：建议 `viewer+`（与读团队片段一致）
-
-**响应 `200`**
-
-```json
-{
-  "fragments": [
-    {
-      "fragment_id": "frag_xxx",
-      "usage_count": 42,
-      "success_count": 40,
-      "total_time_ms": 120000,
-      "last_used_at": 1716969600
-    }
-  ]
-}
-```
-
-| 字段 | 说明 |
-|------|------|
-| `fragment_id` | 团队片段 ID（与 sync 返回的 `TeamFragment.id` 一致） |
-| `usage_count` | 总执行次数 |
-| `success_count` | 成功次数（客户端用其算成功率） |
-| `total_time_ms` | 累计耗时毫秒 |
-| `last_used_at` | Unix 秒时间戳，可选 |
-
-**客户端行为**
-
-- **404 / 未实现**：`team_api_available = false`，仅用本地 `TeamFragmentCache` + 本机 overlay 聚合
-- 成功：与服务端返回行按 `fragment_id` 合并到 `FragmentStats` 再算 Top5 / 慢命令 / 高错误率
-
-### 3.2 片段 sync 内嵌统计（推荐一并返回）
-
-客户端模型 `TeamFragment` 已支持下列字段（`POST .../fragments:sync` 的 `fragments[]` 内）：
-
-| 字段 | 类型 | 默认 | 说明 |
-|------|------|------|------|
-| `usage_count` | u32 | 0 | 团队维度执行次数 |
-| `success_count` | u32 | 0 | 成功次数 |
-| `total_time_ms` | u64 | 0 | 累计耗时 |
-| `last_used_at` | i64? | null | Unix 秒 |
-
-若已实现 §3.1，建议在 sync 中带相同统计，减少单独拉 analytics 的频率；analytics 接口用于**跨成员聚合**或**大盘专用查询**。
-
-### 3.3 团队成员区间统计（可选，客户端本机已用事件日志降级）
+分析弹窗「团队成员（本区间）」在服务端可用时展示**全团队**数据；否则仅汇总本机事件。
 
 ```
 GET /v1/teams/{team_id}/fragments/analytics/members?since=7d
 Authorization: Bearer <access_token>
 ```
 
-**响应示例**
+`since` 与客户端 `FragmentAnalyticsTimeRange` 对齐：`7d` | `30d` | `90d`（全部时间时不请求此接口）。
+
+**响应 `200`：**
 
 ```json
 {
@@ -1568,208 +1304,111 @@ Authorization: Bearer <access_token>
 }
 ```
 
-未实现时客户端仅汇总**本机** `fragment_usage_events.json` 中的团队执行记录。
+| 字段 | 说明 |
+|------|------|
+| `user_id` | 成员 ID |
+| `display_name` | 展示名（可与 members 接口一致） |
+| `run_count` | 区间内团队片段执行次数 |
+| `success_count` | 成功次数 |
 
-### 3.4 统计上报（客户端 ✅ 异步）
-
-团队片段执行成功后，客户端在本地记录（`record_fragment_execution`）并**后台**上报：
-
-```
-POST /v1/teams/{team_id}/fragments/{fragment_id}/usage
-{ "success": true, "duration_ms": 1200 }
-```
-
-- 实现：`TeamClient::report_fragment_usage` + `TeamService::spawn_report_fragment_usage`
-- **404 / 未实现**：静默忽略，不影响现有客户端
-- **非阻塞**：失败仅 `debug` 日志，不弹窗
+**客户端**：`fetch_fragment_member_analytics`；404 → `Ok(None)`，UI 标注「仅本机数据」。
 
 ---
 
-## 4. 命令审计（已实现 — 客户端已对接）
+### 4. 🟡 sync 内嵌统计（P2，建议）
 
-服务端据 [COMMAND-AUDIT.md](./COMMAND-AUDIT.md) **已部署**。客户端实际调用：
+`POST .../fragments:sync` 的 `fragments[]` 可携带与 analytics 相同的统计字段，减少单独请求：
 
-| 方法 | 路径 | 用途 |
+| 字段 | 类型 | 默认 |
 |------|------|------|
-| GET | `/v1/teams/{team_id}/command-audit/sync` | 策略 + 规则本地缓存 |
-| POST | `/v1/teams/{team_id}/command-audit/alerts` | 拦截/确认/告警上报 |
+| `usage_count` | u32 | 0 |
+| `success_count` | u32 | 0 |
+| `total_time_ms` | u64 | 0 |
+| `last_used_at` | i64? | null |
 
-**告警请求体（客户端 `CmdAuditAlertRequest`）**
-
-```json
-{
-  "command": "rm -rf /",
-  "matched_rule": "rm_recursive_root",
-  "match_level": "dangerous",
-  "action_taken": "blocked"
-}
-```
-
-`action_taken` 示例：`blocked` | `confirmed` | `alerted`。
+客户端模型：`TeamFragment`（`src/core/team/models.rs`）。
 
 ---
 
-## 5. 基线团队 API — 待补齐项（客户端已对接）
+### 5. 管理端：审计查询 AUD-2（非 MistTerm 范围）
 
-完整契约见 [TEAM.md §二](./TEAM.md) 与 [TEAM.md §四](./TEAM.md)。
+需求 §4.4.2；**桌面客户端不实现**。供 Web 管理端或 SIEM：
 
-| 优先级 | 方法 | 路径 | 状态 | 客户端未部署时表现 |
-|--------|------|------|------|-------------------|
-| P2 | GET | `/v1/teams/{team_id}/members` | **待实现** | 成员弹窗提示接口未就绪 |
-| P1 | POST | `/v1/audit/events` | 须支持批量 + `evt_*` 去重 | 事件积压本地 `pending-team-events.jsonl` |
-| P2 | — | OAuth redirect 白名单 + 302 | 见 CLIENT-TEAM-TODO §3.2 | Google/GitHub 登录失败 |
-| 运维 | — | 部署 `oauth-desktop-callback.html` | 见 `docs/product/oauth-desktop-callback.html` | 回退 `127.0.0.1` 回调 |
-
-**成员列表响应**
-
-```json
-{
-  "members": [
-    {
-      "user_id": "u_xxx",
-      "email": "a@example.com",
-      "username": "alice",
-      "display_name": "Alice",
-      "role": "editor"
-    }
-  ]
-}
 ```
+GET /v1/teams/{team_id}/audit/events?category=&action=&user_id=&from=&to=&limit=&offset=
+```
+
+权限：admin。契约见 §一 4.4.2 与附录 A.5.2。
 
 ---
 
-## 6. 已实现基线（供联调索引）
+### 6. ✅ 已实现基线（联调索引）
 
-以下接口客户端**已在使用**，新环境部署时需一并可用：
+部署新环境时下列接口须可用（细节见附录 A / COMMAND-AUDIT）：
 
 | 分类 | 路径 |
 |------|------|
-| 认证 | `POST /v1/auth/login`、`POST /v1/auth/register`、`POST /v1/auth/refresh` |
-| OAuth | `GET /v1/oauth/{provider}`、`GET /v1/oauth/{provider}/callback` |
-| 用户/团队 | `GET /v1/me`、`GET /v1/teams`、`GET /v1/team/sync`、`GET /v1/teams/{id}` |
-| 团队片段 | `POST /v1/teams/{id}/fragments:sync`、`POST /v1/teams/{id}/fragments`、`PUT /v1/fragments/{id}`、`DELETE /v1/fragments/{id}` |
-| 审计 | `POST /v1/audit/events` |
-
-片段 sync 请求体：
-
-```json
-{ "cursor": "", "limit": 500 }
-```
+| 认证 | `POST /v1/auth/login`、`register`、`refresh`；`GET /v1/oauth/{provider}` |
+| 用户/团队 | `GET /v1/me`、`/v1/teams`、`/v1/team/sync`、`/v1/teams/{id}/members` |
+| 团队片段 | `POST .../fragments:sync`、CRUD |
+| 片段分析 | `GET .../fragments/analytics` |
+| 片段市场 | `GET /v1/market/fragments/catalog`；可选 `POST .../install` |
+| 审计 ingest | `POST /v1/audit/events` |
+| 命令审计 | `GET .../command-audit/sync`、`POST .../command-audit/alerts` |
 
 ---
 
-## 7. 验收清单（后端自测）
+### 7. 验收清单（后端自测）
 
-### 市场
+**P1 待办**
 
-1. `GET /v1/market/fragments/catalog?limit=10` → 200 + `fragments` 数组  
-2. 未登录（无 Bearer）若允许公开目录 → 仍 200  
-3. 路由不存在 → 404，客户端显示「未部署」且用缓存  
-4. `POST .../install` → 200，`install_count` 递增  
+1. 执行团队片段 → `POST .../usage` 返回 2xx → `GET .../analytics` 中对应 `usage_count` 递增  
+2. `GET .../analytics/members?since=7d` → 200 + `members`；多用户执行后 `run_count` 正确  
+3. 上述路由不存在 → 404；客户端分析弹窗仍可打开（本机数据）
 
-### 片段分析
+**回归**
 
-1. 登录并选择团队 → `GET .../fragments/analytics` → 200 + `fragments`  
-2. 404 时客户端分析大盘仍可打开（仅本地数据）  
-3. sync 返回的 `TeamFragment` 含 `usage_count` 等字段时，侧栏团队片段排序/展示与大盘一致  
-
-### 回归
-
-1. `POST /v1/audit/events` 批量 50 条，`duplicate` 正确  
-2. `GET .../command-audit/sync` 与 `POST .../alerts` 与 COMMAND-AUDIT 文档一致  
-3. `GET .../members` 200（若已排期实现）  
+1. `POST /v1/audit/events` 批量 50 条，`duplicate` 去重正确  
+2. `GET .../command-audit/sync` 与 `POST .../alerts` 符合 COMMAND-AUDIT  
+3. `GET .../members` → 200  
+4. `GET /v1/market/fragments/catalog?limit=10` → 200  
 
 ---
 
-## 8. 相关文档
-
-| 文档 | 说明 |
-|------|------|
-| [TEAM.md §二](./TEAM.md) | 团队平台集成（登录、sync、审计） |
-| [COMMAND-AUDIT.md](./COMMAND-AUDIT.md) | 命令审计完整 API（管理端 + sync） |
-| [TEAM.md §四](./TEAM.md) | 客户端 vs 服务端配合状态表 |
-| [TEAM-PLATFORM-DEV-PLAN.md](./TEAM.md) | 产品与阶段规划 |
-
-**客户端源码索引**
+### 8. 源码索引
 
 | 能力 | 路径 |
 |------|------|
-| 市场 HTTP | `src/core/market/client.rs` |
-| 市场模型 | `src/core/market/models.rs` |
 | 团队 HTTP | `src/core/team/client.rs` |
 | 团队模型 | `src/core/team/models.rs` |
+| 市场 HTTP | `src/core/market/client.rs` |
 | 分析聚合 | `src/core/fragment_analytics.rs` |
-
-
----
-
-## 四、客户端状态与联调
-
-# 客户端团队功能
-
-> **API Base**：`https://api.mistlab.dev`
-
-本文只跟踪**客户端侧**的实现状态，并与**服务端 / 运维必须配合**的项对照标注。「怎么用」和「字段含义」请去集成指南，不在这里复述。
-
-### 标注说明
-
-| 标记 | 含义 |
-|------|------|
-| **客户端 ✅** | MistTerm 仓库内已实现，不依赖本次服务端发版 |
-| **服务端 🔴** | 必须由 `api.mistlab.dev` 提供接口或行为，否则对应功能不可用 / 降级 |
-| **运维 🟠** | 须部署静态页、OAuth 应用配置、白名单等，非 Rust 客户端代码 |
-
-> **第三节**为完整配合清单；**第二节对照表**为近期 P1/P2 与联调项的速查。
+| 分析 UI | `src/ui/fragment_analytics_dialog.rs` |
 
 ---
 
-## 一、当前状态
+## 四、客户端索引
 
-### 1.1 已落地能力
+> 服务端待办见 **§三**；API 契约见 **附录 A**。
+
+### 1. 已落地能力
 
 | 能力 | 入口 | 备注 |
 |------|------|------|
-| 账号 | 偏好设置 → 团队平台；云端同步 → 团队账户 | 邮箱/用户名密码 + Google/GitHub OAuth；access/refresh 自动续约；401 → refresh + retry；登录后 `GET /v1/me`；OAuth 推荐路径依赖 **运维 🟠** 桥接页 + **服务端 ✅** redirect 白名单（§3.2） |
+| 账号 | 偏好设置 → 团队平台；云端同步 → 团队账户 | 邮箱/用户名密码 + Google/GitHub OAuth；OAuth 推荐路径依赖 **运维 🟠** 桥接页（§四 3.2） |
 | 团队列表 + 切换 | 同上 | `GET /v1/teams` 缓存到 `team_state.json`；下拉切换；单团队自动选中 |
 | 登录后一键同步 | 自动 | `GET /v1/team/sync` → 写 `sync_entries`；404 降级为空；401 走 refresh |
 | Vault 自动配置 | 偏好设置 → Vault | `auth_type` token / approle；`kv_mount` → `default_mount`；用户手动改后 `team_auto_apply=false` 不再自动覆盖；提示「来自团队 xxx」 |
 | 团队服务器 | 左侧栏「团队服务器」分组 | 按 `sort_order` 排序；点击连接；`vault_credential_path` → `SecretBackend::VaultKv`，否则走本地凭证 |
-| 团队片段 | 命令片段侧栏 / 团队 | 增量同步、CRUD、409 冲突解决（服务端 / 保留本地 / 合并 / 取消）、按 `CloudSyncSettings.frequency_minutes` 定时同步、按 role 控制按钮 |
-| 审计上报 | 后台线程 | `fragment.*` / `shell.connect / exec` / `file.scp.*` / `team.login` / `team.token_refresh` / `config.vault_*`；HTTP sink → `POST /v1/audit/events`（50 条/30s，`evt_*` id）；离线持久化 `audit/pending-team-events.jsonl`；**服务端 ✅** 已支持批量与去重 |
+| 团队片段 | 命令片段侧栏 / 团队 | 增量同步、CRUD、409 冲突解决、定时同步、按 role 控制按钮 |
+| 片段分析大盘 | 命令片段 → 分析 | 个人/团队 KPI、Top5、成员对比；`GET .../analytics` + 可选 `.../members`；404 本机回退 |
+| 片段市场 | 命令片段侧栏 / 市场 | `GET /v1/market/fragments/catalog`；404 用本地缓存 |
+| 命令审计引擎 | 终端 send_command | 本地策略匹配 + 拦截/确认弹窗；sync/alerts 上报 |
+| 审计上报 | 后台（无 UI） | `POST /v1/audit/events`（50 条/30s）；离线 `pending-team-events.jsonl` |
 | 本地加密 | 自动 | `device_key` (AES-256-GCM) 加密 `settings.json`、`sessions.json`、`fragments.json`、`credentials.json`、`team_tokens.json`、`team_state.json`、`team_fragments_cache.json`（详见 [SECURITY.md](./SECURITY.md)） |
 | 旁路防呆 | 自动 | OAuth 旧版钥匙串首次启动迁入 `team_tokens.json` 后删除；模态打开时不绘右 dock Foreground 避免双 × |
 
-### 1.2 近期项：客户端 vs 服务端 / 运维
-
-（2026-05-25：下表 P1/P2 **客户端均已落地**；2026-06-06：**服务端 ✅** 核心接口已实现；标 **运维 🟠** 的列仍需部署配合。）
-
-| 能力 | 客户端 | 服务端 / 运维必须项 | 未配合时的表现 | 验收 |
-|------|--------|---------------------|----------------|------|
-| 审计批量上报 | ✅ `batch_size=50`、`flush_interval_ms=30000` | **服务端 ✅** `POST /v1/audit/events` 接受批量；按 `event_id`（`evt_{unix_ms}_{hex}`）去重 | 事件积压在 `audit/pending-team-events.jsonl` | §四 第 8 步 |
-| 审计 event_id | ✅ `new_audit_event_id()` | **服务端 ✅** 入库 / 去重逻辑识别 `evt_*` 格式（可与旧 UUID 并存） | 重复上报可能重复入库 | 同批 POST 重放应 `duplicate`↑ |
-| 团队菜单 | ✅ macOS「团队」子菜单 | —（纯客户端） | — | 菜单可见即可 |
-| 成员列表 UI | ✅ `team_members_dialog.rs` | **服务端 ✅** `GET /v1/teams/{team_id}/members` → 200 + `{ "members": [...] }`（契约见 [DEV-PLAN A.3.4](./TEAM.md)） | 弹窗提示「接口未就绪」/ 404 | 登录后「团队 → 团队成员」有列表 |
-| OAuth 桥接（推荐路径） | ✅ 探测桥接页；`redirect_uri=…/desktop-callback.html?port=` | **运维 🟠** 部署 `docs/product/oauth-desktop-callback.html` → `https://mistlab.dev/oauth/desktop-callback.html`（`scripts/verify-oauth-bridge.sh`） | 客户端自动回退 `127.0.0.1:{port}/callback` | 脚本 HTTP 200 |
-| OAuth redirect 白名单 | ✅ 授权 URL 带 `redirect_uri` | **服务端 ✅** 白名单含桥接页及 `?port=` 变体；授权后 **302** 回传 token 或 `code`；Query 用 `&` 拼接（`?port=…&access_token=…`） | Google/GitHub 登录失败或桥接页拿不到 token | §四 第 2–3 步 |
-| OAuth 换票（仅 code 回调） | ✅ `GET /v1/oauth/{provider}/callback` | **服务端 ✅** 与授权时 `redirect_uri` 一致换票 | 登录卡在浏览器 | 仅 code 模式联调 |
-
-#### 客户端待办（已全部完成）
-
-- [x] P1 审计 batch / event_id
-- [x] P2 团队菜单、成员列表 UI、OAuth 桥接与回退
-
-#### 服务端 / 运维待办（请后端与运维跟踪）
-
-- [x] **服务端 ✅** 片段市场 `GET /v1/market/fragments/catalog`、可选 `POST .../install`（契约 [SERVER-API-BACKEND §2](./TEAM.md)）
-- [x] **服务端 ✅** 团队片段分析 `GET /v1/teams/{team_id}/fragments/analytics`；sync 返回 `usage_count` 等（[§3](./TEAM.md)）
-- [x] **服务端 ✅** 实现 `GET /v1/teams/{team_id}/members`（viewer+）
-- [x] **服务端 ✅** 审计接口支持批量 50 条 / 30s 节奏，并按 `evt_{unix_ms}_{hex}` 去重
-- [ ] **运维 🟠** 部署 OAuth 桥接页（见 §3.3）
-- [x] **服务端 ✅** OAuth `redirect_uri` 白名单 + 302 回传规范（见 §3.2）
-
----
-
-## 二、模块索引
+### 2. 模块索引
 
 | 模块 | 路径 |
 |------|------|
@@ -1785,28 +1424,18 @@ POST /v1/teams/{team_id}/fragments/{fragment_id}/usage
 | 云端同步面板 | `src/ui/cloud_sync_panel.rs` |
 | 审计 + 离线队列 | `src/core/audit.rs` |
 | `device_key` + AES 加密 | `src/security/{device_key,encrypted_file}.rs` |
+| 片段分析 UI | `src/ui/fragment_analytics_dialog.rs` |
+| 片段市场 | `src/core/market/` |
+| 命令审计引擎 | `src/core/cmd_audit.rs` |
 | OAuth 桥接（含本机 127.0.0.1 监听） | `src/core/team/auth.rs::run_browser_oauth` |
 
 ---
 
-## 三、服务端 / 运维配合清单（基线 + 增量）
+### 3. OAuth 部署（运维）
 
-> 以下未满足时，**网页可登录但 MistTerm 无法 OAuth 登录或团队同步失败**。  
-> 表内 **角色** 列：`服务端 🔴` = API 行为；`运维 🟠` = 部署 / 第三方控制台；`客户端 ✅` = 仅 MistTerm 已实现。
+基线 API 可用性见 **§三** 状态总览。以下仅列桌面 OAuth 专项。
 
-### 3.1 接口必须对外可用（基线 · 服务端 ✅）
-
-| 项 | 角色 | 要求 |
-|----|------|------|
-| Base URL | 运维 🟠 | 生产固定 `https://api.mistlab.dev`（与 `mistlab.dev/assets/js/api.js` 中 `API_BASE` 一致） |
-| 健康检查 | 服务端 ✅ | `GET /health` 或等价探活（建议 200） |
-| 密码登录 | 服务端 ✅ | `POST /v1/auth/login`、`POST /v1/auth/refresh` |
-| OAuth 入口 | 服务端 ✅ | `GET /v1/oauth/google`、`GET /v1/oauth/github`（**不可 404**） |
-| 团队同步 | 服务端 ✅ | `GET /v1/team/sync`（详见 [集成指南 §1](./TEAM.md)） |
-| 审计入口 | 服务端 ✅ | `POST /v1/audit/events`（详见 [集成指南 §4](./TEAM.md)）；支持批量与 `event_id` 去重 |
-| 成员列表 | 服务端 ✅ | **`GET /v1/teams/{team_id}/members`**（2026-05 桌面端已对接，**待服务端实现**） |
-
-### 3.2 OAuth：支持桌面 `redirect_uri`（服务端 ✅ + 运维 🟠）
+#### 3.1 桌面 `redirect_uri`（服务端 ✅ + 运维 🟠）
 
 **角色**：服务端 ✅（白名单、302、换票）；运维 🟠（桥接页部署、Google/GitHub OAuth App）。客户端 ✅ 已实现桥接探测与 `127.0.0.1` 回退。
 
@@ -1851,7 +1480,7 @@ GET /v1/oauth/{google|github}/callback?code=...&redirect_uri=...
 
 响应 JSON 与登录相同（含 `access_token` / `refresh_token` / `user`）。`redirect_uri` 须与授权请求一致，用于校验 state / PKCE。
 
-### 3.3 OAuth 桥接页（运维 🟠 · 推荐）
+#### 3.2 OAuth 桥接页（运维 🟠 · 推荐）
 
 **角色**：运维 🟠 必须部署；服务端 ✅ 已将下列 URL 加入 OAuth `redirect_uri` 白名单。客户端 ✅ 在桥接页不可达时回退本机回调。
 
@@ -1868,7 +1497,7 @@ GET /v1/oauth/{google|github}/callback?code=...&redirect_uri=...
 
 > 若服务端能**直接** 302 到 `http://127.0.0.1:{port}/callback?...`，桥接页可省略，但须在 Google Cloud / GitHub OAuth App 中允许 `http://127.0.0.1` 回调。
 
-### 3.4 OAuth 应用配置
+#### 3.3 OAuth 应用配置
 
 | 平台 | 配置 |
 |------|------|
@@ -1877,7 +1506,7 @@ GET /v1/oauth/{google|github}/callback?code=...&redirect_uri=...
 
 服务端对外 callback 一般为 `https://api.mistlab.dev/v1/oauth/google/callback`（以实际为准）。
 
-### 3.5 CORS / 网络
+#### 3.4 CORS / 网络
 
 | 项 | 说明 |
 |----|------|
@@ -1885,19 +1514,19 @@ GET /v1/oauth/{google|github}/callback?code=...&redirect_uri=...
 | 本机端口 | 客户端动态绑定 `127.0.0.1:0`，URL 中以 `?port=` 透传 |
 | 防火墙 | 用户本机须能监听 127.0.0.1（一般无问题） |
 
-### 3.6 网页登录 vs 桌面登录（产品约定）
+#### 3.5 网页登录 vs 桌面登录
 
 | 场景 | 行为 |
 |------|------|
 | 用户在 mistlab.dev 点 Google 登录 | 仅网站 session / `localStorage`，**不会**自动登录 MistTerm |
-| 用户在 MistTerm 点 Google / GitHub | 必须走 §3.2 的 `redirect_uri` 回传 token |
+| 用户在 MistTerm 点 Google / GitHub | 必须走上文 3.1 的 `redirect_uri` 回传 token |
 | 仅密码 | 桌面 `POST /v1/auth/login`，与网页账号体系相同 |
 
 ---
 
-## 四、联调验收脚本
+### 4. 联调验收脚本
 
-**前提**：第三节中标 **服务端 🔴** / **运维 🟠** 的项已就绪。服务端就绪后按顺序跑通即可：
+**前提**：**§三** 中 🔴 / 🟠 项已就绪。
 
 1. `curl -sI "https://api.mistlab.dev/health"` → 200
 2. `./scripts/verify-oauth-bridge.sh` → OK（**运维 🟠** 桥接页）
@@ -1907,7 +1536,9 @@ GET /v1/oauth/{google|github}/callback?code=...&redirect_uri=...
 6. `GET /v1/team/sync` 返回至少 1 个 team + servers
 7. Vault 自动填入；连接团队服务器 → 走 Vault 路径或本地凭证两条路径都通
 8. `fragments:sync` 全量 + 增量；故意双端编辑测 409 弹窗
-9. 执行命令、SCP → `POST /v1/audit/events` 后台可查（`accepted` / `duplicate`）
+9. 执行命令、SCP → 服务端 `POST /v1/audit/events` 可查 `accepted` / `duplicate`（桌面端无审计查看界面）
 10. 断网操作 → 恢复网络后 `pending-team-events.jsonl` 自动 flush
 11. 等 access 过期或缩短 JWT 测 refresh / 401 重登
-12. **服务端 ✅** `GET /v1/teams/{current_team_id}/members` → 200；MistTerm「团队 → 团队成员」列表非空（允许仅 1 条）
+12. `GET /v1/teams/{current_team_id}/members` → 200；「团队 → 团队成员」有列表
+13. 执行团队片段 → `POST .../fragments/{id}/usage` 2xx（**§三 P1**）；`GET .../analytics/members?since=7d` 返回全团队成员统计
+14. 打开分析大盘 → 团队 KPI 与成员表正常（服务端未部署时仍可用本机数据）

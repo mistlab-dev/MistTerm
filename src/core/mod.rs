@@ -90,9 +90,8 @@ pub use cmd_audit::{
     CmdAuditPolicy, CmdAuditResult, CmdAuditRule, CmdAuditSyncPayload, CommandSendResult,
 };
 pub use audit::{
-    command_preview, format_audit_jsonl_for_display, list_audit_log_files,
-    read_audit_log_tail, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, AuditSettings,
-    HttpSinkSettings, SyslogSinkSettings, AUDIT_LOG_TAIL_READ_BYTES,
+    command_preview, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, AuditSettings,
+    HttpSinkSettings, SyslogSinkSettings,
 };
 pub use ai_settings::AiSettings;
 pub use ai_client::{

@@ -768,17 +768,6 @@ impl MistTermApp {
                             }
                         }
                     }
-                    if crate::ui::chrome::panel_action_icon_button(
-                        ui,
-                        theme,
-                        crate::ui::icons::IconId::Search,
-                        crate::i18n::tr(ctx, "Audit log", "审计日志"),
-                    )
-                    .clicked()
-                    {
-                        self.audit_log_dialog
-                            .open_viewer(ui.ctx(), &self.app_settings.audit);
-                    }
                 });
                 ui.label(
                     RichText::new(format!(
