@@ -19,7 +19,7 @@
 | 分屏树形 ≤8 + 拖放换位 | ✅ | `tab_pane.rs` `SplitNode` |
 | 市场 catalog 分页 | ✅ | `cursor` +「加载更多」 |
 
-服务端契约：[TEAM.md](../tech/TEAM.md) §三。
+> 服务端契约：[TEAM.md](../tech/TEAM.md) §三（完整接口清单）。
 
 ---
 
