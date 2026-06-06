@@ -32,7 +32,6 @@ use crate::ssh::{JumpHop, SshConfig, parse_jump_chain, parse_jump_endpoint};
 use crate::ui::batch_exec_dialog::{BatchExecDialog, BatchExecUiAction};
 use crate::ui::command_history_overlay::{CommandHistoryAction, CommandHistoryOverlay};
 use crate::ui::help_docs_dialog::{HelpDocsDialog, HelpPage};
-use crate::ui::audit_log_dialog::AuditLogDialog;
 use crate::ui::session_log_dialog::SessionLogDialog;
 use crate::ui::team_members_dialog::TeamMembersDialog;
 use crate::ui::vault_form::VaultSecretForm;
@@ -513,7 +512,6 @@ pub struct MistTermApp {
     native_menu: Option<crate::platform::macos_menu::NativeAppMenu>,
     session_log_settings: SessionLogSettings,
     session_log_dialog: SessionLogDialog,
-    audit_log_dialog: AuditLogDialog,
     team_members_dialog: TeamMembersDialog,
     help_docs_dialog: HelpDocsDialog,
     session_log_enabled: bool,
@@ -917,7 +915,6 @@ impl MistTermApp {
             native_menu: None,
             session_log_settings: SessionLogSettings::default(),
             session_log_dialog: SessionLogDialog::default(),
-            audit_log_dialog: AuditLogDialog::default(),
             team_members_dialog: TeamMembersDialog::default(),
             help_docs_dialog: HelpDocsDialog::default(),
             session_log_enabled: true,
@@ -1659,7 +1656,6 @@ impl MistTermApp {
             || self.ssh_import_dialog.open
             || self.command_history_overlay.open
             || self.session_log_dialog.open
-            || self.audit_log_dialog.open
             || self.team_members_dialog.open
             || self.help_docs_dialog.open
             || self.show_ai_settings_dialog

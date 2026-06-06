@@ -1520,8 +1520,6 @@ impl MistTermApp {
             self.import_ssh_indices(ctx, &indices);
         }
         self.session_log_dialog.show(ctx, theme, &self.session_log_settings);
-        self.audit_log_dialog
-            .show(ctx, theme, &self.app_settings.audit);
         let help_shortcuts = crate::ui::app::mistterm_functional_spec_shortcuts(ctx);
         self.help_docs_dialog.show(
             ctx,

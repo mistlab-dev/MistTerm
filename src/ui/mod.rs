@@ -43,7 +43,6 @@ mod team_members_dialog;
 pub mod ssh_config_import_dialog;
 pub mod command_history_overlay;
 pub mod session_log_dialog;
-pub mod audit_log_dialog;
 pub mod vault_form;
 pub mod help_docs_dialog;
 
