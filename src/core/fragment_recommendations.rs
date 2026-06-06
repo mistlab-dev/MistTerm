@@ -292,6 +292,7 @@ mod pdf_tests {
             team_api_available: false,
             member_rows: vec![],
             period_stats_from_events: false,
+            member_stats_from_server: false,
         };
         let pdf = match build_efficiency_report_pdf(
             &dash,

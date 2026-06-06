@@ -410,6 +410,7 @@ pub struct MistTermApp {
     new_session_username: String,
     new_session_password: String,
     new_session_group: String,
+    new_session_color_tag: String,
     new_session_private_key_path: String,
     new_session_use_ssh_agent: bool,
     new_session_proxy_jump: String,
@@ -856,6 +857,7 @@ impl MistTermApp {
             new_session_username: String::new(),
             new_session_password: String::new(),
             new_session_group: boot_loc.tr("Default", "默认").to_string(),
+            new_session_color_tag: String::new(),
             new_session_private_key_path: String::new(),
             new_session_use_ssh_agent: true,
             new_session_proxy_jump: String::new(),
@@ -2669,36 +2671,63 @@ impl MistTermApp {
     }
 
     fn export_fragment_analytics_json(&mut self, ctx: &egui::Context) {
-        match crate::core::export_dashboard_json(
+        let json = match crate::core::export_dashboard_json(
             &self.fragment_analytics_snapshot,
             self.fragment_analytics_range,
         ) {
-            Ok(json) => {
-                if let Ok(mut clip) = arboard::Clipboard::new() {
-                    if clip.set_text(&json).is_ok() {
-                        self.status_message = crate::i18n::tr(
-                            ctx,
-                            "Analytics JSON copied to clipboard",
-                            "分析 JSON 已复制到剪贴板",
-                        )
-                        .to_string();
-                        return;
-                    }
-                }
-                self.status_message = crate::i18n::tr(
-                    ctx,
-                    "Failed to copy analytics JSON",
-                    "复制分析 JSON 失败",
-                )
-                .to_string();
-            }
+            Ok(j) => j,
             Err(e) => {
                 self.status_message = format!(
                     "{}: {e}",
                     crate::i18n::tr(ctx, "Export failed", "导出失败")
                 );
+                return;
+            }
+        };
+        let default_name = format!(
+            "mistterm-analytics-{}.json",
+            chrono::Local::now().format("%Y%m%d")
+        );
+        if let Some(path) = rfd::FileDialog::new()
+            .set_file_name(&default_name)
+            .add_filter("JSON", &["json"])
+            .save_file()
+        {
+            match std::fs::write(&path, &json) {
+                Ok(()) => {
+                    self.status_message = format!(
+                        "{} {}",
+                        crate::i18n::tr(ctx, "Analytics JSON saved:", "分析 JSON 已保存："),
+                        path.display()
+                    );
+                    return;
+                }
+                Err(e) => {
+                    self.status_message = format!(
+                        "{} {e}",
+                        crate::i18n::tr(ctx, "Save failed:", "保存失败：")
+                    );
+                    return;
+                }
             }
         }
+        if let Ok(mut clip) = arboard::Clipboard::new() {
+            if clip.set_text(&json).is_ok() {
+                self.status_message = crate::i18n::tr(
+                    ctx,
+                    "Analytics JSON copied to clipboard",
+                    "分析 JSON 已复制到剪贴板",
+                )
+                .to_string();
+                return;
+            }
+        }
+        self.status_message = crate::i18n::tr(
+            ctx,
+            "Failed to export analytics JSON",
+            "导出分析 JSON 失败",
+        )
+        .to_string();
     }
 
     fn schedule_market_catalog_debounce(&mut self) {
@@ -3441,6 +3470,7 @@ impl MistTermApp {
             s.local_forwards_text = local_forwards_text;
             s.remote_forwards_text = remote_forwards_text;
             s.dynamic_forwards_text = dynamic_forwards_text;
+            s.color_tag = self.new_session_color_tag.clone();
             if !matches!(backend, SecretBackend::LocalEncrypted) {
                 s.secret_backend = backend.clone();
                 if backend.is_vault() {
@@ -3471,6 +3501,7 @@ impl MistTermApp {
         self.new_session_group = crate::i18n::Locale::from(self.app_settings.ui_language)
             .tr("Default", "默认")
             .to_string();
+        self.new_session_color_tag.clear();
         self.new_session_private_key_path.clear();
         self.new_session_use_ssh_agent = true;
         self.new_session_proxy_jump.clear();

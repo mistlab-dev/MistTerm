@@ -45,6 +45,7 @@ impl Sidebar {
         filter: &mut String,
         sort_by: &mut SessionSortBy,
         connected_sessions: &HashSet<String>,
+        connecting_sessions: &HashSet<String>,
         team_servers: &[TeamServer],
         search_field_id: egui::Id,
         theme: &Theme,
@@ -81,6 +82,7 @@ impl Sidebar {
                 filter,
                 sort_by,
                 connected_sessions,
+                connecting_sessions,
                 team_servers,
                 search_field_id,
                 theme,
@@ -103,6 +105,7 @@ impl Sidebar {
         filter: &mut String,
         sort_by: &mut SessionSortBy,
         connected_sessions: &HashSet<String>,
+        connecting_sessions: &HashSet<String>,
         team_servers: &[TeamServer],
         search_field_id: egui::Id,
         theme: &Theme,
@@ -423,20 +426,37 @@ impl Sidebar {
                                 )),
                                 egui::Layout::left_to_right(egui::Align::Center),
                             );
-                            let _online = connected_sessions.contains(&session.id);
+                            let online = connected_sessions.contains(&session.id);
+                            let connecting = connecting_sessions.contains(&session.id);
                             let env_color = session_color_tag_rgb(&session.color_tag)
                                 .map(|(r, g, b)| egui::Color32::from_rgb(r, g, b));
                             let dot_r = 3.0_f32;
-                            let (dot_rect, _) = row_ui.allocate_exact_size(
-                                egui::vec2(dot_r * 2.0, dot_r * 2.0),
+                            let gap = 3.0_f32;
+                            let (dots_rect, _) = row_ui.allocate_exact_size(
+                                egui::vec2(dot_r * 4.0 + gap, dot_r * 2.0),
                                 egui::Sense::hover(),
                             );
-                            let center = dot_rect.center();
+                            let status_center = egui::pos2(
+                                dots_rect.min.x + dot_r,
+                                dots_rect.center().y,
+                            );
+                            let status_color = if online {
+                                theme.green_color()
+                            } else if connecting {
+                                theme.amber_color()
+                            } else {
+                                theme.color_tab_offline_dot()
+                            };
+                            row_ui.painter().circle_filled(status_center, dot_r, status_color);
+                            let env_center = egui::pos2(
+                                dots_rect.min.x + dot_r * 2.0 + gap + dot_r,
+                                dots_rect.center().y,
+                            );
                             if let Some(rgb) = env_color {
-                                row_ui.painter().circle_filled(center, dot_r, rgb);
+                                row_ui.painter().circle_filled(env_center, dot_r, rgb);
                             } else {
                                 row_ui.painter().circle_stroke(
-                                    center,
+                                    env_center,
                                     dot_r,
                                     egui::Stroke::new(1.0, theme.border_divider_color()),
                                 );

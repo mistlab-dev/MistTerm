@@ -56,6 +56,15 @@ impl FragmentAnalyticsTimeRange {
             Self::Last90Days => "近 90 天",
         }
     }
+
+    pub fn since_days(self) -> Option<u32> {
+        match self {
+            Self::AllTime => None,
+            Self::Last7Days => Some(7),
+            Self::Last30Days => Some(30),
+            Self::Last90Days => Some(90),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -71,9 +80,10 @@ pub struct FragmentAnalyticsDashboard {
     pub slowest: Vec<FragmentStats>,
     pub highest_error: Vec<FragmentStats>,
     pub team_api_available: bool,
-    /// 时间范围内本机记录的团队执行（按成员）；服务端成员统计 API 未对接前仅含本机事件。
+    /// 时间范围内本机记录的团队执行（按成员）；服务端成员 API 可用时为全团队数据。
     pub member_rows: Vec<MemberPeriodStats>,
     pub period_stats_from_events: bool,
+    pub member_stats_from_server: bool,
 }
 
 pub fn build_dashboard(
@@ -86,6 +96,7 @@ pub fn build_dashboard(
         team,
         team_api_available,
         Vec::new(),
+        false,
         false,
     )
 }
@@ -102,7 +113,7 @@ pub fn build_dashboard_with_events(
     let Some(cutoff) = range.cutoff_unix() else {
         let personal = range.filter_fragments(personal_all);
         let team = range.filter_fragments(team_all);
-        return build_dashboard_inner(&personal, &team, team_api_available, Vec::new(), false);
+        return build_dashboard_inner(&personal, &team, team_api_available, Vec::new(), false, false);
     };
 
     let personal = fragment_usage_log::apply_period_stats_to_fragments(
@@ -121,7 +132,28 @@ pub fn build_dashboard_with_events(
         team_api_available,
         member_rows,
         true,
+        false,
     )
+}
+
+pub fn member_rows_from_api(
+    rows: &[crate::core::team::FragmentMemberAnalyticsRow],
+) -> Vec<MemberPeriodStats> {
+    let mut out: Vec<MemberPeriodStats> = rows
+        .iter()
+        .map(|r| MemberPeriodStats {
+            user_id: r.user_id.clone(),
+            display_name: if r.display_name.is_empty() {
+                r.user_id.clone()
+            } else {
+                r.display_name.clone()
+            },
+            run_count: r.run_count,
+            success_count: r.success_count,
+        })
+        .collect();
+    out.sort_by(|a, b| b.run_count.cmp(&a.run_count));
+    out
 }
 
 fn build_dashboard_inner(
@@ -130,11 +162,13 @@ fn build_dashboard_inner(
     team_api_available: bool,
     member_rows: Vec<MemberPeriodStats>,
     period_stats_from_events: bool,
+    member_stats_from_server: bool,
 ) -> FragmentAnalyticsDashboard {
     let mut dash = FragmentAnalyticsDashboard {
         team_api_available,
         member_rows,
         period_stats_from_events,
+        member_stats_from_server,
         ..Default::default()
     };
 
@@ -226,6 +260,8 @@ struct DashboardExport<'a> {
     #[serde(default)]
     member_rows: Vec<ExportMemberRow>,
     period_stats_from_events: bool,
+    #[serde(default)]
+    member_stats_from_server: bool,
 }
 
 #[derive(Serialize)]
@@ -275,6 +311,7 @@ pub fn export_dashboard_json(
             })
             .collect(),
         period_stats_from_events: dash.period_stats_from_events,
+        member_stats_from_server: dash.member_stats_from_server,
     };
     serde_json::to_string_pretty(&payload)
 }
@@ -307,5 +344,26 @@ mod tests {
             FragmentAnalyticsTimeRange::Last7Days.filter_fragments(&[recent, old]);
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].id, "a");
+    }
+
+    #[test]
+    fn member_rows_from_api_sorts_by_run_count() {
+        use crate::core::team::FragmentMemberAnalyticsRow;
+        let rows = member_rows_from_api(&[
+            FragmentMemberAnalyticsRow {
+                user_id: "u1".into(),
+                display_name: "Alice".into(),
+                run_count: 5,
+                success_count: 4,
+            },
+            FragmentMemberAnalyticsRow {
+                user_id: "u2".into(),
+                display_name: "Bob".into(),
+                run_count: 12,
+                success_count: 10,
+            },
+        ]);
+        assert_eq!(rows[0].display_name, "Bob");
+        assert_eq!(rows[0].run_count, 12);
     }
 }
