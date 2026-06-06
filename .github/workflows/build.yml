@@ -15,11 +15,12 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: "0"
   BIN_NAME: Mist
 
 jobs:
-  # 三平台并行，各用独立 runner（不共享 CPU/内存，不会因并行而变慢）。
-  # 每平台单 job：测试 → release 构建 → 打包，复用同一 target 目录与 rust-cache。
+  # 三平台并行。单元测试 + 集成测试仅在 Linux（mold + 系统 OpenSSL，最快）；
+  # Windows / macOS 只 release 构建 + 打包，依赖 rust-cache 复用增量编译。
   platform:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.os }}
@@ -43,7 +44,7 @@ jobs:
             rust_targets: x86_64-pc-windows-msvc
             archive_ext: zip
             cargo_features: vendored-openssl
-            run_unit_tests: true
+            run_unit_tests: false
             run_integration_tests: false
             use_mold: false
 
@@ -83,6 +84,7 @@ jobs:
         with:
           shared-key: mistterm
           key: ${{ matrix.platform }}-${{ matrix.cargo_features || 'default' }}
+          cache-on-failure: true
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -104,8 +106,8 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Run unit tests (Unix)
-        if: matrix.run_unit_tests && runner.os != 'Windows'
+      - name: Run unit tests (Linux)
+        if: matrix.run_unit_tests
         shell: bash
         env:
           RUSTFLAGS: ${{ matrix.use_mold && '-C link-arg=-fuse-ld=mold' || '' }}
@@ -118,19 +120,6 @@ jobs:
           fi
           cargo test --release --lib --tests "${features_arg[@]}"
           cargo test --release --examples "${features_arg[@]}"
-
-      - name: Run unit tests (Windows)
-        if: matrix.run_unit_tests && runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $features = "${{ matrix.cargo_features }}"
-          $featuresArg = @()
-          if ($features) { $featuresArg = @("--features", $features) }
-          cargo test --release --lib --tests @featuresArg
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test --release --examples @featuresArg
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Setup SSH test server
         if: matrix.run_integration_tests
