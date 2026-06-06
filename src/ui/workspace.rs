@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::core::SESSION_COLOR_TAGS;
+use crate::core::session::session_color_tag_rgb;
 
 impl MistTermApp {
     pub(crate) fn render_workspace_shell(
@@ -186,6 +187,12 @@ impl MistTermApp {
                             .filter(|t| t.any_connected())
                             .map(|t| t.primary_session_id())
                             .collect();
+                        let connecting_sessions: HashSet<String> = self
+                            .tabs
+                            .iter()
+                            .filter(|t| t.any_connected_or_connecting() && !t.any_connected())
+                            .map(|t| t.primary_session_id())
+                            .collect();
 
                         let sidebar_rect = egui::Rect::from_min_max(
                             egui::pos2(col_left, work_top),
@@ -204,6 +211,7 @@ impl MistTermApp {
                                     &mut self.sidebar_filter,
                                     &mut self.session_sort_by,
                                     &connected_sessions,
+                                    &connecting_sessions,
                                     &self.team_service.current_team_servers(),
                                     Self::id_sidebar_connection_search(),
                                     theme,
@@ -358,6 +366,14 @@ impl MistTermApp {
                                                     )
                                                 })
                                                 .unwrap_or_else(|| tab_label.clone());
+                                            let env_color = self
+                                                .session_manager
+                                                .get_session(&tab.primary_session_id())
+                                                .and_then(|s| {
+                                                    session_color_tag_rgb(&s.color_tag).map(
+                                                        |(r, g, b)| egui::Color32::from_rgb(r, g, b),
+                                                    )
+                                                });
                                             let tab_chip = crate::ui::chrome::session_tab_chip(
                                                 ui,
                                                 theme,
@@ -365,6 +381,7 @@ impl MistTermApp {
                                                 active,
                                                 tab.any_connected(),
                                                 false,
+                                                env_color,
                                             );
                                             let tab_resp = tab_chip
                                                 .response
@@ -952,6 +969,32 @@ impl MistTermApp {
                                     );
                                 });
                             });
+
+                            Self::ui_field_label(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Accent color tag", "环境色标"),
+                            );
+                            egui::ComboBox::from_id_source("new_session_color")
+                                .selected_text(crate::i18n::session_color_tag(
+                                    ctx,
+                                    SESSION_COLOR_TAGS
+                                        .iter()
+                                        .find(|(v, _)| *v == self.new_session_color_tag.as_str())
+                                        .map(|(v, _)| *v)
+                                        .unwrap_or_else(|| self.new_session_color_tag.as_str()),
+                                ))
+                                .show_ui(ui, |ui| {
+                                    crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                                    for (value, _) in SESSION_COLOR_TAGS {
+                                        let label = crate::i18n::session_color_tag(ctx, value);
+                                        ui.selectable_value(
+                                            &mut self.new_session_color_tag,
+                                            value.to_string(),
+                                            label,
+                                        );
+                                    }
+                                });
 
                             if required_missing {
                                 ui.add_space(theme.spacing_sm());

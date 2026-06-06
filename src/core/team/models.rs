@@ -246,6 +246,25 @@ pub struct FragmentAnalyticsResponse {
     pub fragments: Vec<FragmentAnalyticsRow>,
 }
 
+/// `GET /v1/teams/{team_id}/fragments/analytics/members?since=7d`
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FragmentMemberAnalyticsResponse {
+    #[serde(default)]
+    pub members: Vec<FragmentMemberAnalyticsRow>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FragmentMemberAnalyticsRow {
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub run_count: u64,
+    #[serde(default)]
+    pub success_count: u64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FragmentAnalyticsRow {
     pub fragment_id: String,

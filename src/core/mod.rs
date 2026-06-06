@@ -62,7 +62,8 @@ pub use session_logger::{
 };
 pub use session_sort::{sort_sessions, SessionSortBy};
 pub use fragment_analytics::{
-    build_dashboard, build_dashboard_with_events, export_dashboard_json, FragmentAnalyticsDashboard,
+    build_dashboard, build_dashboard_with_events, export_dashboard_json, member_rows_from_api,
+    FragmentAnalyticsDashboard,
     FragmentAnalyticsTimeRange,
 };
 pub use fragment_usage_log::{FragmentUsageEvent, FragmentUsageLog, MemberPeriodStats};

@@ -87,6 +87,24 @@ fn contains_xymodem_c_fallback(data: &[u8]) -> bool {
     saw
 }
 
+/// 跨多次 feed 累计仅含 `C` 的 slice；连续 ≥3 次判定 X/YMODEM 失配。
+fn advance_xymodem_c_streak(streak: &mut u32, data: &[u8]) -> bool {
+    if data.is_empty() {
+        return false;
+    }
+    if contains_xymodem_c_fallback(data) {
+        *streak = streak.saturating_add(1);
+        *streak >= 3
+    } else {
+        *streak = 0;
+        false
+    }
+}
+
+fn zmodem_troubleshoot_hint() -> &'static str {
+    "排查：docs/tech/ZMODEM.md（远端重新执行 rz -y，或设 MISTTERM_ZMODEM_DUMP_TX=1 抓包）"
+}
+
 /// 统计远端 ZHEX `ZRINIT` 前缀 `** ZDLE 'B' '0' '1'` 出现次数。
 fn count_peer_zrinit_hex_prefix(data: &[u8]) -> usize {
     data.windows(6)
@@ -461,6 +479,7 @@ pub(super) fn run_upload_zmodem2(
     // 上次「拉 PTY / feed 消费到字节」时间，用于停滞告警
     let mut last_ingress_activity = Instant::now();
     let mut last_stall_warn: Option<Instant> = None;
+    let mut xymodem_c_streak: u32 = 0;
 
     while Instant::now() < deadline {
         if !is_active.load(Ordering::Relaxed) {
@@ -523,10 +542,11 @@ pub(super) fn run_upload_zmodem2(
                     recover_cooldown_until = None;
                 }
             }
-            if !file_data_started && contains_xymodem_c_fallback(slice) {
-                return Err(
-                    "远端 rz 已切换到 X/YMODEM（收到连续 'C'），本次 ZMODEM 会话已失配；请在远端重新执行 rz 后重试（建议优先 rz -y）".to_string(),
-                );
+            if !file_data_started && advance_xymodem_c_streak(&mut xymodem_c_streak, slice) {
+                return Err(format!(
+                    "远端 rz 已切换到 X/YMODEM（连续收到 'C'），本次 ZMODEM 会话已失配；请在远端重新执行 rz 后重试（建议 rz -y）。{}",
+                    zmodem_troubleshoot_hint()
+                ));
             }
             if pending_out == 0 {
                 if consumed >= 8 {
@@ -546,12 +566,11 @@ pub(super) fn run_upload_zmodem2(
                         } else {
                             excerpt
                         };
-                        return Err(
-                            format!(
-                                "远端已回到 shell（检测到 command not found / prompt），rz 可能已退出；请在远端重新执行 rz 再试。首段回显: {}",
-                                detail
-                            ),
-                        );
+                        return Err(format!(
+                            "远端已回到 shell（检测到 command not found / prompt），rz 可能已退出；请在远端重新执行 rz 再试。首段回显: {}。{}",
+                            detail,
+                            zmodem_troubleshoot_hint()
+                        ));
                     }
                 }
             } else {
@@ -662,6 +681,12 @@ pub(super) fn run_upload_zmodem2(
             && ingress.buf.is_empty()
             && last_ingress_activity.elapsed() >= Duration::from_secs(4)
         {
+            if last_ingress_activity.elapsed() >= Duration::from_secs(60) {
+                return Err(format!(
+                    "ZMODEM 入站超过 60 秒无进展，传输已中止。{}",
+                    zmodem_troubleshoot_hint()
+                ));
+            }
             let now = Instant::now();
             let due = last_stall_warn
                 .map(|t| now.duration_since(t) >= Duration::from_secs(12))
@@ -736,4 +761,30 @@ pub(super) fn run_upload_zmodem2(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod xymodem_streak_tests {
+    use super::{advance_xymodem_c_streak, contains_xymodem_c_fallback};
+
+    #[test]
+    fn c_only_slice_detected() {
+        assert!(contains_xymodem_c_fallback(b"C\r\n"));
+        assert!(!contains_xymodem_c_fallback(b"CZ"));
+    }
+
+    #[test]
+    fn streak_trips_after_three_c_slices() {
+        let mut streak = 0;
+        assert!(!advance_xymodem_c_streak(&mut streak, b"C"));
+        assert!(!advance_xymodem_c_streak(&mut streak, b"\nC"));
+        assert!(advance_xymodem_c_streak(&mut streak, b"C"));
+    }
+
+    #[test]
+    fn streak_resets_on_mixed_data() {
+        let mut streak = 2;
+        assert!(!advance_xymodem_c_streak(&mut streak, b"Z"));
+        assert_eq!(streak, 0);
+    }
 }

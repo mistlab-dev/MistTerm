@@ -119,25 +119,52 @@ pub fn show_fragment_analytics_modal(
                 ui.collapsing(
                     crate::i18n::tr(ctx, "Team members (this period)", "团队成员（本区间）"),
                     |ui| {
-                        ui.label(
-                            egui::RichText::new(crate::i18n::tr(
+                        let hint = if dash.member_stats_from_server {
+                            crate::i18n::tr(
                                 ctx,
-                                "Based on snippets run on this device; server-wide member stats pending API.",
-                                "仅统计本机执行的团队片段；全团队数据待服务端接口。",
-                            ))
-                            .size(theme.font_size_caption())
-                            .color(theme.text_tertiary()),
+                                "Team-wide stats from server analytics API.",
+                                "全团队成员数据（来自服务端分析 API）。",
+                            )
+                        } else {
+                            crate::i18n::tr(
+                                ctx,
+                                "Based on snippets run on this device (server API unavailable).",
+                                "仅统计本机执行的团队片段（服务端接口未就绪时使用）。",
+                            )
+                        };
+                        ui.label(
+                            egui::RichText::new(hint)
+                                .size(theme.font_size_caption())
+                                .color(theme.text_tertiary()),
                         );
+                        let max_runs = dash
+                            .member_rows
+                            .iter()
+                            .map(|m| m.run_count)
+                            .max()
+                            .unwrap_or(1)
+                            .max(1);
                         for m in &dash.member_rows {
                             let rate = if m.run_count == 0 {
                                 0.0
                             } else {
                                 (m.success_count as f32 / m.run_count as f32) * 100.0
                             };
-                            ui.label(format!(
-                                "· {} — {}× · {:.0}% OK",
-                                m.display_name, m.run_count, rate
-                            ));
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{} — {:.0}% OK", m.display_name, rate));
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(format!("{}×", m.run_count));
+                                    },
+                                );
+                            });
+                            metric_bar(
+                                ui,
+                                theme,
+                                m.run_count as f32 / max_runs as f32,
+                                theme.accent_color(),
+                            );
                         }
                     },
                 );
@@ -201,23 +228,44 @@ pub fn show_fragment_analytics_modal(
                     crate::i18n::tr(ctx, "Slowest & highest error rate", "最慢 / 高错误率"),
                     |ui| {
                         ui.label(crate::i18n::tr(ctx, "Slowest (avg)", "平均最慢"));
+                        let max_ms = dash
+                            .slowest
+                            .first()
+                            .map(|f| f.avg_time_ms())
+                            .unwrap_or(1)
+                            .max(1) as f32;
                         for f in &dash.slowest {
-                            ui.label(format!(
-                                "· {} — {:.1}s ({}×)",
-                                f.title,
-                                f.avg_time_ms() as f32 / 1000.0,
-                                f.usage_count
-                            ));
+                            ui.horizontal(|ui| {
+                                ui.label(format!(
+                                    "· {} — {:.1}s ({}×)",
+                                    f.title,
+                                    f.avg_time_ms() as f32 / 1000.0,
+                                    f.usage_count
+                                ));
+                            });
+                            metric_bar(
+                                ui,
+                                theme,
+                                f.avg_time_ms() as f32 / max_ms,
+                                theme.amber_color(),
+                            );
                         }
                         ui.add_space(theme.spacing_xs());
                         ui.label(crate::i18n::tr(ctx, "Highest error rate", "错误率最高"));
                         for f in &dash.highest_error {
-                            ui.label(format!(
-                                "· {} — {:.0}% fail ({}×)",
-                                f.title,
-                                100.0 - f.success_rate(),
-                                f.usage_count
-                            ));
+                            let err_pct = 100.0 - f.success_rate();
+                            ui.horizontal(|ui| {
+                                ui.label(format!(
+                                    "· {} — {:.0}% fail ({}×)",
+                                    f.title, err_pct, f.usage_count
+                                ));
+                            });
+                            metric_bar(
+                                ui,
+                                theme,
+                                (err_pct / 100.0).clamp(0.0, 1.0),
+                                theme.red_color(),
+                            );
                         }
                     },
                 );
@@ -341,12 +389,39 @@ fn top_list(
         return;
     }
     for (i, f) in items.iter().enumerate() {
-        ui.label(format!(
-            "{}. {} — {}× · {:.0}%",
-            i + 1,
-            f.title,
-            f.usage_count,
-            f.success_rate()
-        ));
+        ui.horizontal(|ui| {
+            ui.label(format!(
+                "{}. {} — {}× · {:.0}%",
+                i + 1,
+                f.title,
+                f.usage_count,
+                f.success_rate()
+            ));
+        });
+        let max = items.first().map(|x| x.usage_count).unwrap_or(1).max(1);
+        metric_bar(
+            ui,
+            theme,
+            f.usage_count as f32 / max as f32,
+            theme.accent_color(),
+        );
     }
+}
+
+fn metric_bar(ui: &mut egui::Ui, theme: &Theme, fraction: f32, fill: egui::Color32) {
+    let w = ui.available_width().max(80.0);
+    let h = 4.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h + 2.0), egui::Sense::hover());
+    let bar = egui::Rect::from_min_size(rect.min, egui::vec2(w, h));
+    ui.painter()
+        .rect_filled(bar, 2.0, theme.color_tab_inactive_fill());
+    let fill_w = (w * fraction.clamp(0.0, 1.0)).max(if fraction > 0.0 { 2.0 } else { 0.0 });
+    if fill_w > 0.0 {
+        ui.painter().rect_filled(
+            egui::Rect::from_min_size(bar.min, egui::vec2(fill_w, h)),
+            2.0,
+            fill,
+        );
+    }
+    ui.add_space(2.0);
 }

@@ -614,9 +614,9 @@ impl TeamService {
     ) -> crate::core::FragmentAnalyticsDashboard {
         let api_ok = self.refresh_fragment_analytics_from_api();
         let team_all = self.team_fragments_as_stats();
-        if range.cutoff_unix().is_some() {
+        let mut dash = if range.cutoff_unix().is_some() {
             let team_id = self.state.current_team_id.clone();
-            return crate::core::build_dashboard_with_events(
+            crate::core::build_dashboard_with_events(
                 personal,
                 &team_all,
                 usage_log.all_events(),
@@ -624,11 +624,29 @@ impl TeamService {
                 api_ok,
                 team_id.as_deref(),
                 &self.team_members,
-            );
+            )
+        } else {
+            let personal = range.filter_fragments(personal);
+            let team = range.filter_fragments(&team_all);
+            crate::core::build_dashboard(&personal, &team, api_ok)
+        };
+        if let (Some(days), Some(tid)) = (range.since_days(), self.state.current_team_id.as_deref())
+        {
+            let api_base = self.api_base();
+            if let Ok(token) = ensure_access_token(&api_base, &self.tokens) {
+                if let Ok(client) = TeamClient::new(&api_base) {
+                    match client.fetch_fragment_member_analytics(&token, tid, days) {
+                        Ok(Some(resp)) if !resp.members.is_empty() => {
+                            dash.member_rows = crate::core::member_rows_from_api(&resp.members);
+                            dash.member_stats_from_server = true;
+                        }
+                        Ok(_) => {}
+                        Err(e) => log::debug!("fragment member analytics API: {}", e),
+                    }
+                }
+            }
         }
-        let personal = range.filter_fragments(personal);
-        let team = range.filter_fragments(&team_all);
-        crate::core::build_dashboard(&personal, &team, api_ok)
+        dash
     }
 
     fn spawn_job(&mut self, job: TeamJob) {

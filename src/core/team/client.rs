@@ -8,8 +8,8 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use super::models::{
-    ApiErrorBody, CreateTeamFragmentRequest, FragmentAnalyticsResponse, FragmentSyncRequest,
-    FragmentSyncResponse,
+    ApiErrorBody, CreateTeamFragmentRequest, FragmentAnalyticsResponse,
+    FragmentMemberAnalyticsResponse, FragmentSyncRequest, FragmentSyncResponse,
     RefreshResponse, RegisterResponse, TeamFragment, TeamInfo, TeamsListResponse, TokenResponse,
     TeamUser, UpdateTeamFragmentRequest,
 };
@@ -180,6 +180,34 @@ impl TeamClient {
         team_id: &str,
     ) -> Result<Option<FragmentAnalyticsResponse>, TeamApiError> {
         let path = format!("/v1/teams/{team_id}/fragments/analytics");
+        let req = self.http.get(self.url(&path)).bearer_auth(access_token);
+        let resp = req.send().map_err(|e| TeamApiError {
+            status: 0,
+            message: e.to_string(),
+            conflict_fragment: None,
+        })?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if resp.status().is_success() {
+            return Self::decode_response(resp).map(Some);
+        }
+        Err(Self::decode_error(
+            resp.status(),
+            resp.text().unwrap_or_default(),
+        ))
+    }
+
+    /// 团队成员区间片段统计；404/未实现时返回 `Ok(None)`。
+    pub fn fetch_fragment_member_analytics(
+        &self,
+        access_token: &str,
+        team_id: &str,
+        since_days: u32,
+    ) -> Result<Option<FragmentMemberAnalyticsResponse>, TeamApiError> {
+        let path = format!(
+            "/v1/teams/{team_id}/fragments/analytics/members?since={since_days}d"
+        );
         let req = self.http.get(self.url(&path)).bearer_auth(access_token);
         let resp = req.send().map_err(|e| TeamApiError {
             status: 0,

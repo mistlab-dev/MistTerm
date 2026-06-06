@@ -942,6 +942,7 @@ pub fn session_tab_chip(
     active: bool,
     online: bool,
     show_close: bool,
+    env_color: Option<egui::Color32>,
 ) -> SessionTabChipResult {
     let size = egui::vec2(theme.size_tab_min_w(), theme.size_tab_min_h());
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
@@ -987,6 +988,11 @@ pub fn session_tab_chip(
         let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(5.0, 5.0), egui::Sense::hover());
         ui.painter()
             .circle_filled(dot_rect.center(), 2.5, dot_color);
+        if let Some(ec) = env_color {
+            let (env_rect, _) = ui.allocate_exact_size(egui::vec2(4.0, 5.0), egui::Sense::hover());
+            ui.painter()
+                .circle_filled(env_rect.center(), 2.0, ec);
+        }
         ui.label(
             RichText::new(label)
                 .size(theme.font_size_tab_label())

@@ -16,7 +16,7 @@ pub use client::{TeamApiError, TeamClient};
 pub use oauth::OAuthProvider;
 pub use models::{
     parse_tags_json, parse_variables_json, CreateTeamFragmentRequest, FragmentAnalyticsResponse,
-    FragmentAnalyticsRow, TeamFragment, TeamMember, TeamMembersResponse, TeamMembership, TeamRole,
+    FragmentAnalyticsRow, FragmentMemberAnalyticsResponse, FragmentMemberAnalyticsRow, TeamFragment, TeamMember, TeamMembersResponse, TeamMembership, TeamRole,
     TeamServer, TeamSyncEntry, TeamSyncResponse, TeamUser, TeamsListResponse, TokenResponse,
     UpdateTeamFragmentRequest,
 };
