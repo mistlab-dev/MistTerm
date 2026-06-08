@@ -1,6 +1,6 @@
 [package]
 name = "mistterm"
-version = "0.2.7"
+version = "0.2.8"
 edition = "2021"
 autobins = false
 default-run = "Mist"
