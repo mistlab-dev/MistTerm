@@ -1626,6 +1626,8 @@ impl TerminalView {
             );
             if tab_plain || tab_shift {
                 self.append_offline_bytes(b"\t");
+                // Tab 默认触发 egui 焦点遍历，即使 consume_key 也可能在帧末丢失焦点
+                self.pending_focus_terminal = true;
             }
             if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
                 self.append_offline_bytes(bytes);
@@ -1870,6 +1872,8 @@ impl TerminalView {
             );
             if tab_plain || tab_shift {
                 let _ = handle.send_input(b"\t");
+                // Tab 默认触发 egui 焦点遍历，即使 consume_key 也可能在帧末丢失焦点
+                self.pending_focus_terminal = true;
             }
             // Esc / F1–F12 / Insert / 带修饰方向键等（egui 常无 Text 事件）
             if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
