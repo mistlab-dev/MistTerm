@@ -1,0 +1,17 @@
+name: Feedback
+description: 报告问题、提建议、或其他反馈
+labels:
+  - feedback
+body:
+  - type: markdown
+    attributes:
+      value: |
+        也可在 MistTerm 内通过 **帮助 → 问题反馈** 打开此页面（会预填版本号）。
+
+  - type: textarea
+    id: desc
+    attributes:
+      label: 描述
+      description: 贴截图、描述一下你遇到的问题或建议即可
+    validations:
+      required: true
