@@ -701,6 +701,33 @@ impl TerminalView {
         self.flush_paste_queue(ui.ctx());
         self.process_transfer_events(theme, ui.ctx());
 
+        if self.transfer_progress.is_some() || self.lrzsz.is_active() {
+            let cancel_shortcut = ui.input_mut(|i| {
+                i.consume_key(
+                    egui::Modifiers {
+                        ctrl: true,
+                        ..Default::default()
+                    },
+                    egui::Key::C,
+                )
+            });
+            if cancel_shortcut {
+                if let Err(e) = self.cancel_zmodem_transfer() {
+                    let msg = format!(
+                        "{}: {}",
+                        crate::i18n::tr(ui.ctx(), "Stop transfer failed", "停止传输失败"),
+                        e
+                    );
+                    self.feed_user_warn_line(theme, &msg);
+                } else {
+                    self.feed_user_warn_line(
+                        theme,
+                        crate::i18n::tr(ui.ctx(), "Transfer stopped", "传输已停止"),
+                    );
+                }
+            }
+        }
+
         // Ctrl + 滚轮：缩放终端字体（不改变 PTY 行列，仅视觉）
         let wheel = ui.ctx().input(|i| {
             let z = i.scroll_delta.y;
@@ -914,7 +941,6 @@ impl TerminalView {
                                                 .font(egui::TextStyle::Monospace)
                                                 .desired_width(edit_w)
                                                 .code_editor()
-                                                .lock_focus(!terminal_search_open)
                                                 .interactive(false)
                                                 .frame(false)
                                                 .layouter(&mut layouter),
@@ -951,7 +977,7 @@ impl TerminalView {
                                     select_resp.request_focus();
                                 }
                                 if self.pending_focus_terminal {
-                                    // 同步写 memory，避免帧初 Esc 清空焦点后本帧无法输入
+                                    // EventFilter 未生效帧的兜底（如刚点击聚焦后的首帧）
                                     ui.memory_mut(|m| m.request_focus(select_id));
                                     select_resp.request_focus();
                                     self.pending_focus_terminal = false;
@@ -960,6 +986,16 @@ impl TerminalView {
                             self.terminal_focused = select_resp.has_focus()
                                 || response.has_focus()
                                 || self.pending_focus_terminal;
+
+                            // 键盘焦点在 select 层：锁定 Tab/Esc/方向键，避免 egui 帧初焦点遍历抢键
+                            if !terminal_search_open && self.terminal_focused {
+                                ui.memory_mut(|m| {
+                                    m.set_focus_lock_filter(
+                                        select_id,
+                                        crate::ui::terminal_keys::terminal_keyboard_event_filter(),
+                                    );
+                                });
+                            }
 
                             // 滚轮浏览 scrollback（与 alacritty 一致：Delta>0 向上翻历史）
                             if (response.hovered() || response.has_focus())
@@ -1222,6 +1258,7 @@ impl TerminalView {
                     self.auto_follow_output = self.terminal.is_scrolled_to_bottom();
                     let _ = scroll_output;
 
+                    let mut stop_transfer_clicked = false;
                     if let Some(ref progress) = self.transfer_progress {
                         ui.add_space(theme.spacing_sm());
                         ui.separator();
@@ -1255,7 +1292,7 @@ impl TerminalView {
                             0.0
                         };
                         let detail = format!(
-                            "{} / {} · {:.1}%",
+                            "  {} / {} · {:.1}%",
                             human_readable_size(progress.1),
                             human_readable_size(progress.2.max(1)),
                             percent
@@ -1267,6 +1304,48 @@ impl TerminalView {
                                 .desired_width(bar_w)
                                 .text(egui::RichText::new(detail).color(theme.text_primary())),
                         );
+                        ui.horizontal(|ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(crate::i18n::tr(
+                                            ui.ctx(),
+                                            "Stop transfer",
+                                            "停止传输",
+                                        ))
+                                        .strong()
+                                        .color(egui::Color32::WHITE),
+                                    )
+                                    .fill(theme.red_color())
+                                    .stroke(egui::Stroke::new(1.0, theme.red_color()))
+                                    .min_size(egui::vec2(68.0, 22.0)),
+                                )
+                                .clicked()
+                            {
+                                stop_transfer_clicked = true;
+                            }
+                            ui.add_space(theme.spacing_sm());
+                            ui.label(
+                                egui::RichText::new(crate::i18n::tr(
+                                    ui.ctx(),
+                                    "or press Ctrl+C",
+                                    "或按 Ctrl+C",
+                                ))
+                                .small()
+                                .color(theme.text_tertiary()),
+                            );
+                        });
+                    }
+                    if stop_transfer_clicked {
+                        let msg = match self.cancel_zmodem_transfer() {
+                            Ok(()) => crate::i18n::tr(ui.ctx(), "Transfer stopped", "传输已停止").to_string(),
+                            Err(e) => format!(
+                                "{}: {}",
+                                crate::i18n::tr(ui.ctx(), "Stop transfer failed", "停止传输失败"),
+                                e
+                            ),
+                        };
+                        self.feed_user_warn_line(theme, &msg);
                     }
                 });
                 ui.visuals_mut().extreme_bg_color = prev_extreme;
@@ -1356,11 +1435,32 @@ impl TerminalView {
                         // 上传（本机 sz→远端 rz）时，PTY 上的 ZMODEM 帧只能经 SSH 泵线程到达此处；
                         // 必须旁路给 lrzsz，不得在另一线程对 Channel 再 read。
                         let text = String::from_utf8_lossy(&data);
+                        if !self.lrzsz.is_upload_pty_capture() {
+                            if self.lrzsz.is_active() {
+                                if self.lrzsz.feed_receive_data(&data) {
+                                    continue;
+                                }
+                            } else if self.lrzsz.detect_zmodem_download(&data) {
+                                if let Some(ref h) = self.ssh_handle {
+                                    match self.lrzsz.start_receive_pump(h.shell_pump_tx()) {
+                                        Ok(()) => {
+                                            if self.lrzsz.feed_receive_data(&data) {
+                                                continue;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            self.error_message = Some(crate::i18n::localize_backend_error(
+                                                self.ui_lang_last,
+                                                &format!("ZMODEM receive failed: {e}"),
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         let is_rz_prompt = text.contains("rz rz rz")
                             || text.contains("Awaiting rz")
-                            || text.contains("rz waiting to receive")
-                            || text.contains("**B0")
-                            || text.contains("B0000"); // 兼容不同 rz 实现的握手串
+                            || text.contains("rz waiting to receive");
 
                         // 尽早打开旁路：选文件前 `rz` 发出的 ZRQINIT 若只进 VTE，`start_send` 会永远等下一轮超时。
                         if is_rz_prompt && self.connected {
@@ -1534,12 +1634,13 @@ impl TerminalView {
                 }
                 TransferEvent::FileComplete { filename, path } => {
                     self.transfer_progress = None;
-                    let line = if self.transfer_outgoing {
+                    let was_outgoing = self.transfer_outgoing;
+                    let line = if was_outgoing {
                         format!(
                             "{}{} -> {}",
                             crate::i18n::tr(ctx, "Upload complete: ", "上传完成："),
-                            filename,
-                            path.display()
+                            path.display(),
+                            format!("./{filename}")
                         )
                     } else {
                         format!(
@@ -1550,8 +1651,11 @@ impl TerminalView {
                         )
                     };
                     self.transfer_outgoing = false;
-                    // 完成后多一空行，与后续 shell 提示符/命令拉开
                     self.feed_user_success_line(theme, &line);
+                    if was_outgoing {
+                        // rz 上传后远端提示符常紧跟收尾输出；成功行后立即补空行，避免粘在同一行。
+                        self.terminal.feed(b"\r\n");
+                    }
                 }
                 TransferEvent::FileError { filename, error } => {
                     if let Some(ref h) = self.ssh_handle {
@@ -1575,7 +1679,6 @@ impl TerminalView {
                     self.auto_follow_output = true;
                     self.rz_control_mode_until = None;
                     self.transfer_outgoing = false;
-                    self.terminal.feed(b"\r\n");
                     // 上传期间可能暂缓了 resize_pty，此处与远端对齐当前 UI 网格
                     self.flush_ssh_pty_size_after_transfer();
                 }
@@ -1626,6 +1729,8 @@ impl TerminalView {
             );
             if tab_plain || tab_shift {
                 self.append_offline_bytes(b"\t");
+                // EventFilter 需上一帧已聚焦才生效；首帧 Tab 仍可能失焦
+                self.pending_focus_terminal = true;
             }
             if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
                 self.append_offline_bytes(bytes);
@@ -1870,12 +1975,14 @@ impl TerminalView {
             );
             if tab_plain || tab_shift {
                 let _ = handle.send_input(b"\t");
+                // EventFilter 需上一帧已聚焦才生效；首帧 Tab 仍可能失焦
+                self.pending_focus_terminal = true;
             }
             // Esc / F1–F12 / Insert / 带修饰方向键等（egui 常无 Text 事件）
             if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
                 let _ = handle.send_input(bytes);
             }) {
-                // egui 帧初会把 Esc 当作「取消焦点」；转发 vim 后须抢回终端焦点
+                // EventFilter 生效前的兜底（帧初 Tab/Esc/方向键抢焦点）
                 self.pending_focus_terminal = true;
             }
             // 同一帧内可能既有 Key 又有 Text（如 Delete / 退格），避免重复或错发
@@ -1998,9 +2105,10 @@ impl TerminalView {
                             }
                             egui::Key::C if modifiers.ctrl && !modifiers.shift => {
                                 if self.lrzsz.is_active() {
-                                    self.lrzsz.cancel_active_transfer();
+                                    let _ = self.cancel_zmodem_transfer();
+                                } else {
+                                    let _ = handle.send_input(&[0x03]);
                                 }
-                                let _ = handle.send_input(&[0x03]);
                             }
                             egui::Key::D if modifiers.ctrl => {
                                 let _ = handle.send_input(&[0x04]);
@@ -2197,6 +2305,43 @@ impl TerminalView {
             self.lrzsz.cancel_active_transfer();
         }
         handle.send_input(&[0x03])
+    }
+
+    pub fn cancel_zmodem_transfer(&mut self) -> Result<(), String> {
+        let loc = self.locale_last();
+        if !self.connected {
+            return Err(loc.tr("Not connected", "当前未连接").to_string());
+        }
+        let Some(handle) = self.ssh_handle.clone() else {
+            return Err(loc.tr("PTY not ready", "PTY 未就绪").to_string());
+        };
+        self.lrzsz.unregister_shell_pump_upload_feed(&handle);
+        self.lrzsz.cancel_active_transfer();
+        self.pending_rz_upload = false;
+        self.end_rz_handshake_capture();
+        self.clear_rz_control_mode();
+        self.transfer_progress = None;
+        self.transfer_outgoing = false;
+        self.auto_follow_output = true;
+        self.pending_focus_terminal = true;
+        self.terminal_focused = true;
+        // ZMODEM 协议态下单个 Ctrl+C 不一定被远端 rz/sz 识别；高优先级发 CAN 序列再补 ETX。
+        let cancel = vec![
+            0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, // CAN x8
+            0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, // erase noise
+            0x03, // ETX
+        ];
+        match handle.send_priority_interrupt(cancel) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                let _ = handle.send_zmodem(vec![
+                    0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18, 0x18,
+                    0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08,
+                ]);
+                let _ = handle.send_input(&[0x03]);
+                Err(e)
+            }
+        }
     }
 
     pub fn clear_rz_control_mode(&mut self) {

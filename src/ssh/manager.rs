@@ -96,6 +96,7 @@ pub enum SshMessage {
 pub struct SshSessionHandle {
     pub session_id: SshSessionId,
     pump_tx: ShellPumpTx,
+    interrupt_tx: std::sync::mpsc::SyncSender<Vec<u8>>,
     resize_tx: std::sync::mpsc::SyncSender<(u32, u32)>,
     upload_bypass_slot: Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
 }
@@ -114,6 +115,13 @@ impl SshSessionHandle {
 
     pub fn send_zmodem(&self, data: Vec<u8>) -> Result<(), String> {
         self.pump_send(ShellPumpCommand::ZmodemWrite(data))
+    }
+
+    /// 高优先级写入 PTY，绕过普通输入/ZMODEM 队列；用于中止 ZMODEM 等紧急控制。
+    pub fn send_priority_interrupt(&self, data: Vec<u8>) -> Result<(), String> {
+        self.interrupt_tx
+            .send(data)
+            .map_err(|e| format!("Interrupt send failed: {}", e))
     }
 
     pub fn shell_pump_tx(&self) -> ShellPumpTx {
@@ -457,6 +465,7 @@ impl SshManager {
         let sessions = self.sessions.clone();
 
         let (pump_tx, pump_rx) = sync_channel::<ShellPumpCommand>(SHELL_PUMP_QUEUE_CAP);
+        let (interrupt_tx, interrupt_rx) = sync_channel::<Vec<u8>>(8);
         let (resize_tx, resize_rx) = sync_channel::<(u32, u32)>(RESIZE_QUEUE_CAP);
         let upload_bypass_slot = Arc::new(Mutex::new(None::<Arc<UploadPtyBypass>>));
 
@@ -476,6 +485,7 @@ impl SshManager {
         shell_pump::spawn_shell_pump(
             channel,
             pump_rx,
+            interrupt_rx,
             resize_rx,
             message_tx,
             session_id,
@@ -486,6 +496,7 @@ impl SshManager {
         Ok(SshSessionHandle {
             session_id,
             pump_tx,
+            interrupt_tx,
             resize_tx,
             upload_bypass_slot,
         })
@@ -578,6 +589,7 @@ mod shell_pump {
     pub(super) fn spawn_shell_pump(
         channel: Channel,
         pump_rx: Receiver<ShellPumpCommand>,
+        interrupt_rx: Receiver<Vec<u8>>,
         resize_rx: Receiver<(u32, u32)>,
         message_tx: Sender<SshMessage>,
         session_id: SshSessionId,
@@ -596,6 +608,7 @@ mod shell_pump {
                 shell_pump_loop(
                     channel,
                     pump_rx,
+                interrupt_rx,
                     resize_rx,
                     message_tx,
                     session_id,
@@ -610,6 +623,7 @@ mod shell_pump {
     fn shell_pump_loop(
         channel: Arc<Mutex<Channel>>,
         pump_rx: Receiver<ShellPumpCommand>,
+        interrupt_rx: Receiver<Vec<u8>>,
         resize_rx: Receiver<(u32, u32)>,
         message_tx: Sender<SshMessage>,
         session_id: SshSessionId,
@@ -620,6 +634,19 @@ mod shell_pump {
         let mut input_line_buf: Vec<u8> = Vec::new();
         let mut esc_state = InputEscState::None;
         loop {
+            while let Ok(data) = interrupt_rx.try_recv() {
+                if !process_priority_interrupt_sync(
+                    &channel,
+                    &message_tx,
+                    session_id,
+                    data,
+                    &mut read_buffer,
+                    &upload_bypass_slot,
+                ) {
+                    return;
+                }
+            }
+
             while let Ok((c, r)) = resize_rx.try_recv() {
                 let pty_cols = c.clamp(20, 512);
                 let pty_rows = r.clamp(5, 256);
@@ -659,7 +686,31 @@ mod shell_pump {
                     ) {
                         return;
                     }
+                    while let Ok(data) = interrupt_rx.try_recv() {
+                        if !process_priority_interrupt_sync(
+                            &channel,
+                            &message_tx,
+                            session_id,
+                            data,
+                            &mut read_buffer,
+                            &upload_bypass_slot,
+                        ) {
+                            return;
+                        }
+                    }
                     while let Ok(more) = pump_rx.try_recv() {
+                        while let Ok(data) = interrupt_rx.try_recv() {
+                            if !process_priority_interrupt_sync(
+                                &channel,
+                                &message_tx,
+                                session_id,
+                                data,
+                                &mut read_buffer,
+                                &upload_bypass_slot,
+                            ) {
+                                return;
+                            }
+                        }
                         if !process_one_command_sync(
                             &mgr,
                             &channel,
@@ -693,6 +744,34 @@ mod shell_pump {
                 }
             }
         }
+    }
+
+    fn process_priority_interrupt_sync(
+        channel: &Arc<Mutex<Channel>>,
+        message_tx: &Sender<SshMessage>,
+        session_id: SshSessionId,
+        data: Vec<u8>,
+        read_buffer: &mut [u8; 16384],
+        upload_bypass: &Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
+    ) -> bool {
+        let mut ch = match channel.lock() {
+            Ok(g) => g,
+            Err(e) => {
+                log::error!("shell pump priority interrupt: channel mutex poisoned: {}", e);
+                return false;
+            }
+        };
+        if let Err(e) = SshManager::write_pty_with_drain(
+            &mut *ch,
+            &data,
+            read_buffer,
+            message_tx,
+            session_id,
+            upload_bypass,
+        ) {
+            log::error!("Priority interrupt write error: {}", e);
+        }
+        true
     }
 
     fn process_one_command_sync(

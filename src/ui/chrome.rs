@@ -980,19 +980,15 @@ pub fn session_tab_chip(
     row_ui.set_max_width(inner.width());
     row_ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = theme.spacing_tab_dot_text();
-        let dot_color = if online {
+        let status_color = if online {
             theme.green_color()
         } else {
             theme.color_tab_offline_dot()
         };
+        let dot_color = env_color.unwrap_or(status_color);
         let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(5.0, 5.0), egui::Sense::hover());
         ui.painter()
             .circle_filled(dot_rect.center(), 2.5, dot_color);
-        if let Some(ec) = env_color {
-            let (env_rect, _) = ui.allocate_exact_size(egui::vec2(4.0, 5.0), egui::Sense::hover());
-            ui.painter()
-                .circle_filled(env_rect.center(), 2.0, ec);
-        }
         ui.label(
             RichText::new(label)
                 .size(theme.font_size_tab_label())

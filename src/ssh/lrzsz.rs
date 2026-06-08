@@ -8,9 +8,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
 use ssh2::Channel;
-use super::manager::{ShellPumpTx, SshSessionHandle};
+use super::manager::{ShellPumpCommand, ShellPumpTx, SshSessionHandle};
 
 const RX_INCOMING_CAP: usize = 512 * 1024;
 
@@ -60,7 +59,6 @@ mod zmodem {
     pub const ZBIN32: u8 = 0x43;
 
     pub const ZRQINIT: u8 = 0x00;
-    pub const ZRINIT: u8 = 0x01;
     /// 部分实现用 `ZVBIN 'a'` 代替 `ZBIN 'A'` 发 BIN16 头
     pub const ZVBIN16: u8 = b'a';
 }
@@ -204,6 +202,7 @@ pub struct LrzszTransfer {
     recv_side: Arc<Mutex<Option<RecvSide>>>,
     // 新增：SSH 通道引用
     channel: Arc<Mutex<Option<Arc<Mutex<Channel>>>>>,
+    receive_pump_tx: Arc<Mutex<Option<ShellPumpTx>>>,
     // 新增：当前接收的文件句柄
     receive_file: Arc<Mutex<Option<File>>>,
     /// rz→本机（上传）时，PTY 上来自远端的 ZMODEM 帧只能经 SSH 泵线程读出；
@@ -237,6 +236,7 @@ impl LrzszTransfer {
             download_dir: download_path,
             recv_side: Arc::new(Mutex::new(None)),
             channel: Arc::new(Mutex::new(None)),
+            receive_pump_tx: Arc::new(Mutex::new(None)),
             receive_file: Arc::new(Mutex::new(None)),
             upload_pty_rx: Arc::new(Mutex::new(Vec::new())),
             upload_pty_capture_on: Arc::new(AtomicBool::new(false)),
@@ -330,6 +330,7 @@ impl LrzszTransfer {
         self.is_active.store(false, Ordering::Relaxed);
         *self.recv_side.lock().unwrap() = None;
         *self.receive_file.lock().unwrap() = None;
+        *self.receive_pump_tx.lock().unwrap() = None;
     }
 
     /// 获取接收进度
@@ -362,31 +363,12 @@ impl LrzszTransfer {
             return true;
         }
         
-        // 二进制 / HEX ZMODEM 邀请（rz 就绪）
-        if data.len() >= 5
-            && is_zpad(data[0])
-            && is_zpad(data[1])
-            && data[2] == zmodem::ZDLE
-            && data[3] == zmodem::ZBIN16
-            && bin16_wire_decode_type(data, 4).is_some_and(|t| {
-                t == zmodem::ZRQINIT || t == zmodem::ZRINIT
-            })
-        {
-            return true;
-        }
-        if data.len() >= 6
-            && is_zpad(data[0])
-            && is_zpad(data[1])
-            && data[2] == zmodem::ZDLE
-            && (data[3] == zmodem::ZHEX || data[3] == b'B' || data[3] == b'b')
-            && hex_pair(data[4], data[5]).is_some_and(|t| {
-                t == zmodem::ZRQINIT || t == zmodem::ZRINIT
-            })
-        {
-            return true;
-        }
-        
         false
+    }
+
+    /// 远端 `sz` 会先发 ZRQINIT；这是下载接收，不应当触发 `rz` 上传选文件。
+    pub fn detect_zmodem_download(&self, data: &[u8]) -> bool {
+        parse_zrqinit_packet(data)
     }
 
     /// 开始接收（被动）：等 PTY 上出现 ZRQINIT 后再建 `zmodem2::Receiver` 并回 ZRINIT。
@@ -399,6 +381,7 @@ impl LrzszTransfer {
         self.received_bytes.store(0, Ordering::Relaxed);
         self.total_bytes.store(0, Ordering::Relaxed);
         *self.channel.lock().unwrap() = Some(channel);
+        *self.receive_pump_tx.lock().unwrap() = None;
         *self.recv_side.lock().unwrap() = Some(RecvSide::Passive {
             pending: Vec::new(),
         });
@@ -416,6 +399,7 @@ impl LrzszTransfer {
         self.received_bytes.store(0, Ordering::Relaxed);
         self.total_bytes.store(0, Ordering::Relaxed);
         *self.channel.lock().unwrap() = Some(channel);
+        *self.receive_pump_tx.lock().unwrap() = None;
 
         let receiver = zmodem2::Receiver::new().map_err(|e| format!("ZMODEM Receiver::new: {}", e))?;
         let mut session = ZmodemRxSession {
@@ -429,8 +413,33 @@ impl LrzszTransfer {
         Ok(())
     }
 
+    /// 通过 shell pump 写回接收端 ACK（交互式 shell 使用同一 PTY FIFO）。
+    pub fn start_receive_pump(&self, pump_tx: ShellPumpTx) -> Result<(), String> {
+        if self.is_active.load(Ordering::Relaxed) {
+            return Err("Transfer already in progress".to_string());
+        }
+
+        self.is_active.store(true, Ordering::Relaxed);
+        self.received_bytes.store(0, Ordering::Relaxed);
+        self.total_bytes.store(0, Ordering::Relaxed);
+        *self.channel.lock().unwrap() = None;
+        *self.receive_pump_tx.lock().unwrap() = Some(pump_tx);
+        *self.recv_side.lock().unwrap() = Some(RecvSide::Passive {
+            pending: Vec::new(),
+        });
+        log::info!("ZMODEM receive started via shell pump (passive, waiting for ZRQINIT)");
+        Ok(())
+    }
+
     /// 向 SSH 通道写 ZMODEM 出站字节（`zmodem2::Receiver::drain_outgoing`）
     fn write_to_channel(&self, data: &[u8]) {
+        if let Ok(pump_guard) = self.receive_pump_tx.lock() {
+            if let Some(ref pump_tx) = *pump_guard {
+                let _ = pump_tx.send(ShellPumpCommand::ZmodemWrite(data.to_vec()));
+                log::debug!("ZMODEM queued {} bytes via shell pump", data.len());
+                return;
+            }
+        }
         if let Ok(chan_lock) = self.channel.lock() {
             if let Some(ref chan) = *chan_lock {
                 if let Ok(mut c) = chan.lock() {
@@ -523,6 +532,7 @@ impl LrzszTransfer {
                 }
                 zmodem2::ReceiverEvent::SessionComplete => {
                     *self.receive_file.lock().unwrap() = None;
+                    *self.receive_pump_tx.lock().unwrap() = None;
                     self.is_active.store(false, Ordering::Relaxed);
                     let _ = self.tx.send(TransferEvent::TransferComplete);
                     return Ok(true);
@@ -573,6 +583,7 @@ impl LrzszTransfer {
     fn abort_recv_locked(&self, slot: &mut Option<RecvSide>, msg: &str) {
         *slot = None;
         *self.receive_file.lock().unwrap() = None;
+        *self.receive_pump_tx.lock().unwrap() = None;
         self.is_active.store(false, Ordering::Relaxed);
         let fname = self.current_filename.lock().unwrap().clone();
         let _ = self.tx.send(TransferEvent::FileError {
@@ -768,18 +779,6 @@ impl LrzszTransfer {
 
             log::info!("ZMODEM upload finished {}", file_name);
 
-            thread::sleep(Duration::from_millis(100));
-
-            // 宽限：SSH 泵上仍可能有几帧 PTY 输出在途；过早关闭旁路会让 ZMODEM 尾字节进 VTE → 乱码/替换字符
-            let grace_end = std::time::Instant::now() + Duration::from_millis(500);
-            while std::time::Instant::now() < grace_end {
-                {
-                    let mut g = upload_pty_rx.lock().unwrap();
-                    g.clear();
-                }
-                thread::sleep(Duration::from_millis(25));
-            }
-
             finish(
                 &is_active,
                 &upload_pty_capture_on,
@@ -828,22 +827,30 @@ mod tests {
     fn test_detect_rz_command_binary() {
         let lrzsz = LrzszTransfer::new("/tmp");
         // BIN16：`** ZDLE 'A' TYPE`
-        assert!(lrzsz.detect_rz_command(&[
+        assert!(!lrzsz.detect_rz_command(&[
             zmodem::ZPAD,
             zmodem::ZPAD,
             zmodem::ZDLE,
             zmodem::ZBIN16,
             zmodem::ZRQINIT,
         ]));
-        assert!(lrzsz.detect_rz_command(&[
+        assert!(!lrzsz.detect_rz_command(&[
             zmodem::ZPAD,
             zmodem::ZPAD,
             zmodem::ZDLE,
             zmodem::ZBIN16,
-            zmodem::ZRINIT,
+            0x01,
         ]));
         // HEX：`** ZDLE 'B' 00` = ZRQINIT
-        assert!(lrzsz.detect_rz_command(&[
+        assert!(!lrzsz.detect_rz_command(&[
+            zmodem::ZPAD,
+            zmodem::ZPAD,
+            zmodem::ZDLE,
+            zmodem::ZHEX,
+            b'0',
+            b'0',
+        ]));
+        assert!(lrzsz.detect_zmodem_download(&[
             zmodem::ZPAD,
             zmodem::ZPAD,
             zmodem::ZDLE,

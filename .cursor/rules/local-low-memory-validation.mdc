@@ -1,0 +1,21 @@
+---
+description: Local validation must use low-memory commands
+alwaysApply: true
+---
+
+# Local Low-Memory Validation
+
+When running validation locally in this workspace, default to low-memory commands:
+
+- Set `CARGO_BUILD_JOBS=1` and `CARGO_INCREMENTAL=0` for Cargo commands.
+- Prefer narrow tests for touched areas instead of full test suites.
+- Use `-- --test-threads=1` for Rust tests unless parallelism is explicitly requested.
+- Do not run high-memory commands such as full `cargo test` or broad release builds locally unless the user explicitly asks.
+
+Example:
+
+```powershell
+$env:CARGO_BUILD_JOBS='1'
+$env:CARGO_INCREMENTAL='0'
+cargo test --lib terminal_keys -- --test-threads=1
+```

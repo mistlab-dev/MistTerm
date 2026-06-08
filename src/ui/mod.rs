@@ -23,7 +23,7 @@ pub mod chrome;
 pub mod app;
 pub mod terminal;
 pub mod tab_pane;
-mod terminal_keys;
+pub mod terminal_keys;
 pub mod sidebar;
 pub mod dialogs;
 pub mod monitor_panel;
