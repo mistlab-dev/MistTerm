@@ -134,19 +134,29 @@ const MOD_COMBOS: [Modifiers; 8] = [
     },
 ];
 
+/// egui 焦点锁：终端 select 层持有键盘焦点时，阻止 Tab/Esc/方向键触发焦点遍历。
+pub fn terminal_keyboard_event_filter() -> egui::EventFilter {
+    egui::EventFilter {
+        tab: true,
+        arrows: true,
+        escape: true,
+    }
+}
+
 /// 消费并编码本帧内「无 Text」的特殊键；`send` 写入 PTY 或离线缓冲。
-/// 若本帧转发了 Esc，返回 `true`（调用方应恢复终端键盘焦点，见 `TerminalPanel::pending_focus_terminal`）。
+/// 若本帧转发了任意键，返回 `true`（Esc/方向键等可能触发 egui 焦点变化时的兜底，见 `pending_focus_terminal`）。
 pub fn forward_non_text_keys(i: &mut egui::InputState, mut send: impl FnMut(&[u8])) -> bool {
-    let mut escape_sent = false;
+    let mut any_sent = false;
     for mods in MOD_COMBOS {
         if i.consume_key(mods, Key::Escape) {
             send(b"\x1b");
-            escape_sent = true;
+            any_sent = true;
         }
         for key in NAV_KEYS {
             if i.consume_key(mods, key) {
                 if let Some(bytes) = encode_nav_key(key, mods) {
                     send(&bytes);
+                    any_sent = true;
                 }
             }
         }
@@ -155,18 +165,30 @@ pub fn forward_non_text_keys(i: &mut egui::InputState, mut send: impl FnMut(&[u8
         if i.consume_key(Modifiers::NONE, key) {
             if let Some(bytes) = encode_other_special_key(key, Modifiers::NONE) {
                 send(&bytes);
+                any_sent = true;
             }
         }
     }
     if i.consume_key(Modifiers::NONE, Key::Insert) {
         send(b"\x1b[2~");
+        any_sent = true;
     }
-    escape_sent
+    any_sent
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eframe::egui::{Event, Key, Modifiers};
+
+    fn key_press(key: Key, modifiers: Modifiers) -> Event {
+        Event::Key {
+            key,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
 
     #[test]
     fn escape_key() {
@@ -195,5 +217,68 @@ mod tests {
             .unwrap(),
             b"\x1b[1;2A"
         );
+    }
+
+    #[test]
+    fn terminal_event_filter_blocks_focus_navigation_keys() {
+        let filter = terminal_keyboard_event_filter();
+        assert!(filter.tab);
+        assert!(filter.arrows);
+        assert!(filter.escape);
+        assert!(filter.matches(&key_press(Key::Tab, Modifiers::NONE)));
+        assert!(filter.matches(&key_press(
+            Key::Tab,
+            Modifiers {
+                shift: true,
+                ..Default::default()
+            }
+        )));
+        assert!(filter.matches(&key_press(Key::Escape, Modifiers::NONE)));
+        assert!(filter.matches(&key_press(Key::ArrowUp, Modifiers::NONE)));
+    }
+
+    #[test]
+    fn forward_non_text_keys_returns_false_without_events() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                assert!(!forward_non_text_keys(i, |_| {}));
+            });
+        });
+    }
+
+    #[test]
+    fn forward_non_text_keys_forwards_and_flags_esc() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.events.push(key_press(Key::Escape, Modifiers::NONE));
+                let mut sent = Vec::new();
+                assert!(forward_non_text_keys(i, |b| sent.push(b.to_vec())));
+                assert_eq!(sent, vec![b"\x1b".to_vec()]);
+            });
+        });
+    }
+
+    #[test]
+    fn forward_non_text_keys_forwards_and_flags_arrow() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.events.push(key_press(Key::ArrowDown, Modifiers::NONE));
+                let mut sent = Vec::new();
+                assert!(forward_non_text_keys(i, |b| sent.push(b.to_vec())));
+                assert_eq!(sent, vec![b"\x1b[B".to_vec()]);
+            });
+        });
+    }
+
+    #[test]
+    fn forward_non_text_keys_forwards_and_flags_f_key() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.events.push(key_press(Key::F5, Modifiers::NONE));
+                let mut sent = Vec::new();
+                assert!(forward_non_text_keys(i, |b| sent.push(b.to_vec())));
+                assert_eq!(sent, vec![b"\x1b[15~".to_vec()]);
+            });
+        });
     }
 }

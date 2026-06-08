@@ -430,16 +430,6 @@ impl Sidebar {
                             let connecting = connecting_sessions.contains(&session.id);
                             let env_color = session_color_tag_rgb(&session.color_tag)
                                 .map(|(r, g, b)| egui::Color32::from_rgb(r, g, b));
-                            let dot_r = 3.0_f32;
-                            let gap = 3.0_f32;
-                            let (dots_rect, _) = row_ui.allocate_exact_size(
-                                egui::vec2(dot_r * 4.0 + gap, dot_r * 2.0),
-                                egui::Sense::hover(),
-                            );
-                            let status_center = egui::pos2(
-                                dots_rect.min.x + dot_r,
-                                dots_rect.center().y,
-                            );
                             let status_color = if online {
                                 theme.green_color()
                             } else if connecting {
@@ -447,20 +437,15 @@ impl Sidebar {
                             } else {
                                 theme.color_tab_offline_dot()
                             };
-                            row_ui.painter().circle_filled(status_center, dot_r, status_color);
-                            let env_center = egui::pos2(
-                                dots_rect.min.x + dot_r * 2.0 + gap + dot_r,
-                                dots_rect.center().y,
+                            let dot_color = env_color.unwrap_or(status_color);
+                            let dot_r = 3.0_f32;
+                            let (dot_rect, _) = row_ui.allocate_exact_size(
+                                egui::vec2(dot_r * 2.0, dot_r * 2.0),
+                                egui::Sense::hover(),
                             );
-                            if let Some(rgb) = env_color {
-                                row_ui.painter().circle_filled(env_center, dot_r, rgb);
-                            } else {
-                                row_ui.painter().circle_stroke(
-                                    env_center,
-                                    dot_r,
-                                    egui::Stroke::new(1.0, theme.border_divider_color()),
-                                );
-                            }
+                            row_ui
+                                .painter()
+                                .circle_filled(dot_rect.center(), dot_r, dot_color);
                             row_ui.add_space(theme.spacing_tab_dot_text());
                             row_ui.label(
                                 egui::RichText::new(&session.name)

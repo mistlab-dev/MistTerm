@@ -29,7 +29,7 @@ pub struct PortForwardAuditRequest {
 
 enum ForwardEntry {
     /// 连接时按会话配置启动，停止需重连。
-    Profile { label: String, kind: PortForwardKind },
+    Profile { label: String },
     /// 面板内运行时添加，可单独停止。
     Runtime {
         label: String,
@@ -115,7 +115,7 @@ impl PortForwardPanel {
         );
         for kind in kinds {
             let label = kind.display_label();
-            self.push_profile(ssh_session_id, label, kind.clone());
+            self.push_profile(ssh_session_id, label);
             self.pending_audits.push(PortForwardAuditRequest {
                 session_profile_id: Some(profile.id.clone()),
                 host: Some(profile.host.clone()),
@@ -524,11 +524,11 @@ impl PortForwardPanel {
         Ok(())
     }
 
-    fn push_profile(&mut self, ssh_session_id: SshSessionId, label: String, kind: PortForwardKind) {
+    fn push_profile(&mut self, ssh_session_id: SshSessionId, label: String) {
         self.by_ssh_session
             .entry(ssh_session_id)
             .or_default()
-            .push(ForwardEntry::Profile { label, kind });
+            .push(ForwardEntry::Profile { label });
     }
 
     fn push_runtime(
@@ -569,7 +569,6 @@ fn section_title(ui: &mut egui::Ui, theme: &Theme, text: impl AsRef<str>) {
 #[cfg(test)]
 mod panel_tests {
     use super::*;
-    use crate::ssh::LocalPortForward;
 
     #[test]
     fn register_profile_once() {
