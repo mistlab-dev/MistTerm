@@ -3025,15 +3025,34 @@ pub fn modal_secondary_icon_button(
     icon: IconId,
     tooltip: &str,
 ) -> Response {
-    paint_icon_only_button(
+    let label_size = control_button_size(
         ui,
         theme,
-        icon,
-        ControlButtonVariant::Secondary,
-        theme.size_modal_footer_btn_min_w_secondary(),
+        tooltip,
         true,
-    )
-    .on_hover_text(tooltip)
+        theme.size_modal_footer_btn_min_w_secondary(),
+    );
+    let response = if ui.available_width() >= label_size.x {
+        paint_control_button(
+            ui,
+            theme,
+            tooltip,
+            Some(icon),
+            ControlButtonVariant::Secondary,
+            theme.size_modal_footer_btn_min_w_secondary(),
+            true,
+        )
+    } else {
+        paint_icon_only_button(
+            ui,
+            theme,
+            icon,
+            ControlButtonVariant::Secondary,
+            theme.size_modal_footer_btn_min_w_secondary(),
+            true,
+        )
+    };
+    response.on_hover_text(tooltip)
 }
 
 pub fn modal_primary_icon_button(ui: &mut Ui, theme: &Theme, icon: IconId, tooltip: &str) -> Response {
@@ -3047,15 +3066,34 @@ pub fn modal_primary_icon_button_ex(
     tooltip: &str,
     can_activate: bool,
 ) -> Response {
-    paint_icon_only_button(
+    let label_size = control_button_size(
         ui,
         theme,
-        icon,
-        ControlButtonVariant::Primary,
+        tooltip,
+        true,
         theme.size_modal_footer_btn_min_w_primary(),
-        can_activate,
-    )
-    .on_hover_text(tooltip)
+    );
+    let response = if ui.available_width() >= label_size.x {
+        paint_control_button(
+            ui,
+            theme,
+            tooltip,
+            Some(icon),
+            ControlButtonVariant::Primary,
+            theme.size_modal_footer_btn_min_w_primary(),
+            can_activate,
+        )
+    } else {
+        paint_icon_only_button(
+            ui,
+            theme,
+            icon,
+            ControlButtonVariant::Primary,
+            theme.size_modal_footer_btn_min_w_primary(),
+            can_activate,
+        )
+    };
+    response.on_hover_text(tooltip)
 }
 
 /// 弹窗底栏主操作（纯图标），用于 `ui.add(...)`。
@@ -3167,15 +3205,26 @@ pub fn modal_primary_button_with_icon_widget<'a>(
 }
 
 pub fn modal_danger_icon_button(ui: &mut Ui, theme: &Theme, icon: IconId, tooltip: &str) -> Response {
-    paint_icon_only_button(
+    let label_size = control_button_size(
         ui,
         theme,
-        icon,
-        ControlButtonVariant::Danger,
+        tooltip,
+        false,
         theme.size_modal_footer_btn_min_w_secondary(),
-        true,
-    )
-    .on_hover_text(tooltip)
+    );
+    let response = if ui.available_width() >= label_size.x {
+        paint_modal_danger_button(ui, theme, tooltip)
+    } else {
+        paint_icon_only_button(
+            ui,
+            theme,
+            icon,
+            ControlButtonVariant::Danger,
+            theme.size_modal_footer_btn_min_w_secondary(),
+            true,
+        )
+    };
+    response.on_hover_text(tooltip)
 }
 
 /// 面板 / dock 内行内次要按钮（与排序芯片、弹窗「取消」同族）

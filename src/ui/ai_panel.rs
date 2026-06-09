@@ -147,6 +147,14 @@ pub struct AiPanel {
     last_panel_slot_rect: Option<egui::Rect>,
     /// 清空对话二次确认（防误触）。
     confirm_clear_chat: bool,
+    /// 从 API 拉取到的模型 id 列表；拉取失败时为空并改用手动输入。
+    available_models: Vec<String>,
+    models_manual_fallback: bool,
+    models_loading: bool,
+    models_fetch: Option<Receiver<Result<Vec<String>, String>>>,
+    /// 上次成功/失败拉取对应的 `base_url|key` 签名，避免每帧重复请求。
+    models_fetch_signature: Option<String>,
+    models_status: Option<String>,
 }
 
 impl Default for AiPanel {
@@ -176,6 +184,12 @@ impl AiPanel {
             input_status: None,
             last_panel_slot_rect: None,
             confirm_clear_chat: false,
+            available_models: Vec::new(),
+            models_manual_fallback: false,
+            models_loading: false,
+            models_fetch: None,
+            models_fetch_signature: None,
+            models_status: None,
         }
     }
 
@@ -227,10 +241,22 @@ impl AiPanel {
         }
     }
 
-    pub fn cancel_generation(&mut self) {
+    pub fn cancel_generation(&mut self, ctx: &egui::Context) {
         if let Some(cancel) = &self.chat_cancel {
             cancel.store(true, Ordering::Relaxed);
         }
+        if self
+            .messages
+            .last()
+            .is_some_and(|m| m.role == "assistant" && m.content.is_empty())
+        {
+            self.messages.pop();
+        }
+        self.background = None;
+        self.busy = false;
+        self.streaming = false;
+        self.chat_cancel = None;
+        self.input_status = Some(i18n::tr(ctx, "Generation stopped", "已停止生成").to_string());
     }
 
     pub fn take_command_for_terminal(&mut self) -> Option<String> {
@@ -294,7 +320,7 @@ impl AiPanel {
     }
 
     /// 轮询后台保存 / 测试 / 对话请求（面板或设置窗打开时由 workspace 调用）。
-    pub fn poll_background(&mut self, ctx: &egui::Context, app_settings: &AppSettings) {
+    pub fn poll_background(&mut self, ctx: &egui::Context, app_settings: &mut AppSettings) {
         self.poll_pending(ctx, app_settings);
     }
 
@@ -420,6 +446,9 @@ impl AiPanel {
         if self.is_background_busy() {
             return self.test_status.clone();
         }
+        if let Some(err) = &self.last_error {
+            return Some(err.clone());
+        }
         self.input_status.clone()
     }
 
@@ -431,36 +460,13 @@ impl AiPanel {
         app_settings: &mut AppSettings,
     ) {
         let ready = self.can_chat(app_settings);
-        if let Some(status) = self.status_line(ctx) {
-            ui.horizontal(|ui| {
-                if self.busy || self.streaming {
-                    ui.spinner();
-                }
-                ui.label(
-                    egui::RichText::new(status).size(theme.font_size_small()),
-                );
-                if self.streaming {
-                    if crate::ui::chrome::panel_action_button_with_icon_ex(
-                        ui,
-                        theme,
-                        IconId::Cross,
-                        i18n::tr(ctx, "Stop", "停止"),
-                        true,
-                    )
-                    .clicked()
-                    {
-                        self.cancel_generation();
-                    }
-                }
-            });
-            ui.add_space(theme.spacing_xs());
-        } else if !ready {
+        if !ready {
             ui.colored_label(
                 theme.amber_color(),
                 i18n::tr(
                     ctx,
-                    "Configure API Key & model via Tools → AI Settings, then enter your question below.",
-                    "请先在菜单「工具 → AI 设置」中配置 API Key 与模型，再在下方输入问题。",
+                    "Configure OpenAI-compatible API URL, API Key, and model in Tools → AI Settings.",
+                    "请在「工具 → AI 设置」中配置 OpenAI 兼容 API 地址、API Key 与模型。",
                 ),
             );
             ui.add_space(theme.spacing_sm());
@@ -474,6 +480,18 @@ impl AiPanel {
                 ),
             );
             ui.add_space(theme.spacing_sm());
+        } else if !self.busy && !self.streaming {
+            if let Some(status) = self.status_line(ctx) {
+                ui.horizontal(|ui| {
+                    if self.is_background_busy() {
+                        ui.spinner();
+                    }
+                    ui.label(
+                        egui::RichText::new(status).size(theme.font_size_small()),
+                    );
+                });
+                ui.add_space(theme.spacing_xs());
+            }
         }
         let row_w = bind_row_width(ui);
         // 以当前光标起点作为正文起始，避免把提示文案错误地覆盖到标题栏区域。
@@ -487,8 +505,9 @@ impl AiPanel {
         let gap = theme.spacing_xs();
         let bottom_pad = 0.0;
         let input_h = ai_input_block_height(theme, self.attached_contexts.len());
+        let input_top = (flex_rect.max.y - input_h - bottom_pad).max(flex_rect.min.y);
         let input_rect = egui::Rect::from_min_max(
-            egui::pos2(flex_rect.min.x, flex_rect.max.y - input_h - bottom_pad),
+            egui::pos2(flex_rect.min.x, input_top),
             egui::pos2(flex_rect.max.x, flex_rect.max.y - bottom_pad),
         );
         let chat_rect = egui::Rect::from_min_max(
@@ -506,6 +525,22 @@ impl AiPanel {
             bind_row_width(ui);
             self.show_input_bar(ui, ctx, theme, app_settings, ready);
         });
+    }
+
+    fn is_awaiting_assistant_reply(&self) -> bool {
+        (self.busy || self.streaming)
+            && self
+                .messages
+                .last()
+                .is_some_and(|m| m.role == "assistant" && m.content.is_empty())
+    }
+
+    fn generation_status_text(&self, ctx: &egui::Context) -> String {
+        if self.streaming {
+            i18n::tr(ctx, "Generating AI reply…", "AI 回复生成中…").to_string()
+        } else {
+            i18n::tr(ctx, "Waiting for AI…", "等待 AI 响应…").to_string()
+        }
     }
 
     fn is_background_busy(&self) -> bool {
@@ -533,6 +568,99 @@ impl AiPanel {
         app_settings.ai.load_api_key()
     }
 
+    fn models_fetch_signature(app_settings: &AppSettings, key: &str) -> String {
+        format!("{}|{}", app_settings.ai.base_url.trim(), key.trim())
+    }
+
+    fn invalidate_models_fetch(&mut self) {
+        self.models_fetch_signature = None;
+        self.models_status = None;
+    }
+
+    fn maybe_start_models_fetch(&mut self, ctx: &egui::Context, app_settings: &AppSettings) {
+        if self.models_loading || self.models_fetch.is_some() {
+            return;
+        }
+        let Some(key) = self.effective_api_key(app_settings) else {
+            return;
+        };
+        if app_settings.ai.base_url.trim().is_empty() {
+            return;
+        }
+        let sig = Self::models_fetch_signature(app_settings, &key);
+        if self.models_fetch_signature.as_deref() == Some(sig.as_str()) {
+            return;
+        }
+        self.start_models_fetch(ctx, app_settings, &key, sig);
+    }
+
+    fn start_models_fetch(
+        &mut self,
+        ctx: &egui::Context,
+        app_settings: &AppSettings,
+        key: &str,
+        signature: String,
+    ) {
+        self.models_loading = true;
+        self.models_manual_fallback = false;
+        self.available_models.clear();
+        self.models_status = Some(
+            i18n::tr(ctx, "Loading models…", "正在拉取模型列表…")
+                .to_string(),
+        );
+        let ai = app_settings.ai.clone();
+        let key = key.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.models_fetch = Some(rx);
+        thread::spawn(move || {
+            let result = crate::core::fetch_models_with_key(&ai, &key);
+            let _ = tx.send(result);
+        });
+        self.models_fetch_signature = Some(signature);
+    }
+
+    fn poll_models_fetch(&mut self, ctx: &egui::Context, app_settings: &mut AppSettings) {
+        let Some(rx) = self.models_fetch.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(models)) => {
+                self.available_models = models;
+                self.models_manual_fallback = false;
+                self.models_loading = false;
+                self.models_status = None;
+                if app_settings.ai.model.trim().is_empty() {
+                    if let Some(first) = self.available_models.first() {
+                        app_settings.ai.model = first.clone();
+                    }
+                }
+                ctx.request_repaint();
+            }
+            Ok(Err(e)) => {
+                self.available_models.clear();
+                self.models_manual_fallback = true;
+                self.models_loading = false;
+                self.models_status = Some(i18n::localize_backend_error(
+                    i18n::language(ctx),
+                    &e,
+                ));
+                ctx.request_repaint();
+            }
+            Err(TryRecvError::Empty) => {
+                self.models_fetch = Some(rx);
+                ctx.request_repaint_after(std::time::Duration::from_millis(120));
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.available_models.clear();
+                self.models_manual_fallback = true;
+                self.models_loading = false;
+                self.models_status = Some(
+                    i18n::tr(ctx, "Model fetch interrupted", "拉取模型列表已中断").to_string(),
+                );
+            }
+        }
+    }
+
     fn show_setup_fields(
         &mut self,
         ui: &mut egui::Ui,
@@ -540,6 +668,10 @@ impl AiPanel {
         theme: &Theme,
         app_settings: &mut AppSettings,
     ) {
+        let mut do_refresh_models = false;
+        let mut do_save = false;
+        let mut do_test = false;
+        {
         let settings = &mut app_settings.ai;
         let label = theme.color_form_hint();
         crate::ui::chrome::form_checkbox(
@@ -548,37 +680,6 @@ impl AiPanel {
             &mut settings.enabled,
             i18n::tr(ctx, "Enable AI", "启用 AI"),
         );
-        ui.add_space(theme.spacing_sm());
-        ui.label(
-            egui::RichText::new(i18n::tr(ctx, "Model preset", "模型预设"))
-                .size(theme.font_size_small())
-                .color(label),
-        );
-        let preset_labels: Vec<String> = AI_MODEL_PRESETS
-            .iter()
-            .map(|p| i18n::tr(ctx, p.label_en, p.label_zh).to_string())
-            .collect();
-        let mut selected_preset = ai_model_preset_index(settings);
-        egui::ComboBox::from_id_source("ai_model_preset")
-            .selected_text(
-                preset_labels
-                    .get(selected_preset)
-                    .cloned()
-                    .unwrap_or_else(|| i18n::tr(ctx, "Custom", "自定义").to_string()),
-            )
-            .show_ui(ui, |ui| {
-                crate::ui::chrome::apply_menu_popup_style(ui, theme);
-                for (i, preset) in AI_MODEL_PRESETS.iter().enumerate() {
-                    let name = i18n::tr(ctx, preset.label_en, preset.label_zh);
-                    if ui.selectable_label(selected_preset == i, name).clicked() {
-                        selected_preset = i;
-                        if !preset.base_url.is_empty() {
-                            settings.base_url = preset.base_url.to_string();
-                            settings.model = preset.model.to_string();
-                        }
-                    }
-                }
-            });
         ui.add_space(theme.spacing_sm());
         ui.label(
             egui::RichText::new(i18n::tr(ctx, "API base URL", "API 地址"))
@@ -591,15 +692,105 @@ impl AiPanel {
                 .desired_width(f32::INFINITY),
         );
         ui.label(
-            egui::RichText::new(i18n::tr(ctx, "Model", "模型"))
+            egui::RichText::new("API Key")
                 .size(theme.font_size_small())
                 .color(label),
         );
+        if self.key_configured_stored && self.settings_key_input.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(i18n::tr(ctx, "Saved encrypted locally", "已加密保存在本机配置"))
+                        .size(theme.font_size_small())
+                        .color(theme.green_color()),
+                );
+                if ui
+                    .small_button(i18n::tr(ctx, "Change Key", "更换 Key"))
+                    .clicked()
+                {
+                    self.key_configured_stored = false;
+                    self.invalidate_models_fetch();
+                }
+            });
+        }
         ui.add(
-            egui::TextEdit::singleline(&mut settings.model)
-                .hint_text("gpt-4o-mini")
+            egui::TextEdit::singleline(&mut self.settings_key_input)
+                .password(true)
+                .hint_text(if self.key_configured_stored {
+                    i18n::tr(ctx, "Enter new key, then Save", "输入新 Key 后点保存")
+                } else {
+                    "sk-..."
+                })
                 .desired_width(f32::INFINITY),
         );
+        ui.add_space(theme.spacing_sm());
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(i18n::tr(ctx, "Model", "模型"))
+                    .size(theme.font_size_small())
+                    .color(label),
+            );
+            if self.models_loading {
+                ui.spinner();
+            }
+            if !self.models_loading
+                && crate::ui::chrome::panel_action_icon_button(
+                    ui,
+                    theme,
+                    IconId::Refresh,
+                    i18n::tr(ctx, "Refresh model list", "刷新模型列表"),
+                )
+                .on_hover_text(i18n::tr(
+                    ctx,
+                    "Fetch models from API",
+                    "从 API 拉取模型列表",
+                ))
+                .clicked()
+            {
+                do_refresh_models = true;
+            }
+        });
+        if !self.models_manual_fallback && !self.available_models.is_empty() {
+            let current = if settings.model.trim().is_empty() {
+                i18n::tr(ctx, "Select a model", "选择模型").to_string()
+            } else {
+                settings.model.clone()
+            };
+            egui::ComboBox::from_id_source("ai_model_select")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                    for id in &self.available_models {
+                        if ui.selectable_label(settings.model == *id, id).clicked() {
+                            settings.model = id.clone();
+                        }
+                    }
+                });
+        } else {
+            ui.add(
+                egui::TextEdit::singleline(&mut settings.model)
+                    .hint_text(i18n::tr(ctx, "Enter model ID", "输入模型 ID"))
+                    .desired_width(f32::INFINITY),
+            );
+            if self.models_manual_fallback {
+                ui.label(
+                    egui::RichText::new(i18n::tr(
+                        ctx,
+                        "Could not load models from API — enter the model ID manually.",
+                        "无法从 API 拉取模型列表，请手动输入模型 ID。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(theme.amber_color()),
+                );
+            }
+        }
+        if let Some(ref s) = self.models_status {
+            ui.label(
+                egui::RichText::new(s)
+                    .size(theme.font_size_small())
+                    .color(theme.color_form_hint()),
+            );
+        }
+        ui.add_space(theme.spacing_sm());
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(i18n::tr(ctx, "Max tokens", "最大 tokens"))
@@ -653,38 +844,7 @@ impl AiPanel {
                 .desired_rows(3)
                 .desired_width(f32::INFINITY),
         );
-        ui.label(
-            egui::RichText::new("API Key")
-                .size(theme.font_size_small())
-                .color(label),
-        );
-        if self.key_configured_stored && self.settings_key_input.is_empty() {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new(i18n::tr(ctx, "Saved encrypted locally", "已加密保存在本机配置"))
-                        .size(theme.font_size_small())
-                        .color(theme.green_color()),
-                );
-                if ui
-                    .small_button(i18n::tr(ctx, "Change Key", "更换 Key"))
-                    .clicked() {
-                    self.key_configured_stored = false;
-                }
-            });
-        }
-        ui.add(
-            egui::TextEdit::singleline(&mut self.settings_key_input)
-                .password(true)
-                .hint_text(if self.key_configured_stored {
-                    i18n::tr(ctx, "Enter new key, then Save", "输入新 Key 后点保存")
-                } else {
-                    "sk-..."
-                })
-                .desired_width(f32::INFINITY),
-        );
         let setup_busy = self.is_background_busy();
-        let mut do_save = false;
-        let mut do_test = false;
         ui.horizontal(|ui| {
             if !setup_busy
                 && crate::ui::chrome::panel_action_primary_button_with_icon_ex(
@@ -710,6 +870,11 @@ impl AiPanel {
                 do_test = true;
             }
         });
+        }
+        if do_refresh_models {
+            self.invalidate_models_fetch();
+        }
+        self.maybe_start_models_fetch(ctx, app_settings);
         if do_save {
             self.start_save_background(ctx, app_settings);
         }
@@ -832,6 +997,11 @@ impl AiPanel {
                 }
                 let mut msg_action = None;
                 for (i, msg) in self.messages.iter().enumerate() {
+                    if self.is_awaiting_assistant_reply()
+                        && i + 1 == self.messages.len()
+                    {
+                        continue;
+                    }
                     let mut picked = None;
                     self.render_message(ui, ctx, theme, msg, i, &mut picked, &mut msg_action);
                     if let Some(cmd) = picked {
@@ -840,6 +1010,16 @@ impl AiPanel {
                     if i + 1 < self.messages.len() {
                         ui.add_space(theme.spacing_xs());
                     }
+                }
+                if self.is_awaiting_assistant_reply() {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(
+                            egui::RichText::new(self.generation_status_text(ctx))
+                                .size(theme.font_size_small())
+                                .color(theme.color_form_hint()),
+                        );
+                    });
                 }
                 if let Some(action) = msg_action {
                     self.handle_message_action(ctx, app_settings, action);
@@ -919,7 +1099,7 @@ impl AiPanel {
                             ui.add_space(theme.spacing_xs());
                         }
                     }
-                    if msg.role == "assistant" {
+                    if msg.role == "assistant" && !msg.content.trim().is_empty() {
                         ui.add_space(theme.spacing_xs());
                         ui.horizontal(|ui| {
                             if crate::ui::chrome::panel_action_button_with_icon_ex(
@@ -1006,6 +1186,7 @@ impl AiPanel {
     ) {
         let can_type = ready && !self.is_background_busy();
         let can_send = self.can_send_now(app_settings);
+        let generating = self.busy || self.streaming;
         let ctrl_enter = ui.input(|i| {
             i.key_pressed(egui::Key::Enter) && (i.modifiers.ctrl || i.modifiers.command)
         });
@@ -1059,25 +1240,41 @@ impl AiPanel {
             ui.add_space(theme.spacing_sm() + 4.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let send_label = i18n::tr(ctx, "Send", "发送");
+                let stop_label = i18n::tr(ctx, "Stop", "停止");
                 let clear_draft_label = i18n::tr(ctx, "Clear input", "清空输入");
                 let clear_chat_label = i18n::tr(ctx, "Clear chat", "清空对话");
-                send_clicked = ui
-                    .add_enabled_ui(can_send, |ui| {
-                        crate::ui::chrome::panel_action_primary_button_with_icon_ex(
-                            ui,
-                            theme,
-                            IconId::Upload,
-                            send_label,
-                            true,
-                        )
-                        .on_hover_text(i18n::tr(
-                            ctx,
-                            "Send (Ctrl + Enter)",
-                            "发送 (Ctrl + Enter)",
-                        ))
-                        .clicked()
-                    })
-                    .inner;
+                if generating {
+                    if crate::ui::chrome::panel_action_button_with_icon_ex(
+                        ui,
+                        theme,
+                        IconId::Cross,
+                        stop_label,
+                        true,
+                    )
+                    .on_hover_text(i18n::tr(ctx, "Stop generation", "停止生成"))
+                    .clicked()
+                    {
+                        self.cancel_generation(ctx);
+                    }
+                } else {
+                    send_clicked = ui
+                        .add_enabled_ui(can_send, |ui| {
+                            crate::ui::chrome::panel_action_primary_button_with_icon_ex(
+                                ui,
+                                theme,
+                                IconId::Upload,
+                                send_label,
+                                true,
+                            )
+                            .on_hover_text(i18n::tr(
+                                ctx,
+                                "Send (Ctrl + Enter)",
+                                "发送 (Ctrl + Enter)",
+                            ))
+                            .clicked()
+                        })
+                        .inner;
+                }
                 ui.add_space(theme.spacing_xs());
                 clear_chat_clicked = ui
                     .add_enabled_ui(can_type, |ui| {
@@ -1163,9 +1360,6 @@ impl AiPanel {
                     self.input_status = Some(msg);
                 }
             }
-        }
-        if let Some(ref e) = self.last_error {
-            ui.colored_label(theme.red_color(), e);
         }
         let _ = app_settings;
     }
@@ -1338,7 +1532,8 @@ impl AiPanel {
         }
     }
 
-    fn poll_pending(&mut self, ctx: &egui::Context, app_settings: &AppSettings) {
+    fn poll_pending(&mut self, ctx: &egui::Context, app_settings: &mut AppSettings) {
+        self.poll_models_fetch(ctx, app_settings);
         let Some(job) = &self.background else {
             return;
         };
@@ -1636,51 +1831,6 @@ fn stored_to_context_ref(c: StoredContextRef) -> TerminalContextRef {
         original_char_count: c.original_char_count,
         source_key: c.source_key,
     }
-}
-
-struct AiModelPreset {
-    label_en: &'static str,
-    label_zh: &'static str,
-    base_url: &'static str,
-    model: &'static str,
-}
-
-const AI_MODEL_PRESETS: &[AiModelPreset] = &[
-    AiModelPreset {
-        label_en: "OpenAI · gpt-4o-mini",
-        label_zh: "OpenAI · gpt-4o-mini",
-        base_url: "https://api.openai.com/v1",
-        model: "gpt-4o-mini",
-    },
-    AiModelPreset {
-        label_en: "OpenAI · gpt-4o",
-        label_zh: "OpenAI · gpt-4o",
-        base_url: "https://api.openai.com/v1",
-        model: "gpt-4o",
-    },
-    AiModelPreset {
-        label_en: "OpenAI · o3-mini",
-        label_zh: "OpenAI · o3-mini",
-        base_url: "https://api.openai.com/v1",
-        model: "o3-mini",
-    },
-    AiModelPreset {
-        label_en: "Custom",
-        label_zh: "自定义",
-        base_url: "",
-        model: "",
-    },
-];
-
-fn ai_model_preset_index(settings: &crate::core::AiSettings) -> usize {
-    AI_MODEL_PRESETS
-        .iter()
-        .position(|p| {
-            !p.base_url.is_empty()
-                && p.base_url == settings.base_url.trim()
-                && p.model == settings.model.trim()
-        })
-        .unwrap_or(AI_MODEL_PRESETS.len() - 1)
 }
 
 fn ui_message_to_stored(m: &UiMessage) -> StoredAiMessage {
