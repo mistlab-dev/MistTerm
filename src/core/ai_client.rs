@@ -86,6 +86,16 @@ struct ApiErrorDetail {
     message: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct ModelsResponse {
+    data: Vec<ModelEntry>,
+}
+
+#[derive(Deserialize)]
+struct ModelEntry {
+    id: String,
+}
+
 /// 发往模型的终端上下文行数上限（超出截断）。
 pub const AI_CONTEXT_MAX_LINES: usize = 400;
 /// 发往模型的终端上下文字符上限（超出截断）。
@@ -379,6 +389,19 @@ chmod +x check_domain.sh
         assert!(super::is_retryable_transport_error("网络错误：connection refused"));
         assert!(!super::is_retryable_transport_error("API 401：unauthorized"));
     }
+
+    #[test]
+    fn parse_models_response_sorts_and_dedups() {
+        let json = r#"{"data":[{"id":"gpt-4o"},{"id":"gpt-4o-mini"},{"id":"gpt-4o"}]}"#;
+        let ids = parse_models_response(json).expect("parse");
+        assert_eq!(ids, vec!["gpt-4o".to_string(), "gpt-4o-mini".to_string()]);
+    }
+
+    #[test]
+    fn parse_models_response_rejects_empty_list() {
+        let json = r#"{"data":[]}"#;
+        assert!(parse_models_response(json).is_err());
+    }
 }
 
 pub fn chat_completions(
@@ -615,6 +638,49 @@ fn parse_api_error(status: u16, text: &str) -> String {
         }
     }
     format!("API {status}：{text}")
+}
+
+pub fn fetch_models(settings: &AiSettings) -> Result<Vec<String>, String> {
+    let api_key = settings
+        .load_api_key()
+        .ok_or_else(|| "请先填写 API Key".to_string())?;
+    fetch_models_with_key(settings, &api_key)
+}
+
+pub fn fetch_models_with_key(settings: &AiSettings, api_key: &str) -> Result<Vec<String>, String> {
+    if api_key.trim().is_empty() {
+        return Err("API Key is empty".to_string());
+    }
+    let client = http_client(settings)?;
+    let resp = send_with_retries(settings, || {
+        client
+            .get(settings.models_url())
+            .header("Authorization", format!("Bearer {api_key}"))
+            .send()
+    })?;
+    let status = resp.status();
+    let text = resp.text().map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(parse_api_error(status.as_u16(), &text));
+    }
+    parse_models_response(&text)
+}
+
+fn parse_models_response(text: &str) -> Result<Vec<String>, String> {
+    let parsed: ModelsResponse =
+        serde_json::from_str(text).map_err(|e| format!("解析响应失败：{e}"))?;
+    let mut ids: Vec<String> = parsed
+        .data
+        .into_iter()
+        .map(|m| m.id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    if ids.is_empty() {
+        return Err("模型列表为空".to_string());
+    }
+    Ok(ids)
 }
 
 pub fn test_connection(settings: &AiSettings) -> Result<(), String> {

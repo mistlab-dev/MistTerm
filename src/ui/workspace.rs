@@ -765,7 +765,7 @@ impl MistTermApp {
             }
         }
         if self.show_ai_panel || self.show_ai_settings_dialog {
-            self.ai_panel.poll_background(ctx, &self.app_settings);
+            self.ai_panel.poll_background(ctx, &mut self.app_settings);
         }
         if paint_right_dock_fg && self.show_ai_panel {
             self.ai_panel.show_foreground_panel(
@@ -969,6 +969,35 @@ impl MistTermApp {
                                     );
                                 });
                             });
+
+                            Self::ui_field_label(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "SSH private key path", "SSH 私钥路径"),
+                            );
+                            Self::ui_form_singleline(
+                                ui,
+                                theme,
+                                "new_session_private_key_path",
+                                &mut self.new_session_private_key_path,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "~/.ssh/id_rsa (empty = password or default keys)",
+                                    "~/.ssh/id_rsa（留空则用密码或系统默认密钥）",
+                                ),
+                                form_w,
+                                false,
+                            );
+                            crate::ui::chrome::form_checkbox(
+                                ui,
+                                theme,
+                                &mut self.new_session_use_ssh_agent,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Use SSH agent (ssh-agent / Pageant)",
+                                    "使用 SSH Agent（ssh-agent / Pageant）",
+                                ),
+                            );
 
                             Self::ui_field_label(
                                 ui,

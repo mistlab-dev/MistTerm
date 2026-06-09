@@ -561,14 +561,14 @@ pub fn centered_window_default_size(ctx: &egui::Context, w_frac: f32, h_frac: f3
     [(sw * w_frac).clamp(380.0, 900.0), (sh * h_frac).clamp(260.0, 800.0)]
 }
 
-/// 新建会话弹窗（精简：名称 / 主机 / 端口 / 用户名 / 密码）。
+/// 新建会话弹窗（名称 / 主机 / 端口 / 用户名 / 密码 / SSH 密钥）。
 #[inline]
 pub fn modal_new_session_size(ctx: &egui::Context) -> egui::Vec2 {
     let r = ctx.screen_rect();
     let sw = r.width().max(360.0);
     egui::vec2(
         (sw * 0.36).clamp(340.0, 480.0),
-        300.0,
+        390.0,
     )
 }
 
