@@ -568,14 +568,6 @@ pub struct MonitorPanel {
 
 **搜索过滤**: `fragment_filter_category` 支持 "常用" / "Docker" / "K8s" / "全部"
 
-### 7.7 Git 同步面板 (`git_sync_panel`)
-
-| 属性 | 值 |
-|------|-----|
-| 开关 | `show_git_sync_panel` |
-| 宽度 | `side_panel_widths(ctx, SidePanelProfile::GitSync)` |
-| 渲染 | `git_sync_panel.show(ui, theme)` |
-
 ---
 
 ## 八、状态栏

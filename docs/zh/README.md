@@ -22,7 +22,7 @@
 | [TECH-STACK.md](../tech/TECH-STACK.md) | 技术选型 |
 | [DEPLOYMENT.md](../tech/DEPLOYMENT.md) | 编译与发布 |
 | [TESTING.md](../tech/TESTING.md) | 测试 |
-| [QA.md](../tech/QA.md) | 冒烟与 UI 验收 |
+| [SERVER-BACKEND.md](../tech/SERVER-BACKEND.md) | 服务端待办与客户端降级 |
 | [TERMINAL-BEHAVIOR.md](../tech/TERMINAL-BEHAVIOR.md) | 终端行为 |
 | [ZMODEM.md](../tech/ZMODEM.md) | ZMODEM |
 | [SECURITY.md](../tech/SECURITY.md) | 安全与加密 |

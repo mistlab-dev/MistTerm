@@ -603,28 +603,20 @@ pub struct ConnectionManager {
 | 密码认证 | ✅ 已实现 | 依赖 SSH 传输层加密 |
 | 密钥认证 | ✅ 已实现 | 指定私钥路径 + `~/.ssh` 默认密钥 |
 | SSH Agent | ✅ 已实现 | ssh-agent / Pageant（会话可开关） |
-| 证书认证 | ⏳ 待实现 | Vault SSH CA 签发短期证书 |
+| 证书认证 | — | **Vault SSH CA 由服务端签发**；桌面端从 Vault KV 读凭证，不实现 CA 签名 |
 
 ### 7.2 数据存储
 
-```
-sessions.json
-    │
-    ▼
-┌─────────────────┐
-│  明文存储       │
-│  (待加密)       │
-└─────────────────┘
-```
+本地敏感 JSON（`sessions.json`、`settings.json`、`fragments.json`、`credentials.json` 等）使用 **`device_key` + AES-256-GCM** 信封加密（格式 `mistterm-aes-v1`）。详见 [SECURITY.md](./SECURITY.md)。
 
-**当前状态**: 密码明文存储  
-**改进计划**: 添加加密存储
+首次启动或升级时，仍为明文 JSON 的旧文件会在加载时自动迁移为加密信封。
 
 ### 7.3 连接安全
 
 - ✅ SSH-2 协议（加密传输）
 - ✅ 服务器主机密钥验证（`known_hosts` 首次信任）
-- ⏳ 证书认证（Vault CA，待实现）
+- ✅ Vault KV 凭证（团队 `vault_credential_path` → 连接前读取密码/私钥）
+- 短期 SSH 证书：由 **Vault SSH CA / 运维** 在服务端签发，非桌面客户端职责
 
 ---
 

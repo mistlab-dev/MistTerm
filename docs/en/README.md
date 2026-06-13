@@ -22,7 +22,7 @@
 | [TECH-STACK.md](../tech/TECH-STACK.md) | Technology stack |
 | [DEPLOYMENT.md](../tech/DEPLOYMENT.md) | Build & release |
 | [TESTING.md](../tech/TESTING.md) | Automated testing |
-| [QA.md](../tech/QA.md) | Manual QA checklist |
+| [SERVER-BACKEND.md](../tech/SERVER-BACKEND.md) | Server backlog & client fallbacks |
 | [TERMINAL-BEHAVIOR.md](../tech/TERMINAL-BEHAVIOR.md) | Terminal behavior |
 | [ZMODEM.md](../tech/ZMODEM.md) | ZMODEM |
 | [SECURITY.md](../tech/SECURITY.md) | Security & encryption |

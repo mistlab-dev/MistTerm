@@ -300,7 +300,7 @@ struct CommandStats {
 |---------|---------|---------|------|
 | 原始历史 | 本地 SQLite | 90 天 | 详细记录 |
 | 统计数据 | 本地 SQLite | 永久 | 聚合数据 |
-| 团队统计 | Git 仓库 | 永久 | 团队共享 |
+| 团队统计 | 团队 API + 本地缓存 | 永久 | `GET …/fragments/analytics` |
 | 效率报告 | 本地 JSON | 1 年 | 周期性报告 |
 
 #### 3.4.3 性能考虑
@@ -372,7 +372,7 @@ struct CommandStats {
 | 本地片段管理 | P0 | 10 人天 | 创建/编辑/删除 |
 | 变量替换 | P0 | 3 人天 | 正则实现 |
 | 快捷键调用 | P0 | 5 人天 | egui 内置 |
-| 团队共享（Git） | P0 | 15 人天 | Git 方案 |
+| 团队共享（HTTPS API） | P0 | 已落地 | `POST …/fragments:sync` 等，见 [TEAM.md](../tech/TEAM.md) |
 | **分析统计** | | | |
 | 基础数据采集 | P0 | 10 人天 | 记录命令历史 |
 | 个人统计 | P0 | 15 人天 | 频率/耗时/错误 |
@@ -423,12 +423,12 @@ struct CommandStats {
 
 ```
 Phase 1 (1.5 个月): 核心功能
-├── 命令片段基础（本地 + Git 共享）
+├── 命令片段基础（本地 + 团队 HTTPS 同步）
 ├── 基础数据采集
 ├── 个人统计仪表盘
 
-Phase 2 (0.5 个月): 增强功能
-├── 团队统计
+Phase 2 (0.5 个月): 增强功能（依赖服务端 § [SERVER-BACKEND.md](../tech/SERVER-BACKEND.md)）
+├── 团队统计（members / usage API）
 ├── 智能推荐
 └── 效率报告
 ```

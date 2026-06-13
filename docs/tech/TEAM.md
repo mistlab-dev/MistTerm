@@ -1,7 +1,8 @@
 ﻿# MistTerm 团队平台
 
 > **维护**：2026-05-30 · 字段与路径以 `src/core/team/client.rs`、`src/core/market/client.rs` 为准  
-> **结构**：§一 产品与需求 · §二 集成参考（`team/sync` 等） · **§三 服务端接口清单** · §四 客户端索引 · 附录 A API 契约
+> **结构**：§一 产品与需求 · §二 集成参考（`team/sync` 等） · **§三 服务端接口清单** · §四 客户端索引 · 附录 A API 契约  
+> **服务端待办与 404 降级**：见 [SERVER-BACKEND.md](./SERVER-BACKEND.md)
 
 | 章节 | 读者 | 内容 |
 |------|------|------|
@@ -34,7 +35,7 @@
 
 ### 1.2 设计原则
 
-- 团队能力通过 **HTTPS API** 提供；**Git / 文件夹同步包** 不作为正式团队方案（仅个人备份）。
+- 团队能力通过 **HTTPS API** 提供；**文件夹导出包**（云端同步 → 导入/导出）不作为正式团队方案，仅作个人备份。
 - 团队能力作为**一体交付**：认证、片段同步、审计上报在同一套契约下联调；**AI 为客户端独立能力**，与团队服务端解耦。
 - 客户端已有 `FragmentManager`、`AuditLogger`，在现有模型上演进，避免推倒重来。
 
@@ -1536,7 +1537,7 @@ GET /v1/teams/{team_id}/audit/events?category=&action=&user_id=&from=&to=&limit=
 
 ### 10. 验收清单（后端自测）
 
-**🔴 P1（待实现）**
+**🔴 P1（待实现）** — 详细契约与客户端降级见 [SERVER-BACKEND.md](./SERVER-BACKEND.md)
 
 1. `POST …/fragments/{id}/usage` → 2xx → `GET …/analytics` 中 `usage_count` 递增  
 2. `GET …/analytics/members?since=7d` → 200 + 多成员 `run_count` 正确  

@@ -6,4 +6,4 @@ cd "$(dirname "$0")/.."
 echo ""
 echo "== release build (Mist) =="
 cargo build --release -q --bin Mist
-echo "OK: 构建与测试通过。完整界面步骤见 docs/tech/QA.md"
+echo "OK: 构建与测试通过。详见 docs/tech/TESTING.md"
