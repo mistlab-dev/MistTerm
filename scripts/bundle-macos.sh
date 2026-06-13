@@ -11,11 +11,17 @@ if [[ -f "$ROOT/scripts/fetch-cjk-font.sh" ]] && [[ ! -f "$ROOT/assets/fonts/Not
   bash "$ROOT/scripts/fetch-cjk-font.sh" || true
 fi
 
-echo "==> cargo build --release --bin $BIN_NAME"
-cargo build --release --bin "$BIN_NAME"
+OUT="${MIST_APP_OUT:-$OUT}"
 
-SRC="$ROOT/target/release/$BIN_NAME"
-[[ -x "$SRC" ]] || { echo "missing $SRC" >&2; exit 1; }
+if [[ -n "${MIST_BINARY:-}" ]]; then
+  SRC="$MIST_BINARY"
+  [[ -x "$SRC" ]] || { echo "missing $SRC" >&2; exit 1; }
+else
+  echo "==> cargo build --release --bin $BIN_NAME"
+  cargo build --release --bin "$BIN_NAME"
+  SRC="$ROOT/target/release/$BIN_NAME"
+  [[ -x "$SRC" ]] || { echo "missing $SRC" >&2; exit 1; }
+fi
 
 rm -rf "$OUT"
 mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources"

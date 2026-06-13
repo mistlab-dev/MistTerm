@@ -78,7 +78,7 @@ impl<'a> MarkdownRenderer<'a> {
             code_format: TextFormat {
                 font_id: FontId::monospace(code_px),
                 color: theme.text_primary(),
-                background: theme.color_subtle_inset_fill(),
+                background: theme.color_markdown_inline_code_bg(),
                 line_height: Some(code_px * 1.4),
                 ..Default::default()
             },

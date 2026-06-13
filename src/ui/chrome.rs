@@ -140,11 +140,11 @@ pub fn panel_header_new_button_with_label(ui: &mut Ui, theme: &Theme, label: &st
         }
         let fill = if theme.uses_modern_palette() {
             if pressed {
-                theme.color_control_secondary_fill_pressed()
+                theme.color_widget_active_fill()
             } else if hovered {
-                theme.color_control_secondary_fill_hover()
+                theme.color_widget_hover_fill()
             } else {
-                theme.color_control_button_fill_idle()
+                Color32::TRANSPARENT
             }
         } else if pressed {
             theme.accent_alpha(64)
@@ -157,7 +157,7 @@ pub fn panel_header_new_button_with_label(ui: &mut Ui, theme: &Theme, label: &st
             if hovered || pressed {
                 theme.text_primary()
             } else {
-                theme.text_secondary()
+                theme.text_secondary().gamma_multiply(0.72)
             }
         } else {
             theme.accent_color()
@@ -221,7 +221,6 @@ pub fn panel_sort_chip(
     let icon_px = theme.size_icon_glyph();
     let gap = 4.0;
     let pad_x = theme.spacing_panel_header_btn_pad_x();
-    let text_color = theme.color_filter_chip_inactive_text();
     let w = panel_sort_chip_width(ui, theme, sort_label);
     let size = egui::vec2(w, chip_h);
     let rounding = theme.radius_category();
@@ -231,19 +230,36 @@ pub fn panel_sort_chip(
     if hovered || pressed {
         ui.ctx().request_repaint();
     }
-    let fill = if pressed {
+    let fill = if theme.uses_modern_palette() {
+        if pressed {
+            theme.color_widget_active_fill()
+        } else if hovered {
+            theme.color_widget_hover_fill()
+        } else {
+            Color32::TRANSPARENT
+        }
+    } else if pressed {
         theme.accent_alpha(38)
     } else if hovered {
         theme.color_filter_chip_active_fill().gamma_multiply(0.45)
     } else {
         theme.color_overlay_fill_subtle()
     };
-    let stroke = if hovered || pressed {
-        egui::Stroke::new(1.0, theme.accent_alpha(51))
-    } else {
+    let stroke = if theme.uses_modern_palette() || !(hovered || pressed) {
         egui::Stroke::NONE
+    } else {
+        egui::Stroke::new(1.0, theme.accent_alpha(51))
     };
     ui.painter().rect(rect, rounding, fill, stroke);
+    let text_color = if theme.uses_modern_palette() {
+        if hovered || pressed {
+            theme.text_primary()
+        } else {
+            theme.text_secondary().gamma_multiply(0.72)
+        }
+    } else {
+        theme.color_filter_chip_inactive_text()
+    };
     paint_icon_caption_row_in_rect(
         ui,
         rect,
@@ -545,7 +561,7 @@ pub fn right_dock_header_divider(ui: &mut Ui, theme: &Theme) {
     ui.painter().hline(
         (rect.min.x - bleed)..=(rect.max.x + bleed),
         rect.center().y,
-        egui::Stroke::new(1.0, theme.accent_color()),
+        egui::Stroke::new(1.0, theme.color_dock_header_divider()),
     );
 }
 
@@ -929,6 +945,19 @@ pub struct TitleBarChromeResult {
     pub dismiss_ssh_import: bool,
 }
 
+/// VS Code 风格 Tab 底栏指示线（2px accent）
+fn paint_vscode_tab_bottom_indicator(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    theme: &Theme,
+) {
+    let bar = egui::Rect::from_min_max(
+        egui::pos2(rect.left(), rect.bottom() - 2.0),
+        rect.right_bottom(),
+    );
+    painter.rect_filled(bar, 0.0, theme.accent_color());
+}
+
 /// 终端区会话 Tab：整块底色（圆点 + 标题 + 关闭），对齐 proto `.tab`。
 pub struct SessionTabChipResult {
     pub response: Response,
@@ -948,26 +977,33 @@ pub fn session_tab_chip(
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let hovered = response.hovered();
     let show_close = show_close || active || hovered;
-    let fill = if active {
+    let modern = theme.uses_modern_palette();
+    let fill = if modern {
+        if hovered && !active {
+            theme.color_widget_hover_fill()
+        } else {
+            Color32::TRANSPARENT
+        }
+    } else if active {
         theme.color_tab_active_fill()
     } else if hovered {
         theme.color_tab_inactive_hover_fill()
     } else {
         theme.color_tab_inactive_fill()
     };
-    let rounding = egui::Rounding::same(theme.radius_category());
-    let stroke = if active {
-        egui::Stroke::new(1.0, theme.color_tab_stroke())
+    let rounding = if modern {
+        egui::Rounding::ZERO
+    } else {
+        egui::Rounding::same(theme.radius_category())
+    };
+    let stroke = if modern || active {
+        egui::Stroke::NONE
     } else {
         egui::Stroke::new(1.0, theme.color_tab_inactive_stroke())
     };
     ui.painter().rect(rect, rounding, fill, stroke);
     if active {
-        let bar = egui::Rect::from_min_max(
-            egui::pos2(rect.left(), rect.bottom() - 2.0),
-            rect.right_bottom(),
-        );
-        ui.painter().rect_filled(bar, 0.0, theme.accent_color());
+        paint_vscode_tab_bottom_indicator(ui.painter(), rect, theme);
     }
     let mut close_clicked = false;
     let inner = rect.shrink2(egui::vec2(
@@ -985,7 +1021,9 @@ pub fn session_tab_chip(
         } else {
             theme.color_tab_offline_dot()
         };
-        let dot_color = env_color.unwrap_or(status_color);
+        let dot_color = env_color
+            .map(|c| c.gamma_multiply(0.78))
+            .unwrap_or(status_color);
         let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(5.0, 5.0), egui::Sense::hover());
         ui.painter()
             .circle_filled(dot_rect.center(), 2.5, dot_color);
@@ -994,6 +1032,8 @@ pub fn session_tab_chip(
                 .size(theme.font_size_tab_label())
                 .color(if active {
                     theme.text_primary()
+                } else if modern {
+                    theme.text_secondary().gamma_multiply(0.72)
                 } else {
                     theme.text_tertiary()
                 }),
@@ -1127,32 +1167,33 @@ fn secondary_control_button_colors(
     pressed: bool,
 ) -> (Color32, Color32, Color32) {
     if !can_activate {
-        (
+        return (
             theme.color_control_secondary_fill_disabled(),
             theme.color_control_disabled_text(),
             theme.color_control_disabled_text(),
-        )
-    } else if pressed {
+        );
+    }
+    if pressed {
         let c = theme.color_control_secondary_active_text();
-        (
+        return (
             theme.color_control_secondary_fill_pressed(),
             c,
             c,
-        )
-    } else if hovered {
+        );
+    }
+    if hovered {
         let c = theme.color_control_secondary_active_text();
-        (
+        return (
             theme.color_control_secondary_fill_hover(),
             c,
             c,
-        )
-    } else {
-        (
-            theme.color_control_secondary_fill_idle(),
-            theme.color_control_secondary_idle_text(),
-            theme.color_control_secondary_idle_icon(),
-        )
+        );
     }
+    (
+        theme.color_control_secondary_fill_idle(),
+        theme.color_control_secondary_idle_text(),
+        theme.color_control_secondary_idle_icon(),
+    )
 }
 
 fn primary_control_button_colors(
@@ -1226,13 +1267,10 @@ fn toolbar_primary_control_button_colors(
         }
         if hovered {
             let c = theme.text_primary();
-            return (theme.color_control_secondary_fill_hover(), c, c);
+            return (theme.color_widget_hover_fill(), c, c);
         }
-        return (
-            theme.color_control_button_fill_idle(),
-            theme.text_primary(),
-            theme.text_secondary(),
-        );
+        let muted = theme.text_secondary().gamma_multiply(0.72);
+        return (Color32::TRANSPARENT, muted, muted);
     }
     primary_control_button_colors(theme, can_activate, hovered, pressed)
 }
@@ -1393,12 +1431,19 @@ fn paint_icon_only_button(
     response
 }
 
-/// 侧栏 / 右 dock 标题行次要工具按钮（浅底 + 描边；宽度按文字测量）。
+/// 侧栏 / 右 dock 标题行次要工具按钮（宽度按文字测量）。
 pub fn panel_toolbar_button_widget<'a>(theme: &'a Theme, text: RichText) -> Button<'a> {
-    Button::new(text)
-        .fill(theme.color_panel_toolbar_btn_fill())
-        .stroke(theme.divider_stroke())
-        .rounding(theme.radius_list_item())
+    if theme.uses_modern_palette() {
+        Button::new(text)
+            .fill(Color32::TRANSPARENT)
+            .stroke(Stroke::NONE)
+            .rounding(theme.radius_list_item())
+    } else {
+        Button::new(text)
+            .fill(theme.color_panel_toolbar_btn_fill())
+            .stroke(theme.divider_stroke())
+            .rounding(theme.radius_list_item())
+    }
 }
 
 fn panel_toolbar_button_size(ui: &Ui, theme: &Theme, label: &str, with_icon: bool) -> egui::Vec2 {
@@ -1421,6 +1466,44 @@ pub fn panel_toolbar_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response
         theme.size_panel_header_btn_min_w(),
         true,
     )
+}
+
+/// 无边框文字链式操作（AI 消息复制/重新生成等；`emphasis` 0~1 控制可见度）。
+pub fn panel_ghost_action_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+    emphasis: f32,
+) -> Response {
+    let emphasis = emphasis.clamp(0.18, 1.0);
+    let color = theme.color_form_hint().gamma_multiply(emphasis);
+    let icon_px = theme.font_size_small();
+    let pad_x = theme.spacing_xs();
+    let galley = ui.painter().layout(
+        label.to_owned(),
+        egui::FontId::proportional(theme.font_size_small()),
+        color,
+        f32::INFINITY,
+    );
+    let size = egui::vec2(
+        pad_x * 2.0 + icon_px + theme.spacing_xs() + galley.size().x,
+        theme.size_control_btn_h().min(22.0),
+    );
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if response.hovered() || emphasis >= 0.99 {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.min.x + pad_x + icon_px * 0.5, rect.center().y),
+        egui::vec2(icon_px, icon_px),
+    );
+    crate::ui::icons::paint_icon(ui, icon_rect, icon, color, icon_px);
+    ui.painter().galley(
+        egui::pos2(icon_rect.max.x + theme.spacing_xs(), rect.center().y - galley.size().y * 0.5),
+        galley,
+    );
+    response.on_hover_text(label)
 }
 
 /// 标题行 / 工具栏纯图标按钮（悬停文案见 `tooltip`）。
@@ -2049,19 +2132,36 @@ pub fn filter_chip_button(
     active: bool,
     min_size: egui::Vec2,
 ) -> Response {
+    let modern = theme.uses_modern_palette();
     let text_color = if active {
         theme.color_filter_chip_active_text()
+    } else if modern {
+        theme.text_secondary().gamma_multiply(0.72)
     } else {
         theme.color_filter_chip_inactive_text()
     };
-    let fill = if active {
+    let rounding = if modern {
+        egui::Rounding::ZERO
+    } else {
+        egui::Rounding::same(theme.radius_category())
+    };
+    let (rect, response) = ui.allocate_exact_size(min_size, Sense::click());
+    let hovered = response.hovered();
+    let fill = if modern {
+        if hovered && !active {
+            theme.color_widget_hover_fill()
+        } else {
+            Color32::TRANSPARENT
+        }
+    } else if active {
         theme.color_filter_chip_active_fill()
     } else {
         theme.color_overlay_fill_subtle()
     };
-    let rounding = theme.radius_category();
-    let (rect, response) = ui.allocate_exact_size(min_size, Sense::click());
     ui.painter().rect(rect, rounding, fill, egui::Stroke::NONE);
+    if active && modern {
+        paint_vscode_tab_bottom_indicator(ui.painter(), rect, theme);
+    }
     paint_caption_in_rect_center(
         ui,
         rect,

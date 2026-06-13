@@ -775,7 +775,7 @@ impl SftpPanel {
                 .rect_filled(row_rect, rounding, theme.list_row_selected_bg());
         } else if response.hovered() {
             ui.painter()
-                .rect_filled(row_rect, rounding, theme.list_row_hover_bg());
+                .rect_filled(row_rect, rounding, theme.color_file_list_row_hover_bg());
         }
         let icon = file_kind_icon(file_kind);
         let icon_px = theme.size_file_list_icon();

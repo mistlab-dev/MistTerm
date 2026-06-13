@@ -249,6 +249,8 @@ impl Theme {
     #[inline]
     pub fn panel_stroke_color(&self) -> Color32 {
         if self.uses_modern_palette() {
+            self.fg_high_alpha(8)
+        } else if self.uses_solid_fg_palette() {
             self.border_divider_color()
         } else {
             self.border_color()
@@ -257,13 +259,59 @@ impl Theme {
 
     #[inline]
     pub fn divider_stroke_color(&self) -> Color32 {
-        self.border_divider_color()
+        if self.uses_modern_palette() {
+            self.fg_high_alpha(10)
+        } else if self.is_light_theme() {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 22)
+        } else {
+            self.border_divider_color()
+        }
+    }
+
+    /// 右 dock 标题行下分隔线（比 accent 满色更淡，避免「格子感」）
+    #[inline]
+    pub fn color_dock_header_divider(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.fg_high_alpha(12)
+        } else {
+            self.accent_alpha(48)
+        }
+    }
+
+    /// AI 用户消息气泡底
+    #[inline]
+    pub fn color_ai_user_bubble_fill(&self) -> Color32 {
+        self.accent_alpha(14)
+    }
+
+    /// Markdown 行内 `code` 高亮底
+    #[inline]
+    pub fn color_markdown_inline_code_bg(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 18)
+        } else {
+            self.fg_high_alpha(15)
+        }
+    }
+
+    /// SFTP / 文件列表行悬停（略强于全局 list hover，便于点选）
+    #[inline]
+    pub fn color_file_list_row_hover_bg(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.fg_high_alpha(16)
+        } else {
+            self.list_row_hover_bg()
+        }
     }
 
     /// 输入框 / 搜索框描边色
     #[inline]
     pub fn stroke_input_color(&self) -> Color32 {
-        self.border_color()
+        if self.uses_modern_palette() {
+            self.divider_stroke_color()
+        } else {
+            self.border_color()
+        }
     }
 
     /// 聚焦环描边色
@@ -633,7 +681,9 @@ impl Theme {
     /// 标题条下分隔线（须强于 `color_tab_inactive_stroke`，暗夜勿用 7% 白边）
     #[inline]
     pub fn color_panel_header_divider(&self) -> Color32 {
-        if self.uses_solid_fg_palette() {
+        if self.uses_modern_palette() {
+            self.fg_high_alpha(12)
+        } else if self.uses_solid_fg_palette() {
             self.divider_stroke_color()
         } else {
             Color32::from_rgb(72, 72, 92)
@@ -657,7 +707,7 @@ impl Theme {
             )
         } else if self.uses_solid_fg_palette() {
             if self.uses_modern_palette() {
-                Color32::from_rgb(45, 45, 45)
+                self.fg_high_alpha(8)
             } else {
                 let w = self.bg_window_color();
                 Color32::from_rgb(
@@ -696,9 +746,9 @@ impl Theme {
     /// 输入框 Frame（圆角、内边距；外框 1px，内层 TextEdit 须 `frame(false)` 避免双边）
     pub fn frame_form_text_input(&self, focused: bool) -> egui::Frame {
         let stroke = if focused {
-            egui::Stroke::new(self.stroke_width_panel(), self.stroke_focus_color())
+            egui::Stroke::new(self.stroke_width_panel().max(1.0), self.accent_color())
         } else if self.uses_modern_palette() {
-            egui::Stroke::NONE
+            egui::Stroke::new(self.stroke_width_panel().max(1.0), self.divider_stroke_color())
         } else {
             egui::Stroke::new(self.stroke_width_panel(), self.color_text_input_stroke())
         };
@@ -895,7 +945,11 @@ impl Theme {
     /// 激活 Tab 底色（与终端区一致，整块标签可见）
     #[inline]
     pub fn color_tab_active_fill(&self) -> Color32 {
-        self.bg_terminal_color()
+        if self.uses_modern_palette() {
+            self.color_tab_inactive_fill()
+        } else {
+            self.bg_terminal_color()
+        }
     }
 
     /// 未激活 Tab 默认底（标签形态，略强于透明）
@@ -959,13 +1013,17 @@ impl Theme {
     /// 面板次要操作按钮（未禁用）文字
     #[inline]
     pub fn color_control_secondary_idle_text(&self) -> Color32 {
-        self.text_secondary()
+        if self.uses_modern_palette() {
+            self.text_secondary().gamma_multiply(0.72)
+        } else {
+            self.text_secondary()
+        }
     }
 
     /// 面板次要操作按钮（未禁用）图标
     #[inline]
     pub fn color_control_secondary_idle_icon(&self) -> Color32 {
-        self.text_secondary()
+        self.color_control_secondary_idle_text()
     }
 
     /// 面板次要按钮悬停/按下时前景
@@ -978,7 +1036,7 @@ impl Theme {
     #[inline]
     pub fn color_control_button_fill_idle(&self) -> Color32 {
         if self.uses_modern_palette() {
-            Color32::from_rgb(55, 55, 55)
+            Color32::TRANSPARENT
         } else {
             self.color_panel_toolbar_btn_fill()
         }
@@ -994,7 +1052,7 @@ impl Theme {
     #[inline]
     pub fn color_control_secondary_fill_hover(&self) -> Color32 {
         if self.uses_modern_palette() {
-            Color32::from_rgb(68, 68, 68)
+            self.color_widget_hover_fill()
         } else {
             self.color_panel_toolbar_btn_fill().gamma_multiply(1.35)
         }
@@ -1004,7 +1062,7 @@ impl Theme {
     #[inline]
     pub fn color_control_secondary_fill_pressed(&self) -> Color32 {
         if self.uses_modern_palette() {
-            Color32::from_rgb(78, 78, 78)
+            self.color_widget_active_fill()
         } else {
             self.accent_alpha(51)
         }
@@ -1014,7 +1072,7 @@ impl Theme {
     #[inline]
     pub fn color_control_secondary_fill_disabled(&self) -> Color32 {
         if self.uses_modern_palette() {
-            Color32::from_rgb(45, 45, 45)
+            Color32::TRANSPARENT
         } else {
             self.color_panel_toolbar_btn_fill()
                 .gamma_multiply(self.color_control_secondary_disabled_fill_gamma())
@@ -1202,7 +1260,7 @@ impl Theme {
     #[inline]
     pub fn size_file_list_row_h(&self) -> f32 {
         if self.uses_modern_palette() {
-            28.0
+            32.0
         } else {
             24.0
         }
@@ -2392,17 +2450,16 @@ impl ThemeManager {
         style.visuals.widgets.noninteractive.bg_fill = theme.color_subtle_inset_fill();
         style.visuals.widgets.noninteractive.bg_stroke = theme.divider_stroke();
         if theme.uses_modern_palette() {
-            let control_fill = theme.color_text_input_fill();
-            let rounding = egui::Rounding::same(theme.radius_search_input());
-            style.visuals.widgets.inactive.bg_fill = control_fill;
-            style.visuals.widgets.inactive.weak_bg_fill = control_fill;
+            let rounding = egui::Rounding::same(theme.radius_list_item());
+            style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+            style.visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
             style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
             style.visuals.widgets.inactive.rounding = rounding;
-            style.visuals.widgets.hovered.bg_fill = theme.color_control_secondary_fill_hover();
-            style.visuals.widgets.hovered.weak_bg_fill = theme.color_control_secondary_fill_hover();
-            style.visuals.widgets.active.bg_fill = theme.color_control_secondary_fill_pressed();
-            style.visuals.widgets.open.bg_fill = control_fill;
-            style.visuals.widgets.open.weak_bg_fill = control_fill;
+            style.visuals.widgets.hovered.bg_fill = theme.color_widget_hover_fill();
+            style.visuals.widgets.hovered.weak_bg_fill = theme.color_widget_hover_fill();
+            style.visuals.widgets.active.bg_fill = theme.color_widget_active_fill();
+            style.visuals.widgets.open.bg_fill = Color32::TRANSPARENT;
+            style.visuals.widgets.open.weak_bg_fill = Color32::TRANSPARENT;
             style.visuals.widgets.open.bg_stroke = egui::Stroke::NONE;
             style.visuals.widgets.open.rounding = rounding;
         } else {
