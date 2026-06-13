@@ -437,7 +437,9 @@ impl Sidebar {
                             } else {
                                 theme.color_tab_offline_dot()
                             };
-                            let dot_color = env_color.unwrap_or(status_color);
+                            let dot_color = env_color
+                                .map(|c| c.gamma_multiply(0.78))
+                                .unwrap_or(status_color);
                             let dot_r = 3.0_f32;
                             let (dot_rect, _) = row_ui.allocate_exact_size(
                                 egui::vec2(dot_r * 2.0, dot_r * 2.0),

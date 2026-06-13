@@ -1038,141 +1038,162 @@ impl AiPanel {
         command_pick: &mut Option<String>,
         msg_action: &mut Option<AiMessageAction>,
     ) {
-        let bubble_fill = if msg.role == "user" {
-            theme.accent_alpha(28)
+        let is_user = msg.role == "user";
+        let bubble_fill = if is_user {
+            theme.color_ai_user_bubble_fill()
         } else {
             theme.color_subtle_inset_fill()
         };
-        let bubble_stroke = if msg.role == "user" {
+        let bubble_stroke = if is_user {
             egui::Stroke::NONE
         } else {
             theme.divider_stroke()
         };
+        let inner_pad = if is_user {
+            egui::vec2(16.0, 12.0)
+        } else {
+            egui::vec2(12.0, 10.0)
+        };
         let rounding = egui::Rounding::same(theme.radius_list_item());
-        let mut render_bubble = |ui: &mut egui::Ui| {
-            egui::Frame::none()
-                .fill(bubble_fill)
-                .stroke(bubble_stroke)
-                .rounding(rounding)
-                .inner_margin(egui::vec2(10.0, 9.0))
-                .show(ui, |ui| {
-                    if msg.role != "user" {
-                        let _ = bind_row_width(ui);
-                    } else {
-                        ui.set_max_width(ui.available_width());
-                    }
-                    let prev_gap_y = ui.spacing().item_spacing.y;
-                    ui.spacing_mut().item_spacing.y = theme.spacing_xs();
-                    if !msg.context_refs.is_empty() {
-                        for (ci, context) in msg.context_refs.iter().enumerate() {
-                            let mut remove = false;
-                            show_terminal_context_chip(
-                                ui,
-                                ctx,
-                                theme,
-                                context,
-                                ui.id().with(("msg_ctx", msg_index, ci)),
-                                ci,
-                                false,
-                                &mut remove,
-                            );
-                        }
-                    }
-                    markdown_view::show_markdown(
+
+        let mut render_bubble_body = |ui: &mut egui::Ui| {
+            if is_user {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                    if crate::ui::chrome::panel_toolbar_icon_button(
                         ui,
                         theme,
-                        &msg.content,
-                        command_pick,
-                        msg.role != "user",
-                    );
-                    if msg.role == "assistant" && !msg.commands.is_empty() {
-                        ui.add_space(theme.spacing_xs());
-                        ui.label(
-                            egui::RichText::new(i18n::tr(ctx, "Runnable commands", "可执行命令"))
-                                .size(theme.font_size_small())
-                                .color(theme.color_form_hint()),
-                        );
-                        for cmd in &msg.commands {
-                            if show_command_card(ui, ctx, theme, cmd) {
-                                *command_pick = Some(cmd.clone());
-                            }
-                            ui.add_space(theme.spacing_xs());
-                        }
-                    }
-                    if msg.role == "assistant" && !msg.content.trim().is_empty() {
-                        ui.add_space(theme.spacing_xs());
-                        ui.horizontal(|ui| {
-                            if crate::ui::chrome::panel_action_button_with_icon_ex(
-                                ui,
-                                theme,
-                                IconId::File,
-                                i18n::tr(ctx, "Copy", "复制"),
-                                true,
-                            )
-                            .clicked()
-                            {
-                                if let Ok(mut clip) = Clipboard::new() {
-                                    let _ = clip.set_text(msg.content.clone());
-                                }
-                            }
-                            if crate::ui::chrome::panel_action_button_with_icon_ex(
-                                ui,
-                                theme,
-                                IconId::Refresh,
-                                i18n::tr(ctx, "Regenerate", "重新生成"),
-                                true,
-                            )
-                            .clicked()
-                            {
-                                *msg_action = Some(AiMessageAction::Regenerate(msg_index));
-                            }
-                        });
-                    } else if msg.role == "user" {
-                        ui.add_space(theme.spacing_xs());
-                        if crate::ui::chrome::panel_action_button_with_icon_ex(
-                            ui,
-                            theme,
-                            IconId::Fragment,
-                            i18n::tr(ctx, "Edit", "编辑"),
-                            true,
-                        )
-                        .clicked()
-                        {
-                            *msg_action = Some(AiMessageAction::Edit(msg_index));
-                        }
-                    }
-                    ui.spacing_mut().item_spacing.y = prev_gap_y;
-                })
-                .response
-                .context_menu(|ui| {
-                    crate::ui::chrome::apply_context_menu_style(ui, theme);
-                    if crate::ui::chrome::popup_menu_button(
-                        ui,
-                        theme,
-                        i18n::tr(ctx, "Copy full message", "复制全文"),
+                        IconId::Fragment,
+                        i18n::tr(ctx, "Edit message", "编辑消息"),
                     )
-                        .clicked() {
-                        let copy_text = message_copy_text(msg);
-                        if let Ok(mut clip) = Clipboard::new() {
-                            let _ = clip.set_text(copy_text);
-                        }
-                        ui.close_menu();
+                    .clicked()
+                    {
+                        *msg_action = Some(AiMessageAction::Edit(msg_index));
                     }
                 });
+                ui.add_space(theme.spacing_xs());
+            } else {
+                let _ = bind_row_width(ui);
+            }
+            let prev_gap_y = ui.spacing().item_spacing.y;
+            ui.spacing_mut().item_spacing.y = theme.spacing_xs();
+            if !msg.context_refs.is_empty() {
+                for (ci, context) in msg.context_refs.iter().enumerate() {
+                    let mut remove = false;
+                    show_terminal_context_chip(
+                        ui,
+                        ctx,
+                        theme,
+                        context,
+                        ui.id().with(("msg_ctx", msg_index, ci)),
+                        ci,
+                        false,
+                        &mut remove,
+                    );
+                }
+            }
+            markdown_view::show_markdown(
+                ui,
+                theme,
+                &msg.content,
+                command_pick,
+                !is_user,
+            );
+            if !is_user && !msg.commands.is_empty() {
+                ui.add_space(theme.spacing_xs());
+                ui.label(
+                    egui::RichText::new(i18n::tr(ctx, "Runnable commands", "可执行命令"))
+                        .size(theme.font_size_small())
+                        .color(theme.color_form_hint()),
+                );
+                for cmd in &msg.commands {
+                    if show_command_card(ui, ctx, theme, cmd) {
+                        *command_pick = Some(cmd.clone());
+                    }
+                    ui.add_space(theme.spacing_xs());
+                }
+            }
+            if !is_user && !msg.content.trim().is_empty() {
+                let hover_id = ui.id().with(("ai_msg_hover", msg_index));
+                let rect = ui.min_rect().union(ui.max_rect());
+                let hovered = ui
+                    .interact(rect, hover_id, egui::Sense::hover())
+                    .hovered();
+                let emphasis = if hovered { 1.0 } else { 0.22 };
+                ui.add_space(theme.spacing_xs());
+                ui.horizontal(|ui| {
+                    if crate::ui::chrome::panel_ghost_action_button(
+                        ui,
+                        theme,
+                        IconId::File,
+                        i18n::tr(ctx, "Copy", "复制"),
+                        emphasis,
+                    )
+                    .clicked()
+                    {
+                        if let Ok(mut clip) = Clipboard::new() {
+                            let _ = clip.set_text(msg.content.clone());
+                        }
+                    }
+                    if crate::ui::chrome::panel_ghost_action_button(
+                        ui,
+                        theme,
+                        IconId::Refresh,
+                        i18n::tr(ctx, "Regenerate", "重新生成"),
+                        emphasis,
+                    )
+                    .clicked()
+                    {
+                        *msg_action = Some(AiMessageAction::Regenerate(msg_index));
+                    }
+                });
+            }
+            ui.spacing_mut().item_spacing.y = prev_gap_y;
         };
-        if msg.role == "user" {
+
+        let context_menu = |ui: &mut egui::Ui| {
+            crate::ui::chrome::apply_context_menu_style(ui, theme);
+            if crate::ui::chrome::popup_menu_button(
+                ui,
+                theme,
+                i18n::tr(ctx, "Copy full message", "复制全文"),
+            )
+            .clicked()
+            {
+                let copy_text = message_copy_text(msg);
+                if let Ok(mut clip) = Clipboard::new() {
+                    let _ = clip.set_text(copy_text);
+                }
+                ui.close_menu();
+            }
+        };
+
+        if is_user {
             ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
                 let max_w = (ui.available_width() * 0.88).max(120.0);
                 ui.set_max_width(max_w);
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
                         ui.set_max_width(max_w);
-                        render_bubble(ui);
+                        egui::Frame::none()
+                            .fill(bubble_fill)
+                            .stroke(bubble_stroke)
+                            .rounding(rounding)
+                            .inner_margin(inner_pad)
+                            .show(ui, |ui| render_bubble_body(ui))
+                            .response
+                            .context_menu(context_menu);
                     });
                 });
             });
         } else {
-            render_bubble(ui);
+            egui::Frame::none()
+                .fill(bubble_fill)
+                .stroke(bubble_stroke)
+                .rounding(rounding)
+                .inner_margin(inner_pad)
+                .show(ui, |ui| render_bubble_body(ui))
+                .response
+                .context_menu(context_menu);
         }
     }
 
@@ -1888,15 +1909,15 @@ fn show_terminal_context_chip(
     let chip_w = pad_x * 2.0 + icon_px + icon_gap + text_w;
     let (rect, response) = ui.allocate_exact_size(egui::vec2(chip_w, chip_h), egui::Sense::click());
     let fill = if response.hovered() {
-        theme.accent_alpha(36)
+        theme.accent_alpha(24)
     } else {
-        theme.accent_alpha(18)
+        theme.accent_alpha(12)
     };
     ui.painter().rect(
         rect,
         theme.radius_category(),
         fill,
-        egui::Stroke::new(1.0, theme.accent_alpha(48)),
+        egui::Stroke::new(1.0, theme.accent_alpha(24)),
     );
     let icon_rect = egui::Rect::from_min_size(
         egui::pos2(rect.min.x + pad_x, rect.center().y - icon_px * 0.5),
