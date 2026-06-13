@@ -20,3 +20,37 @@ pub fn default_ssh_config_path() -> PathBuf {
         .join(".ssh")
         .join("config")
 }
+
+/// SFTP / 表单路径占位示例（随平台与真实家目录变化）。
+pub fn home_dir_display_hint() -> String {
+    if let Some(h) = home_dir() {
+        return h.to_string_lossy().into_owned();
+    }
+    #[cfg(windows)]
+    {
+        return r"C:\Users\me".to_string();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return "/Users/me".to_string();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        return "/home/me".to_string();
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        "~/".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::home_dir_display_hint;
+
+    #[test]
+    fn home_dir_display_hint_non_empty() {
+        let hint = home_dir_display_hint();
+        assert!(!hint.is_empty());
+    }
+}

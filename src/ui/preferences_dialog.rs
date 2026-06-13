@@ -861,7 +861,7 @@ impl MistTermApp {
                 {
                     *should_close = true;
                     if Self::right_dock_open_allowed(Self::layout_window_width(ctx)) {
-                        self.cloud_sync_panel.open = true;
+                        self.open_right_dock_panel(ActiveRightDock::CloudSync);
                     } else {
                         let w = Self::layout_window_width(ctx);
                         self.status_message = Self::narrow_window_right_dock_hint(ctx, w);

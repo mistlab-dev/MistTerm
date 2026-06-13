@@ -96,7 +96,7 @@ pub use audit::{
 pub use ai_settings::AiSettings;
 pub use ai_client::{
     chat_completions, chat_completions_with_key, extract_shell_commands, fetch_models,
-    fetch_models_with_key, prepare_terminal_context, redact_for_ai, resolve_system_prompt,
+    fetch_models_with_key, is_runnable_shell_command, prepare_terminal_context, redact_for_ai, resolve_system_prompt,
     run_chat_with_key, test_connection, test_connection_with_key, ChatEvent, ChatMessage,
     PreparedTerminalContext, AI_CONTEXT_MAX_CHARS, AI_CONTEXT_MAX_LINES, DEFAULT_SYSTEM_PROMPT,
 };

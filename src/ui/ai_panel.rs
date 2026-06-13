@@ -8,14 +8,14 @@ use std::sync::Arc;
 use std::thread;
 
 use crate::core::{
-    delete_chat, extract_shell_commands, load_chat, prepare_terminal_context, save_chat,
+    delete_chat, extract_shell_commands, is_runnable_shell_command, load_chat,
+    prepare_terminal_context, save_chat,
     AppSettings, ChatEvent, ChatMessage, PreparedTerminalContext, StoredAiMessage,
     StoredContextRef, TerminalSessionMeta, run_chat_with_key,
 };
 use crate::i18n::{self};
 use crate::ui::icons::IconId;
 use crate::ui::layout_util;
-use crate::ui::markdown_view;
 use crate::ui::theme::Theme;
 
 #[derive(Clone)]
@@ -47,6 +47,7 @@ impl TerminalContextRef {
         match key {
             "monitor" => i18n::tr(ctx, "Monitor snapshot", "监控快照").to_string(),
             "session_log" => i18n::tr(ctx, "Session log", "会话日志").to_string(),
+            "terminal_tail" => i18n::tr(ctx, "Terminal output", "终端输出").to_string(),
             other => other.to_string(),
         }
     }
@@ -76,32 +77,6 @@ impl TerminalContextRef {
             ));
         }
         label
-    }
-
-    fn hover_detail(&self, ctx: &egui::Context, index: usize) -> String {
-        let mut detail = format!(
-            "{}\n{} · {}\n{}",
-            self.chip_label(ctx, index),
-            self.char_count,
-            i18n::tr(ctx, "characters", "字符"),
-            i18n::tr(
-                ctx,
-                "Click to view full text",
-                "点击查看完整内容",
-            ),
-        );
-        if self.truncated {
-            detail.push('\n');
-            detail.push_str(&format!(
-                "{}: {} {} · {} {}",
-                i18n::tr(ctx, "Original selection", "原始选区"),
-                self.original_line_count,
-                i18n::tr(ctx, "lines", "行"),
-                self.original_char_count,
-                i18n::tr(ctx, "characters", "字符"),
-            ));
-        }
-        detail
     }
 }
 
@@ -144,6 +119,10 @@ pub struct AiPanel {
     test_status: Option<String>,
     /// 输入区旁即时提示（空内容、未启用、请求中等）
     input_status: Option<String>,
+    /// AI 多行输入框是否持有键盘焦点；用于避免右 dock 打开时误拦 PTY 输入。
+    draft_input_focused: bool,
+    /// 输入栏「附带终端」按钮：由 App 读取并注入最近终端输出。
+    attach_terminal_tail_requested: bool,
     last_panel_slot_rect: Option<egui::Rect>,
     /// 清空对话二次确认（防误触）。
     confirm_clear_chat: bool,
@@ -182,6 +161,8 @@ impl AiPanel {
             key_configured_stored: false,
             test_status: None,
             input_status: None,
+            draft_input_focused: false,
+            attach_terminal_tail_requested: false,
             last_panel_slot_rect: None,
             confirm_clear_chat: false,
             available_models: Vec::new(),
@@ -218,6 +199,11 @@ impl AiPanel {
     /// 附带选区后聚焦输入框（便于直接输入问题）。
     pub fn focus_draft_input(&self, ctx: &egui::Context) {
         ctx.memory_mut(|m| m.request_focus(egui::Id::new("mistterm_ai_draft")));
+    }
+
+    /// 只有 AI 输入框真正聚焦时才阻止终端接收键盘；普通查看 AI 回复不应抢 PTY。
+    pub fn is_draft_input_focused(&self) -> bool {
+        self.draft_input_focused
     }
 
     pub fn attach_session_meta(&mut self, meta: TerminalSessionMeta) {
@@ -261,6 +247,11 @@ impl AiPanel {
 
     pub fn take_command_for_terminal(&mut self) -> Option<String> {
         self.command_for_terminal.take()
+    }
+
+    /// 输入栏请求附带当前终端最近输出（由 App 每帧消费）。
+    pub fn take_attach_terminal_tail_request(&mut self) -> bool {
+        std::mem::replace(&mut self.attach_terminal_tail_requested, false)
     }
 
     fn load_persisted_chat(&mut self) {
@@ -493,37 +484,22 @@ impl AiPanel {
                 ui.add_space(theme.spacing_xs());
             }
         }
-        let row_w = bind_row_width(ui);
-        // 以当前光标起点作为正文起始，避免把提示文案错误地覆盖到标题栏区域。
-        let flex_top = ui.cursor().min.y;
-        let flex_h = ui.available_height().max(1.0);
-        let flex_left = ui.min_rect().min.x;
-        let flex_rect = egui::Rect::from_min_max(
-            egui::pos2(flex_left, flex_top),
-            egui::pos2(flex_left + row_w, flex_top + flex_h),
-        );
-        let gap = theme.spacing_xs();
-        let bottom_pad = 0.0;
-        let input_h = ai_input_block_height(theme, self.attached_contexts.len());
-        let input_top = (flex_rect.max.y - input_h - bottom_pad).max(flex_rect.min.y);
-        let input_rect = egui::Rect::from_min_max(
-            egui::pos2(flex_rect.min.x, input_top),
-            egui::pos2(flex_rect.max.x, flex_rect.max.y - bottom_pad),
-        );
-        let chat_rect = egui::Rect::from_min_max(
-            flex_rect.min,
-            egui::pos2(flex_rect.max.x, (input_rect.min.y - gap).max(flex_rect.min.y)),
-        );
-        let chat_h = chat_rect.height().max(64.0);
-        if chat_rect.height() > 1.0 {
-            ui.allocate_ui_at_rect(chat_rect, |ui| {
-                bind_row_width(ui);
-                self.show_conversation(ui, ctx, theme, chat_h, app_settings);
-            });
-        }
-        ui.allocate_ui_at_rect(input_rect, |ui| {
+        bind_row_width(ui);
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
             bind_row_width(ui);
             self.show_input_bar(ui, ctx, theme, app_settings, ready);
+            ui.add_space(theme.spacing_xs());
+            let scroll_h = ui.available_height().max(64.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(ui.available_width(), scroll_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    bind_row_width(ui);
+                    ui.set_min_height(scroll_h);
+                    ui.set_max_height(scroll_h);
+                    self.show_conversation(ui, ctx, theme, app_settings);
+                },
+            );
         });
     }
 
@@ -963,9 +939,9 @@ impl AiPanel {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         theme: &Theme,
-        scroll_h: f32,
         app_settings: &AppSettings,
     ) {
+        let scroll_h = ui.available_height().max(64.0);
         egui::ScrollArea::vertical()
             .id_source("mistterm_ai_chat_scroll")
             .max_height(scroll_h)
@@ -974,6 +950,7 @@ impl AiPanel {
             .drag_to_scroll(false)
             .show(ui, |ui| {
                 bind_row_width(ui);
+                ui.add_space(theme.spacing_xs());
                 if self.messages.is_empty() && !self.busy {
                     ui.label(
                         egui::RichText::new(i18n::tr(
@@ -1012,14 +989,7 @@ impl AiPanel {
                     }
                 }
                 if self.is_awaiting_assistant_reply() {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(
-                            egui::RichText::new(self.generation_status_text(ctx))
-                                .size(theme.font_size_small())
-                                .color(theme.color_form_hint()),
-                        );
-                    });
+                    self.render_generation_placeholder(ui, theme);
                 }
                 if let Some(action) = msg_action {
                     self.handle_message_action(ctx, app_settings, action);
@@ -1045,7 +1015,10 @@ impl AiPanel {
             theme.color_subtle_inset_fill()
         };
         let bubble_stroke = if is_user {
-            egui::Stroke::NONE
+            egui::Stroke::new(
+                theme.hairline_width(ui.ctx()),
+                theme.color_ai_user_bubble_stroke(),
+            )
         } else {
             theme.divider_stroke()
         };
@@ -1056,24 +1029,7 @@ impl AiPanel {
         };
         let rounding = egui::Rounding::same(theme.radius_list_item());
 
-        let mut render_bubble_body = |ui: &mut egui::Ui| {
-            if is_user {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                    if crate::ui::chrome::panel_toolbar_icon_button(
-                        ui,
-                        theme,
-                        IconId::Fragment,
-                        i18n::tr(ctx, "Edit message", "编辑消息"),
-                    )
-                    .clicked()
-                    {
-                        *msg_action = Some(AiMessageAction::Edit(msg_index));
-                    }
-                });
-                ui.add_space(theme.spacing_xs());
-            } else {
-                let _ = bind_row_width(ui);
-            }
+        let mut render_bubble_body = |ui: &mut egui::Ui, body_w: f32| {
             let prev_gap_y = ui.spacing().item_spacing.y;
             ui.spacing_mut().item_spacing.y = theme.spacing_xs();
             if !msg.context_refs.is_empty() {
@@ -1089,25 +1045,31 @@ impl AiPanel {
                         false,
                         &mut remove,
                     );
+                    ui.add_space(theme.spacing_xs());
                 }
             }
-            markdown_view::show_markdown(
-                ui,
-                theme,
-                &msg.content,
-                command_pick,
-                !is_user,
-            );
-            if !is_user && !msg.commands.is_empty() {
+            if is_user {
+                if !msg.content.trim().is_empty() {
+                    show_wrapped_user_text(ui, theme, &msg.content, body_w);
+                }
+            } else {
+                show_assistant_text(ui, theme, &msg.content, body_w);
+            }
+            let runnable_commands: Vec<&String> = msg
+                .commands
+                .iter()
+                .filter(|cmd| is_runnable_shell_command(cmd))
+                .collect();
+            if !is_user && !runnable_commands.is_empty() {
                 ui.add_space(theme.spacing_xs());
                 ui.label(
                     egui::RichText::new(i18n::tr(ctx, "Runnable commands", "可执行命令"))
                         .size(theme.font_size_small())
                         .color(theme.color_form_hint()),
                 );
-                for cmd in &msg.commands {
+                for cmd in runnable_commands {
                     if show_command_card(ui, ctx, theme, cmd) {
-                        *command_pick = Some(cmd.clone());
+                        *command_pick = Some(cmd.to_string());
                     }
                     ui.add_space(theme.spacing_xs());
                 }
@@ -1118,7 +1080,7 @@ impl AiPanel {
                 let hovered = ui
                     .interact(rect, hover_id, egui::Sense::hover())
                     .hovered();
-                let emphasis = if hovered { 1.0 } else { 0.22 };
+                let emphasis = if hovered { 1.0 } else { 0.46 };
                 ui.add_space(theme.spacing_xs());
                 ui.horizontal(|ui| {
                     if crate::ui::chrome::panel_ghost_action_button(
@@ -1168,33 +1130,85 @@ impl AiPanel {
         };
 
         if is_user {
-            ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
-                let max_w = (ui.available_width() * 0.88).max(120.0);
-                ui.set_max_width(max_w);
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
-                        ui.set_max_width(max_w);
-                        egui::Frame::none()
-                            .fill(bubble_fill)
-                            .stroke(bubble_stroke)
-                            .rounding(rounding)
-                            .inner_margin(inner_pad)
-                            .show(ui, |ui| render_bubble_body(ui))
-                            .response
-                            .context_menu(context_menu);
-                    });
-                });
+            let row_w = ai_content_width(ui);
+            let safe_pad = ai_message_side_padding(theme);
+            let max_row_w = (row_w - safe_pad * 2.0).max(96.0);
+            let bubble_w = max_row_w.max(160.0).min(max_row_w);
+            let left_gap = (row_w - bubble_w - safe_pad).max(safe_pad);
+
+            ui.horizontal(|ui| {
+                if left_gap > 0.0 {
+                    ui.add_space(left_gap);
+                }
+                egui::Frame::none()
+                    .fill(bubble_fill)
+                    .stroke(bubble_stroke)
+                    .rounding(rounding)
+                    .inner_margin(inner_pad)
+                    .show(ui, |ui| {
+                        let inner_w = (bubble_w - inner_pad.x * 2.0).max(24.0);
+                        ui.set_min_width(inner_w);
+                        ui.set_width(inner_w);
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                            ui.set_min_width(inner_w);
+                            ui.set_width(inner_w);
+                            render_bubble_body(ui, inner_w);
+                        });
+                    })
+                    .response
+                    .context_menu(context_menu);
             });
         } else {
-            egui::Frame::none()
-                .fill(bubble_fill)
-                .stroke(bubble_stroke)
-                .rounding(rounding)
-                .inner_margin(inner_pad)
-                .show(ui, |ui| render_bubble_body(ui))
-                .response
-                .context_menu(context_menu);
+            let row_w = ai_content_width(ui);
+            let safe_pad = ai_message_side_padding(theme);
+            let bubble_w = (row_w - safe_pad * 2.0).max(96.0);
+            ui.horizontal(|ui| {
+                ui.add_space(safe_pad);
+                egui::Frame::none()
+                    .fill(bubble_fill)
+                    .stroke(bubble_stroke)
+                    .rounding(rounding)
+                    .inner_margin(inner_pad)
+                    .show(ui, |ui| {
+                        let inner_w = (bubble_w - inner_pad.x * 2.0).max(24.0);
+                        ui.set_min_width(inner_w);
+                        ui.set_width(inner_w);
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                            ui.set_min_width(inner_w);
+                            ui.set_width(inner_w);
+                            render_bubble_body(ui, inner_w);
+                        });
+                    })
+                    .response
+                    .context_menu(context_menu);
+                ui.add_space(safe_pad);
+            });
         }
+    }
+
+    fn render_generation_placeholder(&self, ui: &mut egui::Ui, theme: &Theme) {
+        let row_w = ui.available_width().max(120.0);
+        let safe_pad = ai_message_side_padding(theme);
+        let bubble_w = (row_w - safe_pad * 2.0).max(96.0);
+        ui.horizontal(|ui| {
+            ui.add_space(safe_pad);
+            egui::Frame::none()
+                .fill(theme.color_subtle_inset_fill())
+                .stroke(theme.divider_stroke())
+                .rounding(theme.radius_list_item())
+                .inner_margin(egui::vec2(12.0, 10.0))
+                .show(ui, |ui| {
+                    ui.set_width((bubble_w - 24.0).max(48.0));
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(
+                            egui::RichText::new(self.generation_status_text(ui.ctx()))
+                                .size(theme.font_size_small())
+                                .color(theme.text_secondary()),
+                        );
+                    });
+                });
+        });
     }
 
     fn show_input_bar(
@@ -1214,9 +1228,11 @@ impl AiPanel {
         let _row_w = bind_row_width(ui);
         let draft_id = egui::Id::new("mistterm_ai_draft");
         let focused = ui.memory(|m| m.has_focus(draft_id));
+        self.draft_input_focused = focused;
         let mut send_clicked = false;
         let mut clear_draft_clicked = false;
         let mut clear_chat_clicked = false;
+        let mut attach_terminal_clicked = false;
         theme.frame_form_text_input(focused).show(ui, |ui| {
             let inner_w =
                 (ui.available_width() - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0);
@@ -1247,7 +1263,7 @@ impl AiPanel {
                         i18n::tr(
                             ctx,
                             "Ask a question or send attached selection (Ctrl + Enter)",
-                            "输入问题，或直接发送附带选区（Ctrl + Enter）",
+                            "输入问题，或附带终端输出（Ctrl + Enter）",
                         ),
                         theme.font_size_control_input(),
                     ))
@@ -1259,7 +1275,28 @@ impl AiPanel {
             ui.style_mut().visuals.override_text_color = prev_override;
             // 把按钮行往下推一截：原 spacing_xs(2px) 让发送/清空贴在多行输入下沿，按起来逼仄。
             ui.add_space(theme.spacing_sm() + 4.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled_ui(can_type, |ui| {
+                        crate::ui::chrome::panel_action_button_with_icon_ex(
+                            ui,
+                            theme,
+                            IconId::TerminalPrompt,
+                            i18n::tr(ctx, "Attach terminal", "附带终端"),
+                            true,
+                        )
+                        .on_hover_text(i18n::tr(
+                            ctx,
+                            "Attach the last 50 lines from the active terminal (no copy needed)",
+                            "附带当前活动终端最近 50 行（无需手动复制）",
+                        ))
+                        .clicked()
+                    })
+                    .inner
+                {
+                    attach_terminal_clicked = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let send_label = i18n::tr(ctx, "Send", "发送");
                 let stop_label = i18n::tr(ctx, "Stop", "停止");
                 let clear_draft_label = i18n::tr(ctx, "Clear input", "清空输入");
@@ -1332,8 +1369,12 @@ impl AiPanel {
                         .clicked()
                     })
                     .inner;
+                });
             });
         });
+        if attach_terminal_clicked {
+            self.attach_terminal_tail_requested = true;
+        }
         if clear_draft_clicked {
             self.draft_input.clear();
             self.attached_contexts.clear();
@@ -1394,6 +1435,11 @@ impl AiPanel {
     ) {
         let mut remove_idx = None;
         ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(i18n::tr(ctx, "Attached:", "已附带："))
+                    .size(theme.font_size_small())
+                    .color(theme.text_secondary()),
+            );
             for (i, context) in self.attached_contexts.iter().enumerate() {
                 let mut remove = false;
                 show_terminal_context_chip(
@@ -1537,19 +1583,6 @@ impl AiPanel {
                     self.start_chat_request(ctx, app_settings);
                 }
             }
-            AiMessageAction::Edit(idx) => {
-                if self.busy || self.is_background_busy() {
-                    return;
-                }
-                if idx >= self.messages.len() || self.messages[idx].role != "user" {
-                    return;
-                }
-                let msg = self.messages[idx].clone();
-                self.draft_input = msg.content;
-                self.attached_contexts = msg.context_refs;
-                self.messages.truncate(idx);
-                self.chat_dirty = true;
-            }
         }
     }
 
@@ -1686,7 +1719,6 @@ impl AiPanel {
 
 enum AiMessageAction {
     Regenerate(usize),
-    Edit(usize),
 }
 
 enum SendOutcome {
@@ -1695,16 +1727,296 @@ enum SendOutcome {
     NotReady(String),
 }
 
-/// 底部输入区占用高度（多行框 + 按钮行 + 可选引用芯片行）。
-fn ai_input_block_height(theme: &Theme, attached_count: usize) -> f32 {
-    let line = theme.font_size_control_input() * 1.45;
-    let field = line * 2.0 + theme.spacing_search_input_y() * 2.0 + 12.0;
-    let toolbar = theme.size_control_btn_h() + (theme.spacing_sm() + 4.0) + 2.0;
-    let mut h = field + toolbar + theme.spacing_xs() + 6.0;
-    if attached_count > 0 {
-        h += theme.size_panel_filter_chip_h() + theme.spacing_xs();
+fn ai_message_side_padding(theme: &Theme) -> f32 {
+    theme.spacing_md().max(12.0)
+}
+
+fn ai_content_width(ui: &egui::Ui) -> f32 {
+    let w = ui.available_width().max(120.0);
+    let bar = ui.spacing().scroll_bar_width;
+    (w - bar - 4.0).max(96.0)
+}
+
+fn show_wrapped_user_text(ui: &mut egui::Ui, theme: &Theme, text: &str, width: f32) {
+    let width = width.max(24.0);
+    let font_size = theme.font_size_body();
+    let text = user_text_with_soft_breaks(text, width, font_size);
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = width;
+    job.append(
+        &text,
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(font_size),
+            color: theme.text_primary(),
+            ..Default::default()
+        },
+    );
+    let galley = ui.ctx().fonts(|f| f.layout_job(job));
+    let size = egui::vec2(width, galley.size().y.max(font_size * 1.45));
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    ui.painter().galley(rect.min, galley);
+}
+
+fn show_assistant_text(ui: &mut egui::Ui, theme: &Theme, text: &str, width: f32) {
+    let width = width.max(24.0);
+    let font_size = theme.font_size_body();
+    let gap = theme.spacing_xs();
+    let paragraph_gap = theme.spacing_sm().max(6.0);
+    ui.set_max_width(width);
+
+    let mut in_code = false;
+    for raw in text.lines() {
+        let trimmed = raw.trim();
+        if trimmed.starts_with("```") {
+            in_code = !in_code;
+            continue;
+        }
+        if trimmed.is_empty() {
+            ui.add_space(paragraph_gap);
+            continue;
+        }
+        if in_code {
+            continue;
+        }
+
+        let (line, strong, mono) = assistant_display_line(trimmed, in_code);
+        if is_assistant_section_heading(&line) {
+            ui.add_space(paragraph_gap);
+            continue;
+        }
+        if is_command_like_line(&line) {
+            // 命令已在下方“可执行命令”区域统一展示，正文里跳过，避免重复卡片。
+            ui.add_space(paragraph_gap);
+            continue;
+        }
+        let font = if mono {
+            egui::FontId::monospace(theme.font_size_small())
+        } else {
+            egui::FontId::proportional(font_size)
+        };
+        let color = theme.text_primary();
+        let wrap_font_size = if mono { theme.font_size_small() } else { font_size };
+        for wrapped in wrap_text_for_units(&line, width, wrap_font_size) {
+            let mut line_font = font.clone();
+            if strong {
+                line_font.size += 0.5;
+            }
+            paint_ai_text_line(ui, &wrapped, line_font, color, width);
+            ui.add_space(gap);
+        }
     }
-    h
+}
+
+fn break_shell_command_for_wrap(text: &str, width: f32, font_size: f32) -> String {
+    let cols = (width / (font_size * 0.62)).floor() as usize;
+    let cols = cols.clamp(6, 64);
+    let mut out = String::with_capacity(text.len() + text.len() / cols.max(1));
+    for (li, line) in text.lines().enumerate() {
+        if li > 0 {
+            out.push('\n');
+        }
+        let mut run = 0usize;
+        for ch in line.chars() {
+            out.push(ch);
+            if ch.is_whitespace() || ch == '|' || ch == ';' || ch == '&' {
+                run = 0;
+                continue;
+            }
+            run += 1;
+            if run >= cols {
+                out.push('\u{200b}');
+                run = 0;
+            }
+        }
+    }
+    out
+}
+
+fn paint_ai_text_line(
+    ui: &mut egui::Ui,
+    text: &str,
+    font: egui::FontId,
+    color: egui::Color32,
+    width: f32,
+) {
+    let width = width.max(24.0);
+    let display = if font.family == egui::FontFamily::Monospace {
+        break_shell_command_for_wrap(text, width, font.size)
+    } else {
+        text.to_string()
+    };
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = width;
+    job.append(
+        &display,
+        0.0,
+        egui::TextFormat {
+            font_id: font,
+            color,
+            ..Default::default()
+        },
+    );
+    let galley = ui.ctx().fonts(|f| f.layout_job(job));
+    let height = galley
+        .size()
+        .y
+        .max(ui.text_style_height(&egui::TextStyle::Body));
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    ui.painter()
+        .with_clip_rect(rect)
+        .galley(rect.min, galley);
+}
+
+fn assistant_display_line(line: &str, in_code: bool) -> (String, bool, bool) {
+    if in_code {
+        return (line.to_string(), false, true);
+    }
+    let mut s = line.trim().to_string();
+    let mut strong = false;
+    if let Some(rest) = s.strip_prefix("* ") {
+        s = format!("• {}", rest.trim());
+    } else if let Some(rest) = s.strip_prefix("- ") {
+        s = format!("• {}", rest.trim());
+    }
+    for prefix in ["### ", "## ", "# "] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            s = rest.trim().to_string();
+            strong = true;
+            break;
+        }
+    }
+    s = s
+        .replace("**", "")
+        .replace("__", "")
+        .replace('`', "");
+    (s, strong, false)
+}
+
+fn wrap_text_for_units(line: &str, width: f32, font_size: f32) -> Vec<String> {
+    let max_units = (width / (font_size * 0.58)).floor().max(8.0);
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut units = 0.0f32;
+
+    for token in split_wrap_tokens(line) {
+        let token_units = text_units(&token);
+        if units + token_units > max_units && !cur.trim().is_empty() {
+            out.push(cur.trim_end().to_string());
+            cur.clear();
+            units = 0.0;
+        }
+        if token_units > max_units && !is_protected_token(token.trim()) {
+            for ch in token.chars() {
+                let u = char_units(ch);
+                if units + u > max_units && !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                    units = 0.0;
+                }
+                cur.push(ch);
+                units += u;
+            }
+        } else {
+            cur.push_str(&token);
+            units += token_units;
+        }
+    }
+    let cur = cur.trim_end();
+    if !cur.is_empty() {
+        out.push(cur.to_string());
+    }
+    out
+}
+
+fn split_wrap_tokens(line: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    for ch in line.chars() {
+        cur.push(ch);
+        if ch.is_whitespace()
+            || matches!(ch, ',' | '，' | '。' | ':' | '：' | ';' | '；' | '/' | '|' | ')')
+        {
+            tokens.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    tokens
+}
+
+fn text_units(text: &str) -> f32 {
+    text.chars().map(char_units).sum()
+}
+
+fn char_units(ch: char) -> f32 {
+    if ch.is_ascii() { 0.56 } else { 1.0 }
+}
+
+fn is_protected_token(token: &str) -> bool {
+    if token.is_empty() {
+        return false;
+    }
+    let has_digit = token.chars().any(|c| c.is_ascii_digit());
+    let dot_count = token.chars().filter(|&c| c == '.').count();
+    if has_digit && dot_count >= 2 {
+        return true;
+    }
+    token.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+}
+
+fn is_assistant_section_heading(line: &str) -> bool {
+    let s = line
+        .trim()
+        .trim_end_matches([':', '：'])
+        .trim();
+    matches!(
+        s,
+        "结论"
+            | "关键点"
+            | "风险"
+            | "下一步"
+            | "建议命令"
+            | "可执行命令"
+            | "Conclusion"
+            | "Key points"
+            | "Risks"
+            | "Next steps"
+            | "Suggested commands"
+            | "Runnable commands"
+    )
+}
+
+fn is_command_like_line(line: &str) -> bool {
+    let s = line.trim();
+    if s.starts_with('•') {
+        return false;
+    }
+    let has_pipe = s.contains('|');
+    let has_shell_tool = [" awk ", " sort ", " head ", " cut ", " ls ", " find ", " du "]
+        .iter()
+        .any(|needle| format!(" {s} ").contains(needle));
+    has_pipe || has_shell_tool
+}
+
+fn user_text_with_soft_breaks(text: &str, width: f32, font_size: f32) -> String {
+    let cols = (width / (font_size * 0.95)).floor() as usize;
+    let cols = cols.clamp(8, 48);
+    let mut out = String::with_capacity(text.len() + text.len() / cols.max(1));
+    let mut run = 0usize;
+    for ch in text.chars() {
+        out.push(ch);
+        if ch.is_whitespace() || ch == '-' || ch == '_' || ch == '/' || ch == '.' {
+            run = 0;
+            continue;
+        }
+        run += 1;
+        if run >= cols {
+            out.push('\u{200b}');
+            run = 0;
+        }
+    }
+    out
 }
 
 /// 子 Ui 占满**当前**可用行宽（勿把外层宽度传入 Frame/ScrollArea 内层，否则会左裁切）。
@@ -1721,57 +2033,62 @@ fn show_command_card(
     cmd: &str,
 ) -> bool {
     let mut clicked = false;
-    let preview = compact_command_preview(cmd);
+    if !is_runnable_shell_command(cmd) {
+        return false;
+    }
+    let display = cmd
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    if display.is_empty() {
+        return false;
+    }
     egui::Frame::none()
-        .fill(theme.color_text_input_fill())
-        .stroke(theme.stroke_input())
+        .fill(theme.color_markdown_code_block_fill())
+        .stroke(egui::Stroke::new(
+            theme.hairline_width(ui.ctx()),
+            theme.accent_alpha(90),
+        ))
         .rounding(theme.radius_list_item())
-        .inner_margin(egui::vec2(8.0, 5.0))
+        .inner_margin(egui::vec2(10.0, 8.0))
         .show(ui, |ui| {
-            let row_w = layout_util::set_width_to_available(ui);
+            let row_w = ui.available_width().max(48.0);
+            ui.set_max_width(row_w);
+            ui.set_width(row_w);
+            let wrapped = break_shell_command_for_wrap(
+                &display,
+                row_w,
+                theme.font_size_small(),
+            );
+            paint_ai_text_line(
+                ui,
+                &wrapped,
+                egui::FontId::monospace(theme.font_size_small()),
+                theme.text_primary(),
+                row_w,
+            );
+            ui.add_space(theme.spacing_sm());
             ui.horizontal(|ui| {
-                ui.set_max_width(row_w);
-                ui.label(
-                    egui::RichText::new(preview)
-                        .monospace()
-                        .size(theme.font_size_small()),
-                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    clicked = crate::ui::chrome::panel_action_primary_button_with_icon_ex(
-                        ui,
-                        theme,
-                        IconId::TerminalPrompt,
-                        i18n::tr(ctx, "Send", "发送"),
-                        true,
-                    )
-                    .on_hover_text(i18n::tr(
-                        ctx,
-                        "Send this command to the terminal",
-                        "发送该命令到终端",
-                    ))
-                    .clicked();
+                clicked = crate::ui::chrome::panel_action_primary_button_with_icon_ex(
+                    ui,
+                    theme,
+                    IconId::TerminalPrompt,
+                    i18n::tr(ctx, "Send", "发送"),
+                    true,
+                )
+                .on_hover_text(i18n::tr(
+                    ctx,
+                    "Send this command to the terminal",
+                    "发送该命令到终端",
+                ))
+                .clicked();
                 });
             });
         });
     clicked
-}
-
-fn compact_command_preview(cmd: &str) -> String {
-    let first = cmd
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("")
-        .trim();
-    if first.is_empty() {
-        return String::new();
-    }
-    let mut chars = first.chars();
-    let head: String = chars.by_ref().take(72).collect();
-    if chars.next().is_some() || cmd.lines().skip_while(|l| l.trim().is_empty()).nth(1).is_some() {
-        format!("{head} ...")
-    } else {
-        head
-    }
 }
 
 fn message_copy_text(msg: &UiMessage) -> String {
@@ -1894,7 +2211,6 @@ fn show_terminal_context_chip(
     remove_clicked: &mut bool,
 ) {
     let label = context.chip_label(ctx, index);
-    let hover = context.hover_detail(ctx, index);
     let chip_h = theme.size_panel_filter_chip_h();
     let font = egui::FontId::proportional(theme.font_size_small());
     let text_color = theme.accent_color();
@@ -1906,7 +2222,8 @@ fn show_terminal_context_chip(
         .layout_no_wrap(label.clone(), font.clone(), text_color)
         .size()
         .x;
-    let chip_w = pad_x * 2.0 + icon_px + icon_gap + text_w;
+    let max_chip_w = ui.available_width().max(96.0);
+    let chip_w = (pad_x * 2.0 + icon_px + icon_gap + text_w).min(max_chip_w);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(chip_w, chip_h), egui::Sense::click());
     let fill = if response.hovered() {
         theme.accent_alpha(24)
@@ -1925,7 +2242,7 @@ fn show_terminal_context_chip(
     );
     crate::ui::icons::paint_icon(ui, icon_rect, IconId::Attachment, text_color, icon_px);
     let text_x = icon_rect.max.x + icon_gap;
-    ui.painter().galley(
+    ui.painter().with_clip_rect(rect.shrink(2.0)).galley(
         egui::pos2(text_x, rect.center().y - theme.font_size_small() * 0.5),
         ui.painter()
             .layout_no_wrap(label, font, text_color),
@@ -1933,7 +2250,6 @@ fn show_terminal_context_chip(
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    let response = response.on_hover_text(hover);
     if response.clicked() {
         ui.memory_mut(|mem| mem.toggle_popup(popup_id));
     }

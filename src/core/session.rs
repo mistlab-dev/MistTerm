@@ -499,11 +499,68 @@ impl SessionManager {
         manager
     }
 
+    /// 默认会话文件路径（与 `AppSettings` 同目录）。
+    pub fn default_storage_path() -> PathBuf {
+        let mut p = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+        p.push("mistterm");
+        p.push("sessions.json");
+        p
+    }
+
     /// 创建新的会话管理器
     pub fn new() -> Self {
-        let mut file_path = std::env::current_dir().unwrap_or_default();
-        file_path.push("sessions.json");
-        Self::with_sessions_path(file_path)
+        let file_path = Self::default_storage_path();
+        if let Some(parent) = file_path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if !file_path.exists() {
+            let mut legacy = std::env::current_dir().unwrap_or_default();
+            legacy.push("sessions.json");
+            if legacy.exists() && legacy != file_path {
+                if let Err(e) = fs::copy(&legacy, &file_path) {
+                    log::warn!("Failed to migrate sessions.json from cwd: {e}");
+                } else {
+                    log::info!("Migrated sessions.json from cwd to {}", file_path.display());
+                }
+            }
+        }
+        let mut manager = Self::with_sessions_path(file_path);
+        manager.try_load_legacy_cwd_if_empty();
+        manager
+    }
+
+    /// 配置目录无会话时，尝试从旧版「当前工作目录」加载（只读，不自动覆盖主文件）。
+    fn try_load_legacy_cwd_if_empty(&mut self) {
+        if !self.sessions.is_empty() {
+            return;
+        }
+        let mut legacy = std::env::current_dir().unwrap_or_default();
+        legacy.push("sessions.json");
+        if legacy == self.file_path || !legacy.exists() {
+            return;
+        }
+        let Ok(content) = fs::read_to_string(&legacy) else {
+            return;
+        };
+        let Some(inner) = Self::unwrap_sessions_json_text(&content) else {
+            return;
+        };
+        let Some((sessions, _, mut warnings)) =
+            Self::parse_stored_sessions_json(&self.device_key, &inner)
+        else {
+            return;
+        };
+        if sessions.is_empty() {
+            return;
+        }
+        self.load_diagnostics.append(&mut warnings);
+        self.sessions = sessions;
+        log::info!(
+            "Loaded {} sessions from legacy cwd path; saving to {}",
+            self.sessions.len(),
+            self.file_path.display()
+        );
+        self.save();
     }
 
     /// 取走并清空最近一次加载产生的诊断信息（供状态栏一次性展示）。

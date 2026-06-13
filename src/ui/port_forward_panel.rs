@@ -387,52 +387,45 @@ impl PortForwardPanel {
         ui.add_space(4.0);
 
         let prev_kind = self.form_kind;
-        let chip_h = theme.size_panel_filter_chip_h();
-        ui.horizontal(|ui| {
-            let tabs = [
-                (
-                    ForwardFormKind::Local,
-                    crate::i18n::tr(ctx, "Local (-L)", "本地 (-L)"),
-                ),
-                (
-                    ForwardFormKind::Remote,
-                    crate::i18n::tr(ctx, "Remote (-R)", "远程 (-R)"),
-                ),
-                (
-                    ForwardFormKind::Dynamic,
-                    crate::i18n::tr(ctx, "SOCKS (-D)", "SOCKS (-D)"),
-                ),
-            ];
-            for (kind, label) in tabs {
-                let active = self.form_kind == kind;
-                let chip_w = ui
-                    .painter()
-                    .layout_no_wrap(
-                        label.to_string(),
-                        egui::FontId::proportional(theme.font_size_category_label()),
-                        theme.text_primary(),
-                    )
-                    .size()
-                    .x
-                    + theme.spacing_panel_header_btn_pad_x() * 2.0;
-                if crate::ui::chrome::filter_chip_button(
-                    ui,
-                    theme,
-                    label,
-                    active,
-                    egui::vec2(chip_w.max(56.0), chip_h),
-                )
-                .clicked()
-                {
-                    self.form_kind = kind;
-                }
-            }
-        });
+        let tabs = [
+            (
+                "local",
+                crate::i18n::tr(ctx, "Local (-L)", "本地 (-L)"),
+            ),
+            (
+                "remote",
+                crate::i18n::tr(ctx, "Remote (-R)", "远程 (-R)"),
+            ),
+            (
+                "dynamic",
+                crate::i18n::tr(ctx, "SOCKS (-D)", "SOCKS (-D)"),
+            ),
+        ];
+        let active = match self.form_kind {
+            ForwardFormKind::Local => "local",
+            ForwardFormKind::Remote => "remote",
+            ForwardFormKind::Dynamic => "dynamic",
+        };
+        if let Some(picked) = crate::ui::chrome::segmented_control_row(
+            ui,
+            theme,
+            &tabs,
+            active,
+            Some(ui.available_width()),
+        ) {
+            self.form_kind = match picked.as_str() {
+                "remote" => ForwardFormKind::Remote,
+                "dynamic" => ForwardFormKind::Dynamic,
+                _ => ForwardFormKind::Local,
+            };
+        }
         if self.form_kind != prev_kind {
             self.form.fill_defaults_for(self.form_kind);
         }
         ui.add_space(6.0);
-        self.draw_form_fields(ui, ctx, theme);
+        theme.frame_inset_section().show(ui, |ui| {
+            self.draw_form_fields(ui, ctx, theme);
+        });
 
         ui.checkbox(
             &mut self.save_to_session,
