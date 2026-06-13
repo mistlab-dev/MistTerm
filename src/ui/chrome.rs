@@ -438,7 +438,7 @@ pub fn sidebar_list_sort_button(
 /// 下拉 / 右键 / ComboBox 弹出层共用的控件色（含 `widgets.open`，避免子菜单发黑底）。
 pub fn apply_popup_widget_visuals(visuals: &mut egui::Visuals, theme: &Theme) {
     if theme.uses_modern_palette() {
-        let menu_bg = theme.color_control_button_fill_idle();
+        let menu_bg = theme.color_menu_popup_fill();
         visuals.window_fill = menu_bg;
         visuals.widgets.inactive.bg_fill = menu_bg;
         visuals.widgets.inactive.weak_bg_fill = menu_bg;
@@ -488,12 +488,15 @@ pub fn modal_title_font_size(theme: &Theme) -> f32 {
     theme.font_size_panel_header_title()
 }
 
-/// 面板标题 RichText（13px 加粗 + 主色）
+/// 面板标题 RichText（modern =flat 主色；其它主题加粗）
 pub fn rich_panel_header_title(theme: &Theme, text: &str) -> RichText {
-    RichText::new(text)
-        .size(theme.font_size_panel_header_title())
-        .strong()
-        .color(theme.color_panel_header_title())
+    let mut rt = RichText::new(text).size(theme.font_size_panel_header_title());
+    if theme.uses_modern_palette() {
+        rt = rt.color(theme.text_primary());
+    } else {
+        rt = rt.strong().color(theme.color_panel_header_title());
+    }
+    rt
 }
 
 /// 居中弹窗主标题（与 [`rich_panel_header_title`] 一致）
@@ -552,16 +555,28 @@ pub fn panel_header_divider(ui: &mut Ui, theme: &Theme) {
     );
 }
 
-/// 右 dock 标题行与正文之间的横线（与 [`Theme::frame_right_dock_header_band`] 同宽）。
-/// 使用 `accent_color`，与终端激活 Tab 底部高光线视觉一致。
+/// 右 dock 标题行与正文之间的分隔（modern：留白 + 极淡发丝线）
 pub fn right_dock_header_divider(ui: &mut Ui, theme: &Theme) {
+    let bleed = theme.spacing_right_dock_pad_x();
+    let w = ui.available_width().max(1.0);
+    if theme.uses_modern_palette() {
+        ui.add_space(theme.spacing_xs());
+        let hairline = theme.hairline_width(ui.ctx());
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(w, hairline), egui::Sense::hover());
+        ui.painter().hline(
+            (rect.min.x - bleed)..=(rect.max.x + bleed),
+            theme.snap_y_to_pixel(ui.ctx(), rect.center().y),
+            egui::Stroke::new(hairline, theme.color_panel_header_divider()),
+        );
+        return;
+    }
     let bleed = theme.spacing_right_dock_pad_x();
     let w = ui.available_width().max(1.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 1.0), egui::Sense::hover());
     ui.painter().hline(
         (rect.min.x - bleed)..=(rect.max.x + bleed),
-        rect.center().y,
-        egui::Stroke::new(1.0, theme.color_dock_header_divider()),
+        theme.snap_y_to_pixel(ui.ctx(), rect.center().y),
+        egui::Stroke::new(theme.hairline_width(ui.ctx()), theme.color_dock_header_divider()),
     );
 }
 
@@ -789,20 +804,71 @@ pub fn show_right_dock_foreground_body<R>(
     _profile: crate::ui::layout_util::SidePanelProfile,
     add_body: impl FnOnce(&mut Ui, f32) -> R,
 ) -> egui::InnerResponse<R> {
-    // 右 dock 槽位宽已在 SidePanel 阶段统一；Foreground 不再按 profile 二次夹宽，
-    // 否则不同面板会出现“看起来列宽不一致”。
     let body_w = geom.inner.width().max(48.0);
+    let inner_size = geom.inner.size();
+    // 可点层仅覆盖正文区（inner），勿含左侧 dock 缝 / 相邻栏，否则会挡住左邻 dock 的 ×。
     right_dock_foreground_body_area(area_id)
-        .constrain_to(geom.paint)
-        .fixed_pos(geom.paint.min)
+        .constrain_to(geom.inner)
+        .fixed_pos(geom.inner.min)
         .show(ctx, |ui| {
+            ui.set_min_size(inner_size);
+            ui.set_max_size(inner_size);
             ui.set_clip_rect(geom.paint);
-            ui.allocate_ui_at_rect(geom.inner, |ui| {
-                let w = crate::ui::layout_util::constrain_ui_to_right_dock_body(ui, body_w);
-                add_body(ui, w)
-            })
-            .inner
+            show_right_dock_resize_grip(ui, ctx, area_id, geom.inner, geom.paint);
+            let w = crate::ui::layout_util::constrain_ui_to_right_dock_body(ui, body_w);
+            add_body(ui, w)
         })
+}
+
+fn show_right_dock_resize_grip(
+    ui: &mut Ui,
+    ctx: &egui::Context,
+    area_id: &'static str,
+    inner: egui::Rect,
+    paint: egui::Rect,
+) {
+    let Some(panel_id) = right_dock_panel_id_for_foreground(area_id) else {
+        return;
+    };
+    let grip_w = 10.0;
+    let rect = egui::Rect::from_min_max(
+        inner.min,
+        egui::pos2((inner.min.x + grip_w).min(inner.max.x), paint.max.y),
+    );
+    let response = ui.interact(rect, egui::Id::new((area_id, "resize_grip")), egui::Sense::drag());
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        ui.painter().vline(
+            rect.center().x,
+            rect.y_range(),
+            egui::Stroke::new(1.0, ui.visuals().selection.bg_fill),
+        );
+    }
+    if response.dragged() {
+        let id = egui::Id::new(panel_id);
+        if let Some(mut state) = egui::containers::panel::PanelState::load(ctx, id) {
+            let dx = ui.input(|i| i.pointer.delta().x);
+            let current_w = state.rect.width();
+            let (_, min_w, max_w) = crate::ui::layout_util::right_dock_resize_bounds(current_w);
+            let new_w = (current_w - dx).clamp(min_w, max_w);
+            state.rect.min.x = state.rect.max.x - new_w;
+            ctx.data_mut(|d| d.insert_persisted(id, state));
+            ctx.request_repaint();
+        }
+    }
+}
+
+fn right_dock_panel_id_for_foreground(area_id: &'static str) -> Option<&'static str> {
+    match area_id {
+        "mistterm_ai_fg" => Some(crate::ui::layout_util::AI_PANEL_ID),
+        "mistterm_monitor_fg" => Some(crate::ui::layout_util::MONITOR_PANEL_ID),
+        "mistterm_fragment_fg" => Some(crate::ui::layout_util::FRAGMENT_PANEL_ID),
+        "mistterm_sftp_fg" => Some("sftp_browser_panel"),
+        "mistterm_port_fwd_fg" => Some("port_forward_panel"),
+        "mistterm_credential_fg" => Some("credential_panel"),
+        "mistterm_cloud_sync_fg" => Some("cloud_sync_panel"),
+        _ => None,
+    }
 }
 
 /// 右 dock 内「左标签 + 右数值」行（宽度随父级 `available_width`）。
@@ -945,15 +1011,19 @@ pub struct TitleBarChromeResult {
     pub dismiss_ssh_import: bool,
 }
 
-/// VS Code 风格 Tab 底栏指示线（2px accent）
+/// VS Code 风格 Tab 底栏指示线（2 物理像素 accent）
 fn paint_vscode_tab_bottom_indicator(
     painter: &egui::Painter,
+    ctx: &egui::Context,
     rect: egui::Rect,
     theme: &Theme,
 ) {
+    let h = theme.tab_indicator_height(ctx);
+    let bottom = theme.snap_y_to_pixel(ctx, rect.bottom());
+    let top = theme.snap_y_to_pixel(ctx, rect.bottom() - h);
     let bar = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.bottom() - 2.0),
-        rect.right_bottom(),
+        egui::pos2(rect.left(), top),
+        egui::pos2(rect.right(), bottom),
     );
     painter.rect_filled(bar, 0.0, theme.accent_color());
 }
@@ -1003,7 +1073,7 @@ pub fn session_tab_chip(
     };
     ui.painter().rect(rect, rounding, fill, stroke);
     if active {
-        paint_vscode_tab_bottom_indicator(ui.painter(), rect, theme);
+        paint_vscode_tab_bottom_indicator(ui.painter(), ui.ctx(), rect, theme);
     }
     let mut close_clicked = false;
     let inner = rect.shrink2(egui::vec2(
@@ -1640,7 +1710,12 @@ pub fn panel_header_title_leading(ui: &mut Ui, theme: &Theme, icon: IconId, titl
         ui.spacing_mut().item_spacing.x = theme.spacing_sm();
         let px = theme.size_icon_glyph();
         let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
-        icons::paint_icon(ui, r, icon, theme.color_panel_header_title(), px);
+        let icon_color = if theme.uses_modern_palette() {
+            theme.text_secondary()
+        } else {
+            theme.color_panel_header_title()
+        };
+        icons::paint_icon(ui, r, icon, icon_color, px);
         ui.label(rich_panel_header_title(theme, title));
     });
 }
@@ -1908,51 +1983,87 @@ pub fn filter_chip_row_with_sort(
         })
         .show(ui, |ui| {
             let row_w = ui.available_width().max(96.0);
-            let sort_w = panel_sort_chip_width(ui, theme, sort_chip_display);
-            ui.horizontal(|ui| {
-                ui.set_max_width(row_w);
-                ui.spacing_mut().item_spacing = egui::vec2(chip_gap, 0.0);
-                let chips_w = (ui.available_width() - sort_w - sort_gap).max(96.0);
-                ui.scope(|ui| {
-                    ui.set_max_width(chips_w);
-                    let n = chips.len().max(1) as f32;
-                    // 平铺得到的"等分宽"作为下界（窄 dock 时按钮挤在一起仍可读），
-                    // 但封顶 [`size_panel_filter_chip_max_w`]，否则 dock 一拉宽，
-                    // 短标签按钮也跟着无脑撑开（如 "K8s" 长出半屏）。
-                    let max_w = theme.size_panel_filter_chip_max_w();
-                    let even_w = ((chips_w - chip_gap * (n - 1.0)) / n)
-                        .max(theme.size_panel_header_btn_min_w());
-                    let item_w = even_w.min(max_w);
-                    for (value, chip_label) in chips {
-                        let is_active = active_value == *value;
-                        if filter_chip_button(
+            if theme.uses_modern_palette() {
+                let sort_w = panel_sort_chip_width(ui, theme, sort_chip_display);
+                ui.horizontal(|ui| {
+                    ui.set_max_width(row_w);
+                    ui.spacing_mut().item_spacing = egui::vec2(chip_gap, 0.0);
+                    let seg_w = (ui.available_width() - sort_w - sort_gap).max(96.0);
+                    ui.scope(|ui| {
+                        ui.set_max_width(seg_w);
+                        if let Some(picked) = segmented_control_row(
                             ui,
                             theme,
-                            chip_label,
-                            is_active,
-                            egui::vec2(item_w, chip_h),
+                            chips,
+                            active_value,
+                            Some(ui.available_width().max(96.0)),
+                        ) {
+                            out.picked = Some(picked);
+                        }
+                    });
+                    ui.add_space(sort_gap);
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(sort_w, chip_h),
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            if panel_sort_chip(
+                                ui,
+                                theme,
+                                sort_icon,
+                                sort_chip_display,
+                                sort_hover_tooltip,
+                            )
+                            .clicked()
+                            {
+                                out.cycle_sort = true;
+                            }
+                        },
+                    );
+                });
+            } else {
+                let sort_w = panel_sort_chip_width(ui, theme, sort_chip_display);
+                ui.horizontal(|ui| {
+                    ui.set_max_width(row_w);
+                    ui.spacing_mut().item_spacing = egui::vec2(chip_gap, 0.0);
+                    let chips_w = (ui.available_width() - sort_w - sort_gap).max(96.0);
+                    ui.scope(|ui| {
+                        ui.set_max_width(chips_w);
+                        let n = chips.len().max(1) as f32;
+                        let max_w = theme.size_panel_filter_chip_max_w();
+                        let even_w = ((chips_w - chip_gap * (n - 1.0)) / n)
+                            .max(theme.size_panel_header_btn_min_w());
+                        let item_w = even_w.min(max_w);
+                        for (value, chip_label) in chips {
+                            let is_active = active_value == *value;
+                            if filter_chip_button(
+                                ui,
+                                theme,
+                                chip_label,
+                                is_active,
+                                egui::vec2(item_w, chip_h),
+                            )
+                            .clicked()
+                            {
+                                out.picked = Some((*value).to_string());
+                            }
+                        }
+                    });
+                    ui.add_space(sort_gap);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if panel_sort_chip(
+                            ui,
+                            theme,
+                            sort_icon,
+                            sort_chip_display,
+                            sort_hover_tooltip,
                         )
                         .clicked()
                         {
-                            out.picked = Some((*value).to_string());
+                            out.cycle_sort = true;
                         }
-                    }
+                    });
                 });
-                ui.add_space(sort_gap);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if panel_sort_chip(
-                        ui,
-                        theme,
-                        sort_icon,
-                        sort_chip_display,
-                        sort_hover_tooltip,
-                    )
-                    .clicked()
-                    {
-                        out.cycle_sort = true;
-                    }
-                });
-            });
+            }
         });
     out
 }
@@ -2096,6 +2207,548 @@ pub fn fragment_list_row(ui: &mut Ui, theme: &Theme, row: FragmentListRow<'_>) -
     }
 }
 
+/// 工具栏 Button Group 一项
+pub struct ButtonGroupAction<'a> {
+    pub icon: IconId,
+    pub label: &'a str,
+    pub enabled: bool,
+    pub tooltip: &'a str,
+}
+
+/// 胶囊 Segmented Control（modern）；其它主题回退为独立 filter chip。
+pub fn segmented_control_row(
+    ui: &mut Ui,
+    theme: &Theme,
+    items: &[(&str, &str)],
+    active_value: &str,
+    row_width: Option<f32>,
+) -> Option<String> {
+    if items.is_empty() {
+        return None;
+    }
+    if !theme.uses_modern_palette() {
+        let mut picked = None;
+        let chip_h = theme.size_panel_filter_chip_h();
+        let chip_gap = theme.spacing_panel_gap();
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(chip_gap, 0.0);
+            let n = items.len() as f32;
+            let avail = row_width.unwrap_or(ui.available_width()).max(96.0);
+            let item_w = ((avail - chip_gap * (n - 1.0)) / n)
+                .max(theme.size_panel_header_btn_min_w());
+            for (value, label) in items {
+                if filter_chip_button(
+                    ui,
+                    theme,
+                    label,
+                    active_value == *value,
+                    egui::vec2(item_w, chip_h),
+                )
+                .clicked()
+                {
+                    picked = Some((*value).to_string());
+                }
+            }
+        });
+        return picked;
+    }
+
+    let track_pad = theme.spacing_segment_track_pad();
+    let item_pad_x = theme.spacing_segment_item_x();
+    let font = egui::FontId::proportional(theme.font_size_category_label());
+    let mut seg_widths = Vec::with_capacity(items.len());
+    for (_, label) in items {
+        let text_w = ui
+            .painter()
+            .layout_no_wrap(label.to_string(), font.clone(), theme.text_primary())
+            .size()
+            .x;
+        seg_widths.push((text_w + item_pad_x * 2.0).max(44.0));
+    }
+    let inner_w: f32 = seg_widths.iter().sum();
+    let track_w = row_width
+        .unwrap_or(inner_w + track_pad * 2.0)
+        .max(inner_w + track_pad * 2.0);
+    let track_h = theme.size_panel_filter_chip_h() + track_pad * 2.0;
+    let (track_rect, track_resp) =
+        ui.allocate_exact_size(egui::vec2(track_w, track_h), Sense::hover());
+    let track_rect = theme.snap_rect_to_pixels(ui.ctx(), track_rect);
+
+    ui.painter().rect(
+        track_rect,
+        egui::Rounding::same(theme.radius_segment_track()),
+        theme.color_segment_track(),
+        Stroke::NONE,
+    );
+
+    let seg_total = if row_width.is_some() {
+        track_w - track_pad * 2.0
+    } else {
+        inner_w
+    };
+    let seg_gap = 0.0_f32;
+    let mut picked = None;
+    let mut x = track_rect.min.x + track_pad;
+    let thumb_inset = 1.0;
+    let _thumb_h = track_h - track_pad * 2.0;
+    let thumb_rounding = egui::Rounding::same(theme.radius_segment_thumb());
+
+    for (idx, (value, label)) in items.iter().enumerate() {
+        let seg_w = if row_width.is_some() {
+            (seg_total - seg_gap * (items.len() as f32 - 1.0)) / items.len() as f32
+        } else {
+            seg_widths[idx]
+        };
+        let seg_rect = egui::Rect::from_min_size(egui::pos2(x, track_rect.min.y), egui::vec2(seg_w, track_h));
+        let active = active_value == *value;
+        if active {
+            let thumb_rect = theme.snap_rect_to_pixels(
+                ui.ctx(),
+                seg_rect.shrink2(egui::vec2(thumb_inset, track_pad)),
+            );
+            ui.painter().rect(
+                thumb_rect,
+                thumb_rounding,
+                theme.color_segment_thumb(),
+                Stroke::NONE,
+            );
+        }
+        let text_color = if active {
+            theme.color_segment_thumb_text()
+        } else {
+            theme.color_segment_idle_text()
+        };
+        let resp = ui.interact(seg_rect, ui.id().with(("seg", idx)), Sense::click());
+        paint_caption_in_rect_center(ui, seg_rect, label, theme.font_size_category_label(), text_color);
+        if resp.clicked() {
+            picked = Some((*value).to_string());
+        }
+        if resp.hovered() || resp.clicked() {
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+        x += seg_w + seg_gap;
+    }
+    let _ = track_resp;
+    picked
+}
+
+/// 半透明工具栏 Button Group（modern）；返回被点击项索引。
+pub fn button_group_toolbar(
+    ui: &mut Ui,
+    theme: &Theme,
+    actions: &[ButtonGroupAction<'_>],
+    expand_width: Option<f32>,
+    id_salt: impl std::hash::Hash,
+) -> Option<usize> {
+    if actions.is_empty() {
+        return None;
+    }
+    if !theme.uses_modern_palette() {
+        return None;
+    }
+
+    ui.push_id(id_salt, |ui| {
+    let pad = theme.spacing_button_group_pad();
+    let icon_px = theme.size_icon_glyph();
+    let gap = 4.0;
+    let font = theme.font_size_control_btn();
+    let mut item_widths = Vec::with_capacity(actions.len());
+    for action in actions {
+        let w = if action.label.is_empty() {
+            (pad * 2.0 + icon_px).max(theme.size_control_btn_min_w() * 0.72)
+        } else {
+            let text_w = ui
+                .painter()
+                .layout_no_wrap(
+                    action.label.to_string(),
+                    egui::FontId::proportional(font),
+                    theme.text_primary(),
+                )
+                .size()
+                .x;
+            (pad * 2.0 + icon_px + gap + text_w).max(theme.size_control_btn_min_w())
+        };
+        item_widths.push(w);
+    }
+    let items_w: f32 = item_widths.iter().sum();
+    let group_w = expand_width.unwrap_or(items_w).max(items_w);
+    let group_h = theme.size_control_btn_h();
+    let (group_rect, _) = ui.allocate_exact_size(egui::vec2(group_w, group_h), Sense::hover());
+    let group_rect = theme.snap_rect_to_pixels(ui.ctx(), group_rect);
+    let hairline = theme.hairline_width(ui.ctx());
+    ui.painter().rect(
+        group_rect,
+        egui::Rounding::same(theme.radius_list_item()),
+        theme.color_button_group_fill(),
+        Stroke::NONE,
+    );
+
+    let mut clicked_idx = None;
+    let mut x = group_rect.min.x;
+    for (idx, action) in actions.iter().enumerate() {
+        let w = item_widths[idx];
+        let item_rect = egui::Rect::from_min_size(egui::pos2(x, group_rect.min.y), egui::vec2(w, group_h));
+        if idx > 0 {
+            let x = theme.snap_x_to_pixel(ui.ctx(), item_rect.left());
+            ui.painter().vline(
+                x,
+                item_rect.center().y - group_h * 0.28..=item_rect.center().y + group_h * 0.28,
+                Stroke::new(hairline, theme.color_button_group_divider()),
+            );
+        }
+        let sense = if action.enabled {
+            Sense::click()
+        } else {
+            Sense::hover()
+        };
+        let resp = ui.interact(item_rect, ui.id().with(("bgrp", idx)), sense);
+        let text_color = if action.enabled {
+            if resp.hovered() {
+                theme.text_primary()
+            } else {
+                theme.text_secondary().gamma_multiply(0.85)
+            }
+        } else {
+            theme.color_control_disabled_text()
+        };
+        let icon_color = text_color;
+        if resp.hovered() && action.enabled {
+            ui.painter().rect(
+                item_rect.shrink(2.0),
+                egui::Rounding::same(theme.radius_list_item() - 1.0),
+                theme.color_widget_hover_fill(),
+                Stroke::NONE,
+            );
+            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+        }
+        if action.label.is_empty() {
+            let icon_rect = egui::Rect::from_center_size(
+                item_rect.center(),
+                egui::vec2(icon_px, icon_px),
+            );
+            icons::paint_icon(ui, icon_rect, action.icon, icon_color, icon_px);
+        } else {
+            paint_icon_caption_row_in_rect(
+                ui,
+                item_rect,
+                action.icon,
+                action.label,
+                icon_px,
+                gap,
+                font,
+                text_color,
+                icon_color,
+                pad,
+                false,
+            );
+        }
+        if resp.clicked() && action.enabled {
+            clicked_idx = Some(idx);
+        }
+        x += w;
+    }
+    clicked_idx
+    })
+    .inner
+}
+
+// ── SFTP 面板专用工具条（modern：地址栏一体包 + 悬停肉垫 + 幽灵提交） ──
+
+/// SFTP 工具条行容器：统一高度、垂直居中、深色一体底。
+pub fn sftp_toolbar_band<R>(ui: &mut Ui, theme: &Theme, add: impl FnOnce(&mut Ui, &Theme) -> R) -> R {
+    if !theme.uses_modern_palette() {
+        return add(ui, theme);
+    }
+    let row_h = theme.size_sftp_toolbar_row_h();
+    theme.frame_sftp_toolbar_band().show(ui, |ui| {
+        ui.allocate_ui_with_layout(
+            egui::vec2(ui.available_width().max(1.0), row_h),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| add(ui, theme),
+        )
+        .inner
+    })
+    .inner
+}
+
+/// 地址栏内嵌路径输入（无下划线、透明底，随剩余宽度伸缩）。
+pub fn form_singleline_field_sftp_embedded(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    text: &mut String,
+    hint: &str,
+) -> Response {
+    with_underline_field_visuals(ui, theme, |ui| {
+        let w = ui.available_width().max(48.0);
+        let prev_override = ui.style_mut().visuals.override_text_color;
+        ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
+        let mut edit = egui::TextEdit::singleline(text)
+            .id(id)
+            .frame(false)
+            .desired_width(w)
+            .text_color(theme.text_primary())
+            .font(egui::FontId::proportional(theme.font_size_control_input()));
+        if !hint.is_empty() {
+            edit = edit.hint_text(hint_rich(theme, hint, theme.font_size_control_input()));
+        }
+        let response = ui.add(edit);
+        ui.style_mut().visuals.override_text_color = prev_override;
+        response
+    })
+}
+
+fn sftp_toolbar_action_size(
+    ui: &Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+) -> egui::Vec2 {
+    let _ = icon;
+    let icon_px = theme.size_icon_glyph();
+    let pad_x = theme.spacing_button_group_pad() + theme.spacing_xs();
+    let gap = theme.spacing_xs();
+    let font = theme.font_size_control_btn();
+    let text_w = if label.is_empty() {
+        0.0
+    } else {
+        ui.painter()
+            .layout_no_wrap(
+                label.to_string(),
+                egui::FontId::proportional(font),
+                theme.text_primary(),
+            )
+            .size()
+            .x
+    };
+    let content_w = if label.is_empty() {
+        icon_px + pad_x * 2.0
+    } else {
+        pad_x * 2.0 + icon_px + gap + text_w
+    };
+    egui::vec2(
+        content_w.max(theme.size_panel_header_btn_min_w() * 0.65),
+        theme.size_control_btn_h(),
+    )
+}
+
+/// SFTP 工具条内单颗操作：白字 + 图标，idle 透明，hover 圆角灰垫 + 小手。
+pub fn sftp_toolbar_action_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+    tooltip: &str,
+    enabled: bool,
+    _id: egui::Id,
+) -> Response {
+    if !theme.uses_modern_palette() {
+        return if label.is_empty() {
+            panel_action_icon_button_ex(ui, theme, icon, tooltip, enabled)
+        } else {
+            panel_action_button_with_icon_ex(ui, theme, icon, label, enabled)
+        };
+    }
+
+    let size = sftp_toolbar_action_size(ui, theme, icon, label);
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(size, sense);
+    let rounding = egui::Rounding::same(theme.radius_sftp_toolbar_action());
+    let hovered = response.hovered() && enabled;
+    let pressed = response.is_pointer_button_down_on() && enabled;
+    if hovered || pressed {
+        ui.ctx().request_repaint();
+    }
+    let fill = if !enabled {
+        Color32::TRANSPARENT
+    } else if pressed {
+        theme.color_widget_active_fill()
+    } else if hovered {
+        theme.color_sftp_toolbar_action_hover()
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect(rect, rounding, fill, Stroke::NONE);
+    let text_color = if enabled {
+        theme.text_primary()
+    } else {
+        theme.color_control_disabled_text()
+    };
+    let icon_px = theme.size_icon_glyph();
+    let pad = theme.spacing_button_group_pad() + theme.spacing_xs();
+    if label.is_empty() {
+        let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(icon_px, icon_px));
+        icons::paint_icon(ui, icon_rect, icon, text_color, icon_px);
+    } else {
+        paint_icon_caption_row_in_rect(
+            ui,
+            rect,
+            icon,
+            label,
+            icon_px,
+            theme.spacing_xs(),
+            theme.font_size_control_btn(),
+            text_color,
+            text_color,
+            pad,
+            false,
+        );
+    }
+    if hovered {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    } else if response.hovered() && !enabled {
+        ui.ctx().set_cursor_icon(CursorIcon::NotAllowed);
+    }
+    response.on_hover_text(tooltip)
+}
+
+/// SFTP 工具条内一组操作（前往 / 上传等）；返回被点击项索引。
+pub fn sftp_toolbar_actions(
+    ui: &mut Ui,
+    theme: &Theme,
+    actions: &[ButtonGroupAction<'_>],
+    id_salt: impl std::hash::Hash,
+) -> Option<usize> {
+    if !theme.uses_modern_palette() {
+        return None;
+    }
+    let mut clicked = None;
+    ui.push_id(id_salt, |ui| {
+        ui.spacing_mut().item_spacing.x = theme.spacing_xs();
+        for (idx, action) in actions.iter().enumerate() {
+            let tip = if action.tooltip.is_empty() {
+                action.label
+            } else {
+                action.tooltip
+            };
+            if sftp_toolbar_action_button(
+                ui,
+                theme,
+                action.icon,
+                action.label,
+                tip,
+                action.enabled,
+                ui.id().with(idx),
+            )
+            .clicked()
+                && action.enabled
+            {
+                clicked = Some(idx);
+            }
+        }
+    });
+    clicked
+}
+
+/// SFTP 幽灵提交按钮（「+ 创建」：淡描边 + 加宽内边距，hover 填灰）。
+pub fn sftp_ghost_submit_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+    enabled: bool,
+) -> Response {
+    if !theme.uses_modern_palette() {
+        return panel_action_button_with_icon_ex(ui, theme, icon, label, enabled);
+    }
+
+    let icon_px = theme.size_icon_glyph();
+    let pad_x = theme.spacing_sm() + theme.spacing_panel_gap();
+    let font = theme.font_size_control_btn();
+    let text_w = ui
+        .painter()
+        .layout_no_wrap(
+            label.to_string(),
+            egui::FontId::proportional(font),
+            theme.text_primary(),
+        )
+        .size()
+        .x;
+    let gap = theme.spacing_xs();
+    let w = (pad_x * 2.0 + icon_px + gap + text_w).max(theme.size_control_btn_min_w());
+    let h = theme.size_control_btn_h();
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(w, h), Sense::click());
+    let rounding = egui::Rounding::same(theme.radius_sftp_toolbar_action());
+    let hovered = response.hovered() && enabled;
+    let pressed = response.is_pointer_button_down_on() && enabled;
+    if hovered || pressed {
+        ui.ctx().request_repaint();
+    }
+    let hairline = theme.hairline_width(ui.ctx());
+    let stroke = Stroke::new(hairline, theme.color_sftp_ghost_btn_stroke());
+    let fill = if !enabled {
+        Color32::TRANSPARENT
+    } else if pressed {
+        theme.color_widget_active_fill()
+    } else if hovered {
+        theme.color_sftp_toolbar_action_hover()
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect(rect, rounding, fill, stroke);
+    let text_color = if enabled {
+        theme.text_primary()
+    } else {
+        theme.color_control_disabled_text()
+    };
+    paint_icon_caption_row_in_rect(
+        ui,
+        rect,
+        icon,
+        label,
+        icon_px,
+        gap,
+        font,
+        text_color,
+        text_color,
+        pad_x,
+        false,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    } else if response.hovered() && !enabled {
+        ui.ctx().set_cursor_icon(CursorIcon::NotAllowed);
+    }
+    response
+}
+
+/// SFTP 路径行：单独一条深色长条，仅含路径输入。
+pub fn sftp_path_toolbar_row(
+    ui: &mut Ui,
+    theme: &Theme,
+    path_id: egui::Id,
+    path_text: &mut String,
+    path_hint: &str,
+) -> Response {
+    if !theme.uses_modern_palette() {
+        let w = ui.available_width().max(96.0);
+        return form_singleline_field(ui, theme, path_id, path_text, path_hint, w, false);
+    }
+    sftp_toolbar_band(ui, theme, |ui, theme| {
+        crate::ui::layout_util::set_width_to_available(ui);
+        form_singleline_field_sftp_embedded(ui, theme, path_id, path_text, path_hint)
+    })
+}
+
+/// SFTP 导航行：单独一条深色长条，仅含操作按钮。
+pub fn sftp_nav_toolbar_row(
+    ui: &mut Ui,
+    theme: &Theme,
+    nav_actions: &[ButtonGroupAction<'_>],
+    nav_id_salt: impl std::hash::Hash,
+) -> Option<usize> {
+    if !theme.uses_modern_palette() {
+        return None;
+    }
+    sftp_toolbar_band(ui, theme, |ui, theme| {
+        sftp_toolbar_actions(ui, theme, nav_actions, nav_id_salt)
+    })
+}
+
 /// 均分宽度的筛选芯片行（常用/Docker、全部/在线/离线等）
 pub fn filter_chip_row(
     ui: &mut Ui,
@@ -2104,24 +2757,8 @@ pub fn filter_chip_row(
     active: &str,
     panel_w: f32,
 ) -> Option<String> {
-    let mut picked = None;
-    ui.horizontal(|ui| {
-        ui.set_max_width(panel_w);
-        let chip_h = theme.size_panel_filter_chip_h();
-        let chip_gap = theme.spacing_panel_gap();
-        ui.spacing_mut().item_spacing = egui::vec2(chip_gap, 0.0);
-        let n = labels.len().max(1) as f32;
-        let item_w = ((ui.available_width() - chip_gap * (n - 1.0)) / n)
-            .max(theme.size_panel_header_btn_min_w());
-        for label in labels {
-            let is_active = active == *label;
-            if filter_chip_button(ui, theme, label, is_active, egui::vec2(item_w, chip_h)).clicked()
-            {
-                picked = Some((*label).to_string());
-            }
-        }
-    });
-    picked
+    let chips: Vec<(&str, &str)> = labels.iter().map(|l| (*l, *l)).collect();
+    segmented_control_row(ui, theme, &chips, active, Some(panel_w))
 }
 
 /// 分类筛选芯片（全部/在线/离线、常用/Docker 等）
@@ -2160,7 +2797,7 @@ pub fn filter_chip_button(
     };
     ui.painter().rect(rect, rounding, fill, egui::Stroke::NONE);
     if active && modern {
-        paint_vscode_tab_bottom_indicator(ui.painter(), rect, theme);
+        paint_vscode_tab_bottom_indicator(ui.painter(), ui.ctx(), rect, theme);
     }
     paint_caption_in_rect_center(
         ui,
@@ -2395,6 +3032,37 @@ pub fn form_section_heading(theme: &Theme, text: &str) -> RichText {
         .color(theme.color_form_label())
 }
 
+/// 表单输入区临时视觉（modern 下划线：透明 TextEdit 底）
+fn with_underline_field_visuals<R>(ui: &mut Ui, theme: &Theme, add: impl FnOnce(&mut Ui) -> R) -> R {
+    if !theme.uses_underline_inputs() {
+        return add(ui);
+    }
+    let prev_extreme = ui.visuals().extreme_bg_color;
+    let prev_inactive = ui.style().visuals.widgets.inactive.bg_fill;
+    let prev_weak = ui.style().visuals.widgets.inactive.weak_bg_fill;
+    ui.visuals_mut().extreme_bg_color = Color32::TRANSPARENT;
+    ui.style_mut().visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
+    ui.style_mut().visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+    let out = add(ui);
+    ui.visuals_mut().extreme_bg_color = prev_extreme;
+    ui.style_mut().visuals.widgets.inactive.bg_fill = prev_inactive;
+    ui.style_mut().visuals.widgets.inactive.weak_bg_fill = prev_weak;
+    out
+}
+
+fn paint_form_field_underline(ui: &Ui, theme: &Theme, rect: egui::Rect, focused: bool) {
+    let ctx = ui.ctx();
+    let w = theme.hairline_width(ctx);
+    let line_y = theme.snap_y_to_pixel(ctx, rect.bottom() - w * 0.5);
+    let line_color = if focused {
+        theme.color_input_underline_focus()
+    } else {
+        theme.color_input_underline_idle()
+    };
+    ui.painter()
+        .hline(rect.x_range(), line_y, Stroke::new(w, line_color));
+}
+
 /// 输入框占位符 RichText（斜体 + 弱色，与输入正文区分）
 pub fn hint_rich(theme: &Theme, text: &str, font_size: f32) -> RichText {
     RichText::new(text)
@@ -2403,7 +3071,7 @@ pub fn hint_rich(theme: &Theme, text: &str, font_size: f32) -> RichText {
         .color(theme.color_form_hint())
 }
 
-/// 单行输入框（带底+描边，各主题可读）
+/// 单行输入框（modern：透明底 + 底边线；其它主题：带底+描边）
 pub fn form_singleline_field(
     ui: &mut Ui,
     theme: &Theme,
@@ -2414,32 +3082,40 @@ pub fn form_singleline_field(
     password: bool,
 ) -> Response {
     let focused = ui.memory(|m| m.has_focus(id));
-    theme.frame_form_text_input(focused).show(ui, |ui| {
-        // egui 占位符走 weak_text_color()=gray_out(override_text_color)，与正文共用 override 时会几乎同色；
-        // 临时把 override 设为 hint 色，正文仍用 .text_color(输入色) 覆盖。
-        let prev_override = ui.style_mut().visuals.override_text_color;
-        ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
-        let mut edit = egui::TextEdit::singleline(text)
-            .id(id)
-            .frame(false)
-            .desired_width(
-                (desired_width - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0),
-            )
-            .text_color(theme.color_text_input_text())
-            .font(egui::FontId::proportional(theme.font_size_control_input()));
-        if !hint.is_empty() {
-            edit = edit.hint_text(hint_rich(theme, hint, theme.font_size_control_input()));
-        }
-        if password {
-            edit = edit.password(true);
-        }
-        let response = ui.add(edit);
-        ui.style_mut().visuals.override_text_color = prev_override;
-        response
-    }).inner
+    let underline = theme.uses_underline_inputs();
+    let inner_w = if underline {
+        desired_width.max(48.0)
+    } else {
+        (desired_width - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0)
+    };
+    let shown = theme.frame_form_text_input(focused).show(ui, |ui| {
+        with_underline_field_visuals(ui, theme, |ui| {
+            let prev_override = ui.style_mut().visuals.override_text_color;
+            ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
+            let mut edit = egui::TextEdit::singleline(text)
+                .id(id)
+                .frame(false)
+                .desired_width(inner_w)
+                .text_color(theme.color_text_input_text())
+                .font(egui::FontId::proportional(theme.font_size_control_input()));
+            if !hint.is_empty() {
+                edit = edit.hint_text(hint_rich(theme, hint, theme.font_size_control_input()));
+            }
+            if password {
+                edit = edit.password(true);
+            }
+            let response = ui.add(edit);
+            ui.style_mut().visuals.override_text_color = prev_override;
+            response
+        })
+    });
+    if underline {
+        paint_form_field_underline(ui, theme, shown.response.rect, focused);
+    }
+    shown.inner
 }
 
-/// 多行输入框（带底+描边）
+/// 多行输入框（modern：透明底 + 底边线）
 pub fn form_multiline_field(
     ui: &mut Ui,
     theme: &Theme,
@@ -2450,21 +3126,31 @@ pub fn form_multiline_field(
     password: bool,
 ) -> Response {
     let focused = ui.memory(|m| m.has_focus(id));
-    theme.frame_form_text_input(focused).show(ui, |ui| {
-        let mut edit = egui::TextEdit::multiline(text)
-            .id(id)
-            .frame(false)
-            .desired_width(
-                (desired_width - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0),
-            )
-            .desired_rows(rows)
-            .text_color(theme.color_text_input_text())
-            .font(egui::FontId::proportional(theme.font_size_control_input()));
-        if password {
-            edit = edit.password(true);
-        }
-        ui.add(edit)
-    }).inner
+    let underline = theme.uses_underline_inputs();
+    let inner_w = if underline {
+        desired_width.max(48.0)
+    } else {
+        (desired_width - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0)
+    };
+    let shown = theme.frame_form_text_input(focused).show(ui, |ui| {
+        with_underline_field_visuals(ui, theme, |ui| {
+            let mut edit = egui::TextEdit::multiline(text)
+                .id(id)
+                .frame(false)
+                .desired_width(inner_w)
+                .desired_rows(rows)
+                .text_color(theme.color_text_input_text())
+                .font(egui::FontId::proportional(theme.font_size_control_input()));
+            if password {
+                edit = edit.password(true);
+            }
+            ui.add(edit)
+        })
+    });
+    if underline {
+        paint_form_field_underline(ui, theme, shown.response.rect, focused);
+    }
+    shown.inner
 }
 
 /// 只读多行文本：支持鼠标拖选与 Ctrl/Cmd+C（`&str` 缓冲不可编辑）。
@@ -3447,9 +4133,14 @@ pub fn form_drag_value_field(
     add_field: impl FnOnce(&mut Ui) -> Response,
 ) -> Response {
     let focused = ui.memory(|m| m.has_focus(id));
-    theme.frame_form_text_input(focused)
-        .show(ui, add_field)
-        .inner
+    let underline = theme.uses_underline_inputs();
+    let shown = theme.frame_form_text_input(focused).show(ui, |ui| {
+        with_underline_field_visuals(ui, theme, add_field)
+    });
+    if underline {
+        paint_form_field_underline(ui, theme, shown.response.rect, focused);
+    }
+    shown.inner
 }
 
 /// 右对齐底栏：先 add 主操作，再 add 次操作（`right_to_left` 布局）。

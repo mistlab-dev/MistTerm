@@ -161,8 +161,46 @@ impl Theme {
     }
 
     /// 暗夜默认中性灰控件样式（实色底、无硬边框等）。
+    /// 与 OS 无关：Win / macOS / Linux 在 egui 下共用同一套绘制逻辑。
     pub fn uses_modern_palette(&self) -> bool {
         self.name == "暗夜"
+    }
+
+    /// 1 物理像素线宽（HiDPI / 125% / 150% 缩放时不糊边）。
+    #[inline]
+    pub fn hairline_width(&self, ctx: &egui::Context) -> f32 {
+        1.0 / ctx.pixels_per_point()
+    }
+
+    /// Tab 底栏指示线高度（2 物理像素）。
+    #[inline]
+    pub fn tab_indicator_height(&self, ctx: &egui::Context) -> f32 {
+        2.0 / ctx.pixels_per_point()
+    }
+
+    /// 将 Y 坐标对齐到物理像素网格（Windows 非整数缩放尤其需要）。
+    #[inline]
+    pub fn snap_y_to_pixel(&self, ctx: &egui::Context, y: f32) -> f32 {
+        let ppp = ctx.pixels_per_point();
+        (y * ppp).round() / ppp
+    }
+
+    /// 将 X 坐标对齐到物理像素网格。
+    #[inline]
+    pub fn snap_x_to_pixel(&self, ctx: &egui::Context, x: f32) -> f32 {
+        let ppp = ctx.pixels_per_point();
+        (x * ppp).round() / ppp
+    }
+
+    /// 矩形对齐物理像素，减少圆角/填充在 fractional DPI 下的渗色。
+    #[inline]
+    pub fn snap_rect_to_pixels(&self, ctx: &egui::Context, rect: egui::Rect) -> egui::Rect {
+        let ppp = ctx.pixels_per_point();
+        let snap = |v: f32| (v * ppp).round() / ppp;
+        egui::Rect::from_min_max(
+            egui::pos2(snap(rect.min.x), snap(rect.min.y)),
+            egui::pos2(snap(rect.max.x), snap(rect.max.y)),
+        )
     }
 
     /// 次要正文（标签、侧栏图标、Tab ×/+ 等）— 与 [`fg_medium_color`] 同一档位
@@ -211,6 +249,16 @@ impl Theme {
     #[inline]
     pub fn surface_elevated(&self) -> Color32 {
         self.bg_tab_bar_color()
+    }
+
+    /// 菜单 / 下拉弹出层底色（modern 下不用透明 ghost 底，避免透出下层 UI）
+    #[inline]
+    pub fn color_menu_popup_fill(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.surface_elevated()
+        } else {
+            self.bg_window_color()
+        }
     }
 
     /// 终端区 / 激活 Tab（= `bg_terminal`）
@@ -281,16 +329,52 @@ impl Theme {
     /// AI 用户消息气泡底
     #[inline]
     pub fn color_ai_user_bubble_fill(&self) -> Color32 {
-        self.accent_alpha(14)
+        if self.uses_modern_palette() {
+            self.accent_alpha(72)
+        } else {
+            self.accent_alpha(14)
+        }
+    }
+
+    /// AI 用户消息气泡描边（modern 下略提亮，避免与正文融在一起）
+    #[inline]
+    pub fn color_ai_user_bubble_stroke(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.accent_alpha(110)
+        } else {
+            Color32::TRANSPARENT
+        }
+    }
+
+    /// Markdown 围栏代码块底
+    #[inline]
+    pub fn color_markdown_code_block_fill(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 16)
+        } else {
+            self.color_text_input_fill()
+        }
+    }
+
+    /// Markdown 围栏代码块语言标签（bash 等）
+    #[inline]
+    pub fn color_markdown_code_lang_label(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.text_primary()
+        } else {
+            self.color_form_hint()
+        }
     }
 
     /// Markdown 行内 `code` 高亮底
     #[inline]
     pub fn color_markdown_inline_code_bg(&self) -> Color32 {
         if self.is_light_theme() {
-            Color32::from_rgba_unmultiplied(0, 0, 0, 18)
+            Color32::from_rgba_unmultiplied(0, 0, 0, 10)
+        } else if self.uses_modern_palette() {
+            self.fg_high_alpha(7)
         } else {
-            self.fg_high_alpha(15)
+            self.fg_high_alpha(10)
         }
     }
 
@@ -669,8 +753,8 @@ impl Theme {
     /// 面板标题条底（侧栏 / 右 dock / 居中弹窗共用）
     #[inline]
     pub fn color_panel_header_band_fill(&self) -> Color32 {
-        // 使用不透明底色，避免标题带下方正文文字透出。
-        self.bg_tab_bar_color()
+        // 略深于面板正文（= tab 条 / surface_elevated），标题区与内容区有层次
+        self.surface_elevated()
     }
 
     #[inline]
@@ -743,8 +827,20 @@ impl Theme {
         }
     }
 
-    /// 输入框 Frame（圆角、内边距；外框 1px，内层 TextEdit 须 `frame(false)` 避免双边）
+    /// 输入框 Frame（圆角、内边距；modern 为透明底 + 下划线，由 [`form_singleline_field`] 绘制）
     pub fn frame_form_text_input(&self, focused: bool) -> egui::Frame {
+        if self.uses_underline_inputs() {
+            let _ = focused;
+            return egui::Frame::none()
+                .fill(Color32::TRANSPARENT)
+                .stroke(egui::Stroke::NONE)
+                .inner_margin(egui::Margin {
+                    left: 0.0,
+                    right: 0.0,
+                    top: self.spacing_search_input_y(),
+                    bottom: self.spacing_search_input_y() + 2.0,
+                });
+        }
         let stroke = if focused {
             egui::Stroke::new(self.stroke_width_panel().max(1.0), self.accent_color())
         } else if self.uses_modern_palette() {
@@ -856,6 +952,136 @@ impl Theme {
         } else {
             self.accent_alpha(51)
         }
+    }
+
+    /// Segmented Control 外槽（比面板略深）
+    #[inline]
+    pub fn color_segment_track(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 22)
+        } else if self.uses_modern_palette() {
+            Color32::from_rgb(16, 16, 16)
+        } else {
+            self.fg_high_alpha(10)
+        }
+    }
+
+    /// Segmented Control 选中滑块
+    #[inline]
+    pub fn color_segment_thumb(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::WHITE
+        } else if self.uses_modern_palette() {
+            Color32::WHITE
+        } else {
+            self.accent_alpha(89)
+        }
+    }
+
+    /// Segmented Control 滑块内文字
+    #[inline]
+    pub fn color_segment_thumb_text(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgb(20, 22, 26)
+        } else if self.uses_modern_palette() {
+            Color32::from_rgb(20, 20, 20)
+        } else {
+            self.text_primary()
+        }
+    }
+
+    /// Segmented Control 未选中文字
+    #[inline]
+    pub fn color_segment_idle_text(&self) -> Color32 {
+        self.text_secondary()
+    }
+
+    /// 工具栏 Button Group 长条底
+    #[inline]
+    pub fn color_button_group_fill(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 18)
+        } else {
+            self.fg_high_alpha(24)
+        }
+    }
+
+    /// Button Group 项间竖分隔
+    #[inline]
+    pub fn color_button_group_divider(&self) -> Color32 {
+        self.divider_stroke_color()
+    }
+
+    /// 无边框 inset 卡片底（比面板亮 3~5%）
+    #[inline]
+    pub fn color_inset_section_fill(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 10)
+        } else if self.uses_modern_palette() {
+            self.fg_high_alpha(14)
+        } else {
+            self.color_subtle_inset_fill()
+        }
+    }
+
+    /// 表单下划线输入：idle 线色
+    #[inline]
+    pub fn color_input_underline_idle(&self) -> Color32 {
+        self.divider_stroke_color()
+    }
+
+    /// 表单下划线输入：focus 线色
+    #[inline]
+    pub fn color_input_underline_focus(&self) -> Color32 {
+        self.accent_color()
+    }
+
+    /// Segmented Control 外槽圆角
+    #[inline]
+    pub fn radius_segment_track(&self) -> f32 {
+        12.0
+    }
+
+    /// Segmented Control 滑块圆角
+    #[inline]
+    pub fn radius_segment_thumb(&self) -> f32 {
+        8.0
+    }
+
+    /// Segmented Control 槽内边距
+    #[inline]
+    pub fn spacing_segment_track_pad(&self) -> f32 {
+        3.0
+    }
+
+    /// Segmented Control 项左右内边距
+    #[inline]
+    pub fn spacing_segment_item_x(&self) -> f32 {
+        12.0
+    }
+
+    /// Button Group 内边距
+    #[inline]
+    pub fn spacing_button_group_pad(&self) -> f32 {
+        4.0
+    }
+
+    /// 无边框 inset 分区卡片
+    pub fn frame_inset_section(&self) -> egui::Frame {
+        egui::Frame::none()
+            .fill(self.color_inset_section_fill())
+            .stroke(egui::Stroke::NONE)
+            .rounding(egui::Rounding::same(self.radius_panel()))
+            .inner_margin(egui::Margin::symmetric(
+                self.spacing_body_pad(),
+                self.spacing_body_pad(),
+            ))
+    }
+
+    /// modern 主题是否使用下划线输入样式
+    #[inline]
+    pub fn uses_underline_inputs(&self) -> bool {
+        self.uses_modern_palette()
     }
 
     /// egui 裸控件悬停底（暗夜中性灰，非 accent 紫）
@@ -1208,14 +1434,71 @@ impl Theme {
         }
     }
 
-    /// SFTP 本机/远端分区容器底（暗夜与面板齐平，无嵌套灰框）
+    /// SFTP 本机/远端分区容器底（modern：inset 卡片）
     #[inline]
     pub fn color_sftp_section_fill(&self) -> Color32 {
         if self.uses_modern_palette() {
-            Color32::TRANSPARENT
+            self.color_inset_section_fill()
         } else {
             self.color_subtle_inset_fill()
         }
+    }
+
+    /// SFTP 地址栏 / 工具条一体底（比面板略深，无线框）
+    #[inline]
+    pub fn color_sftp_toolbar_fill(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            if self.is_light_theme() {
+                Color32::from_rgba_unmultiplied(0, 0, 0, 10)
+            } else {
+                self.bg_terminal_color().gamma_multiply(0.72)
+            }
+        } else {
+            self.color_sftp_section_fill()
+        }
+    }
+
+    /// SFTP 工具条内按钮悬停「肉垫」
+    #[inline]
+    pub fn color_sftp_toolbar_action_hover(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 16)
+        } else {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 20)
+        }
+    }
+
+    /// SFTP 幽灵提交按钮描边（「+ 创建」等）
+    #[inline]
+    pub fn color_sftp_ghost_btn_stroke(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 28)
+        } else {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 20)
+        }
+    }
+
+    /// SFTP 工具条内按钮圆角
+    #[inline]
+    pub fn radius_sftp_toolbar_action(&self) -> f32 {
+        4.0
+    }
+
+    /// SFTP 工具条统一行高（上传行 / 地址栏 / 创建行对齐）
+    #[inline]
+    pub fn size_sftp_toolbar_row_h(&self) -> f32 {
+        (self.size_control_btn_h() + self.spacing_xs() * 2.0).max(self.font_size_control_input() + 6.0)
+    }
+
+    /// SFTP 地址栏 + 操作条（无描边圆角盒）
+    pub fn frame_sftp_toolbar_band(&self) -> egui::Frame {
+        egui::Frame::none()
+            .fill(self.color_sftp_toolbar_fill())
+            .rounding(egui::Rounding::same(self.radius_list_item()))
+            .inner_margin(egui::Margin::symmetric(
+                self.spacing_sm(),
+                self.spacing_xs(),
+            ))
     }
 
     #[inline]
@@ -1732,14 +2015,16 @@ impl Theme {
     pub fn frame_right_dock_header_band(&self) -> egui::Frame {
         let px = self.spacing_right_dock_pad_x();
         let py = self.spacing_right_dock_pad_y();
-        self.frame_panel_header_band()
-            .stroke(egui::Stroke::new(1.0, self.color_panel_header_divider()))
-            .outer_margin(egui::Margin {
-                left: -px,
-                right: -px,
-                top: -py,
-                bottom: 0.0,
-            })
+        let mut band = self.frame_panel_header_band().outer_margin(egui::Margin {
+            left: -px,
+            right: -px,
+            top: -py,
+            bottom: 0.0,
+        });
+        if !self.uses_modern_palette() {
+            band = band.stroke(egui::Stroke::new(1.0, self.color_panel_header_divider()));
+        }
+        band
     }
 
     /// 监控告警汇总块
@@ -2635,6 +2920,19 @@ mod theme_semantic_tests {
             (l_bg, l_fg)
         };
         (hi + 0.05) / (lo + 0.05)
+    }
+
+    #[test]
+    fn hairline_width_one_physical_pixel() {
+        use egui::Context;
+        let ctx = Context::default();
+        let ppp = ctx.pixels_per_point();
+        let w = Theme::dark().hairline_width(&ctx);
+        assert!(
+            (w * ppp - 1.0).abs() < 0.01,
+            "hairline * ppp = {} (ppp={ppp})",
+            w * ppp
+        );
     }
 
     #[test]

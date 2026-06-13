@@ -81,7 +81,7 @@ pub fn clamp_sidebar_width(w: f32) -> f32 {
 #[inline]
 pub fn right_dock_resize_bounds(default: f32) -> (f32, f32, f32) {
     const MIN_W: f32 = 280.0;
-    const MAX_W: f32 = 720.0;
+    const MAX_W: f32 = 960.0;
     let def = clamp_f32(default, MIN_W, MAX_W);
     (def, MIN_W, MAX_W)
 }
@@ -190,6 +190,10 @@ pub fn right_dock_slot_rect(
     let w = content.width().max(1.0);
     if w < 48.0 || !w.is_finite() {
         return None;
+    }
+    let placed = content.intersect(screen);
+    if placed.is_positive() && placed.width() >= 48.0 {
+        return Some(placed);
     }
     let slot = pin_rect_to_screen_right_edge(content, screen, w, screen_inset);
     if !slot.is_positive() {

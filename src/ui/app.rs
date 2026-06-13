@@ -345,6 +345,18 @@ enum ResponsiveLayoutBand {
     Wide,
 }
 
+/// 右侧辅助 dock 种类（可同时打开多个；Foreground 命中区与绘制顺序保证各栏 × 可点）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ActiveRightDock {
+    Fragment,
+    Credential,
+    CloudSync,
+    Sftp,
+    Monitor,
+    PortForward,
+    Ai,
+}
+
 /// 主应用程序
 pub struct MistTermApp {
     /// 会话管理器
@@ -646,6 +658,26 @@ impl MistTermApp {
         self.monitor_last_tab = None;
         self.sftp_last_tab = None;
         self.port_forward_last_tab = None;
+    }
+
+    /// 打开指定右 dock（不关闭其它已打开的右 dock）。
+    fn open_right_dock_panel(&mut self, panel: ActiveRightDock) {
+        match panel {
+            ActiveRightDock::Fragment => self.show_fragment_panel = true,
+            ActiveRightDock::Credential => self.credential_panel.open = true,
+            ActiveRightDock::CloudSync => self.cloud_sync_panel.open = true,
+            ActiveRightDock::Sftp => self.show_sftp_panel = true,
+            ActiveRightDock::Monitor => {
+                self.show_monitor_panel = true;
+                self.sync_monitor_panel_to_active_tab();
+                self.monitor_last_tab = self.active_tab;
+            }
+            ActiveRightDock::PortForward => {
+                self.show_port_forward_panel = true;
+                self.port_forward_last_tab = self.active_tab;
+            }
+            ActiveRightDock::Ai => self.show_ai_panel = true,
+        }
     }
 
     /// FUNCTIONAL_SPEC §8.2：按窗口宽度收折左栏与右侧 dock
@@ -1661,27 +1693,70 @@ impl MistTermApp {
             || self.show_ai_settings_dialog
     }
 
-    /// 是否将键盘输入交给 PTY（弹窗打开或终端未聚焦时不抢键）
-    fn should_capture_pty_keyboard(&self) -> bool {
+    /// 右侧 dock 都是终端的辅助面板；只打开/查看时不应让终端失去键盘。
+    fn auxiliary_dock_open(&self) -> bool {
+        self.show_fragment_panel
+            || self.show_monitor_panel
+            || self.show_ai_panel
+            || self.show_sftp_panel
+            || self.show_port_forward_panel
+            || self.credential_panel.open
+            || self.cloud_sync_panel.open
+    }
+
+    /// 是否将键盘输入交给 PTY。
+    ///
+    /// 辅助 dock 打开时，只有 dock 内 TextEdit/表单真正持有键盘焦点才阻止 PTY；
+    /// 普通查看、滚动、点按钮后，活动终端仍然是默认输入目标。
+    fn should_capture_pty_keyboard(&self, ctx: &egui::Context) -> bool {
         if self.global_shortcuts_blocked() {
             return false;
         }
-        self.active_tab
+        let terminal_focused = self
+            .active_tab
             .and_then(|i| self.tabs.get(i))
             .and_then(|t| t.active_terminal())
             .map(|term| term.is_terminal_focused())
-            .unwrap_or(false)
+            .unwrap_or(false);
+        if terminal_focused {
+            return true;
+        }
+        if self.auxiliary_dock_open() {
+            if self.show_ai_panel && self.ai_panel.is_draft_input_focused() {
+                return false;
+            }
+            return true;
+        }
+        if ctx.wants_keyboard_input() {
+            return false;
+        }
+        false
     }
 
     /// 编辑菜单 ⌘C/⌘V/全选 是否应发给远端 PTY（否则发给当前焦点控件）
-    fn route_edit_shortcuts_to_terminal(&self) -> bool {
-        !self.global_shortcuts_blocked()
-            && self
-                .active_tab
-                .and_then(|i| self.tabs.get(i))
-                .and_then(|t| t.active_terminal())
-                .map(|term| term.is_terminal_focused())
-                .unwrap_or(false)
+    fn route_edit_shortcuts_to_terminal(&self, ctx: &egui::Context) -> bool {
+        if self.global_shortcuts_blocked() {
+            return false;
+        }
+        let terminal_focused = self
+            .active_tab
+            .and_then(|i| self.tabs.get(i))
+            .and_then(|t| t.active_terminal())
+            .map(|term| term.is_terminal_focused())
+            .unwrap_or(false);
+        if terminal_focused {
+            return true;
+        }
+        if self.auxiliary_dock_open() {
+            if self.show_ai_panel && self.ai_panel.is_draft_input_focused() {
+                return false;
+            }
+            return true;
+        }
+        if ctx.wants_keyboard_input() {
+            return false;
+        }
+        false
     }
 
     /// 将剪贴板内容粘贴到当前获得焦点的 egui 控件（如弹窗内 TextEdit）
@@ -1697,7 +1772,7 @@ impl MistTermApp {
     }
 
     pub(crate) fn menu_paste_for_context(&mut self, ctx: &egui::Context) {
-        if self.route_edit_shortcuts_to_terminal() {
+        if self.route_edit_shortcuts_to_terminal(ctx) {
             self.menu_paste_to_terminal(ctx);
         } else {
             self.menu_paste_to_focused_widget(ctx);
@@ -1705,7 +1780,7 @@ impl MistTermApp {
     }
 
     pub(crate) fn menu_copy_for_context(&mut self, ctx: &egui::Context) {
-        if self.route_edit_shortcuts_to_terminal() {
+        if self.route_edit_shortcuts_to_terminal(ctx) {
             self.menu_copy_terminal(ctx);
         } else {
             ctx.input_mut(|i| i.events.push(egui::Event::Copy));
@@ -1714,7 +1789,7 @@ impl MistTermApp {
     }
 
     pub(crate) fn menu_select_all_for_context(&mut self, ctx: &egui::Context) {
-        if self.route_edit_shortcuts_to_terminal() {
+        if self.route_edit_shortcuts_to_terminal(ctx) {
             self.menu_select_all_terminal(ctx);
         }
         // 表单内全选无标准 Event，依赖 ⌘A；菜单项在表单场景下不重复发终端全选
@@ -1739,8 +1814,7 @@ impl MistTermApp {
             self.status_message = Self::narrow_window_fragment_panel_hint(ctx, w);
             return;
         }
-        self.show_fragment_panel = true;
-        self.show_sftp_panel = false;
+        self.open_right_dock_panel(ActiveRightDock::Fragment);
         ctx.memory_mut(|m| m.request_focus(Self::id_fragment_panel_search()));
         let k = crate::platform::accel("K");
         self.status_message = match crate::i18n::language(ctx) {
@@ -2977,7 +3051,7 @@ impl MistTermApp {
         if self.show_sftp_panel {
             self.show_sftp_panel = false;
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-            self.show_sftp_panel = true;
+            self.open_right_dock_panel(ActiveRightDock::Sftp);
             self.sftp_last_tab = None;
             self.sftp_panel.request_list_on_open();
         }
@@ -2988,7 +3062,7 @@ impl MistTermApp {
         if self.show_fragment_panel {
             self.show_fragment_panel = false;
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-            self.show_fragment_panel = true;
+            self.open_right_dock_panel(ActiveRightDock::Fragment);
         }
     }
 
@@ -2998,9 +3072,7 @@ impl MistTermApp {
             self.show_monitor_panel = false;
             self.monitor_last_tab = None;
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-            self.show_monitor_panel = true;
-            self.sync_monitor_panel_to_active_tab();
-            self.monitor_last_tab = self.active_tab;
+            self.open_right_dock_panel(ActiveRightDock::Monitor);
         }
     }
 
@@ -3010,8 +3082,7 @@ impl MistTermApp {
             self.show_port_forward_panel = false;
             self.port_forward_last_tab = None;
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-            self.show_port_forward_panel = true;
-            self.port_forward_last_tab = self.active_tab;
+            self.open_right_dock_panel(ActiveRightDock::PortForward);
         }
     }
 
@@ -3088,7 +3159,7 @@ impl MistTermApp {
         if self.show_ai_panel {
             self.show_ai_panel = false;
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-            self.show_ai_panel = true;
+            self.open_right_dock_panel(ActiveRightDock::Ai);
         }
     }
 
@@ -3109,11 +3180,39 @@ impl MistTermApp {
         self.ai_panel.attach_context(text);
         self.ai_panel.focus_draft_input(ctx);
         if self.ensure_right_dock_allowed_or_warn(ctx) {
-            self.show_ai_panel = true;
+            self.open_right_dock_panel(ActiveRightDock::Ai);
             self.status_message = crate::i18n::tr(
                 ctx,
                 "Terminal selection attached to AI",
                 "终端选区已附带至 AI",
+            )
+            .to_string();
+        }
+    }
+
+    pub(crate) fn attach_terminal_tail_to_ai(&mut self, ctx: &egui::Context, max_lines: usize) {
+        let text = self
+            .current_terminal()
+            .map(|t| t.tail_plain_text(max_lines))
+            .unwrap_or_default();
+        if text.trim().is_empty() {
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "Terminal buffer is empty",
+                "终端缓冲区为空",
+            )
+            .to_string();
+            return;
+        }
+        self.ai_panel
+            .attach_context_labeled(Some("terminal_tail"), text);
+        self.ai_panel.focus_draft_input(ctx);
+        if self.ensure_right_dock_allowed_or_warn(ctx) {
+            self.open_right_dock_panel(ActiveRightDock::Ai);
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "Last terminal output attached to AI",
+                "终端最近输出已附带至 AI",
             )
             .to_string();
         }
@@ -3208,8 +3307,11 @@ impl MistTermApp {
             self.ai_panel.focus_draft_input(ctx);
             open_ai = true;
         }
+        if self.ai_panel.take_attach_terminal_tail_request() {
+            self.attach_terminal_tail_to_ai(ctx, 50);
+        }
         if open_ai && self.ensure_right_dock_allowed_or_warn(ctx) {
-            self.show_ai_panel = true;
+            self.open_right_dock_panel(ActiveRightDock::Ai);
         }
         if let Some(cmd) = self.ai_panel.take_command_for_terminal() {
             if let Some(idx) = self.active_tab {
@@ -3822,34 +3924,56 @@ impl MistTermApp {
                 theme.size_panel_header_btn_min_w(),
                 chip_h,
             );
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
-                for (key, label) in &scope_defs {
-                    let selected = scope_key == *key;
-                    if crate::ui::chrome::filter_chip_button(
-                        ui,
-                        theme,
-                        label,
-                        selected,
-                        chip_min,
-                    )
-                    .clicked()
-                    {
-                        self.fragment_list_scope = match *key {
-                            "team" => FragmentListScope::Team,
-                            "market" => {
-                                self.market_catalog_query_fingerprint = (
-                                    self.fragment_filter_category.clone(),
-                                    self.fragment_search_query.clone(),
-                                );
-                                self.start_market_catalog_refresh();
-                                FragmentListScope::Market
-                            }
-                            _ => FragmentListScope::Personal,
-                        };
+            let row_w = ui.available_width().max(96.0);
+            if let Some(picked) = crate::ui::chrome::segmented_control_row(
+                ui,
+                theme,
+                &scope_defs,
+                scope_key,
+                Some(row_w),
+            ) {
+                self.fragment_list_scope = match picked.as_str() {
+                    "team" => FragmentListScope::Team,
+                    "market" => {
+                        self.market_catalog_query_fingerprint = (
+                            self.fragment_filter_category.clone(),
+                            self.fragment_search_query.clone(),
+                        );
+                        self.start_market_catalog_refresh();
+                        FragmentListScope::Market
                     }
-                }
-            });
+                    _ => FragmentListScope::Personal,
+                };
+            } else if !theme.uses_modern_palette() {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
+                    for (key, label) in &scope_defs {
+                        let selected = scope_key == *key;
+                        if crate::ui::chrome::filter_chip_button(
+                            ui,
+                            theme,
+                            label,
+                            selected,
+                            chip_min,
+                        )
+                        .clicked()
+                        {
+                            self.fragment_list_scope = match *key {
+                                "team" => FragmentListScope::Team,
+                                "market" => {
+                                    self.market_catalog_query_fingerprint = (
+                                        self.fragment_filter_category.clone(),
+                                        self.fragment_search_query.clone(),
+                                    );
+                                    self.start_market_catalog_refresh();
+                                    FragmentListScope::Market
+                                }
+                                _ => FragmentListScope::Personal,
+                            };
+                        }
+                    }
+                });
+            }
             ui.add_space(theme.spacing_dock_control_gap());
         }
 
@@ -4799,7 +4923,7 @@ impl MistTermApp {
                                     if self.show_fragment_panel {
                                         self.show_fragment_panel = false;
                                     } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                        self.show_fragment_panel = true;
+                                        self.open_right_dock_panel(ActiveRightDock::Fragment);
                                     }
                                 }
                                 if crate::ui::chrome::status_tool_button(
@@ -4875,9 +4999,7 @@ impl MistTermApp {
                                         self.show_monitor_panel = false;
                                         self.monitor_last_tab = None;
                                     } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                        self.show_monitor_panel = true;
-                                        self.sync_monitor_panel_to_active_tab();
-                                        self.monitor_last_tab = self.active_tab;
+                                        self.open_right_dock_panel(ActiveRightDock::Monitor);
                                     }
                                 }
                                 if crate::ui::chrome::status_tool_button(
@@ -4992,7 +5114,7 @@ impl MistTermApp {
             MacMenuAction::QuickFragmentSelector => self.quick_selector.open = true,
             MacMenuAction::CredentialPanel => {
                 if self.ensure_right_dock_allowed_or_warn(ctx) {
-                    self.credential_panel.open = true;
+                    self.open_right_dock_panel(ActiveRightDock::Credential);
                 }
             }
             MacMenuAction::TeamAccount => {
@@ -5003,7 +5125,7 @@ impl MistTermApp {
             }
             MacMenuAction::CloudSync => {
                 if self.ensure_right_dock_allowed_or_warn(ctx) {
-                    self.cloud_sync_panel.open = true;
+                    self.open_right_dock_panel(ActiveRightDock::CloudSync);
                 }
             }
             MacMenuAction::HelpUserGuide => {
@@ -6006,7 +6128,7 @@ mod menu {
                 ui.separator();
                 if crate::ui::chrome::popup_menu_button(ui, theme, l.credentials).clicked() {
                     if self.ensure_right_dock_allowed_or_warn(ctx) {
-                        self.credential_panel.open = true;
+                        self.open_right_dock_panel(ActiveRightDock::Credential);
                     }
                     ui.close_menu();
                 }
@@ -6016,7 +6138,7 @@ mod menu {
                 }
                 if crate::ui::chrome::popup_menu_button(ui, theme, l.cloud_sync).clicked() {
                     if self.ensure_right_dock_allowed_or_warn(ctx) {
-                        self.cloud_sync_panel.open = true;
+                        self.open_right_dock_panel(ActiveRightDock::CloudSync);
                     }
                     ui.close_menu();
                 }

@@ -12,8 +12,10 @@ use serde::{Deserialize, Serialize};
 use crate::core::AiSettings;
 
 pub const DEFAULT_SYSTEM_PROMPT: &str = "你是 MistTerm 终端里的运维助手。用户会提问或附上终端输出。\
-请用简洁中文回答。若给出完整 shell 脚本，请用单个 ```bash 代码块包裹整段脚本；若给出若干条可直接执行的命令，\
-用 ```bash 代码块列出，每行一条命令，不要与完整脚本混在同一提取逻辑里。不要编造未提供的输出。";
+请用简洁中文回答，并固定使用这些小节：结论、关键点、风险、下一步、建议命令（没有命令可省略）。\
+先给 1 句结论，再用短小要点列出关键原因、风险和下一步。避免长段落；每个要点尽量不超过 2 行；不要把普通字段都包成行内代码。\
+需要用户立刻执行时，把命令放在最后的「建议命令」小节。若给出完整 shell 脚本，请用单个 ```bash 代码块包裹整段脚本；\
+若给出若干条可直接执行的命令，用 ```bash 代码块列出，每行一条命令，不要与完整脚本混在同一提取逻辑里。不要编造未提供的输出。";
 
 #[derive(Clone, Debug)]
 pub struct ChatMessage {
@@ -244,9 +246,23 @@ pub fn extract_shell_commands(reply: &str) -> Vec<String> {
     if in_fence && !block.is_empty() {
         cmds.extend(commands_from_fence_block(&block));
     }
+    cmds.retain(|c| is_runnable_shell_command(c));
     cmds.sort();
     cmds.dedup();
     cmds
+}
+
+/// 是否像可在终端单独执行的一条 shell 命令（过滤小节标题等误提取）。
+pub fn is_runnable_shell_command(cmd: &str) -> bool {
+    let line = cmd
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .map(|l| l.trim())
+        .unwrap_or("");
+    if line.is_empty() {
+        return false;
+    }
+    looks_like_runnable_line(line) || line.contains('|')
 }
 
 fn commands_from_fence_block(lines: &[String]) -> Vec<String> {
@@ -321,13 +337,17 @@ fn looks_like_runnable_line(line: &str) -> bool {
 }
 
 fn prompt_line_to_command(t: &str) -> Option<String> {
-    if (t.starts_with('$') || t.starts_with('#')) && t.len() > 2 {
-        let cmd = t.trim_start_matches(['$', '#', ' ']);
-        if !cmd.is_empty() {
-            return Some(cmd.to_string());
-        }
+    let cmd = if let Some(rest) = t.strip_prefix('$') {
+        rest.trim()
+    } else if t.starts_with('#') && !t.starts_with("##") {
+        t.trim_start_matches(['#', ' ']).trim()
+    } else {
+        return None;
+    };
+    if cmd.is_empty() || !is_runnable_shell_command(cmd) {
+        return None;
     }
-    None
+    Some(cmd.to_string())
 }
 
 #[cfg(test)]
@@ -360,6 +380,19 @@ dig +short A $DOMAIN
 ```
 "#;
         assert!(extract_shell_commands(reply).is_empty());
+    }
+
+    #[test]
+    fn ignores_markdown_section_headings_as_commands() {
+        let reply = r#"## 建议命令
+```bash
+ls -1A | awk '{print length"\t"$0}' | sort -nr | head -n 5
+```
+"#;
+        let cmds = extract_shell_commands(reply);
+        assert_eq!(cmds.len(), 1);
+        assert!(cmds[0].contains("ls -1A"));
+        assert!(!cmds.iter().any(|c| c.contains("建议命令")));
     }
 
     #[test]

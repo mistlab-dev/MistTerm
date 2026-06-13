@@ -612,7 +612,7 @@ impl MistTermApp {
                                     ui.set_max_width(term_col_w);
                                     if let Some(idx) = self.active_tab {
                                     self.maybe_collapse_narrow_split(idx, term_col_w);
-                                    let kb_capture = self.should_capture_pty_keyboard();
+                                    let kb_capture = self.should_capture_pty_keyboard(ctx);
                                     let active_pane = self.tabs.get(idx).map(|t| t.active_pane);
                                     let pane_capture = |pane_idx: usize| {
                                         active_pane == Some(pane_idx) && kb_capture
@@ -726,6 +726,57 @@ impl MistTermApp {
 
         // 仅抑制会与右 dock 标题栏 × 重叠的模态窗；偏好/关于/帮助等视口居中窗仍保留 dock。
         let paint_right_dock_fg = !self.suppress_right_dock_foreground();
+        // 右→左绘制 Foreground：靠左的 dock 后绘、叠在上层，关闭钮不被右邻 dock 挡住。
+        if paint_right_dock_fg {
+            self.show_fragment_panel_foreground(ctx, theme);
+        }
+        if paint_right_dock_fg && self.credential_panel.open {
+            let mut close_cred = false;
+            self.credential_panel.show_foreground_panel(
+                ctx,
+                theme,
+                &self.app_settings.vault,
+                &self.audit_logger,
+                &mut cred_action,
+                &mut close_cred,
+            );
+            if close_cred {
+                self.credential_panel.open = false;
+            }
+        }
+        if let Some(CredentialPanelAction::UseForQuickConnect(c)) = cred_action {
+            self.apply_credential_to_new_session_form(ctx, c);
+        }
+
+        if paint_right_dock_fg && self.cloud_sync_panel.open {
+            let fragments_export_path = FragmentManager::default_config_path();
+            let sessions_export_path = self.session_manager.storage_path().clone();
+            let theme_export_path = ThemeManager::config_path();
+            let mut cloud_sync_deps = CloudSyncDeps {
+                fragments_path: &fragments_export_path,
+                sessions_path: &sessions_export_path,
+                theme_path: &theme_export_path,
+                fragment_manager: &mut self.fragment_manager,
+                theme_manager: &mut self.theme_manager,
+                session_manager: &mut self.session_manager,
+                credential_panel: &mut self.credential_panel,
+                audit: Some(&self.audit_logger),
+            };
+            let mut close_cloud = false;
+            let team_action = self.cloud_sync_panel.show_foreground_panel(
+                ctx,
+                theme,
+                &mut cloud_sync_deps,
+                &mut close_cloud,
+                Some(&mut self.team_service),
+                Some(&mut self.team_login_form),
+                Some(&mut self.app_settings),
+            );
+            if matches!(team_action, crate::ui::team_ui::TeamUiAction::OpenMembers) {
+                self.team_members_dialog.open(&mut self.team_service);
+            }
+        }
+
         if paint_right_dock_fg && self.show_monitor_panel {
             self.monitor_panel
                 .show_foreground_panel(ctx, theme, &mut self.show_monitor_panel);
@@ -782,56 +833,6 @@ impl MistTermApp {
                 &mut self.show_ai_settings_dialog,
                 &mut self.app_settings,
             );
-        }
-        if paint_right_dock_fg {
-            self.show_fragment_panel_foreground(ctx, theme);
-        }
-
-        if paint_right_dock_fg && self.credential_panel.open {
-            let mut close_cred = false;
-            self.credential_panel.show_foreground_panel(
-                ctx,
-                theme,
-                &self.app_settings.vault,
-                &self.audit_logger,
-                &mut cred_action,
-                &mut close_cred,
-            );
-            if close_cred {
-                self.credential_panel.open = false;
-            }
-        }
-        if let Some(CredentialPanelAction::UseForQuickConnect(c)) = cred_action {
-            self.apply_credential_to_new_session_form(ctx, c);
-        }
-
-        if paint_right_dock_fg && self.cloud_sync_panel.open {
-            let fragments_export_path = FragmentManager::default_config_path();
-            let sessions_export_path = self.session_manager.storage_path().clone();
-            let theme_export_path = ThemeManager::config_path();
-            let mut cloud_sync_deps = CloudSyncDeps {
-                fragments_path: &fragments_export_path,
-                sessions_path: &sessions_export_path,
-                theme_path: &theme_export_path,
-                fragment_manager: &mut self.fragment_manager,
-                theme_manager: &mut self.theme_manager,
-                session_manager: &mut self.session_manager,
-                credential_panel: &mut self.credential_panel,
-                audit: Some(&self.audit_logger),
-            };
-            let mut close_cloud = false;
-            let team_action = self.cloud_sync_panel.show_foreground_panel(
-                ctx,
-                theme,
-                &mut cloud_sync_deps,
-                &mut close_cloud,
-                Some(&mut self.team_service),
-                Some(&mut self.team_login_form),
-                Some(&mut self.app_settings),
-            );
-            if matches!(team_action, crate::ui::team_ui::TeamUiAction::OpenMembers) {
-                self.team_members_dialog.open(&mut self.team_service);
-            }
         }
 
         let session_for_fragments = self

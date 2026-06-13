@@ -1,9 +1,10 @@
 //! 将 Markdown 渲染为 egui 控件（AI 面板对话区等）。
+#![allow(dead_code)]
 
 use arboard::Clipboard;
 use eframe::egui::{self, FontId, TextFormat, text::LayoutJob};
 use pulldown_cmark::{
-    CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd,
+    CodeBlockKind, Event, HeadingLevel, Tag, TagEnd,
 };
 
 use crate::ui::chrome;
@@ -23,26 +24,170 @@ pub fn show_markdown(
     if markdown.trim().is_empty() {
         return;
     }
-    if bind_full_width {
-    layout_util::set_width_to_available(ui);
-    } else {
-        let w = ui.available_width();
-        if w.is_finite() && w > 1.0 {
-            ui.set_max_width(w);
-        }
-    }
-    let mut r = MarkdownRenderer::new(theme, command_for_terminal);
-    let opts = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TABLES;
-    let parser = Parser::new_ext(markdown, opts);
-    for event in parser {
-        r.on_event(ui, event);
-    }
-    r.finish(ui);
+    let width = markdown_content_width(ui, bind_full_width);
+    render_stable_markdown(ui, theme, markdown, command_for_terminal, width);
 }
 
+fn markdown_content_width(ui: &mut egui::Ui, bind_full_width: bool) -> f32 {
+    if bind_full_width {
+        return layout_util::set_width_to_available(ui).max(24.0);
+    }
+    let mut w = ui.available_width();
+    if !w.is_finite() || w > 10_000.0 {
+        w = ui.max_rect().width();
+    }
+    if !w.is_finite() || w < 1.0 {
+        w = 160.0;
+    }
+    ui.set_max_width(w);
+    w.max(24.0)
+}
+
+fn render_stable_markdown(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    markdown: &str,
+    command_for_terminal: &mut Option<String>,
+    width: f32,
+) {
+    let mut text_buf = String::new();
+    let mut code_buf = String::new();
+    let mut code_lang: Option<String> = None;
+    let mut code_block_serial = 0u32;
+
+    for line in markdown.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("```") {
+            if code_lang.is_some() {
+                paint_code_block(
+                    ui,
+                    theme,
+                    &code_buf,
+                    code_lang.as_deref(),
+                    command_for_terminal,
+                    &mut code_block_serial,
+                );
+                code_buf.clear();
+                code_lang = None;
+                ui.add_space(theme.spacing_xs());
+            } else {
+                render_plain_markdown_text(ui, theme, &text_buf, width);
+                text_buf.clear();
+                let lang = rest.trim();
+                code_lang = Some(if lang.is_empty() {
+                    String::new()
+                } else {
+                    lang.to_string()
+                });
+            }
+            continue;
+        }
+
+        if code_lang.is_some() {
+            code_buf.push_str(line);
+            code_buf.push('\n');
+        } else {
+            text_buf.push_str(line);
+            text_buf.push('\n');
+        }
+    }
+
+    if code_lang.is_some() {
+        paint_code_block(
+            ui,
+            theme,
+            &code_buf,
+            code_lang.as_deref(),
+            command_for_terminal,
+            &mut code_block_serial,
+        );
+    }
+    render_plain_markdown_text(ui, theme, &text_buf, width);
+}
+
+fn render_plain_markdown_text(ui: &mut egui::Ui, theme: &Theme, text: &str, width: f32) {
+    if text.trim().is_empty() {
+        return;
+    }
+    ui.set_max_width(width);
+    let body_size = theme.font_size_body();
+    let small_gap = theme.spacing_xs();
+    let paragraph_gap = theme.spacing_sm().max(6.0);
+    for raw in text.lines() {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            ui.add_space(paragraph_gap);
+            continue;
+        }
+        let (line, strong, size) = normalize_markdown_line(trimmed, body_size);
+        for wrapped in wrap_plain_text_line(&line, width, size) {
+            let mut text = egui::RichText::new(wrapped)
+                .size(size)
+                .color(theme.text_primary());
+            if strong {
+                text = text.strong();
+            }
+            ui.add_sized(
+                egui::vec2(width, size * 1.35),
+                egui::Label::new(text).wrap(false),
+            );
+            ui.add_space(small_gap);
+        }
+    }
+}
+
+fn normalize_markdown_line(line: &str, body_size: f32) -> (String, bool, f32) {
+    let mut s = line.trim().to_string();
+    let mut strong = false;
+    let mut size = body_size;
+    if let Some(rest) = s.strip_prefix("### ") {
+        s = rest.trim().to_string();
+        strong = true;
+        size = body_size + 0.5;
+    } else if let Some(rest) = s.strip_prefix("## ") {
+        s = rest.trim().to_string();
+        strong = true;
+        size = body_size + 1.0;
+    } else if let Some(rest) = s.strip_prefix("# ") {
+        s = rest.trim().to_string();
+        strong = true;
+        size = body_size + 1.5;
+    }
+    s = s
+        .replace("**", "")
+        .replace("__", "")
+        .replace('`', "");
+    (s, strong, size)
+}
+
+fn wrap_plain_text_line(line: &str, width: f32, font_size: f32) -> Vec<String> {
+    let max_units = (width / (font_size * 0.62)).floor().max(8.0);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut units = 0.0f32;
+    for ch in line.chars() {
+        let u = if ch.is_ascii() { 0.58 } else { 1.0 };
+        if units + u > max_units && !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+            units = 0.0;
+        }
+        current.push(ch);
+        units += u;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+#[allow(dead_code)]
 struct MarkdownRenderer<'a> {
     theme: &'a Theme,
     command_for_terminal: &'a mut Option<String>,
+    bind_full_width: bool,
     code_block_serial: u32,
     inline: LayoutJob,
     body_format: TextFormat,
@@ -60,26 +205,30 @@ struct MarkdownRenderer<'a> {
     link_url: Option<String>,
 }
 
+#[allow(dead_code)]
 impl<'a> MarkdownRenderer<'a> {
-    fn new(theme: &'a Theme, command_for_terminal: &'a mut Option<String>) -> Self {
+    fn new(
+        theme: &'a Theme,
+        command_for_terminal: &'a mut Option<String>,
+        bind_full_width: bool,
+    ) -> Self {
         let body_px = theme.font_size_body();
         let code_px = theme.font_size_small();
         Self {
             theme,
             command_for_terminal,
+            bind_full_width,
             code_block_serial: 0,
             inline: LayoutJob::default(),
             body_format: TextFormat {
                 font_id: FontId::proportional(body_px),
                 color: theme.text_primary(),
-                line_height: Some(body_px * 1.3),
                 ..Default::default()
             },
             code_format: TextFormat {
                 font_id: FontId::monospace(code_px),
                 color: theme.text_primary(),
                 background: theme.color_markdown_inline_code_bg(),
-                line_height: Some(code_px * 1.4),
                 ..Default::default()
             },
             strong: 0,
@@ -214,7 +363,7 @@ impl<'a> MarkdownRenderer<'a> {
                             .size(size)
                             .color(self.theme.text_primary()),
                     );
-                    ui.add_space(1.0);
+                    ui.add_space(6.0);
                 }
                 self.heading_level = None;
             }
@@ -239,17 +388,18 @@ impl<'a> MarkdownRenderer<'a> {
                     self.list_ordered = false;
                     self.list_index = 1;
                 }
-                ui.add_space(0.0);
+                ui.add_space(3.0);
             }
             TagEnd::Item => {
                 self.flush_paragraph(ui);
                 if self.list_ordered && self.list_depth >= 1 {
                     self.list_index += 1;
                 }
+                ui.add_space(3.0);
             }
             TagEnd::BlockQuote => {
                 self.in_blockquote = false;
-                ui.add_space(1.0);
+                ui.add_space(6.0);
             }
             TagEnd::Emphasis => {
                 self.emphasis = self.emphasis.saturating_sub(1);
@@ -262,7 +412,7 @@ impl<'a> MarkdownRenderer<'a> {
             }
             TagEnd::Table => {
                 self.flush_paragraph(ui);
-                ui.add_space(1.0);
+                ui.add_space(6.0);
             }
             TagEnd::TableRow | TagEnd::TableHead => {
                 self.push_text("  ");
@@ -327,14 +477,32 @@ impl<'a> MarkdownRenderer<'a> {
         self.inline.append(text, 0.0, fmt);
     }
 
+    fn paragraph_wrap_width(&self, ui: &mut egui::Ui) -> f32 {
+        if self.bind_full_width {
+            return layout_util::set_width_to_available(ui);
+        }
+        let mut w = ui.available_width();
+        if !w.is_finite() || w > 10_000.0 {
+            w = ui.max_rect().width();
+        }
+        let cap = ui.max_rect().width();
+        if cap.is_finite() && cap > 1.0 && cap < 10_000.0 {
+            w = w.min(cap);
+        }
+        if !w.is_finite() || w < 1.0 {
+            w = 160.0;
+        }
+        ui.set_max_width(w);
+        w
+    }
+
     fn flush_paragraph(&mut self, ui: &mut egui::Ui) {
         if self.inline.is_empty() {
             return;
         }
         let mut job = std::mem::take(&mut self.inline);
         self.inline = LayoutJob::default();
-        let row_w = layout_util::set_width_to_available(ui);
-        ui.set_max_width(row_w);
+        let row_w = self.paragraph_wrap_width(ui);
         job.wrap.max_width = row_w;
         if self.in_blockquote {
             egui::Frame::none()
@@ -342,14 +510,24 @@ impl<'a> MarkdownRenderer<'a> {
                 .rounding(self.theme.radius_list_item())
                 .inner_margin(egui::vec2(8.0, 6.0))
                 .show(ui, |ui| {
-                    let _ = layout_util::set_width_to_available(ui);
-                    ui.add(egui::Label::new(job.clone()).wrap(true));
+                    let inner_w = layout_util::set_width_to_available(ui).max(24.0);
+                    paint_layout_job(ui, job.clone(), inner_w);
                 });
         } else {
-            ui.add(egui::Label::new(job).wrap(true));
+            paint_layout_job(ui, job, row_w);
         }
-        ui.add_space(1.0);
+        ui.add_space(if self.list_depth > 0 { 3.0 } else { 7.0 });
     }
+}
+
+#[allow(dead_code)]
+fn paint_layout_job(ui: &mut egui::Ui, mut job: LayoutJob, width: f32) {
+    let width = width.max(24.0);
+    job.wrap.max_width = width;
+    let galley = ui.ctx().fonts(|f| f.layout_job(job));
+    let height = galley.size().y.max(1.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
+    ui.painter().galley(rect.min, galley);
 }
 
 fn paint_code_block(
@@ -367,7 +545,7 @@ fn paint_code_block(
     *code_block_serial = code_block_serial.saturating_add(1);
 
     egui::Frame::none()
-        .fill(theme.color_text_input_fill())
+        .fill(theme.color_markdown_code_block_fill())
         .stroke(theme.stroke_input())
         .rounding(theme.radius_list_item())
         .inner_margin(egui::vec2(8.0, 6.0))
@@ -381,7 +559,7 @@ fn paint_code_block(
                                 egui::RichText::new(l)
                                     .monospace()
                         .size(theme.font_size_small())
-                                    .color(theme.color_form_hint()),
+                                    .color(theme.color_markdown_code_lang_label()),
                             );
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

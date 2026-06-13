@@ -462,38 +462,41 @@ impl MonitorPanel {
     fn show_content(&mut self, ui: &mut egui::Ui, theme: &Theme) {
         layout_util::set_width_to_available(ui);
         let loc = i18n::locale(ui.ctx());
-        ui.vertical(|ui| {
+        theme.frame_inset_section().show(ui, |ui| {
             layout_util::set_width_to_available(ui);
-            ui.horizontal(|ui| {
-                crate::ui::chrome::form_checkbox(
-                    ui,
-                    theme,
-                    &mut self.auto_refresh,
-                    crate::i18n::tr(ui.ctx(), "Auto refresh", "自动刷新"),
-                );
-                if crate::ui::chrome::panel_toolbar_button_with_icon_or_busy(
-                    ui,
-                    theme,
-                    crate::ui::icons::IconId::Refresh,
-                    crate::i18n::tr(ui.ctx(), "Refresh", "刷新"),
-                    crate::i18n::tr(ui.ctx(), "Collecting…", "采集中…"),
-                    self.pending_raw.is_some(),
-                )
-                .clicked()
-                {
-                    self.refresh();
+            ui.vertical(|ui| {
+                layout_util::set_width_to_available(ui);
+                ui.horizontal(|ui| {
+                    crate::ui::chrome::form_checkbox(
+                        ui,
+                        theme,
+                        &mut self.auto_refresh,
+                        crate::i18n::tr(ui.ctx(), "Auto refresh", "自动刷新"),
+                    );
+                    if crate::ui::chrome::panel_toolbar_button_with_icon_or_busy(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Refresh,
+                        crate::i18n::tr(ui.ctx(), "Refresh", "刷新"),
+                        crate::i18n::tr(ui.ctx(), "Collecting…", "采集中…"),
+                        self.pending_raw.is_some(),
+                    )
+                    .clicked()
+                    {
+                        self.refresh();
+                    }
+                });
+                if self.auto_refresh {
+                    crate::ui::chrome::labeled_slider_f32(
+                        ui,
+                        theme,
+                        &mut self.refresh_interval_secs,
+                        1.0..=30.0,
+                        crate::i18n::tr(ui.ctx(), "Interval (s)", "间隔 (秒)"),
+                        "",
+                    );
                 }
             });
-            if self.auto_refresh {
-                crate::ui::chrome::labeled_slider_f32(
-                    ui,
-                    theme,
-                    &mut self.refresh_interval_secs,
-                    1.0..=30.0,
-                    crate::i18n::tr(ui.ctx(), "Interval (s)", "间隔 (秒)"),
-                    "",
-                );
-            }
         });
         ui.add_space(theme.spacing_dock_control_gap());
 
@@ -566,6 +569,8 @@ impl MonitorPanel {
                 ui.add_space(theme.spacing_md());
             }
 
+            theme.frame_inset_section().show(ui, |ui| {
+                layout_util::set_width_to_available(ui);
             crate::ui::chrome::dock_label_value_row(
                 ui,
                 theme,
@@ -607,8 +612,12 @@ impl MonitorPanel {
             );
 
             ui.add_space(theme.spacing_md());
-            ui.separator();
-            ui.add_space(theme.spacing_sm());
+            if theme.uses_modern_palette() {
+                ui.add_space(theme.spacing_sm());
+            } else {
+                ui.separator();
+                ui.add_space(theme.spacing_sm());
+            }
 
             // 系统负载
             crate::ui::icons::icon_label_row(
@@ -656,8 +665,12 @@ impl MonitorPanel {
             });
 
             ui.add_space(theme.spacing_lg() - theme.spacing_sm());
-            ui.separator();
-            ui.add_space(theme.spacing_sm());
+            if theme.uses_modern_palette() {
+                ui.add_space(theme.spacing_sm());
+            } else {
+                ui.separator();
+                ui.add_space(theme.spacing_sm());
+            }
 
             // 历史图表(egui_plot,至多 60 个采样点)
             crate::ui::icons::icon_label_row(
@@ -671,6 +684,7 @@ impl MonitorPanel {
             ui.add_space(theme.spacing_sm());
 
             self.show_history_plots(ui, theme, history);
+            });
 
         } else {
             // 未初始化提示
