@@ -271,7 +271,7 @@ pub struct SessionConfig {
     pub host: String,      // 服务器地址
     pub port: u16,         // 端口号
     pub username: String,  // 用户名
-    pub password: String,  // 密码（明文存储，待加密）
+    pub password: String,  // 运行时明文；落盘为 device_key AES 信封（见 SECURITY.md）
 }
 ```
 

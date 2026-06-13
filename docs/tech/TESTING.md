@@ -692,7 +692,7 @@ cargo audit --id CVE-2023-xxxx
 
 | 测试项 | 方法 | 预期 |
 |-------|------|-----|
-| 密码存储 | 检查 sessions.json | 待加密 |
+| 密码存储 | 检查 sessions.json | AES 信封 `mistterm-aes-v1`（见 SECURITY.md） |
 | SSH 协议 | 检查协议版本 | SSH-2 |
 | 主机验证 | 检查主机密钥 | ✅ `ssh/known_hosts.rs` |
 | 输入验证 | 测试特殊字符 | 正常处理 |
@@ -768,4 +768,5 @@ pub fn hard_to_test_function() {
 
 - [架构文档](./ARCHITECTURE.md)
 - [部署指南](./DEPLOYMENT.md)
+- [服务端待办](./SERVER-BACKEND.md)
 - [API 文档](./API.md)

@@ -94,4 +94,4 @@ sudo apt install -y build-essential libssh2-1-dev pkg-config libssl-dev
 ## 更多
 
 - 编译与打包：[DEPLOYMENT.md](../tech/DEPLOYMENT.md)
-- 冒烟清单：[QA.md](../tech/QA.md)
+- 单元测试：`cargo test --lib -- --test-threads=1`

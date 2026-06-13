@@ -28,7 +28,7 @@
 | 步骤 | 类型 | ID / 说明 |
 |------|------|-----------|
 | 1 | `TopBottomPanel::top` | `"top_chrome"`（仅菜单行 28px，见 `render_top_chrome_panel`） |
-| 2 | `SidePanel::right` | 片段 → Git → 凭证 → 云同步 → SFTP → 监控（以 `workspace.rs` 为准） |
+| 2 | `SidePanel::right` | 片段 → 凭证 → 云同步 → SFTP → 监控 → 端口转发 → AI（以 `workspace.rs` 为准） |
 | 3 | `TopBottomPanel::bottom` | `"bottom_chrome"` **必须在 Central 之前** |
 | 4 | `CentralPanel` | 工作区三列（左栏 + 终端） |
 | 5 | `Area`（`Order::Foreground`） | **监控 / 命令片段正文**（须在 Central 之后，见 §八） |
@@ -177,7 +177,7 @@ ui.painter()
 
 ### 8.7 扩展到其它右 dock
 
-监控 / SFTP / 凭证 / Git / 云同步若出现**同款白膜 + 可点穿**：
+监控 / SFTP / 凭证 / 云同步 / AI 等右 dock 若出现**同款白膜 + 可点穿**：
 
 1. 该 `SidePanel` 改为透明占位（或保留 Frame 仅布局）；  
 2. Central 之后增加 `Area::Foreground` + [`right_dock_slot_rect`](../src/ui/layout_util.rs)（本帧布局 `response.rect` + 右缘钉屏）；  
@@ -202,7 +202,7 @@ ui.painter()
 - [ ] 窗口四边：主内容距边缘约 8px `surface_body`（右 dock 屏右缘用 [`Theme::spacing_right_dock_screen_inset`](../src/ui/theme.rs)；缝由 [`paint_right_dock_screen_gutter`](../src/ui/chrome.rs) 铺 `surface_body`）
 - [ ] 三列之间 6px 缝隙可见（`surface_body`，**非** GPU 黑底）
 - [ ] 左栏 / 终端 / 右 dock：**1px `panel_stroke()`** 外框可辨；内部分隔用 `divider_stroke()`（见 [`theme.rs`](../src/ui/theme.rs) Token v2）
-- [ ] **四套主题**各走查：面板边框、hint、Tab/按钮不裁切（细则见 [`QA.md`](../tech/QA.md) §主题视觉）
+- [ ] **四套主题**各走查：面板边框、hint、Tab/按钮不裁切（见 [`theme.rs`](../src/ui/theme.rs) Token v2）
 - [ ] 左栏：导入条 + 单块圆角面板，无「条在 panel 外、列表在 panel 内」割裂感
 - [ ] 顶栏一行：菜单（文件/视图/工具/帮助）；无重复连接条
 - [ ] 底栏 32px，无第二行快捷栏

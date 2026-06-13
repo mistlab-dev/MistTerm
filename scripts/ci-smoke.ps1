@@ -61,4 +61,4 @@ Invoke-CargoStep "5/5 zmodem integration test" @(
 )
 
 Write-Host ""
-Write-Host "OK: CI smoke passed (see docs/tech/QA.md for manual UI checks)"
+Write-Host "OK: CI smoke passed (see docs/tech/TESTING.md)"

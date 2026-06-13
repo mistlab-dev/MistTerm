@@ -326,8 +326,8 @@ fn feature_sections() -> Vec<FeatureSection> {
         FeatureSection {
             icon: "🔐",
             title: "Vault SSH CA",
-            desc_en: "HashiCorp Vault integration for SSH certificate authentication. Teams issue short-lived certificates instead of static keys.",
-            desc_zh: "集成 HashiCorp Vault SSH CA，签发短期证书替代静态密钥，团队级密钥管理。",
+            desc_en: "Team server issues short-lived SSH certificates via HashiCorp Vault SSH CA (server-side). The desktop app reads credentials from Vault KV for team servers.",
+            desc_zh: "团队服务端通过 HashiCorp Vault SSH CA 签发短期 SSH 证书（服务端职责）。桌面端从 Vault KV 读取团队服务器凭证。",
         },
         FeatureSection {
             icon: "🤖",

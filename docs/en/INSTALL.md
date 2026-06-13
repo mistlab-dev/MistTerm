@@ -94,4 +94,4 @@ Application logs (`log` / `tracing`) and on-disk **session logs** under `~/.conf
 ## More
 
 - Build and packaging: [DEPLOYMENT.md](../tech/DEPLOYMENT.md)
-- Smoke checklist: [QA.md](../tech/QA.md)
+- Unit tests: `cargo test --lib -- --test-threads=1`

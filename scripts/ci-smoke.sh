@@ -43,4 +43,4 @@ step "4/4 run lib unit tests" test --lib -j 1 "${FEATURES[@]}"
 step "5/5 zmodem integration test" test --test zmodem_integration_test -j 1 "${FEATURES[@]}"
 
 echo ""
-echo "OK: CI smoke passed (see docs/tech/QA.md for manual UI checks)"
+echo "OK: CI smoke passed (see docs/tech/TESTING.md)"
