@@ -150,13 +150,139 @@ pub fn inset_slot_for_foreground_paint(
     if r.max.x > screen.max.x - inset {
         r.max.x = screen.max.x - inset;
     }
+    // 贴屏右缘时留 1px，避免壳层描边/内容被窗口裁切
+    const EDGE: f32 = 1.0;
+    if r.max.x > screen.max.x - EDGE {
+        r.max.x = screen.max.x - EDGE;
+    }
     if r.max.x <= r.min.x {
         r.max.x = r.min.x + 48.0;
     }
     r
 }
 
-/// Foreground 槽位：优先本帧 `SidePanel` 内 `ui.max_rect()`（与布局占位一致）；否则回退钉右缘。
+/// 以右缘 + 已知宽重算 SidePanel 槽位（`max_rect.min.x` 漂移时宽会被压扁，须用 [`side_panel_row_width`]）。
+#[inline]
+pub fn anchor_right_dock_slot_to_right_edge(slot: egui::Rect, width: f32) -> egui::Rect {
+    if !slot.is_positive() || !slot.max.x.is_finite() {
+        return slot;
+    }
+    let w = width.max(48.0);
+    if !w.is_finite() {
+        return slot;
+    }
+    let min_x = slot.max.x - w;
+    egui::Rect::from_min_max(
+        egui::pos2(min_x, slot.min.y),
+        egui::pos2(slot.max.x, slot.max.y),
+    )
+}
+
+/// SidePanel 分列宽（表单/列表等内容区用）。
+#[inline]
+pub fn right_dock_side_panel_width(ui: &egui::Ui) -> f32 {
+    let max_r = ui.max_rect();
+    let avail = ui.available_width();
+    let row_w = side_panel_row_width(ui);
+    if avail.is_finite() && avail >= 48.0 && avail < HUGE {
+        if max_r.width().is_finite() && max_r.width() >= 48.0 && avail > max_r.width() + 0.5 {
+            return avail;
+        }
+        if row_w.is_finite() && row_w >= 48.0 && row_w < HUGE {
+            return avail.min(row_w);
+        }
+        return avail;
+    }
+    row_w
+}
+
+/// 从 SidePanel 内层 `max_rect.width()` 与布局默认宽推导槽位列宽。
+/// `max_rect` 漂成整窗宽时回落 `layout_width`；偏窄时至少 `layout_width`（见单测 `record_side_panel_slot_*`）。
+#[inline]
+pub fn side_panel_slot_layout_width(max_rect_width: f32, layout_width: f32) -> f32 {
+    let layout = layout_width.max(SIDE_PANEL_MIN_WIDTH_PX);
+    let max_w = max_rect_width;
+    if !max_w.is_finite() || max_w < SIDE_PANEL_MIN_WIDTH_PX {
+        return layout;
+    }
+    if max_w <= layout * 1.05 {
+        return layout.max(max_w);
+    }
+    const MAX_DOCK_W: f32 = 960.0;
+    if max_w <= MAX_DOCK_W && max_w <= layout * 3.0 {
+        return max_w;
+    }
+    layout
+}
+
+/// SidePanel `.show` 之后：以 **egui 外层 `response.rect`** 为槽位。
+/// 贴屏右缘的最右列须 [`pin_rect_to_screen_right_edge`]，否则多 dock + 监控刷新后易整列偏出窗外。
+#[inline]
+pub fn side_panel_place_slot(
+    ctx: &egui::Context,
+    response: &egui::Response,
+    layout_width: f32,
+    screen_inset: f32,
+) -> egui::Rect {
+    let screen = ctx.screen_rect();
+    let mut r = response.rect.intersect(screen);
+    if !r.is_positive() || r.width() < SIDE_PANEL_MIN_WIDTH_PX {
+        return r;
+    }
+    let w = side_panel_slot_layout_width(r.width(), layout_width);
+    const RIGHT_EDGE_SLACK: f32 = 12.0;
+    let at_screen_right = r.max.x >= screen.max.x - RIGHT_EDGE_SLACK;
+    if at_screen_right || r.width() >= screen.width() * 0.55 {
+        r = pin_rect_to_screen_right_edge(r, screen, w, screen_inset);
+    }
+    r.intersect(screen)
+}
+
+/// SidePanel 回调内（仅调试/回退）：`max_rect.max.x - 分列宽`。
+#[inline]
+pub fn side_panel_column_slot(ui: &egui::Ui, layout_width: f32) -> egui::Rect {
+    let max_r = ui.max_rect();
+    let w = side_panel_slot_layout_width(max_r.width(), layout_width);
+    side_panel_column_slot_with_width(max_r, w)
+}
+
+#[inline]
+pub fn side_panel_column_slot_with_width(max_rect: egui::Rect, column_width: f32) -> egui::Rect {
+    let w = column_width.max(48.0);
+    egui::Rect::from_min_max(
+        egui::pos2(max_rect.max.x - w, max_rect.min.y),
+        egui::pos2(max_rect.max.x, max_rect.max.y),
+    )
+}
+
+/// SidePanel `.show` 返回的 `response.rect` 锚定槽位（回退用）。
+#[inline]
+pub fn side_panel_response_slot(response: &egui::Response, ctx: &egui::Context) -> Option<egui::Rect> {
+    let r = response.rect;
+    if !r.is_positive() || r.width() < 48.0 {
+        return None;
+    }
+    Some(
+        anchor_right_dock_slot_to_right_edge(r, r.width()).intersect(ctx.screen_rect()),
+    )
+}
+
+/// 从 `PanelState` 读槽位（仅无 response 时回退）；同样做右缘锚定。
+#[inline]
+pub fn right_dock_panel_slot_rect(ctx: &egui::Context, panel_id: &str) -> Option<egui::Rect> {
+    side_panel_state_rect(ctx, panel_id)
+        .filter(|r| r.is_positive() && r.width() >= 48.0)
+        .map(|r| anchor_right_dock_slot_to_right_edge(r, r.width()))
+        .map(|r| r.intersect(ctx.screen_rect()))
+}
+
+/// 对已存槽位再锚定一次（宽已正确时幂等；仅宽来自矩形自身，无 `Ui` 时用）。
+#[inline]
+pub fn fix_right_dock_slot_horizontal_drift(slot: egui::Rect) -> egui::Rect {
+    anchor_right_dock_slot_to_right_edge(slot, slot.width())
+}
+
+/// Foreground 槽位：优先本帧 `SidePanel` 内槽位（与布局占位一致）；否则回退钉右缘。
 #[inline]
 pub fn right_dock_foreground_slot(
     panel_slot_rect: Option<egui::Rect>,
@@ -242,25 +368,60 @@ pub fn right_dock_foreground_content_width(
     clamp_f32(inner_width, min_w, max_w)
 }
 
-/// 将 Ui 锁在右 dock 正文宽（防 Foreground 内 ∞ `available_width` 撑大 SidePanel）。
+/// ScrollArea / 卡片 Frame：宽不超过 Foreground 正文宽，避免 `set_min_width(max_rect)` 撑出横向滚动裁切。
+#[inline]
+pub fn dock_scroll_content_width(ui: &egui::Ui, dock_w: f32) -> f32 {
+    let cap = dock_w.max(48.0);
+    let mut w = ui.available_width();
+    if !w.is_finite() || w <= 0.0 || w > HUGE {
+        w = cap;
+    } else {
+        w = w.min(cap);
+    }
+    w.max(1.0)
+}
+
+/// 将出现竖向滚动条时的内容区宽（比 [`dock_scroll_content_width`] 少 `scroll_bar_width`）。
+#[inline]
+pub fn dock_scroll_viewport_width(ui: &egui::Ui, dock_w: f32) -> f32 {
+    let w = dock_scroll_content_width(ui, dock_w);
+    let bar = ui.spacing().scroll_bar_width;
+    if bar.is_finite() && bar > 0.5 {
+        (w - bar).max(48.0)
+    } else {
+        w
+    }
+}
+
+/// 将 Ui 锁在右 dock 正文宽：仅 `set_max_width`，勿 `set_min_width`（ScrollArea 滚动条占位会裁切右缘）。
 #[inline]
 pub fn constrain_ui_to_right_dock_body(ui: &mut egui::Ui, body_w: f32) -> f32 {
-    let w = body_w.max(48.0);
-    ui.set_min_width(w);
+    let w = dock_scroll_viewport_width(ui, body_w);
     ui.set_max_width(w);
     w
 }
 
 /// 右 dock / ScrollArea 子 Ui：以**当前**可用宽为上限（已含滚动条占位），勿信 ∞ 的 `available_width`。
+/// ScrollArea 内 `max_rect` 可能仍为上帧图表撑开的宽，须与更窄的 `clip_rect` 取 min。
 #[inline]
 pub fn set_width_to_available(ui: &mut egui::Ui) -> f32 {
+    let max_r_w = ui.max_rect().width();
+    let clip_w = ui.clip_rect().width();
     let mut w = ui.available_width();
     if !w.is_finite() || w > HUGE {
-        w = ui.max_rect().width();
+        w = if max_r_w.is_finite() && max_r_w > 1.0 && max_r_w < HUGE {
+            max_r_w
+        } else if clip_w.is_finite() && clip_w > 1.0 && clip_w < HUGE {
+            clip_w
+        } else {
+            SIDE_PANEL_MIN_WIDTH_PX
+        };
     }
-    let cap = ui.max_rect().width();
-    if cap.is_finite() && cap > 1.0 && cap < HUGE {
-        w = w.min(cap);
+    if max_r_w.is_finite() && max_r_w > 1.0 && max_r_w < HUGE {
+        w = w.min(max_r_w);
+    }
+    if max_r_w.is_finite() && clip_w.is_finite() && clip_w + 0.5 < max_r_w {
+        w = w.min(clip_w);
     }
     if !w.is_finite() || w < 1.0 {
         w = SIDE_PANEL_MIN_WIDTH_PX;
@@ -870,9 +1031,10 @@ pub fn textedit_width_in_parent(ui: &egui::Ui, subtract: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_f32, inset_slot_for_foreground_paint, pin_rect_to_screen_right_edge,
-        terminal_column_width, work_area_inner_rect, CONTENT_FALLBACK_FRAC,
-        CONTENT_FIELD_MIN_FRAC,
+        anchor_right_dock_slot_to_right_edge, clamp_f32, inset_slot_for_foreground_paint,
+        pin_rect_to_screen_right_edge, side_panel_column_slot_with_width,
+        side_panel_slot_layout_width, terminal_column_width, work_area_inner_rect,
+        CONTENT_FALLBACK_FRAC, CONTENT_FIELD_MIN_FRAC,
     };
     use crate::ui::chrome::right_dock_slot_content_rect;
     use crate::ui::theme::Theme;
@@ -961,6 +1123,88 @@ mod tests {
         assert!((inner.min.x - (slot.min.x + m.left)).abs() < 0.01);
         assert!((inner.max.x - (slot.max.x - m.right)).abs() < 0.01);
         assert!((inner.width() - (slot.width() - m.left - m.right)).abs() < 0.01);
+    }
+
+    #[test]
+    fn pin_rightmost_dock_column_shifted_past_screen() {
+        let screen =
+            egui::Rect::from_min_max(egui::pos2(0.0, 28.0), egui::pos2(1200.0, 800.0));
+        let shifted =
+            egui::Rect::from_min_max(egui::pos2(920.0, 28.0), egui::pos2(1240.0, 572.0));
+        let fixed = pin_rect_to_screen_right_edge(shifted, screen, 320.0, 0.0);
+        assert!((fixed.max.x - screen.max.x).abs() < 0.01);
+        assert!((fixed.min.x - 880.0).abs() < 0.01);
+        assert!((fixed.width() - 320.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn record_side_panel_slot_uses_layout_width_over_narrow_max_rect() {
+        // allocate 320 后 max_rect 仍只有 160 宽（多 dock 并排时偶发）
+        let max_r = egui::Rect::from_min_max(
+            egui::pos2(1040.0, 28.0),
+            egui::pos2(1200.0, 572.0),
+        );
+        let layout_w = 320.0_f32;
+        let mut w = layout_w.max(48.0);
+        if max_r.width().is_finite() && max_r.width() >= 48.0 {
+            w = w.max(max_r.width());
+        }
+        assert!((w - 320.0).abs() < 0.01);
+        let slot = anchor_right_dock_slot_to_right_edge(max_r, w);
+        assert!((slot.min.x - 880.0).abs() < 0.01);
+        assert!((slot.width() - 320.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn right_dock_side_panel_width_prefers_avail_when_max_rect_narrowed() {
+        // min.x 漂右：max_rect 240，available / SidePanel 分列仍 320
+        let drifted = egui::Rect::from_min_max(
+            egui::pos2(960.0, 28.0),
+            egui::pos2(1200.0, 572.0),
+        );
+        let avail = 320.0_f32;
+        let row_w = drifted.width();
+        let w = if avail > drifted.width() + 0.5 {
+            avail
+        } else if row_w.is_finite() && row_w >= 48.0 {
+            avail.min(row_w)
+        } else {
+            avail
+        };
+        assert!((w - 320.0).abs() < 0.01);
+        let slot = anchor_right_dock_slot_to_right_edge(drifted, w);
+        assert!((slot.min.x - 880.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn anchor_right_dock_slot_restores_min_from_max_and_width() {
+        // min.x 漂到 960 时 max_rect 宽仅 240，但真实列宽 320
+        let drifted = egui::Rect::from_min_max(
+            egui::pos2(960.0, 28.0),
+            egui::pos2(1200.0, 572.0),
+        );
+        let fixed = anchor_right_dock_slot_to_right_edge(drifted, 320.0);
+        assert!((fixed.min.x - 880.0).abs() < 0.01);
+        assert!((fixed.max.x - 1200.0).abs() < 0.01);
+        assert!((fixed.width() - 320.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn side_panel_slot_layout_width_rejects_window_drift() {
+        assert!((side_panel_slot_layout_width(1200.0, 320.0) - 320.0).abs() < 0.01);
+        assert!((side_panel_slot_layout_width(160.0, 320.0) - 320.0).abs() < 0.01);
+        assert!((side_panel_slot_layout_width(400.0, 320.0) - 400.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn side_panel_column_slot_with_width_anchors_from_max_x() {
+        // max_rect min.x 漂到 0，但 max.x 与列宽仍可信
+        let drifted_max =
+            egui::Rect::from_min_max(egui::pos2(0.0, 28.0), egui::pos2(1200.0, 572.0));
+        let slot = side_panel_column_slot_with_width(drifted_max, 320.0);
+        assert!((slot.min.x - 880.0).abs() < 0.01);
+        assert!((slot.max.x - 1200.0).abs() < 0.01);
+        assert!((slot.width() - 320.0).abs() < 0.01);
     }
 
     #[test]

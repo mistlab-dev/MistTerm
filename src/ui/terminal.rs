@@ -110,6 +110,16 @@ impl Selection {
     }
 }
 
+/// 右 dock 依赖 SSH 时的连接门闩（避免已断开仍显示「连接中」）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RightDockSshGate {
+    NoSession,
+    Ready,
+    Connecting,
+    Disconnected,
+    Failed(String),
+}
+
 /// 终端视图组件
 pub struct TerminalView {
     /// 会话 ID
@@ -2658,6 +2668,22 @@ impl TerminalView {
     /// 是否处于连接建立中（认证/启动 shell 阶段）
     pub fn is_connecting(&self) -> bool {
         !self.connected && self.error_message.is_none() && self.ssh_manager.is_some()
+    }
+
+    /// 右 dock（SFTP / 端口转发等）是否可绑定当前 SSH 会话。
+    pub fn right_dock_ssh_gate(&self) -> RightDockSshGate {
+        if self.ssh_manager.is_none() && self.connection_target.is_none() {
+            return RightDockSshGate::NoSession;
+        }
+        if self.is_connected() {
+            RightDockSshGate::Ready
+        } else if self.is_connecting() {
+            RightDockSshGate::Connecting
+        } else if let Some(err) = self.error_message.clone() {
+            RightDockSshGate::Failed(err)
+        } else {
+            RightDockSshGate::Disconnected
+        }
     }
 
     /// 底栏连接状态（不写入终端 scrollback）。

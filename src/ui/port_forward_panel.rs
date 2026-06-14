@@ -79,15 +79,38 @@ impl PortForwardPanel {
         std::mem::take(&mut self.pending_audits)
     }
 
+    /// 当前仍运行的转发数（不含已停止的运行时转发）。
     pub fn active_count_for(&self, ssh_session_id: SshSessionId) -> usize {
         self.by_ssh_session
             .get(&ssh_session_id)
-            .map(|v| v.len())
+            .map(|list| {
+                list.iter()
+                    .filter(|entry| match entry {
+                        ForwardEntry::Profile { .. } => true,
+                        ForwardEntry::Runtime { control, .. } => !control.is_stopped(),
+                    })
+                    .count()
+            })
             .unwrap_or(0)
     }
 
-    pub fn has_any_active(&self) -> bool {
-        self.by_ssh_session.values().any(|v| !v.is_empty())
+    /// 移除已无对应 SSH 连接的会话条目（断开时 `ssh_session_id` 可能已不可用）。
+    pub fn retain_live_sessions(&mut self, live: &std::collections::HashSet<SshSessionId>) {
+        let stale: Vec<SshSessionId> = self
+            .by_ssh_session
+            .keys()
+            .copied()
+            .filter(|id| !live.contains(id))
+            .collect();
+        for id in stale {
+            self.clear_ssh_session(id);
+        }
+    }
+
+    /// 每帧：登记会话配置转发并剔除已停止的运行时转发。
+    pub fn tick_active_session(&mut self, ssh_session_id: SshSessionId, profile: &SessionConfig) {
+        self.register_profile_forwards(ssh_session_id, profile);
+        self.prune_stopped(ssh_session_id);
     }
 
     /// 会话连接成功后登记配置中的转发（仅一次/ssh 会话）。
@@ -142,6 +165,11 @@ impl PortForwardPanel {
         }
     }
 
+    #[inline]
+    pub(crate) fn last_panel_slot_rect(&self) -> Option<egui::Rect> {
+        self.last_panel_slot_rect
+    }
+
     pub fn show_side_panel(
         &mut self,
         ctx: &egui::Context,
@@ -157,12 +185,14 @@ impl PortForwardPanel {
             .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
-                crate::ui::chrome::paint_right_dock_left_gap(ui, theme);
-                self.last_panel_slot_rect = Some(ui.max_rect());
                 let h = ui.available_height().max(1.0);
                 let w = ui.available_width().max(1.0);
                 ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
             });
+        let dock_inset = theme.spacing_right_dock_screen_inset();
+        let slot = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
+        crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
+        self.last_panel_slot_rect = Some(slot);
         if let Some(slot) = self.last_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
         } else {
@@ -195,6 +225,7 @@ impl PortForwardPanel {
         crate::ui::chrome::show_right_dock_foreground_body(
             "mistterm_port_fwd_fg",
             ctx,
+            theme,
             &geom,
             layout_util::SidePanelProfile::Standard,
             |ui, _body_w| {
@@ -235,25 +266,19 @@ impl PortForwardPanel {
         ui.spacing_mut().item_spacing.y = prev_gap;
         ui.add_space(theme.spacing_dock_section_gap());
 
-        let Some(t) = terminal else {
-            ui.label(
-                egui::RichText::new(crate::i18n::tr(
-                    ctx,
-                    "Connect a session before using port forwarding.",
-                    "请打开会话并连接后可使用端口转发。",
-                ))
-                .color(theme.text_tertiary()),
-            );
-            return;
-        };
-        if !t.is_connected() {
-            crate::ui::chrome::busy_row(
-                ui,
-                theme,
-                crate::i18n::tr(ctx, "Connecting…", "连接建立中…"),
-            );
+        if !crate::ui::chrome::show_right_dock_ssh_gate(
+            ui,
+            theme,
+            ctx,
+            terminal,
+            "Connect a session before using port forwarding.",
+            "请打开会话并连接后可使用端口转发。",
+        ) {
             return;
         }
+        let Some(t) = terminal else {
+            return;
+        };
         let Some(ssh_session_id) = t.ssh_session_id() else {
             ui.label(
                 egui::RichText::new(crate::i18n::tr(ctx, "Session unavailable", "会话不可用"))
@@ -637,5 +662,22 @@ mod panel_tests {
         panel.clear_ssh_session(2);
         panel.register_profile_forwards(2, &profile);
         assert!(panel.profile_registered.contains(&2));
+    }
+
+    #[test]
+    fn retain_live_sessions_drops_stale() {
+        use std::collections::HashSet;
+        let mut panel = PortForwardPanel::new();
+        let mut profile = SessionConfig::default();
+        profile.local_forwards_text = "8080:127.0.0.1:80\n".into();
+        panel.register_profile_forwards(1, &profile);
+        panel.register_profile_forwards(2, &profile);
+        assert_eq!(panel.active_count_for(1), 1);
+        assert_eq!(panel.active_count_for(2), 1);
+        let mut live = HashSet::new();
+        live.insert(2);
+        panel.retain_live_sessions(&live);
+        assert_eq!(panel.active_count_for(1), 0);
+        assert_eq!(panel.active_count_for(2), 1);
     }
 }

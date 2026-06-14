@@ -815,6 +815,9 @@ impl MistTermApp {
                 self.port_forward_last_tab = None;
             }
         }
+        if !self.show_monitor_panel {
+            self.sync_monitor_panel_to_active_tab();
+        }
         if self.show_ai_panel || self.show_ai_settings_dialog {
             self.ai_panel.poll_background(ctx, &mut self.app_settings);
         }
@@ -825,6 +828,79 @@ impl MistTermApp {
                 &mut self.show_ai_panel,
                 &mut self.app_settings,
             );
+        }
+        // 改宽手柄：全部 dock 正文之后、屏上左→右绘制，避免右邻 dock 正文挡住左缝（如监控+片段并排）。
+        if paint_right_dock_fg {
+            if self.show_ai_panel {
+                crate::ui::chrome::show_right_dock_resize_grip_for_slot(
+                    ctx,
+                    theme,
+                    "mistterm_ai_fg",
+                    self.ai_panel.last_panel_slot_rect(),
+                    layout_util::AI_PANEL_ID,
+                    layout_util::SidePanelProfile::Standard,
+                );
+            }
+            if self.show_port_forward_panel {
+                crate::ui::chrome::show_right_dock_resize_grip_for_slot(
+                    ctx,
+                    theme,
+                    "mistterm_port_fwd_fg",
+                    self.port_forward_panel.last_panel_slot_rect(),
+                    "port_forward_panel",
+                    layout_util::SidePanelProfile::Standard,
+                );
+            }
+            if self.show_monitor_panel {
+                crate::ui::chrome::show_right_dock_resize_grip_for_slot(
+                    ctx,
+                    theme,
+                    "mistterm_monitor_fg",
+                    self.monitor_panel.last_panel_slot_rect(),
+                    layout_util::MONITOR_PANEL_ID,
+                    layout_util::SidePanelProfile::Monitor,
+                );
+            }
+            if self.show_sftp_panel {
+                crate::ui::chrome::show_right_dock_resize_grip_for_slot(
+                    ctx,
+                    theme,
+                    "mistterm_sftp_fg",
+                    self.sftp_panel.last_panel_slot_rect(),
+                    "sftp_browser_panel",
+                    layout_util::SidePanelProfile::Standard,
+                );
+            }
+            if self.cloud_sync_panel.open {
+                crate::ui::chrome::show_right_dock_resize_grip_for_slot(
+                    ctx,
+                    theme,
+                    "mistterm_cloud_sync_fg",
+                    self.cloud_sync_panel.last_panel_slot_rect(),
+                    "cloud_sync_panel",
+                    layout_util::SidePanelProfile::Standard,
+                );
+            }
+            if self.credential_panel.open {
+                crate::ui::chrome::show_right_dock_resize_grip_for_slot(
+                    ctx,
+                    theme,
+                    "mistterm_credential_fg",
+                    self.credential_panel.last_panel_slot_rect(),
+                    "credential_panel",
+                    layout_util::SidePanelProfile::Standard,
+                );
+            }
+            if self.show_fragment_panel {
+                crate::ui::chrome::show_right_dock_resize_grip_for_slot(
+                    ctx,
+                    theme,
+                    "mistterm_fragment_fg",
+                    self.fragment_panel_slot_rect,
+                    layout_util::FRAGMENT_PANEL_ID,
+                    layout_util::SidePanelProfile::Fragment,
+                );
+            }
         }
         if self.show_ai_settings_dialog {
             self.ai_panel.show_settings_dialog(
