@@ -349,6 +349,7 @@ pub struct SftpPanel {
     busy: bool,
     rx: Option<Receiver<SftpJobResult>>,
     mkdir_name: String,
+    show_mkdir_dialog: bool,
     pending_delete: Option<PathBuf>,
     pending_refresh_after_op: bool,
     /// 面板打开后与切换标签时为 true，触发一次列表加载
@@ -393,14 +394,12 @@ impl SftpPanel {
             + theme.size_file_list_row_h()
     }
 
-    /// 远端分区 chrome（标题/路径/导航/创建/表头，不含列表滚动区）。
+    /// 远端分区 chrome（标题/路径/导航/表头，不含列表滚动区；新建目录已改为弹窗）。
     fn estimate_remote_section_chrome(theme: &Theme) -> f32 {
         let band_h = theme.size_sftp_toolbar_row_h() + theme.spacing_xs() * 2.0;
         let caption = theme.font_size_caption() + theme.spacing_xs();
         theme.spacing_body_pad() * 2.0
             + caption
-            + band_h
-            + theme.spacing_xs()
             + band_h
             + theme.spacing_xs()
             + band_h
@@ -441,6 +440,7 @@ impl SftpPanel {
             busy: false,
             rx: None,
             mkdir_name: String::new(),
+            show_mkdir_dialog: false,
             pending_delete: None,
             pending_refresh_after_op: false,
             pending_auto_list: false,
@@ -473,6 +473,7 @@ impl SftpPanel {
         self.busy = false;
         self.rx = None;
         self.mkdir_name.clear();
+        self.show_mkdir_dialog = false;
         self.pending_delete = None;
         self.pending_refresh_after_op = false;
         self.pending_auto_list = false;
@@ -986,6 +987,100 @@ impl SftpPanel {
             })();
             SftpJobResult::Msg(msg)
         });
+    }
+
+    fn show_mkdir_dialog_ui(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        handle: &SshSessionHandle,
+    ) {
+        if !self.show_mkdir_dialog {
+            return;
+        }
+        let mut open = true;
+        let mut should_close = false;
+        let mut do_create = false;
+        let mkdir_id = egui::Id::new("sftp_mkdir_modal_name");
+        let mkdir_hint = crate::i18n::tr(ctx, "New folder name", "新建目录名");
+        let can_create = !self.busy && !self.mkdir_name.trim().is_empty();
+        let modal_sz = layout_util::modal_confirm_size(ctx);
+        let cwd_label = self.cwd.to_string_lossy();
+        let resp = crate::ui::chrome::modal_window("sftp_mkdir_modal", theme, ctx)
+            .open(&mut open)
+            .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
+            .movable(true)
+            .resizable(false)
+            .fixed_size(modal_sz)
+            .show(ctx, |ui| {
+                crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
+                    crate::ui::chrome::modal_header_title_only(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "New folder", "新建目录"),
+                        crate::ui::chrome::modal_title_font_size(theme),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} {}",
+                            crate::i18n::tr(ctx, "Location:", "位置："),
+                            cwd_label,
+                        ))
+                        .size(theme.font_size_small())
+                        .color(theme.text_tertiary()),
+                    );
+                    ui.add_space(theme.spacing_md());
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        mkdir_id,
+                        &mut self.mkdir_name,
+                        mkdir_hint,
+                        ui.available_width().max(160.0),
+                        false,
+                    );
+                    ui.add_space(theme.spacing_lg());
+                    crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
+                        if crate::ui::chrome::modal_primary_icon_button(
+                            ui,
+                            th,
+                            crate::ui::icons::IconId::Plus,
+                            crate::i18n::tr(ctx, "Create", "创建"),
+                        )
+                        .clicked()
+                            && can_create
+                        {
+                            do_create = true;
+                            should_close = true;
+                        }
+                        if crate::ui::chrome::modal_secondary_icon_button(
+                            ui,
+                            th,
+                            crate::ui::icons::IconId::Cross,
+                            crate::i18n::tr(ctx, "Cancel", "取消"),
+                        )
+                        .clicked()
+                        {
+                            should_close = true;
+                        }
+                    });
+                })
+            });
+        if let Some(inner) = resp {
+            crate::ui::chrome::raise_window_response(ctx, &inner.response);
+        }
+        ctx.memory_mut(|m| m.request_focus(mkdir_id));
+        if do_create {
+            let p = self.cwd.join(self.mkdir_name.trim());
+            self.mkdir_name.clear();
+            self.spawn_mkdir(handle, p, ctx);
+        }
+        if !open || should_close {
+            self.show_mkdir_dialog = false;
+            if !do_create {
+                self.mkdir_name.clear();
+            }
+        }
     }
 
     fn spawn_mkdir(&mut self, handle: &SshSessionHandle, path: PathBuf, ctx: &egui::Context) {
@@ -1631,6 +1726,7 @@ impl SftpPanel {
             let up_lbl = crate::i18n::tr(ui.ctx(), "Up", "上级");
             let refresh_lbl = crate::i18n::tr(ui.ctx(), "Refresh", "刷新");
             let root_lbl = crate::i18n::tr(ui.ctx(), "Root /", "根 /");
+            let new_folder_lbl = crate::i18n::tr(ui.ctx(), "New folder", "新建目录");
             let busy = !self.busy;
             let remote_nav = [
                 crate::ui::chrome::ButtonGroupAction {
@@ -1656,6 +1752,12 @@ impl SftpPanel {
                     label: root_lbl,
                     enabled: busy,
                     tooltip: root_lbl,
+                },
+                crate::ui::chrome::ButtonGroupAction {
+                    icon: crate::ui::icons::IconId::Plus,
+                    label: &new_folder_lbl,
+                    enabled: busy,
+                    tooltip: &new_folder_lbl,
                 },
             ];
             if theme.uses_modern_palette() {
@@ -1686,6 +1788,7 @@ impl SftpPanel {
                         }
                         2 => self.spawn_list(&handle, self.cwd.clone(), ctx),
                         3 => self.spawn_list(&handle, PathBuf::from("/"), ctx),
+                        4 => self.show_mkdir_dialog = true,
                         _ => {}
                     }
                 }
@@ -1752,74 +1855,20 @@ impl SftpPanel {
                     {
                         self.spawn_list(&handle, PathBuf::from("/"), ctx);
                     }
-                });
-            }
-
-            let mkdir_id = egui::Id::new("sftp_mkdir_name");
-            let mkdir_hint = crate::i18n::tr(ui.ctx(), "New folder name", "新建目录名");
-            let create_lbl = crate::i18n::tr(ui.ctx(), "Create", "创建");
-            let can_create = !self.busy && !self.mkdir_name.trim().is_empty();
-            if theme.uses_modern_palette() {
-                crate::ui::chrome::sftp_toolbar_band(ui, theme, |ui, theme| {
-                    let gap = theme.spacing_sm();
-                    let create_w = theme.size_control_btn_min_w() + theme.spacing_lg();
-                    let field_w = (ui.available_width() - create_w - gap).max(96.0);
-                    ui.scope(|ui| {
-                        ui.set_max_width(field_w);
-                        ui.set_min_width(field_w);
-                        crate::ui::chrome::form_singleline_field_sftp_embedded(
-                            ui,
-                            theme,
-                            mkdir_id,
-                            &mut self.mkdir_name,
-                            mkdir_hint,
-                        );
-                    });
-                    ui.add_space(gap);
-                    if crate::ui::chrome::sftp_ghost_submit_button(
-                        ui,
-                        theme,
-                        crate::ui::icons::IconId::Plus,
-                        create_lbl,
-                        can_create,
-                    )
-                    .clicked()
-                        && can_create
-                    {
-                        let p = self.cwd.join(self.mkdir_name.trim());
-                        self.mkdir_name.clear();
-                        self.spawn_mkdir(&handle, p, ctx);
-                    }
-                });
-            } else {
-                let mkdir_w = Self::dock_field_width(ui);
-                crate::ui::chrome::form_singleline_field(
-                    ui,
-                    theme,
-                    mkdir_id,
-                    &mut self.mkdir_name,
-                    mkdir_hint,
-                    mkdir_w,
-                    false,
-                );
-                ui.horizontal_wrapped(|ui| {
-                    Self::begin_dock_row(ui);
                     if crate::ui::chrome::panel_action_button_with_icon_ex(
                         ui,
                         theme,
                         crate::ui::icons::IconId::Plus,
-                        create_lbl,
-                        can_create,
+                        new_folder_lbl,
+                        busy,
                     )
                     .clicked()
-                        && can_create
                     {
-                        let p = self.cwd.join(self.mkdir_name.trim());
-                        self.mkdir_name.clear();
-                        self.spawn_mkdir(&handle, p, ctx);
+                        self.show_mkdir_dialog = true;
                     }
                 });
             }
+
             if let Some(p) = self.pending_delete.clone() {
                 ui.horizontal(|ui| {
                     ui.label(
@@ -1939,6 +1988,8 @@ impl SftpPanel {
                 self.spawn_list(&handle, d, ctx);
             }
         });
+
+        self.show_mkdir_dialog_ui(ctx, theme, &handle);
 
         if self.busy {
             ui.add_space(theme.spacing_panel_gap());
