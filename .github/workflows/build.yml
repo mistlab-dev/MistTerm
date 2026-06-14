@@ -176,6 +176,17 @@ jobs:
           cargo build --release --bin $env:BIN_NAME --target "${{ matrix.target }}" @featuresArg
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Build Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install innosetup -y --no-progress
+          $iscc = "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          if (-not (Test-Path $iscc)) { throw "ISCC not found after Inno Setup install" }
+          powershell -ExecutionPolicy Bypass -File scripts/package-windows-installer.ps1 -SkipBuild -Target "${{ matrix.target }}" -IsccPath $iscc
+
       - name: Package artifact
         shell: bash
         run: |
@@ -223,6 +234,14 @@ jobs:
           path: ${{ env.ARTIFACT_PATH }}
           if-no-files-found: error
 
+      - name: Upload Windows installer
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: MistTerm-windows-x86_64-setup
+          path: dist/MistTerm-*-windows-x86_64-setup.exe
+          if-no-files-found: error
+
   release:
     name: Publish Release
     needs: platform
@@ -255,7 +274,7 @@ jobs:
 
             - **macOS**: `Mist-macos-universal.dmg` — open the disk image and drag Mist into Applications
             - **Linux**: `Mist-linux-x86_64.tar.gz`
-            - **Windows**: `Mist-windows-x86_64.zip`
+            - **Windows**: `MistTerm-*-windows-x86_64-setup.exe` (recommended) or `Mist-windows-x86_64.zip`
 
             - Website: https://mistlab.dev
             - Documentation: https://github.com/mistlab-dev/MistTerm/tree/main/docs
