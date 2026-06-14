@@ -793,6 +793,12 @@ impl MistTermApp {
                 &self.audit_logger,
                 &mut close_sftp_panel,
             );
+            let (sftp_ok, sftp_err) = self.sftp_panel.take_pending_status();
+            if let Some(e) = sftp_err {
+                self.status_message = status_message_wrap_error(e);
+            } else if let Some(m) = sftp_ok {
+                self.status_message = m;
+            }
             if close_sftp_panel {
                 self.show_sftp_panel = false;
             }
