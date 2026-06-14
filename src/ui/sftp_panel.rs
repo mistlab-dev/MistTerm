@@ -344,8 +344,9 @@ pub struct SftpPanel {
     local_selected: Option<PathBuf>,
     local_list_err: Option<String>,
     list_err: Option<String>,
-    toast_ok: Option<String>,
-    toast_err: Option<String>,
+    /// 待写入底栏 `status_message` 的成功/失败提示（不在面板内渲染）。
+    pending_status_ok: Option<String>,
+    pending_status_err: Option<String>,
     busy: bool,
     rx: Option<Receiver<SftpJobResult>>,
     mkdir_name: String,
@@ -435,8 +436,8 @@ impl SftpPanel {
             local_selected: None,
             local_list_err: None,
             list_err: None,
-            toast_ok: None,
-            toast_err: None,
+            pending_status_ok: None,
+            pending_status_err: None,
             busy: false,
             rx: None,
             mkdir_name: String::new(),
@@ -468,8 +469,8 @@ impl SftpPanel {
         self.local_selected = None;
         self.local_list_err = None;
         self.list_err = None;
-        self.toast_ok = None;
-        self.toast_err = None;
+        self.pending_status_ok = None;
+        self.pending_status_err = None;
         self.busy = false;
         self.rx = None;
         self.mkdir_name.clear();
@@ -525,7 +526,7 @@ impl SftpPanel {
                                 );
                             }
                         }
-                        self.toast_ok = Some(msg);
+                        self.pending_status_ok = Some(msg);
                         self.pending_refresh_after_op = true;
                         self.refresh_local_list();
                     }
@@ -552,7 +553,7 @@ impl SftpPanel {
                                 );
                             }
                         }
-                        self.toast_err = Some(e);
+                        self.pending_status_err = Some(e);
                     }
                 }
                 self.busy = false;
@@ -562,7 +563,7 @@ impl SftpPanel {
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.busy = false;
                 self.rx = None;
-                self.toast_err = Some(
+                self.pending_status_err = Some(
                     crate::i18n::Locale::from(lang)
                         .tr(
                             "SFTP background worker stopped unexpectedly",
@@ -897,7 +898,7 @@ impl SftpPanel {
         if let Err(e) = result {
             self.busy = false;
             self.rx = None;
-            self.toast_err = Some(e);
+            self.pending_status_err = Some(e);
         }
     }
 
@@ -1188,6 +1189,14 @@ impl SftpPanel {
         self.last_panel_slot_rect
     }
 
+    /// 取出待显示在底栏的状态文案（成功/失败）；失败项优先于成功项。
+    pub fn take_pending_status(&mut self) -> (Option<String>, Option<String>) {
+        (
+            self.pending_status_ok.take(),
+            self.pending_status_err.take(),
+        )
+    }
+
     pub fn show_side_panel(
         &mut self,
         ctx: &egui::Context,
@@ -1323,28 +1332,6 @@ impl SftpPanel {
             self.spawn_list(&handle, self.cwd.clone(), ctx);
         }
 
-        if let Some(ok) = self.toast_ok.clone() {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(&ok).color(theme.green_color()));
-                if crate::ui::chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Close)
-                    .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss", "关闭提示"))
-                    .clicked()
-                {
-                    self.toast_ok = None;
-                }
-            });
-        }
-        if let Some(err) = self.toast_err.clone() {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(&err).color(theme.red_color()));
-                if crate::ui::chrome::chrome_small_icon_button(ui, theme, crate::ui::icons::IconId::Close)
-                    .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss", "关闭"))
-                    .clicked()
-                {
-                    self.toast_err = None;
-                }
-            });
-        }
         if let Some(err) = &self.list_err {
             let msg = Self::localize_list_error(ctx, err);
             egui::Frame::none()
