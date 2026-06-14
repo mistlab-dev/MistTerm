@@ -299,10 +299,10 @@ impl FileTableCols {
         }
     }
 
-    /// 按列表视口当前可用宽度计算列宽（须在进入 [`Self::paint_file_list_viewport_frame`] 后调用）。
-    fn for_list_ui(ui: &mut egui::Ui) -> Self {
+    /// 按列表视口当前可用宽度计算列宽（预留竖向滚动条占位，避免「修改时间」等右列被切）。
+    fn for_list_ui(ui: &mut egui::Ui, body_cap: f32) -> Self {
         layout_util::set_width_to_available(ui);
-        Self::from_panel_width(ui.available_width())
+        Self::from_panel_width(layout_util::dock_scroll_viewport_width(ui, body_cap))
     }
 
     fn col_width(self, col: usize) -> f32 {
@@ -1088,6 +1088,11 @@ impl SftpPanel {
     }
 
     /// 右侧 SFTP 侧栏入口（`close_panel` 置为 true 时由宿主隐藏侧栏）
+    #[inline]
+    pub(crate) fn last_panel_slot_rect(&self) -> Option<egui::Rect> {
+        self.last_panel_slot_rect
+    }
+
     pub fn show_side_panel(
         &mut self,
         ctx: &egui::Context,
@@ -1103,12 +1108,14 @@ impl SftpPanel {
             .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
-                crate::ui::chrome::paint_right_dock_left_gap(ui, theme);
-                self.last_panel_slot_rect = Some(ui.max_rect());
                 let h = ui.available_height().max(1.0);
                 let w = ui.available_width().max(1.0);
                 ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
             });
+        let dock_inset = theme.spacing_right_dock_screen_inset();
+        let slot = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
+        crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
+        self.last_panel_slot_rect = Some(slot);
         if let Some(slot) = self.last_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
         } else {
@@ -1144,10 +1151,11 @@ impl SftpPanel {
         crate::ui::chrome::show_right_dock_foreground_body(
             "mistterm_sftp_fg",
             ctx,
+            theme,
             &geom,
             layout_util::SidePanelProfile::Standard,
-            |ui, _body_w| {
-                self.show_content(ui, ctx, theme, terminal, audit, close_panel);
+            |ui, body_w| {
+                self.show_content(ui, ctx, theme, terminal, audit, close_panel, body_w);
             },
         );
     }
@@ -1160,13 +1168,17 @@ impl SftpPanel {
         terminal: Option<&TerminalView>,
         audit: &AuditLogger,
         close_panel: &mut bool,
+        body_w: f32,
     ) {
         self.poll_rx(audit, crate::i18n::language(ctx));
+
+        let content_w = layout_util::constrain_ui_to_right_dock_body(ui, body_w);
 
         let mut header_closed = false;
         let prev_gap_y = ui.spacing().item_spacing.y;
         ui.spacing_mut().item_spacing.y = 0.0;
         theme.frame_right_dock_header_band().show(ui, |ui| {
+            ui.set_max_width(content_w);
             header_closed = crate::ui::chrome::dock_panel_title_close_only(
                 ui,
                 theme,
@@ -1182,22 +1194,19 @@ impl SftpPanel {
         ui.spacing_mut().item_spacing.y = prev_gap_y;
         ui.add_space(theme.spacing_dock_section_gap());
 
-        let Some(t) = terminal else {
-            ui.label(
-                egui::RichText::new(crate::i18n::tr(
-                    ctx,
-                    "Connect a session before using SFTP.",
-                    "请打开会话并连接后可使用 SFTP。",
-                ))
-                    .color(theme.text_tertiary()),
-            );
-            return;
-        };
-
-        if !t.is_connected() {
-            crate::ui::chrome::busy_row(ui, theme, crate::i18n::tr(ctx, "Connecting…", "连接建立中…"));
+        if !crate::ui::chrome::show_right_dock_ssh_gate(
+            ui,
+            theme,
+            ctx,
+            terminal,
+            "Connect a session before using SFTP.",
+            "请打开会话并连接后可使用 SFTP。",
+        ) {
             return;
         }
+        let Some(t) = terminal else {
+            return;
+        };
 
         let Some(handle) = t.sftp_session_for_ops() else {
             ui.label(egui::RichText::new(crate::i18n::tr(ctx, "Session unavailable", "会话不可用")).color(theme.red_color()));
@@ -1218,9 +1227,6 @@ impl SftpPanel {
             self.refresh_local_list();
             self.spawn_list(&handle, self.cwd.clone(), ctx);
         }
-
-        layout_util::set_width_to_available(ui);
-        ui.set_max_width(ui.available_width());
 
         if let Some(ok) = self.toast_ok.clone() {
             ui.horizontal(|ui| {
@@ -1565,7 +1571,7 @@ impl SftpPanel {
                 |ui| {
             Self::paint_file_list_viewport_frame(theme).show(ui, |ui| {
                 layout_util::set_width_to_available(ui);
-                let table_cols = FileTableCols::for_list_ui(ui);
+                let table_cols = FileTableCols::for_list_ui(ui, content_w);
                 if Self::paint_file_table_header(ui, theme, ctx, table_cols, &mut self.local_sort) {
                     self.apply_local_sort();
                 }
@@ -1855,7 +1861,7 @@ impl SftpPanel {
                 |ui| {
             Self::paint_file_list_viewport_frame(theme).show(ui, |ui| {
                 layout_util::set_width_to_available(ui);
-                let table_cols = FileTableCols::for_list_ui(ui);
+                let table_cols = FileTableCols::for_list_ui(ui, content_w);
                 if Self::paint_file_table_header(ui, theme, ctx, table_cols, &mut self.remote_sort) {
                     self.apply_remote_sort();
                 }

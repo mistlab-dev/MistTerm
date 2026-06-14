@@ -183,8 +183,15 @@ impl MonitorPanel {
         self.monitor.is_some()
     }
 
-    /// 底栏摘要：CPU / 内存（无有效采集数据时返回 None）
-    pub fn status_bar_metrics_line(&self, egui_ctx: &egui::Context) -> Option<String> {
+    /// 底栏摘要：CPU / 内存（监控侧栏打开且有有效采集数据时返回）
+    pub fn status_bar_metrics_line(
+        &self,
+        egui_ctx: &egui::Context,
+        panel_open: bool,
+    ) -> Option<String> {
+        if !panel_open {
+            return None;
+        }
         let monitor = self.monitor.as_ref()?;
         let stats = monitor.last_stats();
         if stats.memory_total == 0 && stats.disk_total == 0 && stats.uptime_secs == 0 {
@@ -282,6 +289,11 @@ impl MonitorPanel {
         }
     }
 
+    #[inline]
+    pub(crate) fn last_panel_slot_rect(&self) -> Option<egui::Rect> {
+        self.last_panel_slot_rect
+    }
+
     /// 注册监控栏槽位（须在 Central 之前）。正文见 [`show_foreground_panel`]。
     pub fn show_side_panel(
         &mut self,
@@ -304,12 +316,14 @@ impl MonitorPanel {
             .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
-                crate::ui::chrome::paint_right_dock_left_gap(ui, theme);
-                self.last_panel_slot_rect = Some(ui.max_rect());
                 let h = ui.available_height().max(1.0);
                 let w = ui.available_width().max(1.0);
                 ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
             });
+        let dock_inset = theme.spacing_right_dock_screen_inset();
+        let slot = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
+        crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
+        self.last_panel_slot_rect = Some(slot);
         if let Some(slot) = self.last_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
         } else {
@@ -346,9 +360,11 @@ impl MonitorPanel {
         crate::ui::chrome::show_right_dock_foreground_body(
             "mistterm_monitor_fg",
             ctx,
+            theme,
             &geom,
             crate::ui::layout_util::SidePanelProfile::Monitor,
-            |ui, _body_w| {
+            |ui, body_w| {
+                let content_w = layout_util::constrain_ui_to_right_dock_body(ui, body_w);
                 let loc_fg = i18n::locale(ctx);
                 let alert_count = self.monitor.as_ref().and_then(|mon| {
                         let alerts = Self::collect_alerts_with(
@@ -367,7 +383,7 @@ impl MonitorPanel {
                     let prev_gap_y = ui.spacing().item_spacing.y;
                     ui.spacing_mut().item_spacing.y = 0.0;
                     theme.frame_right_dock_header_band().show(ui, |ui| {
-                            layout_util::set_width_to_available(ui);
+                            ui.set_max_width(content_w);
                             crate::ui::chrome::dock_header_horizontal(ui, theme, |ui| {
                                 ui.horizontal(|ui| {
                                     crate::ui::chrome::panel_header_title_leading(
@@ -447,23 +463,22 @@ impl MonitorPanel {
                     let prev_extreme = ui.visuals().extreme_bg_color;
                     ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
                     egui::ScrollArea::vertical()
-                        .id_source("mistterm_monitor_scroll")
-                        .auto_shrink([false; 2])
+                        .id_source("mistterm_monitor_scroll_v6")
+                        .auto_shrink([true, false])
                         .max_height(scroll_h)
                         .show(ui, |ui| {
-                            layout_util::set_width_to_available(ui);
-                            self.show_content(ui, theme);
+                            let w = layout_util::constrain_ui_to_right_dock_body(ui, content_w);
+                            self.show_content(ui, theme, w);
                         });
                     ui.visuals_mut().extreme_bg_color = prev_extreme;
         },
         );
     }
 
-    fn show_content(&mut self, ui: &mut egui::Ui, theme: &Theme) {
-        layout_util::set_width_to_available(ui);
+    fn show_content(&mut self, ui: &mut egui::Ui, theme: &Theme, dock_w: f32) {
         let loc = i18n::locale(ui.ctx());
-        theme.frame_inset_section().show(ui, |ui| {
-            layout_util::set_width_to_available(ui);
+        ui.set_max_width(dock_w);
+        show_dock_frame(ui, theme.frame_inset_section(), dock_w, |ui| {
             ui.vertical(|ui| {
                 layout_util::set_width_to_available(ui);
                 ui.horizontal(|ui| {
@@ -550,26 +565,25 @@ impl MonitorPanel {
             let (rx_rate, tx_rate) = monitor.network_rate();
             let alerts = self.collect_alerts(loc, stats);
             if !alerts.is_empty() {
-                theme.frame_monitor_alert()
-                    .show(ui, |ui| {
+                show_dock_frame(ui, theme.frame_monitor_alert(), dock_w, |ui| {
+                    ui.label(
+                        egui::RichText::new(i18n::tr(ui.ctx(), "Current alerts", "当前告警"))
+                            .size(theme.font_size_medium())
+                            .color(theme.red_color()),
+                    );
+                    ui.add_space(4.0);
+                    for line in &alerts {
                         ui.label(
-                            egui::RichText::new(i18n::tr(ui.ctx(), "Current alerts", "当前告警"))
-                                .size(theme.font_size_medium())
-                                .color(theme.red_color()),
+                            egui::RichText::new(line)
+                                .size(theme.font_size_small())
+                                .color(theme.text_primary()),
                         );
-                        ui.add_space(4.0);
-                        for line in &alerts {
-                            ui.label(
-                                egui::RichText::new(line)
-                                    .size(theme.font_size_small())
-                                    .color(theme.text_primary()),
-                            );
-                        }
-                    });
+                    }
+                });
                 ui.add_space(theme.spacing_md());
             }
 
-            theme.frame_inset_section().show(ui, |ui| {
+            show_dock_frame(ui, theme.frame_inset_section(), dock_w, |ui| {
                 layout_util::set_width_to_available(ui);
             crate::ui::chrome::dock_label_value_row(
                 ui,
@@ -584,6 +598,7 @@ impl MonitorPanel {
             self.show_metric_bar(
                 ui,
                 theme,
+                dock_w,
                 crate::ui::icons::IconId::Cpu,
                 loc.tr("CPU", "CPU"),
                 stats.cpu_percent,
@@ -594,6 +609,7 @@ impl MonitorPanel {
             self.show_metric_bar(
                 ui,
                 theme,
+                dock_w,
                 crate::ui::icons::IconId::Memory,
                 loc.tr("Memory", "内存"),
                 stats.memory_percent(),
@@ -604,6 +620,7 @@ impl MonitorPanel {
             self.show_metric_bar(
                 ui,
                 theme,
+                dock_w,
                 crate::ui::icons::IconId::Disk,
                 loc.tr("Disk", "磁盘"),
                 stats.disk_percent(),
@@ -629,6 +646,7 @@ impl MonitorPanel {
                 |t| t.size(theme.font_size_medium()).color(theme.text_secondary()),
             );
             ui.horizontal(|ui| {
+                ui.set_max_width(dock_w);
                 let (l1, l5, l15) = stats.load_avg;
                 self.load_chip(ui, theme, "1m", l1);
                 self.load_chip(ui, theme, "5m", l5);
@@ -683,7 +701,7 @@ impl MonitorPanel {
             );
             ui.add_space(theme.spacing_sm());
 
-            self.show_history_plots(ui, theme, history);
+            self.show_history_plots(ui, theme, history, dock_w);
             });
 
         } else {
@@ -731,6 +749,7 @@ impl MonitorPanel {
         &self,
         ui: &mut egui::Ui,
         theme: &Theme,
+        content_w: f32,
         icon: crate::ui::icons::IconId,
         label: &str,
         percent: f32,
@@ -740,7 +759,8 @@ impl MonitorPanel {
         crate::ui::chrome::dock_label_value_row(ui, theme, icon, label, value_text);
 
         let bar_height = theme.progress_bar_height();
-        let available_width = layout_util::set_width_to_available(ui);
+        let available_width =
+            layout_util::dock_scroll_content_width(ui, content_w);
         let bg_color = theme.metric_bar_track_fill();
 
         ui.allocate_ui_with_layout(
@@ -805,11 +825,13 @@ impl MonitorPanel {
         ui: &mut egui::Ui,
         theme: &Theme,
         history: &[ServerStats],
+        content_w: f32,
     ) {
         let loc = i18n::locale(ui.ctx());
         const CHART_HEIGHT: f32 = 136.0;
         const Y_AXIS_DIGITS: usize = 4;
-        let width = layout_util::set_width_to_available(ui);
+        let width = layout_util::dock_scroll_content_width(ui, content_w);
+        ui.set_max_width(width);
         let plot_margin = egui::vec2(0.05, 0.0);
         let y_axis = vec![AxisHints::default().max_digits(Y_AXIS_DIGITS)];
         let link_x_id = ui.id().with("monitor_hist_time_axis");
@@ -1271,6 +1293,23 @@ fn nearest_history_index(history: &[ServerStats], t0: std::time::Instant, plot_x
         })
         .map(|(i, _)| i)
         .unwrap_or(0)
+}
+
+/// Frame 默认随内容收缩；右 dock 内卡片应铺满正文宽（勿 `set_min_width(max_rect)`）。
+fn show_dock_frame<R>(
+    ui: &mut egui::Ui,
+    frame: egui::Frame,
+    dock_w: f32,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let w = layout_util::dock_scroll_content_width(ui, dock_w);
+    frame
+        .show(ui, |ui| {
+            ui.set_width(w);
+            ui.set_max_width(w);
+            body(ui)
+        })
+        .inner
 }
 
 /// 格式化每秒字节数

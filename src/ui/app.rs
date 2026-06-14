@@ -658,6 +658,7 @@ impl MistTermApp {
         self.monitor_last_tab = None;
         self.sftp_last_tab = None;
         self.port_forward_last_tab = None;
+        self.sync_monitor_panel_to_active_tab();
     }
 
     /// 打开指定右 dock（不关闭其它已打开的右 dock）。
@@ -1558,6 +1559,13 @@ impl MistTermApp {
             .unwrap_or(self.auto_reconnect_enabled)
     }
 
+    fn active_tab_auto_reconnect_enabled(&self) -> bool {
+        self.active_tab
+            .and_then(|i| self.tabs.get(i))
+            .map(|t| self.tab_auto_reconnect_enabled(&t.primary_session_id()))
+            .unwrap_or(false)
+    }
+
     fn poll_command_history_from_active_tab(&mut self) {
         let Some(idx) = self.active_tab else {
             return;
@@ -1654,8 +1662,11 @@ impl MistTermApp {
     fn active_tab_log_status(&self, ctx: &egui::Context) -> Option<String> {
         let idx = self.active_tab?;
         let tab = self.tabs.get(idx)?;
-        tab.active_pane()?.log_writer.as_ref().map(|w| {
-            crate::i18n::session_log_status(ctx, w.status_label_key()).to_string()
+        tab.active_pane()?.log_writer.as_ref().and_then(|w| {
+            if w.status_label_key() == "log_off" {
+                return None;
+            }
+            Some(crate::i18n::session_log_status(ctx, w.status_label_key()).to_string())
         })
     }
 
@@ -1975,7 +1986,9 @@ impl MistTermApp {
             .restore_offline_input_snapshot(offline.0, offline.1);
         pane.title = session.name.clone();
         self.session_manager.mark_session_connected(&sid);
-        self.sync_monitor_panel_to_active_tab();
+        if self.show_monitor_panel {
+            self.sync_monitor_panel_to_active_tab();
+        }
         self.status_message = format!(
             "{} {}",
             crate::i18n::tr(ctx, "Reconnecting:", "正在重连："),
@@ -2135,8 +2148,12 @@ impl MistTermApp {
         self.tabs.get(idx)?.active_terminal()
     }
 
-    /// 监控侧栏跟随当前标签：重新绑定 SSH 会话上的 exec；未连接则清空展示。
+    /// 监控侧栏跟随当前标签：重新绑定 SSH 会话上的 exec；未连接或侧栏关闭则清空。
     fn sync_monitor_panel_to_active_tab(&mut self) {
+        if !self.show_monitor_panel {
+            self.monitor_panel.clear();
+            return;
+        }
         let Some(tab) = self.active_tab.and_then(|i| self.tabs.get(i)) else {
             self.monitor_panel.clear();
             return;
@@ -3071,6 +3088,7 @@ impl MistTermApp {
         if self.show_monitor_panel {
             self.show_monitor_panel = false;
             self.monitor_last_tab = None;
+            self.sync_monitor_panel_to_active_tab();
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
             self.open_right_dock_panel(ActiveRightDock::Monitor);
         }
@@ -3101,6 +3119,21 @@ impl MistTermApp {
         for audit in self.port_forward_panel.take_pending_audits() {
             self.record_port_forward_audit(audit);
         }
+        use std::collections::HashSet;
+        let live_ssh: HashSet<_> = self
+            .tabs
+            .iter()
+            .filter_map(|tab| {
+                tab.active_terminal().and_then(|t| {
+                    if t.is_connected() {
+                        t.ssh_session_id()
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+        self.port_forward_panel.retain_live_sessions(&live_ssh);
         if let Some(t) = self.current_terminal() {
             if t.is_connected() {
                 if let (Some(ssh_id), Some(profile)) = (
@@ -3108,10 +3141,8 @@ impl MistTermApp {
                     self.active_tab_session_profile(),
                 ) {
                     self.port_forward_panel
-                        .register_profile_forwards(ssh_id, &profile);
+                        .tick_active_session(ssh_id, &profile);
                 }
-            } else if let Some(sid) = t.ssh_session_id() {
-                self.port_forward_panel.clear_ssh_session(sid);
             }
         }
     }
@@ -3780,12 +3811,19 @@ impl MistTermApp {
             // 仅占布局宽；勿在此绘制内容（CentralPanel 后绘会盖住）。内容在 Foreground Area 重绘。
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
-                crate::ui::chrome::paint_right_dock_left_gap(ui, theme);
-                self.fragment_panel_slot_rect = Some(ui.max_rect());
                 let h = ui.available_height().max(1.0);
                 let w = ui.available_width().max(1.0);
                 ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
             });
+        let dock_inset = theme.spacing_right_dock_screen_inset();
+        let slot = layout_util::side_panel_place_slot(
+            ctx,
+            &fragment_panel.response,
+            dock_col_w,
+            dock_inset,
+        );
+        crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
+        self.fragment_panel_slot_rect = Some(slot);
         if let Some(slot) = self.fragment_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, &mut self.right_dock_outer_left_x);
         } else {
@@ -3824,6 +3862,7 @@ impl MistTermApp {
         crate::ui::chrome::show_right_dock_foreground_body(
             "mistterm_fragment_fg",
             ctx,
+            theme,
             &geom,
             layout_util::SidePanelProfile::Fragment,
             |ui, panel_w| {
@@ -4571,12 +4610,14 @@ impl MistTermApp {
             if let Some(tab) = self.tabs.get(idx) {
                 if let Some(conn) = tab
                     .active_terminal()
+                    .filter(|t| t.is_connected())
                     .and_then(|t| t.connection_status_for_bar(theme))
                 {
                     Self::status_connection_chip(ui, &conn, theme);
                 }
                 if let Some(ssh_id) = tab
                     .active_terminal()
+                    .filter(|t| t.is_connected())
                     .and_then(|t| t.ssh_session_id())
                 {
                     let n = self.port_forward_panel.active_count_for(ssh_id);
@@ -4655,13 +4696,16 @@ impl MistTermApp {
             }
         }
 
-        if let Some(metrics) = self.monitor_panel.status_bar_metrics_line(&bar_ctx) {
+        if let Some(metrics) = self
+            .monitor_panel
+            .status_bar_metrics_line(&bar_ctx, self.show_monitor_panel)
+        {
             crate::ui::chrome::status_text_chip(ui, theme, &metrics, theme.text_primary());
         }
 
         self.paint_team_account_status_chip(ui, theme, &bar_ctx);
 
-        if self.auto_reconnect_enabled {
+        if self.active_tab_auto_reconnect_enabled() {
             crate::ui::chrome::status_icon_chip(
                 ui,
                 theme,
@@ -4949,6 +4993,7 @@ impl MistTermApp {
                                     .active_tab
                                     .and_then(|idx| self.tabs.get(idx))
                                     .and_then(|tab| tab.active_terminal())
+                                    .filter(|t| t.is_connected())
                                     .and_then(|t| t.ssh_session_id())
                                     .map(|id| self.port_forward_panel.active_count_for(id))
                                     .unwrap_or(0);
@@ -4998,6 +5043,7 @@ impl MistTermApp {
                                     if self.show_monitor_panel {
                                         self.show_monitor_panel = false;
                                         self.monitor_last_tab = None;
+                                        self.sync_monitor_panel_to_active_tab();
                                     } else if self.ensure_right_dock_allowed_or_warn(ctx) {
                                         self.open_right_dock_panel(ActiveRightDock::Monitor);
                                     }

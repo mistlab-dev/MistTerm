@@ -543,6 +543,11 @@ impl CloudSyncPanel {
     }
 
     /// 仅占右栏布局槽（正文在 Central 之后 [`show_foreground_panel`] 绘制）。
+    #[inline]
+    pub(crate) fn last_panel_slot_rect(&self) -> Option<egui::Rect> {
+        self.last_panel_slot_rect
+    }
+
     pub fn show_side_panel(
         &mut self,
         ctx: &egui::Context,
@@ -564,12 +569,14 @@ impl CloudSyncPanel {
             .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
-                crate::ui::chrome::paint_right_dock_left_gap(ui, theme);
-                self.last_panel_slot_rect = Some(ui.max_rect());
                 let h = ui.available_height().max(1.0);
                 let w = ui.available_width().max(1.0);
                 ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
             });
+        let dock_inset = theme.spacing_right_dock_screen_inset();
+        let slot = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
+        crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
+        self.last_panel_slot_rect = Some(slot);
         if let Some(slot) = self.last_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
         } else {
@@ -613,6 +620,7 @@ impl CloudSyncPanel {
         chrome::show_right_dock_foreground_body(
             "mistterm_cloud_sync_fg",
             ctx,
+            theme,
             &geom,
             layout_util::SidePanelProfile::Standard,
             |ui, _body_w| {

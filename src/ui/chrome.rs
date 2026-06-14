@@ -632,14 +632,26 @@ pub fn right_dock_panel_frame(theme: &Theme) -> egui::Frame {
         .outer_margin(right_dock_outer_margin(theme))
 }
 
-/// 在右 dock 槽位（含左侧 `outer_margin.left` 的 gap）铺一层 `bg_body`：
-/// 1. 盖住 egui canvas 的默认黑底，否则圆角外的四角会透出"黑底色漏光"；
-/// 2. 顺手把左侧 `spacing_dock_gap` 那条缝隙漆成 `bg_body`，避免与 dock 同色看不出 gap。
-///
-/// 圆角面板（`right_dock_panel_frame` 直绘 / Foreground shell）画在更上层，遮住槽位中央，
-/// 只剩四角与 gap 露出 `bg_body`，形成"圆角卡片浮在 bg_body 底上"的统一效果。
-///
-/// 须在每个右 `SidePanel::show` 回调里调用一次。
+/// 在右 dock 槽位（含左侧 `spacing_dock_gap` 缝）铺 `bg_body`；须用 [`side_panel_place_slot`] 后的矩形。
+pub fn paint_right_dock_slot_gap(ctx: &egui::Context, theme: &Theme, slot: egui::Rect) {
+    let gap = theme.spacing_dock_gap().max(0.0);
+    let bg = egui::Rect::from_min_max(
+        egui::pos2(slot.min.x - gap, slot.min.y),
+        egui::pos2(slot.max.x, slot.max.y),
+    );
+    if !bg.is_positive() {
+        return;
+    }
+    let layer_id = egui::LayerId::new(
+        egui::Order::Background,
+        egui::Id::new("mistterm_right_dock_slot_bg"),
+    );
+    let painter = ctx.layer_painter(layer_id);
+    painter.rect_filled(bg, 0.0, theme.bg_body_color());
+    painter.vline(bg.min.x + 0.5, bg.y_range(), theme.divider_stroke());
+}
+
+/// SidePanel 回调内（旧路径）：勿再使用；在 `.show` 之后调 [`paint_right_dock_slot_gap`].
 pub fn paint_right_dock_left_gap(ui: &egui::Ui, theme: &Theme) {
     let gap = theme.spacing_dock_gap().max(0.0);
     let inner = ui.max_rect();
@@ -795,67 +807,110 @@ pub fn paint_right_dock_foreground_shell(
     paint_right_dock_slot_shell_with_painter_ex(&painter, paint, theme, true);
 }
 
-/// 标准 Foreground 正文宿主：`Area` 覆盖 `paint`，正文布局在 `inner`。
-/// 这样标题带可横向铺满 dock 壳层，而正文仍保持内容边距。
+/// 标准 Foreground 正文宿主：`Area` 覆盖 `paint`，正文在 `inner`（与 LAYOUT.md §8.3 一致）。
 pub fn show_right_dock_foreground_body<R>(
     area_id: &'static str,
     ctx: &egui::Context,
+    _theme: &Theme,
     geom: &RightDockForegroundGeom,
     _profile: crate::ui::layout_util::SidePanelProfile,
     add_body: impl FnOnce(&mut Ui, f32) -> R,
 ) -> egui::InnerResponse<R> {
+    let paint_size = geom.paint.size();
     let body_w = geom.inner.width().max(48.0);
-    let inner_size = geom.inner.size();
-    // 可点层仅覆盖正文区（inner），勿含左侧 dock 缝 / 相邻栏，否则会挡住左邻 dock 的 ×。
     right_dock_foreground_body_area(area_id)
-        .constrain_to(geom.inner)
-        .fixed_pos(geom.inner.min)
+        .constrain_to(geom.paint)
+        .fixed_pos(geom.paint.min)
         .show(ctx, |ui| {
-            ui.set_min_size(inner_size);
-            ui.set_max_size(inner_size);
+            ui.set_min_size(paint_size);
+            ui.set_max_size(paint_size);
             ui.set_clip_rect(geom.paint);
-            show_right_dock_resize_grip(ui, ctx, area_id, geom.inner, geom.paint);
-            let w = crate::ui::layout_util::constrain_ui_to_right_dock_body(ui, body_w);
-            add_body(ui, w)
+            ui.allocate_ui_at_rect(geom.inner, |ui| {
+                ui.set_clip_rect(geom.inner);
+                let cap = ui.available_width().max(48.0).min(body_w);
+                let w = crate::ui::layout_util::constrain_ui_to_right_dock_body(ui, cap);
+                add_body(ui, w)
+            })
+            .inner
         })
 }
 
-fn show_right_dock_resize_grip(
-    ui: &mut Ui,
+/// 改宽手柄：独立 `Foreground` 层，须在**全部** dock 正文绘完后、按屏上左→右顺序调用（右邻正文会盖住左缝）。
+pub fn show_right_dock_resize_grip_layer(
     ctx: &egui::Context,
+    theme: &Theme,
     area_id: &'static str,
-    inner: egui::Rect,
-    paint: egui::Rect,
+    geom: &RightDockForegroundGeom,
 ) {
     let Some(panel_id) = right_dock_panel_id_for_foreground(area_id) else {
         return;
     };
-    let grip_w = 10.0;
-    let rect = egui::Rect::from_min_max(
-        inner.min,
-        egui::pos2((inner.min.x + grip_w).min(inner.max.x), paint.max.y),
+    let gap = theme.spacing_dock_gap().max(4.0);
+    let gutter = egui::Rect::from_min_max(
+        egui::pos2(geom.paint.min.x - gap, geom.paint.min.y),
+        egui::pos2((geom.paint.min.x + 4.0).min(geom.paint.max.x), geom.paint.max.y),
     );
-    let response = ui.interact(rect, egui::Id::new((area_id, "resize_grip")), egui::Sense::drag());
-    if response.hovered() || response.dragged() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-        ui.painter().vline(
-            rect.center().x,
-            rect.y_range(),
-            egui::Stroke::new(1.0, ui.visuals().selection.bg_fill),
-        );
+    if !gutter.is_positive() {
+        return;
     }
-    if response.dragged() {
-        let id = egui::Id::new(panel_id);
-        if let Some(mut state) = egui::containers::panel::PanelState::load(ctx, id) {
-            let dx = ui.input(|i| i.pointer.delta().x);
-            let current_w = state.rect.width();
-            let (_, min_w, max_w) = crate::ui::layout_util::right_dock_resize_bounds(current_w);
-            let new_w = (current_w - dx).clamp(min_w, max_w);
-            state.rect.min.x = state.rect.max.x - new_w;
-            ctx.data_mut(|d| d.insert_persisted(id, state));
-            ctx.request_repaint();
-        }
-    }
+    egui::Area::new(egui::Id::new((area_id, "resize_grip_layer")))
+        .order(egui::Order::Foreground)
+        .movable(false)
+        .interactable(true)
+        .fixed_pos(gutter.min)
+        .show(ctx, |ui| {
+            ui.set_min_size(gutter.size());
+            ui.set_max_size(gutter.size());
+            let response = ui.interact(gutter, ui.id(), egui::Sense::drag());
+            if response.hovered() || response.dragged() {
+                ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+                let stroke = if response.dragged() {
+                    egui::Stroke::new(1.0, theme.accent_color())
+                } else {
+                    theme.divider_stroke()
+                };
+                let x = theme.snap_x_to_pixel(ctx, geom.paint.min.x - gap * 0.5);
+                ui.painter().vline(x, gutter.y_range(), stroke);
+            }
+            if response.dragged() {
+                let id = egui::Id::new(panel_id);
+                if let Some(mut state) = egui::containers::panel::PanelState::load(ctx, id) {
+                    let dx = ui.input(|i| i.pointer.delta().x);
+                    let current_w = state.rect.width();
+                    let (_, min_w, max_w) =
+                        crate::ui::layout_util::right_dock_resize_bounds(current_w);
+                    let new_w = (current_w - dx).clamp(min_w, max_w);
+                    state.rect.min.x = state.rect.max.x - new_w;
+                    ctx.data_mut(|d| d.insert_persisted(id, state));
+                    ctx.request_repaint();
+                }
+            }
+        });
+}
+
+/// 由 SidePanel 槽位绘制改宽手柄（各 dock 在 workspace 统一 pass 里调用）。
+pub fn show_right_dock_resize_grip_for_slot(
+    ctx: &egui::Context,
+    theme: &Theme,
+    area_id: &'static str,
+    panel_slot: Option<egui::Rect>,
+    panel_id: &str,
+    profile: crate::ui::layout_util::SidePanelProfile,
+) {
+    let screen = ctx.screen_rect();
+    let dock_inset = theme.spacing_right_dock_screen_inset();
+    let Some(slot) = crate::ui::layout_util::right_dock_foreground_slot(
+        panel_slot,
+        ctx,
+        panel_id,
+        profile,
+        None,
+        dock_inset,
+    ) else {
+        return;
+    };
+    let geom = prepare_right_dock_foreground_geom(slot, screen, theme);
+    show_right_dock_resize_grip_layer(ctx, theme, area_id, &geom);
 }
 
 fn right_dock_panel_id_for_foreground(area_id: &'static str) -> Option<&'static str> {
@@ -1904,6 +1959,7 @@ pub fn dock_panel_title_close_only(
         ui.with_layout(
             egui::Layout::right_to_left(egui::Align::Center),
             |ui| {
+                ui.add_space(theme.spacing_dock_panel_trailing_pad());
                 if dock_close_icon_button(ui, theme, close_tooltip).clicked() {
                     closed = true;
                 }
@@ -3562,6 +3618,65 @@ pub fn status_icon_chip(ui: &mut Ui, theme: &Theme, id: IconId, text: &str) {
             );
         });
     });
+}
+
+/// 右 dock SSH 门闩：返回 `true` 表示已连接可继续绘制面板正文。
+pub fn show_right_dock_ssh_gate(
+    ui: &mut Ui,
+    theme: &Theme,
+    ctx: &egui::Context,
+    terminal: Option<&crate::ui::terminal::TerminalView>,
+    no_session_en: &'static str,
+    no_session_zh: &'static str,
+) -> bool {
+    use crate::ui::terminal::RightDockSshGate;
+    let Some(t) = terminal else {
+        ui.label(
+            RichText::new(crate::i18n::tr(ctx, no_session_en, no_session_zh))
+                .color(theme.text_tertiary()),
+        );
+        return false;
+    };
+    match t.right_dock_ssh_gate() {
+        RightDockSshGate::Ready => true,
+        RightDockSshGate::Connecting => {
+            busy_row(
+                ui,
+                theme,
+                crate::i18n::tr(ctx, "Connecting…", "连接建立中…"),
+            );
+            false
+        }
+        RightDockSshGate::Disconnected => {
+            ui.label(
+                RichText::new(crate::i18n::tr(
+                    ctx,
+                    "SSH disconnected. Reconnect the tab to use this panel.",
+                    "SSH 已断开。请重连当前标签后再使用此面板。",
+                ))
+                .color(theme.amber_color()),
+            );
+            false
+        }
+        RightDockSshGate::Failed(err) => {
+            ui.label(
+                RichText::new(format!(
+                    "{} {}",
+                    crate::i18n::tr(ctx, "Connection failed:", "连接失败："),
+                    err
+                ))
+                .color(theme.red_color()),
+            );
+            false
+        }
+        RightDockSshGate::NoSession => {
+            ui.label(
+                RichText::new(crate::i18n::tr(ctx, no_session_en, no_session_zh))
+                    .color(theme.text_tertiary()),
+            );
+            false
+        }
+    }
 }
 
 /// 只读信息标签（连接元信息、侧栏分组等）
