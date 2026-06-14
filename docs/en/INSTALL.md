@@ -29,17 +29,15 @@ Binary is copied to `~/.local/bin/Mist` by default. Override install location:
 INSTALL_DIR=/usr/local/bin ./scripts/install.sh
 ```
 
-### Windows (PowerShell)
+### Windows
 
-```powershell
-git clone https://github.com/mistlab-dev/MistTerm.git
-cd MistTerm
-.\scripts\install.ps1
-```
+Download **`MistTerm-*-windows-x86_64-setup.exe`** from [GitHub Releases](https://github.com/mistlab-dev/MistTerm/releases) and run the installer (Start menu shortcut, optional desktop icon, uninstaller — no PATH setup).
 
-Default install path: `%LOCALAPPDATA%\Programs\Mist\Mist.exe`.
+A portable **zip** is also on the release page if you prefer not to install.
 
-## Run without installing
+## Build from source (developers)
+
+### macOS / Linux
 
 ```bash
 cargo run --release --bin Mist

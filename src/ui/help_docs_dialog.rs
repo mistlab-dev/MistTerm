@@ -186,7 +186,7 @@ fn render_help_tabs(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, page: &mut 
 
 fn render_quick_start(ui: &mut Ui, theme: &Theme, ctx: &egui::Context) {
     ui.label(
-        RichText::new("Mist")
+        RichText::new("MistTerm")
             .size(theme.font_size_empty_state())
             .strong()
             .color(theme.text_primary()),
@@ -486,7 +486,7 @@ fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_m
 // ── Shared widgets ─────────────────────────────────────────────────
 
 fn render_step_row(ui: &mut Ui, theme: &Theme, index: usize, step: &QuickStep) {
-    ui.horizontal_centered(|ui| {
+    ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = theme.spacing_md();
         let circle_r = 13.0;
         let circle_d = circle_r * 2.0;

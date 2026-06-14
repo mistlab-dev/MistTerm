@@ -62,11 +62,13 @@ pub enum IconId {
     Dot,
     Zmodem,
     ChevronLeft,
+    ChevronUp,
+    ArrowEnter,
     Copy,
 }
 
 impl IconId {
-    pub const COUNT: usize = 45;
+    pub const COUNT: usize = 47;
 
     pub fn index(self) -> u32 {
         self as u32
@@ -321,6 +323,8 @@ fn all_icon_ids() -> [IconId; IconId::COUNT] {
         IconId::Dot,
         IconId::Zmodem,
         IconId::ChevronLeft,
+        IconId::ChevronUp,
+        IconId::ArrowEnter,
         IconId::Copy,
     ]
 }
@@ -551,6 +555,11 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
             p.segs(&[(0.35, 0.42, 0.65, 0.42), (0.35, 0.58, 0.65, 0.58)], 1.4);
         }
         IconId::ChevronLeft => p.segs(&[(0.65, 0.22, 0.32, 0.5), (0.65, 0.78, 0.32, 0.5)], w),
+        IconId::ChevronUp => p.segs(&[(0.22, 0.65, 0.5, 0.32), (0.78, 0.65, 0.5, 0.32)], w),
+        IconId::ArrowEnter => p.segs(
+            &[(0.28, 0.72, 0.72, 0.72), (0.28, 0.72, 0.28, 0.32), (0.18, 0.42, 0.28, 0.32), (0.38, 0.42, 0.28, 0.32)],
+            w,
+        ),
         IconId::Copy => {
             p.rect(0.24, 0.26, 0.56, 0.66, w);
             p.rect(0.44, 0.36, 0.76, 0.76, w);

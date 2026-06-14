@@ -29,15 +29,11 @@ chmod +x scripts/install.sh
 INSTALL_DIR=/usr/local/bin ./scripts/install.sh
 ```
 
-### Windows（PowerShell）
+### Windows
 
-```powershell
-git clone https://github.com/mistlab-dev/MistTerm.git
-cd MistTerm
-.\scripts\install.ps1
-```
+从 [GitHub Releases](https://github.com/mistlab-dev/MistTerm/releases) 下载 **`MistTerm-*-windows-x86_64-setup.exe`**，双击安装即可（开始菜单快捷方式、可选桌面图标、自带卸载，无需配置 PATH）。
 
-默认路径：`%LOCALAPPDATA%\Programs\Mist\Mist.exe`。
+便携版（zip）仍在 Release 中提供，解压后需自行运行 `Mist.exe`。
 
 ## 不安装直接运行
 

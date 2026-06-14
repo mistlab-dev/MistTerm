@@ -2275,7 +2275,7 @@ impl Theme {
     /// 左栏｜终端｜右栏之间的缝隙（露出 Central 底色）
     pub fn spacing_region_gap(&self) -> f32 { 6.0 }
     /// 右 dock 与终端、相邻 dock 之间的 `bg_body` 缝宽（独立于 [`spacing_region_gap`]）。
-    pub fn spacing_dock_gap(&self) -> f32 { 5.0 }
+    pub fn spacing_dock_gap(&self) -> f32 { 3.0 }
     /// 右 dock 面板与窗口右缘缝宽（细缝即可；小于 [`spacing_work_area_pad`]）
     pub fn spacing_right_dock_screen_inset(&self) -> f32 {
         // 统一左/右列宽：右 dock 不再额外吃掉可视宽度
