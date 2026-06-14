@@ -764,9 +764,24 @@ pub fn hard_to_test_function() {
 
 ---
 
+## 8. 团队 API 联调测试
+
+`tests/team_api_test.rs` 对 `https://api.mistlab.dev`（或 `MISTTERM_TEST_TEAM_API_BASE`）做冒烟探针：
+
+```bash
+cargo test --test team_api_test -- --test-threads=1
+```
+
+| 测试 | 说明 |
+|------|------|
+| 默认套件 | `GET /health`、P1 路由（无效 token → **401** 而非 404）、serde 单元 |
+| 鉴权流程 | 需 `MISTTERM_TEST_TEAM_EMAIL` + `MISTTERM_TEST_TEAM_PASSWORD`；未设置则跳过 |
+
+---
+
 ## 📚 相关文档
 
 - [架构文档](./ARCHITECTURE.md)
 - [部署指南](./DEPLOYMENT.md)
-- [服务端待办](./SERVER-BACKEND.md)
+- [团队 API 契约](./TEAM.md)
 - [API 文档](./API.md)

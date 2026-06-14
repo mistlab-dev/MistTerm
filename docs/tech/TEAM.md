@@ -2,7 +2,7 @@
 
 > **维护**：2026-05-30 · 字段与路径以 `src/core/team/client.rs`、`src/core/market/client.rs` 为准  
 > **结构**：§一 产品与需求 · §二 集成参考（`team/sync` 等） · **§三 服务端接口清单** · §四 客户端索引 · 附录 A API 契约  
-> **服务端待办与 404 降级**：见 [SERVER-BACKEND.md](./SERVER-BACKEND.md)
+> **404 降级**：见 §三「404 约定」与 `tests/team_api_test.rs`。
 
 | 章节 | 读者 | 内容 |
 |------|------|------|
@@ -1025,7 +1025,7 @@ MistTerm 与 `api.mistlab.dev` 的**增量集成说明**。认证、片段 CRUD 
 | 成员列表 | 服务端 ✅ | 附录 A.3.4 |
 | OAuth redirect 白名单 | 服务端 ✅ | §四 3.1 |
 | OAuth 桥接页 | 运维 🟠 | §四 3.2 |
-| 片段 usage / 成员 analytics | 服务端 🔴 | §三 5.2–5.3 |
+| 片段 usage / 成员 analytics | 服务端 ✅ | §三 5.2–5.3 · `tests/team_api_test.rs` |
 
 ---
 
@@ -1257,8 +1257,8 @@ pub struct TeamServer {
 | 14 | PUT | `/v1/fragments/{id}` | ✅ | 409 冲突 UI | 附录 A.4.5 |
 | 15 | DELETE | `/v1/fragments/{id}` | ✅ | 删除失败提示 | 附录 A.4.6 |
 | 16 | GET | `/v1/teams/{team_id}/fragments/analytics` | ✅ | 大盘仅用本机聚合 | **§3 5.1** |
-| 17 | GET | `/v1/teams/{team_id}/fragments/analytics/members?since={N}d` | 🔴 | 成员表仅本机数据 | **§3 5.2** |
-| 18 | POST | `/v1/teams/{team_id}/fragments/{fragment_id}/usage` | 🔴 | 静默忽略 | **§3 5.3** |
+| 17 | GET | `/v1/teams/{team_id}/fragments/analytics/members?since={N}d` | ✅ | 成员表仅本机数据 | **§3 5.2** |
+| 18 | POST | `/v1/teams/{team_id}/fragments/{fragment_id}/usage` | ✅ | 静默忽略 | **§3 5.3** |
 | 19 | GET | `/v1/market/fragments/catalog` | ✅ | 用本地缓存 + 已安装片段 | **§3 6.1** |
 | 20 | POST | `/v1/market/fragments/{id}/install` | ✅ 可选 | 静默忽略 | **§3 6.2** |
 | 21 | POST | `/v1/audit/events` | ✅ | 积压 `pending-team-events.jsonl` | **§3 7** |
@@ -1267,7 +1267,17 @@ pub struct TeamServer {
 | 24 | GET | `/v1/teams/{team_id}/audit/events` | ➖ 管理端 | 桌面端不调用 | **§3 9** |
 | — | — | OAuth 桥接页 `mistlab.dev/oauth/desktop-callback.html` | 🟠 | 回退 `127.0.0.1` 回调 | **§四 3** |
 
-**404 约定**：除登录、片段 CRUD 等关键路径外，分析/市场/usage 等接口 404 视为「未部署」，走本地回退，不阻断终端。
+**404 约定**：除登录、片段 CRUD 等关键路径外，分析/市场/usage 等接口 404 视为「未部署」，走本地回退，不阻断终端。生产探针见 `tests/team_api_test.rs`（无效 token 应得 **401** 而非 404）。
+
+| 接口 | 404 时客户端 |
+|------|----------------|
+| `GET …/fragments/analytics` | 大盘仅用本机 cache + overlay |
+| `GET …/analytics/members` | 成员表仅本机 `fragment_usage_events.json` |
+| `POST …/fragments/{id}/usage` | 静默成功 |
+| `GET /v1/team/sync` | 空团队列表 |
+| `GET …/members` | 成员弹窗提示未就绪 |
+| `GET /v1/market/fragments/catalog` | 本地 `market_fragments_cache.json` |
+| `GET /v1/oauth/*` | OAuth 探测失败，提示密码登录 |
 
 ---
 
@@ -1361,7 +1371,7 @@ Authorization: Bearer <access_token>
 
 404 → 客户端 `team_api_available = false`，大盘合并本机 `TeamFragmentCache` + overlay。
 
-#### 5.2 🔴 成员区间 `GET …/fragments/analytics/members`
+#### 5.2 ✅ 成员区间 `GET …/fragments/analytics/members`
 
 ```
 GET /v1/teams/{team_id}/fragments/analytics/members?since=7d
@@ -1386,7 +1396,7 @@ GET /v1/teams/{team_id}/fragments/analytics/members?since=7d
 
 404 → 仅汇总本机 `fragment_usage_events.json`；UI 标注「仅本机数据」。
 
-#### 5.3 🔴 执行上报 `POST …/fragments/{fragment_id}/usage`
+#### 5.3 ✅ 执行上报 `POST …/fragments/{fragment_id}/usage`
 
 团队片段执行成功后**异步**上报（`TeamClient::report_fragment_usage`）：
 
@@ -1535,9 +1545,9 @@ GET /v1/teams/{team_id}/audit/events?category=&action=&user_id=&from=&to=&limit=
 
 ---
 
-### 10. 验收清单（后端自测）
+### 10. 验收清单
 
-**🔴 P1（待实现）** — 详细契约与客户端降级见 [SERVER-BACKEND.md](./SERVER-BACKEND.md)
+**✅ P1（片段 analytics / usage / members）** — 联调探针：`cargo test --test team_api_test`
 
 1. `POST …/fragments/{id}/usage` → 2xx → `GET …/analytics` 中 `usage_count` 递增  
 2. `GET …/analytics/members?since=7d` → 200 + 多成员 `run_count` 正确  
@@ -1571,7 +1581,7 @@ GET /v1/teams/{team_id}/audit/events?category=&action=&user_id=&from=&to=&limit=
 
 ## 四、客户端索引
 
-> 服务端待办见 **§三**；API 契约见 **附录 A**。
+> API 契约见 **附录 A**；404 降级见 **§三 404 约定**。
 
 ### 1. 已落地能力
 

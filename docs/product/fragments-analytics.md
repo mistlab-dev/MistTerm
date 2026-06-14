@@ -427,8 +427,8 @@ Phase 1 (1.5 个月): 核心功能
 ├── 基础数据采集
 ├── 个人统计仪表盘
 
-Phase 2 (0.5 个月): 增强功能（依赖服务端 § [SERVER-BACKEND.md](../tech/SERVER-BACKEND.md)）
-├── 团队统计（members / usage API）
+Phase 2 (0.5 个月): 增强功能
+├── 团队统计（members / usage API，已上线 · 见 [TEAM.md](../tech/TEAM.md) §三 5）
 ├── 智能推荐
 └── 效率报告
 ```
