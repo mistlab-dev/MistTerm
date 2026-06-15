@@ -29,5 +29,27 @@ cp "$SRC" "$OUT/Contents/MacOS/$BIN_NAME"
 cp "$ROOT/Info.plist" "$OUT/Contents/Info.plist"
 chmod +x "$OUT/Contents/MacOS/$BIN_NAME"
 
+# Generate .icns app icon (macOS CI has iconutil + sips)
+ICON_SRC="$ROOT/assets/app-icon-1024.png"
+ICONSET="$ROOT/target/release/AppIcon.iconset"
+rm -rf "$ICONSET"
+mkdir -p "$ICONSET"
+if [[ -f "$ICON_SRC" ]] && command -v iconutil &>/dev/null; then
+  sips -z 16 16   "$ICON_SRC" --out "$ICONSET/icon_16x16.png"      >/dev/null 2>&1
+  sips -z 32 32   "$ICON_SRC" --out "$ICONSET/icon_16x16@2x.png"   >/dev/null 2>&1
+  sips -z 32 32   "$ICON_SRC" --out "$ICONSET/icon_32x32.png"      >/dev/null 2>&1
+  sips -z 64 64   "$ICON_SRC" --out "$ICONSET/icon_32x32@2x.png"   >/dev/null 2>&1
+  sips -z 128 128 "$ICON_SRC" --out "$ICONSET/icon_128x128.png"    >/dev/null 2>&1
+  sips -z 256 256 "$ICON_SRC" --out "$ICONSET/icon_128x128@2x.png" >/dev/null 2>&1
+  sips -z 256 256 "$ICON_SRC" --out "$ICONSET/icon_256x256.png"    >/dev/null 2>&1
+  sips -z 512 512 "$ICON_SRC" --out "$ICONSET/icon_256x256@2x.png" >/dev/null 2>&1
+  sips -z 512 512 "$ICON_SRC" --out "$ICONSET/icon_512x512.png"    >/dev/null 2>&1
+  sips -z 1024 1024 "$ICON_SRC" --out "$ICONSET/icon_512x512@2x.png" >/dev/null 2>&1
+  iconutil -c icns "$ICONSET" -o "$OUT/Contents/Resources/AppIcon.icns" >/dev/null 2>&1
+  echo "==> AppIcon.icns generated"
+else
+  echo "⚠️  iconutil/sips not available, skipping icon"
+fi
+
 echo "Bundle ready: $OUT"
 echo "Launch GUI: open \"$OUT\""
