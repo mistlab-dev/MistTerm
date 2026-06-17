@@ -39,6 +39,10 @@ name = "Mist"
 path = "src/main.rs"
 
 [[bin]]
+name = "seed_local_test_session"
+path = "src/bin/seed_local_test_session.rs"
+
+[[bin]]
 name = "export_app_icon"
 path = "src/bin/export_app_icon.rs"
 
