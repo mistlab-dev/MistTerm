@@ -12,7 +12,15 @@ import tempfile
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 import paramiko
+from gui_automation_keys import (
+    SFTP_DOWNLOAD,
+    SFTP_UPLOAD,
+    TOGGLE_SFTP,
+    dismiss_new_session_dialog,
+)
 from pywinauto import Application, Desktop
 from pywinauto.keyboard import send_keys
 
@@ -168,10 +176,14 @@ def gui_terminal_smoke(hwnd: int) -> None:
 
 
 def gui_open_sftp(hwnd: int) -> None:
-    print("==> [GUI] 底栏打开 SFTP")
-    cl, ct, cr, cb = client_rect(hwnd)
-    s = scale_for(cl, cr)
-    click(cr - int(126 * s), cb - int(18 * s))
+    print("==> [GUI] 打开 SFTP (Ctrl+Shift+S)")
+    app = Application(backend="uia").connect(process=int(hwnd))
+    try:
+        app.window(handle=hwnd).set_focus()
+    except Exception:
+        pass
+    dismiss_new_session_dialog()
+    send_keys(TOGGLE_SFTP)
     time.sleep(3.0)
 
 
@@ -191,9 +203,10 @@ def gui_sftp_upload(hwnd: int, marker: str) -> None:
     print("==> [GUI] SFTP 上传 Ctrl+Shift+F9")
     cl, ct, cr, cb = client_rect(hwnd)
     s = scale_for(cl, cr)
+    dismiss_new_session_dialog()
     click(cr - int(150 * s), ct + int(240 * s))
     time.sleep(0.3)
-    send_keys("+^{F9}")
+    send_keys(SFTP_UPLOAD)
     deadline = time.time() + 45.0
     while time.time() < deadline:
         if remote_has_marker(marker):
@@ -208,16 +221,18 @@ def gui_sftp_download(hwnd: int, marker: str, local_file: Path) -> None:
     local_file.unlink(missing_ok=True)
     cl, ct, cr, cb = client_rect(hwnd)
     s = scale_for(cl, cr)
-    time.sleep(2.0)
-    click(cr - int(150 * s), ct + int(240 * s))
-    time.sleep(0.3)
-    send_keys("+^{F10}")
-    deadline = time.time() + 45.0
+    deadline = time.time() + 90.0
     while time.time() < deadline:
+        dismiss_new_session_dialog()
+        send_keys(TOGGLE_SFTP)
+        time.sleep(1.5)
+        click(cr - int(150 * s), ct + int(240 * s))
+        time.sleep(0.3)
+        send_keys(SFTP_DOWNLOAD)
+        time.sleep(6.0)
         if local_file.exists() and marker in local_file.read_text(encoding="utf-8"):
             print(f"  [OK] 已下载到 {local_file}")
             return
-        time.sleep(2.0)
     raise RuntimeError("未确认下载文件")
 
 

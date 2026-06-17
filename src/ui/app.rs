@@ -5561,12 +5561,15 @@ impl eframe::App for MistTermApp {
             }
         }
 
+        // GUI E2E（MISTTERM_GUI_AUTOMATION=1）：专用快捷键，均在 global_shortcuts_blocked 之外处理。
+        // Ctrl+Shift+Backspace 关闭新建会话弹窗（勿用 Esc 组合：Windows Ctrl+Shift+Esc 打开任务管理器）
+        // Ctrl+Shift+S 切换 SFTP；Ctrl+Shift+F9/F10 上传/下载 MISTTERM_E2E_FILE
         if crate::ui::sftp_panel::SftpPanel::gui_automation_enabled() {
             if self.show_new_session_dialog
                 && ctx.input_mut(|i| {
                     i.consume_key(
                         egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
-                        egui::Key::Escape,
+                        egui::Key::Backspace,
                     )
                 })
             {

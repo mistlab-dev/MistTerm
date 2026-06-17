@@ -18,6 +18,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import paramiko
 from pywinauto import Application, Desktop
+from gui_automation_keys import (
+    SFTP_DOWNLOAD,
+    SFTP_UPLOAD,
+    TOGGLE_SFTP,
+    dismiss_new_session_dialog,
+)
 from pywinauto.keyboard import send_keys
 
 from gui_screen import (
@@ -188,11 +194,10 @@ class MistGui:
         }
 
     def force_clear_modals(self) -> None:
+        """关闭新建会话等阻塞弹窗。"""
         self.focus()
-        for _ in range(4):
-            send_keys("+^{ESC}")
-            time.sleep(0.45)
-        dismiss_esc(2)
+        dismiss_new_session_dialog(repeats=2)
+        dismiss_esc(1)
 
     def dismiss_blocking_modals(self) -> None:
         self.force_clear_modals()
@@ -362,7 +367,7 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path) -> None:
         gui.force_clear_modals()
         dismiss_esc(2)
         gui.focus()
-        send_keys("+^s")
+        send_keys(TOGGLE_SFTP)
         time.sleep(3.5)
         gui.snap("sftp-panel-opened")
 
@@ -382,7 +387,7 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path) -> None:
         dismiss_esc(2)
         focus_sftp_panel(gui)
         gui.focus()
-        send_keys("+^{F9}")
+        send_keys(SFTP_UPLOAD)
         wait_for_remote_marker(marker)
 
     if not gui.step("5. SFTP 上传 (Ctrl+Shift+F9)", upload_file, stop=True):
@@ -396,10 +401,10 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path) -> None:
         while time.time() < deadline:
             gui.force_clear_modals()
             gui.focus()
-            send_keys("+^s")
+            send_keys(TOGGLE_SFTP)
             time.sleep(1.5)
             focus_sftp_panel(gui)
-            send_keys("+^{F10}")
+            send_keys(SFTP_DOWNLOAD)
             time.sleep(6.0)
             if local_file.exists() and marker in local_file.read_text(encoding="utf-8"):
                 return
