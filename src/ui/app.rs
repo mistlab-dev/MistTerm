@@ -5561,6 +5561,57 @@ impl eframe::App for MistTermApp {
             }
         }
 
+        if crate::ui::sftp_panel::SftpPanel::gui_automation_enabled() {
+            if self.show_new_session_dialog
+                && ctx.input_mut(|i| {
+                    i.consume_key(
+                        egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                        egui::Key::Escape,
+                    )
+                })
+            {
+                self.show_new_session_dialog = false;
+                self.reset_new_session_form();
+            }
+            if ctx.input_mut(|i| {
+                i.consume_key(
+                    egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                    egui::Key::S,
+                )
+            }) {
+                self.toggle_sftp_panel(ctx);
+            }
+            let sftp_handle = self
+                .active_tab
+                .and_then(|idx| self.tabs.get(idx))
+                .and_then(|t| t.active_terminal())
+                .and_then(|term| term.sftp_session_for_ops());
+            if let Some(handle) = sftp_handle {
+                let upload = ctx.input_mut(|i| {
+                    i.consume_key(
+                        egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                        egui::Key::F9,
+                    )
+                });
+                let download = ctx.input_mut(|i| {
+                    i.consume_key(
+                        egui::Modifiers::CTRL | egui::Modifiers::SHIFT,
+                        egui::Key::F10,
+                    )
+                });
+                if upload {
+                    self.sftp_panel
+                        .run_gui_automation_upload(ctx, &handle);
+                }
+                if download {
+                    self.sftp_panel
+                        .run_gui_automation_download(ctx, &handle);
+                }
+                self.sftp_panel
+                    .tick_sftp_jobs(&handle, ctx, &self.audit_logger);
+            }
+        }
+
         if !self.global_shortcuts_blocked() {
             if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::N)) {
                 self.show_new_session_dialog = true;

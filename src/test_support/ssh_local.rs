@@ -8,6 +8,9 @@ use ssh2::Session;
 
 const DEFAULT_HOST: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 22;
+#[cfg(windows)]
+const DEFAULT_USER: &str = "mistterm_test";
+#[cfg(not(windows))]
 const DEFAULT_USER: &str = "root";
 const DEFAULT_PASSWORD: &str = "mistterm123";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -36,6 +39,15 @@ pub fn ssh_user() -> String {
 
 pub fn ssh_password() -> String {
     env_or("MISTTERM_TEST_SSH_PASSWORD", DEFAULT_PASSWORD)
+}
+
+/// SFTP 集成测试用的远端根目录（Windows OpenSSH 无 `/tmp`）。
+pub fn ssh_remote_sftp_root() -> String {
+    #[cfg(windows)]
+    const DEFAULT_ROOT: &str = "C:/Users/mistterm_test/mistterm_sftp";
+    #[cfg(not(windows))]
+    const DEFAULT_ROOT: &str = "/tmp";
+    env_or("MISTTERM_TEST_SSH_SFTP_ROOT", DEFAULT_ROOT)
 }
 
 /// TCP 可达且能完成 SSH 握手即视为可用。

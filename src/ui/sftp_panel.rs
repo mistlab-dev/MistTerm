@@ -357,6 +357,8 @@ pub struct SftpPanel {
     pending_auto_list: bool,
     /// 后台操作成功后待写入审计
     pending_audit: Option<(&'static str, String)>,
+    /// GUI 自动化：busy 时延后的下载任务
+    deferred_gui_download: Option<(PathBuf, PathBuf)>,
     /// 右 dock 槽位（用于 Central 之后前景重绘）
     last_panel_slot_rect: Option<egui::Rect>,
     local_sort: FileSortState,
@@ -556,6 +558,7 @@ impl SftpPanel {
             pending_refresh_after_op: false,
             pending_auto_list: false,
             pending_audit: None,
+            deferred_gui_download: None,
             last_panel_slot_rect: None,
             local_sort: FileSortState::default(),
             remote_sort: FileSortState::default(),
@@ -589,7 +592,23 @@ impl SftpPanel {
         self.pending_refresh_after_op = false;
         self.pending_auto_list = false;
         self.pending_audit = None;
+        self.deferred_gui_download = None;
         self.last_panel_slot_rect = None;
+    }
+
+    /// 轮询 SFTP 后台任务；面板未显示时也需调用以便 GUI 自动化下载完成。
+    pub fn tick_sftp_jobs(
+        &mut self,
+        handle: &SshSessionHandle,
+        ctx: &egui::Context,
+        audit: &AuditLogger,
+    ) {
+        self.poll_rx(audit, crate::i18n::language(ctx));
+        if !self.busy && self.rx.is_none() {
+            if let Some((remote, local)) = self.deferred_gui_download.take() {
+                self.spawn_download(handle, remote, local, ctx);
+            }
+        }
     }
 
     fn poll_rx(&mut self, audit: &AuditLogger, lang: UiLanguage) {
@@ -1098,6 +1117,100 @@ impl SftpPanel {
             })();
             SftpJobResult::Msg(msg)
         });
+    }
+
+    /// Windows/macOS GUI E2E：由 `MISTTERM_GUI_AUTOMATION=1` 启用，配合 Ctrl+Shift+F9/F10。
+    pub fn gui_automation_enabled() -> bool {
+        matches!(
+            std::env::var("MISTTERM_GUI_AUTOMATION").as_deref(),
+            Ok("1") | Ok("true") | Ok("TRUE")
+        )
+    }
+
+    fn env_e2e_filename() -> Option<String> {
+        std::env::var("MISTTERM_E2E_FILE")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    fn pick_local_by_name(entries: &[LocalEntry], name: &str) -> Option<PathBuf> {
+        entries
+            .iter()
+            .find(|e| e.name == name && !e.is_dir)
+            .map(|e| e.path.clone())
+    }
+
+    fn pick_remote_by_name(entries: &[SftpEntry], name: &str) -> Option<PathBuf> {
+        entries
+            .iter()
+            .find(|e| e.name == name && !e.is_dir)
+            .map(|e| e.path.clone())
+    }
+
+    /// GUI 自动化：上传 `MISTTERM_E2E_FILE`（或首个本机文件）。
+    pub fn run_gui_automation_upload(
+        &mut self,
+        ctx: &egui::Context,
+        handle: &SshSessionHandle,
+    ) {
+        if self.busy {
+            return;
+        }
+        self.refresh_local_list();
+        if let Some(name) = Self::env_e2e_filename() {
+            if let Some(path) = Self::pick_local_by_name(&self.local_entries, &name) {
+                self.local_selected = Some(path);
+            }
+        } else if self.local_selected.is_none() {
+            if let Some(e) = self.local_entries.iter().find(|e| !e.is_dir) {
+                self.local_selected = Some(e.path.clone());
+            }
+        }
+        if let Some((remote, local)) = self.local_upload_job() {
+            self.spawn_upload(handle, remote, local, ctx);
+        } else {
+            let lang = crate::i18n::language(ctx);
+            self.pending_status_err = Some(match lang {
+                UiLanguage::En => "GUI automation: no local file selected for upload".into(),
+                UiLanguage::Zh => "GUI 自动化：未找到可上传的本机文件".into(),
+            });
+        }
+    }
+
+    /// GUI 自动化：下载 `MISTTERM_E2E_FILE`（或首个远端文件）。
+    pub fn run_gui_automation_download(
+        &mut self,
+        ctx: &egui::Context,
+        handle: &SshSessionHandle,
+    ) {
+        let filename = Self::env_e2e_filename();
+        let remote = if let Some(name) = filename.as_deref().filter(|s| !s.is_empty()) {
+            if let Some(path) = Self::pick_remote_by_name(&self.entries, name) {
+                path
+            } else {
+                self.cwd.join(name)
+            }
+        } else if let Some(path) = self.remote_selected.clone() {
+            path
+        } else {
+            self.entries
+                .iter()
+                .find(|e| !e.is_dir)
+                .map(|e| e.path.clone())
+                .unwrap_or_else(|| self.cwd.join("download.bin"))
+        };
+        let local = self.local_cwd.join(
+            remote
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("download.bin"),
+        );
+        if self.busy {
+            self.deferred_gui_download = Some((remote, local));
+            return;
+        }
+        self.spawn_download(handle, remote, local, ctx);
     }
 
     fn show_mkdir_dialog_ui(
@@ -1992,5 +2105,39 @@ impl SftpPanel {
                 theme.spacing_sm(),
                 theme.spacing_sm(),
             ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn local_entry(name: &str) -> LocalEntry {
+        LocalEntry {
+            name: name.to_string(),
+            is_dir: false,
+            size: 12,
+            modified: Utc::now(),
+            path: PathBuf::from(r"C:\temp").join(name),
+        }
+    }
+
+    #[test]
+    fn pick_local_by_name_finds_file() {
+        let entries = vec![
+            local_entry("a.txt"),
+            local_entry("gui_e2e_upload.txt"),
+        ];
+        let path = SftpPanel::pick_local_by_name(&entries, "gui_e2e_upload.txt").unwrap();
+        assert_eq!(path.file_name().unwrap(), "gui_e2e_upload.txt");
+    }
+
+    #[test]
+    fn pick_local_by_name_skips_dirs() {
+        let mut dir = local_entry("ignored");
+        dir.is_dir = true;
+        let entries = vec![dir];
+        assert!(SftpPanel::pick_local_by_name(&entries, "ignored").is_none());
     }
 }
