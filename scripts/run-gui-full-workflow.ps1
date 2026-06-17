@@ -1,5 +1,6 @@
 # 全套 GUI 流程：新建连接 + SFTP + AI + 面板（不跑 cargo test）
 # 前置: 管理员运行一次 .\scripts\setup-windows-test-sshd.ps1
+# 自动化快捷键（MISTTERM_GUI_AUTOMATION=1）见 scripts/gui_automation_keys.py
 # 用法:
 #   .\scripts\run-gui-full-workflow.ps1
 #   .\scripts\run-gui-full-workflow.ps1 -KeepOpen
