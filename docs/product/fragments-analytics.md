@@ -55,10 +55,12 @@
 | 快捷键调用 | Cmd/Ctrl + J 快速调用 |
 | 团队共享 | 创建时选择共享范围，支持评论和版本 |
 
-#### 3.2.3 原型图
+#### 3.2.3 界面参考
 
-![命令片段创建](../protos/fragments-create.png)
-![命令片段列表](../protos/fragments-list.png)
+![命令片段库](../manual/screenshots/16-fragment-library.png)
+![命令片段面板](../manual/screenshots/11-panel-snippets.png)
+
+*见 [操作手册](../manual/MistTerm_操作手册.html) 第 8 节。*
 
 #### 3.2.4 设计规格
 

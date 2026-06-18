@@ -10,7 +10,7 @@
 | [LAYOUT.md](../product/LAYOUT.md) | Window layout |
 | [fragments-analytics.md](../product/fragments-analytics.md) | Command snippets & analytics |
 | [oauth-desktop-callback.html](../product/oauth-desktop-callback.html) | OAuth bridge page |
-| [protos/](../protos/) | UI screenshots |
+| [User manual](../manual/MistTerm_操作手册.html) | End-user guide (with screenshots) |
 
 ## Technical
 

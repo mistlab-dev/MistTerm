@@ -10,7 +10,7 @@
 | [LAYOUT.md](../product/LAYOUT.md) | 窗口布局 |
 | [fragments-analytics.md](../product/fragments-analytics.md) | 命令片段与分析 |
 | [oauth-desktop-callback.html](../product/oauth-desktop-callback.html) | OAuth 桥接页 |
-| [protos/](../protos/) | 界面截图 |
+| [操作手册](../manual/MistTerm_操作手册.html) | 用户手册（含界面截图） |
 
 ## 技术
 
