@@ -8,22 +8,20 @@ import ctypes
 import subprocess
 import sys
 import time
+from pathlib import Path
 
-from pywinauto import Application, Desktop
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from gui_screen import find_mist_window
+from pywinauto import Application
 from pywinauto.keyboard import send_keys
 
 
 user32 = ctypes.windll.user32
 
 
-def find_hwnd(title: str, timeout: float) -> int:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        for w in Desktop(backend="uia").windows():
-            if title in w.window_text():
-                return int(w.handle)
-        time.sleep(0.25)
-    raise RuntimeError("Mist window not found")
+def find_hwnd(proc: subprocess.Popen[bytes], timeout: float) -> int:
+    return find_mist_window(proc, timeout=timeout, title_sub="Mist")
 
 
 def client_rect(hwnd: int) -> tuple[int, int, int, int]:
@@ -57,7 +55,7 @@ def main() -> int:
     print(f"==> Launch {args.exe}")
     proc = subprocess.Popen([args.exe])
     try:
-        hwnd = find_hwnd("Mist", args.timeout)
+        hwnd = find_hwnd(proc, args.timeout)
         app = Application(backend="uia").connect(process=proc.pid)
         win = app.window(handle=hwnd)
         win.set_focus()

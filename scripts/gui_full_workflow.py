@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import paramiko
-from pywinauto import Application, Desktop
+from pywinauto import Application
 from gui_automation_keys import (
     SFTP_DOWNLOAD,
     SFTP_UPLOAD,
@@ -29,6 +29,7 @@ from pywinauto.keyboard import send_keys
 from gui_screen import (
     SHOT_DIR,
     client_rect,
+    find_mist_window,
     modal_sample_pixels,
     new_session_modal_seems_open,
     screenshot,
@@ -480,16 +481,18 @@ def main() -> int:
 
         print(f"==> 启动 {args.exe} (MISTTERM_GUI_AUTOMATION=1)")
         proc = subprocess.Popen([args.exe], env=mist_automation_env())
-        hwnd = None
         deadline = time.time() + args.timeout
+        hwnd = None
         while time.time() < deadline:
-            for w in Desktop(backend="uia").windows():
-                if "Mist" in w.window_text():
-                    hwnd = int(w.handle)
-                    break
-            if hwnd:
+            try:
+                hwnd = find_mist_window(proc, timeout=min(5.0, deadline - time.time()))
                 break
-            time.sleep(0.25)
+            except RuntimeError as e:
+                if proc.poll() is not None:
+                    raise RuntimeError(f"Mist 进程已退出 (code={proc.returncode})") from e
+                if time.time() >= deadline:
+                    raise
+                time.sleep(0.25)
         if not hwnd:
             raise RuntimeError("未找到 Mist 窗口")
 
