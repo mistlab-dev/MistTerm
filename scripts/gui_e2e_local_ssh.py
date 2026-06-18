@@ -21,7 +21,8 @@ from gui_automation_keys import (
     TOGGLE_SFTP,
     dismiss_new_session_dialog,
 )
-from pywinauto import Application, Desktop
+from gui_screen import find_mist_window
+from pywinauto import Application
 from pywinauto.keyboard import send_keys
 
 user32 = ctypes.windll.user32
@@ -144,13 +145,17 @@ def gui_new_session(hwnd: int, app: Application) -> None:
     print("  [OK] 已提交新建连接")
 
 
-def gui_connect_existing(hwnd: int, name: str) -> None:
-    print(f"==> [GUI] 连接已有会话：{name}")
-    app = Application(backend="uia").connect(process=int(hwnd))
+def focus_mist(hwnd: int, pid: int) -> None:
+    app = Application(backend="uia").connect(process=pid)
     try:
         app.window(handle=hwnd).set_focus()
     except Exception:
         pass
+
+
+def gui_connect_existing(hwnd: int, pid: int, name: str) -> None:
+    print(f"==> [GUI] 连接已有会话：{name}")
+    focus_mist(hwnd, pid)
     send_keys("^j")
     time.sleep(0.5)
     send_keys(name.replace(" ", "{SPACE}"), with_spaces=True)
@@ -175,13 +180,9 @@ def gui_terminal_smoke(hwnd: int) -> None:
     time.sleep(1.0)
 
 
-def gui_open_sftp(hwnd: int) -> None:
+def gui_open_sftp(hwnd: int, pid: int) -> None:
     print("==> [GUI] 打开 SFTP (Ctrl+Shift+S)")
-    app = Application(backend="uia").connect(process=int(hwnd))
-    try:
-        app.window(handle=hwnd).set_focus()
-    except Exception:
-        pass
+    focus_mist(hwnd, pid)
     dismiss_new_session_dialog()
     send_keys(TOGGLE_SFTP)
     time.sleep(3.0)
@@ -254,18 +255,7 @@ def main() -> int:
 
     proc = subprocess.Popen([args.exe], env=env)
     try:
-        hwnd = None
-        deadline = time.time() + args.timeout
-        while time.time() < deadline:
-            for w in Desktop(backend="uia").windows():
-                if "Mist" in w.window_text():
-                    hwnd = int(w.handle)
-                    break
-            if hwnd:
-                break
-            time.sleep(0.25)
-        if not hwnd:
-            raise RuntimeError("未找到 Mist 窗口")
+        hwnd = find_mist_window(proc, timeout=args.timeout)
 
         app = Application(backend="uia").connect(process=proc.pid)
         time.sleep(1.2)
@@ -273,13 +263,13 @@ def main() -> int:
         if not args.skip_new_session:
             gui_new_session(hwnd, app)
         else:
-            gui_connect_existing(hwnd, "Local Test SSH")
+            gui_connect_existing(hwnd, proc.pid, "Local Test SSH")
 
         if proc.poll() is not None:
             raise RuntimeError("Mist 进程已退出")
 
         gui_terminal_smoke(hwnd)
-        gui_open_sftp(hwnd)
+        gui_open_sftp(hwnd, proc.pid)
         gui_set_local_path(hwnd)
         gui_sftp_upload(hwnd, marker)
         gui_sftp_download(hwnd, marker, local_file)

@@ -4,13 +4,27 @@
 from __future__ import annotations
 
 import ctypes
+import subprocess
 import time
 from pathlib import Path
 
+from pywinauto import Desktop
+
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
+try:
+    shcore = ctypes.windll.shcore
+except Exception:
+    shcore = None
 
 SHOT_DIR = Path(__file__).resolve().parent.parent / "target" / "gui-screenshots"
+MANUAL_SHOT_DIR = Path(__file__).resolve().parent.parent / "docs" / "manual" / "screenshots"
+
+PW_RENDERFULLCONTENT = 0x00000002
+SRCCOPY = 0x00CC0020
+BI_RGB = 0
+DIB_RGB_COLORS = 0
+SW_MAXIMIZE = 3
 
 
 class POINT(ctypes.Structure):
@@ -29,6 +43,44 @@ def client_rect(hwnd: int) -> tuple[int, int, int, int]:
     return pt.x, pt.y, pt.x + rect.r, pt.y + rect.b
 
 
+def find_mist_window(
+    proc: subprocess.Popen[bytes],
+    *,
+    timeout: float = 60.0,
+    title_sub: str = "Mist",
+) -> int:
+    """等待 Mist 主窗口出现；按进程 PID 匹配，避免误选其它窗口。"""
+    deadline = time.time() + timeout
+    last_titles: list[str] = []
+    while time.time() < deadline:
+        code = proc.poll()
+        if code is not None:
+            raise RuntimeError(f"Mist 进程已退出 (code={code})")
+        for w in Desktop(backend="uia").windows():
+            title = w.window_text()
+            if title_sub not in title:
+                continue
+            try:
+                if int(w.process_id()) == proc.pid:
+                    return int(w.handle)
+            except Exception:
+                return int(w.handle)
+            last_titles.append(title)
+        try:
+            from pywinauto import findwindows
+
+            wins = findwindows.find_windows(process=proc.pid, title_re=f".*{title_sub}.*")
+            if wins:
+                return int(wins[0])
+        except Exception:
+            pass
+        time.sleep(0.25)
+    hint = f" 最近可见标题: {last_titles[-5:]}" if last_titles else ""
+    raise RuntimeError(
+        f"未找到 Mist 窗口 (pid={proc.pid}, 超时 {timeout}s){hint}"
+    )
+
+
 def get_pixel(x: int, y: int) -> tuple[int, int, int]:
     hdc = user32.GetDC(0)
     try:
@@ -40,29 +92,111 @@ def get_pixel(x: int, y: int) -> tuple[int, int, int]:
         user32.ReleaseDC(0, hdc)
 
 
-def screenshot(hwnd: int, label: str, shot_dir: Path | None = None) -> Path:
+def enable_dpi_awareness() -> None:
+    """高 DPI 屏上避免截图发糊。"""
+    if shcore is not None:
+        try:
+            shcore.SetProcessDpiAwareness(2)  # PER_MONITOR_AWARE_V2
+            return
+        except Exception:
+            pass
+    try:
+        user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
+def window_rect(hwnd: int) -> tuple[int, int, int, int]:
+    rect = RECT()
+    user32.GetWindowRect(hwnd, ctypes.byref(rect))
+    return rect.l, rect.t, rect.r, rect.b
+
+
+def maximize_window(hwnd: int) -> None:
+    user32.ShowWindow(hwnd, SW_MAXIMIZE)
+    time.sleep(0.6)
+
+
+def _capture_print_window(hwnd: int) -> "Image.Image":
+    from PIL import Image
+
+    left, top, right, bottom = window_rect(hwnd)
+    w, h = max(1, right - left), max(1, bottom - top)
+    hwnd_dc = user32.GetWindowDC(hwnd)
+    mfc_dc = gdi32.CreateCompatibleDC(hwnd_dc)
+    save_bitmap = gdi32.CreateCompatibleBitmap(hwnd_dc, w, h)
+    gdi32.SelectObject(mfc_dc, save_bitmap)
+    ok = user32.PrintWindow(hwnd, mfc_dc, PW_RENDERFULLCONTENT)
+    if not ok:
+        user32.PrintWindow(hwnd, mfc_dc, 0)
+
+    class BITMAPINFOHEADER(ctypes.Structure):
+        _fields_ = [
+            ("biSize", ctypes.c_uint32),
+            ("biWidth", ctypes.c_int32),
+            ("biHeight", ctypes.c_int32),
+            ("biPlanes", ctypes.c_uint16),
+            ("biBitCount", ctypes.c_uint16),
+            ("biCompression", ctypes.c_uint32),
+            ("biSizeImage", ctypes.c_uint32),
+            ("biXPelsPerMeter", ctypes.c_int32),
+            ("biYPelsPerMeter", ctypes.c_int32),
+            ("biClrUsed", ctypes.c_uint32),
+            ("biClrImportant", ctypes.c_uint32),
+        ]
+
+    bmi = BITMAPINFOHEADER()
+    bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+    bmi.biWidth = w
+    bmi.biHeight = -h
+    bmi.biPlanes = 1
+    bmi.biBitCount = 32
+    bmi.biCompression = BI_RGB
+    buf = ctypes.create_string_buffer(w * h * 4)
+    gdi32.GetDIBits(mfc_dc, save_bitmap, 0, h, buf, ctypes.byref(bmi), DIB_RGB_COLORS)
+    gdi32.DeleteObject(save_bitmap)
+    gdi32.DeleteDC(mfc_dc)
+    user32.ReleaseDC(hwnd, hwnd_dc)
+    return Image.frombuffer("RGBA", (w, h), buf, "raw", "BGRA", 0, 1).convert("RGB")
+
+
+def screenshot(
+    hwnd: int,
+    label: str,
+    shot_dir: Path | None = None,
+    *,
+    stable_name: str | None = None,
+    maximize: bool = True,
+) -> Path:
+    enable_dpi_awareness()
     out_dir = shot_dir or SHOT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in label)
-    path = out_dir / f"{safe}_{int(time.time() * 1000)}.png"
-    cl, ct, cr, cb = client_rect(hwnd)
+    if stable_name:
+        fname = "".join(c if c.isalnum() or c in "-_" else "_" for c in stable_name)
+        path = out_dir / f"{fname}.png"
+    else:
+        path = out_dir / f"{safe}_{int(time.time() * 1000)}.png"
+
+    if maximize:
+        maximize_window(hwnd)
+        time.sleep(0.25)
 
     try:
-        from pywinauto import Application
-
-        img = Application(backend="uia").connect(handle=hwnd).window(handle=hwnd).capture_as_image()
-        img.save(str(path))
+        img = _capture_print_window(hwnd)
+        img.save(str(path), format="PNG", optimize=False)
     except Exception:
+        cl, ct, cr, cb = client_rect(hwnd)
         try:
             from PIL import ImageGrab
 
             img = ImageGrab.grab(bbox=(cl, ct, cr, cb))
-            img.save(path)
+            img.save(path, format="PNG", optimize=False)
         except Exception as e:
             path.write_text(f"screenshot failed: {e}", encoding="utf-8")
             return path
 
-    print(f"    [截图] {path}", flush=True)
+    print(f"    [截图] {path} ({img.size[0]}x{img.size[1]})", flush=True)
     return path
 
 

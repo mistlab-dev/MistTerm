@@ -1,0 +1,122 @@
+[
+  {
+    "id": "01-main-connected",
+    "title": "主界面（已连接 SSH）",
+    "section": "快速开始",
+    "file": "docs/manual/screenshots/01-main-connected.png"
+  },
+  {
+    "id": "02-new-session-dialog",
+    "title": "新建会话对话框",
+    "section": "SSH 连接管理",
+    "file": "docs/manual/screenshots/02-new-session-dialog.png"
+  },
+  {
+    "id": "03-terminal-session",
+    "title": "终端会话与命令输出",
+    "section": "终端操作",
+    "file": "docs/manual/screenshots/03-terminal-session.png"
+  },
+  {
+    "id": "04-sftp-panel",
+    "title": "SFTP 双栏文件浏览器",
+    "section": "文件传输",
+    "file": "docs/manual/screenshots/04-sftp-panel.png"
+  },
+  {
+    "id": "05-sftp-upload-done",
+    "title": "SFTP 上传完成",
+    "section": "文件传输",
+    "file": "docs/manual/screenshots/05-sftp-upload-done.png"
+  },
+  {
+    "id": "06-ai-panel",
+    "title": "AI 助手面板",
+    "section": "AI 助手",
+    "file": "docs/manual/screenshots/06-ai-panel.png"
+  },
+  {
+    "id": "07-menu-tools",
+    "title": "工具菜单",
+    "section": "界面导航",
+    "file": "docs/manual/screenshots/07-menu-tools.png"
+  },
+  {
+    "id": "08-ai-settings-dialog",
+    "title": "AI 设置对话框",
+    "section": "AI 助手",
+    "file": "docs/manual/screenshots/08-ai-settings-dialog.png"
+  },
+  {
+    "id": "09-panel-monitor",
+    "title": "主机监控面板",
+    "section": "主机监控",
+    "file": "docs/manual/screenshots/09-panel-monitor.png"
+  },
+  {
+    "id": "10-panel-port-forward",
+    "title": "端口转发面板",
+    "section": "端口转发",
+    "file": "docs/manual/screenshots/10-panel-port-forward.png"
+  },
+  {
+    "id": "11-panel-snippets",
+    "title": "命令片段面板",
+    "section": "命令片段",
+    "file": "docs/manual/screenshots/11-panel-snippets.png"
+  },
+  {
+    "id": "12-menu-view",
+    "title": "视图菜单（面板切换）",
+    "section": "界面导航",
+    "file": "docs/manual/screenshots/12-menu-view.png"
+  },
+  {
+    "id": "13-preferences",
+    "title": "偏好设置",
+    "section": "主题与外观",
+    "file": "docs/manual/screenshots/13-preferences.png"
+  },
+  {
+    "id": "14-about",
+    "title": "关于 Mist",
+    "section": "界面导航",
+    "file": "docs/manual/screenshots/14-about.png"
+  },
+  {
+    "id": "15-terminal-find",
+    "title": "终端内查找 (F3)",
+    "section": "终端操作",
+    "file": "docs/manual/screenshots/15-terminal-find.png"
+  },
+  {
+    "id": "16-fragment-library",
+    "title": "命令片段库",
+    "section": "命令片段",
+    "file": "docs/manual/screenshots/16-fragment-library.png"
+  },
+  {
+    "id": "17-command-history",
+    "title": "命令历史",
+    "section": "终端操作",
+    "file": "docs/manual/screenshots/17-command-history.png"
+  },
+  {
+    "id": "18-import-ssh-config",
+    "title": "导入 SSH Config",
+    "section": "SSH 连接管理",
+    "file": "docs/manual/screenshots/18-import-ssh-config.png"
+  },
+  {
+    "id": "19-help-quick-start",
+    "title": "快速入门帮助",
+    "section": "界面导航",
+    "file": "docs/manual/screenshots/19-help-quick-start.png"
+  },
+  {
+    "id": "20-sidebar-sessions",
+    "title": "侧栏会话列表",
+    "section": "SSH 连接管理",
+    "file": "docs/manual/screenshots/20-sidebar-sessions.png"
+  }
+]

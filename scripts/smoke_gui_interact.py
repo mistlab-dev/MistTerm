@@ -5,12 +5,18 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import os
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
-from pywinauto import Application, Desktop
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from gui_automation_keys import dismiss_new_session_dialog
+from gui_screen import find_mist_window
+from pywinauto import Application
 from pywinauto.keyboard import send_keys
 
 
@@ -77,14 +83,8 @@ def client_screen_rect(hwnd: int) -> tuple[int, int, int, int]:
     return pt.x, pt.y, pt.x + rect.right, pt.y + rect.bottom
 
 
-def find_mist_hwnd(title_sub: str, timeout: float) -> int:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        for w in Desktop(backend="uia").windows():
-            if title_sub in w.window_text():
-                return int(w.handle)
-        time.sleep(0.2)
-    raise RuntimeError(f"window '{title_sub}' not found")
+def find_mist_hwnd(title_sub: str, timeout: float, proc: subprocess.Popen[bytes]) -> int:
+    return find_mist_window(proc, timeout=timeout, title_sub=title_sub)
 
 
 def click_xy(x: int, y: int) -> None:
@@ -123,6 +123,12 @@ class GuiWalker:
     def dismiss(self, times: int = 3) -> None:
         if not self.alive():
             return
+        if os.environ.get("MISTTERM_GUI_AUTOMATION") == "1":
+            try:
+                self.focus()
+            except Exception:
+                pass
+            dismiss_new_session_dialog(repeats=1)
         for _ in range(times):
             try:
                 self.focus()
@@ -315,14 +321,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("exe")
     parser.add_argument("--title", default="Mist")
-    parser.add_argument("--timeout", type=float, default=20.0)
+    parser.add_argument("--timeout", type=float, default=45.0)
     args = parser.parse_args()
 
     report = Report()
+    env = os.environ.copy()
+    env["MISTTERM_GUI_AUTOMATION"] = "1"
     print(f"==> Launching {args.exe}", flush=True)
-    proc = subprocess.Popen([args.exe])
+    proc = subprocess.Popen([args.exe], env=env)
     try:
-        hwnd = find_mist_hwnd(args.title, args.timeout)
+        hwnd = find_mist_hwnd(args.title, args.timeout, proc)
         print(f"    hwnd={hwnd} pid={proc.pid}", flush=True)
         walker = GuiWalker(proc, hwnd, report)
         walker.focus()

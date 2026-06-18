@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MistTerm 操作手册</title>
+<style>
+body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; max-width: 920px; margin: 2rem auto; padding: 0 1.5rem; line-height: 1.65; color: #222; }
+h1 { border-bottom: 2px solid #ddd; padding-bottom: 0.3em; }
+h1,h2,h3 { color: #111; margin-top: 1.6em; }
+img { max-width: 100%; border: 1px solid #ddd; border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+figure { margin: 1.2em 0; text-align: center; }
+figcaption { font-size: 0.9em; color: #555; margin-top: 0.4em; }
+p.caption { text-align: center; color: #555; font-size: 0.9em; margin: 0.2em 0 1.2em; }
+code { background: #f4f4f4; padding: 0.12em 0.35em; border-radius: 4px; font-size: 0.92em; }
+pre { background: #f4f4f4; padding: 1em; overflow-x: auto; border-radius: 6px; line-height: 1.45; white-space: pre; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; }
+th, td { border: 1px solid #ccc; padding: 0.5em 0.75em; text-align: left; vertical-align: top; }
+th { background: #f0f0f0; font-weight: 600; }
+blockquote { border-left: 4px solid #ccc; margin: 1em 0; padding: 0.5em 1em; color: #444; background: #fafafa; }
+ul, ol { padding-left: 1.5em; margin: 0.6em 0; }
+li { margin: 0.3em 0; }
+a { color: #0969da; }
+hr { border: none; border-top: 1px solid #ddd; margin: 2em 0; }
+strong { font-weight: 600; }
+</style>
+</head>
+<body>
+<h1>MistTerm 操作手册</h1>
+<blockquote><p><strong>适用版本</strong>：1.0.4</p></blockquote>
+<blockquote><p><strong>更新日期</strong>：2026-06-18</p></blockquote>
+<blockquote><p><strong>官网</strong>：<a href="https://mistlab.dev">mistlab.dev</a> · <strong>下载</strong>：<a href="https://github.com/mistlab-dev/MistTerm/releases">GitHub Releases</a></p></blockquote>
+<p>本手册面向<strong>日常使用 MistTerm 连接服务器、操作终端、传文件</strong>的用户。不涉及编译源码或参与开发；开发者文档见仓库内 <code>docs/</code> 目录。</p>
+<hr>
+<h2>目录</h2>
+<ol>
+<li><a href="#1-mistterm-是什么">MistTerm 是什么</a></li>
+<li><a href="#2-安装与启动">安装与启动</a></li>
+<li><a href="#3-五分钟上手">五分钟上手</a></li>
+<li><a href="#4-认识界面">认识界面</a></li>
+<li><a href="#5-连接服务器">连接服务器</a></li>
+<li><a href="#6-使用终端">使用终端</a></li>
+<li><a href="#7-传输文件">传输文件</a></li>
+<li><a href="#8-命令片段">命令片段</a></li>
+<li><a href="#9-监控与端口转发">监控与端口转发</a></li>
+<li><a href="#10-ai-助手">AI 助手</a></li>
+<li><a href="#11-团队与同步可选">团队与同步（可选）</a></li>
+<li><a href="#12-命令安全提示">命令安全提示</a></li>
+<li><a href="#13-凭证日志与偏好">凭证、日志与偏好</a></li>
+<li><a href="#14-快捷键一览">快捷键一览</a></li>
+<li><a href="#15-常见问题">常见问题</a></li>
+</ol>
+<hr>
+<h2>1. MistTerm 是什么</h2>
+<p>MistTerm 是一款 <strong>SSH 终端客户端</strong>，帮助您：</p>
+<ul>
+<li>保存多台服务器连接，一键打开终端</li>
+<li>在图形界面里上传、下载文件（SFTP）</li>
+<li>保存常用命令模板（片段），少打重复命令</li>
+<li>查看服务器 CPU、内存、磁盘等状态</li>
+<li>可选：AI 辅助解释命令、团队共享片段</li>
+</ul>
+<p>支持 <strong>Windows</strong> 与 <strong>macOS</strong>。</p>
+<hr>
+<h2>2. 安装与启动</h2>
+<h3>2.1 下载安装</h3>
+<ol>
+<li>打开 <a href="https://github.com/mistlab-dev/MistTerm/releases">GitHub Releases</a></li>
+<li>下载对应系统的安装包：</li>
+</ol>
+<ul>
+<li><strong>Windows</strong>：<code>MistTerm-*-windows-x86_64-setup.exe</code>，双击安装</li>
+<li><strong>macOS</strong>：<code>.dmg</code>，拖入「应用程序」文件夹</li>
+</ul>
+<ol>
+<li>从开始菜单 / Launchpad 启动 <strong>Mist</strong>（或 MistTerm）</li>
+</ol>
+<p>安装后无需单独安装 OpenSSH；连接远程 Linux 服务器即可使用。</p>
+<h3>2.2 首次启动</h3>
+<p>启动后会出现主窗口：左侧为<strong>会话列表</strong>，中间为<strong>工作区</strong>（连接后显示终端），顶部为<strong>菜单</strong>，底部为<strong>状态栏</strong>。</p>
+<figure><img src="screenshots/01-main-connected.png" alt="主界面（已连接 SSH）"><figcaption>主界面（已连接 SSH）</figcaption></figure>
+<p class="caption"><em>图 2-1：已连接服务器时的主界面</em></p>
+<h3>2.3 数据保存在哪</h3>
+<p>连接、密码、片段等配置保存在本机用户目录（已加密），例如：</p>
+<ul>
+<li>Windows：<code>%APPDATA%\mistterm\</code></li>
+<li>macOS：<code>~/Library/Application Support/mistterm/</code></li>
+</ul>
+<p>请勿手动编辑这些文件；在应用内修改即可。</p>
+<hr>
+<h2>3. 五分钟上手</h2>
+<table><thead><tr><th>步骤</th><th>操作</th></tr></thead><tbody><tr><td>1</td><td>按 <strong>Ctrl+N</strong>（Mac：<strong>⌘N</strong>）打开「新建会话」</td></tr><tr><td>2</td><td>填写名称、主机 IP/域名、端口（默认 22）、用户名、密码或密钥</td></tr><tr><td>3</td><td>点击 <strong>保存并连接</strong>，或在侧栏<strong>双击</strong>该会话</td></tr><tr><td>4</td><td>在中间终端输入命令，如 <code>ls</code>、<code>cd</code>、<code>top</code></td></tr><tr><td>5</td><td>需要传文件时：菜单 <strong>视图 → SFTP</strong>，或点击底栏 <strong>Files</strong></td></tr></tbody></table>
+<figure><img src="screenshots/02-new-session-dialog.png" alt="新建会话对话框"><figcaption>新建会话对话框</figcaption></figure>
+<p class="caption"><em>图 3-1：新建会话</em></p>
+<hr>
+<h2>4. 认识界面</h2>
+<h3>4.1 布局</h3>
+<table><thead><tr><th>区域</th><th>位置</th><th>说明</th></tr></thead><tbody><tr><td>顶栏菜单</td><td>窗口顶部</td><td><strong>终端</strong>、<strong>编辑</strong>、<strong>视图</strong>、<strong>工具</strong>、<strong>帮助</strong></td></tr><tr><td>会话列表</td><td>左侧</td><td>已保存的连接，支持分组与搜索</td></tr><tr><td>工作区</td><td>中间</td><td>终端标签页；连接后在此输入命令</td></tr><tr><td>侧面板</td><td>右侧（按需打开）</td><td>SFTP、监控、片段、AI 等</td></tr><tr><td>状态栏</td><td>窗口底部</td><td>连接信息，以及 <strong>AI</strong> / <strong>Monitor</strong> / <strong>Forward</strong> / <strong>Files</strong> / <strong>Snippets</strong> 快捷入口</td></tr></tbody></table>
+<h3>4.2 常用入口</h3>
+<table><thead><tr><th>想做什么</th><th>怎么打开</th></tr></thead><tbody><tr><td>新建/编辑连接</td><td><strong>Ctrl+N</strong> / 侧栏选中后 <strong>Ctrl+E</strong></td></tr><tr><td>打开 SFTP</td><td><strong>视图 → SFTP</strong> 或底栏 <strong>Files</strong></td></tr><tr><td>看 CPU/内存</td><td><strong>视图 → 监控</strong> 或底栏 <strong>Monitor</strong></td></tr><tr><td>命令片段</td><td><strong>Ctrl+K</strong> 或底栏 <strong>Snippets</strong></td></tr><tr><td>AI 助手</td><td><strong>Ctrl+Shift+A</strong> 或底栏 <strong>AI</strong></td></tr><tr><td>偏好设置</td><td><strong>Ctrl+,</strong></td></tr><tr><td>帮助与快捷键</td><td><strong>帮助 → 快速入门 / 键盘快捷键</strong> 或 <strong>Ctrl+H</strong></td></tr></tbody></table>
+<figure><img src="screenshots/20-sidebar-sessions.png" alt="侧栏会话列表"><figcaption>侧栏会话列表</figcaption></figure>
+<p class="caption"><em>图 4-1：侧栏会话列表（可分组、搜索）</em></p>
+<figure><img src="screenshots/12-menu-view.png" alt="视图菜单"><figcaption>视图菜单</figcaption></figure>
+<p class="caption"><em>图 4-2：视图菜单 — 切换各侧面板</em></p>
+<hr>
+<h2>5. 连接服务器</h2>
+<h3>5.1 新建会话</h3>
+<ol>
+<li><strong>Ctrl+N</strong> 打开对话框</li>
+<li>填写：</li>
+</ol>
+<ul>
+<li><strong>会话名称</strong>：便于识别，如「生产 Web-01」</li>
+<li><strong>主机</strong>：IP 或域名</li>
+<li><strong>端口</strong>：一般为 22</li>
+<li><strong>用户名</strong></li>
+<li><strong>密码</strong> 或 <strong>私钥文件路径</strong></li>
+</ul>
+<ol>
+<li>可选：取消勾选「使用 SSH Agent」若只用密码登录</li>
+<li>点击 <strong>保存并连接</strong></li>
+</ol>
+<figure><img src="screenshots/18-import-ssh-config.png" alt="导入 SSH Config"><figcaption>导入 SSH Config</figcaption></figure>
+<p>*图 5-1：也可通过 <strong>终端 → 导入 SSH Config</strong> 从已有 <code>~/.ssh/config</code> 批量导入*</p>
+<h3>5.2 认证方式</h3>
+<table><thead><tr><th>方式</th><th>适用场景</th></tr></thead><tbody><tr><td>密码</td><td>服务器允许密码登录</td></tr><tr><td>私钥文件</td><td>本机 <code>.pem</code> / <code>id_ed25519</code> 等</td></tr><tr><td>SSH Agent</td><td>已启动 ssh-agent / Pageant，密钥已加载</td></tr><tr><td>跳板机</td><td>在高级选项中填写 ProxyJump（与 OpenSSH 相同）</td></tr></tbody></table>
+<h3>5.3 连接与重连</h3>
+<ul>
+<li><strong>连接</strong>：侧栏单击选中 → <strong>Ctrl+T</strong> 新标签，或<strong>双击</strong>会话</li>
+<li><strong>搜索会话</strong>：<strong>Ctrl+J</strong> 聚焦侧栏搜索框</li>
+<li><strong>自动重连</strong>：在会话编辑里可开启 KeepAlive / 自动重连</li>
+<li>底栏显示 <code>用户名@主机 · 已连接</code> 表示成功</li>
+</ul>
+<h3>5.4 本地数据安全</h3>
+<p>密码和会话信息在本地<strong>加密保存</strong>，换电脑需重新配置或恢复备份。配置文件为加密格式，用记事本打开会看到乱码，属正常现象。</p>
+<hr>
+<h2>6. 使用终端</h2>
+<h3>6.1 基本操作</h3>
+<ul>
+<li>连接成功后直接在终端区输入命令，<strong>Enter</strong> 执行</li>
+<li><strong>鼠标选中</strong>文字即可复制；<strong>Ctrl+V</strong> 粘贴（Mac：<strong>⌘V</strong>）</li>
+<li>支持彩色输出、vim、htop 等常见 TUI 程序</li>
+<li>标签页：<strong>Ctrl+T</strong> 新开标签；<strong>Ctrl+W</strong> 关闭当前标签；<strong>Ctrl+Tab</strong> 切换标签</li>
+</ul>
+<figure><img src="screenshots/03-terminal-session.png" alt="终端会话"><figcaption>终端会话</figcaption></figure>
+<p class="caption"><em>图 6-1：终端中执行命令</em></p>
+<h3>6.2 查找与历史</h3>
+<ul>
+<li><strong>F3</strong> 或 <strong>Ctrl+F</strong>：在终端输出中查找文字</li>
+</ul>
+<figure><img src="screenshots/15-terminal-find.png" alt="终端内查找"><figcaption>终端内查找</figcaption></figure>
+<p class="caption"><em>图 6-2：终端内查找</em></p>
+<ul>
+<li><strong>Ctrl+R</strong>（在终端焦点下）：搜索并重复执行历史命令</li>
+<li><strong>工具 → 命令历史</strong>：浏览最近执行过的命令列表</li>
+</ul>
+<figure><img src="screenshots/17-command-history.png" alt="命令历史"><figcaption>命令历史</figcaption></figure>
+<p class="caption"><em>图 6-3：命令历史窗口</em></p>
+<h3>6.3 分屏（同一标签多窗格）</h3>
+<ul>
+<li><strong>Ctrl+Shift+D</strong>：左右分屏</li>
+<li><strong>Ctrl+Shift+U</strong>：上下分屏</li>
+<li><strong>Alt+← / Alt+→</strong>：在分屏窗格间切换焦点</li>
+</ul>
+<hr>
+<h2>7. 传输文件</h2>
+<h3>7.1 SFTP 面板（推荐）</h3>
+<p><strong>打开方式</strong>：菜单 <strong>视图 → SFTP</strong>，或底栏 <strong>Files</strong>。</p>
+<p>界面分为<strong>本机</strong>与<strong>远程</strong>两栏：</p>
+<ol>
+<li>上方输入框可修改当前目录路径，按 Enter 跳转</li>
+<li>单击选中文件或文件夹</li>
+<li>使用面板上的按钮或右键菜单：<strong>上传</strong>、<strong>下载</strong>、<strong>删除</strong>、<strong>新建文件夹</strong>、<strong>重命名</strong></li>
+<li>操作结果在窗口<strong>底栏状态</strong>显示</li>
+</ol>
+<figure><img src="screenshots/04-sftp-panel.png" alt="SFTP 双栏浏览器"><figcaption>SFTP 双栏浏览器</figcaption></figure>
+<p class="caption"><em>图 7-1：SFTP 双栏文件管理</em></p>
+<figure><img src="screenshots/05-sftp-upload-done.png" alt="SFTP 上传完成"><figcaption>SFTP 上传完成</figcaption></figure>
+<p class="caption"><em>图 7-2：上传完成后底栏提示</em></p>
+<p><strong>典型流程 — 上传文件到服务器：</strong></p>
+<ol>
+<li>连接 SSH 后打开 SFTP 面板</li>
+<li>左侧本机栏进入要上传的文件所在目录</li>
+<li>右侧远程栏进入目标目录</li>
+<li>选中本机文件 → 上传</li>
+</ol>
+<p><strong>下载</strong>则反向操作：选中远程文件 → 下载到本机当前目录。</p>
+<h3>7.2 终端内 ZMODEM（rz / sz）</h3>
+<p>若服务器已安装 <code>lrzsz</code>，可在终端里：</p>
+<pre><code># 从本地上传文件到当前远程目录（执行后按提示选择文件）
+rz -bye
+
+# 从远程下载文件到本机
+sz 文件名</code></pre>
+<p>MistTerm 会自动接管传输并显示进度。若传输异常，请确认远端使用 <code>rz -bye</code>，并检查防火墙是否中断长连接。</p>
+<hr>
+<h2>8. 命令片段</h2>
+<p>将常用命令存为<strong>片段</strong>，需要时一键插入，支持 <code>&lt;变量名&gt;</code> 占位符。</p>
+<h3>8.1 打开片段</h3>
+<table><thead><tr><th>方式</th><th>说明</th></tr></thead><tbody><tr><td><strong>Ctrl+K</strong></td><td>聚焦片段搜索</td></tr><tr><td><strong>Ctrl+Shift+J</strong></td><td>快速片段选择器</td></tr><tr><td>底栏 <strong>Snippets</strong></td><td>打开右侧片段面板</td></tr><tr><td><strong>工具 → 命令片段库</strong></td><td>管理、新建、编辑片段</td></tr></tbody></table>
+<figure><img src="screenshots/11-panel-snippets.png" alt="命令片段底栏面板"><figcaption>命令片段底栏面板</figcaption></figure>
+<p class="caption"><em>图 8-1：底栏打开片段侧栏</em></p>
+<figure><img src="screenshots/16-fragment-library.png" alt="命令片段库"><figcaption>命令片段库</figcaption></figure>
+<p class="caption"><em>图 8-2：片段库 — 新建与编辑</em></p>
+<h3>8.2 使用变量</h3>
+<p>片段内容示例：</p>
+<pre><code>kubectl logs -f deployment/&lt;服务名&gt; -n &lt;命名空间&gt;</code></pre>
+<p>执行时会弹出输入框，填好变量后自动替换并发送到终端。</p>
+<h3>8.3 团队片段</h3>
+<p>若已登录 MistLab 团队账号，可使用团队共享片段（见第 11 节）。</p>
+<hr>
+<h2>9. 监控与端口转发</h2>
+<h3>9.1 主机监控</h3>
+<ol>
+<li>先建立 SSH 连接</li>
+<li>打开 <strong>视图 → 监控</strong> 或底栏 <strong>Monitor</strong></li>
+<li>查看 CPU、内存、磁盘、负载等图表（数据来自远程服务器，只读采集）</li>
+</ol>
+<figure><img src="screenshots/09-panel-monitor.png" alt="主机监控面板"><figcaption>主机监控面板</figcaption></figure>
+<p class="caption"><em>图 9-1：主机监控</em></p>
+<blockquote><p>监控依赖 SSH 连接。若连接断开，图表会停止更新；重新连接即可。</p></blockquote>
+<h3>9.2 端口转发</h3>
+<ol>
+<li>打开底栏 <strong>Port Forward</strong> 或 <strong>视图 → 端口转发</strong></li>
+<li>添加规则（格式与 OpenSSH 类似）：</li>
+</ol>
+<ul>
+<li><strong>本地转发</strong>：<code>本地端口:目标主机:目标端口</code></li>
+<li><strong>远程转发</strong>：<code>远程端口:目标主机:目标端口</code></li>
+<li><strong>SOCKS 代理</strong>：端口号</li>
+</ul>
+<ol>
+<li>连接会话后规则生效</li>
+</ol>
+<figure><img src="screenshots/10-panel-port-forward.png" alt="端口转发面板"><figcaption>端口转发面板</figcaption></figure>
+<p class="caption"><em>图 9-2：端口转发管理</em></p>
+<hr>
+<h2>10. AI 助手</h2>
+<h3>10.1 首次配置</h3>
+<ol>
+<li><strong>工具 → AI 设置</strong>（或先 <strong>Ctrl+Shift+A</strong> 打开面板再进设置）</li>
+<li>填写 <strong>API 地址</strong>、<strong>API Key</strong>、<strong>模型名称</strong>（需兼容 OpenAI 接口的服务，如各类 API 网关）</li>
+<li>保存</li>
+</ol>
+<figure><img src="screenshots/08-ai-settings-dialog.png" alt="AI 设置"><figcaption>AI 设置</figcaption></figure>
+<p class="caption"><em>图 10-1：AI 设置</em></p>
+<h3>10.2 使用</h3>
+<ul>
+<li><strong>Ctrl+Shift+A</strong> 打开 AI 面板，输入问题后发送</li>
+<li><strong>Ctrl+Shift+L</strong>：将终端中选中的文字发送给 AI 分析</li>
+<li>请求直接发往您配置的 API，<strong>不经过 MistLab 服务器</strong>（密钥保存在本机）</li>
+</ul>
+<figure><img src="screenshots/06-ai-panel.png" alt="AI 助手面板"><figcaption>AI 助手面板</figcaption></figure>
+<p class="caption"><em>图 10-2：AI 助手对话</em></p>
+<figure><img src="screenshots/07-menu-tools.png" alt="工具菜单"><figcaption>工具菜单</figcaption></figure>
+<p class="caption"><em>图 10-3：工具菜单 — AI、片段、批量执行、凭证等</em></p>
+<hr>
+<h2>11. 团队与同步（可选）</h2>
+<p>面向使用 <strong>MistLab 团队版</strong> 的用户：</p>
+<ol>
+<li><strong>工具 → 团队账号</strong> 登录（浏览器 OAuth 授权）</li>
+<li>登录后可：</li>
+</ol>
+<ul>
+<li>同步/共享命令片段</li>
+<li>查看团队审计记录（若管理员已开启）</li>
+<li>使用团队 Vault 凭证（若已配置）</li>
+</ul>
+<ol>
+<li><strong>工具 → 云同步</strong> 可将个人配置备份到 Git 仓库（可选）</li>
+</ol>
+<p>未登录团队时，所有个人功能照常使用。</p>
+<hr>
+<h2>12. 命令安全提示</h2>
+<p>MistTerm 可在危险命令发送到服务器<strong>之前</strong>进行提示或拦截（取决于您的规则与团队策略）：</p>
+<table><thead><tr><th>行为</th><th>说明</th></tr></thead><tbody><tr><td>拦截</td><td>如 <code>rm -rf /</code> 等极高风险命令无法发送</td></tr><tr><td>确认</td><td>弹窗询问「是否继续」</td></tr><tr><td>告警</td><td>允许执行但记录告警</td></tr></tbody></table>
+<p>可在 <strong>偏好设置</strong> 中查看或调整本地规则。加入团队后，管理员下发的策略会同步到本机。</p>
+<hr>
+<h2>13. 凭证、日志与偏好</h2>
+<h3>13.1 凭证管理</h3>
+<p><strong>工具 → 凭证</strong>：集中保存服务器账号、数据库、API Token 等，供会话或片段引用。默认本地加密存储。</p>
+<h3>13.2 会话日志</h3>
+<p>在偏好设置中可开启<strong>会话日志</strong>，自动保存终端交互记录，便于事后审计。可通过 <strong>工具 → 浏览会话日志</strong> 查看。</p>
+<h3>13.3 偏好设置与主题</h3>
+<ul>
+<li><strong>Ctrl+,</strong> 打开偏好设置：界面语言、主题、字体、审计、日志等</li>
+</ul>
+<figure><img src="screenshots/13-preferences.png" alt="偏好设置"><figcaption>偏好设置</figcaption></figure>
+<p class="caption"><em>图 13-1：偏好设置</em></p>
+<ul>
+<li><strong>Ctrl+H</strong> 查看关于与内置快捷键说明</li>
+</ul>
+<figure><img src="screenshots/14-about.png" alt="关于 Mist"><figcaption>关于 Mist</figcaption></figure>
+<p class="caption"><em>图 13-2：关于 Mist</em></p>
+<ul>
+<li><strong>视图 → 主题</strong>：切换深色/浅色等配色</li>
+</ul>
+<h3>13.4 批量执行</h3>
+<p><strong>工具 → 批量执行</strong>：选择多台已保存的主机，输入同一条命令并行执行，适合巡检（结果分主机显示，过长输出会自动截断）。</p>
+<hr>
+<h2>14. 快捷键一览</h2>
+<p>以下以 <strong>Windows</strong> 为例；macOS 将 <strong>Ctrl</strong> 换为 <strong>⌘</strong> 即可（如 Ctrl+N → ⌘N）。</p>
+<table><thead><tr><th>快捷键</th><th>功能</th></tr></thead><tbody><tr><td><strong>Ctrl+N</strong></td><td>新建会话</td></tr><tr><td><strong>Ctrl+E</strong></td><td>编辑所选会话</td></tr><tr><td><strong>Ctrl+T</strong></td><td>为所选会话新建终端标签</td></tr><tr><td><strong>Ctrl+W</strong></td><td>关闭当前标签</td></tr><tr><td><strong>Ctrl+Tab</strong> / <strong>Ctrl+Shift+Tab</strong></td><td>下一 / 上一标签</td></tr><tr><td><strong>Ctrl+1 … Ctrl+9</strong></td><td>切换到第 N 个标签</td></tr><tr><td><strong>Ctrl+J</strong></td><td>聚焦连接搜索（侧栏）</td></tr><tr><td><strong>Ctrl+K</strong></td><td>聚焦片段搜索</td></tr><tr><td><strong>Ctrl+Shift+J</strong></td><td>快速片段选择器</td></tr><tr><td><strong>Ctrl+F</strong> / <strong>F3</strong></td><td>终端内查找</td></tr><tr><td><strong>Ctrl+R</strong></td><td>命令历史搜索（终端内）</td></tr><tr><td><strong>Ctrl+Shift+A</strong></td><td>AI 助手面板</td></tr><tr><td><strong>Ctrl+Shift+L</strong></td><td>终端选区发送到 AI</td></tr><tr><td><strong>Ctrl+Shift+D</strong> / <strong>Ctrl+Shift+U</strong></td><td>终端左右 / 上下分屏</td></tr><tr><td><strong>Ctrl+,</strong></td><td>偏好设置</td></tr><tr><td><strong>Ctrl+H</strong></td><td>关于与快捷键说明</td></tr><tr><td><strong>Esc</strong></td><td>关闭当前弹窗、菜单</td></tr></tbody></table>
+<p>完整列表以应用内 <strong>帮助 → 键盘快捷键</strong> 为准。</p>
+<figure><img src="screenshots/19-help-quick-start.png" alt="快速入门帮助"><figcaption>快速入门帮助</figcaption></figure>
+<p class="caption"><em>图 14-1：应用内帮助 — 快速入门</em></p>
+<hr>
+<h2>15. 常见问题</h2>
+<h3>无法连接服务器</h3>
+<ul>
+<li>检查主机、端口、用户名、密码/密钥是否正确</li>
+<li>确认本机网络能访问目标 IP（可先用系统自带 <code>ssh</code> 命令测试）</li>
+<li>若需跳板机，在会话高级选项中配置 ProxyJump</li>
+<li>查看底栏是否显示错误信息</li>
+</ul>
+<h3>连接后终端空白或乱码</h3>
+<ul>
+<li>稍等几秒等待 shell 初始化</li>
+<li>在偏好设置中确认语言与字体；中文环境一般会自动选用合适字体</li>
+</ul>
+<h3>SFTP 无法上传/下载</h3>
+<ul>
+<li>确认 SSH 已连接成功（同一标签页）</li>
+<li>检查远程目录是否有写权限</li>
+<li>本机目标路径是否存在、是否只读</li>
+</ul>
+<h3>ZMODEM（rz/sz）传文件失败</h3>
+<ul>
+<li>确认服务器已安装 <code>lrzsz</code>（<code>which rz</code>）</li>
+<li>上传时使用 <code>rz -bye</code></li>
+<li>传输过程中勿切换标签或断开连接</li>
+</ul>
+<h3>配置文件打开是乱码</h3>
+<ul>
+<li>正常现象：MistTerm 对本地配置做了加密，请只在应用内修改</li>
+</ul>
+<h3>如何卸载</h3>
+<ul>
+<li><strong>Windows</strong>：设置 → 应用 → MistTerm → 卸载</li>
+<li><strong>macOS</strong>：将 MistTerm 拖入废纸篓；配置仍在 <code>Application Support/mistterm/</code>，可手动删除</li>
+</ul>
+<h3>如何反馈问题</h3>
+<p>前往 <a href="https://github.com/mistlab-dev/MistTerm/issues">GitHub Issues</a> 描述现象、版本号与操作系统，勿在 issue 中粘贴密码或密钥。</p>
+<hr>
+<p>*MistTerm v1.0.4 用户手册 · MistLab*</p>
+</body>
+</html>
