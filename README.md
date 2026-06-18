@@ -56,6 +56,7 @@ See [docs/en/INSTALL.md](docs/en/INSTALL.md). Repository docs: [docs/](docs/).
 |---|---|
 | [Doc index (EN)](docs/en/README.md) | [Doc index (ZH)](docs/zh/README.md) |
 | [Install (EN)](docs/en/INSTALL.md) | [Install (ZH)](docs/zh/INSTALL.md) |
+| [User manual (ZH)](docs/manual/MistTerm_操作手册.html) | |
 
 ### Testing
 
@@ -117,7 +118,8 @@ cargo build --release --bin Mist
 | | |
 |---|---|
 | [英文索引](docs/en/README.md) | [中文索引](docs/zh/README.md) |
-| [Install (EN)](docs/en/INSTALL.md) | [安装 (ZH)](docs/zh/INSTALL.md) |
+| [安装说明（中文）](docs/zh/INSTALL.md) | [安装说明（英文）](docs/en/INSTALL.md) |
+| [操作手册](docs/manual/MistTerm_操作手册.html) | |
 
 ### 测试
 
