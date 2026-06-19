@@ -14,7 +14,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from gui_automation_keys import dismiss_new_session_dialog
+from gui_automation_keys import TOGGLE_SFTP, dismiss_new_session_dialog
+from gui_common import automation_env, capture_failure, connect_local_session, ssh_preflight
+from gui_coverage import CoverageTracker
 from gui_screen import find_mist_window
 from pywinauto import Application
 from pywinauto.keyboard import send_keys
@@ -95,10 +97,17 @@ def click_xy(x: int, y: int) -> None:
 
 
 class GuiWalker:
-    def __init__(self, proc: subprocess.Popen[bytes], hwnd: int, report: Report):
+    def __init__(
+        self,
+        proc: subprocess.Popen[bytes],
+        hwnd: int,
+        report: Report,
+        coverage: CoverageTracker | None = None,
+    ):
         self.proc = proc
         self.hwnd = hwnd
         self.report = report
+        self.cov = coverage
         self.app = Application(backend="uia").connect(process=proc.pid)
         self.win = self.app.window(handle=hwnd)
         cl, ct, cr, cb = client_screen_rect(hwnd)
@@ -165,41 +174,95 @@ class GuiWalker:
         click_xy(x, self.status_y)
         time.sleep(0.35)
 
-    def run_step(self, name: str, action) -> None:
+    def run_step(self, name: str, action, *feature_ids: str) -> None:
         try:
             action()
             self.check(name)
             self.dismiss()
             self.report.ok(name)
+            if self.cov and feature_ids:
+                self.cov.mark_many(*feature_ids)
         except Exception as e:
             self.dismiss(3)
             self.report.fail(name, str(e))
 
     def walk(self) -> None:
+        print("==> Connect Local Test SSH", flush=True)
+        ssh_preflight()
+        connect_local_session(self.hwnd, self.proc.pid)
+        if self.cov:
+            self.cov.mark("session.connect")
+
         # ── Keyboard shortcuts ──
-        self.run_step("shortcut Ctrl+N (new session)", lambda: self.shortcut("^n"))
-        self.run_step("shortcut Ctrl+T (new tab)", lambda: self.shortcut("^t"))
+        self.run_step(
+            "shortcut Ctrl+N (new session)",
+            lambda: self.shortcut("^n"),
+            "session.new_dialog",
+        )
+        self.run_step(
+            "shortcut Ctrl+Shift+Backspace (close new session)",
+            lambda: dismiss_new_session_dialog(repeats=1),
+            "automation.close_modal",
+        )
+        self.run_step("shortcut Ctrl+T (new tab)", lambda: self.shortcut("^t"), "tab.new")
         self.run_step("shortcut Ctrl+J (sidebar search)", lambda: self.shortcut("^j"))
         self.run_step("shortcut Ctrl+K (fragment search)", lambda: self.shortcut("^k"))
         self.run_step(
             "shortcut Ctrl+Shift+A (AI panel)",
             lambda: self.shortcut("+^a"),
+            "panel.ai",
         )
-        self.run_step("shortcut Ctrl+H (about)", lambda: self.shortcut("^h"))
-        self.run_step("shortcut Ctrl+, (preferences)", lambda: self.shortcut("^,"))
-        self.run_step("shortcut F3 (terminal find)", lambda: self.shortcut("{F3}"))
+        self.run_step(
+            "shortcut Ctrl+Shift+S (SFTP panel)",
+            lambda: self.shortcut(TOGGLE_SFTP),
+            "sftp.toggle",
+        )
+        self.run_step("shortcut Ctrl+H (about)", lambda: self.shortcut("^h"), "dialog.about")
+        self.run_step(
+            "shortcut Ctrl+, (preferences)",
+            lambda: self.shortcut("^,"),
+            "dialog.preferences",
+        )
+        self.run_step(
+            "shortcut F3 (terminal find)",
+            lambda: self.shortcut("{F3}"),
+            "terminal.find",
+        )
+        self.run_step(
+            "shortcut Ctrl+R (command history)",
+            lambda: self.shortcut("^r"),
+            "terminal.history",
+        )
+        self.run_step(
+            "shortcut Ctrl+E (edit session)",
+            lambda: self.shortcut("^e"),
+            "session.edit",
+        )
+        self.run_step(
+            "shortcut Ctrl+Shift+L (send selection to AI)",
+            lambda: self.shortcut("+^l"),
+            "shortcut.ai_send_sel",
+        )
         self.run_step(
             "shortcut Ctrl+Shift+D (split horizontal)",
             lambda: self.shortcut("+^d"),
+            "terminal.split_h",
         )
         self.run_step(
             "shortcut Ctrl+Shift+U (split vertical)",
             lambda: self.shortcut("+^u"),
+            "terminal.split_v",
         )
-        self.run_step("shortcut Ctrl+Tab (next tab)", lambda: self.shortcut("^{TAB}"))
+        self.run_step(
+            "shortcut Alt+Left (pane focus)",
+            lambda: self.shortcut("%{LEFT}"),
+            "terminal.pane_focus",
+        )
+        self.run_step("shortcut Ctrl+Tab (next tab)", lambda: self.shortcut("^{TAB}"), "tab.cycle")
         self.run_step(
             "shortcut Ctrl+Shift+Tab (prev tab)",
             lambda: self.shortcut("+^{TAB}"),
+            "tab.cycle",
         )
 
         # ── Terminal menu ──
@@ -207,7 +270,7 @@ class GuiWalker:
             x = self.open_menu(0)
             self.pick_item(x, 2)
 
-        self.run_step("menu Terminal > Import SSH Config", terminal_import)
+        self.run_step("menu Terminal > Import SSH Config", terminal_import, "session.import_ssh")
 
         # Preferences: use shortcut only (menu row near Quit — mis-click risk)
 
@@ -216,12 +279,13 @@ class GuiWalker:
             x = self.open_menu(1)
             self.pick_item(x, 3, SEP_H)
 
-        self.run_step("menu Edit > Find in Terminal", edit_find)
+        self.run_step("menu Edit > Find in Terminal", edit_find, "menu.edit")
 
         for label, row in [("Copy", 0), ("Paste", 1), ("Select All", 2)]:
             self.run_step(
                 f"menu Edit > {label}",
                 lambda r=row: self.pick_item(self.open_menu(1), r),
+                "menu.edit",
             )
 
         # ── View menu (panels + window) ──
@@ -236,9 +300,19 @@ class GuiWalker:
         ]
         extra = SEP_H
         for name, row in view_items:
+            fid = {
+                "toggle sidebar": "menu.view",
+                "maximize/restore window": "menu.view",
+                "SFTP panel": "sftp.toggle",
+                "Port forwarding panel": "panel.port_forward",
+                "Fragment panel": "panel.snippets",
+                "Monitor panel": "panel.monitor",
+                "AI panel": "panel.ai",
+            }.get(name, "menu.view")
             self.run_step(
                 f"menu View > {name}",
                 lambda r=row, e=extra: self.pick_item(self.open_menu(2), r, e),
+                fid,
             )
 
         def view_theme():
@@ -249,9 +323,20 @@ class GuiWalker:
             time.sleep(0.3)
             click_xy(x + int(110 * self.scale), y + int(28 * self.scale))
 
-        self.run_step("menu View > Theme (switch)", view_theme)
+        self.run_step("menu View > Theme (switch)", view_theme, "menu.view")
 
         # ── Tools menu ──
+        tools_fids = {
+            "AI Settings": "panel.ai_settings",
+            "Fragment Library": "dialog.fragment_lib",
+            "Quick Fragment Picker": "panel.snippets",
+            "Command History": "terminal.history",
+            "Batch Run on Servers": "dialog.batch_exec",
+            "Credentials": "dialog.credentials",
+            "Team Account": "dialog.team",
+            "Cloud Sync": "dialog.cloud_sync",
+            "Browse Session Logs": "dialog.session_logs",
+        }
         tools_rows = [
             ("AI Settings", 0),
             ("Fragment Library", 1),
@@ -270,11 +355,11 @@ class GuiWalker:
             if row >= 8:
                 tools_extra = SEP_H * 2
 
-            def action(r=row, e=tools_extra, n=name):
+            def action(r=row, e=tools_extra):
                 x = self.open_menu(3)
                 self.pick_item(x, r, e)
 
-            self.run_step(f"menu Tools > {name}", action)
+            self.run_step(f"menu Tools > {name}", action, tools_fids.get(name, "menu.view"))
 
         # ── Help menu ──
         for name, row, extra in [
@@ -284,6 +369,7 @@ class GuiWalker:
             self.run_step(
                 f"menu Help > {name}",
                 lambda r=row, e=extra: self.pick_item(self.open_menu(4), r, e),
+                "dialog.help",
             )
 
         self.report.skip("menu Help > About Mist", "covered by Ctrl+H shortcut")
@@ -299,9 +385,18 @@ class GuiWalker:
             ("SFTP Files", 126),
             ("Snippets", 160),
         ]:
+            fid = {
+                "AI": "panel.ai",
+                "Monitor": "panel.monitor",
+                "Port Forward": "panel.port_forward",
+                "SFTP Files": "sftp.toggle",
+                "Snippets": "panel.snippets",
+            }[name]
             self.run_step(
                 f"bottom bar > {name}",
                 lambda o=off: self.bottom_btn_from_right(o),
+                fid,
+                "bar.bottom",
             )
 
         # ── Status bar context menu (right-click) ──
@@ -314,29 +409,55 @@ class GuiWalker:
             time.sleep(0.35)
             click_xy(x, y - int(28 * self.scale))
 
-        self.run_step("status bar context > Import SSH", status_context)
+        self.run_step("status bar context > Import SSH", status_context, "bar.status_ctx")
+
+        def terminal_close_tab():
+            x = self.open_menu(0)
+            self.pick_item(x, 3, SEP_H)
+
+        self.run_step("menu Terminal > Close Tab", terminal_close_tab, "tab.close")
+
+        connect_local_session(self.hwnd, self.proc.pid, wait=10.0)
+
+        def terminal_disconnect():
+            x = self.open_menu(0)
+            self.pick_item(x, 4, SEP_H * 2)
+
+        self.run_step("menu Terminal > Disconnect SSH", terminal_disconnect, "session.disconnect")
+
+        def terminal_reconnect():
+            x = self.open_menu(0)
+            self.pick_item(x, 5, SEP_H * 2)
+
+        self.run_step("menu Terminal > Reconnect Tab", terminal_reconnect, "session.reconnect")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("exe")
     parser.add_argument("--title", default="Mist")
-    parser.add_argument("--timeout", type=float, default=45.0)
+    parser.add_argument("--timeout", type=float, default=90.0)
     args = parser.parse_args()
 
     report = Report()
-    env = os.environ.copy()
-    env["MISTTERM_GUI_AUTOMATION"] = "1"
+    coverage = CoverageTracker("smoke")
     print(f"==> Launching {args.exe}", flush=True)
-    proc = subprocess.Popen([args.exe], env=env)
+    proc = subprocess.Popen([args.exe], env=automation_env())
+    hwnd: int | None = None
     try:
         hwnd = find_mist_hwnd(args.title, args.timeout, proc)
         print(f"    hwnd={hwnd} pid={proc.pid}", flush=True)
-        walker = GuiWalker(proc, hwnd, report)
+        walker = GuiWalker(proc, hwnd, report, coverage)
         walker.focus()
         time.sleep(0.8)
         print("==> Feature walkthrough", flush=True)
         walker.walk()
+        code = report.summary()
+        code = max(code, coverage.report())
+        return code
+    except Exception as e:
+        capture_failure(hwnd, "menu_walkthrough")
+        report.fail("fatal", str(e))
         return report.summary()
     finally:
         if proc.poll() is None:

@@ -16,7 +16,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import paramiko
 from pywinauto import Application
 from gui_automation_keys import (
     SFTP_DOWNLOAD,
@@ -26,6 +25,14 @@ from gui_automation_keys import (
 )
 from pywinauto.keyboard import send_keys
 
+from gui_common import (
+    automation_env,
+    capture_failure,
+    remote_has_marker,
+    send_terminal_line,
+    ssh_preflight,
+)
+from gui_coverage import CoverageTracker
 from gui_screen import (
     SHOT_DIR,
     client_rect,
@@ -256,13 +263,6 @@ def ssh_established_count() -> int:
     )
 
 
-def ssh_preflight() -> None:
-    c = paramiko.SSHClient()
-    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(SSH_HOST, 22, SSH_USER, SSH_PASS, timeout=10, allow_agent=False, look_for_keys=False)
-    c.close()
-
-
 def prepare_local_file() -> tuple[Path, str]:
     d = Path(tempfile.gettempdir()) / "mistterm_downloads"
     d.mkdir(parents=True, exist_ok=True)
@@ -270,34 +270,6 @@ def prepare_local_file() -> tuple[Path, str]:
     p = d / REMOTE_FILE
     p.write_text(f"MistTerm GUI upload {marker}\n", encoding="utf-8")
     return p, marker
-
-
-def remote_paths() -> list[str]:
-    home = f"C:/Users/{SSH_USER}"
-    return [
-        REMOTE_FILE,
-        f"{home}/{REMOTE_FILE}",
-        f"{home}/mistterm_sftp/{REMOTE_FILE}",
-        f"mistterm_sftp/{REMOTE_FILE}",
-    ]
-
-
-def remote_has_marker(marker: str) -> bool:
-    c = paramiko.SSHClient()
-    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(SSH_HOST, 22, SSH_USER, SSH_PASS, timeout=10, allow_agent=False, look_for_keys=False)
-    sftp = c.open_sftp()
-    for rp in remote_paths():
-        try:
-            with sftp.open(rp, "r") as f:
-                body = f.read().decode("utf-8", errors="replace")
-            if marker in body:
-                c.close()
-                return True
-        except OSError:
-            pass
-    c.close()
-    return False
 
 
 def set_local_sftp_path(gui: MistGui) -> None:
@@ -325,25 +297,10 @@ def wait_for_remote_marker(marker: str, timeout: float = 45.0) -> None:
     raise RuntimeError("上传后服务器未找到带标记的文件")
 
 
-def wait_for_local_marker(local_file: Path, marker: str, timeout: float = 45.0) -> None:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        if local_file.exists() and marker in local_file.read_text(encoding="utf-8"):
-            return
-        time.sleep(2.0)
-    raise RuntimeError("下载后本地未找到带标记的文件")
-
-
-def mist_automation_env() -> dict[str, str]:
-    env = os.environ.copy()
-    env["MISTTERM_GUI_AUTOMATION"] = "1"
-    env["MISTTERM_E2E_FILE"] = REMOTE_FILE
-    return env
-
-
-def run_workflow(gui: MistGui, marker: str, local_file: Path) -> None:
+def run_workflow(gui: MistGui, marker: str, local_file: Path, cov: CoverageTracker) -> None:
     if not gui.step("1. 新建会话对话框 (Ctrl+N) 打开并关闭", gui.fill_new_session, stop=True):
         return
+    cov.mark("session.new_dialog")
 
     def ensure_ssh() -> None:
         gui.require_modal_closed("连接前")
@@ -351,18 +308,20 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path) -> None:
 
     if not gui.step("1b. 连接本地测试会话 (Ctrl+J / Ctrl+T)", ensure_ssh, stop=True):
         return
+    cov.mark("session.connect", "tab.new")
 
     def terminal_cmds() -> None:
         gui.require_modal_closed("终端输入前")
         gui.focus()
         click(gui.cl + int(450 * gui.s), gui.ct + int(380 * gui.s))
         time.sleep(0.3)
-        send_keys("whoami{ENTER}")
+        send_terminal_line("whoami")
         time.sleep(0.8)
-        send_keys("echo MISTTERM_GUI_FULL_OK{ENTER}")
+        send_terminal_line("echo MISTTERM_GUI_FULL_OK")
         time.sleep(0.8)
 
-    gui.step("2. 终端命令 whoami / echo", terminal_cmds)
+    if gui.step("2. 终端命令 whoami / echo", terminal_cmds):
+        cov.mark("terminal.commands")
 
     def open_sftp() -> None:
         gui.force_clear_modals()
@@ -374,6 +333,7 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path) -> None:
 
     if not gui.step("3. 打开 SFTP (Ctrl+Shift+S)", open_sftp, stop=True):
         return
+    cov.mark("sftp.toggle")
 
     def refresh_local() -> None:
         set_local_sftp_path(gui)
@@ -393,6 +353,7 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path) -> None:
 
     if not gui.step("5. SFTP 上传 (Ctrl+Shift+F9)", upload_file, stop=True):
         return
+    cov.mark("sftp.upload")
 
     def download_file() -> None:
         wait_for_remote_marker(marker)
@@ -414,6 +375,7 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path) -> None:
 
     if not gui.step("6. SFTP 下载 (Ctrl+Shift+F10)", download_file, stop=True):
         return
+    cov.mark("sftp.download")
 
     def ai_panel() -> None:
         dismiss_esc()
@@ -423,8 +385,6 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path) -> None:
         send_keys("Explain the ls command briefly{ENTER}")
         time.sleep(1.0)
 
-    gui.step("7. AI 助手面板输入并发送", ai_panel)
-
     def ai_settings() -> None:
         dismiss_esc()
         x = gui.open_menu(3)
@@ -432,16 +392,12 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path) -> None:
         time.sleep(0.8)
         dismiss_esc(2)
 
-    gui.step("8. Tools > AI 设置对话框", ai_settings)
-
     def other_panels() -> None:
         dismiss_esc()
         for off, _ in [(58, "Monitor"), (92, "Port Forward"), (160, "Snippets")]:
             gui.bottom_btn(off)
             time.sleep(0.5)
         dismiss_esc()
-
-    gui.step("9. 其它底栏面板 (Monitor/转发/片段)", other_panels)
 
     def view_panels() -> None:
         dismiss_esc()
@@ -451,28 +407,113 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path) -> None:
             time.sleep(0.45)
             dismiss_esc()
 
-    gui.step("10. View 菜单切换片段/监控/AI", view_panels)
-
     def prefs_about() -> None:
         gui.shortcut("^,", 0.7)
         dismiss_esc()
         gui.shortcut("^h", 0.7)
         dismiss_esc()
 
-    gui.step("11. 偏好设置与关于", prefs_about)
+    if gui.step("7. AI 助手面板输入并发送", ai_panel):
+        cov.mark("panel.ai")
+
+    if gui.step("8. Tools > AI 设置对话框", ai_settings):
+        cov.mark("panel.ai_settings")
+
+    if gui.step("9. 其它底栏面板 (Monitor/转发/片段)", other_panels):
+        cov.mark("panel.monitor", "panel.port_forward", "panel.snippets")
+
+    if gui.step("10. View 菜单切换片段/监控/AI", view_panels):
+        cov.mark("panel.snippets", "panel.monitor", "panel.ai")
+
+    if gui.step("11. 偏好设置与关于", prefs_about):
+        cov.mark("dialog.preferences", "dialog.about")
+
+    def terminal_find() -> None:
+        dismiss_esc()
+        gui.shortcut("{F3}")
+        send_keys("GUI{ENTER}")
+        time.sleep(0.4)
+        dismiss_esc(2)
+
+    if gui.step("12. 终端查找 F3", terminal_find):
+        cov.mark("terminal.find")
+
+    def tools_extra() -> None:
+        dismiss_esc()
+        x = gui.open_menu(3)
+        gui.pick_menu(x, 1)
+        time.sleep(0.7)
+        dismiss_esc(2)
+        x = gui.open_menu(3)
+        gui.pick_menu(x, 3, SEP_H)
+        time.sleep(0.7)
+        dismiss_esc(2)
+
+    if gui.step("13. 片段库与命令历史", tools_extra):
+        cov.mark("dialog.fragment_lib", "terminal.history")
+
+    def import_ssh() -> None:
+        dismiss_esc()
+        x = gui.open_menu(0)
+        gui.pick_menu(x, 2)
+        time.sleep(0.7)
+        dismiss_esc(2)
+
+    if gui.step("14. 导入 SSH Config", import_ssh):
+        cov.mark("session.import_ssh")
+
+    def help_quick() -> None:
+        dismiss_esc()
+        x = gui.open_menu(4)
+        gui.pick_menu(x, 0)
+        time.sleep(0.7)
+        dismiss_esc(2)
+
+    if gui.step("15. 帮助快速入门", help_quick):
+        cov.mark("dialog.help")
+
+    def edit_session() -> None:
+        gui.shortcut("^e")
+        time.sleep(0.7)
+        dismiss_esc(2)
+
+    if gui.step("16. 编辑会话 Ctrl+E", edit_session):
+        cov.mark("session.edit")
+
+    def split_and_pane() -> None:
+        dismiss_esc()
+        gui.shortcut("+^d")
+        time.sleep(0.5)
+        gui.shortcut("%{LEFT}")
+        time.sleep(0.4)
+        dismiss_esc()
+
+    if gui.step("17. 分屏与窗格切换", split_and_pane):
+        cov.mark("terminal.split_h", "terminal.pane_focus")
+
+    def split_vertical() -> None:
+        dismiss_esc()
+        gui.shortcut("+^u")
+        time.sleep(0.4)
+        dismiss_esc()
+
+    if gui.step("18. 上下分屏 Ctrl+Shift+U", split_vertical):
+        cov.mark("terminal.split_v")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("exe")
-    parser.add_argument("--timeout", type=float, default=45.0)
+    parser.add_argument("--timeout", type=float, default=180.0)
     parser.add_argument("--keep-open", action="store_true")
     args = parser.parse_args()
 
     print("=== MistTerm 全套 GUI 流程（无单元测试）===\n")
     report = Report()
+    coverage = CoverageTracker("workflow")
 
     proc: subprocess.Popen[bytes] | None = None
+    hwnd: int | None = None
     try:
         print("==> SSH 预检与准备本机文件")
         ssh_preflight()
@@ -480,7 +521,7 @@ def main() -> int:
         print(f"    本机文件: {local_file} (marker={marker})")
 
         print(f"==> 启动 {args.exe} (MISTTERM_GUI_AUTOMATION=1)")
-        proc = subprocess.Popen([args.exe], env=mist_automation_env())
+        proc = subprocess.Popen([args.exe], env=automation_env())
         deadline = time.time() + args.timeout
         hwnd = None
         while time.time() < deadline:
@@ -500,15 +541,16 @@ def main() -> int:
         print(f"    截图目录: {SHOT_DIR}")
         time.sleep(1.0)
         gui = MistGui(proc, hwnd, report)
-        run_workflow(gui, marker, local_file)
+        run_workflow(gui, marker, local_file, coverage)
 
-        code = report.summary()
+        code = max(report.summary(), coverage.report())
         if code == 0:
             print("\n=== 全套 GUI 流程通过 ===")
         if args.keep_open and proc.poll() is None:
             proc.wait()
         return code
     except Exception as e:
+        capture_failure(hwnd, "full_workflow")
         print(f"\nFATAL: {e}", file=sys.stderr)
         return 2
     finally:
