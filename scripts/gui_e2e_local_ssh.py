@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import ctypes
 import os
 import subprocess
 import sys
@@ -14,63 +13,34 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-import paramiko
 from gui_automation_keys import (
     SFTP_DOWNLOAD,
     SFTP_UPLOAD,
     TOGGLE_SFTP,
     dismiss_new_session_dialog,
 )
+from gui_common import (
+    LOCAL_TEST_SESSION,
+    REMOTE_FILE,
+    SSH_HOST,
+    SSH_PASS,
+    SSH_USER,
+    automation_env,
+    capture_failure,
+    click,
+    client_rect,
+    paste_field,
+    remote_has_marker,
+    scale_for,
+    send_terminal_line,
+    ssh_preflight,
+)
+from gui_coverage import CoverageTracker
 from gui_screen import find_mist_window
 from pywinauto import Application
 from pywinauto.keyboard import send_keys
 
-user32 = ctypes.windll.user32
 SESSION_NAME = "GUI E2E Local"
-SSH_USER = "mistterm_test"
-SSH_PASS = "mistterm123"
-SSH_HOST = "127.0.0.1"
-REMOTE_FILE = "gui_e2e_upload.txt"
-
-
-class POINT(ctypes.Structure):
-    _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-
-class RECT(ctypes.Structure):
-    _fields_ = [("l", ctypes.c_long), ("t", ctypes.c_long), ("r", ctypes.c_long), ("b", ctypes.c_long)]
-
-
-def client_rect(hwnd: int) -> tuple[int, int, int, int]:
-    rect = RECT()
-    user32.GetClientRect(hwnd, ctypes.byref(rect))
-    pt = POINT(0, 0)
-    user32.ClientToScreen(hwnd, ctypes.byref(pt))
-    return pt.x, pt.y, pt.x + rect.r, pt.y + rect.b
-
-
-def click(x: int, y: int) -> None:
-    user32.SetCursorPos(int(x), int(y))
-    user32.mouse_event(0x0002, 0, 0, 0, 0)
-    user32.mouse_event(0x0004, 0, 0, 0, 0)
-    time.sleep(0.12)
-
-
-def right_click(x: int, y: int) -> None:
-    user32.SetCursorPos(int(x), int(y))
-    user32.mouse_event(0x0008, 0, 0, 0, 0)
-    user32.mouse_event(0x0010, 0, 0, 0, 0)
-    time.sleep(0.2)
-
-
-def scale_for(cl: int, cr: int) -> float:
-    return max(0.85, min(1.35, (cr - cl) / 1200.0))
-
-
-def paste_field(text: str) -> None:
-    send_keys("^a")
-    time.sleep(0.05)
-    send_keys(text, with_spaces=True, pause=0.02)
 
 
 def modal_layout(hwnd: int) -> dict[str, tuple[int, int]]:
@@ -89,13 +59,6 @@ def modal_layout(hwnd: int) -> dict[str, tuple[int, int]]:
     }
 
 
-def ssh_preflight() -> None:
-    c = paramiko.SSHClient()
-    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(SSH_HOST, 22, SSH_USER, SSH_PASS, timeout=10, allow_agent=False, look_for_keys=False)
-    c.close()
-
-
 def prepare_local_file() -> tuple[Path, str]:
     d = Path(tempfile.gettempdir()) / "mistterm_downloads"
     d.mkdir(parents=True, exist_ok=True)
@@ -103,23 +66,6 @@ def prepare_local_file() -> tuple[Path, str]:
     p = d / REMOTE_FILE
     p.write_text(f"MistTerm GUI E2E upload {marker}\n", encoding="utf-8")
     return p, marker
-
-
-def remote_has_marker(marker: str) -> bool:
-    c = paramiko.SSHClient()
-    c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    c.connect(SSH_HOST, 22, SSH_USER, SSH_PASS, timeout=10, allow_agent=False, look_for_keys=False)
-    sftp = c.open_sftp()
-    for rp in [REMOTE_FILE, f"C:/Users/{SSH_USER}/{REMOTE_FILE}"]:
-        try:
-            with sftp.open(rp, "r") as f:
-                if marker in f.read().decode("utf-8", errors="replace"):
-                    c.close()
-                    return True
-        except OSError:
-            pass
-    c.close()
-    return False
 
 
 def gui_new_session(hwnd: int, app: Application) -> None:
@@ -169,15 +115,17 @@ def gui_connect_existing(hwnd: int, pid: int, name: str) -> None:
 
 
 def gui_terminal_smoke(hwnd: int) -> None:
-    print("==> [GUI] 终端输入 whoami / echo")
+    print("==> [GUI] 终端：whoami / hostname / echo")
     cl, ct, cr, cb = client_rect(hwnd)
     s = scale_for(cl, cr)
     click(cl + int(450 * s), ct + int(400 * s))
     time.sleep(0.4)
-    send_keys("whoami{ENTER}")
-    time.sleep(1.0)
-    send_keys("echo MISTTERM_GUI_OK{ENTER}")
-    time.sleep(1.0)
+    send_terminal_line("whoami")
+    time.sleep(0.8)
+    send_terminal_line("hostname")
+    time.sleep(0.8)
+    send_terminal_line("echo MISTTERM_GUI_OK")
+    time.sleep(0.8)
 
 
 def gui_open_sftp(hwnd: int, pid: int) -> None:
@@ -208,7 +156,7 @@ def gui_sftp_upload(hwnd: int, marker: str) -> None:
     click(cr - int(150 * s), ct + int(240 * s))
     time.sleep(0.3)
     send_keys(SFTP_UPLOAD)
-    deadline = time.time() + 45.0
+    deadline = time.time() + 60.0
     while time.time() < deadline:
         if remote_has_marker(marker):
             print("  [OK] 上传成功")
@@ -246,15 +194,14 @@ def main() -> int:
     args = parser.parse_args()
 
     print("=== MistTerm GUI E2E（无单元测试）===\n")
+    coverage = CoverageTracker("e2e")
     ssh_preflight()
     local_file, marker = prepare_local_file()
 
-    env = os.environ.copy()
-    env["MISTTERM_GUI_AUTOMATION"] = "1"
-    env["MISTTERM_E2E_FILE"] = REMOTE_FILE
-
-    proc = subprocess.Popen([args.exe], env=env)
+    proc: subprocess.Popen[bytes] | None = None
+    hwnd: int | None = None
     try:
+        proc = subprocess.Popen([args.exe], env=automation_env())
         hwnd = find_mist_window(proc, timeout=args.timeout)
 
         app = Application(backend="uia").connect(process=proc.pid)
@@ -262,27 +209,35 @@ def main() -> int:
 
         if not args.skip_new_session:
             gui_new_session(hwnd, app)
+            coverage.mark("session.new_dialog")
         else:
-            gui_connect_existing(hwnd, proc.pid, "Local Test SSH")
+            gui_connect_existing(hwnd, proc.pid, LOCAL_TEST_SESSION)
+        coverage.mark("session.connect", "tab.new")
 
         if proc.poll() is not None:
             raise RuntimeError("Mist 进程已退出")
 
         gui_terminal_smoke(hwnd)
+        coverage.mark("terminal.commands")
         gui_open_sftp(hwnd, proc.pid)
+        coverage.mark("sftp.toggle")
         gui_set_local_path(hwnd)
         gui_sftp_upload(hwnd, marker)
+        coverage.mark("sftp.upload")
         gui_sftp_download(hwnd, marker, local_file)
+        coverage.mark("sftp.download")
 
         print("\n=== GUI E2E 通过 ===")
+        code = coverage.report()
         if args.keep_open:
             proc.wait()
-        return 0
+        return code
     except Exception as e:
+        capture_failure(hwnd, "gui_e2e")
         print(f"\n=== GUI E2E 失败: {e} ===", file=sys.stderr)
         return 1
     finally:
-        if proc.poll() is None and not args.keep_open:
+        if proc is not None and proc.poll() is None and not args.keep_open:
             proc.terminate()
             try:
                 proc.wait(timeout=5)

@@ -31,6 +31,12 @@ if (-not (Test-Path $exe)) {
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 }
 
+Write-Host "==> Seed local test session"
+$env:CARGO_BUILD_JOBS = "1"
+$env:CARGO_INCREMENTAL = "0"
+cargo run --bin seed_local_test_session
+if ($LASTEXITCODE -ne 0) { throw "seed_local_test_session failed" }
+
 if ($LaunchOnly) {
     Write-Host "==> Launching (manual): $exe"
     Start-Process -FilePath $exe
@@ -43,11 +49,11 @@ if (-not (Test-Path $pyScript)) {
     throw "Missing $pyScript"
 }
 
-python -c "import pywinauto" 2>$null
+python -c "import pywinauto, paramiko" 2>$null
 if ($LASTEXITCODE -ne 0) {
-    Write-Host "==> Installing pywinauto..."
-    pip install pywinauto --quiet
-    if ($LASTEXITCODE -ne 0) { throw "pip install pywinauto failed" }
+    Write-Host "==> Installing pywinauto, paramiko..."
+    pip install pywinauto paramiko --quiet
+    if ($LASTEXITCODE -ne 0) { throw "pip install failed" }
 }
 
 Write-Host "==> GUI full feature walkthrough"

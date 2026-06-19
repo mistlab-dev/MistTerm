@@ -2140,4 +2140,48 @@ mod tests {
         let entries = vec![dir];
         assert!(SftpPanel::pick_local_by_name(&entries, "ignored").is_none());
     }
+
+    #[test]
+    fn pick_remote_by_name_finds_file() {
+        use crate::ssh::SftpEntry;
+        let entries = vec![SftpEntry {
+            name: "gui_e2e_upload.txt".to_string(),
+            is_dir: false,
+            size: 12,
+            permissions: "-rw-r--r--".to_string(),
+            modified: Utc::now(),
+            path: PathBuf::from("/tmp/gui_e2e_upload.txt"),
+        }];
+        let path = SftpPanel::pick_remote_by_name(&entries, "gui_e2e_upload.txt").unwrap();
+        assert_eq!(path.file_name().unwrap(), "gui_e2e_upload.txt");
+    }
+
+    #[test]
+    fn gui_automation_enabled_reads_env() {
+        struct EnvGuard {
+            key: &'static str,
+            old: Option<String>,
+        }
+        impl EnvGuard {
+            fn set(key: &'static str, val: &str) -> Self {
+                let old = std::env::var(key).ok();
+                std::env::set_var(key, val);
+                Self { key, old }
+            }
+        }
+        impl Drop for EnvGuard {
+            fn drop(&mut self) {
+                match &self.old {
+                    Some(v) => std::env::set_var(self.key, v),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+
+        let _g = EnvGuard::set("MISTTERM_GUI_AUTOMATION", "1");
+        assert!(SftpPanel::gui_automation_enabled());
+        drop(_g);
+        let _g2 = EnvGuard::set("MISTTERM_GUI_AUTOMATION", "true");
+        assert!(SftpPanel::gui_automation_enabled());
+    }
 }

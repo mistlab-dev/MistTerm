@@ -35,6 +35,12 @@ if ($LASTEXITCODE -ne 0) {
     pip install pywinauto paramiko --quiet
 }
 
+Write-Host "==> Seed local test session"
+$env:CARGO_BUILD_JOBS = "1"
+$env:CARGO_INCREMENTAL = "0"
+cargo run --bin seed_local_test_session
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
 $pyArgs = @($exe, "--timeout", "120")
 if ($KeepOpen) { $pyArgs += "--keep-open" }
 
