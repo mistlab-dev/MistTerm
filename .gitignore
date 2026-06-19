@@ -28,6 +28,10 @@ logs/
 .DS_Store
 Thumbs.db
 
+# Python
+__pycache__/
+*.py[cod]
+
 # 配置文件（敏感信息）
 *.env
 .env.local
