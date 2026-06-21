@@ -1219,7 +1219,7 @@ impl MistTermApp {
                                 &mut should_close,
                             );
                             ui.label(
-                                egui::RichText::new("Mist")
+                                egui::RichText::new(crate::platform::APP_DISPLAY_NAME)
                                     .size(theme.font_size_prominent())
                                     .color(theme.color_body_text_muted()),
                             );

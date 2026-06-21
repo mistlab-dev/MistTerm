@@ -1,5 +1,5 @@
 # 全套 GUI 流程：新建连接 + SFTP + AI + 面板（不跑 cargo test）
-# 前置: 管理员运行一次 .\scripts\setup-windows-test-sshd.ps1
+# 会自动 ensure 本地 sshd（必要时提权 setup-windows-test-sshd.ps1）
 # 自动化快捷键（MISTTERM_GUI_AUTOMATION=1）见 scripts/gui_automation_keys.py
 # 用法:
 #   .\scripts\run-gui-full-workflow.ps1
@@ -22,6 +22,10 @@ if (Test-Path $devShell) {
 
 $env:CARGO_BUILD_JOBS = "1"
 $env:CARGO_INCREMENTAL = "0"
+
+Write-Host "==> Ensure local OpenSSH test sshd"
+powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\ensure-windows-test-sshd.ps1")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "==> 更新本地测试会话 (seed)"
 cargo run --bin seed_local_test_session

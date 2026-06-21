@@ -220,6 +220,87 @@ impl MistTermApp {
                         ctx.request_repaint();
                     }
                 }
+
+                ui.add_space(theme.spacing_md());
+                ui.label(
+                    RichText::new(crate::i18n::tr(ctx, "Terminal font", "终端字体"))
+                        .size(theme.font_size_small())
+                        .color(theme.color_form_hint()),
+                );
+                ui.add_space(theme.spacing_panel_gap());
+
+                let mut preset = self.terminal_font_preset;
+                let preset_label = |ctx: &egui::Context, p: crate::platform::TerminalFontPreset| {
+                    match p {
+                        crate::platform::TerminalFontPreset::Default => {
+                            crate::i18n::tr(ctx, "System default", "系统默认")
+                        }
+                        crate::platform::TerminalFontPreset::Consolas => "Consolas",
+                        crate::platform::TerminalFontPreset::CascadiaMono => "Cascadia Mono",
+                        crate::platform::TerminalFontPreset::JetBrainsMono => "JetBrains Mono",
+                    }
+                };
+                egui::ComboBox::from_id_source("preferences_terminal_font_preset")
+                    .selected_text(preset_label(ctx, preset))
+                    .show_ui(ui, |ui| {
+                        for p in crate::platform::TerminalFontPreset::ALL {
+                            ui.selectable_value(&mut preset, p, preset_label(ctx, p));
+                        }
+                    });
+                if preset != self.terminal_font_preset {
+                    self.terminal_font_preset = preset;
+                    self.apply_terminal_font_preferences(ctx);
+                }
+
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(crate::i18n::tr(ctx, "Font size", "字号"))
+                            .size(theme.font_size_small())
+                            .color(theme.color_form_hint()),
+                    );
+                    let mut size = self.terminal_font_size;
+                    if crate::ui::chrome::form_drag_value_field(
+                        ui,
+                        theme,
+                        egui::Id::new("pref_terminal_font_size"),
+                        |ui| {
+                            ui.add(
+                                egui::DragValue::new(&mut size)
+                                    .speed(0.25)
+                                    .clamp_range(
+                                        crate::platform::TERMINAL_FONT_SIZE_MIN
+                                            ..=crate::platform::TERMINAL_FONT_SIZE_MAX,
+                                    )
+                                    .suffix(" px"),
+                            )
+                        },
+                    )
+                    .changed()
+                    {
+                        self.terminal_font_size =
+                            crate::platform::clamp_terminal_font_size(size);
+                        self.apply_terminal_font_size_to_all_terminals();
+                        ctx.request_repaint();
+                    }
+                });
+                ui.add_space(theme.spacing_panel_gap());
+                ui.label(
+                    RichText::new(format!(
+                        "{}  Ag gjpqy  终端 ABC 123  #!/bin/bash",
+                        crate::i18n::tr(ctx, "Preview:", "预览：")
+                    ))
+                    .font(egui::FontId::monospace(self.terminal_font_size))
+                    .color(theme.text_primary()),
+                );
+                ui.label(
+                    RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Ctrl+scroll wheel still zooms the active terminal temporarily.",
+                        "Ctrl+滚轮仍可在当前终端临时缩放字号。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(theme.color_form_hint()),
+                );
             },
         );
     }

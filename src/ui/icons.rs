@@ -239,12 +239,30 @@ pub fn icon_hit_button(
     pressed_fill: Color32,
     rounding: f32,
 ) -> Response {
+    icon_hit_button_revealed(
+        ui, id, hit, icon_px, idle, hover, hover_fill, pressed_fill, rounding, true,
+    )
+}
+
+/// 同 [`icon_hit_button`]，但 `revealed == false` 时仅保留点击区不绘制（避免显隐切换导致 hover 抖动）。
+pub fn icon_hit_button_revealed(
+    ui: &mut Ui,
+    id: IconId,
+    hit: f32,
+    icon_px: f32,
+    idle: Color32,
+    hover: Color32,
+    hover_fill: Color32,
+    pressed_fill: Color32,
+    rounding: f32,
+    revealed: bool,
+) -> Response {
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(hit), Sense::click());
-    let active = response.hovered() || response.is_pointer_button_down_on();
+    let active = revealed && (response.hovered() || response.is_pointer_button_down_on());
     if active {
         ui.ctx().request_repaint();
     }
-    if response.hovered() || response.is_pointer_button_down_on() {
+    if revealed && (response.hovered() || response.is_pointer_button_down_on()) {
         let fill = if response.is_pointer_button_down_on() {
             pressed_fill
         } else {
@@ -252,9 +270,11 @@ pub fn icon_hit_button(
         };
         ui.painter().rect_filled(rect, rounding, fill);
     }
-    let color = if active { hover } else { idle };
-    paint_icon(ui, rect, id, color, icon_px);
-    if response.hovered() {
+    if revealed {
+        let color = if active { hover } else { idle };
+        paint_icon(ui, rect, id, color, icon_px);
+    }
+    if revealed && response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
     response

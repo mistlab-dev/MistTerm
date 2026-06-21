@@ -53,10 +53,13 @@ fn main() -> eframe::Result<()> {
     };
     
     eframe::run_native(
-        "Mist",
+        mistterm::platform::APP_DISPLAY_NAME,
         options,
         Box::new(|cc| {
-            if !mistterm::platform::configure_egui_fonts(&cc.egui_ctx) {
+            if !mistterm::platform::configure_egui_fonts(
+                &cc.egui_ctx,
+                mistterm::platform::TerminalFontPreset::default(),
+            ) {
                 log::warn!("CJK font not loaded; Chinese UI text may show as tofu");
             }
             mistterm::ui::icons::UiIcons::install(&cc.egui_ctx);

@@ -823,7 +823,7 @@ pub fn modal_about_size_for_content(
         .fold(0.0_f32, f32::max);
 
     let content_text_w = shortcuts_content_w
-        .max(measure("Mist", prominent_font.clone()).x)
+        .max(measure(crate::platform::APP_DISPLAY_NAME, prominent_font.clone()).x)
         .max(measure(subtitle, panel_font.clone()).x)
         .max(measure(version_line, panel_font.clone()).x);
 
@@ -860,7 +860,7 @@ pub fn modal_about_size_for_content(
     let height = modal_my
         + theme.size_panel_header_row_h()
         + theme.spacing_modal_header_after_sep()
-        + measure("Mist", prominent_font).y
+        + measure(crate::platform::APP_DISPLAY_NAME, prominent_font).y
         + item_spacing_y
         + measure(subtitle, panel_font.clone()).y
         + theme.spacing_md()

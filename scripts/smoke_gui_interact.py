@@ -15,7 +15,22 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from gui_automation_keys import TOGGLE_SFTP, dismiss_new_session_dialog
-from gui_common import automation_env, capture_failure, connect_local_session, ssh_preflight
+from gui_common import (
+    automation_env,
+    capture_failure,
+    clipboard_get,
+    clipboard_set,
+    connect_local_session,
+    drag_select,
+    focus_terminal_area,
+    remote_assert_file,
+    remote_exec,
+    remote_temp_path,
+    remote_text_file_contains,
+    send_terminal_line,
+    ssh_preflight,
+    SSH_USER,
+)
 from gui_coverage import CoverageTracker
 from gui_screen import find_mist_window
 from pywinauto import Application
@@ -151,7 +166,8 @@ class GuiWalker:
             raise RuntimeError("process exited")
 
     def menu_x(self, index: int) -> int:
-        return self.cl + int(MENU_X[index] * self.scale)
+        # 顶栏菜单项为固定像素布局，勿随窗口宽度放大（宽屏下会点偏到相邻菜单）。
+        return self.cl + MENU_X[index]
 
     def open_menu(self, index: int) -> int:
         x = self.menu_x(index)
@@ -160,7 +176,8 @@ class GuiWalker:
         return x
 
     def pick_item(self, menu_x: int, row: int, extra_y: int = 0) -> None:
-        y = self.menu_y + int((row * ITEM_H + extra_y) * self.scale)
+        # 下拉首项在菜单栏下方；row 0 对应 Copy，勿点击 menu_y（会关闭菜单）。
+        y = self.menu_y + int(((row + 1) * ITEM_H + extra_y) * self.scale)
         click_xy(menu_x, y)
         time.sleep(0.35)
 
@@ -186,12 +203,151 @@ class GuiWalker:
             self.dismiss(3)
             self.report.fail(name, str(e))
 
+    def focus_terminal(self) -> None:
+        focus_terminal_area(self.hwnd)
+        time.sleep(0.2)
+
+    def run_terminal_shortcut_tests(self) -> None:
+        """常见终端操作：shell 保留 Ctrl+C/W，MistTerm 用 Ctrl+Shift+C/V。"""
+        marker = "MISTTERM_CLIP_COPY_OK"
+        paste_marker = "MISTTERM_PASTE_OK"
+        paste_file = remote_temp_path("mistterm_paste.txt")
+
+        def ctrl_shift_c_copies_selection() -> None:
+            self.focus_terminal()
+            send_keys("{VK_CONTROL up}{VK_SHIFT up}{VK_MENU up}")
+            time.sleep(0.15)
+            send_terminal_line(f"echo {marker}")
+            time.sleep(1.2)
+            y = self.ct + int((self.cb - self.ct) * 0.58)
+            x1 = self.cl + int((self.cr - self.cl) * 0.15)
+            x2 = self.cl + int((self.cr - self.cl) * 0.72)
+            drag_select(x1, y, x2, y)
+            time.sleep(0.3)
+            self.shortcut("+^c")
+            time.sleep(0.8)
+            clip = ""
+            for _ in range(6):
+                clip = clipboard_get()
+                if marker in clip:
+                    break
+                time.sleep(0.25)
+            if marker not in clip:
+                raise RuntimeError(f"clipboard missing marker, got: {clip[:160]!r}")
+
+        self.run_step(
+            "terminal Ctrl+Shift+C copy selection",
+            ctrl_shift_c_copies_selection,
+            "terminal.copy_shortcut",
+        )
+
+        def ctrl_shift_v_pastes_to_shell() -> None:
+            cmd = f"echo {paste_marker}> {paste_file}"
+            clipboard_set(cmd)
+            time.sleep(0.2)
+            self.focus_terminal()
+            self.shortcut("+^v")
+            time.sleep(0.35)
+            send_keys("{ENTER}")
+            time.sleep(2.0)
+            if not remote_text_file_contains(paste_file, paste_marker):
+                remote_assert_file(paste_file, paste_marker, what="Ctrl+Shift+V paste")
+
+        self.run_step(
+            "terminal Ctrl+Shift+V paste to shell",
+            ctrl_shift_v_pastes_to_shell,
+            "terminal.paste_shortcut",
+        )
+
+        def shell_ctrl_c_does_not_close_tab() -> None:
+            before = remote_temp_path("mistterm_ctrlc_before.txt")
+            after = remote_temp_path("mistterm_ctrlc_after.txt")
+            remote_exec(f'del /q "{before.replace("/", "\\")}" "{after.replace("/", "\\")}" 2>nul')
+            self.focus_terminal()
+            send_keys("{VK_CONTROL up}{VK_SHIFT up}{VK_MENU up}")
+            time.sleep(0.1)
+            send_terminal_line(f"echo MISTTERM_SHELL_CTRLC>{before.replace('/', chr(92))}")
+            time.sleep(0.9)
+            remote_assert_file(before, "MISTTERM_SHELL_CTRLC", what="Ctrl+C preflight echo")
+            send_terminal_line("ping -n 30 127.0.0.1")
+            time.sleep(0.9)
+            self.shortcut("^c")
+            time.sleep(0.5)
+            self.focus_terminal()
+            send_terminal_line(f"echo MISTTERM_AFTER_CTRLC>{after.replace('/', chr(92))}")
+            time.sleep(1.5)
+            remote_assert_file(after, "MISTTERM_AFTER_CTRLC", what="Ctrl+C interrupt (shell alive)")
+
+        self.run_step(
+            "terminal Ctrl+C interrupt (tab stays open)",
+            shell_ctrl_c_does_not_close_tab,
+            "terminal.shell_ctrl_c",
+        )
+
+        def shell_ctrl_w_does_not_close_tab() -> None:
+            marker_file = remote_temp_path("mistterm_ctrlw.txt")
+            after_file = remote_temp_path("mistterm_after_ctrlw.txt")
+            remote_exec(
+                f'del /q "{marker_file.replace("/", "\\")}" "{after_file.replace("/", "\\")}" 2>nul'
+            )
+            self.focus_terminal()
+            send_keys("{VK_CONTROL up}{VK_SHIFT up}{VK_MENU up}")
+            time.sleep(0.1)
+            send_terminal_line(f"echo MISTTERM_SHELL_CTRLW>{marker_file.replace('/', chr(92))}")
+            time.sleep(0.8)
+            remote_assert_file(marker_file, "MISTTERM_SHELL_CTRLW", what="Ctrl+W preflight echo")
+            self.focus_terminal()
+            send_keys("^w")
+            time.sleep(0.25)
+            send_keys("{ENTER}")
+            time.sleep(0.35)
+            self.focus_terminal()
+            send_keys("{VK_CONTROL up}{VK_SHIFT up}{VK_MENU up}")
+            time.sleep(0.15)
+            send_terminal_line(f"echo MISTTERM_AFTER_CTRLW>{after_file.replace('/', chr(92))}")
+            time.sleep(2.0)
+            remote_assert_file(after_file, "MISTTERM_AFTER_CTRLW", what="Ctrl+W (tab/shell alive)")
+
+        self.run_step(
+            "terminal Ctrl+W backward-kill-word (tab stays open)",
+            shell_ctrl_w_does_not_close_tab,
+            "terminal.shell_ctrl_w",
+        )
+
+        def tab_and_enter_still_work() -> None:
+            tab_file = remote_temp_path("mistterm_tab_ok.txt")
+            after_file = remote_temp_path("mistterm_after_tab.txt")
+            remote_exec(f'del /q "{tab_file.replace("/", "\\")}" "{after_file.replace("/", "\\")}" 2>nul')
+            self.focus_terminal()
+            send_keys("{VK_CONTROL up}{VK_SHIFT up}{VK_MENU up}")
+            time.sleep(0.1)
+            send_terminal_line(f"echo MISTTERM_TAB_OK>{tab_file.replace('/', chr(92))}")
+            time.sleep(0.8)
+            remote_assert_file(tab_file, "MISTTERM_TAB_OK", what="Tab preflight echo")
+            self.shortcut("{TAB}")
+            time.sleep(0.2)
+            send_keys("{ENTER}")
+            time.sleep(0.35)
+            self.focus_terminal()
+            send_terminal_line(f"echo MISTTERM_AFTER_TAB>{after_file.replace('/', chr(92))}")
+            time.sleep(1.2)
+            remote_assert_file(after_file, "MISTTERM_AFTER_TAB", what="Tab/Enter (shell alive)")
+
+        self.run_step(
+            "terminal Tab / Enter (focus kept)",
+            tab_and_enter_still_work,
+            "terminal.tab_enter",
+        )
+
     def walk(self) -> None:
         print("==> Connect Local Test SSH", flush=True)
         ssh_preflight()
         connect_local_session(self.hwnd, self.proc.pid)
         if self.cov:
             self.cov.mark("session.connect")
+
+        print("==> Terminal shortcut smoke", flush=True)
+        self.run_terminal_shortcut_tests()
 
         # ── Keyboard shortcuts ──
         self.run_step(
@@ -204,7 +360,11 @@ class GuiWalker:
             lambda: dismiss_new_session_dialog(repeats=1),
             "automation.close_modal",
         )
-        self.run_step("shortcut Ctrl+T (new tab)", lambda: self.shortcut("^t"), "tab.new")
+        self.run_step(
+            "shortcut Ctrl+Shift+T (new tab)",
+            lambda: self.shortcut("+^t"),
+            "tab.new",
+        )
         self.run_step("shortcut Ctrl+J (sidebar search)", lambda: self.shortcut("^j"))
         self.run_step("shortcut Ctrl+K (fragment search)", lambda: self.shortcut("^k"))
         self.run_step(
@@ -254,8 +414,8 @@ class GuiWalker:
             "terminal.split_v",
         )
         self.run_step(
-            "shortcut Alt+Left (pane focus)",
-            lambda: self.shortcut("%{LEFT}"),
+            "shortcut Ctrl+Shift+Left (pane focus)",
+            lambda: self.shortcut("+^{LEFT}"),
             "terminal.pane_focus",
         )
         self.run_step("shortcut Ctrl+Tab (next tab)", lambda: self.shortcut("^{TAB}"), "tab.cycle")
@@ -435,7 +595,7 @@ class GuiWalker:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("exe")
-    parser.add_argument("--title", default="Mist")
+    parser.add_argument("--title", default="MistTerm")
     parser.add_argument("--timeout", type=float, default=90.0)
     args = parser.parse_args()
 

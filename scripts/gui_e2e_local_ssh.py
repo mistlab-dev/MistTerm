@@ -110,7 +110,7 @@ def gui_connect_existing(hwnd: int, pid: int, name: str) -> None:
     s = scale_for(cl, cr)
     click(cl + int(110 * s), ct + int(160 * s))
     time.sleep(0.4)
-    send_keys("^t")
+    send_keys("+^t")
     time.sleep(12.0)
 
 

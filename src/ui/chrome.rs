@@ -27,6 +27,30 @@ fn theme_icon_hit(
     )
 }
 
+fn theme_icon_hit_revealed(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: IconId,
+    hit: f32,
+    icon_px: f32,
+    idle: Color32,
+    hover: Color32,
+    revealed: bool,
+) -> Response {
+    icons::icon_hit_button_revealed(
+        ui,
+        id,
+        hit,
+        icon_px,
+        idle,
+        hover,
+        theme.color_tab_bar_icon_btn_hover_fill(),
+        theme.accent_alpha(45),
+        theme.radius_list_item(),
+        revealed,
+    )
+}
+
 /// Tab 栏图标按钮（关闭 / 新建）：固定点击区、悬停底。
 pub fn tab_bar_icon_button(ui: &mut Ui, theme: &Theme, id: IconId, tooltip: &str) -> Response {
     theme_icon_hit(
@@ -1089,6 +1113,16 @@ pub struct SessionTabChipResult {
     pub close_clicked: bool,
 }
 
+/// 标签右侧关闭槽位（与 [`session_tab_chip`] 内关闭按钮对齐）。
+fn pointer_hovers_tab_close_slot(ctx: &egui::Context, inner: egui::Rect, close_slot: f32) -> bool {
+    let close_rect = egui::Rect::from_min_size(
+        egui::pos2(inner.max.x - close_slot, inner.center().y - close_slot * 0.5),
+        egui::vec2(close_slot, close_slot),
+    );
+    ctx.pointer_hover_pos()
+        .is_some_and(|p| close_rect.contains(p))
+}
+
 pub fn session_tab_chip(
     ui: &mut Ui,
     theme: &Theme,
@@ -1100,18 +1134,24 @@ pub fn session_tab_chip(
 ) -> SessionTabChipResult {
     let size = egui::vec2(theme.size_tab_min_w(), theme.size_tab_min_h());
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let hovered = response.hovered();
-    let show_close = show_close || active || hovered;
+    let inner = rect.shrink2(egui::vec2(
+        theme.spacing_tab_x(),
+        theme.spacing_tab_y(),
+    ));
+    let close_slot = theme.size_tab_bar_icon_btn();
+    let close_slot_hot = pointer_hovers_tab_close_slot(ui.ctx(), inner, close_slot);
+    // 子控件（×）会抢走外层 hover；用关闭槽位命中避免 × 显隐来回切换。
+    let tab_hot = response.hovered() || close_slot_hot;
     let modern = theme.uses_modern_palette();
     let fill = if modern {
-        if hovered && !active {
+        if tab_hot && !active {
             theme.color_widget_hover_fill()
         } else {
             Color32::TRANSPARENT
         }
     } else if active {
         theme.color_tab_active_fill()
-    } else if hovered {
+    } else if tab_hot {
         theme.color_tab_inactive_hover_fill()
     } else {
         theme.color_tab_inactive_fill()
@@ -1131,10 +1171,6 @@ pub fn session_tab_chip(
         paint_vscode_tab_bottom_indicator(ui.painter(), ui.ctx(), rect, theme);
     }
     let mut close_clicked = false;
-    let inner = rect.shrink2(egui::vec2(
-        theme.spacing_tab_x(),
-        theme.spacing_tab_y(),
-    ));
     let mut row_ui = ui.child_ui(inner, egui::Layout::left_to_right(egui::Align::Center));
     row_ui.set_width(inner.width());
     row_ui.set_min_width(inner.width());
@@ -1163,24 +1199,33 @@ pub fn session_tab_chip(
                     theme.text_tertiary()
                 }),
         );
-        if show_close {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if tab_bar_icon_button(
-                    ui,
-                    theme,
-                    IconId::Close,
-                    &format!(
-                        "{} · {}",
-                        crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
-                        crate::platform::accel("W")
-                    ),
-                )
-                .clicked()
-                {
-                    close_clicked = true;
-                }
-            });
-        }
+        // 关闭按钮始终占位；仅切换绘制，避免控件树显隐导致 × 上 hover 闪烁。
+        let close_visible = show_close || active || tab_hot;
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let close_tooltip = format!(
+                "{} · {}",
+                crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
+                crate::platform::accel("W")
+            );
+            let close_resp = theme_icon_hit_revealed(
+                ui,
+                theme,
+                IconId::Close,
+                close_slot,
+                theme.size_icon_glyph(),
+                theme.color_tab_bar_icon(),
+                theme.color_tab_bar_icon_hover(),
+                close_visible,
+            );
+            let close_resp = if close_visible {
+                close_resp.on_hover_text(close_tooltip.as_str())
+            } else {
+                close_resp
+            };
+            if close_visible && close_resp.clicked() {
+                close_clicked = true;
+            }
+        });
     });
     SessionTabChipResult {
         response,

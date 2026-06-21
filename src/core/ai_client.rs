@@ -424,6 +424,27 @@ chmod +x check_domain.sh
     }
 
     #[test]
+    fn parse_blocking_chat_body_rejects_empty() {
+        let err = super::parse_blocking_chat_body("").unwrap_err();
+        assert!(err.contains("空响应"));
+    }
+
+    #[test]
+    fn parse_blocking_chat_body_extracts_message() {
+        let json = r#"{"choices":[{"message":{"role":"assistant","content":"你好"}}]}"#;
+        assert_eq!(
+            super::parse_blocking_chat_body(json).unwrap(),
+            "你好".to_string()
+        );
+    }
+
+    #[test]
+    fn parse_blocking_chat_body_rejects_html() {
+        let err = super::parse_blocking_chat_body("<html>403</html>").unwrap_err();
+        assert!(err.contains("HTML"));
+    }
+
+    #[test]
     fn parse_models_response_sorts_and_dedups() {
         let json = r#"{"data":[{"id":"gpt-4o"},{"id":"gpt-4o-mini"},{"id":"gpt-4o"}]}"#;
         let ids = parse_models_response(json).expect("parse");
@@ -567,16 +588,8 @@ fn chat_blocking_with_key(
     if !status.is_success() {
         return Err(parse_api_error(status.as_u16(), &text));
     }
-    let parsed: ChatResponse = serde_json::from_str(&text).map_err(|e| format!("解析响应失败：{e}"))?;
-    let reply = parsed
-        .choices
-        .first()
-        .map(|c| c.message.content.clone())
-        .ok_or_else(|| "模型返回为空".to_string())?;
-    if !reply.is_empty() {
-        let _ = tx.send(ChatEvent::Delta(reply));
-    }
-    let _ = tx.send(ChatEvent::Finished);
+    let reply = parse_blocking_chat_body(&text)?;
+    emit_blocking_reply(tx, reply);
     Ok(())
 }
 
@@ -614,6 +627,8 @@ fn chat_streaming_with_key(
         client
             .post(&url)
             .header("Authorization", format!("Bearer {api_key}"))
+            .header("Accept", "text/event-stream")
+            .header("Content-Type", "application/json")
             .json(&body)
             .send()
     })?;
@@ -629,6 +644,7 @@ fn chat_streaming_with_key(
     let mut reader = BufReader::new(resp.by_ref());
     let mut line = String::new();
     let mut got_delta = false;
+    let mut raw_body = String::new();
     loop {
         if cancel.load(Ordering::Relaxed) {
             let _ = tx.send(ChatEvent::Cancelled);
@@ -639,6 +655,7 @@ fn chat_streaming_with_key(
         if n == 0 {
             break;
         }
+        raw_body.push_str(&line);
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with(':') {
             continue;
@@ -657,11 +674,56 @@ fn chat_streaming_with_key(
         }
     }
     if !got_delta {
-        // 部分网关忽略 stream，回退整段请求
-        return chat_blocking_with_key(settings, api_key, messages, cancel, tx);
+        // 部分网关忽略 stream=true，直接返回整段 JSON；先尝试解析已读 body，避免重复请求。
+        match parse_blocking_chat_body(&raw_body) {
+            Ok(reply) => {
+                emit_blocking_reply(tx, reply);
+                return Ok(());
+            }
+            Err(_e) if raw_body.trim().is_empty() => {
+                // 空 SSE 体时再回退非流式请求。
+                return chat_blocking_with_key(settings, api_key, messages, cancel, tx);
+            }
+            Err(e) => return Err(e),
+        }
     }
     let _ = tx.send(ChatEvent::Finished);
     Ok(())
+}
+
+fn format_parse_error(text: &str, err: serde_json::Error) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return "API 返回空响应，请检查 Base URL（需含 /v1）、API Key 与模型名称".to_string();
+    }
+    if trimmed.starts_with('<') {
+        return "API 返回了 HTML 页面而非 JSON，请检查 Base URL 是否正确".to_string();
+    }
+    let preview: String = trimmed.chars().take(160).collect();
+    format!("解析响应失败：{err}；响应开头：{preview}")
+}
+
+fn parse_blocking_chat_body(text: &str) -> Result<String, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(
+            "API 返回空响应，请检查 Base URL（需含 /v1）、API Key 与模型名称".to_string(),
+        );
+    }
+    let parsed: ChatResponse =
+        serde_json::from_str(trimmed).map_err(|e| format_parse_error(trimmed, e))?;
+    parsed
+        .choices
+        .first()
+        .map(|c| c.message.content.clone())
+        .ok_or_else(|| "模型返回为空".to_string())
+}
+
+fn emit_blocking_reply(tx: &Sender<ChatEvent>, reply: String) {
+    if !reply.is_empty() {
+        let _ = tx.send(ChatEvent::Delta(reply));
+    }
+    let _ = tx.send(ChatEvent::Finished);
 }
 
 fn parse_api_error(status: u16, text: &str) -> String {
@@ -700,8 +762,14 @@ pub fn fetch_models_with_key(settings: &AiSettings, api_key: &str) -> Result<Vec
 }
 
 fn parse_models_response(text: &str) -> Result<Vec<String>, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err(
+            "API 返回空响应，请检查 Base URL（需含 /v1）与 API Key".to_string(),
+        );
+    }
     let parsed: ModelsResponse =
-        serde_json::from_str(text).map_err(|e| format!("解析响应失败：{e}"))?;
+        serde_json::from_str(trimmed).map_err(|e| format_parse_error(trimmed, e))?;
     let mut ids: Vec<String> = parsed
         .data
         .into_iter()

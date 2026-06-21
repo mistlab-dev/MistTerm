@@ -511,6 +511,13 @@ impl SshManager {
         sessions.get(&session_id).map(|c| c.get_session().clone())
     }
 
+    pub(crate) fn tick_session_keepalive(&self, session_id: SshSessionId) {
+        let sessions = self.sessions.lock().unwrap();
+        if let Some(client) = sessions.get(&session_id) {
+            super::client::tick_keepalive(client.get_session());
+        }
+    }
+
     /// 在独立 exec 通道执行远程命令（与交互式 shell 并存）。
     ///
     /// 与 SFTP/SCP 相同，使用 [`get_session`] 克隆的会话句柄并短期切为阻塞模式完成读写，
@@ -725,6 +732,7 @@ mod shell_pump {
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
+                    mgr.tick_session_keepalive(session_id);
                     if !process_idle_read_sync(
                         &channel,
                         &message_tx,

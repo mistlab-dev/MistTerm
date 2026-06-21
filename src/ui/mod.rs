@@ -24,6 +24,7 @@ pub mod app;
 pub mod terminal;
 pub mod tab_pane;
 pub mod terminal_keys;
+pub mod keyboard_shortcuts;
 pub mod sidebar;
 pub mod dialogs;
 pub mod monitor_panel;
