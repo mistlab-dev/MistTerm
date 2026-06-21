@@ -20,6 +20,7 @@ use alacritty_terminal::grid::Scroll;
 use crate::terminal::{Terminal as VtTerminal, TerminalShellStyle};
 use crate::terminal::style::{
     format_user_error_line, format_user_info_line, format_user_success_line, format_user_warn_line,
+    TERMINAL_LINE_HEIGHT_EXTRA,
 };
 use crate::i18n::UiLanguage;
 use crate::ui::layout_util;
@@ -242,14 +243,37 @@ impl TerminalView {
         response.rect.max.y - galley.size().y
     }
 
+    fn measure_terminal_line_height(
+        fonts: &egui::text::Fonts,
+        font_size: f32,
+        color: egui::Color32,
+    ) -> f32 {
+        let font_id = egui::FontId::monospace(font_size);
+        // 含下伸部的两行样本；单行 "W" 会低估行高，导致 g/y/p 被下一行 cell 底色裁切。
+        let mut job = egui::text::LayoutJob::default();
+        let fmt = egui::TextFormat {
+            font_id: font_id.clone(),
+            color,
+            background: egui::Color32::BLACK,
+            ..Default::default()
+        };
+        job.append("gjpqy\nW", 0.0, fmt);
+        let galley = fonts.layout_job(job);
+        let measured = if galley.rows.len() >= 2 {
+            galley.rows[1].rect.min.y - galley.rows[0].rect.min.y
+        } else {
+            galley.size().y.max(font_size)
+        };
+        let h = measured.max(font_size) + TERMINAL_LINE_HEIGHT_EXTRA;
+        (h * 2.0).round() / 2.0
+    }
+
     fn terminal_cell_metrics(ui: &egui::Ui, font_size: f32, color: egui::Color32) -> (f32, f32) {
         ui.ctx().fonts(|fonts| {
-            let galley = fonts.layout_no_wrap(
-                "W".to_string(),
-                egui::FontId::monospace(font_size),
-                color,
-            );
-            (galley.size().x.max(6.0), galley.size().y.max(12.0))
+            let font_id = egui::FontId::monospace(font_size);
+            let width_galley = fonts.layout_no_wrap("M".to_string(), font_id, color);
+            let line_height = Self::measure_terminal_line_height(fonts, font_size, color);
+            (width_galley.size().x.max(6.0), line_height.max(12.0))
         })
     }
 
@@ -825,6 +849,9 @@ impl TerminalView {
                     // 终端内容区在上，ZMODEM 进度条固定在底部，避免插在命令与 shell 输出之间
                     let shell = TerminalShellStyle::from_theme(theme);
                     let font_bits = self.font_size.to_bits();
+                    let line_height = ui.ctx().fonts(|fonts| {
+                        Self::measure_terminal_line_height(fonts, self.font_size, theme.text_primary())
+                    });
                     let cache_key = (
                         self.vt_visual_generation,
                         self.terminal.content_epoch(),
@@ -852,6 +879,7 @@ impl TerminalView {
                             } else {
                                 let layout_job = self.terminal.get_layout_job(
                                     self.font_size,
+                                    line_height,
                                     &shell,
                                     self.search_highlight,
                                 );
@@ -872,6 +900,7 @@ impl TerminalView {
                         } else {
                             let layout_job = self.terminal.get_layout_job(
                                 self.font_size,
+                                line_height,
                                 &shell,
                                 self.search_highlight,
                             );
@@ -1369,11 +1398,12 @@ impl TerminalView {
         let usable_height = viewport.y.max(48.0);
 
         // 用真实字体测量单字符网格尺寸，避免 80x24 误差
-        let font_id = egui::FontId::monospace(self.font_size);
         let (cell_w, cell_h) = ui.ctx().fonts(|fonts| {
-            let galley =
-                fonts.layout_no_wrap("W".to_string(), font_id, theme.text_primary());
-            (galley.size().x.max(6.0), galley.size().y.max(12.0))
+            let font_id = egui::FontId::monospace(self.font_size);
+            let width_galley = fonts.layout_no_wrap("M".to_string(), font_id, theme.text_primary());
+            let line_height =
+                Self::measure_terminal_line_height(fonts, self.font_size, theme.text_primary());
+            (width_galley.size().x.max(6.0), line_height.max(12.0))
         });
 
         let cols = (usable_width / cell_w).floor().clamp(20.0, 512.0) as u32;

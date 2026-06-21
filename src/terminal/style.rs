@@ -15,6 +15,9 @@ pub const TERMINAL_SCROLL_BAR_WIDTH: f32 = 4.0;
 /// 255 * 0.06 ≈ 15，与 `Theme::fg_high_a15` 一致。
 pub const TERMINAL_SCROLL_BAR_TRACK_ALPHA: u8 = 15;
 
+/// 终端行高在字体默认行距上追加的 descender 余量（像素）。
+pub const TERMINAL_LINE_HEIGHT_EXTRA: f32 = 1.0;
+
 /// 由当前主题派生的终端 shell 着色参数（供 [`crate::terminal::Terminal::get_layout_job`] 与 UI feed 共用）。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerminalShellStyle {

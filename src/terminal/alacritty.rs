@@ -274,6 +274,7 @@ impl Terminal {
     pub fn get_layout_job(
         &self,
         font_size: f32,
+        line_height: f32,
         shell: &TerminalShellStyle,
         highlight: Option<(usize, usize, usize)>,
     ) -> LayoutJob {
@@ -317,31 +318,20 @@ impl Terminal {
         }
 
         let mut job = LayoutJob::default();
+        let cell_fmt = |color: Color32, bg: Color32| TextFormat {
+            font_id: FontId::monospace(font_size),
+            color,
+            background: bg,
+            line_height: Some(line_height),
+            ..Default::default()
+        };
         for row in rows {
             for (ch, color, bg) in row {
                 let mut buf = [0u8; 4];
                 let s = ch.encode_utf8(&mut buf);
-                job.append(
-                    s,
-                    0.0,
-                    TextFormat {
-                        font_id: FontId::monospace(font_size),
-                        color,
-                        background: bg,
-                        ..Default::default()
-                    },
-                );
+                job.append(s, 0.0, cell_fmt(color, bg));
             }
-            job.append(
-                "\n",
-                0.0,
-                TextFormat {
-                    font_id: FontId::monospace(font_size),
-                    color: default_fg,
-                    background: terminal_bg,
-                    ..Default::default()
-                },
-            );
+            job.append("\n", 0.0, cell_fmt(default_fg, terminal_bg));
         }
         job
     }
