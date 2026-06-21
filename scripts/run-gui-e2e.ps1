@@ -1,5 +1,5 @@
 # 纯 GUI 端到端：新建连接 + SSH + SFTP 传文件（不跑 cargo test）
-# 前置: 管理员运行一次 .\scripts\setup-windows-test-sshd.ps1
+# 会自动 ensure 本地 sshd（必要时提权 setup-windows-test-sshd.ps1）
 # 用法:
 #   .\scripts\run-gui-e2e.ps1
 #   .\scripts\run-gui-e2e.ps1 -KeepOpen
@@ -34,6 +34,10 @@ python -c "import pywinauto, paramiko" 2>$null
 if ($LASTEXITCODE -ne 0) {
     pip install pywinauto paramiko --quiet
 }
+
+Write-Host "==> Ensure local OpenSSH test sshd"
+powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\ensure-windows-test-sshd.ps1")
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "==> Seed local test session"
 $env:CARGO_BUILD_JOBS = "1"

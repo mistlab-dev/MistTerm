@@ -4,8 +4,7 @@ use objc2::MainThreadMarker;
 use objc2_app_kit::NSApplication;
 use objc2_foundation::{NSProcessInfo, NSString};
 
-/// 用户可见的产品名（菜单栏、窗口标题等）。
-pub const APP_DISPLAY_NAME: &str = "Mist";
+pub use super::app_name::APP_DISPLAY_NAME;
 
 /// 设置进程名，并修正菜单栏首项标题（`cargo run` 时系统默认显示可执行文件名）。
 pub fn set_application_display_name() {

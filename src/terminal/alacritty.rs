@@ -271,16 +271,19 @@ impl Terminal {
     /// 返回带颜色信息的布局（保持等宽）。`shell` 须由 [`TerminalShellStyle::from_theme`] 生成，
     /// 且 `terminal_bg` 与 UI 外框一致，否则整块格子与外框底色色差会像「四周留白」。
     /// `highlight`: 当前命中 `(行, 列, 长度)`，均为 **1-based** 字符下标（与 [`Self::search_viewport`] 一致）。
+    /// `cell_w`：单格像素宽（与 UI [`TerminalView`] 测 `M` 一致），用于宽字符占位。
     pub fn get_layout_job(
         &self,
         font_size: f32,
         line_height: f32,
+        cell_w: f32,
         shell: &TerminalShellStyle,
         highlight: Option<(usize, usize, usize)>,
     ) -> LayoutJob {
         let default_fg = shell.default_fg;
         let terminal_bg = shell.terminal_bg;
-        let mut rows = vec![vec![(' ', default_fg, terminal_bg); self.width]; self.height];
+        let mut rows =
+            vec![vec![(' ', default_fg, terminal_bg, Flags::empty()); self.width]; self.height];
         let content = self.term.renderable_content();
 
         for indexed in content.display_iter {
@@ -296,7 +299,7 @@ impl Terminal {
                     if indexed.cell.flags.contains(Flags::INVERSE) {
                         std::mem::swap(&mut fg, &mut bg);
                     }
-                    rows[y][x] = (indexed.cell.c, fg, bg);
+                    rows[y][x] = (indexed.cell.c, fg, bg, indexed.cell.flags);
                 }
             }
         }
@@ -317,6 +320,7 @@ impl Terminal {
             }
         }
 
+        let wide_spacer = Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER;
         let mut job = LayoutJob::default();
         let cell_fmt = |color: Color32, bg: Color32| TextFormat {
             font_id: FontId::monospace(font_size),
@@ -326,10 +330,19 @@ impl Terminal {
             ..Default::default()
         };
         for row in rows {
-            for (ch, color, bg) in row {
+            for (ch, color, bg, flags) in row {
+                if flags.intersects(wide_spacer) {
+                    // 宽字符占两格：第二格仅为网格占位，勿渲染成可见空格（否则 CJK 间像有空格）
+                    job.append("\u{200b}", 0.0, cell_fmt(bg, bg));
+                    continue;
+                }
+                let mut fmt = cell_fmt(color, bg);
+                if flags.contains(Flags::WIDE_CHAR) {
+                    fmt.extra_letter_spacing = cell_w.max(0.0);
+                }
                 let mut buf = [0u8; 4];
                 let s = ch.encode_utf8(&mut buf);
-                job.append(s, 0.0, cell_fmt(color, bg));
+                job.append(s, 0.0, fmt);
             }
             job.append("\n", 0.0, cell_fmt(default_fg, terminal_bg));
         }
@@ -340,7 +353,7 @@ impl Terminal {
 /// FUNCTIONAL_SPEC §2.3.2：对「整行均为应用默认前景 + 终端背景」的行做轻量 shell 提示启发式着色；
 /// 任意单元格已带 ANSI 前景/背景差异时整行跳过，避免覆盖远端配色。
 fn apply_heuristic_shell_row_style(
-    rows: &mut [Vec<(char, Color32, Color32)>],
+    rows: &mut [Vec<(char, Color32, Color32, Flags)>],
     shell: &TerminalShellStyle,
     width: usize,
 ) {
@@ -352,7 +365,7 @@ fn apply_heuristic_shell_row_style(
 
     for row in rows.iter_mut() {
         let mut all_default = true;
-        for (_ch, fg, bg) in row.iter() {
+        for (_ch, fg, bg, _flags) in row.iter() {
             if *fg != default_fg || *bg != terminal_bg {
                 all_default = false;
                 break;
@@ -362,7 +375,7 @@ fn apply_heuristic_shell_row_style(
             continue;
         }
 
-        let chars: Vec<char> = row.iter().map(|(c, _, _)| *c).collect();
+        let chars: Vec<char> = row.iter().map(|(c, _, _, _)| *c).collect();
         if chars.iter().all(|c| c.is_whitespace()) {
             continue;
         }
@@ -429,7 +442,7 @@ fn apply_heuristic_shell_row_style(
             .map(|(i, _)| i)
             .unwrap_or(0);
 
-        let scale_line_fg = |cell: &mut (char, Color32, Color32), factor: f32| {
+        let scale_line_fg = |cell: &mut (char, Color32, Color32, Flags), factor: f32| {
             if cell.1 == default_fg {
                 cell.1 = Color32::from_rgb(
                     ((default_fg.r() as f32) * factor).min(255.0) as u8,

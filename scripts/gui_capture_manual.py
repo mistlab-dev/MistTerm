@@ -230,7 +230,7 @@ class ManualCapture:
         time.sleep(0.8)
         click(self.cl + int(110 * self.s), self.ct + int(165 * self.s))
         time.sleep(0.5)
-        send_keys("^t")
+        send_keys("+^t")
         time.sleep(16.0)
 
     def focus_terminal(self) -> None:
@@ -281,7 +281,7 @@ class ManualCapture:
         return x
 
     def pick_menu(self, menu_x: int, row: int, extra: int = 0) -> None:
-        y = self.ct + int(16 * self.s) + int((row * ITEM_H + extra) * self.s)
+        y = self.ct + int(16 * self.s) + int(((row + 1) * ITEM_H + extra) * self.s)
         click(menu_x, y, 0.35)
 
     def bottom_btn(self, offset: int) -> None:

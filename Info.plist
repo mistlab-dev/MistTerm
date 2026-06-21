@@ -5,9 +5,9 @@
 	<key>CFBundleExecutable</key>
 	<string>Mist</string>
 	<key>CFBundleName</key>
-	<string>Mist</string>
+	<string>MistTerm</string>
 	<key>CFBundleDisplayName</key>
-	<string>Mist</string>
+	<string>MistTerm</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.mist.term</string>
 	<key>CFBundlePackageType</key>

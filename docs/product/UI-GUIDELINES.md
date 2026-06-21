@@ -64,7 +64,7 @@
 | 新建会话 | ⌘N | `show_new_session_dialog = true` | 打开新建会话对话框(§6.1) |
 | 偏好设置 | ⌘, | `show_preferences_dialog = true` | 打开偏好设置对话框(§6.2) |
 | — | | | 分隔线 |
-| 关闭标签 | ⌘W | `request_close_active_tab()` | 关闭当前Tab；连接中则弹出确认(§6.6) |
+| 关闭标签 | ⌘W / Ctrl+Shift+W | `request_close_active_tab()` | 关闭当前Tab；连接中则弹出确认(§6.6) |
 | 断开 SSH（保留输出） | | `disconnect_ssh_keep_buffer_active()` | 断开SSH但终端内容不清除，可浏览历史输出 |
 | 重连当前标签 | | `reconnect_active_tab()` | 重新建立SSH连接，复用已有Tab |
 | — | | | 分隔线 |
@@ -230,8 +230,8 @@
 | 快捷键 | 功能 | 代码 |
 |--------|------|------|
 | ⌘N | 新建会话 | `show_new_session_dialog = true` |
-| ⌘T | 新建Tab | `open_new_tab_from_selection()` |
-| ⌘W | 关闭当前Tab | `request_close_active_tab()` |
+| ⌘T / Ctrl+Shift+T | 新建Tab | `open_new_tab_from_selection()` |
+| ⌘W / Ctrl+Shift+W | 关闭当前Tab | `request_close_active_tab()` |
 | ⌘J | 定位到左侧搜索框 | `focus_sidebar_connection_search(ctx)` |
 | ⌘K | 打开片段面板搜索 | `focus_fragment_panel_search(ctx)` |
 | ⌘E | 编辑当前选中会话 | `open_edit_session_dialog(sid)` |

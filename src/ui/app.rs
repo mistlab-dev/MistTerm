@@ -74,6 +74,10 @@ struct MistTermUiPersist {
     #[serde(default)]
     auto_reconnect_enabled: bool,
     #[serde(default)]
+    terminal_font_preset: crate::platform::TerminalFontPreset,
+    #[serde(default = "default_terminal_font_size_persist")]
+    terminal_font_size: f32,
+    #[serde(default)]
     session_sort_by: SessionSortBy,
     #[serde(default = "default_session_log_enabled")]
     session_log_enabled: bool,
@@ -102,6 +106,9 @@ fn default_keepalive_interval_persist() -> u32 {
 }
 fn default_keepalive_count_max_persist() -> u8 {
     3
+}
+fn default_terminal_font_size_persist() -> f32 {
+    crate::platform::DEFAULT_TERMINAL_FONT_SIZE
 }
 
 fn truncate_status(s: &str, max_chars: usize) -> String {
@@ -156,8 +163,8 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::primary_modifier_label(),
             s::help_line("N", "New session"),
             s::help_line("E", "Edit selected session"),
-            s::help_line("T", "New terminal tab"),
-            s::help_line("W", "Close current tab"),
+            s::new_tab_help_line("New terminal tab"),
+            s::close_tab_help_line("Close current tab"),
             s::accel_literal("1–9"),
             s::accel_literal("Tab"),
             s::help_line("J", "Focus connection search"),
@@ -193,8 +200,8 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::primary_modifier_label(),
             s::help_line("N", "新建会话"),
             s::help_line("E", "编辑所选会话"),
-            s::help_line("T", "新终端标签"),
-            s::help_line("W", "关闭当前标签"),
+            s::new_tab_help_line("新终端标签"),
+            s::close_tab_help_line("关闭当前标签"),
             s::accel_literal("1–9"),
             s::accel_literal("Tab"),
             s::help_line("J", "聚焦连接搜索"),
@@ -509,6 +516,10 @@ pub struct MistTermApp {
 
     /// 网络断开后是否自动重连（偏好设置，§1.4）
     auto_reconnect_enabled: bool,
+    /// 终端等宽字体预设（偏好设置 → 外观）
+    terminal_font_preset: crate::platform::TerminalFontPreset,
+    /// 终端字号 px（偏好设置 → 外观；Ctrl+滚轮 仍可临时缩放单窗格）
+    terminal_font_size: f32,
     /// ≥10MB 上传：待用户选择 SCP 或 ZMODEM 的本地路径
     large_upload_pending_path: Option<std::path::PathBuf>,
 
@@ -563,6 +574,27 @@ impl MistTermApp {
     /// 应用当前主题（由 ThemeManager 统一管理）
     fn apply_current_theme(&self, ctx: &egui::Context) {
         self.theme_manager.apply_theme(ctx);
+    }
+
+    fn apply_terminal_font_size_to_all_terminals(&mut self) {
+        for tab in &mut self.tabs {
+            for pane in tab.panes_mut() {
+                pane.terminal
+                    .set_font_size(self.terminal_font_size);
+            }
+        }
+    }
+
+    fn apply_terminal_font_preferences(&mut self, ctx: &egui::Context) {
+        crate::platform::configure_egui_fonts(ctx, self.terminal_font_preset);
+        self.apply_terminal_font_size_to_all_terminals();
+        ctx.request_repaint();
+    }
+
+    fn new_terminal_view(&self) -> TerminalView {
+        let mut terminal = TerminalView::new();
+        terminal.set_font_size(self.terminal_font_size);
+        terminal
     }
 
     // ── 通用 UI 辅助函数（统一字体大小和间距，按设计规范固定值） ──
@@ -936,6 +968,8 @@ impl MistTermApp {
             batch_exec_dialog: BatchExecDialog::default(),
             batch_exec_rx: None,
             auto_reconnect_enabled: false,
+            terminal_font_preset: crate::platform::TerminalFontPreset::default(),
+            terminal_font_size: crate::platform::DEFAULT_TERMINAL_FONT_SIZE,
             large_upload_pending_path: None,
             command_history: CommandHistory::new(),
             command_history_overlay: CommandHistoryOverlay::default(),
@@ -965,6 +999,9 @@ impl MistTermApp {
                 app.sidebar_collapsed = false;
                 app.sidebar_user_dismissed_responsive = false;
                 app.auto_reconnect_enabled = p.auto_reconnect_enabled;
+                app.terminal_font_preset = p.terminal_font_preset;
+                app.terminal_font_size =
+                    crate::platform::clamp_terminal_font_size(p.terminal_font_size);
                 app.session_sort_by = p.session_sort_by;
                 app.session_log_enabled = p.session_log_enabled;
                 app.default_keepalive_enabled = p.default_keepalive_enabled;
@@ -994,6 +1031,9 @@ impl MistTermApp {
             app.team_service.spawn_refresh_current_team_detail();
             app.team_service.spawn_cmd_audit_sync();
         }
+
+        crate::platform::configure_egui_fonts(&cc.egui_ctx, app.terminal_font_preset);
+        app.apply_terminal_font_size_to_all_terminals();
 
         app
     }
@@ -1443,7 +1483,7 @@ impl MistTermApp {
         };
         *temp_key = resolved.temp_key_file;
         let theme = self.theme_manager.current_theme();
-        let (ka_on, ka_int, ka_max) = Self::session_keepalive_params(session);
+        let (ka_on, ka_int, ka_max) = self.session_keepalive_params(session);
         let jump_hops = match self.resolve_proxy_jump_hops(session) {
             Ok(h) => h,
             Err(e) => {
@@ -1511,16 +1551,22 @@ impl MistTermApp {
         Ok(hops)
     }
 
-    fn session_keepalive_params(session: &SessionConfig) -> (bool, u32, u8) {
-        if session.keepalive_enabled && session.keepalive_interval_secs > 0 {
-            (
-                true,
-                session.keepalive_interval_secs,
-                session.keepalive_count_max.max(1),
-            )
-        } else {
-            (false, 0, session.keepalive_count_max.max(1))
+    fn session_keepalive_params(&self, session: &SessionConfig) -> (bool, u32, u8) {
+        if !session.keepalive_enabled {
+            return (false, 0, session.keepalive_count_max.max(1));
         }
+        let count = session.keepalive_count_max.max(1);
+        if session.keepalive_interval_secs > 0 {
+            return (true, session.keepalive_interval_secs, count);
+        }
+        if self.default_keepalive_enabled && self.default_keepalive_interval_secs > 0 {
+            return (
+                true,
+                self.default_keepalive_interval_secs,
+                self.default_keepalive_count_max.max(1),
+            );
+        }
+        (false, 0, count)
     }
 
     fn ensure_tab_log_writer(&mut self, tab_idx: usize) {
@@ -1727,7 +1773,7 @@ impl MistTermApp {
             .active_tab
             .and_then(|i| self.tabs.get(i))
             .and_then(|t| t.active_terminal())
-            .map(|term| term.is_terminal_focused())
+            .map(|term| term.is_terminal_focused() || term.wants_terminal_keyboard())
             .unwrap_or(false);
         if terminal_focused {
             return true;
@@ -1744,6 +1790,47 @@ impl MistTermApp {
         false
     }
 
+    /// 编辑菜单 Copy/Paste/Select All 是否作用于当前终端标签（含 egui 菜单打开时）。
+    fn edit_menu_targets_active_terminal(&self, _ctx: &egui::Context) -> bool {
+        if self.global_shortcuts_blocked() {
+            return false;
+        }
+        if self.auxiliary_dock_open()
+            && self.show_ai_panel
+            && self.ai_panel.is_draft_input_focused()
+        {
+            return false;
+        }
+        self.active_tab
+            .and_then(|i| self.tabs.get(i))
+            .and_then(|t| t.active_terminal())
+            .is_some()
+    }
+
+    /// `Ctrl+Shift+C` 路由：PTY 聚焦时，或菜单全选后 PTY 失焦但选区仍在时。
+    fn route_terminal_copy_shortcut(&self, ctx: &egui::Context) -> bool {
+        if self.global_shortcuts_blocked() {
+            return false;
+        }
+        if self.route_edit_shortcuts_to_terminal(ctx) {
+            return true;
+        }
+        if self.auxiliary_dock_open()
+            && self.show_ai_panel
+            && self.ai_panel.is_draft_input_focused()
+        {
+            return false;
+        }
+        if ctx.wants_keyboard_input() {
+            return false;
+        }
+        self.active_tab
+            .and_then(|i| self.tabs.get(i))
+            .and_then(|t| t.active_terminal())
+            .map(|t| t.has_active_selection())
+            .unwrap_or(false)
+    }
+
     /// 编辑菜单 ⌘C/⌘V/全选 是否应发给远端 PTY（否则发给当前焦点控件）
     fn route_edit_shortcuts_to_terminal(&self, ctx: &egui::Context) -> bool {
         if self.global_shortcuts_blocked() {
@@ -1753,7 +1840,7 @@ impl MistTermApp {
             .active_tab
             .and_then(|i| self.tabs.get(i))
             .and_then(|t| t.active_terminal())
-            .map(|term| term.is_terminal_focused())
+            .map(|term| term.is_terminal_focused() || term.wants_terminal_keyboard())
             .unwrap_or(false);
         if terminal_focused {
             return true;
@@ -1767,7 +1854,11 @@ impl MistTermApp {
         if ctx.wants_keyboard_input() {
             return false;
         }
-        false
+        // 菜单栏/弹层操作后 PTY 可能短暂失焦，但当前标签仍是终端时应继续路由复制/粘贴/全选。
+        self.active_tab
+            .and_then(|i| self.tabs.get(i))
+            .and_then(|t| t.active_terminal())
+            .is_some()
     }
 
     /// 将剪贴板内容粘贴到当前获得焦点的 egui 控件（如弹窗内 TextEdit）
@@ -1783,7 +1874,7 @@ impl MistTermApp {
     }
 
     pub(crate) fn menu_paste_for_context(&mut self, ctx: &egui::Context) {
-        if self.route_edit_shortcuts_to_terminal(ctx) {
+        if self.edit_menu_targets_active_terminal(ctx) {
             self.menu_paste_to_terminal(ctx);
         } else {
             self.menu_paste_to_focused_widget(ctx);
@@ -1791,7 +1882,7 @@ impl MistTermApp {
     }
 
     pub(crate) fn menu_copy_for_context(&mut self, ctx: &egui::Context) {
-        if self.route_edit_shortcuts_to_terminal(ctx) {
+        if self.edit_menu_targets_active_terminal(ctx) {
             self.menu_copy_terminal(ctx);
         } else {
             ctx.input_mut(|i| i.events.push(egui::Event::Copy));
@@ -1800,7 +1891,7 @@ impl MistTermApp {
     }
 
     pub(crate) fn menu_select_all_for_context(&mut self, ctx: &egui::Context) {
-        if self.route_edit_shortcuts_to_terminal(ctx) {
+        if self.edit_menu_targets_active_terminal(ctx) {
             self.menu_select_all_terminal(ctx);
         }
         // 表单内全选无标准 Event，依赖 ⌘A；菜单项在表单场景下不重复发终端全选
@@ -1975,7 +2066,7 @@ impl MistTermApp {
             return;
         };
         let mut temp_key = None;
-        let mut terminal = TerminalView::new();
+        let mut terminal = self.new_terminal_view();
         self.terminal_connect_session(ctx, &mut terminal, &session, &mut temp_key);
         let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) else {
             return;
@@ -2175,7 +2266,29 @@ impl MistTermApp {
     /// macOS ⌘ 与 Windows/Linux Ctrl（FUNCTIONAL_SPEC §7）
     #[inline]
     fn input_primary_mod(i: &egui::InputState) -> bool {
-        i.modifiers.command || i.modifiers.ctrl
+        crate::ui::keyboard_shortcuts::input_primary_mod(i)
+    }
+
+    fn active_terminal_has_keyboard_focus(&self) -> bool {
+        self.active_tab
+            .and_then(|i| self.tabs.get(i))
+            .and_then(|t| t.active_terminal())
+            .map(|term| term.is_terminal_focused())
+            .unwrap_or(false)
+    }
+
+    /// 终端持有键盘焦点时，MistTerm 全局快捷键一律不抢占（Ctrl/⌘ 组合交给 PTY / readline）。
+    fn app_shortcut_overrides_terminal(&self, _i: &egui::InputState) -> bool {
+        !self.active_terminal_has_keyboard_focus()
+    }
+
+    /// 标签/分屏导航（spec §6.2）：终端聚焦时仍由 MistTerm 处理。
+    fn app_tab_navigation_enabled(&self) -> bool {
+        self.app_global_shortcuts_enabled()
+    }
+
+    fn app_global_shortcuts_enabled(&self) -> bool {
+        !self.global_shortcuts_blocked()
     }
 
     /// 为给定会话配置追加一个新终端标签并发起连接（不检查是否已有同会话标签）
@@ -2261,7 +2374,7 @@ impl MistTermApp {
     }
 
     fn push_tab_connecting(&mut self, ctx: &egui::Context, session: &SessionConfig) {
-        let mut terminal = TerminalView::new();
+        let mut terminal = self.new_terminal_view();
         let mut temp_key = None;
         self.terminal_connect_session(ctx, &mut terminal, session, &mut temp_key);
         self.tabs.push(TerminalTab::single(TerminalPane::new(
@@ -2345,7 +2458,7 @@ impl MistTermApp {
             .resolve_session(session)
             .map_err(|e| e.to_string())?;
         let jump_hops = self.resolve_proxy_jump_hops(session)?;
-        let (ka_on, ka_int, ka_max) = Self::session_keepalive_params(session);
+        let (ka_on, ka_int, ka_max) = self.session_keepalive_params(session);
         let interval = if ka_on {
             ka_int.max(1)
         } else {
@@ -2862,7 +2975,7 @@ impl MistTermApp {
         let Some(session) = self.session_manager.get_session(&session_id).cloned() else {
             return;
         };
-        let mut terminal = TerminalView::new();
+        let mut terminal = self.new_terminal_view();
         let mut temp_key = None;
         self.terminal_connect_session(ctx, &mut terminal, &session, &mut temp_key);
         let n = self.tabs[idx].panes.len() + 1;
@@ -3426,6 +3539,21 @@ impl MistTermApp {
                 crate::i18n::tr(ctx, "Terminal has nothing to copy", "终端无内容可复制").to_string();
         }
         ctx.request_repaint();
+    }
+
+    /// `Ctrl+Shift+C`：仅复制终端选区（与 Windows Terminal 一致）。
+    fn copy_active_terminal_selection_shortcut(&mut self, ctx: &egui::Context) {
+        let Some(idx) = self.active_tab else {
+            return;
+        };
+        let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) else {
+            return;
+        };
+        if pane.terminal.shortcut_copy_to_clipboard() {
+            self.status_message =
+                crate::i18n::tr(ctx, "Copied to clipboard", "已复制到剪贴板").to_string();
+            ctx.request_repaint();
+        }
     }
 
     pub(crate) fn menu_paste_to_terminal(&mut self, ctx: &egui::Context) {
@@ -5107,7 +5235,7 @@ impl MistTermApp {
                 self.handle_mac_menu_action(action, ctx, frame);
             }
         }
-        // 系统会反复把首项改回可执行文件名 mistterm，每帧纠正为 Mist
+        // 系统会反复把首项改回可执行文件名 mistterm，每帧纠正为 MistTerm
         crate::platform::fix_menu_bar_application_title();
     }
 
@@ -5265,6 +5393,8 @@ impl eframe::App for MistTermApp {
             sidebar_collapsed: self.sidebar_collapsed,
             sidebar_user_dismissed_responsive: self.sidebar_user_dismissed_responsive,
             auto_reconnect_enabled: self.auto_reconnect_enabled,
+            terminal_font_preset: self.terminal_font_preset,
+            terminal_font_size: self.terminal_font_size,
             session_sort_by: self.session_sort_by,
             session_log_enabled: self.session_log_enabled,
             default_keepalive_enabled: self.default_keepalive_enabled,
@@ -5289,20 +5419,40 @@ impl eframe::App for MistTermApp {
         #[cfg(target_os = "macos")]
         self.poll_native_menu_bar(ctx, frame);
 
+        if self.route_terminal_copy_shortcut(ctx) {
+            if ctx.input_mut(|i| crate::ui::terminal_keys::consume_terminal_copy_shortcut(i)) {
+                self.copy_active_terminal_selection_shortcut(ctx);
+            }
+        }
+        if self.route_edit_shortcuts_to_terminal(ctx) {
+            if ctx.input_mut(|i| crate::ui::terminal_keys::consume_terminal_paste_shortcut(i)) {
+                self.menu_paste_to_terminal(ctx);
+            }
+        }
+
         // ⌘⇧J / Ctrl+⇧J：快速片段选择器（FUNCTIONAL_SPEC §7：⌘J 为连接搜索）
-        if !self.global_shortcuts_blocked()
+        if self.app_global_shortcuts_enabled()
             && ctx.input(|i| {
-                i.modifiers.shift
+                self.app_shortcut_overrides_terminal(i)
+                    && i.modifiers.shift
                     && i.key_pressed(egui::Key::J)
                     && (i.modifiers.command || i.modifiers.ctrl)
             })
         {
             self.quick_selector.open = true;
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
-            || ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F))
-        {
-            self.toggle_terminal_search();
+        if self.show_terminal_search {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
+                || ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F))
+            {
+                self.toggle_terminal_search();
+            }
+        } else if ctx.input(|i| self.app_shortcut_overrides_terminal(i)) {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::F))
+                || ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::F))
+            {
+                self.toggle_terminal_search();
+            }
         }
         if self.show_terminal_search {
             let step = ctx.input(|i| {
@@ -5615,38 +5765,59 @@ impl eframe::App for MistTermApp {
             }
         }
 
-        if !self.global_shortcuts_blocked() {
-            if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::N)) {
+        if self.app_global_shortcuts_enabled() {
+            if ctx.input(|i| {
+                self.app_shortcut_overrides_terminal(i)
+                    && Self::input_primary_mod(i)
+                    && i.key_pressed(egui::Key::N)
+            }) {
                 self.show_new_session_dialog = true;
             }
-            if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::T)) {
+            if ctx.input(|i| {
+                self.app_tab_navigation_enabled()
+                    && crate::ui::keyboard_shortcuts::new_tab_shortcut_pressed(i)
+            }) {
                 self.open_new_tab_from_selection(ctx);
             }
-            if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::J)) {
+            if ctx.input(|i| {
+                self.app_shortcut_overrides_terminal(i)
+                    && Self::input_primary_mod(i)
+                    && i.key_pressed(egui::Key::J)
+            }) {
                 self.focus_sidebar_connection_search(ctx);
             }
-            if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::K)) {
+            if ctx.input(|i| {
+                self.app_shortcut_overrides_terminal(i)
+                    && Self::input_primary_mod(i)
+                    && i.key_pressed(egui::Key::K)
+            }) {
                 self.focus_fragment_panel_search(ctx);
             }
             if ctx.input(|i| {
-                Self::input_primary_mod(i) && i.modifiers.shift && i.key_pressed(egui::Key::A)
+                self.app_shortcut_overrides_terminal(i)
+                    && Self::input_primary_mod(i)
+                    && i.modifiers.shift
+                    && i.key_pressed(egui::Key::A)
             }) {
                 self.toggle_ai_panel(ctx);
             }
             if ctx.input(|i| {
-                Self::input_primary_mod(i) && i.modifiers.shift && i.key_pressed(egui::Key::L)
+                self.app_shortcut_overrides_terminal(i)
+                    && Self::input_primary_mod(i)
+                    && i.modifiers.shift
+                    && i.key_pressed(egui::Key::L)
             }) {
                 self.send_terminal_selection_to_ai(ctx);
             }
-            if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::W)) {
+            if ctx.input(|i| {
+                self.app_tab_navigation_enabled()
+                    && crate::ui::keyboard_shortcuts::close_tab_shortcut_pressed(i)
+            }) {
                 self.request_close_active_tab();
             }
             if ctx.input(|i| {
-                i.modifiers.alt
-                    && !i.modifiers.ctrl
-                    && !i.modifiers.command
-                    && !i.modifiers.shift
-                    && (i.key_pressed(egui::Key::ArrowLeft) || i.key_pressed(egui::Key::ArrowRight))
+                self.app_tab_navigation_enabled()
+                    && crate::ui::keyboard_shortcuts::split_pane_focus_shortcut_pressed(i)
             }) {
                 if let Some(idx) = self.active_tab {
                     if self.tabs.get(idx).is_some_and(|t| t.is_split()) {
@@ -5657,7 +5828,8 @@ impl eframe::App for MistTermApp {
             }
             // 分屏：⌘⇧D / Ctrl+Shift+D 左右，⌘⇧U / Ctrl+Shift+U 上下
             if ctx.input(|i| {
-                Self::input_primary_mod(i)
+                self.app_shortcut_overrides_terminal(i)
+                    && Self::input_primary_mod(i)
                     && i.modifiers.shift
                     && i.key_pressed(egui::Key::D)
             }) {
@@ -5666,7 +5838,8 @@ impl eframe::App for MistTermApp {
                 }
             }
             if ctx.input(|i| {
-                Self::input_primary_mod(i)
+                self.app_shortcut_overrides_terminal(i)
+                    && Self::input_primary_mod(i)
                     && i.modifiers.shift
                     && i.key_pressed(egui::Key::U)
             }) {
@@ -5674,7 +5847,11 @@ impl eframe::App for MistTermApp {
                     self.split_tab_at(ctx, idx, crate::ui::tab_pane::TabLayout::SplitVertical);
                 }
             }
-            if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::E)) {
+            if ctx.input(|i| {
+                self.app_shortcut_overrides_terminal(i)
+                    && Self::input_primary_mod(i)
+                    && i.key_pressed(egui::Key::E)
+            }) {
                 if let Some(ref sid) = self.selected_session_id.clone() {
                     self.open_edit_session_dialog(sid);
                 } else {
@@ -5690,10 +5867,19 @@ impl eframe::App for MistTermApp {
                     };
                 }
             }
-            if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(egui::Key::H)) {
+            if ctx.input(|i| {
+                self.app_shortcut_overrides_terminal(i)
+                    && Self::input_primary_mod(i)
+                    && i.key_pressed(egui::Key::H)
+            }) {
                 self.show_about_dialog = true;
             }
-            if ctx.input(|i| i.key_pressed(egui::Key::R) && i.modifiers.ctrl && !i.modifiers.command) {
+            if ctx.input(|i| {
+                self.app_shortcut_overrides_terminal(i)
+                    && i.key_pressed(egui::Key::R)
+                    && i.modifiers.ctrl
+                    && !i.modifiers.command
+            }) {
                 if self.current_terminal().map(|t| t.is_connected()).unwrap_or(false) {
                     if self.command_history_overlay.open {
                         let n = self
@@ -5718,7 +5904,7 @@ impl eframe::App for MistTermApp {
             }
             // egui 0.23 无 Key::Comma；⌘/Ctrl+, 常表现为 Text(",") + 主修饰键
             let prefs_shortcut = ctx.input_mut(|i| {
-                if !Self::input_primary_mod(i) {
+                if !self.app_shortcut_overrides_terminal(i) || !Self::input_primary_mod(i) {
                     return false;
                 }
                 let mut hit = false;
@@ -5737,7 +5923,10 @@ impl eframe::App for MistTermApp {
                 self.show_preferences_dialog = true;
             }
             let primary_tab_cycle = ctx.input(|i| {
-                if Self::input_primary_mod(i) && i.key_pressed(egui::Key::Tab) {
+                if self.app_tab_navigation_enabled()
+                    && Self::input_primary_mod(i)
+                    && i.key_pressed(egui::Key::Tab)
+                {
                     Some(i.modifiers.shift)
                 } else {
                     None
@@ -5748,23 +5937,21 @@ impl eframe::App for MistTermApp {
                 Some(false) => self.switch_to_next_tab(),
                 None => {}
             }
-            for n in 1u8..=9u8 {
-                let key = match n {
-                    1 => egui::Key::Num1,
-                    2 => egui::Key::Num2,
-                    3 => egui::Key::Num3,
-                    4 => egui::Key::Num4,
-                    5 => egui::Key::Num5,
-                    6 => egui::Key::Num6,
-                    7 => egui::Key::Num7,
-                    8 => egui::Key::Num8,
-                    9 => egui::Key::Num9,
-                    _ => continue,
-                };
-                if ctx.input(|i| Self::input_primary_mod(i) && i.key_pressed(key)) {
-                    let idx = (n - 1) as usize;
-                    self.switch_tab_to_index(idx);
-                    break;
+            if self.app_tab_navigation_enabled() {
+                for n in 1u8..=9u8 {
+                    let Some(key) = crate::ui::keyboard_shortcuts::tab_index_key(n) else {
+                        continue;
+                    };
+                    if ctx.input(|i| {
+                        crate::ui::keyboard_shortcuts::tab_switch_modifiers(i)
+                            && i.key_pressed(key)
+                    }) {
+                        let idx = (n - 1) as usize;
+                        if idx < self.tabs.len() {
+                            self.switch_tab_to_index(idx);
+                        }
+                        break;
+                    }
                 }
             }
         }

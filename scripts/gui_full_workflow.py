@@ -175,12 +175,12 @@ class MistGui:
         click(self.cr - int(offset * self.s), self.status_y, 0.35)
 
     def open_menu(self, idx: int) -> int:
-        x = self.cl + int(MENU_X[idx] * self.s)
+        x = self.cl + MENU_X[idx]
         click(x, self.menu_y, 0.3)
         return x
 
     def pick_menu(self, menu_x: int, row: int, extra: int = 0) -> None:
-        y = self.menu_y + int((row * ITEM_H + extra) * self.s)
+        y = self.menu_y + int(((row + 1) * ITEM_H + extra) * self.s)
         click(menu_x, y, 0.35)
 
     def modal_layout(self) -> dict[str, tuple[int, int]]:
@@ -250,7 +250,7 @@ class MistGui:
         time.sleep(0.8)
         click(self.cl + int(110 * self.s), self.ct + int(165 * self.s))
         time.sleep(0.5)
-        send_keys("^t")
+        send_keys("+^t")
         time.sleep(18.0)
 
 
@@ -484,7 +484,7 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path, cov: CoverageTrack
         dismiss_esc()
         gui.shortcut("+^d")
         time.sleep(0.5)
-        gui.shortcut("%{LEFT}")
+        gui.shortcut("+^{LEFT}")
         time.sleep(0.4)
         dismiss_esc()
 

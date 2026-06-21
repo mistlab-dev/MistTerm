@@ -10,7 +10,7 @@ param(
     [switch]$Release,
     [switch]$LaunchOnly,
     [int]$TimeoutSec = 20,
-    [string]$WindowTitle = "Mist"
+    [string]$WindowTitle = "MistTerm"
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,6 +30,12 @@ if (-not (Test-Path $exe)) {
     }
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 }
+
+Write-Host "==> Ensure local OpenSSH test sshd"
+$ensure = Join-Path $Root "scripts\ensure-windows-test-sshd.ps1"
+if (-not (Test-Path $ensure)) { throw "Missing $ensure" }
+powershell -NoProfile -ExecutionPolicy Bypass -File $ensure
+if ($LASTEXITCODE -ne 0) { throw "ensure-windows-test-sshd failed" }
 
 Write-Host "==> Seed local test session"
 $env:CARGO_BUILD_JOBS = "1"

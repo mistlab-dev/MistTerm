@@ -144,6 +144,11 @@ pub fn apply_keepalive(session: &mut Session, config: &SshConfig) {
     }
 }
 
+/// libssh2 需在事件循环中周期性调用 [`Session::keepalive_send`] 才会真正发出 SSH 心跳。
+pub fn tick_keepalive(session: &Session) {
+    let _ = session.keepalive_send();
+}
+
 /// SSH 客户端
 pub struct SshClient {
     session: Option<Session>,

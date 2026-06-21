@@ -79,7 +79,7 @@ def main():
         s = (cr - cl) / 1200.0
         click(cl + int(110 * s), ct + int(155 * s))
         time.sleep(0.4)
-        send_keys("^t")
+        send_keys("+^t")
         time.sleep(10)
 
         click(cr - int(126 * s), cb - int(18 * s))

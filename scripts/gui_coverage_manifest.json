@@ -25,7 +25,7 @@
       "smoke"
     ],
     "tab.new": [
-      "新建标签 Ctrl+T",
+      "新建标签 Ctrl+Shift+T",
       "smoke|workflow|e2e"
     ],
     "tab.close": [
@@ -57,8 +57,28 @@
       "smoke|workflow"
     ],
     "terminal.pane_focus": [
-      "窗格切换 Alt+←/→",
+      "窗格切换 Ctrl+Shift+←/→",
       "smoke|workflow"
+    ],
+    "terminal.shell_ctrl_c": [
+      "终端 Ctrl+C 中断（不关标签）",
+      "smoke"
+    ],
+    "terminal.shell_ctrl_w": [
+      "终端 Ctrl+W 删词（不关标签）",
+      "smoke"
+    ],
+    "terminal.copy_shortcut": [
+      "终端复制选区 Ctrl+Shift+C",
+      "smoke"
+    ],
+    "terminal.paste_shortcut": [
+      "终端粘贴 Ctrl+Shift+V",
+      "smoke"
+    ],
+    "terminal.tab_enter": [
+      "终端 Tab/Enter 焦点",
+      "smoke"
     ],
     "sftp.toggle": [
       "SFTP 面板 Ctrl+Shift+S",
@@ -169,6 +189,11 @@
       "terminal.split_h",
       "terminal.split_v",
       "terminal.pane_focus",
+      "terminal.shell_ctrl_c",
+      "terminal.shell_ctrl_w",
+      "terminal.copy_shortcut",
+      "terminal.paste_shortcut",
+      "terminal.tab_enter",
       "sftp.toggle",
       "panel.monitor",
       "panel.port_forward",

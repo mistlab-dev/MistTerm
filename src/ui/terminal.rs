@@ -170,6 +170,8 @@ pub struct TerminalView {
     connected_at: Option<Instant>,
     connection_target: Option<(String, String)>,
     auto_follow_output: bool,
+    /// 用户点击终端后保持键盘输入，直到点击终端外区域（IME 框按 Enter 会 surrender_focus，不能只看 has_focus）
+    terminal_wants_keyboard: bool,
     terminal_focused: bool,
     rz_control_mode_until: Option<Instant>,
     upload_result_rx: Option<Receiver<Result<String, String>>>,
@@ -215,6 +217,8 @@ pub struct TerminalView {
     search_highlight: Option<(usize, usize, usize)>,
     /// `show()` 每帧同步，用于无 `Context` 入参的路径（不影响 `process_ssh_messages` 内语言的一帧滞后）。
     ui_lang_last: UiLanguage,
+    /// 透明 IME 捕获框（须持有文本光标，winit 才会 `set_ime_allowed`）
+    ime_capture: String,
 }
 
 impl TerminalView {
@@ -338,6 +342,52 @@ impl TerminalView {
         let h = row.height().max(1.0);
         let x = response.rect.min.x + row.x_offset(cur.col);
         egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell_w, h))
+    }
+
+    fn ime_committed_text<'a>(text: &'a str, modifiers: egui::Modifiers) -> Option<&'a str> {
+        if text.is_empty() || modifiers.command || modifiers.ctrl {
+            None
+        } else {
+            Some(text)
+        }
+    }
+
+    /// 在 PTY 光标处放置透明单行框，供系统 IME 定位并启用 `set_ime_allowed`。
+    fn show_terminal_ime_capture(
+        &mut self,
+        ui: &mut egui::Ui,
+        ime_id: egui::Id,
+        ime_rect: egui::Rect,
+        cell_h: f32,
+    ) {
+        ui.allocate_ui_at_rect(ime_rect, |ui| {
+            ui.set_min_size(egui::vec2(ime_rect.width().max(8.0), ime_rect.height().max(cell_h)));
+            ui.visuals_mut().override_text_color = Some(egui::Color32::TRANSPARENT);
+            // 勿绘制 TextEdit 竖线光标；终端仅用下方块状光标 + 本框仅向 winit 报告 IME 位置
+            ui.visuals_mut().text_cursor =
+                egui::Stroke::new(0.0, egui::Color32::TRANSPARENT);
+            ui.add(
+                egui::TextEdit::singleline(&mut self.ime_capture)
+                    .id(ime_id)
+                    .frame(false)
+                    .margin(egui::vec2(0.0, 0.0))
+                    .lock_focus(true)
+                    .desired_width(ime_rect.width().max(8.0)),
+            );
+        });
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(
+                ime_id,
+                crate::ui::terminal_keys::terminal_keyboard_event_filter(),
+            );
+        });
+        self.ime_capture.clear();
+        if let Some(mut state) = egui::widgets::text_edit::TextEditState::load(ui.ctx(), ime_id) {
+            state.set_ccursor_range(Some(egui::text::CCursorRange::one(
+                egui::text::CCursor::new(0),
+            )));
+            state.store(ui.ctx(), ime_id);
+        }
     }
 
     fn terminal_selection_rect(
@@ -557,10 +607,11 @@ impl TerminalView {
             transfer_outgoing: false,
             pending_focus_terminal: false,
             download_dir: download_dir.to_string_lossy().to_string(),
-            font_size: 13.0,
+            font_size: crate::platform::DEFAULT_TERMINAL_FONT_SIZE,
             connected_at: None,
             connection_target: None,
             auto_follow_output: true,
+            terminal_wants_keyboard: false,
             terminal_focused: false,
             rz_control_mode_until: None,
             upload_result_rx: None,
@@ -587,6 +638,7 @@ impl TerminalView {
             pending_log_output: Vec::new(),
             search_highlight: None,
             ui_lang_last: UiLanguage::default(),
+            ime_capture: String::new(),
         }
     }
 
@@ -852,6 +904,8 @@ impl TerminalView {
                     let line_height = ui.ctx().fonts(|fonts| {
                         Self::measure_terminal_line_height(fonts, self.font_size, theme.text_primary())
                     });
+                    let (cell_w, _cell_h_probe) =
+                        Self::terminal_cell_metrics(ui, self.font_size, theme.text_primary());
                     let cache_key = (
                         self.vt_visual_generation,
                         self.terminal.content_epoch(),
@@ -880,6 +934,7 @@ impl TerminalView {
                                 let layout_job = self.terminal.get_layout_job(
                                     self.font_size,
                                     line_height,
+                                    cell_w,
                                     &shell,
                                     self.search_highlight,
                                 );
@@ -901,6 +956,7 @@ impl TerminalView {
                             let layout_job = self.terminal.get_layout_job(
                                 self.font_size,
                                 line_height,
+                                cell_w,
                                 &shell,
                                 self.search_highlight,
                             );
@@ -991,8 +1047,6 @@ impl TerminalView {
                             let select_id = response.id.with("terminal_select");
                             let select_resp =
                                 ui.interact(text_rect, select_id, egui::Sense::click_and_drag());
-                            let primary_clicked =
-                                select_resp.clicked_by(egui::PointerButton::Primary);
                             let primary_double_clicked =
                                 select_resp.double_clicked_by(egui::PointerButton::Primary);
                             let primary_drag_started =
@@ -1010,34 +1064,94 @@ impl TerminalView {
                             let galley = Self::layout_terminal_galley(ui, &layout_job);
                             let text_top = Self::terminal_text_top(&response, &galley);
                             let display_lines: Vec<&str> = display_owned.lines().collect();
+                            let ime_id = response.id.with("terminal_ime");
                             if !terminal_search_open {
-                                if primary_clicked || primary_drag_started {
-                                    ui.memory_mut(|m| m.request_focus(select_id));
-                                    select_resp.request_focus();
+                                if ui.input(|i| i.pointer.any_click()) {
+                                    let in_terminal = ui.input(|i| {
+                                        i.pointer.interact_pos().is_some_and(|pos| {
+                                            text_rect.contains(pos)
+                                                || select_resp
+                                                    .interact_pointer_pos()
+                                                    .is_some_and(|p| text_rect.contains(p))
+                                        })
+                                    });
+                                    self.terminal_wants_keyboard = in_terminal;
                                 }
                                 if self.pending_focus_terminal {
-                                    // EventFilter 未生效帧的兜底（如刚点击聚焦后的首帧）
-                                    ui.memory_mut(|m| m.request_focus(select_id));
-                                    select_resp.request_focus();
+                                    self.terminal_wants_keyboard = true;
                                     self.pending_focus_terminal = false;
                                 }
                             }
-                            self.terminal_focused = select_resp.has_focus()
-                                || response.has_focus()
-                                || self.pending_focus_terminal;
+                            self.terminal_focused = self.terminal_wants_keyboard
+                                && !terminal_search_open
+                                && capture_pty_keyboard;
 
-                            // 键盘焦点在 select 层：锁定 Tab/Esc/方向键，避免 egui 帧初焦点遍历抢键
-                            if !terminal_search_open && self.terminal_focused {
-                                ui.memory_mut(|m| {
-                                    m.set_focus_lock_filter(
-                                        select_id,
-                                        crate::ui::terminal_keys::terminal_keyboard_event_filter(),
-                                    );
-                                });
+                            if self.terminal_focused {
+                                ui.memory_mut(|m| m.request_focus(ime_id));
                             }
 
+                            // 块状闪烁光标（UI 层绘制，勿再用 │ 字符占位）
+                            if self.terminal_focused
+                                && !terminal_search_open
+                                && self.selection.is_empty()
+                            {
+                                if let Some(cur) = self.terminal.viewport_cursor() {
+                                    let t = ui.input(|i| i.time);
+                                    let phase = (t
+                                        / crate::terminal::style::TERMINAL_CURSOR_BLINK_PERIOD_SECS)
+                                        .floor() as i64
+                                        % 2;
+                                    if phase == 0 {
+                                        let cursor_rect = Self::terminal_block_cursor_rect(
+                                            &response,
+                                            &galley,
+                                            text_top,
+                                            cur,
+                                            cell_w,
+                                        );
+                                        let painter =
+                                            ui.painter().clone().with_layer_id(response.layer_id);
+                                        painter.rect_filled(
+                                            cursor_rect,
+                                            0.0,
+                                            theme.color_terminal_cursor_block(),
+                                        );
+                                    }
+                                }
+                                ui.ctx().request_repaint_after(
+                                    std::time::Duration::from_millis(60),
+                                );
+                            }
+
+                            // 中文/日文 IME：须有 TextEdit 文本光标，winit 才会启用输入法
+                            if capture_pty_keyboard
+                                && self.terminal_wants_keyboard
+                                && !terminal_search_open
+                            {
+                                let ime_rect = if let Some(cur) =
+                                    self.terminal.viewport_cursor()
+                                {
+                                    Self::terminal_block_cursor_rect(
+                                        &response,
+                                        &galley,
+                                        text_top,
+                                        cur,
+                                        cell_w,
+                                    )
+                                } else {
+                                    egui::Rect::from_min_size(
+                                        egui::pos2(text_rect.min.x, text_top),
+                                        egui::vec2(cell_w.max(8.0), cell_h.max(12.0)),
+                                    )
+                                };
+                                self.show_terminal_ime_capture(ui, ime_id, ime_rect, cell_h);
+                            }
+
+                            // === 文本选择（独立 interact 层，避免 TextEdit 抢鼠标） ===
                             // 滚轮浏览 scrollback（与 alacritty 一致：Delta>0 向上翻历史）
-                            if (response.hovered() || response.has_focus())
+                            if (select_resp.hovered()
+                                || response.hovered()
+                                || self.terminal_focused)
                                 && ui.input(|i| !i.modifiers.ctrl && i.scroll_delta.y.abs() > 0.5)
                             {
                                 let dy = ui.input(|i| i.scroll_delta.y);
@@ -1048,7 +1162,6 @@ impl TerminalView {
                                 }
                             }
 
-                            // === 文本选择（独立 interact 层，避免 TextEdit 抢鼠标） ===
                             if primary_double_clicked {
                                 if let Some(pos) = select_resp.interact_pointer_pos() {
                                     let (row_i, col) = Self::terminal_pointer_row_col(
@@ -1110,39 +1223,6 @@ impl TerminalView {
                                         self.selection.active = true;
                                     }
                                 }
-                            }
-
-                            // 块状闪烁光标（UI 层绘制，勿再用 │ 字符占位）
-                            if self.terminal_focused
-                                && !terminal_search_open
-                                && self.selection.is_empty()
-                            {
-                                if let Some(cur) = self.terminal.viewport_cursor() {
-                                    let t = ui.input(|i| i.time);
-                                    let phase = (t
-                                        / crate::terminal::style::TERMINAL_CURSOR_BLINK_PERIOD_SECS)
-                                        .floor() as i64
-                                        % 2;
-                                    if phase == 0 {
-                                        let cursor_rect = Self::terminal_block_cursor_rect(
-                                            &response,
-                                            &galley,
-                                            text_top,
-                                            cur,
-                                            cell_w,
-                                        );
-                                        let painter =
-                                            ui.painter().clone().with_layer_id(response.layer_id);
-                                        painter.rect_filled(
-                                            cursor_rect,
-                                            0.0,
-                                            theme.color_terminal_cursor_block(),
-                                        );
-                                    }
-                                }
-                                ui.ctx().request_repaint_after(
-                                    std::time::Duration::from_millis(60),
-                                );
                             }
 
                             // 绘制选择高亮
@@ -1591,6 +1671,7 @@ impl TerminalView {
                         }
                         self.connected = true;
                         self.connected_at = Some(Instant::now());
+                        self.terminal_wants_keyboard = true;
                         self.terminal_focused = true;
                         self.pending_focus_terminal = true;
                         self.auto_follow_output = true;
@@ -1631,6 +1712,7 @@ impl TerminalView {
                             self.unexpected_disconnect_notified = true;
                         }
                         self.connected = false;
+                        self.terminal_wants_keyboard = false;
                         self.terminal_focused = false;
                         self.connected_at = None;
                         self.auto_follow_output = true;
@@ -1757,6 +1839,7 @@ impl TerminalView {
             return;
         }
         let mut pending_paste: Option<String> = None;
+        let mut ctrl_to_send: Vec<u8> = Vec::new();
 
         ui.input_mut(|i| {
             let tab_plain = i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
@@ -1776,6 +1859,15 @@ impl TerminalView {
                 self.append_offline_bytes(bytes);
             }) {
                 self.pending_focus_terminal = true;
+            }
+            let mut sent_ctrl = [false; 32];
+            if crate::ui::terminal_keys::forward_ctrl_keys(i, |b| {
+                if b < 32 {
+                    sent_ctrl[b as usize] = true;
+                }
+                ctrl_to_send.push(b);
+            }) && !ctrl_to_send.is_empty() {
+                // pending_focus set after input_mut
             }
 
             let mut backspace_key = false;
@@ -1798,6 +1890,11 @@ impl TerminalView {
 
             for event in &i.events {
                 match event {
+                    egui::Event::CompositionEnd(text) => {
+                        if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
+                            self.append_offline_bytes(text.as_bytes());
+                        }
+                    }
                     egui::Event::Text(text) => {
                         if text == "\n" || text == "\r" {
                             continue;
@@ -1805,9 +1902,12 @@ impl TerminalView {
                         if i.modifiers.command {
                             continue;
                         }
-                        if i.modifiers.ctrl && text.as_bytes() == [0x1b] {
-                            self.append_offline_bytes(b"\x1b");
-                            self.pending_focus_terminal = true;
+                        if crate::ui::terminal_keys::try_forward_ctrl_text_byte(
+                            text,
+                            i.modifiers.ctrl,
+                            &mut sent_ctrl,
+                            |b| ctrl_to_send.push(b),
+                        ) {
                             continue;
                         }
                         if i.modifiers.ctrl {
@@ -1875,6 +1975,12 @@ impl TerminalView {
                 }
             }
         });
+        if !ctrl_to_send.is_empty() {
+            self.pending_focus_terminal = true;
+            for b in ctrl_to_send {
+                self.append_offline_bytes(&[b]);
+            }
+        }
         if let Some(text) = pending_paste {
             let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
             self.append_offline_bytes(normalized.as_bytes());
@@ -1997,13 +2103,23 @@ impl TerminalView {
         let Some(handle) = self.ssh_handle.clone() else {
             return;
         };
-        if !self.terminal_focused {
+        if !self.terminal_wants_keyboard {
             return;
         }
 
         let mut pending_paste: Option<String> = None;
+        let mut ctrl_to_send: Vec<u8> = Vec::new();
 
         ui.input_mut(|i| {
+            if crate::ui::terminal_keys::consume_terminal_paste_shortcut(i) {
+                if let Ok(mut clip) = Clipboard::new() {
+                    if let Ok(text) = clip.get_text() {
+                        pending_paste = Some(text);
+                    }
+                }
+            } else if crate::ui::terminal_keys::consume_terminal_copy_shortcut(i) {
+                let _ = self.shortcut_copy_to_clipboard();
+            }
             // 强制拦截 Tab 焦点遍历，把 Tab/Shift+Tab 交给终端
             let tab_plain = i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
             let tab_shift = i.consume_key(
@@ -2024,6 +2140,15 @@ impl TerminalView {
             }) {
                 // EventFilter 生效前的兜底（帧初 Tab/Esc/方向键抢焦点）
                 self.pending_focus_terminal = true;
+            }
+            let mut sent_ctrl = [false; 32];
+            if crate::ui::terminal_keys::forward_ctrl_keys(i, |b| {
+                if b < 32 {
+                    sent_ctrl[b as usize] = true;
+                }
+                ctrl_to_send.push(b);
+            }) {
+                // pending_focus set after input_mut
             }
             // 同一帧内可能既有 Key 又有 Text（如 Delete / 退格），避免重复或错发
             let mut backspace_key = false;
@@ -2046,6 +2171,14 @@ impl TerminalView {
 
             for event in &i.events {
                 match event {
+                    egui::Event::CompositionEnd(text) => {
+                        if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
+                            self.track_typed_text(text);
+                            if let Err(e) = handle.send_input(text.as_bytes()) {
+                                log::error!("PTY write (ime): {}", e);
+                            }
+                        }
+                    }
                     egui::Event::Text(text) => {
                         // Enter 由 Key::Enter 统一发 \r，避免与 Text 里的 \n 重复
                         if text == "\n" || text == "\r" {
@@ -2054,10 +2187,12 @@ impl TerminalView {
                         if i.modifiers.command {
                             continue;
                         }
-                        // 部分平台 Ctrl+[ 仅以 Text(ESC) 送达，无 Key 事件
-                        if i.modifiers.ctrl && text.as_bytes() == [0x1b] {
-                            let _ = handle.send_input(b"\x1b");
-                            self.pending_focus_terminal = true;
+                        if crate::ui::terminal_keys::try_forward_ctrl_text_byte(
+                            text,
+                            i.modifiers.ctrl,
+                            &mut sent_ctrl,
+                            |b| ctrl_to_send.push(b),
+                        ) {
                             continue;
                         }
                         if i.modifiers.ctrl {
@@ -2110,18 +2245,6 @@ impl TerminalView {
                             }
                         } else {
                         match key {
-                            egui::Key::V if modifiers.ctrl && modifiers.shift => {
-                                if let Ok(mut clip) = Clipboard::new() {
-                                    if let Ok(text) = clip.get_text() {
-                                        pending_paste = Some(text);
-                                    }
-                                }
-                            }
-                            egui::Key::C if modifiers.ctrl && modifiers.shift => {
-                                if let Ok(mut clip) = Clipboard::new() {
-                                    let _ = clip.set_text(self.terminal.get_formatted_output());
-                                }
-                            }
                             egui::Key::Enter => {
                                 self.commit_typed_line_on_enter();
                                 if let Err(e) = handle.send_input(b"\r") {
@@ -2143,16 +2266,6 @@ impl TerminalView {
                             egui::Key::Tab => {
                                 // Tab 已在 consume_key 阶段统一发送
                             }
-                            egui::Key::C if modifiers.ctrl && !modifiers.shift => {
-                                if self.lrzsz.is_active() {
-                                    let _ = self.cancel_zmodem_transfer();
-                                } else {
-                                    let _ = handle.send_input(&[0x03]);
-                                }
-                            }
-                            egui::Key::D if modifiers.ctrl => {
-                                let _ = handle.send_input(&[0x04]);
-                            }
                             _ => {}
                         }
                         }
@@ -2161,6 +2274,16 @@ impl TerminalView {
                 }
             }
         });
+        if !ctrl_to_send.is_empty() {
+            self.pending_focus_terminal = true;
+            for b in ctrl_to_send {
+                if b == 0x03 && self.lrzsz.is_active() {
+                    let _ = self.cancel_zmodem_transfer();
+                } else if let Err(e) = handle.send_input(&[b]) {
+                    log::error!("PTY write (ctrl): {}", e);
+                }
+            }
+        }
         if let Some(text) = pending_paste {
             self.paste_text(&text, ui.ctx());
         }
@@ -2223,10 +2346,11 @@ impl TerminalView {
         self.selection.clear();
     }
 
-    /// 菜单「复制」：优先选区，否则复制当前屏格式化输出。
-    pub(crate) fn menu_copy_to_clipboard(&self) -> bool {
+    /// 复制到剪贴板。`fallback_all` 为 true 时无选区则复制整屏（菜单「复制」）；
+    /// false 时仅复制选区（Ctrl+Shift+C，与 Windows Terminal 一致）。
+    fn copy_to_clipboard(&self, fallback_all: bool) -> bool {
         let text = self.get_selected_text();
-        let text = if text.is_empty() {
+        let text = if text.is_empty() && fallback_all {
             self.terminal.get_formatted_output()
         } else {
             text
@@ -2240,6 +2364,16 @@ impl TerminalView {
             .is_some()
     }
 
+    /// 菜单「复制」：优先选区，否则复制当前屏格式化输出。
+    pub(crate) fn menu_copy_to_clipboard(&self) -> bool {
+        self.copy_to_clipboard(true)
+    }
+
+    /// 快捷键 Ctrl+Shift+C：仅复制选区；无选区时不复制。
+    pub(crate) fn shortcut_copy_to_clipboard(&self) -> bool {
+        self.copy_to_clipboard(false)
+    }
+
     /// 菜单「粘贴」：从系统剪贴板粘贴到 PTY。
     pub(crate) fn menu_paste_from_clipboard(&mut self, ctx: &egui::Context) {
         if let Ok(mut clip) = Clipboard::new() {
@@ -2247,6 +2381,11 @@ impl TerminalView {
                 self.paste_text(&text, ctx);
             }
         }
+    }
+
+    /// 当前标签页是否有可复制的终端选区。
+    pub(crate) fn has_active_selection(&self) -> bool {
+        !self.selection.is_empty()
     }
 
     /// 菜单「全选」：选中当前屏全部内容。
@@ -2364,6 +2503,7 @@ impl TerminalView {
         self.transfer_outgoing = false;
         self.auto_follow_output = true;
         self.pending_focus_terminal = true;
+        self.terminal_wants_keyboard = true;
         self.terminal_focused = true;
         // ZMODEM 协议态下单个 Ctrl+C 不一定被远端 rz/sz 识别；高优先级发 CAN 序列再补 ETX。
         let cancel = vec![
@@ -2398,6 +2538,7 @@ impl TerminalView {
         self.auto_follow_output = true;
         // 文件对话框关闭后主动抢回终端焦点，避免「取消后不能输入」
         self.pending_focus_terminal = true;
+        self.terminal_wants_keyboard = true;
         self.terminal_focused = true;
         if self.lrzsz.is_active() {
             self.lrzsz.cancel_active_transfer();
@@ -2682,6 +2823,11 @@ impl TerminalView {
         self.terminal_focused
     }
 
+    /// 用户已点击终端并希望输入（Enter 后 IME 失焦时仍保持，直到点击终端外）。
+    pub fn wants_terminal_keyboard(&self) -> bool {
+        self.terminal_wants_keyboard
+    }
+
     pub fn ssh_session_handle(&self) -> Option<SshSessionHandle> {
         self.ssh_handle.clone()
     }
@@ -2864,6 +3010,7 @@ impl TerminalView {
         self.transfer_outgoing = false;
         self.pending_focus_terminal = false;
         self.connected_at = None;
+        self.terminal_wants_keyboard = false;
         self.terminal_focused = false;
         self.paste_pending.clear();
         self.paste_next_chunk_at = None;
@@ -2891,6 +3038,7 @@ impl TerminalView {
         self.transfer_outgoing = false;
         self.pending_focus_terminal = false;
         self.connected_at = None;
+        self.terminal_wants_keyboard = false;
         self.terminal_focused = false;
         self.paste_pending.clear();
         self.paste_next_chunk_at = None;

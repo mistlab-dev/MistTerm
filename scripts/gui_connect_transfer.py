@@ -59,7 +59,7 @@ def main() -> int:
         time.sleep(0.5)
         click(cl + int(110 * s), ct + int(165 * s))
         time.sleep(0.4)
-        send_keys("^t")
+        send_keys("+^t")
         time.sleep(14.0)
 
         if proc.poll() is not None:
