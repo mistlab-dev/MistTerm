@@ -63,6 +63,17 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host "OK: local sshd ready ($User@127.0.0.1, password $Pass)"
 }
 
+Write-Host "==> SSH key for integration tests (rz_upload_smoke)"
+$adminKey = Join-Path $env:USERPROFILE ".ssh\id_rsa_mistterm_test"
+if (-not (Test-Path $adminKey)) {
+    ssh-keygen -t rsa -b 2048 -f $adminKey -N '""' -q
+}
+$sshDir = "C:\Users\$User\.ssh"
+New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
+Set-Content -Path "$sshDir\authorized_keys" -Value (Get-Content "$adminKey.pub") -Encoding ascii
+icacls $sshDir /inheritance:r /grant "${User}:(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
+Write-Host "    $adminKey -> ${User}@127.0.0.1"
+
 Write-Host ""
 Write-Host "Next:"
 Write-Host "  .\scripts\run-transfer-tests.ps1"
