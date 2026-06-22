@@ -188,10 +188,16 @@ fn test_remote_lrzsz_available() {
     let Some(session) = skip_without_sshd() else {
         return;
     };
-    let rz = exec_remote(&session, "command -v rz 2>/dev/null || command -v lrz 2>/dev/null")
-        .unwrap_or_default();
-    let sz = exec_remote(&session, "command -v sz 2>/dev/null || command -v lsz 2>/dev/null")
-        .unwrap_or_default();
+    let rz = exec_remote(
+        &session,
+        "command -v rz 2>/dev/null || command -v lrz 2>/dev/null || where rz 2>nul",
+    )
+    .unwrap_or_default();
+    let sz = exec_remote(
+        &session,
+        "command -v sz 2>/dev/null || command -v lsz 2>/dev/null || where sz 2>nul",
+    )
+    .unwrap_or_default();
     println!("remote rz: {:?}, sz: {:?}", rz.trim(), sz.trim());
     if rz.trim().is_empty() && sz.trim().is_empty() {
         eprintln!("skip: remote host has no rz/sz (lrzsz); install for full ZMODEM E2E");

@@ -1127,6 +1127,31 @@ impl SftpPanel {
         )
     }
 
+    /// GUI 自动化：本机 E2E / ZMODEM 上传文件路径。
+    pub fn gui_automation_zmodem_local_path() -> Option<PathBuf> {
+        if !Self::gui_automation_enabled() {
+            return None;
+        }
+        if let Ok(p) = std::env::var("MISTTERM_ZMODEM_E2E_LOCAL") {
+            let pb = PathBuf::from(p.trim());
+            if pb.is_file() {
+                return Some(pb);
+            }
+        }
+        Self::gui_automation_e2e_local_path()
+    }
+
+    /// GUI 自动化：本机 E2E 文件路径（`%TEMP%/mistterm_downloads/<MISTTERM_E2E_FILE>`）。
+    pub fn gui_automation_e2e_local_path() -> Option<PathBuf> {
+        if !Self::gui_automation_enabled() {
+            return None;
+        }
+        let name = Self::env_e2e_filename()?;
+        let dir = std::env::temp_dir().join("mistterm_downloads");
+        let path = dir.join(&name);
+        path.exists().then_some(path)
+    }
+
     fn env_e2e_filename() -> Option<String> {
         std::env::var("MISTTERM_E2E_FILE")
             .ok()

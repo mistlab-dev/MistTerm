@@ -5668,14 +5668,18 @@ impl eframe::App for MistTermApp {
                 if let Some(t) = self.current_terminal_mut() {
                     t.pending_rz_upload = false;
                 }
-                if let Some(path) = FileDialog::new()
-                    .set_title(crate::i18n::tr(
-                        ctx,
-                        "Choose file for remote upload (rz)",
-                        "选择要上传到远端（rz）的文件",
-                    ))
-                    .pick_file()
-                {
+                let picked = if crate::ui::sftp_panel::SftpPanel::gui_automation_enabled() {
+                    crate::ui::sftp_panel::SftpPanel::gui_automation_zmodem_local_path()
+                } else {
+                    FileDialog::new()
+                        .set_title(crate::i18n::tr(
+                            ctx,
+                            "Choose file for remote upload (rz)",
+                            "选择要上传到远端（rz）的文件",
+                        ))
+                        .pick_file()
+                };
+                if let Some(path) = picked {
                     self.status_message = format!(
                         "{} {}",
                         crate::i18n::tr(ctx, "ZMODEM upload:", "ZMODEM 上传："),
@@ -5701,8 +5705,16 @@ impl eframe::App for MistTermApp {
                         }
                     }
                 } else {
-                    self.status_message = crate::i18n::tr(ctx, "rz upload cancelled", "rz 上传已取消")
-                        .to_string();
+                    self.status_message = if crate::ui::sftp_panel::SftpPanel::gui_automation_enabled() {
+                        crate::i18n::tr(
+                            ctx,
+                            "GUI automation: ZMODEM local file not found",
+                            "GUI 自动化：未找到 ZMODEM 本机文件",
+                        )
+                        .to_string()
+                    } else {
+                        crate::i18n::tr(ctx, "rz upload cancelled", "rz 上传已取消").to_string()
+                    };
                     if let Some(t) = self.current_terminal_mut() {
                         t.end_rz_handshake_capture();
                         t.clear_rz_control_mode();
