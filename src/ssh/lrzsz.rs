@@ -371,6 +371,16 @@ impl LrzszTransfer {
         parse_zrqinit_packet(data)
     }
 
+    /// 远端 `rz` 在 PTY 上的握手邀请（含 Windows ASCII `**B01…`）。
+    pub fn detect_rz_pty_invitation(&self, data: &[u8]) -> bool {
+        detect_rz_pty_invitation(data)
+    }
+
+    /// Windows `rz -bye` 在 PTY 上发 ASCII `**B01…`（早于本机 Enter 回显）；与远端 `sz` 的 ZRQINIT `**B00` 区分。
+    pub fn detect_windows_rz_wait_invitation(&self, data: &[u8]) -> bool {
+        detect_windows_rz_wait_invitation(data)
+    }
+
     /// 开始接收（被动）：等 PTY 上出现 ZRQINIT 后再建 `zmodem2::Receiver` 并回 ZRINIT。
     pub fn start_receive(&self, channel: Arc<Mutex<Channel>>) -> Result<(), String> {
         if self.is_active.load(Ordering::Relaxed) {
@@ -791,10 +801,45 @@ impl LrzszTransfer {
     }
 }
 
+/// lrzsz / conhost 常把 ZHEX 头落成 ASCII `**B00` / `**B01`，中间无 ZDLE。
+fn ascii_hex_scan_for_type(data: &[u8], want: u8) -> bool {
+    for i in 0..data.len().saturating_sub(5) {
+        if data[i] != b'*' || data.get(i + 1) != Some(&b'*') {
+            continue;
+        }
+        let hb = data.get(i + 2).copied();
+        if hb != Some(b'B') && hb != Some(b'b') {
+            continue;
+        }
+        if let Some(t) = hex_pair(data[i + 3], data[i + 4]) {
+            if t == want {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Windows lrzsz `rz` 等待发送方：PTY 上出现 ASCII `**B01…`（非 ZDLE 编码）。
+fn detect_windows_rz_wait_invitation(data: &[u8]) -> bool {
+    ascii_hex_scan_for_type(data, 0x01)
+}
+
+/// 远端 `rz` 在 PTY 上的 ZHEX 邀请语（含 Windows ASCII `**B01…` 无 ZDLE 形式）。
+pub fn detect_rz_pty_invitation(data: &[u8]) -> bool {
+    parse_zrqinit_packet(data)
+        || ascii_hex_scan_for_type(data, zmodem::ZRQINIT)
+        || detect_windows_rz_wait_invitation(data)
+}
+
 /// 检测 ZRQINIT 包
 fn parse_zrqinit_packet(data: &[u8]) -> bool {
     if hex_scan_for_type(data, zmodem::ZRQINIT) {
         log::info!("Detected ZRQINIT (HEX header)");
+        return true;
+    }
+    if ascii_hex_scan_for_type(data, zmodem::ZRQINIT) {
+        log::info!("Detected ZRQINIT (ASCII ZHEX header)");
         return true;
     }
     if binary_frame_type(data, zmodem::ZRQINIT) {
@@ -878,5 +923,19 @@ mod tests {
             zmodem::ZBIN16,
             zmodem::ZRQINIT,
         ]));
+    }
+
+    #[test]
+    fn test_detect_windows_rz_wait_invitation() {
+        assert!(detect_windows_rz_wait_invitation(b"**B0100000063f694"));
+        assert!(!detect_windows_rz_wait_invitation(b"**\x18B00000000000000\r\n\x11"));
+        assert!(!detect_windows_rz_wait_invitation(b"echo hello"));
+    }
+
+    #[test]
+    fn test_detect_rz_pty_invitation_windows_ascii() {
+        assert!(detect_rz_pty_invitation(b"**\x18B00000000000000\r\n\x11"));
+        assert!(detect_rz_pty_invitation(b"**B0100000063f694"));
+        assert!(!detect_rz_pty_invitation(b"echo hello"));
     }
 }

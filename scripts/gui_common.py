@@ -17,12 +17,58 @@ from gui_screen import client_rect, screenshot
 
 user32 = ctypes.windll.user32
 
+REMOTE_FILE = "gui_e2e_upload.txt"
+LOCAL_TEST_SESSION = "Local Test SSH"
+
+
+def _env(name: str, default: str = "") -> str:
+    val = os.environ.get(name, "").strip()
+    return val if val else default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def ssh_is_localhost() -> bool:
+    return SSH_HOST in ("127.0.0.1", "localhost", "::1")
+
+
+def reload_ssh_test_config() -> None:
+    """从 MISTTERM_TEST_SSH_* 刷新模块级 SSH 配置（供脚本 import 后调用）。"""
+    global SSH_HOST, SSH_USER, SSH_PASS, SSH_PORT, SSH_SFTP_ROOT, LOCAL_TEST_SESSION
+    SSH_HOST = _env("MISTTERM_TEST_SSH_HOST", "127.0.0.1")
+    SSH_PORT = _env_int("MISTTERM_TEST_SSH_PORT", 22)
+    SSH_PASS = _env("MISTTERM_TEST_SSH_PASSWORD", "mistterm123")
+    if _env("MISTTERM_TEST_SSH_USER"):
+        SSH_USER = _env("MISTTERM_TEST_SSH_USER")
+    elif ssh_is_localhost():
+        SSH_USER = "mistterm_test"
+    else:
+        SSH_USER = "root"
+    if _env("MISTTERM_TEST_SSH_SFTP_ROOT"):
+        SSH_SFTP_ROOT = _env("MISTTERM_TEST_SSH_SFTP_ROOT").replace("\\", "/")
+    elif ssh_is_localhost():
+        SSH_SFTP_ROOT = f"C:/Users/{SSH_USER}/mistterm_sftp"
+    else:
+        SSH_SFTP_ROOT = "/tmp/mistterm_sftp"
+    LOCAL_TEST_SESSION = _env("MISTTERM_TEST_SSH_SESSION", LOCAL_TEST_SESSION)
+    if not _env("MISTTERM_TEST_SSH_SESSION"):
+        LOCAL_TEST_SESSION = "Local Test SSH" if ssh_is_localhost() else "Linux Test SSH"
+
+
 SSH_HOST = "127.0.0.1"
 SSH_USER = "mistterm_test"
 SSH_PASS = "mistterm123"
 SSH_PORT = 22
-REMOTE_FILE = "gui_e2e_upload.txt"
-LOCAL_TEST_SESSION = "Local Test SSH"
+SSH_SFTP_ROOT = "C:/Users/mistterm_test/mistterm_sftp"
+reload_ssh_test_config()
 
 
 def scale_for(cl: int, cr: int) -> float:
@@ -98,8 +144,35 @@ def focus_terminal_area(hwnd: int, *, y_ratio: float = 0.58) -> None:
 
 
 def remote_temp_path(name: str) -> str:
-    """Windows 测试账号下的 Temp 路径（正斜杠，供 SFTP/脚本统一使用）。"""
-    return f"C:/Users/{SSH_USER}/AppData/Local/Temp/{name}"
+    if ssh_is_localhost():
+        return f"C:/Users/{SSH_USER}/AppData/Local/Temp/{name}"
+    return f"/tmp/{name}"
+
+
+def remote_zmodem_dir() -> str:
+    return SSH_SFTP_ROOT.replace("\\", "/")
+
+
+def _ssh_connect(c: paramiko.SSHClient, *, timeout: float = 10.0) -> None:
+    c.connect(
+        SSH_HOST,
+        SSH_PORT,
+        SSH_USER,
+        SSH_PASS,
+        timeout=timeout,
+        allow_agent=False,
+        look_for_keys=False,
+    )
+
+
+def remote_cat(path: str) -> tuple[int, str]:
+    """读取远端文本文件内容（Windows type / Linux cat）。"""
+    p = path.replace("\\", "/")
+    if ssh_is_localhost():
+        code, out, err = remote_exec(f'type "{path.replace("/", chr(92))}" 2>&1')
+    else:
+        code, out, err = remote_exec(f"cat {p!r} 2>&1")
+    return code, (out or err or "").strip()
 
 
 def remote_exec(command: str, *, timeout: float = 15.0) -> tuple[int, str, str]:
@@ -107,15 +180,7 @@ def remote_exec(command: str, *, timeout: float = 15.0) -> tuple[int, str, str]:
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        c.connect(
-            SSH_HOST,
-            SSH_PORT,
-            SSH_USER,
-            SSH_PASS,
-            timeout=timeout,
-            allow_agent=False,
-            look_for_keys=False,
-        )
+        _ssh_connect(c, timeout=timeout)
         _stdin, stdout, stderr = c.exec_command(command, timeout=timeout)
         out = stdout.read().decode("utf-8", errors="replace")
         err = stderr.read().decode("utf-8", errors="replace")
@@ -129,10 +194,9 @@ def remote_assert_file(path: str, marker: str, *, what: str) -> None:
     """断言远端文本文件包含 marker；失败时附带 type 输出便于排查。"""
     if remote_text_file_contains(path, marker):
         return
-    win_path = path.replace("/", "\\")
-    code, out, err = remote_exec(f'type "{win_path}" 2>&1')
-    detail = (out or err or "(file missing)").strip()[:240]
-    raise RuntimeError(f"{what}: expected {marker!r} in {path}, got: {detail!r} (type exit {code})")
+    code, detail = remote_cat(path)
+    detail = detail[:240]
+    raise RuntimeError(f"{what}: expected {marker!r} in {path}, got: {detail!r} (exit {code})")
 
 
 def remote_text_file_contains(path: str, marker: str) -> bool:
@@ -140,15 +204,7 @@ def remote_text_file_contains(path: str, marker: str) -> bool:
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        c.connect(
-            SSH_HOST,
-            SSH_PORT,
-            SSH_USER,
-            SSH_PASS,
-            timeout=10,
-            allow_agent=False,
-            look_for_keys=False,
-        )
+        _ssh_connect(c, timeout=10)
         sftp = c.open_sftp()
         try:
             with sftp.open(path.replace("\\", "/"), "r") as f:
@@ -181,18 +237,26 @@ def ssh_preflight() -> None:
         msg = err.strip() or got or f"exit {code}"
         raise RuntimeError(
             f"SSH preflight failed for {SSH_USER}@{SSH_HOST}:{SSH_PORT}: {msg}. "
-            f"Run: .\\scripts\\ensure-windows-test-sshd.ps1"
+            f"Check MISTTERM_TEST_SSH_HOST / MISTTERM_TEST_SSH_PASSWORD."
         )
     print(f"  [SSH] {SSH_USER}@{SSH_HOST} exec echo ok -> {got!r}", flush=True)
 
 
 def remote_paths(filename: str = REMOTE_FILE) -> list[str]:
-    home = f"C:/Users/{SSH_USER}"
+    if ssh_is_localhost():
+        home = f"C:/Users/{SSH_USER}"
+        return [
+            filename,
+            f"{home}/{filename}",
+            f"{home}/mistterm_sftp/{filename}",
+            f"mistterm_sftp/{filename}",
+        ]
+    root = remote_zmodem_dir()
     return [
         filename,
-        f"{home}/{filename}",
-        f"{home}/mistterm_sftp/{filename}",
-        f"mistterm_sftp/{filename}",
+        f"{root}/{filename}",
+        f"/tmp/{filename}",
+        f"/root/{filename}",
     ]
 
 
@@ -200,15 +264,7 @@ def remote_has_marker(marker: str, filename: str = REMOTE_FILE) -> bool:
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        c.connect(
-            SSH_HOST,
-            SSH_PORT,
-            SSH_USER,
-            SSH_PASS,
-            timeout=10,
-            allow_agent=False,
-            look_for_keys=False,
-        )
+        _ssh_connect(c, timeout=10)
         sftp = c.open_sftp()
         for rp in remote_paths(filename):
             try:
@@ -243,7 +299,7 @@ def connect_local_session(
     pid: int,
     name: str = LOCAL_TEST_SESSION,
     *,
-    wait: float = 14.0,
+    wait: float = 10.0,
 ) -> None:
     """侧栏搜索并 Ctrl+Shift+T 连接本地测试会话。"""
     from gui_automation_keys import dismiss_new_session_dialog
