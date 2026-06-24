@@ -5665,9 +5665,6 @@ impl eframe::App for MistTermApp {
         // 检查是否有终端等待 rz 上传文件（ZMODEM：`start_rz_upload`，非 SCP `start_upload`）
         if let Some(terminal) = self.current_terminal() {
             if terminal.pending_rz_upload {
-                if let Some(t) = self.current_terminal_mut() {
-                    t.pending_rz_upload = false;
-                }
                 let picked = if crate::ui::sftp_panel::SftpPanel::gui_automation_enabled() {
                     crate::ui::sftp_panel::SftpPanel::gui_automation_zmodem_local_path()
                 } else {
@@ -5680,6 +5677,9 @@ impl eframe::App for MistTermApp {
                         .pick_file()
                 };
                 if let Some(path) = picked {
+                    if let Some(t) = self.current_terminal_mut() {
+                        t.pending_rz_upload = false;
+                    }
                     self.status_message = format!(
                         "{} {}",
                         crate::i18n::tr(ctx, "ZMODEM upload:", "ZMODEM 上传："),

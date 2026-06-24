@@ -174,6 +174,10 @@ pub struct TerminalView {
     terminal_wants_keyboard: bool,
     terminal_focused: bool,
     rz_control_mode_until: Option<Instant>,
+    /// 用户已在 shell 执行 `rz`/`lrz` 后，lrzsz 可能不发文本提示（如 `rz -bye`）而直接发 ZRQINIT。
+    expect_rz_upload_until: Option<Instant>,
+    /// 用户已在 shell 执行 `sz`/`lsz` 后，等待远端 ZRQINIT 以启动本机接收。
+    expect_sz_download_until: Option<Instant>,
     upload_result_rx: Option<Receiver<Result<String, String>>>,
     command_usage: HashMap<String, u64>,
     /// FUNCTIONAL_SPEC §2.4：超长粘贴分片发送（>10KB 时每批 4096 字节、间隔 5ms）
@@ -205,8 +209,12 @@ pub struct TerminalView {
     pending_send_tail_to_ai: bool,
     /// 点击「发送到 AI」当帧快照的选中文本，避免后续选区变化导致桥接拿到空串。
     pending_send_to_ai_text: Option<String>,
+    /// 最近 PTY 输出尾部，用于跨 chunk 识别 ZMODEM 握手帧。
+    zmodem_pty_detect_tail: Vec<u8>,
     /// 当前行已键入字节（用于 Ctrl+R 命令历史，近似 PTY 行缓冲）
     typed_line_buffer: String,
+    /// 最近写入 PTY 的当前行（自动化可能无 egui Text 事件，仍可从出站字节识别 `rz`）
+    pty_outbound_line_buffer: String,
     /// Enter 提交后待取走的整行命令（供命令历史 / 会话日志）
     submitted_line: Option<String>,
     /// 待写入会话日志的命令（片段执行、Enter 提交等）
@@ -614,6 +622,8 @@ impl TerminalView {
             terminal_wants_keyboard: false,
             terminal_focused: false,
             rz_control_mode_until: None,
+            expect_rz_upload_until: None,
+            expect_sz_download_until: None,
             upload_result_rx: None,
             command_usage: HashMap::new(),
             paste_pending: Vec::new(),
@@ -633,6 +643,8 @@ impl TerminalView {
             pending_send_tail_to_ai: false,
             pending_send_to_ai_text: None,
             typed_line_buffer: String::new(),
+            zmodem_pty_detect_tail: Vec::new(),
+            pty_outbound_line_buffer: String::new(),
             submitted_line: None,
             pending_log_commands: Vec::new(),
             pending_log_output: Vec::new(),
@@ -667,14 +679,50 @@ impl TerminalView {
         }
     }
 
-    fn commit_typed_line_on_enter(&mut self) {
+    fn commit_typed_line_on_enter(&mut self) -> bool {
         let line = self.typed_line_buffer.trim().to_string();
         self.typed_line_buffer.clear();
         if line.is_empty() {
-            return;
+            return false;
+        }
+        if is_rz_shell_command(&line) {
+            self.note_rz_shell_command_submitted();
+        }
+        if is_sz_shell_command(&line) {
+            self.note_sz_shell_command_submitted();
         }
         self.submitted_line = Some(line.clone());
         self.pending_log_commands.push(line);
+        true
+    }
+
+    fn expect_rz_upload_active(&self) -> bool {
+        self.expect_rz_upload_until
+            .map(|u| Instant::now() <= u)
+            .unwrap_or(false)
+            || self.zmodem_upload_after_rz_path.is_some()
+    }
+
+    fn note_rz_shell_command_submitted(&mut self) {
+        self.expect_rz_upload_until = Some(Instant::now() + Duration::from_secs(45));
+    }
+
+    fn expect_sz_download_active(&self) -> bool {
+        self.expect_sz_download_until
+            .map(|u| Instant::now() <= u)
+            .unwrap_or(false)
+    }
+
+    fn note_sz_shell_command_submitted(&mut self) {
+        self.expect_sz_download_until = Some(Instant::now() + Duration::from_secs(30));
+    }
+
+    fn clear_expect_sz_download(&mut self) {
+        self.expect_sz_download_until = None;
+    }
+
+    fn clear_expect_rz_upload(&mut self) {
+        self.expect_rz_upload_until = None;
     }
 
     fn enqueue_log_command(&mut self, command: &str) {
@@ -700,6 +748,51 @@ impl TerminalView {
         if !self.typed_line_buffer.is_empty() {
             self.typed_line_buffer.pop();
         }
+        if !self.pty_outbound_line_buffer.is_empty() {
+            self.pty_outbound_line_buffer.pop();
+        }
+    }
+
+    fn note_pty_outbound_for_rz(&mut self, data: &[u8]) {
+        for &b in data {
+            if b == b'\r' || b == b'\n' {
+                let line = self.pty_outbound_line_buffer.trim().to_string();
+                self.pty_outbound_line_buffer.clear();
+                if is_rz_shell_command(&line) {
+                    self.note_rz_shell_command_submitted();
+                }
+                if is_sz_shell_command(&line) {
+                    self.note_sz_shell_command_submitted();
+                }
+            } else if b == 0x7f || b == 0x08 {
+                self.pty_outbound_line_buffer.pop();
+            } else if (0x20..=0x7e).contains(&b) || b == b'\t' {
+                if self.pty_outbound_line_buffer.len() < 512 {
+                    self.pty_outbound_line_buffer.push(b as char);
+                }
+            }
+        }
+    }
+
+    fn send_pty_input(&mut self, handle: &SshSessionHandle, data: &[u8]) -> Result<(), String> {
+        self.note_pty_outbound_for_rz(data);
+        handle.send_input(data)
+    }
+
+    fn push_zmodem_detect_tail(&mut self, data: &[u8]) {
+        const TAIL_CAP: usize = 512;
+        if data.is_empty() {
+            return;
+        }
+        self.zmodem_pty_detect_tail.extend_from_slice(data);
+        if self.zmodem_pty_detect_tail.len() > TAIL_CAP {
+            let drop = self.zmodem_pty_detect_tail.len() - TAIL_CAP;
+            self.zmodem_pty_detect_tail.drain(..drop);
+        }
+    }
+
+    fn zmodem_detect_window(&self) -> &[u8] {
+        self.zmodem_pty_detect_tail.as_slice()
     }
 
     /// 连接到 SSH 服务器
@@ -1516,7 +1609,7 @@ impl TerminalView {
             self.paste_next_chunk_at = None;
             return;
         }
-        let Some(handle) = self.ssh_handle.as_ref() else {
+        let Some(handle) = self.ssh_handle.clone() else {
             self.paste_pending.clear();
             self.paste_next_chunk_at = None;
             return;
@@ -1532,7 +1625,7 @@ impl TerminalView {
 
         let n = CHUNK.min(self.paste_pending.len());
         let chunk: Vec<u8> = self.paste_pending.drain(..n).collect();
-        if let Err(e) = handle.send_input(&chunk) {
+        if let Err(e) = self.send_pty_input(&handle, &chunk) {
             log::error!("PTY write (paste chunk): {}", e);
         }
 
@@ -1552,15 +1645,32 @@ impl TerminalView {
             for msg in batch {
                 match msg {
                     SshMessage::Output { data, .. } => {
+                        self.push_zmodem_detect_tail(&data);
+                        let detect_buf = self.zmodem_detect_window();
                         // 上传（本机 sz→远端 rz）时，PTY 上的 ZMODEM 帧只能经 SSH 泵线程到达此处；
                         // 必须旁路给 lrzsz，不得在另一线程对 Channel 再 read。
                         let text = String::from_utf8_lossy(&data);
+                        let is_rz_prompt_text = text.contains("rz rz rz")
+                            || text.contains("Awaiting rz")
+                            || text.contains("rz waiting to receive");
+                        let zrqinit_in_data = self.lrzsz.detect_zmodem_download(detect_buf);
+                        let rz_invitation = self.lrzsz.detect_rz_pty_invitation(detect_buf);
+                        let windows_rz_wait = self.lrzsz.detect_windows_rz_wait_invitation(detect_buf);
+                        let expect_rz_upload = self.expect_rz_upload_active();
+                        // `rz -bye` 握手常早于 Enter；Windows lrzsz 发 ASCII `**B01…`。
+                        let is_rz_upload_handshake = is_rz_prompt_text
+                            || windows_rz_wait
+                            || (expect_rz_upload && rz_invitation);
+
                         if !self.lrzsz.is_upload_pty_capture() {
                             if self.lrzsz.is_active() {
                                 if self.lrzsz.feed_receive_data(&data) {
                                     continue;
                                 }
-                            } else if self.lrzsz.detect_zmodem_download(&data) {
+                            } else if zrqinit_in_data
+                                && !is_rz_upload_handshake
+                                && self.expect_sz_download_active()
+                            {
                                 if let Some(ref h) = self.ssh_handle {
                                     match self.lrzsz.start_receive_pump(h.shell_pump_tx()) {
                                         Ok(()) => {
@@ -1578,12 +1688,9 @@ impl TerminalView {
                                 }
                             }
                         }
-                        let is_rz_prompt = text.contains("rz rz rz")
-                            || text.contains("Awaiting rz")
-                            || text.contains("rz waiting to receive");
 
                         // 尽早打开旁路：选文件前 `rz` 发出的 ZRQINIT 若只进 VTE，`start_send` 会永远等下一轮超时。
-                        if is_rz_prompt && self.connected {
+                        if is_rz_upload_handshake && self.connected {
                             if let Some(path) = self.zmodem_upload_after_rz_path.take() {
                                 log::info!(
                                     "rz handshake ready; starting queued ZMODEM upload: {}",
@@ -1612,16 +1719,43 @@ impl TerminalView {
                                 }
                                 continue;
                             }
-                            if !self.pending_rz_upload {
-                            log::info!("Detected rz command; opening upload file picker");
-                            self.pending_rz_upload = true;
-                            self.rz_control_mode_until = Some(Instant::now() + Duration::from_secs(20));
+                            if !self.pending_rz_upload
+                                && !self.lrzsz.is_upload_pty_capture()
+                                && !self.lrzsz.is_active()
+                            {
+                            log::info!(
+                                "Detected rz upload handshake (text={}, windows_rz={}, invitation={})",
+                                is_rz_prompt_text,
+                                windows_rz_wait,
+                                rz_invitation
+                            );
+                            self.rz_control_mode_until =
+                                Some(Instant::now() + Duration::from_secs(30));
                             self.lrzsz.begin_rz_handshake_capture();
-                            // 首段触发文本必须先入队；随后注册 shell 泵同步旁路（避免仅 UI 路径一帧延迟）。
                             self.lrzsz.feed_send_pty_output(&data);
                             if let Some(ref h) = self.ssh_handle {
                                 self.lrzsz.register_shell_pump_upload_feed(h);
                             }
+                            if crate::ui::sftp_panel::SftpPanel::gui_automation_enabled() {
+                                if let Some(path) =
+                                    crate::ui::sftp_panel::SftpPanel::gui_automation_zmodem_local_path()
+                                {
+                                    log::info!(
+                                        "GUI automation: starting ZMODEM upload {}",
+                                        path.display()
+                                    );
+                                    if let Err(e) = self.start_rz_upload(path.as_path()) {
+                                        self.error_message =
+                                            Some(crate::i18n::localize_backend_error(
+                                                self.ui_lang_last,
+                                                &e,
+                                            ));
+                                        self.lrzsz.end_rz_handshake_capture();
+                                    }
+                                    continue;
+                                }
+                            }
+                            self.pending_rz_upload = true;
                             if Self::mirror_rz_text_to_vte_enabled()
                                 && Self::pty_chunk_safe_to_mirror_vte(&data)
                             {
@@ -1773,6 +1907,11 @@ impl TerminalView {
                         )
                     };
                     self.transfer_outgoing = false;
+                    if was_outgoing {
+                        self.clear_expect_rz_upload();
+                    } else {
+                        self.clear_expect_sz_download();
+                    }
                     self.feed_user_success_line(theme, &line);
                     if was_outgoing {
                         // rz 上传后远端提示符常紧跟收尾输出；成功行后立即补空行，避免粘在同一行。
@@ -1785,6 +1924,8 @@ impl TerminalView {
                     }
                     self.transfer_progress = None;
                     self.transfer_outgoing = false;
+                    self.clear_expect_rz_upload();
+                    self.clear_expect_sz_download();
                     self.feed_user_error_line(theme, &format!(
                         "{} {}: {}",
                         crate::i18n::tr(ctx, "Transfer failed", "传输失败"),
@@ -1800,6 +1941,8 @@ impl TerminalView {
                     // 传输完成，恢复终端交互状态
                     self.auto_follow_output = true;
                     self.rz_control_mode_until = None;
+                    self.clear_expect_rz_upload();
+                    self.clear_expect_sz_download();
                     self.transfer_outgoing = false;
                     // 上传期间可能暂缓了 resize_pty，此处与远端对齐当前 UI 网格
                     self.flush_ssh_pty_size_after_transfer();
@@ -2055,8 +2198,13 @@ impl TerminalView {
                     )
                     .clicked() {
                         if let Some(handle) = self.ssh_handle.clone() {
-                            for chunk in self.disconnected_input_buffer.chunks(4096) {
-                                let _ = handle.send_input(chunk);
+                            let chunks: Vec<Vec<u8>> = self
+                                .disconnected_input_buffer
+                                .chunks(4096)
+                                .map(|c| c.to_vec())
+                                .collect();
+                            for chunk in chunks {
+                                let _ = self.send_pty_input(&handle, &chunk);
                             }
                         }
                         self.disconnected_input_buffer.clear();
@@ -2130,13 +2278,13 @@ impl TerminalView {
                 egui::Key::Tab,
             );
             if tab_plain || tab_shift {
-                let _ = handle.send_input(b"\t");
+                let _ = self.send_pty_input(&handle, b"\t");
                 // EventFilter 需上一帧已聚焦才生效；首帧 Tab 仍可能失焦
                 self.pending_focus_terminal = true;
             }
             // Esc / F1–F12 / Insert / 带修饰方向键等（egui 常无 Text 事件）
             if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
-                let _ = handle.send_input(bytes);
+                let _ = self.send_pty_input(&handle, bytes);
             }) {
                 // EventFilter 生效前的兜底（帧初 Tab/Esc/方向键抢焦点）
                 self.pending_focus_terminal = true;
@@ -2174,14 +2322,19 @@ impl TerminalView {
                     egui::Event::CompositionEnd(text) => {
                         if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
                             self.track_typed_text(text);
-                            if let Err(e) = handle.send_input(text.as_bytes()) {
+                            if let Err(e) = self.send_pty_input(&handle, text.as_bytes()) {
                                 log::error!("PTY write (ime): {}", e);
                             }
                         }
                     }
                     egui::Event::Text(text) => {
-                        // Enter 由 Key::Enter 统一发 \r，避免与 Text 里的 \n 重复
+                        // Enter：部分自动化（如 pywinauto）只发 Text(\r) 不发 Key::Enter；commit 幂等避免双发。
                         if text == "\n" || text == "\r" {
+                            if self.commit_typed_line_on_enter() {
+                                if let Err(e) = self.send_pty_input(&handle, b"\r") {
+                                    log::error!("PTY write (enter text): {}", e);
+                                }
+                            }
                             continue;
                         }
                         if i.modifiers.command {
@@ -2210,21 +2363,21 @@ impl TerminalView {
                             // macOS 上 Fn+Delete 等常只来 Text(DEL)，应发 xterm「向前删」而非裸 0x7f（易被当成怪字符/像空格）
                             #[cfg(target_os = "macos")]
                             {
-                                if let Err(e) = handle.send_input(b"\x1b[3~") {
+                                if let Err(e) = self.send_pty_input(&handle, b"\x1b[3~") {
                                     log::error!("PTY write (delete seq): {}", e);
                                 }
                                 continue;
                             }
                             #[cfg(not(target_os = "macos"))]
                             {
-                                if let Err(e) = handle.send_input(&[0x7f]) {
+                                if let Err(e) = self.send_pty_input(&handle, &[0x7f]) {
                                     log::error!("PTY write (del): {}", e);
                                 }
                                 continue;
                             }
                         }
                         self.track_typed_text(text);
-                        if let Err(e) = handle.send_input(text.as_bytes()) {
+                        if let Err(e) = self.send_pty_input(&handle, text.as_bytes()) {
                             log::error!("PTY write (text): {}", e);
                         }
                     }
@@ -2246,20 +2399,21 @@ impl TerminalView {
                         } else {
                         match key {
                             egui::Key::Enter => {
-                                self.commit_typed_line_on_enter();
-                                if let Err(e) = handle.send_input(b"\r") {
-                                    log::error!("PTY write (enter): {}", e);
+                                if self.commit_typed_line_on_enter() {
+                                    if let Err(e) = self.send_pty_input(&handle, b"\r") {
+                                        log::error!("PTY write (enter): {}", e);
+                                    }
                                 }
                             }
                             egui::Key::Backspace => {
                                 self.track_backspace();
-                                if let Err(e) = handle.send_input(&[0x7f]) {
+                                if let Err(e) = self.send_pty_input(&handle, &[0x7f]) {
                                     log::error!("PTY write (bs): {}", e);
                                 }
                             }
                             // xterm / xterm-256color：Forward Delete 为 CSI 3 ~
                             egui::Key::Delete => {
-                                if let Err(e) = handle.send_input(b"\x1b[3~") {
+                                if let Err(e) = self.send_pty_input(&handle, b"\x1b[3~") {
                                     log::error!("PTY write (delete): {}", e);
                                 }
                             }
@@ -2279,7 +2433,7 @@ impl TerminalView {
             for b in ctrl_to_send {
                 if b == 0x03 && self.lrzsz.is_active() {
                     let _ = self.cancel_zmodem_transfer();
-                } else if let Err(e) = handle.send_input(&[b]) {
+                } else if let Err(e) = self.send_pty_input(&handle, &[b]) {
                     log::error!("PTY write (ctrl): {}", e);
                 }
             }
@@ -2300,13 +2454,21 @@ impl TerminalView {
         for line in &lines {
             self.enqueue_log_command(line);
         }
-        let Some(handle) = self.ssh_handle.as_ref() else {
+        for line in &lines {
+            if is_rz_shell_command(line) {
+                self.note_rz_shell_command_submitted();
+            }
+            if is_sz_shell_command(line) {
+                self.note_sz_shell_command_submitted();
+            }
+        }
+        let Some(handle) = self.ssh_handle.clone() else {
             return;
         };
         for line in lines {
             let mut payload = line.to_string();
             payload.push('\r');
-            if let Err(e) = handle.send_input(payload.as_bytes()) {
+            if let Err(e) = self.send_pty_input(&handle, payload.as_bytes()) {
                 log::error!("PTY write (command): {}", e);
             }
         }
@@ -2322,12 +2484,12 @@ impl TerminalView {
             }
             return;
         }
-        let Some(handle) = self.ssh_handle.as_ref() else {
+        let Some(handle) = self.ssh_handle.clone() else {
             return;
         };
         const LONG_PASTE: usize = 10 * 1024;
         if normalized.len() <= LONG_PASTE {
-            if let Err(e) = handle.send_input(normalized.as_bytes()) {
+            if let Err(e) = self.send_pty_input(&handle, normalized.as_bytes()) {
                 log::error!("PTY write (paste): {}", e);
             }
             return;
@@ -2499,6 +2661,7 @@ impl TerminalView {
         self.pending_rz_upload = false;
         self.end_rz_handshake_capture();
         self.clear_rz_control_mode();
+        self.clear_expect_rz_upload();
         self.transfer_progress = None;
         self.transfer_outgoing = false;
         self.auto_follow_output = true;
@@ -2533,6 +2696,7 @@ impl TerminalView {
         self.pending_rz_upload = false;
         self.end_rz_handshake_capture();
         self.clear_rz_control_mode();
+        self.clear_expect_rz_upload();
         self.transfer_progress = None;
         self.transfer_outgoing = false;
         self.auto_follow_output = true;
@@ -3067,13 +3231,13 @@ impl TerminalView {
             return Err(Self::ERR_FRAGMENT_NOT_CONNECTED.to_string());
         }
         let loc = self.locale_last();
-        let Some(handle) = self.ssh_handle.as_ref() else {
+        let Some(handle) = self.ssh_handle.clone() else {
             return Err(loc
                 .tr("SSH session handle unavailable", "连接句柄不可用")
                 .to_string());
         };
         let input = format!("{}\r", command);
-        handle.send_input(input.as_bytes()).map_err(|e| {
+        self.send_pty_input(&handle, input.as_bytes()).map_err(|e| {
             format!(
                 "{}: {}",
                 loc.tr("Send failed", "发送失败"),
@@ -3101,9 +3265,10 @@ impl TerminalView {
     pub fn queue_zmodem_upload_after_rz(&mut self, path: PathBuf) {
         self.zmodem_upload_after_rz_path = Some(path);
         self.pending_rz_upload = false;
+        self.note_rz_shell_command_submitted();
         if self.connected {
-            if let Some(ref h) = self.ssh_handle {
-                let _ = h.send_input(b"\nrz -y\r");
+            if let Some(h) = self.ssh_handle.clone() {
+                let _ = self.send_pty_input(&h, b"\nrz -y\r");
             }
         }
     }
@@ -3121,6 +3286,27 @@ impl TerminalView {
         self.visual_layout_cache = None;
         self.terminal.reveal_search_hit(hit)
     }
+}
+
+fn first_shell_word(line: &str) -> &str {
+    line.trim().split_whitespace().next().unwrap_or("")
+}
+
+fn shell_word_basename(word: &str) -> &str {
+    word.rsplit(['\\', '/']).next().unwrap_or(word)
+}
+
+/// 判断用户在 shell 提交的是否为远端接收命令 `rz`/`lrz`（本机应对应 ZMODEM 发送）。
+fn is_rz_shell_command(line: &str) -> bool {
+    let base = shell_word_basename(first_shell_word(line));
+    let lower = base.to_ascii_lowercase();
+    matches!(lower.as_str(), "rz" | "lrz" | "rz.exe" | "lrz.exe")
+}
+
+fn is_sz_shell_command(line: &str) -> bool {
+    let base = shell_word_basename(first_shell_word(line));
+    let lower = base.to_ascii_lowercase();
+    matches!(lower.as_str(), "sz" | "lsz" | "sz.exe" | "lsz.exe")
 }
 
 /// 人类可读的文件大小格式
@@ -3143,5 +3329,22 @@ fn human_readable_size(size: u64) -> String {
 impl Default for TerminalView {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod rz_shell_command_tests {
+    use super::is_rz_shell_command;
+
+    #[test]
+    fn detects_rz_variants() {
+        assert!(is_rz_shell_command("rz -bye"));
+        assert!(is_rz_shell_command("  lrz -y "));
+        assert!(is_rz_shell_command("C:\\ProgramData\\mistterm\\lrzsz\\rz.exe -bye"));
+        assert!(!is_rz_shell_command("sz -bye foo.txt"));
+        assert!(!is_rz_shell_command("where rz"));
+        assert!(!is_rz_shell_command("echo rz"));
+        assert!(is_sz_shell_command("sz -bye foo.txt"));
+        assert!(!is_sz_shell_command("rz -bye"));
     }
 }
