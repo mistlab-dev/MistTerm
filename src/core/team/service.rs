@@ -1004,6 +1004,7 @@ pub fn create_team_fragment_blocking(
     title: &str,
     command: &str,
     category: Option<&str>,
+    status: Option<&str>,
 ) -> Result<TeamFragment, String> {
     let team_id = service
         .state
@@ -1020,6 +1021,7 @@ pub fn create_team_fragment_blocking(
         category: category.map(|s| s.to_string()),
         tags: Some("[]".to_string()),
         variables: Some("{}".to_string()),
+        status: status.map(|s| s.to_string()),
     };
     let frag = with_auth_retry(&api_base, &service.tokens, |access, client| {
         client.create_fragment(access, &team_id, &req)
@@ -1040,6 +1042,7 @@ pub fn update_team_fragment_blocking(
     fragment: &TeamFragment,
     title: &str,
     command: &str,
+    status: Option<&str>,
 ) -> Result<TeamFragment, TeamApiError> {
     let api_base = service.api_base();
     let client = TeamClient::new(&api_base).map_err(|e| TeamApiError {
@@ -1053,7 +1056,7 @@ pub fn update_team_fragment_blocking(
         category: fragment.category.clone(),
         tags: fragment.tags.clone(),
         variables: fragment.variables.clone(),
-        status: fragment.status.clone(),
+        status: status.map(|s| s.to_string()).unwrap_or(fragment.status.clone()),
         revision: fragment.revision,
     };
     let fid = fragment.id.clone();

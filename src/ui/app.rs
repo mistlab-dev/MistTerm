@@ -505,6 +505,7 @@ pub struct MistTermApp {
     pending_fragment_vars: Vec<(String, String)>,
     show_fragment_vars_dialog: bool,
     fragment_filter_category: String,
+    fragment_filter_status: String,
     /// 连接就绪后要插入的片段（标签索引、片段 id、命令）
     pending_fragment_insert: Option<(usize, Option<String>, String)>,
 
@@ -912,6 +913,7 @@ impl MistTermApp {
             pending_fragment_vars: Vec::new(),
             show_fragment_vars_dialog: false,
             fragment_filter_category: "all".to_string(),
+            fragment_filter_status: "all".to_string(),
             pending_fragment_insert: None,
             new_session_name: String::new(),
             new_session_host: String::new(),
@@ -4348,6 +4350,32 @@ impl MistTermApp {
                 SortBy::LastUsed => SortBy::Name,
                 SortBy::Name => SortBy::UsageCount,
             };
+        }
+
+        // Status filter chip row (Team scope only)
+        if self.fragment_list_scope == FragmentListScope::Team {
+            let ctx_owned2 = ui.ctx().clone();
+            let status_chips: [(&str, &str); 4] = [
+                ("all", crate::i18n::tr(&ctx_owned2, "All", "全部")),
+                ("published", crate::i18n::tr(&ctx_owned2, "Published", "已发布")),
+                ("draft", crate::i18n::tr(&ctx_owned2, "Draft", "草稿")),
+                ("archived", crate::i18n::tr(&ctx_owned2, "Archived", "已归档")),
+            ];
+            let status_row = crate::ui::chrome::filter_chip_row(
+                ui,
+                theme,
+                &status_chips,
+                self.fragment_filter_status.as_str(),
+            );
+            if let Some(picked) = status_row.picked {
+                self.fragment_filter_status = picked;
+            }
+        }
+                SortBy::UsageCount => SortBy::SuccessRate,
+                SortBy::SuccessRate => SortBy::LastUsed,
+                SortBy::LastUsed => SortBy::Name,
+                SortBy::Name => SortBy::UsageCount,
+            };
             self.fragment_manager.sort(self.fragment_sort_by);
         }
         ui.add_space(theme.spacing_dock_control_gap());
@@ -4490,6 +4518,15 @@ impl MistTermApp {
             }
         }
 
+        // Status filter (Team scope only)
+        match self.fragment_filter_status.as_str() {
+            "published" | "draft" | "archived" => {
+                let s = self.fragment_filter_status.clone();
+                work.retain(|f| f.source_status == s);
+            }
+            _ => {}
+        }
+
         let scroll_h = ui.available_height().max(80.0);
         let prev_extreme = ui.visuals().extreme_bg_color;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
@@ -4522,6 +4559,11 @@ impl MistTermApp {
                                     frag.category.clone()
                                 }
                             });
+                            let status_badge = if is_team_scope && frag.source_status != "published" {
+                                Some(frag.source_status.as_str())
+                            } else {
+                                None
+                            };
                             let row_resp = crate::ui::chrome::fragment_list_row(
                                 ui,
                                 theme,
@@ -4530,6 +4572,7 @@ impl MistTermApp {
                                     command: &frag.command,
                                     stats_line: &stats_line,
                                     tag_label: &tag_label,
+                                    status_label: status_badge,
                                 },
                             );
                             let is_team_scope =

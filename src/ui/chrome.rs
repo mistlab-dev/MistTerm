@@ -2175,6 +2175,7 @@ pub struct FragmentListRow<'a> {
     pub command: &'a str,
     pub stats_line: &'a str,
     pub tag_label: &'a str,
+    pub status_label: Option<&'a str>,
 }
 
 /// 命令片段列表行交互结果
@@ -2254,10 +2255,21 @@ pub fn fragment_list_row(ui: &mut Ui, theme: &Theme, row: FragmentListRow<'_>) -
                             .truncate(true)
                             .sense(egui::Sense::click()),
                         )
-                        .on_hover_text(row.command)
-                    },
-                )
-                .inner;
+                        .on_hover_text(row.command);
+                    if let Some(status) = row.status_label {
+                        let badge_color = match status {
+                            "draft" => theme.warning_color(),
+                            "archived" => theme.text_tertiary(),
+                            _ => theme.accent_color(),
+                        };
+                        ui.label(
+                            RichText::new(format!("[{}]", status))
+                                .size(tag_px * 0.85)
+                                .color(badge_color),
+                        );
+                    }
+                    title
+                },
             if tag_col_w > 0.0 {
                 ui.allocate_ui_with_layout(
                     egui::vec2(tag_col_w, title_line_h),

@@ -8,10 +8,11 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 
 use super::models::{
-    ApiErrorBody, CreateTeamFragmentRequest, FragmentAnalyticsResponse,
-    FragmentMemberAnalyticsResponse, FragmentSyncRequest, FragmentSyncResponse,
-    RefreshResponse, RegisterResponse, TeamFragment, TeamInfo, TeamsListResponse, TokenResponse,
-    TeamUser, UpdateTeamFragmentRequest,
+    ApiErrorBody, CreateShareRequest, CreateShareResponse, CreateTeamFragmentRequest,
+    FragmentAnalyticsResponse, FragmentMemberAnalyticsResponse, FragmentSyncRequest,
+    FragmentSyncResponse, FragmentVersion, FragmentVersionsResponse, ListSharesResponse,
+    RefreshResponse, RegisterResponse, TeamFragment, TeamInfo, TeamSettings,
+    TeamsListResponse, TokenResponse, TeamUser, UpdateTeamFragmentRequest,
 };
 use super::oauth::{percent_encode_query, OAuthProvider};
 use super::settings::normalize_api_base;
@@ -452,5 +453,116 @@ impl TeamClient {
             message,
             conflict_fragment: parsed.and_then(|b| b.server_version),
         }
+    }
+
+    // ── Fragment lock/unlock ──
+
+    pub fn lock_fragment(
+        &self,
+        access_token: &str,
+        fragment_id: &str,
+    ) -> Result<(), TeamApiError> {
+        self.post_json_empty(
+            &format!("/v1/fragments/{fragment_id}/lock"),
+            Some(access_token),
+            &serde_json::json!({}),
+        )
+    }
+
+    pub fn unlock_fragment(
+        &self,
+        access_token: &str,
+        fragment_id: &str,
+    ) -> Result<(), TeamApiError> {
+        self.post_json_empty(
+            &format!("/v1/fragments/{fragment_id}/unlock"),
+            Some(access_token),
+            &serde_json::json!({}),
+        )
+    }
+
+    // ── Fragment version history ──
+
+    pub fn get_fragment_versions(
+        &self,
+        access_token: &str,
+        fragment_id: &str,
+        limit: u32,
+        offset: u32,
+    ) -> Result<FragmentVersionsResponse, TeamApiError> {
+        let path = format!(
+            "/v1/fragments/{fragment_id}/versions?limit={limit}&offset={offset}"
+        );
+        self.get_json(&path, Some(access_token))
+    }
+
+    pub fn get_fragment_version(
+        &self,
+        access_token: &str,
+        fragment_id: &str,
+        revision: i64,
+    ) -> Result<FragmentVersion, TeamApiError> {
+        let path = format!("/v1/fragments/{fragment_id}/versions/{revision}");
+        self.get_json(&path, Some(access_token))
+    }
+
+    // ── External shares ──
+
+    pub fn create_share(
+        &self,
+        access_token: &str,
+        fragment_id: &str,
+        req: &CreateShareRequest,
+    ) -> Result<CreateShareResponse, TeamApiError> {
+        self.post_json(
+            &format!("/v1/fragments/{fragment_id}/shares"),
+            Some(access_token),
+            req,
+        )
+    }
+
+    pub fn list_shares(
+        &self,
+        access_token: &str,
+        fragment_id: &str,
+    ) -> Result<ListSharesResponse, TeamApiError> {
+        self.get_json(
+            &format!("/v1/fragments/{fragment_id}/shares"),
+            Some(access_token),
+        )
+    }
+
+    pub fn delete_share(
+        &self,
+        access_token: &str,
+        share_id: &str,
+    ) -> Result<(), TeamApiError> {
+        self.delete(&format!("/v1/shares/{share_id}"), Some(access_token))
+    }
+
+    // ── Team settings ──
+
+    pub fn get_team_settings(
+        &self,
+        access_token: &str,
+        team_id: &str,
+    ) -> Result<TeamSettings, TeamApiError> {
+        self.get_json(
+            &format!("/v1/teams/{team_id}/settings"),
+            Some(access_token),
+        )
+    }
+
+    pub fn update_team_settings(
+        &self,
+        access_token: &str,
+        team_id: &str,
+        settings: &TeamSettings,
+    ) -> Result<TeamSettings, TeamApiError> {
+        self.put_json(
+            &format!("/v1/teams/{team_id}/settings"),
+            access_token,
+            settings,
+        )
     }
 }

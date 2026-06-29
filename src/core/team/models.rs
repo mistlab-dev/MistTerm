@@ -222,6 +222,10 @@ pub struct TeamFragment {
     #[serde(default)]
     pub revision: u32,
     #[serde(default)]
+    pub locked_by: String,
+    #[serde(default)]
+    pub locked_at: Option<String>,
+    #[serde(default)]
     pub created_by: Option<String>,
     #[serde(default)]
     pub updated_by: Option<String>,
@@ -310,6 +314,8 @@ pub struct CreateTeamFragmentRequest {
     pub tags: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub variables: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -382,6 +388,89 @@ impl TeamFragment {
         f.success_count = self.success_count;
         f.total_time_ms = self.total_time_ms;
         f.last_used = self.last_used_at;
+        f.source_status = self.status.clone();
         f
     }
+}
+
+// ── Fragment version history ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FragmentVersion {
+    pub id: String,
+    #[serde(default)]
+    pub fragment_id: String,
+    pub revision: i64,
+    pub title: String,
+    pub command: String,
+    #[serde(default)]
+    pub category: String,
+    #[serde(default)]
+    pub tags: String,
+    #[serde(default)]
+    pub variables: String,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub updated_by: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FragmentVersionsResponse {
+    #[serde(default)]
+    pub versions: Vec<FragmentVersion>,
+}
+
+// ── External share ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalShare {
+    pub id: String,
+    #[serde(default)]
+    pub fragment_id: String,
+    #[serde(default)]
+    pub team_id: String,
+    pub share_token: String,
+    pub title: String,
+    pub command: String,
+    #[serde(default)]
+    pub expires_at: Option<String>,
+    #[serde(default)]
+    pub view_count: i64,
+    #[serde(default)]
+    pub created_by: String,
+    #[serde(default)]
+    pub created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateShareRequest {
+    #[serde(default)]
+    pub expires_in_hours: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateShareResponse {
+    pub share: ExternalShare,
+    pub share_url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListSharesResponse {
+    #[serde(default)]
+    pub shares: Vec<ExternalShare>,
+}
+
+// ── Team settings ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TeamSettings {
+    #[serde(default)]
+    pub audit_retention_days: i64,
+    #[serde(default)]
+    pub allow_guest_access: bool,
+    #[serde(default)]
+    pub require_mfa: bool,
 }
