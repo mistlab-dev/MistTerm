@@ -63,6 +63,9 @@ pub struct FragmentStats {
     pub total_time_ms: u64,
     /// 最后使用时间（Unix 时间戳）
     pub last_used: Option<i64>,
+    /// 团队片段状态（published/draft/archived），个人片段始终为空
+    #[serde(default)]
+    pub source_status: String,
 }
 
 /// 兼容旧代码路径的类型别名（原「命令片段」模型）。

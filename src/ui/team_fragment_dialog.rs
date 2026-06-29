@@ -20,6 +20,7 @@ pub struct TeamFragmentEditorState {
     pub title: String,
     pub command: String,
     pub category: String,
+    pub status: String,
     pub error: String,
 }
 
@@ -37,6 +38,7 @@ pub fn open_create_editor(editor: &mut TeamFragmentEditorState) {
     editor.title.clear();
     editor.command.clear();
     editor.category.clear();
+    editor.status = "published".to_string();
     editor.error.clear();
 }
 
@@ -50,6 +52,7 @@ pub fn open_edit_editor(editor: &mut TeamFragmentEditorState, frag: &TeamFragmen
     editor.title = frag.title.clone();
     editor.command = frag.command.clone();
     editor.category = frag.category.clone();
+    editor.status = frag.status.clone();
     editor.error.clear();
 }
 
@@ -118,6 +121,20 @@ pub fn show_team_fragment_editor_modal(
                         false,
                     );
 
+                    chrome::form_field_label(ui, theme, i18n::tr(ctx, "Status", "状态"));
+                    egui::ComboBox::from_id_salt("team_frag_status")
+                        .width(form_w)
+                        .selected_text(i18n::tr(ctx, status_display(&editor.status), status_display(&editor.status)))
+                        .show_ui(ui, |ui| {
+                            for (val, label) in STATUS_OPTIONS {
+                                let text = i18n::tr(ctx, label, label);
+                                if ui.selectable_label(editor.status == val, text).clicked() {
+                                    editor.status = val.to_string();
+                                }
+                            }
+                        });
+                    ui.add_space(4.0);
+
                     if !editor.error.is_empty() {
                         ui.label(
                             chrome::rich_caption(theme, &editor.error).color(theme.red_color()),
@@ -162,11 +179,17 @@ pub fn show_team_fragment_editor_modal(
                                 Some(cat)
                             };
                             if let Some(ref existing) = editor.editing {
+                                let status_opt = if editor.status.is_empty() {
+                                    None
+                                } else {
+                                    Some(editor.status.as_str())
+                                };
                                 match update_team_fragment_blocking(
                                     service,
                                     existing,
                                     &title,
                                     &command,
+                                    status_opt,
                                 ) {
                                     Ok(updated) => {
                                         audit.record(
@@ -201,11 +224,17 @@ pub fn show_team_fragment_editor_modal(
                                     }
                                 }
                             } else {
+                                let status_opt = if editor.status.is_empty() {
+                                    None
+                                } else {
+                                    Some(editor.status.as_str())
+                                };
                                 match create_team_fragment_blocking(
                                     service,
                                     &title,
                                     &command,
                                     cat_opt,
+                                    status_opt,
                                 ) {
                                     Ok(created) => {
                                         audit.record(
@@ -346,7 +375,7 @@ fn apply_conflict_resolution(
     audit: &AuditLogger,
 ) -> Result<(), String> {
     let updated =
-        update_team_fragment_blocking(service, base, &base.title, &base.command)
+        update_team_fragment_blocking(service, base, &base.title, &base.command, None)
             .map_err(|e| e.message)?;
     audit.record(
         AuditEvent::new(
@@ -358,4 +387,18 @@ fn apply_conflict_resolution(
         .with_detail(serde_json::json!({ "conflict_resolved": true })),
     );
     Ok(())
+}
+
+const STATUS_OPTIONS: &[(&str, &str)] = &[
+    ("published", "Published"),
+    ("draft", "Draft"),
+    ("archived", "Archived"),
+];
+
+fn status_display(status: &str) -> &'static str {
+    match status {
+        "draft" => "Draft",
+        "archived" => "Archived",
+        _ => "Published",
+    }
 }
