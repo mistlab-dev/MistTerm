@@ -251,8 +251,9 @@ impl TerminalView {
     }
 
     /// 与 TextEdit `vertical_align(BOTTOM)` 一致：文本块顶边（勿用 `行数 * cell_h` 估算）。
+    /// macOS 上字体度量可能使 galley 略大于 response.rect，此时夹到 0 避免第一行被切。
     fn terminal_text_top(response: &egui::Response, galley: &egui::Galley) -> f32 {
-        response.rect.max.y - galley.size().y
+        (response.rect.max.y - galley.size().y).max(0.0)
     }
 
     fn measure_terminal_line_height(
@@ -1115,6 +1116,9 @@ impl TerminalView {
                                     egui::Layout::bottom_up(egui::Align::LEFT),
                                     |ui| {
                                         ui.set_min_width(vw);
+                                        // macOS 字体度量可能使 galley 略大于可用空间，
+                                        // 加一行高度避免 TextEdit 裁剪第一行顶部
+                                        ui.set_min_height(scroll_h + cell_h);
                                         ui.set_min_height(scroll_h);
                                         self.sync_pty_size_with_ui(
                                             ui,
