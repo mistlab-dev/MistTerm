@@ -2269,7 +2269,8 @@ pub fn fragment_list_row(ui: &mut Ui, theme: &Theme, row: FragmentListRow<'_>) -
                         );
                     }
                     title
-                },
+                    },
+                );
             if tag_col_w > 0.0 {
                 ui.allocate_ui_with_layout(
                     egui::vec2(tag_col_w, title_line_h),
