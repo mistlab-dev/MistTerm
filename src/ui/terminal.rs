@@ -1074,8 +1074,15 @@ impl TerminalView {
                     ui.spacing_mut().scroll_bar_width = theme.terminal_scroll_bar_width();
                     ui.visuals_mut().widgets.inactive.bg_fill =
                         theme.terminal_scroll_bar_track_fill();
-                    // 内容仅为当前视口行数；历史在 VTE scrollback，须用 scroll_display 而非 ScrollArea 滑条
-                    let scroll_output = egui::ScrollArea::vertical()
+                    // ScrollArea 在内容不足 max_height 时会收缩，导致提示符浮在中间；外层固定 scroll_h 视口
+                    let scroll_output = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(col_w.max(1.0), scroll_h),
+                            egui::Layout::top_down(egui::Align::LEFT),
+                            |ui| {
+                                ui.set_min_height(scroll_h);
+                                ui.set_max_height(scroll_h);
+                                egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .enable_scrolling(false)
                         .drag_to_scroll(false)
@@ -1109,29 +1116,31 @@ impl TerminalView {
                             let prev_sel_fg = ui.visuals().selection.stroke.color;
                             ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
                             ui.visuals_mut().selection.stroke.color = egui::Color32::TRANSPARENT;
-                            // ScrollArea 默认自上而下排布，短会话时会把提示符顶在视口上方；用 bottom_up 占满视口高
+                            // TextEdit 默认 TOP 对齐；须 BOTTOM + 固定视口高，提示符才能贴底
+                            self.sync_pty_size_with_ui(
+                                ui,
+                                egui::vec2(vw, scroll_h.max(1.0)),
+                                theme,
+                            );
+                            let rows_usize = self.rows.max(1) as usize;
+                            // 勿用 ui.add_sized：其内部布局是 centered_and_justified（居中），
+                            // 会把比视口宽的行居中，导致提示符左侧被裁。用 LEFT 布局容器固定视口高。
                             let response = ui
                                 .allocate_ui_with_layout(
                                     egui::vec2(vw, scroll_h),
-                                    egui::Layout::bottom_up(egui::Align::LEFT),
+                                    egui::Layout::top_down(egui::Align::LEFT),
                                     |ui| {
                                         ui.set_min_width(vw);
-                                        // macOS 字体度量可能使 galley 略大于可用空间，
-                                        // 加一行高度避免 TextEdit 裁剪第一行顶部
-                                        ui.set_min_height(scroll_h + cell_h);
                                         ui.set_min_height(scroll_h);
-                                        self.sync_pty_size_with_ui(
-                                            ui,
-                                            egui::vec2(vw, scroll_h.max(1.0)),
-                                            theme,
-                                        );
                                         ui.add(
                                             egui::TextEdit::multiline(&mut display_view)
                                                 .id_source("terminal_text_area")
                                                 .margin(egui::vec2(0.0, 0.0))
                                                 .horizontal_align(egui::Align::LEFT)
+                                                .vertical_align(egui::Align::BOTTOM)
                                                 .font(egui::TextStyle::Monospace)
                                                 .desired_width(edit_w)
+                                                .desired_rows(rows_usize)
                                                 .code_editor()
                                                 .interactive(false)
                                                 .frame(false)
@@ -1466,6 +1475,8 @@ impl TerminalView {
                                 }
                             });
                         });
+                            })
+                        .inner;
 
                     ui.spacing_mut().scroll_bar_width = prev_scroll_w;
                     ui.visuals_mut().widgets.inactive.bg_fill = prev_inactive_fill;
@@ -1584,10 +1595,7 @@ impl TerminalView {
         });
 
         let cols = (usable_width / cell_w).floor().clamp(20.0, 512.0) as u32;
-        // 2px 余量即可；少算整行会在 bottom_up 布局下顶留一整行空白
-        let rows = ((usable_height - 2.0) / cell_h)
-            .floor()
-            .clamp(5.0, 256.0) as u32;
+        let rows = (usable_height / cell_h).floor().clamp(5.0, 256.0) as u32;
 
         if cols != self.cols || rows != self.rows {
             self.resize(cols, rows);

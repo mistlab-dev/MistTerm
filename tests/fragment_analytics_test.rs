@@ -15,6 +15,7 @@ fn make_fragment_stats(id: &str, command: &str, last_used: Option<i64>) -> Fragm
         success_count: 1,
         total_time_ms: 100,
         last_used,
+        source_status: String::new(),
     }
 }
 

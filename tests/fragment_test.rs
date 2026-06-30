@@ -16,6 +16,7 @@ fn make_fragment_stats(id: &str, title: &str, command: &str, category: &str) -> 
         success_count: 1,
         total_time_ms: 100,
         last_used: None,
+        source_status: String::new(),
     }
 }
 
