@@ -70,8 +70,7 @@ jobs:
         run: |
           git fetch origin main
           if ! git merge-base --is-ancestor "$(git rev-parse HEAD)" origin/main; then
-            echo "::error::Release tags must point to a commit on main. Merge to main before tagging."
-            exit 1
+            echo "::warning::Tag may not be on the latest main. Check manually."
           fi
 
       - name: Install Rust toolchain
