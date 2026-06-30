@@ -4623,7 +4623,6 @@ impl MistTermApp {
                         }
                     });
         ui.visuals_mut().extreme_bg_color = prev_extreme;
-    }
 
     /// 从右侧片段列表点击：支持片段库定义的变量、命令里的 `<占位符>`，以及会话字段替换。
     fn begin_fragment_insert(&mut self, egui_ctx: &egui::Context, fragment: &FragmentStats) {
@@ -5426,7 +5425,6 @@ impl MistTermApp {
             "已从凭证填入新建会话（请检查后连接）",
         )
         .to_string();
-    }
 }
 
 impl eframe::App for MistTermApp {
