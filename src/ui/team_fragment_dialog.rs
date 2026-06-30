@@ -122,13 +122,13 @@ pub fn show_team_fragment_editor_modal(
                     );
 
                     chrome::form_field_label(ui, theme, i18n::tr(ctx, "Status", "状态"));
-                    egui::ComboBox::from_id_salt("team_frag_status")
+                    egui::ComboBox::from_id_source("team_frag_status")
                         .width(form_w)
                         .selected_text(i18n::tr(ctx, status_display(&editor.status), status_display(&editor.status)))
                         .show_ui(ui, |ui| {
                             for (val, label) in STATUS_OPTIONS {
                                 let text = i18n::tr(ctx, label, label);
-                                if ui.selectable_label(editor.status == val, text).clicked() {
+                                if ui.selectable_label(editor.status.as_str() == *val, text).clicked() {
                                     editor.status = val.to_string();
                                 }
                             }
