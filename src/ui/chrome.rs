@@ -2246,7 +2246,7 @@ pub fn fragment_list_row(ui: &mut Ui, theme: &Theme, row: FragmentListRow<'_>) -
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
                         ui.set_max_width(title_col_w);
-                        ui.add(
+                        let title_resp = ui.add(
                             egui::Label::new(
                                 RichText::new(row.title)
                                     .size(title_px)
@@ -2256,21 +2256,22 @@ pub fn fragment_list_row(ui: &mut Ui, theme: &Theme, row: FragmentListRow<'_>) -
                             .sense(egui::Sense::click()),
                         )
                         .on_hover_text(row.command);
-                    if let Some(status) = row.status_label {
-                        let badge_color = match status {
-                            "draft" => theme.warning_color(),
-                            "archived" => theme.text_tertiary(),
-                            _ => theme.accent_color(),
-                        };
-                        ui.label(
-                            RichText::new(format!("[{}]", status))
-                                .size(tag_px * 0.85)
-                                .color(badge_color),
-                        );
-                    }
-                    title
+                        if let Some(status) = row.status_label {
+                            let badge_color = match status {
+                                "draft" => theme.accent_dim_color(),
+                                "archived" => theme.text_tertiary(),
+                                _ => theme.accent_color(),
+                            };
+                            ui.label(
+                                RichText::new(format!("[{}]", status))
+                                    .size(tag_px * 0.85)
+                                    .color(badge_color),
+                            );
+                        }
+                        title_resp
                     },
-                );
+                )
+                .inner;
             if tag_col_w > 0.0 {
                 ui.allocate_ui_with_layout(
                     egui::vec2(tag_col_w, title_line_h),

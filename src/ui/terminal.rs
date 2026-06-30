@@ -3338,7 +3338,7 @@ impl Default for TerminalView {
 
 #[cfg(test)]
 mod rz_shell_command_tests {
-    use super::is_rz_shell_command;
+    use super::{is_rz_shell_command, is_sz_shell_command};
 
     #[test]
     fn detects_rz_variants() {
