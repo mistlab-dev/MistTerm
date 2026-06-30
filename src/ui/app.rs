@@ -50,6 +50,11 @@ use crate::ui::team_fragment_dialog::{
     open_create_editor, open_edit_editor, show_team_fragment_conflict_modal,
     show_team_fragment_editor_modal, TeamFragmentConflictState, TeamFragmentEditorState,
 };
+use crate::ui::team_fragment_extras_dialog::{
+    open_shares, open_team_settings, open_versions, show_fragment_shares_modal,
+    show_fragment_versions_modal, show_team_settings_modal, FragmentSharesState,
+    FragmentVersionsState, TeamSettingsState,
+};
 use crate::ui::team_ui::TeamLoginForm;
 use crate::ui::layout_util;
 use crate::ui::tab_pane::{TabLayout, TerminalPane, TerminalTab};
@@ -484,6 +489,9 @@ pub struct MistTermApp {
     team_login_form: TeamLoginForm,
     team_fragment_editor: TeamFragmentEditorState,
     team_fragment_conflict: Option<TeamFragmentConflictState>,
+    team_fragment_versions: FragmentVersionsState,
+    team_fragment_shares: FragmentSharesState,
+    team_settings_dialog: TeamSettingsState,
     team_fragment_selected_id: Option<String>,
     fragment_list_scope: FragmentListScope,
     show_fragment_analytics_dialog: bool,
@@ -894,6 +902,9 @@ impl MistTermApp {
             team_login_form: TeamLoginForm::default(),
             team_fragment_editor: TeamFragmentEditorState::default(),
             team_fragment_conflict: None,
+            team_fragment_versions: FragmentVersionsState::default(),
+            team_fragment_shares: FragmentSharesState::default(),
+            team_settings_dialog: TeamSettingsState::default(),
             team_fragment_selected_id: None,
             fragment_list_scope: FragmentListScope::Personal,
             show_fragment_analytics_dialog: false,
@@ -1750,6 +1761,9 @@ impl MistTermApp {
             || self.team_members_dialog.open
             || self.help_docs_dialog.open
             || self.show_ai_settings_dialog
+            || self.team_fragment_versions.open
+            || self.team_fragment_shares.open
+            || self.team_settings_dialog.open
     }
 
     /// 右侧 dock 都是终端的辅助面板；只打开/查看时不应让终端失去键盘。
@@ -4307,6 +4321,99 @@ impl MistTermApp {
                         }
                     }
                 }
+                let selected_locked = self
+                    .team_fragment_selected_id
+                    .as_deref()
+                    .and_then(|id| self.team_service.find_team_fragment(id))
+                    .map(|f| !f.locked_by.is_empty())
+                    .unwrap_or(false);
+                if can_edit
+                    && self.team_fragment_selected_id.is_some()
+                    && crate::ui::chrome::panel_action_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Key,
+                        if selected_locked {
+                            crate::i18n::tr(ui.ctx(), "Unlock", "解锁")
+                        } else {
+                            crate::i18n::tr(ui.ctx(), "Lock", "锁定")
+                        },
+                    )
+                    .clicked()
+                {
+                    if let Some(id) = self.team_fragment_selected_id.clone() {
+                        let res = if selected_locked {
+                            crate::core::team::unlock_team_fragment_blocking(
+                                &mut self.team_service,
+                                &id,
+                            )
+                        } else {
+                            crate::core::team::lock_team_fragment_blocking(
+                                &mut self.team_service,
+                                &id,
+                            )
+                        };
+                        match res {
+                            Ok(()) => {
+                                self.status_message = if selected_locked {
+                                    crate::i18n::tr(ui.ctx(), "Snippet unlocked", "已解锁片段")
+                                } else {
+                                    crate::i18n::tr(ui.ctx(), "Snippet locked", "已锁定片段")
+                                }
+                                .to_string();
+                            }
+                            Err(e) => self.status_message = e,
+                        }
+                    }
+                }
+                if self.team_fragment_selected_id.is_some()
+                    && crate::ui::chrome::panel_action_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Timer,
+                        crate::i18n::tr(ui.ctx(), "Version history", "版本历史"),
+                    )
+                    .clicked()
+                {
+                    if let Some(id) = self.team_fragment_selected_id.clone() {
+                        let title = self
+                            .team_service
+                            .find_team_fragment(&id)
+                            .map(|f| f.title)
+                            .unwrap_or_default();
+                        open_versions(&mut self.team_fragment_versions, &id, &title);
+                    }
+                }
+                if can_edit
+                    && self.team_fragment_selected_id.is_some()
+                    && crate::ui::chrome::panel_action_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Copy,
+                        crate::i18n::tr(ui.ctx(), "Share", "分享"),
+                    )
+                    .clicked()
+                {
+                    if let Some(id) = self.team_fragment_selected_id.clone() {
+                        let title = self
+                            .team_service
+                            .find_team_fragment(&id)
+                            .map(|f| f.title)
+                            .unwrap_or_default();
+                        open_shares(&mut self.team_fragment_shares, &id, &title);
+                    }
+                }
+                if can_delete
+                    && crate::ui::chrome::panel_action_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Package,
+                        crate::i18n::tr(ui.ctx(), "Team settings", "团队设置"),
+                    )
+                    .clicked()
+                {
+                    open_team_settings(&mut self.team_settings_dialog);
+                }
                 if crate::ui::chrome::panel_action_icon_button(
                     ui,
                     theme,
@@ -4361,22 +4468,16 @@ impl MistTermApp {
                 ("draft", crate::i18n::tr(&ctx_owned2, "Draft", "草稿")),
                 ("archived", crate::i18n::tr(&ctx_owned2, "Archived", "已归档")),
             ];
-            let status_row = crate::ui::chrome::filter_chip_row(
+            let status_row = crate::ui::chrome::segmented_control_row(
                 ui,
                 theme,
                 &status_chips,
                 self.fragment_filter_status.as_str(),
+                Some(panel_w),
             );
-            if let Some(picked) = status_row.picked {
+            if let Some(picked) = status_row {
                 self.fragment_filter_status = picked;
             }
-        }
-                SortBy::UsageCount => SortBy::SuccessRate,
-                SortBy::SuccessRate => SortBy::LastUsed,
-                SortBy::LastUsed => SortBy::Name,
-                SortBy::Name => SortBy::UsageCount,
-            };
-            self.fragment_manager.sort(self.fragment_sort_by);
         }
         ui.add_space(theme.spacing_dock_control_gap());
 
@@ -4528,6 +4629,8 @@ impl MistTermApp {
         }
 
         let scroll_h = ui.available_height().max(80.0);
+        let is_team_scope = self.fragment_list_scope == FragmentListScope::Team;
+        let is_market_scope = self.fragment_list_scope == FragmentListScope::Market;
         let prev_extreme = ui.visuals().extreme_bg_color;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
         egui::ScrollArea::vertical()
@@ -4575,10 +4678,6 @@ impl MistTermApp {
                                     status_label: status_badge,
                                 },
                             );
-                            let is_team_scope =
-                                self.fragment_list_scope == FragmentListScope::Team;
-                            let is_market_scope =
-                                self.fragment_list_scope == FragmentListScope::Market;
                             let selected = self
                                 .team_fragment_selected_id
                                 .as_deref()
@@ -4623,6 +4722,7 @@ impl MistTermApp {
                         }
                     });
         ui.visuals_mut().extreme_bg_color = prev_extreme;
+    }
 
     /// 从右侧片段列表点击：支持片段库定义的变量、命令里的 `<占位符>`，以及会话字段替换。
     fn begin_fragment_insert(&mut self, egui_ctx: &egui::Context, fragment: &FragmentStats) {
@@ -5425,6 +5525,7 @@ impl MistTermApp {
             "已从凭证填入新建会话（请检查后连接）",
         )
         .to_string();
+    }
 }
 
 impl eframe::App for MistTermApp {
@@ -5528,6 +5629,26 @@ impl eframe::App for MistTermApp {
             &mut self.team_service,
             &mut self.team_fragment_conflict,
             &self.audit_logger,
+        );
+        show_fragment_versions_modal(
+            ctx,
+            &theme,
+            &mut self.team_service,
+            &mut self.team_fragment_versions,
+            &self.audit_logger,
+        );
+        show_fragment_shares_modal(
+            ctx,
+            &theme,
+            &mut self.team_service,
+            &mut self.team_fragment_shares,
+            &self.audit_logger,
+        );
+        show_team_settings_modal(
+            ctx,
+            &theme,
+            &mut self.team_service,
+            &mut self.team_settings_dialog,
         );
         let mut analytics_action =
             crate::ui::fragment_analytics_dialog::FragmentAnalyticsUiAction::None;
