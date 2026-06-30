@@ -139,6 +139,17 @@ jobs:
           cargo test --release --test zmodem_integration_test
           cargo test --release --test zmodem_integration_test test_ssh_connect -- --ignored --exact
 
+      - name: Quick syntax check (all platforms)
+        shell: bash
+        run: |
+          set -euo pipefail
+          features="${{ matrix.cargo_features }}"
+          features_arg=()
+          if [ -n "$features" ]; then
+            features_arg=(--features "$features")
+          fi
+          cargo check --bin "$BIN_NAME" "${features_arg[@]}"
+
       - name: Build release binary (Unix)
         if: runner.os != 'Windows'
         shell: bash
