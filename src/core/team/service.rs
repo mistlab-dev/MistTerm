@@ -1126,3 +1126,197 @@ pub fn delete_team_fragment_blocking(
     Ok(())
 }
 
+/// 锁定团队片段（编辑者+）。成功后乐观更新本地缓存的 `locked_by`。
+pub fn lock_team_fragment_blocking(
+    service: &mut TeamService,
+    fragment_id: &str,
+) -> Result<(), String> {
+    if !service.state.current_role().can_edit() {
+        return Err("Editor role required".into());
+    }
+    let api_base = service.api_base();
+    let fid = fragment_id.to_string();
+    with_auth_retry(&api_base, &service.tokens, |access, client| {
+        client.lock_fragment(access, &fid)
+    })
+    .map_err(|e| {
+        if e.contains("401") {
+            service.handle_auth_failure(&e);
+        }
+        e
+    })?;
+    let locker = service
+        .state
+        .user
+        .as_ref()
+        .map(|u| u.id.clone())
+        .unwrap_or_default();
+    if let Some(tid) = service.state.current_team_id.clone() {
+        if let Some(mut frag) = service.cache.find_fragment(&tid, fragment_id) {
+            frag.locked_by = locker;
+            frag.locked_at = Some(chrono::Utc::now().to_rfc3339());
+            service.cache.upsert_fragment(&tid, frag);
+            let _ = service.cache.save();
+        }
+    }
+    Ok(())
+}
+
+/// 解锁团队片段（编辑者+）。成功后清除本地缓存的 `locked_by`。
+pub fn unlock_team_fragment_blocking(
+    service: &mut TeamService,
+    fragment_id: &str,
+) -> Result<(), String> {
+    if !service.state.current_role().can_edit() {
+        return Err("Editor role required".into());
+    }
+    let api_base = service.api_base();
+    let fid = fragment_id.to_string();
+    with_auth_retry(&api_base, &service.tokens, |access, client| {
+        client.unlock_fragment(access, &fid)
+    })
+    .map_err(|e| {
+        if e.contains("401") {
+            service.handle_auth_failure(&e);
+        }
+        e
+    })?;
+    if let Some(tid) = service.state.current_team_id.clone() {
+        if let Some(mut frag) = service.cache.find_fragment(&tid, fragment_id) {
+            frag.locked_by.clear();
+            frag.locked_at = None;
+            service.cache.upsert_fragment(&tid, frag);
+            let _ = service.cache.save();
+        }
+    }
+    Ok(())
+}
+
+/// 拉取片段版本历史（viewer+）。
+pub fn fetch_fragment_versions_blocking(
+    service: &mut TeamService,
+    fragment_id: &str,
+) -> Result<Vec<super::models::FragmentVersion>, String> {
+    let api_base = service.api_base();
+    let fid = fragment_id.to_string();
+    let resp = with_auth_retry(&api_base, &service.tokens, |access, client| {
+        client.get_fragment_versions(access, &fid, 50, 0)
+    })
+    .map_err(|e| {
+        if e.contains("401") {
+            service.handle_auth_failure(&e);
+        }
+        e
+    })?;
+    Ok(resp.versions)
+}
+
+/// 创建外部分享链接（编辑者+）。`expires_in_hours` <= 0 表示永不过期。
+pub fn create_fragment_share_blocking(
+    service: &mut TeamService,
+    fragment_id: &str,
+    expires_in_hours: i64,
+) -> Result<super::models::CreateShareResponse, String> {
+    if !service.state.current_role().can_edit() {
+        return Err("Editor role required".into());
+    }
+    let api_base = service.api_base();
+    let fid = fragment_id.to_string();
+    let req = super::models::CreateShareRequest { expires_in_hours };
+    with_auth_retry(&api_base, &service.tokens, |access, client| {
+        client.create_share(access, &fid, &req)
+    })
+    .map_err(|e| {
+        if e.contains("401") {
+            service.handle_auth_failure(&e);
+        }
+        e
+    })
+}
+
+/// 列出片段的外部分享链接（viewer+）。
+pub fn list_fragment_shares_blocking(
+    service: &mut TeamService,
+    fragment_id: &str,
+) -> Result<Vec<super::models::ExternalShare>, String> {
+    let api_base = service.api_base();
+    let fid = fragment_id.to_string();
+    let resp = with_auth_retry(&api_base, &service.tokens, |access, client| {
+        client.list_shares(access, &fid)
+    })
+    .map_err(|e| {
+        if e.contains("401") {
+            service.handle_auth_failure(&e);
+        }
+        e
+    })?;
+    Ok(resp.shares)
+}
+
+/// 撤销外部分享链接（编辑者+）。
+pub fn delete_fragment_share_blocking(
+    service: &mut TeamService,
+    share_id: &str,
+) -> Result<(), String> {
+    if !service.state.current_role().can_edit() {
+        return Err("Editor role required".into());
+    }
+    let api_base = service.api_base();
+    let sid = share_id.to_string();
+    with_auth_retry(&api_base, &service.tokens, |access, client| {
+        client.delete_share(access, &sid).map(|_| ())
+    })
+    .map_err(|e| {
+        if e.contains("401") {
+            service.handle_auth_failure(&e);
+        }
+        e
+    })
+}
+
+/// 拉取团队服务端设置（viewer+）。
+pub fn fetch_team_settings_blocking(
+    service: &mut TeamService,
+) -> Result<super::models::TeamSettings, String> {
+    let team_id = service
+        .state
+        .current_team_id
+        .clone()
+        .ok_or_else(|| "No team selected".to_string())?;
+    let api_base = service.api_base();
+    with_auth_retry(&api_base, &service.tokens, |access, client| {
+        client.get_team_settings(access, &team_id)
+    })
+    .map_err(|e| {
+        if e.contains("401") {
+            service.handle_auth_failure(&e);
+        }
+        e
+    })
+}
+
+/// 更新团队服务端设置（管理员）。
+pub fn update_team_settings_blocking(
+    service: &mut TeamService,
+    settings: &super::models::TeamSettings,
+) -> Result<super::models::TeamSettings, String> {
+    if !service.state.current_role().can_delete() {
+        return Err("Admin role required".into());
+    }
+    let team_id = service
+        .state
+        .current_team_id
+        .clone()
+        .ok_or_else(|| "No team selected".to_string())?;
+    let api_base = service.api_base();
+    with_auth_retry(&api_base, &service.tokens, |access, client| {
+        client.update_team_settings(access, &team_id, settings)
+    })
+    .map_err(|e| {
+        if e.contains("401") {
+            service.handle_auth_failure(&e);
+        }
+        e
+    })
+}
+

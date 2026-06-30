@@ -101,6 +101,130 @@ fn team_api_members_route_deployed() {
 }
 
 #[test]
+fn team_api_p2_lock_versions_shares_settings_routes_deployed() {
+    assert_invalid_token_not_404(
+        reqwest::Method::POST,
+        "/v1/fragments/f_smoke/lock",
+        Some("{}"),
+    );
+    assert_invalid_token_not_404(
+        reqwest::Method::POST,
+        "/v1/fragments/f_smoke/unlock",
+        Some("{}"),
+    );
+    assert_invalid_token_not_404(
+        reqwest::Method::GET,
+        "/v1/fragments/f_smoke/versions?limit=10&offset=0",
+        None,
+    );
+    assert_invalid_token_not_404(
+        reqwest::Method::GET,
+        "/v1/fragments/f_smoke/versions/1",
+        None,
+    );
+    assert_invalid_token_not_404(
+        reqwest::Method::POST,
+        "/v1/fragments/f_smoke/shares",
+        Some(r#"{"expires_in_hours":24}"#),
+    );
+    assert_invalid_token_not_404(
+        reqwest::Method::GET,
+        "/v1/fragments/f_smoke/shares",
+        None,
+    );
+    assert_invalid_token_not_404(reqwest::Method::DELETE, "/v1/shares/sh_smoke", None);
+    assert_invalid_token_not_404(reqwest::Method::GET, "/v1/teams/t_smoke/settings", None);
+    assert_invalid_token_not_404(
+        reqwest::Method::PUT,
+        "/v1/teams/t_smoke/settings",
+        Some(r#"{"audit_retention_days":30,"allow_guest_access":false,"require_mfa":false}"#),
+    );
+}
+
+#[test]
+fn team_api_authenticated_lock_versions_shares_settings() {
+    let Some(session) = login_test_session() else {
+        eprintln!("skip: set MISTTERM_TEST_TEAM_EMAIL + MISTTERM_TEST_TEAM_PASSWORD");
+        return;
+    };
+
+    let settings = session
+        .client
+        .get_team_settings(&session.access_token, &session.team_id)
+        .expect("get_team_settings");
+    assert!(settings.audit_retention_days >= 0);
+
+    let created = session
+        .client
+        .create_fragment(
+            &session.access_token,
+            &session.team_id,
+            &CreateTeamFragmentRequest {
+                title: format!(
+                    "mistterm_p2_smoke_{}",
+                    chrono::Utc::now().timestamp_millis()
+                ),
+                command: "echo mistterm-p2-smoke".into(),
+                category: Some("test".into()),
+                tags: None,
+                variables: None,
+                status: Some("draft".into()),
+            },
+        )
+        .expect("create_fragment for p2 smoke");
+    let fid = created.id.clone();
+
+    session
+        .client
+        .lock_fragment(&session.access_token, &fid)
+        .expect("lock_fragment");
+    session
+        .client
+        .unlock_fragment(&session.access_token, &fid)
+        .expect("unlock_fragment");
+
+    let versions = session
+        .client
+        .get_fragment_versions(&session.access_token, &fid, 10, 0)
+        .expect("get_fragment_versions");
+    assert!(
+        !versions.versions.is_empty(),
+        "new fragment should have at least one version"
+    );
+
+    let share = session
+        .client
+        .create_share(
+            &session.access_token,
+            &fid,
+            &mistterm::core::team::CreateShareRequest {
+                expires_in_hours: 1,
+            },
+        )
+        .expect("create_share");
+    assert!(!share.share_url.is_empty());
+
+    let listed = session
+        .client
+        .list_shares(&session.access_token, &fid)
+        .expect("list_shares");
+    assert!(
+        listed.shares.iter().any(|s| s.id == share.share.id),
+        "listed shares should include created share"
+    );
+
+    session
+        .client
+        .delete_share(&session.access_token, &share.share.id)
+        .expect("delete_share");
+
+    session
+        .client
+        .delete_fragment(&session.access_token, &fid)
+        .expect("delete_fragment cleanup");
+}
+
+#[test]
 fn team_api_authenticated_analytics_and_members() {
     let Some(session) = login_test_session() else {
         eprintln!("skip: set MISTTERM_TEST_TEAM_EMAIL + MISTTERM_TEST_TEAM_PASSWORD");
@@ -163,6 +287,7 @@ fn team_api_authenticated_usage_report() {
                     category: Some("test".into()),
                     tags: None,
                     variables: None,
+                    status: Some("published".into()),
                 },
             )
             .expect("create_fragment for usage smoke");
