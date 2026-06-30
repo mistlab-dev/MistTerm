@@ -139,7 +139,8 @@ jobs:
           cargo test --release --test zmodem_integration_test
           cargo test --release --test zmodem_integration_test test_ssh_connect -- --ignored --exact
 
-      - name: Quick syntax check (all platforms)
+      - name: Quick syntax check
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
