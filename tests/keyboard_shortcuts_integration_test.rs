@@ -175,6 +175,7 @@ fn integration_ctrl_w_forwards_kill_word_byte_to_pty() {
 
 #[test]
 fn integration_ctrl_shift_c_is_terminal_copy_not_pty() {
+    #[cfg(not(target_os = "macos"))]
     egui::__run_test_ui(|ui| {
         ui.input_mut(|i| {
             feed_keys(i, ctrl_shift(), [key_press(Key::C, ctrl_shift())]);
@@ -188,6 +189,7 @@ fn integration_ctrl_shift_c_is_terminal_copy_not_pty() {
 
 #[test]
 fn integration_ctrl_shift_v_is_terminal_paste_not_pty() {
+    #[cfg(not(target_os = "macos"))]
     egui::__run_test_ui(|ui| {
         ui.input_mut(|i| {
             feed_keys(i, ctrl_shift(), [key_press(Key::V, ctrl_shift())]);
@@ -201,6 +203,7 @@ fn integration_ctrl_shift_v_is_terminal_paste_not_pty() {
 
 #[test]
 fn integration_ctrl_shift_c_windows_modifier_fallback() {
+    #[cfg(not(target_os = "macos"))]
     egui::__run_test_ui(|ui| {
         ui.input_mut(|i| {
             feed_keys(i, ctrl_shift(), [key_press(Key::C, Modifiers::NONE)]);
@@ -213,8 +216,12 @@ fn integration_ctrl_shift_c_windows_modifier_fallback() {
 
 #[test]
 fn integration_terminal_clipboard_modifiers_match_consume_key() {
+    let mods = terminal_clipboard_modifiers();
+    #[cfg(target_os = "macos")]
+    assert!(mods.command && !mods.ctrl && !mods.shift);
+    #[cfg(not(target_os = "macos"))]
     assert_eq!(
-        terminal_clipboard_modifiers(),
+        mods,
         Modifiers {
             ctrl: true,
             shift: true,
@@ -225,10 +232,10 @@ fn integration_terminal_clipboard_modifiers_match_consume_key() {
         ui.input_mut(|i| {
             feed_keys(
                 i,
-                ctrl_shift(),
+                mods,
                 [
-                    key_press(Key::C, ctrl_shift()),
-                    key_press(Key::V, ctrl_shift()),
+                    key_press(Key::C, Modifiers::NONE),
+                    key_press(Key::V, Modifiers::NONE),
                 ],
             );
             assert!(consume_terminal_copy_shortcut(i));

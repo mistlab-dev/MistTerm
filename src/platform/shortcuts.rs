@@ -64,6 +64,30 @@ pub fn help_line(key: &str, description: &str) -> String {
     format!("{} — {}", accel(key), description)
 }
 
+/// 终端复制选区：macOS ⌘C；Win/Linux Ctrl+Shift+C。
+pub fn terminal_copy_accel() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        accel("c")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        accel_shift("c")
+    }
+}
+
+/// 终端粘贴：macOS ⌘V；Win/Linux Ctrl+Shift+V。
+pub fn terminal_paste_accel() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        accel("v")
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        accel_shift("v")
+    }
+}
+
 /// 关闭当前终端标签：macOS 用 ⌘W；Win/Linux 用 Ctrl+Shift+W（避免与 shell 的 Ctrl+W 删词冲突）。
 pub fn close_tab_accel() -> String {
     #[cfg(target_os = "macos")]

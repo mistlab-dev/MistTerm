@@ -17,6 +17,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, LrzszTransfer, TransferEvent, format_ssh_connect_error};
 use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::index::{Column, Line, Point};
+use alacritty_terminal::term::{point_to_viewport, viewport_to_point};
 use crate::terminal::{Terminal as VtTerminal, TerminalShellStyle};
 use crate::terminal::style::{
     format_user_error_line, format_user_info_line, format_user_success_line, format_user_warn_line,
@@ -79,12 +81,12 @@ fn truncate_connection_status(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// 终端文本选择（行号从 0 开始，列号从 0 开始）
+/// 终端文本选择（绝对网格坐标：`Line.0` 可为负表示 scrollback，列 0-based）
 #[derive(Clone, Debug, Default)]
 struct Selection {
-    start_line: usize,
+    start_line: i32,
     start_col: usize,
-    end_line: usize,
+    end_line: i32,
     end_col: usize,
     active: bool,
 }
@@ -94,7 +96,7 @@ impl Selection {
         !self.active || (self.start_line == self.end_line && self.start_col == self.end_col)
     }
 
-    fn normalize(&self) -> (usize, usize, usize, usize) {
+    fn normalize(&self) -> (i32, usize, i32, usize) {
         if (self.start_line, self.start_col) <= (self.end_line, self.end_col) {
             (self.start_line, self.start_col, self.end_line, self.end_col)
         } else {
@@ -108,6 +110,30 @@ impl Selection {
         self.start_col = 0;
         self.end_line = 0;
         self.end_col = 0;
+    }
+
+    fn set_from_viewport(
+        &mut self,
+        display_offset: usize,
+        start_row: usize,
+        start_col: usize,
+        end_row: usize,
+        end_col: usize,
+    ) {
+        let sp = viewport_to_point(display_offset, Point::new(start_row, Column(start_col)));
+        let ep = viewport_to_point(display_offset, Point::new(end_row, Column(end_col)));
+        self.start_line = sp.line.0;
+        self.start_col = sp.column.0;
+        self.end_line = ep.line.0;
+        self.end_col = ep.column.0;
+        self.active = true;
+    }
+
+    fn set_end_from_viewport(&mut self, display_offset: usize, end_row: usize, end_col: usize) {
+        let ep = viewport_to_point(display_offset, Point::new(end_row, Column(end_col)));
+        self.end_line = ep.line.0;
+        self.end_col = ep.column.0;
+        self.active = true;
     }
 }
 
@@ -775,7 +801,18 @@ impl TerminalView {
         }
     }
 
+    fn scroll_to_bottom_on_user_input(&mut self) {
+        if !self.terminal.is_scrolled_to_bottom() {
+            self.terminal.scroll_to_bottom();
+            self.visual_layout_cache = None;
+            self.auto_follow_output = true;
+        }
+    }
+
     fn send_pty_input(&mut self, handle: &SshSessionHandle, data: &[u8]) -> Result<(), String> {
+        if !data.is_empty() {
+            self.scroll_to_bottom_on_user_input();
+        }
         self.note_pty_outbound_for_rz(data);
         handle.send_input(data)
     }
@@ -1282,11 +1319,13 @@ impl TerminalView {
                                         if let Some((start, end)) =
                                             Self::terminal_token_range_at(line_text, col)
                                         {
-                                            self.selection.start_line = row_i;
-                                            self.selection.start_col = start;
-                                            self.selection.end_line = row_i;
-                                            self.selection.end_col = end;
-                                            self.selection.active = true;
+                                            self.selection.set_from_viewport(
+                                                self.terminal.display_offset(),
+                                                row_i,
+                                                start,
+                                                row_i,
+                                                end,
+                                            );
                                         }
                                     }
                                 }
@@ -1300,11 +1339,13 @@ impl TerminalView {
                                         cell_h,
                                         &display_lines,
                                     );
-                                    self.selection.start_line = row_i;
-                                    self.selection.start_col = col;
-                                    self.selection.end_line = row_i;
-                                    self.selection.end_col = col;
-                                    self.selection.active = true;
+                                    self.selection.set_from_viewport(
+                                        self.terminal.display_offset(),
+                                        row_i,
+                                        col,
+                                        row_i,
+                                        col,
+                                    );
                                 }
                             } else if primary_dragged {
                                 let drag_distance = ui.input(|i| {
@@ -1324,38 +1365,42 @@ impl TerminalView {
                                             cell_h,
                                             &display_lines,
                                         );
-                                        self.selection.end_line = row_i;
-                                        self.selection.end_col = col;
-                                        self.selection.active = true;
+                                        self.selection.set_end_from_viewport(
+                                            self.terminal.display_offset(),
+                                            row_i,
+                                            col,
+                                        );
                                     }
                                 }
                             }
 
-                            // 绘制选择高亮
+                            // 绘制选择高亮（绝对网格坐标 → 当前视口行）
                             if !self.selection.is_empty() {
                                 let painter = ui.painter().clone().with_layer_id(response.layer_id);
+                                let offset = self.terminal.display_offset();
                                 let (start_l, start_c, end_l, end_c) = self.selection.normalize();
-                                let lines = display_owned.lines().collect::<Vec<_>>();
-                                
-                                for line_idx in start_l..=end_l {
-                                    if line_idx >= lines.len() {
-                                        break;
+
+                                for abs_line in start_l..=end_l {
+                                    let pt = Point::new(Line(abs_line), Column(0));
+                                    let Some(vp) = point_to_viewport(offset, pt) else {
+                                        continue;
+                                    };
+                                    let vp_line = vp.line;
+                                    if vp_line >= display_lines.len() {
+                                        continue;
                                     }
-                                    let line = lines[line_idx];
-                                    let chars: Vec<char> = line.chars().collect();
-                                    let line_len = chars.len();
-                                    
-                                    let c_start = if line_idx == start_l { start_c } else { 0 };
-                                    let c_end = if line_idx == end_l { end_c } else { line_len };
+                                    let line_len = display_lines[vp_line].chars().count();
+                                    let c_start = if abs_line == start_l { start_c } else { 0 };
+                                    let c_end = if abs_line == end_l { end_c } else { line_len };
                                     let c_start = c_start.min(line_len);
                                     let c_end = c_end.min(line_len);
-                                    
+
                                     if c_start < c_end {
                                         if let Some(sel_rect) = Self::terminal_selection_rect(
                                             &response,
                                             &galley,
                                             text_top,
-                                            line_idx,
+                                            vp_line,
                                             c_start,
                                             c_end,
                                             cell_w,
@@ -1980,6 +2025,7 @@ impl TerminalView {
         if data.is_empty() {
             return;
         }
+        self.scroll_to_bottom_on_user_input();
         let cap = Self::OFFLINE_INPUT_CAP;
         if self.disconnected_input_buffer.len() >= cap {
             return;
@@ -2400,7 +2446,7 @@ impl TerminalView {
                         ..
                     } => {
                         if modifiers.command {
-                            // 仅 ⌘V→PTY；⌘C/⌘A 等留给表单/侧栏 TextEdit（勿 continue 整段 command）
+                            // macOS：⌘C 复制 / ⌘V 粘贴（复制在帧初 consume；此处仅兜底 ⌘V）
                             if *key == egui::Key::V {
                                 if let Ok(mut clip) = Clipboard::new() {
                                     if let Ok(text) = clip.get_text() {
@@ -2562,15 +2608,12 @@ impl TerminalView {
         !self.selection.is_empty()
     }
 
-    /// 菜单「全选」：选中当前屏全部内容。
+    /// 菜单「全选」：选中当前视口全部内容。
     pub(crate) fn menu_select_all(&mut self) {
+        let offset = self.terminal.display_offset();
         let rows = self.rows.max(1) as usize;
         let cols = self.cols.max(1) as usize;
-        self.selection.start_line = 0;
-        self.selection.start_col = 0;
-        self.selection.end_line = rows.saturating_sub(1);
-        self.selection.end_col = cols.saturating_sub(1);
-        self.selection.active = true;
+        self.selection.set_from_viewport(offset, 0, 0, rows.saturating_sub(1), cols.saturating_sub(1));
     }
 
     pub fn take_pending_send_to_ai(&mut self) -> bool {
@@ -2612,38 +2655,15 @@ impl TerminalView {
         v
     }
 
-    /// 获取选中的文本
+    /// 获取选中的文本（按绝对网格坐标从缓冲区读取，滚动后仍正确）
     fn get_selected_text(&self) -> String {
         if self.selection.is_empty() {
             return String::new();
         }
-        let text = self.terminal.get_formatted_output();
-        let lines: Vec<&str> = text.lines().collect();
         let (start_l, start_c, end_l, end_c) = self.selection.normalize();
-        
-        let mut result = String::new();
-        for line_idx in start_l..=end_l {
-            if line_idx >= lines.len() {
-                break;
-            }
-            let line = lines[line_idx];
-            let chars: Vec<char> = line.chars().collect();
-            let line_len = chars.len();
-            
-            let c_start = if line_idx == start_l { start_c } else { 0 };
-            let c_end = if line_idx == end_l { end_c } else { line_len };
-            let c_start = c_start.min(line_len);
-            let c_end = c_end.min(line_len);
-            
-            if c_start < c_end {
-                let selected: String = chars[c_start..c_end].iter().collect();
-                result.push_str(&selected);
-            }
-            if line_idx < end_l {
-                result.push('\n');
-            }
-        }
-        result
+        let start = Point::new(Line(start_l), Column(start_c));
+        let end = Point::new(Line(end_l), Column(end_c));
+        self.terminal.text_in_point_range(start, end)
     }
 
     pub fn send_ctrl_c(&self) -> Result<(), String> {
