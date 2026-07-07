@@ -159,12 +159,22 @@ pub fn ctrl_byte_for_key(key: Key) -> Option<u8> {
     }
 }
 
-/// Win/Linux 终端剪贴板：`Ctrl+Shift+C` / `Ctrl+Shift+V`（与 Windows Terminal 一致，避开 shell 的 Ctrl+C/V）。
+/// 终端剪贴板快捷键修饰键：macOS `⌘C`/`⌘V`；Win/Linux `Ctrl+Shift+C`/`Ctrl+Shift+V`（避开 shell 的 Ctrl+C/V）。
 pub fn terminal_clipboard_modifiers() -> Modifiers {
-    Modifiers {
-        ctrl: true,
-        shift: true,
-        ..Modifiers::NONE
+    #[cfg(target_os = "macos")]
+    {
+        Modifiers {
+            command: true,
+            ..Modifiers::NONE
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Modifiers {
+            ctrl: true,
+            shift: true,
+            ..Modifiers::NONE
+        }
     }
 }
 
@@ -190,12 +200,12 @@ fn consume_terminal_clipboard_key(i: &mut InputState, key: Key) -> bool {
     false
 }
 
-/// 消费 `Ctrl+Shift+C`（复制终端选区）。
+/// 消费终端复制快捷键（macOS ⌘C，Win/Linux Ctrl+Shift+C）。
 pub fn consume_terminal_copy_shortcut(i: &mut InputState) -> bool {
     consume_terminal_clipboard_key(i, Key::C)
 }
 
-/// 消费 `Ctrl+Shift+V`（粘贴到终端）。
+/// 消费终端粘贴快捷键（macOS ⌘V，Win/Linux Ctrl+Shift+V）。
 pub fn consume_terminal_paste_shortcut(i: &mut InputState) -> bool {
     consume_terminal_clipboard_key(i, Key::V)
 }
@@ -441,11 +451,7 @@ mod tests {
     fn consume_terminal_copy_shortcut_uses_input_modifiers_fallback() {
         egui::__run_test_ui(|ui| {
             ui.input_mut(|i| {
-                i.modifiers = Modifiers {
-                    ctrl: true,
-                    shift: true,
-                    ..Modifiers::NONE
-                };
+                i.modifiers = terminal_clipboard_modifiers();
                 i.events.push(key_press(Key::C, Modifiers::NONE));
                 assert!(consume_terminal_copy_shortcut(i));
             });
@@ -453,17 +459,10 @@ mod tests {
     }
 
     #[test]
-    fn consume_terminal_paste_shortcut_matches_ctrl_shift_v() {
+    fn consume_terminal_paste_shortcut_matches_platform_clipboard_mods() {
         egui::__run_test_ui(|ui| {
             ui.input_mut(|i| {
-                i.events.push(key_press(
-                    Key::V,
-                    Modifiers {
-                        ctrl: true,
-                        shift: true,
-                        ..Modifiers::NONE
-                    },
-                ));
+                i.events.push(key_press(Key::V, terminal_clipboard_modifiers()));
                 assert!(consume_terminal_paste_shortcut(i));
             });
         });

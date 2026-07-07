@@ -148,6 +148,47 @@ impl Terminal {
         self.term.grid().display_offset()
     }
 
+    /// 滚到最新输出（`display_offset == 0`）。
+    pub fn scroll_to_bottom(&mut self) {
+        let offset = self.term.grid().display_offset();
+        if offset > 0 {
+            self.scroll_display(Scroll::Delta(-(offset as i32)));
+        }
+    }
+
+    /// 按绝对网格坐标提取选中文本（`start`/`end` 为 inclusive-exclusive 列范围惯例，与 UI 选区一致）。
+    pub fn text_in_point_range(&self, start: Point, end: Point) -> String {
+        let (start, end) = if (start.line.0, start.column.0) <= (end.line.0, end.column.0) {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        let mut result = String::new();
+        for line_idx in start.line.0..=end.line.0 {
+            let row = self.row_chars(Line(line_idx));
+            let line_len = row.len();
+            let c_start = if line_idx == start.line.0 {
+                start.column.0
+            } else {
+                0
+            };
+            let c_end = if line_idx == end.line.0 {
+                end.column.0
+            } else {
+                line_len
+            };
+            let c_start = c_start.min(line_len);
+            let c_end = c_end.min(line_len);
+            if c_start < c_end {
+                result.push_str(&row[c_start..c_end].iter().collect::<String>());
+            }
+            if line_idx < end.line.0 {
+                result.push('\n');
+            }
+        }
+        result
+    }
+
     fn row_chars(&self, line: Line) -> Vec<char> {
         let grid = self.term.grid();
         let cols = grid.columns();
@@ -674,5 +715,34 @@ mod tests {
             .iter()
             .collect();
         assert_eq!(window, "55");
+    }
+
+    #[test]
+    fn scroll_to_bottom_clears_display_offset() {
+        use alacritty_terminal::grid::Scroll;
+        let mut t = Terminal::new(20, 5);
+        for i in 0..15 {
+            t.feed(format!("row-{i:02}\r\n").as_bytes());
+        }
+        t.scroll_display(Scroll::Delta(4));
+        assert!(t.display_offset() > 0);
+        assert!(!t.is_scrolled_to_bottom());
+        t.scroll_to_bottom();
+        assert_eq!(t.display_offset(), 0);
+        assert!(t.is_scrolled_to_bottom());
+    }
+
+    #[test]
+    fn text_in_point_range_reads_from_absolute_grid() {
+        use alacritty_terminal::index::{Column, Point};
+        let mut t = Terminal::new(40, 3);
+        t.feed(b"alpha needle omega\r\n");
+        let hits = t.search_all("needle", false);
+        let hit = hits.first().expect("hit");
+        let start = Point::new(hit.line, Column(hit.column));
+        let end = Point::new(hit.line, Column(hit.column + 6));
+        assert_eq!(t.text_in_point_range(start, end), "needle");
+        // 反向端点仍应得到相同文本
+        assert_eq!(t.text_in_point_range(end, start), "needle");
     }
 }

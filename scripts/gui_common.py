@@ -285,6 +285,81 @@ def automation_env(*, e2e_file: str = REMOTE_FILE) -> dict[str, str]:
     return env
 
 
+WM_CLOSE = 0x0010
+
+
+def stop_existing_mist_processes(*, title_sub: str = "Mist", grace_sec: float = 3.0) -> int:
+    """关闭已存在的 MistTerm 窗口，避免 GUI 测试叠加多个实例。返回尝试关闭的窗口数。"""
+    closed = 0
+    try:
+        from pywinauto import Desktop
+
+        for w in Desktop(backend="uia").windows():
+            title = w.window_text() or ""
+            if title_sub not in title:
+                continue
+            try:
+                hwnd = int(w.handle)
+            except Exception:
+                continue
+            user32.PostMessageW(hwnd, WM_CLOSE, 0, 0)
+            closed += 1
+    except Exception:
+        pass
+
+    if closed:
+        time.sleep(grace_sec)
+
+    # 仍存活的进程：先 taskkill（WM_CLOSE），再 /F
+    subprocess.run(
+        ["taskkill", "/IM", "Mist.exe", "/T"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    time.sleep(0.4)
+    subprocess.run(
+        ["taskkill", "/F", "/IM", "Mist.exe", "/T"],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if closed:
+        print(f"  [cleanup] closed {closed} lingering Mist window(s)", flush=True)
+    return closed
+
+
+def graceful_stop_mist_process(
+    proc: subprocess.Popen[bytes],
+    hwnd: int | None = None,
+    *,
+    grace_sec: float = 4.0,
+) -> None:
+    """先 WM_CLOSE 关窗，超时后再 terminate/kill。"""
+    if proc.poll() is not None:
+        return
+    if hwnd is not None:
+        user32.PostMessageW(int(hwnd), WM_CLOSE, 0, 0)
+    else:
+        proc.terminate()
+    deadline = time.time() + grace_sec
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            return
+        time.sleep(0.12)
+    if proc.poll() is None:
+        proc.kill()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            subprocess.run(
+                ["taskkill", "/F", "/PID", str(proc.pid), "/T"],
+                capture_output=True,
+            )
+
+
 def capture_failure(hwnd: int | None, label: str) -> Path | None:
     if hwnd is None:
         return None

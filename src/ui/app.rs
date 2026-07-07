@@ -1823,7 +1823,7 @@ impl MistTermApp {
             .is_some()
     }
 
-    /// `Ctrl+Shift+C` 路由：PTY 聚焦时，或菜单全选后 PTY 失焦但选区仍在时。
+    /// 终端复制快捷键路由：PTY 聚焦时，或菜单全选后 PTY 失焦但选区仍在时。
     fn route_terminal_copy_shortcut(&self, ctx: &egui::Context) -> bool {
         if self.global_shortcuts_blocked() {
             return false;
@@ -3557,7 +3557,7 @@ impl MistTermApp {
         ctx.request_repaint();
     }
 
-    /// `Ctrl+Shift+C`：仅复制终端选区（与 Windows Terminal 一致）。
+    /// 终端复制快捷键：仅复制选区（macOS ⌘C，Win/Linux Ctrl+Shift+C）。
     fn copy_active_terminal_selection_shortcut(&mut self, ctx: &egui::Context) {
         let Some(idx) = self.active_tab else {
             return;
