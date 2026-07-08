@@ -33,6 +33,7 @@ pub mod ai_client;
 pub mod ai_chat_store;
 pub mod ai_session_meta;
 pub mod app_settings;
+pub mod hang_reporter;
 pub mod team;
 pub mod market;
 pub mod vault;
@@ -103,6 +104,7 @@ pub use ai_client::{
 pub use ai_chat_store::{delete_chat, load_chat, save_chat, StoredAiMessage, StoredContextRef};
 pub use ai_session_meta::TerminalSessionMeta;
 pub use app_settings::AppSettings;
+pub use hang_reporter::{ensure_hang_report_dir, hang_report_dir, HangReporter, HangSnapshot};
 pub use team::{
     apply_vault_for_team, parse_vault_credential_path, OAuthProvider, TeamAsyncResult,
     TeamFragment, TeamMembership, TeamRole, TeamServer, TeamService, TeamSettings, TeamState,

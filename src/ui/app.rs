@@ -7,6 +7,7 @@
 use eframe::egui;
 use rfd::FileDialog;
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::time::{Duration, Instant};
 use crate::core::{
     candidate_to_session, default_ssh_config_path, is_already_imported, parse_ssh_config_file,
@@ -14,7 +15,7 @@ use crate::core::{
     AppSettings, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, CmdAuditAction,
     CmdAuditAlertRequest, CmdAuditCacheStore, CmdAuditEngine, CmdAuditResult, CommandHistory,
     CommandSendResult, Credential,
-    CredentialAuthKind, SecretResolver, SessionLogSettings, SessionLogWriter, SecretBackend,
+    CredentialAuthKind, HangReporter, HangSnapshot, SecretResolver, SessionLogSettings, SessionLogWriter, SecretBackend,
     TempKeyFile, spawn_cleanup_old_logs, DEFAULT_RETENTION_DAYS,
     SessionSortBy, SshConfigCandidate, command_preview, expand_command_template,
     expand_fragment_command_stages, expand_rhai_blocks, list_placeholder_keys, merge_rhai_context,
@@ -586,6 +587,8 @@ pub struct MistTermApp {
     /// 批量多机 SSH 执行
     batch_exec_dialog: BatchExecDialog,
     batch_exec_rx: Option<std::sync::mpsc::Receiver<Vec<BatchExecRow>>>,
+    /// UI 卡顿 watchdog（本地报告）
+    hang_reporter: HangReporter,
 }
 
 /// 命令审计确认弹窗状态
@@ -1004,6 +1007,7 @@ impl MistTermApp {
             cmd_audit_confirm: None,
             batch_exec_dialog: BatchExecDialog::default(),
             batch_exec_rx: None,
+            hang_reporter: HangReporter::start_default(),
             auto_reconnect_enabled: false,
             terminal_font_preset: crate::platform::TerminalFontPreset::default(),
             terminal_font_size: crate::platform::DEFAULT_TERMINAL_FONT_SIZE,
@@ -3629,6 +3633,194 @@ impl MistTermApp {
         }
     }
 
+    pub(crate) fn open_hang_report_folder(&mut self, ctx: &egui::Context) {
+        let Ok(dir) = crate::core::ensure_hang_report_dir() else {
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "Failed to prepare hang report folder",
+                "无法准备卡顿日志目录",
+            )
+            .to_string();
+            return;
+        };
+        if crate::platform::reveal_directory(&dir) {
+            self.status_message = match crate::i18n::language(ctx) {
+                crate::i18n::UiLanguage::En => {
+                    format!("Opened hang reports folder: {}", dir.display())
+                }
+                crate::i18n::UiLanguage::Zh => {
+                    format!("已打开卡顿日志目录：{}", dir.display())
+                }
+            };
+        } else {
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "Failed to open hang report folder",
+                "无法打开卡顿日志目录",
+            )
+            .to_string();
+        }
+    }
+
+    pub(crate) fn copy_recent_hang_report_summary(&mut self, ctx: &egui::Context) {
+        let Some(out) = self.build_recent_hang_summary_text(ctx) else {
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "No local hang reports yet",
+                "暂无本地卡顿日志",
+            )
+            .to_string();
+            return;
+        };
+        ctx.copy_text(out);
+        self.status_message = crate::i18n::tr(
+            ctx,
+            "Copied recent hang summary to clipboard",
+            "已复制最近卡顿摘要到剪贴板",
+        )
+        .to_string();
+    }
+
+    pub(crate) fn open_issue_with_recent_hang_summary(&mut self, ctx: &egui::Context) {
+        let Some(summary) = self.build_recent_hang_summary_text(ctx) else {
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "No local hang reports yet",
+                "暂无本地卡顿日志",
+            )
+            .to_string();
+            return;
+        };
+        let url = crate::platform::github_new_issue_url_with_body(
+            env!("CARGO_PKG_VERSION"),
+            "UI freeze diagnostics",
+            &summary,
+        );
+        if !crate::platform::open_url(&url) {
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "Failed to open browser",
+                "无法打开浏览器",
+            )
+            .to_string();
+        } else {
+            self.status_message = crate::i18n::tr(
+                ctx,
+                "Opened issue form with hang summary",
+                "已打开并预填卡顿摘要的 Issue 表单",
+            )
+            .to_string();
+        }
+    }
+
+    fn build_recent_hang_summary_text(&self, ctx: &egui::Context) -> Option<String> {
+        fn hang_severity(stale_ms: u64, threshold_ms: u64, is_zh: bool) -> &'static str {
+            if threshold_ms == 0 {
+                return if is_zh { "未知" } else { "unknown" };
+            }
+            let ratio = stale_ms as f64 / threshold_ms as f64;
+            if ratio >= 2.0 {
+                if is_zh { "重" } else { "high" }
+            } else if ratio >= 1.4 {
+                if is_zh { "中" } else { "medium" }
+            } else {
+                if is_zh { "轻" } else { "low" }
+            }
+        }
+
+        fn local_time_text(ts_ms: u64) -> String {
+            let t = std::time::UNIX_EPOCH + std::time::Duration::from_millis(ts_ms);
+            chrono::DateTime::<chrono::Local>::from(t)
+                .format("%Y-%m-%d %H:%M:%S")
+                .to_string()
+        }
+
+        let dir = crate::core::hang_report_dir();
+        let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = match fs::read_dir(&dir) {
+            Ok(rd) => rd
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("json"))
+                .map(|p| {
+                    let t = p
+                        .metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                    (t, p)
+                })
+                .collect(),
+            Err(_) => Vec::new(),
+        };
+        files.sort_by(|a, b| b.0.cmp(&a.0));
+        let files = files.into_iter().take(10).collect::<Vec<_>>();
+        if files.is_empty() {
+            return None;
+        }
+        let is_zh = crate::i18n::language(ctx) == crate::i18n::UiLanguage::Zh;
+        let mut out = String::new();
+        if is_zh {
+            out.push_str("# MistTerm 卡顿摘要（最近 10 条）\n");
+            out.push_str(&format!("目录：`{}`\n\n", dir.display()));
+            out.push_str("| 文件 | 本地时间 | 时间戳(ms) | 卡顿等级 | 卡顿时长(ms) | 阈值(ms) | Tabs/Active | 面板状态 | 状态栏 |\n");
+            out.push_str("|---|---|---:|---|---:|---:|---|---|---|\n");
+        } else {
+            out.push_str("# MistTerm hang summary (latest 10)\n");
+            out.push_str(&format!("Directory: `{}`\n\n", dir.display()));
+            out.push_str("| File | local_time | timestamp_ms | severity | stale_for_ms | threshold_ms | tabs/active | panel_state | status |\n");
+            out.push_str("|---|---|---:|---|---:|---:|---|---|---|\n");
+        }
+        for (_mtime, path) in files {
+            let raw = match fs::read_to_string(&path) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            let v: serde_json::Value = match serde_json::from_str(&raw) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let ts = v.get("timestamp_unix_ms").and_then(|x| x.as_u64()).unwrap_or(0);
+            let local_time = local_time_text(ts);
+            let stale = v.get("stale_for_ms").and_then(|x| x.as_u64()).unwrap_or(0);
+            let threshold = v.get("threshold_ms").and_then(|x| x.as_u64()).unwrap_or(0);
+            let severity = hang_severity(stale, threshold, is_zh);
+            let status = v
+                .get("snapshot")
+                .and_then(|s| s.get("status_message"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .replace('|', "\\|")
+                .replace('\n', " ");
+            let panel_state = v
+                .get("snapshot")
+                .and_then(|s| s.get("panel_state"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .replace('|', "\\|")
+                .replace('\n', " ");
+            let tabs = v
+                .get("snapshot")
+                .and_then(|s| s.get("tabs_count"))
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0);
+            let active_tab = v
+                .get("snapshot")
+                .and_then(|s| s.get("active_tab"))
+                .map(|x| x.to_string())
+                .unwrap_or_else(|| "null".to_string());
+            let tabs_active = format!("{tabs}/{active_tab}");
+            let name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown.json")
+                .replace('|', "\\|");
+            out.push_str(&format!(
+                "| {name} | {local_time} | {ts} | {severity} | {stale} | {threshold} | {tabs_active} | {panel_state} | {status} |\n"
+            ));
+        }
+        Some(out)
+    }
+
     pub(crate) fn menu_open_session_log_browser(&mut self, ctx: &egui::Context) {
         let Some(idx) = self.active_tab else {
             self.status_message = crate::i18n::tr(ctx, "Open a terminal tab first", "请先打开终端标签")
@@ -5575,6 +5767,21 @@ impl eframe::App for MistTermApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.hang_reporter.update_snapshot(HangSnapshot {
+            status_message: status_message_body(&self.status_message).to_string(),
+            tabs_count: self.tabs.len(),
+            active_tab: self.active_tab,
+            panel_state: format!(
+                "fragment={} monitor={} ai={} sftp={} pf={} search={}",
+                self.show_fragment_panel,
+                self.show_monitor_panel,
+                self.show_ai_panel,
+                self.show_sftp_panel,
+                self.show_port_forward_panel,
+                self.show_terminal_search
+            ),
+        });
+        self.hang_reporter.heartbeat();
         crate::i18n::set_language(ctx, self.app_settings.ui_language);
         crate::ui::icons::UiIcons::reload_if_ppp_changed(ctx);
         self.apply_current_theme(ctx);
@@ -6659,6 +6866,42 @@ mod menu {
                     self.open_report_issue(ctx);
                     ui.close_menu();
                 }
+                ui.menu_button(
+                    crate::i18n::tr(ctx, "Freeze diagnostics", "卡顿诊断"),
+                    |ui| {
+                        crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                        if crate::ui::chrome::popup_menu_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(ctx, "Open diagnostics folder", "打开诊断目录"),
+                        )
+                        .clicked()
+                        {
+                            self.open_hang_report_folder(ctx);
+                            ui.close_menu();
+                        }
+                        if crate::ui::chrome::popup_menu_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(ctx, "Copy recent summary", "复制最近摘要"),
+                        )
+                        .clicked()
+                        {
+                            self.copy_recent_hang_report_summary(ctx);
+                            ui.close_menu();
+                        }
+                        if crate::ui::chrome::popup_menu_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(ctx, "Report with summary", "带摘要提交 Issue"),
+                        )
+                        .clicked()
+                        {
+                            self.open_issue_with_recent_hang_summary(ctx);
+                            ui.close_menu();
+                        }
+                    },
+                );
                 ui.separator();
                 if crate::ui::chrome::popup_menu_button(ui, theme, l.help_about).clicked() {
                     self.show_about_dialog = true;

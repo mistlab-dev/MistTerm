@@ -18,6 +18,17 @@ pub fn github_new_issue_url(app_version: &str) -> String {
     )
 }
 
+/// 打开 Bug 报告模板，并预填标题与正文（用于附带本地诊断摘要）。
+pub fn github_new_issue_url_with_body(app_version: &str, title_suffix: &str, body: &str) -> String {
+    let os = std::env::consts::OS;
+    let title = format!("[Bug] v{app_version} ({os}) {title_suffix}");
+    format!(
+        "{GITHUB_NEW_ISSUE_BASE}?template=bug_report.yml&title={}&body={}",
+        encode_query_component(&title),
+        encode_query_component(body),
+    )
+}
+
 /// 打开功能建议模板。
 pub fn github_feature_request_url() -> String {
     format!("{GITHUB_NEW_ISSUE_BASE}?template=feature_request.yml")
@@ -54,5 +65,12 @@ mod tests {
     fn feature_request_url_uses_template() {
         let url = github_feature_request_url();
         assert!(url.contains("template=feature_request.yml"));
+    }
+
+    #[test]
+    fn new_issue_with_body_contains_body_param() {
+        let url = github_new_issue_url_with_body("1.2.3", "hang", "line1\nline2");
+        assert!(url.contains("template=bug_report.yml"));
+        assert!(url.contains("body="));
     }
 }
