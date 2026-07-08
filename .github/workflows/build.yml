@@ -52,7 +52,7 @@ jobs:
             os: macos-latest
             target: universal-apple-darwin
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-            archive_ext: dmg
+            archive_ext: tar.gz
             cargo_features: vendored-openssl
             run_unit_tests: false
             run_integration_tests: false
@@ -290,7 +290,7 @@ jobs:
 
             Pick the archive for your platform:
 
-            - **macOS**: `Mist-macos-universal.dmg` — open the disk image and drag Mist into Applications
+            - **macOS**: `Mist-macos-universal.tar.gz`
             - **Linux**: `Mist-linux-x86_64.tar.gz`
             - **Windows**: `MistTerm-*-windows-x86_64-setup.exe` (recommended) or `Mist-windows-x86_64.zip`
 

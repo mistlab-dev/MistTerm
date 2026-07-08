@@ -18,7 +18,10 @@ mod macos_ime;
 pub mod macos_menu;
 
 pub use app_name::APP_DISPLAY_NAME;
-pub use docs::{github_feature_request_url, github_new_issue_url, DOCS_INDEX_URL, GITHUB_ISSUES_URL};
+pub use docs::{
+    github_feature_request_url, github_new_issue_url, github_new_issue_url_with_body, DOCS_INDEX_URL,
+    GITHUB_ISSUES_URL,
+};
 pub use fonts::{
     cjk_font_loaded, clamp_terminal_font_size, configure_egui_fonts, TerminalFontPreset,
     DEFAULT_TERMINAL_FONT_SIZE, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_MIN,
