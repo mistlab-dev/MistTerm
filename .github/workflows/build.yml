@@ -206,6 +206,13 @@ jobs:
           mkdir -p dist
 
           if [ "${{ matrix.archive_ext }}" = "dmg" ]; then
+            if [ "${{ runner.os }}" = "macOS" ]; then
+              # Universal binary is already lipo-merged; remove per-arch build leftovers
+              # to prevent hdiutil from failing with "No space left on device".
+              rm -rf target/aarch64-apple-darwin/release/{build,deps,examples,incremental} || true
+              rm -rf target/x86_64-apple-darwin/release/{build,deps,examples,incremental} || true
+              df -h
+            fi
             MIST_BINARY="target/${{ matrix.target }}/release/$BIN_NAME" \
               bash scripts/bundle-macos.sh
             artifact="$NAME.dmg"
