@@ -147,6 +147,28 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
     use crate::i18n::UiLanguage;
     use crate::platform::shortcuts as s;
 
+    fn mac_extra_en() -> String {
+        #[cfg(target_os = "macos")]
+        {
+            "\n⌘ + q — Quit app\n⌘ + h — Hide app\n⌘ + m — Minimize window".to_string()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            String::new()
+        }
+    }
+
+    fn mac_extra_zh() -> String {
+        #[cfg(target_os = "macos")]
+        {
+            "\n⌘ + q — 退出应用\n⌘ + h — 隐藏应用\n⌘ + m — 最小化窗口".to_string()
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            String::new()
+        }
+    }
+
     fn en() -> String {
         format!(
             "Keyboard shortcuts (primary: {})\n\
@@ -164,7 +186,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — About & this cheatsheet\n\
              {} — command history (in terminal)\n\
              {} — AI assistant panel\n\
-             {} — send terminal selection to AI",
+             {} — send terminal selection to AI{}",
             s::primary_modifier_label(),
             s::help_line("N", "New session"),
             s::help_line("E", "Edit selected session"),
@@ -181,6 +203,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::terminal_history_accel(),
             s::accel_shift("A"),
             s::accel_shift("L"),
+            mac_extra_en(),
         )
     }
 
@@ -201,7 +224,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — 关于与本说明\n\
              {} — 命令历史（终端内）\n\
              {} — AI 助手面板\n\
-             {} — 终端选区发送到 AI",
+             {} — 终端选区发送到 AI{}",
             s::primary_modifier_label(),
             s::help_line("N", "新建会话"),
             s::help_line("E", "编辑所选会话"),
@@ -218,6 +241,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::terminal_history_accel(),
             s::accel_shift("A"),
             s::accel_shift("L"),
+            mac_extra_zh(),
         )
     }
 
