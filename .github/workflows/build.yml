@@ -16,6 +16,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
   BIN_NAME: Mist
 
 jobs:
@@ -137,18 +140,6 @@ jobs:
           set -euo pipefail
           cargo test --release --test zmodem_integration_test
           cargo test --release --test zmodem_integration_test test_ssh_connect -- --ignored --exact
-
-      - name: Quick syntax check
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          set -euo pipefail
-          features="${{ matrix.cargo_features }}"
-          features_arg=()
-          if [ -n "$features" ]; then
-            features_arg=(--features "$features")
-          fi
-          cargo check --bin "$BIN_NAME" "${features_arg[@]}"
 
       - name: Build release binary (Unix)
         if: runner.os != 'Windows'
