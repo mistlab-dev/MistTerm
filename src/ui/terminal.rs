@@ -712,10 +712,10 @@ impl TerminalView {
         if line.is_empty() {
             return false;
         }
-        if is_rz_shell_command(&line) {
+        if crate::ui::terminal_shell_command::is_rz_shell_command(&line) {
             self.note_rz_shell_command_submitted();
         }
-        if is_sz_shell_command(&line) {
+        if crate::ui::terminal_shell_command::is_sz_shell_command(&line) {
             self.note_sz_shell_command_submitted();
         }
         self.submitted_line = Some(line.clone());
@@ -785,10 +785,10 @@ impl TerminalView {
             if b == b'\r' || b == b'\n' {
                 let line = self.pty_outbound_line_buffer.trim().to_string();
                 self.pty_outbound_line_buffer.clear();
-                if is_rz_shell_command(&line) {
+                if crate::ui::terminal_shell_command::is_rz_shell_command(&line) {
                     self.note_rz_shell_command_submitted();
                 }
-                if is_sz_shell_command(&line) {
+                if crate::ui::terminal_shell_command::is_sz_shell_command(&line) {
                     self.note_sz_shell_command_submitted();
                 }
             } else if b == 0x7f || b == 0x08 {
@@ -2513,10 +2513,10 @@ impl TerminalView {
             self.enqueue_log_command(line);
         }
         for line in &lines {
-            if is_rz_shell_command(line) {
+            if crate::ui::terminal_shell_command::is_rz_shell_command(line) {
                 self.note_rz_shell_command_submitted();
             }
-            if is_sz_shell_command(line) {
+            if crate::ui::terminal_shell_command::is_sz_shell_command(line) {
                 self.note_sz_shell_command_submitted();
             }
         }
@@ -3320,27 +3320,6 @@ impl TerminalView {
     }
 }
 
-fn first_shell_word(line: &str) -> &str {
-    line.trim().split_whitespace().next().unwrap_or("")
-}
-
-fn shell_word_basename(word: &str) -> &str {
-    word.rsplit(['\\', '/']).next().unwrap_or(word)
-}
-
-/// 判断用户在 shell 提交的是否为远端接收命令 `rz`/`lrz`（本机应对应 ZMODEM 发送）。
-fn is_rz_shell_command(line: &str) -> bool {
-    let base = shell_word_basename(first_shell_word(line));
-    let lower = base.to_ascii_lowercase();
-    matches!(lower.as_str(), "rz" | "lrz" | "rz.exe" | "lrz.exe")
-}
-
-fn is_sz_shell_command(line: &str) -> bool {
-    let base = shell_word_basename(first_shell_word(line));
-    let lower = base.to_ascii_lowercase();
-    matches!(lower.as_str(), "sz" | "lsz" | "sz.exe" | "lsz.exe")
-}
-
 /// 人类可读的文件大小格式
 fn human_readable_size(size: u64) -> String {
     const KB: u64 = 1024;
@@ -3361,22 +3340,5 @@ fn human_readable_size(size: u64) -> String {
 impl Default for TerminalView {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod rz_shell_command_tests {
-    use super::{is_rz_shell_command, is_sz_shell_command};
-
-    #[test]
-    fn detects_rz_variants() {
-        assert!(is_rz_shell_command("rz -bye"));
-        assert!(is_rz_shell_command("  lrz -y "));
-        assert!(is_rz_shell_command("C:\\ProgramData\\mistterm\\lrzsz\\rz.exe -bye"));
-        assert!(!is_rz_shell_command("sz -bye foo.txt"));
-        assert!(!is_rz_shell_command("where rz"));
-        assert!(!is_rz_shell_command("echo rz"));
-        assert!(is_sz_shell_command("sz -bye foo.txt"));
-        assert!(!is_sz_shell_command("rz -bye"));
     }
 }
