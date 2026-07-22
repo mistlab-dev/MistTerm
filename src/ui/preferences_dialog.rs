@@ -6,9 +6,8 @@ use eframe::egui::RichText;
 impl MistTermApp {
     fn workspace_top_chrome_height(&self, theme: &crate::ui::theme::Theme) -> f32 {
         let pending = self.ssh_pending_import_count();
-        let show_import_chip = self.sidebar_collapsed
-            && !self.title_ssh_import_dismissed
-            && pending > 0;
+        let show_import_chip =
+            self.sidebar_collapsed && !self.title_ssh_import_dismissed && pending > 0;
         #[cfg(target_os = "macos")]
         {
             if show_import_chip {
@@ -24,7 +23,11 @@ impl MistTermApp {
         }
     }
 
-    pub(crate) fn show_preferences_modal(&mut self, ctx: &egui::Context, theme: &crate::ui::theme::Theme) {
+    pub(crate) fn show_preferences_modal(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+    ) {
         let mut open = self.show_preferences_dialog;
         let mut should_close = false;
         let label_color = theme.color_form_label();
@@ -33,7 +36,8 @@ impl MistTermApp {
         let top_inset = self.workspace_top_chrome_height(theme) + margin;
         let bottom_inset = margin;
         let modal_sz = layout_util::modal_pref_size_in_viewport(ctx, top_inset, bottom_inset);
-        let modal_pos = layout_util::modal_center_pos_clamped(ctx, modal_sz, top_inset, bottom_inset);
+        let modal_pos =
+            layout_util::modal_center_pos_clamped(ctx, modal_sz, top_inset, bottom_inset);
         crate::ui::chrome::modal_window("preferences_modal", theme, ctx)
             .open(&mut open)
             .default_pos(modal_pos)
@@ -74,33 +78,63 @@ impl MistTermApp {
                                             layout_util::set_width_to_available(ui);
                                             ui.spacing_mut().item_spacing.y = theme.spacing_md();
                                             self.preferences_section_general(
-                                                ui, ctx, theme, label_color, text_low,
+                                                ui,
+                                                ctx,
+                                                theme,
+                                                label_color,
+                                                text_low,
                                             );
                                             self.preferences_section_appearance(
-                                                ui, ctx, theme, label_color,
+                                                ui,
+                                                ctx,
+                                                theme,
+                                                label_color,
                                             );
                                             self.preferences_section_connection(
-                                                ui, ctx, theme, label_color, text_low,
+                                                ui,
+                                                ctx,
+                                                theme,
+                                                label_color,
+                                                text_low,
                                             );
                                             self.preferences_section_terminal_logs(
-                                                ui, ctx, theme, label_color, text_low,
+                                                ui,
+                                                ctx,
+                                                theme,
+                                                label_color,
+                                                text_low,
                                             );
                                             self.preferences_section_vault(
-                                                ui, ctx, theme, label_color, text_low,
+                                                ui,
+                                                ctx,
+                                                theme,
+                                                label_color,
+                                                text_low,
                                             );
                                             self.preferences_section_audit(
-                                                ui, ctx, theme, label_color, text_low,
+                                                ui,
+                                                ctx,
+                                                theme,
+                                                label_color,
+                                                text_low,
                                             );
                                             self.preferences_section_team(
-                                                ui, ctx, theme, label_color, text_low,
+                                                ui,
+                                                ctx,
+                                                theme,
+                                                label_color,
+                                                text_low,
                                             );
                                             self.preferences_section_sync(
-                                                ui, ctx, theme, label_color, &mut should_close,
+                                                ui,
+                                                ctx,
+                                                theme,
+                                                label_color,
+                                                &mut should_close,
                                             );
                                         });
                                 });
                         });
-
                     });
                 });
             });
@@ -230,16 +264,15 @@ impl MistTermApp {
                 ui.add_space(theme.spacing_panel_gap());
 
                 let mut preset = self.terminal_font_preset;
-                let preset_label = |ctx: &egui::Context, p: crate::platform::TerminalFontPreset| {
-                    match p {
+                let preset_label =
+                    |ctx: &egui::Context, p: crate::platform::TerminalFontPreset| match p {
                         crate::platform::TerminalFontPreset::Default => {
                             crate::i18n::tr(ctx, "System default", "系统默认")
                         }
                         crate::platform::TerminalFontPreset::Consolas => "Consolas",
                         crate::platform::TerminalFontPreset::CascadiaMono => "Cascadia Mono",
                         crate::platform::TerminalFontPreset::JetBrainsMono => "JetBrains Mono",
-                    }
-                };
+                    };
                 egui::ComboBox::from_id_source("preferences_terminal_font_preset")
                     .selected_text(preset_label(ctx, preset))
                     .show_ui(ui, |ui| {
@@ -277,8 +310,7 @@ impl MistTermApp {
                     )
                     .changed()
                     {
-                        self.terminal_font_size =
-                            crate::platform::clamp_terminal_font_size(size);
+                        self.terminal_font_size = crate::platform::clamp_terminal_font_size(size);
                         self.apply_terminal_font_size_to_all_terminals();
                         ctx.request_repaint();
                     }
@@ -426,7 +458,11 @@ impl MistTermApp {
                     ui,
                     theme,
                     &mut log_on,
-                    crate::i18n::tr(ctx, "Save terminal output locally", "自动保存终端输出到本地"),
+                    crate::i18n::tr(
+                        ctx,
+                        "Save terminal output locally",
+                        "自动保存终端输出到本地",
+                    ),
                 )
                 .changed()
                 {
@@ -517,9 +553,9 @@ impl MistTermApp {
                         crate::i18n::UiLanguage::En => format!(
                             "Vault settings from team «{name}» (read-only until you change them)"
                         ),
-                        crate::i18n::UiLanguage::Zh => format!(
-                            "Vault 由团队「{name}」自动配置（修改任意项后将不再自动覆盖）"
-                        ),
+                        crate::i18n::UiLanguage::Zh => {
+                            format!("Vault 由团队「{name}」自动配置（修改任意项后将不再自动覆盖）")
+                        }
                     };
                     ui.label(
                         RichText::new(vault_hint)
@@ -669,33 +705,34 @@ impl MistTermApp {
                     )
                     .clicked()
                     {
-                        match crate::core::HashiCorpVaultClient::new(self.app_settings.vault.clone())
-                        {
+                        match crate::core::HashiCorpVaultClient::new(
+                            self.app_settings.vault.clone(),
+                        ) {
                             Ok(c) => match c.test_connection() {
                                 Ok(()) => {
-                                    self.status_message = crate::i18n::tr(
-                                        ctx,
-                                        "Connected to HashiCorp Vault",
-                                        "已连接到 HashiCorp Vault",
-                                    )
-                                    .to_string()
+                                    self.notify_success(
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "Connected to HashiCorp Vault",
+                                            "已连接到 HashiCorp Vault",
+                                        )
+                                        .to_string(),
+                                    );
                                 }
                                 Err(e) => {
-                                    self.status_message = super::status_message_wrap_error(
-                                        format!(
-                                            "{} {}",
-                                            crate::i18n::tr(
-                                                ctx,
-                                                "HashiCorp Vault:",
-                                                "HashiCorp Vault：",
-                                            ),
-                                            e
+                                    self.notify_error(format!(
+                                        "{} {}",
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "HashiCorp Vault:",
+                                            "HashiCorp Vault：",
                                         ),
-                                    );
+                                        e
+                                    ));
                                 }
                             },
                             Err(e) => {
-                                self.status_message = super::status_message_wrap_error(format!(
+                                self.notify_error(format!(
                                     "{} {}",
                                     crate::i18n::tr(ctx, "HashiCorp Vault:", "HashiCorp Vault："),
                                     e
@@ -826,22 +863,22 @@ impl MistTermApp {
                             .update_settings(self.app_settings.audit.clone());
                         match self.app_settings.save() {
                             Ok(()) => {
-                                self.audit_logger.record(
-                                    crate::core::AuditEvent::new(
-                                        crate::core::AuditCategory::Config,
-                                        "config.audit.updated",
-                                        crate::core::AuditOutcome::Success,
-                                    ),
+                                self.audit_logger.record(crate::core::AuditEvent::new(
+                                    crate::core::AuditCategory::Config,
+                                    "config.audit.updated",
+                                    crate::core::AuditOutcome::Success,
+                                ));
+                                self.notify_success(
+                                    crate::i18n::tr(
+                                        ctx,
+                                        "Saved Vault & audit settings",
+                                        "已保存 Vault 与审计设置",
+                                    )
+                                    .to_string(),
                                 );
-                                self.status_message = crate::i18n::tr(
-                                    ctx,
-                                    "Saved Vault & audit settings",
-                                    "已保存 Vault 与审计设置",
-                                )
-                                .into();
                             }
                             Err(e) => {
-                                self.status_message = super::status_message_wrap_error(format!(
+                                self.notify_error(format!(
                                     "{} {}",
                                     crate::i18n::tr(ctx, "Save failed:", "保存失败："),
                                     e
@@ -945,7 +982,7 @@ impl MistTermApp {
                         self.open_right_dock_panel(ActiveRightDock::CloudSync);
                     } else {
                         let w = Self::layout_window_width(ctx);
-                        self.status_message = Self::narrow_window_right_dock_hint(ctx, w);
+                        self.notify_warn(Self::narrow_window_right_dock_hint(ctx, w));
                     }
                 }
                 ui.add_space(theme.spacing_panel_gap());

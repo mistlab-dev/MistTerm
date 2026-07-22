@@ -107,13 +107,13 @@ impl HelpDocsDialog {
         ctx: &egui::Context,
         theme: &Theme,
         shortcuts_text: &str,
-        status_message: &mut String,
-    ) {
+    ) -> Option<String> {
         if !self.open {
-            return;
+            return None;
         }
         let mut open = self.open;
         let mut should_close = false;
+        let mut error = None;
         let modal_sz = egui::vec2(600.0, 560.0);
         chrome::modal_window("help_docs_modal", theme, ctx)
             .open(&mut open)
@@ -157,10 +157,11 @@ impl HelpDocsDialog {
                         });
                     ui.add_space(theme.spacing_md());
                     // Bottom link bar
-                    render_bottom_links(ui, theme, ctx, status_message);
+                    render_bottom_links(ui, theme, ctx, &mut error);
                 });
             });
         self.open = open && !should_close;
+        error
     }
 }
 
@@ -409,7 +410,12 @@ fn render_features(ui: &mut Ui, theme: &Theme, ctx: &egui::Context) {
 
 // ── Bottom link bar ────────────────────────────────────────────────
 
-fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_message: &mut String) {
+fn render_bottom_links(
+    ui: &mut Ui,
+    theme: &Theme,
+    ctx: &egui::Context,
+    error: &mut Option<String>,
+) {
     ui.horizontal(|ui| {
         if chrome::modal_secondary_icon_button(
             ui,
@@ -420,12 +426,12 @@ fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_m
         .clicked()
             && !crate::platform::open_url(DOCS_INDEX_URL)
         {
-            *status_message = crate::i18n::tr(
+            *error = Some(crate::i18n::tr(
                 ctx,
                 "Failed to open browser",
                 "无法打开浏览器",
             )
-            .to_string();
+            .to_string());
         }
 
         if chrome::modal_secondary_icon_button(
@@ -438,12 +444,12 @@ fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_m
         {
             let url = crate::platform::github_new_issue_url(env!("CARGO_PKG_VERSION"));
             if !crate::platform::open_url(&url) {
-                *status_message = crate::i18n::tr(
+                *error = Some(crate::i18n::tr(
                     ctx,
                     "Failed to open browser",
                     "无法打开浏览器",
                 )
-                .to_string();
+                .to_string());
             }
         }
 
@@ -457,11 +463,12 @@ fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_m
         .clicked()
             && !crate::platform::open_url(WEBSITE_URL)
         {
-            *status_message = crate::i18n::tr(
+            *error = Some(crate::i18n::tr(
                 ctx,
                 "Failed to open browser",
                 "无法打开浏览器",
-            ).to_string();
+            )
+            .to_string());
         }
 
         // GitHub link
@@ -474,11 +481,12 @@ fn render_bottom_links(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status_m
         .clicked()
             && !crate::platform::open_url(GITHUB_URL)
         {
-            *status_message = crate::i18n::tr(
+            *error = Some(crate::i18n::tr(
                 ctx,
                 "Failed to open browser",
                 "无法打开浏览器",
-            ).to_string();
+            )
+            .to_string());
         }
     });
 }
