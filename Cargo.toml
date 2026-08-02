@@ -1,6 +1,6 @@
 [package]
 name = "mistterm"
-version = "1.0.16"
+version = "1.0.17"
 edition = "2021"
 autobins = false
 default-run = "Mist"
@@ -11,7 +11,7 @@ repository = "https://github.com/mistlab-dev/MistTerm"
 license = "AGPL-3.0-or-later"
 
 [features]
-# 让 ssh2 / openssl-sys 自带源码编译 OpenSSL，便于 CI 跨平台构建（macOS universal 等）。
+# �?ssh2 / openssl-sys 自带源码编译 OpenSSL，便�?CI 跨平台构建（macOS universal 等）�?
 vendored-openssl = ["ssh2/vendored-openssl"]
 
 [lib]
@@ -89,7 +89,7 @@ base64 = "0.21"
 hkdf = "0.12"
 sha2 = "0.10"
 
-# HTTP（Vault API、审计远程 sink）
+# HTTP（Vault API、审计远�?sink�?
 reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 # Logging
@@ -105,14 +105,14 @@ parking_lot = "0.12"
 shellexpand = "3.1"
 dirs = "5.0"
 chrono = "0.4"
-# 片段命令中 {{ ... }} 表达式（md5/base64 等），默认沙箱、无 IO
+# 片段命令�?{{ ... }} 表达式（md5/base64 等），默认沙箱、无 IO
 rhai = "1.19"
 
 # Font support
 ab_glyph = "0.2"
 image = "0.24"
 alacritty_terminal = "0.26.0"
-# ZMODEM 协议（lrzsz 路径专用；与 SFTP / cat 直传无关）
+# ZMODEM 协议（lrzsz 路径专用；与 SFTP / cat 直传无关�?
 zmodem2 = { path = "vendor/zmodem2" }
 egui_plot = "0.23"
 pulldown-cmark = "0.11"
@@ -141,7 +141,7 @@ libc = "0.2"
 
 [profile.release]
 opt-level = 3
-# 用 thin LTO：链接时间显著降低（CI ~2-3x），二进制体积比 fat LTO 大 ~10-20%，
-# 运行性能差异基本无感。GUI / IO 类应用切 thin 性价比最高。
+# �?thin LTO：链接时间显著降低（CI ~2-3x），二进制体积比 fat LTO �?~10-20%�?
+# 运行性能差异基本无感。GUI / IO 类应用切 thin 性价比最高�?
 lto = "thin"
 strip = true
