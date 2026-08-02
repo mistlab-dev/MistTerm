@@ -422,8 +422,8 @@ impl MonitorPanel {
                                             theme,
                                             crate::i18n::tr(
                                                 ui.ctx(),
-                                                "Hide side panel · switch with footer Monitor",
-                                                "隐藏侧栏 · 也可用底部「监控」切换",
+                                                "Hide panel · reopen from Activity Rail or View menu",
+                                                "隐藏面板 · 可从活动栏或「视图」菜单再打开",
                                             ),
                                         )
                                         .clicked()

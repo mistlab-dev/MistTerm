@@ -4,10 +4,15 @@ use crate::ui::theme::Theme;
 use egui::Color32;
 
 /// FUNCTIONAL_SPEC §2.3.2：提示行命令段 / 输出行相对默认前景的亮度系数。
-pub const TERMINAL_COMMAND_DIM_FACTOR: f32 = 0.9;
-pub const TERMINAL_OUTPUT_DIM_FACTOR: f32 = 0.4;
+/// 与 Windows Terminal / PowerShell 对齐：默认不做压暗（1.0）。
+pub const TERMINAL_COMMAND_DIM_FACTOR: f32 = 1.0;
+pub const TERMINAL_OUTPUT_DIM_FACTOR: f32 = 1.0;
 
-/// 块状光标闪烁周期（秒），与常见终端 ~530ms 一致。
+/// 已连接时 UI 刷新间隔（毫秒）。
+/// 业界常见：有输出时约 16–33ms（60–30 FPS）；过低会空转 CPU，过高则 `top`/vim 发钝。
+pub const TERMINAL_LIVE_REPAINT_MS: u64 = 33;
+
+/// 块状光标闪烁周期（秒），与 xterm 默认约 530ms 一致。
 pub const TERMINAL_CURSOR_BLINK_PERIOD_SECS: f64 = 0.53;
 
 /// 终端 ScrollArea 纵向条（§2.3.4：宽 4px、轨道约 `rgba(255,255,255,0.06)`）。
@@ -15,8 +20,10 @@ pub const TERMINAL_SCROLL_BAR_WIDTH: f32 = 4.0;
 /// 255 * 0.06 ≈ 15，与 `Theme::fg_high_a15` 一致。
 pub const TERMINAL_SCROLL_BAR_TRACK_ALPHA: u8 = 15;
 
-/// 终端行高在字体默认行距上追加的 descender 余量（像素）。
-pub const TERMINAL_LINE_HEIGHT_EXTRA: f32 = 1.0;
+/// 终端行高相对字号的上限系数。
+/// egui `row_height` = ascent - descent + line_gap；Consolas 等 line_gap 偏大时会出现「字贴顶、下空一截」。
+/// 夹到 `font_size * FACTOR` 与 Windows Terminal 常见 1.0–1.2 行距接近。
+pub const TERMINAL_LINE_HEIGHT_FACTOR: f32 = 1.1;
 
 /// 由当前主题派生的终端 shell 着色参数（供 [`crate::terminal::Terminal::get_layout_job`] 与 UI feed 共用）。
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -44,7 +51,7 @@ pub fn line_compact(line: &str) -> String {
 impl TerminalShellStyle {
     pub fn from_theme(theme: &Theme) -> Self {
         Self {
-            default_fg: theme.text_primary(),
+            default_fg: theme.terminal_default_fg(),
             terminal_bg: theme.bg_terminal_color(),
             prompt_arrow: theme.green_color(),
             path_hint: theme.accent_color(),
@@ -52,13 +59,13 @@ impl TerminalShellStyle {
             user_info: if theme.is_light_theme() {
                 theme.accent_color()
             } else {
-                theme.text_primary()
+                theme.terminal_default_fg()
             },
             user_success: theme.green_color(),
             user_warn: theme.amber_color(),
             command_dim_factor: theme.terminal_command_dim_factor(),
             output_dim_factor: theme.terminal_output_dim_factor(),
-            search_match_fg: theme.text_primary(),
+            search_match_fg: theme.terminal_default_fg(),
             search_match_bg: theme.list_row_selected_bg(),
         }
     }

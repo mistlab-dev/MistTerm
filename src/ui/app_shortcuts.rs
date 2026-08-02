@@ -39,6 +39,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {}\n\
              {}\n\
              {}\n\
+             {}\n\
              {} — search in terminal viewport\n\
              {} — Preferences\n\
              {} — About & this cheatsheet\n\
@@ -54,6 +55,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::accel_literal("Tab"),
             s::help_line("J", "Focus connection search"),
             s::help_line("K", "Focus snippet search"),
+            s::help_line("B", "Show/hide activity rail"),
             format!("{} — Quick snippet picker", s::accel_shift("J")),
             s::accel("F"),
             s::accel_literal(","),
@@ -77,6 +79,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {}\n\
              {}\n\
              {}\n\
+             {}\n\
              {} — 终端内搜索\n\
              {} — 偏好设置\n\
              {} — 关于与本说明\n\
@@ -92,6 +95,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::accel_literal("Tab"),
             s::help_line("J", "聚焦连接搜索"),
             s::help_line("K", "聚焦片段搜索"),
+            s::help_line("B", "显示/隐藏活动栏"),
             s::accel_shift("J").to_owned() + " — 快速片段选择器",
             s::accel("F"),
             s::accel_literal(","),

@@ -254,8 +254,8 @@ impl PortForwardPanel {
                 crate::i18n::tr(ctx, "Port Forward", "端口转发"),
                 crate::i18n::tr(
                     ctx,
-                    "Hide sidebar · or use bottom toggle",
-                    "隐藏侧栏 · 也可用底栏切换",
+                    "Hide panel · reopen from Activity Rail or View menu",
+                    "隐藏面板 · 可从活动栏或「视图」菜单再打开",
                 ),
             );
         });

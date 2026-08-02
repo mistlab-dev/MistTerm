@@ -109,6 +109,9 @@ struct MistTermUiPersist {
     session_log_include_ansi: bool,
     #[serde(default)]
     ssh_import_banner_dismissed: bool,
+    /// 左侧 Activity Rail 是否隐藏（默认显示）。
+    #[serde(default)]
+    activity_rail_collapsed: bool,
 }
 
 fn default_session_log_enabled() -> bool {
@@ -249,6 +252,8 @@ pub struct MistTermApp {
 
     /// 侧边栏状态
     sidebar_collapsed: bool,
+    /// 左侧 Activity Rail 隐藏后完全不占位；默认 false=显示。
+    activity_rail_collapsed: bool,
     sidebar_width: f32,
     /// 用户曾主动折叠左侧连接栏；宽屏时响应式不自动展开（FUNCTIONAL_SPEC §8 注意）
     sidebar_user_dismissed_responsive: bool,
@@ -434,6 +439,8 @@ pub struct MistTermApp {
     hang_reporter: HangReporter,
     /// 统一 Toast（所有用户可见通知走这里）
     active_toast: Option<ActiveToast>,
+    /// GUI 自动化：首帧按会话名自动连接（`MISTTERM_AUTO_CONNECT`）
+    pending_auto_connect_session: Option<String>,
 }
 
 /// 命令审计确认弹窗状态
@@ -452,8 +459,8 @@ impl MistTermApp {
     const RESP_LAYOUT_NARROW_LT_PX: f32 = 800.0;
 
     /// 片段变量类弹窗：正文 / 单行输入 / 按钮统一字号（egui 默认 Body 往往偏大）
-    /// 应用当前主题（由 ThemeManager 统一管理）
-    fn apply_current_theme(&self, ctx: &egui::Context) {
+    /// 应用当前主题（由 ThemeManager 统一管理；同主题重复调用为 no-op）
+    fn apply_current_theme(&mut self, ctx: &egui::Context) {
         self.theme_manager.apply_theme(ctx);
     }
 
@@ -586,33 +593,13 @@ impl MistTermApp {
                 }),
             selected_session_id,
             sidebar_collapsed: true,
+            activity_rail_collapsed: false,
             sidebar_width: layout_util::default_sidebar_width(&cc.egui_ctx),
             sidebar_user_dismissed_responsive: true,
             last_responsive_layout_band: None,
             tabs: Vec::new(),
             active_tab: None,
-            status_message: {
-                let ready = boot_loc.tr("Ready", "就绪").to_string();
-                let mut msg = if boot_diagnostics.is_empty() {
-                    ready.clone()
-                } else {
-                    boot_diagnostics
-                };
-                if !crate::platform::cjk_font_loaded() {
-                    let warn = boot_loc
-                        .tr(
-                            "CJK fonts not loaded; Chinese may render as boxes",
-                            "未加载中文字体，界面中文可能显示为方框",
-                        )
-                        .to_string();
-                    if msg.is_empty() || msg == ready {
-                        msg = warn;
-                    } else {
-                        msg = format!("{}{}{}", msg, boot_loc.tr(" — ", "；"), warn);
-                    }
-                }
-                msg
-            },
+            status_message: String::new(),
             show_new_session_dialog: false,
             show_edit_session_dialog: false,
             show_about_dialog: false,
@@ -726,6 +713,7 @@ impl MistTermApp {
             batch_exec_rx: None,
             hang_reporter: HangReporter::start_default(),
             active_toast: None,
+            pending_auto_connect_session: None,
             auto_reconnect_enabled: false,
             terminal_font_preset: crate::platform::TerminalFontPreset::default(),
             terminal_font_size: crate::platform::DEFAULT_TERMINAL_FONT_SIZE,
@@ -773,6 +761,7 @@ impl MistTermApp {
                 };
                 app.session_log_settings.include_ansi = p.session_log_include_ansi;
                 app.ssh_import_banner_dismissed = p.ssh_import_banner_dismissed;
+                app.activity_rail_collapsed = p.activity_rail_collapsed;
             }
         }
         app.session_log_settings.enabled = app.session_log_enabled;
@@ -792,6 +781,31 @@ impl MistTermApp {
 
         crate::platform::configure_egui_fonts(&cc.egui_ctx, app.terminal_font_preset);
         app.apply_terminal_font_size_to_all_terminals();
+
+        // GUI 自动化：启动后首帧自动连接已保存会话（仅 MISTTERM_GUI_AUTOMATION=1 时生效）
+        if crate::ui::sftp_panel::SftpPanel::gui_automation_enabled() {
+            if let Ok(name) = std::env::var("MISTTERM_AUTO_CONNECT") {
+                let name = name.trim().to_string();
+                if !name.is_empty() {
+                    app.pending_auto_connect_session = Some(name);
+                }
+            }
+        }
+
+        // 启动诊断 / 字体问题走 Toast；不再显示「就绪」。
+        if !boot_diagnostics.is_empty() {
+            app.notify_warn(boot_diagnostics);
+        }
+        if !crate::platform::cjk_font_loaded() {
+            app.notify_warn(
+                boot_loc
+                    .tr(
+                        "CJK fonts not loaded; Chinese may render as boxes",
+                        "未加载中文字体，界面中文可能显示为方框",
+                    )
+                    .to_string(),
+            );
+        }
 
         app
     }
@@ -1065,7 +1079,7 @@ impl MistTermApp {
                 self.team_service.spawn_sync_current_team();
             }
             if self.team_service.auth_expired {
-                self.notify_auto(
+                self.notify_error(
                     crate::i18n::tr(
                         ctx,
                         "Team session expired — sign in again in Preferences",
@@ -1074,6 +1088,9 @@ impl MistTermApp {
                     .to_string(),
                 );
                 self.team_service.auth_expired = false;
+            }
+            if let Some(err) = self.team_service.take_pending_notify_error() {
+                self.notify_error(err);
             }
             self.configure_team_audit_sink();
             ctx.request_repaint();
@@ -1186,8 +1203,12 @@ impl MistTermApp {
     }
 
     fn poll_connect_audit_from_tabs(&mut self) {
+        let mut toast_errors = Vec::new();
         for tab in &mut self.tabs {
             for pane in tab.panes.iter_mut() {
+                if let Some(err) = pane.terminal.take_pending_toast_error() {
+                    toast_errors.push(err);
+                }
                 if let Some((ok, host)) = pane.terminal.take_connect_audit() {
                     let action = if ok {
                         "connect.success"
@@ -1217,6 +1238,9 @@ impl MistTermApp {
                     }
                 }
             }
+        }
+        for err in toast_errors {
+            self.notify_error(err);
         }
     }
 
@@ -2109,6 +2133,7 @@ impl MistTermApp {
             Err(e) => {
                 self.team_service.state.last_error = e.clone();
                 let _ = self.team_service.state.save();
+                self.notify_error(e);
             }
         }
     }
@@ -3001,6 +3026,15 @@ impl MistTermApp {
             self.close_all_right_dock_panels();
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
             self.open_right_dock_panel(ActiveRightDock::Fragment);
+        }
+    }
+
+    /// 显示/隐藏左侧 Activity Rail；隐藏时同步收起连接抽屉。
+    pub(crate) fn toggle_activity_rail(&mut self) {
+        self.activity_rail_collapsed = !self.activity_rail_collapsed;
+        if self.activity_rail_collapsed {
+            self.sidebar_collapsed = true;
+            self.sidebar_user_dismissed_responsive = true;
         }
     }
 
@@ -4329,7 +4363,7 @@ impl MistTermApp {
                                     .to_string(),
                                 );
                             }
-                            Err(e) => self.notify_auto(e),
+                            Err(e) => self.notify_error(e),
                         }
                     }
                 }
@@ -4376,7 +4410,7 @@ impl MistTermApp {
                                     .to_string(),
                                 );
                             }
-                            Err(e) => self.notify_auto(e),
+                            Err(e) => self.notify_error(e),
                         }
                     }
                 }
@@ -4421,7 +4455,7 @@ impl MistTermApp {
                     && crate::ui::chrome::panel_action_icon_button(
                         ui,
                         theme,
-                        crate::ui::icons::IconId::Package,
+                        crate::ui::icons::IconId::Settings,
                         crate::i18n::tr(ui.ctx(), "Team settings", "团队设置"),
                     )
                     .clicked()
@@ -5132,13 +5166,24 @@ impl MistTermApp {
         });
     }
 
-    /// 左侧 Activity Rail（全平台统一导航）。
+    /// 左侧 Activity Rail（全平台统一导航）。隐藏时改画左缘窄恢复条。
     pub(crate) fn show_activity_rail(
         &mut self,
         ctx: &egui::Context,
         theme: &crate::ui::theme::Theme,
     ) {
+        if self.activity_rail_collapsed {
+            self.show_activity_rail_reveal_strip(ctx, theme);
+            return;
+        }
         let rail_w = theme.activity_rail_width();
+        let menu = crate::i18n::menu::labels(crate::i18n::language(ctx));
+        let tip = |label: &str, accel: Option<String>| -> String {
+            match accel {
+                Some(a) => format!("{label} · {a}"),
+                None => label.to_string(),
+            }
+        };
         egui::SidePanel::left("activity_rail")
             .exact_width(rail_w)
             .resizable(false)
@@ -5158,13 +5203,12 @@ impl MistTermApp {
                 ui.add_space(8.0);
                 ui.vertical_centered(|ui| {
                     ui.spacing_mut().item_spacing.y = 6.0;
-                    let conn_tip = crate::i18n::tr(ctx, "Connections", "连接");
                     if crate::ui::chrome::activity_rail_button(
                         ui,
                         theme,
                         crate::ui::icons::IconId::Server,
                         !self.sidebar_collapsed,
-                        conn_tip,
+                        &tip(menu.connections, None),
                     )
                     .clicked()
                     {
@@ -5172,13 +5216,12 @@ impl MistTermApp {
                         self.sidebar_user_dismissed_responsive = self.sidebar_collapsed;
                     }
 
-                    let menu = crate::i18n::menu::labels(crate::i18n::language(ctx));
                     if crate::ui::chrome::activity_rail_button(
                         ui,
                         theme,
                         crate::ui::icons::IconId::Fragment,
                         self.show_fragment_panel,
-                        &format!("{} · {}", menu.fragment_panel, crate::platform::accel("K")),
+                        &tip(menu.fragment_panel, Some(crate::platform::accel("K"))),
                     )
                     .clicked()
                     {
@@ -5189,7 +5232,10 @@ impl MistTermApp {
                         theme,
                         crate::ui::icons::IconId::Folder,
                         self.show_sftp_panel,
-                        crate::i18n::tr(ctx, "SFTP files", "SFTP 文件"),
+                        &tip(
+                            menu.sftp_panel,
+                            Some(crate::platform::accel_shift("S")),
+                        ),
                     )
                     .clicked()
                     {
@@ -5200,7 +5246,7 @@ impl MistTermApp {
                         theme,
                         crate::ui::icons::IconId::Network,
                         self.show_port_forward_panel,
-                        crate::i18n::tr(ctx, "Port forwarding", "端口转发"),
+                        &tip(menu.port_forward_panel, None),
                     )
                     .clicked()
                     {
@@ -5211,7 +5257,7 @@ impl MistTermApp {
                         theme,
                         crate::ui::icons::IconId::Monitor,
                         self.show_monitor_panel,
-                        crate::i18n::tr(ctx, "Monitor", "监控"),
+                        &tip(menu.monitor_panel, None),
                     )
                     .clicked()
                     {
@@ -5222,7 +5268,7 @@ impl MistTermApp {
                         theme,
                         crate::ui::icons::IconId::Api,
                         self.show_ai_panel,
-                        crate::i18n::tr(ctx, "AI assistant", "AI 助手"),
+                        &tip(menu.ai_panel, Some(crate::platform::accel_shift("A"))),
                     )
                     .clicked()
                     {
@@ -5235,15 +5281,45 @@ impl MistTermApp {
                     if crate::ui::chrome::activity_rail_button(
                         ui,
                         theme,
-                        crate::ui::icons::IconId::Package,
+                        crate::ui::icons::IconId::Settings,
                         self.show_preferences_dialog,
-                        crate::i18n::tr(ctx, "Preferences", "偏好设置"),
+                        &tip(
+                            menu.preferences,
+                            Some(crate::platform::accel_literal(",")),
+                        ),
                     )
                     .clicked()
                     {
                         self.show_preferences_dialog = true;
                     }
                 });
+            });
+    }
+
+    /// Rail 完全隐藏时的左缘窄条（跨平台可视恢复入口；与菜单 / ⌘·Ctrl+B 并存）。
+    pub(crate) fn show_activity_rail_reveal_strip(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+    ) {
+        let strip_w = theme.activity_rail_collapsed_strip_width();
+        let tip = format!(
+            "{} · {}",
+            crate::i18n::menu::labels(crate::i18n::language(ctx)).show_activity_rail,
+            crate::platform::accel("B"),
+        );
+        egui::SidePanel::left("activity_rail_reveal")
+            .exact_width(strip_w)
+            .resizable(false)
+            .frame(
+                egui::Frame::none()
+                    .fill(theme.chrome_bar_fill())
+                    .stroke(egui::Stroke::NONE),
+            )
+            .show(ctx, |ui| {
+                if crate::ui::chrome::activity_rail_reveal_strip(ui, theme, &tip).clicked() {
+                    self.activity_rail_collapsed = false;
+                }
             });
     }
 
@@ -5484,6 +5560,7 @@ impl MistTermApp {
                 self.app_settings.ui_language,
                 self.ssh_config_path.exists(),
                 self.sidebar_collapsed,
+                self.activity_rail_collapsed,
                 frame.info().window_info.maximized,
                 self.show_sftp_panel,
                 self.show_fragment_panel,
@@ -5527,6 +5604,7 @@ impl MistTermApp {
                     self.sidebar_user_dismissed_responsive = false;
                 }
             }
+            MacMenuAction::ToggleActivityRail => self.toggle_activity_rail(),
             MacMenuAction::ToggleMaximize => {
                 frame.set_maximized(!frame.info().window_info.maximized);
             }
@@ -5663,25 +5741,76 @@ impl eframe::App for MistTermApp {
             session_log_retention_days: self.session_log_settings.retention_days,
             session_log_include_ansi: self.session_log_settings.include_ansi,
             ssh_import_banner_dismissed: self.ssh_import_banner_dismissed,
+            activity_rail_collapsed: self.activity_rail_collapsed,
         };
         eframe::set_value(storage, MISTTERM_UI_STORAGE_KEY, &p);
         let _ = self.command_history.save();
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if let Some(name) = self.pending_auto_connect_session.take() {
+            if let Some(session) = self
+                .session_manager
+                .list_sessions()
+                .iter()
+                .find(|s| s.name == name)
+                .cloned()
+            {
+                log::info!("GUI automation auto-connect: {name}");
+                self.push_tab_connecting(ctx, &session);
+            } else {
+                log::warn!("GUI automation auto-connect session not found: {name}");
+            }
+        }
         self.hang_reporter.update_snapshot(HangSnapshot {
             status_message: status_message_body(&self.status_message).to_string(),
             tabs_count: self.tabs.len(),
             active_tab: self.active_tab,
             panel_state: format!(
-                "fragment={} monitor={} ai={} sftp={} pf={} search={}",
+                "fragment={} monitor={} ai={} sftp={} pf={} search={} rail_hidden={}",
                 self.show_fragment_panel,
                 self.show_monitor_panel,
                 self.show_ai_panel,
                 self.show_sftp_panel,
                 self.show_port_forward_panel,
-                self.show_terminal_search
+                self.show_terminal_search,
+                self.activity_rail_collapsed
             ),
+            busy_hint: {
+                let mut parts = Vec::new();
+                if self.team_service.is_busy() {
+                    parts.push("team.busy");
+                }
+                if self.ai_panel.is_busy() {
+                    parts.push("ai.busy");
+                }
+                if self.sftp_panel.is_busy() {
+                    parts.push("sftp.busy");
+                }
+                if self
+                    .tabs
+                    .iter()
+                    .any(|t| t.panes.iter().any(|p| p.terminal.is_connecting()))
+                {
+                    parts.push("ssh.connecting");
+                }
+                if self.show_new_session_dialog {
+                    parts.push("dialog.new_session");
+                }
+                if self.show_edit_session_dialog {
+                    parts.push("dialog.edit_session");
+                }
+                if self.show_preferences_dialog {
+                    parts.push("dialog.preferences");
+                }
+                if self.delete_session_confirm.is_some() {
+                    parts.push("modal.delete_session");
+                }
+                if self.cmd_audit_confirm.is_some() {
+                    parts.push("modal.cmd_audit");
+                }
+                parts.join(",")
+            },
         });
         self.hang_reporter.heartbeat();
         crate::i18n::set_language(ctx, self.app_settings.ui_language);
@@ -5910,7 +6039,14 @@ impl eframe::App for MistTermApp {
                     pane.ssh_auto_reconnect_attempts = new_sched.attempts;
                 }
                 if let Some(s) = status {
-                    self.notify_auto(Self::format_reconnect_status(ctx, s));
+                    match s {
+                        crate::core::ReconnectStatus::GaveUp { .. } => {
+                            self.notify_error(Self::format_reconnect_status(ctx, s));
+                        }
+                        crate::core::ReconnectStatus::Scheduled { .. } => {
+                            self.notify_auto(Self::format_reconnect_status(ctx, s));
+                        }
+                    }
                 }
             }
         }
@@ -6111,6 +6247,16 @@ impl eframe::App for MistTermApp {
                     && i.key_pressed(egui::Key::K)
             }) {
                 self.focus_fragment_panel_search(ctx);
+            }
+            // ⌘B / Ctrl+B：显示/隐藏 Activity Rail
+            if ctx.input(|i| {
+                self.app_shortcut_overrides_terminal(i)
+                    && Self::input_primary_mod(i)
+                    && !i.modifiers.shift
+                    && !i.modifiers.alt
+                    && i.key_pressed(egui::Key::B)
+            }) {
+                self.toggle_activity_rail();
             }
             if ctx.input(|i| {
                 self.app_shortcut_overrides_terminal(i)

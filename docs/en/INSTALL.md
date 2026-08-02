@@ -33,7 +33,7 @@ INSTALL_DIR=/usr/local/bin ./scripts/install.sh
 
 Download **`MistTerm-*-windows-x86_64-setup.exe`** from [GitHub Releases](https://github.com/mistlab-dev/MistTerm/releases) and run the installer (Start menu shortcut, optional desktop icon, uninstaller — no PATH setup).
 
-A portable **zip** is also on the release page if you prefer not to install.
+A portable **zip** is also on the release page if you prefer not to install. Double-click `Mist.exe` (Windows GUI subsystem — **no** extra console window; unlike `cargo run`, which attaches to the parent terminal).
 
 ## Build from source (developers)
 

@@ -11,6 +11,7 @@
 use super::macos_app_name::APP_DISPLAY_NAME;
 use crate::i18n::{menu, UiLanguage};
 use muda::{
+    accelerator::{Accelerator, Code, Modifiers},
     CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
 };
 
@@ -30,6 +31,7 @@ pub enum MacMenuAction {
     SelectAllTerminal,
     TerminalSearch,
     ToggleSidebar,
+    ToggleActivityRail,
     ToggleMaximize,
     ToggleSftp,
     ToggleFragmentSidebar,
@@ -74,6 +76,7 @@ pub struct NativeAppMenu {
     select_terminal: MenuItem,
     terminal_search: MenuItem,
     toggle_sidebar: MenuItem,
+    toggle_activity_rail: MenuItem,
     toggle_maximize: MenuItem,
     sftp_panel: CheckMenuItem,
     fragment_panel: CheckMenuItem,
@@ -121,7 +124,7 @@ impl NativeAppMenu {
             "mistterm.app.quit",
             l.quit,
             true,
-            None,
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyQ)),
         );
         app_menu.append(&about)?;
         app_menu.append(&PredefinedMenuItem::separator())?;
@@ -209,6 +212,12 @@ impl NativeAppMenu {
         let view = Submenu::new(l.view_menu, true);
         let toggle_sidebar =
             MenuItem::with_id("mistterm.view.toggle_sidebar", l.collapse_sidebar, true, None);
+        let toggle_activity_rail = MenuItem::with_id(
+            "mistterm.view.toggle_activity_rail",
+            l.hide_activity_rail,
+            true,
+            Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyB)),
+        );
         let toggle_maximize =
             MenuItem::with_id("mistterm.view.toggle_maximize", l.maximize_window, true, None);
         let sftp_panel = CheckMenuItem::with_id(
@@ -234,6 +243,7 @@ impl NativeAppMenu {
         );
         let (theme_submenu, theme_items) =
             build_theme_submenu(theme_display_names, l.theme_menu)?;
+        view.append(&toggle_activity_rail)?;
         view.append(&toggle_sidebar)?;
         view.append(&toggle_maximize)?;
         view.append(&PredefinedMenuItem::separator())?;
@@ -345,6 +355,7 @@ impl NativeAppMenu {
             select_terminal,
             terminal_search,
             toggle_sidebar,
+            toggle_activity_rail,
             toggle_maximize,
             sftp_panel,
             fragment_panel,
@@ -416,6 +427,7 @@ impl NativeAppMenu {
         lang: UiLanguage,
         ssh_import_enabled: bool,
         sidebar_collapsed: bool,
+        activity_rail_collapsed: bool,
         window_maximized: bool,
         show_sftp_panel: bool,
         show_fragment_panel: bool,
@@ -446,6 +458,12 @@ impl NativeAppMenu {
             l.collapse_sidebar
         };
         let _ = self.toggle_sidebar.set_text(sidebar_label);
+        let rail_label = if activity_rail_collapsed {
+            l.show_activity_rail
+        } else {
+            l.hide_activity_rail
+        };
+        let _ = self.toggle_activity_rail.set_text(rail_label);
         let maximize_label = if window_maximized {
             l.restore_window
         } else {
@@ -496,6 +514,7 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.edit.select_all_terminal" => Some(MacMenuAction::SelectAllTerminal),
         "mistterm.edit.find" => Some(MacMenuAction::TerminalSearch),
         "mistterm.view.toggle_sidebar" => Some(MacMenuAction::ToggleSidebar),
+        "mistterm.view.toggle_activity_rail" => Some(MacMenuAction::ToggleActivityRail),
         "mistterm.view.toggle_maximize" => Some(MacMenuAction::ToggleMaximize),
         "mistterm.view.panel.sftp" | "mistterm.view.sftp" => Some(MacMenuAction::ToggleSftp),
         "mistterm.view.panel.fragments" => Some(MacMenuAction::ToggleFragmentSidebar),

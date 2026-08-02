@@ -91,6 +91,24 @@ impl MistTermApp {
             if crate::ui::chrome::popup_menu_button(
                 ui,
                 theme,
+                &format!(
+                    "{} · {}",
+                    if self.activity_rail_collapsed {
+                        l.show_activity_rail
+                    } else {
+                        l.hide_activity_rail
+                    },
+                    crate::platform::accel("B"),
+                ),
+            )
+            .clicked()
+            {
+                self.toggle_activity_rail();
+                ui.close_menu();
+            }
+            if crate::ui::chrome::popup_menu_button(
+                ui,
+                theme,
                 if self.sidebar_collapsed {
                     l.expand_sidebar
                 } else {
@@ -129,7 +147,7 @@ impl MistTermApp {
                 ui,
                 theme,
                 self.show_port_forward_panel,
-                crate::i18n::tr(ctx, "Port Forwarding", "端口转发"),
+                l.port_forward_panel,
             )
             .clicked()
             {

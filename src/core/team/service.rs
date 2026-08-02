@@ -94,6 +94,8 @@ pub struct TeamService {
     pending_team_detail: bool,
     oauth_cancel: Arc<AtomicBool>,
     pending_cmd_audit_payload: Option<crate::core::cmd_audit::CmdAuditSyncPayload>,
+    /// 待宿主 Toast 的网络/同步错误。
+    pending_notify_error: Option<String>,
 }
 
 impl TeamService {
@@ -122,7 +124,12 @@ impl TeamService {
             pending_team_detail: false,
             oauth_cancel: Arc::new(AtomicBool::new(false)),
             pending_cmd_audit_payload: None,
+            pending_notify_error: None,
         }
+    }
+
+    pub fn take_pending_notify_error(&mut self) -> Option<String> {
+        self.pending_notify_error.take()
     }
 
     pub fn take_cmd_audit_sync_payload(&mut self) -> Option<crate::core::cmd_audit::CmdAuditSyncPayload> {
@@ -390,6 +397,7 @@ impl TeamService {
         self.auth_expired = true;
         self.state.last_error = message.to_string();
         self.status_line = "Session expired — sign in again".into();
+        self.pending_notify_error = Some(self.status_line.clone());
         let _ = self.state.save();
     }
 
@@ -481,7 +489,8 @@ impl TeamService {
                             self.handle_auth_failure(&e);
                         } else {
                             self.state.last_error = e.clone();
-                            self.status_line = e;
+                            self.status_line = e.clone();
+                            self.pending_notify_error = Some(e);
                             let _ = self.state.save();
                         }
                     }

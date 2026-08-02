@@ -10,10 +10,11 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// 默认阈值：主线程 5 秒无心跳，判定为一次疑似卡顿。
-const DEFAULT_HANG_THRESHOLD_MS: u64 = 5_000;
-/// watchdog 检查间隔。
-const DEFAULT_POLL_MS: u64 = 1_000;
+/// 默认阈值：主线程约 3 秒无心跳视为疑似卡顿。
+/// 过短（1s 内）易被 FileDialog/短暂 GC 误报；过长（>5s）不利定位。业界桌面诊断常见 2–5s。
+const DEFAULT_HANG_THRESHOLD_MS: u64 = 3_000;
+/// watchdog 检查间隔（不必过密）。
+const DEFAULT_POLL_MS: u64 = 500;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct HangSnapshot {
@@ -21,6 +22,9 @@ pub struct HangSnapshot {
     pub tabs_count: usize,
     pub active_tab: Option<usize>,
     pub panel_state: String,
+    /// 忙态提示（团队/市场/对话框等），便于归因 UI 阻塞。
+    #[serde(default)]
+    pub busy_hint: String,
 }
 
 impl Default for HangSnapshot {
@@ -30,6 +34,7 @@ impl Default for HangSnapshot {
             tabs_count: 0,
             active_tab: None,
             panel_state: String::new(),
+            busy_hint: String::new(),
         }
     }
 }
@@ -153,6 +158,13 @@ fn check_and_dump_if_hung(inner: &Inner) {
         snapshot,
     };
     let _ = write_report(&report);
+    log::warn!(
+        "UI hang suspected: stale_for_ms={} threshold_ms={} busy_hint={} panels={}",
+        report.stale_for_ms,
+        report.threshold_ms,
+        report.snapshot.busy_hint,
+        report.snapshot.panel_state
+    );
     inner
         .last_reported_heartbeat_ms
         .store(last, Ordering::Relaxed);

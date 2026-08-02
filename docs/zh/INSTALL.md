@@ -33,7 +33,7 @@ INSTALL_DIR=/usr/local/bin ./scripts/install.sh
 
 从 [GitHub Releases](https://github.com/mistlab-dev/MistTerm/releases) 下载 **`MistTerm-*-windows-x86_64-setup.exe`**，双击安装即可（开始菜单快捷方式、可选桌面图标、自带卸载，无需配置 PATH）。
 
-便携版（zip）仍在 Release 中提供，解压后需自行运行 `Mist.exe`。
+便携版（zip）仍在 Release 中提供，解压后双击 `Mist.exe` 即可（GUI 子系统，**不会**额外弹出控制台；与开发时 `cargo run` 附着父终端不同）。
 
 ## 不安装直接运行
 

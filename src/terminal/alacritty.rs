@@ -282,11 +282,14 @@ impl Terminal {
         }
 
         let mut out = String::with_capacity(self.height * (self.width + 1));
-        for row in rows {
+        for (i, row) in rows.into_iter().enumerate() {
             for ch in row {
                 out.push(ch);
             }
-            out.push('\n');
+            // 与 get_layout_job 一致：末行后不再加 `\n`，避免 TextEdit/行计数多出空行。
+            if i + 1 < self.height {
+                out.push('\n');
+            }
         }
         out
     }
@@ -309,10 +312,11 @@ impl Terminal {
         lines.join("\n")
     }
 
-    /// 返回带颜色信息的布局（保持等宽）。`shell` 须由 [`TerminalShellStyle::from_theme`] 生成，
-    /// 且 `terminal_bg` 与 UI 外框一致，否则整块格子与外框底色色差会像「四周留白」。
-    /// `highlight`: 当前命中 `(行, 列, 长度)`，均为 **1-based** 字符下标（与 [`Self::search_viewport`] 一致）。
-    /// `cell_w`：单格像素宽（与 UI [`TerminalView`] 测 `M` 一致），用于宽字符占位。
+    /// 返回着色 `LayoutJob` 与逐格背景色。
+    ///
+    /// **背景不写入 `TextFormat.background`**：egui 会对 background 做 `expand(1.0)`，
+    /// 在终端密排下会压住下一行字形。调用方须在文本之下自绘 `cell_bgs`，再铺 galley。
+    /// `selection`: 绝对网格选区 `(start_line, start_col, end_line, end_col)`（列 end 开区间）+ 选区底色。
     pub fn get_layout_job(
         &self,
         font_size: f32,
@@ -320,7 +324,8 @@ impl Terminal {
         cell_w: f32,
         shell: &TerminalShellStyle,
         highlight: Option<(usize, usize, usize)>,
-    ) -> LayoutJob {
+        selection: Option<(i32, usize, i32, usize, Color32)>,
+    ) -> (LayoutJob, Vec<Vec<Color32>>) {
         let default_fg = shell.default_fg;
         let terminal_bg = shell.terminal_bg;
         let mut rows =
@@ -361,33 +366,93 @@ impl Terminal {
             }
         }
 
-        let wide_spacer = Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER;
-        let mut job = LayoutJob::default();
-        let cell_fmt = |color: Color32, bg: Color32| TextFormat {
-            font_id: FontId::monospace(font_size),
-            color,
-            background: bg,
-            line_height: Some(line_height),
-            ..Default::default()
-        };
-        for row in rows {
-            for (ch, color, bg, flags) in row {
-                if flags.intersects(wide_spacer) {
-                    // 宽字符占两格：第二格仅为网格占位，勿渲染成可见空格（否则 CJK 间像有空格）
-                    job.append("\u{200b}", 0.0, cell_fmt(bg, bg));
+        if let Some((sl, sc, el, ec, sel_bg)) = selection {
+            let offset = content.display_offset;
+            for abs_line in sl..=el {
+                let pt = Point::new(Line(abs_line), Column(0));
+                let Some(vp) = point_to_viewport(offset, pt) else {
+                    continue;
+                };
+                let y = vp.line;
+                if y >= self.height {
                     continue;
                 }
-                let mut fmt = cell_fmt(color, bg);
-                if flags.contains(Flags::WIDE_CHAR) {
-                    fmt.extra_letter_spacing = cell_w.max(0.0);
+                let c0 = if abs_line == sl { sc } else { 0 };
+                let c1 = if abs_line == el { ec } else { self.width };
+                let c0 = c0.min(self.width);
+                let c1 = c1.min(self.width);
+                for x in c0..c1 {
+                    rows[y][x].2 = sel_bg;
                 }
-                let mut buf = [0u8; 4];
-                let s = ch.encode_utf8(&mut buf);
-                job.append(s, 0.0, fmt);
             }
-            job.append("\n", 0.0, cell_fmt(default_fg, terminal_bg));
         }
-        job
+
+        let cell_bgs: Vec<Vec<Color32>> = rows
+            .iter()
+            .map(|row| row.iter().map(|(_, _, bg, _)| *bg).collect())
+            .collect();
+
+        let wide_spacer = Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER;
+        let mut job = LayoutJob::default();
+        // 字形层底色一律透明；ANSI/选区底由 UI 自绘，避免 egui background expand 压行。
+        let cell_fmt = |color: Color32, extra_spacing: f32| TextFormat {
+            font_id: FontId::monospace(font_size),
+            color,
+            background: Color32::TRANSPARENT,
+            line_height: Some(line_height),
+            extra_letter_spacing: extra_spacing,
+            // 显式 BOTTOM：与 egui 默认一致；单字体时基线按行 ascent，勿改 Center/TOP 折腾 CJK。
+            valign: egui::Align::BOTTOM,
+            ..Default::default()
+        };
+        let same_run = |a: &TextFormat, b: &TextFormat| {
+            a.color == b.color
+                && a.extra_letter_spacing == b.extra_letter_spacing
+                && a.line_height == b.line_height
+                && a.font_id == b.font_id
+        };
+        let mut run_text = String::new();
+        let mut run_fmt: Option<TextFormat> = None;
+        let flush_run = |job: &mut LayoutJob, text: &mut String, fmt: &mut Option<TextFormat>| {
+            if let Some(f) = fmt.take() {
+                if !text.is_empty() {
+                    job.append(text, 0.0, f);
+                    text.clear();
+                }
+            }
+        };
+        let row_count = rows.len();
+        for (row_i, row) in rows.into_iter().enumerate() {
+            for (ch, color, _bg, flags) in row {
+                if flags.intersects(wide_spacer) {
+                    flush_run(&mut job, &mut run_text, &mut run_fmt);
+                    job.append("\u{200b}", 0.0, cell_fmt(color, 0.0));
+                    continue;
+                }
+                let spacing = if flags.contains(Flags::WIDE_CHAR) {
+                    cell_w.max(0.0)
+                } else {
+                    0.0
+                };
+                let fmt = cell_fmt(color, spacing);
+                if let Some(ref cur) = run_fmt {
+                    if same_run(cur, &fmt) {
+                        run_text.push(ch);
+                        continue;
+                    }
+                }
+                flush_run(&mut job, &mut run_text, &mut run_fmt);
+                run_text.push(ch);
+                run_fmt = Some(fmt);
+            }
+            flush_run(&mut job, &mut run_text, &mut run_fmt);
+            // 最后一行后勿再 append '\n'，否则 egui 会多出一行空 galley（底栏上方多一截空白）。
+            if row_i + 1 < row_count {
+                job.append("\n", 0.0, cell_fmt(default_fg, 0.0));
+            }
+        }
+        flush_run(&mut job, &mut run_text, &mut run_fmt);
+        (job, cell_bgs)
     }
 }
 
@@ -556,7 +621,7 @@ fn apply_heuristic_shell_row_style(
             || is_user_success_line(line_trim)
             || is_user_warn_line(line_trim)
         {
-            // 状态行若未命中上方着色（如 CJK 被拉开空格），勿按输出行 0.4/0.62 压暗
+            // 状态行若未命中上方着色（如 CJK 被拉开空格），勿按输出行压暗
         } else {
             for cell in row.iter_mut() {
                 if !cell.0.is_whitespace() {
@@ -574,23 +639,49 @@ fn map_cell_color(
     bold: bool,
     dim: bool,
 ) -> Color32 {
-    use alacritty_terminal::vte::ansi::Color;
+    use alacritty_terminal::vte::ansi::{Color, NamedColor};
     match color {
         Color::Spec(rgb) => {
+            // truecolor 已是显式色值；勿因 BOLD 再提亮（会发糊且非标准）。
             let c = Color32::from_rgb(rgb.r, rgb.g, rgb.b);
-            if dim { dim_color(c) } else { c }
+            if dim {
+                dim_color(c)
+            } else {
+                c
+            }
         }
         Color::Indexed(mut idx) => {
-            // 兼容经典终端行为：粗体将 0..7 前景提升到亮色 8..15
+            // 经典 ANSI：粗体将 0..7 前景提升到亮色 8..15
             if bold && idx < 8 {
                 idx += 8;
             }
             let c = indexed_to_color(idx);
-            if dim { dim_color(c) } else { c }
+            if dim {
+                dim_color(c)
+            } else {
+                c
+            }
         }
         Color::Named(mut name) => {
+            // 基础 8 色：bold→bright；默认前景：适度提亮（勿到纯白），与略暗的 default_fg 形成区分。
             if bold {
-                name = name.to_bright();
+                match name {
+                    NamedColor::Black
+                    | NamedColor::Red
+                    | NamedColor::Green
+                    | NamedColor::Yellow
+                    | NamedColor::Blue
+                    | NamedColor::Magenta
+                    | NamedColor::Cyan
+                    | NamedColor::White => {
+                        name = name.to_bright();
+                    }
+                    NamedColor::Foreground => {
+                        let c = brighten_fg(fallback_fg);
+                        return if dim { dim_color(c) } else { c };
+                    }
+                    _ => {}
+                }
             }
             if dim {
                 name = name.to_dim();
@@ -611,7 +702,7 @@ fn indexed_to_color(idx: u8) -> Color32 {
             4 => Color32::from_rgb(0, 0, 238),
             5 => Color32::from_rgb(205, 0, 205),
             6 => Color32::from_rgb(0, 205, 205),
-            7 => Color32::from_rgb(229, 229, 229),
+            7 => Color32::from_rgb(200, 200, 200),
             8 => Color32::from_rgb(127, 127, 127),
             9 => Color32::from_rgb(255, 0, 0),
             10 => Color32::from_rgb(0, 255, 0),
@@ -619,7 +710,8 @@ fn indexed_to_color(idx: u8) -> Color32 {
             12 => Color32::from_rgb(92, 92, 255),
             13 => Color32::from_rgb(255, 0, 255),
             14 => Color32::from_rgb(0, 255, 255),
-            _ => Color32::from_rgb(255, 255, 255),
+            // BrightWhite：与暗色 default_fg(~#A8) 拉开，但低于纯白以免发糊
+            _ => Color32::from_rgb(248, 248, 248),
         };
     }
     if idx < 232 {
@@ -668,9 +760,18 @@ fn named_to_color(
         NamedColor::DimMagenta => dim_color(indexed_to_color(5)),
         NamedColor::DimCyan => dim_color(indexed_to_color(6)),
         NamedColor::DimWhite => dim_color(indexed_to_color(7)),
-        NamedColor::BrightForeground => indexed_to_color(15),
+        // 勿用纯白：相对默认前景再提亮一档即可（default 已是软白）。
+        NamedColor::BrightForeground => brighten_fg(fallback_fg),
         NamedColor::DimForeground => dim_color(fallback_fg),
     }
+}
+
+/// 粗体 / bright 提亮：向白靠拢约 55%，与略暗的 default_fg 拉开对比。
+fn brighten_fg(color: Color32) -> Color32 {
+    let lift = |c: u8| -> u8 {
+        c.saturating_add(((255u16.saturating_sub(c as u16)) * 55 / 100) as u8)
+    };
+    Color32::from_rgb(lift(color.r()), lift(color.g()), lift(color.b()))
 }
 
 fn dim_color(color: Color32) -> Color32 {

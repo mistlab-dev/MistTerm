@@ -34,8 +34,8 @@ fn quick_steps(ctx: &egui::Context) -> Vec<QuickStep> {
             title: crate::i18n::tr(ctx, "Command snippets", "命令片段"),
             detail: crate::i18n::tr(
                 ctx,
-                "Bottom bar → Snippets to open the fragment library. Browse market templates or create your own. Click to send to terminal.",
-                "底栏 → 片段图标打开片段库。浏览市场模板或创建自定义片段，点击即发送到终端。",
+                "Activity Rail → Fragments (or View menu) to open the fragment library. Browse market templates or create your own. Click to send to terminal.",
+                "活动栏 → 命令片段（或「视图」菜单）打开片段库。浏览市场模板或创建自定义片段，点击即发送到终端。",
             ),
             keys: vec![shortcuts::accel("K")],
         },

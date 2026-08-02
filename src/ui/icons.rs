@@ -65,10 +65,11 @@ pub enum IconId {
     ChevronUp,
     ArrowEnter,
     Copy,
+    Settings,
 }
 
 impl IconId {
-    pub const COUNT: usize = 47;
+    pub const COUNT: usize = 48;
 
     pub fn index(self) -> u32 {
         self as u32
@@ -79,7 +80,7 @@ impl IconId {
             IconId::Fragment => Some("命令片段"),
             IconId::Upload => Some("上传"),
             IconId::Search => Some("搜索"),
-            IconId::Monitor => Some("监控"),
+            IconId::Monitor => Some("系统监控"),
             IconId::Folder => Some("SFTP 文件"),
             _ => None,
         }
@@ -346,6 +347,7 @@ fn all_icon_ids() -> [IconId; IconId::COUNT] {
         IconId::ChevronUp,
         IconId::ArrowEnter,
         IconId::Copy,
+        IconId::Settings,
     ]
 }
 
@@ -436,8 +438,17 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
         IconId::Plus => p.segs(&[(0.5, 0.2, 0.5, 0.8), (0.2, 0.5, 0.8, 0.5)], w),
         IconId::ChevronRight => p.segs(&[(0.35, 0.22, 0.68, 0.5), (0.35, 0.78, 0.68, 0.5)], w),
         IconId::Fragment => {
-            p.rect(0.22, 0.2, 0.78, 0.8, w);
-            p.segs(&[(0.32, 0.38, 0.68, 0.38), (0.32, 0.5, 0.6, 0.5), (0.32, 0.62, 0.68, 0.62)], 1.4);
+            // 代码括号 <>，避免与 Server 矩形同轮廓
+            let w = 2.2_f32;
+            p.segs(
+                &[
+                    (0.38, 0.22, 0.20, 0.50),
+                    (0.20, 0.50, 0.38, 0.78),
+                    (0.62, 0.22, 0.80, 0.50),
+                    (0.80, 0.50, 0.62, 0.78),
+                ],
+                w,
+            );
         }
         IconId::Upload => p.segs(
             &[(0.5, 0.72, 0.5, 0.28), (0.35, 0.42, 0.5, 0.28), (0.65, 0.42, 0.5, 0.28), (0.22, 0.78, 0.78, 0.78)],
@@ -448,8 +459,9 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
             p.segs(&[(0.58, 0.58, 0.78, 0.78)], w);
         }
         IconId::Monitor => {
-            p.rect(0.18, 0.22, 0.82, 0.68, w);
-            p.segs(&[(0.4, 0.78, 0.6, 0.78), (0.5, 0.68, 0.5, 0.78)], w);
+            let w = 2.2_f32;
+            p.rect(0.16, 0.18, 0.84, 0.64, w);
+            p.segs(&[(0.36, 0.78, 0.64, 0.78), (0.50, 0.64, 0.50, 0.78)], w);
         }
         IconId::Alert => p.segs(
             &[(0.5, 0.18, 0.22, 0.78), (0.5, 0.18, 0.78, 0.78), (0.38, 0.62, 0.62, 0.62)],
@@ -464,11 +476,17 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
             p.segs(&[(0.28, 0.32, 0.72, 0.32), (0.32, 0.32, 0.34, 0.78), (0.66, 0.32, 0.68, 0.78), (0.34, 0.78, 0.66, 0.78)], w);
             p.segs(&[(0.38, 0.22, 0.62, 0.22)], w);
         }
-        // 开口文件夹：矩形主体 + 分段顶边（小尺寸底栏/SFTP 侧栏须可辨认）
+        // 开口文件夹：主体 + 清晰页签
         IconId::Folder => {
-            p.rect(0.2, 0.36, 0.8, 0.78, w);
+            let w = 2.2_f32;
+            p.rect(0.18, 0.38, 0.82, 0.80, w);
             p.segs(
-                &[(0.2, 0.36, 0.46, 0.36), (0.46, 0.36, 0.54, 0.26), (0.76, 0.26, 0.76, 0.36)],
+                &[
+                    (0.18, 0.38, 0.42, 0.38),
+                    (0.42, 0.38, 0.50, 0.24),
+                    (0.50, 0.24, 0.78, 0.24),
+                    (0.78, 0.24, 0.78, 0.38),
+                ],
                 w,
             );
         }
@@ -492,7 +510,20 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
             p.circle(0.5, 0.5, 0.22, w);
             p.segs(&[(0.28, 0.5, 0.72, 0.5)], w);
         }
-        IconId::Package => p.rect(0.25, 0.28, 0.75, 0.72, w),
+        IconId::Package => {
+            // 包装盒（压缩包 / 包类条目）
+            let w = 2.0_f32;
+            p.rect(0.22, 0.32, 0.78, 0.80, w);
+            p.segs(
+                &[
+                    (0.22, 0.32, 0.50, 0.18),
+                    (0.78, 0.32, 0.50, 0.18),
+                    (0.50, 0.18, 0.50, 0.32),
+                    (0.50, 0.32, 0.50, 0.80),
+                ],
+                w,
+            );
+        }
         IconId::Key => {
             p.circle(0.35, 0.38, 0.14, w);
             p.segs(&[(0.45, 0.45, 0.78, 0.78), (0.65, 0.65, 0.78, 0.52), (0.65, 0.78, 0.78, 0.78)], w);
@@ -515,10 +546,21 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
             p.circle(0.5, 0.5, 0.28, w);
             p.fill_circle(0.5, 0.5, 0.1);
         }
-        IconId::Network => p.segs(
-            &[(0.2, 0.5, 0.38, 0.5), (0.62, 0.5, 0.8, 0.5), (0.38, 0.5, 0.5, 0.32), (0.5, 0.32, 0.62, 0.5)],
-            w,
-        ),
+        IconId::Network => {
+            // 三节点拓扑（避免旧「弓形」缩成 ^）
+            let w = 2.0_f32;
+            p.fill_circle(0.50, 0.22, 0.09);
+            p.fill_circle(0.20, 0.74, 0.09);
+            p.fill_circle(0.80, 0.74, 0.09);
+            p.segs(
+                &[
+                    (0.50, 0.30, 0.24, 0.66),
+                    (0.50, 0.30, 0.76, 0.66),
+                    (0.28, 0.74, 0.72, 0.74),
+                ],
+                w,
+            );
+        }
         IconId::Chart => p.segs(
             &[(0.2, 0.75, 0.35, 0.45), (0.35, 0.45, 0.52, 0.62), (0.52, 0.62, 0.68, 0.35), (0.68, 0.35, 0.82, 0.55)],
             w,
@@ -536,10 +578,15 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
             w,
         ),
         IconId::Server => {
-            p.rect(0.22, 0.2, 0.78, 0.8, w);
-            for y in [0.38, 0.55, 0.72] {
-                p.segs(&[(0.32, y, 0.68, y)], 1.4);
+            // 机架：外框 + 三层插槽（与 Fragment 括号区分）
+            let w = 2.2_f32;
+            p.rect(0.22, 0.16, 0.78, 0.84, w);
+            for y in [0.34, 0.50, 0.66] {
+                p.segs(&[(0.32, y, 0.68, y)], 2.0);
             }
+            p.fill_circle(0.70, 0.34, 0.045);
+            p.fill_circle(0.70, 0.50, 0.045);
+            p.fill_circle(0.70, 0.66, 0.045);
         }
         IconId::Database => {
             p.segs(
@@ -548,7 +595,15 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
             );
             p.segs(&[(0.3, 0.22, 0.7, 0.22), (0.3, 0.78, 0.7, 0.78)], w);
         }
-        IconId::Api => p.segs(&[(0.22, 0.72, 0.42, 0.28), (0.42, 0.28, 0.62, 0.72), (0.62, 0.72, 0.82, 0.28)], w),
+        IconId::Api => {
+            // AI：聊天气泡 + 三点（比折线 N 更易认）
+            let w = 2.2_f32;
+            p.rect(0.16, 0.16, 0.84, 0.58, w);
+            p.segs(&[(0.32, 0.58, 0.26, 0.80), (0.26, 0.80, 0.48, 0.58)], w);
+            p.fill_circle(0.34, 0.37, 0.055);
+            p.fill_circle(0.50, 0.37, 0.055);
+            p.fill_circle(0.66, 0.37, 0.055);
+        }
         IconId::Attachment => p.segs(
             &[(0.42, 0.18, 0.42, 0.62), (0.42, 0.35, 0.62, 0.55), (0.62, 0.55, 0.62, 0.35), (0.62, 0.35, 0.42, 0.18)],
             w,
@@ -583,6 +638,20 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
         IconId::Copy => {
             p.rect(0.24, 0.26, 0.56, 0.66, w);
             p.rect(0.44, 0.36, 0.76, 0.76, w);
+        }
+        IconId::Settings => {
+            // 偏好设置：齿轮
+            let w = 2.0_f32;
+            p.circle(0.5, 0.5, 0.22, w);
+            p.fill_circle(0.5, 0.5, 0.08);
+            for i in 0..6 {
+                let a = std::f32::consts::TAU * i as f32 / 6.0;
+                let (c, s) = (a.cos(), a.sin());
+                p.segs(
+                    &[(0.5 + 0.28 * c, 0.5 + 0.28 * s, 0.5 + 0.42 * c, 0.5 + 0.42 * s)],
+                    w,
+                );
+            }
         }
     }
 }

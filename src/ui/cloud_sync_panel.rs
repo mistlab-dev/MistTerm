@@ -35,6 +35,8 @@ pub struct CloudSyncPanel {
     pub open: bool,
     pub settings: CloudSyncSettings,
     pub message: String,
+    /// 待宿主 `notify_error` 的失败文案。
+    pending_toast_error: Option<String>,
     /// 从同步包导入片段时是否与现有条目按 id 合并（否则整库替换）
     pub merge_fragments_on_package_import: bool,
     pending_import_dir: Option<PathBuf>,
@@ -48,10 +50,20 @@ impl CloudSyncPanel {
             open: false,
             settings: CloudSyncSettings::load(),
             message: String::new(),
+            pending_toast_error: None,
             merge_fragments_on_package_import: true,
             pending_import_dir: None,
             last_panel_slot_rect: None,
         }
+    }
+
+    pub fn take_pending_toast_error(&mut self) -> Option<String> {
+        self.pending_toast_error.take()
+    }
+
+    fn push_toast_error(&mut self, msg: String) {
+        self.message = msg.clone();
+        self.pending_toast_error = Some(msg);
     }
 
     fn save_settings(&mut self, lang: UiLanguage) {
@@ -59,11 +71,11 @@ impl CloudSyncPanel {
         match self.settings.save() {
             Ok(()) => self.message = loc.tr("Settings saved", "已保存设置").to_string(),
             Err(e) => {
-                self.message = format!(
+                self.push_toast_error(format!(
                     "{}{}",
                     loc.tr("Save failed: ", "保存失败："),
                     e
-                )
+                ));
             }
         }
     }
@@ -163,12 +175,13 @@ impl CloudSyncPanel {
         let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S").to_string();
         let dest = parent.join(format!("mistterm-sync-{}", stamp));
         if let Err(e) = fs::create_dir_all(&dest) {
-            self.settings.mark_sync_err(format!(
+            let msg = format!(
                 "{}{}",
                 loc.tr("Create folder failed: ", "创建目录失败："),
                 e
-            ));
-            self.message.clone_from(&self.settings.last_error);
+            );
+            self.settings.mark_sync_err(msg.clone());
+            self.push_toast_error(msg);
             return;
         }
 
@@ -258,7 +271,7 @@ impl CloudSyncPanel {
 
         if let Some(e) = err {
             self.settings.mark_sync_err(e.clone());
-            self.message = e;
+            self.push_toast_error(e);
         } else {
             self.settings.mark_sync_ok();
             if let Some(audit) = deps.audit {
