@@ -120,6 +120,8 @@ pub struct AiPanel {
     streaming: bool,
     chat_cancel: Option<Arc<AtomicBool>>,
     last_error: Option<String>,
+    /// 待宿主 `notify_error` 的超时/失败文案。
+    pending_toast_error: Option<String>,
     command_for_terminal: Option<String>,
     settings_key_input: String,
     /// 本地已加密保存 Key 时不再在输入框显示明文
@@ -151,6 +153,16 @@ impl Default for AiPanel {
 }
 
 impl AiPanel {
+    #[inline]
+    pub fn is_busy(&self) -> bool {
+        self.busy || self.background.is_some()
+    }
+
+    /// 取出待 Toast 的错误（失败/超时）；面板内仍保留 `last_error`。
+    pub fn take_pending_toast_error(&mut self) -> Option<String> {
+        self.pending_toast_error.take()
+    }
+
     pub fn new() -> Self {
         Self {
             messages: Vec::new(),
@@ -164,6 +176,7 @@ impl AiPanel {
             streaming: false,
             chat_cancel: None,
             last_error: None,
+            pending_toast_error: None,
             command_for_terminal: None,
             settings_key_input: String::new(),
             key_configured_stored: false,
@@ -1553,10 +1566,10 @@ impl AiPanel {
         let api_key = match self.effective_api_key(app_settings) {
             Some(k) => k,
             None => {
-                self.last_error = Some(
-                    i18n::tr(ctx, "Fill in and save API Key first", "请先填写并保存 API Key")
-                        .to_string(),
-                );
+                let msg = i18n::tr(ctx, "Fill in and save API Key first", "请先填写并保存 API Key")
+                    .to_string();
+                self.last_error = Some(msg.clone());
+                self.pending_toast_error = Some(msg);
                 return;
             }
         };
@@ -1644,7 +1657,9 @@ impl AiPanel {
                     {
                         self.messages.pop();
                     }
-                    self.last_error = Some(i18n::localize_backend_error(i18n::language(ctx), &e));
+                    let msg = i18n::localize_backend_error(i18n::language(ctx), &e);
+                    self.last_error = Some(msg.clone());
+                    self.pending_toast_error = Some(msg);
                     self.input_status = None;
                     self.background = None;
                     self.busy = false;
@@ -1673,9 +1688,10 @@ impl AiPanel {
                     ctx.request_repaint_after(std::time::Duration::from_millis(80));
                 }
                 Err(TryRecvError::Disconnected) => {
-                    self.last_error = Some(
-                        i18n::tr(ctx, "Request interrupted", "请求已中断").to_string(),
-                    );
+                    let msg =
+                        i18n::tr(ctx, "Request interrupted", "请求已中断").to_string();
+                    self.last_error = Some(msg.clone());
+                    self.pending_toast_error = Some(msg);
                     self.background = None;
                     self.busy = false;
                     self.streaming = false;
@@ -1689,10 +1705,12 @@ impl AiPanel {
                     ctx.request_repaint();
                 }
                 Ok(Err(e)) => {
-                    self.test_status = Some(format!(
+                    let msg = format!(
                         "{}{e}",
                         i18n::tr(ctx, "Save failed: ", "保存失败："),
-                    ));
+                    );
+                    self.test_status = Some(msg.clone());
+                    self.pending_toast_error = Some(msg);
                     self.background = None;
                     ctx.request_repaint();
                 }
@@ -1700,9 +1718,10 @@ impl AiPanel {
                     ctx.request_repaint_after(std::time::Duration::from_millis(120));
                 }
                 Err(TryRecvError::Disconnected) => {
-                    self.test_status = Some(
-                        i18n::tr(ctx, "Save interrupted", "保存已中断").to_string(),
-                    );
+                    let msg =
+                        i18n::tr(ctx, "Save interrupted", "保存已中断").to_string();
+                    self.test_status = Some(msg.clone());
+                    self.pending_toast_error = Some(msg);
                     self.background = None;
                 }
             },
@@ -1715,7 +1734,12 @@ impl AiPanel {
                     ctx.request_repaint();
                 }
                 Ok(Err(e)) => {
-                    self.test_status = Some(e);
+                    let msg = format!(
+                        "{}{e}",
+                        i18n::tr(ctx, "Connection test failed: ", "测试连接失败："),
+                    );
+                    self.test_status = Some(msg.clone());
+                    self.pending_toast_error = Some(msg);
                     self.background = None;
                     ctx.request_repaint();
                 }
@@ -1723,9 +1747,10 @@ impl AiPanel {
                     ctx.request_repaint_after(std::time::Duration::from_millis(120));
                 }
                 Err(TryRecvError::Disconnected) => {
-                    self.test_status = Some(
-                        i18n::tr(ctx, "Test interrupted", "测试已中断").to_string(),
-                    );
+                    let msg =
+                        i18n::tr(ctx, "Test interrupted", "测试已中断").to_string();
+                    self.test_status = Some(msg.clone());
+                    self.pending_toast_error = Some(msg);
                     self.background = None;
                 }
             },

@@ -22,6 +22,9 @@ pub struct ThemeManager {
     themes: Vec<Theme>,
     /// 当前选中的主题索引
     pub current: usize,
+    /// 已写入 egui Context 的主题索引；避免每帧 `set_style` 打满 CPU。
+    #[serde(skip)]
+    applied_ctx_index: Option<usize>,
 }
 
 impl ThemeManager {
@@ -35,6 +38,7 @@ impl ThemeManager {
                 Theme::forest(),
             ],
             current: 0, // 默认暗夜
+            applied_ctx_index: None,
         }
     }
 
@@ -115,8 +119,11 @@ impl ThemeManager {
             .join("theme.json")
     }
 
-    /// 应用主题到 egui Context
-    pub fn apply_theme(&self, ctx: &egui::Context) {
+    /// 应用主题到 egui Context（同索引重复调用为 no-op）。
+    pub fn apply_theme(&mut self, ctx: &egui::Context) {
+        if self.applied_ctx_index == Some(self.current) {
+            return;
+        }
         let theme = self.current_theme();
         let mut style = (*ctx.style()).clone();
 
@@ -236,7 +243,13 @@ impl ThemeManager {
         );
 
         ctx.set_style(style);
-        ctx.request_repaint();
+        self.applied_ctx_index = Some(self.current);
+        // 勿在此 request_repaint：每帧 apply 时再立即重绘会形成无限帧循环。
+        // 切换主题时由偏好/菜单等调用方自行 request_repaint。
+    }
+
+    fn invalidate_applied_style(&mut self) {
+        self.applied_ctx_index = None;
     }
 
     /// 获取当前主题
@@ -263,7 +276,10 @@ impl ThemeManager {
     pub fn set_theme(&mut self, name: &str) -> bool {
         for (i, theme) in self.themes.iter().enumerate() {
             if theme.name == name {
-                self.current = i;
+                if self.current != i {
+                    self.current = i;
+                    self.invalidate_applied_style();
+                }
                 return true;
             }
         }
@@ -273,7 +289,10 @@ impl ThemeManager {
     /// 切换到指定主题（按索引）
     pub fn set_theme_index(&mut self, index: usize) -> bool {
         if index < self.themes.len() {
-            self.current = index;
+            if self.current != index {
+                self.current = index;
+                self.invalidate_applied_style();
+            }
             true
         } else {
             false
@@ -283,6 +302,7 @@ impl ThemeManager {
     /// 循环切换主题
     pub fn cycle_theme(&mut self) {
         self.current = (self.current + 1) % self.themes.len();
+        self.invalidate_applied_style();
     }
 }
 

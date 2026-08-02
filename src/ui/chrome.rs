@@ -1138,10 +1138,31 @@ pub fn session_tab_chip(
     show_close: bool,
     env_color: Option<egui::Color32>,
 ) -> SessionTabChipResult {
-    let size = egui::vec2(theme.size_tab_min_w(), theme.size_tab_min_h());
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
-    let inner = rect.shrink2(egui::vec2(theme.spacing_tab_x(), theme.spacing_tab_y()));
     let close_slot = theme.size_tab_bar_icon_btn();
+    let pad_x = theme.spacing_tab_x();
+    let pad_y = theme.spacing_tab_y();
+    let gap_dot = theme.spacing_tab_dot_text();
+    let gap_close = theme.spacing_tab_icon_gap();
+    let label_color = if active {
+        theme.text_primary()
+    } else if theme.uses_modern_palette() {
+        theme.text_secondary().gamma_multiply(0.72)
+    } else {
+        theme.text_tertiary()
+    };
+    let label_galley = ui.fonts(|f| {
+        f.layout_no_wrap(
+            label.to_owned(),
+            egui::FontId::proportional(theme.font_size_tab_label()),
+            label_color,
+        )
+    });
+    // 宽度随内容：圆点 + 标题 + 间距 + ×，避免固定 min_w 时标题与 × 重叠。
+    let content_w = 5.0 + gap_dot + label_galley.size().x + gap_close + close_slot;
+    let tab_w = (content_w + pad_x * 2.0).max(72.0);
+    let size = egui::vec2(tab_w, theme.size_tab_min_h());
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let inner = rect.shrink2(egui::vec2(pad_x, pad_y));
     let close_slot_hot = pointer_hovers_tab_close_slot(ui.ctx(), inner, close_slot);
     // 子控件（×）会抢走外层 hover；用关闭槽位命中避免 × 显隐来回切换。
     let tab_hot = response.hovered() || close_slot_hot;
@@ -1175,11 +1196,9 @@ pub fn session_tab_chip(
     }
     let mut close_clicked = false;
     let mut row_ui = ui.child_ui(inner, egui::Layout::left_to_right(egui::Align::Center));
-    row_ui.set_width(inner.width());
-    row_ui.set_min_width(inner.width());
-    row_ui.set_max_width(inner.width());
     row_ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = theme.spacing_tab_dot_text();
+        // 显式间距：避免 Label/item_spacing 把 × 挤出或叠到标题上。
+        ui.spacing_mut().item_spacing.x = 0.0;
         let status_color = if online {
             theme.green_color()
         } else {
@@ -1191,44 +1210,44 @@ pub fn session_tab_chip(
         let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(5.0, 5.0), egui::Sense::hover());
         ui.painter()
             .circle_filled(dot_rect.center(), 2.5, dot_color);
-        ui.label(
-            RichText::new(label)
-                .size(theme.font_size_tab_label())
-                .color(if active {
-                    theme.text_primary()
-                } else if modern {
-                    theme.text_secondary().gamma_multiply(0.72)
-                } else {
-                    theme.text_tertiary()
-                }),
+        ui.add_space(gap_dot);
+        // 按测量宽度精确占位，勿用会占满剩余宽度的默认 Label。
+        let label_size = egui::vec2(
+            label_galley.size().x,
+            label_galley.size().y.max(close_slot * 0.6),
         );
-        // 关闭按钮始终占位；仅切换绘制，避免控件树显隐导致 × 上 hover 闪烁。
+        let (label_rect, _) = ui.allocate_exact_size(label_size, egui::Sense::hover());
+        let label_pos = egui::pos2(
+            label_rect.min.x,
+            label_rect.center().y - label_galley.size().y * 0.5,
+        );
+        ui.painter().galley(label_pos, label_galley);
+        ui.add_space(gap_close);
+        // × 紧跟标题；始终占位，仅切换绘制，避免显隐导致 hover 闪烁。
         let close_visible = show_close || active || tab_hot;
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let close_tooltip = format!(
-                "{} · {}",
-                crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
-                crate::platform::accel("W")
-            );
-            let close_resp = theme_icon_hit_revealed(
-                ui,
-                theme,
-                IconId::Close,
-                close_slot,
-                theme.size_icon_glyph(),
-                theme.color_tab_bar_icon(),
-                theme.color_tab_bar_icon_hover(),
-                close_visible,
-            );
-            let close_resp = if close_visible {
-                close_resp.on_hover_text(close_tooltip.as_str())
-            } else {
-                close_resp
-            };
-            if close_visible && close_resp.clicked() {
-                close_clicked = true;
-            }
-        });
+        let close_tooltip = format!(
+            "{} · {}",
+            crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
+            crate::platform::accel("W")
+        );
+        let close_resp = theme_icon_hit_revealed(
+            ui,
+            theme,
+            IconId::Close,
+            close_slot,
+            theme.size_icon_glyph(),
+            theme.color_tab_bar_icon(),
+            theme.color_tab_bar_icon_hover(),
+            close_visible,
+        );
+        let close_resp = if close_visible {
+            close_resp.on_hover_text(close_tooltip.as_str())
+        } else {
+            close_resp
+        };
+        if close_visible && close_resp.clicked() {
+            close_clicked = true;
+        }
     });
     SessionTabChipResult {
         response,
@@ -3366,7 +3385,8 @@ pub fn activity_rail_button(
     selected: bool,
     tooltip: &str,
 ) -> Response {
-    let size = egui::vec2(40.0, 40.0);
+    let side = theme.size_activity_rail_btn();
+    let size = egui::vec2(side, side);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = response.hovered();
     let pressed = response.is_pointer_button_down_on();
@@ -3397,44 +3417,147 @@ pub fn activity_rail_button(
     response.on_hover_text(tooltip)
 }
 
-/// 右下角状态 Toast（替代旧底栏 `status_message`）。
+/// Rail 隐藏时的左缘恢复条：点击显示活动栏。
+pub fn activity_rail_reveal_strip(ui: &mut Ui, theme: &Theme, tooltip: &str) -> Response {
+    let full = ui.max_rect();
+    ui.painter().rect_filled(full, 0.0, theme.chrome_bar_fill());
+    let (rect, response) = ui.allocate_exact_size(full.size(), Sense::click());
+    let hovered = response.hovered();
+    if hovered {
+        ui.painter()
+            .rect_filled(rect, 0.0, theme.accent_alpha(36));
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    // 中央细 chevron（›）示意「点此展开」
+    let mid = rect.center();
+    let stroke = egui::Stroke::new(
+        1.25,
+        if hovered {
+            theme.accent_color()
+        } else {
+            theme.color_toolbar_glyph_idle()
+        },
+    );
+    let painter = ui.painter();
+    let x = mid.x - 0.5;
+    let y = mid.y;
+    painter.line_segment(
+        [egui::pos2(x - 1.5, y - 5.0), egui::pos2(x + 1.5, y)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(x + 1.5, y), egui::pos2(x - 1.5, y + 5.0)],
+        stroke,
+    );
+    response.on_hover_text(tooltip)
+}
+
+/// 右下角 Toast 交互结果。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct StatusToastActions {
+    pub primary: bool,
+    pub dismiss: bool,
+}
+
+/// 右下角状态 Toast（替代旧常驻状态栏）。
+/// `action_label` 为 `Some` 时绘制主按钮；`show_dismiss` 绘制关闭（需确认或 Error/Warn）。
 pub(crate) fn paint_status_toast(
     ui: &mut Ui,
     theme: &Theme,
     text: &str,
     kind: crate::ui::app::ToastKind,
-) {
+    action_label: Option<&str>,
+    show_dismiss: bool,
+) -> StatusToastActions {
     if text.is_empty() {
-        return;
+        return StatusToastActions::default();
     }
     let font = egui::FontId::proportional(theme.font_size_status_bar());
     let (accent, fg) = match kind {
-        crate::ui::app::ToastKind::Error => (theme.red_color(), theme.red_color()),
-        crate::ui::app::ToastKind::Warn => (theme.accent_color(), theme.text_primary()),
-        crate::ui::app::ToastKind::Success => (theme.green_color(), theme.green_color()),
+        crate::ui::app::ToastKind::Error => (theme.red_color(), theme.text_primary()),
+        crate::ui::app::ToastKind::Warn => (theme.amber_color(), theme.amber_color()),
+        crate::ui::app::ToastKind::Success => (theme.green_color(), theme.text_primary()),
         crate::ui::app::ToastKind::Info => (theme.accent_color(), theme.text_primary()),
     };
-    let galley = ui.painter().layout(text.to_owned(), font, fg, 320.0);
+    let max_text_w = theme.toast_max_text_width();
+    let margin = theme.toast_screen_margin();
+    let btn_h = theme.toast_action_btn_h();
+    let dismiss_only = show_dismiss && action_label.is_none();
+    let dismiss_reserve = if dismiss_only { 22.0 } else { 0.0 };
+    let galley = ui.painter().layout(text.to_owned(), font, fg, max_text_w);
     let pad = egui::vec2(12.0, 8.0);
-    let size = galley.size() + pad * 2.0 + egui::vec2(6.0, 0.0);
+    let actions_h = if action_label.is_some() {
+        btn_h + 6.0
+    } else {
+        0.0
+    };
+    let size = egui::vec2(
+        (galley.size().x + pad.x * 2.0 + 6.0 + dismiss_reserve).max(theme.toast_min_width()),
+        galley.size().y + pad.y * 2.0 + actions_h,
+    );
     let screen = ui.ctx().screen_rect();
-    let pos = egui::pos2(screen.max.x - size.x - 16.0, screen.max.y - size.y - 16.0);
+    let pos = egui::pos2(screen.max.x - size.x - margin, screen.max.y - size.y - margin);
     let rect = egui::Rect::from_min_size(pos, size);
-    ui.painter().rect(
-        rect,
-        theme.radius_list_item(),
-        theme.chrome_bar_fill(),
-        egui::Stroke::new(1.0, theme.border_divider_color()),
-    );
-    // 左侧色条标明通知级别
-    let bar = egui::Rect::from_min_max(
-        egui::pos2(rect.min.x, rect.min.y + 4.0),
-        egui::pos2(rect.min.x + 3.0, rect.max.y - 4.0),
-    );
-    ui.painter()
-        .rect_filled(bar, egui::Rounding::same(1.5), accent);
-    ui.painter()
-        .galley(rect.min + pad + egui::vec2(4.0, 0.0), galley);
+    let primary = std::cell::Cell::new(false);
+    let dismiss = std::cell::Cell::new(false);
+    ui.allocate_ui_at_rect(rect, |ui| {
+        ui.set_min_size(size);
+        let painter = ui.painter();
+        painter.rect(
+            rect,
+            theme.radius_list_item(),
+            theme.chrome_bar_fill(),
+            egui::Stroke::new(1.0, theme.border_divider_color()),
+        );
+        let bar = egui::Rect::from_min_max(
+            egui::pos2(rect.min.x, rect.min.y + 4.0),
+            egui::pos2(rect.min.x + 3.0, rect.max.y - 4.0),
+        );
+        painter.rect_filled(bar, egui::Rounding::same(1.5), accent);
+        painter.galley(rect.min + pad + egui::vec2(4.0, 0.0), galley);
+
+        if dismiss_only {
+            let close_rect = egui::Rect::from_min_size(
+                egui::pos2(rect.max.x - pad.x - 18.0, rect.min.y + pad.y - 2.0),
+                egui::vec2(18.0, 18.0),
+            );
+            ui.allocate_ui_at_rect(close_rect, |ui| {
+                if icon_button(ui, theme, IconId::Close, theme.color_caption_text())
+                    .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss", "关闭"))
+                    .clicked()
+                {
+                    dismiss.set(true);
+                }
+            });
+        } else if let Some(label) = action_label {
+            let row_y = rect.max.y - pad.y - btn_h;
+            ui.allocate_ui_at_rect(
+                egui::Rect::from_min_max(
+                    egui::pos2(rect.min.x + pad.x + 4.0, row_y),
+                    egui::pos2(rect.max.x - pad.x, rect.max.y - pad.y),
+                ),
+                |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if show_dismiss
+                            && icon_button(ui, theme, IconId::Close, theme.color_caption_text())
+                                .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss", "关闭"))
+                                .clicked()
+                        {
+                            dismiss.set(true);
+                        }
+                        ui.add_space(6.0);
+                        if chrome_small_accent_button(ui, theme, label).clicked() {
+                            primary.set(true);
+                        }
+                    });
+                },
+            );
+        }
+    });
+    StatusToastActions {
+        primary: primary.get(),
+        dismiss: dismiss.get(),
+    }
 }
 
 /// 状态栏工具按钮：图标 + 短标签（比纯图标更易识别）。

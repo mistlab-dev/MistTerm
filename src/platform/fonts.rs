@@ -49,9 +49,13 @@ pub fn configure_egui_fonts(ctx: &egui::Context, terminal_preset: TerminalFontPr
     let mut fonts = egui::FontDefinitions::default();
     if let Some(bytes) = load_terminal_preset_font(terminal_preset) {
         let mono_name = "mistterm-terminal-mono".to_string();
-        fonts
-            .font_data
-            .insert(mono_name.clone(), egui::FontData::from_owned(bytes));
+        // 行高已用 FACTOR 收紧，勿再大幅 y_offset，否则字下移而块光标仍贴格顶，看起来光标偏低。
+        let mono_data = egui::FontData::from_owned(bytes).tweak(egui::FontTweak {
+            y_offset_factor: 0.02,
+            baseline_offset_factor: -0.02,
+            ..Default::default()
+        });
+        fonts.font_data.insert(mono_name.clone(), mono_data);
         fonts
             .families
             .entry(egui::FontFamily::Monospace)
@@ -90,10 +94,13 @@ pub fn configure_egui_fonts(ctx: &egui::Context, terminal_preset: TerminalFontPr
 }
 
 fn load_terminal_preset_font(preset: TerminalFontPreset) -> Option<Vec<u8>> {
-    if preset == TerminalFontPreset::Default {
-        return None;
-    }
-    for path in terminal_preset_candidates(preset) {
+    let candidates = match preset {
+        // Default：优先系统 Regular 等宽（与 Windows Terminal / 常见终端观感接近），
+        // 绝不回退到 Bold 字重文件。
+        TerminalFontPreset::Default => default_mono_font_candidates(),
+        other => terminal_preset_candidates(other),
+    };
+    for path in candidates {
         match std::fs::read(&path) {
             Ok(bytes) => {
                 log::info!(
@@ -113,9 +120,26 @@ fn load_terminal_preset_font(preset: TerminalFontPreset) -> Option<Vec<u8>> {
     None
 }
 
+/// 跨平台默认等宽：仅 Regular。Windows 优先 Consolas（与 PowerShell 观感接近）。
+fn default_mono_font_candidates() -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        paths.extend(consolas_font_candidates());
+        paths.extend(cascadia_mono_font_candidates());
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        paths.extend(cascadia_mono_font_candidates());
+        paths.extend(consolas_font_candidates());
+    }
+    paths.extend(jetbrains_mono_font_candidates());
+    paths
+}
+
 fn terminal_preset_candidates(preset: TerminalFontPreset) -> Vec<std::path::PathBuf> {
     match preset {
-        TerminalFontPreset::Default => Vec::new(),
+        TerminalFontPreset::Default => default_mono_font_candidates(),
         TerminalFontPreset::Consolas => consolas_font_candidates(),
         TerminalFontPreset::CascadiaMono => cascadia_mono_font_candidates(),
         TerminalFontPreset::JetBrainsMono => jetbrains_mono_font_candidates(),
@@ -125,9 +149,10 @@ fn terminal_preset_candidates(preset: TerminalFontPreset) -> Vec<std::path::Path
 fn consolas_font_candidates() -> Vec<std::path::PathBuf> {
     #[cfg(target_os = "windows")]
     {
+        // 仅 Regular（consola.ttf）；不要 consolab.ttf（Bold）
         return system_fonts_dir()
             .into_iter()
-            .flat_map(|dir| [dir.join("consola.ttf"), dir.join("consolab.ttf")])
+            .map(|dir| dir.join("consola.ttf"))
             .collect();
     }
     #[cfg(target_os = "macos")]

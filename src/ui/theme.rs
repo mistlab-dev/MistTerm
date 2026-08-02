@@ -109,10 +109,20 @@ impl Theme {
         self.bg_tab_bar_color()
     }
 
+    /// 底栏等：保留少量垂直 margin，避免徽章/字被裁切。
     pub fn frame_chrome_bar(&self) -> egui::Frame {
         egui::Frame::none()
             .fill(self.chrome_bar_fill())
             .inner_margin(self.margin_chrome_bar())
+    }
+
+    /// 顶栏菜单行：垂直 margin 必须为 0。
+    /// `TopBottomPanel::exact_height(H)` + `set_min_height(H)` 时若再加上下 padding，
+    /// egui Frame 会把面板撑到 H+pad，菜单与 Tab 之间会出现「多出来的空行」。
+    pub fn frame_top_chrome(&self) -> egui::Frame {
+        egui::Frame::none()
+            .fill(self.chrome_bar_fill())
+            .inner_margin(egui::Margin::symmetric(self.spacing_status_bar_x(), 0.0))
     }
 
     /// 中央工作区 Panel：须不透明，勿用 TRANSPARENT（浅色主题会露出窗口黑底）
@@ -562,18 +572,24 @@ impl Theme {
         self.text_primary()
     }
 
-    /// FUNCTIONAL_SPEC §2.3.2：提示行命令段相对默认前景亮度（设计稿 `.cmd` ≈ 0.9）。
+    /// 终端区默认前景（暗色软灰，便于 bold 提亮后与正文区分；对齐 WT 软白分层）。
+    pub fn terminal_default_fg(&self) -> Color32 {
+        if self.is_light_theme() {
+            self.text_primary()
+        } else {
+            // ~#A8A8A8：相对亮色/粗体 (~#DC+) 对比更明显；勿再抬到 #CCC。
+            Color32::from_rgb(168, 168, 168)
+        }
+    }
+
+    /// 提示行命令段相对默认前景亮度。
     pub fn terminal_command_dim_factor(&self) -> f32 {
         crate::terminal::style::TERMINAL_COMMAND_DIM_FACTOR
     }
 
-    /// FUNCTIONAL_SPEC §2.3.2：非提示输出行相对默认前景亮度（设计稿 `.out` ≈ 0.4）。
+    /// 非提示输出行相对默认前景亮度（默认不压暗）。
     pub fn terminal_output_dim_factor(&self) -> f32 {
-        if self.is_light_theme() {
-            0.62
-        } else {
-            crate::terminal::style::TERMINAL_OUTPUT_DIM_FACTOR
-        }
+        crate::terminal::style::TERMINAL_OUTPUT_DIM_FACTOR
     }
 
     /// FUNCTIONAL_SPEC §2.3.4：终端纵向滚动条宽度（px）。
@@ -1141,10 +1157,14 @@ impl Theme {
         }
     }
 
-    /// 终端内联选区高亮
+    /// 终端内联选区高亮（画在字形之下；暗色用半透明白，接近 Windows Terminal）。
     #[inline]
     pub fn color_terminal_selection(&self) -> Color32 {
-        self.accent_alpha(150)
+        if self.is_light_theme() {
+            self.accent_alpha(72)
+        } else {
+            Color32::from_rgba_unmultiplied(255, 255, 255, 56)
+        }
     }
 
     /// 终端块状光标（闪烁时绘制整格实心块）
@@ -2307,8 +2327,8 @@ impl Theme {
         6.0
     } // Tab 圆点与文字间距
     pub fn spacing_tab_icon_gap(&self) -> f32 {
-        8.0
-    } // Tab 标题与 × 间距
+        4.0
+    } // Tab 标题与 × 间距（紧跟文案）
     pub fn spacing_terminal_pad_x(&self) -> f32 {
         4.0
     } // 终端滚动区左右 padding
@@ -2342,7 +2362,7 @@ impl Theme {
         // 统一左/右列宽：右 dock 不再额外吃掉可视宽度
         0.0
     }
-    /// 主工作区相对 `central_work_rect` 的外圈内边距（对齐原型 `.main { padding: 8px }`）
+    /// 主工作区相对 `central_work_rect` 的外圈内边距。
     pub fn spacing_work_area_pad(&self) -> f32 {
         4.0
     }
@@ -2370,11 +2390,12 @@ impl Theme {
     }
 
     pub fn terminal_content_margin(&self) -> egui::Margin {
+        // 底边勿留大 padding：会与 PTY 行高取整余量叠成「多一空行」。
         egui::Margin {
             left: self.spacing_terminal_pad_x(),
             right: self.spacing_terminal_pad_x(),
-            top: 4.0,
-            bottom: self.spacing_terminal_pad_y(),
+            top: 2.0,
+            bottom: 0.0,
         }
     }
     pub fn spacing_card_x(&self) -> f32 {
@@ -2520,6 +2541,34 @@ impl Theme {
     /// 左侧 Activity Rail 宽度（全平台统一）。
     pub fn activity_rail_width(&self) -> f32 {
         48.0
+    }
+    /// Rail 完全隐藏时的左缘恢复条宽度（可点开回）。
+    pub fn activity_rail_collapsed_strip_width(&self) -> f32 {
+        8.0
+    }
+    /// Activity Rail 图标按钮边长。
+    pub fn size_activity_rail_btn(&self) -> f32 {
+        40.0
+    }
+    /// Activity Rail 内图标绘制边长（略大于通用 glyph，便于辨认）。
+    pub fn size_activity_rail_icon(&self) -> f32 {
+        22.0
+    }
+    /// Toast 正文最大换行宽度。
+    pub fn toast_max_text_width(&self) -> f32 {
+        320.0
+    }
+    /// Toast 距屏边外边距。
+    pub fn toast_screen_margin(&self) -> f32 {
+        16.0
+    }
+    /// Toast 最小宽度。
+    pub fn toast_min_width(&self) -> f32 {
+        200.0
+    }
+    /// Toast 操作行按钮高度。
+    pub fn toast_action_btn_h(&self) -> f32 {
+        24.0
     }
     /// 顶栏菜单行（终端 / 编辑 / 视图 / 工具 / 帮助）
     pub fn menu_bar_height(&self) -> f32 {

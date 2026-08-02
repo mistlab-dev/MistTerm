@@ -266,6 +266,11 @@ impl SftpPanel {
         self.pending_auto_list = true;
     }
 
+    #[inline]
+    pub fn is_busy(&self) -> bool {
+        self.busy
+    }
+
     pub fn reset(&mut self) {
         self.cwd = PathBuf::from(".");
         self.entries.clear();
@@ -1069,7 +1074,11 @@ impl SftpPanel {
                 theme,
                 crate::ui::icons::IconId::Folder,
                 "SFTP",
-                crate::i18n::tr(ctx, "Hide sidebar · or use bottom SFTP toggle", "隐藏侧栏 · 也可用底部 SFTP 切换"),
+                crate::i18n::tr(
+                    ctx,
+                    "Hide panel · reopen from Activity Rail or View menu",
+                    "隐藏面板 · 可从活动栏或「视图」菜单再打开",
+                ),
             );
         });
         if header_closed {

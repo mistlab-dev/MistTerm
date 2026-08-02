@@ -13,11 +13,21 @@ pub(crate) enum ToastKind {
     Error,
 }
 
+/// Toast 主按钮动作（需用户确认的提示）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToastAction {
+    /// 打开 SSH 配置导入对话框。
+    OpenSshImport,
+}
+
 #[derive(Debug, Clone)]
 pub(super) struct ActiveToast {
     kind: ToastKind,
     text: String,
-    until: Instant,
+    /// `None` = 需用户确认，不自动消失。
+    until: Option<Instant>,
+    action: Option<ToastAction>,
+    action_label: Option<String>,
 }
 
 #[inline]
@@ -63,7 +73,7 @@ pub(crate) fn status_message_looks_like_error(msg: &str) -> bool {
         || body.contains("失败")
 }
 
-/// 底栏 / 提示文案颜色：错误类用主题红，其余用弱文字色（避免顶栏大块告警色）
+/// 提示文案颜色：错误类用主题红，其余用弱文字色。
 pub(super) fn status_message_text_color(
     msg: &str,
     theme: &crate::ui::theme::Theme,
@@ -76,6 +86,15 @@ pub(super) fn status_message_text_color(
 }
 
 impl MistTermApp {
+    fn toast_duration_secs(kind: ToastKind) -> u64 {
+        // 业界常见：Info ~3–5s，Warn/Error 略长；过长会挡操作，过短读不完。
+        match kind {
+            ToastKind::Error => 8,
+            ToastKind::Warn => 7,
+            ToastKind::Success | ToastKind::Info => 5,
+        }
+    }
+
     /// 统一通知入口：所有用户可见提示走 Toast（并同步 `status_message` 供诊断快照）。
     pub(crate) fn push_toast(&mut self, kind: ToastKind, text: impl Into<String>) {
         let raw = text.into();
@@ -85,11 +104,14 @@ impl MistTermApp {
             self.status_message.clear();
             return;
         }
-        let secs = match kind {
-            ToastKind::Error => 6,
-            ToastKind::Warn => 5,
-            ToastKind::Success | ToastKind::Info => 4,
-        };
+        // 需确认的 Toast 不被瞬时提示覆盖（过期后会再同步）。
+        if self
+            .active_toast
+            .as_ref()
+            .is_some_and(|t| t.action.is_some() && t.until.is_none())
+        {
+            return;
+        }
         self.status_message = match kind {
             ToastKind::Error => status_message_wrap_error(text.clone()),
             _ => text.clone(),
@@ -97,7 +119,45 @@ impl MistTermApp {
         self.active_toast = Some(ActiveToast {
             kind,
             text,
-            until: Instant::now() + Duration::from_secs(secs),
+            until: Some(Instant::now() + Duration::from_secs(Self::toast_duration_secs(kind))),
+            action: None,
+            action_label: None,
+        });
+    }
+
+    /// 需用户确认的 Toast：不自动消失，带主操作与关闭。
+    pub(crate) fn push_action_toast(
+        &mut self,
+        kind: ToastKind,
+        text: impl Into<String>,
+        action: ToastAction,
+        action_label: impl Into<String>,
+    ) {
+        let raw = text.into();
+        let text = status_message_body(&raw).trim().to_string();
+        if text.is_empty() {
+            return;
+        }
+        let action_label = action_label.into();
+        if let Some(toast) = &self.active_toast {
+            if toast.action == Some(action)
+                && toast.until.is_none()
+                && toast.text == text
+                && toast.action_label.as_deref() == Some(action_label.as_str())
+            {
+                return;
+            }
+        }
+        self.status_message = match kind {
+            ToastKind::Error => status_message_wrap_error(text.clone()),
+            _ => text.clone(),
+        };
+        self.active_toast = Some(ActiveToast {
+            kind,
+            text,
+            until: None,
+            action: Some(action),
+            action_label: Some(action_label),
         });
     }
 
@@ -132,6 +192,42 @@ impl MistTermApp {
         self.status_message.clear();
     }
 
+    /// 有待导入且用户未关闭时，展示可操作 Toast（替代侧栏横幅 / 顶栏 chip）。
+    pub(crate) fn sync_ssh_import_action_toast(&mut self, ctx: &egui::Context) {
+        let pending = self.ssh_pending_import_count();
+        if pending == 0 || self.ssh_import_banner_dismissed {
+            if self
+                .active_toast
+                .as_ref()
+                .is_some_and(|t| t.action == Some(ToastAction::OpenSshImport))
+            {
+                self.clear_toast();
+            }
+            return;
+        }
+        if self
+            .active_toast
+            .as_ref()
+            .is_some_and(|t| t.action.is_none() && t.until.is_some())
+        {
+            // 瞬时 Toast 优先展示；结束后下一帧再同步待导入。
+            return;
+        }
+        let text = match crate::i18n::language(ctx) {
+            crate::i18n::UiLanguage::En => {
+                format!("Detected {pending} pending SSH Host block(s)")
+            }
+            crate::i18n::UiLanguage::Zh => format!("检测到 {pending} 个未导入的 SSH 配置"),
+        };
+        let action_label = crate::i18n::tr(ctx, "Import", "导入").to_string();
+        self.push_action_toast(
+            ToastKind::Warn,
+            text,
+            ToastAction::OpenSshImport,
+            action_label,
+        );
+    }
+
     /// 刷新 Toast 过期；并桥接仍直接写 `status_message` 的旧路径。
     pub(crate) fn tick_status_toast(&mut self) {
         let toast_text = self
@@ -142,42 +238,84 @@ impl MistTermApp {
         let body = status_message_body(&self.status_message);
         if body != toast_text {
             if body.is_empty() {
-                self.active_toast = None;
-            } else {
+                if self
+                    .active_toast
+                    .as_ref()
+                    .is_some_and(|t| t.action.is_none())
+                {
+                    self.active_toast = None;
+                }
+            } else if self
+                .active_toast
+                .as_ref()
+                .map(|t| t.action.is_none())
+                .unwrap_or(true)
+            {
                 let kind = if status_message_looks_like_error(&self.status_message) {
                     ToastKind::Error
                 } else {
                     ToastKind::Info
                 };
                 let text = body.to_string();
-                let secs = match kind {
-                    ToastKind::Error => 6,
-                    ToastKind::Warn => 5,
-                    ToastKind::Success | ToastKind::Info => 4,
-                };
                 self.active_toast = Some(ActiveToast {
                     kind,
                     text,
-                    until: Instant::now() + Duration::from_secs(secs),
+                    until: Some(
+                        Instant::now() + Duration::from_secs(Self::toast_duration_secs(kind)),
+                    ),
+                    action: None,
+                    action_label: None,
                 });
             }
         }
         if let Some(toast) = &self.active_toast {
-            if Instant::now() >= toast.until {
-                self.clear_toast();
+            if let Some(until) = toast.until {
+                if Instant::now() >= until {
+                    self.clear_toast();
+                }
             }
         }
     }
 
-    pub(crate) fn show_status_toast(&self, ctx: &egui::Context, theme: &crate::ui::theme::Theme) {
-        let Some(toast) = &self.active_toast else {
+    pub(crate) fn show_status_toast(&mut self, ctx: &egui::Context, theme: &crate::ui::theme::Theme) {
+        let Some(toast) = self.active_toast.clone() else {
             return;
         };
+        let show_dismiss = toast.action.is_some()
+            || matches!(toast.kind, ToastKind::Error | ToastKind::Warn);
+        let mut primary = false;
+        let mut dismiss = false;
         egui::Area::new(egui::Id::new("status_toast"))
             .order(egui::Order::Foreground)
-            .interactable(false)
+            .interactable(true)
             .show(ctx, |ui| {
-                crate::ui::chrome::paint_status_toast(ui, theme, &toast.text, toast.kind);
+                let actions = crate::ui::chrome::paint_status_toast(
+                    ui,
+                    theme,
+                    &toast.text,
+                    toast.kind,
+                    toast.action_label.as_deref(),
+                    show_dismiss,
+                );
+                primary = actions.primary;
+                dismiss = actions.dismiss;
             });
+
+        if primary {
+            if let Some(action) = toast.action {
+                match action {
+                    ToastAction::OpenSshImport => {
+                        self.clear_toast();
+                        self.open_ssh_import_dialog(ctx);
+                    }
+                }
+            }
+        } else if dismiss {
+            if toast.action == Some(ToastAction::OpenSshImport) {
+                self.ssh_import_banner_dismissed = true;
+                self.title_ssh_import_dismissed = true;
+            }
+            self.clear_toast();
+        }
     }
 }

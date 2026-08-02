@@ -17,42 +17,32 @@ impl MistTermApp {
         // 顶栏：非 macOS 为窗口内菜单；macOS 用系统菜单栏（与 native_menu 安装时机解耦：
         // 用 `cfg` 直接关掉应用内 top_chrome，避免首帧或安装失败时露出一条 chrome_bar 颜色）。
         let pending = self.ssh_pending_import_count();
-        let show_import_chip =
-            self.sidebar_collapsed && !self.title_ssh_import_dismissed && pending > 0;
+        let _ = pending; // SSH 待导入改走右下角需确认 Toast，顶栏不再显示 chip
         #[cfg(target_os = "macos")]
-        let top_chrome_height = if show_import_chip {
-            theme.menu_bar_height()
-        } else {
-            0.0
-        };
+        let top_chrome_height = 0.0;
         #[cfg(not(target_os = "macos"))]
         let top_chrome_height = theme.top_chrome_total_height();
         if top_chrome_height > 0.0 {
             egui::TopBottomPanel::top("top_chrome")
                 .exact_height(top_chrome_height)
-                .frame(theme.frame_chrome_bar())
+                .frame(theme.frame_top_chrome())
+                .show_separator_line(false)
                 .show(ctx, |ui| {
                     let bar_bg = ui.max_rect();
                     ui.painter()
                         .rect_filled(bar_bg, 0.0, theme.chrome_bar_fill());
-                    let title_actions = crate::ui::chrome::render_top_chrome_panel(
+                    let _title_actions = crate::ui::chrome::render_top_chrome_panel(
                         ui,
                         theme,
                         !self.uses_native_menu_bar(),
                         |ui| self.show_application_menu_bar(ui, ctx, theme, frame),
-                        pending,
-                        show_import_chip,
+                        0,
+                        false,
                     );
-                    if title_actions.open_ssh_import {
-                        self.open_ssh_import_dialog(ctx);
-                    }
-                    if title_actions.dismiss_ssh_import {
-                        self.title_ssh_import_dismissed = true;
-                    }
                 });
         }
 
-        // 左侧 Activity Rail（全平台统一）；连接列表由 rail 开关抽屉。
+        // 左侧 Activity Rail（可完全隐藏；隐藏时仍保留左缘窄恢复条）。
         self.show_activity_rail(ctx, theme);
 
         // 右侧单抽屉：须先于 Central 注册（Foreground 重绘依赖）。
@@ -200,8 +190,8 @@ impl MistTermApp {
                                     ui,
                                     layout_h,
                                     self.sidebar_width,
-                                    self.ssh_import_banner_dismissed,
-                                    self.ssh_pending_import_count(),
+                                    true, // SSH 待导入改走 Toast，侧栏不再显示横幅
+                                    0,
                                     &self.session_manager,
                                     &self.selected_session_id,
                                     &mut self.sidebar_search_query,
@@ -213,12 +203,7 @@ impl MistTermApp {
                                     Self::id_sidebar_connection_search(),
                                     theme,
                                 );
-                                if col_actions.open_ssh_import {
-                                    self.open_ssh_import_dialog(ctx);
-                                }
-                                if col_actions.dismiss_ssh_banner {
-                                    self.ssh_import_banner_dismissed = true;
-                                }
+                                let _ = col_actions;
 
                                 if sidebar_output.create_session_clicked {
                                     self.show_new_session_dialog = true;
@@ -728,6 +713,7 @@ impl MistTermApp {
             });
 
         self.render_workspace_right_dock_foreground(ctx, theme, top_chrome_height);
+        self.sync_ssh_import_action_toast(ctx);
         self.tick_status_toast();
         self.show_status_toast(ctx, theme);
 
@@ -1261,8 +1247,8 @@ impl MistTermApp {
                             ui.label(
                                 egui::RichText::new(crate::i18n::tr(
                                     ctx,
-                                    "Tip: use the snippets button in the bottom bar to open the side panel.",
-                                    "提示：点击底部「命令片段」按钮打开侧边栏面板",
+                                    "Tip: open the snippets panel from the Activity Rail or View menu.",
+                                    "提示：从活动栏或「视图」菜单打开命令片段面板",
                                 ))
                                     .size(theme.font_size_panel_title())
                                     .color(theme.color_caption_text()),

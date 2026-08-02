@@ -28,14 +28,23 @@
 
 ## Refresh Behavior
 
-- Terminal view requests periodic repaint while connected (for live updates).
-- This is required for dynamic TUI/CLI apps even when input is idle.
+- Connected terminal requests periodic repaint for live TUI/CLI (`top`, `vim`, …).
+- Live repaint interval: **~33ms (30 FPS)** (`TERMINAL_LIVE_REPAINT_MS`) — common for desktop terminals when content is dirty; not 60 FPS continuous (wastes CPU) and not ≤20 FPS (feels sluggish).
+- Cursor blink period: **~530ms** (xterm-like).
+- SSH shell pump poll: **~8ms** non-blocking timeout (latency-oriented; fine for interactive SSH).
+- UI hang watchdog: **~3s** stale heartbeat threshold (2–5s is typical for desktop diagnostics).
+- Toast auto-dismiss: Info/Success **5s**, Warn **7s**, Error **8s** (readable without lingering).
 
 ## Font & Color Behavior
 
-- Monospace rendering uses egui monospace font path.
+- Monospace rendering uses egui monospace font path (system Regular preferred; never Bold font files as default).
 - CJK fallback is placed after monospace primary font to reduce non-monospace appearance.
 - Cell foreground colors are rendered from terminal color attributes (including indexed/truecolor paths).
+- Bold uses classic ANSI brightening only for indexed/named base colors `0..7`; default foreground and truecolor are not forced toward white.
+- Line height is clamped to about `1.1 × font_size` when the font’s egui `row_height` (includes line_gap) is looser, reducing the “glyph stuck to top of cell” look; terminal mono fonts get a slight `y_offset` tweak to sit nearer mid-cell.
+- VT grid is laid out **top-aligned** in the viewport after syncing PTY rows to the visible height first.
+- Cell / selection backgrounds are painted by MistTerm (row-clamped, no egui `expand(1)`); `TextFormat.background` stays transparent so highlights cannot crush the next line.
+- Block cursor uses font row height and `TextEdit`’s real `text_draw_pos` (top-aligned with glyphs).
 
 ## Regression Checklist
 

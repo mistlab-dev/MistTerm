@@ -62,6 +62,12 @@ impl MistTermApp {
             if matches!(team_action, crate::ui::team_ui::TeamUiAction::OpenMembers) {
                 self.team_members_dialog.open(&mut self.team_service);
             }
+            if let Some(err) = self.cloud_sync_panel.take_pending_toast_error() {
+                self.notify_error(err);
+            }
+            if close_cloud {
+                self.cloud_sync_panel.open = false;
+            }
         }
 
         if paint_right_dock_fg && self.show_monitor_panel {
@@ -113,6 +119,9 @@ impl MistTermApp {
         }
         if self.show_ai_panel || self.show_ai_settings_dialog {
             self.ai_panel.poll_background(ctx, &mut self.app_settings);
+            if let Some(err) = self.ai_panel.take_pending_toast_error() {
+                self.notify_error(err);
+            }
         }
         if paint_right_dock_fg && self.show_ai_panel {
             self.ai_panel.show_foreground_panel(
@@ -121,6 +130,9 @@ impl MistTermApp {
                 &mut self.show_ai_panel,
                 &mut self.app_settings,
             );
+            if let Some(err) = self.ai_panel.take_pending_toast_error() {
+                self.notify_error(err);
+            }
         }
         // 改宽手柄：全部 dock 正文之后、屏上左→右绘制，避免右邻 dock 正文挡住左缝（如监控+片段并排）。
         if paint_right_dock_fg {

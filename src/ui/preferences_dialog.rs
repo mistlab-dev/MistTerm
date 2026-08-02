@@ -5,20 +5,13 @@ use eframe::egui::RichText;
 
 impl MistTermApp {
     fn workspace_top_chrome_height(&self, theme: &crate::ui::theme::Theme) -> f32 {
-        let pending = self.ssh_pending_import_count();
-        let show_import_chip =
-            self.sidebar_collapsed && !self.title_ssh_import_dismissed && pending > 0;
         #[cfg(target_os = "macos")]
         {
-            if show_import_chip {
-                theme.menu_bar_height()
-            } else {
-                0.0
-            }
+            let _ = theme;
+            0.0
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let _ = show_import_chip;
             theme.top_chrome_total_height()
         }
     }
