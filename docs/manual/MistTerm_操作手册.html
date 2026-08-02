@@ -28,8 +28,8 @@ strong { font-weight: 600; }
 </head>
 <body>
 <h1>MistTerm 操作手册</h1>
-<blockquote><p><strong>适用版本</strong>：1.0.4</p></blockquote>
-<blockquote><p><strong>更新日期</strong>：2026-06-18</p></blockquote>
+<blockquote><p><strong>适用版本</strong>：1.0.16</p></blockquote>
+<blockquote><p><strong>更新日期</strong>：2026-08-02</p></blockquote>
 <blockquote><p><strong>官网</strong>：<a href="https://mistlab.dev">mistlab.dev</a> · <strong>下载</strong>：<a href="https://github.com/mistlab-dev/MistTerm/releases">GitHub Releases</a></p></blockquote>
 <p>本手册面向<strong>日常使用 MistTerm 连接服务器、操作终端、传文件</strong>的用户。不涉及编译源码或参与开发；开发者文档见仓库内 <code>docs/</code> 目录。</p>
 <hr>
@@ -61,7 +61,7 @@ strong { font-weight: 600; }
 <li>查看服务器 CPU、内存、磁盘等状态</li>
 <li>可选：AI 辅助解释命令、团队共享片段</li>
 </ul>
-<p>支持 <strong>Windows</strong> 与 <strong>macOS</strong>。</p>
+<p>支持 <strong>Windows</strong>、<strong>macOS</strong> 与 <strong>Linux</strong>。</p>
 <hr>
 <h2>2. 安装与启动</h2>
 <h3>2.1 下载安装</h3>
@@ -78,7 +78,7 @@ strong { font-weight: 600; }
 </ol>
 <p>安装后无需单独安装 OpenSSH；连接远程 Linux 服务器即可使用。</p>
 <h3>2.2 首次启动</h3>
-<p>启动后会出现主窗口：左侧为<strong>会话列表</strong>，中间为<strong>工作区</strong>（连接后显示终端），顶部为<strong>菜单</strong>，底部为<strong>状态栏</strong>。</p>
+<p>启动后会出现主窗口：左侧为<strong>活动栏</strong>（可打开连接列表与各面板），中间为<strong>工作区</strong>（连接后显示终端），顶部为<strong>菜单</strong>；提示信息以右下角 <strong>Toast</strong> 显示（无常驻底栏）。</p>
 <figure><img src="screenshots/01-main-connected.png" alt="主界面（已连接 SSH）"><figcaption>主界面（已连接 SSH）</figcaption></figure>
 <p class="caption"><em>图 2-1：已连接服务器时的主界面</em></p>
 <h3>2.3 数据保存在哪</h3>
@@ -90,15 +90,15 @@ strong { font-weight: 600; }
 <p>请勿手动编辑这些文件；在应用内修改即可。</p>
 <hr>
 <h2>3. 五分钟上手</h2>
-<table><thead><tr><th>步骤</th><th>操作</th></tr></thead><tbody><tr><td>1</td><td>按 <strong>Ctrl+N</strong>（Mac：<strong>⌘N</strong>）打开「新建会话」</td></tr><tr><td>2</td><td>填写名称、主机 IP/域名、端口（默认 22）、用户名、密码或密钥</td></tr><tr><td>3</td><td>点击 <strong>保存并连接</strong>，或在侧栏<strong>双击</strong>该会话</td></tr><tr><td>4</td><td>在中间终端输入命令，如 <code>ls</code>、<code>cd</code>、<code>top</code></td></tr><tr><td>5</td><td>需要传文件时：菜单 <strong>视图 → SFTP</strong>，或点击底栏 <strong>Files</strong></td></tr></tbody></table>
+<table><thead><tr><th>步骤</th><th>操作</th></tr></thead><tbody><tr><td>1</td><td>按 <strong>Ctrl+N</strong>（Mac：<strong>⌘N</strong>）打开「新建会话」</td></tr><tr><td>2</td><td>填写名称、主机 IP/域名、端口（默认 22）、用户名、密码或密钥</td></tr><tr><td>3</td><td>点击 <strong>保存并连接</strong>，或在侧栏<strong>双击</strong>该会话</td></tr><tr><td>4</td><td>在中间终端输入命令，如 <code>ls</code>、<code>cd</code>、<code>top</code></td></tr><tr><td>5</td><td>需要传文件时：菜单 <strong>视图 → SFTP</strong>，或点击左侧<strong>活动栏</strong>「文件」</td></tr></tbody></table>
 <figure><img src="screenshots/02-new-session-dialog.png" alt="新建会话对话框"><figcaption>新建会话对话框</figcaption></figure>
 <p class="caption"><em>图 3-1：新建会话</em></p>
 <hr>
 <h2>4. 认识界面</h2>
 <h3>4.1 布局</h3>
-<table><thead><tr><th>区域</th><th>位置</th><th>说明</th></tr></thead><tbody><tr><td>顶栏菜单</td><td>窗口顶部</td><td><strong>终端</strong>、<strong>编辑</strong>、<strong>视图</strong>、<strong>工具</strong>、<strong>帮助</strong></td></tr><tr><td>会话列表</td><td>左侧</td><td>已保存的连接，支持分组与搜索</td></tr><tr><td>工作区</td><td>中间</td><td>终端标签页；连接后在此输入命令</td></tr><tr><td>侧面板</td><td>右侧（按需打开）</td><td>SFTP、监控、片段、AI 等</td></tr><tr><td>状态栏</td><td>窗口底部</td><td>连接信息，以及 <strong>AI</strong> / <strong>Monitor</strong> / <strong>Forward</strong> / <strong>Files</strong> / <strong>Snippets</strong> 快捷入口</td></tr></tbody></table>
+<table><thead><tr><th>区域</th><th>位置</th><th>说明</th></tr></thead><tbody><tr><td>顶栏菜单</td><td>窗口顶部</td><td><strong>终端</strong>、<strong>编辑</strong>、<strong>视图</strong>、<strong>工具</strong>、<strong>帮助</strong>（macOS 多用系统菜单）</td></tr><tr><td>活动栏</td><td>窗口左侧</td><td>连接列表、片段、文件、转发、监控、AI、偏好；<strong>Ctrl+B</strong>（Mac：<strong>⌘B</strong>）可隐藏，左缘窄条可恢复</td></tr><tr><td>连接列表</td><td>活动栏「连接」展开</td><td>已保存的会话，支持分组与搜索（默认收起）</td></tr><tr><td>工作区</td><td>中间</td><td>终端标签页；连接后在此输入命令</td></tr><tr><td>侧面板</td><td>右侧（按需打开）</td><td>SFTP、监控、片段、AI 等（同时只开一个）</td></tr><tr><td>Toast</td><td>右下角</td><td>临时提示 / 需确认提示（已无常驻底栏）</td></tr></tbody></table>
 <h3>4.2 常用入口</h3>
-<table><thead><tr><th>想做什么</th><th>怎么打开</th></tr></thead><tbody><tr><td>新建/编辑连接</td><td><strong>Ctrl+N</strong> / 侧栏选中后 <strong>Ctrl+E</strong></td></tr><tr><td>打开 SFTP</td><td><strong>视图 → SFTP</strong> 或底栏 <strong>Files</strong></td></tr><tr><td>看 CPU/内存</td><td><strong>视图 → 监控</strong> 或底栏 <strong>Monitor</strong></td></tr><tr><td>命令片段</td><td><strong>Ctrl+K</strong> 或底栏 <strong>Snippets</strong></td></tr><tr><td>AI 助手</td><td><strong>Ctrl+Shift+A</strong> 或底栏 <strong>AI</strong></td></tr><tr><td>偏好设置</td><td><strong>Ctrl+,</strong></td></tr><tr><td>帮助与快捷键</td><td><strong>帮助 → 快速入门 / 键盘快捷键</strong> 或 <strong>Ctrl+H</strong></td></tr></tbody></table>
+<table><thead><tr><th>想做什么</th><th>怎么打开</th></tr></thead><tbody><tr><td>新建/编辑连接</td><td><strong>Ctrl+N</strong> / 连接列表选中后 <strong>Ctrl+E</strong></td></tr><tr><td>打开 SFTP</td><td><strong>视图 → SFTP</strong> 或活动栏「文件」</td></tr><tr><td>看 CPU/内存</td><td><strong>视图 → 监控</strong> 或活动栏「监控」</td></tr><tr><td>命令片段</td><td><strong>Ctrl+K</strong> 或活动栏「片段」</td></tr><tr><td>AI 助手</td><td><strong>Ctrl+Shift+A</strong> 或活动栏「AI」</td></tr><tr><td>显示/隐藏活动栏</td><td><strong>Ctrl+B</strong>（Mac：<strong>⌘B</strong>）或 <strong>视图</strong> 菜单</td></tr><tr><td>偏好设置</td><td><strong>Ctrl+,</strong> 或活动栏底部设置</td></tr><tr><td>帮助与快捷键</td><td><strong>帮助 → 快速入门 / 键盘快捷键</strong> 或 <strong>Ctrl+H</strong></td></tr></tbody></table>
 <figure><img src="screenshots/20-sidebar-sessions.png" alt="侧栏会话列表"><figcaption>侧栏会话列表</figcaption></figure>
 <p class="caption"><em>图 4-1：侧栏会话列表（可分组、搜索）</em></p>
 <figure><img src="screenshots/12-menu-view.png" alt="视图菜单"><figcaption>视图菜单</figcaption></figure>
@@ -130,7 +130,7 @@ strong { font-weight: 600; }
 <li><strong>连接</strong>：侧栏单击选中 → <strong>Ctrl+T</strong> 新标签，或<strong>双击</strong>会话</li>
 <li><strong>搜索会话</strong>：<strong>Ctrl+J</strong> 聚焦侧栏搜索框</li>
 <li><strong>自动重连</strong>：在会话编辑里可开启 KeepAlive / 自动重连</li>
-<li>底栏显示 <code>用户名@主机 · 已连接</code> 表示成功</li>
+<li>连接成功后，标签上会显示在线圆点；提示信息以右下角 Toast 显示</li>
 </ul>
 <h3>5.4 本地数据安全</h3>
 <p>密码和会话信息在本地<strong>加密保存</strong>，换电脑需重新配置或恢复备份。配置文件为加密格式，用记事本打开会看到乱码，属正常现象。</p>
@@ -166,18 +166,18 @@ strong { font-weight: 600; }
 <hr>
 <h2>7. 传输文件</h2>
 <h3>7.1 SFTP 面板（推荐）</h3>
-<p><strong>打开方式</strong>：菜单 <strong>视图 → SFTP</strong>，或底栏 <strong>Files</strong>。</p>
+<p><strong>打开方式</strong>：菜单 <strong>视图 → SFTP</strong>，或左侧<strong>活动栏</strong>「文件」。</p>
 <p>界面分为<strong>本机</strong>与<strong>远程</strong>两栏：</p>
 <ol>
 <li>上方输入框可修改当前目录路径，按 Enter 跳转</li>
 <li>单击选中文件或文件夹</li>
 <li>使用面板上的按钮或右键菜单：<strong>上传</strong>、<strong>下载</strong>、<strong>删除</strong>、<strong>新建文件夹</strong>、<strong>重命名</strong></li>
-<li>操作结果在窗口<strong>底栏状态</strong>显示</li>
+<li>操作结果以右下角 <strong>Toast</strong> 提示</li>
 </ol>
 <figure><img src="screenshots/04-sftp-panel.png" alt="SFTP 双栏浏览器"><figcaption>SFTP 双栏浏览器</figcaption></figure>
 <p class="caption"><em>图 7-1：SFTP 双栏文件管理</em></p>
 <figure><img src="screenshots/05-sftp-upload-done.png" alt="SFTP 上传完成"><figcaption>SFTP 上传完成</figcaption></figure>
-<p class="caption"><em>图 7-2：上传完成后底栏提示</em></p>
+<p class="caption"><em>图 7-2：上传完成后的 Toast 提示</em></p>
 <p><strong>典型流程 — 上传文件到服务器：</strong></p>
 <ol>
 <li>连接 SSH 后打开 SFTP 面板</li>
@@ -198,9 +198,9 @@ sz 文件名</code></pre>
 <h2>8. 命令片段</h2>
 <p>将常用命令存为<strong>片段</strong>，需要时一键插入，支持 <code>&lt;变量名&gt;</code> 占位符。</p>
 <h3>8.1 打开片段</h3>
-<table><thead><tr><th>方式</th><th>说明</th></tr></thead><tbody><tr><td><strong>Ctrl+K</strong></td><td>聚焦片段搜索</td></tr><tr><td><strong>Ctrl+Shift+J</strong></td><td>快速片段选择器</td></tr><tr><td>底栏 <strong>Snippets</strong></td><td>打开右侧片段面板</td></tr><tr><td><strong>工具 → 命令片段库</strong></td><td>管理、新建、编辑片段</td></tr></tbody></table>
-<figure><img src="screenshots/11-panel-snippets.png" alt="命令片段底栏面板"><figcaption>命令片段底栏面板</figcaption></figure>
-<p class="caption"><em>图 8-1：底栏打开片段侧栏</em></p>
+<table><thead><tr><th>方式</th><th>说明</th></tr></thead><tbody><tr><td><strong>Ctrl+K</strong></td><td>聚焦片段搜索</td></tr><tr><td><strong>Ctrl+Shift+J</strong></td><td>快速片段选择器</td></tr><tr><td>活动栏「片段」</td><td>打开右侧片段面板</td></tr><tr><td><strong>工具 → 命令片段库</strong></td><td>管理、新建、编辑片段</td></tr></tbody></table>
+<figure><img src="screenshots/11-panel-snippets.png" alt="命令片段面板"><figcaption>命令片段面板</figcaption></figure>
+<p class="caption"><em>图 8-1：从活动栏打开片段侧栏</em></p>
 <figure><img src="screenshots/16-fragment-library.png" alt="命令片段库"><figcaption>命令片段库</figcaption></figure>
 <p class="caption"><em>图 8-2：片段库 — 新建与编辑</em></p>
 <h3>8.2 使用变量</h3>
@@ -214,7 +214,7 @@ sz 文件名</code></pre>
 <h3>9.1 主机监控</h3>
 <ol>
 <li>先建立 SSH 连接</li>
-<li>打开 <strong>视图 → 监控</strong> 或底栏 <strong>Monitor</strong></li>
+<li>打开 <strong>视图 → 监控</strong> 或活动栏「监控」</li>
 <li>查看 CPU、内存、磁盘、负载等图表（数据来自远程服务器，只读采集）</li>
 </ol>
 <figure><img src="screenshots/09-panel-monitor.png" alt="主机监控面板"><figcaption>主机监控面板</figcaption></figure>
@@ -222,7 +222,7 @@ sz 文件名</code></pre>
 <blockquote><p>监控依赖 SSH 连接。若连接断开，图表会停止更新；重新连接即可。</p></blockquote>
 <h3>9.2 端口转发</h3>
 <ol>
-<li>打开底栏 <strong>Port Forward</strong> 或 <strong>视图 → 端口转发</strong></li>
+<li>打开活动栏「转发」或 <strong>视图 → 端口转发</strong></li>
 <li>添加规则（格式与 OpenSSH 类似）：</li>
 </ol>
 <ul>
@@ -301,7 +301,7 @@ sz 文件名</code></pre>
 <hr>
 <h2>14. 快捷键一览</h2>
 <p>以下以 <strong>Windows</strong> 为例；macOS 将 <strong>Ctrl</strong> 换为 <strong>⌘</strong> 即可（如 Ctrl+N → ⌘N）。</p>
-<table><thead><tr><th>快捷键</th><th>功能</th></tr></thead><tbody><tr><td><strong>Ctrl+N</strong></td><td>新建会话</td></tr><tr><td><strong>Ctrl+E</strong></td><td>编辑所选会话</td></tr><tr><td><strong>Ctrl+T</strong></td><td>为所选会话新建终端标签</td></tr><tr><td><strong>Ctrl+W</strong></td><td>关闭当前标签</td></tr><tr><td><strong>Ctrl+Tab</strong> / <strong>Ctrl+Shift+Tab</strong></td><td>下一 / 上一标签</td></tr><tr><td><strong>Ctrl+1 … Ctrl+9</strong></td><td>切换到第 N 个标签</td></tr><tr><td><strong>Ctrl+J</strong></td><td>聚焦连接搜索（侧栏）</td></tr><tr><td><strong>Ctrl+K</strong></td><td>聚焦片段搜索</td></tr><tr><td><strong>Ctrl+Shift+J</strong></td><td>快速片段选择器</td></tr><tr><td><strong>Ctrl+F</strong> / <strong>F3</strong></td><td>终端内查找</td></tr><tr><td><strong>Ctrl+R</strong></td><td>命令历史搜索（终端内）</td></tr><tr><td><strong>Ctrl+Shift+A</strong></td><td>AI 助手面板</td></tr><tr><td><strong>Ctrl+Shift+L</strong></td><td>终端选区发送到 AI</td></tr><tr><td><strong>Ctrl+Shift+D</strong> / <strong>Ctrl+Shift+U</strong></td><td>终端左右 / 上下分屏</td></tr><tr><td><strong>Ctrl+,</strong></td><td>偏好设置</td></tr><tr><td><strong>Ctrl+H</strong></td><td>关于与快捷键说明</td></tr><tr><td><strong>Esc</strong></td><td>关闭当前弹窗、菜单</td></tr></tbody></table>
+<table><thead><tr><th>快捷键</th><th>功能</th></tr></thead><tbody><tr><td><strong>Ctrl+N</strong></td><td>新建会话</td></tr><tr><td><strong>Ctrl+E</strong></td><td>编辑所选会话</td></tr><tr><td><strong>Ctrl+T</strong></td><td>为所选会话新建终端标签</td></tr><tr><td><strong>Ctrl+Shift+W</strong></td><td>关闭当前标签（Mac：<strong>⌘W</strong>）</td></tr><tr><td><strong>Ctrl+Tab</strong> / <strong>Ctrl+Shift+Tab</strong></td><td>下一 / 上一标签</td></tr><tr><td><strong>Ctrl+1 … Ctrl+9</strong></td><td>切换到第 N 个标签</td></tr><tr><td><strong>Ctrl+B</strong></td><td>显示 / 隐藏活动栏</td></tr><tr><td><strong>Ctrl+J</strong></td><td>聚焦连接搜索（连接列表）</td></tr><tr><td><strong>Ctrl+K</strong></td><td>聚焦片段搜索</td></tr><tr><td><strong>Ctrl+Shift+J</strong></td><td>快速片段选择器</td></tr><tr><td><strong>Ctrl+F</strong> / <strong>F3</strong></td><td>终端内查找</td></tr><tr><td><strong>Ctrl+R</strong></td><td>命令历史搜索（终端内）</td></tr><tr><td><strong>Ctrl+Shift+A</strong></td><td>AI 助手面板</td></tr><tr><td><strong>Ctrl+Shift+L</strong></td><td>终端选区发送到 AI</td></tr><tr><td><strong>Ctrl+Shift+D</strong> / <strong>Ctrl+Shift+U</strong></td><td>终端左右 / 上下分屏</td></tr><tr><td><strong>Ctrl+,</strong></td><td>偏好设置</td></tr><tr><td><strong>Ctrl+H</strong></td><td>关于与快捷键说明</td></tr><tr><td><strong>Esc</strong></td><td>关闭当前弹窗、菜单</td></tr></tbody></table>
 <p>完整列表以应用内 <strong>帮助 → 键盘快捷键</strong> 为准。</p>
 <figure><img src="screenshots/19-help-quick-start.png" alt="快速入门帮助"><figcaption>快速入门帮助</figcaption></figure>
 <p class="caption"><em>图 14-1：应用内帮助 — 快速入门</em></p>
@@ -312,7 +312,7 @@ sz 文件名</code></pre>
 <li>检查主机、端口、用户名、密码/密钥是否正确</li>
 <li>确认本机网络能访问目标 IP（可先用系统自带 <code>ssh</code> 命令测试）</li>
 <li>若需跳板机，在会话高级选项中配置 ProxyJump</li>
-<li>查看底栏是否显示错误信息</li>
+<li>查看右下角 Toast 是否显示错误信息</li>
 </ul>
 <h3>连接后终端空白或乱码</h3>
 <ul>
