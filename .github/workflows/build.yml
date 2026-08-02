@@ -221,15 +221,16 @@ jobs:
                 bash scripts/bundle-macos.sh
               # 附带裸二进制，供 CLI / install.sh 使用；GUI 请用 Mist.app
               cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
-              cat > "$STAGE/README-macOS.txt" <<'EOF'
-MistTerm for macOS
-==================
-GUI（推荐，不会先弹出终端）:
-  open Mist.app
-  或把 Mist.app 拖到 /Applications 后从 Launchpad / Spotlight 启动
-
-不要双击同目录下的裸二进制 Mist，否则 macOS 会先打开 Terminal.app。
-EOF
+              printf '%s\n' \
+                'MistTerm for macOS' \
+                '==================' \
+                'GUI (recommended, no Terminal popup):' \
+                '  open Mist.app' \
+                '  or drag Mist.app to /Applications' \
+                '' \
+                'Do not double-click the bare Mist binary in Finder,' \
+                'or macOS will open Terminal.app first.' \
+                > "$STAGE/README-macOS.txt"
             else
               cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
             fi
