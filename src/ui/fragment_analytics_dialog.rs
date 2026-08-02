@@ -61,6 +61,7 @@ pub fn show_fragment_analytics_modal(
                             crate::i18n::UiLanguage::En => range.label_en(),
                         })
                         .show_ui(ui, |ui| {
+                            crate::ui::chrome::apply_menu_popup_style(ui, theme);
                             for candidate in [
                                 FragmentAnalyticsTimeRange::AllTime,
                                 FragmentAnalyticsTimeRange::Last7Days,

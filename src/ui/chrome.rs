@@ -460,36 +460,41 @@ pub fn sidebar_list_sort_button(
 }
 
 /// 下拉 / 右键 / ComboBox 弹出层共用的控件色（含 `widgets.open`，避免子菜单发黑底）。
+///
+/// 注意：此处的 `selection` 专供弹出层内 SelectableLabel / selectable_value（弱灰选中），
+/// 与全局主题里的「文本拖选」色分离——弹窗外 TextEdit 仍用 theme_manager 的拖选色。
 pub fn apply_popup_widget_visuals(visuals: &mut egui::Visuals, theme: &Theme) {
-    if theme.uses_modern_palette() {
-        let menu_bg = theme.color_menu_popup_fill();
-        visuals.window_fill = menu_bg;
-        visuals.widgets.inactive.bg_fill = menu_bg;
-        visuals.widgets.inactive.weak_bg_fill = menu_bg;
-        visuals.widgets.hovered.bg_fill = theme.color_control_secondary_fill_hover();
-        visuals.widgets.active.bg_fill = theme.color_control_secondary_fill_pressed();
-        visuals.widgets.inactive.fg_stroke.color = theme.text_secondary();
-        visuals.widgets.hovered.fg_stroke.color = theme.text_primary();
-        visuals.widgets.active.fg_stroke.color = theme.text_primary();
-        let open = &mut visuals.widgets.open;
-        open.weak_bg_fill = theme.color_control_secondary_fill_pressed();
-        open.bg_fill = theme.color_control_secondary_fill_pressed();
-        open.bg_stroke = egui::Stroke::NONE;
-        open.fg_stroke.color = theme.text_primary();
-    } else {
-        visuals.widgets.inactive.bg_fill = theme.bg_window_color();
-        visuals.widgets.hovered.bg_fill = theme.accent_alpha(38);
-        visuals.widgets.active.bg_fill = theme.accent_alpha(64);
-        visuals.widgets.inactive.fg_stroke.color = theme.text_secondary();
-        visuals.widgets.hovered.fg_stroke.color = theme.text_primary();
-        let open = &mut visuals.widgets.open;
-        open.weak_bg_fill = theme.accent_alpha(38);
-        open.bg_fill = theme.accent_alpha(38);
-        open.bg_stroke = egui::Stroke::NONE;
-        open.fg_stroke.color = theme.text_primary();
-    }
-    visuals.selection.bg_fill = theme.color_text_selection_bg();
-    visuals.selection.stroke.color = theme.color_text_selection_fg();
+    let rounding = egui::Rounding::same(theme.radius_list_item());
+    let menu_bg = theme.color_menu_popup_fill();
+    let hover = theme.list_row_hover_bg();
+    let selected = theme.list_row_selected_bg();
+    let active = theme.color_widget_active_fill();
+
+    visuals.window_fill = menu_bg;
+    visuals.menu_rounding = rounding;
+    visuals.widgets.inactive.bg_fill = menu_bg;
+    visuals.widgets.inactive.weak_bg_fill = menu_bg;
+    visuals.widgets.inactive.rounding = rounding;
+    visuals.widgets.hovered.bg_fill = hover;
+    visuals.widgets.hovered.weak_bg_fill = hover;
+    visuals.widgets.hovered.rounding = rounding;
+    visuals.widgets.active.bg_fill = active;
+    visuals.widgets.active.weak_bg_fill = active;
+    visuals.widgets.active.rounding = rounding;
+    visuals.widgets.inactive.fg_stroke.color = theme.text_secondary();
+    visuals.widgets.hovered.fg_stroke.color = theme.text_primary();
+    visuals.widgets.active.fg_stroke.color = theme.text_primary();
+
+    let open = &mut visuals.widgets.open;
+    open.weak_bg_fill = active;
+    open.bg_fill = active;
+    open.bg_stroke = egui::Stroke::NONE;
+    open.fg_stroke.color = theme.text_primary();
+    open.rounding = rounding;
+
+    // 菜单选中：弱灰底（与侧栏一致），勿用文本拖选的高亮白底
+    visuals.selection.bg_fill = selected;
+    visuals.selection.stroke = egui::Stroke::NONE;
 }
 
 fn apply_sidebar_menu_popup_style(ui: &mut Ui, theme: &Theme) {
@@ -1146,7 +1151,7 @@ pub fn session_tab_chip(
     let label_color = if active {
         theme.text_primary()
     } else if theme.uses_modern_palette() {
-        theme.text_secondary().gamma_multiply(0.72)
+        theme.text_secondary().gamma_multiply(0.55)
     } else {
         theme.text_tertiary()
     };
@@ -1167,7 +1172,17 @@ pub fn session_tab_chip(
     // 子控件（×）会抢走外层 hover；用关闭槽位命中避免 × 显隐来回切换。
     let tab_hot = response.hovered() || close_slot_hot;
     let modern = theme.uses_modern_palette();
-    let fill = if modern {
+    let fill = if let Some(c) = env_color {
+        // 未选中尽量淡，避免多标签糊成一整块；当前标签更实一点
+        let a = if active {
+            72u8
+        } else if tab_hot {
+            22
+        } else {
+            8
+        };
+        Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
+    } else if modern {
         if tab_hot && !active {
             theme.color_widget_hover_fill()
         } else {
@@ -1191,6 +1206,32 @@ pub fn session_tab_chip(
         egui::Stroke::new(1.0, theme.color_tab_inactive_stroke())
     };
     ui.painter().rect(rect, rounding, fill, stroke);
+    // 左侧色条：当前标签实色，未选中变淡，避免连成一片
+    if let Some(c) = env_color {
+        let bar_w = 3.0;
+        let bar = egui::Rect::from_min_max(
+            rect.left_top(),
+            egui::pos2(rect.left() + bar_w, rect.bottom()),
+        );
+        let bar_rounding = if modern {
+            egui::Rounding::ZERO
+        } else {
+            egui::Rounding {
+                nw: rounding.nw,
+                ne: 0.0,
+                sw: rounding.sw,
+                se: 0.0,
+            }
+        };
+        let bar_color = if active {
+            c.gamma_multiply(0.95)
+        } else if tab_hot {
+            Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 110)
+        } else {
+            Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 55)
+        };
+        ui.painter().rect_filled(bar, bar_rounding, bar_color);
+    }
     if active {
         paint_vscode_tab_bottom_indicator(ui.painter(), ui.ctx(), rect, theme);
     }
@@ -1199,17 +1240,15 @@ pub fn session_tab_chip(
     row_ui.horizontal(|ui| {
         // 显式间距：避免 Label/item_spacing 把 × 挤出或叠到标题上。
         ui.spacing_mut().item_spacing.x = 0.0;
+        // 圆点只表示在线/离线；会话身份用左侧色条 + 底色
         let status_color = if online {
             theme.green_color()
         } else {
             theme.color_tab_offline_dot()
         };
-        let dot_color = env_color
-            .map(|c| c.gamma_multiply(0.78))
-            .unwrap_or(status_color);
         let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(5.0, 5.0), egui::Sense::hover());
         ui.painter()
-            .circle_filled(dot_rect.center(), 2.5, dot_color);
+            .circle_filled(dot_rect.center(), 2.5, status_color);
         ui.add_space(gap_dot);
         // 按测量宽度精确占位，勿用会占满剩余宽度的默认 Label。
         let label_size = egui::vec2(
@@ -3736,9 +3775,8 @@ pub fn modal_header_title_only(ui: &mut Ui, theme: &Theme, title: &str, title_px
     let _ = title_px;
     let mx = theme.spacing_modal_content_x();
     let my = theme.spacing_modal_content_y();
-    theme
+    let band = theme
         .frame_modal_title_band()
-        .stroke(egui::Stroke::new(1.0, theme.color_panel_header_divider()))
         .outer_margin(egui::Margin {
             left: -mx,
             right: -mx,
@@ -3748,10 +3786,10 @@ pub fn modal_header_title_only(ui: &mut Ui, theme: &Theme, title: &str, title_px
         .show(ui, |ui| {
             ui.horizontal(|ui| {
                 panel_header_title_leading(ui, theme, IconId::Plus, title);
-                // 用右对齐空 layout 吃掉剩余宽度，迫使 frame 横向铺满。
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |_ui| {});
             });
         });
+    paint_modal_header_bottom_divider(ui, theme, band.response.rect);
     ui.add_space(theme.spacing_modal_header_after_sep());
 }
 
@@ -3761,9 +3799,8 @@ pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> b
     let mx = theme.spacing_modal_content_x();
     let my = theme.spacing_modal_content_y();
     let mut closed = false;
-    theme
+    let band = theme
         .frame_modal_title_band()
-        .stroke(egui::Stroke::new(1.0, theme.color_panel_header_divider()))
         .outer_margin(egui::Margin {
             left: -mx,
             right: -mx,
@@ -3780,8 +3817,18 @@ pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> b
                 });
             });
         });
+    paint_modal_header_bottom_divider(ui, theme, band.response.rect);
     ui.add_space(theme.spacing_modal_header_after_sep());
     closed
+}
+
+fn paint_modal_header_bottom_divider(ui: &mut Ui, theme: &Theme, band: egui::Rect) {
+    let y = band.bottom() - 0.5;
+    ui.painter().hline(
+        band.x_range(),
+        y,
+        egui::Stroke::new(1.0, theme.color_modal_header_divider()),
+    );
 }
 
 /// 右侧 dock 标题行（标题 + 关闭 ×）。

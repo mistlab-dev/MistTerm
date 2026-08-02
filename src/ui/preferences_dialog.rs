@@ -51,81 +51,72 @@ impl MistTermApp {
 
                         let scroll_h = (ui.available_height() - theme.spacing_sm()).max(120.0);
 
+                        // 与弹窗表面同色直铺，不再套一层 inset 灰底卡片
                         ui.allocate_ui(egui::vec2(ui.available_width(), scroll_h), |ui| {
-                            egui::Frame::none()
-                                .fill(theme.color_subtle_inset_fill())
-                                .stroke(egui::Stroke::new(1.0, theme.border_divider_color()))
-                                .rounding(theme.radius_panel())
-                                .inner_margin(egui::Margin::symmetric(
-                                    theme.spacing_body_pad(),
-                                    theme.spacing_body_pad(),
-                                ))
+                            layout_util::set_width_to_available(ui);
+                            let inner_h = ui.available_height().max(80.0);
+                            egui::ScrollArea::vertical()
+                                .id_source("preferences_modal_scroll")
+                                .auto_shrink([false; 2])
+                                .max_height(inner_h)
                                 .show(ui, |ui| {
                                     layout_util::set_width_to_available(ui);
-                                    let inner_h = ui.available_height().max(80.0);
-                                    egui::ScrollArea::vertical()
-                                        .id_source("preferences_modal_scroll")
-                                        .auto_shrink([false; 2])
-                                        .max_height(inner_h)
-                                        .show(ui, |ui| {
-                                            layout_util::set_width_to_available(ui);
-                                            ui.spacing_mut().item_spacing.y = theme.spacing_md();
-                                            self.preferences_section_general(
-                                                ui,
-                                                ctx,
-                                                theme,
-                                                label_color,
-                                                text_low,
-                                            );
-                                            self.preferences_section_appearance(
-                                                ui,
-                                                ctx,
-                                                theme,
-                                                label_color,
-                                            );
-                                            self.preferences_section_connection(
-                                                ui,
-                                                ctx,
-                                                theme,
-                                                label_color,
-                                                text_low,
-                                            );
-                                            self.preferences_section_terminal_logs(
-                                                ui,
-                                                ctx,
-                                                theme,
-                                                label_color,
-                                                text_low,
-                                            );
-                                            self.preferences_section_vault(
-                                                ui,
-                                                ctx,
-                                                theme,
-                                                label_color,
-                                                text_low,
-                                            );
-                                            self.preferences_section_audit(
-                                                ui,
-                                                ctx,
-                                                theme,
-                                                label_color,
-                                                text_low,
-                                            );
-                                            self.preferences_section_team(
-                                                ui,
-                                                ctx,
-                                                theme,
-                                                label_color,
-                                                text_low,
-                                            );
-                                            self.preferences_section_sync(
-                                                ui,
-                                                ctx,
-                                                theme,
-                                                label_color,
-                                                &mut should_close,
-                                            );
-                                        });
+                                    ui.spacing_mut().item_spacing.y = theme.spacing_md();
+                                    self.preferences_section_general(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        label_color,
+                                        text_low,
+                                    );
+                                    self.preferences_section_appearance(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        label_color,
+                                    );
+                                    self.preferences_section_connection(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        label_color,
+                                        text_low,
+                                    );
+                                    self.preferences_section_terminal_logs(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        label_color,
+                                        text_low,
+                                    );
+                                    self.preferences_section_vault(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        label_color,
+                                        text_low,
+                                    );
+                                    self.preferences_section_audit(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        label_color,
+                                        text_low,
+                                    );
+                                    self.preferences_section_team(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        label_color,
+                                        text_low,
+                                    );
+                                    self.preferences_section_sync(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        label_color,
+                                        &mut should_close,
+                                    );
                                 });
                         });
                     });
@@ -269,6 +260,7 @@ impl MistTermApp {
                 egui::ComboBox::from_id_source("preferences_terminal_font_preset")
                     .selected_text(preset_label(ctx, preset))
                     .show_ui(ui, |ui| {
+                        crate::ui::chrome::apply_menu_popup_style(ui, theme);
                         for p in crate::platform::TerminalFontPreset::ALL {
                             ui.selectable_value(&mut preset, p, preset_label(ctx, p));
                         }

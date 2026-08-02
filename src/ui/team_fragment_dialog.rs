@@ -126,6 +126,7 @@ pub fn show_team_fragment_editor_modal(
                         .width(form_w)
                         .selected_text(i18n::tr(ctx, status_display(&editor.status), status_display(&editor.status)))
                         .show_ui(ui, |ui| {
+                            chrome::apply_menu_popup_style(ui, theme);
                             for (val, label) in STATUS_OPTIONS {
                                 let text = i18n::tr(ctx, label, label);
                                 if ui.selectable_label(editor.status.as_str() == *val, text).clicked() {

@@ -267,14 +267,10 @@ impl Theme {
         self.bg_tab_bar_color()
     }
 
-    /// 菜单 / 下拉弹出层底色（modern 下不用透明 ghost 底，避免透出下层 UI）
+    /// 菜单 / 下拉弹出层底色（与弹窗面板同色，避免多层灰阶）
     #[inline]
     pub fn color_menu_popup_fill(&self) -> Color32 {
-        if self.uses_modern_palette() {
-            self.surface_elevated()
-        } else {
-            self.bg_window_color()
-        }
+        self.color_panel_surface()
     }
 
     /// 终端区 / 激活 Tab（= `bg_terminal`）
@@ -781,7 +777,8 @@ impl Theme {
 
     #[inline]
     pub fn color_modal_title_band_fill(&self) -> Color32 {
-        self.color_panel_header_band_fill()
+        // 与弹窗正文同色，仅靠底部分隔线分层，避免标题条/内容区灰阶打架
+        self.color_panel_surface()
     }
 
     /// 标题条下分隔线（须强于 `color_tab_inactive_stroke`，暗夜勿用 7% 白边）
@@ -1195,6 +1192,37 @@ impl Theme {
         } else {
             Color32::WHITE
         }
+    }
+
+    /// 会话标签强调色：有环境色标用色标；否则用主题 accent 系变体（与全局主题一致）。
+    pub fn session_tab_accent_color(&self, session: &crate::core::SessionConfig) -> Color32 {
+        if let Some((r, g, b)) = crate::core::session_color_tag_accent_rgb(session) {
+            return Color32::from_rgb(r, g, b);
+        }
+        self.session_tab_accent_from_id(&session.id)
+    }
+
+    /// 无色标时：在 accent / accent_dim 附近取稳定变体，不引入彩虹色。
+    fn session_tab_accent_from_id(&self, session_id: &str) -> Color32 {
+        let a = self.accent_color();
+        let d = self.accent_dim_color();
+        let mid = Color32::from_rgb(
+            ((u16::from(a.r()) + u16::from(d.r())) / 2) as u8,
+            ((u16::from(a.g()) + u16::from(d.g())) / 2) as u8,
+            ((u16::from(a.b()) + u16::from(d.b())) / 2) as u8,
+        );
+        let soft = Color32::from_rgb(
+            ((u16::from(a.r()) * 2 + 220) / 3) as u8,
+            ((u16::from(a.g()) * 2 + 220) / 3) as u8,
+            ((u16::from(a.b()) * 2 + 220) / 3) as u8,
+        );
+        let palette = [a, d, mid, soft];
+        let mut h: u32 = 2166136261;
+        for b in session_id.as_bytes() {
+            h ^= u32::from(*b);
+            h = h.wrapping_mul(16777619);
+        }
+        palette[(h as usize) % palette.len()]
     }
 
     /// 激活 Tab 底色（与终端区一致，整块标签可见）
@@ -2031,20 +2059,22 @@ impl Theme {
             })
     }
 
-    /// 弹窗标题行底带（仅顶部圆角，与底部分隔线齐平）
+    /// 弹窗标题行底带（与正文同色；仅顶部圆角，底部分隔线由 [`crate::ui::chrome::modal_header`] 绘制）
     pub fn frame_modal_title_band(&self) -> egui::Frame {
         let r = self.radius_list_item();
-        self.frame_panel_header_band()
-            .inner_margin(egui::Margin::symmetric(
-                self.spacing_panel_title_pad_x(),
-                6.0,
-            ))
+        egui::Frame::none()
+            .fill(self.color_modal_title_band_fill())
+            .stroke(egui::Stroke::NONE)
             .rounding(egui::Rounding {
                 nw: r,
                 ne: r,
                 sw: 0.0,
                 se: 0.0,
             })
+            .inner_margin(egui::Margin::symmetric(
+                self.spacing_panel_title_pad_x(),
+                6.0,
+            ))
     }
 
     /// 右 dock Foreground 标题带：抵消 [`right_dock_content_margin`]，横向铺满 dock 壳层。

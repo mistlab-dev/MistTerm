@@ -18,6 +18,8 @@ pub(crate) enum ToastKind {
 pub(crate) enum ToastAction {
     /// 打开 SSH 配置导入对话框。
     OpenSshImport,
+    /// 重连指定标签的 SSH（连接失败 / 自动重连放弃后）。
+    ReconnectTab { tab_idx: usize },
 }
 
 #[derive(Debug, Clone)]
@@ -308,6 +310,15 @@ impl MistTermApp {
                         self.clear_toast();
                         self.open_ssh_import_dialog(ctx);
                     }
+                    ToastAction::ReconnectTab { tab_idx } => {
+                        self.clear_toast();
+                        if tab_idx < self.tabs.len() {
+                            self.active_tab = Some(tab_idx);
+                            self.reconnect_tab_at(ctx, tab_idx);
+                        } else {
+                            self.reconnect_active_tab(ctx);
+                        }
+                    }
                 }
             }
         } else if dismiss {
@@ -317,5 +328,21 @@ impl MistTermApp {
             }
             self.clear_toast();
         }
+    }
+
+    /// SSH 连接失败 / 自动重连放弃：带「重连」主按钮的 Error Toast。
+    pub(crate) fn notify_ssh_reconnect_error(
+        &mut self,
+        ctx: &egui::Context,
+        tab_idx: usize,
+        text: impl Into<String>,
+    ) {
+        let action_label = crate::i18n::tr(ctx, "Reconnect", "重连").to_string();
+        self.push_action_toast(
+            ToastKind::Error,
+            text,
+            ToastAction::ReconnectTab { tab_idx },
+            action_label,
+        );
     }
 }
