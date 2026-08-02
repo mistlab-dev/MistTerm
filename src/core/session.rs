@@ -95,6 +95,32 @@ pub fn session_color_tag_rgb(tag: &str) -> Option<(u8, u8, u8)> {
     }
 }
 
+/// 仅当用户设置了环境色标时返回颜色；未设置时由 UI 用主题 accent 着色。
+pub fn session_color_tag_accent_rgb(session: &SessionConfig) -> Option<(u8, u8, u8)> {
+    session_color_tag_rgb(&session.color_tag)
+}
+
+/// 终端标签标题：`名称 · host[:port]`，便于多开时区分。
+pub fn session_tab_label(session: &SessionConfig) -> String {
+    let host = if session.port != 22 {
+        format!("{}:{}", session.host, session.port)
+    } else {
+        session.host.clone()
+    };
+    let name = session.name.trim();
+    if name.is_empty() {
+        if session.username.is_empty() {
+            host
+        } else {
+            format!("{}@{}", session.username, host)
+        }
+    } else if name.eq_ignore_ascii_case(&host) || name.contains(&session.host) {
+        name.to_string()
+    } else {
+        format!("{name} · {host}")
+    }
+}
+
 pub const SESSION_COLOR_TAGS: &[(&str, &str)] = &[
     ("", "无"),
     ("red", "红"),

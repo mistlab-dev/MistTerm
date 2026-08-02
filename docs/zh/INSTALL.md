@@ -52,6 +52,8 @@ chmod +x scripts/run-macos-gui.sh
 
 等价于 `scripts/bundle-macos.sh` 后执行 `open target/release/Mist.app`。
 
+从 GitHub Releases 下载的 macOS 包内含 **`Mist.app`**：解压后执行 `open Mist.app`，或拖到「应用程序」。同目录的裸二进制 `Mist` 仅供命令行调试。
+
 安装脚本在 macOS 上也会把 `Mist.app` 复制到 `~/Applications`，可从 Spotlight 或 Dock 启动。
 
 调试日志：在终端执行 `MIST_LOG=1 ~/.local/bin/Mist` 或 `RUST_LOG=debug cargo run --release --bin Mist`。

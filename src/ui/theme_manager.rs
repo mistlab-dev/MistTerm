@@ -187,10 +187,11 @@ impl ThemeManager {
         style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, theme.text_primary());
         style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, theme.text_primary());
 
-        // 文本拖选（勿用 accent 纯色底，避免与 accent 色 RichText 冲突）
+        // 文本拖选（仅 TextEdit；菜单/列表选中用 list_row_*，见 apply_popup_widget_visuals）
         style.visuals.selection.bg_fill = theme.color_text_selection_bg();
         style.visuals.selection.stroke.color = theme.color_text_selection_fg();
         style.visuals.hyperlink_color = theme.accent_color();
+        style.visuals.menu_rounding = egui::Rounding::same(theme.radius_list_item());
 
         // 间距保持与设计一致
         style.spacing.item_spacing = egui::vec2(8.0, 8.0);

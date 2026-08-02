@@ -5,7 +5,7 @@
 use eframe::egui;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::core::session::{session_color_tag_rgb, SessionManager};
+use crate::core::session::SessionManager;
 use crate::core::team::TeamServer;
 use crate::core::session_sort::{sort_sessions, SessionSortBy};
 use crate::ui::layout_util;
@@ -428,8 +428,17 @@ impl Sidebar {
                             );
                             let online = connected_sessions.contains(&session.id);
                             let connecting = connecting_sessions.contains(&session.id);
-                            let env_color = session_color_tag_rgb(&session.color_tag)
-                                .map(|(r, g, b)| egui::Color32::from_rgb(r, g, b));
+                            let accent = theme.session_tab_accent_color(session);
+                            // 左侧色条区分会话；圆点仍表示在线状态
+                            let accent_bar = egui::Rect::from_min_max(
+                                row_rect.left_top(),
+                                egui::pos2(row_rect.left() + 3.0, row_rect.bottom()),
+                            );
+                            ui.painter().rect_filled(
+                                accent_bar,
+                                egui::Rounding::ZERO,
+                                accent.gamma_multiply(0.9),
+                            );
                             let status_color = if online {
                                 theme.green_color()
                             } else if connecting {
@@ -437,9 +446,6 @@ impl Sidebar {
                             } else {
                                 theme.color_tab_offline_dot()
                             };
-                            let dot_color = env_color
-                                .map(|c| c.gamma_multiply(0.78))
-                                .unwrap_or(status_color);
                             let dot_r = 3.0_f32;
                             let (dot_rect, _) = row_ui.allocate_exact_size(
                                 egui::vec2(dot_r * 2.0, dot_r * 2.0),
@@ -447,17 +453,30 @@ impl Sidebar {
                             );
                             row_ui
                                 .painter()
-                                .circle_filled(dot_rect.center(), dot_r, dot_color);
+                                .circle_filled(dot_rect.center(), dot_r, status_color);
                             row_ui.add_space(theme.spacing_tab_dot_text());
-                            row_ui.label(
-                                egui::RichText::new(&session.name)
-                                    .size(theme.font_size_connection_name())
-                                    .color(if is_selected {
-                                        theme.text_primary()
-                                    } else {
-                                        theme.text_secondary()
-                                    }),
-                            );
+                            row_ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 0.0;
+                                ui.label(
+                                    egui::RichText::new(&session.name)
+                                        .size(theme.font_size_connection_name())
+                                        .color(if is_selected {
+                                            theme.text_primary()
+                                        } else {
+                                            theme.text_secondary()
+                                        }),
+                                );
+                                let host_line = if session.port != 22 {
+                                    format!("{}:{}", session.host, session.port)
+                                } else {
+                                    session.host.clone()
+                                };
+                                ui.label(
+                                    egui::RichText::new(host_line)
+                                        .size(theme.font_size_caption().max(10.0))
+                                        .color(theme.color_caption_text()),
+                                );
+                            });
                             row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.label(
                                     egui::RichText::new(status_text)

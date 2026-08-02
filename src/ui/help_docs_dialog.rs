@@ -133,27 +133,17 @@ impl HelpDocsDialog {
                     }
                     render_help_tabs(ui, theme, ctx, &mut self.page);
                     ui.add_space(theme.spacing_md());
-                    egui::Frame::none()
-                        .fill(theme.color_subtle_inset_fill())
-                        .stroke(egui::Stroke::new(1.0, theme.border_divider_color()))
-                        .rounding(theme.radius_panel())
-                        .inner_margin(egui::Margin::symmetric(
-                            theme.spacing_body_pad(),
-                            theme.spacing_body_pad(),
-                        ))
+                    egui::ScrollArea::vertical()
+                        .max_height(360.0)
+                        .auto_shrink([false; 2])
                         .show(ui, |ui| {
-                            egui::ScrollArea::vertical()
-                                .max_height(360.0)
-                                .auto_shrink([false; 2])
-                                .show(ui, |ui| {
-                                    match self.page {
-                                        HelpPage::QuickStart => render_quick_start(ui, theme, ctx),
-                                        HelpPage::Shortcuts => {
-                                            render_shortcuts(ui, theme, ctx, shortcuts_text)
-                                        }
-                                        HelpPage::Features => render_features(ui, theme, ctx),
-                                    }
-                                });
+                            match self.page {
+                                HelpPage::QuickStart => render_quick_start(ui, theme, ctx),
+                                HelpPage::Shortcuts => {
+                                    render_shortcuts(ui, theme, ctx, shortcuts_text)
+                                }
+                                HelpPage::Features => render_features(ui, theme, ctx),
+                            }
                         });
                     ui.add_space(theme.spacing_md());
                     // Bottom link bar

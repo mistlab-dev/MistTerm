@@ -54,6 +54,8 @@ chmod +x scripts/run-macos-gui.sh
 
 Same as `scripts/bundle-macos.sh` then `open target/release/Mist.app`.
 
+GitHub Release macOS archives include **`Mist.app`**: run `open Mist.app`, or drag it to Applications. The companion raw `Mist` binary is for CLI debugging only — do not double-click it in Finder.
+
 On macOS, `./scripts/install.sh` also copies `Mist.app` to `~/Applications` for Spotlight / Dock launch.
 
 Debug logging: `MIST_LOG=1 ~/.local/bin/Mist` or `RUST_LOG=debug cargo run --release --bin Mist`.

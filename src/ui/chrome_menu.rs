@@ -29,32 +29,73 @@ pub fn menu_theme_check_slot(ui: &mut Ui, theme: &Theme, selected: bool) {
 
 /// 视图菜单等开关项（无左侧 18px 勾选列，避免未选中时文字前大块空白）
 pub fn menu_toggle_item(ui: &mut Ui, theme: &Theme, selected: bool, name: &str) -> egui::Response {
-    ui.selectable_label(
-        selected,
-        RichText::new(name)
-            .size(theme.font_size_menu_item())
-            .color(if selected {
-                theme.accent_color()
-            } else {
-                theme.text_secondary()
-            }),
-    )
+    menu_selectable_row(ui, theme, selected, name, false)
 }
 
 /// 主题子菜单一行：勾选列 + 可选标签（选中项文字用 accent）。
 pub fn menu_theme_item(ui: &mut Ui, theme: &Theme, selected: bool, name: &str) -> egui::Response {
-    ui.horizontal(|ui| {
-        menu_theme_check_slot(ui, theme, selected);
-        let label = egui::RichText::new(name)
-            .size(theme.font_size_menu_item())
-            .color(if selected {
-                theme.accent_color()
-            } else {
-                theme.text_secondary()
-            });
-        ui.selectable_label(selected, label)
-    })
-    .inner
+    menu_selectable_row(ui, theme, selected, name, true)
+}
+
+/// 菜单/偏好里的可选行：弱灰悬停/选中底 + 可选左侧 ✓，不再用文本拖选高亮。
+fn menu_selectable_row(
+    ui: &mut Ui,
+    theme: &Theme,
+    selected: bool,
+    name: &str,
+    with_check: bool,
+) -> egui::Response {
+    let px = theme.font_size_menu_item();
+    let pad = ui.spacing().button_padding;
+    let check_w = if with_check { 18.0 } else { 0.0 };
+    let check_gap = if with_check { 6.0 } else { 0.0 };
+    let text_color = if selected {
+        theme.accent_color()
+    } else {
+        theme.text_secondary()
+    };
+    let galley = ui.fonts(|f| {
+        f.layout_no_wrap(
+            name.to_owned(),
+            egui::FontId::proportional(px),
+            text_color,
+        )
+    });
+    let content_w = pad.x * 2.0 + check_w + check_gap + galley.size().x;
+    let row_w = ui.available_width().max(content_w);
+    let row_h = (galley.size().y + pad.y * 2.0).max(ui.spacing().interact_size.y);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(row_w, row_h), Sense::click());
+    let rounding = theme.radius_list_item();
+    if selected {
+        ui.painter()
+            .rect_filled(rect, rounding, theme.list_row_selected_bg());
+    } else if response.hovered() || response.has_focus() {
+        ui.painter()
+            .rect_filled(rect, rounding, theme.list_row_hover_bg());
+    }
+    let mut x = rect.min.x + pad.x;
+    if with_check {
+        let check_rect = egui::Rect::from_min_size(
+            egui::pos2(x, rect.center().y - 9.0),
+            egui::vec2(18.0, 18.0),
+        );
+        if selected {
+            icons::paint_icon(
+                ui,
+                check_rect,
+                IconId::Check,
+                theme.accent_color(),
+                px,
+            );
+        }
+        x += check_w + check_gap;
+    }
+    let text_pos = egui::pos2(x, rect.center().y - galley.size().y * 0.5);
+    ui.painter().galley(text_pos, galley);
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response
 }
 
 /// 顶栏 / 菜单项文字（可选快捷键后缀；仅用于无布局需求的简单标签）
@@ -139,9 +180,10 @@ pub fn popup_menu_button_shortcut_enabled(
     let (rect, response) = ui.allocate_exact_size(egui::vec2(row_w, row_h), sense);
 
     if ui.is_enabled() {
-        let visuals = ui.style().interact_selectable(&response, enabled);
+        let rounding = theme.radius_list_item();
         if enabled && (response.hovered() || response.has_focus()) {
-            ui.painter().rect_filled(rect, 0.0, visuals.bg_fill);
+            ui.painter()
+                .rect_filled(rect, rounding, theme.list_row_hover_bg());
         }
         let title_pos = egui::pos2(rect.min.x + pad.x, rect.center().y - title_g.size().y * 0.5);
         ui.painter().galley(title_pos, title_g);

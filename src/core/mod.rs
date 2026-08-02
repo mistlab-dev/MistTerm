@@ -49,7 +49,7 @@ pub use session::{
     parse_dynamic_forwards_text, parse_local_forwards_text, parse_remote_forwards_text,
     SessionConfig, SessionManager,
     SESSION_COLOR_TAGS,
-    session_color_tag_rgb,
+    session_color_tag_accent_rgb, session_color_tag_rgb, session_tab_label,
 };
 pub use ssh_config_importer::{
     candidate_to_session, default_ssh_config_path, is_already_imported, parse_ssh_config_file,

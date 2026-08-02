@@ -1202,12 +1202,12 @@ impl MistTermApp {
         }
     }
 
-    fn poll_connect_audit_from_tabs(&mut self) {
-        let mut toast_errors = Vec::new();
-        for tab in &mut self.tabs {
+    fn poll_connect_audit_from_tabs(&mut self, ctx: &egui::Context) {
+        let mut toast_errors: Vec<(usize, String)> = Vec::new();
+        for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
             for pane in tab.panes.iter_mut() {
                 if let Some(err) = pane.terminal.take_pending_toast_error() {
-                    toast_errors.push(err);
+                    toast_errors.push((tab_idx, err));
                 }
                 if let Some((ok, host)) = pane.terminal.take_connect_audit() {
                     let action = if ok {
@@ -1239,8 +1239,8 @@ impl MistTermApp {
                 }
             }
         }
-        for err in toast_errors {
-            self.notify_error(err);
+        for (tab_idx, err) in toast_errors {
+            self.notify_ssh_reconnect_error(ctx, tab_idx, err);
         }
     }
 
@@ -1888,7 +1888,7 @@ impl MistTermApp {
         pane.ssh_temp_key = temp_key;
         pane.terminal
             .restore_offline_input_snapshot(offline.0, offline.1);
-        pane.title = session.name.clone();
+        pane.title = crate::core::session_tab_label(&session);
         self.session_manager.mark_session_connected(&sid);
         if self.show_monitor_panel {
             self.sync_monitor_panel_to_active_tab();
@@ -2204,9 +2204,10 @@ impl MistTermApp {
         let mut terminal = self.new_terminal_view();
         let mut temp_key = None;
         self.terminal_connect_session(ctx, &mut terminal, session, &mut temp_key);
+        let title = self.next_tab_title_for_session(session);
         self.tabs.push(TerminalTab::single(TerminalPane::new(
             session.id.clone(),
-            session.name.clone(),
+            title,
             terminal,
         )));
         if let Some(tab) = self.tabs.last_mut() {
@@ -2216,6 +2217,21 @@ impl MistTermApp {
         self.ensure_tab_log_writer(idx);
         self.active_tab = Some(idx);
         self.session_manager.mark_session_connected(&session.id);
+    }
+
+    /// 标签标题：`名称 · host`；同一会话多开时追加 `#2`。
+    fn next_tab_title_for_session(&self, session: &SessionConfig) -> String {
+        let base = crate::core::session_tab_label(session);
+        let dup = self
+            .tabs
+            .iter()
+            .filter(|t| t.primary_session_id() == session.id)
+            .count();
+        if dup == 0 {
+            base
+        } else {
+            format!("{} #{}", base, dup + 1)
+        }
     }
 
     fn menu_open_batch_exec(&mut self, ctx: &egui::Context) {
@@ -2803,7 +2819,7 @@ impl MistTermApp {
         let mut temp_key = None;
         self.terminal_connect_session(ctx, &mut terminal, &session, &mut temp_key);
         let n = self.tabs[idx].panes.len() + 1;
-        let title2 = format!("{} ({n})", session.name);
+        let title2 = format!("{} ({n})", crate::core::session_tab_label(&session));
         let mut pane2 = TerminalPane::new(session.id.clone(), title2, terminal);
         pane2.ssh_temp_key = temp_key;
         let tab = &mut self.tabs[idx];
@@ -5966,7 +5982,7 @@ impl eframe::App for MistTermApp {
             ctx.request_repaint();
         }
         self.poll_command_history_from_active_tab();
-        self.poll_connect_audit_from_tabs();
+        self.poll_connect_audit_from_tabs(ctx);
         self.poll_session_log_commands();
         self.append_terminal_output_logs();
 
@@ -6041,7 +6057,11 @@ impl eframe::App for MistTermApp {
                 if let Some(s) = status {
                     match s {
                         crate::core::ReconnectStatus::GaveUp { .. } => {
-                            self.notify_error(Self::format_reconnect_status(ctx, s));
+                            self.notify_ssh_reconnect_error(
+                                ctx,
+                                i,
+                                Self::format_reconnect_status(ctx, s),
+                            );
                         }
                         crate::core::ReconnectStatus::Scheduled { .. } => {
                             self.notify_auto(Self::format_reconnect_status(ctx, s));

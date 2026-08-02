@@ -4,7 +4,6 @@
 //! 右抽屉、中央工作区、Toast 与弹窗层（全平台统一，无常驻底栏）。
 
 use super::*;
-use crate::core::session::session_color_tag_rgb;
 use crate::core::SESSION_COLOR_TAGS;
 
 impl MistTermApp {
@@ -349,13 +348,7 @@ impl MistTermApp {
                                                 let env_color = self
                                                     .session_manager
                                                     .get_session(&tab.primary_session_id())
-                                                    .and_then(|s| {
-                                                        session_color_tag_rgb(&s.color_tag).map(
-                                                            |(r, g, b)| {
-                                                                egui::Color32::from_rgb(r, g, b)
-                                                            },
-                                                        )
-                                                    });
+                                                    .map(|s| theme.session_tab_accent_color(s));
                                                 let tab_chip = crate::ui::chrome::session_tab_chip(
                                                     ui,
                                                     theme,
