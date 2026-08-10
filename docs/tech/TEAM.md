@@ -13,6 +13,7 @@
 | 附录 A | 联调 | 认证 / 片段 CRUD / 审计 ingest 请求响应细节 |
 
 命令审计（拦截/策略）：见 [COMMAND-AUDIT.md](./COMMAND-AUDIT.md)（服务端已实现，本文不重复）。
+服务器侧强制命令审计（agent + 服务器侧判定）客户端配合事项：见 [SERVER-SIDE-AUDIT.md](./SERVER-SIDE-AUDIT.md)。
 
 ---
 
