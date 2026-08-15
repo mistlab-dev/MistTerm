@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::{FragmentStats, FragmentVariable};
+use crate::core::{FragmentStats, FragmentVariable, LinkedDoc};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -241,6 +241,9 @@ pub struct TeamFragment {
     pub total_time_ms: u64,
     #[serde(default)]
     pub last_used_at: Option<i64>,
+    /// 片段被哪些文档引用（MistDocs 跨服务关联）
+    #[serde(default)]
+    pub linked_docs: Vec<LinkedDoc>,
 }
 
 /// `GET /v1/teams/{team_id}/fragments/analytics`（未部署时客户端用本地聚合）
@@ -389,6 +392,7 @@ impl TeamFragment {
         f.total_time_ms = self.total_time_ms;
         f.last_used = self.last_used_at;
         f.source_status = self.status.clone();
+        f.linked_docs = self.linked_docs.clone();
         f
     }
 }

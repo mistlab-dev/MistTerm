@@ -79,7 +79,7 @@ pub use market::{
 pub use fragment::{
     expand_command_template, expand_fragment_command_stages, list_placeholder_keys,
     substitute_angle_placeholders, FragmentManager, FragmentMergeReport, FragmentStats,
-    FragmentVariable, SortBy,
+    FragmentVariable, LinkedDoc, SortBy,
 };
 pub use fragment_expr::{expand_rhai_blocks, merge_rhai_context};
 pub use fragment_command::{build_fragment_command_preview, finalize_fragment_command_text};
