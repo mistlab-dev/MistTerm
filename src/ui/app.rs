@@ -432,6 +432,8 @@ pub struct MistTermApp {
     cmd_audit_engine: CmdAuditEngine,
     /// 敏感命令二次确认（标签索引、命令、匹配详情）
     cmd_audit_confirm: Option<CmdAuditConfirmState>,
+    /// 服务器侧命令审计拦截 Toast（每帧临时收集，`poll_connect_audit_from_tabs` 消费）
+    server_audit_toasts: Vec<(usize, String)>,
     /// 批量多机 SSH 执行
     batch_exec_dialog: BatchExecDialog,
     batch_exec_rx: Option<std::sync::mpsc::Receiver<Vec<BatchExecRow>>>,
@@ -709,6 +711,7 @@ impl MistTermApp {
             close_tab_confirm_idx: None,
             cmd_audit_engine: CmdAuditEngine::new(),
             cmd_audit_confirm: None,
+            server_audit_toasts: Vec::new(),
             batch_exec_dialog: BatchExecDialog::default(),
             batch_exec_rx: None,
             hang_reporter: HangReporter::start_default(),
@@ -1209,6 +1212,10 @@ impl MistTermApp {
                 if let Some(err) = pane.terminal.take_pending_toast_error() {
                     toast_errors.push((tab_idx, err));
                 }
+                if let Some(msg) = pane.terminal.take_pending_server_audit_block() {
+                    // 服务器侧命令审计拦截提示：独立携带 tab 定位，稍后统一用 warn toast 展示。
+                    self.server_audit_toasts.push((tab_idx, msg));
+                }
                 if let Some((ok, host)) = pane.terminal.take_connect_audit() {
                     let action = if ok {
                         "connect.success"
@@ -1241,6 +1248,13 @@ impl MistTermApp {
         }
         for (tab_idx, err) in toast_errors {
             self.notify_ssh_reconnect_error(ctx, tab_idx, err);
+        }
+        for (_, msg) in std::mem::take(&mut self.server_audit_toasts) {
+            self.notify_warn(crate::i18n::tr(
+                ctx,
+                "Server-side audit: this command was blocked by team policy.",
+                "服务器侧审计：该命令已被团队策略拦截。",
+            ));
         }
     }
 

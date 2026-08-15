@@ -236,6 +236,8 @@ pub struct TerminalView {
     pending_connect_audit: Option<(bool, String)>,
     /// 连接失败待宿主 Toast（`take_pending_toast_error` 取走）
     pending_toast_error: Option<String>,
+    /// 服务器侧命令审计拦截提示（由 `[mist-agent]` 拦截标记触发，待宿主 Toast 取走）
+    pending_server_audit_block: Option<String>,
     /// 拖入终端区域、待宿主处理的上传路径（§4.3.2）。
     pending_drop_upload_paths: Vec<PathBuf>,
     /// 大文件上传：用户选 ZMODEM 后先发 `rz -y`，握手检测到后再用此路径 `start_rz_upload`。
@@ -674,6 +676,7 @@ impl TerminalView {
             unexpected_disconnect_notified: false,
             pending_connect_audit: None,
             pending_toast_error: None,
+            pending_server_audit_block: None,
             pending_drop_upload_paths: Vec::new(),
             zmodem_upload_after_rz_path: None,
             selection: Selection::default(),
@@ -1933,6 +1936,16 @@ impl TerminalView {
                         }
                         if !display_data.is_empty() {
                             self.pending_log_output.push(display_data.clone());
+                            // 服务器侧命令审计主动拦截时，`mist-audit-wrapper` 会向 stderr 输出
+                            // `[mist-agent] 该命令已被服务器规则拦截...`。这部分文本会随 PTY 输出
+                            // 进入终端；在此识别并显式提示用户「该命令被服务器策略拦截」，
+                            // 避免只看终端文本误以为命令执行出错。
+                            if self.pending_server_audit_block.is_none() {
+                                let out = String::from_utf8_lossy(&display_data);
+                                if out.contains("[mist-agent]") && out.contains("拦截") {
+                                    self.server_audit_block_noticed();
+                                }
+                            }
                             self.terminal.feed(&display_data);
                             vte_dirty = true;
                         }
@@ -3385,6 +3398,23 @@ impl TerminalView {
 
     pub fn take_pending_toast_error(&mut self) -> Option<String> {
         self.pending_toast_error.take()
+    }
+
+    pub fn take_pending_server_audit_block(&mut self) -> Option<String> {
+        self.pending_server_audit_block.take()
+    }
+
+    /// 服务器侧命令审计拦截提示：仅触发一次，避免同一条拦截文本被多个 PTY chunk 重复提示。
+    fn server_audit_block_noticed(&mut self) {
+        let lang = crate::i18n::Locale::from(self.ui_lang_last);
+        self.pending_server_audit_block = Some(
+            lang
+                .tr(
+                    "This command was blocked by the server-side audit policy.",
+                    "该命令已被服务器侧审计策略拦截。",
+                )
+                .to_string(),
+        );
     }
 
     /// 大文件走 ZMODEM：向 PTY 发送 `rz -y` 并在握手就绪后用 `path` 启动上传（FUNCTIONAL_SPEC §4.3）。
