@@ -66,10 +66,21 @@ pub struct FragmentStats {
     /// 团队片段状态（published/draft/archived），个人片段始终为空
     #[serde(default)]
     pub source_status: String,
+    /// 关联的文档（团队片段被哪些 MistDocs 文档引用）
+    #[serde(default)]
+    pub linked_docs: Vec<LinkedDoc>,
 }
 
 /// 兼容旧代码路径的类型别名（原「命令片段」模型）。
 pub type CommandFragment = FragmentStats;
+
+/// 片段被引用的文档信息（跨服务，来自 MistDocs 的 md_doc_fragments 关联）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LinkedDoc {
+    pub document_id: String,
+    #[serde(default)]
+    pub title: String,
+}
 
 impl FragmentStats {
     /// 创建新的片段统计
@@ -86,6 +97,7 @@ impl FragmentStats {
             total_time_ms: 0,
             last_used: None,
             source_status: String::new(),
+            linked_docs: Vec::new(),
         }
     }
 
