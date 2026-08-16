@@ -1,4 +1,5 @@
-//! 团队命令审计：本地匹配引擎（策略 + 自定义规则 + 内置模式）。
+//! 命令审计：本地快捷提示引擎（策略 + 自定义规则 + 内置模式）+
+//! 服务器侧判定结果解析（`MIST_AUDIT` 标记行）。
 
 use chrono::Utc;
 use regex::Regex;
@@ -505,6 +506,170 @@ pub enum CommandSendResult {
     NeedsConfirm { command: String, audit: CmdAuditResult },
 }
 
+/// 判定结果来源：本地引擎 vs 服务器侧 agent。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CmdAuditSource {
+    #[default]
+    Local,
+    Server,
+}
+
+/// 服务器侧通过 PTY 回传的审计事件（agent / 包裹脚本打印）。
+///
+/// 行格式：`MIST_AUDIT\t{"v":1,"action":"block","message":"...","rule":"...","command":"...","token":"..."}`
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerAuditEvent {
+    pub action: CmdAuditAction,
+    pub message: String,
+    pub rule: String,
+    pub command: String,
+    /// 可选放行令牌；确认后客户端可先发 `MIST_AUDIT_APPROVE\t{token}`。
+    pub token: String,
+}
+
+impl ServerAuditEvent {
+    pub fn to_cmd_audit_result(&self) -> CmdAuditResult {
+        let allowed = matches!(self.action, CmdAuditAction::Alert | CmdAuditAction::Allow);
+        CmdAuditResult {
+            allowed,
+            action: self.action,
+            matches: vec![CmdAuditMatch {
+                rule_id: if self.rule.is_empty() {
+                    "server".into()
+                } else {
+                    self.rule.clone()
+                },
+                source: "server".into(),
+                level: match self.action {
+                    CmdAuditAction::Block => "dangerous".into(),
+                    CmdAuditAction::Confirm => "sensitive".into(),
+                    CmdAuditAction::Alert => "alert".into(),
+                    CmdAuditAction::Allow => "safe".into(),
+                },
+                message: self.message.clone(),
+                action: self.action,
+            }],
+        }
+    }
+}
+
+const MIST_AUDIT_PREFIX: &[u8] = b"MIST_AUDIT";
+
+/// 从 PTY 字节流中剥离并解析 `MIST_AUDIT` 标记行。
+#[derive(Debug, Default)]
+pub struct ServerAuditProbe {
+    /// 可能是 `MIST_AUDIT…` 起始的不完整行，暂不交给 VTE。
+    pending: Vec<u8>,
+}
+
+impl ServerAuditProbe {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 喂入一块 PTY 数据，返回应显示的字节与解析出的事件。
+    pub fn feed(&mut self, chunk: &[u8]) -> (Vec<u8>, Vec<ServerAuditEvent>) {
+        if chunk.is_empty() && self.pending.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        let mut data = std::mem::take(&mut self.pending);
+        data.extend_from_slice(chunk);
+        let mut out = Vec::with_capacity(data.len());
+        let mut events = Vec::new();
+        let mut start = 0usize;
+        while start < data.len() {
+            let rest = &data[start..];
+            let nl = rest.iter().position(|&b| b == b'\n');
+            match nl {
+                Some(rel) => {
+                    let mut line = &rest[..rel];
+                    if line.ends_with(b"\r") {
+                        line = &line[..line.len() - 1];
+                    }
+                    let line_start = start;
+                    start += rel + 1;
+                    if let Some(ev) = parse_mist_audit_line(line) {
+                        events.push(ev);
+                    } else {
+                        out.extend_from_slice(&data[line_start..start]);
+                    }
+                }
+                None => {
+                    if looks_like_mist_audit_prefix(rest) {
+                        self.pending = rest.to_vec();
+                    } else {
+                        out.extend_from_slice(rest);
+                    }
+                    break;
+                }
+            }
+        }
+        (out, events)
+    }
+}
+
+fn looks_like_mist_audit_prefix(bytes: &[u8]) -> bool {
+    if bytes.is_empty() {
+        return false;
+    }
+    // 跳过行首空白 / CR
+    let mut i = 0;
+    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r') {
+        i += 1;
+    }
+    let rest = &bytes[i..];
+    MIST_AUDIT_PREFIX.starts_with(rest) || rest.starts_with(MIST_AUDIT_PREFIX)
+}
+
+fn parse_mist_audit_line(line: &[u8]) -> Option<ServerAuditEvent> {
+    let mut i = 0;
+    while i < line.len() && matches!(line[i], b' ' | b'\t') {
+        i += 1;
+    }
+    let line = &line[i..];
+    if !line.starts_with(MIST_AUDIT_PREFIX) {
+        return None;
+    }
+    let after = &line[MIST_AUDIT_PREFIX.len()..];
+    let payload = after
+        .strip_prefix(b"\t")
+        .or_else(|| after.strip_prefix(b" "))
+        .unwrap_or(after);
+    let text = std::str::from_utf8(payload).ok()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    #[derive(Deserialize)]
+    struct Raw {
+        #[serde(default)]
+        action: String,
+        #[serde(default)]
+        message: String,
+        #[serde(default)]
+        rule: String,
+        #[serde(default)]
+        command: String,
+        #[serde(default)]
+        token: String,
+    }
+    let raw: Raw = serde_json::from_str(text).ok()?;
+    let action = CmdAuditAction::parse(&raw.action);
+    if matches!(action, CmdAuditAction::Allow) && raw.action.trim().is_empty() {
+        return None;
+    }
+    // 仅展示 block/confirm/alert；allow 忽略
+    if matches!(action, CmdAuditAction::Allow) {
+        return None;
+    }
+    Some(ServerAuditEvent {
+        action,
+        message: raw.message,
+        rule: raw.rule,
+        command: raw.command,
+        token: raw.token,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -548,5 +713,38 @@ mod tests {
         });
         let r = engine.check("echo hello");
         assert!(r.allowed);
+    }
+
+    #[test]
+    fn server_audit_probe_parses_and_strips_marker_line() {
+        let mut probe = ServerAuditProbe::new();
+        let chunk = b"hello\nMIST_AUDIT\t{\"action\":\"block\",\"message\":\"nope\",\"rule\":\"r1\",\"command\":\"rm -rf /\"}\nworld\n";
+        let (out, events) = probe.feed(chunk);
+        assert_eq!(out, b"hello\nworld\n");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].action, CmdAuditAction::Block);
+        assert_eq!(events[0].message, "nope");
+        assert_eq!(events[0].rule, "r1");
+        assert_eq!(events[0].command, "rm -rf /");
+    }
+
+    #[test]
+    fn server_audit_probe_holds_partial_prefix() {
+        let mut probe = ServerAuditProbe::new();
+        let (out1, ev1) = probe.feed(b"MIST_AUD");
+        assert!(out1.is_empty());
+        assert!(ev1.is_empty());
+        let (out2, ev2) = probe.feed(b"IT\t{\"action\":\"alert\",\"message\":\"ok\"}\n");
+        assert!(out2.is_empty());
+        assert_eq!(ev2.len(), 1);
+        assert_eq!(ev2[0].action, CmdAuditAction::Alert);
+    }
+
+    #[test]
+    fn server_audit_probe_passes_through_unrelated() {
+        let mut probe = ServerAuditProbe::new();
+        let (out, ev) = probe.feed(b"MIST_AUDX\n");
+        assert_eq!(out, b"MIST_AUDX\n");
+        assert!(ev.is_empty());
     }
 }

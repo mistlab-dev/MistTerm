@@ -15,11 +15,12 @@ use crate::core::{
     parse_local_forwards_text, parse_remote_forwards_text, parse_ssh_config_file,
     parse_vault_credential_path, pending_imports, spawn_cleanup_old_logs, status_bar_summary,
     AppSettings, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, CmdAuditAction,
-    CmdAuditAlertRequest, CmdAuditCacheStore, CmdAuditEngine, CmdAuditResult, CommandHistory,
-    CommandSendResult, Credential, CredentialAuthKind, FragmentManager, FragmentStats,
-    HangReporter, HangSnapshot, PortForwardKind, SecretBackend, SecretResolver, SessionConfig,
-    SessionLogSettings, SessionLogWriter, SessionManager, SessionSortBy, SortBy,
-    SshConfigCandidate, SshConfigParseResult, TeamService, TempKeyFile, DEFAULT_RETENTION_DAYS,
+    CmdAuditAlertRequest, CmdAuditCacheStore, CmdAuditEngine, CmdAuditResult, CmdAuditSource,
+    CommandHistory, CommandSendResult, Credential, CredentialAuthKind, FragmentManager,
+    FragmentStats, HangReporter, HangSnapshot, PortForwardKind, SecretBackend, SecretResolver,
+    ServerAuditEvent, SessionConfig, SessionLogSettings, SessionLogWriter, SessionManager,
+    SessionSortBy, SortBy, SshConfigCandidate, SshConfigParseResult, TeamService, TempKeyFile,
+    DEFAULT_RETENTION_DAYS,
 };
 use crate::ssh::{parse_jump_chain, parse_jump_endpoint, JumpHop, SshConfig};
 use crate::ui::ai_panel::AiPanel;
@@ -428,7 +429,7 @@ pub struct MistTermApp {
     delete_session_confirm: Option<(String, String)>,
     /// §2.3.5：关闭仍连接/握手中的标签前确认
     close_tab_confirm_idx: Option<usize>,
-    /// 团队命令审计本地引擎
+    /// 本地快捷提示引擎（非服务器强制边界）
     cmd_audit_engine: CmdAuditEngine,
     /// 敏感命令二次确认（标签索引、命令、匹配详情）
     cmd_audit_confirm: Option<CmdAuditConfirmState>,
@@ -443,12 +444,15 @@ pub struct MistTermApp {
     pending_auto_connect_session: Option<String>,
 }
 
-/// 命令审计确认弹窗状态
+/// 命令确认弹窗状态（本地快捷提示或服务器侧策略）
 #[derive(Clone)]
 struct CmdAuditConfirmState {
     tab_idx: usize,
     command: String,
     audit: CmdAuditResult,
+    source: CmdAuditSource,
+    /// 服务器侧可选放行令牌
+    approve_token: String,
     started: Instant,
 }
 
@@ -956,10 +960,14 @@ impl MistTermApp {
                     .unwrap_or("");
                 self.notify_error(format!(
                     "{}: {} — {}",
-                    crate::i18n::tr(ctx, "Command blocked", "命令已拦截"),
+                    crate::i18n::tr(ctx, "Local hint: command blocked", "本地提示：命令已拦截"),
                     command_preview(command, 80),
                     if hint.is_empty() {
-                        crate::i18n::tr(ctx, "blocked by team policy", "已被团队策略阻止")
+                        crate::i18n::tr(
+                            ctx,
+                            "blocked by local quick check (not a server policy)",
+                            "已被本地快捷提示拦截（非服务器强制策略）",
+                        )
                     } else {
                         hint
                     },
@@ -971,6 +979,8 @@ impl MistTermApp {
                     tab_idx,
                     command: command.to_string(),
                     audit: audit.clone(),
+                    source: CmdAuditSource::Local,
+                    approve_token: String::new(),
                     started: Instant::now(),
                 });
                 return CommandSendResult::NeedsConfirm {
@@ -1010,27 +1020,141 @@ impl MistTermApp {
             return;
         };
         if proceed {
-            self.record_cmd_audit_event(
-                "command.confirmed",
-                &state.command,
-                &state.audit,
-                AuditOutcome::Success,
-            );
+            if matches!(state.source, CmdAuditSource::Local) {
+                self.record_cmd_audit_event(
+                    "command.confirmed",
+                    &state.command,
+                    &state.audit,
+                    AuditOutcome::Success,
+                );
+            }
             if let Some(pane) = self
                 .tabs
                 .get_mut(state.tab_idx)
                 .and_then(|t| t.active_pane_mut())
             {
+                // 服务器侧 confirm：可选先发放行令牌，再重发原命令（选项 A）。
+                if matches!(state.source, CmdAuditSource::Server) && !state.approve_token.is_empty()
+                {
+                    let approve = format!("MIST_AUDIT_APPROVE\t{}", state.approve_token);
+                    pane.terminal.send_command(&approve);
+                }
                 pane.terminal.send_command(&state.command);
                 self.notify_auto(terminal_command_status_message(ctx, &state.command));
             }
-        } else {
+        } else if matches!(state.source, CmdAuditSource::Local) {
             self.record_cmd_audit_event(
                 "command.cancelled",
                 &state.command,
                 &state.audit,
                 AuditOutcome::Denied,
             );
+        }
+    }
+
+    fn poll_server_audit_from_tabs(&mut self, ctx: &egui::Context) {
+        let mut pending: Vec<(usize, ServerAuditEvent)> = Vec::new();
+        for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
+            for pane in tab.panes.iter_mut() {
+                for ev in pane.terminal.take_server_audit_events() {
+                    pending.push((tab_idx, ev));
+                }
+            }
+        }
+        for (tab_idx, ev) in pending {
+            self.handle_server_audit_event(ctx, tab_idx, ev);
+        }
+    }
+
+    fn handle_server_audit_event(
+        &mut self,
+        ctx: &egui::Context,
+        tab_idx: usize,
+        ev: ServerAuditEvent,
+    ) {
+        let cmd_preview = if ev.command.is_empty() {
+            String::new()
+        } else {
+            command_preview(&ev.command, 80)
+        };
+        let detail = if ev.message.is_empty() {
+            String::new()
+        } else {
+            format!(" — {}", ev.message)
+        };
+        match ev.action {
+            CmdAuditAction::Block => {
+                self.notify_error(format!(
+                    "{}{}{}",
+                    crate::i18n::tr(
+                        ctx,
+                        "Server policy: command blocked",
+                        "服务器策略：该命令被禁止",
+                    ),
+                    if cmd_preview.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {cmd_preview}")
+                    },
+                    detail,
+                ));
+            }
+            CmdAuditAction::Alert => {
+                self.notify_warn(format!(
+                    "{}{}{}",
+                    crate::i18n::tr(
+                        ctx,
+                        "Server policy: command reported to team audit",
+                        "服务器策略：该命令已上报团队审计",
+                    ),
+                    if cmd_preview.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {cmd_preview}")
+                    },
+                    detail,
+                ));
+            }
+            CmdAuditAction::Confirm => {
+                let command = if ev.command.is_empty() {
+                    // 无命令原文时仅提示，不弹确认框
+                    self.notify_warn(format!(
+                        "{}{}",
+                        crate::i18n::tr(
+                            ctx,
+                            "Server policy: confirmation required",
+                            "服务器策略：要求确认后才能执行",
+                        ),
+                        detail,
+                    ));
+                    return;
+                } else {
+                    ev.command.clone()
+                };
+                // 已有确认框时不覆盖本地确认；服务器结果用 toast 叠加提示
+                if self.cmd_audit_confirm.is_some() {
+                    self.notify_warn(format!(
+                        "{}: {}{}",
+                        crate::i18n::tr(
+                            ctx,
+                            "Server policy: confirmation required",
+                            "服务器策略：要求确认后才能执行",
+                        ),
+                        command_preview(&command, 80),
+                        detail,
+                    ));
+                    return;
+                }
+                self.cmd_audit_confirm = Some(CmdAuditConfirmState {
+                    tab_idx,
+                    command,
+                    audit: ev.to_cmd_audit_result(),
+                    source: CmdAuditSource::Server,
+                    approve_token: ev.token,
+                    started: Instant::now(),
+                });
+            }
+            CmdAuditAction::Allow => {}
         }
     }
 
@@ -2337,7 +2461,7 @@ impl MistTermApp {
                 );
                 self.notify_auto(format!(
                     "{}: {}",
-                    crate::i18n::tr(ctx, "Command blocked", "命令已拦截"),
+                    crate::i18n::tr(ctx, "Local hint: command blocked", "本地提示：命令已拦截"),
                     command_preview(command, 80)
                 ));
                 false
@@ -5983,6 +6107,7 @@ impl eframe::App for MistTermApp {
         }
         self.poll_command_history_from_active_tab();
         self.poll_connect_audit_from_tabs(ctx);
+        self.poll_server_audit_from_tabs(ctx);
         self.poll_session_log_commands();
         self.append_terminal_output_logs();
 

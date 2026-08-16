@@ -87,8 +87,9 @@ pub use credential::{
     Credential, CredentialAuthKind, CredentialCategory, CredentialVault, SecretBackend,
 };
 pub use cmd_audit::{
-    CmdAuditAction, CmdAuditAlertRequest, CmdAuditCacheEntry, CmdAuditCacheStore, CmdAuditEngine, CmdAuditMatch,
-    CmdAuditPolicy, CmdAuditResult, CmdAuditRule, CmdAuditSyncPayload, CommandSendResult,
+    CmdAuditAction, CmdAuditAlertRequest, CmdAuditCacheEntry, CmdAuditCacheStore, CmdAuditEngine,
+    CmdAuditMatch, CmdAuditPolicy, CmdAuditResult, CmdAuditRule, CmdAuditSource, CmdAuditSyncPayload,
+    CommandSendResult, ServerAuditEvent, ServerAuditProbe,
 };
 pub use audit::{
     command_preview, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, AuditSettings,

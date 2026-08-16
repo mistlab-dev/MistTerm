@@ -470,6 +470,7 @@ pub(super) fn run_upload_zmodem2(
     let mut file_complete_sent = false;
     // 已为 `poll_file` 供过数据：此后 PTY 上多为 ZDATA 二进制，不再剥前导以免误伤载荷。
     let mut file_data_started = false;
+    let mut stream_window_logged = false;
     // 握手期重复看到对端 ZRINIT（ZHEX B01）但始终无 ZRPOS，可判定为严格模式不兼容。
     let mut peer_zrinit_reinvite_count = 0usize;
     // 是否已主动触发过 WaitFilePos 兼容恢复（含 ZSINIT 路径）。
@@ -480,6 +481,7 @@ pub(super) fn run_upload_zmodem2(
     let mut last_ingress_activity = Instant::now();
     let mut last_stall_warn: Option<Instant> = None;
     let mut xymodem_c_streak: u32 = 0;
+    let mut last_progress_at = 0u64;
 
     while Instant::now() < deadline {
         if !is_active.load(Ordering::Relaxed) {
@@ -492,6 +494,8 @@ pub(super) fn run_upload_zmodem2(
             ));
         }
 
+        let mut progressed = false;
+
         flush_sender_out(
             &mut sender,
             pump_tx,
@@ -503,6 +507,7 @@ pub(super) fn run_upload_zmodem2(
         ingress.pull_from_rx(upload_pty_rx, upload_pty_pull_bytes.as_ref());
         if ingress.buf.len() > len_before_pull {
             last_ingress_activity = Instant::now();
+            progressed = true;
         }
         let ingress_phase = if file_data_started {
             UploadIngressPhase::Binary
@@ -523,14 +528,17 @@ pub(super) fn run_upload_zmodem2(
             if consumed == 0 {
                 break;
             }
+            progressed = true;
             last_ingress_activity = Instant::now();
             ingress.on_fed(consumed);
             let pending_out = sender.drain_outgoing().len();
             let slice = &ingress.buf[..consumed];
             if !escctl_before && sender.escctl_enabled() {
                 log::info!(
-                    "ZMODEM 对端 ZRINIT 声明 ESCCTL（peer_caps=0x{:02x}），已切换到全控制字符 ZDLE 转义（rz -e/-bye 兼容）",
-                    sender.peer_caps()
+                    "ZMODEM 对端 ZRINIT 声明 ESCCTL（peer_caps=0x{:02x}），已切换到全控制字符 ZDLE 转义（rz -e/-bye 兼容）；流窗 {}×{} B",
+                    sender.peer_caps(),
+                    sender.max_subpackets_per_ack(),
+                    sender.max_subpacket_size(),
                 );
             }
             if !file_data_started {
@@ -592,7 +600,19 @@ pub(super) fn run_upload_zmodem2(
         }
 
         while let Some(req) = sender.poll_file() {
-            file_data_started = true;
+            if !file_data_started {
+                file_data_started = true;
+                if !stream_window_logged {
+                    stream_window_logged = true;
+                    log::info!(
+                        "ZMODEM 数据流开始：子包 {} B × 每 ACK {} 包（peer_caps=0x{:02x}）",
+                        sender.max_subpacket_size(),
+                        sender.max_subpackets_per_ack(),
+                        sender.peer_caps()
+                    );
+                }
+            }
+            progressed = true;
             let off = req.offset as usize;
             let end = off.checked_add(req.len).ok_or_else(|| {
                 "ZMODEM FileRequest 偏移溢出".to_string()
@@ -603,12 +623,17 @@ pub(super) fn run_upload_zmodem2(
             sender
                 .feed_file(slice)
                 .map_err(|e| format!("ZMODEM feed_file: {}", e))?;
-            received_bytes.store(end as u64, Ordering::Relaxed);
-            let _ = tx.send(TransferEvent::FileProgress {
-                filename: file_name.to_string(),
-                received: end as u64,
-                total: file_size,
-            });
+            let end_u64 = end as u64;
+            received_bytes.store(end_u64, Ordering::Relaxed);
+            // 进度事件节流：避免每 1KiB 打爆 UI 事件队列。
+            if end_u64.saturating_sub(last_progress_at) >= 32 * 1024 || end_u64 >= file_size {
+                last_progress_at = end_u64;
+                let _ = tx.send(TransferEvent::FileProgress {
+                    filename: file_name.to_string(),
+                    received: end_u64,
+                    total: file_size,
+                });
+            }
             if end & 0x7fff == 0 {
                 std::thread::yield_now();
             }
@@ -626,6 +651,7 @@ pub(super) fn run_upload_zmodem2(
                 Some(e) => e,
                 None => break,
             };
+            progressed = true;
             match ev {
                 SenderEvent::FileComplete => {
                     if !file_complete_sent {
@@ -747,7 +773,10 @@ pub(super) fn run_upload_zmodem2(
             }
         }
 
-        std::thread::sleep(Duration::from_millis(1));
+        // 有进展时忙转；仅在等 ACK 时空睡，避免每包固定 +1ms。
+        if !progressed {
+            std::thread::sleep(Duration::from_micros(200));
+        }
     }
 
     if !session_done {

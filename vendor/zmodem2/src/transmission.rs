@@ -21,9 +21,12 @@ use core::fmt::Write as _;
 use std::time::{Duration, Instant};
 
 /// Size of the unescaped subpacket payload. The size is picked from the
-/// original ZMODEM specification.
+/// original ZMODEM specification (≤1024). Larger sizes need the lrzsz `-8`
+/// extension and are not enabled by default.
 const SUBPACKET_MAX_SIZE: usize = 1024;
-const SUBPACKET_PER_ACK: usize = 10;
+/// Streaming window (ZCRCG…ZCRCW) when peer advertises `CANOVIO` and bufsize=0.
+/// Classic `sz` with TXBSIZE≈16–32KiB behaves similarly; 10 was too ACK-bound over SSH RTT.
+const SUBPACKET_PER_ACK: usize = 32;
 const MAX_HEADER_ESCAPED: usize = 128;
 const MAX_SUBPACKET_ESCAPED: usize = SUBPACKET_MAX_SIZE * 2 + 2 + 8;
 const WIRE_BUF_SIZE: usize = MAX_HEADER_ESCAPED + MAX_SUBPACKET_ESCAPED;
@@ -39,6 +42,21 @@ fn mistterm_sender_reply_zrinit_enabled() -> bool {
     std::env::var("MISTTERM_ZMODEM_SENDER_REPLY_ZRINIT")
         .map(|v| !(v == "0" || v.eq_ignore_ascii_case("false") || v.eq_ignore_ascii_case("no")))
         .unwrap_or(false)
+}
+
+/// Override streaming window; `MISTTERM_ZMODEM_SUBPACKET_PER_ACK=1..256`（默认 [`SUBPACKET_PER_ACK`]）。
+#[cfg(feature = "std")]
+fn mistterm_subpacket_per_ack() -> usize {
+    std::env::var("MISTTERM_ZMODEM_SUBPACKET_PER_ACK")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .map(|n| n.clamp(1, 256))
+        .unwrap_or(SUBPACKET_PER_ACK)
+}
+
+#[cfg(not(feature = "std"))]
+const fn mistterm_subpacket_per_ack() -> usize {
+    SUBPACKET_PER_ACK
 }
 
 #[cfg(not(feature = "std"))]
@@ -517,7 +535,7 @@ impl Sender {
             frame_remaining: 0,
             frame_needs_header: false,
             max_subpacket_size: SUBPACKET_MAX_SIZE,
-            max_subpackets_per_ack: SUBPACKET_PER_ACK,
+            max_subpackets_per_ack: mistterm_subpacket_per_ack(),
             buf: Buffer::<SUBPACKET_MAX_SIZE>::new(),
             outgoing: Buffer::<WIRE_BUF_SIZE>::new(),
             outgoing_offset: 0,
@@ -730,6 +748,18 @@ impl Sender {
     #[must_use]
     pub fn escctl_enabled(&self) -> bool {
         zdle::escctl_enabled()
+    }
+
+    /// 当前协商的子包载荷上限（未转义），通常为 1024。
+    #[must_use]
+    pub fn max_subpacket_size(&self) -> usize {
+        self.max_subpacket_size
+    }
+
+    /// 当前协商的每 ACK 流水线子包数（`CANOVIO` 时 >1）。
+    #[must_use]
+    pub fn max_subpackets_per_ack(&self) -> usize {
+        self.max_subpackets_per_ack
     }
 
     /// In `WaitFilePos`, proactively retries handshake bytes when peer goes silent.
@@ -1007,20 +1037,33 @@ impl Sender {
         let rx_buf_size = u16::from_le_bytes([flags[0], flags[1]]) as usize;
         let can_ovio = (caps & Zrinit::CANOVIO.bits()) != 0;
 
+        let per_ack = mistterm_subpacket_per_ack();
         if rx_buf_size == 0 {
             self.max_subpacket_size = SUBPACKET_MAX_SIZE;
-            self.max_subpackets_per_ack = if can_ovio { SUBPACKET_PER_ACK } else { 1 };
+            // SSH/PTY 上多数 `rz` 会带 CANOVIO；若未声明则仍用短流水线，避免严格 stop-and-wait
+            // 在数十毫秒 RTT 下比 iTerm2/`sz` 慢一个数量级。
+            self.max_subpackets_per_ack = if can_ovio {
+                per_ack
+            } else {
+                (per_ack / 4).max(4)
+            };
             return;
         }
 
         self.max_subpacket_size = min(SUBPACKET_MAX_SIZE, rx_buf_size);
         if !can_ovio {
-            self.max_subpackets_per_ack = 1;
+            // 有接收缓冲声明时按缓冲折算窗口，至少 1；不再强制单包 ACK。
+            let subpackets = rx_buf_size / self.max_subpacket_size.max(1);
+            self.max_subpackets_per_ack = subpackets.clamp(1, per_ack);
             return;
         }
 
-        let subpackets = rx_buf_size / self.max_subpacket_size;
-        self.max_subpackets_per_ack = if subpackets == 0 { 1 } else { subpackets };
+        let subpackets = rx_buf_size / self.max_subpacket_size.max(1);
+        self.max_subpackets_per_ack = if subpackets == 0 {
+            1
+        } else {
+            subpackets.min(per_ack)
+        };
     }
 
     fn on_zrpos(&mut self, offset: u32) -> Result<(), Error> {
