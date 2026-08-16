@@ -212,6 +212,7 @@ impl MistTermApp {
             }
             let command = confirm.command.clone();
             let audit = confirm.audit.clone();
+            let from_server = matches!(confirm.source, crate::core::CmdAuditSource::Server);
             let modal_sz = layout_util::modal_confirm_size(ctx);
             crate::ui::chrome::modal_window("cmd_audit_confirm", theme, ctx)
                 .open(&mut open)
@@ -224,14 +225,34 @@ impl MistTermApp {
                         Self::modal_header_title_only(
                             ui,
                             theme,
-                            crate::i18n::tr(ctx, "Command needs confirmation", "命令需要确认"),
+                            if from_server {
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Server policy: confirmation required",
+                                    "服务器策略：需要确认",
+                                )
+                            } else {
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Local hint: confirmation needed",
+                                    "本地提示：命令需要确认",
+                                )
+                            },
                         );
                         ui.label(
-                            egui::RichText::new(crate::i18n::tr(
-                                ctx,
-                                "Sensitive operation detected:",
-                                "检测到敏感操作：",
-                            ))
+                            egui::RichText::new(if from_server {
+                                crate::i18n::tr(
+                                    ctx,
+                                    "The remote server requires confirmation before running:",
+                                    "远程服务器要求确认后才能执行：",
+                                )
+                            } else {
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Local quick check flagged a sensitive operation (not a server policy):",
+                                    "本地快捷提示检测到敏感操作（非服务器强制策略）：",
+                                )
+                            })
                             .size(theme.font_size_normal())
                             .color(theme.color_body_text_muted()),
                         );

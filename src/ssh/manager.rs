@@ -231,15 +231,21 @@ impl SshManager {
                     return Err(());
                 }
                 Ok(n) => {
+                    // 上传旁路开启时协议字节已同步进 `upload_pty_rx`；再拷一份进 UI mpsc
+                    // 只会拖慢泵线程，并让主线程做无用的 detect/utf8（ACK 路径尤其伤吞吐）。
+                    let mut via_bypass = false;
                     if let Ok(guard) = upload_bypass.lock() {
                         if let Some(ref b) = *guard {
                             b.feed_from_shell_pump(&read_buffer[..n]);
+                            via_bypass = true;
                         }
                     }
-                    let _ = message_tx.send(SshMessage::Output {
-                        session_id,
-                        data: read_buffer[..n].to_vec(),
-                    });
+                    if !via_bypass {
+                        let _ = message_tx.send(SshMessage::Output {
+                            session_id,
+                            data: read_buffer[..n].to_vec(),
+                        });
+                    }
                 }
                 Err(e) if Self::is_retryable_read_error(&e) => return Ok(()),
                 Err(e) => {
@@ -669,7 +675,18 @@ mod shell_pump {
                 }
             }
 
-            match pump_rx.recv_timeout(Duration::from_millis(8)) {
+            // ZMODEM 上传旁路开启时缩短空闲读间隔，尽快把 ZACK/ZRPOS 交给发送线程。
+            let idle_ms = if upload_bypass_slot
+                .lock()
+                .ok()
+                .and_then(|g| g.as_ref().map(|_| ()))
+                .is_some()
+            {
+                1
+            } else {
+                8
+            };
+            match pump_rx.recv_timeout(Duration::from_millis(idle_ms)) {
                 Ok(cmd) => {
                     if let ShellPumpCommand::PtyInput(data) = &cmd {
                         let commands = capture_and_log_user_command(
@@ -682,53 +699,18 @@ mod shell_pump {
                             let _ = message_tx.send(SshMessage::UserCommand { session_id, command });
                         }
                     }
-                    if !process_one_command_sync(
+                    if !dispatch_pump_command_coalesced(
                         &mgr,
                         &channel,
                         &message_tx,
                         session_id,
                         cmd,
+                        &pump_rx,
                         &mut read_buffer,
                         &upload_bypass_slot,
+                        &interrupt_rx,
                     ) {
                         return;
-                    }
-                    while let Ok(data) = interrupt_rx.try_recv() {
-                        if !process_priority_interrupt_sync(
-                            &channel,
-                            &message_tx,
-                            session_id,
-                            data,
-                            &mut read_buffer,
-                            &upload_bypass_slot,
-                        ) {
-                            return;
-                        }
-                    }
-                    while let Ok(more) = pump_rx.try_recv() {
-                        while let Ok(data) = interrupt_rx.try_recv() {
-                            if !process_priority_interrupt_sync(
-                                &channel,
-                                &message_tx,
-                                session_id,
-                                data,
-                                &mut read_buffer,
-                                &upload_bypass_slot,
-                            ) {
-                                return;
-                            }
-                        }
-                        if !process_one_command_sync(
-                            &mgr,
-                            &channel,
-                            &message_tx,
-                            session_id,
-                            more,
-                            &mut read_buffer,
-                            &upload_bypass_slot,
-                        ) {
-                            return;
-                        }
                     }
                 }
                 Err(RecvTimeoutError::Timeout) => {
@@ -752,6 +734,72 @@ mod shell_pump {
                 }
             }
         }
+    }
+
+    /// 连续 `ZmodemWrite` 合并为一次 `write_pty_with_drain`（一次 flush），显著减少 SSH 往返。
+    const ZMODEM_WRITE_COALESCE_CAP: usize = 64 * 1024;
+
+    fn dispatch_pump_command_coalesced(
+        mgr: &SshManager,
+        channel: &Arc<Mutex<Channel>>,
+        message_tx: &Sender<SshMessage>,
+        session_id: SshSessionId,
+        cmd: ShellPumpCommand,
+        pump_rx: &Receiver<ShellPumpCommand>,
+        read_buffer: &mut [u8; 16384],
+        upload_bypass: &Arc<Mutex<Option<Arc<UploadPtyBypass>>>>,
+        interrupt_rx: &Receiver<Vec<u8>>,
+    ) -> bool {
+        let mut next = Some(cmd);
+        while let Some(cmd) = next.take() {
+            while let Ok(data) = interrupt_rx.try_recv() {
+                if !process_priority_interrupt_sync(
+                    channel,
+                    message_tx,
+                    session_id,
+                    data,
+                    read_buffer,
+                    upload_bypass,
+                ) {
+                    return false;
+                }
+            }
+
+            let (cmd, deferred) = match cmd {
+                ShellPumpCommand::ZmodemWrite(mut data) => {
+                    let mut deferred: Option<ShellPumpCommand> = None;
+                    while data.len() < ZMODEM_WRITE_COALESCE_CAP {
+                        match pump_rx.try_recv() {
+                            Ok(ShellPumpCommand::ZmodemWrite(more)) => {
+                                data.extend_from_slice(&more);
+                            }
+                            Ok(other) => {
+                                deferred = Some(other);
+                                break;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    (ShellPumpCommand::ZmodemWrite(data), deferred)
+                }
+                other => (other, None),
+            };
+
+            if !process_one_command_sync(
+                mgr,
+                channel,
+                message_tx,
+                session_id,
+                cmd,
+                read_buffer,
+                upload_bypass,
+            ) {
+                return false;
+            }
+
+            next = deferred.or_else(|| pump_rx.try_recv().ok());
+        }
+        true
     }
 
     fn process_priority_interrupt_sync(

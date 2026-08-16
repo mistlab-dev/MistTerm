@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::{Duration, Instant};
+use crate::core::{ServerAuditEvent, ServerAuditProbe};
 use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, LrzszTransfer, TransferEvent, format_ssh_connect_error};
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line, Point};
@@ -234,6 +235,10 @@ pub struct TerminalView {
     unexpected_disconnect_notified: bool,
     /// 连接成功/失败待宿主写入审计（`take_connect_audit` 取走）
     pending_connect_audit: Option<(bool, String)>,
+    /// 服务器侧命令审计标记行解析（`MIST_AUDIT`）
+    server_audit_probe: ServerAuditProbe,
+    /// 待宿主展示的服务器侧审计事件
+    pending_server_audit: Vec<ServerAuditEvent>,
     /// 连接失败待宿主 Toast（`take_pending_toast_error` 取走）
     pending_toast_error: Option<String>,
     /// 拖入终端区域、待宿主处理的上传路径（§4.3.2）。
@@ -673,6 +678,8 @@ impl TerminalView {
             local_disconnect_intent: false,
             unexpected_disconnect_notified: false,
             pending_connect_audit: None,
+            server_audit_probe: ServerAuditProbe::new(),
+            pending_server_audit: Vec::new(),
             pending_toast_error: None,
             pending_drop_upload_paths: Vec::new(),
             zmodem_upload_after_rz_path: None,
@@ -1916,7 +1923,10 @@ impl TerminalView {
                             continue;
                         }
 
-                        let display_data: Vec<u8> = data;
+                        let (display_data, audit_events) = self.server_audit_probe.feed(&data);
+                        if !audit_events.is_empty() {
+                            self.pending_server_audit.extend(audit_events);
+                        }
                         if let Some(until) = self.rz_control_mode_until {
                             if Instant::now() <= until {
                                 // 控制模式内默认吞掉输出，避免显示 **B0... / ccc|... 等握手噪音。
@@ -3381,6 +3391,11 @@ impl TerminalView {
     /// 取走待上报的连接结果（`success`, `host`）。
     pub fn take_connect_audit(&mut self) -> Option<(bool, String)> {
         self.pending_connect_audit.take()
+    }
+
+    /// 取走服务器侧命令审计事件（agent 经 PTY 回传的 `MIST_AUDIT` 行）。
+    pub fn take_server_audit_events(&mut self) -> Vec<ServerAuditEvent> {
+        std::mem::take(&mut self.pending_server_audit)
     }
 
     pub fn take_pending_toast_error(&mut self) -> Option<String> {
