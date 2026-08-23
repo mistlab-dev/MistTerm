@@ -9,8 +9,9 @@ param([switch]$Quiet)
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$User = if ($env:MISTTERM_TEST_SSH_USER) { $env:MISTTERM_TEST_SSH_USER } else { "mistterm_test" }
-$Pass = if ($env:MISTTERM_TEST_SSH_PASSWORD) { $env:MISTTERM_TEST_SSH_PASSWORD } else { "mistterm123" }
+# 本地 OpenSSH 固定测试账号；勿用 MISTTERM_TEST_SSH_* 远程变量，避免与 127.0.0.1 混用。
+$User = "mistterm_test"
+$Pass = "mistterm123"
 
 function Write-Step([string]$Msg) {
     if (-not $Quiet) { Write-Host $Msg }
