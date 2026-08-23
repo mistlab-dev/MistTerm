@@ -105,7 +105,7 @@ pub use ai_client::{
 };
 pub use ai_chat_store::{delete_chat, load_chat, save_chat, StoredAiMessage, StoredContextRef};
 pub use ai_session_meta::TerminalSessionMeta;
-pub use ai_enhanced::{AiContext, AiContext as EnhancedContext, CommandCompleter, EnhancedPromptBuilder, QuickAction};
+pub use ai_enhanced::{AiContext, AiContext as EnhancedContext, CommandCompleter, EnhancedPromptBuilder, QuickAction, SshInfo};
 pub use app_settings::AppSettings;
 pub use hang_reporter::{ensure_hang_report_dir, hang_report_dir, HangReporter, HangSnapshot};
 pub use team::{

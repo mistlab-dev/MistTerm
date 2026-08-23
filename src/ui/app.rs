@@ -14,12 +14,12 @@ use crate::core::{
     is_already_imported, list_placeholder_keys, merge_rhai_context, parse_dynamic_forwards_text,
     parse_local_forwards_text, parse_remote_forwards_text, parse_ssh_config_file,
     parse_vault_credential_path, pending_imports, spawn_cleanup_old_logs, status_bar_summary,
-    AppSettings, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, CmdAuditAction,
+    AppSettings, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, AiContext, CmdAuditAction,
     CmdAuditAlertRequest, CmdAuditCacheStore, CmdAuditEngine, CmdAuditResult, CmdAuditSource,
     CommandHistory, CommandSendResult, Credential, CredentialAuthKind, FragmentManager,
     FragmentStats, HangReporter, HangSnapshot, PortForwardKind, SecretBackend, SecretResolver,
     ServerAuditEvent, SessionConfig, SessionLogSettings, SessionLogWriter, SessionManager,
-    SessionSortBy, SortBy, SshConfigCandidate, SshConfigParseResult, TeamService, TempKeyFile,
+    SessionSortBy, SortBy, SshConfigCandidate, SshConfigParseResult, SshInfo, TeamService, TempKeyFile,
     DEFAULT_RETENTION_DAYS,
 };
 use crate::ssh::{parse_jump_chain, parse_jump_endpoint, JumpHop, SshConfig};
@@ -3471,6 +3471,8 @@ impl MistTermApp {
     /// 终端「发送到 AI」与 AI 面板「用到终端」桥接。
     pub(crate) fn process_ai_bridge(&mut self, ctx: &egui::Context) {
         self.sync_ai_chat_session();
+        self.ai_panel
+            .set_session_context(self.build_ai_session_context());
         let mut open_ai = false;
         let mut attach_text: Option<String> = None;
         let mut attach_source: Option<&str> = None;
@@ -3554,6 +3556,9 @@ impl MistTermApp {
         if self.ai_panel.take_attach_terminal_tail_request() {
             self.attach_terminal_tail_to_ai(ctx, 50);
         }
+        if self.ai_panel.take_attach_selection_request() {
+            self.send_terminal_selection_to_ai(ctx);
+        }
         if open_ai && self.ensure_right_dock_allowed_or_warn(ctx) {
             self.open_right_dock_panel(ActiveRightDock::Ai);
         }
@@ -3596,6 +3601,36 @@ impl MistTermApp {
                 );
             }
         }
+    }
+
+    fn build_ai_session_context(&self) -> AiContext {
+        let mut ai_ctx = AiContext::from_history(&self.command_history, 10);
+        if let Some(idx) = self.active_tab {
+            if let Some(tab) = self.tabs.get(idx) {
+                if let Some(pane) = tab.active_pane() {
+                    let selected = pane.terminal.selected_text();
+                    if !selected.trim().is_empty() {
+                        ai_ctx.selected_text = Some(selected);
+                    }
+                    let session_name = self
+                        .session_manager
+                        .get_session(&pane.session_id)
+                        .map(|s| s.name.clone());
+                    let meta = pane.terminal.ai_session_meta(session_name);
+                    if let Some(host) = meta.host {
+                        ai_ctx.hostname = Some(host.clone());
+                        if let Some(user) = meta.username {
+                            ai_ctx.ssh_info = Some(SshInfo {
+                                host,
+                                port: 22,
+                                user,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        ai_ctx
     }
 
     fn sync_ai_chat_session(&mut self) {

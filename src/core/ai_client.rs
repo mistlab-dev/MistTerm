@@ -478,7 +478,7 @@ pub fn chat_completions_with_key(
     }
     let (tx, rx) = std::sync::mpsc::channel();
     let cancel = AtomicBool::new(false);
-    run_chat_with_key(settings, api_key, messages, &cancel, &tx, true);
+    run_chat_with_key(settings, api_key, messages, &cancel, &tx, true, None);
     let mut full = String::new();
     loop {
         match rx.recv() {
@@ -499,11 +499,12 @@ pub fn run_chat_with_key(
     cancel: &AtomicBool,
     tx: &Sender<ChatEvent>,
     force_blocking: bool,
+    system_prompt_override: Option<String>,
 ) {
     let result = if settings.stream_responses && !force_blocking {
-        chat_streaming_with_key(settings, api_key, messages, cancel, tx)
+        chat_streaming_with_key(settings, api_key, messages, cancel, tx, system_prompt_override.as_deref())
     } else {
-        chat_blocking_with_key(settings, api_key, messages, cancel, tx)
+        chat_blocking_with_key(settings, api_key, messages, cancel, tx, system_prompt_override.as_deref())
     };
     if let Err(e) = result {
         let _ = tx.send(ChatEvent::Failed(e));
@@ -548,13 +549,16 @@ fn chat_blocking_with_key(
     messages: &[ChatMessage],
     cancel: &AtomicBool,
     tx: &Sender<ChatEvent>,
+    system_prompt_override: Option<&str>,
 ) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) {
         let _ = tx.send(ChatEvent::Cancelled);
         return Ok(());
     }
     let url = settings.chat_completions_url();
-    let system = resolve_system_prompt(settings);
+    let system = system_prompt_override
+        .map(str::to_string)
+        .unwrap_or_else(|| resolve_system_prompt(settings));
     let api_messages: Vec<ApiMessage> = std::iter::once(ApiMessage {
         role: "system",
         content: system.as_str(),
@@ -599,13 +603,16 @@ fn chat_streaming_with_key(
     messages: &[ChatMessage],
     cancel: &AtomicBool,
     tx: &Sender<ChatEvent>,
+    system_prompt_override: Option<&str>,
 ) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) {
         let _ = tx.send(ChatEvent::Cancelled);
         return Ok(());
     }
     let url = settings.chat_completions_url();
-    let system = resolve_system_prompt(settings);
+    let system = system_prompt_override
+        .map(str::to_string)
+        .unwrap_or_else(|| resolve_system_prompt(settings));
     let api_messages: Vec<ApiMessage> = std::iter::once(ApiMessage {
         role: "system",
         content: system.as_str(),
@@ -682,7 +689,14 @@ fn chat_streaming_with_key(
             }
             Err(_e) if raw_body.trim().is_empty() => {
                 // 空 SSE 体时再回退非流式请求。
-                return chat_blocking_with_key(settings, api_key, messages, cancel, tx);
+                return chat_blocking_with_key(
+                    settings,
+                    api_key,
+                    messages,
+                    cancel,
+                    tx,
+                    system_prompt_override,
+                );
             }
             Err(e) => return Err(e),
         }

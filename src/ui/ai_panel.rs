@@ -9,9 +9,9 @@ use std::thread;
 
 use crate::core::{
     delete_chat, extract_shell_commands, is_runnable_shell_command, load_chat,
-    prepare_terminal_context, save_chat, AppSettings, ChatEvent, ChatMessage,
-    PreparedTerminalContext, StoredAiMessage, StoredContextRef, TerminalSessionMeta,
-    run_chat_with_key,
+    prepare_terminal_context, resolve_system_prompt, save_chat, AiContext, AppSettings,
+    ChatEvent, ChatMessage, EnhancedPromptBuilder, PreparedTerminalContext, QuickAction,
+    StoredAiMessage, StoredContextRef, TerminalSessionMeta, run_chat_with_key,
 };
 use crate::i18n::{self};
 use crate::ui::icons::IconId;
@@ -133,6 +133,10 @@ pub struct AiPanel {
     draft_input_focused: bool,
     /// 输入栏「附带终端」按钮：由 App 读取并注入最近终端输出。
     attach_terminal_tail_requested: bool,
+    /// 输入栏「附带选区」按钮：由 App 读取并注入当前终端选区。
+    attach_selection_requested: bool,
+    /// 当前活动终端会话上下文（命令历史、SSH 信息等），用于增强 system prompt。
+    session_context: AiContext,
     last_panel_slot_rect: Option<egui::Rect>,
     /// 清空对话二次确认（防误触）。
     confirm_clear_chat: bool,
@@ -184,6 +188,8 @@ impl AiPanel {
             input_status: None,
             draft_input_focused: false,
             attach_terminal_tail_requested: false,
+            attach_selection_requested: false,
+            session_context: AiContext::default(),
             last_panel_slot_rect: None,
             confirm_clear_chat: false,
             available_models: Vec::new(),
@@ -273,6 +279,14 @@ impl AiPanel {
     /// 输入栏请求附带当前终端最近输出（由 App 每帧消费）。
     pub fn take_attach_terminal_tail_request(&mut self) -> bool {
         std::mem::replace(&mut self.attach_terminal_tail_requested, false)
+    }
+
+    pub fn take_attach_selection_request(&mut self) -> bool {
+        std::mem::replace(&mut self.attach_selection_requested, false)
+    }
+
+    pub fn set_session_context(&mut self, context: AiContext) {
+        self.session_context = context;
     }
 
     fn load_persisted_chat(&mut self) {
@@ -991,13 +1005,13 @@ impl AiPanel {
                             .color(theme.color_form_hint()),
                     );
                     ui.add_space(theme.spacing_xs());
-                    for sample in example_questions(ctx) {
+                    for (label, action) in quick_action_chips(ctx) {
                         if ui
-                            .small_button(sample)
+                            .small_button(&label)
                             .on_hover_text(i18n::tr(ctx, "Fill input", "填入输入框"))
                             .clicked()
                         {
-                            self.draft_input = sample.to_string();
+                            self.apply_quick_action(action, &label);
                         }
                     }
                 }
@@ -1262,6 +1276,7 @@ impl AiPanel {
         let mut clear_draft_clicked = false;
         let mut clear_chat_clicked = false;
         let mut attach_terminal_clicked = false;
+        let mut attach_selection_clicked = false;
         theme.frame_form_text_input(focused).show(ui, |ui| {
             let inner_w =
                 (ui.available_width() - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0);
@@ -1324,6 +1339,26 @@ impl AiPanel {
                     .inner
                 {
                     attach_terminal_clicked = true;
+                }
+                if ui
+                    .add_enabled_ui(can_type, |ui| {
+                        crate::ui::chrome::panel_action_button_with_icon_ex(
+                            ui,
+                            theme,
+                            IconId::Attachment,
+                            i18n::tr(ctx, "Attach selection", "附带选区"),
+                            true,
+                        )
+                        .on_hover_text(i18n::tr(
+                            ctx,
+                            "Attach the current terminal selection (no copy needed)",
+                            "附带当前终端选区（无需手动复制）",
+                        ))
+                        .clicked()
+                    })
+                    .inner
+                {
+                    attach_selection_clicked = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let send_label = i18n::tr(ctx, "Send", "发送");
@@ -1403,6 +1438,9 @@ impl AiPanel {
         });
         if attach_terminal_clicked {
             self.attach_terminal_tail_requested = true;
+        }
+        if attach_selection_clicked {
+            self.attach_selection_requested = true;
         }
         if clear_draft_clicked {
             self.draft_input.clear();
@@ -1563,6 +1601,9 @@ impl AiPanel {
             })
             .collect();
         let settings = app_settings.ai.clone();
+        let base_prompt = resolve_system_prompt(&settings);
+        let system_prompt =
+            EnhancedPromptBuilder::new(&base_prompt, self.session_context.clone()).build();
         let api_key = match self.effective_api_key(app_settings) {
             Some(k) => k,
             None => {
@@ -1588,7 +1629,15 @@ impl AiPanel {
             commands: vec![],
         });
         thread::spawn(move || {
-            run_chat_with_key(&settings, &api_key, &api_messages, &cancel, &tx, false);
+            run_chat_with_key(
+                &settings,
+                &api_key,
+                &api_messages,
+                &cancel,
+                &tx,
+                false,
+                Some(system_prompt),
+            );
         });
     }
 
@@ -1816,12 +1865,56 @@ fn build_user_api_body(
     body
 }
 
-fn example_questions(ctx: &egui::Context) -> [&'static str; 3] {
+fn quick_action_chips(ctx: &egui::Context) -> [(String, QuickAction); 3] {
     [
-        i18n::tr(ctx, "Explain this error", "解释这条报错"),
-        i18n::tr(ctx, "What should I run next?", "接下来该运行什么？"),
-        i18n::tr(ctx, "Summarize this output", "总结这段输出"),
+        (
+            i18n::tr(ctx, "Explain this error", "解释这条报错").to_string(),
+            QuickAction::ExplainSelection,
+        ),
+        (
+            i18n::tr(ctx, "What should I run next?", "接下来该运行什么？").to_string(),
+            QuickAction::GenerateSimilar,
+        ),
+        (
+            i18n::tr(ctx, "Summarize this output", "总结这段输出").to_string(),
+            QuickAction::SummarizeOutput,
+        ),
     ]
+}
+
+impl AiPanel {
+    fn selection_text_for_quick_action(&self) -> String {
+        if let Some(c) = self.attached_contexts.last() {
+            if !c.text.trim().is_empty() {
+                return c.text.clone();
+            }
+        }
+        self.session_context
+            .selected_text
+            .clone()
+            .unwrap_or_default()
+    }
+
+    fn apply_quick_action(&mut self, action: QuickAction, fallback_label: &str) {
+        let mut selection = self.selection_text_for_quick_action();
+        if selection.trim().is_empty() {
+            if let QuickAction::GenerateSimilar = action {
+                selection = self
+                    .session_context
+                    .recent_commands
+                    .first()
+                    .cloned()
+                    .unwrap_or_default();
+            }
+        }
+        if selection.trim().is_empty() {
+            self.draft_input = fallback_label.to_string();
+        } else {
+            self.draft_input = self
+                .session_context
+                .build_action_prompt(&action, &selection);
+        }
+    }
 }
 
 fn context_ref_to_stored(c: &TerminalContextRef) -> StoredContextRef {

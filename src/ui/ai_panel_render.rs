@@ -358,13 +358,13 @@ pub(super) fn show_command_card(
                         ui,
                         theme,
                         IconId::TerminalPrompt,
-                        i18n::tr(ctx, "Send", "发送"),
+                        i18n::tr(ctx, "Apply to terminal", "用到终端"),
                         true,
                     )
                     .on_hover_text(i18n::tr(
                         ctx,
-                        "Send this command to the terminal",
-                        "发送该命令到终端",
+                        "Send this command to the active terminal (same as pressing Enter)",
+                        "将该命令发送到活动终端并执行（等同按 Enter）",
                     ))
                     .clicked();
                 });
