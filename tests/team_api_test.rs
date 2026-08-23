@@ -96,6 +96,20 @@ fn team_api_p1_analytics_routes_deployed() {
 }
 
 #[test]
+fn team_api_cmd_audit_agents_and_storage_routes_deployed() {
+    assert_invalid_token_not_404(
+        reqwest::Method::GET,
+        "/v1/teams/t_smoke/command-audit/agents",
+        None,
+    );
+    assert_invalid_token_not_404(
+        reqwest::Method::GET,
+        "/v1/teams/t_smoke/storage/usage",
+        None,
+    );
+}
+
+#[test]
 fn team_api_members_route_deployed() {
     assert_invalid_token_not_404(reqwest::Method::GET, "/v1/teams/t_smoke/members", None);
 }

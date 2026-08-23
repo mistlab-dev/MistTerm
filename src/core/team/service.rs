@@ -17,9 +17,11 @@ use self::service_jobs::{
 pub use self::service_blocking::{
     create_fragment_share_blocking, create_team_fragment_blocking,
     delete_fragment_share_blocking, delete_team_fragment_blocking, ensure_access_token,
-    fetch_fragment_versions_blocking, fetch_team_settings_blocking, list_fragment_shares_blocking,
-    lock_team_fragment_blocking, sync_fragments_blocking, unlock_team_fragment_blocking,
-    update_team_fragment_blocking, update_team_settings_blocking,
+    fetch_fragment_versions_blocking, fetch_storage_usage_blocking, fetch_team_settings_blocking,
+    list_cmd_audit_agents_blocking, list_fragment_shares_blocking, lock_team_fragment_blocking,
+    release_residual_fragment_locks_blocking, sync_fragments_blocking,
+    unlock_team_fragment_blocking, update_cmd_audit_agent_blocking, update_team_fragment_blocking,
+    update_team_settings_blocking,
 };
 pub use self::service_jobs::do_sync;
 

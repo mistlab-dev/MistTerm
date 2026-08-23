@@ -239,6 +239,10 @@ pub struct TerminalView {
     server_audit_probe: ServerAuditProbe,
     /// 待宿主展示的服务器侧审计事件
     pending_server_audit: Vec<ServerAuditEvent>,
+    /// 当前连接主机无可用 agent 时显示降级横幅
+    agent_audit_degraded: bool,
+    /// 用户关闭降级横幅后，本连接周期内不再显示
+    agent_audit_banner_dismissed: bool,
     /// 连接失败待宿主 Toast（`take_pending_toast_error` 取走）
     pending_toast_error: Option<String>,
     /// 拖入终端区域、待宿主处理的上传路径（§4.3.2）。
@@ -680,6 +684,8 @@ impl TerminalView {
             pending_connect_audit: None,
             server_audit_probe: ServerAuditProbe::new(),
             pending_server_audit: Vec::new(),
+            agent_audit_degraded: false,
+            agent_audit_banner_dismissed: false,
             pending_toast_error: None,
             pending_drop_upload_paths: Vec::new(),
             zmodem_upload_after_rz_path: None,
@@ -911,6 +917,8 @@ impl TerminalView {
                 self.visual_layout_cache = None;
                 self.local_disconnect_intent = false;
                 self.connected_at = None;
+                self.agent_audit_degraded = false;
+                self.agent_audit_banner_dismissed = false;
                 self.connection_target = Some((username.to_string(), host.to_string()));
             }
             Err(e) => {
@@ -3396,6 +3404,27 @@ impl TerminalView {
     /// 取走服务器侧命令审计事件（agent 经 PTY 回传的 `MIST_AUDIT` 行）。
     pub fn take_server_audit_events(&mut self) -> Vec<ServerAuditEvent> {
         std::mem::take(&mut self.pending_server_audit)
+    }
+
+    /// 更新服务器侧审计可用性；返回 `Some(true)` 表示刚从降级恢复。
+    pub fn set_agent_audit_available(&mut self, available: bool) -> Option<bool> {
+        let was_degraded = self.agent_audit_degraded;
+        self.agent_audit_degraded = !available;
+        if available {
+            self.agent_audit_banner_dismissed = false;
+            if was_degraded {
+                return Some(true);
+            }
+        }
+        None
+    }
+
+    pub fn agent_audit_banner_visible(&self) -> bool {
+        self.connected && self.agent_audit_degraded && !self.agent_audit_banner_dismissed
+    }
+
+    pub fn dismiss_agent_audit_banner(&mut self) {
+        self.agent_audit_banner_dismissed = true;
     }
 
     pub fn take_pending_toast_error(&mut self) -> Option<String> {

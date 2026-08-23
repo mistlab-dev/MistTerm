@@ -228,14 +228,14 @@ impl MistTermApp {
                             if from_server {
                                 crate::i18n::tr(
                                     ctx,
-                                    "Server policy: confirmation required",
-                                    "服务器策略：需要确认",
+                                    "Server policy: confirm to run",
+                                    "服务器策略：确认执行",
                                 )
                             } else {
                                 crate::i18n::tr(
                                     ctx,
-                                    "Local hint: confirmation needed",
-                                    "本地提示：命令需要确认",
+                                    "Local check: confirm to run",
+                                    "本地检查：确认执行",
                                 )
                             },
                         );
@@ -292,7 +292,11 @@ impl MistTermApp {
                                 ui,
                                 th,
                                 crate::ui::icons::IconId::Check,
-                                crate::i18n::tr(ctx, "Run anyway", "确认执行"),
+                                if from_server {
+                                    crate::i18n::tr(ctx, "Approve and send", "放行并发送")
+                                } else {
+                                    crate::i18n::tr(ctx, "Confirm send", "确认发送")
+                                },
                             )
                             .clicked()
                             {

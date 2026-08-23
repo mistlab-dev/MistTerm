@@ -474,3 +474,149 @@ pub struct TeamSettings {
     #[serde(default)]
     pub require_mfa: bool,
 }
+
+// ── Command-audit agents ──
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CmdAuditAgent {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub host: String,
+    /// `active` / `offline` / 其它
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub last_seen_at: Option<String>,
+    #[serde(default = "default_true_bool")]
+    pub enabled: bool,
+}
+
+fn default_true_bool() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CmdAuditAgentsResponse {
+    #[serde(default)]
+    pub agents: Vec<CmdAuditAgent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCmdAuditAgentRequest {
+    pub enabled: bool,
+}
+
+// ── Team storage usage ──
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StorageUsageBucket {
+    #[serde(default)]
+    pub count: u64,
+    #[serde(default)]
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StorageUsageResponse {
+    #[serde(default)]
+    pub total_bytes: u64,
+    #[serde(default)]
+    pub quota_bytes: Option<u64>,
+    #[serde(default)]
+    pub fragments: StorageUsageBucket,
+    #[serde(default)]
+    pub recordings: StorageUsageBucket,
+    #[serde(default)]
+    pub documents: StorageUsageBucket,
+    #[serde(default)]
+    pub versions: StorageUsageBucket,
+}
+
+impl CmdAuditAgent {
+    /// `last_seen_at` 距今超过 `stale_secs`（默认 300）视为离线。
+    pub fn is_online(&self, now: chrono::DateTime<chrono::Utc>, stale_secs: i64) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let status = self.status.trim().to_ascii_lowercase();
+        if status == "offline" || status == "disabled" {
+            return false;
+        }
+        let Some(raw) = self.last_seen_at.as_deref() else {
+            return status == "active" || status == "online";
+        };
+        let Ok(seen) = chrono::DateTime::parse_from_rfc3339(raw) else {
+            return status == "active" || status == "online";
+        };
+        (now - seen.with_timezone(&chrono::Utc)).num_seconds() <= stale_secs
+    }
+}
+
+/// SSH 会话 host 是否与 agent 登记 host 匹配（hostname / FQDN 宽松匹配）。
+pub fn cmd_audit_host_matches(session_host: &str, agent_host: &str) -> bool {
+    let sh = session_host.trim().to_ascii_lowercase();
+    let ah = agent_host.trim().to_ascii_lowercase();
+    if sh.is_empty() || ah.is_empty() {
+        return false;
+    }
+    sh == ah
+        || sh.starts_with(&format!("{ah}:"))
+        || ah.starts_with(&format!("{sh}:"))
+        || sh.ends_with(&format!(".{ah}"))
+}
+
+/// 当前 host 是否存在在线且启用的 agent。
+pub fn cmd_audit_agent_available_for_host(
+    agents: &[CmdAuditAgent],
+    host: &str,
+    now: chrono::DateTime<chrono::Utc>,
+    stale_secs: i64,
+) -> bool {
+    agents.iter().any(|a| {
+        cmd_audit_host_matches(host, &a.host) && a.is_online(now, stale_secs)
+    })
+}
+
+#[cfg(test)]
+mod cmd_audit_agent_tests {
+    use super::*;
+
+    #[test]
+    fn host_matches_exact_and_suffix() {
+        assert!(cmd_audit_host_matches("10.0.0.1", "10.0.0.1"));
+        assert!(cmd_audit_host_matches("web.prod.example", "example"));
+        assert!(!cmd_audit_host_matches("10.0.0.2", "10.0.0.1"));
+    }
+
+    #[test]
+    fn agent_online_respects_stale_and_enabled() {
+        let now = chrono::Utc::now();
+        let recent = (now - chrono::Duration::seconds(30)).to_rfc3339();
+        let agent = CmdAuditAgent {
+            id: "a1".into(),
+            host: "srv1".into(),
+            status: "active".into(),
+            last_seen_at: Some(recent),
+            enabled: true,
+        };
+        assert!(agent.is_online(now, 300));
+        let mut disabled = agent.clone();
+        disabled.enabled = false;
+        assert!(!disabled.is_online(now, 300));
+    }
+
+    #[test]
+    fn agent_available_for_host() {
+        let now = chrono::Utc::now();
+        let agents = vec![CmdAuditAgent {
+            id: "a1".into(),
+            host: "prod-1".into(),
+            status: "active".into(),
+            last_seen_at: Some(now.to_rfc3339()),
+            enabled: true,
+        }];
+        assert!(cmd_audit_agent_available_for_host(&agents, "prod-1", now, 300));
+        assert!(!cmd_audit_agent_available_for_host(&agents, "prod-2", now, 300));
+    }
+}
