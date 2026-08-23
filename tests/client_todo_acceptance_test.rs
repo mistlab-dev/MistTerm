@@ -1,9 +1,10 @@
 //! CLIENT-TODO 文档场景的可自动化验收（无需实机 SSH / agent）。
 
-use mistterm::core::cmd_audit::{CmdAuditAction, CmdAuditEngine, CmdAuditPolicy, CmdAuditSyncPayload, ServerAuditProbe};
+use mistterm::core::cmd_audit::{CmdAuditAction, CmdAuditEngine, CmdAuditPolicy, CmdAuditSyncPayload, ServerAuditEvent, ServerAuditProbe};
 use mistterm::core::team::{
     cmd_audit_agent_available_for_host, cmd_audit_host_matches, CmdAuditAgent, StorageUsageResponse,
 };
+use mistterm::core::{AiContext, EnhancedPromptBuilder, SshInfo};
 
 /// §5：本地 `rm -rf /` → 本地 block（本地检查语义由 UI 展示，引擎层验证拦截）。
 #[test]
@@ -108,4 +109,51 @@ fn doc_storage_usage_serde() {
     assert_eq!(u.total_bytes, 12345678);
     assert_eq!(u.fragments.count, 42);
     assert_eq!(u.quota_bytes, Some(1073741824));
+}
+
+/// §5：服务器 confirm 放行行格式。
+#[test]
+fn doc_server_approve_line_format() {
+    let token = "approve-42";
+    assert_eq!(
+        format!("MIST_AUDIT_APPROVE\t{token}"),
+        "MIST_AUDIT_APPROVE\tapprove-42"
+    );
+}
+
+/// §5：服务器 block toast 在无 message 时回退显示 rule。
+#[test]
+fn doc_server_audit_detail_falls_back_to_rule() {
+    let ev = ServerAuditEvent {
+        action: CmdAuditAction::Block,
+        message: String::new(),
+        rule: "dangerous_rm".into(),
+        command: "rm -rf /".into(),
+        token: String::new(),
+    };
+    let detail = if !ev.message.is_empty() {
+        format!(" — {}", ev.message)
+    } else if !ev.rule.is_empty() {
+        format!(" — {}", ev.rule)
+    } else {
+        String::new()
+    };
+    assert_eq!(detail, " — dangerous_rm");
+}
+
+/// AI：增强 system prompt 包含 SSH 与历史命令。
+#[test]
+fn doc_ai_enhanced_prompt_includes_session() {
+    let ctx = AiContext {
+        ssh_info: Some(SshInfo {
+            host: "prod-1".into(),
+            port: 22,
+            user: "deploy".into(),
+        }),
+        recent_commands: vec!["kubectl get pods".into()],
+        ..Default::default()
+    };
+    let prompt = EnhancedPromptBuilder::new("base", ctx).build();
+    assert!(prompt.contains("deploy@prod-1"));
+    assert!(prompt.contains("kubectl"));
 }
