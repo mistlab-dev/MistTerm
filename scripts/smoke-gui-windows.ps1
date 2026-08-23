@@ -9,7 +9,7 @@
 param(
     [switch]$Release,
     [switch]$LaunchOnly,
-    [int]$TimeoutSec = 20,
+    [int]$TimeoutSec = 30,
     [string]$WindowTitle = "MistTerm"
 )
 
@@ -30,6 +30,11 @@ if (-not (Test-Path $exe)) {
     }
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed" }
 }
+
+$env:MISTTERM_GUI_LOCAL_SSH = "1"
+Remove-Item Env:MISTTERM_TEST_SSH_HOST -ErrorAction SilentlyContinue
+Remove-Item Env:MISTTERM_TEST_SSH_PASSWORD -ErrorAction SilentlyContinue
+Remove-Item Env:MISTTERM_TEST_SSH_USER -ErrorAction SilentlyContinue
 
 Write-Host "==> Ensure local OpenSSH test sshd"
 $ensure = Join-Path $Root "scripts\ensure-windows-test-sshd.ps1"

@@ -23,6 +23,11 @@ if (Test-Path $devShell) {
 $env:CARGO_BUILD_JOBS = "1"
 $env:CARGO_INCREMENTAL = "0"
 
+$env:MISTTERM_GUI_LOCAL_SSH = "1"
+Remove-Item Env:MISTTERM_TEST_SSH_HOST -ErrorAction SilentlyContinue
+Remove-Item Env:MISTTERM_TEST_SSH_PASSWORD -ErrorAction SilentlyContinue
+Remove-Item Env:MISTTERM_TEST_SSH_USER -ErrorAction SilentlyContinue
+
 Write-Host "==> Ensure local OpenSSH test sshd"
 powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Root "scripts\ensure-windows-test-sshd.ps1")
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -45,7 +50,7 @@ if ($LASTEXITCODE -ne 0) {
     pip install pywinauto paramiko --quiet
 }
 
-$pyArgs = @($exe, "--timeout", "60")
+$pyArgs = @($exe, "--timeout", "35")
 if ($KeepOpen) { $pyArgs += "--keep-open" }
 
 python (Join-Path $Root "scripts\gui_full_workflow.py") @pyArgs

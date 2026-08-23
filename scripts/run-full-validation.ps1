@@ -59,10 +59,10 @@ if (-not $TestsOnly) {
     }
 
     $guiSteps = @(
-        @{ Name = "menu walkthrough"; Script = "smoke_gui_interact.py"; Args = @($exe, "--timeout", "120") },
-        @{ Name = "full workflow"; Script = "gui_full_workflow.py"; Args = @($exe, "--timeout", "180") },
-        @{ Name = "local SSH SFTP E2E"; Script = "gui_e2e_local_ssh.py"; Args = @($exe, "--timeout", "120", "--skip-new-session") },
-        @{ Name = "connect + panels"; Script = "gui_connect_transfer.py"; Args = @($exe, "--timeout", "30") }
+        @{ Name = "menu walkthrough"; Script = "smoke_gui_interact.py"; Args = @($exe, "--timeout", "30") },
+        @{ Name = "full workflow"; Script = "gui_full_workflow.py"; Args = @($exe, "--timeout", "45") },
+        @{ Name = "local SSH SFTP E2E"; Script = "gui_e2e_local_ssh.py"; Args = @($exe, "--timeout", "30", "--skip-new-session") },
+        @{ Name = "connect + panels"; Script = "gui_connect_transfer.py"; Args = @($exe, "--timeout", "20") }
     )
 
     foreach ($step in $guiSteps) {

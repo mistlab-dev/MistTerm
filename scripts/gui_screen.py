@@ -46,7 +46,7 @@ def client_rect(hwnd: int) -> tuple[int, int, int, int]:
 def find_mist_window(
     proc: subprocess.Popen[bytes],
     *,
-    timeout: float = 60.0,
+    timeout: float = 25.0,
     title_sub: str = "Mist",
 ) -> int:
     """等待 Mist 主窗口出现；按进程 PID 匹配，避免误选其它窗口。"""
@@ -74,7 +74,7 @@ def find_mist_window(
                 return int(wins[0])
         except Exception:
             pass
-        time.sleep(0.25)
+        time.sleep(0.15)
     hint = f" 最近可见标题: {last_titles[-5:]}" if last_titles else ""
     raise RuntimeError(
         f"未找到 Mist 窗口 (pid={proc.pid}, 超时 {timeout}s){hint}"
