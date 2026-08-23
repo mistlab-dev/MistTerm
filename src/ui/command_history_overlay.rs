@@ -1,6 +1,7 @@
 //! Ctrl+R 命令历史搜索：窄浮层，可拖动，列标题对齐。
 
 use crate::core::command_history::{CommandHistory, HistoryEntry};
+use crate::core::CommandCompleter;
 use crate::ui::theme::Theme;
 use eframe::egui;
 
@@ -58,10 +59,27 @@ impl CommandHistoryOverlay {
             return CommandHistoryAction::None;
         }
         let results = history.search(&self.query, true);
+        let fuzzy_suggestions = if results.is_empty() && !self.query.trim().is_empty() {
+            CommandCompleter::new(history)
+                .complete(&self.query, 8)
+                .into_iter()
+                .map(|c| c.command)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         if self.selected >= results.len() && !results.is_empty() {
             self.selected = results.len() - 1;
         }
-        if self.match_index >= results.len() && !results.is_empty() {
+        let display_len = if results.is_empty() {
+            fuzzy_suggestions.len()
+        } else {
+            results.len()
+        };
+        if self.selected >= display_len && display_len > 0 {
+            self.selected = display_len - 1;
+        }
+        if self.match_index >= display_len && display_len > 0 {
             self.match_index = 0;
             self.selected = 0;
         }
@@ -72,8 +90,8 @@ impl CommandHistoryOverlay {
                 action = CommandHistoryAction::Close;
             }
             if i.key_pressed(egui::Key::ArrowDown) {
-                if !results.is_empty() {
-                    self.selected = (self.selected + 1).min(results.len() - 1);
+                if display_len > 0 {
+                    self.selected = (self.selected + 1).min(display_len - 1);
                     self.match_index = self.selected;
                 }
             }
@@ -84,6 +102,8 @@ impl CommandHistoryOverlay {
             if i.key_pressed(egui::Key::Enter) {
                 if let Some(entry) = results.get(self.selected) {
                     action = CommandHistoryAction::Apply(entry.command.clone());
+                } else if let Some(cmd) = fuzzy_suggestions.get(self.selected) {
+                    action = CommandHistoryAction::Apply(cmd.clone());
                 }
             }
         });
@@ -148,14 +168,39 @@ impl CommandHistoryOverlay {
                     .show(ui, |ui| {
                         ui.set_width(content_w);
                         if results.is_empty() {
-                            ui.label(
-                                egui::RichText::new(crate::i18n::tr(
-                                    ctx,
-                                    "No matches",
-                                    "无匹配记录",
-                                ))
-                                .color(theme.text_tertiary()),
-                            );
+                            if !fuzzy_suggestions.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(crate::i18n::tr(
+                                        ctx,
+                                        "Suggested commands",
+                                        "建议命令",
+                                    ))
+                                    .size(theme.font_size_small())
+                                    .color(theme.text_tertiary()),
+                                );
+                                ui.add_space(4.0);
+                                for (i, cmd) in fuzzy_suggestions.iter().enumerate() {
+                                    let (row, _) = fuzzy_suggestion_row(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        cmd,
+                                        i == self.selected,
+                                    );
+                                    if row.clicked() {
+                                        action = CommandHistoryAction::Apply(cmd.clone());
+                                    }
+                                }
+                            } else {
+                                ui.label(
+                                    egui::RichText::new(crate::i18n::tr(
+                                        ctx,
+                                        "No matches",
+                                        "无匹配记录",
+                                    ))
+                                    .color(theme.text_tertiary()),
+                                );
+                            }
                         } else {
                             for (i, entry) in results.iter().enumerate() {
                                 let (row, delete) = history_row(
@@ -182,7 +227,11 @@ impl CommandHistoryOverlay {
                         egui::RichText::new(format!(
                             "{}{}{}",
                             crate::i18n::tr(ctx, "Total ", "共 "),
-                            results.len(),
+                            if results.is_empty() {
+                                fuzzy_suggestions.len()
+                            } else {
+                                results.len()
+                            },
                             crate::i18n::tr(ctx, " results", " 条结果"),
                         ))
                         .size(theme.font_size_small())
@@ -342,6 +391,37 @@ fn column_header(ui: &mut egui::Ui, ctx: &egui::Context, theme: &Theme, cols: Hi
         ui.min_rect().bottom(),
         egui::Stroke::new(1.0, theme.border_divider_color()),
     );
+}
+
+fn fuzzy_suggestion_row(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    theme: &Theme,
+    command: &str,
+    selected: bool,
+) -> (egui::Response, bool) {
+    let row_h = HistoryTableCols::ROW_H;
+    let (row_rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), row_h), egui::Sense::click());
+    let rounding = theme.radius_list_item();
+    if selected {
+        ui.painter()
+            .rect_filled(row_rect, rounding, theme.list_row_selected_bg());
+    } else if response.hovered() {
+        ui.painter()
+            .rect_filled(row_rect, rounding, theme.list_row_hover_bg());
+    }
+    ui.allocate_ui_at_rect(row_rect.shrink2(egui::vec2(8.0, 4.0)), |ui| {
+        ui.label(
+            egui::RichText::new(format!(
+                "{} {}",
+                crate::i18n::tr(ctx, "Suggest", "建议"),
+                command
+            ))
+            .color(theme.text_primary()),
+        );
+    });
+    (response, false)
 }
 
 fn history_row(

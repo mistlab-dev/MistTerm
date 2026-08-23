@@ -1,8 +1,7 @@
 //! AI 助手增强：上下文感知、智能补全、快捷操作。
 
-use crate::core::ai_client::{prepare_terminal_context, PreparedTerminalContext};
+use crate::core::ai_client::prepare_terminal_context;
 use crate::core::command_history::CommandHistory;
-use crate::core::ai_settings::AiSettings;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

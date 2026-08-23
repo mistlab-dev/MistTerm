@@ -490,6 +490,25 @@ fn paint_storage_usage_card(
             format_bytes_short(quota),
             pct
         ));
+        if pct >= 90.0 {
+            ui.colored_label(
+                theme.red_color(),
+                i18n::tr(
+                    ctx,
+                    "Storage is almost full — consider cleaning up old recordings or documents.",
+                    "存储空间即将用尽，建议清理旧录制或文档。",
+                ),
+            );
+        } else if pct >= 70.0 {
+            ui.colored_label(
+                theme.amber_color(),
+                i18n::tr(
+                    ctx,
+                    "Storage usage is high — monitor quota regularly.",
+                    "存储用量偏高，请关注配额。",
+                ),
+            );
+        }
         let bar_w = ui.available_width().min(360.0);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(bar_w, 8.0), egui::Sense::hover());
         ui.painter()
@@ -611,8 +630,20 @@ fn paint_cmd_audit_agents_section(
                         if let Some(slot) = state.agents.iter_mut().find(|a| a.id == updated.id) {
                             *slot = updated;
                         }
+                        state.agents_error.clear();
                     }
-                    Err(e) => state.agents_error = e,
+                    Err(e) => {
+                        state.agents_error = if e.contains("404") {
+                            i18n::tr(
+                                ctx,
+                                "Agent management API is not deployed yet. Contact your server admin.",
+                                "Agent 管理接口尚未部署，请联系服务端管理员。",
+                            )
+                            .to_string()
+                        } else {
+                            e
+                        };
+                    }
                 }
             }
         });
