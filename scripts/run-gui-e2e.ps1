@@ -50,7 +50,7 @@ $env:CARGO_INCREMENTAL = "0"
 cargo run --bin seed_local_test_session
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-$pyArgs = @($exe, "--timeout", "30")
+$pyArgs = @($exe, "--timeout", "30", "--skip-new-session")
 if ($KeepOpen) { $pyArgs += "--keep-open" }
 
 python (Join-Path $Root "scripts\gui_e2e_local_ssh.py") @pyArgs

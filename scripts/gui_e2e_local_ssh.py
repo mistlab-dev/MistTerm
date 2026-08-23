@@ -32,12 +32,14 @@ from gui_common import (
     click,
     client_rect,
     connect_local_session,
+    launch_mist_gui,
     paste_field,
     remote_has_marker,
     reload_ssh_test_config,
     scale_for,
     send_terminal_line,
     ssh_preflight,
+    verify_session_connected,
     wait_session_connected,
 )
 from gui_coverage import CoverageTracker
@@ -199,18 +201,17 @@ def main() -> int:
     proc: subprocess.Popen[bytes] | None = None
     hwnd: int | None = None
     try:
-        proc = subprocess.Popen([args.exe], env=automation_env())
-        hwnd = find_mist_window(proc, timeout=args.timeout)
-
-        app = Application(backend="uia").connect(process=proc.pid)
-        time.sleep(1.2)
-
-        if not args.skip_new_session:
+        if args.skip_new_session:
+            proc, hwnd = launch_mist_gui(args.exe, window_timeout=args.timeout)
+            coverage.mark("session.connect", "tab.new")
+        else:
+            proc = subprocess.Popen([args.exe], env=automation_env(auto_connect=None))
+            hwnd = find_mist_window(proc, timeout=args.timeout)
+            app = Application(backend="uia").connect(process=proc.pid)
+            time.sleep(1.2)
             gui_new_session(hwnd, app)
             coverage.mark("session.new_dialog")
-        else:
-            gui_connect_existing(hwnd, proc.pid, LOCAL_TEST_SESSION)
-        coverage.mark("session.connect", "tab.new")
+            coverage.mark("session.connect", "tab.new")
 
         if proc.poll() is not None:
             raise RuntimeError("Mist 进程已退出")

@@ -15,22 +15,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from gui_common import (
     LOCAL_TEST_SESSION,
-    automation_env,
     capture_failure,
     clipboard_get,
     clipboard_set,
     click,
-    connect_local_session,
     graceful_stop_mist_process,
+    launch_mist_gui,
     remote_assert_file,
     remote_exec,
     remote_temp_path,
     remote_text_file_contains,
     send_terminal_line,
-    ssh_preflight,
-    stop_existing_mist_processes,
 )
-from gui_screen import client_rect, find_mist_window
+from gui_screen import client_rect
 from pywinauto.keyboard import send_keys
 from smoke_gui_interact import GuiWalker, Report
 
@@ -181,21 +178,18 @@ def main() -> int:
     args = parser.parse_args()
 
     report = UiReport()
-    print("==> SSH preflight", flush=True)
-    ssh_preflight()
-
-    print("==> Stop lingering Mist windows from prior runs", flush=True)
-    stop_existing_mist_processes()
-
-    proc = subprocess.Popen([args.exe], env=automation_env())
+    proc: subprocess.Popen[bytes] | None = None
     hwnd: int | None = None
     try:
-        hwnd = find_mist_window(proc, timeout=args.timeout, title_sub=args.title)
+        proc, hwnd = launch_mist_gui(
+            args.exe,
+            window_timeout=args.timeout,
+            title_sub=args.title,
+            connect_wait=min(args.timeout, 15.0),
+        )
         print(f"==> hwnd={hwnd} pid={proc.pid}", flush=True)
         walker = GuiWalker(proc, hwnd, Report())
-        print(f"==> Connect: {LOCAL_TEST_SESSION}", flush=True)
-        connect_local_session(hwnd, proc.pid, LOCAL_TEST_SESSION, wait=min(args.timeout, 15.0))
-        time.sleep(1.0)
+        time.sleep(0.8)
 
         print("==> UI: input returns to bottom", flush=True)
         test_input_scrolls_back_to_bottom(walker, report)
