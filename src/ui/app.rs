@@ -462,6 +462,16 @@ struct CmdAuditConfirmState {
     started: Instant,
 }
 
+fn server_audit_detail(ev: &ServerAuditEvent) -> String {
+    if !ev.message.is_empty() {
+        format!(" — {}", ev.message)
+    } else if !ev.rule.is_empty() {
+        format!(" — {}", ev.rule)
+    } else {
+        String::new()
+    }
+}
+
 impl MistTermApp {
     /// FUNCTIONAL_SPEC §8.2：窗口宽度 ≥ 此值视为「宽屏」，左侧可自动展开、右侧 dock 可打开
     const RESP_LAYOUT_WIDE_MIN_PX: f32 = 1200.0;
@@ -1092,11 +1102,7 @@ impl MistTermApp {
         } else {
             command_preview(&ev.command, 80)
         };
-        let detail = if ev.message.is_empty() {
-            String::new()
-        } else {
-            format!(" — {}", ev.message)
-        };
+        let detail = server_audit_detail(&ev);
         match ev.action {
             CmdAuditAction::Block => {
                 self.notify_error(format!(
@@ -3605,12 +3611,27 @@ impl MistTermApp {
 
     fn build_ai_session_context(&self) -> AiContext {
         let mut ai_ctx = AiContext::from_history(&self.command_history, 10);
+        if let Some(entry) = self.command_history.entries_newest_first().next() {
+            if !entry.success {
+                ai_ctx.last_failed_command = Some(entry.command.clone());
+            }
+        }
         if let Some(idx) = self.active_tab {
             if let Some(tab) = self.tabs.get(idx) {
                 if let Some(pane) = tab.active_pane() {
                     let selected = pane.terminal.selected_text();
                     if !selected.trim().is_empty() {
                         ai_ctx.selected_text = Some(selected);
+                    }
+                    let tail = pane.terminal.tail_plain_text(40);
+                    if !tail.trim().is_empty() {
+                        ai_ctx.last_output = Some(tail.clone());
+                        if ai_ctx.error_output.is_none()
+                            && (ai_ctx.last_failed_command.is_some()
+                                || AiContext::looks_like_error_output(&tail))
+                        {
+                            ai_ctx.error_output = Some(tail);
+                        }
                     }
                     let session_name = self
                         .session_manager

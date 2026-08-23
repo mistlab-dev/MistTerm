@@ -22,6 +22,8 @@ pub struct AiContext {
     pub ssh_info: Option<SshInfo>,
     /// 错误输出（如果有）
     pub error_output: Option<String>,
+    /// 最近一次失败的命令（来自命令历史）
+    pub last_failed_command: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,7 +112,32 @@ impl AiContext {
             }
         }
 
+        // 最近终端输出摘要
+        if let Some(out) = &self.last_output {
+            let prep = prepare_terminal_context(out);
+            if !prep.text.is_empty() {
+                parts.push(format!("## 最近终端输出\n{}", prep.text));
+            }
+        }
+
         parts.join("\n\n")
+    }
+
+    /// 终端输出是否像错误信息（启发式）。
+    pub fn looks_like_error_output(text: &str) -> bool {
+        let lower = text.to_lowercase();
+        [
+            "error",
+            "failed",
+            "failure",
+            "permission denied",
+            "not found",
+            "fatal",
+            "panic",
+            "denied",
+        ]
+        .iter()
+        .any(|k| lower.contains(k))
     }
 
     /// 为 QuickAction 构建提示词
@@ -123,12 +150,17 @@ impl AiContext {
                 )
             }
             QuickAction::RetryFixed => {
+                let cmd = self
+                    .last_failed_command
+                    .as_deref()
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(selection);
                 let mut prompt =
                     "用户执行了以下命令但失败了，请分析错误并给出修正后的命令：\n\n".to_string();
                 if let Some(err) = &self.error_output {
                     prompt.push_str(&format!("错误输出：\n```\n{}\n```\n\n", err));
                 }
-                prompt.push_str(&format!("原始命令：\n```\n{}\n```\n\n", selection));
+                prompt.push_str(&format!("原始命令：\n```\n{}\n```\n\n", cmd));
                 prompt.push_str("请给出修正后的命令，用 ```bash 代码块包裹。");
                 prompt
             }
@@ -320,6 +352,37 @@ mod tests {
     fn context_block_empty() {
         let ctx = AiContext::default();
         assert!(ctx.build_context_block().is_empty());
+    }
+
+    #[test]
+    fn context_block_includes_last_output() {
+        let ctx = AiContext {
+            last_output: Some("nginx: error".into()),
+            ..Default::default()
+        };
+        assert!(ctx.build_context_block().contains("nginx"));
+    }
+
+    #[test]
+    fn looks_like_error_detects_common_patterns() {
+        assert!(AiContext::looks_like_error_output("Permission denied"));
+        assert!(!AiContext::looks_like_error_output("all ok"));
+    }
+
+    #[test]
+    fn enhanced_prompt_includes_ssh() {
+        let ctx = AiContext {
+            ssh_info: Some(SshInfo {
+                host: "prod-1".into(),
+                port: 22,
+                user: "deploy".into(),
+            }),
+            recent_commands: vec!["systemctl status nginx".into()],
+            ..Default::default()
+        };
+        let prompt = EnhancedPromptBuilder::new("You are a shell assistant.", ctx).build();
+        assert!(prompt.contains("deploy@prod-1"));
+        assert!(prompt.contains("systemctl"));
     }
 
     #[test]

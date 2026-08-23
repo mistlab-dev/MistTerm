@@ -1005,7 +1005,7 @@ impl AiPanel {
                             .color(theme.color_form_hint()),
                     );
                     ui.add_space(theme.spacing_xs());
-                    for (label, action) in quick_action_chips(ctx) {
+                    for (label, action) in self.quick_action_chips(ctx) {
                         if ui
                             .small_button(&label)
                             .on_hover_text(i18n::tr(ctx, "Fill input", "填入输入框"))
@@ -1865,24 +1865,37 @@ fn build_user_api_body(
     body
 }
 
-fn quick_action_chips(ctx: &egui::Context) -> [(String, QuickAction); 3] {
-    [
-        (
-            i18n::tr(ctx, "Explain this error", "解释这条报错").to_string(),
-            QuickAction::ExplainSelection,
-        ),
-        (
-            i18n::tr(ctx, "What should I run next?", "接下来该运行什么？").to_string(),
-            QuickAction::GenerateSimilar,
-        ),
-        (
-            i18n::tr(ctx, "Summarize this output", "总结这段输出").to_string(),
-            QuickAction::SummarizeOutput,
-        ),
-    ]
-}
-
 impl AiPanel {
+    fn quick_action_chips(&self, ctx: &egui::Context) -> Vec<(String, QuickAction)> {
+        let mut chips = vec![
+            (
+                i18n::tr(ctx, "Explain this error", "解释这条报错").to_string(),
+                QuickAction::ExplainSelection,
+            ),
+            (
+                i18n::tr(ctx, "What should I run next?", "接下来该运行什么？").to_string(),
+                QuickAction::GenerateSimilar,
+            ),
+            (
+                i18n::tr(ctx, "Summarize this output", "总结这段输出").to_string(),
+                QuickAction::SummarizeOutput,
+            ),
+        ];
+        if self.session_context.error_output.is_some() {
+            chips.push((
+                i18n::tr(ctx, "Translate error", "翻译错误信息").to_string(),
+                QuickAction::TranslateError,
+            ));
+        }
+        if self.session_context.last_failed_command.is_some() {
+            chips.push((
+                i18n::tr(ctx, "Fix last command", "修正上次命令").to_string(),
+                QuickAction::RetryFixed,
+            ));
+        }
+        chips
+    }
+
     fn selection_text_for_quick_action(&self) -> String {
         if let Some(c) = self.attached_contexts.last() {
             if !c.text.trim().is_empty() {
@@ -1898,13 +1911,31 @@ impl AiPanel {
     fn apply_quick_action(&mut self, action: QuickAction, fallback_label: &str) {
         let mut selection = self.selection_text_for_quick_action();
         if selection.trim().is_empty() {
-            if let QuickAction::GenerateSimilar = action {
-                selection = self
-                    .session_context
-                    .recent_commands
-                    .first()
-                    .cloned()
-                    .unwrap_or_default();
+            match action {
+                QuickAction::GenerateSimilar => {
+                    selection = self
+                        .session_context
+                        .recent_commands
+                        .first()
+                        .cloned()
+                        .unwrap_or_default();
+                }
+                QuickAction::RetryFixed => {
+                    selection = self
+                        .session_context
+                        .last_failed_command
+                        .clone()
+                        .unwrap_or_default();
+                }
+                QuickAction::TranslateError => {
+                    selection = self
+                        .session_context
+                        .error_output
+                        .clone()
+                        .or_else(|| self.session_context.last_output.clone())
+                        .unwrap_or_default();
+                }
+                _ => {}
             }
         }
         if selection.trim().is_empty() {

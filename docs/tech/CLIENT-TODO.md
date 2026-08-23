@@ -63,6 +63,19 @@
 | agent 恢复 | 横幅消失 + 绿色 toast | 待测 |
 | 本地审计 | toast 标注「本地检查」 | 待测 |
 
+#### 实机联调步骤（约 15 分钟）
+
+**前置**：登录团队账号；目标主机已安装 command-audit agent；团队设置 → Agent 列表显示「在线」。
+
+1. **block**：SSH 连 agent 主机 → 输入 `rm -rf /` 回车 → 红色 toast「服务器策略：该命令被禁止」（含规则 message 或 rule）；命令未执行。
+2. **allow**：输入 `ls` → 无 block toast；正常输出目录列表。
+3. **confirm**：输入 `cat /etc/shadow` → 弹出「服务器策略：确认执行」对话框，按钮「放行并发送」→ 确认后终端应先收到 `MIST_AUDIT_APPROVE\t{token}` 再发送原命令。
+4. **降级**：在主机上 `systemctl stop mist-audit-agent`（或等心跳超时 >5min）→ 终端顶栏黄色横幅「服务器侧审计不可用…」；可点 × 关闭。
+5. **恢复**：重启 agent → 横幅消失 + 绿色 toast「服务器侧命令审计已恢复」。
+6. **本地 vs 服务器**：断开 agent 或连未装 agent 的主机 → 执行本地 block 规则 → toast 前缀为「本地检查：」而非「服务器策略：」。
+
+**记录**：每项 PASS/FAIL + 截图或 toast 原文；失败时附 `MIST_AUDIT` 原始行（若可见）与团队 ID / 主机名。
+
 ---
 
 ## P1 — 片段体验补齐
