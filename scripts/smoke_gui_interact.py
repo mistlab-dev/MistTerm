@@ -23,10 +23,12 @@ from gui_common import (
     connect_local_session,
     drag_select,
     focus_terminal_area,
+    GUI_WINDOW_TIMEOUT_SEC,
     remote_assert_file,
     remote_exec,
     remote_temp_path,
     remote_text_file_contains,
+    reload_ssh_test_config,
     send_terminal_line,
     ssh_preflight,
     SSH_USER,
@@ -577,7 +579,7 @@ class GuiWalker:
 
         self.run_step("menu Terminal > Close Tab", terminal_close_tab, "tab.close")
 
-        connect_local_session(self.hwnd, self.proc.pid, wait=10.0)
+        connect_local_session(self.hwnd, self.proc.pid)
 
         def terminal_disconnect():
             x = self.open_menu(0)
@@ -596,8 +598,11 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("exe")
     parser.add_argument("--title", default="MistTerm")
-    parser.add_argument("--timeout", type=float, default=90.0)
+    parser.add_argument("--timeout", type=float, default=GUI_WINDOW_TIMEOUT_SEC)
     args = parser.parse_args()
+
+    os.environ["MISTTERM_GUI_LOCAL_SSH"] = "1"
+    reload_ssh_test_config()
 
     report = Report()
     coverage = CoverageTracker("smoke")

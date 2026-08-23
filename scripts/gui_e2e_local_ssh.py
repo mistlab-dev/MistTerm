@@ -25,15 +25,20 @@ from gui_common import (
     SSH_HOST,
     SSH_PASS,
     SSH_USER,
+    GUI_CONNECT_WAIT_SEC,
+    GUI_WINDOW_TIMEOUT_SEC,
     automation_env,
     capture_failure,
     click,
     client_rect,
+    connect_local_session,
     paste_field,
     remote_has_marker,
+    reload_ssh_test_config,
     scale_for,
     send_terminal_line,
     ssh_preflight,
+    wait_session_connected,
 )
 from gui_coverage import CoverageTracker
 from gui_screen import find_mist_window
@@ -85,9 +90,9 @@ def gui_new_session(hwnd: int, app: Application) -> None:
         paste_field(text)
         time.sleep(0.1)
     click(*m["agent_cb"])
-    time.sleep(0.15)
+    time.sleep(0.1)
     click(*m["save"])
-    time.sleep(12.0)
+    wait_session_connected(hwnd, wait=GUI_CONNECT_WAIT_SEC, session_name=SESSION_NAME)
     print("  [OK] 已提交新建连接")
 
 
@@ -101,17 +106,7 @@ def focus_mist(hwnd: int, pid: int) -> None:
 
 def gui_connect_existing(hwnd: int, pid: int, name: str) -> None:
     print(f"==> [GUI] 连接已有会话：{name}")
-    focus_mist(hwnd, pid)
-    send_keys("^j")
-    time.sleep(0.5)
-    send_keys(name.replace(" ", "{SPACE}"), with_spaces=True)
-    time.sleep(0.6)
-    cl, ct, cr, cb = client_rect(hwnd)
-    s = scale_for(cl, cr)
-    click(cl + int(110 * s), ct + int(160 * s))
-    time.sleep(0.4)
-    send_keys("+^t")
-    time.sleep(12.0)
+    connect_local_session(hwnd, pid, name, wait=GUI_CONNECT_WAIT_SEC)
 
 
 def gui_terminal_smoke(hwnd: int) -> None:
@@ -156,12 +151,12 @@ def gui_sftp_upload(hwnd: int, marker: str) -> None:
     click(cr - int(150 * s), ct + int(240 * s))
     time.sleep(0.3)
     send_keys(SFTP_UPLOAD)
-    deadline = time.time() + 60.0
+    deadline = time.time() + 20.0
     while time.time() < deadline:
         if remote_has_marker(marker):
             print("  [OK] 上传成功")
             return
-        time.sleep(2.0)
+        time.sleep(1.0)
     raise RuntimeError("未在服务器上找到上传文件")
 
 
@@ -170,15 +165,15 @@ def gui_sftp_download(hwnd: int, marker: str, local_file: Path) -> None:
     local_file.unlink(missing_ok=True)
     cl, ct, cr, cb = client_rect(hwnd)
     s = scale_for(cl, cr)
-    deadline = time.time() + 90.0
+    deadline = time.time() + 25.0
     while time.time() < deadline:
         dismiss_new_session_dialog()
         send_keys(TOGGLE_SFTP)
-        time.sleep(1.5)
+        time.sleep(0.8)
         click(cr - int(150 * s), ct + int(240 * s))
-        time.sleep(0.3)
+        time.sleep(0.2)
         send_keys(SFTP_DOWNLOAD)
-        time.sleep(6.0)
+        time.sleep(2.5)
         if local_file.exists() and marker in local_file.read_text(encoding="utf-8"):
             print(f"  [OK] 已下载到 {local_file}")
             return
@@ -188,10 +183,13 @@ def gui_sftp_download(hwnd: int, marker: str, local_file: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("exe")
-    parser.add_argument("--timeout", type=float, default=35.0)
+    parser.add_argument("--timeout", type=float, default=GUI_WINDOW_TIMEOUT_SEC)
     parser.add_argument("--keep-open", action="store_true")
     parser.add_argument("--skip-new-session", action="store_true")
     args = parser.parse_args()
+
+    os.environ["MISTTERM_GUI_LOCAL_SSH"] = "1"
+    reload_ssh_test_config()
 
     print("=== MistTerm GUI E2E（无单元测试）===\n")
     coverage = CoverageTracker("e2e")

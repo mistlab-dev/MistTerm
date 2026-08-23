@@ -19,6 +19,9 @@ user32 = ctypes.windll.user32
 
 REMOTE_FILE = "gui_e2e_upload.txt"
 LOCAL_TEST_SESSION = "Local Test SSH"
+# GUI 自动化默认超时（秒）：连接失败时尽快报错，避免长时间空等。
+GUI_WINDOW_TIMEOUT_SEC = 25.0
+GUI_CONNECT_WAIT_SEC = 5.0
 
 
 def _env(name: str, default: str = "") -> str:
@@ -43,6 +46,9 @@ def ssh_is_localhost() -> bool:
 def reload_ssh_test_config() -> None:
     """从 MISTTERM_TEST_SSH_* 刷新模块级 SSH 配置（供脚本 import 后调用）。"""
     global SSH_HOST, SSH_USER, SSH_PASS, SSH_PORT, SSH_SFTP_ROOT, LOCAL_TEST_SESSION
+    if os.environ.get("MISTTERM_GUI_LOCAL_SSH", "").strip() in ("1", "true", "yes"):
+        use_local_openssh_test_config()
+        return
     SSH_HOST = _env("MISTTERM_TEST_SSH_HOST", "127.0.0.1")
     SSH_PORT = _env_int("MISTTERM_TEST_SSH_PORT", 22)
     SSH_PASS = _env("MISTTERM_TEST_SSH_PASSWORD", "mistterm123")
@@ -61,6 +67,17 @@ def reload_ssh_test_config() -> None:
     LOCAL_TEST_SESSION = _env("MISTTERM_TEST_SSH_SESSION", LOCAL_TEST_SESSION)
     if not _env("MISTTERM_TEST_SSH_SESSION"):
         LOCAL_TEST_SESSION = "Local Test SSH" if ssh_is_localhost() else "Linux Test SSH"
+
+
+def use_local_openssh_test_config() -> None:
+    """GUI 本地联调：固定 mistterm_test@127.0.0.1，忽略远程 MISTTERM_TEST_SSH_*。"""
+    global SSH_HOST, SSH_USER, SSH_PASS, SSH_PORT, SSH_SFTP_ROOT, LOCAL_TEST_SESSION
+    SSH_HOST = "127.0.0.1"
+    SSH_USER = "mistterm_test"
+    SSH_PASS = "mistterm123"
+    SSH_PORT = 22
+    SSH_SFTP_ROOT = "C:/Users/mistterm_test/mistterm_sftp"
+    LOCAL_TEST_SESSION = "Local Test SSH"
 
 
 SSH_HOST = "127.0.0.1"
@@ -369,12 +386,46 @@ def capture_failure(hwnd: int | None, label: str) -> Path | None:
     return path
 
 
+def wait_session_connected(
+    hwnd: int,
+    *,
+    wait: float = GUI_CONNECT_WAIT_SEC,
+    session_name: str = LOCAL_TEST_SESSION,
+) -> None:
+    """发送探测命令并轮询远端文件，确认 MistTerm 终端已连上 SSH。"""
+    probe = f"MISTTERM_CONN_{int(time.time())}"
+    probe_file = remote_temp_path("mistterm_conn_probe.txt")
+    if ssh_is_localhost():
+        probe_cmd = f"echo {probe}>{probe_file.replace('/', chr(92))}"
+    else:
+        probe_cmd = f"echo {probe} > {probe_file}"
+
+    time.sleep(0.8)
+    focus_terminal_area(hwnd)
+    send_terminal_line(probe_cmd)
+
+    deadline = time.time() + wait
+    last_err = "探测文件未出现"
+    while time.time() < deadline:
+        try:
+            if remote_text_file_contains(probe_file, probe):
+                return
+        except Exception as e:
+            last_err = str(e)
+        time.sleep(0.35)
+    raise RuntimeError(
+        f"连接「{session_name}」超时 ({wait:.0f}s)：{last_err}。"
+        f"请确认侧栏有该会话且 sshd 可用（{SSH_USER}@{SSH_HOST}）。"
+    )
+
+
 def connect_local_session(
     hwnd: int,
     pid: int,
     name: str = LOCAL_TEST_SESSION,
     *,
-    wait: float = 10.0,
+    wait: float = GUI_CONNECT_WAIT_SEC,
+    verify: bool = True,
 ) -> None:
     """侧栏搜索并 Ctrl+Shift+T 连接本地测试会话。"""
     from gui_automation_keys import dismiss_new_session_dialog
@@ -386,13 +437,16 @@ def connect_local_session(
         pass
     dismiss_new_session_dialog()
     send_keys("^j")
-    time.sleep(0.5)
+    time.sleep(0.35)
     send_keys("^a")
     send_keys(name.replace(" ", "{SPACE}"), with_spaces=True)
-    time.sleep(0.6)
+    time.sleep(0.35)
     cl, ct, cr, cb = client_rect(hwnd)
     s = scale_for(cl, cr)
     click(cl + int(110 * s), ct + int(165 * s))
-    time.sleep(0.4)
+    time.sleep(0.25)
     send_keys("+^t")
-    time.sleep(wait)
+    if verify:
+        wait_session_connected(hwnd, wait=wait, session_name=name)
+    else:
+        time.sleep(min(wait, 1.5))

@@ -28,6 +28,7 @@ from pywinauto.keyboard import send_keys
 from gui_common import (
     automation_env,
     capture_failure,
+    connect_local_session,
     remote_has_marker,
     send_terminal_line,
     ssh_preflight,
@@ -242,16 +243,7 @@ class MistGui:
 
     def reconnect_session(self, name: str) -> None:
         self.force_clear_modals()
-        self.focus()
-        send_keys("^j")
-        time.sleep(0.6)
-        send_keys("^a")
-        send_keys(name.replace(" ", "{SPACE}"), with_spaces=True)
-        time.sleep(0.8)
-        click(self.cl + int(110 * self.s), self.ct + int(165 * self.s))
-        time.sleep(0.5)
-        send_keys("+^t")
-        time.sleep(18.0)
+        connect_local_session(self.hwnd, self.proc.pid, name)
 
 
 def ssh_established_count() -> int:
@@ -288,12 +280,12 @@ def focus_sftp_panel(gui: MistGui) -> None:
     time.sleep(0.35)
 
 
-def wait_for_remote_marker(marker: str, timeout: float = 45.0) -> None:
+def wait_for_remote_marker(marker: str, timeout: float = 20.0) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
         if remote_has_marker(marker):
             return
-        time.sleep(2.0)
+        time.sleep(1.0)
     raise RuntimeError("上传后服务器未找到带标记的文件")
 
 
@@ -504,7 +496,7 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path, cov: CoverageTrack
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("exe")
-    parser.add_argument("--timeout", type=float, default=180.0)
+    parser.add_argument("--timeout", type=float, default=45.0)
     parser.add_argument("--keep-open", action="store_true")
     args = parser.parse_args()
 
