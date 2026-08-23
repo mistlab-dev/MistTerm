@@ -19,7 +19,7 @@ from gui_common import (
     SSH_USER,
     automation_env,
     capture_failure,
-    connect_local_session,
+    launch_mist_gui,
     remote_assert_file,
     remote_exec,
     remote_temp_path,
@@ -27,10 +27,9 @@ from gui_common import (
     remote_zmodem_dir,
     send_terminal_line,
     ssh_is_localhost,
-    ssh_preflight,
 )
 from pywinauto.keyboard import send_keys
-from smoke_gui_interact import GuiWalker, Report, find_mist_hwnd
+from smoke_gui_interact import GuiWalker, Report
 
 UI_STEP_SEC = 10.0
 OP_TIMEOUT_SEC = 30.0
@@ -372,18 +371,21 @@ def main() -> int:
     marker = f"rw-{int(time.time())}"
 
     print(f"==> SSH target: {SSH_USER}@{__import__('gui_common').SSH_HOST}", flush=True)
-    print("==> SSH preflight", flush=True)
-    ssh_preflight()
 
-    proc = subprocess.Popen([args.exe], env=automation_env_with_zmodem_file(marker))
+    proc: subprocess.Popen[bytes] | None = None
     hwnd: int | None = None
     try:
-        hwnd = find_mist_hwnd(args.title, args.timeout, proc)
+        zmodem_local = prepare_zmodem_local_file(marker)
+        proc, hwnd = launch_mist_gui(
+            args.exe,
+            window_timeout=args.timeout,
+            title_sub=args.title,
+            connect_wait=min(args.timeout, UI_STEP_SEC),
+            extra_env={"MISTTERM_ZMODEM_E2E_LOCAL": str(zmodem_local)},
+        )
         print(f"==> hwnd={hwnd} pid={proc.pid}", flush=True)
         walker = GuiWalker(proc, hwnd, Report())
-        print(f"==> Connect session: {LOCAL_TEST_SESSION}", flush=True)
-        connect_local_session(hwnd, proc.pid, LOCAL_TEST_SESSION, wait=min(args.timeout, UI_STEP_SEC))
-        time.sleep(1.0)
+        time.sleep(0.8)
 
         runner = RealWorldRunner(walker, report)
         print("==> Normal commands", flush=True)

@@ -26,18 +26,18 @@ from gui_automation_keys import (
 from pywinauto.keyboard import send_keys
 
 from gui_common import (
-    automation_env,
     capture_failure,
     connect_local_session,
+    launch_mist_gui,
+    reload_ssh_test_config,
     remote_has_marker,
     send_terminal_line,
-    ssh_preflight,
+    verify_session_connected,
 )
 from gui_coverage import CoverageTracker
 from gui_screen import (
     SHOT_DIR,
     client_rect,
-    find_mist_window,
     modal_sample_pixels,
     new_session_modal_seems_open,
     screenshot,
@@ -246,15 +246,6 @@ class MistGui:
         connect_local_session(self.hwnd, self.proc.pid, name)
 
 
-def ssh_established_count() -> int:
-    out = subprocess.check_output(["netstat", "-an"], text=True, errors="replace")
-    return sum(
-        1
-        for line in out.splitlines()
-        if ":22" in line and "ESTABLISHED" in line and "127.0.0.1" in line
-    )
-
-
 def prepare_local_file() -> tuple[Path, str]:
     d = Path(tempfile.gettempdir()) / "mistterm_downloads"
     d.mkdir(parents=True, exist_ok=True)
@@ -296,9 +287,9 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path, cov: CoverageTrack
 
     def ensure_ssh() -> None:
         gui.require_modal_closed("连接前")
-        gui.reconnect_session("Local Test SSH")
+        verify_session_connected(gui.hwnd)
 
-    if not gui.step("1b. 连接本地测试会话 (Ctrl+J / Ctrl+T)", ensure_ssh, stop=True):
+    if not gui.step("1b. 确认本地测试会话已连接", ensure_ssh, stop=True):
         return
     cov.mark("session.connect", "tab.new")
 
@@ -504,34 +495,22 @@ def main() -> int:
     report = Report()
     coverage = CoverageTracker("workflow")
 
+    os.environ["MISTTERM_GUI_LOCAL_SSH"] = "1"
+    reload_ssh_test_config()
+
     proc: subprocess.Popen[bytes] | None = None
     hwnd: int | None = None
     try:
         print("==> SSH 预检与准备本机文件")
-        ssh_preflight()
         local_file, marker = prepare_local_file()
         print(f"    本机文件: {local_file} (marker={marker})")
 
-        print(f"==> 启动 {args.exe} (MISTTERM_GUI_AUTOMATION=1)")
-        proc = subprocess.Popen([args.exe], env=automation_env())
-        deadline = time.time() + args.timeout
-        hwnd = None
-        while time.time() < deadline:
-            try:
-                hwnd = find_mist_window(proc, timeout=min(5.0, deadline - time.time()))
-                break
-            except RuntimeError as e:
-                if proc.poll() is not None:
-                    raise RuntimeError(f"Mist 进程已退出 (code={proc.returncode})") from e
-                if time.time() >= deadline:
-                    raise
-                time.sleep(0.25)
-        if not hwnd:
-            raise RuntimeError("未找到 Mist 窗口")
+        print(f"==> 启动 {args.exe} (MISTTERM_AUTO_CONNECT)")
+        proc, hwnd = launch_mist_gui(args.exe, window_timeout=args.timeout, connect_wait=12.0)
 
         print(f"    hwnd={hwnd} pid={proc.pid}")
         print(f"    截图目录: {SHOT_DIR}")
-        time.sleep(1.0)
+        time.sleep(0.6)
         gui = MistGui(proc, hwnd, report)
         run_workflow(gui, marker, local_file, coverage)
 
