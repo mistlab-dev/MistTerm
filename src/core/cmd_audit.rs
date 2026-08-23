@@ -747,4 +747,52 @@ mod tests {
         assert_eq!(out, b"MIST_AUDX\n");
         assert!(ev.is_empty());
     }
+
+    #[test]
+    fn server_audit_probe_confirm_and_alert_actions() {
+        let mut probe = ServerAuditProbe::new();
+        let line = b"prompt$\nMIST_AUDIT\t{\"action\":\"confirm\",\"message\":\"sensitive\",\"rule\":\"read_shadow\",\"command\":\"cat /etc/shadow\",\"token\":\"tok1\"}\n";
+        let (out, events) = probe.feed(line);
+        assert!(String::from_utf8_lossy(&out).contains("prompt$"));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].action, CmdAuditAction::Confirm);
+        assert_eq!(events[0].token, "tok1");
+        let alert_line = b"MIST_AUDIT\t{\"action\":\"alert\",\"message\":\"logged\"}\n";
+        let (_, ev2) = probe.feed(alert_line);
+        assert_eq!(ev2[0].action, CmdAuditAction::Alert);
+    }
+
+    #[test]
+    fn server_audit_probe_large_chunk_split_no_data_loss() {
+        let payload = br#"MIST_AUDIT	{"action":"block","message":"nope","command":"rm -rf /"}"#;
+        let mut line = b"before\n".to_vec();
+        line.extend_from_slice(payload);
+        line.push(b'\n');
+        line.extend_from_slice(b"after\n");
+        let mut probe = ServerAuditProbe::new();
+        let mut out_all = Vec::new();
+        let mut events_all = Vec::new();
+        for chunk in line.chunks(17) {
+            let (out, ev) = probe.feed(chunk);
+            out_all.extend(out);
+            events_all.extend(ev);
+        }
+        assert_eq!(events_all.len(), 1);
+        assert_eq!(events_all[0].action, CmdAuditAction::Block);
+        assert_eq!(std::str::from_utf8(&out_all).unwrap(), "before\nafter\n");
+    }
+
+    #[test]
+    fn server_audit_event_to_cmd_audit_result() {
+        let ev = ServerAuditEvent {
+            action: CmdAuditAction::Block,
+            message: "deny".into(),
+            rule: "r1".into(),
+            command: "rm -rf /".into(),
+            token: String::new(),
+        };
+        let r = ev.to_cmd_audit_result();
+        assert!(!r.allowed);
+        assert_eq!(r.matches[0].source, "server");
+    }
 }

@@ -578,14 +578,25 @@ impl MistTermApp {
                                     } else {
                                         0.0
                                     };
-                                    let term_body_h = (ui.available_height() - search_h).max(1.0);
+                                    let agent_banner_h = if self.active_agent_audit_banner_visible() {
+                                        theme.font_size_small() + theme.spacing_md() * 2.0
+                                    } else {
+                                        0.0
+                                    };
+                                    let term_body_h =
+                                        (ui.available_height() - search_h - agent_banner_h).max(1.0);
                                     let terminal_search_open = self.show_terminal_search;
                                     ui.allocate_ui_with_layout(
-                                        egui::vec2(term_col_w, term_body_h),
+                                        egui::vec2(term_col_w, term_body_h + agent_banner_h),
                                         egui::Layout::top_down(egui::Align::LEFT),
                                         |ui| {
-                                            ui.set_min_height(term_body_h);
+                                            ui.set_min_height(term_body_h + agent_banner_h);
                                             ui.set_max_width(term_col_w);
+                                            if agent_banner_h > 0.0 {
+                                                Self::paint_agent_audit_degraded_banner(
+                                                    ui, &theme, ctx, self,
+                                                );
+                                            }
                                             if let Some(idx) = self.active_tab {
                                                 self.maybe_collapse_narrow_split(idx, term_col_w);
                                                 let kb_capture =
@@ -1786,6 +1797,60 @@ impl MistTermApp {
                 egui::Order::Middle,
                 egui::Id::new("mistterm_fragment_variable_dialog"),
             ));
+        }
+    }
+
+    pub(crate) fn paint_agent_audit_degraded_banner(
+        ui: &mut egui::Ui,
+        theme: &crate::ui::theme::Theme,
+        ctx: &egui::Context,
+        app: &mut MistTermApp,
+    ) {
+        let w = ui.available_width();
+        let h = theme.font_size_small() + theme.spacing_md() * 2.0;
+        let (rect, _response) =
+            ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+        let warn_fill = theme.accent_color().gamma_multiply(0.18);
+        ui.painter()
+            .rect_filled(rect, theme.radius_list_item(), warn_fill);
+        ui.painter().rect_stroke(
+            rect,
+            theme.radius_list_item(),
+            egui::Stroke::new(1.0, theme.accent_dim_color()),
+        );
+        let text = crate::i18n::tr(
+            ctx,
+            "Server-side audit unavailable; commands use local checks only",
+            "服务器侧审计不可用，命令将仅做本地检查",
+        );
+        let close_id = egui::Id::new("agent_audit_banner_close");
+        let close_w = theme.spacing_lg() + theme.font_size_small();
+        let text_rect = rect.shrink2(egui::vec2(theme.spacing_sm(), theme.spacing_xs()));
+        let text_rect = egui::Rect::from_min_max(
+            text_rect.min,
+            egui::pos2(text_rect.max.x - close_w, text_rect.max.y),
+        );
+        ui.painter().text(
+            text_rect.left_center(),
+            egui::Align2::LEFT_CENTER,
+            text,
+            egui::FontId::proportional(theme.font_size_small()),
+            theme.fg_high_color(),
+        );
+        let close_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.max.x - close_w, rect.min.y),
+            egui::vec2(close_w, rect.height()),
+        );
+        let close_resp = ui.interact(close_rect, close_id, egui::Sense::click());
+        ui.painter().text(
+            close_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "×",
+            egui::FontId::proportional(theme.font_size_normal()),
+            theme.color_body_text_muted(),
+        );
+        if close_resp.clicked() {
+            app.dismiss_agent_audit_banner_active();
         }
     }
 }

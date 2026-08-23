@@ -408,3 +408,120 @@ pub fn update_team_settings_blocking(
         e
     })
 }
+
+/// 拉取命令审计 Agent 列表。
+pub fn list_cmd_audit_agents_blocking(
+    service: &mut TeamService,
+) -> Result<Vec<super::super::models::CmdAuditAgent>, String> {
+    let team_id = service
+        .state
+        .current_team_id
+        .clone()
+        .ok_or_else(|| "No team selected".to_string())?;
+    let api_base = service.api_base();
+    with_auth_retry(&api_base, &service.tokens, |access, client| {
+        client.list_cmd_audit_agents(access, &team_id)
+    })
+    .map(|r| r.agents)
+    .map_err(|e| {
+        if e.contains("401") {
+            service.handle_auth_failure(&e);
+        }
+        e
+    })
+}
+
+/// 启用/禁用命令审计 Agent（管理员）。
+pub fn update_cmd_audit_agent_blocking(
+    service: &mut TeamService,
+    agent_id: &str,
+    enabled: bool,
+) -> Result<super::super::models::CmdAuditAgent, String> {
+    if !service.state.current_role().can_delete() {
+        return Err("Admin role required".into());
+    }
+    let team_id = service
+        .state
+        .current_team_id
+        .clone()
+        .ok_or_else(|| "No team selected".to_string())?;
+    let api_base = service.api_base();
+    let aid = agent_id.to_string();
+    with_auth_retry(&api_base, &service.tokens, |access, client| {
+        client.update_cmd_audit_agent(access, &team_id, &aid, enabled)
+    })
+    .map_err(|e| {
+        if e.contains("401") {
+            service.handle_auth_failure(&e);
+        }
+        e
+    })
+}
+
+/// 拉取团队存储用量。
+pub fn fetch_storage_usage_blocking(
+    service: &mut TeamService,
+) -> Result<super::super::models::StorageUsageResponse, String> {
+    let team_id = service
+        .state
+        .current_team_id
+        .clone()
+        .ok_or_else(|| "No team selected".to_string())?;
+    let api_base = service.api_base();
+    with_auth_retry(&api_base, &service.tokens, |access, client| {
+        client.get_storage_usage(access, &team_id)
+    })
+    .map_err(|e| {
+        if e.contains("401") {
+            service.handle_auth_failure(&e);
+        }
+        e
+    })
+}
+
+/// 启动/登录后：释放当前用户在本地缓存中仍持有的残留编辑锁。
+pub fn release_residual_fragment_locks_blocking(service: &mut TeamService) -> usize {
+    let Some(uid) = service.state.user.as_ref().map(|u| u.id.clone()) else {
+        return 0;
+    };
+    if uid.is_empty() || !service.state.current_role().can_edit() {
+        return 0;
+    }
+    let Some(tid) = service.state.current_team_id.clone() else {
+        return 0;
+    };
+    let candidates: Vec<String> = service
+        .cache
+        .fragments_for_team(&tid)
+        .iter()
+        .filter(|f| f.locked_by == uid)
+        .map(|f| f.id.clone())
+        .collect();
+    if candidates.is_empty() {
+        return 0;
+    }
+    let api_base = service.api_base();
+    let mut released = 0usize;
+    for fid in candidates {
+        let still_mine = with_auth_retry(&api_base, &service.tokens, |access, client| {
+            client.get_fragment(access, &fid)
+        });
+        match still_mine {
+            Ok(remote) if remote.locked_by == uid => {
+                if unlock_team_fragment_blocking(service, &fid).is_ok() {
+                    released += 1;
+                }
+            }
+            Ok(remote) => {
+                if let Some(mut frag) = service.cache.find_fragment(&tid, &fid) {
+                    frag.locked_by = remote.locked_by;
+                    frag.locked_at = remote.locked_at;
+                    service.cache.upsert_fragment(&tid, frag);
+                    let _ = service.cache.save();
+                }
+            }
+            Err(_) => {}
+        }
+    }
+    released
+}

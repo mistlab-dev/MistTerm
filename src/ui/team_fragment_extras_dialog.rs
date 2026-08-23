@@ -4,11 +4,13 @@ use eframe::egui;
 
 use crate::core::team::{
     create_fragment_share_blocking, delete_fragment_share_blocking,
-    fetch_fragment_versions_blocking, fetch_team_settings_blocking,
-    list_fragment_shares_blocking, update_team_fragment_blocking, update_team_settings_blocking,
-    ExternalShare, FragmentVersion, TeamServerSettings, TeamService,
+    fetch_fragment_versions_blocking, fetch_storage_usage_blocking, fetch_team_settings_blocking,
+    list_cmd_audit_agents_blocking, list_fragment_shares_blocking,
+    update_cmd_audit_agent_blocking, update_team_fragment_blocking, update_team_settings_blocking,
+    CmdAuditAgent, ExternalShare, FragmentVersion, StorageUsageResponse, TeamServerSettings,
+    TeamService,
 };
-use crate::core::{AuditCategory, AuditEvent, AuditLogger, AuditOutcome};
+use crate::core::{format_bytes_short, AuditCategory, AuditEvent, AuditLogger, AuditOutcome};
 use crate::i18n;
 use crate::ui::chrome;
 use crate::ui::layout_util;
@@ -426,12 +428,194 @@ pub struct TeamSettingsState {
     pub audit_retention_days_str: String,
     pub allow_guest_access: bool,
     pub require_mfa: bool,
+    pub agents_loaded: bool,
+    pub agents: Vec<CmdAuditAgent>,
+    pub agents_error: String,
+    pub storage_loaded: bool,
+    pub storage: Option<StorageUsageResponse>,
+    pub storage_error: String,
 }
 
 pub fn open_team_settings(state: &mut TeamSettingsState) {
     state.open = true;
     state.loaded = false;
+    state.agents_loaded = false;
+    state.storage_loaded = false;
     state.error.clear();
+    state.agents_error.clear();
+    state.storage_error.clear();
+}
+
+fn agent_status_label(ctx: &egui::Context, agent: &CmdAuditAgent) -> String {
+    if !agent.enabled {
+        return i18n::tr(ctx, "Paused", "已禁用").to_string();
+    }
+    let now = chrono::Utc::now();
+    if agent.is_online(now, 300) {
+        i18n::tr(ctx, "Online", "在线").to_string()
+    } else {
+        i18n::tr(ctx, "Offline", "离线").to_string()
+    }
+}
+
+fn paint_storage_usage_card(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    ctx: &egui::Context,
+    usage: &StorageUsageResponse,
+) {
+    ui.label(chrome::rich_caption(
+        theme,
+        i18n::tr(ctx, "Storage usage", "存储用量"),
+    ));
+    ui.add_space(theme.spacing_xs());
+    let quota = usage.quota_bytes.unwrap_or(0);
+    let total = usage.total_bytes;
+    let pct = if quota > 0 {
+        (total as f64 / quota as f64 * 100.0).min(100.0)
+    } else {
+        0.0
+    };
+    let bar_color = if pct >= 90.0 {
+        theme.red_color()
+    } else if pct >= 70.0 {
+        theme.accent_color()
+    } else {
+        theme.green_color()
+    };
+    if quota > 0 {
+        ui.label(format!(
+            "{} / {} ({:.1}%)",
+            format_bytes_short(total),
+            format_bytes_short(quota),
+            pct
+        ));
+        let bar_w = ui.available_width().min(360.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(bar_w, 8.0), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 4.0, theme.bg_hover_color());
+        let fill_w = rect.width() * (pct as f32 / 100.0);
+        let fill = egui::Rect::from_min_size(rect.min, egui::vec2(fill_w, rect.height()));
+        ui.painter().rect_filled(fill, 4.0, bar_color);
+    } else {
+        ui.label(format!(
+            "{} {}",
+            i18n::tr(ctx, "Total", "总计"),
+            format_bytes_short(total)
+        ));
+    }
+    ui.add_space(theme.spacing_xs());
+    for (icon, label, bucket) in [
+        ("📄", i18n::tr(ctx, "Fragments", "片段"), &usage.fragments),
+        ("🎬", i18n::tr(ctx, "Recordings", "录制"), &usage.recordings),
+        ("📝", i18n::tr(ctx, "Documents", "文档"), &usage.documents),
+        ("📚", i18n::tr(ctx, "Versions", "版本"), &usage.versions),
+    ] {
+        ui.horizontal(|ui| {
+            ui.label(chrome::rich_caption(
+                theme,
+                &format!(
+                    "{icon} {label}: {} · {}",
+                    bucket.count,
+                    format_bytes_short(bucket.bytes)
+                ),
+            ));
+        });
+    }
+}
+
+fn paint_cmd_audit_agents_section(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    ctx: &egui::Context,
+    service: &mut TeamService,
+    state: &mut TeamSettingsState,
+    is_admin: bool,
+) {
+    ui.add_space(theme.spacing_md());
+    ui.separator();
+    ui.add_space(theme.spacing_sm());
+    ui.label(chrome::rich_caption(
+        theme,
+        i18n::tr(ctx, "Command audit agents", "命令审计 Agent"),
+    ));
+    if !state.agents_loaded {
+        match list_cmd_audit_agents_blocking(service) {
+            Ok(list) => {
+                state.agents = list;
+                state.agents_error.clear();
+            }
+            Err(e) => {
+                state.agents.clear();
+                state.agents_error = e;
+            }
+        }
+        state.agents_loaded = true;
+    }
+    if !state.agents_error.is_empty() {
+        ui.label(
+            chrome::rich_caption(theme, &state.agents_error).color(theme.red_color()),
+        );
+        return;
+    }
+    if state.agents.is_empty() {
+        ui.label(chrome::rich_caption(
+            theme,
+            i18n::tr(
+                ctx,
+                "No agents installed yet. Ask an admin to run the install script on audited hosts.",
+                "尚未安装 Agent。请联系管理员在被审计主机上运行安装脚本。",
+            ),
+        ));
+        return;
+    }
+    egui::Grid::new("team_cmd_audit_agents")
+        .num_columns(4)
+        .spacing([12.0, 6.0])
+        .show(ui, |ui| {
+            ui.label(chrome::rich_caption(theme, i18n::tr(ctx, "Host", "主机")));
+            ui.label(chrome::rich_caption(theme, i18n::tr(ctx, "Status", "状态")));
+            ui.label(chrome::rich_caption(
+                theme,
+                i18n::tr(ctx, "Last seen", "最后心跳"),
+            ));
+            ui.label(chrome::rich_caption(theme, i18n::tr(ctx, "Action", "操作")));
+            ui.end_row();
+            let mut toggle: Option<(String, bool)> = None;
+            for agent in &state.agents {
+                ui.label(&agent.host);
+                ui.label(agent_status_label(ctx, agent));
+                ui.label(
+                    agent
+                        .last_seen_at
+                        .as_deref()
+                        .unwrap_or("—"),
+                );
+                if is_admin {
+                    let label = if agent.enabled {
+                        i18n::tr(ctx, "Disable", "禁用")
+                    } else {
+                        i18n::tr(ctx, "Enable", "启用")
+                    };
+                    if ui.button(label).clicked() {
+                        toggle = Some((agent.id.clone(), !agent.enabled));
+                    }
+                } else {
+                    ui.label("—");
+                }
+                ui.end_row();
+            }
+            if let Some((id, enabled)) = toggle {
+                match update_cmd_audit_agent_blocking(service, &id, enabled) {
+                    Ok(updated) => {
+                        if let Some(slot) = state.agents.iter_mut().find(|a| a.id == updated.id) {
+                            *slot = updated;
+                        }
+                    }
+                    Err(e) => state.agents_error = e,
+                }
+            }
+        });
 }
 
 pub fn show_team_settings_modal(
@@ -471,6 +655,9 @@ pub fn show_team_settings_modal(
         .show(ctx, |ui| {
             chrome::modal_content_frame(theme).show(ui, |ui| {
                 ui.push_id("team_settings_form", |ui| {
+                    egui::ScrollArea::vertical()
+                        .max_height(modal_sz.y - theme.spacing_lg() * 2.0)
+                        .show(ui, |ui| {
                     modal_header_title(ui, theme, i18n::tr(ctx, "Team settings", "团队设置"));
                     ui.add_space(theme.spacing_sm());
 
@@ -500,6 +687,37 @@ pub fn show_team_settings_modal(
                         ui.label(chrome::rich_caption(
                             theme,
                             i18n::tr(ctx, "Admin role required to edit", "仅管理员可修改"),
+                        ));
+                    }
+
+                    paint_cmd_audit_agents_section(ui, theme, ctx, service, state, is_admin);
+
+                    if !state.storage_loaded {
+                        match fetch_storage_usage_blocking(service) {
+                            Ok(u) => {
+                                state.storage = Some(u);
+                                state.storage_error.clear();
+                            }
+                            Err(e) => {
+                                state.storage = None;
+                                state.storage_error = e;
+                            }
+                        }
+                        state.storage_loaded = true;
+                    }
+                    ui.add_space(theme.spacing_md());
+                    ui.separator();
+                    ui.add_space(theme.spacing_sm());
+                    if let Some(ref usage) = state.storage {
+                        paint_storage_usage_card(ui, theme, ctx, usage);
+                    } else if !state.storage_error.is_empty() {
+                        ui.label(chrome::rich_caption(
+                            theme,
+                            i18n::tr(
+                                ctx,
+                                "Storage usage API not available",
+                                "存储用量接口不可用",
+                            ),
                         ));
                     }
 
@@ -534,6 +752,7 @@ pub fn show_team_settings_modal(
                             save_now = true;
                         }
                     });
+                        });
                 });
             });
         });

@@ -174,6 +174,53 @@ impl TeamClient {
         )
     }
 
+    pub fn list_cmd_audit_agents(
+        &self,
+        access_token: &str,
+        team_id: &str,
+    ) -> Result<super::models::CmdAuditAgentsResponse, TeamApiError> {
+        self.get_json(
+            &format!("/v1/teams/{team_id}/command-audit/agents"),
+            Some(access_token),
+        )
+    }
+
+    pub fn update_cmd_audit_agent(
+        &self,
+        access_token: &str,
+        team_id: &str,
+        agent_id: &str,
+        enabled: bool,
+    ) -> Result<super::models::CmdAuditAgent, TeamApiError> {
+        self.put_json(
+            &format!("/v1/teams/{team_id}/command-audit/agents/{agent_id}"),
+            access_token,
+            &super::models::UpdateCmdAuditAgentRequest { enabled },
+        )
+    }
+
+    pub fn get_storage_usage(
+        &self,
+        access_token: &str,
+        team_id: &str,
+    ) -> Result<super::models::StorageUsageResponse, TeamApiError> {
+        self.get_json(
+            &format!("/v1/teams/{team_id}/storage/usage"),
+            Some(access_token),
+        )
+    }
+
+    pub fn get_fragment(
+        &self,
+        access_token: &str,
+        fragment_id: &str,
+    ) -> Result<super::models::TeamFragment, TeamApiError> {
+        self.get_json(
+            &format!("/v1/fragments/{fragment_id}"),
+            Some(access_token),
+        )
+    }
+
     /// 团队片段聚合统计；404/未实现时返回 `Ok(None)` 供客户端本地回退。
     pub fn fetch_fragment_analytics(
         &self,

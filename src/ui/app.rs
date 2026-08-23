@@ -433,6 +433,12 @@ pub struct MistTermApp {
     cmd_audit_engine: CmdAuditEngine,
     /// 敏感命令二次确认（标签索引、命令、匹配详情）
     cmd_audit_confirm: Option<CmdAuditConfirmState>,
+    /// 命令审计 Agent 列表（用于终端降级横幅）
+    cmd_audit_agents: Vec<crate::core::team::CmdAuditAgent>,
+    cmd_audit_agents_at: Option<Instant>,
+    cmd_audit_agents_error: String,
+    /// `false` when agents API returns 404 (未部署)
+    cmd_audit_agents_supported: bool,
     /// 批量多机 SSH 执行
     batch_exec_dialog: BatchExecDialog,
     batch_exec_rx: Option<std::sync::mpsc::Receiver<Vec<BatchExecRow>>>,
@@ -713,6 +719,10 @@ impl MistTermApp {
             close_tab_confirm_idx: None,
             cmd_audit_engine: CmdAuditEngine::new(),
             cmd_audit_confirm: None,
+            cmd_audit_agents: Vec::new(),
+            cmd_audit_agents_at: None,
+            cmd_audit_agents_error: String::new(),
+            cmd_audit_agents_supported: true,
             batch_exec_dialog: BatchExecDialog::default(),
             batch_exec_rx: None,
             hang_reporter: HangReporter::start_default(),
@@ -781,6 +791,11 @@ impl MistTermApp {
             // 异步拉取团队详情，避免启动时阻塞 UI 线程；UI 渲染期间会先用本地缓存（current_team_detail = None 时回退到 state 名字）。
             app.team_service.spawn_refresh_current_team_detail();
             app.team_service.spawn_cmd_audit_sync();
+            let released =
+                crate::core::team::release_residual_fragment_locks_blocking(&mut app.team_service);
+            if released > 0 {
+                log::info!("released {released} residual team fragment lock(s) at startup");
+            }
         }
 
         crate::platform::configure_egui_fonts(&cc.egui_ctx, app.terminal_font_preset);
@@ -959,17 +974,17 @@ impl MistTermApp {
                     .map(|m| m.message.as_str())
                     .unwrap_or("");
                 self.notify_error(format!(
-                    "{}: {} — {}",
-                    crate::i18n::tr(ctx, "Local hint: command blocked", "本地提示：命令已拦截"),
+                    "{}: {}{}",
+                    crate::i18n::tr(
+                        ctx,
+                        "Local check: command blocked",
+                        "本地检查：该命令被禁止",
+                    ),
                     command_preview(command, 80),
                     if hint.is_empty() {
-                        crate::i18n::tr(
-                            ctx,
-                            "blocked by local quick check (not a server policy)",
-                            "已被本地快捷提示拦截（非服务器强制策略）",
-                        )
+                        String::new()
                     } else {
-                        hint
+                        format!(" — {hint}")
                     },
                 ));
                 return CommandSendResult::Blocked(audit);
@@ -1193,6 +1208,10 @@ impl MistTermApp {
                 self.configure_team_audit_sink();
                 self.team_service.spawn_config_sync();
                 self.team_service.spawn_cmd_audit_sync();
+                self.cmd_audit_agents_at = None;
+                let _ = crate::core::team::release_residual_fragment_locks_blocking(
+                    &mut self.team_service,
+                );
             }
             if self.team_service.take_pending_vault_apply() {
                 self.apply_team_vault_from_sync();
@@ -1216,9 +1235,110 @@ impl MistTermApp {
             if let Some(err) = self.team_service.take_pending_notify_error() {
                 self.notify_error(err);
             }
+            self.poll_cmd_audit_agents(ctx);
             self.configure_team_audit_sink();
             ctx.request_repaint();
         }
+    }
+
+    fn cmd_audit_agent_available_for_host(
+        agents: &[crate::core::team::CmdAuditAgent],
+        host: &str,
+    ) -> bool {
+        crate::core::team::cmd_audit_agent_available_for_host(
+            agents,
+            host,
+            chrono::Utc::now(),
+            300,
+        )
+    }
+
+    fn poll_cmd_audit_agents(&mut self, ctx: &egui::Context) {
+        if !self.team_service.is_logged_in() {
+            self.cmd_audit_agents.clear();
+            self.cmd_audit_agents_at = None;
+            self.cmd_audit_agents_supported = true;
+            return;
+        }
+        let due = self
+            .cmd_audit_agents_at
+            .map(|t| t.elapsed() >= Duration::from_secs(60))
+            .unwrap_or(true);
+        if due && !self.team_service.is_busy() {
+            match crate::core::team::list_cmd_audit_agents_blocking(&mut self.team_service) {
+                Ok(agents) => {
+                    self.cmd_audit_agents = agents;
+                    self.cmd_audit_agents_error.clear();
+                    self.cmd_audit_agents_supported = true;
+                }
+                Err(e) => {
+                    if e.contains("404") {
+                        self.cmd_audit_agents.clear();
+                        self.cmd_audit_agents_error.clear();
+                        self.cmd_audit_agents_supported = false;
+                    } else {
+                        self.cmd_audit_agents_error = e;
+                    }
+                }
+            }
+            self.cmd_audit_agents_at = Some(Instant::now());
+        }
+        self.apply_cmd_audit_agent_availability_to_terminals(ctx);
+    }
+
+    fn apply_cmd_audit_agent_availability_to_terminals(&mut self, ctx: &egui::Context) {
+        if !self.team_service.is_logged_in() || !self.cmd_audit_agents_supported {
+            return;
+        }
+        let agents = self.cmd_audit_agents.clone();
+        let polled = self.cmd_audit_agents_at.is_some();
+        let mut audit_restored = false;
+        for tab in &mut self.tabs {
+            for pane in tab.panes_mut() {
+                if !pane.terminal.is_connected() || !polled {
+                    continue;
+                }
+                let Some(session) = self.session_manager.get_session(&pane.session_id) else {
+                    continue;
+                };
+                let host = session.host.clone();
+                let available = if !self.cmd_audit_agents_error.is_empty() {
+                    continue;
+                } else if agents.is_empty() {
+                    false
+                } else {
+                    Self::cmd_audit_agent_available_for_host(&agents, &host)
+                };
+                if pane.terminal.set_agent_audit_available(available) == Some(true) {
+                    audit_restored = true;
+                }
+            }
+        }
+        if audit_restored {
+            self.notify_success(crate::i18n::tr(
+                ctx,
+                "Server-side command audit restored",
+                "服务器侧命令审计已恢复",
+            ));
+        }
+    }
+
+    pub(crate) fn dismiss_agent_audit_banner_active(&mut self) {
+        if let Some(idx) = self.active_tab {
+            if let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) {
+                pane.terminal.dismiss_agent_audit_banner();
+            }
+        }
+    }
+
+    pub(crate) fn active_agent_audit_banner_visible(&self) -> bool {
+        let Some(idx) = self.active_tab else {
+            return false;
+        };
+        self.tabs
+            .get(idx)
+            .and_then(|t| t.active_pane())
+            .is_some_and(|p| p.terminal.agent_audit_banner_visible())
     }
 
     fn refresh_ssh_config_candidates(&mut self) {
@@ -2461,7 +2581,11 @@ impl MistTermApp {
                 );
                 self.notify_auto(format!(
                     "{}: {}",
-                    crate::i18n::tr(ctx, "Local hint: command blocked", "本地提示：命令已拦截"),
+                    crate::i18n::tr(
+                        ctx,
+                        "Local check: command blocked",
+                        "本地检查：该命令被禁止",
+                    ),
                     command_preview(command, 80)
                 ));
                 false

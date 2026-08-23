@@ -1,10 +1,12 @@
 //! 团队片段：创建/编辑与 409 冲突解决弹窗。
 
+use std::time::{Duration, Instant};
+
 use eframe::egui;
 
 use crate::core::team::{
-    create_team_fragment_blocking, update_team_fragment_blocking,
-    TeamFragment, TeamService,
+    create_team_fragment_blocking, lock_team_fragment_blocking, unlock_team_fragment_blocking,
+    update_team_fragment_blocking, TeamFragment, TeamService,
 };
 use crate::core::{AuditCategory, AuditEvent, AuditOutcome, AuditLogger};
 use crate::i18n;
@@ -22,6 +24,9 @@ pub struct TeamFragmentEditorState {
     pub category: String,
     pub status: String,
     pub error: String,
+    /// 编辑中持有的服务端锁
+    pub lock_held_id: Option<String>,
+    pub lock_heartbeat_at: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +45,8 @@ pub fn open_create_editor(editor: &mut TeamFragmentEditorState) {
     editor.category.clear();
     editor.status = "published".to_string();
     editor.error.clear();
+    editor.lock_held_id = None;
+    editor.lock_heartbeat_at = None;
 }
 
 fn modal_header_title(ui: &mut egui::Ui, theme: &Theme, title: &str) {
@@ -54,6 +61,8 @@ pub fn open_edit_editor(editor: &mut TeamFragmentEditorState, frag: &TeamFragmen
     editor.category = frag.category.clone();
     editor.status = frag.status.clone();
     editor.error.clear();
+    editor.lock_held_id = None;
+    editor.lock_heartbeat_at = None;
 }
 
 pub fn show_team_fragment_editor_modal(
@@ -66,6 +75,33 @@ pub fn show_team_fragment_editor_modal(
 ) {
     if !editor.open {
         return;
+    }
+    if let Some(ref existing) = editor.editing {
+        if editor.lock_held_id.is_none() {
+            match lock_team_fragment_blocking(service, &existing.id) {
+                Ok(()) => {
+                    editor.lock_held_id = Some(existing.id.clone());
+                    editor.lock_heartbeat_at = Some(Instant::now());
+                }
+                Err(e) => editor.error = e,
+            }
+        } else if editor
+            .lock_heartbeat_at
+            .map(|t| t.elapsed() >= Duration::from_secs(30))
+            .unwrap_or(true)
+        {
+            if let Some(ref fid) = editor.lock_held_id.clone() {
+                if lock_team_fragment_blocking(service, fid).is_err() {
+                    editor.error = i18n::tr(
+                        ctx,
+                        "Edit lock lost; save may conflict",
+                        "编辑锁已丢失，保存可能冲突",
+                    )
+                    .to_string();
+                }
+                editor.lock_heartbeat_at = Some(Instant::now());
+            }
+        }
     }
     let mut open = editor.open;
     let mut should_close = false;
@@ -261,6 +297,12 @@ pub fn show_team_fragment_editor_modal(
                 });
             });
         });
+    if should_close || !open {
+        if let Some(fid) = editor.lock_held_id.take() {
+            let _ = unlock_team_fragment_blocking(service, &fid);
+            editor.lock_heartbeat_at = None;
+        }
+    }
     editor.open = open && !should_close;
 }
 
