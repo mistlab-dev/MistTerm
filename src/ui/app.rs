@@ -466,46 +466,120 @@ struct CmdAuditConfirmState {
 
 fn server_audit_detail(ev: &ServerAuditEvent) -> String {
     if !ev.message.is_empty() {
-        format!(" — {}", ev.message)
+        ev.message.clone()
     } else if !ev.rule.is_empty() {
-        format!(" — {}", ev.rule)
+        ev.rule.clone()
     } else {
         String::new()
     }
 }
 
+fn server_audit_body(cmd_preview: &str, detail: &str) -> String {
+    match (cmd_preview.is_empty(), detail.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => cmd_preview.to_string(),
+        (true, false) => detail.to_string(),
+        (false, false) => format!("{cmd_preview} — {detail}"),
+    }
+}
+
 impl MistTermApp {
-    /// 拦截后尝试推一条合规片段：有命中则带「用到终端」按钮，否则普通 Error Toast。
+    /// 拦截后尝试推一条合规片段：有命中则带「用到终端」+（团队来源时）「存到个人库」。
     fn notify_block_with_compliant_suggestion(
         &mut self,
         ctx: &egui::Context,
         tab_idx: usize,
         blocked_command: &str,
-        base_message: String,
+        title: String,
+        body: String,
     ) {
         let team = self.team_service.team_fragments_as_stats();
         let personal = self.fragment_manager.list().to_vec();
         let suggestion =
             suggest_compliant_after_block(blocked_command, &team, &personal);
         let Some(suggestion) = suggestion else {
-            self.notify_error(base_message);
+            self.notify_error_titled(title, body);
             return;
         };
         let source_label = match suggestion.source {
             "team" => crate::i18n::tr(ctx, "Team snippet", "团队片段"),
             _ => crate::i18n::tr(ctx, "Personal snippet", "个人片段"),
         };
-        let title = suggestion.fragment.title.clone();
-        let text = format!(
-            "{base_message} · {source_label}「{title}」"
-        );
+        let frag_title = suggestion.fragment.title.clone();
+        let text = if body.is_empty() {
+            format!("{source_label}「{frag_title}」")
+        } else {
+            format!("{body} · {source_label}「{frag_title}」")
+        };
         self.pending_suggested_snippet = Some((tab_idx, suggestion.fragment));
-        self.push_action_toast(
+        // 团队片段：次要「存到个人库」沉底；个人命中已在库中，不再提供沉底。
+        let (secondary, secondary_label) = if suggestion.source == "team" {
+            (
+                Some(ToastAction::SaveSuggestedSnippet),
+                Some(crate::i18n::tr(ctx, "Save to library", "存到个人库")),
+            )
+        } else {
+            (None, None)
+        };
+        self.push_dual_action_toast_titled(
             ToastKind::Error,
+            title,
             text,
             ToastAction::InsertSuggestedSnippet,
             crate::i18n::tr(ctx, "Use in terminal", "用到终端"),
+            secondary,
+            secondary_label,
         );
+    }
+
+    /// 将拦截建议沉底到个人库（按命令去重；复制变量定义）。
+    /// `true` = 新写入；`false` = 个人库已有相同命令。
+    fn save_suggested_snippet_to_personal(
+        &mut self,
+        fragment: &FragmentStats,
+    ) -> (bool, String) {
+        let norm: String = fragment
+            .command
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let already = self.fragment_manager.get_all().iter().any(|f| {
+            let fc: String = f.command.split_whitespace().collect::<Vec<_>>().join(" ");
+            fc == norm
+        });
+        if already {
+            return (false, fragment.title.clone());
+        }
+        let mut tags = fragment.tags.clone();
+        if !tags.iter().any(|t| t == "from-team") {
+            tags.push("from-team".to_string());
+        }
+        let category = if fragment.category.trim().is_empty() {
+            "team".to_string()
+        } else {
+            fragment.category.clone()
+        };
+        let title = fragment.title.clone();
+        self.fragment_manager.add_fragment_with_all(
+            title.clone(),
+            fragment.command.clone(),
+            category,
+            tags,
+            fragment.variables.clone(),
+        );
+        let _ = self
+            .fragment_manager
+            .save(&FragmentManager::default_config_path());
+        self.audit_logger.record(
+            AuditEvent::new(
+                AuditCategory::Fragment,
+                "fragment.save_from_suggestion",
+                AuditOutcome::Success,
+            )
+            .with_resource(&fragment.id)
+            .with_detail(serde_json::json!({ "title": title })),
+        );
+        (true, title)
     }
 }
 
@@ -873,6 +947,42 @@ impl MistTermApp {
                     .to_string(),
             );
         }
+        // 视觉验收：`MIST_DEMO_TOAST=1` 启动时展示各级别标题+正文 Toast（不写进正式产品路径）。
+        if std::env::var_os("MIST_DEMO_TOAST").is_some() {
+            let demo = std::env::var("MIST_DEMO_TOAST").unwrap_or_default();
+            let kind = demo.trim().to_ascii_lowercase();
+            match kind.as_str() {
+                "warn" => app.notify_warn_titled(
+                    boot_loc.tr("Warning demo", "警告演示"),
+                    boot_loc.tr(
+                        "Amber background + title/body layout",
+                        "琥珀色底 + 标题/正文布局",
+                    ),
+                ),
+                "info" => app.notify_info_titled(
+                    boot_loc.tr("Notice demo", "提示演示"),
+                    boot_loc.tr(
+                        "Accent background + title/body layout",
+                        "主题色底 + 标题/正文布局",
+                    ),
+                ),
+                "success" => app.push_toast_titled(
+                    ToastKind::Success,
+                    boot_loc.tr("Success demo", "完成演示"),
+                    boot_loc.tr(
+                        "Green background + title/body layout",
+                        "绿色底 + 标题/正文布局",
+                    ),
+                ),
+                _ => app.notify_error_titled(
+                    boot_loc.tr(
+                        "Server policy: command blocked",
+                        "服务器策略：该命令被禁止",
+                    ),
+                    "cat /etc/shadow — block",
+                ),
+            }
+        }
 
         app
     }
@@ -1021,13 +1131,14 @@ impl MistTermApp {
                     .first()
                     .map(|m| m.message.as_str())
                     .unwrap_or("");
-                let msg = format!(
-                    "{}: {}{}",
-                    crate::i18n::tr(
-                        ctx,
-                        "Local check: command blocked",
-                        "本地检查：该命令被禁止",
-                    ),
+                let title = crate::i18n::tr(
+                    ctx,
+                    "Local check: command blocked",
+                    "本地检查：该命令被禁止",
+                )
+                .to_string();
+                let body = format!(
+                    "{}{}",
                     command_preview(command, 80),
                     if hint.is_empty() {
                         String::new()
@@ -1035,7 +1146,9 @@ impl MistTermApp {
                         format!(" — {hint}")
                     },
                 );
-                self.notify_block_with_compliant_suggestion(ctx, tab_idx, command, msg);
+                self.notify_block_with_compliant_suggestion(
+                    ctx, tab_idx, command, title, body,
+                );
                 return CommandSendResult::Blocked(audit);
             }
             CmdAuditAction::Confirm => {
@@ -1125,9 +1238,14 @@ impl MistTermApp {
                 }
             }
         }
+        if pending.is_empty() {
+            return;
+        }
         for (tab_idx, ev) in pending {
             self.handle_server_audit_event(ctx, tab_idx, ev);
         }
+        // Toast 在本帧 workspace 里可能已画过；下一帧再绘出。
+        ctx.request_repaint();
     }
 
     fn handle_server_audit_event(
@@ -1144,66 +1262,55 @@ impl MistTermApp {
         let detail = server_audit_detail(&ev);
         match ev.action {
             CmdAuditAction::Block => {
-                let msg = format!(
-                    "{}{}{}",
-                    crate::i18n::tr(
-                        ctx,
-                        "Server policy: command blocked",
-                        "服务器策略：该命令被禁止",
-                    ),
-                    if cmd_preview.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {cmd_preview}")
-                    },
-                    detail,
+                let title = crate::i18n::tr(
+                    ctx,
+                    "Server policy: command blocked",
+                    "服务器策略：该命令被禁止",
+                )
+                .to_string();
+                let body = server_audit_body(&cmd_preview, &detail);
+                self.notify_block_with_compliant_suggestion(
+                    ctx,
+                    tab_idx,
+                    &ev.command,
+                    title,
+                    body,
                 );
-                self.notify_block_with_compliant_suggestion(ctx, tab_idx, &ev.command, msg);
             }
             CmdAuditAction::Alert => {
-                self.notify_warn(format!(
-                    "{}{}{}",
-                    crate::i18n::tr(
-                        ctx,
-                        "Server policy: command reported to team audit",
-                        "服务器策略：该命令已上报团队审计",
-                    ),
-                    if cmd_preview.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {cmd_preview}")
-                    },
-                    detail,
-                ));
+                let title = crate::i18n::tr(
+                    ctx,
+                    "Server policy: command reported to team audit",
+                    "服务器策略：该命令已上报团队审计",
+                )
+                .to_string();
+                self.notify_warn_titled(title, server_audit_body(&cmd_preview, &detail));
             }
             CmdAuditAction::Confirm => {
                 let command = if ev.command.is_empty() {
                     // 无命令原文时仅提示，不弹确认框
-                    self.notify_warn(format!(
-                        "{}{}",
+                    self.notify_warn_titled(
                         crate::i18n::tr(
                             ctx,
                             "Server policy: confirmation required",
                             "服务器策略：要求确认后才能执行",
                         ),
                         detail,
-                    ));
+                    );
                     return;
                 } else {
                     ev.command.clone()
                 };
                 // 已有确认框时不覆盖本地确认；服务器结果用 toast 叠加提示
                 if self.cmd_audit_confirm.is_some() {
-                    self.notify_warn(format!(
-                        "{}: {}{}",
+                    self.notify_warn_titled(
                         crate::i18n::tr(
                             ctx,
                             "Server policy: confirmation required",
                             "服务器策略：要求确认后才能执行",
                         ),
-                        command_preview(&command, 80),
-                        detail,
-                    ));
+                        server_audit_body(&command_preview(&command, 80), &detail),
+                    );
                     return;
                 }
                 self.cmd_audit_confirm = Some(CmdAuditConfirmState {
@@ -2625,24 +2732,25 @@ impl MistTermApp {
                     &audit,
                     AuditOutcome::Denied,
                 );
-                self.notify_auto(format!(
-                    "{}: {}",
+                self.notify_error_titled(
                     crate::i18n::tr(
                         ctx,
                         "Local check: command blocked",
                         "本地检查：该命令被禁止",
                     ),
-                    command_preview(command, 80)
-                ));
+                    command_preview(command, 80),
+                );
                 false
             }
             CmdAuditAction::Confirm => {
-                self.notify_auto( crate::i18n::tr(
-                    ctx,
-                    "Batch run cannot proceed: command requires confirmation in an interactive terminal.",
-                    "无法批量执行：该命令需在交互终端中二次确认。",
-                )
-                .to_string());
+                self.notify_warn_titled(
+                    crate::i18n::tr(ctx, "Batch run blocked", "无法批量执行"),
+                    crate::i18n::tr(
+                        ctx,
+                        "Command requires confirmation in an interactive terminal.",
+                        "该命令需在交互终端中二次确认。",
+                    ),
+                );
                 false
             }
             CmdAuditAction::Alert => {
@@ -6330,7 +6438,6 @@ impl eframe::App for MistTermApp {
         }
         self.poll_command_history_from_active_tab();
         self.poll_connect_audit_from_tabs(ctx);
-        self.poll_server_audit_from_tabs(ctx);
         self.poll_session_log_commands();
         self.append_terminal_output_logs();
 
@@ -6815,6 +6922,8 @@ impl eframe::App for MistTermApp {
         }
 
         self.render_workspace_shell(ctx, frame, &theme);
+        // 须在终端/非活动窗格泵完 SSH 之后再取 MIST_AUDIT，否则本帧事件会空转。
+        self.poll_server_audit_from_tabs(ctx);
         self.process_ai_bridge(ctx);
     }
 }

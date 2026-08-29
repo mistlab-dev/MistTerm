@@ -11,8 +11,8 @@ alwaysApply: false
 ## 按钮：一眼能点
 
 - **禁止**暗夜下「纯文字幽灵按钮」：常态透明底 + 无描边 + 发灰字。
-- 次要操作：`panel_outlined_*` / `panel_action_*`（依赖 theme 次要按钮浅底+描边）。
-- 主操作（发送、保存、用到终端）：`panel_solid_primary_*` 或实心 Primary。
+- **两档统一**：主操作实心 Primary（`panel_action_primary_*` / `panel_header_new_button*`）；工具栏次要一律 Secondary（`panel_action_*` / `panel_outlined_*`）。
+- 不要再为 SFTP/AI 单独画一套更灰的幽灵样式。
 - 不要手写 `Button::new(...).fill(TRANSPARENT).stroke(NONE)`；不要裸 `ui.small_button` / 裸 accent 文字当工具栏按钮。
 - 筛选芯片 / 分段控件可以弱样式；**工具栏动作**必须有底有边。
 
@@ -31,9 +31,10 @@ alwaysApply: false
 
 ## Theme token（勿回退）
 
-- `color_control_secondary_fill_idle`：暗夜用 `color_subtle_inset_fill`，**禁止**再改回 `TRANSPARENT`。
-- `color_control_secondary_stroke`：暗夜保留描边，**禁止** `Stroke::NONE`。
+- `color_control_secondary_fill_idle`：暗夜约白 28α，**禁止**再改回接近透明。
+- `color_control_secondary_stroke`：暗夜保留可见描边，**禁止** `Stroke::NONE`。
 - 次要按钮 idle 字色用 `text_primary`，勿过度 `gamma_multiply` 成说明灰。
+- `panel_action_primary_*` 必须是实心 accent，勿再映射成灰次要按钮。
 
 ## 自检
 
