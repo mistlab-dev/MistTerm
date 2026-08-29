@@ -1934,6 +1934,8 @@ impl TerminalView {
                         let (display_data, audit_events) = self.server_audit_probe.feed(&data);
                         if !audit_events.is_empty() {
                             self.pending_server_audit.extend(audit_events);
+                            // 审计行常被整行剥离：无 VTE 脏位则不 request_repaint，Toast 会一直卡着。
+                            vte_dirty = true;
                         }
                         if let Some(until) = self.rz_control_mode_until {
                             if Instant::now() <= until {

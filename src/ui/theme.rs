@@ -1299,8 +1299,10 @@ impl Theme {
     /// 面板次要操作按钮（未禁用）文字
     #[inline]
     pub fn color_control_secondary_idle_text(&self) -> Color32 {
-        if self.uses_modern_palette() {
-            // 暗夜须与正文同级，避免「像说明文字不像按钮」
+        if self.uses_modern_palette() && !self.is_light_theme() {
+            // 纯白：半透明正文压在灰钮上会发糊
+            Color32::WHITE
+        } else if self.uses_modern_palette() {
             self.text_primary()
         } else {
             self.text_secondary()
@@ -1316,14 +1318,23 @@ impl Theme {
     /// 面板次要按钮悬停/按下时前景
     #[inline]
     pub fn color_control_secondary_active_text(&self) -> Color32 {
-        self.text_primary()
+        if self.uses_modern_palette() && !self.is_light_theme() {
+            Color32::WHITE
+        } else {
+            self.text_primary()
+        }
     }
 
     /// 面板工具按钮常态浅底（略亮于面板，可辨认为按钮）
     #[inline]
     pub fn color_control_button_fill_idle(&self) -> Color32 {
         if self.uses_modern_palette() {
-            self.color_subtle_inset_fill()
+            if self.is_light_theme() {
+                Color32::from_rgba_unmultiplied(0, 0, 0, 14)
+            } else {
+                // 不透明抬升面：半透明白叠暗底会变成「脏灰」，白字对比差
+                Color32::from_rgb(56, 56, 56)
+            }
         } else {
             self.color_panel_toolbar_btn_fill()
         }
@@ -1339,7 +1350,11 @@ impl Theme {
     #[inline]
     pub fn color_control_secondary_fill_hover(&self) -> Color32 {
         if self.uses_modern_palette() {
-            self.color_widget_hover_fill()
+            if self.is_light_theme() {
+                Color32::from_rgba_unmultiplied(0, 0, 0, 22)
+            } else {
+                Color32::from_rgb(70, 70, 70)
+            }
         } else {
             self.color_panel_toolbar_btn_fill().gamma_multiply(1.35)
         }
@@ -1349,7 +1364,11 @@ impl Theme {
     #[inline]
     pub fn color_control_secondary_fill_pressed(&self) -> Color32 {
         if self.uses_modern_palette() {
-            self.color_widget_active_fill()
+            if self.is_light_theme() {
+                Color32::from_rgba_unmultiplied(0, 0, 0, 30)
+            } else {
+                Color32::from_rgb(82, 82, 82)
+            }
         } else {
             self.accent_alpha(51)
         }
@@ -1369,14 +1388,15 @@ impl Theme {
     /// 面板次要按钮描边（暗夜也保留描边，避免幽灵文字按钮）
     #[inline]
     pub fn color_control_secondary_stroke(&self, enabled: bool) -> egui::Stroke {
-        egui::Stroke::new(
-            1.0,
-            if enabled {
-                self.color_text_input_stroke()
-            } else {
-                self.color_text_input_stroke().gamma_multiply(0.5)
-            },
-        )
+        let c = if !enabled {
+            self.color_text_input_stroke().gamma_multiply(0.5)
+        } else if self.uses_modern_palette() && !self.is_light_theme() {
+            // 略强于输入框描边，工具条按钮在深底上轮廓更清晰
+            Color32::from_rgba_unmultiplied(255, 255, 255, 52)
+        } else {
+            self.color_text_input_stroke()
+        };
+        egui::Stroke::new(1.0, c)
     }
 
     /// 禁用控件文字/图标
@@ -2586,7 +2606,7 @@ impl Theme {
     }
     /// Toast 正文最大换行宽度。
     pub fn toast_max_text_width(&self) -> f32 {
-        320.0
+        340.0
     }
     /// Toast 距屏边外边距。
     pub fn toast_screen_margin(&self) -> f32 {
@@ -2594,11 +2614,43 @@ impl Theme {
     }
     /// Toast 最小宽度。
     pub fn toast_min_width(&self) -> f32 {
-        200.0
+        240.0
     }
     /// Toast 操作行按钮高度。
     pub fn toast_action_btn_h(&self) -> f32 {
         24.0
+    }
+    /// Toast 标题与正文间距。
+    pub fn toast_title_body_gap(&self) -> f32 {
+        4.0
+    }
+    /// 按级别着色的 Toast 底（标题+正文布局用，一眼区分严重度）。
+    pub fn toast_fill(&self, accent: Color32) -> Color32 {
+        let base = if self.is_light_theme() {
+            self.color_panel_surface()
+        } else {
+            self.chrome_bar_fill()
+        };
+        let t = if self.is_light_theme() { 0.14 } else { 0.28 };
+        Self::lerp_rgb(base, accent, t)
+    }
+    /// Toast 描边：同色系略深/略亮。
+    pub fn toast_stroke_color(&self, accent: Color32) -> Color32 {
+        let t = if self.is_light_theme() { 0.55 } else { 0.45 };
+        Self::lerp_rgb(accent, self.chrome_bar_fill(), 1.0 - t)
+    }
+    /// Toast 标题字色（跟级别走）。
+    pub fn toast_title_color(&self, accent: Color32) -> Color32 {
+        if self.is_light_theme() {
+            Self::lerp_rgb(accent, Color32::BLACK, 0.35)
+        } else {
+            Self::lerp_rgb(accent, Color32::WHITE, 0.35)
+        }
+    }
+    fn lerp_rgb(a: Color32, b: Color32, t: f32) -> Color32 {
+        let t = t.clamp(0.0, 1.0);
+        let lerp = |x: u8, y: u8| ((x as f32) * (1.0 - t) + (y as f32) * t).round() as u8;
+        Color32::from_rgb(lerp(a.r(), b.r()), lerp(a.g(), b.g()), lerp(a.b(), b.b()))
     }
     /// 顶栏菜单行（终端 / 编辑 / 视图 / 工具 / 帮助）
     pub fn menu_bar_height(&self) -> f32 {

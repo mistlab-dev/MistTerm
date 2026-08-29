@@ -612,30 +612,61 @@ fn looks_like_mist_audit_prefix(bytes: &[u8]) -> bool {
     if bytes.is_empty() {
         return false;
     }
-    // 跳过行首空白 / CR
-    let mut i = 0;
-    while i < bytes.len() && matches!(bytes[i], b' ' | b'\t' | b'\r') {
-        i += 1;
+    // 行内任意位置已出现完整前缀（常见：ANSI / CR 之后）
+    if find_mist_audit_offset(bytes).is_some() {
+        return true;
     }
-    let rest = &bytes[i..];
+    // 跳过行首空白 / CR / 常见 CSI，再判断是否为前缀残片
+    let rest = strip_leading_pty_noise(bytes);
+    if rest.is_empty() {
+        // 整段都是噪声，可能后面还有 MIST_AUDIT
+        return bytes.iter().any(|&b| b == 0x1b || b == b'\r');
+    }
     MIST_AUDIT_PREFIX.starts_with(rest) || rest.starts_with(MIST_AUDIT_PREFIX)
 }
 
+fn find_mist_audit_offset(line: &[u8]) -> Option<usize> {
+    line.windows(MIST_AUDIT_PREFIX.len())
+        .position(|w| w == MIST_AUDIT_PREFIX)
+}
+
+/// 去掉行首空白、CR，以及常见 CSI（如 bracketed-paste `\x1b[?2004l`）。
+fn strip_leading_pty_noise(mut line: &[u8]) -> &[u8] {
+    loop {
+        if line.is_empty() {
+            return line;
+        }
+        match line[0] {
+            b' ' | b'\t' | b'\r' => line = &line[1..],
+            0x1b => {
+                line = &line[1..];
+                if line.first() == Some(&b'[') {
+                    line = &line[1..];
+                    while let Some((&b, rest)) = line.split_first() {
+                        line = rest;
+                        if b.is_ascii_alphabetic() {
+                            break;
+                        }
+                    }
+                }
+            }
+            _ => return line,
+        }
+    }
+}
+
 fn parse_mist_audit_line(line: &[u8]) -> Option<ServerAuditEvent> {
-    let mut i = 0;
-    while i < line.len() && matches!(line[i], b' ' | b'\t') {
-        i += 1;
-    }
-    let line = &line[i..];
-    if !line.starts_with(MIST_AUDIT_PREFIX) {
-        return None;
-    }
+    // bash DEBUG / bracketed-paste 常在同行前塞 ANSI，不能只认「行首」MIST_AUDIT。
+    let idx = find_mist_audit_offset(line)?;
+    let line = &line[idx..];
     let after = &line[MIST_AUDIT_PREFIX.len()..];
     let payload = after
         .strip_prefix(b"\t")
         .or_else(|| after.strip_prefix(b" "))
         .unwrap_or(after);
     let text = std::str::from_utf8(payload).ok()?.trim();
+    // JSON 后偶发残留 CR / 控制符
+    let text = text.trim_end_matches(|c: char| c == '\r' || c.is_control());
     if text.is_empty() {
         return None;
     }
@@ -746,6 +777,20 @@ mod tests {
         let (out, ev) = probe.feed(b"MIST_AUDX\n");
         assert_eq!(out, b"MIST_AUDX\n");
         assert!(ev.is_empty());
+    }
+
+    #[test]
+    fn server_audit_probe_parses_marker_after_bracketed_paste_csi() {
+        let mut probe = ServerAuditProbe::new();
+        // 交互 bash 实测：`\x1b[?2004l\rMIST_AUDIT\t{...}\r\n`
+        let chunk = b"cat /etc/shadow\r\n\x1b[?2004l\rMIST_AUDIT\t{\"action\":\"block\",\"message\":\"block\",\"rule\":\"server\",\"command\":\"cat /etc/shadow\"}\r\n\x1b[?2004h";
+        let (out, events) = probe.feed(chunk);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].action, CmdAuditAction::Block);
+        assert_eq!(events[0].command, "cat /etc/shadow");
+        let s = String::from_utf8_lossy(&out);
+        assert!(!s.contains("MIST_AUDIT"), "marker must be stripped, got {s:?}");
+        assert!(s.contains("cat /etc/shadow"));
     }
 
     #[test]

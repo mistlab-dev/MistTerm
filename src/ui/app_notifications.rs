@@ -22,16 +22,23 @@ pub(crate) enum ToastAction {
     ReconnectTab { tab_idx: usize },
     /// 将审计拦截后的合规片段建议插入终端（内容在 `pending_suggested_snippet`）。
     InsertSuggestedSnippet,
+    /// 将合规片段建议沉底到个人库（团队片段副本 / 去重后写入）。
+    SaveSuggestedSnippet,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct ActiveToast {
     kind: ToastKind,
+    /// 标题行（级别语义，如「命令被禁止」）。
+    title: String,
+    /// 正文行（命令预览、详情等）。
     text: String,
     /// `None` = 需用户确认，不自动消失。
     until: Option<Instant>,
     action: Option<ToastAction>,
     action_label: Option<String>,
+    secondary_action: Option<ToastAction>,
+    secondary_action_label: Option<String>,
 }
 
 #[inline]
@@ -89,6 +96,26 @@ pub(super) fn status_message_text_color(
     }
 }
 
+/// 级别默认标题（无显式 title 时使用）。
+pub(crate) fn default_toast_title(ctx: &egui::Context, kind: ToastKind) -> String {
+    match kind {
+        ToastKind::Error => crate::i18n::tr(ctx, "Error", "错误").to_string(),
+        ToastKind::Warn => crate::i18n::tr(ctx, "Warning", "警告").to_string(),
+        ToastKind::Success => crate::i18n::tr(ctx, "Success", "完成").to_string(),
+        ToastKind::Info => crate::i18n::tr(ctx, "Notice", "提示").to_string(),
+    }
+}
+
+fn status_payload(title: &str, text: &str) -> String {
+    if title.is_empty() {
+        text.to_string()
+    } else if text.is_empty() {
+        title.to_string()
+    } else {
+        format!("{title}\n{text}")
+    }
+}
+
 impl MistTermApp {
     fn toast_duration_secs(kind: ToastKind) -> u64 {
         // 业界常见：Info ~3–5s，Warn/Error 略长；过长会挡操作，过短读不完。
@@ -101,9 +128,20 @@ impl MistTermApp {
 
     /// 统一通知入口：所有用户可见提示走 Toast（并同步 `status_message` 供诊断快照）。
     pub(crate) fn push_toast(&mut self, kind: ToastKind, text: impl Into<String>) {
+        self.push_toast_titled(kind, String::new(), text);
+    }
+
+    /// 标题 + 正文 Toast（标题空则绘制时用级别默认标题）。
+    pub(crate) fn push_toast_titled(
+        &mut self,
+        kind: ToastKind,
+        title: impl Into<String>,
+        text: impl Into<String>,
+    ) {
+        let title = title.into().trim().to_string();
         let raw = text.into();
         let text = status_message_body(&raw).trim().to_string();
-        if text.is_empty() {
+        if title.is_empty() && text.is_empty() {
             self.active_toast = None;
             self.status_message.clear();
             return;
@@ -116,16 +154,20 @@ impl MistTermApp {
         {
             return;
         }
+        let payload = status_payload(&title, &text);
         self.status_message = match kind {
-            ToastKind::Error => status_message_wrap_error(text.clone()),
-            _ => text.clone(),
+            ToastKind::Error => status_message_wrap_error(payload),
+            _ => payload,
         };
         self.active_toast = Some(ActiveToast {
             kind,
+            title,
             text,
             until: Some(Instant::now() + Duration::from_secs(Self::toast_duration_secs(kind))),
             action: None,
             action_label: None,
+            secondary_action: None,
+            secondary_action_label: None,
         });
     }
 
@@ -137,31 +179,93 @@ impl MistTermApp {
         action: ToastAction,
         action_label: impl Into<String>,
     ) {
+        self.push_dual_action_toast(kind, text, action, action_label, None, None::<String>);
+    }
+
+    pub(crate) fn push_action_toast_titled(
+        &mut self,
+        kind: ToastKind,
+        title: impl Into<String>,
+        text: impl Into<String>,
+        action: ToastAction,
+        action_label: impl Into<String>,
+    ) {
+        self.push_dual_action_toast_titled(
+            kind,
+            title,
+            text,
+            action,
+            action_label,
+            None,
+            None::<String>,
+        );
+    }
+
+    /// 需用户确认的 Toast：主操作 + 可选次要操作（如「用到终端」+「存到个人库」）。
+    pub(crate) fn push_dual_action_toast(
+        &mut self,
+        kind: ToastKind,
+        text: impl Into<String>,
+        action: ToastAction,
+        action_label: impl Into<String>,
+        secondary_action: Option<ToastAction>,
+        secondary_action_label: Option<impl Into<String>>,
+    ) {
+        self.push_dual_action_toast_titled(
+            kind,
+            String::new(),
+            text,
+            action,
+            action_label,
+            secondary_action,
+            secondary_action_label,
+        );
+    }
+
+    pub(crate) fn push_dual_action_toast_titled(
+        &mut self,
+        kind: ToastKind,
+        title: impl Into<String>,
+        text: impl Into<String>,
+        action: ToastAction,
+        action_label: impl Into<String>,
+        secondary_action: Option<ToastAction>,
+        secondary_action_label: Option<impl Into<String>>,
+    ) {
+        let title = title.into().trim().to_string();
         let raw = text.into();
         let text = status_message_body(&raw).trim().to_string();
-        if text.is_empty() {
+        if title.is_empty() && text.is_empty() {
             return;
         }
         let action_label = action_label.into();
+        let secondary_action_label = secondary_action_label.map(|s| s.into());
         if let Some(toast) = &self.active_toast {
             if toast.action == Some(action)
                 && toast.until.is_none()
+                && toast.title == title
                 && toast.text == text
                 && toast.action_label.as_deref() == Some(action_label.as_str())
+                && toast.secondary_action == secondary_action
+                && toast.secondary_action_label == secondary_action_label
             {
                 return;
             }
         }
+        let payload = status_payload(&title, &text);
         self.status_message = match kind {
-            ToastKind::Error => status_message_wrap_error(text.clone()),
-            _ => text.clone(),
+            ToastKind::Error => status_message_wrap_error(payload),
+            _ => payload,
         };
         self.active_toast = Some(ActiveToast {
             kind,
+            title,
             text,
             until: None,
             action: Some(action),
             action_label: Some(action_label),
+            secondary_action,
+            secondary_action_label,
         });
     }
 
@@ -179,6 +283,30 @@ impl MistTermApp {
 
     pub(crate) fn notify_error(&mut self, text: impl Into<String>) {
         self.push_toast(ToastKind::Error, text);
+    }
+
+    pub(crate) fn notify_info_titled(
+        &mut self,
+        title: impl Into<String>,
+        text: impl Into<String>,
+    ) {
+        self.push_toast_titled(ToastKind::Info, title, text);
+    }
+
+    pub(crate) fn notify_warn_titled(
+        &mut self,
+        title: impl Into<String>,
+        text: impl Into<String>,
+    ) {
+        self.push_toast_titled(ToastKind::Warn, title, text);
+    }
+
+    pub(crate) fn notify_error_titled(
+        &mut self,
+        title: impl Into<String>,
+        text: impl Into<String>,
+    ) {
+        self.push_toast_titled(ToastKind::Error, title, text);
     }
 
     /// 兼容旧赋值：自动区分错误 / 普通提示。
@@ -218,15 +346,17 @@ impl MistTermApp {
             // 瞬时 Toast 优先展示；结束后下一帧再同步待导入。
             return;
         }
+        let title = crate::i18n::tr(ctx, "SSH import", "SSH 导入").to_string();
         let text = match crate::i18n::language(ctx) {
             crate::i18n::UiLanguage::En => {
-                format!("Detected {pending} pending SSH Host block(s)")
+                format!("Detected {pending} pending Host block(s)")
             }
-            crate::i18n::UiLanguage::Zh => format!("检测到 {pending} 个未导入的 SSH 配置"),
+            crate::i18n::UiLanguage::Zh => format!("检测到 {pending} 个未导入的 Host 配置"),
         };
         let action_label = crate::i18n::tr(ctx, "Import", "导入").to_string();
-        self.push_action_toast(
+        self.push_action_toast_titled(
             ToastKind::Warn,
+            title,
             text,
             ToastAction::OpenSshImport,
             action_label,
@@ -235,13 +365,13 @@ impl MistTermApp {
 
     /// 刷新 Toast 过期；并桥接仍直接写 `status_message` 的旧路径。
     pub(crate) fn tick_status_toast(&mut self) {
-        let toast_text = self
+        let toast_payload = self
             .active_toast
             .as_ref()
-            .map(|t| t.text.as_str())
-            .unwrap_or("");
+            .map(|t| status_payload(&t.title, &t.text))
+            .unwrap_or_default();
         let body = status_message_body(&self.status_message);
-        if body != toast_text {
+        if body != toast_payload {
             if body.is_empty() {
                 if self
                     .active_toast
@@ -264,12 +394,15 @@ impl MistTermApp {
                 let text = body.to_string();
                 self.active_toast = Some(ActiveToast {
                     kind,
+                    title: String::new(),
                     text,
                     until: Some(
                         Instant::now() + Duration::from_secs(Self::toast_duration_secs(kind)),
                     ),
                     action: None,
                     action_label: None,
+                    secondary_action: None,
+                    secondary_action_label: None,
                 });
             }
         }
@@ -286,15 +419,24 @@ impl MistTermApp {
         let Some(toast) = self.active_toast.clone() else {
             return;
         };
+        let title = if toast.title.is_empty() {
+            default_toast_title(ctx, toast.kind)
+        } else {
+            toast.title.clone()
+        };
         let show_dismiss = toast.action.is_some()
+            || toast.secondary_action.is_some()
             || matches!(toast.kind, ToastKind::Error | ToastKind::Warn);
         let mut primary = false;
+        let mut secondary = false;
         let mut dismiss = false;
         let size = crate::ui::chrome::measure_status_toast_size(
             ctx,
             theme,
+            &title,
             &toast.text,
             toast.action_label.as_deref(),
+            toast.secondary_action_label.as_deref(),
             show_dismiss,
         );
         if size.x < 1.0 || size.y < 1.0 {
@@ -318,44 +460,25 @@ impl MistTermApp {
                 let actions = crate::ui::chrome::paint_status_toast(
                     ui,
                     theme,
+                    &title,
                     &toast.text,
                     toast.kind,
                     toast.action_label.as_deref(),
+                    toast.secondary_action_label.as_deref(),
                     show_dismiss,
                 );
                 primary = actions.primary;
+                secondary = actions.secondary;
                 dismiss = actions.dismiss;
             });
 
         if primary {
             if let Some(action) = toast.action {
-                match action {
-                    ToastAction::OpenSshImport => {
-                        self.clear_toast();
-                        self.open_ssh_import_dialog(ctx);
-                    }
-                    ToastAction::ReconnectTab { tab_idx } => {
-                        self.clear_toast();
-                        if tab_idx < self.tabs.len() {
-                            self.active_tab = Some(tab_idx);
-                            self.reconnect_tab_at(ctx, tab_idx);
-                        } else {
-                            self.reconnect_active_tab(ctx);
-                        }
-                    }
-                    ToastAction::InsertSuggestedSnippet => {
-                        // 必须在 clear_toast 之前取出（clear 会丢掉 pending）
-                        let pending = self.pending_suggested_snippet.take();
-                        self.active_toast = None;
-                        self.status_message.clear();
-                        if let Some((tab_idx, fragment)) = pending {
-                            if tab_idx < self.tabs.len() {
-                                self.active_tab = Some(tab_idx);
-                            }
-                            self.begin_fragment_insert(ctx, &fragment);
-                        }
-                    }
-                }
+                self.handle_toast_action(ctx, action);
+            }
+        } else if secondary {
+            if let Some(action) = toast.secondary_action {
+                self.handle_toast_action(ctx, action);
             }
         } else if dismiss {
             if toast.action == Some(ToastAction::OpenSshImport) {
@@ -363,6 +486,56 @@ impl MistTermApp {
                 self.title_ssh_import_dismissed = true;
             }
             self.clear_toast();
+        }
+    }
+
+    fn handle_toast_action(&mut self, ctx: &egui::Context, action: ToastAction) {
+        match action {
+            ToastAction::OpenSshImport => {
+                self.clear_toast();
+                self.open_ssh_import_dialog(ctx);
+            }
+            ToastAction::ReconnectTab { tab_idx } => {
+                self.clear_toast();
+                if tab_idx < self.tabs.len() {
+                    self.active_tab = Some(tab_idx);
+                    self.reconnect_tab_at(ctx, tab_idx);
+                } else {
+                    self.reconnect_active_tab(ctx);
+                }
+            }
+            ToastAction::InsertSuggestedSnippet => {
+                // 必须在 clear_toast 之前取出（clear 会丢掉 pending）
+                let pending = self.pending_suggested_snippet.take();
+                self.active_toast = None;
+                self.status_message.clear();
+                if let Some((tab_idx, fragment)) = pending {
+                    if tab_idx < self.tabs.len() {
+                        self.active_tab = Some(tab_idx);
+                    }
+                    self.begin_fragment_insert(ctx, &fragment);
+                }
+            }
+            ToastAction::SaveSuggestedSnippet => {
+                let pending = self.pending_suggested_snippet.clone();
+                if let Some((_tab_idx, fragment)) = pending {
+                    let (is_new, title) = self.save_suggested_snippet_to_personal(&fragment);
+                    if let Some(t) = &mut self.active_toast {
+                        t.secondary_action = None;
+                        t.secondary_action_label = None;
+                        let mark = if is_new {
+                            crate::i18n::tr(ctx, "saved to library", "已存到个人库")
+                        } else {
+                            crate::i18n::tr(ctx, "already in library", "个人库已有")
+                        };
+                        if !t.text.contains(mark) {
+                            t.text = format!("{} · {mark}「{title}」", t.text);
+                            self.status_message =
+                                status_message_wrap_error(status_payload(&t.title, &t.text));
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -374,8 +547,9 @@ impl MistTermApp {
         text: impl Into<String>,
     ) {
         let action_label = crate::i18n::tr(ctx, "Reconnect", "重连").to_string();
-        self.push_action_toast(
+        self.push_action_toast_titled(
             ToastKind::Error,
+            crate::i18n::tr(ctx, "Connection failed", "连接失败"),
             text,
             ToastAction::ReconnectTab { tab_idx },
             action_label,

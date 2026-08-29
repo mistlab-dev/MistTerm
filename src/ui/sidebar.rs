@@ -144,22 +144,17 @@ impl Sidebar {
                             );
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 ui.spacing_mut().item_spacing.x = theme.spacing_tool_btn_gap();
-                                if crate::ui::chrome::sidebar_header_icon_button(
-                                    ui,
-                                    theme,
-                                    crate::ui::icons::IconId::SidebarCollapse,
-                                    theme.color_sidebar_header_icon(),
-                                )
-                                .on_hover_text(crate::i18n::tr(
-                                    &ctx,
-                                    "Collapse connection panel",
-                                    "收起连接栏",
-                                ))
-                                .clicked()
+                                // 先占右侧，保证收起钮不被「新建」挤出可视区
+                                if crate::ui::chrome::sidebar_collapse_button(ui, theme)
+                                    .on_hover_text(crate::i18n::tr(
+                                        &ctx,
+                                        "Collapse connection panel",
+                                        "收起连接栏",
+                                    ))
+                                    .clicked()
                                 {
                                     collapse_clicked = true;
                                 }
-                                ui.add_space(theme.spacing_panel_gap());
                                 if crate::ui::chrome::panel_header_new_button_with_label(
                                     ui,
                                     theme,

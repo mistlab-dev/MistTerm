@@ -639,21 +639,24 @@ pub struct MonitorPanel {
 
 ### 10.1 按钮
 
+两档即可，勿再发明第三套灰幽灵样式：
+
 | 类型 | 样式 | 函数 |
 |------|------|------|
-| Primary（弹窗） | ccent_color() 背景, 白色文字 | modal_primary_button* |
-| Solid Primary（面板） | 实心主色，高对比 | panel_solid_primary_button_with_icon_ex |
-| Outlined / Secondary（面板） | 浅底 + 描边 + 正文色（暗夜也可见） | panel_outlined_* / panel_action_* |
-| Danger | 红色背景, 白色文字 | modal_danger_button() |
-| Icon(关闭) | 透明背景, 悬停变红 | close_icon_button() |
-| Status tool | 透明, 底部状态栏用 | status_tool_glyph() |
+| **Primary**（主操作） | 实心 accent 底 + 白字 | `panel_header_new_button*`、`panel_action_primary*`、`panel_solid_primary*`、`modal_primary_button*` |
+| **Secondary**（工具栏） | 浅抬升底 + 可见描边 + 正文色 | `panel_action_*`、`panel_outlined_*`、SFTP 前往/上级/刷新/浏览 |
+| Danger | 红底白字 | `modal_danger_button()` |
+| Icon(关闭) | 透明底，悬停强调 | `close_icon_button()` / `sidebar_collapse_button` |
+
+**用法**：每区通常 **一个** Primary（如侧栏「新建」、弹窗「保存」）；同行工具动作一律 Secondary，不要混用不同灰阶。
 
 **硬规则（暗夜）**：
 
 - 工具栏 / 面板内操作**禁止**常态透明底 + 无描边 + 发灰字（幽灵文字按钮）。
-- 筛选芯片、分段控件可弱样式；「新建 / 保存 / 发送 / 测试 / 分析」等动作必须有底有边（或实心主按钮）。
-- 勿手写 ill(TRANSPARENT) + stroke(NONE) 的 egui Button；勿用裸 small_button 冒充工具栏按钮。
-- Theme：color_control_secondary_fill_idle 用浅嵌底；color_control_secondary_stroke 保留描边；勿回退为透明/无边。
+- 筛选芯片、分段控件可弱样式；「新建 / 保存 / 发送 / 测试 / 分析」等主动作用 Primary。
+- 勿手写 `fill(TRANSPARENT)` + `stroke(NONE)` 的 egui Button；勿用裸 `small_button` 冒充工具栏按钮。
+- Theme：`color_control_secondary_fill_idle` 暗夜约白 28α；`color_control_secondary_stroke` 保留可见描边；勿回退为透明/无边。
+- 禁止再维护 SFTP/AI 专用「幽灵」绘制路径；统一走 `panel_action_*`。
 
 ### 10.2 输入框
 
