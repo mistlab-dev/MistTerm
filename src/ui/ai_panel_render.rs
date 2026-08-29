@@ -32,9 +32,39 @@ pub(super) fn show_wrapped_user_text(ui: &mut egui::Ui, theme: &Theme, text: &st
         },
     );
     let galley = ui.ctx().fonts(|f| f.layout_job(job));
-    let size = egui::vec2(width, galley.size().y.max(font_size * 1.45));
+    // 短句按内容宽分配，避免「通栏蓝条」像按钮
+    let content_w = galley.size().x.min(width).max(12.0);
+    let size = egui::vec2(content_w, galley.size().y.max(font_size * 1.2));
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
     ui.painter().galley(rect.min, galley);
+}
+
+/// 按文案估算用户气泡外宽（含内边距），上限约可用宽的 85%。
+pub(super) fn estimate_user_bubble_outer_width(
+    ui: &egui::Ui,
+    theme: &Theme,
+    text: &str,
+    max_row_w: f32,
+) -> f32 {
+    let pad_x = 10.0;
+    let font = egui::FontId::proportional(theme.font_size_body());
+    let cap = (max_row_w * 0.85).max(64.0).min(max_row_w);
+    let inner_cap = (cap - pad_x * 2.0).max(24.0);
+    let soft = user_text_with_soft_breaks(text, inner_cap, theme.font_size_body());
+    let mut job = egui::text::LayoutJob::default();
+    job.wrap.max_width = inner_cap;
+    job.append(
+        &soft,
+        0.0,
+        egui::TextFormat {
+            font_id: font,
+            color: theme.text_primary(),
+            ..Default::default()
+        },
+    );
+    let galley = ui.ctx().fonts(|f| f.layout_job(job));
+    let content = galley.size().x.max(12.0);
+    (content + pad_x * 2.0 + 2.0).clamp(48.0, cap)
 }
 
 pub(super) fn show_assistant_text(ui: &mut egui::Ui, theme: &Theme, text: &str, width: f32) {
@@ -354,7 +384,7 @@ pub(super) fn show_command_card(
             ui.add_space(theme.spacing_sm());
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    clicked = crate::ui::chrome::panel_action_primary_button_with_icon_ex(
+                    clicked = crate::ui::chrome::panel_solid_primary_button_with_icon_ex(
                         ui,
                         theme,
                         IconId::TerminalPrompt,

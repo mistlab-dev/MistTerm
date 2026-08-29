@@ -168,7 +168,7 @@ pub fn panel_header_new_button_with_label(ui: &mut Ui, theme: &Theme, label: &st
             } else if hovered {
                 theme.color_widget_hover_fill()
             } else {
-                Color32::TRANSPARENT
+                theme.color_subtle_inset_fill()
             }
         } else if pressed {
             theme.accent_alpha(64)
@@ -178,15 +178,16 @@ pub fn panel_header_new_button_with_label(ui: &mut Ui, theme: &Theme, label: &st
             theme.accent_alpha(38)
         };
         let icon_color = if theme.uses_modern_palette() {
-            if hovered || pressed {
-                theme.text_primary()
-            } else {
-                theme.text_secondary().gamma_multiply(0.72)
-            }
+            theme.text_primary()
         } else {
             theme.accent_color()
         };
-        ui.painter().rect(rect, rounding, fill, egui::Stroke::NONE);
+        let stroke = if theme.uses_modern_palette() {
+            theme.color_control_secondary_stroke(true)
+        } else {
+            egui::Stroke::NONE
+        };
+        ui.painter().rect(rect, rounding, fill, stroke);
         icons::paint_icon(
             ui,
             rect,
@@ -377,16 +378,24 @@ fn text_hit_button(
     if hovered || pressed {
         ui.ctx().request_repaint();
     }
-    if hovered || pressed {
-        ui.painter().rect_filled(
-            rect,
-            theme.radius_list_item(),
-            if pressed {
-                theme.accent_alpha(51)
-            } else {
-                theme.color_panel_toolbar_btn_fill()
-            },
-        );
+    // 暗夜常态也画浅底+描边，避免「导入」等像纯文字链接。
+    let fill = if pressed {
+        theme.accent_alpha(51)
+    } else if hovered {
+        theme.color_widget_hover_fill()
+    } else if theme.uses_modern_palette() {
+        theme.color_subtle_inset_fill()
+    } else {
+        Color32::TRANSPARENT
+    };
+    let stroke = if theme.uses_modern_palette() {
+        theme.color_control_secondary_stroke(true)
+    } else {
+        egui::Stroke::NONE
+    };
+    if fill != Color32::TRANSPARENT || stroke != egui::Stroke::NONE {
+        ui.painter()
+            .rect(rect, theme.radius_list_item(), fill, stroke);
     }
     let text_color = if hovered || pressed {
         hover_color
@@ -837,7 +846,7 @@ pub fn paint_right_dock_foreground_shell(
     paint_right_dock_slot_shell_with_painter_ex(&painter, paint, theme, true);
 }
 
-/// 标准 Foreground 正文宿主：`Area` 覆盖 `paint`，正文在 `inner`（与 LAYOUT.md §8.3 一致）。
+/// 标准 Foreground 正文宿主：`Area` 严格限制在 `paint` 内，避免可点区吞掉左侧栏。
 pub fn show_right_dock_foreground_body<R>(
     area_id: &'static str,
     ctx: &egui::Context,
@@ -846,22 +855,46 @@ pub fn show_right_dock_foreground_body<R>(
     _profile: crate::ui::layout_util::SidePanelProfile,
     add_body: impl FnOnce(&mut Ui, f32) -> R,
 ) -> egui::InnerResponse<R> {
-    let paint_size = geom.paint.size();
-    let body_w = geom.inner.width().max(48.0);
+    let screen = ctx.screen_rect();
+    // 防护：槽位异常过宽时钉在右侧，防止 Middle Area 盖住整窗。
+    let mut paint = geom.paint;
+    if paint.width() > screen.width() * 0.55 {
+        let w = paint.width().min(screen.width() * 0.42).max(48.0);
+        paint = egui::Rect::from_min_max(
+            egui::pos2(screen.max.x - w, paint.min.y),
+            egui::pos2(screen.max.x, paint.max.y),
+        );
+    }
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(
+            (geom.inner.min.x - geom.paint.min.x) + paint.min.x,
+            (geom.inner.min.y - geom.paint.min.y) + paint.min.y,
+        ),
+        egui::pos2(
+            (geom.inner.max.x - geom.paint.min.x) + paint.min.x,
+            (geom.inner.max.y - geom.paint.min.y) + paint.min.y,
+        ),
+    )
+    .intersect(paint);
+    let paint_size = paint.size();
+    let body_w = inner.width().max(48.0);
     right_dock_foreground_body_area(area_id)
-        .constrain_to(geom.paint)
-        .fixed_pos(geom.paint.min)
+        .constrain_to(paint)
+        .fixed_pos(paint.min)
         .show(ctx, |ui| {
             ui.set_min_size(paint_size);
             ui.set_max_size(paint_size);
-            ui.set_clip_rect(geom.paint);
-            ui.allocate_ui_at_rect(geom.inner, |ui| {
-                ui.set_clip_rect(geom.inner);
-                let cap = ui.available_width().max(48.0).min(body_w);
-                let w = crate::ui::layout_util::constrain_ui_to_right_dock_body(ui, cap);
-                add_body(ui, w)
-            })
-            .inner
+            ui.set_clip_rect(paint);
+            let local_inner = egui::Rect::from_min_max(
+                ui.min_rect().min + (inner.min.to_vec2() - paint.min.to_vec2()),
+                ui.min_rect().min + (inner.max.to_vec2() - paint.min.to_vec2()),
+            );
+            let mut body_ui =
+                ui.child_ui(local_inner, egui::Layout::top_down(egui::Align::Min));
+            body_ui.set_clip_rect(local_inner);
+            let cap = body_ui.available_width().max(48.0).min(body_w);
+            let w = crate::ui::layout_util::constrain_ui_to_right_dock_body(&mut body_ui, cap);
+            add_body(&mut body_ui, w)
         })
 }
 
@@ -1459,7 +1492,7 @@ fn primary_control_button_colors(
     (theme.color_modal_primary_fill(), c, c)
 }
 
-/// 面板命令栏主按钮（暗夜：浅底 ghost；彩色主题：与弹窗主按钮同族）
+/// 面板命令栏主按钮（暗夜：有底有边；彩色主题：与弹窗主按钮同族）
 fn toolbar_primary_control_button_colors(
     theme: &Theme,
     can_activate: bool,
@@ -1467,23 +1500,8 @@ fn toolbar_primary_control_button_colors(
     pressed: bool,
 ) -> (Color32, Color32, Color32) {
     if theme.uses_modern_palette() {
-        if !can_activate {
-            return (
-                theme.color_control_secondary_fill_disabled(),
-                theme.color_control_disabled_text(),
-                theme.color_control_disabled_text(),
-            );
-        }
-        if pressed {
-            let c = theme.text_primary();
-            return (theme.color_control_secondary_fill_pressed(), c, c);
-        }
-        if hovered {
-            let c = theme.text_primary();
-            return (theme.color_widget_hover_fill(), c, c);
-        }
-        let muted = theme.text_secondary().gamma_multiply(0.72);
-        return (Color32::TRANSPARENT, muted, muted);
+        // 暗夜不用实心 accent 铺满工具栏；用次要按钮底 + 正文色，仍一眼可点。
+        return secondary_control_button_colors(theme, can_activate, hovered, pressed);
     }
     primary_control_button_colors(theme, can_activate, hovered, pressed)
 }
@@ -1507,7 +1525,14 @@ fn paint_control_button(
     }
 
     let stroke = match variant {
-        ControlButtonVariant::Primary | ControlButtonVariant::ToolbarPrimary => egui::Stroke::NONE,
+        ControlButtonVariant::Primary => egui::Stroke::NONE,
+        ControlButtonVariant::ToolbarPrimary => {
+            if theme.uses_modern_palette() {
+                theme.color_control_secondary_stroke(can_activate)
+            } else {
+                egui::Stroke::NONE
+            }
+        }
         ControlButtonVariant::Secondary => theme.color_control_secondary_stroke(can_activate),
         ControlButtonVariant::Danger => egui::Stroke::new(1.0, theme.color_text_input_stroke()),
     };
@@ -1582,7 +1607,14 @@ fn paint_icon_only_button(
     }
 
     let stroke = match variant {
-        ControlButtonVariant::Primary | ControlButtonVariant::ToolbarPrimary => egui::Stroke::NONE,
+        ControlButtonVariant::Primary => egui::Stroke::NONE,
+        ControlButtonVariant::ToolbarPrimary => {
+            if theme.uses_modern_palette() {
+                theme.color_control_secondary_stroke(can_activate)
+            } else {
+                egui::Stroke::NONE
+            }
+        }
         ControlButtonVariant::Secondary => theme.color_control_secondary_stroke(can_activate),
         ControlButtonVariant::Danger => egui::Stroke::new(1.0, theme.color_text_input_stroke()),
     };
@@ -1638,17 +1670,10 @@ fn paint_icon_only_button(
 
 /// 侧栏 / 右 dock 标题行次要工具按钮（宽度按文字测量）。
 pub fn panel_toolbar_button_widget<'a>(theme: &'a Theme, text: RichText) -> Button<'a> {
-    if theme.uses_modern_palette() {
-        Button::new(text)
-            .fill(Color32::TRANSPARENT)
-            .stroke(Stroke::NONE)
-            .rounding(theme.radius_list_item())
-    } else {
-        Button::new(text)
-            .fill(theme.color_panel_toolbar_btn_fill())
-            .stroke(theme.divider_stroke())
-            .rounding(theme.radius_list_item())
-    }
+    Button::new(text)
+        .fill(theme.color_control_secondary_fill_idle())
+        .stroke(theme.color_control_secondary_stroke(true))
+        .rounding(theme.radius_list_item())
 }
 
 fn panel_toolbar_button_size(ui: &Ui, theme: &Theme, label: &str, with_icon: bool) -> egui::Vec2 {
@@ -2677,7 +2702,7 @@ fn sftp_toolbar_action_size(ui: &Ui, theme: &Theme, icon: IconId, label: &str) -
     )
 }
 
-/// SFTP 工具条内单颗操作：白字 + 图标，idle 透明，hover 圆角灰垫 + 小手。
+/// SFTP 工具条内单颗操作：有底有边，避免暗夜下像纯文字。
 pub fn sftp_toolbar_action_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -2709,15 +2734,16 @@ pub fn sftp_toolbar_action_button(
         ui.ctx().request_repaint();
     }
     let fill = if !enabled {
-        Color32::TRANSPARENT
+        theme.color_control_secondary_fill_disabled()
     } else if pressed {
         theme.color_widget_active_fill()
     } else if hovered {
         theme.color_sftp_toolbar_action_hover()
     } else {
-        Color32::TRANSPARENT
+        theme.color_subtle_inset_fill()
     };
-    ui.painter().rect(rect, rounding, fill, Stroke::NONE);
+    let stroke = theme.color_control_secondary_stroke(enabled);
+    ui.painter().rect(rect, rounding, fill, stroke);
     let text_color = if enabled {
         theme.text_primary()
     } else {
@@ -2823,16 +2849,15 @@ pub fn sftp_ghost_submit_button(
     if hovered || pressed {
         ui.ctx().request_repaint();
     }
-    let hairline = theme.hairline_width(ui.ctx());
-    let stroke = Stroke::new(hairline, theme.color_sftp_ghost_btn_stroke());
+    let stroke = theme.color_control_secondary_stroke(enabled);
     let fill = if !enabled {
-        Color32::TRANSPARENT
+        theme.color_control_secondary_fill_disabled()
     } else if pressed {
         theme.color_widget_active_fill()
     } else if hovered {
         theme.color_sftp_toolbar_action_hover()
     } else {
-        Color32::TRANSPARENT
+        theme.color_subtle_inset_fill()
     };
     ui.painter().rect(rect, rounding, fill, stroke);
     let text_color = if enabled {
@@ -3498,8 +3523,43 @@ pub struct StatusToastActions {
     pub dismiss: bool,
 }
 
-/// 右下角状态 Toast（替代旧常驻状态栏）。
-/// `action_label` 为 `Some` 时绘制主按钮；`show_dismiss` 绘制关闭（需确认或 Error/Warn）。
+/// 测算 Toast 外框尺寸（用于 `Area::fixed_pos`，避免可点区铺满整窗）。
+pub(crate) fn measure_status_toast_size(
+    ctx: &egui::Context,
+    theme: &Theme,
+    text: &str,
+    action_label: Option<&str>,
+    show_dismiss: bool,
+) -> egui::Vec2 {
+    if text.is_empty() {
+        return egui::Vec2::ZERO;
+    }
+    let font = egui::FontId::proportional(theme.font_size_status_bar());
+    let max_text_w = theme.toast_max_text_width();
+    let btn_h = theme.toast_action_btn_h();
+    let dismiss_only = show_dismiss && action_label.is_none();
+    let dismiss_reserve = if dismiss_only { 22.0 } else { 0.0 };
+    let galley = ctx.fonts(|f| {
+        f.layout(
+            text.to_owned(),
+            font,
+            Color32::WHITE,
+            max_text_w,
+        )
+    });
+    let pad = egui::vec2(12.0, 8.0);
+    let actions_h = if action_label.is_some() {
+        btn_h + 6.0
+    } else {
+        0.0
+    };
+    egui::vec2(
+        (galley.size().x + pad.x * 2.0 + 6.0 + dismiss_reserve).max(theme.toast_min_width()),
+        galley.size().y + pad.y * 2.0 + actions_h,
+    )
+}
+
+/// 在当前 `Ui` 原点绘制 Toast（调用方须已 `fixed_pos` 到右下角）。
 pub(crate) fn paint_status_toast(
     ui: &mut Ui,
     theme: &Theme,
@@ -3519,7 +3579,6 @@ pub(crate) fn paint_status_toast(
         crate::ui::app::ToastKind::Info => (theme.accent_color(), theme.text_primary()),
     };
     let max_text_w = theme.toast_max_text_width();
-    let margin = theme.toast_screen_margin();
     let btn_h = theme.toast_action_btn_h();
     let dismiss_only = show_dismiss && action_label.is_none();
     let dismiss_reserve = if dismiss_only { 22.0 } else { 0.0 };
@@ -3534,65 +3593,60 @@ pub(crate) fn paint_status_toast(
         (galley.size().x + pad.x * 2.0 + 6.0 + dismiss_reserve).max(theme.toast_min_width()),
         galley.size().y + pad.y * 2.0 + actions_h,
     );
-    let screen = ui.ctx().screen_rect();
-    let pos = egui::pos2(screen.max.x - size.x - margin, screen.max.y - size.y - margin);
-    let rect = egui::Rect::from_min_size(pos, size);
+    let (rect, _) = ui.allocate_exact_size(size, Sense::click());
     let primary = std::cell::Cell::new(false);
     let dismiss = std::cell::Cell::new(false);
-    ui.allocate_ui_at_rect(rect, |ui| {
-        ui.set_min_size(size);
-        let painter = ui.painter();
-        painter.rect(
-            rect,
-            theme.radius_list_item(),
-            theme.chrome_bar_fill(),
-            egui::Stroke::new(1.0, theme.border_divider_color()),
-        );
-        let bar = egui::Rect::from_min_max(
-            egui::pos2(rect.min.x, rect.min.y + 4.0),
-            egui::pos2(rect.min.x + 3.0, rect.max.y - 4.0),
-        );
-        painter.rect_filled(bar, egui::Rounding::same(1.5), accent);
-        painter.galley(rect.min + pad + egui::vec2(4.0, 0.0), galley);
+    let painter = ui.painter();
+    painter.rect(
+        rect,
+        theme.radius_list_item(),
+        theme.chrome_bar_fill(),
+        egui::Stroke::new(1.0, theme.border_divider_color()),
+    );
+    let bar = egui::Rect::from_min_max(
+        egui::pos2(rect.min.x, rect.min.y + 4.0),
+        egui::pos2(rect.min.x + 3.0, rect.max.y - 4.0),
+    );
+    painter.rect_filled(bar, egui::Rounding::same(1.5), accent);
+    painter.galley(rect.min + pad + egui::vec2(4.0, 0.0), galley);
 
-        if dismiss_only {
-            let close_rect = egui::Rect::from_min_size(
-                egui::pos2(rect.max.x - pad.x - 18.0, rect.min.y + pad.y - 2.0),
-                egui::vec2(18.0, 18.0),
-            );
-            ui.allocate_ui_at_rect(close_rect, |ui| {
-                if icon_button(ui, theme, IconId::Close, theme.color_caption_text())
-                    .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss", "关闭"))
-                    .clicked()
-                {
-                    dismiss.set(true);
-                }
-            });
-        } else if let Some(label) = action_label {
-            let row_y = rect.max.y - pad.y - btn_h;
-            ui.allocate_ui_at_rect(
-                egui::Rect::from_min_max(
-                    egui::pos2(rect.min.x + pad.x + 4.0, row_y),
-                    egui::pos2(rect.max.x - pad.x, rect.max.y - pad.y),
-                ),
-                |ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if show_dismiss
-                            && icon_button(ui, theme, IconId::Close, theme.color_caption_text())
-                                .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss", "关闭"))
-                                .clicked()
-                        {
-                            dismiss.set(true);
-                        }
-                        ui.add_space(6.0);
-                        if chrome_small_accent_button(ui, theme, label).clicked() {
-                            primary.set(true);
-                        }
-                    });
-                },
-            );
-        }
-    });
+    if dismiss_only {
+        let close_rect = egui::Rect::from_min_size(
+            egui::pos2(rect.max.x - pad.x - 18.0, rect.min.y + pad.y - 2.0),
+            egui::vec2(18.0, 18.0),
+        );
+        ui.allocate_ui_at_rect(close_rect, |ui| {
+            if icon_button(ui, theme, IconId::Close, theme.color_caption_text())
+                .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss", "关闭"))
+                .clicked()
+            {
+                dismiss.set(true);
+            }
+        });
+    } else if let Some(label) = action_label {
+        let row_y = rect.max.y - pad.y - btn_h;
+        ui.allocate_ui_at_rect(
+            egui::Rect::from_min_max(
+                egui::pos2(rect.min.x + pad.x + 4.0, row_y),
+                egui::pos2(rect.max.x - pad.x, rect.max.y - pad.y),
+            ),
+            |ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if show_dismiss
+                        && icon_button(ui, theme, IconId::Close, theme.color_caption_text())
+                            .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss", "关闭"))
+                            .clicked()
+                    {
+                        dismiss.set(true);
+                    }
+                    ui.add_space(6.0);
+                    if chrome_small_accent_button(ui, theme, label).clicked() {
+                        primary.set(true);
+                    }
+                });
+            },
+        );
+    }
     StatusToastActions {
         primary: primary.get(),
         dismiss: dismiss.get(),
@@ -3989,7 +4043,201 @@ pub fn panel_action_primary_button_with_icon_ex(
     )
 }
 
-/// 数字框（`DragValue` 等）包进与单行输入相同的底+描边
+/// 实心主按钮（高对比；AI「用到终端」/「发送」等需一眼可点）。
+pub fn panel_solid_primary_button_with_icon_ex(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+    enabled: bool,
+) -> Response {
+    paint_control_button(
+        ui,
+        theme,
+        label,
+        Some(icon),
+        ControlButtonVariant::Primary,
+        theme.size_control_btn_min_w(),
+        enabled,
+    )
+}
+
+/// 有底+描边的工具按钮（AI 输入栏等；暗夜下也保持可辨认为按钮）。
+pub fn panel_outlined_toolbar_button_with_icon_ex(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+    enabled: bool,
+) -> Response {
+    let size = control_button_size(ui, theme, label, true, theme.size_control_btn_min_w());
+    let rounding = theme.radius_list_item();
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    if hovered || pressed {
+        ui.ctx().request_repaint();
+    }
+    let (fill, text_color) = if !enabled {
+        (
+            theme.color_subtle_inset_fill().gamma_multiply(0.5),
+            theme.color_control_disabled_text(),
+        )
+    } else if pressed {
+        (
+            theme.color_widget_active_fill(),
+            theme.text_primary(),
+        )
+    } else if hovered {
+        (
+            theme.color_widget_hover_fill(),
+            theme.text_primary(),
+        )
+    } else {
+        (
+            theme.color_subtle_inset_fill(),
+            theme.text_primary(),
+        )
+    };
+    let stroke = egui::Stroke::new(
+        theme.hairline_width(ui.ctx()).max(1.0),
+        if enabled {
+            theme.color_text_input_stroke()
+        } else {
+            theme.color_text_input_stroke().gamma_multiply(0.5)
+        },
+    );
+    ui.painter().rect(rect, rounding, fill, stroke);
+    let icon_px = theme.size_icon_glyph();
+    paint_icon_caption_row_in_rect(
+        ui,
+        rect,
+        icon,
+        label,
+        icon_px,
+        4.0,
+        theme.font_size_control_btn(),
+        text_color,
+        text_color,
+        0.0,
+        true,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(if enabled {
+            CursorIcon::PointingHand
+        } else {
+            CursorIcon::NotAllowed
+        });
+    }
+    response
+}
+
+/// 有底+描边的纯图标按钮（AI 清空对话等次要操作）。
+pub fn panel_outlined_icon_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    tooltip: &str,
+    enabled: bool,
+) -> Response {
+    let size = icon_only_button_size(theme, theme.size_control_btn_h());
+    let rounding = theme.radius_list_item();
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    if hovered || pressed {
+        ui.ctx().request_repaint();
+    }
+    let (fill, icon_color) = if !enabled {
+        (
+            theme.color_subtle_inset_fill().gamma_multiply(0.5),
+            theme.color_control_disabled_text(),
+        )
+    } else if pressed {
+        (theme.color_widget_active_fill(), theme.text_primary())
+    } else if hovered {
+        (theme.color_widget_hover_fill(), theme.text_primary())
+    } else {
+        (theme.color_subtle_inset_fill(), theme.text_secondary())
+    };
+    let stroke = egui::Stroke::new(
+        theme.hairline_width(ui.ctx()).max(1.0),
+        if enabled {
+            theme.color_text_input_stroke()
+        } else {
+            theme.color_text_input_stroke().gamma_multiply(0.5)
+        },
+    );
+    ui.painter().rect(rect, rounding, fill, stroke);
+    let icon_px = theme.size_icon_glyph();
+    icons::paint_icon(
+        ui,
+        egui::Rect::from_center_size(rect.center(), egui::vec2(icon_px, icon_px)),
+        icon,
+        icon_color,
+        icon_px,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(if enabled {
+            CursorIcon::PointingHand
+        } else {
+            CursorIcon::NotAllowed
+        });
+    }
+    response.on_hover_text(tooltip)
+}
+
+/// 矮轮廓快捷 chip（空态提问；固定行高 + 统一字号，同行文字基线对齐）。
+pub fn panel_quick_prompt_chip(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
+    let font = egui::FontId::proportional(theme.font_size_ui_control());
+    let text_color = theme.text_primary();
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, text_color);
+    let pad_x = 10.0;
+    // 高度不跟单条文案的 galley 走（全角「？」等会抬高行盒），同行必须同高。
+    let chip_h = theme.size_panel_filter_chip_h().max(theme.size_control_btn_h() - 2.0);
+    let size = egui::vec2(
+        (galley.size().x + pad_x * 2.0).max(theme.size_panel_header_btn_min_w()),
+        chip_h,
+    );
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    let fill = if pressed {
+        theme.color_widget_active_fill()
+    } else if hovered {
+        theme.color_widget_hover_fill()
+    } else {
+        theme.color_subtle_inset_fill()
+    };
+    let stroke = egui::Stroke::new(
+        theme.hairline_width(ui.ctx()).max(1.0),
+        if hovered || pressed {
+            theme.accent_alpha(160)
+        } else {
+            theme.color_text_input_stroke()
+        },
+    );
+    ui.painter().rect(
+        rect,
+        egui::Rounding::same(theme.radius_category()),
+        fill,
+        stroke,
+    );
+    // 垂直居中到固定 chip 高，同行多枚文字落在同一条中线。
+    let text_pos = egui::pos2(
+        rect.center().x - galley.size().x * 0.5,
+        rect.center().y - galley.size().y * 0.5,
+    );
+    ui.painter().galley(text_pos, galley);
+    if hovered {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response
+}
+
+/// 数字框（`DragValue` 等）包进与单行输入相同的底+描边，字号与表单输入一致。
 pub fn form_drag_value_field(
     ui: &mut Ui,
     theme: &Theme,
@@ -4000,7 +4248,18 @@ pub fn form_drag_value_field(
     let underline = theme.uses_underline_inputs();
     let shown = theme
         .frame_form_text_input(focused)
-        .show(ui, |ui| with_underline_field_visuals(ui, theme, add_field));
+        .show(ui, |ui| {
+            with_underline_field_visuals(ui, theme, |ui| {
+                let font = egui::FontId::proportional(theme.font_size_control_input());
+                ui.style_mut()
+                    .text_styles
+                    .insert(egui::TextStyle::Body, font.clone());
+                ui.style_mut()
+                    .text_styles
+                    .insert(egui::TextStyle::Button, font);
+                add_field(ui)
+            })
+        });
     if underline {
         paint_form_field_underline(ui, theme, shown.response.rect, focused);
     }

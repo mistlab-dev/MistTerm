@@ -12,6 +12,186 @@ pub struct FragmentRecommendation {
     pub source: &'static str,
 }
 
+/// 审计拦截后的合规替代建议（团队优先）。
+#[derive(Debug, Clone)]
+pub struct CompliantFragmentSuggestion {
+    pub fragment: FragmentStats,
+    /// `"team"` / `"personal"`
+    pub source: &'static str,
+}
+
+/// 从被拦截命令推断主题关键词，并在片段库中打分取 Top1。
+/// 刻意排除与拦截命令相同/明显同危的片段，避免「推荐再执行一遍危险命令」。
+pub fn suggest_compliant_after_block(
+    blocked_command: &str,
+    team_fragments: &[FragmentStats],
+    personal_fragments: &[FragmentStats],
+) -> Option<CompliantFragmentSuggestion> {
+    let keywords = block_topic_keywords(blocked_command);
+    if keywords.is_empty() {
+        return None;
+    }
+    let blocked_norm = normalize_command(blocked_command);
+    if let Some(f) = best_compliant_match(&keywords, &blocked_norm, team_fragments) {
+        return Some(CompliantFragmentSuggestion {
+            fragment: f,
+            source: "team",
+        });
+    }
+    best_compliant_match(&keywords, &blocked_norm, personal_fragments).map(|f| {
+        CompliantFragmentSuggestion {
+            fragment: f,
+            source: "personal",
+        }
+    })
+}
+
+fn block_topic_keywords(blocked: &str) -> Vec<String> {
+    let lower = blocked.to_lowercase();
+    let mut keys: Vec<String> = Vec::new();
+
+    // 常见危险模式 → 运维主题词（中英），便于命中「清理日志」等合规片段
+    if lower.contains("rm")
+        && (lower.contains("-rf")
+            || lower.contains("-fr")
+            || lower.split_whitespace().any(|t| t == "-r" || t == "-f"))
+    {
+        for k in [
+            "clean", "cleanup", "log", "logs", "disk", "df", "清理", "日志", "磁盘", "空间",
+        ] {
+            keys.push(k.to_string());
+        }
+    }
+    if lower.contains("mkfs") || lower.contains("dd if=") || lower.contains("ddof=") {
+        for k in ["disk", "partition", "备份", "backup", "磁盘"] {
+            keys.push(k.to_string());
+        }
+    }
+    if lower.contains("iptables") || lower.contains("firewall") || lower.contains("ufw") {
+        for k in ["firewall", "iptables", "网络", "network", "端口"] {
+            keys.push(k.to_string());
+        }
+    }
+    if lower.contains("chmod") && (lower.contains("777") || lower.contains("-r")) {
+        for k in ["chmod", "权限", "permission", "secure"] {
+            keys.push(k.to_string());
+        }
+    }
+
+    for tok in tokenize_cmd(blocked) {
+        if is_noise_token(&tok) {
+            continue;
+        }
+        if !keys.iter().any(|k| k == &tok) {
+            keys.push(tok);
+        }
+    }
+    keys
+}
+
+fn tokenize_cmd(cmd: &str) -> Vec<String> {
+    cmd.split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+        .filter(|s| s.len() >= 2)
+        .map(|s| s.to_lowercase())
+        .collect()
+}
+
+fn is_noise_token(tok: &str) -> bool {
+    matches!(
+        tok,
+        "rm" | "rf"
+            | "fr"
+            | "sudo"
+            | "doas"
+            | "bash"
+            | "sh"
+            | "zsh"
+            | "cmd"
+            | "exe"
+            | "bin"
+            | "usr"
+            | "dev"
+            | "etc"
+            | "var"
+            | "tmp"
+            | "true"
+            | "false"
+            | "yes"
+            | "no"
+            | "the"
+            | "and"
+            | "for"
+            | "from"
+            | "with"
+    ) || tok.chars().all(|c| c == '-')
+}
+
+fn best_compliant_match(
+    keywords: &[String],
+    blocked_norm: &str,
+    fragments: &[FragmentStats],
+) -> Option<FragmentStats> {
+    let mut best: Option<(i64, FragmentStats)> = None;
+    for f in fragments {
+        let cmd_norm = normalize_command(&f.command);
+        if cmd_norm.is_empty() {
+            continue;
+        }
+        // 不要推荐与被拦命令实质相同的内容
+        if cmd_norm == blocked_norm
+            || blocked_norm.contains(&cmd_norm)
+            || cmd_norm.contains(blocked_norm)
+        {
+            continue;
+        }
+        if looks_like_same_danger(&f.command, blocked_norm) {
+            continue;
+        }
+        let score = score_fragment_keywords(f, keywords);
+        if score <= 0 {
+            continue;
+        }
+        let rank = score * 1000 + i64::from(f.usage_count.min(999));
+        match &best {
+            None => best = Some((rank, f.clone())),
+            Some((r, _)) if rank > *r => best = Some((rank, f.clone())),
+            _ => {}
+        }
+    }
+    best.map(|(_, f)| f)
+}
+
+fn looks_like_same_danger(candidate: &str, blocked_norm: &str) -> bool {
+    let c = candidate.to_lowercase();
+    if blocked_norm.contains("rm") && c.contains("rm") && (c.contains("-rf") || c.contains("-fr")) {
+        return true;
+    }
+    false
+}
+
+fn score_fragment_keywords(f: &FragmentStats, keywords: &[String]) -> i64 {
+    let title = f.title.to_lowercase();
+    let command = f.command.to_lowercase();
+    let category = f.category.to_lowercase();
+    let tags = f.tags.join(" ").to_lowercase();
+    let mut score: i64 = 0;
+    for k in keywords {
+        if k.is_empty() {
+            continue;
+        }
+        if title.contains(k) {
+            score += 3;
+        }
+        if command.contains(k) {
+            score += 2;
+        }
+        if category.contains(k) || tags.contains(k) {
+            score += 2;
+        }
+    }
+    score
+}
+
 fn normalize_command(cmd: &str) -> String {
     cmd.split_whitespace().collect::<Vec<_>>().join(" ")
 }

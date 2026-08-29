@@ -11,6 +11,7 @@
 - 说明：内置规则将 `cat /etc/shadow` 标为 **dangerous→block**（非 confirm）；confirm 场景用团队自定义规则 `mist_confirm_demo` 验证。
 - Agent 为 bash+curl（非二进制），API 基址指向本机 `http://127.0.0.1:8080/v1`（与 `mist-team-server` 同机）。
 - MistTerm GUI toast / 黄横幅仍建议在客户端登录对应团队后做一次人工点看。
+- **hotfix**：`interactive.bash` / wrapper 内 `case` 曾写成 `"trap "*"`（坏引号）→ 登录即 `syntax error near unexpected token '*'`；已改为 `trap\ *|source\ *|.\ *)` 并同步修 wrapper 内嵌 HOOK，避免再次覆盖。
 
 ---
 
@@ -123,6 +124,7 @@
 
 - `docs/tech/COMMAND-AUDIT.md`
 - `docs/tech/SERVER-SIDE-AUDIT.md`
+- 下一版（概念稿 v4 对齐）：`docs/product/NEXT-VERSION-TODO.md`
 
 ---
 

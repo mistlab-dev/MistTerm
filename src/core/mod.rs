@@ -71,7 +71,8 @@ pub use fragment_analytics::{
 pub use fragment_usage_log::{FragmentUsageEvent, FragmentUsageLog, MemberPeriodStats};
 pub use fragment_recommendations::{
     build_efficiency_report_markdown, build_efficiency_report_pdf, recommend_from_history,
-    merge_recommendations, FragmentRecommendation,
+    merge_recommendations, suggest_compliant_after_block, CompliantFragmentSuggestion,
+    FragmentRecommendation,
 };
 pub use ssh_keygen::generate_ed25519;
 pub use market::{

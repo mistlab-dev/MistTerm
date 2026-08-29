@@ -20,6 +20,8 @@ pub(crate) enum ToastAction {
     OpenSshImport,
     /// 重连指定标签的 SSH（连接失败 / 自动重连放弃后）。
     ReconnectTab { tab_idx: usize },
+    /// 将审计拦截后的合规片段建议插入终端（内容在 `pending_suggested_snippet`）。
+    InsertSuggestedSnippet,
 }
 
 #[derive(Debug, Clone)]
@@ -192,6 +194,7 @@ impl MistTermApp {
     pub(crate) fn clear_toast(&mut self) {
         self.active_toast = None;
         self.status_message.clear();
+        self.pending_suggested_snippet = None;
     }
 
     /// 有待导入且用户未关闭时，展示可操作 Toast（替代侧栏横幅 / 顶栏 chip）。
@@ -287,10 +290,31 @@ impl MistTermApp {
             || matches!(toast.kind, ToastKind::Error | ToastKind::Warn);
         let mut primary = false;
         let mut dismiss = false;
+        let size = crate::ui::chrome::measure_status_toast_size(
+            ctx,
+            theme,
+            &toast.text,
+            toast.action_label.as_deref(),
+            show_dismiss,
+        );
+        if size.x < 1.0 || size.y < 1.0 {
+            return;
+        }
+        let margin = theme.toast_screen_margin();
+        let screen = ctx.screen_rect();
+        let pos = egui::pos2(
+            screen.max.x - size.x - margin,
+            screen.max.y - size.y - margin,
+        );
+        // 必须 fixed_pos + 限制尺寸：否则 Area 默认可点区会铺满从原点到右下，左侧菜单全部点不穿。
         egui::Area::new(egui::Id::new("status_toast"))
             .order(egui::Order::Foreground)
+            .fixed_pos(pos)
+            .constrain_to(screen)
             .interactable(true)
             .show(ctx, |ui| {
+                ui.set_max_size(size);
+                ui.set_min_size(size);
                 let actions = crate::ui::chrome::paint_status_toast(
                     ui,
                     theme,
@@ -317,6 +341,18 @@ impl MistTermApp {
                             self.reconnect_tab_at(ctx, tab_idx);
                         } else {
                             self.reconnect_active_tab(ctx);
+                        }
+                    }
+                    ToastAction::InsertSuggestedSnippet => {
+                        // 必须在 clear_toast 之前取出（clear 会丢掉 pending）
+                        let pending = self.pending_suggested_snippet.take();
+                        self.active_toast = None;
+                        self.status_message.clear();
+                        if let Some((tab_idx, fragment)) = pending {
+                            if tab_idx < self.tabs.len() {
+                                self.active_tab = Some(tab_idx);
+                            }
+                            self.begin_fragment_insert(ctx, &fragment);
                         }
                     }
                 }

@@ -338,21 +338,21 @@ impl Theme {
         }
     }
 
-    /// AI 用户消息气泡底
+    /// AI 用户消息气泡底（弱填充，避免短句看起来像可点按钮）
     #[inline]
     pub fn color_ai_user_bubble_fill(&self) -> Color32 {
         if self.uses_modern_palette() {
-            self.accent_alpha(72)
+            self.accent_alpha(36)
         } else {
             self.accent_alpha(14)
         }
     }
 
-    /// AI 用户消息气泡描边（modern 下略提亮，避免与正文融在一起）
+    /// AI 用户消息气泡描边（modern 下轻描边，弱于控件按钮）
     #[inline]
     pub fn color_ai_user_bubble_stroke(&self) -> Color32 {
         if self.uses_modern_palette() {
-            self.accent_alpha(110)
+            self.accent_alpha(55)
         } else {
             Color32::TRANSPARENT
         }
@@ -860,15 +860,18 @@ impl Theme {
                     bottom: self.spacing_search_input_y() + 2.0,
                 });
         }
+        self.frame_boxed_text_input(focused)
+    }
+
+    /// 始终有底+描边的输入框（AI 多行编辑器等；不受 underline 模式影响）
+    pub fn frame_boxed_text_input(&self, focused: bool) -> egui::Frame {
         let stroke = if focused {
             egui::Stroke::new(self.stroke_width_panel().max(1.0), self.accent_color())
-        } else if self.uses_modern_palette() {
+        } else {
             egui::Stroke::new(
                 self.stroke_width_panel().max(1.0),
-                self.divider_stroke_color(),
+                self.color_text_input_stroke(),
             )
-        } else {
-            egui::Stroke::new(self.stroke_width_panel(), self.color_text_input_stroke())
         };
         egui::Frame::none()
             .fill(self.color_text_input_fill())
@@ -1297,7 +1300,8 @@ impl Theme {
     #[inline]
     pub fn color_control_secondary_idle_text(&self) -> Color32 {
         if self.uses_modern_palette() {
-            self.text_secondary().gamma_multiply(0.72)
+            // 暗夜须与正文同级，避免「像说明文字不像按钮」
+            self.text_primary()
         } else {
             self.text_secondary()
         }
@@ -1319,7 +1323,7 @@ impl Theme {
     #[inline]
     pub fn color_control_button_fill_idle(&self) -> Color32 {
         if self.uses_modern_palette() {
-            Color32::TRANSPARENT
+            self.color_subtle_inset_fill()
         } else {
             self.color_panel_toolbar_btn_fill()
         }
@@ -1355,28 +1359,24 @@ impl Theme {
     #[inline]
     pub fn color_control_secondary_fill_disabled(&self) -> Color32 {
         if self.uses_modern_palette() {
-            Color32::TRANSPARENT
+            self.color_subtle_inset_fill().gamma_multiply(0.5)
         } else {
             self.color_panel_toolbar_btn_fill()
                 .gamma_multiply(self.color_control_secondary_disabled_fill_gamma())
         }
     }
 
-    /// 面板次要按钮描边（暗夜无硬边框，与芯片一致）
+    /// 面板次要按钮描边（暗夜也保留描边，避免幽灵文字按钮）
     #[inline]
     pub fn color_control_secondary_stroke(&self, enabled: bool) -> egui::Stroke {
-        if self.uses_modern_palette() {
-            egui::Stroke::NONE
-        } else {
-            egui::Stroke::new(
-                1.0,
-                if enabled {
-                    self.color_text_input_stroke()
-                } else {
-                    self.color_text_input_stroke().gamma_multiply(0.75)
-                },
-            )
-        }
+        egui::Stroke::new(
+            1.0,
+            if enabled {
+                self.color_text_input_stroke()
+            } else {
+                self.color_text_input_stroke().gamma_multiply(0.5)
+            },
+        )
     }
 
     /// 禁用控件文字/图标
@@ -1680,9 +1680,9 @@ impl Theme {
         32.0
     }
 
-    /// 搜索框 / 表单单行输入统一字号（13px）
+    /// 搜索框 / 表单单行输入统一字号（与控件档一致，避免撑满输入框高度）
     pub fn font_size_control_input(&self) -> f32 {
-        self.font_size_body()
+        self.font_size_ui_control()
     }
 
     /// 次要 / 工具按钮统一字号（比正文小一档，减轻面板内按钮的生硬感）
@@ -1728,7 +1728,7 @@ impl Theme {
 
     /// Tab 栏 × / ＋ 可点区域边长
     pub fn size_tab_bar_icon_btn(&self) -> f32 {
-        24.0
+        20.0
     }
 
     /// Tab 行统一高度（内边距 + 图标区，保证 × / ＋ 垂直对齐）
@@ -1741,7 +1741,7 @@ impl Theme {
     }
 
     pub fn size_sidebar_filter_chip_h(&self) -> f32 {
-        22.0
+        20.0
     }
 
     /// 侧栏标题行控件统一高度（对齐原型 sidebar-add 18px 量级）
@@ -1793,7 +1793,7 @@ impl Theme {
     }
 
     pub fn size_session_list_row_h(&self) -> f32 {
-        36.0
+        32.0
     }
 
     /// 终端列底部内嵌查找条高度（单行：输入 + 导航 + 命中计数）
@@ -1964,7 +1964,7 @@ impl Theme {
     }
 
     pub fn margin_status_chip(&self) -> egui::Margin {
-        egui::Margin::symmetric(8.0, 3.0)
+        egui::Margin::symmetric(6.0, 2.0)
     }
 
     /// 顶栏 / 底栏 Panel 内边距（水平留白 + 垂直居中余量，避免字形被裁切）
@@ -2312,13 +2312,13 @@ impl Theme {
         6.0
     } // 搜索框输入左右 padding（收紧）
     pub fn spacing_search_input_y(&self) -> f32 {
-        5.0
-    } // 搜索框输入上下 padding
+        6.0
+    } // 搜索框输入上下 padding（略增，避免字顶满框）
     pub fn spacing_list_item_x(&self) -> f32 {
         10.0
     } // 列表条目左右 padding
     pub fn spacing_list_item_y(&self) -> f32 {
-        8.0
+        5.0
     } // 列表条目上下 padding
     pub fn spacing_list_item_gap(&self) -> f32 {
         if self.uses_modern_palette() {
@@ -2351,7 +2351,7 @@ impl Theme {
         14.0
     } // Tab 左右 padding
     pub fn spacing_tab_y(&self) -> f32 {
-        7.0
+        4.0
     } // Tab 上下 padding
     pub fn spacing_tab_dot_text(&self) -> f32 {
         6.0

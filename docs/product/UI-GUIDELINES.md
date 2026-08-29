@@ -635,44 +635,78 @@ pub struct MonitorPanel {
 
 ## 十、UI 组件规范
 
+> **2026-08-29 增补（暗夜可辨识度）**：不大换肤，但必须分清「说明文字」与「可点控件」；表单字号与行高统一。Agent 执行细则见 .cursor/rules/ui-affordance-density.mdc。
+
 ### 10.1 按钮
 
 | 类型 | 样式 | 函数 |
 |------|------|------|
-| Primary | `accent_color()` 背景, 白色文字 | `modal_primary_button_widget()` |
-| Secondary | `bg_medium_color()` 背景, `fg_medium_color()` 文字 | `modal_secondary_button()` |
-| Danger | 红色背景, 白色文字 | `modal_danger_button()` |
-| Icon(关闭) | 透明背景, 悬停变红 | `close_icon_button()` |
-| Status tool | 透明, 底部状态栏用 | `status_tool_glyph()` |
+| Primary（弹窗） | ccent_color() 背景, 白色文字 | modal_primary_button* |
+| Solid Primary（面板） | 实心主色，高对比 | panel_solid_primary_button_with_icon_ex |
+| Outlined / Secondary（面板） | 浅底 + 描边 + 正文色（暗夜也可见） | panel_outlined_* / panel_action_* |
+| Danger | 红色背景, 白色文字 | modal_danger_button() |
+| Icon(关闭) | 透明背景, 悬停变红 | close_icon_button() |
+| Status tool | 透明, 底部状态栏用 | status_tool_glyph() |
+
+**硬规则（暗夜）**：
+
+- 工具栏 / 面板内操作**禁止**常态透明底 + 无描边 + 发灰字（幽灵文字按钮）。
+- 筛选芯片、分段控件可弱样式；「新建 / 保存 / 发送 / 测试 / 分析」等动作必须有底有边（或实心主按钮）。
+- 勿手写 ill(TRANSPARENT) + stroke(NONE) 的 egui Button；勿用裸 small_button 冒充工具栏按钮。
+- Theme：color_control_secondary_fill_idle 用浅嵌底；color_control_secondary_stroke 保留描边；勿回退为透明/无边。
 
 ### 10.2 输入框
 
 | 属性 | 值 |
 |------|-----|
-| 背景 | `color_panel_surface()` |
-| 边框 | 1px, `fg_high_alpha(8)` |
-| 圆角 | 4px |
-| 文字颜色 | `fg_high_a179()` |
-| Hint颜色 | `color_form_hint()` |
+| 实现 | **必须** orm_singleline_field / orm_multiline_field（禁止裸 TextEdit） |
+| 字号 | ont_size_control_input()（= ont_size_ui_control，12px） |
+| 上下内边距 | spacing_search_input_y()（≥6，避免字顶满框高） |
+| 背景 / 描边 | rame_form_text_input / rame_boxed_text_input |
+| Hint | hint_rich + color_form_hint() |
 
-### 10.3 表单标签
+数字字段用 orm_drag_value_field（同底同字号），禁止裸 DragValue 贴在小标签旁造成「标签小、数字巨大」。
 
-`ui_field_label()` — 字号 `font_size_small()`，颜色 `color_form_label()`
+### 10.3 表单标签与说明
 
-### 10.4 Frame 类型
+| 用途 | 字号 | API |
+|------|------|-----|
+| 字段标签 | ont_size_form_label()（12px） | orm_field_label / 
+ich_form_label |
+| 正文输入 | ont_size_control_input()（12px） | 见 §10.2 |
+| 说明 / 错误 / 状态 | ont_size_caption()（更小） | 
+ich_caption 或显式 .size(caption) |
+
+禁止：标签用 10px caption、输入却用默认 Body/更大字号导致同一表单「忽大忽小」。
+
+### 10.4 同行 chip / 工具条
+
+- 快捷提问等 chip：panel_quick_prompt_chip — **固定高度**（size_panel_filter_chip_h），统一字号，垂直居中；高度不跟单条 galley.size().y 走。
+- 全角标点（如「？」）易抬高行盒 → 固定高 + 必要时缩短文案。
+- 同行多枚控件应对齐到同一中线/基线。
+
+### 10.5 Frame 类型
 
 | Frame | 用途 |
 |-------|------|
-| `modal_window_frame` | 对话框外框 |
-| `modal_content_frame` | 对话框内容容器 |
-| `region_panel_frame` | 侧栏、面板区域 |
-| `status_chip` | 状态徽章 — 淡色底, padding 2px 8px, 圆角 4px, 11px |
+| modal_window_frame | 对话框外框 |
+| modal_content_frame | 对话框内容容器 |
+| 
+egion_panel_frame | 侧栏、面板区域 |
+| status_chip | 状态徽章 — 淡色底, padding 2px 8px, 圆角 4px, 11px |
 
-### 10.5 分隔线
+### 10.6 分隔线
 
-1px, `border_color()`
+1px, order_color()
 - 菜单内: margin 3px 8px
 - 面板内: full width
+
+### 10.7 改 UI 自检清单
+
+- [ ] 暗夜未悬停也能看出哪里可点
+- [ ] 输入框文字上下有余量，不顶满
+- [ ] 同排 chip/按钮同高，文字在一条横线上
+- [ ] 新面板复用 chrome 助手，不复制幽灵样式
 
 ---
 
@@ -680,6 +714,7 @@ pub struct MonitorPanel {
 
 | 文档 | 关系 |
 |------|------|
-| [`SPECIFICATION_DETAILED.md`](./SPECIFICATION_DETAILED.md) | 定义颜色体系、字号、圆角的具体值；本文档引用 theme 令牌名 |
-| [`FUNCTIONAL_SPEC.md`](./FUNCTIONAL_SPEC.md) | 定义功能逻辑与边界条件；本文档描述 UI 布局与交互 |
-| [`LAYOUT.md`](./LAYOUT.md) | 窗口布局（egui 区域、间距、底栏） |
+| [SPECIFICATION_DETAILED.md](./SPECIFICATION_DETAILED.md) | 定义颜色体系、字号、圆角的具体值；本文档引用 theme 令牌名 |
+| [FUNCTIONAL_SPEC.md](./FUNCTIONAL_SPEC.md) | 定义功能逻辑与边界条件；本文档描述 UI 布局与交互 |
+| [LAYOUT.md](./LAYOUT.md) | 窗口布局（egui 区域、间距、底栏） |
+| .cursor/rules/ui-affordance-density.mdc | Agent 改 src/ui/** 时强制执行的可辨识度/密度细则 |
