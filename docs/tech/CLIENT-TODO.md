@@ -5,6 +5,13 @@
 
 **2026-08-23 更新**：P0 §1–§4、P1 §6–§7 已实现并通过自动化测试（`client_todo_acceptance_test`、`cmd_audit` 单测、团队 API 探针）；§5 实机 SSH/agent 仍建议人工抽测；§8 生产 sshd 运维操作。
 
+**2026-08-29 更新**：
+- 客户端自动化验收仍通过（`client_todo_acceptance_test` 9/9）。
+- **§5 已在 `124.220.224.223` 落地 mist-agent 并完成 SSH ForceCommand 联调**（见下表）。
+- 说明：内置规则将 `cat /etc/shadow` 标为 **dangerous→block**（非 confirm）；confirm 场景用团队自定义规则 `mist_confirm_demo` 验证。
+- Agent 为 bash+curl（非二进制），API 基址指向本机 `http://127.0.0.1:8080/v1`（与 `mist-team-server` 同机）。
+- MistTerm GUI toast / 黄横幅仍建议在客户端登录对应团队后做一次人工点看。
+
 ---
 
 ## P0 — 命令审计客户端闭环
@@ -25,9 +32,10 @@
 **待验证**：
 - [x] `cargo build --release` / `cargo check --lib` 编译通过
 - [x] `cargo test` cmd_audit 单测不回归
-- [ ] 实机：连接已装 agent 主机，执行 `rm -rf /` → block toast
-- [ ] 实机：`ls` 正常放行
+- [x] 实机：agent 主机执行危险命令 → `MIST_AUDIT` block（`rm -rf /`）
+- [x] 实机：无害命令正常放行
 - [ ] 大数据块 partial prefix 不丢数据（已有单测，建议 SSH 压测）
+- [ ] MistTerm GUI 上确认 toast / confirm 弹窗 / Agent 黄横幅（需客户端登录团队）
 
 ### 2. 本地审计与服务器审计的文案区分（已实现）
 
@@ -55,13 +63,15 @@
 
 | 场景 | 预期行为 | 状态 |
 |------|----------|------|
-| 连接已装 agent，执行 `rm -rf /` | block toast | 待测 |
-| 执行 `ls` | 正常放行 | 待测 |
-| `cat /etc/shadow` | 服务器 confirm 弹窗 | 待测 |
-| 确认后 | `MIST_AUDIT_APPROVE\t{token}` + 原命令 | 待测 |
-| agent 停止后连接 | 黄色降级横幅 | 待测 |
-| agent 恢复 | 横幅消失 + 绿色 toast | 待测 |
-| 本地审计 | toast 标注「本地检查」 | 待测 |
+| 连接已装 agent，执行 `rm -rf /` | block + `MIST_AUDIT` | **PASS**（SSH ForceCommand） |
+| 执行无害命令（如 `echo …`） | 正常放行 | **PASS** |
+| 触发 confirm 规则（`mist_confirm_demo`） | confirm + `MIST_AUDIT` | **PASS** |
+| 确认后 `MIST_AUDIT_APPROVE` | 客户端放行链路 | 待 MistTerm GUI 人工点看 |
+| agent 列表 API | 返回 active agent | **PASS** |
+| agent 停止后黄横幅 | 客户端降级 UI | 待 MistTerm 登录团队后人工 |
+| 本地审计文案「本地检查」 | toast 前缀 | 自动化覆盖 |
+
+> 注：文档原稿中的 `cat /etc/shadow`→confirm 与当前内置规则不符（CREAD-006 = dangerous→block）。实机以规则引擎为准。
 
 #### 实机联调步骤（约 15 分钟）
 
