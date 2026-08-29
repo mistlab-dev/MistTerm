@@ -20,7 +20,7 @@ use crate::core::{
     FragmentStats, HangReporter, HangSnapshot, PortForwardKind, SecretBackend, SecretResolver,
     ServerAuditEvent, SessionConfig, SessionLogSettings, SessionLogWriter, SessionManager,
     SessionSortBy, SortBy, SshConfigCandidate, SshConfigParseResult, SshInfo, TeamService, TempKeyFile,
-    DEFAULT_RETENTION_DAYS,
+    suggest_compliant_after_block, DEFAULT_RETENTION_DAYS,
 };
 use crate::ssh::{parse_jump_chain, parse_jump_endpoint, JumpHop, SshConfig};
 use crate::ui::ai_panel::AiPanel;
@@ -60,7 +60,7 @@ use std::time::{Duration, Instant};
 
 #[path = "app_notifications.rs"]
 mod notifications;
-pub(crate) use notifications::ToastKind;
+pub(crate) use notifications::{ToastAction, ToastKind};
 use notifications::{status_message_body, status_message_text_color, ActiveToast};
 
 #[path = "app_responsive.rs"]
@@ -433,6 +433,8 @@ pub struct MistTermApp {
     cmd_audit_engine: CmdAuditEngine,
     /// 敏感命令二次确认（标签索引、命令、匹配详情）
     cmd_audit_confirm: Option<CmdAuditConfirmState>,
+    /// 审计拦截后待插入的合规片段（配合 `ToastAction::InsertSuggestedSnippet`）
+    pending_suggested_snippet: Option<(usize, FragmentStats)>,
     /// 命令审计 Agent 列表（用于终端降级横幅）
     cmd_audit_agents: Vec<crate::core::team::CmdAuditAgent>,
     cmd_audit_agents_at: Option<Instant>,
@@ -469,6 +471,41 @@ fn server_audit_detail(ev: &ServerAuditEvent) -> String {
         format!(" — {}", ev.rule)
     } else {
         String::new()
+    }
+}
+
+impl MistTermApp {
+    /// 拦截后尝试推一条合规片段：有命中则带「用到终端」按钮，否则普通 Error Toast。
+    fn notify_block_with_compliant_suggestion(
+        &mut self,
+        ctx: &egui::Context,
+        tab_idx: usize,
+        blocked_command: &str,
+        base_message: String,
+    ) {
+        let team = self.team_service.team_fragments_as_stats();
+        let personal = self.fragment_manager.list().to_vec();
+        let suggestion =
+            suggest_compliant_after_block(blocked_command, &team, &personal);
+        let Some(suggestion) = suggestion else {
+            self.notify_error(base_message);
+            return;
+        };
+        let source_label = match suggestion.source {
+            "team" => crate::i18n::tr(ctx, "Team snippet", "团队片段"),
+            _ => crate::i18n::tr(ctx, "Personal snippet", "个人片段"),
+        };
+        let title = suggestion.fragment.title.clone();
+        let text = format!(
+            "{base_message} · {source_label}「{title}」"
+        );
+        self.pending_suggested_snippet = Some((tab_idx, suggestion.fragment));
+        self.push_action_toast(
+            ToastKind::Error,
+            text,
+            ToastAction::InsertSuggestedSnippet,
+            crate::i18n::tr(ctx, "Use in terminal", "用到终端"),
+        );
     }
 }
 
@@ -729,6 +766,7 @@ impl MistTermApp {
             close_tab_confirm_idx: None,
             cmd_audit_engine: CmdAuditEngine::new(),
             cmd_audit_confirm: None,
+            pending_suggested_snippet: None,
             cmd_audit_agents: Vec::new(),
             cmd_audit_agents_at: None,
             cmd_audit_agents_error: String::new(),
@@ -983,7 +1021,7 @@ impl MistTermApp {
                     .first()
                     .map(|m| m.message.as_str())
                     .unwrap_or("");
-                self.notify_error(format!(
+                let msg = format!(
                     "{}: {}{}",
                     crate::i18n::tr(
                         ctx,
@@ -996,7 +1034,8 @@ impl MistTermApp {
                     } else {
                         format!(" — {hint}")
                     },
-                ));
+                );
+                self.notify_block_with_compliant_suggestion(ctx, tab_idx, command, msg);
                 return CommandSendResult::Blocked(audit);
             }
             CmdAuditAction::Confirm => {
@@ -1105,7 +1144,7 @@ impl MistTermApp {
         let detail = server_audit_detail(&ev);
         match ev.action {
             CmdAuditAction::Block => {
-                self.notify_error(format!(
+                let msg = format!(
                     "{}{}{}",
                     crate::i18n::tr(
                         ctx,
@@ -1118,7 +1157,8 @@ impl MistTermApp {
                         format!(": {cmd_preview}")
                     },
                     detail,
-                ));
+                );
+                self.notify_block_with_compliant_suggestion(ctx, tab_idx, &ev.command, msg);
             }
             CmdAuditAction::Alert => {
                 self.notify_warn(format!(
@@ -4438,28 +4478,31 @@ impl MistTermApp {
             theme,
             Self::id_fragment_panel_search(),
             &mut self.fragment_search_query,
-            crate::i18n::tr(ui.ctx(), "Search snippets…", "搜索片段…"),
+            crate::i18n::tr(ui.ctx(), "Search snippets…", "搜索片段 / 我们怎么…"),
             panel_w,
             false,
         );
         ui.add_space(theme.spacing_dock_control_gap());
 
         ui.horizontal(|ui| {
-            if crate::ui::chrome::panel_action_icon_button(
+            ui.spacing_mut().item_spacing.x = 6.0;
+            if crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Plus,
                 crate::i18n::tr(ui.ctx(), "New snippet", "新建片段"),
+                true,
             )
             .clicked()
             {
                 self.fragment_library.open = true;
             }
-            if crate::ui::chrome::panel_action_icon_button(
+            if crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Fragment,
                 crate::i18n::tr(ui.ctx(), "Analytics", "分析"),
+                true,
             )
             .clicked()
             {

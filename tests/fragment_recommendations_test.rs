@@ -161,3 +161,55 @@ fn efficiency_report_pdf_valid_when_cjk_font_available() {
     assert!(bytes.starts_with(b"%PDF"));
     assert!(bytes.len() > 400);
 }
+
+#[test]
+fn suggest_compliant_after_rm_rf_prefers_team_cleanup() {
+    use mistterm::core::FragmentStats;
+
+    let mut team = FragmentStats::new(
+        "t1".into(),
+        "清理日志标准流程".into(),
+        "find /var/log -name '*.log' -mtime +7 -delete".into(),
+        "ops".into(),
+    );
+    team.usage_count = 12;
+    team.tags = vec!["disk".into(), "log".into()];
+
+    let personal = FragmentStats::new(
+        "p1".into(),
+        "清理日志标准流程".into(),
+        "truncate -s 0 /var/log/app.log".into(),
+        "ops".into(),
+    );
+
+    let hit = suggest_compliant_after_block("rm -rf /", &[team.clone()], &[personal])
+        .expect("should suggest cleanup snippet");
+    assert_eq!(hit.source, "team");
+    assert_eq!(hit.fragment.id, "t1");
+}
+
+#[test]
+fn suggest_compliant_skips_same_danger_command() {
+    use mistterm::core::FragmentStats;
+
+    let bad = FragmentStats::new(
+        "bad".into(),
+        "force wipe".into(),
+        "rm -rf /".into(),
+        "ops".into(),
+    );
+    let good = FragmentStats::new(
+        "good".into(),
+        "磁盘清理".into(),
+        "du -sh /var/log/*".into(),
+        "ops".into(),
+    );
+    let hit = suggest_compliant_after_block("rm -rf /var", &[bad, good.clone()], &[])
+        .expect("safe alternative");
+    assert_eq!(hit.fragment.id, "good");
+}
+
+#[test]
+fn suggest_compliant_none_without_library() {
+    assert!(suggest_compliant_after_block("rm -rf /", &[], &[]).is_none());
+}

@@ -1,0 +1,43 @@
+---
+description: MistTerm UI affordance, font rhythm, and control density (dark-theme first)
+globs: src/ui/**/*.rs
+alwaysApply: false
+---
+
+# UI 可辨识度与密度（暗夜优先）
+
+改 `src/ui` 时遵守；不大换肤，但**文本 ≠ 按钮**，字号/行高要齐。
+
+## 按钮：一眼能点
+
+- **禁止**暗夜下「纯文字幽灵按钮」：常态透明底 + 无描边 + 发灰字。
+- 次要操作：`panel_outlined_*` / `panel_action_*`（依赖 theme 次要按钮浅底+描边）。
+- 主操作（发送、保存、用到终端）：`panel_solid_primary_*` 或实心 Primary。
+- 不要手写 `Button::new(...).fill(TRANSPARENT).stroke(NONE)`；不要裸 `ui.small_button` / 裸 accent 文字当工具栏按钮。
+- 筛选芯片 / 分段控件可以弱样式；**工具栏动作**必须有底有边。
+
+## 表单：统一字号与内边距
+
+- 单行/多行输入：只用 `form_singleline_field` / `form_multiline_field`（`font_size_control_input` = 12px + frame 内边距）。
+- 数字：`form_drag_value_field`，禁止裸 `DragValue` 贴在小标签旁。
+- 标签：`form_field_label`（12px）；说明/错误：`font_size_caption`（更小），勿混用。
+- 禁止裸 `TextEdit::singleline/multiline` 无 `.font()`、无 frame（字会顶满框高）。
+
+## 同行控件：同高、对齐
+
+- 快捷 chip / 工具条按钮：固定高度（如 `size_panel_filter_chip_h`），**不要**按单条文案 `galley.size().y` 撑高。
+- 同行文字垂直居中到同一 chip 高，保证基线/中线齐。
+- 全角标点（「？」）易抬高行盒 → 更要用固定高，或缩短文案。
+
+## Theme token（勿回退）
+
+- `color_control_secondary_fill_idle`：暗夜用 `color_subtle_inset_fill`，**禁止**再改回 `TRANSPARENT`。
+- `color_control_secondary_stroke`：暗夜保留描边，**禁止** `Stroke::NONE`。
+- 次要按钮 idle 字色用 `text_primary`，勿过度 `gamma_multiply` 成说明灰。
+
+## 自检
+
+- [ ] 暗夜下未悬停也能看出哪里可点
+- [ ] 输入框内文字上下有余量，不顶满
+- [ ] 同排 chip/按钮同高，文字在一条横线上
+- [ ] 新面板复用 chrome 助手，不复制一套幽灵样式
