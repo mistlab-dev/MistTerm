@@ -142,20 +142,33 @@ pub struct TeamVaultCredential {
     pub approle_secret_id: String,
 }
 
+/// 团队平台下发的「可用服务器」条目（Team → Servers 列表项）。
+///
+/// 与本地 [`SessionConfig`] 是一对多映射：同一个团队服务器可以被多人生成本地会话，
+/// 或通过 [`parse_vault_credential_path`] 共享 Vault 凭据路径。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamServer {
+    /// 团队平台内稳定的服务器 ID（空字符串表示本地脱机缓存或未关联团队的旧条目）。
     #[serde(default)]
     pub id: String,
+    /// 展示名称，例如「生产数据库-主」。
     pub name: String,
+    /// 远端主机名或 IP（不含端口）。
     pub host: String,
+    /// SSH 端口；默认 22（由 [`default_ssh_port`] 提供）。
     #[serde(default = "default_ssh_port")]
     pub port: u16,
+    /// 默认登录用户名（可为空，本地会话创建时允许覆盖）。
     #[serde(default)]
     pub username: String,
+    /// 展示用标签，例如「prod」「db」「staging」，不影响连接。
     #[serde(default)]
     pub tags: Vec<String>,
+    /// 团队配置的 Vault 凭据路径（如 `secret/data/ssh/db-master`），
+    /// 由 [`crate::core::team::sync_config::parse_vault_credential_path`] 解析。
     #[serde(default)]
     pub vault_credential_path: String,
+    /// 团队管理员设置的列表排序权重（越小越靠前；负数可置顶）。
     #[serde(default)]
     pub sort_order: i32,
 }

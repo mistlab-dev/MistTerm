@@ -726,16 +726,17 @@ impl SessionManager {
     }
 
     /// 获取所有会话
+    #[deprecated(since = "1.1.1", note = "命名与 list_sessions 重复；请改用 list_sessions()")]
     pub fn get_sessions(&self) -> &[SessionConfig] {
-        &self.sessions
+        self.list_sessions()
     }
 
-    /// 获取会话列表（UI 层使用）
+    /// 获取会话列表（只读切片）；侧栏、批量执行等所有列表场景统一入口。
     pub fn list_sessions(&self) -> &[SessionConfig] {
         &self.sessions
     }
 
-    /// 根据 ID 获取会话
+    /// 根据 ID 获取会话（在 HashMap/索引不存在时为 O(n)；会话列表通常 <1000 可接受）。
     pub fn get_session(&self, id: &str) -> Option<&SessionConfig> {
         self.sessions.iter().find(|s| s.id == id)
     }

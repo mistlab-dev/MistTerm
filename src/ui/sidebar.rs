@@ -370,7 +370,13 @@ impl Sidebar {
                                 crate::ui::chrome::label_tag_chip(
                                     ui,
                                     theme,
-                                    &format!("[{}]", current_group),
+                                    &format!(
+                                        "[{}]",
+                                        crate::i18n::session_group_display_name(
+                                            ui.ctx(),
+                                            &current_group
+                                        )
+                                    ),
                                     theme.font_size_connection_meta(),
                                     theme.color_section_title(),
                                 );

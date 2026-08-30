@@ -24,6 +24,14 @@ pub enum CredentialCategory {
 }
 
 impl CredentialCategory {
+    /// 返回中文分类名。
+    ///
+    /// ⚠️ **已弃用**：硬编码中文，不支持 UI 语言切换。
+    /// UI 层请使用 [`crate::i18n::credential_category`] 获取当前语言的标签。
+    #[deprecated(
+        since = "1.1.1",
+        note = "硬编码中文；请改用 crate::i18n::credential_category(ctx, variant)"
+    )]
     pub fn label_zh(&self) -> &'static str {
         match self {
             CredentialCategory::Server => "服务器账号",
@@ -73,6 +81,14 @@ pub enum CredentialAuthKind {
 }
 
 impl CredentialAuthKind {
+    /// 返回中文认证方式名。
+    ///
+    /// ⚠️ **已弃用**：硬编码中文，不支持 UI 语言切换。
+    /// UI 层请使用 [`crate::i18n::credential_auth_kind`] 获取当前语言的标签。
+    #[deprecated(
+        since = "1.1.1",
+        note = "硬编码中文；请改用 crate::i18n::credential_auth_kind(ctx, variant)"
+    )]
     pub fn label_zh(&self) -> &'static str {
         match self {
             CredentialAuthKind::Password => "密码",
@@ -82,22 +98,36 @@ impl CredentialAuthKind {
     }
 }
 
-/// 单条凭证（解密后的工作副本）
+/// 单条凭证（解密后的内存工作副本；落盘时会经过 [`StoredCredential`] + 整文件 AES-GCM）。
+///
+/// 除本模块内部的序列化代码外，UI/业务层一律操作此结构体。
 #[derive(Debug, Clone)]
 pub struct Credential {
+    /// 凭证唯一 ID（UUID v4），跨设备同步时作为稳定主键。
     pub id: String,
+    /// 用户给凭证起的展示名称，例如「prod-db root」。
     pub name: String,
+    /// 凭证分类（侧栏筛选分组）。
     pub category: CredentialCategory,
+    /// 该凭证对应的远端主机名/IP；数据库或 API 类凭证可为空字符串。
     pub host: String,
+    /// 服务端口（SSH=22、MySQL=3306 等）；未设置时为 0。
     pub port: u16,
+    /// 登录用户名；API Token 场景可为空。
     pub username: String,
+    /// 认证方式（密码 / SSH 密钥 / Token），决定 UI 表单与 [`Credential::secret`] 的语义。
     pub auth: CredentialAuthKind,
-    /// 密码、PEM 或 token 明文（仅内存）
+    /// 密码、PEM 或 token 明文（仅内存中存在；Vault 后端时本字段为 `""`，需通过 Vault 实时解析）。
     pub secret: String,
+    /// 自由文本备注（支持多行）。
     pub notes: String,
+    /// 用户自定义标签（侧栏与搜索中使用；与片段 tag 字段对齐设计）。
     pub tags: Vec<String>,
+    /// 创建时间戳（秒级 Unix 时间）。
     pub created_at: i64,
+    /// 最近一次更新时间戳（秒级 Unix 时间），用于云端同步冲突合并。
     pub updated_at: i64,
+    /// 秘密的存储后端：本地加密存储 / Vault KV 引用。
     pub secret_backend: SecretBackend,
 }
 

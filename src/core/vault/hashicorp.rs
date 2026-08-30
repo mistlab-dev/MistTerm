@@ -11,42 +11,73 @@ const KEYRING_VAULT_TOKEN: &str = "vault_token";
 const KEYRING_VAULT_ROLE_ID: &str = "vault_role_id";
 const KEYRING_VAULT_SECRET_ID: &str = "vault_secret_id";
 
+/// 对 Vault KV 存储中某一条秘密的定位引用（mount + path + field + 可选版本）。
+///
+/// 由 [`parse_vault_credential_path`] 从 `secret/data/ssh/db-master` 这类路径解析得到，
+/// 或在 UI 中手动填写 mount/path/field 后构造。
 #[derive(Debug, Clone)]
 pub struct VaultKvRef {
+    /// KV 挂载点名称（例如 `secret`，对应 Vault CLI 的 `-mount=secret`）。
     pub mount: String,
+    /// KV 内部相对路径（不含 mount 与 `/data/` 前缀，例如 `ssh/db-master`）。
     pub path: String,
+    /// 读取的字段名（例如 `password` / `private_key`）。
     pub field: String,
+    /// KV v2 的版本号；`None` 表示读取最新版本。v1 忽略此字段。
     pub version: Option<u32>,
 }
 
+/// Vault 列表接口返回的单条条目（文件或子目录）。
 #[derive(Debug, Clone)]
 pub struct VaultListEntry {
+    /// 条目路径片段（父目录 + 名称，不含 mount）。
     pub path: String,
+    /// `true` 表示这是子目录（以 `/` 结尾的条目），需再次调用 list 展开。
     pub is_dir: bool,
 }
 
+/// Vault 操作的统一错误枚举：配置缺失、HTTP 层、API 层、字段缺失、系统密钥链。
 #[derive(Debug, thiserror::Error)]
 pub enum VaultError {
+    /// [`VaultSettings::address`] 为空，未配置 Vault 服务地址。
     #[error("Vault 未配置地址")]
     NoAddress,
+    /// 既没有 Token 也没有 AppRole，缺少认证信息。
     #[error("未配置 Vault 认证")]
     NoAuth,
+    /// HTTP 传输层错误（超时、DNS 失败、TLS 握手失败等，底层 reqwest 错误）。
     #[error("HTTP: {0}")]
     Http(String),
+    /// Vault API 返回的业务错误（权限不足、路径不存在、令牌过期等）。
     #[error("API: {0}")]
     Api(String),
+    /// KV 对象存在，但未找到期望读取的 [`VaultKvRef::field`] 字段名。
     #[error("字段不存在: {0}")]
     FieldMissing(String),
+    /// 从操作系统 Keyring 存取 Token / AppRole 凭证时失败。
     #[error("密钥链: {0}")]
     Keyring(String),
 }
 
+/// Vault 认证方式。当前支持静态 Token 与 AppRole（role_id + secret_id）两种。
 #[derive(Debug, Clone)]
 pub enum VaultAuth {
+    /// 直接使用 `X-Vault-Token` 头携带的 Bearer Token。
     Token(String),
-    AppRole { role_id: String, secret_id: String },
+    /// AppRole 工作流：使用 `role_id` 与 `secret_id` 先 `/auth/approle/login` 换取临时 Token。
+    AppRole {
+        /// 绑定了角色权限的 Role ID（通常是稳定的长 UUID）。
+        role_id: String,
+        /// 一次性或短期有效的 Secret ID（敏感，建议与 role_id 分开保管）。
+        secret_id: String,
+    },
 }
 
+/// 同步阻塞式 HashiCorp Vault 客户端。
+///
+/// 优先使用 KV v2（`/v1/{mount}/data/{path}`）；读取 KV v1 时会回退到
+/// `/v1/{mount}/{path}` 并跳过 `/metadata` 调用。构造通过 [`Self::new`] 并携带
+/// [`VaultSettings`]，创建时会立即验证地址非空。
 #[derive(Debug)]
 pub struct HashiCorpVaultClient {
     settings: VaultSettings,
@@ -54,6 +85,7 @@ pub struct HashiCorpVaultClient {
 }
 
 impl HashiCorpVaultClient {
+    /// 构造新的客户端，设置超时（默认 5s）与 TLS；若地址为空返回 [`VaultError::NoAddress`]。
     pub fn new(settings: VaultSettings) -> Result<Self, VaultError> {
         if settings.address.is_empty() {
             return Err(VaultError::NoAddress);
