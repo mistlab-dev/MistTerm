@@ -95,6 +95,7 @@ reqwest = { version = "0.11", default-features = false, features = ["blocking", 
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-log = "0.2"
 log = "0.4"
 
 # Command audit pattern matching
