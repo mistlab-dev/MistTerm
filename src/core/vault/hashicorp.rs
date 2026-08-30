@@ -47,6 +47,7 @@ pub enum VaultAuth {
     AppRole { role_id: String, secret_id: String },
 }
 
+#[derive(Debug)]
 pub struct HashiCorpVaultClient {
     settings: VaultSettings,
     http: reqwest::blocking::Client,
@@ -161,17 +162,11 @@ impl HashiCorpVaultClient {
     }
 
     pub fn read_kv(&self, reference: &VaultKvRef) -> Result<String, VaultError> {
-        let mount = if reference.mount.is_empty() {
-            self.settings.default_mount.clone()
-        } else {
-            reference.mount.clone()
-        };
-        let path = reference.path.trim_start_matches('/');
-        let v2_path = format!("/v1/{mount}/data/{path}");
+        let v2_path = build_kv_v2_path(&self.settings.default_mount, reference);
         match self.request(reqwest::Method::GET, &v2_path, None) {
             Ok(v) => extract_kv_field(&v, &reference.field, true),
             Err(_) => {
-                let v1_path = format!("/v1/{mount}/{path}");
+                let v1_path = build_kv_v1_fallback_path(&self.settings.default_mount, reference);
                 let v = self.request(reqwest::Method::GET, &v1_path, None)?;
                 extract_kv_field(&v, &reference.field, false)
             }
@@ -179,51 +174,16 @@ impl HashiCorpVaultClient {
     }
 
     pub fn write_kv(&self, reference: &VaultKvRef, value: &str) -> Result<(), VaultError> {
-        let mount = if reference.mount.is_empty() {
-            self.settings.default_mount.clone()
-        } else {
-            reference.mount.clone()
-        };
-        let path = reference.path.trim_start_matches('/');
-        let v2_path = format!("/v1/{mount}/data/{path}");
-        let field = reference.field.clone();
-        let body = json!({ "data": { field: value } });
+        let v2_path = build_kv_v2_path(&self.settings.default_mount, reference);
+        let body = build_write_kv_body(&reference.field, value);
         self.request(reqwest::Method::POST, &v2_path, Some(body))?;
         Ok(())
     }
 
     pub fn list_kv(&self, mount: &str, prefix: &str) -> Result<Vec<VaultListEntry>, VaultError> {
-        let mount = if mount.is_empty() {
-            self.settings.default_mount.as_str()
-        } else {
-            mount
-        };
-        let prefix = prefix.trim_matches('/');
-        let list_path = if prefix.is_empty() {
-            format!("/v1/{mount}/metadata?list=true")
-        } else {
-            format!("/v1/{mount}/metadata/{prefix}?list=true")
-        };
+        let list_path = build_list_kv_path(&self.settings.default_mount, mount, prefix);
         let v = self.request(reqwest::Method::GET, &list_path, None)?;
-        let keys = v["data"]["keys"]
-            .as_array()
-            .or_else(|| v["data"]["keys"].as_array());
-        let keys = keys.cloned().unwrap_or_default();
-        let mut out = Vec::new();
-        for k in keys {
-            if let Some(s) = k.as_str() {
-                let is_dir = s.ends_with('/');
-                out.push(VaultListEntry {
-                    path: if prefix.is_empty() {
-                        s.trim_end_matches('/').to_string()
-                    } else {
-                        format!("{prefix}/{}", s.trim_end_matches('/'))
-                    },
-                    is_dir,
-                });
-            }
-        }
-        Ok(out)
+        Ok(parse_list_kv_response(prefix, &v))
     }
 
     pub fn test_connection(&self) -> Result<(), VaultError> {
@@ -254,4 +214,244 @@ fn extract_kv_field(v: &Value, field: &str, v2: bool) -> Result<String, VaultErr
 #[allow(dead_code)]
 fn decode_b64(s: &str) -> Option<String> {
     B64.decode(s).ok().and_then(|b| String::from_utf8(b).ok())
+}
+
+// ---- Pure path helpers (extracted from read_kv / write_kv / list_kv so we
+//      can cover mount fallback, prefix normalization, slash stripping, and
+//      JSON field extraction without firing a real HTTP client).
+
+pub(crate) fn build_kv_v2_path(default_mount: &str, r: &VaultKvRef) -> String {
+    let mount = if r.mount.is_empty() {
+        default_mount.to_string()
+    } else {
+        r.mount.clone()
+    };
+    let path = r.path.trim_start_matches('/');
+    format!("/v1/{mount}/data/{path}")
+}
+
+pub(crate) fn build_kv_v1_fallback_path(default_mount: &str, r: &VaultKvRef) -> String {
+    let mount = if r.mount.is_empty() {
+        default_mount.to_string()
+    } else {
+        r.mount.clone()
+    };
+    let path = r.path.trim_start_matches('/');
+    format!("/v1/{mount}/{path}")
+}
+
+pub(crate) fn build_list_kv_path(default_mount: &str, mount: &str, prefix: &str) -> String {
+    let mount = if mount.is_empty() { default_mount } else { mount };
+    let prefix = prefix.trim_matches('/');
+    if prefix.is_empty() {
+        format!("/v1/{mount}/metadata?list=true")
+    } else {
+        format!("/v1/{mount}/metadata/{prefix}?list=true")
+    }
+}
+
+pub(crate) fn build_write_kv_body(field: &str, value: &str) -> Value {
+    json!({ "data": { field: value } })
+}
+
+pub(crate) fn build_approle_login_url(address: &str) -> String {
+    format!(
+        "{}/v1/auth/approle/login",
+        address.trim_end_matches('/')
+    )
+}
+
+pub(crate) fn parse_list_kv_response(prefix: &str, body: &Value) -> Vec<VaultListEntry> {
+    let prefix = prefix.trim_matches('/');
+    let keys = body["data"]["keys"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let mut out = Vec::new();
+    for k in keys {
+        if let Some(s) = k.as_str() {
+            let is_dir = s.ends_with('/');
+            out.push(VaultListEntry {
+                path: if prefix.is_empty() {
+                    s.trim_end_matches('/').to_string()
+                } else {
+                    format!("{prefix}/{}", s.trim_end_matches('/'))
+                },
+                is_dir,
+            });
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod pure_logic_tests {
+    use super::*;
+
+    fn kv_ref(mount: &str, path: &str, field: &str, version: Option<u32>) -> VaultKvRef {
+        VaultKvRef {
+            mount: mount.into(),
+            path: path.into(),
+            field: field.into(),
+            version,
+        }
+    }
+
+    // ---------------- build_kv paths
+
+    #[test]
+    fn build_kv_v2_uses_explicit_mount_over_default() {
+        let p = build_kv_v2_path("secret", &kv_ref("kv-platform", "app/db", "pass", None));
+        assert_eq!(p, "/v1/kv-platform/data/app/db");
+    }
+
+    #[test]
+    fn build_kv_v2_falls_back_to_default_mount() {
+        let p = build_kv_v2_path("secret", &kv_ref("", "a/b", "k", None));
+        assert_eq!(p, "/v1/secret/data/a/b");
+    }
+
+    #[test]
+    fn build_kv_v2_strips_leading_slash_from_path() {
+        let p = build_kv_v2_path("secret", &kv_ref("", "//leading//slashes", "k", None));
+        // trim_start_matches('/') leaves no leading `/` in the middle segment.
+        assert_eq!(p, "/v1/secret/data/leading//slashes");
+    }
+
+    #[test]
+    fn build_kv_v1_same_normalization_as_v2() {
+        let p = build_kv_v1_fallback_path("secret", &kv_ref("", "/env/app", "pwd", None));
+        assert_eq!(p, "/v1/secret/env/app");
+    }
+
+    // ---------------- list_kv path
+
+    #[test]
+    fn build_list_root_without_prefix() {
+        let p = build_list_kv_path("secret", "", "");
+        assert_eq!(p, "/v1/secret/metadata?list=true");
+    }
+
+    #[test]
+    fn build_list_with_prefix_trims_slashes() {
+        let p = build_list_kv_path("secret", "", "/team/ops/");
+        assert_eq!(p, "/v1/secret/metadata/team/ops?list=true");
+    }
+
+    #[test]
+    fn build_list_uses_explicit_mount() {
+        let p = build_list_kv_path("secret", "team-kv", "/");
+        assert_eq!(p, "/v1/team-kv/metadata?list=true");
+    }
+
+    // ---------------- write_kv body
+
+    #[test]
+    fn write_body_nests_field_inside_data() {
+        let v = build_write_kv_body("password", "hunter2");
+        assert_eq!(v["data"]["password"].as_str(), Some("hunter2"));
+        // No spurious other keys.
+        assert_eq!(v.as_object().unwrap().len(), 1);
+        assert_eq!(v["data"].as_object().unwrap().len(), 1);
+    }
+
+    // ---------------- approle login URL trimming
+
+    #[test]
+    fn approle_url_strips_trailing_slash() {
+        let u = build_approle_login_url("https://vault.corp:8200/");
+        assert_eq!(u, "https://vault.corp:8200/v1/auth/approle/login");
+    }
+
+    #[test]
+    fn approle_url_works_without_trailing_slash() {
+        let u = build_approle_login_url("https://vault.corp:8200");
+        assert_eq!(u, "https://vault.corp:8200/v1/auth/approle/login");
+    }
+
+    // ---------------- extract_kv_field (v2 / v1 / number / bool / missing)
+
+    #[test]
+    fn extract_v2_reads_data_dot_data() {
+        let body = json!({ "data": { "data": { "password": "top" } } });
+        let out = extract_kv_field(&body, "password", true).unwrap();
+        assert_eq!(out, "top");
+    }
+
+    #[test]
+    fn extract_v1_reads_flat_data() {
+        let body = json!({ "data": { "password": "top" } });
+        let out = extract_kv_field(&body, "password", false).unwrap();
+        assert_eq!(out, "top");
+    }
+
+    #[test]
+    fn extract_coerces_numbers_and_bools_to_string() {
+        let body_v1_num = json!({ "data": { "port": 5432 } });
+        assert_eq!(
+            extract_kv_field(&body_v1_num, "port", false).unwrap(),
+            "5432"
+        );
+        let body_v2_bool = json!({ "data": { "data": { "tls": true } } });
+        assert_eq!(
+            extract_kv_field(&body_v2_bool, "tls", true).unwrap(),
+            "true"
+        );
+    }
+
+    #[test]
+    fn extract_missing_returns_field_missing_variant() {
+        let body = json!({ "data": {} });
+        let err = extract_kv_field(&body, "nope", false).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("nope"));
+    }
+
+    // ---------------- parse_list_kv_response
+
+    #[test]
+    fn parse_list_combines_prefix_and_dir_vs_file_flags() {
+        let body = json!({
+            "data": {
+                "keys": [ "apps/", "apps/web.conf", "db.conf" ]
+            }
+        });
+        let entries = parse_list_kv_response("", &body);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].path, "apps");
+        assert!(entries[0].is_dir);
+        assert_eq!(entries[1].path, "apps/web.conf");
+        assert!(!entries[1].is_dir);
+        assert_eq!(entries[2].path, "db.conf");
+        assert!(!entries[2].is_dir);
+    }
+
+    #[test]
+    fn parse_list_missing_keys_yields_empty_entries() {
+        let empty_body = json!({"data": {}});
+        assert!(parse_list_kv_response("", &empty_body).is_empty());
+        let malformed = json!({"data": { "keys": "not an array" }});
+        assert!(parse_list_kv_response("", &malformed).is_empty());
+    }
+
+    #[test]
+    fn parse_list_with_prefix_prepends_it() {
+        let body = json!({ "data": { "keys": ["service/", "creds.json"] } });
+        let entries = parse_list_kv_response("/team/ops/", &body);
+        assert_eq!(entries[0].path, "team/ops/service");
+        assert!(entries[0].is_dir);
+        assert_eq!(entries[1].path, "team/ops/creds.json");
+    }
+
+    // ---------------- base64 decode helper
+
+    #[test]
+    fn decode_b64_standard_roundtrip_and_invalid() {
+        use base64::Engine as _;
+        let plain = "hello vault";
+        let encoded = B64.encode(plain);
+        assert_eq!(decode_b64(&encoded).as_deref(), Some(plain));
+        assert_eq!(decode_b64("!!!not base64!!!"), None);
+        assert_eq!(decode_b64("not-valid-b64=="), None); // non-alphabet
+    }
 }

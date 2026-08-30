@@ -128,3 +128,86 @@ fn spawn_proxy_shell(command: &str) -> Result<std::process::Child, String> {
             .map_err(|e| format!("ProxyCommand spawn: {}", e))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_proxy_command_no_tokens_returns_template_unchanged() {
+        assert_eq!(
+            expand_proxy_command("nc example.com 22", "h", 22, "u"),
+            "nc example.com 22"
+        );
+    }
+
+    #[test]
+    fn expand_proxy_command_host_only() {
+        assert_eq!(
+            expand_proxy_command("nc %h 22", "10.0.0.1", 22, "alice"),
+            "nc 10.0.0.1 22"
+        );
+    }
+
+    #[test]
+    fn expand_proxy_command_port_only() {
+        assert_eq!(
+            expand_proxy_command("nc host %p", "host", 8080, "u"),
+            "nc host 8080"
+        );
+    }
+
+    #[test]
+    fn expand_proxy_command_user_r_and_user_u_are_both_replaced() {
+        assert_eq!(
+            expand_proxy_command("cmd %r@%h", "srv", 22, "bob"),
+            "cmd bob@srv"
+        );
+        assert_eq!(
+            expand_proxy_command("cmd %u@%h", "srv", 22, "bob"),
+            "cmd bob@srv"
+        );
+    }
+
+    #[test]
+    fn expand_proxy_command_all_four_tokens() {
+        assert_eq!(
+            expand_proxy_command(
+                "proxy --host=%h --port=%p --remote=%r --user=%u",
+                "gw",
+                443,
+                "eve"
+            ),
+            "proxy --host=gw --port=443 --remote=eve --user=eve"
+        );
+    }
+
+    #[test]
+    fn expand_proxy_command_repeated_tokens() {
+        assert_eq!(
+            expand_proxy_command("ssh %h && echo %h done", "foo", 22, "u"),
+            "ssh foo && echo foo done"
+        );
+    }
+
+    #[test]
+    fn expand_proxy_command_percent_without_token_not_replaced() {
+        // Only %h / %p / %r / %u should be substituted.
+        let out = expand_proxy_command("100% ok %x", "h", 22, "u");
+        assert!(out.contains("100%"));
+        assert!(out.contains("%x"));
+    }
+
+    #[test]
+    fn expand_proxy_command_empty_template() {
+        assert_eq!(expand_proxy_command("", "h", 22, "u"), "");
+    }
+
+    #[test]
+    fn expand_proxy_command_port_zero_formats_as_0() {
+        assert_eq!(
+            expand_proxy_command("nc %h:%p", "h", 0, "u"),
+            "nc h:0"
+        );
+    }
+}

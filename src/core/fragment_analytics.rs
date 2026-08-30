@@ -330,15 +330,29 @@ fn export_row(f: &FragmentStats) -> ExportSnippetRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::FragmentStats;
+    use crate::core::team::FragmentMemberAnalyticsRow;
+
+    fn fs(id: &str, usage: u32, success: u32, total_ms: u64, last_used: Option<i64>) -> FragmentStats {
+        let mut f = FragmentStats::new(
+            id.to_string(),
+            id.to_string(),
+            "echo x".into(),
+            "ops".into(),
+        );
+        f.usage_count = usage;
+        f.success_count = success;
+        f.total_time_ms = total_ms;
+        f.last_used = last_used;
+        f
+    }
 
     #[test]
     fn time_range_filters_by_last_used() {
         let now = chrono::Utc::now().timestamp();
-        let mut recent = FragmentStats::new("a".into(), "recent".into(), "x".into(), "c".into());
-        recent.last_used = Some(now - 86_400);
+        let mut recent = fs("a", 1, 1, 100, Some(now - 86_400));
         recent.usage_count = 1;
-        let mut old = FragmentStats::new("b".into(), "old".into(), "y".into(), "c".into());
-        old.last_used = Some(now - 86_400 * 40);
+        let mut old = fs("b", 2, 2, 200, Some(now - 86_400 * 40));
         old.usage_count = 2;
         let filtered =
             FragmentAnalyticsTimeRange::Last7Days.filter_fragments(&[recent, old]);
@@ -348,7 +362,6 @@ mod tests {
 
     #[test]
     fn member_rows_from_api_sorts_by_run_count() {
-        use crate::core::team::FragmentMemberAnalyticsRow;
         let rows = member_rows_from_api(&[
             FragmentMemberAnalyticsRow {
                 user_id: "u1".into(),
@@ -365,5 +378,254 @@ mod tests {
         ]);
         assert_eq!(rows[0].display_name, "Bob");
         assert_eq!(rows[0].run_count, 12);
+    }
+
+    // ------------------------------------------------ TimeRange accessors
+    #[test]
+    fn time_range_default_is_all_time() {
+        assert_eq!(
+            FragmentAnalyticsTimeRange::default(),
+            FragmentAnalyticsTimeRange::AllTime
+        );
+    }
+
+    #[test]
+    fn time_range_since_days_map_to_variants() {
+        assert_eq!(FragmentAnalyticsTimeRange::AllTime.since_days(), None);
+        assert_eq!(FragmentAnalyticsTimeRange::Last7Days.since_days(), Some(7));
+        assert_eq!(FragmentAnalyticsTimeRange::Last30Days.since_days(), Some(30));
+        assert_eq!(FragmentAnalyticsTimeRange::Last90Days.since_days(), Some(90));
+    }
+
+    #[test]
+    fn time_range_cutoff_all_time_is_none_others_are_reasonable() {
+        assert!(FragmentAnalyticsTimeRange::AllTime.cutoff_unix().is_none());
+        let now = chrono::Utc::now().timestamp();
+        // Last7 days cutoff should be ~7 days ago (within ±2 min of drift).
+        let c7 = FragmentAnalyticsTimeRange::Last7Days.cutoff_unix().unwrap();
+        assert!((now - 7 * 86400 - c7).abs() < 120);
+        let c30 = FragmentAnalyticsTimeRange::Last30Days.cutoff_unix().unwrap();
+        assert!((now - 30 * 86400 - c30).abs() < 120);
+        let c90 = FragmentAnalyticsTimeRange::Last90Days.cutoff_unix().unwrap();
+        assert!((now - 90 * 86400 - c90).abs() < 120);
+    }
+
+    #[test]
+    fn time_range_labels_all_deterministic() {
+        use FragmentAnalyticsTimeRange::*;
+        assert_eq!(AllTime.label_en(), "All time");
+        assert_eq!(Last7Days.label_en(), "Last 7 days");
+        assert_eq!(Last30Days.label_en(), "Last 30 days");
+        assert_eq!(Last90Days.label_en(), "Last 90 days");
+        assert_eq!(AllTime.label_zh(), "全部时间");
+        assert_eq!(Last7Days.label_zh(), "近 7 天");
+        assert_eq!(Last30Days.label_zh(), "近 30 天");
+        assert_eq!(Last90Days.label_zh(), "近 90 天");
+    }
+
+    #[test]
+    fn filter_fragments_all_time_returns_cloned_list_including_none_last_used() {
+        let list = [
+            fs("a", 1, 1, 100, None),
+            fs("b", 2, 2, 200, Some(1)),
+        ];
+        let got = FragmentAnalyticsTimeRange::AllTime.filter_fragments(&list);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[0].id, "a");
+        assert_eq!(got[1].id, "b");
+    }
+
+    #[test]
+    fn filter_fragments_last_30_days_drops_ancient_and_none_last_used() {
+        let now = chrono::Utc::now().timestamp();
+        let list = [
+            fs("a", 1, 1, 100, None),
+            fs("recent", 2, 2, 200, Some(now - 86400)),
+            fs("ancient", 3, 3, 300, Some(now - 400 * 86400)),
+        ];
+        let got = FragmentAnalyticsTimeRange::Last30Days.filter_fragments(&list);
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].id, "recent");
+    }
+
+    // ------------------------------------------------ member_rows_from_api
+    #[test]
+    fn member_rows_from_api_uses_user_id_when_display_name_empty() {
+        let rows = member_rows_from_api(&[FragmentMemberAnalyticsRow {
+            user_id: "u-only".into(),
+            display_name: String::new(),
+            run_count: 2,
+            success_count: 1,
+        }]);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].display_name, "u-only");
+        assert_eq!(rows[0].run_count, 2);
+        assert_eq!(rows[0].success_count, 1);
+        assert_eq!(rows[0].user_id, "u-only");
+    }
+
+    #[test]
+    fn member_rows_from_api_empty_input_is_empty() {
+        assert!(member_rows_from_api(&[]).is_empty());
+    }
+
+    // ------------------------------------------------ build_dashboard aggregates
+    #[test]
+    fn dashboard_empty_input_gives_zeroes_and_empty_lists() {
+        let d = build_dashboard(&[], &[], false);
+        assert_eq!(d.personal_total_usage, 0);
+        assert_eq!(d.team_total_usage, 0);
+        assert_eq!(d.personal_success_rate, 0.0);
+        assert_eq!(d.team_success_rate, 0.0);
+        assert_eq!(d.personal_avg_ms, 0);
+        assert_eq!(d.team_avg_ms, 0);
+        assert!(d.personal_top.is_empty());
+        assert!(d.team_top.is_empty());
+        assert!(d.slowest.is_empty());
+        assert!(d.highest_error.is_empty());
+        assert!(!d.team_api_available);
+        assert!(!d.period_stats_from_events);
+        assert!(!d.member_stats_from_server);
+        assert!(d.member_rows.is_empty());
+    }
+
+    #[test]
+    fn dashboard_aggregates_personal_and_team() {
+        let personal = vec![
+            fs("p1", 10, 9, 1000, Some(1)),  // avg=100ms, 90%
+            fs("p2", 0, 0, 0, None),          // ignored in top
+            fs("p3", 2, 0, 20, Some(2)),      // 2nd top
+        ];
+        let team = vec![
+            fs("t1", 5, 5, 500, Some(10)),    // 100% avg 100ms; 1st top
+            fs("t2", 1, 0, 50, Some(9)),      // 2nd top
+        ];
+        let d = build_dashboard(&personal, &team, true);
+
+        assert_eq!(d.personal_total_usage, 12); // 10+0+2
+        assert_eq!(d.team_total_usage, 6);
+        // personal rate: 9/12 = 75%
+        assert!((d.personal_success_rate - 75.0).abs() < 0.1);
+        // personal avg: (1000+0+20)/12 = 1020/12 = 85
+        assert_eq!(d.personal_avg_ms, 85);
+        // team rate: 5/6 ≈ 83.33%
+        assert!((d.team_success_rate - (5.0 / 6.0 * 100.0)).abs() < 0.1);
+        // team avg: 550/6 = 91
+        assert_eq!(d.team_avg_ms, 91);
+
+        // Personal top sorted desc by usage: p1=10, p3=2 (p2=0 excluded).
+        let pids: Vec<&str> = d.personal_top.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(pids, vec!["p1", "p3"]);
+        // Team top: t1=5, t2=1.
+        let tids: Vec<&str> = d.team_top.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(tids, vec!["t1", "t2"]);
+
+        assert!(d.team_api_available);
+    }
+
+    #[test]
+    fn dashboard_slowest_uses_avg_time_and_skips_usage_zero() {
+        let personal = vec![
+            fs("p1", 2, 2, 200, None),   // avg=100
+            fs("p2", 0, 0, 9000, None),  // skip, usage_count==0
+        ];
+        let team = vec![
+            fs("t1", 1, 1, 500, None),   // avg=500 — slowest #1
+            fs("t2", 4, 4, 800, None),   // avg=200 — slowest #2
+        ];
+        let d = build_dashboard(&personal, &team, false);
+        let ids: Vec<&str> = d.slowest.iter().map(|s| s.id.as_str()).collect();
+        assert_eq!(ids, vec!["t1", "t2", "p1"]);
+    }
+
+    #[test]
+    fn dashboard_highest_error_filter_requires_min_3_usage() {
+        let personal = vec![
+            fs("bad", 5, 0, 100, None),   // 100% error, 5≥3 — qualify
+            fs("med", 10, 5, 200, None),  // 50% error — qualify
+            fs("small", 2, 0, 10, None),  // 100% error, but 2<3 — excluded
+        ];
+        let team = vec![
+            fs("tgood", 10, 10, 200, None), // 0% error
+        ];
+        let d = build_dashboard(&personal, &team, false);
+        let ids: Vec<&str> = d.highest_error.iter().map(|s| s.id.as_str()).collect();
+        // error rate desc: bad (100) → med (50) → tgood (0). small excluded.
+        assert_eq!(ids, vec!["bad", "med", "tgood"]);
+    }
+
+    #[test]
+    fn dashboard_top_n_truncates_at_five_with_sort_desc_usage() {
+        let team: Vec<FragmentStats> = (0..10u32)
+            .map(|i| {
+                let mut f = fs(
+                    &format!("t{}", i),
+                    100 + i,
+                    50,
+                    100,
+                    Some(1),
+                );
+                f.usage_count = 100 + i;
+                f
+            })
+            .collect();
+        let d = build_dashboard(&[], &team, false);
+        assert_eq!(d.team_top.len(), 5);
+        // Sorted desc usage: t9 (109) → t5 (105)
+        for (rank, expect_id) in ["t9", "t8", "t7", "t6", "t5"].iter().enumerate() {
+            assert_eq!(d.team_top[rank].id, *expect_id, "rank {} mismatch", rank);
+        }
+    }
+
+    // ------------------------------------------------ build_dashboard_with_events (AllTime path)
+    #[test]
+    fn dashboard_with_events_all_time_shortcut_calls_filter_not_apply_events() {
+        let now = chrono::Utc::now().timestamp();
+        let mut p1 = fs("p1", 5, 5, 100, Some(now - 86400));
+        p1.usage_count = 5;
+        let mut p2 = fs("p2", 1, 0, 20, Some(now - 365 * 86400));
+        p2.usage_count = 1;
+        let personal = [p1, p2];
+        let d = build_dashboard_with_events(
+            &personal,
+            &[],
+            &[],
+            FragmentAnalyticsTimeRange::AllTime,
+            false,
+            None,
+            &[],
+        );
+        // All-time: uses filter (last_used isn't bounded), so total 6, top includes both
+        assert_eq!(d.personal_total_usage, 6);
+        assert_eq!(d.personal_top.len(), 2);
+        assert!(!d.period_stats_from_events);
+    }
+
+    // ------------------------------------------------ export_dashboard_json
+    #[test]
+    fn export_json_contains_field_level_values_and_time_range() {
+        let d = build_dashboard(
+            &[fs("p1", 10, 10, 500, Some(123))],
+            &[fs("t1", 4, 2, 400, Some(456))],
+            true,
+        );
+        let json =
+            export_dashboard_json(&d, FragmentAnalyticsTimeRange::Last30Days).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["time_range"], "Last 30 days");
+        assert_eq!(v["team_api_available"], true);
+        assert_eq!(v["personal_total_usage"], 10);
+        assert_eq!(v["team_total_usage"], 4);
+        assert_eq!(v["personal_top"][0]["id"], "p1");
+        assert_eq!(v["team_top"][0]["id"], "t1");
+        let rate_p: f32 = v["personal_success_rate"].as_number().unwrap().as_f64().unwrap() as f32;
+        assert!((rate_p - 100.0).abs() < 0.1);
+        assert_eq!(v["personal_avg_ms"], 50);
+        let rate_t: f32 = v["team_success_rate"].as_number().unwrap().as_f64().unwrap() as f32;
+        assert!((rate_t - 50.0).abs() < 0.1);
+        assert_eq!(v["team_avg_ms"], 100);
+        // exported_at is RFC3339 (T and Z presence)
+        let ea = v["exported_at"].as_str().unwrap();
+        assert!(ea.contains('T'), "no T in exported_at: {ea}");
     }
 }

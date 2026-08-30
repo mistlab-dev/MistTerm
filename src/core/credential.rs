@@ -419,6 +419,267 @@ impl Default for CredentialVault {
 mod tests {
     use super::*;
 
+    // ------------------------------------------------------ enums + labels
+    #[test]
+    fn category_all_variants_have_distinct_non_empty_labels() {
+        use CredentialCategory::*;
+        let all = [Server, Database, SshKey, Api, Other];
+        let mut seen: Vec<&str> = all.iter().map(|c| c.label_zh()).collect();
+        for s in &seen {
+            assert!(!s.is_empty());
+        }
+        let n = seen.len();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen.len(), n);
+    }
+
+    #[test]
+    fn category_serde_uses_snake_case() {
+        use CredentialCategory::*;
+        assert_eq!(to_snake(&Server), "\"server\"");
+        assert_eq!(to_snake(&Database), "\"database\"");
+        assert_eq!(to_snake(&SshKey), "\"ssh_key\"");
+        assert_eq!(to_snake(&Api), "\"api\"");
+        assert_eq!(to_snake(&Other), "\"other\"");
+        // roundtrip
+        let c: CredentialCategory = serde_json::from_str("\"ssh_key\"").unwrap();
+        assert_eq!(c, SshKey);
+    }
+
+    #[test]
+    fn auth_kind_default_and_labels_are_distinct() {
+        assert_eq!(CredentialAuthKind::default(), CredentialAuthKind::Password);
+        use CredentialAuthKind::*;
+        for (v, expect) in &[
+            (Password, "密码"),
+            (SshKey, "SSH 密钥"),
+            (Token, "令牌 / API Key"),
+        ] {
+            assert_eq!(v.label_zh(), *expect);
+        }
+    }
+
+    #[test]
+    fn auth_kind_serde_uses_snake_case_roundtrip() {
+        use CredentialAuthKind::*;
+        let cases = [(Password, "password"), (SshKey, "ssh_key"), (Token, "token")];
+        for (v, s) in cases {
+            let json = serde_json::to_string(&v).unwrap();
+            assert_eq!(json, format!("\"{s}\""));
+            let back: CredentialAuthKind = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, v);
+        }
+    }
+
+    // ------------------------------------------------------ SecretBackend defaults
+    #[test]
+    fn secret_backend_default_is_local_and_detects_vault() {
+        assert_eq!(SecretBackend::default(), SecretBackend::LocalEncrypted);
+        assert!(!SecretBackend::LocalEncrypted.is_vault());
+        let vault = SecretBackend::VaultKv {
+            mount: "secret".into(),
+            path: "app/x".into(),
+            field: "pw".into(),
+            version: None,
+        };
+        assert!(vault.is_vault());
+    }
+
+    #[test]
+    fn secret_backend_serde_roundtrip_variants() {
+        let local = SecretBackend::LocalEncrypted;
+        let json = serde_json::to_string(&local).unwrap();
+        assert_eq!(json, "\"local\"");
+        let back: SecretBackend = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, SecretBackend::LocalEncrypted);
+
+        let vault = SecretBackend::VaultKv {
+            mount: "kv".into(),
+            path: "creds/db".into(),
+            field: "pass".into(),
+            version: Some(2),
+        };
+        let json = serde_json::to_string(&vault).unwrap();
+        let back: SecretBackend = serde_json::from_str(&json).unwrap();
+        match back {
+            SecretBackend::VaultKv { mount, path, field, version } => {
+                assert_eq!(mount, "kv");
+                assert_eq!(path, "creds/db");
+                assert_eq!(field, "pass");
+                assert_eq!(version, Some(2));
+            }
+            _ => panic!("expected VaultKv"),
+        }
+    }
+
+    #[test]
+    fn secret_backend_vault_defaults_version_missing_to_none() {
+        let json = r#"{"vault_kv":{"mount":"kv","path":"x","field":"y"}}"#;
+        let back: SecretBackend = serde_json::from_str(json).unwrap();
+        match back {
+            SecretBackend::VaultKv { version, .. } => assert!(version.is_none()),
+            _ => panic!(),
+        }
+    }
+
+    // ------------------------------------------------------ StoredCredential::from_credential pure behaviour
+    #[test]
+    fn from_credential_wipes_secret_when_vault_backend() {
+        let mut c = test_cred();
+        c.secret_backend = SecretBackend::VaultKv {
+            mount: "secret".into(),
+            path: "p".into(),
+            field: "f".into(),
+            version: None,
+        };
+        c.secret = "MY-SECRET".into();
+        let s = StoredCredential::from_credential(&c);
+        assert_eq!(s.secret, ""); // vault backend — never persist secret
+        assert_eq!(s.id, c.id);
+        assert_eq!(s.name, c.name);
+        assert!(matches!(s.secret_backend, SecretBackend::VaultKv { .. }));
+    }
+
+    #[test]
+    fn from_credential_keeps_secret_when_local_backend() {
+        let mut c = test_cred();
+        c.secret_backend = SecretBackend::LocalEncrypted;
+        c.secret = "plain-pw".into();
+        let s = StoredCredential::from_credential(&c);
+        assert_eq!(s.secret, "plain-pw");
+        assert_eq!(s.secret_enc, "");
+        assert_eq!(s.secret_nonce, "");
+    }
+
+    // ------------------------------------------------------ StoredCredential::resolve_secret pure behaviour
+    #[test]
+    fn resolve_secret_vault_always_empty_regardless_of_fields() {
+        let key = zero_key();
+        let mut s = stored_from_cred(test_cred());
+        s.secret_backend = SecretBackend::VaultKv {
+            mount: "m".into(),
+            path: "p".into(),
+            field: "f".into(),
+            version: None,
+        };
+        s.secret = "leaked".into(); // if backend=vault we ignore secret field
+        assert_eq!(s.resolve_secret(&key), "");
+    }
+
+    #[test]
+    fn resolve_secret_prefers_plain_secret_if_present() {
+        let key = zero_key();
+        let mut s = stored_from_cred(test_cred());
+        s.secret_backend = SecretBackend::LocalEncrypted;
+        s.secret = "plain-secret".into();
+        s.secret_enc = "anything".into(); // ignored when secret.is_empty() == false
+        s.secret_nonce = "x".into();
+        assert_eq!(s.resolve_secret(&key), "plain-secret");
+    }
+
+    #[test]
+    fn resolve_secret_empty_when_enc_or_nonce_missing() {
+        let key = zero_key();
+        let mut s = stored_from_cred(test_cred());
+        s.secret_backend = SecretBackend::LocalEncrypted;
+        s.secret = String::new();
+        // secret_enc set, nonce empty -> ""
+        s.secret_enc = "X".into();
+        s.secret_nonce = String::new();
+        assert_eq!(s.resolve_secret(&key), "");
+        // nonce set, enc empty -> ""
+        s.secret_enc = String::new();
+        s.secret_nonce = "Y".into();
+        assert_eq!(s.resolve_secret(&key), "");
+        // both empty -> ""
+        s.secret_nonce = String::new();
+        assert_eq!(s.resolve_secret(&key), "");
+    }
+
+    // ------------------------------------------------------ StoredCredential::normalize_for_encrypted_file
+    #[test]
+    fn normalize_vault_backend_clears_all_three_secret_fields() {
+        let key = zero_key();
+        let mut s = stored_from_cred(test_cred());
+        s.secret_backend = SecretBackend::VaultKv {
+            mount: "m".into(), path: "p".into(), field: "f".into(), version: None,
+        };
+        s.secret = "foo".into();
+        s.secret_enc = "ENCRYPTED".into();
+        s.secret_nonce = "NONCE".into();
+        s.normalize_for_encrypted_file(&key);
+        assert_eq!(s.secret, "");
+        assert_eq!(s.secret_enc, "");
+        assert_eq!(s.secret_nonce, "");
+    }
+
+    #[test]
+    fn normalize_local_backend_clears_enc_and_nonce_fields() {
+        let key = zero_key();
+        let mut s = stored_from_cred(test_cred());
+        s.secret_backend = SecretBackend::LocalEncrypted;
+        s.secret = "my-pw".into();
+        s.secret_enc = "old-enc".into();
+        s.secret_nonce = "old-nonce".into();
+        s.normalize_for_encrypted_file(&key);
+        assert_eq!(s.secret, "my-pw");
+        assert_eq!(s.secret_enc, "");
+        assert_eq!(s.secret_nonce, "");
+    }
+
+    // ------------------------------------------------------ StoredCredential::to_credential
+    #[test]
+    fn to_credential_preserves_all_non_secret_metadata() {
+        let key = zero_key();
+        let c = test_cred();
+        let s = stored_from_cred(c.clone());
+        let back = s.to_credential(&key).expect("to_credential always returns Some");
+        assert_eq!(back.id, c.id);
+        assert_eq!(back.name, c.name);
+        assert_eq!(back.category, c.category);
+        assert_eq!(back.host, c.host);
+        assert_eq!(back.port, c.port);
+        assert_eq!(back.username, c.username);
+        assert_eq!(back.auth, c.auth);
+        assert_eq!(back.notes, c.notes);
+        assert_eq!(back.tags, c.tags);
+        assert_eq!(back.created_at, c.created_at);
+        assert_eq!(back.updated_at, c.updated_at);
+    }
+
+    // -------------------------------------------------- tiny helpers
+    fn to_snake<T: serde::Serialize>(t: &T) -> String {
+        serde_json::to_string(t).unwrap()
+    }
+
+    fn zero_key() -> [u8; 32] {
+        [0u8; 32]
+    }
+
+    fn test_cred() -> Credential {
+        Credential {
+            id: "c1".into(),
+            name: "C1".into(),
+            category: CredentialCategory::Server,
+            host: "1.2.3.4".into(),
+            port: 22,
+            username: "u".into(),
+            auth: CredentialAuthKind::Password,
+            secret: String::new(),
+            notes: "n".into(),
+            tags: vec!["t1".into()],
+            created_at: 100,
+            updated_at: 200,
+            secret_backend: SecretBackend::LocalEncrypted,
+        }
+    }
+
+    fn stored_from_cred(c: Credential) -> StoredCredential {
+        StoredCredential::from_credential(&c)
+    }
+
+    // ------------------------------------------------------ file-based round-trip
     #[test]
     fn vault_roundtrip() {
         let path = std::env::temp_dir().join("mistterm-test-creds.json");

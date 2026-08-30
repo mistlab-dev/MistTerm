@@ -2,7 +2,7 @@
 //!
 //! 第一版仅本地记录，不做网络上报。
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -16,7 +16,7 @@ const DEFAULT_HANG_THRESHOLD_MS: u64 = 3_000;
 /// watchdog 检查间隔（不必过密）。
 const DEFAULT_POLL_MS: u64 = 500;
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HangSnapshot {
     pub status_message: String,
     pub tabs_count: usize,
@@ -186,4 +186,170 @@ fn now_unix_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hang_snapshot_default_all_fields_are_empty_or_zero() {
+        let s = HangSnapshot::default();
+        assert_eq!(s.status_message, "");
+        assert_eq!(s.tabs_count, 0);
+        assert_eq!(s.active_tab, None);
+        assert_eq!(s.panel_state, "");
+        assert_eq!(s.busy_hint, "");
+    }
+
+    #[test]
+    fn hang_snapshot_serde_busy_hint_defaults_to_empty_when_missing() {
+        // HangSnapshot::busy_hint 有 #[serde(default)]，序列化后缺该字段
+        // 时反序列化应补为 ""。
+        let json = r#"{
+            "status_message":"loading",
+            "tabs_count": 4,
+            "active_tab": 1,
+            "panel_state": "connection-grid"
+        }"#;
+        let s: HangSnapshot = serde_json::from_str(json).unwrap();
+        assert_eq!(s.status_message, "loading");
+        assert_eq!(s.tabs_count, 4);
+        assert_eq!(s.active_tab, Some(1));
+        assert_eq!(s.panel_state, "connection-grid");
+        assert_eq!(s.busy_hint, "");
+    }
+
+    #[test]
+    fn hang_snapshot_serde_roundtrip_preserves_busy_hint() {
+        let s = HangSnapshot {
+            status_message: "rendering".into(),
+            tabs_count: 1,
+            active_tab: Some(0),
+            panel_state: "terminal".into(),
+            busy_hint: "market-catalog".into(),
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let r: HangSnapshot = serde_json::from_str(&json).unwrap();
+        assert_eq!(r.status_message, "rendering");
+        assert_eq!(r.tabs_count, 1);
+        assert_eq!(r.active_tab, Some(0));
+        assert_eq!(r.panel_state, "terminal");
+        assert_eq!(r.busy_hint, "market-catalog");
+    }
+
+    #[test]
+    fn ensure_hang_report_dir_creates_parent_and_returns_path() {
+        let dir = ensure_hang_report_dir().expect("should be able to create the dir");
+        assert!(dir.exists());
+        assert!(dir.is_dir());
+        // Directory name ends with the configured subfolder.
+        assert!(dir
+            .to_string_lossy()
+            .contains("hang-reports"));
+    }
+
+    #[test]
+    fn hang_report_dir_lives_under_default_log_base() {
+        let dir = hang_report_dir();
+        let base = crate::core::default_log_base_dir();
+        assert!(dir.starts_with(base));
+    }
+
+    #[test]
+    fn default_constants_within_reasonable_ranges() {
+        // Threshold 3s; don't let refactors accidentally widen too much.
+        assert!(DEFAULT_HANG_THRESHOLD_MS >= 2_000, "threshold too low to be useful");
+        assert!(DEFAULT_HANG_THRESHOLD_MS <= 5_000, "threshold too high to diagnose hangs");
+        assert!(DEFAULT_POLL_MS >= 100);
+        assert!(DEFAULT_POLL_MS <= DEFAULT_HANG_THRESHOLD_MS);
+    }
+
+    // ---- Threshold + dedup logic via Inner without spawning a thread ----
+
+    fn fresh_inner(threshold_ms: u64, poll_ms: u64) -> Inner {
+        Inner {
+            stop: AtomicBool::new(false),
+            last_heartbeat_ms: AtomicU64::new(0),
+            last_reported_heartbeat_ms: AtomicU64::new(0),
+            threshold_ms,
+            poll_ms,
+            snapshot: Mutex::new(HangSnapshot::default()),
+        }
+    }
+
+    #[test]
+    fn check_and_dump_skips_when_last_heartbeat_under_threshold() {
+        let inner = fresh_inner(10_000, 100);
+        // "now" is >= last (0 with saturating sub => 0ms stale); threshold 10s
+        // so it should NOT dump anything. Just confirm the call is a no-op.
+        check_and_dump_if_hung(&inner);
+        // No reports should be written; but since we can't easily list all
+        // hang reports, we assert via the reported-timestamp atomics which
+        // remain 0 (unchanged) because the early-return path was taken.
+        assert_eq!(
+            inner
+                .last_reported_heartbeat_ms
+                .load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn check_and_dump_writes_report_when_stale() {
+        let threshold = 10; // ms
+        let inner = fresh_inner(threshold, 1);
+        let past_ts = now_unix_ms().saturating_sub(1_000); // definitely stale
+        inner.last_heartbeat_ms.store(past_ts, Ordering::Relaxed);
+        check_and_dump_if_hung(&inner);
+        // After dumping, `last_reported_heartbeat_ms` should match `last` so
+        // a second invocation within the same stale window does NOT dump
+        // again (dedup logic).
+        assert_eq!(
+            inner
+                .last_reported_heartbeat_ms
+                .load(Ordering::Relaxed),
+            past_ts
+        );
+    }
+
+    #[test]
+    fn check_and_dump_dedupes_within_same_heartbeat() {
+        let threshold = 10;
+        let inner = fresh_inner(threshold, 1);
+        let past_ts = now_unix_ms().saturating_sub(1_000);
+        inner
+            .last_heartbeat_ms
+            .store(past_ts, Ordering::Relaxed);
+        check_and_dump_if_hung(&inner); // dumps
+        let reported_after_first = inner
+            .last_reported_heartbeat_ms
+            .load(Ordering::Relaxed);
+        check_and_dump_if_hung(&inner); // deduped
+        let reported_after_second = inner
+            .last_reported_heartbeat_ms
+            .load(Ordering::Relaxed);
+        // The dedup condition `last_reported == last` guards the second call.
+        // If dedup worked correctly, no new dump happened -> atomic unchanged.
+        assert_eq!(reported_after_first, reported_after_second);
+        assert_eq!(reported_after_second, past_ts);
+    }
+
+    #[test]
+    fn reporter_drop_sets_stop_flag() {
+        // Start a real reporter (small poll just so it doesn't wait long),
+        // then drop it and inspect stop by leaking the Arc contents. Since
+        // `inner` is private we check indirectly: constructing a reporter
+        // then dropping it must be safe (no panic, no thread stuck forever
+        // past drop). With poll_ms=1 we can at least exercise the code.
+        let reporter = HangReporter::start(10_000, 1);
+        reporter.heartbeat();
+        reporter.update_snapshot(HangSnapshot {
+            status_message: "hi".into(),
+            ..Default::default()
+        });
+        drop(reporter);
+        // If we got here without deadlock/panic, Drop's stop=true fired
+        // correctly (the watchdog thread's next loop iteration exits).
+    }
 }

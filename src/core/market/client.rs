@@ -103,30 +103,197 @@ impl MarketClient {
     fn decode_response<T: DeserializeOwned>(resp: reqwest::blocking::Response) -> Result<T, MarketApiError> {
         let status = resp.status();
         let text = resp.text().unwrap_or_default();
-        if status.is_success() {
-            serde_json::from_str(&text).map_err(|e| MarketApiError {
-                status: status.as_u16(),
-                message: format!("JSON decode: {e}"),
-            })
-        } else {
-            Err(Self::decode_error(status, text))
-        }
+        decode_market_text(status.as_u16(), &text)
     }
 
     fn decode_error(status: StatusCode, text: String) -> MarketApiError {
-        let message = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| {
-                v.get("error")
-                    .or_else(|| v.get("message"))
-                    .and_then(|x| x.as_str())
-                    .map(|s| s.to_string())
-            })
-            .filter(|s| !s.is_empty())
-            .unwrap_or(text);
-        MarketApiError {
-            status: status.as_u16(),
-            message,
-        }
+        decode_market_error(status.as_u16(), &text)
+    }
+}
+
+// ---- Pure market helpers (same pattern as team client)
+
+pub(crate) fn decode_market_error(status_u16: u16, text: &str) -> MarketApiError {
+    let message = serde_json::from_str::<serde_json::Value>(text)
+        .ok()
+        .and_then(|v| {
+            v.get("error")
+                .or_else(|| v.get("message"))
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string())
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| text.to_string());
+    MarketApiError {
+        status: status_u16,
+        message,
+    }
+}
+
+pub(crate) fn decode_market_text<T: DeserializeOwned>(
+    status_u16: u16,
+    text: &str,
+) -> Result<T, MarketApiError> {
+    if (200..300).contains(&status_u16) {
+        return serde_json::from_str(text).map_err(|e| MarketApiError {
+            status: status_u16,
+            message: format!("JSON decode: {e}"),
+        });
+    }
+    Err(decode_market_error(status_u16, text))
+}
+
+/// Catalog query → list of (key, value) pairs that will be passed to
+/// `reqwest::RequestBuilder::query`. Returned as a plain `Vec<String>`
+/// (serialized key=value) so tests can verify order & content.
+pub(crate) fn catalog_query_pairs(q: &MarketCatalogQuery) -> Vec<(&'static str, String)> {
+    let mut out: Vec<(&'static str, String)> = Vec::new();
+    if !q.category.trim().is_empty() {
+        out.push(("category", q.category.trim().to_string()));
+    }
+    if !q.search.trim().is_empty() {
+        out.push(("search", q.search.trim().to_string()));
+    }
+    if q.limit > 0 {
+        out.push(("limit", q.limit.to_string()));
+    }
+    if !q.cursor.trim().is_empty() {
+        out.push(("cursor", q.cursor.trim().to_string()));
+    }
+    out
+}
+
+pub(crate) fn build_market_path(path: &str) -> String {
+    // Market API lives under /v1/market/...
+    format!("/v1/market/{path}")
+}
+
+#[cfg(test)]
+mod pure_tests {
+    use super::*;
+
+    // ------------------------------------------------ new + base_url
+
+    #[test]
+    fn new_rejects_empty_or_all_slashes_base() {
+        let e = match MarketClient::new("") {
+            Ok(_) => panic!("expected Err for empty base"),
+            Err(e) => e,
+        };
+        assert!(e.contains("empty"));
+        let e2 = match MarketClient::new(" //// ") {
+            Ok(_) => panic!("expected Err for all-slashes base"),
+            Err(e) => e,
+        };
+        assert!(e2.contains("empty"));
+    }
+
+    #[test]
+    fn new_ok_adds_https_for_plain_host() {
+        let c = MarketClient::new("mkt.example.com").unwrap();
+        assert_eq!(c.base_url, "https://mkt.example.com");
+    }
+
+    // ------------------------------------------------ decode_market_error
+
+    #[test]
+    fn market_error_prefers_error_key_then_message_key() {
+        let a = decode_market_error(400, r#"{"error":"rate limited"}"#);
+        assert_eq!(a.status, 400);
+        assert_eq!(a.message, "rate limited");
+        let b = decode_market_error(500, r#"{"message":"oops"}"#);
+        assert_eq!(b.message, "oops");
+    }
+
+    #[test]
+    fn market_error_falls_back_to_raw_body() {
+        let a = decode_market_error(502, "gateway timeout");
+        assert_eq!(a.message, "gateway timeout");
+        let b = decode_market_error(422, r#"{"error":""}"#);
+        assert_eq!(b.message, r#"{"error":""}"#);
+    }
+
+    // ------------------------------------------------ decode_market_text
+
+    #[test]
+    fn decode_market_success_roundtrip_catalog() {
+        let body = r#"{"catalog_version":"cv1","cursor":"c","fragments":[{"id":"x","title":"t","command":"c"}]}"#;
+        let r: MarketCatalogResponse = decode_market_text(200, body).unwrap();
+        assert_eq!(r.catalog_version, "cv1");
+        assert_eq!(r.cursor, "c");
+        assert_eq!(r.fragments.len(), 1);
+        assert_eq!(r.fragments[0].id, "x");
+    }
+
+    #[test]
+    fn decode_market_success_invalid_json_returns_decode_error() {
+        let e = decode_market_text::<MarketCatalogResponse>(200, "{invalid").unwrap_err();
+        assert!(e.message.contains("JSON decode"));
+        assert_eq!(e.status, 200);
+    }
+
+    #[test]
+    fn decode_market_failure_uses_error_decoder() {
+        let e = decode_market_text::<MarketCatalogResponse>(
+            403,
+            r#"{"message":"denied"}"#
+        ).unwrap_err();
+        assert_eq!(e.status, 403);
+        assert_eq!(e.message, "denied");
+    }
+
+    // ------------------------------------------------ catalog_query_pairs
+
+    #[test]
+    fn catalog_empty_query_emits_no_pairs() {
+        let q = MarketCatalogQuery::default();
+        assert!(catalog_query_pairs(&q).is_empty());
+    }
+
+    #[test]
+    fn catalog_pairs_appear_in_declared_order_and_trim() {
+        let q = MarketCatalogQuery {
+            category: "  ops  ".into(),
+            search: " nginx  ".into(),
+            limit: 100,
+            cursor: "  cur-0 ".into(),
+        };
+        let pairs = catalog_query_pairs(&q);
+        assert_eq!(pairs.len(), 4);
+        assert_eq!(pairs[0], ("category", "ops".into()));
+        assert_eq!(pairs[1], ("search", "nginx".into()));
+        assert_eq!(pairs[2], ("limit", "100".into()));
+        assert_eq!(pairs[3], ("cursor", "cur-0".into()));
+    }
+
+    #[test]
+    fn catalog_zero_limit_is_omitted() {
+        let q = MarketCatalogQuery {
+            limit: 0,
+            search: "any".into(),
+            ..Default::default()
+        };
+        let pairs = catalog_query_pairs(&q);
+        // limit=0 is skipped; only search pair is present.
+        assert!(!pairs.iter().any(|(k, _)| *k == "limit"));
+        assert_eq!(pairs.len(), 1);
+    }
+
+    // ------------------------------------------------ build_market_path
+
+    #[test]
+    fn build_market_path_prefixes_v1_market() {
+        assert_eq!(
+            build_market_path("fragments/catalog"),
+            "/v1/market/fragments/catalog"
+        );
+    }
+
+    // ------------------------------------------------ MarketApiError Display
+
+    #[test]
+    fn market_api_error_display_format() {
+        let e = MarketApiError { status: 404, message: "gone".into() };
+        assert_eq!(format!("{e}"), "HTTP 404: gone");
     }
 }
