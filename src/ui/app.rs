@@ -2268,7 +2268,7 @@ impl MistTermApp {
             self.notify_auto(
                 crate::i18n::tr(
                     ctx,
-                    "No session profile found)); cannot reconnect",
+                    "No session profile found; cannot reconnect",
                     "未找到会话配置，无法重连",
                 )
                 .to_string(),

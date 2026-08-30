@@ -17,53 +17,93 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const HTTP_QUEUE_CAP: usize = 512;
 
+/// 结构化审计事件的分类（与 `AuditEvent.category` 对应，JSON 序列化时为 snake_case）。
+///
+/// 用于审计日志检索、后台 Dashboard 分桶与 HTTP/Syslog sink 的分类筛选。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[allow(clippy::enum_variant_names)]
 pub enum AuditCategory {
+    /// 身份认证类事件：SSH 登录、Vault 认证、团队 OAuth 登录/刷新/退出等。
     Auth,
+    /// 会话生命周期：新建、连接、断开、重连、关闭标签、导入 SSH 配置等。
     Session,
+    /// 凭证管理：新建/编辑/删除、导出、Vault 凭据解析与迁移、密钥链存取。
     Credential,
+    /// Vault 相关：读取 KV 字段、列表浏览、AppRole 登录、令牌刷新。
     Vault,
+    /// 配置变更：AppSettings 保存、偏好设置修改、云端同步开关/令牌。
     Config,
+    /// 命令片段：个人库导入导出、团队片段 lock/unlock、安装市场片段。
     Fragment,
+    /// 终端命令发送：本地 cmd_audit 拦截、服务器审计引擎 Block/Alert/Confirm 结果。
     Command,
 }
 
+/// 单个审计事件的最终结果。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuditOutcome {
+    /// 操作成功执行（SSH 登录成功、保存成功、命令未被拦截等）。
     Success,
+    /// 操作尝试但失败（登录失败、Vault 读取错误、命令发送中途断开等）。
     Failure,
+    /// 策略明确拒绝：命令被 Block 规则拦截、权限不足被服务器 Deny、凭据被擦除。
     Denied,
 }
 
+/// 审计事件的主体（操作发起方）——本机用户、主机名、客户端版本。
+///
+/// 由 [`current_actor`] 在事件落盘时自动填充，不对外暴露可变。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditActor {
+    /// 本机操作系统用户名（`$USER` / `%USERNAME%`，获取不到时为 `"unknown"`）。
     pub os_user: String,
+    /// 本机主机名（`$HOSTNAME` / `%COMPUTERNAME%`，获取不到时为 `"unknown"`）。
     pub hostname: String,
+    /// 生成事件时的 MistTerm 版本号（`env!("CARGO_PKG_VERSION")`）。
     pub app_version: String,
 }
 
+/// 单条结构化审计事件，落盘为 JSONL（一行一个对象），可转发到 HTTP/Syslog sink。
+///
+/// 使用构造器 + Builder 风格拼装：
+/// ```no_run
+/// # use mistterm_core::{AuditCategory, AuditOutcome, AuditEvent};
+/// let ev = AuditEvent::new(AuditCategory::Session, "session.connect", AuditOutcome::Success)
+///     .with_session("sess-abc")
+///     .with_host("10.0.0.1:22");
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEvent {
+    /// RFC3339 毫秒精度事件时间戳（UTC，由事件创建时 `Utc::now()` 生成）。
     pub ts: String,
+    /// 全局唯一事件 ID（带时间前缀的随机 UUID，便于 sink 端去重）。
     pub event_id: String,
+    /// 事件主体：本机用户、主机、App 版本。
     pub actor: AuditActor,
+    /// 事件所属功能分类（影响检索与仪表盘）。
     pub category: AuditCategory,
+    /// 动作标识（点分路径，例如 `session.connect`、`fragment.import`，稳定可读）。
     pub action: String,
+    /// 事件结果：成功 / 失败 / 拒绝。
     pub outcome: AuditOutcome,
+    /// 关联的会话 ID（仅 Session/Command 类事件有值，`None` 则序列化时省略）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// 关联的远端主机 `host[:port]`（SSH/Vault 相关事件）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
+    /// 关联的资源路径（例如 Vault KV 路径、片段 ID、凭证文件名）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource: Option<String>,
+    /// 可选的扩展明细（任意 JSON 对象；例如命令审计带上规则 ID、匹配的 pattern 列表）。
     #[serde(default)]
     pub detail: Value,
 }
 
 impl AuditEvent {
+    /// 创建一个新的审计事件，自动填充 `ts`、`event_id`、`actor`，其余字段可选。
     pub fn new(category: AuditCategory, action: impl Into<String>, outcome: AuditOutcome) -> Self {
         Self {
             ts: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -79,21 +119,25 @@ impl AuditEvent {
         }
     }
 
+    /// Builder：设置 [`AuditEvent::session_id`]，覆盖已有值。
     pub fn with_session(mut self, session_id: impl Into<String>) -> Self {
         self.session_id = Some(session_id.into());
         self
     }
 
+    /// Builder：设置 [`AuditEvent::host`]（远端主机 host[:port]），覆盖已有值。
     pub fn with_host(mut self, host: impl Into<String>) -> Self {
         self.host = Some(host.into());
         self
     }
 
+    /// Builder：设置 [`AuditEvent::resource`]（资源标识），覆盖已有值。
     pub fn with_resource(mut self, resource: impl Into<String>) -> Self {
         self.resource = Some(resource.into());
         self
     }
 
+    /// Builder：设置 [`AuditEvent::detail`] 扩展明细，覆盖已有值。
     pub fn with_detail(mut self, detail: Value) -> Self {
         self.detail = detail;
         self

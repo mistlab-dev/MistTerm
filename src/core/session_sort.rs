@@ -1,12 +1,24 @@
-//! 侧栏会话排序
+//! 侧栏会话列表排序：策略枚举 + 排序函数
+//!
+//! UI 层应调用 [`crate::i18n::session_sort_popup_row`] / [`crate::i18n::session_sort_chip_short`]
+//! 获取当前语言的标签，而不是直接使用本模块的 [`SessionSortBy::label`]（已标记弃用）。
 
 use super::session::SessionConfig;
 
+/// 会话排序的四种策略（侧栏筛选区右上 chip 循环切换）。
+///
+/// 内部比较逻辑在 [`sort_sessions`] 中实现：
+/// - 排序前不会改动「在线/离线」的大分组顺序（分组逻辑由 UI 侧先处理）；
+/// - 同一分组内按选择的字段排序，`None` 时间戳下沉到末尾。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SessionSortBy {
+    /// 按会话名称的字典序升序（A→Z），数字与符号按 Unicode 排序规则。
     Name,
+    /// 按会话名称的字典序降序（Z→A）。
     NameDesc,
+    /// 按最后连接时间降序（最近连接过的排在最前）。
     LastConnected,
+    /// 按创建时间升序（最早创建的会话排在最前）。
     CreatedAt,
 }
 
@@ -24,6 +36,14 @@ impl SessionSortBy {
         SessionSortBy::CreatedAt,
     ];
 
+    /// 侧栏/设置菜单中用于 ComboBox/说明的长标签。
+    ///
+    /// ⚠️ **已弃用**：返回值硬编码中文，不支持 UI 语言切换。
+    /// UI 层应调用 [`crate::i18n::session_sort_popup_row`] 获取当前语言的标签。
+    #[deprecated(
+        since = "1.1.1",
+        note = "硬编码中文；请改用 crate::i18n::session_sort_popup_row(ctx, variant)"
+    )]
     pub fn label(self) -> &'static str {
         match self {
             SessionSortBy::Name => "名称 (A→Z)",
@@ -33,7 +53,14 @@ impl SessionSortBy {
         }
     }
 
-    /// 侧栏标题行窄位展示（避免 ComboBox 内换行）
+    /// 侧栏标题行窄位展示（避免 ComboBox 内换行）。
+    ///
+    /// ⚠️ **已弃用**：返回值硬编码中文，不支持 UI 语言切换。
+    /// UI 层应调用 [`crate::i18n::session_sort_chip_short`] 获取当前语言的短标签。
+    #[deprecated(
+        since = "1.1.1",
+        note = "硬编码中文；请改用 crate::i18n::session_sort_chip_short(ctx, variant)"
+    )]
     pub fn short_label(self) -> &'static str {
         match self {
             SessionSortBy::Name => "A→Z",

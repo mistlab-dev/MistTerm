@@ -11,24 +11,35 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::AiSettings;
 
+/// 中文模型下的默认 system prompt（`AiSettings.system_prompt` 为空时使用）。
+///
+/// 要求模型使用固定章节结构：结论、关键点、风险、下一步、建议命令，
+/// 便于 [`extract_shell_commands`] 自动从「建议命令」章节提取可执行命令。
 pub const DEFAULT_SYSTEM_PROMPT: &str = "你是 MistTerm 终端里的运维助手。用户会提问或附上终端输出。\
 请用简洁中文回答，并固定使用这些小节：结论、关键点、风险、下一步、建议命令（没有命令可省略）。\
 先给 1 句结论，再用短小要点列出关键原因、风险和下一步。避免长段落；每个要点尽量不超过 2 行；不要把普通字段都包成行内代码。\
 需要用户立刻执行时，把命令放在最后的「建议命令」小节。若给出完整 shell 脚本，请用单个 ```bash 代码块包裹整段脚本；\
 若给出若干条可直接执行的命令，用 ```bash 代码块列出，每行一条命令，不要与完整脚本混在同一提取逻辑里。不要编造未提供的输出。";
 
+/// OpenAI Chat Completions API 中的单条消息角色 + 正文（未区分 system/user/assistant 外的角色）。
 #[derive(Clone, Debug)]
 pub struct ChatMessage {
+    /// OpenAI 角色：`system` / `user` / `assistant`。
     pub role: String,
+    /// 消息正文（多行纯文本或 Markdown，不做长度校验）。
     pub content: String,
 }
 
 /// 流式或非流式对话进度（后台线程 → UI）。
 #[derive(Clone, Debug)]
 pub enum ChatEvent {
+    /// 流式传输中又到达一段增量 token 文本；可直接 append 到缓冲区。
     Delta(String),
+    /// 对话结束；不再有任何事件。
     Finished,
+    /// 后端明确返回错误或网络层失败。字段是可读的错误说明（包含 HTTP 状态码时已被格式化）。
     Failed(String),
+    /// 用户在 UI 点击「停止」时触发（`cancel` 原子标志为 true）。
     Cancelled,
 }
 
@@ -106,15 +117,24 @@ pub const AI_CONTEXT_MAX_CHARS: usize = 24_000;
 /// 终端选区经脱敏与体积限制后的结果。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedTerminalContext {
+    /// 脱敏并截断后的最终文本（trim 过；空表示无需附带）。
     pub text: String,
+    /// 截断后的行数（0..=[`AI_CONTEXT_MAX_LINES`]）。
     pub line_count: usize,
+    /// 截断后的字符数（0..=[`AI_CONTEXT_MAX_CHARS`]）。
     pub char_count: usize,
+    /// `true` 表示由于行数或字符数限制做了尾部截断；UI 会给用户提示。
     pub truncated: bool,
+    /// 原始脱敏后的行数（用于展示「已附带 N 行中的 M 行」）。
     pub original_line_count: usize,
+    /// 原始脱敏后的字符数。
     pub original_char_count: usize,
 }
 
-/// 脱敏并按 [`AI_CONTEXT_MAX_LINES`] / [`AI_CONTEXT_MAX_CHARS`] 截断。
+/// 对终端输出执行脱敏（IP/密码/Token/JWT/AWS Key/邮箱等模式化字段），然后按
+/// [`AI_CONTEXT_MAX_LINES`] / [`AI_CONTEXT_MAX_CHARS`] 截断保留末尾。
+///
+/// 脱敏不保证 100%，仅降低常见误上传风险；AI 对话中用户仍能看到真实输出。
 pub fn prepare_terminal_context(text: &str) -> PreparedTerminalContext {
     let redacted = redact_for_ai(text);
     let trimmed = redacted.trim();
@@ -210,6 +230,7 @@ pub fn redact_for_ai(text: &str) -> String {
     out
 }
 
+/// 使用 [`DEFAULT_SYSTEM_PROMPT`]，除非 [`AiSettings::system_prompt`] 已有非空白自定义值。
 pub fn resolve_system_prompt(settings: &AiSettings) -> String {
     let custom = settings.system_prompt.trim();
     if custom.is_empty() {
@@ -458,6 +479,10 @@ chmod +x check_domain.sh
     }
 }
 
+/// 同步阻塞调用 `/chat/completions`（非流式）；API Key 从 settings 的密钥链加载。
+///
+/// 本质是构造 `run_chat_with_key(..., force_blocking=true)` 并收集所有 Delta 后返回整段正文。
+/// 流式 UI 请不要调用此函数，直接在后台线程使用 [`run_chat_with_key`]。
 pub fn chat_completions(
     settings: &AiSettings,
     messages: &[ChatMessage],
@@ -468,6 +493,7 @@ pub fn chat_completions(
     chat_completions_with_key(settings, &api_key, messages)
 }
 
+/// 同 [`chat_completions`]，但允许调用方显式传入 API Key（用于「测试连接」流程中用户尚未保存的场景）。
 pub fn chat_completions_with_key(
     settings: &AiSettings,
     api_key: &str,
@@ -491,7 +517,13 @@ pub fn chat_completions_with_key(
     }
 }
 
-/// 后台线程入口：按设置走流式或整段响应。
+/// 后台线程入口：按 [`AiSettings::stream_responses`] 选择流式或阻塞调用。
+///
+/// - `cancel` 设为 `true` 时流式读取会在下次 chunk 后发送 [`ChatEvent::Cancelled`] 并返回。
+/// - `force_blocking=true` 时忽略配置，直接走阻塞模式（被 [`chat_completions_with_key`] 使用）。
+/// - `system_prompt_override` 可覆盖默认 system prompt（`None` 时使用 [`resolve_system_prompt`]）。
+///
+/// 该函数不返回结果，所有事件都通过 `tx` 通道发送；UI 侧在循环中接收。
 pub fn run_chat_with_key(
     settings: &AiSettings,
     api_key: &str,
@@ -749,6 +781,9 @@ fn parse_api_error(status: u16, text: &str) -> String {
     format!("API {status}：{text}")
 }
 
+/// 从 `/models` 接口拉取当前 API Key 可访问的模型 ID 列表（已按字典序去重）。
+///
+/// API Key 从 settings 的密钥链加载；若未配置则返回错误。
 pub fn fetch_models(settings: &AiSettings) -> Result<Vec<String>, String> {
     let api_key = settings
         .load_api_key()
@@ -756,6 +791,7 @@ pub fn fetch_models(settings: &AiSettings) -> Result<Vec<String>, String> {
     fetch_models_with_key(settings, &api_key)
 }
 
+/// 同 [`fetch_models`]，但允许显式传入 API Key（用于「保存前预览模型」）。
 pub fn fetch_models_with_key(settings: &AiSettings, api_key: &str) -> Result<Vec<String>, String> {
     if api_key.trim().is_empty() {
         return Err("API Key is empty".to_string());
@@ -798,6 +834,9 @@ fn parse_models_response(text: &str) -> Result<Vec<String>, String> {
     Ok(ids)
 }
 
+/// 快速连通性测试：调用一次 `/models` 接口，成功返回 `Ok(())`，失败返回带状态码的中文说明。
+///
+/// API Key 从 settings 的密钥链加载。
 pub fn test_connection(settings: &AiSettings) -> Result<(), String> {
     let api_key = settings
         .load_api_key()
@@ -805,6 +844,7 @@ pub fn test_connection(settings: &AiSettings) -> Result<(), String> {
     test_connection_with_key(settings, &api_key)
 }
 
+/// 同 [`test_connection`]，允许显式传入 API Key（用于 AI 面板「测试连接」按钮，用户尚未保存）。
 pub fn test_connection_with_key(settings: &AiSettings, api_key: &str) -> Result<(), String> {
     if api_key.trim().is_empty() {
         return Err("API Key is empty".to_string());

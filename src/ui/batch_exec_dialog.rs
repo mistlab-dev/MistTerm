@@ -141,7 +141,11 @@ impl BatchExecDialog {
                                         self.selected.remove(&t.id);
                                     }
                                 }
-                                ui.label(format!("{} · {}", t.label, t.group));
+                                ui.label(format!(
+                                    "{} · {}",
+                                    t.label,
+                                    crate::i18n::session_group_display_name(ctx, &t.group)
+                                ));
                             });
                         }
                     });
