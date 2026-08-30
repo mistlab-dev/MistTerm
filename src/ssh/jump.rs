@@ -10,6 +10,7 @@ use std::time::Duration;
 use super::client::{authenticate_session, apply_keepalive, SshConfig};
 use super::known_hosts;
 use super::proxy_command;
+use super::SessionBlockingGuard;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -155,11 +156,10 @@ pub fn connect_ssh_session(config: &SshConfig) -> Result<Session, String> {
             next_port
         );
 
-        session.set_blocking(true);
+        let _guard = SessionBlockingGuard::new(&session);
         let channel = session
             .channel_direct_tcpip(&next_host, next_port, None)
             .map_err(|e| format!("direct-tcpip to {}:{} failed: {}", next_host, next_port, e))?;
-        session.set_blocking(false);
 
         session = handshake_on_channel(channel, &next_cfg)?;
     }
@@ -301,14 +301,15 @@ fn run_channel_tcp_bridge(mut tcp: TcpStream, channel: ssh2::Channel) -> Result<
 
 fn finish_handshake(mut session: Session, config: &SshConfig) -> Result<Session, String> {
     session.set_timeout(CONNECT_TIMEOUT.as_millis() as u32);
-    session.set_blocking(true);
-    session
-        .handshake()
-        .map_err(|e| format!("SSH handshake failed: {}", e))?;
-    known_hosts::verify_or_record_host_key(&session, &config.host, config.port)?;
-    apply_keepalive(&mut session, config);
-    authenticate_session(&mut session, config)?;
-    session.set_blocking(false);
+    {
+        let _guard = SessionBlockingGuard::new(&session);
+        session
+            .handshake()
+            .map_err(|e| format!("SSH handshake failed: {}", e))?;
+        known_hosts::verify_or_record_host_key(&session, &config.host, config.port)?;
+        apply_keepalive(&mut session, config);
+        authenticate_session(&mut session, config)?;
+    }
     Ok(session)
 }
 

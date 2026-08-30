@@ -835,11 +835,28 @@ impl TerminalView {
     }
 
     fn send_pty_input(&mut self, handle: &SshSessionHandle, data: &[u8]) -> Result<(), String> {
+        let __t0 = std::time::Instant::now();
         if !data.is_empty() {
             self.scroll_to_bottom_on_user_input();
         }
+        let __t1 = std::time::Instant::now();
         self.note_pty_outbound_for_rz(data);
-        handle.send_input(data)
+        let __t2 = std::time::Instant::now();
+        let __res = handle.send_input(data);
+        let __t3 = std::time::Instant::now();
+        let __total = (__t3 - __t0).as_micros() as u64;
+        if __total >= 5_000 {
+            log::warn!(
+                "TERM_SLOW send_pty_input total={}us n={} first_byte={:02x} stages: scroll={}us rz_note={}us pump_send={}us",
+                __total,
+                data.len(),
+                data.first().copied().unwrap_or(0),
+                (__t1 - __t0).as_micros(),
+                (__t2 - __t1).as_micros(),
+                (__t3 - __t2).as_micros(),
+            );
+        }
+        __res
     }
 
     fn push_zmodem_detect_tail(&mut self, data: &[u8]) {

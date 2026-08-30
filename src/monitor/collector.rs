@@ -266,6 +266,15 @@ impl Monitor {
     }
 
     /// 同步执行远程采集（会阻塞直至命令返回；UI 线程请用异步采集）。
+    ///
+    /// ⚠️ **此方法会跨线程调 `SshManager::exec_remote`，临时将 Session 切为阻塞模式，
+    /// 可能导致 shell_pump 线程的 PTY channel 永久阻塞（终端卡死）。**
+    /// UI 侧应经 [`MonitorPanel::begin_async_collect`]（底层为 `SshSessionHandle::enqueue_remote_exec`）
+    /// 排入 shell 泵线程执行，与 PTY 读写在同一线程互斥，不会争用 Session。
+    #[deprecated(
+        since = "1.1.1",
+        note = "跨线程调 set_blocking 会导致 shell_pump PTY channel 永久阻塞。改用 MonitorPanel::begin_async_collect（排入 shell 泵线程）"
+    )]
     pub fn refresh(&mut self) -> Result<ServerStats, String> {
         let sid = self.ssh_handle.session_id;
         let raw = self
