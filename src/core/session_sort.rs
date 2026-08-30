@@ -53,20 +53,153 @@ pub fn sort_sessions(sessions: &mut [SessionConfig], sort_by: SessionSortBy) {
 mod tests {
     use super::*;
 
+    fn sc(name: &str, last: Option<i64>, created: Option<i64>) -> SessionConfig {
+        SessionConfig {
+            name: name.to_string(),
+            last_connected_at: last,
+            created_at: created,
+            ..SessionConfig::default()
+        }
+    }
+
     #[test]
     fn name_desc_order() {
         let mut v = vec![
-            SessionConfig {
-                name: "b".into(),
-                ..SessionConfig::default()
-            },
-            SessionConfig {
-                name: "a".into(),
-                ..SessionConfig::default()
-            },
+            sc("b", None, None),
+            sc("a", None, None),
         ];
         sort_sessions(&mut v, SessionSortBy::NameDesc);
         assert_eq!(v[0].name, "b");
+    }
+
+    // ------------------------------------------------ default + constants
+    #[test]
+    fn default_is_last_connected_and_all_has_four_variants() {
+        assert_eq!(SessionSortBy::default(), SessionSortBy::LastConnected);
+        assert_eq!(SessionSortBy::ALL.len(), 4);
+        assert!(SessionSortBy::ALL.contains(&SessionSortBy::Name));
+        assert!(SessionSortBy::ALL.contains(&SessionSortBy::NameDesc));
+        assert!(SessionSortBy::ALL.contains(&SessionSortBy::LastConnected));
+        assert!(SessionSortBy::ALL.contains(&SessionSortBy::CreatedAt));
+    }
+
+    #[test]
+    fn labels_have_no_duplicates_and_all_nonempty() {
+        for s in SessionSortBy::ALL {
+            let l = s.label();
+            let sl = s.short_label();
+            assert!(!l.is_empty(), "label empty for {:?}", s);
+            assert!(!sl.is_empty(), "short_label empty for {:?}", s);
+        }
+        let mut longs: Vec<&str> = SessionSortBy::ALL.iter().map(|s| s.label()).collect();
+        let mut shorts: Vec<&str> = SessionSortBy::ALL.iter().map(|s| s.short_label()).collect();
+        let l_orig_len = longs.len();
+        longs.sort_unstable();
+        longs.dedup();
+        assert_eq!(longs.len(), l_orig_len, "label() has duplicates");
+        shorts.sort_unstable();
+        shorts.dedup();
+        assert_eq!(shorts.len(), l_orig_len, "short_label() has duplicates");
+    }
+
+    #[test]
+    fn label_matches_expected_strings() {
+        assert_eq!(SessionSortBy::Name.label(), "名称 (A→Z)");
+        assert_eq!(SessionSortBy::NameDesc.label(), "名称 (Z→A)");
+        assert_eq!(SessionSortBy::LastConnected.label(), "最近连接");
+        assert_eq!(SessionSortBy::CreatedAt.label(), "创建时间");
+
+        assert_eq!(SessionSortBy::Name.short_label(), "A→Z");
+        assert_eq!(SessionSortBy::NameDesc.short_label(), "Z→A");
+        assert_eq!(SessionSortBy::LastConnected.short_label(), "最近");
+        assert_eq!(SessionSortBy::CreatedAt.short_label(), "创建");
+    }
+
+    // ------------------------------------------------ serde
+    #[test]
+    fn serde_round_trip_all_variants() {
+        for s in SessionSortBy::ALL {
+            let json = serde_json::to_string(s).unwrap();
+            let back: SessionSortBy = serde_json::from_str(&json).unwrap();
+            assert_eq!(*s, back);
+        }
+    }
+
+    // ------------------------------------------------ Name (case-insensitive)
+    #[test]
+    fn name_sort_asc_case_insensitive_and_stable_same() {
+        let mut v = vec![
+            sc("B", None, None),
+            sc("a", None, None),
+            sc("C", None, None),
+        ];
+        sort_sessions(&mut v, SessionSortBy::Name);
+        let names: Vec<&str> = v.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["a", "B", "C"]);
+    }
+
+    #[test]
+    fn name_sort_desc_case_insensitive() {
+        let mut v = vec![
+            sc("a", None, None),
+            sc("Zebra", None, None),
+            sc("Monkey", None, None),
+        ];
+        sort_sessions(&mut v, SessionSortBy::NameDesc);
+        let names: Vec<&str> = v.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["Zebra", "Monkey", "a"]);
+    }
+
+    // ------------------------------------------------ LastConnected (None → 0, largest first)
+    #[test]
+    fn last_connected_puts_largest_first_and_none_last() {
+        let mut v = vec![
+            sc("a", None, None),
+            sc("b", Some(500), None),
+            sc("c", Some(100), None),
+        ];
+        sort_sessions(&mut v, SessionSortBy::LastConnected);
+        let names: Vec<&str> = v.iter().map(|s| s.name.as_str()).collect();
+        // Descending: b=500, c=100, a=0 (None as 0)
+        assert_eq!(names, vec!["b", "c", "a"]);
+    }
+
+    #[test]
+    fn last_connected_equal_values_preserve_relative_order_via_stable_sort() {
+        let mut v = vec![
+            sc("x", Some(1000), None),
+            sc("y", Some(1000), None),
+            sc("z", Some(1000), None),
+        ];
+        sort_sessions(&mut v, SessionSortBy::LastConnected);
+        let names: Vec<&str> = v.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["x", "y", "z"]);
+    }
+
+    // ------------------------------------------------ CreatedAt
+    #[test]
+    fn created_at_newest_first_none_treated_as_zero() {
+        let mut v = vec![
+            sc("s1", None, Some(10)),
+            sc("s2", None, None),
+            sc("s3", None, Some(100)),
+            sc("s4", None, Some(50)),
+        ];
+        sort_sessions(&mut v, SessionSortBy::CreatedAt);
+        let names: Vec<&str> = v.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["s3", "s4", "s1", "s2"]);
+    }
+
+    // ------------------------------------------------ Copy semantics
+    #[test]
+    fn enum_is_copy_clone_eq() {
+        let a = SessionSortBy::Name;
+        let b = SessionSortBy::CreatedAt;
+        assert_ne!(a, b);
+        let c = a;
+        assert_eq!(c, SessionSortBy::Name);
+        let cl = a.clone();
+        assert_eq!(cl, a);
     }
 }
 

@@ -107,3 +107,163 @@ pub fn verify_or_record_host_key(session: &Session, host: &str, port: u16) -> Re
     log::info!("Trusting new host key for {}:{} ({})", host, port, fp);
     append_entry(host, port, &fp)
 }
+
+/// Parse a `known_hosts` file *content* string into `(host, port, fingerprint)` tuples.
+/// Mirrors the real `read_entries` parser so tests can exercise it without touching the disk.
+fn parse_known_hosts_content(text: &str) -> Vec<(String, u16, String)> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((hostport, fp)) = line.split_once(' ') else {
+            continue;
+        };
+        let fp = fp.trim().to_string();
+        if let Some((host, port_str)) = hostport.rsplit_once(':') {
+            if let Ok(port) = port_str.parse::<u16>() {
+                out.push((host.to_string(), port, fp));
+                continue;
+            }
+        }
+        out.push((hostport.to_string(), 22, fp));
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ------------------------------------------------------------------ base64_encode
+
+    #[test]
+    fn base64_encode_empty_input() {
+        assert_eq!(base64_encode(&[]), "");
+    }
+
+    #[test]
+    fn base64_encode_one_byte_no_padding() {
+        // 0x4D = 01001101 -> in 3-byte group padded: 0x4D 00 00 -> T A = =
+        assert_eq!(base64_encode(&[0x4D]), "TQ==");
+    }
+
+    #[test]
+    fn base64_encode_two_bytes_one_padding() {
+        // 0x4D 0x61 = Man
+        assert_eq!(base64_encode(b"Ma"), "TWE=");
+    }
+
+    #[test]
+    fn base64_encode_three_bytes_no_padding() {
+        assert_eq!(base64_encode(b"Man"), "TWFu");
+    }
+
+    #[test]
+    fn base64_encode_standard_vectors() {
+        // Well-known RFC vectors.
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn base64_encode_binary_with_symbols() {
+        // Bytes which exercise the '+' and '/' chars.
+        assert_eq!(base64_encode(&[0xFB, 0xFF, 0xFE]), "+//+");
+        assert_eq!(base64_encode(&[0x00, 0x00, 0x00]), "AAAA");
+    }
+
+    // ------------------------------------------------------------------ host_key_line
+
+    #[test]
+    fn host_key_line_formats_host_port_fingerprint() {
+        assert_eq!(
+            host_key_line("srv", 2222, "SHA256:abcd"),
+            "srv:2222 SHA256:abcd\n"
+        );
+    }
+
+    #[test]
+    fn host_key_line_default_port() {
+        assert_eq!(host_key_line("host", 22, "fp1"), "host:22 fp1\n");
+    }
+
+    // ------------------------------------------------------------- parse_known_hosts_content
+
+    #[test]
+    fn parse_empty_content_returns_empty() {
+        assert!(parse_known_hosts_content("").is_empty());
+        assert!(parse_known_hosts_content("\n\n   \n").is_empty());
+    }
+
+    #[test]
+    fn parse_skips_comments_and_blank_lines() {
+        let text = "\n# a comment\n  \n# another\n";
+        assert!(parse_known_hosts_content(text).is_empty());
+    }
+
+    #[test]
+    fn parse_host_with_explicit_port() {
+        let rows = parse_known_hosts_content("192.168.1.1:2222 SHA256:abc\n");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "192.168.1.1");
+        assert_eq!(rows[0].1, 2222);
+        assert_eq!(rows[0].2, "SHA256:abc");
+    }
+
+    #[test]
+    fn parse_host_without_port_defaults_to_22() {
+        let rows = parse_known_hosts_content("github.com SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s\n");
+        assert_eq!(rows[0].0, "github.com");
+        assert_eq!(rows[0].1, 22);
+        assert_eq!(rows[0].2, "SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s");
+    }
+
+    #[test]
+    fn parse_host_with_colon_in_ipv6_addr_or_port_garbage_falls_back_to_default_port() {
+        // If the token after the last ':' is not a valid u16, treat host:port as
+        // just host with default port 22.
+        let rows = parse_known_hosts_content("host:NOTAPORT fp_x\n");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, "host:NOTAPORT");
+        assert_eq!(rows[0].1, 22);
+        assert_eq!(rows[0].2, "fp_x");
+    }
+
+    #[test]
+    fn parse_line_missing_fingerprint_is_skipped() {
+        // A single token with no space -> no split_once -> skipped.
+        let rows = parse_known_hosts_content("only.host\n");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn parse_multiple_mixed_lines_preserves_order() {
+        let text = "\
+# banner
+serverA:22 SHA256:A
+serverB:2022 SHA256:B
+serverC  SHA256:C   # inline comment not in fp: fp is 'SHA256:C'
+";
+        let rows = parse_known_hosts_content(text);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].0, "serverA");
+        assert_eq!(rows[0].1, 22);
+        assert_eq!(rows[0].2, "SHA256:A");
+        assert_eq!(rows[1].0, "serverB");
+        assert_eq!(rows[1].1, 2022);
+        assert_eq!(rows[1].2, "SHA256:B");
+        assert_eq!(rows[2].0, "serverC");
+        assert_eq!(rows[2].1, 22);
+        // Because split_once splits on the FIRST space,
+        // the fp part becomes "SHA256:C   # inline comment not in fp: fp is 'SHA256:C'"
+        // This documents current behavior.
+        assert!(rows[2].2.starts_with("SHA256:C"));
+    }
+}

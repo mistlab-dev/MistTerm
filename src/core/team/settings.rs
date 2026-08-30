@@ -74,3 +74,89 @@ pub fn normalize_api_base(raw: &str) -> String {
         format!("https://{s}")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ------------------------------------------------------- constants
+    #[test]
+    fn constants_have_expected_format() {
+        assert!(DEFAULT_TEAM_API_BASE.starts_with("https://api."));
+        assert!(DEFAULT_TEAM_WEB_ORIGIN.starts_with("https://mistlab"));
+        assert_eq!(team_web_register_url(), "https://mistlab.dev/register");
+        assert_eq!(
+            team_web_forgot_password_url(),
+            "https://mistlab.dev/forgot-password"
+        );
+        assert_eq!(
+            team_web_oauth_desktop_callback_url(),
+            "https://mistlab.dev/oauth/desktop-callback.html"
+        );
+        assert_eq!(OAUTH_LOCAL_PORT, 8765);
+    }
+
+    // --------------------------------------------------- TeamSettings
+    #[test]
+    fn default_uses_product_api_base() {
+        let s = TeamSettings::default();
+        assert_eq!(s.api_base, DEFAULT_TEAM_API_BASE);
+        assert!(s.is_configured());
+    }
+
+    #[test]
+    fn normalized_base_always_returns_product_default() {
+        let mut s = TeamSettings::default();
+        s.api_base = "https://evil.example.com".to_string();
+        // Runtime normalizer ignores the user file override.
+        assert_eq!(s.normalized_api_base(), DEFAULT_TEAM_API_BASE);
+        s.lock_to_product_defaults();
+        assert_eq!(s.api_base, DEFAULT_TEAM_API_BASE);
+    }
+
+    #[test]
+    fn serde_defaults_roundtrip() {
+        // Empty JSON -> api_base should be the product default.
+        let s: TeamSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.api_base, DEFAULT_TEAM_API_BASE);
+        // Partial override deserializes cleanly (but normalizer ignores it anyway).
+        let s: TeamSettings = serde_json::from_str(
+            r#"{"api_base":"https://staging.example/"}"#,
+        )
+        .unwrap();
+        assert_eq!(s.api_base, "https://staging.example/");
+        let roundtrip = serde_json::to_string(&s).unwrap();
+        let s2: TeamSettings = serde_json::from_str(&roundtrip).unwrap();
+        assert_eq!(s2.api_base, s.api_base);
+    }
+
+    // ------------------------------------------------ normalize_api_base
+    #[test]
+    fn normalize_empty_variants_are_empty() {
+        assert_eq!(normalize_api_base(""), "");
+        assert_eq!(normalize_api_base("   "), "");
+        assert_eq!(normalize_api_base(" /////  "), "");
+        assert_eq!(normalize_api_base("////////"), "");
+    }
+
+    #[test]
+    fn normalize_preserves_scheme_prefixes_and_strips_trailing_slashes() {
+        assert_eq!(
+            normalize_api_base("https://api.example.com/"),
+            "https://api.example.com"
+        );
+        assert_eq!(
+            normalize_api_base("  http://api.example.com/team////  "),
+            "http://api.example.com/team"
+        );
+    }
+
+    #[test]
+    fn normalize_prepends_https_for_bare_hostnames() {
+        assert_eq!(normalize_api_base("api.example"), "https://api.example");
+        assert_eq!(
+            normalize_api_base("  localhost:8080/  "),
+            "https://localhost:8080"
+        );
+    }
+}

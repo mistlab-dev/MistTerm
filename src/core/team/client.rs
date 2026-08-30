@@ -470,38 +470,15 @@ impl TeamClient {
     fn decode_response<T: DeserializeOwned>(resp: reqwest::blocking::Response) -> Result<T, TeamApiError> {
         let status = resp.status();
         let text = resp.text().unwrap_or_default();
-        if status.is_success() {
-            if text.trim().is_empty() {
-                return Err(TeamApiError {
-                    status: status.as_u16(),
-                    message: "empty response body".into(),
-                    conflict_fragment: None,
-                });
-            }
-            serde_json::from_str(&text).map_err(|e| TeamApiError {
-                status: status.as_u16(),
-                message: format!("JSON decode: {e}; body={text}"),
-                conflict_fragment: None,
-            })
-        } else {
-            Err(Self::decode_error(status, text))
-        }
+        decode_text_as_result(status.as_u16(), &text)
     }
 
     fn decode_error(status: StatusCode, text: String) -> TeamApiError {
-        let parsed: Option<ApiErrorBody> = serde_json::from_str(&text).ok();
-        let message = parsed
-            .as_ref()
-            .map(|b| b.error.clone())
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| text.clone());
-        TeamApiError {
-            status: status.as_u16(),
-            message,
-            conflict_fragment: parsed.and_then(|b| b.server_version),
-        }
+        decode_error_body(status.as_u16(), &text)
     }
+}
 
+impl TeamClient {
     // ── Fragment lock/unlock ──
 
     pub fn lock_fragment(
@@ -611,5 +588,226 @@ impl TeamClient {
             access_token,
             settings,
         )
+    }
+}
+
+// ---- Pure helpers extracted from decode_response / decode_error.
+//      Taking status as plain u16 + &str body means no reqwest Response is
+//      needed for unit tests; TeamClient methods just delegate.
+
+pub(crate) fn decode_error_body(status_u16: u16, text: &str) -> TeamApiError {
+    let parsed: Option<ApiErrorBody> = serde_json::from_str(text).ok();
+    let message = parsed
+        .as_ref()
+        .map(|b| b.error.clone())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| text.to_string());
+    // Historical naming quirk: server_version is actually the serialized
+    // conflict_fragment body returned on 409 conflicts by the team server.
+    let conflict_fragment = parsed.and_then(|b| b.server_version);
+    TeamApiError {
+        status: status_u16,
+        message,
+        conflict_fragment,
+    }
+}
+
+pub(crate) fn decode_text_as_result<T: DeserializeOwned>(
+    status_u16: u16,
+    text: &str,
+) -> Result<T, TeamApiError> {
+    use std::num::NonZeroU16;
+    // Mimic `StatusCode::is_success` range [200, 300).
+    let is_success = (200..300).contains(&status_u16);
+    if is_success {
+        if text.trim().is_empty() {
+            return Err(TeamApiError {
+                status: status_u16,
+                message: "empty response body".into(),
+                conflict_fragment: None,
+            });
+        }
+        return serde_json::from_str(text).map_err(|e| TeamApiError {
+            status: status_u16,
+            message: format!("JSON decode: {e}; body={text}"),
+            conflict_fragment: None,
+        });
+    }
+    // status_u16 of 0 would mean `StatusCode::from_u16` fails; still safe.
+    let fallback = status_u16.max(NonZeroU16::MIN.get());
+    Err(decode_error_body(fallback, text))
+}
+
+/// Simple string-level URL combiner (matches `TeamClient::url` exactly).
+pub(crate) fn build_api_url(base: &str, path: &str) -> String {
+    format!("{base}{path}")
+}
+
+#[cfg(test)]
+mod pure_client_tests {
+    use super::*;
+
+    // ------------------------------------------------ normalize / TeamClient::new
+
+    #[test]
+    fn normalize_preserves_https_and_strips_trailing_slash_and_ws() {
+        assert_eq!(normalize_api_base("  https://a.corp/  "), "https://a.corp");
+        assert_eq!(normalize_api_base("http://insecure/"), "http://insecure");
+    }
+
+    #[test]
+    fn normalize_prepends_https_for_plain_hostname() {
+        assert_eq!(normalize_api_base("team.example.com"), "https://team.example.com");
+        assert_eq!(normalize_api_base(""), "");
+        assert_eq!(normalize_api_base("   ////  "), ""); // becomes empty after trimming
+    }
+
+    #[test]
+    fn team_client_new_rejects_empty_base_and_reports_custom_message() {
+        let err = match TeamClient::new("") {
+            Ok(_) => panic!("expected Err for empty base"),
+            Err(e) => e,
+        };
+        assert!(err.contains("empty"));
+        let err2 = match TeamClient::new("   ///   ") {
+            Ok(_) => panic!("expected Err for all-slashes base"),
+            Err(e) => e,
+        };
+        assert!(err2.contains("empty"));
+    }
+
+    #[test]
+    fn team_client_new_ok_with_valid_base_exposes_via_base_url() {
+        let c = TeamClient::new("team.corp").unwrap();
+        assert_eq!(c.base_url(), "https://team.corp");
+    }
+
+    // ------------------------------------------------ decode_error_body
+
+    #[test]
+    fn error_body_with_api_error_takes_precedence_over_raw_text() {
+        // `server_version` type is `Option<TeamFragment>`; to keep the parsed
+        // ApiErrorBody valid we don't pass that field (defaults to None).
+        let e = decode_error_body(400, r#"{"error":"bad request"}"#);
+        assert_eq!(e.status, 400);
+        assert_eq!(e.message, "bad request");
+        // conflict_fragment field missing => None
+        assert!(e.conflict_fragment.is_none());
+    }
+
+    #[test]
+    fn error_body_raw_text_is_fallback_when_json_missing_or_empty_err() {
+        let plain = decode_error_body(500, "plain text boom");
+        assert_eq!(plain.message, "plain text boom");
+        assert_eq!(plain.status, 500);
+        // JSON object present but `error` is "" -> falls back to raw text.
+        let empty_err = decode_error_body(403, r#"{"error":"","other":"x"}"#);
+        assert_eq!(empty_err.message, r#"{"error":"","other":"x"}"#);
+    }
+
+    #[test]
+    fn error_body_parses_conflict_fragment_payload() {
+        // TeamApiError.conflict_fragment comes from ApiErrorBody.server_version
+        // field (historical naming quirk for 409 conflict responses).
+        let json = r#"{
+          "error":"revision mismatch",
+          "server_version":{
+            "id":"f-1","title":"T","command":"c","category":"ops","tags":"[]","variables":"{}","status":"live","revision":5
+          }
+        }"#;
+        let e = decode_error_body(409, json);
+        let c = e.conflict_fragment.expect("missing conflict_fragment (server_version)");
+        assert_eq!(c.id, "f-1");
+        assert_eq!(c.revision, 5);
+        assert_eq!(c.title, "T");
+    }
+
+    // ------------------------------------------------ decode_text_as_result
+
+    #[test]
+    fn decode_success_json_parses_typed_result() {
+        let body = r#"{"access_token":"abc","refresh_token":"def","expires_in":3600,"user":{"id":"u","email":"a@b","username":"alice"}}"#;
+        let r: TokenResponse = decode_text_as_result(200, body).unwrap();
+        assert_eq!(r.access_token, "abc");
+        assert_eq!(r.refresh_token, "def");
+        assert_eq!(r.user.id, "u");
+        assert_eq!(r.user.email, "a@b");
+    }
+
+    #[test]
+    fn decode_empty_body_on_success_is_error() {
+        let e = decode_text_as_result::<TokenResponse>(201, "   \n\t  ").unwrap_err();
+        assert_eq!(e.status, 201);
+        assert!(e.message.contains("empty"));
+    }
+
+    #[test]
+    fn decode_invalid_json_on_success_is_decode_error_with_body_snippet() {
+        let e = decode_text_as_result::<TokenResponse>(200, "{not json").unwrap_err();
+        assert_eq!(e.status, 200);
+        assert!(e.message.contains("JSON decode"));
+        assert!(e.message.contains("{not json"));
+    }
+
+    #[test]
+    fn decode_non_success_status_runs_decode_error_body_even_with_typed_call() {
+        let e = decode_text_as_result::<TokenResponse>(
+            401,
+            r#"{"error":"unauthorized"}"#
+        ).unwrap_err();
+        assert_eq!(e.status, 401);
+        assert_eq!(e.message, "unauthorized");
+    }
+
+    #[test]
+    fn decode_non_success_zero_status_becomes_1() {
+        // 0 is "unknown" sentinel from HTTP errors; clamp inside the pure fn.
+        let e = decode_text_as_result::<TokenResponse>(0, "network failed").unwrap_err();
+        assert!(e.status >= 1);
+    }
+
+    // ------------------------------------------------ build_api_url
+
+    #[test]
+    fn build_url_concatenates_base_path_without_rewrite() {
+        assert_eq!(
+            build_api_url("https://team.corp", "/v1/me"),
+            "https://team.corp/v1/me"
+        );
+    }
+
+    // ------------------------------------------------ oauth_authorize_url (team + market share the util)
+
+    #[test]
+    fn oauth_authorize_url_encodes_redirect_uri_percent() {
+        let url = TeamClient::oauth_authorize_url(
+            "team.corp/",
+            OAuthProvider::Github,
+            "myapp://cb?x=1&y=2",
+        );
+        assert!(url.starts_with("https://team.corp/v1/oauth/github?redirect_uri="));
+        // `?` and `=` and `&` must all be percent-encoded in redirect_uri value.
+        let tail = url.rsplit("redirect_uri=").next().unwrap();
+        assert!(!tail.contains('='), "tail contained raw =: {tail}");
+        assert!(!tail.contains('&'), "tail contained raw &: {tail}");
+        assert!(tail.contains("%3F") || tail.contains("%26"));
+    }
+
+    #[test]
+    fn oauth_authorize_url_google_segment_is_google_lowercase() {
+        let u = TeamClient::oauth_authorize_url("a", OAuthProvider::Google, "r");
+        assert!(u.contains("/oauth/google?"));
+    }
+
+    // ------------------------------------------------ TeamApiError Display
+
+    #[test]
+    fn display_team_api_error_inlines_status_and_message() {
+        let e = TeamApiError {
+            status: 404,
+            message: "nope".into(),
+            conflict_fragment: None,
+        };
+        assert_eq!(format!("{e}"), "HTTP 404: nope");
     }
 }

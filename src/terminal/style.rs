@@ -133,3 +133,121 @@ pub fn is_user_warn_line(line: &str) -> bool {
         || line.contains("连接已断开")
         || line.contains("已断开 SSH")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------------------------------------------------------------- line_compact
+
+    #[test]
+    fn line_compact_strips_all_ascii_whitespace() {
+        assert_eq!(line_compact("a b\tc\nd"), "abcd");
+    }
+
+    #[test]
+    fn line_compact_strips_unicode_whitespace() {
+        assert_eq!(line_compact("　a\u{2003}b "), "ab");
+    }
+
+    #[test]
+    fn line_compact_empty_input() {
+        assert_eq!(line_compact(""), "");
+    }
+
+    #[test]
+    fn line_compact_preserves_cjk_and_symbols() {
+        assert_eq!(line_compact("正在   连 接..."), "正在连接...");
+    }
+
+    #[test]
+    fn line_compact_only_whitespace_returns_empty() {
+        assert_eq!(line_compact("  \t\n  \r\n"), "");
+    }
+
+    // --------------------------------------------------------------- truecolor_sgr_bold
+
+    #[test]
+    fn truecolor_sgr_bold_formats_rgb() {
+        let c = egui::Color32::from_rgb(0xAB, 0xCD, 0xEF);
+        assert_eq!(truecolor_sgr_bold(c), "1;38;2;171;205;239");
+    }
+
+    #[test]
+    fn truecolor_sgr_bold_black() {
+        assert_eq!(
+            truecolor_sgr_bold(egui::Color32::BLACK),
+            "1;38;2;0;0;0"
+        );
+    }
+
+    #[test]
+    fn truecolor_sgr_bold_white() {
+        assert_eq!(
+            truecolor_sgr_bold(egui::Color32::WHITE),
+            "1;38;2;255;255;255"
+        );
+    }
+
+    // -------------------------------------------------------------- is_user_*_line
+
+    #[test]
+    fn is_user_error_line_detected_patterns() {
+        assert!(is_user_error_line("Error: something wrong"));
+        assert!(is_user_error_line("错误：权限不足"));
+        assert!(is_user_error_line("SSH 连接失败，请检查地址"));
+        assert!(is_user_error_line("认证失败 (publickey)"));
+        assert!(is_user_error_line("文件传输失败：timeout"));
+        assert!(is_user_error_line("❌ 主机不可达"));
+    }
+
+    #[test]
+    fn is_user_error_line_rejects_normal_lines() {
+        assert!(!is_user_error_line("root@host:~$ ls -la"));
+        assert!(!is_user_error_line("Connected to server"));
+        assert!(!is_user_error_line(""));
+    }
+
+    #[test]
+    fn is_user_info_line_detected_patterns() {
+        assert!(is_user_info_line("Connecting to 1.2.3.4:22 ..."));
+        assert!(is_user_info_line("正在连接 server.example"));
+        assert!(is_user_info_line("  正在 连 接  远程主机  "));
+        assert!(is_user_info_line("Connected successfully"));
+        assert!(is_user_info_line("Connecting via ProxyCommand"));
+    }
+
+    #[test]
+    fn is_user_info_line_rejects_normal_lines() {
+        assert!(!is_user_info_line("root@host:~$ echo hello"));
+        assert!(!is_user_info_line("Disconnected"));
+        assert!(!is_user_info_line(""));
+    }
+
+    #[test]
+    fn is_user_success_line_detected_patterns() {
+        assert!(is_user_success_line("✅ 登录成功"));
+        assert!(is_user_success_line("已连接到 10.0.0.1"));
+        assert!(is_user_success_line(" 已 连 接  (耗时 123ms)"));
+    }
+
+    #[test]
+    fn is_user_success_line_rejects_normal_lines() {
+        assert!(!is_user_success_line("Connecting to host"));
+        assert!(!is_user_success_line(""));
+    }
+
+    #[test]
+    fn is_user_warn_line_detected_patterns() {
+        assert!(is_user_warn_line("Disconnected by remote host"));
+        assert!(is_user_warn_line("连接已断开 (timeout=30s)"));
+        assert!(is_user_warn_line("已断开 SSH 会话"));
+    }
+
+    #[test]
+    fn is_user_warn_line_rejects_normal_lines() {
+        assert!(!is_user_warn_line("Connected to host"));
+        assert!(!is_user_warn_line("root@host:~$ exit"));
+        assert!(!is_user_warn_line(""));
+    }
+}

@@ -620,3 +620,221 @@ mod cmd_audit_agent_tests {
         assert!(!cmd_audit_agent_available_for_host(&agents, "prod-2", now, 300));
     }
 }
+
+#[cfg(test)]
+mod serde_and_business_logic_tests {
+    use super::*;
+
+    // ------------------------------------------------------------------ TeamRole
+
+    #[test]
+    fn team_role_parse_admin_editor_and_default_viewer() {
+        assert_eq!(TeamRole::parse("admin"), TeamRole::Admin);
+        assert_eq!(TeamRole::parse("editor"), TeamRole::Editor);
+        assert_eq!(TeamRole::parse("viewer"), TeamRole::Viewer);
+        assert_eq!(TeamRole::parse("garbage"), TeamRole::Viewer);
+        assert_eq!(TeamRole::parse(""), TeamRole::Viewer);
+    }
+
+    #[test]
+    fn team_role_permission_grid() {
+        use TeamRole::*;
+        // Viewer
+        assert!(!Viewer.can_edit());
+        assert!(!Viewer.can_delete());
+        // Editor
+        assert!(Editor.can_edit());
+        assert!(!Editor.can_delete());
+        // Admin
+        assert!(Admin.can_edit());
+        assert!(Admin.can_delete());
+    }
+
+    #[test]
+    fn team_role_serde_lowercase() {
+        let j = serde_json::to_string(&TeamRole::Admin).unwrap();
+        assert_eq!(j, "\"admin\"");
+        let r: TeamRole = serde_json::from_str("\"editor\"").unwrap();
+        assert_eq!(r, TeamRole::Editor);
+    }
+
+    // -------------------------------------------------------------- TeamMembership role_enum
+
+    #[test]
+    fn membership_role_enum_matches_string() {
+        let m = TeamMembership {
+            team: TeamInfo {
+                id: "t".into(),
+                name: "n".into(),
+                description: String::new(),
+                created_at: None,
+                updated_at: None,
+            },
+            role: "admin".into(),
+        };
+        assert_eq!(m.role_enum(), TeamRole::Admin);
+    }
+
+    // -------------------------------------------------------------- TeamServer defaults + list_key
+
+    #[test]
+    fn team_server_default_port_22_via_serde() {
+        // JSON omits `port`; should fallback via default_ssh_port = 22.
+        let s: TeamServer = serde_json::from_str(
+            r#"{"name":"srv","host":"example.com"}"#
+        ).unwrap();
+        assert_eq!(s.port, 22);
+        assert_eq!(s.name, "srv");
+        assert_eq!(s.host, "example.com");
+    }
+
+    #[test]
+    fn team_server_list_key_uses_id_when_present_or_host_port_name() {
+        let with_id = TeamServer {
+            id: "id-123".into(),
+            name: "ignored".into(),
+            host: "ignored".into(),
+            port: 9999,
+            username: String::new(),
+            tags: vec![],
+            vault_credential_path: String::new(),
+            sort_order: 0,
+        };
+        assert_eq!(with_id.list_key(), "id-123");
+
+        let without_id = TeamServer {
+            id: String::new(),
+            name: "bastion".into(),
+            host: "10.0.0.1".into(),
+            port: 2222,
+            username: String::new(),
+            tags: vec![],
+            vault_credential_path: String::new(),
+            sort_order: 0,
+        };
+        assert_eq!(without_id.list_key(), "10.0.0.1:2222:bastion");
+    }
+
+    #[test]
+    fn team_server_serde_roundtrip_preserves_fields() {
+        let s = TeamServer {
+            id: "s1".into(),
+            name: "db".into(),
+            host: "db.corp".into(),
+            port: 2222,
+            username: "app".into(),
+            tags: vec!["prod".into(), "db".into()],
+            vault_credential_path: "kv/env/app".into(),
+            sort_order: -5,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let r: TeamServer = serde_json::from_str(&json).unwrap();
+        assert_eq!(r.id, "s1");
+        assert_eq!(r.port, 2222);
+        assert_eq!(r.tags, vec!["prod", "db"]);
+        assert_eq!(r.sort_order, -5);
+        assert_eq!(r.vault_credential_path, "kv/env/app");
+    }
+
+    // -------------------------------------------------------------- parse_tags_json / parse_variables_json
+
+    #[test]
+    fn parse_tags_json_empty_inputs() {
+        assert!(parse_tags_json("").is_empty());
+        assert!(parse_tags_json("   \t\n").is_empty());
+    }
+
+    #[test]
+    fn parse_tags_json_array_parsed_ordered() {
+        assert_eq!(
+            parse_tags_json(r#"["a","b","c"]"#),
+            vec!["a".to_string(), "b".into(), "c".into()]
+        );
+    }
+
+    #[test]
+    fn parse_tags_json_invalid_json_returns_empty() {
+        assert!(parse_tags_json("NOT JSON").is_empty());
+    }
+
+    #[test]
+    fn parse_variables_json_empty_inputs() {
+        assert!(parse_variables_json("").is_empty());
+        assert!(parse_variables_json(" \n").is_empty());
+        assert!(parse_variables_json("NOT JSON").is_empty());
+    }
+
+    #[test]
+    fn parse_variables_json_object_with_string_defaults() {
+        let vars = parse_variables_json(
+            r#"{"host":"default.example","port":"2222"}"#
+        );
+        assert_eq!(vars.len(), 2);
+        assert_eq!(vars[0].name, "host");
+        assert_eq!(vars[0].default_value.as_deref(), Some("default.example"));
+        assert_eq!(vars[1].name, "port");
+        assert_eq!(vars[1].default_value.as_deref(), Some("2222"));
+    }
+
+    #[test]
+    fn parse_variables_json_object_with_integer_defaults_coerced_to_str() {
+        let vars = parse_variables_json(r#"{"n":42}"#);
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].name, "n");
+        assert_eq!(vars[0].default_value.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn parse_variables_json_primitive_values_return_empty() {
+        // Only object form is supported; array/string primitives should be empty.
+        assert!(parse_variables_json(r#"["a","b"]"#).is_empty());
+        assert!(parse_variables_json(r#""str""#).is_empty());
+    }
+
+    // -------------------------------------------------------------- default_sync_limit helper
+
+    #[test]
+    fn default_sync_limit_is_500() {
+        assert_eq!(default_sync_limit(), 500);
+    }
+
+    #[test]
+    fn fragment_sync_request_default_limit_when_missing() {
+        let r: FragmentSyncRequest =
+            serde_json::from_str(r#"{"cursor":"c"}"#).unwrap();
+        assert_eq!(r.cursor, "c");
+        assert_eq!(r.limit, 500);
+    }
+
+    // -------------------------------------------------------------- TeamsListResponse + ApiErrorBody serde defaults
+
+    #[test]
+    fn teams_list_response_requires_teams_field_in_json() {
+        // TeamsListResponse has no #[serde(default)] on teams; empty JSON must fail.
+        let err = serde_json::from_str::<TeamsListResponse>("{}").unwrap_err();
+        assert!(err.to_string().contains("missing field `teams`"));
+    }
+
+    #[test]
+    fn teams_list_response_parses_list_ordered() {
+        let json = r#"{
+          "teams": [
+            {"team":{"id":"t1","name":"Ops"}, "role":"admin"},
+            {"team":{"id":"t2","name":"Qa"},  "role":"viewer"}
+          ]
+        }"#;
+        let r: TeamsListResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(r.teams.len(), 2);
+        assert_eq!(r.teams[0].team.id, "t1");
+        assert_eq!(r.teams[0].role, "admin");
+        assert_eq!(r.teams[1].team.name, "Qa");
+    }
+
+    #[test]
+    fn api_error_body_defaults_apply() {
+        // `error` missing -> ""; `server_version` missing -> None.
+        let e: ApiErrorBody = serde_json::from_str("{}").unwrap();
+        assert_eq!(e.error, "");
+        assert!(e.server_version.is_none());
+    }
+}
