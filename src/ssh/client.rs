@@ -5,6 +5,7 @@ use ssh2::Session;
 use std::io::Write;
 
 use super::jump;
+use super::SessionBlockingGuard;
 
 /// SSH 配置
 #[derive(Debug, Clone)]
@@ -190,15 +191,11 @@ impl SshClient {
             .ok_or("Not connected")?;
 
         // 打开 channel/shell 时使用阻塞模式，避免 Session(-37) Would block
-        session.set_blocking(true);
+        let _guard = SessionBlockingGuard::new(session);
 
-        let mut channel = match session.channel_session() {
-            Ok(channel) => channel,
-            Err(e) => {
-                session.set_blocking(false);
-                return Err(format!("Failed to open channel: {}", e));
-            }
-        };
+        let mut channel = session
+            .channel_session()
+            .map_err(|e| format!("Failed to open channel: {}", e))?;
 
         let cols = cols.clamp(20, 512);
         let rows = rows.clamp(5, 256);
@@ -206,23 +203,18 @@ impl SshClient {
         let px_h = rows.saturating_mul(16);
 
         // 请求 PTY（尺寸错误会导致远端按 80 列换行、vim 只开一行等）
-        if let Err(e) = channel.request_pty(
-            "xterm-256color",
-            None,
-            Some((cols, rows, px_w, px_h)),
-        ) {
-            session.set_blocking(false);
-            return Err(format!("Failed to request PTY: {}", e));
-        }
+        channel
+            .request_pty(
+                "xterm-256color",
+                None,
+                Some((cols, rows, px_w, px_h)),
+            )
+            .map_err(|e| format!("Failed to request PTY: {}", e))?;
 
         // 启动 shell
-        if let Err(e) = channel.shell() {
-            session.set_blocking(false);
-            return Err(format!("Failed to start shell: {}", e));
-        }
-
-        // shell 已建立，切回非阻塞给后台轮询线程
-        session.set_blocking(false);
+        channel
+            .shell()
+            .map_err(|e| format!("Failed to start shell: {}", e))?;
 
         log::info!("Shell channel opened");
         Ok(channel)
@@ -263,25 +255,21 @@ impl SshClient {
     pub fn exec_command(&mut self, command: &str) -> Result<(String, i32), String> {
         use std::io::Read;
         let session = self.session.as_mut().ok_or("Not connected")?;
-        session.set_blocking(true);
-        let result = (|| {
-            let mut channel = session
-                .channel_session()
-                .map_err(|e| format!("打开 exec 通道失败: {e}"))?;
-            channel
-                .exec(command)
-                .map_err(|e| format!("exec 失败: {e}"))?;
-            let mut output = Vec::new();
-            channel
-                .read_to_end(&mut output)
-                .map_err(|e| format!("读取输出失败: {e}"))?;
-            let code = channel.exit_status().unwrap_or(-1);
-            let _ = channel.wait_close();
-            let stdout = String::from_utf8_lossy(&output).into_owned();
-            Ok((stdout, code))
-        })();
-        session.set_blocking(false);
-        result
+        let _guard = SessionBlockingGuard::new(session);
+        let mut channel = session
+            .channel_session()
+            .map_err(|e| format!("打开 exec 通道失败: {e}"))?;
+        channel
+            .exec(command)
+            .map_err(|e| format!("exec 失败: {e}"))?;
+        let mut output = Vec::new();
+        channel
+            .read_to_end(&mut output)
+            .map_err(|e| format!("读取输出失败: {e}"))?;
+        let code = channel.exit_status().unwrap_or(-1);
+        let _ = channel.wait_close();
+        let stdout = String::from_utf8_lossy(&output).into_owned();
+        Ok((stdout, code))
     }
 
     /// 获取 SSH 会话（用于文件传输等高级操作）
