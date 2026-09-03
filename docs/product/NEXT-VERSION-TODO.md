@@ -2,7 +2,7 @@
 
 > 依据：产品方向（管得住 · 帮得上 · 不做手机终端）+ [`concept-desktop-calm.html`](concept-desktop-calm.html) v4。  
 > 原则：**不大改现有客户端壳**；增量做「审计拦截 ↔ 团队知识」交汇。  
-> 日期：2026-08-29 · 基线 release：v1.0.22 → 目标 v1.1.0
+> 日期：2026-09-03 · 当前 release：v1.1.2 · 下一目标：v1.1.3
 
 ---
 
@@ -15,13 +15,13 @@
 
 ---
 
-## Now — 可演示闭环
+## v1.1.2 已完成 — 可演示闭环
 
 ### A. 治理收尾（客户端）
 
 - [x] MistTerm 登录团队后，连 agent 主机：人工确认 **block toast**（「服务器策略」前缀；标题+正文；PTY CSI 行内标记解析；泵消息后再 poll）
-- [ ] 人工确认 **confirm 弹窗**（「放行并发送」）与黄横幅（agent 离线）— 发版后继续点验
-- [ ] （可选）SSH 压测：大数据块 partial prefix 不丢数据
+- [x] **confirm 弹窗**（「放行并发送」）与 Agent 离线黄横幅：代码已随 v1.1.2 发布；仍建议在真实 GUI 团队登录环境人工点验
+- [x] 大数据块 partial prefix 解析：已有单测覆盖；SSH 压测作为可选回归项
 
 ### B. 知识优先（增量）
 
@@ -46,23 +46,26 @@
 
 ---
 
-## Next — 加深飞轮
+## v1.1.3 — 加深飞轮（下一期）
 
-### 治理
+### P0 治理闭环
 
-- [ ] Agent 安装向导（文档/客户端引导，仍非大改壳）
-- [ ] 审计时间线（本会话或近期 block/confirm/allow 只读列表）
+- [ ] **审计时间线**：展示本会话及近期 block / confirm / allow，只读、可按主机和结果筛选
+- [ ] **Agent 安装向导**：提供文档和客户端入口，明确安装、绑定、心跳检查，不改现有客户端壳
 
-### 知识
+### P1 知识闭环
 
-- [ ] 失败输出 / 成功路径 → **入库候选**（需确认后写入，禁止静默入库）
-- [ ] 引用 MistDocs / 团队文档段落（带来源锚点）
-- [ ] 拦截后推荐与当前主机/环境标签对齐（有则过滤，无则全局）
-- [ ] 「问：我们怎么…」独立入口 / 语义检索
+- [ ] 失败输出 / 成功路径 → **入库候选**（必须用户确认，禁止静默入库）
+- [ ] 拦截后推荐按当前主机 / 环境标签过滤，无标签时回退全局
+- [ ] 引用 MistDocs / 团队文档段落，并展示来源锚点
+
+### P2 检索体验
+
+- [ ] 「问：我们怎么……」独立入口 / 语义检索；先检索团队知识，再模型兜底并标明来源
 
 ---
 
-## Later — 组织能力
+## v1.2 — 组织能力（后续）
 
 - [ ] 策略可读视图（人能看懂「为什么拦」）
 - [ ] 多主机策略包
@@ -85,6 +88,6 @@
 
 - Canvas：`mistterm-next-direction`（差异化方向）
 - 概念稿：`docs/product/concept-desktop-calm.html`（v4）
-- 既有客户端闭环：`docs/tech/CLIENT-TODO.md`（§1–§7 已完成；§5 GUI 人工点看仍待）
+- 既有客户端闭环：`docs/tech/CLIENT-TODO.md`（§1–§8 已完成；仅保留 GUI 人工点验建议）
 - 审计：`docs/tech/COMMAND-AUDIT.md`、`docs/tech/SERVER-SIDE-AUDIT.md`
 - 实现：`suggest_compliant_after_block`（`fragment_recommendations.rs`）+ `ToastAction::InsertSuggestedSnippet`
