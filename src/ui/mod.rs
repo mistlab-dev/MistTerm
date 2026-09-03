@@ -42,6 +42,7 @@ mod team_fragment_dialog;
 pub mod team_fragment_extras_dialog;
 mod fragment_analytics_dialog;
 mod audit_timeline_dialog;
+mod agent_install_dialog;
 mod batch_exec_dialog;
 mod team_members_dialog;
 pub mod ssh_config_import_dialog;

@@ -371,6 +371,8 @@ pub struct MistTermApp {
     fragment_list_scope: FragmentListScope,
     show_fragment_analytics_dialog: bool,
     show_audit_timeline_dialog: bool,
+    show_agent_install_dialog: bool,
+    agent_install_copied: bool,
     audit_timeline: AuditTimeline,
     audit_timeline_host_filter: String,
     audit_timeline_outcome_filter: Option<TimelineOutcome>,
@@ -776,6 +778,8 @@ impl MistTermApp {
             fragment_list_scope: FragmentListScope::Personal,
             show_fragment_analytics_dialog: false,
             show_audit_timeline_dialog: false,
+            show_agent_install_dialog: false,
+            agent_install_copied: false,
             audit_timeline: AuditTimeline::new(),
             audit_timeline_host_filter: String::new(),
             audit_timeline_outcome_filter: None,
@@ -1161,6 +1165,11 @@ impl MistTermApp {
 
     pub(crate) fn open_audit_timeline_dialog(&mut self) {
         self.show_audit_timeline_dialog = true;
+    }
+
+    pub(crate) fn open_agent_install_dialog(&mut self) {
+        self.agent_install_copied = false;
+        self.show_agent_install_dialog = true;
     }
 
     /// 经命令审计后发送到指定标签的 PTY（拦截/确认在 UI 层处理）。
@@ -2052,6 +2061,7 @@ impl MistTermApp {
             || self.show_fragment_vars_dialog
             || self.show_fragment_analytics_dialog
             || self.show_audit_timeline_dialog
+            || self.show_agent_install_dialog
             || self.variable_dialog.open
             || self.fragment_library.open
             || self.show_terminal_search
