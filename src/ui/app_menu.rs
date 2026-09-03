@@ -247,6 +247,16 @@ impl MistTermApp {
                 self.menu_open_session_log_browser(ctx);
                 ui.close_menu();
             }
+            if crate::ui::chrome::popup_menu_button(
+                ui,
+                theme,
+                crate::i18n::tr(ctx, "Audit timeline", "审计时间线"),
+            )
+            .clicked()
+            {
+                self.open_audit_timeline_dialog();
+                ui.close_menu();
+            }
         });
         egui::menu::menu_button(ui, label(l.help_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);

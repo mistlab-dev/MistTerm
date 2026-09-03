@@ -730,6 +730,22 @@ impl MistTermApp {
             );
         }
 
+        if self.show_audit_timeline_dialog {
+            let mut action = crate::ui::audit_timeline_dialog::AuditTimelineUiAction::None;
+            crate::ui::audit_timeline_dialog::show_audit_timeline_modal(
+                ctx,
+                theme,
+                &mut self.show_audit_timeline_dialog,
+                &self.audit_timeline,
+                &mut self.audit_timeline_host_filter,
+                &mut self.audit_timeline_outcome_filter,
+                &mut action,
+            );
+            if matches!(action, crate::ui::audit_timeline_dialog::AuditTimelineUiAction::Clear) {
+                self.audit_timeline.clear();
+            }
+        }
+
         let session_for_fragments = self
             .selected_session_id
             .as_deref()

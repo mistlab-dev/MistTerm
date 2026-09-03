@@ -16,6 +16,7 @@ use crate::core::{
     parse_vault_credential_path, pending_imports, spawn_cleanup_old_logs, status_bar_summary,
     AppSettings, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, AiContext, CmdAuditAction,
     CmdAuditAlertRequest, CmdAuditCacheStore, CmdAuditEngine, CmdAuditResult, CmdAuditSource,
+    AuditTimeline, TimelineEntry, TimelineOutcome,
     CommandHistory, CommandSendResult, Credential, CredentialAuthKind, FragmentManager,
     FragmentStats, HangReporter, HangSnapshot, PortForwardKind, SecretBackend, SecretResolver,
     ServerAuditEvent, SessionConfig, SessionLogSettings, SessionLogWriter, SessionManager,
@@ -369,6 +370,10 @@ pub struct MistTermApp {
     team_fragment_selected_id: Option<String>,
     fragment_list_scope: FragmentListScope,
     show_fragment_analytics_dialog: bool,
+    show_audit_timeline_dialog: bool,
+    audit_timeline: AuditTimeline,
+    audit_timeline_host_filter: String,
+    audit_timeline_outcome_filter: Option<TimelineOutcome>,
     fragment_analytics_snapshot: crate::core::FragmentAnalyticsDashboard,
     fragment_analytics_range: crate::core::FragmentAnalyticsTimeRange,
     fragment_usage_log: crate::core::FragmentUsageLog,
@@ -770,6 +775,10 @@ impl MistTermApp {
             team_fragment_selected_id: None,
             fragment_list_scope: FragmentListScope::Personal,
             show_fragment_analytics_dialog: false,
+            show_audit_timeline_dialog: false,
+            audit_timeline: AuditTimeline::new(),
+            audit_timeline_host_filter: String::new(),
+            audit_timeline_outcome_filter: None,
             fragment_analytics_snapshot: crate::core::FragmentAnalyticsDashboard::default(),
             fragment_analytics_range: crate::core::FragmentAnalyticsTimeRange::default(),
             fragment_usage_log: crate::core::FragmentUsageLog::load(),
@@ -1101,6 +1110,59 @@ impl MistTermApp {
         self.report_cmd_audit_alert_to_team(command, audit, action_taken);
     }
 
+    /// 将已经完成的本地/服务器审计结果写入只读内存时间线。
+    /// 时间线不参与策略判定，也不通过审计 sink 回流服务端。
+    fn push_timeline_entry(
+        &mut self,
+        tab_idx: usize,
+        command: &str,
+        audit: &CmdAuditResult,
+        outcome: TimelineOutcome,
+        note: &str,
+    ) {
+        let host = self
+            .tabs
+            .get(tab_idx)
+            .map(|tab| tab.primary_session_id())
+            .and_then(|sid| self.session_manager.get_session(&sid))
+            .map(|session| {
+                if session.port == 22 {
+                    session.host.clone()
+                } else {
+                    format!("{}:{}", session.host, session.port)
+                }
+            })
+            .unwrap_or_default();
+        let rule = audit
+            .matches
+            .first()
+            .map(|matched| matched.rule_id.clone())
+            .unwrap_or_else(|| format!("{:?}", audit.action).to_lowercase());
+        let detail = audit
+            .matches
+            .first()
+            .map(|matched| matched.message.clone())
+            .unwrap_or_default();
+        let note = if detail.is_empty() {
+            note.to_string()
+        } else {
+            format!("{}: {}", note, detail)
+        };
+        let ts = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        self.audit_timeline.push(TimelineEntry::new(
+            &ts,
+            host,
+            command_preview(command, 200),
+            outcome,
+            rule,
+            note,
+        ));
+    }
+
+    pub(crate) fn open_audit_timeline_dialog(&mut self) {
+        self.show_audit_timeline_dialog = true;
+    }
+
     /// 经命令审计后发送到指定标签的 PTY（拦截/确认在 UI 层处理）。
     pub(crate) fn send_audited_command_at(
         &mut self,
@@ -1125,6 +1187,13 @@ impl MistTermApp {
                     command,
                     &audit,
                     AuditOutcome::Denied,
+                );
+                self.push_timeline_entry(
+                    tab_idx,
+                    command,
+                    &audit,
+                    TimelineOutcome::Blocked,
+                    "local policy",
                 );
                 let hint = audit
                     .matches
@@ -1172,8 +1241,23 @@ impl MistTermApp {
                     &audit,
                     AuditOutcome::Success,
                 );
+                self.push_timeline_entry(
+                    tab_idx,
+                    command,
+                    &audit,
+                    TimelineOutcome::Allowed,
+                    "local alert",
+                );
             }
-            CmdAuditAction::Allow => {}
+            CmdAuditAction::Allow => {
+                self.push_timeline_entry(
+                    tab_idx,
+                    command,
+                    &audit,
+                    TimelineOutcome::Allowed,
+                    "local policy",
+                );
+            }
         }
         if let Some(pane) = self.tabs.get_mut(tab_idx).and_then(|t| t.active_pane_mut()) {
             pane.terminal.send_command(command);
@@ -1204,6 +1288,15 @@ impl MistTermApp {
                     &state.audit,
                     AuditOutcome::Success,
                 );
+                self.push_timeline_entry(state.tab_idx, &state.command, &state.audit, TimelineOutcome::Confirmed, "command.confirmed");
+            } else {
+                self.push_timeline_entry(
+                    state.tab_idx,
+                    &state.command,
+                    &state.audit,
+                    TimelineOutcome::Confirmed,
+                    "server policy",
+                );
             }
             if let Some(pane) = self
                 .tabs
@@ -1226,6 +1319,7 @@ impl MistTermApp {
                 &state.audit,
                 AuditOutcome::Denied,
             );
+            self.push_timeline_entry(state.tab_idx, &state.command, &state.audit, TimelineOutcome::Blocked, "command.cancelled");
         }
     }
 
@@ -1262,6 +1356,14 @@ impl MistTermApp {
         let detail = server_audit_detail(&ev);
         match ev.action {
             CmdAuditAction::Block => {
+                let audit = ev.to_cmd_audit_result();
+                self.push_timeline_entry(
+                    tab_idx,
+                    &ev.command,
+                    &audit,
+                    TimelineOutcome::Blocked,
+                    "server policy",
+                );
                 let title = crate::i18n::tr(
                     ctx,
                     "Server policy: command blocked",
@@ -1278,6 +1380,14 @@ impl MistTermApp {
                 );
             }
             CmdAuditAction::Alert => {
+                let audit = ev.to_cmd_audit_result();
+                self.push_timeline_entry(
+                    tab_idx,
+                    &ev.command,
+                    &audit,
+                    TimelineOutcome::Allowed,
+                    "server alert",
+                );
                 let title = crate::i18n::tr(
                     ctx,
                     "Server policy: command reported to team audit",
@@ -1301,6 +1411,7 @@ impl MistTermApp {
                 } else {
                     ev.command.clone()
                 };
+                let audit = ev.to_cmd_audit_result();
                 // 已有确认框时不覆盖本地确认；服务器结果用 toast 叠加提示
                 if self.cmd_audit_confirm.is_some() {
                     self.notify_warn_titled(
@@ -1316,13 +1427,22 @@ impl MistTermApp {
                 self.cmd_audit_confirm = Some(CmdAuditConfirmState {
                     tab_idx,
                     command,
-                    audit: ev.to_cmd_audit_result(),
+                    audit,
                     source: CmdAuditSource::Server,
                     approve_token: ev.token,
                     started: Instant::now(),
                 });
             }
-            CmdAuditAction::Allow => {}
+            CmdAuditAction::Allow => {
+                let audit = ev.to_cmd_audit_result();
+                self.push_timeline_entry(
+                    tab_idx,
+                    &ev.command,
+                    &audit,
+                    TimelineOutcome::Allowed,
+                    "server policy",
+                );
+            }
         }
     }
 
@@ -1931,6 +2051,7 @@ impl MistTermApp {
             || self.show_fragments_dialog
             || self.show_fragment_vars_dialog
             || self.show_fragment_analytics_dialog
+            || self.show_audit_timeline_dialog
             || self.variable_dialog.open
             || self.fragment_library.open
             || self.show_terminal_search
