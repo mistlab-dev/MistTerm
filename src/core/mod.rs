@@ -27,6 +27,7 @@ pub mod command_history;
 pub mod session_logger;
 pub mod session_sort;
 pub mod audit;
+pub mod audit_timeline;
 pub mod cmd_audit;
 pub mod ai_settings;
 pub mod ai_client;
@@ -96,6 +97,10 @@ pub use cmd_audit::{
 pub use audit::{
     command_preview, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, AuditSettings,
     HttpSinkSettings, SyslogSinkSettings,
+};
+pub use audit_timeline::{
+    parse_rfc3339_ms, recent_within, AuditTimeline, TimelineEntry, TimelineOutcome,
+    MAX_EVENTS as AUDIT_TIMELINE_MAX_EVENTS,
 };
 pub use ai_settings::AiSettings;
 pub use ai_client::{
