@@ -1,7 +1,7 @@
 # MistTerm User Manual
 
-> **Version**: 1.0.4  
-> **Updated**: 2026-06-18  
+> **Version**: 1.1.2
+> **Updated**: 2026-09-03
 > **Website**: [mistlab.dev](https://mistlab.dev) · **Download**: [GitHub Releases](https://github.com/mistlab-dev/MistTerm/releases)
 
 This manual is for users who use MistTerm to connect to servers, work in terminals, and transfer files. It does not cover compiling source code or development; for developer docs, see the `docs/` directory in the repository.
@@ -280,6 +280,8 @@ When executed, an input dialog appears for each variable. After filling them in,
 
 If you are logged into a MistLab team account, you can use team-shared snippets (see Section 11).
 
+Team snippets support **admin / editor / viewer** roles, with optional per-member overrides. Editing a team snippet acquires an edit lock and renews it automatically; after an abnormal exit, the client cleans up the current user's residual locks on the next startup or sign-in.
+
 ---
 
 ## 9. Monitoring & Port Forwarding
@@ -348,15 +350,27 @@ For users of **MistLab Team Edition**:
    - Sync/share command snippets
    - View team audit records (if enabled by admin)
    - Use team Vault credentials (if configured)
+   - View storage usage and command-audit Agent status in Team Settings
 3. **Tools → Cloud Sync** can back up personal configuration to a Git repository (optional)
 
 Without a team login, all personal features work normally.
+
+### 11.1 Team snippets, editing, and storage
+
+- **viewer** can view and use authorized team snippets.
+- **editor** can create, edit, and maintain team snippets; the client renews the edit lock while editing.
+- **admin** can manage team members, snippet permissions, and command-audit Agents.
+- The Team Settings storage card shows total usage, quota, and category breakdown. If the API is unavailable, MistTerm shows a notice and local terminal use is unaffected.
+
+### 11.2 Command-audit Agent status
+
+When a team command-audit Agent is installed on the target server, MistTerm receives server-side audit results through the terminal connection. The Agent list in Team Settings shows the host, enabled state, and last heartbeat; administrators can enable or disable an Agent.
 
 ---
 
 ## 12. Command Safety Alerts
 
-MistTerm can warn or block dangerous commands **before** they are sent to the server (depending on your rules and team policies):
+MistTerm has two layers of command safety checks: local checks provide fast feedback, while the server-side team policy is authoritative when an Agent is installed. Both can warn or block a dangerous command before it is sent or executed:
 
 | Behavior | Description |
 |----------|-------------|
@@ -364,7 +378,22 @@ MistTerm can warn or block dangerous commands **before** they are sent to the se
 | Confirm | A dialog asks "Are you sure?" |
 | Alert | Execution allowed but a warning is logged |
 
-View or adjust local rules in **Preferences**. When joining a team, admin-pushed policies sync to your machine.
+View or adjust local rules in **Preferences**. When joining a team, admin-pushed policies sync to your machine. Server-side decisions are returned through the terminal connection and use the **“Server policy”** prefix.
+
+### 12.1 Server-side blocks and compliant alternatives
+
+When a server-side policy intercepts a command:
+
+1. **Block**: MistTerm shows “Server policy: command blocked”; the original command is not sent.
+2. **Confirm**: MistTerm shows a confirmation dialog; the command is sent only after choosing **Allow and send**.
+3. **Alert**: execution is allowed and the team audit event is recorded.
+4. If the team or personal snippet library contains a relevant safe operation, the intercept notice prioritizes a compliant alternative. It can be inserted into the current terminal, and a team suggestion can also be saved to the personal library.
+
+Local rules use the **“Local check”** prefix. MistTerm does not use AI to explain how to bypass team policy; AI suggestions never replace server-side policy enforcement.
+
+### 12.2 Agent unavailable
+
+MistTerm periodically checks the current host's Agent heartbeat. If the Agent is offline or has not sent a heartbeat for about five minutes, a yellow notice appears at the top of the terminal. A recovery notification appears when it comes back. Local checks remain available, but server-side enforcement should be treated as unavailable until the team administrator fixes the Agent.
 
 ---
 
@@ -473,4 +502,4 @@ Go to [GitHub Issues](https://github.com/mistlab-dev/MistTerm/issues) and descri
 
 ---
 
-*MistTerm v1.0.4 User Manual · MistLab*
+*MistTerm v1.1.2 User Manual · MistLab*

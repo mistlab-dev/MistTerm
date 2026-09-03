@@ -1,9 +1,15 @@
-# MistTerm 客户端待办（2026-08-21）
+# MistTerm 客户端待办（2026-09-03）
 
-> 服务端所有功能已交付并部署生产，以下为客户端侧需要完成的工作。
-> 涉及 Rust 代码改动，需本地 cargo 环境编译验证。
+> 服务端所有功能已交付并部署生产；本文用于记录客户端验收状态和后续体验项。
+> 涉及 Rust 代码改动时，需在本地 cargo 环境编译验证；本次仅同步文档，未执行编译。
 
 **2026-08-23 更新**：P0 §1–§4、P1 §6–§7 已实现并通过自动化测试（`client_todo_acceptance_test`、`cmd_audit` 单测、团队 API 探针）；§5 实机 SSH/agent 仍建议人工抽测；§8 生产 sshd 运维操作。
+
+**2026-09-03 更新（文档同步，未编译）**：
+- 基线 release 已到 **v1.1.2**（v1.0.22 → v1.1.2），本条目所有「已实现」功能均已发布。
+- CLI/v1.1 期间的稳定修复一并随版本发布：**ZMODEM 接收管道缓冲区溢出丢弃 bug 修复**、**SSH shell pump 防 Tab/输入阻塞加固**、core 公开 API 文档补全与遗留中文 label 函数弃用。
+- §5 实机点验：自动化部分已 PASS；GUI 人工点验（confirm 弹窗 / 黄横幅）仍建议登录团队后补一次。
+- **§8 已完成**：生产机已关闭 SSH 密码登录（`PasswordAuthentication no`）并依赖 CA 证书，客户端无代码改动。
 
 **2026-08-29 更新**：
 - 客户端自动化验收仍通过（`client_todo_acceptance_test` 9/9）。
@@ -23,20 +29,21 @@
 
 **信任边界变化**：命令审计的判定权威从「客户端本地」移到「服务端 + 服务器侧 agent」。客户端本地审计（`CmdAuditEngine`）保留但降级为「本地快捷提示」，不作为安全承诺。
 
-### 1. 服务器侧审计结果展示（已实现，待实机验证）
+### 1. 服务器侧审计结果展示（已实现；仅剩 GUI 人工点验）
 
 **现状**：
 - `src/core/cmd_audit.rs` — `ServerAuditProbe` 解析 `MIST_AUDIT\t{JSON}` 标记行
 - `src/ui/terminal.rs` — PTY feed 调用 probe，事件经 `take_server_audit_events` 交给宿主
 - `src/ui/app.rs` — `poll_server_audit_from_tabs` / `handle_server_audit_event` 展示 block/confirm/alert
 
-**待验证**：
-- [x] `cargo build --release` / `cargo check --lib` 编译通过
-- [x] `cargo test` cmd_audit 单测不回归
+**验收状态**：
+- [x] `cargo build --release` / `cargo check --lib` 编译通过（此前已验证）
+- [x] `cargo test` cmd_audit 单测不回归（此前已验证）
 - [x] 实机：agent 主机执行危险命令 → `MIST_AUDIT` block（`rm -rf /`）
 - [x] 实机：无害命令正常放行
-- [ ] 大数据块 partial prefix 不丢数据（已有单测，建议 SSH 压测）
-- [ ] MistTerm GUI 上确认 toast / confirm 弹窗 / Agent 黄横幅（需客户端登录团队）
+- [x] 实机：自定义 confirm 规则和 Agent 列表 API
+- [ ] 大数据块 partial prefix 不丢数据（已有单测；可选 SSH 压测）
+- [ ] MistTerm GUI 上人工点验 confirm 弹窗 / Agent 黄横幅（代码已实现，需登录团队后点验）
 
 ### 2. 本地审计与服务器审计的文案区分（已实现）
 
@@ -67,10 +74,10 @@
 | 连接已装 agent，执行 `rm -rf /` | block + `MIST_AUDIT` | **PASS**（SSH ForceCommand） |
 | 执行无害命令（如 `echo …`） | 正常放行 | **PASS** |
 | 触发 confirm 规则（`mist_confirm_demo`） | confirm + `MIST_AUDIT` | **PASS** |
-| 确认后 `MIST_AUDIT_APPROVE` | 客户端放行链路 | 待 MistTerm GUI 人工点看 |
+| 确认后 `MIST_AUDIT_APPROVE` | 客户端放行链路 | **PASS**（自动化链路）；GUI 待人工点看 |
 | agent 列表 API | 返回 active agent | **PASS** |
-| agent 停止后黄横幅 | 客户端降级 UI | 待 MistTerm 登录团队后人工 |
-| 本地审计文案「本地检查」 | toast 前缀 | 自动化覆盖 |
+| agent 停止后黄横幅 | 客户端降级 UI | 代码已实现；登录团队后人工点验 |
+| 本地审计文案「本地检查」 | toast 前缀 | 自动化覆盖（`client_todo_acceptance_test` 9/9） |
 
 > 注：文档原稿中的 `cat /etc/shadow`→confirm 与当前内置规则不符（CREAD-006 = dangerous→block）。实机以规则引擎为准。
 
@@ -108,9 +115,9 @@
 
 ## P2 — 运维/安全
 
-### 8. SSH 密码登录关闭（运维，非客户端）
+### 8. SSH 密码登录关闭（已完成）
 
-生产机 `sshd_config` 操作，需运维在确认全员 CA 证书可用后执行。客户端无代码改动。
+生产机已执行：`sshd_config` 关闭 `PasswordAuthentication`，依赖 Vault SSH CA 证书，并配置 `AuthorizedPrincipalsFile`。客户端无需改动。
 
 ---
 
