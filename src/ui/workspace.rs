@@ -746,6 +746,15 @@ impl MistTermApp {
             }
         }
 
+        if self.show_agent_install_dialog {
+            crate::ui::agent_install_dialog::show_agent_install_modal(
+                ctx,
+                theme,
+                &mut self.show_agent_install_dialog,
+                &mut self.agent_install_copied,
+            );
+        }
+
         let session_for_fragments = self
             .selected_session_id
             .as_deref()

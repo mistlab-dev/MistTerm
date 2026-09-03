@@ -257,6 +257,16 @@ impl MistTermApp {
                 self.open_audit_timeline_dialog();
                 ui.close_menu();
             }
+            if crate::ui::chrome::popup_menu_button(
+                ui,
+                theme,
+                crate::i18n::tr(ctx, "Install audit Agent", "安装审计 Agent"),
+            )
+            .clicked()
+            {
+                self.open_agent_install_dialog();
+                ui.close_menu();
+            }
         });
         egui::menu::menu_button(ui, label(l.help_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
