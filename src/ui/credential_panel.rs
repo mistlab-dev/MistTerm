@@ -1,4 +1,4 @@
-//! 凭证管理侧栏（设计文档 §6.2）：本地加密库 + 表单
+//! 凭证管理侧栏(设计文档 §6.2)：本地加密库 + 表单
 
 use eframe::egui;
 
@@ -14,7 +14,7 @@ use crate::ui::theme::Theme;
 
 #[derive(Clone, Debug)]
 pub enum CredentialPanelAction {
-    /// 使用该凭证填充「新建会话」或状态提示（由主窗口处理）
+    /// 使用该凭证填充「新建会话」或状态提示(由主窗口处理)
     UseForQuickConnect(Credential),
 }
 
@@ -41,7 +41,7 @@ pub struct CredentialPanel {
     vault_list_busy: bool,
     search: String,
     status_msg: String,
-    /// 本帧 `SidePanel` 槽位（Central 之后 Foreground 重绘用）。
+    /// 本帧 `SidePanel` 槽位(Central 之后 Foreground 重绘用)。
     last_panel_slot_rect: Option<egui::Rect>,
 }
 
@@ -81,7 +81,7 @@ impl CredentialPanel {
         self.vault = CredentialVault::new();
     }
 
-    /// 外部（如同步包还原）更新了 `credentials.json` 后调用，刷新表单与缓存
+    /// 外部(如同步包还原)更新了 `credentials.json` 后调用，刷新表单与缓存
     pub fn reload_after_external_file_replace(&mut self) {
         self.reload_vault();
         self.selected_id = None;
@@ -350,7 +350,7 @@ impl CredentialPanel {
         chrome::form_field_label(
             ui,
             theme,
-            i18n::tr(ui.ctx(), "Username (optional)", "用户名（可选）"),
+            i18n::tr(ui.ctx(), "Username (optional)", "用户名 (可选)"),
         );
         chrome::form_singleline_field(
             ui,
@@ -365,7 +365,7 @@ impl CredentialPanel {
             ui,
             theme,
             &mut panel.form_use_vault,
-            i18n::tr(ui.ctx(), "Secret stored in HashiCorp Vault (KV)", "机密存于 HashiCorp Vault（KV）"),
+            i18n::tr(ui.ctx(), "Secret stored in HashiCorp Vault (KV)", "机密存于 HashiCorp Vault(KV)"),
         );
         if panel.form_use_vault {
             if panel.form_vault_mount.is_empty() {
@@ -513,7 +513,7 @@ impl CredentialPanel {
                                     panel.status_msg = i18n::tr(
                                         ui.ctx(),
                                         "Written to Vault (local entry references only)",
-                                        "已写入 Vault（本地条目仅存引用）",
+                                        "已写入 Vault(本地条目仅存引用)",
                                     )
                                     .to_string();
                                     panel.form_secret.clear();
@@ -635,7 +635,7 @@ impl CredentialPanel {
         chrome::form_field_label(
             ui,
             theme,
-            i18n::tr(ui.ctx(), "Tags (comma-separated)", "标签（逗号分隔）"),
+            i18n::tr(ui.ctx(), "Tags (comma-separated)", "标签(逗号分隔)"),
         );
         chrome::form_singleline_field(
             ui,
@@ -753,7 +753,7 @@ impl CredentialPanel {
         }
     }
 
-    /// 仅占右栏布局槽（正文在 Central 之后 [`show_foreground_panel`] 绘制）。
+    /// 仅占右栏布局槽(正文在 Central 之后 [`show_foreground_panel`] 绘制)。
     #[inline]
     pub(crate) fn last_panel_slot_rect(&self) -> Option<egui::Rect> {
         self.last_panel_slot_rect
@@ -796,7 +796,7 @@ impl CredentialPanel {
         let _ = theme;
     }
 
-    /// Central 之后绘制凭证库正文（避免被 CentralPanel 盖住）。
+    /// Central 之后绘制凭证库正文(避免被 CentralPanel 盖住)。
     pub fn show_foreground_panel(
         &mut self,
         ctx: &egui::Context,

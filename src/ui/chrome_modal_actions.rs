@@ -1,6 +1,6 @@
 use super::*;
 
-/// 弹窗主按钮（自绘三态；勿 `add_enabled` 灰化，否则悬停不可见）
+/// 弹窗主按钮(自绘三态；勿 `add_enabled` 灰化，否则悬停不可见)
 pub struct ModalPrimaryButton<'a> {
     theme: &'a Theme,
     label: &'a str,
@@ -182,7 +182,7 @@ pub fn modal_primary_icon_button_ex(
     response.on_hover_text(tooltip)
 }
 
-/// 弹窗底栏主操作（纯图标），用于 `ui.add(...)`。
+/// 弹窗底栏主操作(纯图标)，用于 `ui.add(...)`。
 pub struct ModalPrimaryIconButton<'a> {
     theme: &'a Theme,
     icon: IconId,
@@ -244,7 +244,7 @@ pub fn modal_primary_button_with_icon(
     modal_primary_button_with_icon_ex(ui, theme, icon, label, true)
 }
 
-/// 弹窗底栏主操作（图标 + 文字），用于 `ui.add(...)`。
+/// 弹窗底栏主操作(图标 + 文字)，用于 `ui.add(...)`。
 pub struct ModalPrimaryButtonWithIcon<'a> {
     theme: &'a Theme,
     icon: IconId,
@@ -306,7 +306,7 @@ pub fn modal_danger_icon_button(
     response.on_hover_text(tooltip)
 }
 
-/// 右对齐底栏：先 add 主操作，再 add 次操作（`right_to_left` 布局）。
+/// 右对齐底栏：先 add 主操作，再 add 次操作(`right_to_left` 布局)。
 pub fn modal_footer_actions<F>(ui: &mut Ui, theme: &Theme, add_buttons: F)
 where
     F: FnOnce(&mut Ui, &Theme),

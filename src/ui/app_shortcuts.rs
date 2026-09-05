@@ -1,6 +1,6 @@
 use eframe::egui;
 
-/// FUNCTIONAL_SPEC §7 快捷键单一真源（关于页与帮助共用；随平台显示 ⌘ 或 Ctrl）。
+/// FUNCTIONAL_SPEC §7 快捷键单一真源(关于页与帮助共用；随平台显示 ⌘ 或 Ctrl)。
 pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String {
     use crate::i18n::UiLanguage;
     use crate::platform::shortcuts as s;
@@ -69,7 +69,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
 
     fn zh() -> String {
         format!(
-            "键盘快捷键（主修饰键：{}）\n\
+            "键盘快捷键(主修饰键：{})\n\
              {}\n\
              {}\n\
              {}\n\
@@ -83,7 +83,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — 终端内搜索\n\
              {} — 偏好设置\n\
              {} — 关于与本说明\n\
-             {} — 命令历史（终端内）\n\
+             {} — 命令历史(终端内)\n\
              {} — AI 助手面板\n\
              {} — 终端选区发送到 AI{}",
             s::primary_modifier_label(),

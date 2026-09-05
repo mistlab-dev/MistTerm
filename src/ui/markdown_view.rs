@@ -1,4 +1,4 @@
-//! 将 Markdown 渲染为 egui 控件（AI 面板对话区等）。
+//! 将 Markdown 渲染为 egui 控件(AI 面板对话区等)。
 #![allow(dead_code)]
 
 use arboard::Clipboard;
@@ -11,7 +11,7 @@ use crate::ui::chrome;
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 
-/// 渲染完整 Markdown 正文（不过滤围栏、标题、列表等）。
+/// 渲染完整 Markdown 正文(不过滤围栏、标题、列表等)。
 /// `command_for_terminal`：点击 shell 代码块「执行」时写入待发送内容。
 /// `bind_full_width`：用户气泡等窄容器内应传 `false`，避免 `set_width` 撑破导致左裁切。
 pub fn show_markdown(

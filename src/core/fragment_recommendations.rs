@@ -1,4 +1,4 @@
-//! 命令片段智能推荐（命令历史 + 执行日志，纯本地）。
+//! 命令片段智能推荐(命令历史 + 执行日志，纯本地)。
 
 use std::collections::HashMap;
 
@@ -12,7 +12,7 @@ pub struct FragmentRecommendation {
     pub source: &'static str,
 }
 
-/// 审计拦截后的合规替代建议（团队优先）。
+/// 审计拦截后的合规替代建议(团队优先)。
 #[derive(Debug, Clone)]
 pub struct CompliantFragmentSuggestion {
     pub fragment: FragmentStats,
@@ -37,7 +37,7 @@ impl SuggestionEnvContext {
         }
     }
 
-    /// 用于匹配的小写标签集合（host 短名、color_tag、TeamServer tags）。
+    /// 用于匹配的小写标签集合(host 短名、color_tag、TeamServer tags)。
     pub fn effective_match_tags(&self) -> Vec<String> {
         let mut out: Vec<String> = Vec::new();
         let push_unique = |out: &mut Vec<String>, raw: &str| {
@@ -85,7 +85,7 @@ impl SuggestionEnvContext {
     }
 }
 
-/// 入库候选原因（必须经用户确认，禁止静默写入）。
+/// 入库候选原因(必须经用户确认，禁止静默写入)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FragmentCandidateReason {
     FailedPath,
@@ -136,10 +136,10 @@ pub fn candidate_from_failed_command(
     Some(FragmentCandidate::from_command(&n, FragmentCandidateReason::FailedPath))
 }
 
-/// 成功路径入库：仅当「刚执行的这条」累计次数**刚好达到**阈值时提示（避免每敲一条都弹最热门命令）。
+/// 成功路径入库：仅当「刚执行的这条」累计次数**刚好达到**阈值时提示(避免每敲一条都弹最热门命令)。
 pub const SUCCESS_CANDIDATE_MIN_COUNT: u32 = 5;
 
-/// 将历史频次推荐转为需确认的成功路径候选（取第一条）。
+/// 将历史频次推荐转为需确认的成功路径候选(取第一条)。
 pub fn candidate_from_success_recommendation(
     rec: &FragmentRecommendation,
 ) -> FragmentCandidate {
@@ -246,12 +246,12 @@ fn scope_fragments(
     }
 }
 
-/// 自然语言/拦截主题共用的关键词抽取（供 knowledge 检索）。
+/// 自然语言/拦截主题共用的关键词抽取(供 knowledge 检索)。
 pub fn query_topic_keywords(query: &str) -> Vec<String> {
     block_topic_keywords(query)
 }
 
-/// 片段相对关键词的打分（供 knowledge 检索公开）。
+/// 片段相对关键词的打分(供 knowledge 检索公开)。
 pub fn score_fragment_against_keywords(f: &FragmentStats, keywords: &[String]) -> i64 {
     score_fragment_keywords(f, keywords)
 }
@@ -260,7 +260,7 @@ fn block_topic_keywords(blocked: &str) -> Vec<String> {
     let lower = blocked.to_lowercase();
     let mut keys: Vec<String> = Vec::new();
 
-    // 常见危险模式 → 运维主题词（中英），便于命中「清理日志」等合规片段
+    // 常见危险模式 → 运维主题词(中英)，便于命中「清理日志」等合规片段
     if lower.contains("rm")
         && (lower.contains("-rf")
             || lower.contains("-fr")
@@ -338,7 +338,7 @@ fn is_noise_token(tok: &str) -> bool {
             | "why"
             | "can"
             | "please"
-            // 中文问法噪声（「我们怎么清理」→ 保留「清理」）
+            // 中文问法噪声(「我们怎么清理」→ 保留「清理」)
             | "我们"
             | "你们"
             | "怎么"
@@ -555,7 +555,7 @@ pub fn build_efficiency_report_markdown(
         ));
     }
     if !dash.member_rows.is_empty() {
-        out.push_str("\n## 团队成员（本机）\n\n");
+        out.push_str("\n## 团队成员(本机)\n\n");
         for m in &dash.member_rows {
             let rate = if m.run_count == 0 {
                 0.0
@@ -572,7 +572,7 @@ pub fn build_efficiency_report_markdown(
         out.push_str("\n## 建议添加到片段库\n\n");
         for r in recommendations {
             out.push_str(&format!(
-                "- `{}`（{} 次，来源：{}）\n",
+                "- `{}`({} 次，来源：{})\n",
                 r.command, r.count, r.source
             ));
         }
@@ -580,7 +580,7 @@ pub fn build_efficiency_report_markdown(
     out
 }
 
-/// 将效率报告渲染为 PDF 字节（需可加载的 CJK TTF/TTC）。
+/// 将效率报告渲染为 PDF 字节(需可加载的 CJK TTF/TTC)。
 pub fn build_efficiency_report_pdf(
     dash: &crate::core::FragmentAnalyticsDashboard,
     range: crate::core::FragmentAnalyticsTimeRange,
@@ -630,7 +630,7 @@ fn load_pdf_cjk_font() -> Result<genpdf::fonts::FontData, String> {
         }
     }
     Err(
-        "未找到可用于 PDF 的中文字体（请运行 scripts/fetch-cjk-font.sh 下载嵌入字体）"
+        "未找到可用于 PDF 的中文字体(请运行 scripts/fetch-cjk-font.sh 下载嵌入字体)"
             .to_string(),
     )
 }

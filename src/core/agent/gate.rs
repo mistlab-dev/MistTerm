@@ -1,4 +1,4 @@
-//! 门闩：按命令串决策 L0/L1/L2（不认「场景安全」）。
+//! 门闩：按命令串决策 L0/L1/L2(不认「场景安全」)。
 
 use crate::core::cmd_audit::{CmdAuditAction, CmdAuditResult};
 
@@ -20,7 +20,7 @@ pub struct GateDecision {
     pub message: String,
 }
 
-/// 变更类命令粗匹配（选项 B：默认对话路径关闭变更时用于拒跑）。
+/// 变更类命令粗匹配(选项 B：默认对话路径关闭变更时用于拒跑)。
 pub fn looks_like_mutate_command(command: &str) -> bool {
     let c = command.to_lowercase();
     const PATS: &[&str] = &[
@@ -68,7 +68,7 @@ pub fn gate_decision(audit: CmdAuditResult, command: &str, allow_mutate: bool) -
         CmdAuditAction::Confirm => GateDecision {
             level: GateLevel::L2,
             mutate,
-            message: "该命令需二次确认（审计 Confirm）".into(),
+            message: "该命令需二次确认(审计 Confirm)".into(),
             audit,
         },
         CmdAuditAction::Alert | CmdAuditAction::Allow => {

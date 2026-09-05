@@ -1,4 +1,4 @@
-//! 弹窗 / 侧栏标题与操作按钮的统一视觉（关闭 ×、侧栏 ◀ 收起、主次按钮）。
+//! 弹窗 / 侧栏标题与操作按钮的统一视觉(关闭 ×、侧栏 ◀ 收起、主次按钮)。
 //! 颜色与尺寸均来自 [`Theme`]，本模块不硬编码样式。
 
 use crate::ui::icons::{self, IconId};
@@ -53,7 +53,7 @@ fn theme_icon_hit_revealed(
     )
 }
 
-/// Tab 栏图标按钮（关闭 / 新建）：固定点击区、悬停底。
+/// Tab 栏图标按钮(关闭 / 新建)：固定点击区、悬停底。
 pub fn tab_bar_icon_button(ui: &mut Ui, theme: &Theme, id: IconId, tooltip: &str) -> Response {
     theme_icon_hit(
         ui,
@@ -67,7 +67,7 @@ pub fn tab_bar_icon_button(ui: &mut Ui, theme: &Theme, id: IconId, tooltip: &str
     .on_hover_text(tooltip)
 }
 
-/// 标签栏「新建 Tab」按钮（与 Tab 芯片同高、垂直居中）
+/// 标签栏「新建 Tab」按钮(与 Tab 芯片同高、垂直居中)
 pub fn tab_bar_new_tab_button(ui: &mut Ui, theme: &Theme) -> Response {
     let row_h = theme.size_tab_bar_row_h();
     let icon = theme.size_tab_bar_icon_btn();
@@ -88,7 +88,7 @@ pub fn tab_bar_new_tab_button(ui: &mut Ui, theme: &Theme) -> Response {
     .inner
 }
 
-/// 通用图标按钮（可指定 idle 色）
+/// 通用图标按钮(可指定 idle 色)
 pub fn icon_button(ui: &mut Ui, theme: &Theme, id: IconId, color: Color32) -> Response {
     theme_icon_hit(
         ui,
@@ -101,7 +101,7 @@ pub fn icon_button(ui: &mut Ui, theme: &Theme, id: IconId, color: Color32) -> Re
     )
 }
 
-/// 标题栏 / 右 dock 关闭 ×（28px 点击区 + 悬停底，与 Tab 栏 × 同级）
+/// 标题栏 / 右 dock 关闭 ×(28px 点击区 + 悬停底，与 Tab 栏 × 同级)
 pub fn close_icon_button_with_tooltip(ui: &mut Ui, theme: &Theme, tooltip: &str) -> Response {
     theme_icon_hit(
         ui,
@@ -115,17 +115,17 @@ pub fn close_icon_button_with_tooltip(ui: &mut Ui, theme: &Theme, tooltip: &str)
     .on_hover_text(tooltip)
 }
 
-/// 弹窗 / 侧栏标题栏关闭（默认提示「关闭」）
+/// 弹窗 / 侧栏标题栏关闭(默认提示「关闭」)
 pub fn close_icon_button(ui: &mut Ui, theme: &Theme) -> Response {
     close_icon_button_with_tooltip(ui, theme, crate::i18n::tr(ui.ctx(), "Close", "关闭"))
 }
 
-/// 右 dock 标题栏关闭（与 [`close_icon_button_with_tooltip`] 相同尺寸；`tooltip` 仅设置一次，避免叠两条提示）
+/// 右 dock 标题栏关闭(与 [`close_icon_button_with_tooltip`] 相同尺寸；`tooltip` 仅设置一次，避免叠两条提示)
 pub fn dock_close_icon_button(ui: &mut Ui, theme: &Theme, tooltip: &str) -> Response {
     close_icon_button_with_tooltip(ui, theme, tooltip)
 }
 
-/// 侧栏标题行方形图标按钮（与排序下拉同高）。
+/// 侧栏标题行方形图标按钮(与排序下拉同高)。
 pub fn sidebar_header_icon_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -156,7 +156,7 @@ pub fn sidebar_collapse_button(ui: &mut Ui, theme: &Theme) -> Response {
     )
 }
 
-/// 面板标题栏「＋」新建（连接栏 / 命令片段库统一：实心 Primary，与 Tab/Rail 强调色同族）。
+/// 面板标题栏「＋」新建(连接栏 / 命令片段库统一：实心 Primary，与 Tab/Rail 强调色同族)。
 pub fn panel_header_new_button(ui: &mut Ui, theme: &Theme) -> Response {
     panel_header_new_button_with_label(ui, theme, "")
 }
@@ -190,7 +190,7 @@ pub fn panel_header_new_button_with_label(ui: &mut Ui, theme: &Theme, label: &st
         }
         return response;
     }
-    // 标题行主操作：实心 accent，勿用 ToolbarPrimary 的灰底描边（与整体蓝强调脱节）。
+    // 标题行主操作：实心 accent，勿用 ToolbarPrimary 的灰底描边(与整体蓝强调脱节)。
     paint_control_button(
         ui,
         theme,
@@ -202,13 +202,13 @@ pub fn panel_header_new_button_with_label(ui: &mut Ui, theme: &Theme, label: &st
     )
 }
 
-/// [`panel_header_new_button`] 别名（侧栏）
+/// [`panel_header_new_button`] 别名(侧栏)
 #[inline]
 pub fn sidebar_new_session_button(ui: &mut Ui, theme: &Theme) -> Response {
     panel_header_new_button(ui, theme)
 }
 
-/// 排序芯片预估宽度（与 [`panel_sort_chip`] 一致）
+/// 排序芯片预估宽度(与 [`panel_sort_chip`] 一致)
 pub fn panel_sort_chip_width(ui: &Ui, theme: &Theme, sort_label: &str) -> f32 {
     let icon_px = theme.size_icon_glyph();
     let pad = theme.spacing_panel_header_btn_pad_x();
@@ -225,7 +225,7 @@ pub fn panel_sort_chip_width(ui: &Ui, theme: &Theme, sort_label: &str) -> f32 {
     (icon_px + 4.0 + text_w + pad * 2.0).max(theme.size_panel_header_btn_min_w())
 }
 
-/// 排序芯片（与分类筛选同高；连接栏点开菜单、片段栏点击轮换）
+/// 排序芯片(与分类筛选同高；连接栏点开菜单、片段栏点击轮换)
 pub fn panel_sort_chip(
     ui: &mut Ui,
     theme: &Theme,
@@ -295,7 +295,7 @@ pub fn panel_sort_chip(
     response.on_hover_text(hover_text)
 }
 
-/// 小号图标按钮（终端搜索上/下条等）
+/// 小号图标按钮(终端搜索上/下条等)
 pub fn chrome_small_icon_button(ui: &mut Ui, theme: &Theme, id: IconId) -> Response {
     theme_icon_hit(
         ui,
@@ -308,7 +308,7 @@ pub fn chrome_small_icon_button(ui: &mut Ui, theme: &Theme, id: IconId) -> Respo
     )
 }
 
-/// 异步加载行：旋转指示 + 文案（SFTP / 监控 / Vault 等复用）
+/// 异步加载行：旋转指示 + 文案(SFTP / 监控 / Vault 等复用)
 pub fn busy_row(ui: &mut Ui, theme: &Theme, label: &str) {
     ui.horizontal(|ui| {
         ui.add_space(theme.spacing_sm());
@@ -323,7 +323,7 @@ pub fn busy_row(ui: &mut Ui, theme: &Theme, label: &str) {
         .request_repaint_after(std::time::Duration::from_millis(120));
 }
 
-/// 小号文字按钮（替换 `small_button`，带悬停底）
+/// 小号文字按钮(替换 `small_button`，带悬停底)
 pub fn chrome_small_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
     text_hit_button(
         ui,
@@ -336,7 +336,7 @@ pub fn chrome_small_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response 
     )
 }
 
-/// 强调色小号文字按钮（如 SSH 导入条「导入」）
+/// 强调色小号文字按钮(如 SSH 导入条「导入」)
 pub fn chrome_small_accent_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
     text_hit_button(
         ui,
@@ -347,6 +347,56 @@ pub fn chrome_small_accent_button(ui: &mut Ui, theme: &Theme, label: &str) -> Re
         theme.color_modal_primary_fill_hover(),
         egui::vec2(8.0, 4.0),
     )
+}
+
+/// 同行说明链接：固定行高 + 同一 CJK 字体 + 按字形基线对齐(避免中英混排/两段链接错位)。
+pub fn panel_caption_link(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
+    panel_caption_link_with_hover(ui, theme, label, None)
+}
+
+/// 同 [`panel_caption_link`]，可附悬停提示(如域名)。
+pub fn panel_caption_link_with_hover(
+    ui: &mut Ui,
+    theme: &Theme,
+    label: &str,
+    hover: Option<&str>,
+) -> Response {
+    let font_size = theme.font_size_caption();
+    let row_h = theme.size_panel_filter_chip_h();
+    let color = theme.accent_color();
+    let font = crate::platform::ui_caption_font_id(font_size);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(label.to_owned(), font, color);
+    let size = egui::vec2(galley.size().x.max(1.0), row_h);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = response.hovered();
+    if hovered {
+        ui.ctx().request_repaint();
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+
+    // 两段链接共用「距行底固定间隙」的基线，而不是按 galley 盒高贴底(混排时盒高不同会看起来一高一低)。
+    let baseline_in_galley = galley
+        .rows
+        .first()
+        .and_then(|row| row.glyphs.first())
+        .map(|g| g.pos.y)
+        .unwrap_or(font_size * 0.85);
+    let baseline_y = rect.bottom() - 2.0;
+    let text_pos = egui::pos2(rect.left(), baseline_y - baseline_in_galley);
+    ui.painter().galley(text_pos, galley);
+    if hovered {
+        ui.painter().hline(
+            egui::Rangef::new(rect.left(), rect.right()),
+            rect.bottom() - 0.5,
+            Stroke::new(1.0, color),
+        );
+    }
+    match hover {
+        Some(tip) if !tip.is_empty() => response.on_hover_text(tip),
+        _ => response,
+    }
 }
 
 fn text_hit_button(
@@ -427,7 +477,7 @@ pub fn sidebar_list_sort_button(
         "{}{}{}",
         crate::i18n::tr(ctx, "Sort: ", "排序："),
         row_lbl,
-        crate::i18n::tr(ctx, " (click to pick)", "（点击选择）"),
+        crate::i18n::tr(ctx, " (click to pick)", " (点击选择)"),
     );
     let short = crate::i18n::session_sort_chip_short(ctx, *sort_by);
     let response = panel_sort_chip(ui, theme, icon, short, &hover);
@@ -459,9 +509,9 @@ pub fn sidebar_list_sort_button(
     );
 }
 
-/// 下拉 / 右键 / ComboBox 弹出层共用的控件色（含 `widgets.open`，避免子菜单发黑底）。
+/// 下拉 / 右键 / ComboBox 弹出层共用的控件色(含 `widgets.open`，避免子菜单发黑底)。
 ///
-/// 注意：此处的 `selection` 专供弹出层内 SelectableLabel / selectable_value（弱灰选中），
+/// 注意：此处的 `selection` 专供弹出层内 SelectableLabel / selectable_value(弱灰选中)，
 /// 与全局主题里的「文本拖选」色分离——弹窗外 TextEdit 仍用 theme_manager 的拖选色。
 pub fn apply_popup_widget_visuals(visuals: &mut egui::Visuals, theme: &Theme) {
     let rounding = egui::Rounding::same(theme.radius_list_item());
@@ -492,7 +542,7 @@ pub fn apply_popup_widget_visuals(visuals: &mut egui::Visuals, theme: &Theme) {
     open.fg_stroke.color = theme.text_primary();
     open.rounding = rounding;
 
-    // 菜单选中：弱灰底（与侧栏一致），勿用文本拖选的高亮白底
+    // 菜单选中：弱灰底(与侧栏一致)，勿用文本拖选的高亮白底
     visuals.selection.bg_fill = selected;
     visuals.selection.stroke = egui::Stroke::NONE;
 }
@@ -512,12 +562,12 @@ pub fn modal_content_frame(theme: &Theme) -> egui::Frame {
     theme.frame_modal_content()
 }
 
-/// 面板标题字号（侧栏 / dock / 弹窗统一）
+/// 面板标题字号(侧栏 / dock / 弹窗统一)
 pub fn modal_title_font_size(theme: &Theme) -> f32 {
     theme.font_size_panel_header_title()
 }
 
-/// 面板标题 RichText（modern =flat 主色；其它主题加粗）
+/// 面板标题 RichText(modern =flat 主色；其它主题加粗)
 pub fn rich_panel_header_title(theme: &Theme, text: &str) -> RichText {
     let mut rt = RichText::new(text).size(theme.font_size_panel_header_title());
     if theme.uses_modern_palette() {
@@ -528,12 +578,12 @@ pub fn rich_panel_header_title(theme: &Theme, text: &str) -> RichText {
     rt
 }
 
-/// 居中弹窗主标题（与 [`rich_panel_header_title`] 一致）
+/// 居中弹窗主标题(与 [`rich_panel_header_title`] 一致)
 pub fn rich_modal_title(theme: &Theme, text: &str) -> RichText {
     rich_panel_header_title(theme, text)
 }
 
-/// 区域外框：左、上、右（不画底边，避免与底栏顶部分隔线叠成双行）
+/// 区域外框：左、上、右(不画底边，避免与底栏顶部分隔线叠成双行)
 pub fn paint_rect_border_ltr(painter: &Painter, rect: egui::Rect, stroke: Stroke) {
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return;
@@ -543,7 +593,7 @@ pub fn paint_rect_border_ltr(painter: &Painter, rect: egui::Rect, stroke: Stroke
     painter.vline(rect.max.x - 0.5, rect.y_range(), stroke);
 }
 
-/// 侧栏 / 右 dock 壳层描边：左、上、右 + 底部分隔线（底线用 divider，避免与状态栏叠粗线）。
+/// 侧栏 / 右 dock 壳层描边：左、上、右 + 底部分隔线(底线用 divider，避免与状态栏叠粗线)。
 pub fn paint_region_panel_shell_border(
     painter: &Painter,
     rect: egui::Rect,
@@ -560,7 +610,7 @@ pub fn paint_region_panel_shell_border(
     }
 }
 
-/// 区域外框：仅左右（顶线由 Tab 条底部分隔线承担，避免与 PTY 顶行叠线）
+/// 区域外框：仅左右(顶线由 Tab 条底部分隔线承担，避免与 PTY 顶行叠线)
 pub fn paint_rect_border_lr(painter: &Painter, rect: egui::Rect, stroke: Stroke) {
     if rect.width() < 1.0 || rect.height() < 1.0 {
         return;
@@ -580,7 +630,7 @@ pub fn panel_header_divider(ui: &mut Ui, theme: &Theme) {
     );
 }
 
-/// 右 dock 标题行与正文之间的分隔（modern：留白 + 极淡发丝线）
+/// 右 dock 标题行与正文之间的分隔(modern：留白 + 极淡发丝线)
 pub fn right_dock_header_divider(ui: &mut Ui, theme: &Theme) {
     let bleed = theme.spacing_right_dock_pad_x();
     let w = ui.available_width().max(1.0);
@@ -608,12 +658,12 @@ pub fn right_dock_header_divider(ui: &mut Ui, theme: &Theme) {
     );
 }
 
-/// 标准弹窗 `Window`：无系统标题栏、不可折叠、统一外框（须再 `.open()` / `.show()` / 尺寸）
+/// 标准弹窗 `Window`：无系统标题栏、不可折叠、统一外框(须再 `.open()` / `.show()` / 尺寸)
 /// 统一弹窗入口：去掉默认 title_bar / collapse，应用 [`modal_window_frame`]，
-/// 并把约束放宽到整屏（`ctx.screen_rect()`），否则默认 `constrain(true)` 会把弹窗夹在
+/// 并把约束放宽到整屏(`ctx.screen_rect()`)，否则默认 `constrain(true)` 会把弹窗夹在
 /// `ctx.available_rect()` 内，右 dock 打开后无法把弹窗拖到 dock 上方。
 ///
-/// 首次居中请用 [`layout_util::modal_center_pos`] + `.default_pos(...)`，勿 `.anchor(...)`（拖拽会弹回）。
+/// 首次居中请用 [`layout_util::modal_center_pos`] + `.default_pos(...)`，勿 `.anchor(...)`(拖拽会弹回)。
 pub fn modal_window<'a>(
     window_id: &'a str,
     theme: &Theme,
@@ -623,7 +673,7 @@ pub fn modal_window<'a>(
         .title_bar(false)
         .collapsible(false)
         .frame(modal_window_frame(theme))
-        // egui 0.27 系列方法名是 `constraint_to`（拼写问题，但 API 就是这样）。
+        // egui 0.27 系列方法名是 `constraint_to`(拼写问题，但 API 就是这样)。
         .constraint_to(ctx.screen_rect())
 }
 
@@ -637,7 +687,7 @@ pub fn region_panel_frame(theme: &Theme) -> egui::Frame {
     theme.frame_region_panel()
 }
 
-/// 左连接栏外框（底缘贴状态栏顶线，底角不圆；描边由 [`paint_region_panel_shell_border`] 统一绘制）
+/// 左连接栏外框(底缘贴状态栏顶线，底角不圆；描边由 [`paint_region_panel_shell_border`] 统一绘制)
 pub fn sidebar_panel_frame(theme: &Theme) -> egui::Frame {
     theme
         .frame_region_panel_flush_bottom()
@@ -645,26 +695,26 @@ pub fn sidebar_panel_frame(theme: &Theme) -> egui::Frame {
         .inner_margin(theme.right_dock_content_margin())
 }
 
-/// 右 dock 左侧让出的 `bg_body` 缝（单 dock 与终端之间、多 dock 之间都看得见）。
+/// 右 dock 左侧让出的 `bg_body` 缝(单 dock 与终端之间、多 dock 之间都看得见)。
 fn right_dock_outer_margin(theme: &Theme) -> egui::Margin {
     let mut m = theme.margin_right_dock_screen_outer();
     m.left = theme.spacing_dock_gap();
     m
 }
 
-/// 右 `SidePanel` 占位槽（透明，屏右缘留 `bg_body` 缝）。
+/// 右 `SidePanel` 占位槽(透明，屏右缘留 `bg_body` 缝)。
 pub fn right_dock_placeholder_frame(theme: &Theme) -> egui::Frame {
     egui::Frame::none().outer_margin(right_dock_outer_margin(theme))
 }
 
-/// 右 `SidePanel` 可见外框（SFTP / 凭证等直绘 dock）。
+/// 右 `SidePanel` 可见外框(SFTP / 凭证等直绘 dock)。
 pub fn right_dock_panel_frame(theme: &Theme) -> egui::Frame {
     theme
         .frame_region_panel_flush_bottom()
         .outer_margin(right_dock_outer_margin(theme))
 }
 
-/// 在右 dock 槽位（含左侧 `spacing_dock_gap` 缝）铺 `bg_body`；须用 [`side_panel_place_slot`] 后的矩形。
+/// 在右 dock 槽位(含左侧 `spacing_dock_gap` 缝)铺 `bg_body`；须用 [`side_panel_place_slot`] 后的矩形。
 pub fn paint_right_dock_slot_gap(ctx: &egui::Context, theme: &Theme, slot: egui::Rect) {
     let gap = theme.spacing_dock_gap().max(0.0);
     let bg = egui::Rect::from_min_max(
@@ -683,7 +733,7 @@ pub fn paint_right_dock_slot_gap(ctx: &egui::Context, theme: &Theme, slot: egui:
     painter.vline(bg.min.x + 0.5, bg.y_range(), theme.divider_stroke());
 }
 
-/// SidePanel 回调内（旧路径）：勿再使用；在 `.show` 之后调 [`paint_right_dock_slot_gap`].
+/// SidePanel 回调内(旧路径)：勿再使用；在 `.show` 之后调 [`paint_right_dock_slot_gap`].
 pub fn paint_right_dock_left_gap(ui: &egui::Ui, theme: &Theme) {
     let gap = theme.spacing_dock_gap().max(0.0);
     let inner = ui.max_rect();
@@ -700,11 +750,11 @@ pub fn paint_right_dock_left_gap(ui: &egui::Ui, theme: &Theme) {
     );
     let painter = ui.ctx().layer_painter(layer_id);
     painter.rect_filled(bg, 0.0, theme.bg_body_color());
-    // 缝左侧 1px 分隔线（终端/相邻 dock 与当前 dock 之间）
+    // 缝左侧 1px 分隔线(终端/相邻 dock 与当前 dock 之间)
     painter.vline(bg.min.x + 0.5, bg.y_range(), theme.divider_stroke());
 }
 
-/// 右 dock `outer_margin` 与窗口右缘之间的竖条（须铺 `bg_body`，否则会露系统/窗口黑底）。
+/// 右 dock `outer_margin` 与窗口右缘之间的竖条(须铺 `bg_body`，否则会露系统/窗口黑底)。
 pub fn paint_right_dock_screen_gutter(ctx: &egui::Context, theme: &Theme, top_chrome_height: f32) {
     let inset = theme.spacing_right_dock_screen_inset();
     if inset < 0.5 || !inset.is_finite() {
@@ -732,13 +782,13 @@ pub fn paint_right_dock_screen_gutter(ctx: &egui::Context, theme: &Theme, top_ch
 /// 左缘略向左扩 2px，盖住 Central `bg_body` 可能压到侧栏左缘的细缝。
 pub const RIGHT_DOCK_SHELL_LEFT_BLEED: f32 = 0.0;
 
-/// 右 dock Foreground：先铺满整个槽位（`Frame` 仅包住内容时左侧会透出中央 `bg_body`）。
+/// 右 dock Foreground：先铺满整个槽位(`Frame` 仅包住内容时左侧会透出中央 `bg_body`)。
 pub fn paint_right_dock_slot_shell(ui: &mut egui::Ui, slot: egui::Rect, theme: &Theme) {
     paint_right_dock_slot_shell_with_painter(ui.painter(), slot, theme);
 }
 
-/// 与 [`paint_right_dock_slot_shell`] 相同，用于在 `Area` 外先铺底色（避免可点层盖住整块槽位）。
-/// 右 dock 壳层圆角：顶角不圆（与终端 Tab 条齐平）；贴底栏时底角也为 0。
+/// 与 [`paint_right_dock_slot_shell`] 相同，用于在 `Area` 外先铺底色(避免可点层盖住整块槽位)。
+/// 右 dock 壳层圆角：顶角不圆(与终端 Tab 条齐平)；贴底栏时底角也为 0。
 pub fn right_dock_shell_rounding(theme: &Theme, flush_bottom: bool) -> egui::Rounding {
     if flush_bottom {
         egui::Rounding::ZERO
@@ -774,19 +824,19 @@ pub fn paint_right_dock_slot_shell_with_painter_ex(
     paint_region_panel_shell_border(painter, fill, theme, flush_bottom);
 }
 
-/// 槽位扣除 region panel 内边距后的内容矩形（须用 `Margin::shrink_rect`，勿 `shrink2(left+right)`）。
+/// 槽位扣除 region panel 内边距后的内容矩形(须用 `Margin::shrink_rect`，勿 `shrink2(left+right)`)。
 #[inline]
 pub fn right_dock_slot_content_rect(slot: egui::Rect, theme: &Theme) -> egui::Rect {
     theme.right_dock_content_margin().shrink_rect(slot)
 }
 
-/// Central 之后 Foreground 重绘右 dock 用的图层（仅绘制壳层，勿在此注册可点 `Area`）。
+/// Central 之后 Foreground 重绘右 dock 用的图层(仅绘制壳层，勿在此注册可点 `Area`)。
 #[inline]
 pub fn right_dock_foreground_layer_id(id: &'static str) -> egui::LayerId {
     egui::LayerId::new(egui::Order::Middle, egui::Id::new(id))
 }
 
-/// 右 dock Foreground `Area`（可点层）；正文仍在 `inner` 子区域布局。
+/// 右 dock Foreground `Area`(可点层)；正文仍在 `inner` 子区域布局。
 pub fn right_dock_foreground_body_area(id: &'static str) -> egui::Area {
     egui::Area::new(egui::Id::new(id))
         .order(egui::Order::Middle)
@@ -801,7 +851,7 @@ pub struct RightDockForegroundGeom {
     pub inner: egui::Rect,
 }
 
-/// 由 SidePanel 槽位计算 Foreground 绘制区（与 [`right_dock_slot_content_rect`] 一致）。
+/// 由 SidePanel 槽位计算 Foreground 绘制区(与 [`right_dock_slot_content_rect`] 一致)。
 pub fn prepare_right_dock_foreground_geom(
     slot: egui::Rect,
     screen: egui::Rect,
@@ -826,7 +876,7 @@ pub fn prepare_right_dock_foreground_geom(
     RightDockForegroundGeom { paint, inner }
 }
 
-/// 铺 Foreground 壳层与右边框（在 `Area` 之前用 `Painter` 调用）。
+/// 铺 Foreground 壳层与右边框(在 `Area` 之前用 `Painter` 调用)。
 pub fn paint_right_dock_foreground_shell(
     ctx: &egui::Context,
     layer_id: egui::LayerId,
@@ -889,7 +939,7 @@ pub fn show_right_dock_foreground_body<R>(
         })
 }
 
-/// 改宽手柄：独立 `Foreground` 层，须在**全部** dock 正文绘完后、按屏上左→右顺序调用（右邻正文会盖住左缝）。
+/// 改宽手柄：独立 `Foreground` 层，须在**全部** dock 正文绘完后、按屏上左→右顺序调用(右邻正文会盖住左缝)。
 pub fn show_right_dock_resize_grip_layer(
     ctx: &egui::Context,
     theme: &Theme,
@@ -945,7 +995,7 @@ pub fn show_right_dock_resize_grip_layer(
         });
 }
 
-/// 由 SidePanel 槽位绘制改宽手柄（各 dock 在 workspace 统一 pass 里调用）。
+/// 由 SidePanel 槽位绘制改宽手柄(各 dock 在 workspace 统一 pass 里调用)。
 pub fn show_right_dock_resize_grip_for_slot(
     ctx: &egui::Context,
     theme: &Theme,
@@ -978,7 +1028,7 @@ fn right_dock_panel_id_for_foreground(area_id: &'static str) -> Option<&'static 
     }
 }
 
-/// 右 dock 内「左标签 + 右数值」行（宽度随父级 `available_width`）。
+/// 右 dock 内「左标签 + 右数值」行(宽度随父级 `available_width`)。
 pub fn dock_label_value_row(
     ui: &mut Ui,
     theme: &Theme,
@@ -1007,7 +1057,7 @@ pub fn dock_label_value_row(
     });
 }
 
-/// 标题栏连接区展示数据（§三）
+/// 标题栏连接区展示数据(§三)
 #[derive(Clone)]
 pub struct TitleBarConnection {
     pub server_text: String,
@@ -1020,7 +1070,7 @@ fn paint_top_strip(ui: &mut Ui, rect: egui::Rect, theme: &Theme) {
     ui.painter().rect_filled(rect, 0.0, theme.chrome_bar_fill());
 }
 
-/// 顶栏：仅菜单行（连接信息在 Tab / 底栏，避免与顶栏重复）
+/// 顶栏：仅菜单行(连接信息在 Tab / 底栏，避免与顶栏重复)
 pub fn render_top_chrome_panel(
     ui: &mut Ui,
     theme: &Theme,
@@ -1122,7 +1172,7 @@ pub struct TitleBarChromeResult {
     pub dismiss_ssh_import: bool,
 }
 
-/// VS Code 风格 Tab 底栏指示线（2 物理像素 accent）
+/// VS Code 风格 Tab 底栏指示线(2 物理像素 accent)
 fn paint_vscode_tab_bottom_indicator(
     painter: &egui::Painter,
     ctx: &egui::Context,
@@ -1139,13 +1189,13 @@ fn paint_vscode_tab_bottom_indicator(
     painter.rect_filled(bar, 0.0, theme.accent_color());
 }
 
-/// 终端区会话 Tab：整块底色（圆点 + 标题 + 关闭），对齐 proto `.tab`。
+/// 终端区会话 Tab：整块底色(圆点 + 标题 + 关闭)，对齐 proto `.tab`。
 pub struct SessionTabChipResult {
     pub response: Response,
     pub close_clicked: bool,
 }
 
-/// 标签右侧关闭槽位（与 [`session_tab_chip`] 内关闭按钮对齐）。
+/// 标签右侧关闭槽位(与 [`session_tab_chip`] 内关闭按钮对齐)。
 fn pointer_hovers_tab_close_slot(ctx: &egui::Context, inner: egui::Rect, close_slot: f32) -> bool {
     let close_rect = egui::Rect::from_min_size(
         egui::pos2(
@@ -1193,7 +1243,7 @@ pub fn session_tab_chip(
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
     let inner = rect.shrink2(egui::vec2(pad_x, pad_y));
     let close_slot_hot = pointer_hovers_tab_close_slot(ui.ctx(), inner, close_slot);
-    // 子控件（×）会抢走外层 hover；用关闭槽位命中避免 × 显隐来回切换。
+    // 子控件(×)会抢走外层 hover；用关闭槽位命中避免 × 显隐来回切换。
     let tab_hot = response.hovered() || close_slot_hot;
     let modern = theme.uses_modern_palette();
     let fill = if let Some(c) = env_color {
@@ -1318,7 +1368,7 @@ pub fn session_tab_chip(
     }
 }
 
-/// 会话列表选中行左侧 3px 强调条（§4.4）
+/// 会话列表选中行左侧 3px 强调条(§4.4)
 pub fn paint_sidebar_selection_accent(
     painter: &egui::Painter,
     row_rect: egui::Rect,
@@ -1331,7 +1381,7 @@ pub fn paint_sidebar_selection_accent(
     painter.rect_filled(bar, 0.0, theme.accent_color());
 }
 
-/// 主 / 次按钮视觉（弹窗底栏、标题栏工具、面板内操作共用）
+/// 主 / 次按钮视觉(弹窗底栏、标题栏工具、面板内操作共用)
 #[derive(Clone, Copy, PartialEq)]
 enum ControlButtonVariant {
     Primary,
@@ -1356,7 +1406,7 @@ fn paint_caption_in_rect_center(
     ui.painter().galley(pos, galley);
 }
 
-/// `center_row`: 工具按钮等在槽内居中；`false` 时自左 `pad_x` 起排（排序芯片、状态栏）。
+/// `center_row`: 工具按钮等在槽内居中；`false` 时自左 `pad_x` 起排(排序芯片、状态栏)。
 fn paint_icon_caption_row_in_rect(
     ui: &mut Ui,
     rect: egui::Rect,
@@ -1580,7 +1630,7 @@ fn icon_only_button_size(theme: &Theme, min_w: f32) -> egui::Vec2 {
     egui::vec2(side, h)
 }
 
-/// 仅图标（方形容器），悬停显示 `tooltip`。
+/// 仅图标(方形容器)，悬停显示 `tooltip`。
 fn paint_icon_only_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -1660,7 +1710,7 @@ fn paint_icon_only_button(
     response
 }
 
-/// 侧栏 / 右 dock 标题行次要工具按钮（宽度按文字测量）。
+/// 侧栏 / 右 dock 标题行次要工具按钮(宽度按文字测量)。
 pub fn panel_toolbar_button_widget<'a>(theme: &'a Theme, text: RichText) -> Button<'a> {
     Button::new(text)
         .fill(theme.color_control_secondary_fill_idle())
@@ -1690,7 +1740,7 @@ pub fn panel_toolbar_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response
     )
 }
 
-/// 无边框文字链式操作（AI 消息复制/重新生成等；`emphasis` 0~1 控制可见度）。
+/// 无边框文字链式操作(AI 消息复制/重新生成等；`emphasis` 0~1 控制可见度)。
 pub fn panel_ghost_action_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -1731,7 +1781,7 @@ pub fn panel_ghost_action_button(
     response.on_hover_text(label)
 }
 
-/// 标题行 / 工具栏纯图标按钮（悬停文案见 `tooltip`）。
+/// 标题行 / 工具栏纯图标按钮(悬停文案见 `tooltip`)。
 pub fn panel_toolbar_icon_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -1767,7 +1817,7 @@ pub fn panel_toolbar_button_with_icon(
     )
 }
 
-/// 工具栏图标按钮或采集中态（带可见标签）。
+/// 工具栏图标按钮或采集中态(带可见标签)。
 pub fn panel_toolbar_button_with_icon_or_busy(
     ui: &mut Ui,
     theme: &Theme,
@@ -1806,7 +1856,7 @@ pub fn panel_toolbar_button_with_icon_or_busy(
     response.on_hover_text(busy_label)
 }
 
-/// 标题行主操作（实心 accent，纯图标）。
+/// 标题行主操作(实心 accent，纯图标)。
 pub fn panel_toolbar_primary_icon_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -1852,7 +1902,7 @@ pub fn panel_toolbar_icon_button_or_busy(
     response.on_hover_text(crate::i18n::tr(ui.ctx(), "Collecting metrics…", "采集中…"))
 }
 
-/// 面板标题行左侧：图标 + 文案（侧栏 / dock / 弹窗统一）
+/// 面板标题行左侧：图标 + 文案(侧栏 / dock / 弹窗统一)
 pub fn panel_header_title_leading(ui: &mut Ui, theme: &Theme, icon: IconId, title: &str) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = theme.spacing_sm();
@@ -1868,7 +1918,7 @@ pub fn panel_header_title_leading(ui: &mut Ui, theme: &Theme, icon: IconId, titl
     });
 }
 
-/// 右 dock 大标题 + 左侧图标（与 [`panel_header_title_leading`] 一致）
+/// 右 dock 大标题 + 左侧图标(与 [`panel_header_title_leading`] 一致)
 pub fn dock_title_row(ui: &mut Ui, theme: &Theme, icon: IconId, title: &str) {
     panel_header_title_leading(ui, theme, icon, title);
 }
@@ -1884,12 +1934,12 @@ pub fn section_title_row(ui: &mut Ui, theme: &Theme, icon: IconId, title: &str, 
     });
 }
 
-/// 区段标题（与 [`rich_panel_header_title`] 一致；`color` 参数保留兼容）
+/// 区段标题(与 [`rich_panel_header_title`] 一致；`color` 参数保留兼容)
 pub fn rich_section_title(theme: &Theme, text: &str, _color: Color32) -> RichText {
     rich_panel_header_title(theme, text)
 }
 
-/// 右 dock 标题（与 [`rich_panel_header_title`] 一致）
+/// 右 dock 标题(与 [`rich_panel_header_title`] 一致)
 pub fn rich_dock_title(theme: &Theme, text: &str) -> RichText {
     rich_panel_header_title(theme, text)
 }
@@ -1952,8 +2002,8 @@ pub fn form_checkbox_with_id(
     .inner
 }
 
-/// 标题行右侧操作区宽度（工具按钮 + 关闭 ×；RTL 顺序为 close, …tools）
-/// 标题行右侧工具按钮描述（用于预留宽度）
+/// 标题行右侧操作区宽度(工具按钮 + 关闭 ×；RTL 顺序为 close, …tools)
+/// 标题行右侧工具按钮描述(用于预留宽度)
 pub struct PanelToolbarSpec<'a> {
     pub icon: Option<IconId>,
     pub label: &'a str,
@@ -1988,7 +2038,7 @@ pub fn panel_header_trailing_width_tools(
     tools_w + gap * tools.len() as f32 + close_w + pad
 }
 
-/// 右 dock / 侧栏统一标题行：左侧标题区（可截断），右侧 RTL 操作区
+/// 右 dock / 侧栏统一标题行：左侧标题区(可截断)，右侧 RTL 操作区
 pub fn dock_panel_title_row(
     ui: &mut Ui,
     theme: &Theme,
@@ -2018,7 +2068,7 @@ fn dock_panel_title_close_trailing(ui: &mut Ui, theme: &Theme, close_tooltip: &s
     dock_close_icon_button(ui, theme, close_tooltip).clicked()
 }
 
-/// 右 dock 标题行内容区（固定高度，与终端 Tab 条 [`Theme::size_panel_header_row_h`] 对齐）
+/// 右 dock 标题行内容区(固定高度，与终端 Tab 条 [`Theme::size_panel_header_row_h`] 对齐)
 pub fn dock_header_horizontal<R>(
     ui: &mut Ui,
     theme: &Theme,
@@ -2034,7 +2084,7 @@ pub fn dock_header_horizontal<R>(
     .inner
 }
 
-/// 仅标题 + 关闭 ×（右侧仅一个图标按钮，避免与 dock 工具栏混排重复）
+/// 仅标题 + 关闭 ×(右侧仅一个图标按钮，避免与 dock 工具栏混排重复)
 pub fn dock_panel_title_close_only(
     ui: &mut Ui,
     theme: &Theme,
@@ -2094,7 +2144,7 @@ pub fn dock_panel_title_bar(
     out
 }
 
-/// 筛选芯片行 + 右侧排序芯片（同一行，不占额外表头行）
+/// 筛选芯片行 + 右侧排序芯片(同一行，不占额外表头行)
 pub struct FilterChipRowWithSortResult {
     pub picked: Option<String>,
     pub cycle_sort: bool,
@@ -2226,7 +2276,7 @@ pub struct FragmentListRowResponse {
     pub title: Response,
 }
 
-/// 片段列表标题行：标签列宽（随文案测量，带上限）。
+/// 片段列表标题行：标签列宽(随文案测量，带上限)。
 fn fragment_list_tag_column_width(ui: &Ui, theme: &Theme, tag_label: &str, content_w: f32) -> f32 {
     let tag_pad = theme.spacing_fragment_tag_inner_x();
     let tag_font = egui::FontId::proportional(theme.font_size_fragment_tag());
@@ -2370,7 +2420,7 @@ pub struct ButtonGroupAction<'a> {
     pub tooltip: &'a str,
 }
 
-/// 胶囊 Segmented Control（modern）；其它主题回退为独立 filter chip。
+/// 胶囊 Segmented Control(modern)；其它主题回退为独立 filter chip。
 pub fn segmented_control_row(
     ui: &mut Ui,
     theme: &Theme,
@@ -2494,7 +2544,7 @@ pub fn segmented_control_row(
     picked
 }
 
-/// 半透明工具栏 Button Group（modern）；返回被点击项索引。
+/// 半透明工具栏 Button Group(modern)；返回被点击项索引。
 pub fn button_group_toolbar(
     ui: &mut Ui,
     theme: &Theme,
@@ -2613,7 +2663,7 @@ pub fn button_group_toolbar(
     .inner
 }
 
-// ── SFTP 面板专用工具条（modern：地址栏一体包 + 悬停肉垫 + 幽灵提交） ──
+// ── SFTP 面板专用工具条(modern：地址栏一体包 + 悬停肉垫 + 幽灵提交) ──
 
 /// SFTP 工具条行容器：统一高度、垂直居中、深色一体底。
 pub fn sftp_toolbar_band<R>(
@@ -2638,7 +2688,7 @@ pub fn sftp_toolbar_band<R>(
         .inner
 }
 
-/// 地址栏内嵌路径输入（无下划线、透明底，随剩余宽度伸缩）。
+/// 地址栏内嵌路径输入(无下划线、透明底，随剩余宽度伸缩)。
 pub fn form_singleline_field_sftp_embedded(
     ui: &mut Ui,
     theme: &Theme,
@@ -2665,7 +2715,7 @@ pub fn form_singleline_field_sftp_embedded(
     })
 }
 
-/// SFTP 工具条内单颗操作：与面板次要按钮同一套（浅底+描边），勿再单独画一套「幽灵」样式。
+/// SFTP 工具条内单颗操作：与面板次要按钮同一套(浅底+描边)，勿再单独画一套「幽灵」样式。
 pub fn sftp_toolbar_action_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -2687,7 +2737,7 @@ pub fn sftp_toolbar_action_button(
     }
 }
 
-/// SFTP 工具条内一组操作（前往 / 上传等）；返回被点击项索引。
+/// SFTP 工具条内一组操作(前往 / 上传等)；返回被点击项索引。
 pub fn sftp_toolbar_actions(
     ui: &mut Ui,
     theme: &Theme,
@@ -2725,7 +2775,7 @@ pub fn sftp_toolbar_actions(
     clicked
 }
 
-/// SFTP 提交类按钮（「+ 创建」等）— 与面板次要按钮同族，不再单独画幽灵样式。
+/// SFTP 提交类按钮(「+ 创建」等)— 与面板次要按钮同族，不再单独画幽灵样式。
 pub fn sftp_ghost_submit_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -2769,7 +2819,7 @@ pub fn sftp_nav_toolbar_row(
     })
 }
 
-/// 均分宽度的筛选芯片行（常用/Docker、全部/在线/离线等）
+/// 均分宽度的筛选芯片行(常用/Docker、全部/在线/离线等)
 pub fn filter_chip_row(
     ui: &mut Ui,
     theme: &Theme,
@@ -2781,7 +2831,7 @@ pub fn filter_chip_row(
     segmented_control_row(ui, theme, &chips, active, Some(panel_w))
 }
 
-/// 分类筛选芯片（全部/在线/离线、常用/Docker 等）
+/// 分类筛选芯片(全部/在线/离线、常用/Docker 等)
 pub fn filter_chip_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -2840,7 +2890,7 @@ pub use chrome_menu::{
     popup_menu_button_shortcut_enabled, prime_menu_popup_width,
 };
 
-/// 偏好 / 设置区小节标题（与表单标签区分层级）
+/// 偏好 / 设置区小节标题(与表单标签区分层级)
 pub fn form_section_heading(theme: &Theme, text: &str) -> RichText {
     RichText::new(text)
         .size(theme.font_size_panel_title())
@@ -2848,7 +2898,7 @@ pub fn form_section_heading(theme: &Theme, text: &str) -> RichText {
         .color(theme.color_form_label())
 }
 
-/// 表单输入区临时视觉（modern 下划线：透明 TextEdit 底）
+/// 表单输入区临时视觉(modern 下划线：透明 TextEdit 底)
 fn with_underline_field_visuals<R>(
     ui: &mut Ui,
     theme: &Theme,
@@ -2883,7 +2933,7 @@ fn paint_form_field_underline(ui: &Ui, theme: &Theme, rect: egui::Rect, focused:
         .hline(rect.x_range(), line_y, Stroke::new(w, line_color));
 }
 
-/// 输入框占位符 RichText（斜体 + 弱色，与输入正文区分）
+/// 输入框占位符 RichText(斜体 + 弱色，与输入正文区分)
 pub fn hint_rich(theme: &Theme, text: &str, font_size: f32) -> RichText {
     RichText::new(text)
         .size(font_size)
@@ -2891,7 +2941,7 @@ pub fn hint_rich(theme: &Theme, text: &str, font_size: f32) -> RichText {
         .color(theme.color_form_hint())
 }
 
-/// 单行输入框（modern：透明底 + 底边线；其它主题：带底+描边）
+/// 单行输入框(modern：透明底 + 底边线；其它主题：带底+描边)
 pub fn form_singleline_field(
     ui: &mut Ui,
     theme: &Theme,
@@ -2935,7 +2985,7 @@ pub fn form_singleline_field(
     shown.inner
 }
 
-/// 多行输入框（modern：透明底 + 底边线）
+/// 多行输入框(modern：透明底 + 底边线)
 pub fn form_multiline_field(
     ui: &mut Ui,
     theme: &Theme,
@@ -2973,8 +3023,8 @@ pub fn form_multiline_field(
     shown.inner
 }
 
-/// 只读多行文本：支持鼠标拖选与 Ctrl/Cmd+C（`&str` 缓冲不可编辑）。
-/// 带可见滑轨的水平滑块（全局 `inactive.bg_fill` 为透明时仍绘制轨道）。
+/// 只读多行文本：支持鼠标拖选与 Ctrl/Cmd+C(`&str` 缓冲不可编辑)。
+/// 带可见滑轨的水平滑块(全局 `inactive.bg_fill` 为透明时仍绘制轨道)。
 pub fn labeled_slider_f32(
     ui: &mut Ui,
     theme: &Theme,
@@ -2995,7 +3045,7 @@ pub fn labeled_slider_f32(
     resp
 }
 
-/// 带可见滑轨的水平滑块（`f64` 版本，如刷新间隔秒数）。
+/// 带可见滑轨的水平滑块(`f64` 版本，如刷新间隔秒数)。
 pub fn labeled_slider_f64(
     ui: &mut Ui,
     theme: &Theme,
@@ -3033,7 +3083,7 @@ pub fn selectable_readonly_monospace(
     )
 }
 
-/// 搜索框（左侧 🔍 + 与表单相同的底/描边/字号）；`desired_width` 为外框总宽（含描边）。
+/// 搜索框(左侧 🔍 + 与表单相同的底/描边/字号)；`desired_width` 为外框总宽(含描边)。
 pub fn search_field(
     ui: &mut Ui,
     theme: &Theme,
@@ -3094,7 +3144,7 @@ pub fn search_field(
     .inner
 }
 
-/// 面板内搜索行：左右留白与侧栏一致；`content_w` 为面板正文宽（右 dock 须传入，避免 outer_margin 撑出裁切）。
+/// 面板内搜索行：左右留白与侧栏一致；`content_w` 为面板正文宽(右 dock 须传入，避免 outer_margin 撑出裁切)。
 pub fn panel_search_row(
     ui: &mut Ui,
     theme: &Theme,
@@ -3123,7 +3173,7 @@ pub fn panel_search_row(
         .inner
 }
 
-/// 侧栏搜索框（[`panel_search_row`] 别名）
+/// 侧栏搜索框([`panel_search_row`] 别名)
 pub fn sidebar_search_field(
     ui: &mut Ui,
     theme: &Theme,
@@ -3136,7 +3186,7 @@ pub fn sidebar_search_field(
     panel_search_row(ui, theme, id, query, hint, None)
 }
 
-/// 左栏顶部 SSH 配置导入提示条（§4.2，约 34px，弱提示）
+/// 左栏顶部 SSH 配置导入提示条(§4.2，约 34px，弱提示)
 pub struct SshImportBannerAction {
     pub import: bool,
     pub dismiss: bool,
@@ -3242,7 +3292,7 @@ fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
     ((a as f32) * (1.0 - t) + (b as f32) * t).round() as u8
 }
 
-/// 标题栏 macOS 风格红绿灯（装饰；真实关/最小化/最大化由系统窗口按钮处理）
+/// 标题栏 macOS 风格红绿灯(装饰；真实关/最小化/最大化由系统窗口按钮处理)
 pub fn title_bar_traffic_lights(ui: &mut Ui, theme: &Theme) {
     let r = theme.radius_traffic_light();
     let gap = 7.0;
@@ -3260,12 +3310,12 @@ pub fn title_bar_traffic_lights(ui: &mut Ui, theme: &Theme) {
     }
 }
 
-/// 状态栏内容区可用高度（与底栏 Panel 内边距一致）。
+/// 状态栏内容区可用高度(与底栏 Panel 内边距一致)。
 pub fn status_bar_content_height(theme: &Theme) -> f32 {
     theme.chrome_bar_content_height(theme.status_bar_height())
 }
 
-/// 状态栏文字徽章（统一字号；由父级 `Align::Center` 负责垂直对齐）。
+/// 状态栏文字徽章(统一字号；由父级 `Align::Center` 负责垂直对齐)。
 pub fn status_text_chip(ui: &mut Ui, theme: &Theme, text: &str, color: Color32) -> Response {
     theme
         .frame_status_chip()
@@ -3301,7 +3351,7 @@ pub fn status_tool_icon(ui: &mut Ui, theme: &Theme, id: IconId) -> Response {
     .inner
 }
 
-/// Activity Rail 图标按钮（选中时 accent 底）。
+/// Activity Rail 图标按钮(选中时 accent 底)。
 pub fn activity_rail_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -3352,7 +3402,7 @@ pub fn activity_rail_reveal_strip(ui: &mut Ui, theme: &Theme, tooltip: &str) -> 
             .rect_filled(rect, 0.0, theme.accent_alpha(36));
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
-    // 中央细 chevron（›）示意「点此展开」
+    // 中央细 chevron(›)示意「点此展开」
     let mid = rect.center();
     let stroke = egui::Stroke::new(
         1.25,
@@ -3393,7 +3443,7 @@ fn toast_kind_accent(theme: &Theme, kind: crate::ui::app::ToastKind) -> Color32 
     }
 }
 
-/// 测算 Toast 外框尺寸（标题 + 正文；用于 `Area::fixed_pos`）。
+/// 测算 Toast 外框尺寸(标题 + 正文；用于 `Area::fixed_pos`)。
 pub(crate) fn measure_status_toast_size(
     ctx: &egui::Context,
     theme: &Theme,
@@ -3449,7 +3499,7 @@ pub(crate) fn measure_status_toast_size(
     )
 }
 
-/// 在当前 `Ui` 原点绘制 Toast（标题 + 正文；级别底色）。
+/// 在当前 `Ui` 原点绘制 Toast(标题 + 正文；级别底色)。
 pub(crate) fn paint_status_toast(
     ui: &mut Ui,
     theme: &Theme,
@@ -3586,7 +3636,7 @@ pub(crate) fn paint_status_toast(
     }
 }
 
-/// 状态栏工具按钮：图标 + 短标签（比纯图标更易识别）。
+/// 状态栏工具按钮：图标 + 短标签(比纯图标更易识别)。
 pub fn status_tool_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -3637,7 +3687,7 @@ pub fn status_tool_button(
     response.on_hover_text(tooltip)
 }
 
-/// 状态栏带小图标的文字 chip（如自动重连）
+/// 状态栏带小图标的文字 chip(如自动重连)
 pub fn status_icon_chip(ui: &mut Ui, theme: &Theme, id: IconId, text: &str) {
     theme.frame_status_chip().show(ui, |ui| {
         ui.horizontal(|ui| {
@@ -3713,14 +3763,14 @@ pub fn show_right_dock_ssh_gate(
     }
 }
 
-/// 只读信息标签（连接元信息、侧栏分组等）
+/// 只读信息标签(连接元信息、侧栏分组等)
 pub fn label_tag_chip(ui: &mut Ui, theme: &Theme, text: &str, font_size: f32, text_color: Color32) {
     theme.frame_label_tag().show(ui, |ui| {
         ui.label(RichText::new(text).size(font_size).color(text_color));
     });
 }
 
-/// 面板折叠后状态栏复原按钮（图标 + 名称 · N）
+/// 面板折叠后状态栏复原按钮(图标 + 名称 · N)
 pub fn status_restore_chip(ui: &mut Ui, theme: &Theme, name: &str, count: usize) -> Response {
     let label = format!("{name} · {count}");
     let bar_h = theme.chrome_bar_content_height(theme.status_bar_height());
@@ -3753,12 +3803,12 @@ pub fn status_restore_chip(ui: &mut Ui, theme: &Theme, name: &str, count: usize)
     response
 }
 
-/// 弹窗标题行（标题 + 右上角 ×）。与 [`modal_header`] 相同；保留此名以免旧调用点遗漏。
+/// 弹窗标题行(标题 + 右上角 ×)。与 [`modal_header`] 相同；保留此名以免旧调用点遗漏。
 pub fn modal_header_title_only(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> bool {
     modal_header(ui, theme, title, title_px)
 }
 
-/// 弹窗标题行（标题 + 右侧 ×，用于仅通过标题栏关闭的弹窗）。
+/// 弹窗标题行(标题 + 右侧 ×，用于仅通过标题栏关闭的弹窗)。
 pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> bool {
     let _ = title_px;
     let mx = theme.spacing_modal_content_x();
@@ -3796,7 +3846,7 @@ fn paint_modal_header_bottom_divider(ui: &mut Ui, theme: &Theme, band: egui::Rec
     );
 }
 
-/// 右侧 dock 标题行（标题 + 关闭 ×）。
+/// 右侧 dock 标题行(标题 + 关闭 ×)。
 #[inline]
 pub fn side_panel_title_row(ui: &mut Ui, theme: &Theme, title: &str) -> bool {
     dock_panel_title_close_only(
@@ -3808,7 +3858,7 @@ pub fn side_panel_title_row(ui: &mut Ui, theme: &Theme, title: &str) -> bool {
     )
 }
 
-/// 侧栏小标题 + 右侧关闭（与 [`dock_panel_title_close_only`] 相同布局）。
+/// 侧栏小标题 + 右侧关闭(与 [`dock_panel_title_close_only`] 相同布局)。
 #[inline]
 pub fn side_panel_section_title(
     ui: &mut Ui,
@@ -3837,7 +3887,7 @@ pub use chrome_modal_actions::{
     ModalPrimaryButtonWithIcon, ModalPrimaryIconButton,
 };
 
-/// 面板 / dock 内行内次要按钮（与排序芯片、弹窗「取消」同族）
+/// 面板 / dock 内行内次要按钮(与排序芯片、弹窗「取消」同族)
 pub fn panel_action_icon_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -3876,7 +3926,7 @@ pub fn panel_action_primary_icon_button_ex(
     panel_action_primary_button_with_icon_ex(ui, theme, icon, tooltip, enabled)
 }
 
-/// 面板 / dock 内行内次要按钮（与排序芯片、弹窗「取消」同族）
+/// 面板 / dock 内行内次要按钮(与排序芯片、弹窗「取消」同族)
 pub fn panel_action_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
     panel_action_button_ex(ui, theme, label, true)
 }
@@ -3894,7 +3944,7 @@ pub fn panel_action_button_ex(ui: &mut Ui, theme: &Theme, label: &str, enabled: 
     )
 }
 
-/// 面板内行内主按钮（保存、克隆、确认、重试等）— 实心 accent，与标题「新建」同族。
+/// 面板内行内主按钮(保存、克隆、确认、重试等)— 实心 accent，与标题「新建」同族。
 pub fn panel_action_primary_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
     panel_action_primary_button_ex(ui, theme, label, true)
 }
@@ -3916,7 +3966,7 @@ pub fn panel_action_primary_button_ex(
     )
 }
 
-/// 图标 + 文字的次要按钮（侧栏 SFTP / 资源面板等比纯图标更易识别的工具按钮）。
+/// 图标 + 文字的次要按钮(侧栏 SFTP / 资源面板等比纯图标更易识别的工具按钮)。
 pub fn panel_action_button_with_icon_ex(
     ui: &mut Ui,
     theme: &Theme,
@@ -3935,7 +3985,7 @@ pub fn panel_action_button_with_icon_ex(
     )
 }
 
-/// 图标 + 文字的主按钮（最显眼的「上传」等正向操作）— 实心 accent。
+/// 图标 + 文字的主按钮(最显眼的「上传」等正向操作)— 实心 accent。
 pub fn panel_action_primary_button_with_icon_ex(
     ui: &mut Ui,
     theme: &Theme,
@@ -3954,7 +4004,7 @@ pub fn panel_action_primary_button_with_icon_ex(
     )
 }
 
-/// 实心主按钮（与 [`panel_action_primary_button_with_icon_ex`] 同族）。
+/// 实心主按钮(与 [`panel_action_primary_button_with_icon_ex`] 同族)。
 pub fn panel_solid_primary_button_with_icon_ex(
     ui: &mut Ui,
     theme: &Theme,
@@ -3965,7 +4015,7 @@ pub fn panel_solid_primary_button_with_icon_ex(
     panel_action_primary_button_with_icon_ex(ui, theme, icon, label, enabled)
 }
 
-/// 有底+描边的工具按钮（与次要按钮同族，暗夜统一浅底+描边）。
+/// 有底+描边的工具按钮(与次要按钮同族，暗夜统一浅底+描边)。
 pub fn panel_outlined_toolbar_button_with_icon_ex(
     ui: &mut Ui,
     theme: &Theme,
@@ -3976,7 +4026,7 @@ pub fn panel_outlined_toolbar_button_with_icon_ex(
     panel_action_button_with_icon_ex(ui, theme, icon, label, enabled)
 }
 
-/// 有底+描边的纯图标按钮（与次要按钮同族）。
+/// 有底+描边的纯图标按钮(与次要按钮同族)。
 pub fn panel_outlined_icon_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -3987,7 +4037,7 @@ pub fn panel_outlined_icon_button(
     panel_action_icon_button_ex(ui, theme, icon, tooltip, enabled)
 }
 
-/// 矮轮廓快捷 chip（空态提问；固定行高 + 统一字号，同行文字基线对齐）。
+/// 矮轮廓快捷 chip(空态提问；固定行高 + 统一字号，同行文字基线对齐)。
 pub fn panel_quick_prompt_chip(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
     let font = egui::FontId::proportional(theme.font_size_ui_control());
     let text_color = theme.text_primary();
@@ -3995,7 +4045,7 @@ pub fn panel_quick_prompt_chip(ui: &mut Ui, theme: &Theme, label: &str) -> Respo
         .painter()
         .layout_no_wrap(label.to_owned(), font, text_color);
     let pad_x = 10.0;
-    // 高度不跟单条文案的 galley 走（全角「？」等会抬高行盒），同行必须同高。
+    // 高度不跟单条文案的 galley 走(全角「?」等会抬高行盒)，同行必须同高。
     let chip_h = theme.size_panel_filter_chip_h().max(theme.size_control_btn_h() - 2.0);
     let size = egui::vec2(
         (galley.size().x + pad_x * 2.0).max(theme.size_panel_header_btn_min_w()),
@@ -4037,7 +4087,7 @@ pub fn panel_quick_prompt_chip(ui: &mut Ui, theme: &Theme, label: &str) -> Respo
     response
 }
 
-/// 数字框（`DragValue` 等）包进与单行输入相同的底+描边，字号与表单输入一致。
+/// 数字框(`DragValue` 等)包进与单行输入相同的底+描边，字号与表单输入一致。
 pub fn form_drag_value_field(
     ui: &mut Ui,
     theme: &Theme,

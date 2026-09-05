@@ -346,7 +346,7 @@ impl MistTermApp {
                         crate::i18n::tr(
                             ctx,
                             "Reconnect automatically after network loss (up to 5 times, exponential backoff)",
-                            "网络断开后自动重连（最多 5 次，指数退避）",
+                            "网络断开后自动重连(最多 5 次，指数退避)",
                         ),
                     )
                     .on_hover_text(crate::i18n::tr(
@@ -490,7 +490,7 @@ impl MistTermApp {
                         format!("Directory: {path} (max {mb} MB per file)")
                     }
                     crate::i18n::UiLanguage::Zh => {
-                        format!("目录：{path}（单文件上限 {mb} MB）")
+                        format!("目录：{path}(单文件上限 {mb} MB)")
                     }
                 };
                 ui.label(
@@ -539,7 +539,7 @@ impl MistTermApp {
                             "Vault settings from team «{name}» (read-only until you change them)"
                         ),
                         crate::i18n::UiLanguage::Zh => {
-                            format!("Vault 由团队「{name}」自动配置（修改任意项后将不再自动覆盖）")
+                            format!("Vault 由团队「{name}」自动配置(修改任意项后将不再自动覆盖)")
                         }
                     };
                     ui.label(
@@ -608,10 +608,10 @@ impl MistTermApp {
                             crate::i18n::tr(ctx, "Not configured", "未配置").to_owned()
                         }
                         crate::core::VaultAuthSettings::Token => {
-                            crate::i18n::tr(ctx, "Token (Keychain)", "Token（存钥匙串）").to_owned()
+                            crate::i18n::tr(ctx, "Token (Keychain)", "Token (存钥匙串)").to_owned()
                         }
                         crate::core::VaultAuthSettings::AppRole => {
-                            crate::i18n::tr(ctx, "AppRole (Keychain)", "AppRole（存钥匙串）")
+                            crate::i18n::tr(ctx, "AppRole (Keychain)", "AppRole (存钥匙串)")
                                 .to_owned()
                         }
                     })
@@ -628,12 +628,12 @@ impl MistTermApp {
                                     crate::i18n::tr(ctx, "Not configured", "未配置")
                                 }
                                 crate::core::VaultAuthSettings::Token => {
-                                    crate::i18n::tr(ctx, "Token (Keychain)", "Token（存钥匙串）")
+                                    crate::i18n::tr(ctx, "Token (Keychain)", "Token (存钥匙串)")
                                 }
                                 crate::core::VaultAuthSettings::AppRole => crate::i18n::tr(
                                     ctx,
                                     "AppRole (Keychain)",
-                                    "AppRole（存钥匙串）",
+                                    "AppRole (存钥匙串)",
                                 ),
                             };
                             if ui.selectable_label(auth == v, label).clicked() {
@@ -647,7 +647,6 @@ impl MistTermApp {
                     self.app_settings.vault.managed_by_team_id = None;
                     let _ = self.app_settings.save();
                 }
-                let mut vault_token_buf = String::new();
                 crate::ui::chrome::form_field_label(
                     ui,
                     theme,
@@ -657,7 +656,7 @@ impl MistTermApp {
                     ui,
                     theme,
                     egui::Id::new("pref_vault_token_buf"),
-                    &mut vault_token_buf,
+                    &mut self.pref_vault_token_draft,
                     crate::i18n::tr(
                         ctx,
                         "Enter token, then click Save",
@@ -667,20 +666,29 @@ impl MistTermApp {
                     true,
                 );
                 ui.horizontal(|ui| {
-                    if crate::ui::chrome::panel_action_icon_button(
+                    if crate::ui::chrome::panel_action_primary_icon_button(
                         ui,
                         theme,
                         crate::ui::icons::IconId::Key,
                         crate::i18n::tr(ctx, "Save", "保存"),
                     )
                     .clicked()
-                        && !vault_token_buf.is_empty()
+                        && !self.pref_vault_token_draft.is_empty()
                     {
                         self.app_settings.vault.auth = crate::core::VaultAuthSettings::Token;
                         let _ = crate::core::HashiCorpVaultClient::save_token_to_keyring(
-                            &vault_token_buf,
+                            &self.pref_vault_token_draft,
                         );
                         let _ = self.app_settings.save();
+                        self.pref_vault_token_draft.clear();
+                        self.notify_success(
+                            crate::i18n::tr(
+                                ctx,
+                                "Vault token saved to keychain",
+                                "Token 已保存到钥匙串",
+                            )
+                            .to_string(),
+                        );
                     }
                     if crate::ui::chrome::panel_action_icon_button(
                         ui,
@@ -743,7 +751,7 @@ impl MistTermApp {
             ui,
             theme,
             "audit",
-            crate::i18n::tr(ctx, "Security audit (SIEM)", "安全审计（SIEM）"),
+            crate::i18n::tr(ctx, "Security audit (SIEM)", "安全审计 (SIEM)"),
             label_color,
             false,
             |ui| {
@@ -786,11 +794,11 @@ impl MistTermApp {
                     crate::i18n::tr(
                         ctx,
                         "Log command previews (truncated when plaintext is withheld)",
-                        "记录命令预览（不含完整明文时可截断）",
+                        "记录命令预览(不含完整明文时可截断)",
                     ),
                 );
                 // 团队 HTTP 上报由登录后的 configure_team_audit_sink 自动配置
-                // （URL / Bearer / team_id），用户无需在偏好里手动维护。
+                // (URL / Bearer / team_id)，用户无需在偏好里手动维护。
                 crate::ui::chrome::form_checkbox(
                     ui,
                     theme,
@@ -906,7 +914,7 @@ impl MistTermApp {
                     RichText::new(crate::i18n::tr(
                         ctx,
                         "Connect to Mist team server (mistlab.dev).",
-                        "对接 Mist 团队服务端（mistlab.dev）。",
+                        "对接 Mist 团队服务端(mistlab.dev)。",
                     ))
                     .size(theme.font_size_small())
                     .color(text_low),

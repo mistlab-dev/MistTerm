@@ -1,4 +1,4 @@
-//! 命令片段库窗口：新建 / 编辑 / 删除（设计文档 §2）
+//! 命令片段库窗口：新建 / 编辑 / 删除(设计文档 §2)
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -18,7 +18,7 @@ use crate::ui::layout_util::{
     modal_center_pos,
 };
 
-/// 片段库编辑器状态（不与 `FragmentStats` 强绑定便于表单编辑）
+/// 片段库编辑器状态(不与 `FragmentStats` 强绑定便于表单编辑)
 #[derive(Clone, Debug, Default)]
 pub struct FragmentLibraryState {
     pub open: bool,
@@ -353,7 +353,7 @@ impl FragmentLibraryState {
                             ui.add_space(theme.spacing_sm());
                         }
 
-                        // 表单在列内纵向滚动；高度用布局分配后的剩余空间（优于固定像素）。
+                        // 表单在列内纵向滚动；高度用布局分配后的剩余空间(优于固定像素)。
                         let scroll_h = ui.available_height().max(120.0);
                         egui::ScrollArea::vertical()
                             .id_source("mistterm_fragment_lib_form_scroll")
@@ -397,7 +397,7 @@ impl FragmentLibraryState {
                                 crate::ui::chrome::form_field_label(
                                     ui,
                                     theme,
-                                    i18n::tr(ui.ctx(), "Tags (comma-separated)", "标签（逗号分隔）"),
+                                    i18n::tr(ui.ctx(), "Tags (comma-separated)", "标签(逗号分隔)"),
                                 );
                                 crate::ui::chrome::form_singleline_field(
                                     ui,
@@ -411,7 +411,7 @@ impl FragmentLibraryState {
                                 crate::ui::chrome::form_field_label(
                                     ui,
                                     theme,
-                                    i18n::tr(ui.ctx(),"Command (`<host>` placeholder; `{{ md5(a) }}` via Rhai)","命令（`<host>` 占位符；`{{ md5(a) }}` 见 Rhai）"),
+                                    i18n::tr(ui.ctx(),"Command (`<host>` placeholder; `{{ md5(a) }}` via Rhai)","命令(`<host>` 占位符；`{{ md5(a) }}` 见 Rhai)"),
                                 );
                                 crate::ui::chrome::form_multiline_field(
                                     ui,
@@ -533,7 +533,7 @@ impl FragmentLibraryState {
                                 egui::CollapsingHeader::new(i18n::tr(
                                     ctx,
                                     "Preview resolved (session context)",
-                                    "预览替换后（当前会话上下文）",
+                                    "预览替换后(当前会话上下文)",
                                 ))
                                     .id_source("mistterm_fragment_lib_preview_expand")
                                     .show(ui, |ui| {

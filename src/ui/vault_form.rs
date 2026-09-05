@@ -5,7 +5,7 @@ use crate::ui::chrome;
 use crate::ui::theme::Theme;
 use eframe::egui;
 
-/// Vault 引用编辑状态（与 [`SecretBackend::VaultKv`] 对应）
+/// Vault 引用编辑状态(与 [`SecretBackend::VaultKv`] 对应)
 #[derive(Debug, Clone)]
 pub struct VaultSecretForm {
     pub use_vault: bool,
@@ -69,7 +69,7 @@ impl VaultSecretForm {
         }
     }
 
-    /// 在会话/凭证表单中绘制 Vault 区块（`id_prefix` 用于 egui 控件 id 去重）
+    /// 在会话/凭证表单中绘制 Vault 区块(`id_prefix` 用于 egui 控件 id 去重)
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -87,7 +87,7 @@ impl VaultSecretForm {
             crate::i18n::tr(
                 &ctx_owned,
                 "Store password/key in HashiCorp Vault (KV)",
-                "密码/密钥存于 HashiCorp Vault（KV）",
+                "密码/密钥存于 HashiCorp Vault(KV)",
             ),
         );
         if !self.use_vault {

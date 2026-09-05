@@ -35,7 +35,7 @@ struct TerminalContextRef {
     truncated: bool,
     original_line_count: usize,
     original_char_count: usize,
-    /// 非终端选区时的芯片标题键（如 `monitor`、`session_log`）。
+    /// 非终端选区时的芯片标题键(如 `monitor`、`session_log`)。
     source_key: Option<String>,
 }
 
@@ -92,16 +92,16 @@ impl TerminalContextRef {
 #[derive(Clone)]
 struct UiMessage {
     role: &'static str,
-    /// 气泡内展示的用户问题或助手回复（不含附带终端全文）。
+    /// 气泡内展示的用户问题或助手回复(不含附带终端全文)。
     content: String,
-    /// 发往 API 的完整 user 正文（含终端上下文）；助手消息为 None。
+    /// 发往 API 的完整 user 正文(含终端上下文)；助手消息为 None。
     api_content: Option<String>,
-    /// 本条 user 消息附带的终端选区引用（可多条）。
+    /// 本条 user 消息附带的终端选区引用(可多条)。
     context_refs: Vec<TerminalContextRef>,
     commands: Vec<String>,
-    /// 可选来源标签（如「模型 · 非团队知识」）。
+    /// 可选来源标签(如「模型 · 非团队知识」)。
     source_label: Option<String>,
-    /// v2 多机结果卡（有则走结构化 UI，不用 markdown/HTML）。
+    /// v2 多机结果卡(有则走结构化 UI，不用 markdown/HTML)。
     agent_batch: Option<AgentBatchCard>,
 }
 
@@ -113,13 +113,34 @@ struct AgentBatchCard {
 
 #[derive(Clone)]
 struct AgentHostRow {
-    label: String,
+    /// 会话/服务器显示名
+    name: String,
+    /// 主机地址(通常为 IP/域名)
+    endpoint: String,
     ok: bool,
     exit_code: Option<i32>,
+    /// 一行摘要(成功取有用行；失败取短错误)
     summary: String,
     error: Option<String>,
     output: String,
     duration_ms: u64,
+}
+
+fn split_batch_host_label(label: &str) -> (String, String) {
+    if let Some((name, endpoint)) = label.split_once(" · ") {
+        (name.to_string(), endpoint.to_string())
+    } else {
+        (label.to_string(), String::new())
+    }
+}
+
+fn truncate_ui_line(s: &str, max_chars: usize) -> String {
+    let t = s.trim().replace('\n', " ");
+    if t.chars().count() <= max_chars {
+        return t;
+    }
+    let head: String = t.chars().take(max_chars.saturating_sub(1)).collect();
+    format!("{head}…")
 }
 
 enum BackgroundJob {
@@ -149,7 +170,7 @@ pub struct AiPanel {
     /// 本地已加密保存 Key 时不再在输入框显示明文
     key_configured_stored: bool,
     test_status: Option<String>,
-    /// 输入区旁即时提示（空内容、未启用、请求中等）
+    /// 输入区旁即时提示(空内容、未启用、请求中等)
     input_status: Option<String>,
     /// AI 多行输入框是否持有键盘焦点；用于避免右 dock 打开时误拦 PTY 输入。
     draft_input_focused: bool,
@@ -157,7 +178,7 @@ pub struct AiPanel {
     attach_terminal_tail_requested: bool,
     /// 输入栏「附带选区」按钮：由 App 读取并注入当前终端选区。
     attach_selection_requested: bool,
-    /// 当前活动终端会话上下文（命令历史、SSH 信息等），用于增强 system prompt。
+    /// 当前活动终端会话上下文(命令历史、SSH 信息等)，用于增强 system prompt。
     session_context: AiContext,
     last_panel_slot_rect: Option<egui::Rect>,
     /// 从 API 拉取到的模型 id 列表；拉取失败时为空并改用手动输入。
@@ -170,9 +191,9 @@ pub struct AiPanel {
     models_status: Option<String>,
     /// 下一次发出的助手回复应标明「模型 / 非团队知识」。
     pending_model_fallback_label: bool,
-    /// 预填问题后自动发送（「问 AI」兜底入口）。
+    /// 预填问题后自动发送(「问 AI」兜底入口)。
     pending_auto_send: bool,
-    /// v2 多机 Agent 计划卡（无 Skill 目录；命令可改）。
+    /// v2 多机 Agent 计划卡(无 Skill 目录；命令可改)。
     agent_plan: Option<AgentPlanUi>,
     /// 用户已确认、待 App 执行的命令。
     pending_agent_exec: Option<String>,
@@ -201,7 +222,7 @@ impl AiPanel {
         self.busy || self.background.is_some() || self.agent_is_executing()
     }
 
-    /// 取出待 Toast 的错误（失败/超时）；面板内仍保留 `last_error`。
+    /// 取出待 Toast 的错误(失败/超时)；面板内仍保留 `last_error`。
     pub fn take_pending_toast_error(&mut self) -> Option<String> {
         self.pending_toast_error.take()
     }
@@ -243,14 +264,14 @@ impl AiPanel {
         }
     }
 
-    /// 供 App 注入当前可选主机数量（计划卡展示）。
+    /// 供 App 注入当前可选主机数量(计划卡展示)。
     pub fn set_agent_target_count(&mut self, n: usize) {
         if let Some(p) = &mut self.agent_plan {
             p.target_count = n;
         }
     }
 
-    /// 取出待批量执行的命令（一步一确认之后）。
+    /// 取出待批量执行的命令(一步一确认之后)。
     pub fn take_pending_agent_exec(&mut self) -> Option<String> {
         self.pending_agent_exec.take()
     }
@@ -274,19 +295,18 @@ impl AiPanel {
         let mut hosts: Vec<AgentHostRow> = rows
             .into_iter()
             .map(|r| {
+                let (name, endpoint) = split_batch_host_label(&r.label);
                 let summary = if r.ok {
-                    crate::core::first_useful_line(&r.output).unwrap_or_else(|| {
-                        if r.output.trim().is_empty() {
-                            "—".into()
-                        } else {
-                            crate::core::truncate_chars(&r.output.replace('\n', " "), 96)
-                        }
-                    })
+                    crate::core::host_result_summary(command, &r.output)
                 } else {
-                    r.error.clone().unwrap_or_else(|| "failed".into())
+                    truncate_ui_line(
+                        r.error.as_deref().unwrap_or("failed"),
+                        120,
+                    )
                 };
                 AgentHostRow {
-                    label: r.label,
+                    name,
+                    endpoint,
                     ok: r.ok,
                     exit_code: r.exit_code,
                     summary,
@@ -304,7 +324,7 @@ impl AiPanel {
             api_content: None,
             context_refs: vec![],
             commands: vec![],
-            source_label: Some("多机执行 · Agent".into()),
+            source_label: None,
             agent_batch: Some(AgentBatchCard {
                 command: command.to_string(),
                 hosts,
@@ -335,14 +355,14 @@ impl AiPanel {
         self.pending_agent_exec = None;
     }
 
-    /// 预填问题并标记为模型兜底（无团队知识命中）。
+    /// 预填问题并标记为模型兜底(无团队知识命中)。
     pub fn queue_model_fallback_question(&mut self, question: &str) {
         self.draft_input = question.trim().to_string();
         self.pending_model_fallback_label = true;
         self.pending_auto_send = false;
     }
 
-    /// 预填后自动发送（从「问：我们怎么」无命中入口进入）。
+    /// 预填后自动发送(从「问：我们怎么」无命中入口进入)。
     pub fn queue_model_fallback_question_and_send(&mut self, question: &str) {
         self.queue_model_fallback_question(question);
         self.pending_auto_send = !self.draft_input.trim().is_empty();
@@ -390,7 +410,7 @@ impl AiPanel {
         self.attached_contexts.push(item);
     }
 
-    /// 附带选区后聚焦输入框（便于直接输入问题）。
+    /// 附带选区后聚焦输入框(便于直接输入问题)。
     pub fn focus_draft_input(&self, ctx: &egui::Context) {
         ctx.memory_mut(|m| m.request_focus(egui::Id::new("mistterm_ai_draft")));
     }
@@ -443,7 +463,7 @@ impl AiPanel {
         self.command_for_terminal.take()
     }
 
-    /// 输入栏请求附带当前终端最近输出（由 App 每帧消费）。
+    /// 输入栏请求附带当前终端最近输出(由 App 每帧消费)。
     pub fn take_attach_terminal_tail_request(&mut self) -> bool {
         std::mem::replace(&mut self.attach_terminal_tail_requested, false)
     }
@@ -519,7 +539,7 @@ impl AiPanel {
         }
     }
 
-    /// 轮询后台保存 / 测试 / 对话请求（面板或设置窗打开时由 workspace 调用）。
+    /// 轮询后台保存 / 测试 / 对话请求(面板或设置窗打开时由 workspace 调用)。
     pub fn poll_background(&mut self, ctx: &egui::Context, app_settings: &mut AppSettings) {
         self.poll_pending(ctx, app_settings);
     }
@@ -734,7 +754,7 @@ impl AiPanel {
         self.background.is_some()
     }
 
-    /// 已具备 Key 与模型（可编辑输入；发送另需勾选「启用 AI」）。
+    /// 已具备 Key 与模型(可编辑输入；发送另需勾选「启用 AI」)。
     fn can_chat(&self, app_settings: &AppSettings) -> bool {
         !app_settings.ai.model.trim().is_empty()
             && (app_settings.ai.has_api_key() || !self.settings_key_input.trim().is_empty())
@@ -1055,7 +1075,7 @@ impl AiPanel {
         crate::ui::chrome::form_field_label(
             ui,
             theme,
-            i18n::tr(ctx, "System prompt (optional)", "System prompt（可选）"),
+            i18n::tr(ctx, "System prompt (optional)", "System prompt (可选)"),
         );
         crate::ui::chrome::form_multiline_field(
             ui,
@@ -1305,7 +1325,7 @@ impl AiPanel {
                         "{}: {}",
                         i18n::tr(ctx, "Targets", "目标主机"),
                         if plan.target_count == 0 {
-                            i18n::tr(ctx, "(resolving…)", "（解析中…）").to_string()
+                            i18n::tr(ctx, "(resolving…)", "(解析中…)").to_string()
                         } else {
                             format!(
                                 "{} {}",
@@ -1428,107 +1448,258 @@ impl AiPanel {
         theme: &Theme,
         batch: &AgentBatchCard,
         width: f32,
+        msg_index: usize,
     ) {
         let ok_n = batch.hosts.iter().filter(|h| h.ok).count();
         let fail_n = batch.hosts.len().saturating_sub(ok_n);
         ui.set_max_width(width.max(24.0));
-        ui.label(
-            egui::RichText::new(i18n::tr(ctx, "Multi-host results", "多机执行结果"))
-                .strong()
-                .size(theme.font_size_body()),
-        );
-        ui.label(
-            egui::RichText::new(format!(
-                "{} `{}`",
-                i18n::tr(ctx, "Command", "命令"),
-                batch.command
-            ))
-            .size(theme.font_size_small())
-            .monospace(),
-        );
-        ui.horizontal(|ui| {
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} {} / {}",
-                    i18n::tr(ctx, "OK", "成功"),
-                    ok_n,
-                    batch.hosts.len()
-                ))
-                .size(theme.font_size_small())
-                .color(theme.color_status_online_muted()),
-            );
-            if fail_n > 0 {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "· {} {fail_n}",
-                        i18n::tr(ctx, "Failed", "失败")
-                    ))
-                    .size(theme.font_size_small())
-                    .strong()
-                    .color(theme.color_status_offline_muted()),
-                );
-            }
-        });
-        ui.add_space(theme.spacing_xs());
 
-        for (i, host) in batch.hosts.iter().enumerate() {
-            let status_color = if host.ok {
-                theme.color_status_online_muted()
-            } else {
-                theme.color_status_offline_muted()
-            };
-            let status_text = if host.ok {
-                i18n::tr(ctx, "OK", "成功")
-            } else {
-                i18n::tr(ctx, "FAIL", "失败")
-            };
-            let header = format!("{}  ·  {}", status_text, host.label);
-            egui::CollapsingHeader::new(
-                egui::RichText::new(header)
-                    .size(theme.font_size_small())
-                    .color(status_color)
-                    .strong(),
-            )
-            .id_source(("agent_host", msg_stable_id(&host.label), i))
-            .default_open(!host.ok)
+        // —— 顶栏：命令为主，计数为辅 ——
+        egui::Frame::none()
+            .fill(theme.color_panel_header_band_fill())
+            .stroke(theme.divider_stroke())
+            .rounding(egui::Rounding::same(theme.radius_list_item()))
+            .inner_margin(egui::vec2(10.0, 8.0))
             .show(ui, |ui| {
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{} · {} ms{}",
-                        host.summary,
-                        host.duration_ms,
-                        host.exit_code
-                            .map(|c| format!(" · exit {c}"))
-                            .unwrap_or_default()
-                    ))
-                    .size(theme.font_size_small())
-                    .color(theme.color_form_hint()),
-                );
-                if let Some(err) = &host.error {
+                ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new(err)
-                            .size(theme.font_size_small())
-                            .color(theme.color_status_offline_muted()),
+                        egui::RichText::new(i18n::tr(ctx, "Multi-host", "多机"))
+                            .size(theme.font_size_caption())
+                            .color(theme.text_secondary()),
                     );
-                }
-                if !host.output.trim().is_empty() {
-                    egui::ScrollArea::vertical()
-                        .max_height(160.0)
-                        .id_source(("agent_out", msg_stable_id(&host.label), i))
-                        .show(ui, |ui| {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&host.output)
-                                        .monospace()
-                                        .size(theme.font_size_small()),
-                                )
-                                .wrap(true),
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if fail_n > 0 {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{} {fail_n}",
+                                    i18n::tr(ctx, "failed", "失败")
+                                ))
+                                .size(theme.font_size_caption())
+                                .strong()
+                                .color(theme.red_color()),
+                            );
+                            ui.label(
+                                egui::RichText::new("·")
+                                    .size(theme.font_size_caption())
+                                    .color(theme.text_secondary()),
+                            );
+                        }
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} {ok_n}/{}",
+                                i18n::tr(ctx, "OK", "成功"),
+                                batch.hosts.len()
+                            ))
+                            .size(theme.font_size_caption())
+                            .strong()
+                            .color(if fail_n > 0 {
+                                theme.text_secondary()
+                            } else {
+                                theme.green_color()
+                            }),
+                        );
+                    });
+                });
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new(&batch.command)
+                        .monospace()
+                        .strong()
+                        .size(theme.font_size_body())
+                        .color(theme.text_primary()),
+                );
+            });
+
+        ui.add_space(theme.spacing_sm());
+
+        let (fails, oks): (Vec<_>, Vec<_>) = batch
+            .hosts
+            .iter()
+            .enumerate()
+            .partition(|(_, h)| !h.ok);
+
+        if !fails.is_empty() {
+            ui.label(
+                egui::RichText::new(i18n::tr(ctx, "Failed hosts", "失败主机"))
+                    .size(theme.font_size_caption())
+                    .strong()
+                    .color(theme.red_color()),
+            );
+            ui.add_space(theme.spacing_xs());
+            for (i, host) in &fails {
+                self.render_agent_host_row(ui, ctx, theme, host, msg_index, *i, true);
+                ui.add_space(theme.spacing_xs());
+            }
+        }
+
+        if !oks.is_empty() {
+            if !fails.is_empty() {
+                ui.add_space(theme.spacing_xs());
+            }
+            ui.label(
+                egui::RichText::new(i18n::tr(ctx, "Succeeded hosts", "成功主机"))
+                    .size(theme.font_size_caption())
+                    .strong()
+                    .color(theme.text_secondary()),
+            );
+            ui.add_space(theme.spacing_xs());
+            for (i, host) in &oks {
+                self.render_agent_host_row(ui, ctx, theme, host, msg_index, *i, false);
+                ui.add_space(theme.spacing_xs());
+            }
+        }
+    }
+
+    fn render_agent_host_row(
+        &self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+        host: &AgentHostRow,
+        msg_index: usize,
+        host_index: usize,
+        emphasize: bool,
+    ) {
+        let accent = if host.ok {
+            theme.green_color()
+        } else {
+            theme.red_color()
+        };
+        // 必须含消息序号：多条多机结果卡里同主机时，ScrollArea/折叠 ID 不可复用。
+        let row_id = format!(
+            "m{msg_index}|h{host_index}|{}|{}",
+            host.name, host.endpoint
+        );
+
+        egui::Frame::none()
+            .fill(theme.color_subtle_inset_fill())
+            .stroke(egui::Stroke::new(
+                theme.hairline_width(ui.ctx()),
+                if emphasize {
+                    accent.gamma_multiply(0.7)
+                } else {
+                    theme.divider_stroke().color
+                },
+            ))
+            .rounding(egui::Rounding::same(theme.radius_list_item()))
+            .inner_margin(egui::Margin {
+                left: 0.0,
+                right: 8.0,
+                top: 6.0,
+                bottom: 6.0,
+            })
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    // 左侧状态条
+                    let (bar_rect, _) = ui.allocate_exact_size(
+                        egui::vec2(3.0, ui.available_height().max(36.0)),
+                        egui::Sense::hover(),
+                    );
+                    ui.painter().rect_filled(
+                        bar_rect,
+                        egui::Rounding {
+                            nw: theme.radius_list_item(),
+                            sw: theme.radius_list_item(),
+                            ne: 0.0,
+                            se: 0.0,
+                        },
+                        accent,
+                    );
+                    ui.add_space(8.0);
+                    ui.vertical(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                egui::RichText::new(if host.ok { "✓" } else { "✕" })
+                                    .size(theme.font_size_body())
+                                    .strong()
+                                    .color(accent),
+                            );
+                            ui.label(
+                                egui::RichText::new(&host.name)
+                                    .strong()
+                                    .size(theme.font_size_body())
+                                    .color(theme.text_primary()),
+                            );
+                            if !host.endpoint.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(&host.endpoint)
+                                        .size(theme.font_size_caption())
+                                        .color(theme.text_secondary()),
+                                );
+                            }
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    ui.label(
+                                        egui::RichText::new(format!("{} ms", host.duration_ms))
+                                            .size(theme.font_size_caption())
+                                            .color(theme.text_secondary()),
+                                    );
+                                },
                             );
                         });
-                }
+                        // 摘要是主内容：用正文色，失败用红，勿用 form_hint(暗夜约 34% 白几乎看不见)
+                        ui.label(
+                            egui::RichText::new(&host.summary)
+                                .size(theme.font_size_body())
+                                .color(if host.ok {
+                                    theme.text_primary()
+                                } else {
+                                    theme.red_color()
+                                }),
+                        );
+                        let has_detail = !host.output.trim().is_empty()
+                            || host
+                                .error
+                                .as_ref()
+                                .map(|e| e.trim().len() > host.summary.len())
+                                .unwrap_or(false);
+                        if has_detail {
+                            egui::CollapsingHeader::new(
+                                egui::RichText::new(i18n::tr(ctx, "Raw output", "原文"))
+                                    .size(theme.font_size_caption())
+                                    .color(theme.text_secondary()),
+                            )
+                            .id_source(("agent_host_raw", msg_stable_id(&row_id)))
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                if let Some(err) = &host.error {
+                                    if err.trim() != host.summary.trim() {
+                                        ui.label(
+                                            egui::RichText::new(err)
+                                                .size(theme.font_size_caption())
+                                                .color(theme.red_color()),
+                                        );
+                                    }
+                                }
+                                if !host.output.trim().is_empty() {
+                                    egui::ScrollArea::vertical()
+                                        .max_height(140.0)
+                                        .id_source(("agent_out", msg_stable_id(&row_id)))
+                                        .show(ui, |ui| {
+                                            ui.add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(&host.output)
+                                                        .monospace()
+                                                        .size(theme.font_size_caption())
+                                                        .color(theme.text_primary()),
+                                                )
+                                                .wrap(true),
+                                            );
+                                        });
+                                }
+                                if let Some(code) = host.exit_code {
+                                    ui.label(
+                                        egui::RichText::new(format!("exit {code}"))
+                                            .size(theme.font_size_caption())
+                                            .color(theme.text_secondary()),
+                                    );
+                                }
+                            });
+                        }
+                    });
+                });
             });
-            ui.add_space(2.0);
-        }
     }
 
     /// 渲染单条消息；`command_pick` 收集本帧内「执行」或命令卡片的点击。
@@ -1595,7 +1766,7 @@ impl AiPanel {
                     show_wrapped_user_text(ui, theme, &msg.content, body_w);
                 }
             } else if let Some(batch) = &msg.agent_batch {
-                self.render_agent_batch_card(ui, ctx, theme, batch, body_w);
+                self.render_agent_batch_card(ui, ctx, theme, batch, body_w, msg_index);
             } else {
                 show_assistant_text(ui, theme, &msg.content, body_w);
             }
@@ -1634,7 +1805,7 @@ impl AiPanel {
                             let _ = clip.set_text(msg.content.clone());
                         }
                     }
-                    // 多机结果卡不提供「重新生成」（无模型回合可重放）
+                    // 多机结果卡不提供「重新生成」(无模型回合可重放)
                     if msg.agent_batch.is_none()
                         && crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
                             ui,
@@ -1825,7 +1996,7 @@ impl AiPanel {
                     .desired_rows(3)
                     .desired_width(inner_w)
                     .text_color(theme.color_text_input_text())
-                    .font(egui::FontId::proportional(theme.font_size_control_input())),
+                    .font(crate::platform::ui_font_id(theme.font_size_control_input())),
             );
             ui.style_mut().visuals.override_text_color = prev_override;
         });
@@ -1902,7 +2073,7 @@ impl AiPanel {
                             .on_hover_text(i18n::tr(
                                 ctx,
                                 "Attach the last 50 lines from the active terminal (no copy needed)",
-                                "附带当前活动终端最近 50 行（无需手动复制）",
+                                "附带当前活动终端最近 50 行(无需手动复制)",
                             ))
                             .clicked()
                         })
@@ -1922,7 +2093,7 @@ impl AiPanel {
                             .on_hover_text(i18n::tr(
                                 ctx,
                                 "Attach the current terminal selection (no copy needed)",
-                                "附带当前终端选区（无需手动复制）",
+                                "附带当前终端选区(无需手动复制)",
                             ))
                             .clicked()
                         })
@@ -1977,7 +2148,7 @@ impl AiPanel {
         let _ = app_settings;
     }
 
-    /// 输入框内引用芯片（Cursor 式：附在 composer 上，不在对话区单独占行）。
+    /// 输入框内引用芯片(Cursor 式：附在 composer 上，不在对话区单独占行)。
     fn show_attached_context_chip_row(
         &mut self,
         ui: &mut egui::Ui,
@@ -2026,7 +2197,7 @@ impl AiPanel {
             return SendOutcome::Empty;
         }
 
-        // v2：多机运维意图 → Agent 计划卡（不依赖 API Key）
+        // v2：多机运维意图 → Agent 计划卡(不依赖 API Key)
         if !question.is_empty() && looks_like_host_ops_intent(&question) {
             self.draft_input.clear();
             let context_refs = std::mem::take(&mut self.attached_contexts);
@@ -2096,7 +2267,7 @@ impl AiPanel {
             rationale: proposal.rationale,
             phase: AgentPhase::AwaitingL1,
             target_count: 0,
-            gate_hint: "确认后将在所选主机上短连接执行（不占用终端 Tab）".into(),
+            gate_hint: "确认后将在所选主机上短连接执行(不占用终端 Tab)".into(),
             l2_armed: false,
             status: None,
         });
@@ -2569,7 +2740,7 @@ fn stored_to_ui_message(m: StoredAiMessage) -> UiMessage {
     }
 }
 
-/// 终端选区引用芯片：对话区只显示链接式摘要，全文在弹出层查看（类似 Cursor @ 引用）。
+/// 终端选区引用芯片：对话区只显示链接式摘要，全文在弹出层查看(类似 Cursor @ 引用)。
 fn show_terminal_context_chip(
     ui: &mut egui::Ui,
     ctx: &egui::Context,

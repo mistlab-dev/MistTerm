@@ -13,29 +13,29 @@ pub(crate) enum ToastKind {
     Error,
 }
 
-/// Toast 主按钮动作（需用户确认的提示）。
+/// Toast 主按钮动作(需用户确认的提示)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToastAction {
     /// 打开 SSH 配置导入对话框。
     OpenSshImport,
-    /// 重连指定标签的 SSH（连接失败 / 自动重连放弃后）。
+    /// 重连指定标签的 SSH(连接失败 / 自动重连放弃后)。
     ReconnectTab { tab_idx: usize },
-    /// 将审计拦截后的合规片段建议插入终端（内容在 `pending_suggested_snippet`）。
+    /// 将审计拦截后的合规片段建议插入终端(内容在 `pending_suggested_snippet`)。
     InsertSuggestedSnippet,
-    /// 将合规片段建议沉底到个人库（团队片段副本 / 去重后写入）。
+    /// 将合规片段建议沉底到个人库(团队片段副本 / 去重后写入)。
     SaveSuggestedSnippet,
     /// 拦截无命中 / Ask 无命中：打开 AI 并标明非团队知识。
     AskAiFallback,
-    /// 将 `pending_fragment_candidate` 写入个人库（用户确认）。
+    /// 将 `pending_fragment_candidate` 写入个人库(用户确认)。
     ConfirmSaveCandidate,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct ActiveToast {
     kind: ToastKind,
-    /// 标题行（级别语义，如「命令被禁止」）。
+    /// 标题行(级别语义，如「命令被禁止」)。
     title: String,
-    /// 正文行（命令预览、详情等）。
+    /// 正文行(命令预览、详情等)。
     text: String,
     /// `None` = 需用户确认，不自动消失。
     until: Option<Instant>,
@@ -58,7 +58,7 @@ pub(crate) fn status_message_wrap_error(display: impl Into<String>) -> String {
     format!("{STATUS_ERROR_MARKER}{s}")
 }
 
-/// 根据文案推断是否为错误类通知（兼容旧 `status_message` 赋值）。
+/// 根据文案推断是否为错误类通知(兼容旧 `status_message` 赋值)。
 pub(crate) fn status_message_looks_like_error(msg: &str) -> bool {
     let body = status_message_body(msg);
     msg.starts_with(STATUS_ERROR_MARKER)
@@ -100,7 +100,7 @@ pub(super) fn status_message_text_color(
     }
 }
 
-/// 级别默认标题（无显式 title 时使用）。
+/// 级别默认标题(无显式 title 时使用)。
 pub(crate) fn default_toast_title(ctx: &egui::Context, kind: ToastKind) -> String {
     match kind {
         ToastKind::Error => crate::i18n::tr(ctx, "Error", "错误").to_string(),
@@ -130,12 +130,12 @@ impl MistTermApp {
         }
     }
 
-    /// 统一通知入口：所有用户可见提示走 Toast（并同步 `status_message` 供诊断快照）。
+    /// 统一通知入口：所有用户可见提示走 Toast(并同步 `status_message` 供诊断快照)。
     pub(crate) fn push_toast(&mut self, kind: ToastKind, text: impl Into<String>) {
         self.push_toast_titled(kind, String::new(), text);
     }
 
-    /// 标题 + 正文 Toast（标题空则绘制时用级别默认标题）。
+    /// 标题 + 正文 Toast(标题空则绘制时用级别默认标题)。
     pub(crate) fn push_toast_titled(
         &mut self,
         kind: ToastKind,
@@ -150,7 +150,7 @@ impl MistTermApp {
             self.status_message.clear();
             return;
         }
-        // 需确认的 Toast 不被瞬时提示覆盖（过期后会再同步）。
+        // 需确认的 Toast 不被瞬时提示覆盖(过期后会再同步)。
         if self
             .active_toast
             .as_ref()
@@ -205,7 +205,7 @@ impl MistTermApp {
         );
     }
 
-    /// 需用户确认的 Toast：主操作 + 可选次要操作（如「用到终端」+「存到个人库」）。
+    /// 需用户确认的 Toast：主操作 + 可选次要操作(如「用到终端」+「存到个人库」)。
     pub(crate) fn push_dual_action_toast(
         &mut self,
         kind: ToastKind,
@@ -329,7 +329,7 @@ impl MistTermApp {
         self.pending_suggested_snippet = None;
     }
 
-    /// 有待导入且用户未关闭时，展示可操作 Toast（替代侧栏横幅 / 顶栏 chip）。
+    /// 有待导入且用户未关闭时，展示可操作 Toast(替代侧栏横幅 / 顶栏 chip)。
     pub(crate) fn sync_ssh_import_action_toast(&mut self, ctx: &egui::Context) {
         let pending = self.ssh_pending_import_count();
         if pending == 0 || self.ssh_import_banner_dismissed {
@@ -509,7 +509,7 @@ impl MistTermApp {
                 }
             }
             ToastAction::InsertSuggestedSnippet => {
-                // 必须在 clear_toast 之前取出（clear 会丢掉 pending）
+                // 必须在 clear_toast 之前取出(clear 会丢掉 pending)
                 let pending = self.pending_suggested_snippet.take();
                 self.active_toast = None;
                 self.status_message.clear();

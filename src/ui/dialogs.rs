@@ -42,7 +42,7 @@ impl NewSessionDialog {
         }
     }
 
-    /// 显示对话框（文字与输入框颜色随 `Theme`）
+    /// 显示对话框(文字与输入框颜色随 `Theme`)
     pub fn show(&mut self, ctx: &egui::Context, theme: &Theme) {
         if !self.visible {
             return;

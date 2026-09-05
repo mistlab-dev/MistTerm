@@ -142,7 +142,7 @@ impl SessionLogDialog {
         let mut copy_all = false;
         let display = self.filtered_content();
         let display_for_view = if display.is_empty() {
-            crate::i18n::tr(ctx, "(No matches)", "（无匹配内容）").to_string()
+            crate::i18n::tr(ctx, "(No matches)", "(无匹配内容)").to_string()
         } else {
             display
         };
@@ -270,7 +270,7 @@ impl SessionLogDialog {
                                         crate::i18n::tr(
                                             ctx,
                                             "Locally recorded terminal output (not live). Color codes are stripped; see the log file for raw content.",
-                                            "本地录制的终端输出（非实时）。已去除颜色控制符；完整原始内容见日志文件。",
+                                            "本地录制的终端输出(非实时)。已去除颜色控制符；完整原始内容见日志文件。",
                                         ),
                                     ))
                                     .wrap(true),

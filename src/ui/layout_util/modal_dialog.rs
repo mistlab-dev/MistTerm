@@ -8,11 +8,11 @@ use super::dock_geometry::{
 
 const HUGE: f32 = 10_000.0;
 
-/// 表单内容区：从父级 cap 两侧各减去的 inset（[`finite_content_width`]）。
+/// 表单内容区：从父级 cap 两侧各减去的 inset([`finite_content_width`])。
 const CONTENT_CAP_TRIM: f32 = 20.0;
 const CONTENT_CAP_FLOOR: f32 = 1.0;
 const CONTENT_FALLBACK_FRAC: f32 = 0.52;
-/// 输入框最小宽度 = cap × 此比例（窄 cap 时避免 `lo > hi` panic）。
+/// 输入框最小宽度 = cap × 此比例(窄 cap 时避免 `lo > hi` panic)。
 const CONTENT_FIELD_MIN_FRAC: f32 = 0.67;
 
 /// 右 dock 内表单/图表宽度上限 = 当前 panel 宽度
@@ -22,13 +22,13 @@ pub fn finite_content_width_in_panel(ui: &egui::Ui, inset_each_side: f32, fallba
     finite_content_width_inset(ui, inset_each_side, fallback, cap)
 }
 
-/// 居中弹窗类 `Window::default_width`（新建会话、克隆仓库等）。
+/// 居中弹窗类 `Window::default_width`(新建会话、克隆仓库等)。
 #[inline]
 pub fn modal_default_width(ctx: &egui::Context) -> f32 {
     (screen_width(ctx) * 0.36).clamp(320.0, 600.0)
 }
 
-/// 底部锚定条带（如终端搜索）的默认宽度。
+/// 底部锚定条带(如终端搜索)的默认宽度。
 #[inline]
 pub fn floating_bar_default_width(ctx: &egui::Context) -> f32 {
     (screen_width(ctx) * 0.42).clamp(440.0, 760.0)
@@ -92,7 +92,7 @@ pub fn centered_window_default_size(ctx: &egui::Context, w_frac: f32, h_frac: f3
     ]
 }
 
-/// 新建会话弹窗（名称 / 主机 / 端口 / 用户名 / 密码 / SSH 密钥）。
+/// 新建会话弹窗(名称 / 主机 / 端口 / 用户名 / 密码 / SSH 密钥)。
 #[inline]
 pub fn modal_new_session_size(ctx: &egui::Context) -> egui::Vec2 {
     let r = ctx.screen_rect();
@@ -100,7 +100,7 @@ pub fn modal_new_session_size(ctx: &egui::Context) -> egui::Vec2 {
     egui::vec2((sw * 0.36).clamp(340.0, 480.0), 390.0)
 }
 
-/// 新建 / 编辑会话弹窗尺寸（§8.4.1）。
+/// 新建 / 编辑会话弹窗尺寸(§8.4.1)。
 #[inline]
 pub fn modal_edit_size(ctx: &egui::Context) -> egui::Vec2 {
     let r = ctx.screen_rect();
@@ -112,7 +112,7 @@ pub fn modal_edit_size(ctx: &egui::Context) -> egui::Vec2 {
     )
 }
 
-/// 偏好设置弹窗（§8.4.2）：高度不超过视口减去 `top_inset` / `bottom_inset`。
+/// 偏好设置弹窗(§8.4.2)：高度不超过视口减去 `top_inset` / `bottom_inset`。
 #[inline]
 pub fn modal_pref_size_in_viewport(
     ctx: &egui::Context,
@@ -127,13 +127,13 @@ pub fn modal_pref_size_in_viewport(
     egui::vec2((sw * 0.44).clamp(420.0, 600.0), ideal_h.min(max_h))
 }
 
-/// 偏好设置弹窗默认尺寸（关于等复用；含基础边距）。
+/// 偏好设置弹窗默认尺寸(关于等复用；含基础边距)。
 #[inline]
 pub fn modal_pref_size(ctx: &egui::Context) -> egui::Vec2 {
     modal_pref_size_in_viewport(ctx, 24.0, 24.0)
 }
 
-/// 关于弹窗（§8.4.3）默认尺寸（无内容测量时的回退）。
+/// 关于弹窗(§8.4.3)默认尺寸(无内容测量时的回退)。
 #[inline]
 pub fn modal_about_size(ctx: &egui::Context) -> egui::Vec2 {
     let r = ctx.screen_rect();
@@ -233,7 +233,7 @@ pub fn modal_about_size_for_content(
     egui::vec2(width, height.clamp(220.0, max_h))
 }
 
-/// 快速片段选择器（§8.4.4）。
+/// 快速片段选择器(§8.4.4)。
 #[inline]
 pub fn modal_quick_fragment_size(ctx: &egui::Context) -> egui::Vec2 {
     let r = ctx.screen_rect();
@@ -245,7 +245,7 @@ pub fn modal_quick_fragment_size(ctx: &egui::Context) -> egui::Vec2 {
     )
 }
 
-/// Clone 仓库弹窗（§8.4.5）。
+/// Clone 仓库弹窗(§8.4.5)。
 #[inline]
 pub fn modal_clone_size(ctx: &egui::Context) -> egui::Vec2 {
     let r = ctx.screen_rect();
@@ -257,7 +257,7 @@ pub fn modal_clone_size(ctx: &egui::Context) -> egui::Vec2 {
     )
 }
 
-/// 删除确认等小弹窗（§8.4.6）。
+/// 删除确认等小弹窗(§8.4.6)。
 #[inline]
 pub fn modal_confirm_size(ctx: &egui::Context) -> egui::Vec2 {
     let r = ctx.screen_rect();
@@ -292,7 +292,7 @@ pub fn dialog_scroll_max_height(ctx: &egui::Context, chrome_reserve: f32) -> f32
     inner.clamp(160.0, (h * 0.62).min(720.0))
 }
 
-/// 侧栏/面板内 `ScrollArea`：吃掉当前 `Ui` 剩余高度（减去顶部控件占位）。
+/// 侧栏/面板内 `ScrollArea`：吃掉当前 `Ui` 剩余高度(减去顶部控件占位)。
 #[inline]
 pub fn scroll_area_fill_height(ui: &egui::Ui, reserve_top: f32) -> f32 {
     let mut h = ui.available_height() - reserve_top;
@@ -353,7 +353,7 @@ pub fn finite_avail_minus(ui: &egui::Ui, subtract: f32, fallback: f32, max_w: f3
     w.clamp(48.0, max_w)
 }
 
-/// 与 [`finite_content_width_inset`] 类似，用于纵向分配（侧栏、滚动区等）。
+/// 与 [`finite_content_width_inset`] 类似，用于纵向分配(侧栏、滚动区等)。
 #[inline]
 pub fn finite_content_height(ui: &egui::Ui, fallback: f32, max_h: f32) -> f32 {
     let mut h = ui.available_height();
@@ -366,7 +366,7 @@ pub fn finite_content_height(ui: &egui::Ui, fallback: f32, max_h: f32) -> f32 {
     h.clamp(40.0, max_h)
 }
 
-/// 供 `TextEdit` / 多行编辑：宽度**绝不超出**当前 `Ui` 的 `max_rect`（勿用 `clip_rect`，在根区域常与整窗同宽，会误放大）。
+/// 供 `TextEdit` / 多行编辑：宽度**绝不超出**当前 `Ui` 的 `max_rect`(勿用 `clip_rect`，在根区域常与整窗同宽，会误放大)。
 #[inline]
 pub fn textedit_width_in_parent(ui: &egui::Ui, subtract: f32) -> f32 {
     let mut w = ui.available_width() - subtract;

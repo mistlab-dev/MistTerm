@@ -1,11 +1,11 @@
-//! Planner：NL → StepProposal（启发式；可手改；日后接 LLM）。
+//! Planner：NL → StepProposal(启发式；可手改；日后接 LLM)。
 
-/// 下一步执行提议（尚未过门闩、未 SSH）。
+/// 下一步执行提议(尚未过门闩、未 SSH)。
 #[derive(Debug, Clone)]
 pub struct StepProposal {
     pub command: String,
     pub rationale: String,
-    /// 是否建议结束（无命令可跑）。
+    /// 是否建议结束(无命令可跑)。
     pub stop: bool,
 }
 
@@ -38,6 +38,8 @@ pub fn looks_like_host_ops_intent(text: &str) -> bool {
         "负载",
         "cpu",
         "uptime",
+        "进程",
+        "process",
         "df -",
         "free -",
         "查下服务器",
@@ -48,7 +50,7 @@ pub fn looks_like_host_ops_intent(text: &str) -> bool {
     NEEDLES.iter().any(|n| lower.contains(&n.to_lowercase()) || t.contains(n))
 }
 
-/// 从自然语言启发式提议一条命令（可改）。
+/// 从自然语言启发式提议一条命令(可改)。
 pub fn propose_step(user_text: &str) -> StepProposal {
     let t = user_text.trim();
     let stripped = strip_ops_prefix(t);
@@ -66,28 +68,61 @@ pub fn propose_step(user_text: &str) -> StepProposal {
     if contains_any(&lower, stripped, &["磁盘", "disk", "空间", "filesystem", "df"]) {
         return StepProposal {
             command: "df -h".into(),
-            rationale: "查各主机磁盘用量（可改命令）".into(),
+            rationale: "查各主机磁盘用量(可改命令)".into(),
             stop: false,
         };
     }
     if contains_any(&lower, stripped, &["内存", "memory", "mem ", "free"]) {
         return StepProposal {
             command: "free -h".into(),
-            rationale: "查各主机内存（可改命令）".into(),
+            rationale: "查各主机内存(可改命令)".into(),
             stop: false,
         };
     }
     if contains_any(&lower, stripped, &["cpu", "负载", "load", "uptime"]) {
         return StepProposal {
             command: "uptime".into(),
-            rationale: "查各主机负载与运行时间（可改命令）".into(),
+            rationale: "查各主机负载与运行时间(可改命令)".into(),
+            stop: false,
+        };
+    }
+    if contains_any(
+        &lower,
+        stripped,
+        &[
+            "进程数量",
+            "进程数",
+            "进程个数",
+            "多少进程",
+            "process count",
+            "process number",
+            "nproc",
+        ],
+    ) || (contains_any(&lower, stripped, &["进程", "process", "processes"])
+        && contains_any(
+            &lower,
+            stripped,
+            &["数量", "个数", "多少", "count", "number", "num"],
+        ))
+    {
+        return StepProposal {
+            // pid= 无表头，输出即为进程数
+            command: "ps -eo pid= | wc -l".into(),
+            rationale: "统计各主机进程数量(可改命令)".into(),
+            stop: false,
+        };
+    }
+    if contains_any(&lower, stripped, &["进程", "process", "processes", "ps "]) {
+        return StepProposal {
+            command: "ps aux --sort=-%cpu | head -n 15".into(),
+            rationale: "列出各主机占用 CPU 较高的进程(可改命令)".into(),
             stop: false,
         };
     }
     if contains_any(&lower, stripped, &["谁在听", "端口", "listening", "ss -", "netstat"]) {
         return StepProposal {
             command: "ss -lntp".into(),
-            rationale: "查监听端口（可改命令）".into(),
+            rationale: "查监听端口(可改命令)".into(),
             stop: false,
         };
     }
@@ -145,6 +180,21 @@ mod tests {
     #[test]
     fn memory_intent() {
         assert_eq!(propose_step("看看各台内存").command, "free -h");
+    }
+
+    #[test]
+    fn process_count_intent() {
+        let p = propose_step("查询 所有服务器进程数量");
+        assert_eq!(p.command, "ps -eo pid= | wc -l");
+        assert!(looks_like_host_ops_intent("查询 所有服务器进程数量"));
+    }
+
+    #[test]
+    fn process_list_intent() {
+        assert_eq!(
+            propose_step("看看各台进程").command,
+            "ps aux --sort=-%cpu | head -n 15"
+        );
     }
 
     #[test]

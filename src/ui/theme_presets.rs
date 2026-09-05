@@ -25,7 +25,7 @@ impl Theme {
         }
     }
 
-    /// 创建晨曦主题（Light）- 实色描边，浅底对比加强
+    /// 创建晨曦主题(Light)- 实色描边，浅底对比加强
     pub fn light() -> Self {
         Self {
             name: "晨曦".to_string(),
@@ -36,7 +36,7 @@ impl Theme {
             bg_tab_bar: Color32Serializable::new(238, 240, 244), // 顶/底栏与面板区分
             bg_hover: Color32Serializable::with_alpha(0, 0, 0, 22),
             bg_selected: Color32Serializable::with_alpha(102, 126, 234, 48),
-            // === 文字（实色，浅底须更深以保证侧栏/监控可读）===
+            // === 文字(实色，浅底须更深以保证侧栏/监控可读)===
             fg_high: Color32Serializable::new(20, 22, 26), // #14161a
             fg_medium: Color32Serializable::new(46, 50, 56), // #2e3238
             fg_low: Color32Serializable::new(72, 78, 86),  // #484e56
@@ -54,7 +54,7 @@ impl Theme {
         }
     }
 
-    /// 创建海洋主题（Ocean）- 蓝调背景，专业冷静
+    /// 创建海洋主题(Ocean)- 蓝调背景，专业冷静
     pub fn ocean() -> Self {
         Self {
             name: "海洋".to_string(),
@@ -83,7 +83,7 @@ impl Theme {
         }
     }
 
-    /// 创建森林主题（Forest）- 绿色调背景，自然清新
+    /// 创建森林主题(Forest)- 绿色调背景，自然清新
     pub fn forest() -> Self {
         Self {
             name: "森林".to_string(),

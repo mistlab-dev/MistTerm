@@ -1,4 +1,4 @@
-//! 帮助弹窗：结构化排版（快速入门 / 快捷键 / 功能指南），外链文档在浏览器打开。
+//! 帮助弹窗：结构化排版(快速入门 / 快捷键 / 功能指南)，外链文档在浏览器打开。
 
 use crate::platform::{shortcuts, DOCS_INDEX_URL};
 use crate::ui::chrome;
@@ -35,16 +35,16 @@ fn quick_steps(ctx: &egui::Context) -> Vec<QuickStep> {
             detail: crate::i18n::tr(
                 ctx,
                 "Activity Rail → Fragments (or View menu) to open the fragment library. Browse market templates or create your own. Click to send to terminal.",
-                "活动栏 → 命令片段（或「视图」菜单）打开片段库。浏览市场模板或创建自定义片段，点击即发送到终端。",
+                "活动栏 → 命令片段(或「视图」菜单)打开片段库。浏览市场模板或创建自定义片段，点击即发送到终端。",
             ),
             keys: vec![shortcuts::accel("K")],
         },
         QuickStep {
-            title: crate::i18n::tr(ctx, "File transfer (SFTP)", "文件传输（SFTP）"),
+            title: crate::i18n::tr(ctx, "File transfer (SFTP)", "文件传输(SFTP)"),
             detail: crate::i18n::tr(
                 ctx,
                 "View → SFTP to open the file panel. Drag & drop upload, right-click for download. Also supports ZMODEM (rz/sz) in terminal.",
-                "菜单「视图」→ SFTP 打开文件面板。拖拽上传，右键下载。终端内也支持 ZMODEM（rz/sz）。",
+                "菜单「视图」→ SFTP 打开文件面板。拖拽上传，右键下载。终端内也支持 ZMODEM(rz/sz)。",
             ),
             keys: vec![],
         },
@@ -294,7 +294,7 @@ fn feature_sections() -> Vec<FeatureSection> {
             icon: "🔧",
             title: "Command Snippets",
             desc_en: "Personal snippet library + marketplace with 60+ pre-built templates for Linux, Docker, Kubernetes, networking, databases, and more. Click to execute.",
-            desc_zh: "个人片段库 + 市场，内置 60+ 运维模板（Linux、Docker、K8s、网络、数据库等），点击即执行。",
+            desc_zh: "个人片段库 + 市场，内置 60+ 运维模板(Linux、Docker、K8s、网络、数据库等)，点击即执行。",
         },
         FeatureSection {
             icon: "📊",
@@ -318,7 +318,7 @@ fn feature_sections() -> Vec<FeatureSection> {
             icon: "🔐",
             title: "Vault SSH CA",
             desc_en: "Team server issues short-lived SSH certificates via HashiCorp Vault SSH CA (server-side). The desktop app reads credentials from Vault KV for team servers.",
-            desc_zh: "团队服务端通过 HashiCorp Vault SSH CA 签发短期 SSH 证书（服务端职责）。桌面端从 Vault KV 读取团队服务器凭证。",
+            desc_zh: "团队服务端通过 HashiCorp Vault SSH CA 签发短期 SSH 证书(服务端职责)。桌面端从 Vault KV 读取团队服务器凭证。",
         },
         FeatureSection {
             icon: "🤖",

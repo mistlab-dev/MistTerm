@@ -2,7 +2,7 @@
 //!
 //! 包含主窗口、侧边栏、终端区域等。
 //!
-//! 传文件三种入口彼此独立：**终端内 `rz`+ZMODEM**、**SFTP 侧栏**、**工具栏「上传」SCP 直传**（另见 `TerminalView::start_upload_to_remote` 的 cat 直传 API）。
+//! 传文件三种入口彼此独立：**终端内 `rz`+ZMODEM**、**SFTP 侧栏**、**工具栏「上传」SCP 直传**(另见 `TerminalView::start_upload_to_remote` 的 cat 直传 API)。
 
 use crate::core::batch_exec::{
     run_batch_parallel, BatchExecJob, BatchExecRow, BatchTarget, TEAM_TARGET_PREFIX,
@@ -76,7 +76,7 @@ use responsive::ResponsiveLayoutBand;
 mod shortcuts;
 pub(crate) use shortcuts::mistterm_functional_spec_shortcuts;
 
-/// eframe 自定义持久化键（RON）；与 egui 自带的窗口几何持久化并存（FUNCTIONAL_SPEC §8.1）
+/// eframe 自定义持久化键(RON)；与 egui 自带的窗口几何持久化并存(FUNCTIONAL_SPEC §8.1)
 const MISTTERM_UI_STORAGE_KEY: &str = "mistterm_ui_v1";
 
 /// 命令片段侧栏：个人库 vs 团队同步库。
@@ -115,7 +115,7 @@ struct MistTermUiPersist {
     session_log_include_ansi: bool,
     #[serde(default)]
     ssh_import_banner_dismissed: bool,
-    /// 左侧 Activity Rail 是否隐藏（默认显示）。
+    /// 左侧 Activity Rail 是否隐藏(默认显示)。
     #[serde(default)]
     activity_rail_collapsed: bool,
 }
@@ -182,7 +182,7 @@ fn localize_terminal_insert_fragment_error(ctx: &egui::Context, err: &str) -> St
     }
 }
 
-/// 流水线：先 `{{ … }}`（Rhai）再 `expand_command_template` 替换会话字段，避免 `{{ md5(<user>) }}` 被提前展开成非法 Rhai；仍含 `<key>` 时需用户填写。
+/// 流水线：先 `{{ … }}`(Rhai)再 `expand_command_template` 替换会话字段，避免 `{{ md5(<user>) }}` 被提前展开成非法 Rhai；仍含 `<key>` 时需用户填写。
 const SESSION_PLACEHOLDER_KEYS: &[&str] = &[
     "host",
     "hostname",
@@ -208,15 +208,15 @@ pub struct FragmentVariableDialog {
     pub fragment_id: Option<String>,
     pub fragment_title: String,
     pub values: std::collections::HashMap<String, String>,
-    /// 为 true 时在终端内插入（粘贴）；为 false 时直接「执行」发送一行命令。
+    /// 为 true 时在终端内插入(粘贴)；为 false 时直接「执行」发送一行命令。
     pub paste_after_fill: bool,
-    /// 发送前可编辑的最终命令（含 `{{ … }}` 时在确认时会再次求值）。
+    /// 发送前可编辑的最终命令(含 `{{ … }}` 时在确认时会再次求值)。
     pub command_edit: String,
-    /// 点「插入/执行」时若 `{{ … }}` 展开失败，在弹窗内展示（避免用户以为按钮失灵）。
+    /// 点「插入/执行」时若 `{{ … }}` 展开失败，在弹窗内展示(避免用户以为按钮失灵)。
     pub last_finalize_error: Option<String>,
 }
 
-/// 「填写片段变量」弹窗关闭后的动作（插入终端 vs ⌘J 直接发送）
+/// 「填写片段变量」弹窗关闭后的动作(插入终端 vs ⌘J 直接发送)
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum FragmentVarsCompletion {
     /// 右侧栏逻辑：粘贴进终端并记 usage 统计
@@ -234,7 +234,7 @@ pub struct FragmentQuickSelector {
     pub selected_index: usize,
 }
 
-/// 右侧辅助 dock 种类（可同时打开多个；Foreground 命中区与绘制顺序保证各栏 × 可点）。
+/// 右侧辅助 dock 种类(可同时打开多个；Foreground 命中区与绘制顺序保证各栏 × 可点)。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ActiveRightDock {
     Fragment,
@@ -261,9 +261,9 @@ pub struct MistTermApp {
     /// 左侧 Activity Rail 隐藏后完全不占位；默认 false=显示。
     activity_rail_collapsed: bool,
     sidebar_width: f32,
-    /// 用户曾主动折叠左侧连接栏；宽屏时响应式不自动展开（FUNCTIONAL_SPEC §8 注意）
+    /// 用户曾主动折叠左侧连接栏；宽屏时响应式不自动展开(FUNCTIONAL_SPEC §8 注意)
     sidebar_user_dismissed_responsive: bool,
-    /// 上一帧的响应式布局档位（窄 / 中 / 宽），仅用于检测变化
+    /// 上一帧的响应式布局档位(窄 / 中 / 宽)，仅用于检测变化
     last_responsive_layout_band: Option<ResponsiveLayoutBand>,
 
     /// 终端标签页
@@ -277,18 +277,20 @@ pub struct MistTermApp {
     show_new_session_dialog: bool,
     show_edit_session_dialog: bool,
     show_about_dialog: bool,
-    /// 原型 / 常见桌面习惯：⌘, 偏好设置（主题等）
+    /// 原型 / 常见桌面习惯：⌘, 偏好设置(主题等)
     show_preferences_dialog: bool,
+    /// 偏好设置 → Vault Token 输入草稿(不落盘；保存时写入钥匙串)
+    pref_vault_token_draft: String,
     show_fragments_dialog: bool,
     show_fragment_panel: bool, // 命令片段侧边栏
-    /// 本帧命令片段 `SidePanel` 槽位矩形（`ui.max_rect()`）
+    /// 本帧命令片段 `SidePanel` 槽位矩形(`ui.max_rect()`)
     fragment_panel_slot_rect: Option<egui::Rect>,
-    /// 本帧任意右侧 dock（片段/SFTP/监控等）与主区交界的最左 **屏幕 x**（多栏时取 min，即贴主区的那条边）
+    /// 本帧任意右侧 dock(片段/SFTP/监控等)与主区交界的最左 **屏幕 x**(多栏时取 min，即贴主区的那条边)
     right_dock_outer_left_x: Option<f32>,
     show_monitor_panel: bool, // 监控面板
     show_ai_panel: bool,
     show_ai_settings_dialog: bool,
-    /// 终端视口搜索（当前屏缓冲，不含卷动历史）
+    /// 终端视口搜索(当前屏缓冲，不含卷动历史)
     show_terminal_search: bool,
     /// 打开查找条后首帧聚焦输入框
     terminal_search_pending_focus: bool,
@@ -298,10 +300,10 @@ pub struct MistTermApp {
     terminal_search_cur: usize,
     show_sftp_panel: bool, // SFTP 文件浏览器
     show_port_forward_panel: bool,
-    /// 上次已同步 SFTP 列表的终端标签索引（切换标签时重置远端浏览状态）
+    /// 上次已同步 SFTP 列表的终端标签索引(切换标签时重置远端浏览状态)
     sftp_last_tab: Option<usize>,
     port_forward_last_tab: Option<usize>,
-    /// 监控面板绑定的终端标签（切换标签时重新绑定当前 SSH 会话）
+    /// 监控面板绑定的终端标签(切换标签时重新绑定当前 SSH 会话)
     monitor_last_tab: Option<usize>,
 
     /// 新建会话表单
@@ -352,7 +354,7 @@ pub struct MistTermApp {
     fragment_sort_by: SortBy,
     /// 变量输入对话框
     variable_dialog: FragmentVariableDialog,
-    /// `show_fragment_vars_dialog` 确认后的行为（见 [`FragmentVarsCompletion`]）
+    /// `show_fragment_vars_dialog` 确认后的行为(见 [`FragmentVarsCompletion`])
     fragment_vars_completion: FragmentVarsCompletion,
     /// 快速片段选择器
     quick_selector: FragmentQuickSelector,
@@ -389,9 +391,9 @@ pub struct MistTermApp {
     pending_ask_fallback_question: Option<String>,
     /// 待用户确认写入个人库的候选
     pending_fragment_candidate: Option<FragmentCandidate>,
-    /// 最近一次已提示的候选命令（防刷屏）
+    /// 最近一次已提示的候选命令(防刷屏)
     last_candidate_offer_command: String,
-    /// 历史记录后待弹出的成功路径候选（下一帧有 ctx 时弹出）
+    /// 历史记录后待弹出的成功路径候选(下一帧有 ctx 时弹出)
     deferred_candidate_toast: Option<FragmentCandidate>,
     fragment_analytics_snapshot: crate::core::FragmentAnalyticsDashboard,
     fragment_analytics_range: crate::core::FragmentAnalyticsTimeRange,
@@ -412,7 +414,7 @@ pub struct MistTermApp {
     show_fragment_vars_dialog: bool,
     fragment_filter_category: String,
     fragment_filter_status: String,
-    /// 连接就绪后要插入的片段（标签索引、片段 id、命令）
+    /// 连接就绪后要插入的片段(标签索引、片段 id、命令)
     pending_fragment_insert: Option<(usize, Option<String>, String)>,
 
     /// 主题管理器
@@ -421,11 +423,11 @@ pub struct MistTermApp {
     app_settings: AppSettings,
     audit_logger: AuditLogger,
 
-    /// 网络断开后是否自动重连（偏好设置，§1.4）
+    /// 网络断开后是否自动重连(偏好设置，§1.4)
     auto_reconnect_enabled: bool,
-    /// 终端等宽字体预设（偏好设置 → 外观）
+    /// 终端等宽字体预设(偏好设置 → 外观)
     terminal_font_preset: crate::platform::TerminalFontPreset,
-    /// 终端字号 px（偏好设置 → 外观；Ctrl+滚轮 仍可临时缩放单窗格）
+    /// 终端字号 px(偏好设置 → 外观；Ctrl+滚轮 仍可临时缩放单窗格)
     terminal_font_size: f32,
     /// ≥10MB 上传：待用户选择 SCP 或 ZMODEM 的本地路径
     large_upload_pending_path: Option<std::path::PathBuf>,
@@ -437,7 +439,7 @@ pub struct MistTermApp {
     ssh_config_path: std::path::PathBuf,
     ssh_import_banner_dismissed: bool,
     title_ssh_import_dismissed: bool,
-    /// macOS 系统菜单栏（`muda` / NSMenu）
+    /// macOS 系统菜单栏(`muda` / NSMenu)
     #[cfg(target_os = "macos")]
     native_menu: Option<crate::platform::macos_menu::NativeAppMenu>,
     session_log_settings: SessionLogSettings,
@@ -453,13 +455,13 @@ pub struct MistTermApp {
     delete_session_confirm: Option<(String, String)>,
     /// §2.3.5：关闭仍连接/握手中的标签前确认
     close_tab_confirm_idx: Option<usize>,
-    /// 本地快捷提示引擎（非服务器强制边界）
+    /// 本地快捷提示引擎(非服务器强制边界)
     cmd_audit_engine: CmdAuditEngine,
-    /// 敏感命令二次确认（标签索引、命令、匹配详情）
+    /// 敏感命令二次确认(标签索引、命令、匹配详情)
     cmd_audit_confirm: Option<CmdAuditConfirmState>,
-    /// 审计拦截后待插入的合规片段（配合 `ToastAction::InsertSuggestedSnippet`）
+    /// 审计拦截后待插入的合规片段(配合 `ToastAction::InsertSuggestedSnippet`)
     pending_suggested_snippet: Option<(usize, FragmentStats)>,
-    /// 命令审计 Agent 列表（用于终端降级横幅）
+    /// 命令审计 Agent 列表(用于终端降级横幅)
     cmd_audit_agents: Vec<crate::core::team::CmdAuditAgent>,
     cmd_audit_agents_at: Option<Instant>,
     cmd_audit_agents_error: String,
@@ -470,15 +472,15 @@ pub struct MistTermApp {
     batch_exec_rx: Option<std::sync::mpsc::Receiver<Vec<BatchExecRow>>>,
     /// v2 Agent 多机执行结果：(command, rows)
     agent_batch_rx: Option<std::sync::mpsc::Receiver<(String, Vec<BatchExecRow>)>>,
-    /// UI 卡顿 watchdog（本地报告）
+    /// UI 卡顿 watchdog(本地报告)
     hang_reporter: HangReporter,
-    /// 统一 Toast（所有用户可见通知走这里）
+    /// 统一 Toast(所有用户可见通知走这里)
     active_toast: Option<ActiveToast>,
-    /// GUI 自动化：首帧按会话名自动连接（`MISTTERM_AUTO_CONNECT`）
+    /// GUI 自动化：首帧按会话名自动连接(`MISTTERM_AUTO_CONNECT`)
     pending_auto_connect_session: Option<String>,
 }
 
-/// 命令确认弹窗状态（本地快捷提示或服务器侧策略）
+/// 命令确认弹窗状态(本地快捷提示或服务器侧策略)
 #[derive(Clone)]
 struct CmdAuditConfirmState {
     tab_idx: usize,
@@ -510,7 +512,7 @@ fn server_audit_body(cmd_preview: &str, detail: &str) -> String {
 }
 
 impl MistTermApp {
-    /// 拦截后尝试推一条合规片段：有命中则带「用到终端」+（团队来源时）「存到个人库」。
+    /// 拦截后尝试推一条合规片段：有命中则带「用到终端」+(团队来源时)「存到个人库」。
     /// 无命中：短提示「暂无团队替代」+ 可选「问 AI」。
     fn notify_block_with_compliant_suggestion(
         &mut self,
@@ -557,7 +559,7 @@ impl MistTermApp {
                 title,
                 text,
                 ToastAction::AskAiFallback,
-                crate::i18n::tr(ctx, "Ask AI (not team knowledge)", "问 AI（非团队知识）"),
+                crate::i18n::tr(ctx, "Ask AI (not team knowledge)", "问 AI (非团队知识)"),
                 secondary,
                 secondary_label,
             );
@@ -635,7 +637,7 @@ impl MistTermApp {
         self.pending_fragment_candidate = Some(cand);
         self.push_action_toast_titled(
             ToastKind::Info,
-            crate::i18n::tr(ctx, "Save as snippet?", "保存为片段？"),
+            crate::i18n::tr(ctx, "Save as snippet?", "保存为片段?"),
             format!("{reason} · {preview}"),
             ToastAction::ConfirmSaveCandidate,
             crate::i18n::tr(ctx, "Save", "保存"),
@@ -747,14 +749,14 @@ impl MistTermApp {
                 crate::i18n::tr(
                     ctx,
                     "No team hit — asking AI (not team knowledge)",
-                    "暂无团队知识，已改问 AI（非团队知识）",
+                    "暂无团队知识，已改问 AI (非团队知识)",
                 )
                 .to_string(),
             );
         }
     }
 
-    /// 将拦截建议沉底到个人库（按命令去重；复制变量定义）。
+    /// 将拦截建议沉底到个人库(按命令去重；复制变量定义)。
     /// `true` = 新写入；`false` = 个人库已有相同命令。
     fn save_suggested_snippet_to_personal(
         &mut self,
@@ -811,8 +813,8 @@ impl MistTermApp {
     /// §8.2：宽度 **小于** 此值为「窄屏」，左侧连接栏自动折叠且关闭所有右侧 dock
     const RESP_LAYOUT_NARROW_LT_PX: f32 = 800.0;
 
-    /// 片段变量类弹窗：正文 / 单行输入 / 按钮统一字号（egui 默认 Body 往往偏大）
-    /// 应用当前主题（由 ThemeManager 统一管理；同主题重复调用为 no-op）
+    /// 片段变量类弹窗：正文 / 单行输入 / 按钮统一字号(egui 默认 Body 往往偏大)
+    /// 应用当前主题(由 ThemeManager 统一管理；同主题重复调用为 no-op)
     fn apply_current_theme(&mut self, ctx: &egui::Context) {
         self.theme_manager.apply_theme(ctx);
     }
@@ -827,6 +829,8 @@ impl MistTermApp {
 
     fn apply_terminal_font_preferences(&mut self, ctx: &egui::Context) {
         crate::platform::configure_egui_fonts(ctx, self.terminal_font_preset);
+        // 字体族变更后重刷 TextStyle，确保界面比例字体仍指向统一 CJK 族。
+        self.theme_manager.invalidate_and_apply(ctx);
         self.apply_terminal_font_size_to_all_terminals();
         ctx.request_repaint();
     }
@@ -837,14 +841,14 @@ impl MistTermApp {
         terminal
     }
 
-    // ── 通用 UI 辅助函数（统一字体大小和间距，按设计规范固定值） ──
+    // ── 通用 UI 辅助函数(统一字体大小和间距，按设计规范固定值) ──
 
-    /// 表单字段标签（见 [`crate::ui::chrome::form_field_label`]）
+    /// 表单字段标签(见 [`crate::ui::chrome::form_field_label`])
     fn ui_field_label(ui: &mut egui::Ui, theme: &crate::ui::theme::Theme, text: &str) {
         crate::ui::chrome::form_field_label(ui, theme, text);
     }
 
-    /// 单行表单输入（可读占位符 + 统一输入框样式）
+    /// 单行表单输入(可读占位符 + 统一输入框样式)
     fn ui_form_singleline(
         ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
@@ -865,7 +869,7 @@ impl MistTermApp {
         );
     }
 
-    /// 端口输入（与其它单行框同款样式，避免 DragValue 默认灰底）
+    /// 端口输入(与其它单行框同款样式，避免 DragValue 默认灰底)
     fn ui_form_port(
         ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
@@ -917,7 +921,7 @@ impl MistTermApp {
                     delay_secs,
                     attempt,
                     max_attempts,
-                } => format!("连接已断开，{delay_secs} 秒后将自动重连（{attempt}/{max_attempts}）"),
+                } => format!("连接已断开，{delay_secs} 秒后将自动重连({attempt}/{max_attempts})"),
             },
         }
     }
@@ -957,6 +961,7 @@ impl MistTermApp {
             show_edit_session_dialog: false,
             show_about_dialog: false,
             show_preferences_dialog: false,
+            pref_vault_token_draft: String::new(),
             show_fragments_dialog: false,
             show_fragment_panel: false,
             fragment_panel_slot_rect: None,
@@ -1147,7 +1152,7 @@ impl MistTermApp {
         if app.team_service.is_logged_in() {
             app.configure_team_audit_sink();
             app.apply_cmd_audit_cache_for_current_team();
-            // 异步拉取团队详情，避免启动时阻塞 UI 线程；UI 渲染期间会先用本地缓存（current_team_detail = None 时回退到 state 名字）。
+            // 异步拉取团队详情，避免启动时阻塞 UI 线程；UI 渲染期间会先用本地缓存(current_team_detail = None 时回退到 state 名字)。
             app.team_service.spawn_refresh_current_team_detail();
             app.team_service.spawn_cmd_audit_sync();
             let released =
@@ -1160,7 +1165,7 @@ impl MistTermApp {
         crate::platform::configure_egui_fonts(&cc.egui_ctx, app.terminal_font_preset);
         app.apply_terminal_font_size_to_all_terminals();
 
-        // GUI 自动化：启动后首帧自动连接已保存会话（仅 MISTTERM_GUI_AUTOMATION=1 时生效）
+        // GUI 自动化：启动后首帧自动连接已保存会话(仅 MISTTERM_GUI_AUTOMATION=1 时生效)
         if crate::ui::sftp_panel::SftpPanel::gui_automation_enabled() {
             if let Ok(name) = std::env::var("MISTTERM_AUTO_CONNECT") {
                 let name = name.trim().to_string();
@@ -1184,7 +1189,7 @@ impl MistTermApp {
                     .to_string(),
             );
         }
-        // 视觉验收：`MIST_DEMO_TOAST=1` 启动时展示各级别标题+正文 Toast（不写进正式产品路径）。
+        // 视觉验收：`MIST_DEMO_TOAST=1` 启动时展示各级别标题+正文 Toast(不写进正式产品路径)。
         if std::env::var_os("MIST_DEMO_TOAST").is_some() {
             let demo = std::env::var("MIST_DEMO_TOAST").unwrap_or_default();
             let kind = demo.trim().to_ascii_lowercase();
@@ -1396,7 +1401,7 @@ impl MistTermApp {
         self.show_agent_install_dialog = true;
     }
 
-    /// 经命令审计后发送到指定标签的 PTY（拦截/确认在 UI 层处理）。
+    /// 经命令审计后发送到指定标签的 PTY(拦截/确认在 UI 层处理)。
     pub(crate) fn send_audited_command_at(
         &mut self,
         ctx: &egui::Context,
@@ -1536,7 +1541,7 @@ impl MistTermApp {
                 .get_mut(state.tab_idx)
                 .and_then(|t| t.active_pane_mut())
             {
-                // 服务器侧 confirm：可选先发放行令牌，再重发原命令（选项 A）。
+                // 服务器侧 confirm：可选先发放行令牌，再重发原命令(选项 A)。
                 if matches!(state.source, CmdAuditSource::Server) && !state.approve_token.is_empty()
                 {
                     let approve = format!("MIST_AUDIT_APPROVE\t{}", state.approve_token);
@@ -2066,7 +2071,7 @@ impl MistTermApp {
         );
     }
 
-    /// 将 `ProxyJump` 各跳解析为连接凭据（匹配已保存会话名/主机，或 `user@host:port`）。
+    /// 将 `ProxyJump` 各跳解析为连接凭据(匹配已保存会话名/主机，或 `user@host:port`)。
     fn resolve_proxy_jump_hops(&self, session: &SessionConfig) -> Result<Vec<JumpHop>, String> {
         let chain = parse_jump_chain(&session.proxy_jump);
         if chain.is_empty() {
@@ -2204,7 +2209,7 @@ impl MistTermApp {
             );
             self.command_history
                 .record(&command, Some(&sid), sname.as_deref(), true);
-            // 成功路径：仅当「刚敲的这条」累计刚好达标时才弹（非每条命令弹最热门）
+            // 成功路径：仅当「刚敲的这条」累计刚好达标时才弹(非每条命令弹最热门)
             self.queue_success_path_candidate_if_due(&command);
             // 失败路径：若终端尾部像错误，延后提示保存候选
             self.queue_failed_path_candidate_if_due(&command);
@@ -2331,7 +2336,7 @@ impl MistTermApp {
         egui::Id::new("mistterm_fragment_panel_search")
     }
 
-    /// 存在模态/表单/查找条等需使用标准编辑快捷键（⌘C/V/A）的 UI
+    /// 存在模态/表单/查找条等需使用标准编辑快捷键(⌘C/V/A)的 UI
     fn global_shortcuts_blocked(&self) -> bool {
         self.show_new_session_dialog
             || self.show_edit_session_dialog
@@ -2382,6 +2387,19 @@ impl MistTermApp {
         if self.global_shortcuts_blocked() {
             return false;
         }
+        // AI 草稿在 Foreground(Central 之后)：用 memory 实时查焦点，避免晚一帧。
+        let ai_draft_focused = self.show_ai_panel
+            && (self.ai_panel.is_draft_input_focused()
+                || ctx.memory(|m| m.has_focus(egui::Id::new("mistterm_ai_draft"))));
+        if ai_draft_focused {
+            return false;
+        }
+        // 任何 UI TextEdit/IME 优先于「终端仍想要键盘」。
+        // 半角 `,` 是广播式 Event::Text；全角 `，` 走 IME Composition，只进当前 IME 目标。
+        // 若仍按 terminal_wants 抢键，全角标点会进终端 ime_capture 并被清空。
+        if ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
+            return false;
+        }
         let terminal_focused = self
             .active_tab
             .and_then(|i| self.tabs.get(i))
@@ -2392,18 +2410,29 @@ impl MistTermApp {
             return true;
         }
         if self.auxiliary_dock_open() {
-            if self.show_ai_panel && self.ai_panel.is_draft_input_focused() {
-                return false;
-            }
             return true;
-        }
-        if ctx.wants_keyboard_input() {
-            return false;
         }
         false
     }
 
-    /// 编辑菜单 Copy/Paste/Select All 是否作用于当前终端标签（含 egui 菜单打开时）。
+    /// AI/表单持有输入时，释放终端 wants + IME 焦点，让全角/半角都进当前 TextEdit。
+    fn release_terminal_keyboard_if_ui_typing(&mut self, ctx: &egui::Context) {
+        let ai_draft_focused = self.show_ai_panel
+            && (self.ai_panel.is_draft_input_focused()
+                || ctx.memory(|m| m.has_focus(egui::Id::new("mistterm_ai_draft"))));
+        let ui_typing =
+            ai_draft_focused || (ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus());
+        if !ui_typing {
+            return;
+        }
+        for tab in &mut self.tabs {
+            for pane in tab.panes_mut() {
+                pane.terminal.release_keyboard_for_ui_input(ctx);
+            }
+        }
+    }
+
+    /// 编辑菜单 Copy/Paste/Select All 是否作用于当前终端标签(含 egui 菜单打开时)。
     fn edit_menu_targets_active_terminal(&self, _ctx: &egui::Context) -> bool {
         if self.global_shortcuts_blocked() {
             return false;
@@ -2444,9 +2473,18 @@ impl MistTermApp {
             .unwrap_or(false)
     }
 
-    /// 编辑菜单 ⌘C/⌘V/全选 是否应发给远端 PTY（否则发给当前焦点控件）
+    /// 编辑菜单 ⌘C/⌘V/全选 是否应发给远端 PTY(否则发给当前焦点控件)
     fn route_edit_shortcuts_to_terminal(&self, ctx: &egui::Context) -> bool {
         if self.global_shortcuts_blocked() {
+            return false;
+        }
+        let ai_draft_focused = self.show_ai_panel
+            && (self.ai_panel.is_draft_input_focused()
+                || ctx.memory(|m| m.has_focus(egui::Id::new("mistterm_ai_draft"))));
+        if ai_draft_focused {
+            return false;
+        }
+        if ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
             return false;
         }
         let terminal_focused = self
@@ -2459,13 +2497,7 @@ impl MistTermApp {
             return true;
         }
         if self.auxiliary_dock_open() {
-            if self.show_ai_panel && self.ai_panel.is_draft_input_focused() {
-                return false;
-            }
             return true;
-        }
-        if ctx.wants_keyboard_input() {
-            return false;
         }
         // 菜单栏/弹层操作后 PTY 可能短暂失焦，但当前标签仍是终端时应继续路由复制/粘贴/全选。
         self.active_tab
@@ -2474,7 +2506,7 @@ impl MistTermApp {
             .is_some()
     }
 
-    /// 将剪贴板内容粘贴到当前获得焦点的 egui 控件（如弹窗内 TextEdit）
+    /// 将剪贴板内容粘贴到当前获得焦点的 egui 控件(如弹窗内 TextEdit)
     pub(crate) fn menu_paste_to_focused_widget(&self, ctx: &egui::Context) {
         if let Ok(mut clip) = arboard::Clipboard::new() {
             if let Ok(text) = clip.get_text() {
@@ -2515,11 +2547,17 @@ impl MistTermApp {
             self.sidebar_collapsed = false;
             self.sidebar_user_dismissed_responsive = false;
         }
+        // 交出终端键盘/IME，否则下一帧 Ctrl+J 后的字符仍进 PTY（表现为会话名当命令）。
+        for tab in &mut self.tabs {
+            for pane in tab.panes_mut() {
+                pane.terminal.release_keyboard_for_ui_input(ctx);
+            }
+        }
         ctx.memory_mut(|m| m.request_focus(Self::id_sidebar_connection_search()));
         let j = crate::platform::accel("J");
         self.notify_auto(match crate::i18n::language(ctx) {
             crate::i18n::UiLanguage::En => format!("Focused connection search ({j})"),
-            crate::i18n::UiLanguage::Zh => format!("已聚焦连接搜索框（{}）", j),
+            crate::i18n::UiLanguage::Zh => format!("已聚焦连接搜索框({})", j),
         });
     }
 
@@ -2530,11 +2568,16 @@ impl MistTermApp {
             return;
         }
         self.open_right_dock_panel(ActiveRightDock::Fragment);
+        for tab in &mut self.tabs {
+            for pane in tab.panes_mut() {
+                pane.terminal.release_keyboard_for_ui_input(ctx);
+            }
+        }
         ctx.memory_mut(|m| m.request_focus(Self::id_fragment_panel_search()));
         let k = crate::platform::accel("K");
         self.notify_auto(match crate::i18n::language(ctx) {
             crate::i18n::UiLanguage::En => format!("Focused snippet search ({k})"),
-            crate::i18n::UiLanguage::Zh => format!("已聚焦片段搜索框（{}）", k),
+            crate::i18n::UiLanguage::Zh => format!("已聚焦片段搜索框({})", k),
         });
     }
 
@@ -2573,7 +2616,7 @@ impl MistTermApp {
         self.switch_tab_to_index(prev);
     }
 
-    /// 移除标签前先断开 SSH（FUNCTIONAL_SPEC §1.3.4）
+    /// 移除标签前先断开 SSH(FUNCTIONAL_SPEC §1.3.4)
     fn remove_tab_at(&mut self, idx: usize) {
         if idx >= self.tabs.len() {
             return;
@@ -2613,7 +2656,7 @@ impl MistTermApp {
         self.request_close_tab_at(idx);
     }
 
-    /// FUNCTIONAL_SPEC §1.3.5：断开 SSH，标签与屏幕缓冲保留（不可再输入）
+    /// FUNCTIONAL_SPEC §1.3.5：断开 SSH，标签与屏幕缓冲保留(不可再输入)
     fn disconnect_ssh_keep_buffer_at(&mut self, ctx: &egui::Context, idx: usize) {
         if idx >= self.tabs.len() {
             return;
@@ -2645,7 +2688,7 @@ impl MistTermApp {
             crate::i18n::tr(
                 ctx,
                 "SSH disconnected on this tab (output kept; reconnect or close)",
-                "已断开 SSH（本标签输出已保留，可重连或关闭标签）",
+                "已断开 SSH(本标签输出已保留，可重连或关闭标签)",
             )
             .to_string(),
         );
@@ -2719,7 +2762,7 @@ impl MistTermApp {
         self.reconnect_tab_at(ctx, idx);
     }
 
-    /// 活动标签：SCP 直传或弹出 ≥10MB 选择（与拖放共用，FUNCTIONAL_SPEC §4.3）
+    /// 活动标签：SCP 直传或弹出 ≥10MB 选择(与拖放共用，FUNCTIONAL_SPEC §4.3)
     fn enqueue_upload_for_active_tab(&mut self, ctx: &egui::Context, path: std::path::PathBuf) {
         use crate::core::{decide_upload_dispatch, format_bytes_short, UploadDispatch};
 
@@ -2744,7 +2787,7 @@ impl MistTermApp {
                         format_bytes_short(size_bytes)
                     ),
                     crate::i18n::UiLanguage::Zh => format!(
-                        "文件较大（≥10 MB），请选择上传方式：{}（{}）",
+                        "文件较大(≥10 MB)，请选择上传方式：{}({})",
                         disp,
                         format_bytes_short(size_bytes)
                     ),
@@ -2755,7 +2798,7 @@ impl MistTermApp {
                     match terminal.start_upload(path.as_path()) {
                         Ok(_) => {
                             self.notify_auto(format!(
-                                "{} {}（{}）",
+                                "{} {}({})",
                                 crate::i18n::tr(ctx, "Starting SCP upload:", "开始 SCP 上传："),
                                 path.display(),
                                 format_bytes_short(size_bytes)
@@ -2790,7 +2833,7 @@ impl MistTermApp {
         }
     }
 
-    /// 弹窗标题行（标题 + 右上角 ×）。与 [`Self::modal_header`] 相同。
+    /// 弹窗标题行(标题 + 右上角 ×)。与 [`Self::modal_header`] 相同。
     fn modal_header_title_only(
         ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
@@ -2892,7 +2935,7 @@ impl MistTermApp {
         self.monitor_panel.clear();
     }
 
-    /// macOS ⌘ 与 Windows/Linux Ctrl（FUNCTIONAL_SPEC §7）
+    /// macOS ⌘ 与 Windows/Linux Ctrl(FUNCTIONAL_SPEC §7)
     #[inline]
     fn input_primary_mod(i: &egui::InputState) -> bool {
         crate::ui::keyboard_shortcuts::input_primary_mod(i)
@@ -2906,12 +2949,12 @@ impl MistTermApp {
             .unwrap_or(false)
     }
 
-    /// 终端持有键盘焦点时，MistTerm 全局快捷键一律不抢占（Ctrl/⌘ 组合交给 PTY / readline）。
+    /// 终端持有键盘焦点时，MistTerm 全局快捷键一律不抢占(Ctrl/⌘ 组合交给 PTY / readline)。
     fn app_shortcut_overrides_terminal(&self, _i: &egui::InputState) -> bool {
         !self.active_terminal_has_keyboard_focus()
     }
 
-    /// 标签/分屏导航（spec §6.2）：终端聚焦时仍由 MistTerm 处理。
+    /// 标签/分屏导航(spec §6.2)：终端聚焦时仍由 MistTerm 处理。
     fn app_tab_navigation_enabled(&self) -> bool {
         self.app_global_shortcuts_enabled()
     }
@@ -2920,7 +2963,7 @@ impl MistTermApp {
         !self.global_shortcuts_blocked()
     }
 
-    /// 为给定会话配置追加一个新终端标签并发起连接（不检查是否已有同会话标签）
+    /// 为给定会话配置追加一个新终端标签并发起连接(不检查是否已有同会话标签)
     fn apply_team_vault_from_sync(&mut self) {
         let Some(tid) = self.team_service.state.current_team_id.clone() else {
             return;
@@ -3078,6 +3121,48 @@ impl MistTermApp {
                     group: crate::i18n::tr(ctx, "Team", "团队").to_string(),
                 });
             }
+        }
+        out
+    }
+
+    /// Agent「全部主机」：本地会话优先，再补团队服务器；按 `user@host:port` 去重，避免同机跑两次。
+    fn build_agent_batch_targets(&self, ctx: &egui::Context) -> Vec<BatchTarget> {
+        use crate::core::push_unique_batch_target;
+        use std::collections::HashSet;
+
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        for s in self.session_manager.list_sessions() {
+            push_unique_batch_target(
+                &mut out,
+                &mut seen,
+                &s.host,
+                s.port,
+                &s.username,
+                BatchTarget {
+                    id: s.id.clone(),
+                    label: format!("{} · {}", s.name, s.host),
+                    group: if s.group.is_empty() {
+                        crate::i18n::tr(ctx, "Default", "默认").to_string()
+                    } else {
+                        s.group.clone()
+                    },
+                },
+            );
+        }
+        for srv in self.team_service.current_team_servers() {
+            push_unique_batch_target(
+                &mut out,
+                &mut seen,
+                &srv.host,
+                srv.port,
+                &srv.username,
+                BatchTarget {
+                    id: format!("{TEAM_TARGET_PREFIX}{}", srv.list_key()),
+                    label: format!("{} · {}", srv.name, srv.host),
+                    group: crate::i18n::tr(ctx, "Team", "团队").to_string(),
+                },
+            );
         }
         out
     }
@@ -3439,7 +3524,7 @@ impl MistTermApp {
                     crate::i18n::tr(
                         ctx,
                         "Efficiency report (Markdown) copied to clipboard",
-                        "效率报告（Markdown）已复制到剪贴板",
+                        "效率报告(Markdown)已复制到剪贴板",
                     )
                     .to_string(),
                 );
@@ -3662,7 +3747,7 @@ impl MistTermApp {
         self.notify_auto(crate::i18n::tr(ctx, "Merged split panes", "已合并分屏").to_string());
     }
 
-    /// ⌘T / Ctrl+T：为左侧当前选中会话新开标签；未选中时提示（与 ⌘N 新建配置区分）
+    /// ⌘T / Ctrl+T：为左侧当前选中会话新开标签；未选中时提示(与 ⌘N 新建配置区分)
     fn open_new_tab_from_selection(&mut self, ctx: &egui::Context) {
         let Some(ref sid) = self.selected_session_id else {
             let t = crate::platform::accel("T");
@@ -3687,7 +3772,7 @@ impl MistTermApp {
         self.push_tab_connecting(ctx, &session);
     }
 
-    /// 终端列内查找条（非浮动 Window，避免标题栏占满宽）。返回 `true` 表示关闭。
+    /// 终端列内查找条(非浮动 Window，避免标题栏占满宽)。返回 `true` 表示关闭。
     fn show_terminal_search_bar(
         &mut self,
         ui: &mut egui::Ui,
@@ -3711,7 +3796,7 @@ impl MistTermApp {
             crate::i18n::tr(
                 &ctx,
                 "Matches terminal buffer (incl. scrollback)",
-                "匹配终端缓冲（含 scrollback）",
+                "匹配终端缓冲(含 scrollback)",
             )
             .to_string()
         } else if self.terminal_search_hits.is_empty() {
@@ -3963,6 +4048,13 @@ impl MistTermApp {
             self.close_all_right_dock_panels();
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
             self.open_right_dock_panel(ActiveRightDock::Ai);
+            // 打开即聚焦草稿：符合「点开就能打字」；并交出终端 IME，避免全角/Ctrl 漏进 PTY。
+            for tab in &mut self.tabs {
+                for pane in tab.panes_mut() {
+                    pane.terminal.release_keyboard_for_ui_input(ctx);
+                }
+            }
+            self.ai_panel.focus_draft_input(ctx);
         }
     }
 
@@ -4162,7 +4254,7 @@ impl MistTermApp {
 
     /// v2：AI 面板多机 Agent — 更新目标数、门闩、启动/回收批量结果。
     fn poll_ai_agent_ops(&mut self, ctx: &egui::Context) {
-        let targets = self.build_batch_targets(ctx, true);
+        let targets = self.build_agent_batch_targets(ctx);
         self.ai_panel.set_agent_target_count(targets.len());
 
         if let Some(rx) = &self.agent_batch_rx {
@@ -4424,7 +4516,7 @@ impl MistTermApp {
         let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) else {
             return;
         };
-        if pane.terminal.menu_copy_to_clipboard() {
+        if pane.terminal.menu_copy_to_clipboard(ctx) {
             self.notify_auto(
                 crate::i18n::tr(ctx, "Copied to clipboard", "已复制到剪贴板").to_string(),
             );
@@ -4437,7 +4529,7 @@ impl MistTermApp {
         ctx.request_repaint();
     }
 
-    /// 终端复制快捷键：仅复制选区（macOS ⌘C，Win/Linux Ctrl+Shift+C）。
+    /// 终端复制快捷键：仅复制选区(macOS ⌘C，Win/Linux Ctrl+Shift+C)。
     fn copy_active_terminal_selection_shortcut(&mut self, ctx: &egui::Context) {
         let Some(idx) = self.active_tab else {
             return;
@@ -4445,7 +4537,7 @@ impl MistTermApp {
         let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) else {
             return;
         };
-        if pane.terminal.shortcut_copy_to_clipboard() {
+        if pane.terminal.shortcut_copy_to_clipboard(ctx) {
             self.notify_auto(
                 crate::i18n::tr(ctx, "Copied to clipboard", "已复制到剪贴板").to_string(),
             );
@@ -4622,7 +4714,7 @@ impl MistTermApp {
         let is_zh = crate::i18n::language(ctx) == crate::i18n::UiLanguage::Zh;
         let mut out = String::new();
         if is_zh {
-            out.push_str("# MistTerm 卡顿摘要（最近 10 条）\n");
+            out.push_str("# MistTerm 卡顿摘要(最近 10 条)\n");
             out.push_str(&format!("目录：`{}`\n\n", dir.display()));
             out.push_str("| 文件 | 本地时间 | 时间戳(ms) | 卡顿等级 | 卡顿时长(ms) | 阈值(ms) | Tabs/Active | 面板状态 | 状态栏 |\n");
             out.push_str("|---|---|---:|---|---:|---:|---|---|---|\n");
@@ -5046,7 +5138,7 @@ impl MistTermApp {
         }
     }
 
-    /// 注册命令片段栏槽位（须在 Central 之前）。实际 UI 见 [`show_fragment_panel_foreground`]。
+    /// 注册命令片段栏槽位(须在 Central 之前)。实际 UI 见 [`show_fragment_panel_foreground`]。
     fn show_fragment_panel(
         &mut self,
         ctx: &egui::Context,
@@ -5060,7 +5152,7 @@ impl MistTermApp {
             .max_width(max_w)
             .resizable(true)
             .show_separator_line(false)
-            // 仅占布局宽；勿在此绘制内容（CentralPanel 后绘会盖住）。内容在 Foreground Area 重绘。
+            // 仅占布局宽；勿在此绘制内容(CentralPanel 后绘会盖住)。内容在 Foreground Area 重绘。
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
                 let h = ui.available_height().max(1.0);
@@ -5087,7 +5179,7 @@ impl MistTermApp {
         let _ = theme;
     }
 
-    /// Central 之后绘制命令片段（egui 规定 Central 最后绘制，会盖住同层 SidePanel 的像素）。
+    /// Central 之后绘制命令片段(egui 规定 Central 最后绘制，会盖住同层 SidePanel 的像素)。
     pub(crate) fn show_fragment_panel_foreground(
         &mut self,
         ctx: &egui::Context,
@@ -5123,7 +5215,7 @@ impl MistTermApp {
         );
     }
 
-    /// 命令片段面板正文（§5 扁平列表 + 四标签）。
+    /// 命令片段面板正文(§5 扁平列表 + 四标签)。
     fn show_fragment_panel_contents(
         &mut self,
         ui: &mut egui::Ui,
@@ -5161,7 +5253,7 @@ impl MistTermApp {
         ui.spacing_mut().item_spacing.y = prev_gap_y;
         ui.add_space(theme.spacing_dock_section_gap());
 
-        // 这里必须用 `form_singleline_field`（有框）且不要走 `panel_search_row/search_field`：
+        // 这里必须用 `form_singleline_field`(有框)且不要走 `panel_search_row/search_field`：
         // 后两者会引入额外外边距或行高壳层，导致「命令片段」顶部节奏与 SFTP 不一致。
         crate::ui::chrome::form_singleline_field(
             ui,
@@ -5540,7 +5632,7 @@ impl MistTermApp {
             ui.add_space(theme.spacing_dock_control_gap());
         }
 
-        // §5.3：分类筛选 + 右侧排序（与芯片同排，不再单独占「片段列表」行）
+        // §5.3：分类筛选 + 右侧排序(与芯片同排，不再单独占「片段列表」行)
         let ctx_owned = ui.ctx().clone();
         let chip_defs: [(&str, &str); 4] = [
             ("frequent", crate::i18n::tr(&ctx_owned, "Pinned", "常用")),
@@ -5645,7 +5737,7 @@ impl MistTermApp {
                         egui::RichText::new(crate::i18n::tr(
                             ui.ctx(),
                             "Top snippets (local usage)",
-                            "常用片段（本地统计）",
+                            "常用片段(本地统计)",
                         ))
                         .size(theme.font_size_small())
                         .color(theme.text_tertiary()),
@@ -5973,7 +6065,7 @@ impl MistTermApp {
         self.insert_fragment_at_tab_index(ctx, idx, Some(id), expanded);
     }
 
-    /// 底栏左侧：连接 / 侧栏会话 / 日志等状态信息成组排列（不拉满整行）。
+    /// 底栏左侧：连接 / 侧栏会话 / 日志等状态信息成组排列(不拉满整行)。
     fn status_bar_info_cluster(&mut self, ui: &mut egui::Ui, theme: &crate::ui::theme::Theme) {
         let bar_ctx = ui.ctx().clone();
         ui.spacing_mut().item_spacing = egui::vec2(theme.spacing_sm(), 0.0);
@@ -6046,7 +6138,7 @@ impl MistTermApp {
                     .on_hover_text(crate::i18n::tr(
                         &bar_ctx,
                         "Browse local recording of this session's terminal output",
-                        "查看本会话的终端输出录制（本地日志文件）",
+                        "查看本会话的终端输出录制(本地日志文件)",
                     ));
                 if chip.clicked() {
                     if let Some(idx) = self.active_tab {
@@ -6200,7 +6292,7 @@ impl MistTermApp {
         }
     }
 
-    /// 当前标签 SSH 连接状态（主机 + 状态字色），不占用终端 scrollback。
+    /// 当前标签 SSH 连接状态(主机 + 状态字色)，不占用终端 scrollback。
     fn status_connection_chip(
         ui: &mut egui::Ui,
         status: &crate::ui::terminal::ConnectionBarStatus,
@@ -6230,7 +6322,7 @@ impl MistTermApp {
         });
     }
 
-    /// 左侧 Activity Rail（全平台统一导航）。隐藏时改画左缘窄恢复条。
+    /// 左侧 Activity Rail(全平台统一导航)。隐藏时改画左缘窄恢复条。
     pub(crate) fn show_activity_rail(
         &mut self,
         ctx: &egui::Context,
@@ -6360,7 +6452,7 @@ impl MistTermApp {
             });
     }
 
-    /// Rail 完全隐藏时的左缘窄条（跨平台可视恢复入口；与菜单 / ⌘·Ctrl+B 并存）。
+    /// Rail 完全隐藏时的左缘窄条(跨平台可视恢复入口；与菜单 / ⌘·Ctrl+B 并存)。
     pub(crate) fn show_activity_rail_reveal_strip(
         &mut self,
         ctx: &egui::Context,
@@ -6387,7 +6479,7 @@ impl MistTermApp {
             });
     }
 
-    /// 遗留底栏（已由 Activity Rail + Toast 替代；保留实现供对照，默认不调用）。
+    /// 遗留底栏(已由 Activity Rail + Toast 替代；保留实现供对照，默认不调用)。
     #[allow(dead_code)]
     fn show_bottom_chrome(&mut self, ctx: &egui::Context) {
         let theme = self.theme_manager.current_theme().clone();
@@ -6781,7 +6873,7 @@ impl MistTermApp {
             crate::i18n::tr(
                 ctx,
                 "Credential prefilled into new session — review before connecting.",
-                "已从凭证填入新建会话（请检查后连接）",
+                "已从凭证填入新建会话(请检查后连接)",
             )
             .to_string(),
         );
@@ -6881,6 +6973,8 @@ impl eframe::App for MistTermApp {
         crate::ui::icons::UiIcons::reload_if_ppp_changed(ctx);
         self.apply_current_theme(ctx);
         self.apply_responsive_layout(ctx);
+        // 须在 Central 画终端之前：把 IME 从终端框让给 AI/表单(全角标点依赖此路径)。
+        self.release_terminal_keyboard_if_ui_typing(ctx);
         self.poll_market_catalog_refresh(ctx);
         self.poll_market_catalog_debounce();
 
@@ -6898,7 +6992,7 @@ impl eframe::App for MistTermApp {
             }
         }
 
-        // ⌘⇧J / Ctrl+⇧J：快速片段选择器（FUNCTIONAL_SPEC §7：⌘J 为连接搜索）
+        // ⌘⇧J / Ctrl+⇧J：快速片段选择器(FUNCTIONAL_SPEC §7：⌘J 为连接搜索)
         if self.app_global_shortcuts_enabled()
             && ctx.input(|i| {
                 self.app_shortcut_overrides_terminal(i)
@@ -7135,7 +7229,7 @@ impl eframe::App for MistTermApp {
             ctx.request_repaint_after(Duration::from_millis(120));
         }
 
-        // SCP 直传结果（`TerminalView::start_upload` 后台线程）
+        // SCP 直传结果(`TerminalView::start_upload` 后台线程)
         let mut upload_toast: Option<(bool, String)> = None;
         for tab in &mut self.tabs {
             for pane in tab.panes.iter_mut() {
@@ -7173,7 +7267,7 @@ impl eframe::App for MistTermApp {
             }
         }
 
-        // 检查是否有终端等待 rz 上传文件（ZMODEM：`start_rz_upload`，非 SCP `start_upload`）
+        // 检查是否有终端等待 rz 上传文件(ZMODEM：`start_rz_upload`，非 SCP `start_upload`)
         if let Some(terminal) = self.current_terminal() {
             if terminal.pending_rz_upload {
                 let picked = if crate::ui::sftp_panel::SftpPanel::gui_automation_enabled() {
@@ -7183,7 +7277,7 @@ impl eframe::App for MistTermApp {
                         .set_title(crate::i18n::tr(
                             ctx,
                             "Choose file for remote upload (rz)",
-                            "选择要上传到远端（rz）的文件",
+                            "选择要上传到远端(rz)的文件",
                         ))
                         .pick_file()
                 };
@@ -7240,8 +7334,8 @@ impl eframe::App for MistTermApp {
             }
         }
 
-        // GUI E2E（MISTTERM_GUI_AUTOMATION=1）：专用快捷键，均在 global_shortcuts_blocked 之外处理。
-        // Ctrl+Shift+Backspace 关闭新建会话弹窗（勿用 Esc 组合：Windows Ctrl+Shift+Esc 打开任务管理器）
+        // GUI E2E(MISTTERM_GUI_AUTOMATION=1)：专用快捷键，均在 global_shortcuts_blocked 之外处理。
+        // Ctrl+Shift+Backspace 关闭新建会话弹窗(勿用 Esc 组合：Windows Ctrl+Shift+Esc 打开任务管理器)
         // Ctrl+Shift+S 切换 SFTP；Ctrl+Shift+F9/F10 上传/下载 MISTTERM_E2E_FILE
         if crate::ui::sftp_panel::SftpPanel::gui_automation_enabled() {
             if self.show_new_session_dialog
@@ -7303,17 +7397,15 @@ impl eframe::App for MistTermApp {
             }) {
                 self.open_new_tab_from_selection(ctx);
             }
-            if ctx.input(|i| {
+            if ctx.input_mut(|i| {
                 self.app_shortcut_overrides_terminal(i)
-                    && Self::input_primary_mod(i)
-                    && i.key_pressed(egui::Key::J)
+                    && crate::ui::keyboard_shortcuts::consume_primary_key(i, egui::Key::J)
             }) {
                 self.focus_sidebar_connection_search(ctx);
             }
-            if ctx.input(|i| {
+            if ctx.input_mut(|i| {
                 self.app_shortcut_overrides_terminal(i)
-                    && Self::input_primary_mod(i)
-                    && i.key_pressed(egui::Key::K)
+                    && crate::ui::keyboard_shortcuts::consume_primary_key(i, egui::Key::K)
             }) {
                 self.focus_fragment_panel_search(ctx);
             }
@@ -7327,19 +7419,13 @@ impl eframe::App for MistTermApp {
             }) {
                 self.toggle_activity_rail();
             }
-            if ctx.input(|i| {
-                self.app_shortcut_overrides_terminal(i)
-                    && Self::input_primary_mod(i)
-                    && i.modifiers.shift
-                    && i.key_pressed(egui::Key::A)
+            if ctx.input_mut(|i| {
+                crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::A)
             }) {
                 self.toggle_ai_panel(ctx);
             }
-            if ctx.input(|i| {
-                self.app_shortcut_overrides_terminal(i)
-                    && Self::input_primary_mod(i)
-                    && i.modifiers.shift
-                    && i.key_pressed(egui::Key::L)
+            if ctx.input_mut(|i| {
+                crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::L)
             }) {
                 self.send_terminal_selection_to_ai(ctx);
             }
@@ -7361,21 +7447,15 @@ impl eframe::App for MistTermApp {
                 }
             }
             // 分屏：⌘⇧D / Ctrl+Shift+D 左右，⌘⇧U / Ctrl+Shift+U 上下
-            if ctx.input(|i| {
-                self.app_shortcut_overrides_terminal(i)
-                    && Self::input_primary_mod(i)
-                    && i.modifiers.shift
-                    && i.key_pressed(egui::Key::D)
+            if ctx.input_mut(|i| {
+                crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::D)
             }) {
                 if let Some(idx) = self.active_tab {
                     self.split_tab_at(ctx, idx, crate::ui::tab_pane::TabLayout::SplitHorizontal);
                 }
             }
-            if ctx.input(|i| {
-                self.app_shortcut_overrides_terminal(i)
-                    && Self::input_primary_mod(i)
-                    && i.modifiers.shift
-                    && i.key_pressed(egui::Key::U)
+            if ctx.input_mut(|i| {
+                crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::U)
             }) {
                 if let Some(idx) = self.active_tab {
                     self.split_tab_at(ctx, idx, crate::ui::tab_pane::TabLayout::SplitVertical);
@@ -7395,7 +7475,7 @@ impl eframe::App for MistTermApp {
                             "Select a connection on the left first ({accel} edits the profile)."
                         ),
                         crate::i18n::UiLanguage::Zh => {
-                            format!("请先在左侧选择一个连接（{} 编辑会话配置）", accel,)
+                            format!("请先在左侧选择一个连接({} 编辑会话配置)", accel,)
                         }
                     });
                 }
@@ -7439,9 +7519,14 @@ impl eframe::App for MistTermApp {
                     });
                 }
             }
-            // egui 0.23 无 Key::Comma；⌘/Ctrl+, 常表现为 Text(",") + 主修饰键
+            // egui 0.23 无 Key::Comma；⌘/Ctrl+, 常表现为 Text(",") + 主修饰键。
+            // 仅匹配半角 ","；全角 "，" 是用户输入，绝不当快捷键、也绝不吞掉。
+            // 勿在 AI/表单 TextEdit 聚焦时吞掉裸 ","。
             let prefs_shortcut = ctx.input_mut(|i| {
                 if !self.app_shortcut_overrides_terminal(i) || !Self::input_primary_mod(i) {
+                    return false;
+                }
+                if ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
                     return false;
                 }
                 let mut hit = false;
@@ -7523,7 +7608,7 @@ impl eframe::App for MistTermApp {
 }
 
 impl MistTermApp {
-    /// 执行命令片段（⌘J 快速选择）：会话占位符展开；片段库变量与 `<自定义>` 占位符弹窗填写。
+    /// 执行命令片段(⌘J 快速选择)：会话占位符展开；片段库变量与 `<自定义>` 占位符弹窗填写。
     fn execute_fragment(&mut self, ctx: &egui::Context, fragment: &FragmentStats) {
         if self.selected_session_id.is_none() {
             self.notify_auto(
@@ -7715,14 +7800,14 @@ impl MistTermApp {
     }
 }
 
-/// 主窗口布局 shell（`docs/product/LAYOUT.md`）
+/// 主窗口布局 shell(`docs/product/LAYOUT.md`)
 #[path = "workspace.rs"]
 mod workspace;
 
 #[path = "preferences_dialog.rs"]
 mod preferences_dialog;
 
-/// 工作区确认类模态窗（大文件上传 / 删会话 / 命令审计 / 关标签）
+/// 工作区确认类模态窗(大文件上传 / 删会话 / 命令审计 / 关标签)
 #[path = "app_workspace_confirm_modals.rs"]
 mod workspace_confirm_modals;
 
@@ -7730,11 +7815,11 @@ mod workspace_confirm_modals;
 #[path = "app_new_session_modal.rs"]
 mod new_session_modal;
 
-/// 应用菜单（终端 / 编辑 / 视图 / 工具 / 帮助）— 子模块可访问 `MistTermApp` 私有字段
+/// 应用菜单(终端 / 编辑 / 视图 / 工具 / 帮助)— 子模块可访问 `MistTermApp` 私有字段
 #[path = "app_menu.rs"]
 mod menu;
 
-/// 右 dock Foreground pass（gutter → 面板 → resize grip）
+/// 右 dock Foreground pass(gutter → 面板 → resize grip)
 #[path = "app_workspace_foreground.rs"]
 mod workspace_foreground;
 
@@ -7754,7 +7839,7 @@ fn terminal_command_status_message(ctx: &egui::Context, cmd: &str) -> String {
         }
         UiLanguage::En => format!("Sent to terminal: {preview}"),
         UiLanguage::Zh if lines.len() > 1 => {
-            format!("已发送到终端（{} 行）：{preview}", lines.len())
+            format!("已发送到终端({} 行)：{preview}", lines.len())
         }
         UiLanguage::Zh => format!("已发送到终端：{preview}"),
     }

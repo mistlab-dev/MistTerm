@@ -6,7 +6,7 @@ use eframe::egui::{self, Color32, RichText, Sense};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// 本机目录项（`std::fs::read_dir`）
+/// 本机目录项(`std::fs::read_dir`)
 #[derive(Debug, Clone)]
 pub(super) struct LocalEntry {
     pub(super) name: String,
@@ -31,7 +31,7 @@ pub(super) fn format_file_mtime(dt: DateTime<Utc>) -> String {
     dt.format("%Y-%m-%d %H:%M").to_string()
 }
 
-/// SFTP 文件列表行类型（用于文件名/图标前景色）
+/// SFTP 文件列表行类型(用于文件名/图标前景色)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SftpFileKind {
     Dir,
@@ -241,7 +241,7 @@ fn format_file_size(size: u64) -> String {
     }
 }
 
-/// 固定列宽表格布局（表头与各行共用，保证列对齐）
+/// 固定列宽表格布局(表头与各行共用，保证列对齐)
 #[derive(Clone, Copy)]
 pub(super) struct FileTableCols {
     pub(super) total: f32,
@@ -292,7 +292,7 @@ impl FileTableCols {
         }
     }
 
-    /// 按列表视口当前可用宽度计算列宽（预留竖向滚动条占位，避免「修改时间」等右列被切）。
+    /// 按列表视口当前可用宽度计算列宽(预留竖向滚动条占位，避免「修改时间」等右列被切)。
     pub(super) fn for_list_ui(ui: &mut egui::Ui, body_cap: f32) -> Self {
         layout_util::set_width_to_available(ui);
         Self::from_panel_width(layout_util::dock_scroll_viewport_width(ui, body_cap))

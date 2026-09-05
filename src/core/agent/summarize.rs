@@ -1,8 +1,8 @@
-//! 将批量执行结果整理成对话可读摘要（纯文本，供复制；UI 另有结构化卡片）。
+//! 将批量执行结果整理成对话可读摘要(纯文本，供复制；UI 另有结构化卡片)。
 
 use crate::core::batch_exec::BatchExecRow;
 
-/// 短摘要（复制/持久化）；不含 HTML，不做 markdown 表。
+/// 短摘要(复制/持久化)；不含 HTML，不做 markdown 表。
 pub fn summarize_batch_rows(command: &str, rows: &[BatchExecRow]) -> String {
     let ok_n = rows.iter().filter(|r| r.ok).count();
     let fail_n = rows.len().saturating_sub(ok_n);
@@ -19,13 +19,7 @@ pub fn summarize_batch_rows(command: &str, rows: &[BatchExecRow]) -> String {
     for r in ordered {
         let mark = if r.ok { "OK" } else { "FAIL" };
         let detail = if r.ok {
-            first_useful_line(&r.output).unwrap_or_else(|| {
-                if r.output.trim().is_empty() {
-                    "—".into()
-                } else {
-                    truncate_chars(&r.output.replace('\n', " "), 72)
-                }
-            })
+            host_result_summary(command, &r.output)
         } else {
             r.error
                 .clone()
@@ -52,6 +46,24 @@ pub fn first_useful_line(output: &str) -> Option<String> {
         return Some(truncate_chars(t, 96));
     }
     None
+}
+
+/// 结果卡短摘要：进程计数类命令把纯数字标成「进程数 N」。
+pub fn host_result_summary(command: &str, output: &str) -> String {
+    let line = first_useful_line(output).unwrap_or_else(|| {
+        if output.trim().is_empty() {
+            "—".into()
+        } else {
+            truncate_chars(&output.replace('\n', " "), 96)
+        }
+    });
+    let cmd = command.to_lowercase();
+    let looks_count = cmd.contains("wc -l") || cmd.contains("| wc");
+    if looks_count && line.chars().all(|c| c.is_ascii_digit()) {
+        format!("进程数 {line}")
+    } else {
+        line
+    }
 }
 
 pub fn truncate_chars(s: &str, max: usize) -> String {
@@ -82,6 +94,14 @@ mod tests {
         assert!(s.contains("web-1"));
         assert!(s.contains("[OK]"));
         assert!(!s.contains("<details>"));
+    }
+
+    #[test]
+    fn process_count_summary_labels_number() {
+        assert_eq!(
+            host_result_summary("ps -eo pid= | wc -l", "  187\n"),
+            "进程数 187"
+        );
     }
 
     #[test]

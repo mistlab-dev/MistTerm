@@ -36,12 +36,30 @@ impl TerminalFontPreset {
 
 static CJK_FONT_LOADED: AtomicBool = AtomicBool::new(false);
 
+/// 嵌入/系统 CJK 字体在 egui 中的注册名（可作 `FontFamily::Name`）。
+pub const CJK_UI_FONT_NAME: &str = "mistterm-cjk";
+
 /// 最近一次 `configure_egui_fonts` 是否成功注册 CJK 字体。
 pub fn cjk_font_loaded() -> bool {
     CJK_FONT_LOADED.load(Ordering::Relaxed)
 }
 
-/// 为 egui 注册终端等宽字体与 CJK 回退（拉丁 UI 仍用 egui 自带字体）。成功加载 CJK 返回 `true`。
+/// 界面统一正文字体（中英同一套；CJK 未加载时回退 egui 默认比例字体）。
+pub fn ui_font_id(size: f32) -> egui::FontId {
+    if cjk_font_loaded() {
+        egui::FontId::new(size, egui::FontFamily::Name(CJK_UI_FONT_NAME.into()))
+    } else {
+        egui::FontId::proportional(size)
+    }
+}
+
+/// 说明链接等与 [`ui_font_id`] 相同（保留别名，避免旧调用点遗漏）。
+#[inline]
+pub fn ui_caption_font_id(size: f32) -> egui::FontId {
+    ui_font_id(size)
+}
+
+/// 为 egui 注册字体：界面比例字体统一为 CJK（含拉丁）；终端等宽仍用预设 + CJK 回退。
 pub fn configure_egui_fonts(ctx: &egui::Context, terminal_preset: TerminalFontPreset) -> bool {
     let ppp = ctx.pixels_per_point();
     log::info!("egui pixels_per_point = {ppp:.2} (HiDPI reference)");
@@ -64,19 +82,28 @@ pub fn configure_egui_fonts(ctx: &egui::Context, terminal_preset: TerminalFontPr
     }
 
     let loaded = if let Some(cjk_font) = load_cjk_font() {
-        let cjk_name = "mistterm-cjk".to_string();
+        let cjk_name = CJK_UI_FONT_NAME.to_string();
         fonts.font_data.insert(cjk_name.clone(), cjk_font);
 
-        fonts
-            .families
-            .entry(egui::FontFamily::Proportional)
-            .or_default()
-            .push(cjk_name.clone());
+        // 界面：CJK 置顶为唯一首选，中英混排同一字形/基线；egui 默认拉丁仅作缺字兜底。
+        {
+            let entry = fonts
+                .families
+                .entry(egui::FontFamily::Proportional)
+                .or_default();
+            entry.retain(|n| n != &cjk_name);
+            entry.insert(0, cjk_name.clone());
+        }
+        // 终端等宽：拉丁/符号走 mono 预设，中文回退 CJK。
         fonts
             .families
             .entry(egui::FontFamily::Monospace)
             .or_default()
-            .push(cjk_name);
+            .push(cjk_name.clone());
+        fonts.families.insert(
+            egui::FontFamily::Name(CJK_UI_FONT_NAME.into()),
+            vec![cjk_name],
+        );
         true
     } else {
         false

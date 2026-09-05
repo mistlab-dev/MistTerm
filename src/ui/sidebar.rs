@@ -22,7 +22,7 @@ pub struct SidebarOutput {
     pub connect_team_server_key: Option<String>,
 }
 
-/// 左栏整列（导入条 + 圆角面板）的附加动作
+/// 左栏整列(导入条 + 圆角面板)的附加动作
 pub struct SidebarColumnActions {
     pub open_ssh_import: bool,
     pub dismiss_ssh_banner: bool,
@@ -32,7 +32,7 @@ pub struct SidebarColumnActions {
 pub struct Sidebar;
 
 impl Sidebar {
-    /// 左栏整列：SSH 导入条（可选）→ 圆角连接面板（[`Sidebar::show`]）
+    /// 左栏整列：SSH 导入条(可选)→ 圆角连接面板([`Sidebar::show`])
     pub fn show_column(
         ui: &mut egui::Ui,
         layout_h: f32,
@@ -110,7 +110,7 @@ impl Sidebar {
         search_field_id: egui::Id,
         theme: &Theme,
     ) -> SidebarOutput {
-        // 占满宿主分配的侧栏列宽（勿再 cap 200px，否则列宽 > 内容宽会出现一条空白缝）
+        // 占满宿主分配的侧栏列宽(勿再 cap 200px，否则列宽 > 内容宽会出现一条空白缝)
         let width = layout_util::finite_avail_minus(
             ui,
             0.0,
@@ -280,7 +280,7 @@ impl Sidebar {
                     ui.add_space(theme.spacing_panel_gap());
                 }
 
-                // 会话列表（占满标题/搜索/筛选下方的剩余高度）
+                // 会话列表(占满标题/搜索/筛选下方的剩余高度)
                 let list_h = ui.available_height().max(80.0);
                 egui::ScrollArea::vertical()
                     .id_source("mistterm_sidebar_sessions")

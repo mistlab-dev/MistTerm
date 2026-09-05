@@ -1,19 +1,19 @@
 use super::*;
 
-/// 顶栏菜单弹出层（§2：圆角、内边距、悬停色）
+/// 顶栏菜单弹出层(§2：圆角、内边距、悬停色)
 pub fn apply_menu_popup_style(ui: &mut Ui, theme: &Theme) {
     apply_popup_widget_visuals(&mut ui.style_mut().visuals, theme);
     ui.style_mut().spacing.button_padding = egui::vec2(10.0, 5.0);
     ui.style_mut().spacing.item_spacing = egui::vec2(4.0, 2.0);
 }
 
-/// 右键菜单 / 终端 Tab 菜单等（与顶栏菜单同色）
+/// 右键菜单 / 终端 Tab 菜单等(与顶栏菜单同色)
 #[inline]
 pub fn apply_context_menu_style(ui: &mut Ui, theme: &Theme) {
     apply_menu_popup_style(ui, theme);
 }
 
-/// 主题子菜单左侧勾选列（固定宽，与 [`menu_theme_item`] 成对使用）。
+/// 主题子菜单左侧勾选列(固定宽，与 [`menu_theme_item`] 成对使用)。
 pub fn menu_theme_check_slot(ui: &mut Ui, theme: &Theme, selected: bool) {
     let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
     if selected {
@@ -27,12 +27,12 @@ pub fn menu_theme_check_slot(ui: &mut Ui, theme: &Theme, selected: bool) {
     }
 }
 
-/// 视图菜单等开关项（无左侧 18px 勾选列，避免未选中时文字前大块空白）
+/// 视图菜单等开关项(无左侧 18px 勾选列，避免未选中时文字前大块空白)
 pub fn menu_toggle_item(ui: &mut Ui, theme: &Theme, selected: bool, name: &str) -> egui::Response {
     menu_selectable_row(ui, theme, selected, name, false)
 }
 
-/// 主题子菜单一行：勾选列 + 可选标签（选中项文字用 accent）。
+/// 主题子菜单一行：勾选列 + 可选标签(选中项文字用 accent)。
 pub fn menu_theme_item(ui: &mut Ui, theme: &Theme, selected: bool, name: &str) -> egui::Response {
     menu_selectable_row(ui, theme, selected, name, true)
 }
@@ -98,7 +98,7 @@ fn menu_selectable_row(
     response
 }
 
-/// 顶栏 / 菜单项文字（可选快捷键后缀；仅用于无布局需求的简单标签）
+/// 顶栏 / 菜单项文字(可选快捷键后缀；仅用于无布局需求的简单标签)
 pub fn menu_item_label(theme: &Theme, title: &str, shortcut: Option<&str>) -> RichText {
     let text = if let Some(sc) = shortcut {
         format!("{}  {}", title, sc)
@@ -115,7 +115,7 @@ fn layout_menu_line(ui: &Ui, text: &str, px: f32, color: Color32) -> std::sync::
     ui.fonts(|fonts| fonts.layout_no_wrap(text.to_owned(), font_id, color))
 }
 
-/// 测量下拉菜单行内容宽（标题 + 可选快捷键）
+/// 测量下拉菜单行内容宽(标题 + 可选快捷键)
 pub fn measure_popup_menu_row_width(
     ui: &Ui,
     theme: &Theme,
@@ -143,7 +143,7 @@ pub fn prime_menu_popup_width(ui: &mut Ui, min_content_width: f32) {
     }
 }
 
-/// 下拉菜单行：标题居左、快捷键居右（整行可点）
+/// 下拉菜单行：标题居左、快捷键居右(整行可点)
 pub fn popup_menu_button_shortcut_enabled(
     ui: &mut Ui,
     theme: &Theme,
@@ -209,7 +209,7 @@ pub fn popup_menu_button_shortcut_enabled(
     response
 }
 
-/// 下拉菜单行（默认可点）
+/// 下拉菜单行(默认可点)
 pub fn popup_menu_button_shortcut(
     ui: &mut Ui,
     theme: &Theme,
@@ -219,7 +219,7 @@ pub fn popup_menu_button_shortcut(
     popup_menu_button_shortcut_enabled(ui, theme, title, shortcut, true)
 }
 
-/// 菜单项 + 当前平台主修饰键快捷键（`⌘ + n` / `Ctrl + n`）。
+/// 菜单项 + 当前平台主修饰键快捷键(`⌘ + n` / `Ctrl + n`)。
 pub fn popup_menu_button_accel(ui: &mut Ui, theme: &Theme, title: &str, key: &str) -> Response {
     let shortcut = crate::platform::accel(key);
     popup_menu_button_shortcut(ui, theme, title, Some(&shortcut))
@@ -236,7 +236,7 @@ pub fn popup_menu_button_accel_shift(
     popup_menu_button_shortcut(ui, theme, title, Some(&shortcut))
 }
 
-/// 菜单项 + 当前平台主修饰键快捷键（`⌘ + n` / `Ctrl + n`）— 仅文案，供旧调用。
+/// 菜单项 + 当前平台主修饰键快捷键(`⌘ + n` / `Ctrl + n`)— 仅文案，供旧调用。
 pub fn menu_item_label_accel(theme: &Theme, title: &str, key: &str) -> RichText {
     let shortcut = crate::platform::accel(key);
     menu_item_label(theme, title, Some(&shortcut))
@@ -248,7 +248,7 @@ pub fn menu_item_label_accel_shift(theme: &Theme, title: &str, key: &str) -> Ric
     menu_item_label(theme, title, Some(&shortcut))
 }
 
-/// 弹出菜单 / 右键 / Tab 菜单项（与顶栏菜单同字号，非面板灰钮）
+/// 弹出菜单 / 右键 / Tab 菜单项(与顶栏菜单同字号，非面板灰钮)
 pub fn popup_menu_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
     popup_menu_button_shortcut(ui, theme, label, None)
 }

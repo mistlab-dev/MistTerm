@@ -14,7 +14,7 @@ fn atlas_cell_size(ppp: f32) -> u32 {
         .clamp(BASE_CELL as f32, MAX_CELL as f32) as u32
 }
 
-/// 图集格子 ID（行列 = index / COLS, index % COLS）
+/// 图集格子 ID(行列 = index / COLS, index % COLS)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum IconId {
@@ -220,7 +220,7 @@ impl UiIcons {
     }
 }
 
-/// 在矩形内居中绘制图标（`logical_px` 为 egui 逻辑点；图集格已在加载时按 `pixels_per_point` 生成）
+/// 在矩形内居中绘制图标(`logical_px` 为 egui 逻辑点；图集格已在加载时按 `pixels_per_point` 生成)
 pub fn paint_icon(ui: &Ui, rect: Rect, id: IconId, tint: Color32, logical_px: f32) {
     let icons = UiIcons::get(ui.ctx());
     let side = logical_px.min(rect.width()).min(rect.height());
@@ -228,7 +228,7 @@ pub fn paint_icon(ui: &Ui, rect: Rect, id: IconId, tint: Color32, logical_px: f3
     icons.paint(ui, r, id, tint);
 }
 
-/// 方形可点击图标区（`hit` / `icon_px` 为 egui 逻辑点）
+/// 方形可点击图标区(`hit` / `icon_px` 为 egui 逻辑点)
 pub fn icon_hit_button(
     ui: &mut Ui,
     id: IconId,
@@ -245,7 +245,7 @@ pub fn icon_hit_button(
     )
 }
 
-/// 同 [`icon_hit_button`]，但 `revealed == false` 时仅保留点击区不绘制（避免显隐切换导致 hover 抖动）。
+/// 同 [`icon_hit_button`]，但 `revealed == false` 时仅保留点击区不绘制(避免显隐切换导致 hover 抖动)。
 pub fn icon_hit_button_revealed(
     ui: &mut Ui,
     id: IconId,
@@ -281,7 +281,7 @@ pub fn icon_hit_button_revealed(
     response
 }
 
-/// 图标 + 文字（水平）
+/// 图标 + 文字(水平)
 pub fn icon_label_row(
     ui: &mut Ui,
     id: IconId,
@@ -351,7 +351,7 @@ fn all_icon_ids() -> [IconId; IconId::COUNT] {
     ]
 }
 
-// --- 图集绘制（0..1 单元格内坐标）---
+// --- 图集绘制(0..1 单元格内坐标)---
 
 type Seg = (f32, f32, f32, f32);
 
@@ -511,7 +511,7 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
             p.segs(&[(0.28, 0.5, 0.72, 0.5)], w);
         }
         IconId::Package => {
-            // 包装盒（压缩包 / 包类条目）
+            // 包装盒(压缩包 / 包类条目)
             let w = 2.0_f32;
             p.rect(0.22, 0.32, 0.78, 0.80, w);
             p.segs(
@@ -547,7 +547,7 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
             p.fill_circle(0.5, 0.5, 0.1);
         }
         IconId::Network => {
-            // 三节点拓扑（避免旧「弓形」缩成 ^）
+            // 三节点拓扑(避免旧「弓形」缩成 ^)
             let w = 2.0_f32;
             p.fill_circle(0.50, 0.22, 0.09);
             p.fill_circle(0.20, 0.74, 0.09);
@@ -578,7 +578,7 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
             w,
         ),
         IconId::Server => {
-            // 机架：外框 + 三层插槽（与 Fragment 括号区分）
+            // 机架：外框 + 三层插槽(与 Fragment 括号区分)
             let w = 2.2_f32;
             p.rect(0.22, 0.16, 0.78, 0.84, w);
             for y in [0.34, 0.50, 0.66] {
@@ -596,7 +596,7 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
             p.segs(&[(0.3, 0.22, 0.7, 0.22), (0.3, 0.78, 0.7, 0.78)], w);
         }
         IconId::Api => {
-            // AI：聊天气泡 + 三点（比折线 N 更易认）
+            // AI：聊天气泡 + 三点(比折线 N 更易认)
             let w = 2.2_f32;
             p.rect(0.16, 0.16, 0.84, 0.58, w);
             p.segs(&[(0.32, 0.58, 0.26, 0.80), (0.26, 0.80, 0.48, 0.58)], w);
@@ -656,7 +656,7 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
     }
 }
 
-/// Mist 字母 M 笔画（0..1 归一化坐标）
+/// Mist 字母 M 笔画(0..1 归一化坐标)
 const M_LETTER_SEGS: &[Seg] = &[
     (0.24, 0.78, 0.24, 0.22),
     (0.24, 0.22, 0.5, 0.58),
@@ -670,7 +670,7 @@ fn draw_m_letter_cell(p: &mut CellPainter<'_>, stroke_w: f32) {
 
 const APP_ICON_FONT: &[u8] = include_bytes!("../../assets/fonts/NotoSansSC-Regular.otf");
 
-/// 霓虹青（参考图地平面 / 外发光）
+/// 霓虹青(参考图地平面 / 外发光)
 const APP_ICON_CYAN: [u8; 3] = [55, 175, 255];
 /// 字标核心高光白
 const APP_ICON_TEXT_CORE: [u8; 4] = [238, 246, 255, 255];
@@ -686,7 +686,7 @@ fn app_icon_outer_pad_frac() -> f32 {
     }
 }
 
-/// 窗口 / Dock / 任务栏图标（霓虹 Mist 字标 + 圆角底板）。
+/// 窗口 / Dock / 任务栏图标(霓虹 Mist 字标 + 圆角底板)。
 pub fn app_window_icon_data() -> eframe::IconData {
     const SIZE: u32 = 256;
     let pad = (SIZE as f32 * app_icon_outer_pad_frac()).round() as u32;
@@ -700,7 +700,7 @@ pub fn app_window_icon_data() -> eframe::IconData {
     }
 }
 
-/// 导出 PNG 预览（`cargo run --bin export_app_icon`）。
+/// 导出 PNG 预览(`cargo run --bin export_app_icon`)。
 pub fn export_app_icon_png(path: &std::path::Path) -> Result<(), image::ImageError> {
     let icon = app_window_icon_data();
     let img = image::RgbaImage::from_raw(icon.width, icon.height, icon.rgba)
@@ -708,7 +708,7 @@ pub fn export_app_icon_png(path: &std::path::Path) -> Result<(), image::ImageErr
     img.save(path)
 }
 
-/// 在 `[x0,x1)×[y0,y1)` 内绘制 Mist 品牌图标（参考霓虹字标 + 底部地光）。
+/// 在 `[x0,x1)×[y0,y1)` 内绘制 Mist 品牌图标(参考霓虹字标 + 底部地光)。
 fn paint_mist_app_icon(img: &mut RgbaImage, x0: u32, x1: u32, y1: u32) {
     let y0 = x0;
     let w = (x1 - x0) as f32;
@@ -736,7 +736,7 @@ fn paint_mist_app_icon(img: &mut RgbaImage, x0: u32, x1: u32, y1: u32) {
     apply_rounded_alpha_mask(img, ox, oy, ox + w, oy + h, radius);
 }
 
-/// 圆角矩形 SDF（负值 = 内侧）
+/// 圆角矩形 SDF(负值 = 内侧)
 fn sdf_rounded_rect(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> f32 {
     let cx = (x0 + x1) * 0.5;
     let cy = (y0 + y1) * 0.5;
@@ -754,7 +754,7 @@ fn rounded_rect_coverage(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32, r
     (0.5 - d).clamp(0.0, 1.0)
 }
 
-/// 将图标内容裁切为圆角方形（外侧透明）
+/// 将图标内容裁切为圆角方形(外侧透明)
 fn apply_rounded_alpha_mask(img: &mut RgbaImage, x0: f32, y0: f32, x1: f32, y1: f32, radius: f32) {
     let w = img.width();
     let h = img.height();
@@ -772,7 +772,7 @@ fn apply_rounded_alpha_mask(img: &mut RgbaImage, x0: f32, y0: f32, x1: f32, y1: 
     }
 }
 
-/// 底部径向地光（参考图蓝色光池）
+/// 底部径向地光(参考图蓝色光池)
 fn paint_bottom_floor_glow(img: &mut RgbaImage, ox: f32, oy: f32, w: f32, h: f32) {
     let c = APP_ICON_CYAN;
     draw_soft_ellipse(img, ox + w * 0.5, oy + h * 0.92, w * 0.62, h * 0.28, [c[0], c[1], c[2], 48]);
@@ -822,7 +822,7 @@ fn draw_neon_wordmark(img: &mut RgbaImage, text: &str, cx: f32, cy: f32, target_
     let _ = draw_wordmark(img, text, cx, cy, target_width, APP_ICON_TEXT_CORE, WordmarkDrawOpts::default());
 }
 
-/// 镜面地平面亮线（在字标下方，作为反射分界）
+/// 镜面地平面亮线(在字标下方，作为反射分界)
 fn paint_mirror_surface_line(img: &mut RgbaImage, x0: f32, x1: f32, y: f32) {
     let core = [140, 230, 255, 155];
     let glow = [APP_ICON_CYAN[0], APP_ICON_CYAN[1], APP_ICON_CYAN[2]];
@@ -844,7 +844,7 @@ fn paint_mirror_surface_line(img: &mut RgbaImage, x0: f32, x1: f32, y: f32) {
     }
 }
 
-/// 字标在镜面下方的倒影（随深度衰减）
+/// 字标在镜面下方的倒影(随深度衰减)
 fn draw_wordmark_reflection(
     img: &mut RgbaImage,
     text: &str,

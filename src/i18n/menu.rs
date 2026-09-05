@@ -66,7 +66,7 @@ pub fn labels(lang: UiLanguage) -> MacMenuLabels {
         new_tab: loc.tr("New Tab", "新建标签"),
         import_ssh: loc.tr("Import SSH Config", "导入 SSH 配置"),
         close_tab: loc.tr("Close Tab", "关闭标签"),
-        disconnect: loc.tr("Disconnect SSH (keep output)", "断开 SSH（保留输出）"),
+        disconnect: loc.tr("Disconnect SSH (keep output)", "断开 SSH(保留输出)"),
         reconnect: loc.tr("Reconnect Tab", "重连当前标签"),
         edit_menu: loc.tr("Edit", "编辑"),
         undo: loc.tr("Undo", "撤销"),

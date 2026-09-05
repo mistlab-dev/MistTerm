@@ -106,15 +106,18 @@ def paste_field(text: str) -> None:
 
 
 def clipboard_get() -> str:
-    """读取系统剪贴板文本（PowerShell，避免与 GUI 进程争用 OpenClipboard）。"""
-    proc = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=10,
-    )
+    """读取系统剪贴板文本。短超时：与 Mist OpenClipboard 争用时勿长时间阻塞。"""
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", "Get-Clipboard -Raw"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=1.5,
+        )
+    except subprocess.TimeoutExpired:
+        return ""
     if proc.returncode != 0:
         return ""
     return proc.stdout or ""
@@ -128,13 +131,16 @@ def clipboard_set(text: str) -> None:
         "$t=[System.Text.Encoding]::Unicode.GetString($b); "
         "Set-Clipboard -Value $t"
     )
-    proc = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", ps],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        timeout=10,
-    )
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=1.5,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError("Set-Clipboard timed out (clipboard lock)") from e
     if proc.returncode != 0:
         err = (proc.stderr or proc.stdout or "").strip()
         raise RuntimeError(f"Set-Clipboard failed: {err}")
@@ -478,33 +484,44 @@ def wait_session_connected(
         )
 
     if saw_conn:
-        time.sleep(1.5)
+        time.sleep(1.2)
+
+    # 勿向 MistTerm 终端键入探测命令(会污染滚动区、像用户误操作)。
+    # 已有 ESTABLISHED 时，用独立 SSH 会话确认账号可执行即可。
+    if saw_conn:
+        try:
+            code, out, err = remote_exec("echo ok")
+            if code == 0 and out.strip() == "ok":
+                return
+            last_err = err.strip() or out.strip() or f"exit {code}"
+        except Exception as e:
+            last_err = str(e)
+        # 独立会话失败不代表 MistTerm shell 未就绪：再轻量试一次终端(仅此兜底)
+        pass
 
     probe_deadline = time.time() + max(3.0, wait - netstat_budget)
-    last_err = "探测文件未出现"
-    for attempt in range(3):
+    last_err = locals().get("last_err") or "探测失败"
+    for attempt in range(2):
         probe = f"MISTTERM_CONN_{int(time.time())}_{attempt}"
         probe_file = remote_temp_path("mistterm_conn_probe.txt")
-        if ssh_is_localhost():
-            win_path = probe_file.replace("/", "\\")
-            probe_cmd = f'cmd /c "echo {probe}>{win_path}"'
-        else:
-            probe_cmd = f"echo {probe} > {probe_file}"
-
-        focus_terminal_area(hwnd)
-        send_keys("{ENTER}")
-        time.sleep(0.35)
-        send_terminal_line(probe_cmd)
-
-        while time.time() < probe_deadline:
-            try:
-                if remote_text_file_contains(probe_file, probe):
-                    return
-            except Exception as e:
-                last_err = str(e)
-            time.sleep(0.3)
-        last_err = f"第 {attempt + 1} 次探测文件未出现"
-        time.sleep(0.6)
+        try:
+            if ssh_is_localhost():
+                win_path = probe_file.replace("/", "\\")
+                # 独立 SSH 写探测文件，不碰 MistTerm PTY
+                code, _, err = remote_exec(f'cmd /c "echo {probe}>{win_path}"')
+            else:
+                code, _, err = remote_exec(f"echo {probe} > {probe_file}")
+            if code == 0 and remote_text_file_contains(probe_file, probe):
+                # MistTerm：点一下终端区域确认窗口存活即可，不发命令
+                focus_terminal_area(hwnd)
+                time.sleep(0.2)
+                return
+            last_err = err.strip() or f"probe exit {code}"
+        except Exception as e:
+            last_err = str(e)
+        time.sleep(0.5)
+        if time.time() > probe_deadline:
+            break
 
     raise RuntimeError(
         f"连接「{session_name}」超时 ({wait:.0f}s)：{last_err}。"
@@ -528,7 +545,7 @@ def verify_session_connected(
 
 
 def _click_sidebar_session(hwnd: int, pid: int, name: str) -> None:
-    """侧栏 Ctrl+J 过滤后点击会话行（单击即 select_session → 自动连接）。"""
+    """侧栏搜索并点击会话行。优先点搜索框再输入，避免键入漏进 PTY。"""
     from gui_automation_keys import dismiss_new_session_dialog
     from pywinauto import Application
 
@@ -536,10 +553,20 @@ def _click_sidebar_session(hwnd: int, pid: int, name: str) -> None:
     win = app.window(handle=hwnd)
     win.set_focus()
     dismiss_new_session_dialog(repeats=1, pause=0.2)
-    send_keys("^j")
-    time.sleep(0.4)
-    send_keys("^a")
-    send_keys(name.replace(" ", "{SPACE}"), with_spaces=True)
+
+    cl, ct, cr, cb = client_rect(hwnd)
+    s = scale_for(cl, cr)
+    # 活动栏 Server 图标：确保连接侧栏展开
+    click(cl + int(24 * s), ct + int(28 * s), pause=0.25)
+    time.sleep(0.2)
+    # 侧栏搜索框：rail(~48) + 侧栏内偏上
+    search_x = cl + int(48 * s) + int(120 * s)
+    search_y = ct + int(52 * s)
+    click(search_x, search_y, pause=0.3)
+    time.sleep(0.25)
+    for _ in range(20):
+        send_keys("{BACKSPACE}")
+    send_keys(name.replace(" ", "{SPACE}"), with_spaces=True, pause=0.02)
     time.sleep(0.55)
 
     clicked = False
@@ -558,7 +585,8 @@ def _click_sidebar_session(hwnd: int, pid: int, name: str) -> None:
             continue
 
     if not clicked:
-        send_keys("{ENTER}")
+        # 会话行大致在搜索框下方
+        click(search_x, search_y + int(90 * s), pause=0.3)
     time.sleep(0.45)
 
 

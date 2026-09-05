@@ -39,7 +39,7 @@ pub(super) fn show_wrapped_user_text(ui: &mut egui::Ui, theme: &Theme, text: &st
     ui.painter().galley(rect.min, galley);
 }
 
-/// 按文案估算用户气泡外宽（含内边距），上限约可用宽的 85%。
+/// 按文案估算用户气泡外宽(含内边距)，上限约可用宽的 85%。
 pub(super) fn estimate_user_bubble_outer_width(
     ui: &egui::Ui,
     theme: &Theme,
@@ -335,7 +335,7 @@ fn user_text_with_soft_breaks(text: &str, width: f32, font_size: f32) -> String 
     out
 }
 
-/// 子 Ui 占满**当前**可用行宽（勿把外层宽度传入 Frame/ScrollArea 内层，否则会左裁切）。
+/// 子 Ui 占满**当前**可用行宽(勿把外层宽度传入 Frame/ScrollArea 内层，否则会左裁切)。
 pub(super) fn bind_row_width(ui: &mut egui::Ui) -> f32 {
     let w = layout_util::set_width_to_available(ui);
     ui.set_width(w);
@@ -394,7 +394,7 @@ pub(super) fn show_command_card(
                     .on_hover_text(i18n::tr(
                         ctx,
                         "Send this command to the active terminal (same as pressing Enter)",
-                        "将该命令发送到活动终端并执行（等同按 Enter）",
+                        "将该命令发送到活动终端并执行(等同按 Enter)",
                     ))
                     .clicked();
                 });

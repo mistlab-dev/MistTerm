@@ -85,7 +85,7 @@ impl BatchExecDialog {
                     egui::RichText::new(crate::i18n::tr(
                         ctx,
                         "Runs one command per host over a separate SSH connection (no terminal tabs).",
-                        "每台主机单独建连并执行命令（不占用终端标签）。",
+                        "每台主机单独建连并执行命令(不占用终端标签)。",
                     ))
                     .size(theme.font_size_caption())
                     .color(theme.text_tertiary()),
