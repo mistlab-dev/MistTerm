@@ -72,10 +72,10 @@
 > 设计稿：[`CONVERSATIONAL-TERMINAL.md`](CONVERSATIONAL-TERMINAL.md)。**不纳入 v1.1.3**。  
 > 分支：`feature/v2-conversational-terminal`（设计与实现可多轮迭代，合入/发版另议）。
 
-- [ ] Phase 1：`AgentRun`（含 Clarifying）+ 只读 Skill（磁盘等）+ L1/L2 门闩（选项 B 预留变更档）
-- [ ] Phase 1末/2：设置「允许对话变更」默认关 + restart/rollout 等 mutate Skill（强制 L2）
-- [ ] Phase 2：多轮澄清 + 规则自适应多步；ProxyJump
-- [ ] Phase 3：LLM 动态规划；非白名单变更仍拒跑；不做自愈
+- [ ] Phase 1：AgentLoop + Gate + ExecutionBase（NL→提议命令→L1/L2→batch SSH→回对话）；**无 Skill 目录**
+- [ ] Phase 1末/2：多轮澄清 + 跟进；「允许对话变更」+ mutate 命令模式白名单（L2）
+- [ ] Phase 2/3：LLM 主规划；可选片段级预填（非 Skill 商店）
+- [ ] 不做自愈；不做 per-scenario / 能力目录
 
 ---
 
@@ -113,4 +113,4 @@
 - 审计：`docs/tech/COMMAND-AUDIT.md`、`docs/tech/SERVER-SIDE-AUDIT.md`
 - MistDocs 契约：`docs/tech/TEAM-DOCS.md`
 - 实现：`suggest_compliant_after_block_with_env` + `retrieve_team_knowledge` + `ToastAction::{AskAiFallback,ConfirmSaveCandidate}`
-- 对话运维（**v2.0**）：[`CONVERSATIONAL-TERMINAL.md`](CONVERSATIONAL-TERMINAL.md)
+- 对话运维（**v2.0** · AgentLoop/Gate/ExecutionBase）：[`CONVERSATIONAL-TERMINAL.md`](CONVERSATIONAL-TERMINAL.md)
