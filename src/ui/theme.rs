@@ -15,11 +15,11 @@ pub use theme_manager::{is_deprecated_dark_theme_storage_name, ThemeManager};
 /// 主题颜色配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Theme {
-    /// 主题名称（用于显示和配置保存）
+    /// 主题名称(用于显示和配置保存)
     pub name: String,
     /// 窗口外背景色
     pub bg_body: Color32Serializable,
-    /// 面板底色（侧边栏等）
+    /// 面板底色(侧边栏等)
     pub bg_window: Color32Serializable,
     /// 终端区域/激活 Tab 背景色
     pub bg_terminal: Color32Serializable,
@@ -35,21 +35,21 @@ pub struct Theme {
     pub fg_medium: Color32Serializable,
     /// 暗淡文字颜色
     pub fg_low: Color32Serializable,
-    /// 主色调（按钮、状态栏等）
+    /// 主色调(按钮、状态栏等)
     pub accent: Color32Serializable,
-    /// 主色调暗（悬停状态等）
+    /// 主色调暗(悬停状态等)
     pub accent_dim: Color32Serializable,
     /// 边框颜色
     pub border: Color32Serializable,
     /// 边框分隔线色
     pub border_divider: Color32Serializable,
-    /// 成功色（在线状态等）
+    /// 成功色(在线状态等)
     pub green: Color32Serializable,
-    /// 绿色暗色（在线状态 dim）
+    /// 绿色暗色(在线状态 dim)
     pub green_dim: Color32Serializable,
-    /// 错误色（离线状态等）
+    /// 错误色(离线状态等)
     pub red: Color32Serializable,
-    /// 警告/琥珀色（中等负载、中间档位进度等）
+    /// 警告/琥珀色(中等负载、中间档位进度等)
     #[serde(default = "default_theme_amber")]
     pub amber: Color32Serializable,
 }
@@ -104,7 +104,7 @@ impl Theme {
         self.bg_tab_bar.to_color32()
     }
 
-    /// 顶栏 / 底栏 Panel 底色（与 Tab 条一致，必须不透明）
+    /// 顶栏 / 底栏 Panel 底色(与 Tab 条一致，必须不透明)
     pub fn chrome_bar_fill(&self) -> Color32 {
         self.bg_tab_bar_color()
     }
@@ -125,7 +125,7 @@ impl Theme {
             .inner_margin(egui::Margin::symmetric(self.spacing_status_bar_x(), 0.0))
     }
 
-    /// 中央工作区 Panel：须不透明，勿用 TRANSPARENT（浅色主题会露出窗口黑底）
+    /// 中央工作区 Panel：须不透明，勿用 TRANSPARENT(浅色主题会露出窗口黑底)
     pub fn frame_central_workspace(&self) -> egui::Frame {
         egui::Frame::none()
             .fill(self.bg_body_color())
@@ -166,35 +166,35 @@ impl Theme {
         }
     }
 
-    /// 浅色主题（晨曦等）：语义色须用实色档位，勿用 `fg_high_alpha`（在浅底上几乎不可见）。
+    /// 浅色主题(晨曦等)：语义色须用实色档位，勿用 `fg_high_alpha`(在浅底上几乎不可见)。
     pub fn is_light_theme(&self) -> bool {
         self.bg_body.r >= 128
     }
 
-    /// 前景为实色档位（暗夜、晨曦、海洋、森林）；自定义主题若 `fg_high.a < 250` 则走 [`fg_high_alpha`]。
+    /// 前景为实色档位(暗夜、晨曦、海洋、森林)；自定义主题若 `fg_high.a < 250` 则走 [`fg_high_alpha`]。
     pub fn uses_solid_fg_palette(&self) -> bool {
         self.fg_high.a >= 250
     }
 
-    /// 暗夜默认中性灰控件样式（实色底、无硬边框等）。
+    /// 暗夜默认中性灰控件样式(实色底、无硬边框等)。
     /// 与 OS 无关：Win / macOS / Linux 在 egui 下共用同一套绘制逻辑。
     pub fn uses_modern_palette(&self) -> bool {
         self.name == "暗夜"
     }
 
-    /// 1 物理像素线宽（HiDPI / 125% / 150% 缩放时不糊边）。
+    /// 1 物理像素线宽(HiDPI / 125% / 150% 缩放时不糊边)。
     #[inline]
     pub fn hairline_width(&self, ctx: &egui::Context) -> f32 {
         1.0 / ctx.pixels_per_point()
     }
 
-    /// Tab 底栏指示线高度（2 物理像素）。
+    /// Tab 底栏指示线高度(2 物理像素)。
     #[inline]
     pub fn tab_indicator_height(&self, ctx: &egui::Context) -> f32 {
         2.0 / ctx.pixels_per_point()
     }
 
-    /// 将 Y 坐标对齐到物理像素网格（Windows 非整数缩放尤其需要）。
+    /// 将 Y 坐标对齐到物理像素网格(Windows 非整数缩放尤其需要)。
     #[inline]
     pub fn snap_y_to_pixel(&self, ctx: &egui::Context, y: f32) -> f32 {
         let ppp = ctx.pixels_per_point();
@@ -219,13 +219,13 @@ impl Theme {
         )
     }
 
-    /// 次要正文（标签、侧栏图标、Tab ×/+ 等）— 与 [`fg_medium_color`] 同一档位
+    /// 次要正文(标签、侧栏图标、Tab ×/+ 等)— 与 [`fg_medium_color`] 同一档位
     #[inline]
     fn muted_secondary_text(&self) -> Color32 {
         self.fg_medium_color()
     }
 
-    /// 更弱文字（占位 hint、离线状态等）— 与 [`fg_low_color`] 同一档位
+    /// 更弱文字(占位 hint、离线状态等)— 与 [`fg_low_color`] 同一档位
     #[inline]
     fn muted_tertiary_text(&self) -> Color32 {
         self.fg_low_color()
@@ -247,33 +247,33 @@ impl Theme {
         self.border_divider.to_color32()
     }
 
-    // ── Theme Token v2：表面 / 描边 / 文字（业务优先调这些方法，勿用 fg_high_alpha 画边框）──
+    // ── Theme Token v2：表面 / 描边 / 文字(业务优先调这些方法，勿用 fg_high_alpha 画边框)──
 
-    /// 窗口外背景（= `bg_body`）
+    /// 窗口外背景(= `bg_body`)
     #[inline]
     pub fn surface_body(&self) -> Color32 {
         self.bg_body_color()
     }
 
-    /// 侧栏 / 右 dock / 弹窗面板底（= `bg_window`）
+    /// 侧栏 / 右 dock / 弹窗面板底(= `bg_window`)
     #[inline]
     pub fn surface_panel(&self) -> Color32 {
         self.bg_window_color()
     }
 
-    /// 顶栏 / 底栏 / Tab 条（= `bg_tab_bar`）
+    /// 顶栏 / 底栏 / Tab 条(= `bg_tab_bar`)
     #[inline]
     pub fn surface_elevated(&self) -> Color32 {
         self.bg_tab_bar_color()
     }
 
-    /// 菜单 / 下拉弹出层底色（与弹窗面板同色，避免多层灰阶）
+    /// 菜单 / 下拉弹出层底色(与弹窗面板同色，避免多层灰阶)
     #[inline]
     pub fn color_menu_popup_fill(&self) -> Color32 {
         self.color_panel_surface()
     }
 
-    /// 终端区 / 激活 Tab（= `bg_terminal`）
+    /// 终端区 / 激活 Tab(= `bg_terminal`)
     #[inline]
     pub fn surface_terminal(&self) -> Color32 {
         self.bg_terminal_color()
@@ -285,7 +285,7 @@ impl Theme {
         self.fg_high_color()
     }
 
-    /// 次要正文（节标题、图标、Tab 控件）
+    /// 次要正文(节标题、图标、Tab 控件)
     #[inline]
     pub fn text_secondary(&self) -> Color32 {
         self.muted_secondary_text()
@@ -297,7 +297,7 @@ impl Theme {
         self.muted_tertiary_text()
     }
 
-    /// 面板外框线宽（逻辑 px）
+    /// 面板外框线宽(逻辑 px)
     pub fn stroke_width_panel(&self) -> f32 {
         if self.uses_modern_palette() {
             0.0
@@ -328,7 +328,7 @@ impl Theme {
         }
     }
 
-    /// 右 dock 标题行下分隔线（比 accent 满色更淡，避免「格子感」）
+    /// 右 dock 标题行下分隔线(比 accent 满色更淡，避免「格子感」)
     #[inline]
     pub fn color_dock_header_divider(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -338,7 +338,7 @@ impl Theme {
         }
     }
 
-    /// AI 用户消息气泡底（弱填充，避免短句看起来像可点按钮）
+    /// AI 用户消息气泡底(弱填充，避免短句看起来像可点按钮)
     #[inline]
     pub fn color_ai_user_bubble_fill(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -348,7 +348,7 @@ impl Theme {
         }
     }
 
-    /// AI 用户消息气泡描边（modern 下轻描边，弱于控件按钮）
+    /// AI 用户消息气泡描边(modern 下轻描边，弱于控件按钮)
     #[inline]
     pub fn color_ai_user_bubble_stroke(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -368,7 +368,7 @@ impl Theme {
         }
     }
 
-    /// Markdown 围栏代码块语言标签（bash 等）
+    /// Markdown 围栏代码块语言标签(bash 等)
     #[inline]
     pub fn color_markdown_code_lang_label(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -390,7 +390,7 @@ impl Theme {
         }
     }
 
-    /// SFTP / 文件列表行悬停（略强于全局 list hover，便于点选）
+    /// SFTP / 文件列表行悬停(略强于全局 list hover，便于点选)
     #[inline]
     pub fn color_file_list_row_hover_bg(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -444,7 +444,7 @@ impl Theme {
         self.amber.to_color32()
     }
 
-    /// 监控进度条轨道底（暗夜用 inset，彩色主题用 border）
+    /// 监控进度条轨道底(暗夜用 inset，彩色主题用 border)
     #[inline]
     pub fn metric_bar_track_fill(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -568,7 +568,7 @@ impl Theme {
         self.text_primary()
     }
 
-    /// 终端区默认前景（暗色软灰，便于 bold 提亮后与正文区分；对齐 WT 软白分层）。
+    /// 终端区默认前景(暗色软灰，便于 bold 提亮后与正文区分；对齐 WT 软白分层)。
     pub fn terminal_default_fg(&self) -> Color32 {
         if self.is_light_theme() {
             self.text_primary()
@@ -583,17 +583,17 @@ impl Theme {
         crate::terminal::style::TERMINAL_COMMAND_DIM_FACTOR
     }
 
-    /// 非提示输出行相对默认前景亮度（默认不压暗）。
+    /// 非提示输出行相对默认前景亮度(默认不压暗)。
     pub fn terminal_output_dim_factor(&self) -> f32 {
         crate::terminal::style::TERMINAL_OUTPUT_DIM_FACTOR
     }
 
-    /// FUNCTIONAL_SPEC §2.3.4：终端纵向滚动条宽度（px）。
+    /// FUNCTIONAL_SPEC §2.3.4：终端纵向滚动条宽度(px)。
     pub fn terminal_scroll_bar_width(&self) -> f32 {
         crate::terminal::style::TERMINAL_SCROLL_BAR_WIDTH
     }
 
-    /// 终端滚动条轨道底色（设计稿 `rgba(255,255,255,0.06)`，随主题前景派生）。
+    /// 终端滚动条轨道底色(设计稿 `rgba(255,255,255,0.06)`，随主题前景派生)。
     pub fn terminal_scroll_bar_track_fill(&self) -> Color32 {
         if self.is_light_theme() {
             Color32::from_rgba_unmultiplied(0, 0, 0, 15)
@@ -608,33 +608,33 @@ impl Theme {
     // UI 样式令牌 — 调整颜色/间距/尺寸请优先改本节；业务代码勿写裸 RGB/RGBA
     // ══════════════════════════════════════════════════════════════════════════
 
-    // ── 语义色（由主题色派生，随明暗主题变化） ──
+    // ── 语义色(由主题色派生，随明暗主题变化) ──
 
-    /// 面板 / 弹窗 / 底栏 / 右 dock 统一表面色（= `bg_window`）
+    /// 面板 / 弹窗 / 底栏 / 右 dock 统一表面色(= `bg_window`)
     #[inline]
     pub fn color_panel_surface(&self) -> Color32 {
         self.bg_window_color()
     }
 
-    /// ScrollArea、Multiline 的 `extreme_bg_color`（与面板底一致，避免灰条）
+    /// ScrollArea、Multiline 的 `extreme_bg_color`(与面板底一致，避免灰条)
     #[inline]
     pub fn color_scroll_extreme_bg(&self) -> Color32 {
         self.bg_window_color()
     }
 
-    /// 侧栏 / 右 dock / 弹窗等面板标题字色（与 [`color_panel_header_title`] 一致，保留别名）
+    /// 侧栏 / 右 dock / 弹窗等面板标题字色(与 [`color_panel_header_title`] 一致，保留别名)
     #[inline]
     pub fn color_section_title(&self) -> Color32 {
         self.color_panel_header_title()
     }
 
-    /// 面板标题行文字（连接、新建会话、系统监控、命令片段等统一）
+    /// 面板标题行文字(连接、新建会话、系统监控、命令片段等统一)
     #[inline]
     pub fn color_panel_header_title(&self) -> Color32 {
         self.text_primary()
     }
 
-    /// 表单字段标签、弹窗次要标签（须亮于 hint、暗于输入正文）
+    /// 表单字段标签、弹窗次要标签(须亮于 hint、暗于输入正文)
     #[inline]
     pub fn color_form_label(&self) -> Color32 {
         if self.uses_solid_fg_palette() {
@@ -645,7 +645,7 @@ impl Theme {
         }
     }
 
-    /// 表单说明、占位提示（输入框 hint，须明显弱于 [`color_text_input_text`]）
+    /// 表单说明、占位提示(输入框 hint，须明显弱于 [`color_text_input_text`])
     #[inline]
     pub fn color_form_hint(&self) -> Color32 {
         if self.uses_solid_fg_palette() {
@@ -656,7 +656,7 @@ impl Theme {
         }
     }
 
-    /// 居中弹窗主标题（与 [`color_panel_header_title`] 一致）
+    /// 居中弹窗主标题(与 [`color_panel_header_title`] 一致)
     #[inline]
     pub fn color_modal_title(&self) -> Color32 {
         self.color_panel_header_title()
@@ -692,7 +692,7 @@ impl Theme {
         }
     }
 
-    /// 极淡块底（折叠区、表单分组底）
+    /// 极淡块底(折叠区、表单分组底)
     #[inline]
     pub fn color_subtle_inset_fill(&self) -> Color32 {
         if self.is_light_theme() {
@@ -704,13 +704,13 @@ impl Theme {
         }
     }
 
-    /// 未勾选复选框填充（与输入框底一致，须在面板底上可见；勿用全透明）
+    /// 未勾选复选框填充(与输入框底一致，须在面板底上可见；勿用全透明)
     #[inline]
     pub fn color_checkbox_off_fill(&self) -> Color32 {
         self.color_text_input_fill()
     }
 
-    /// 未勾选复选框描边色（比分割线略强，避免「只有悬停才看得见方框」）
+    /// 未勾选复选框描边色(比分割线略强，避免「只有悬停才看得见方框」)
     #[inline]
     pub fn color_checkbox_off_stroke_color(&self) -> Color32 {
         if self.is_light_theme() {
@@ -728,7 +728,7 @@ impl Theme {
         self.accent_alpha(28)
     }
 
-    /// 勾选标记颜色（叠在 accent 底上）
+    /// 勾选标记颜色(叠在 accent 底上)
     #[inline]
     pub fn color_checkbox_checkmark(&self) -> Color32 {
         if self.is_light_theme() {
@@ -744,7 +744,7 @@ impl Theme {
         3.0
     }
 
-    /// Slider 滑轨底色（egui 用 `widgets.inactive.bg_fill` 绘制轨道）
+    /// Slider 滑轨底色(egui 用 `widgets.inactive.bg_fill` 绘制轨道)
     #[inline]
     pub fn color_slider_rail_fill(&self) -> Color32 {
         if self.is_light_theme() {
@@ -756,7 +756,7 @@ impl Theme {
         }
     }
 
-    /// 底栏状态徽章底（贴 chrome 条；勿用 [`color_chip_fill`] 的 accent 淡紫）
+    /// 底栏状态徽章底(贴 chrome 条；勿用 [`color_chip_fill`] 的 accent 淡紫)
     #[inline]
     pub fn color_status_chip_fill(&self) -> Color32 {
         if self.is_light_theme() {
@@ -768,10 +768,10 @@ impl Theme {
         }
     }
 
-    /// 面板标题条底（侧栏 / 右 dock / 居中弹窗共用）
+    /// 面板标题条底(侧栏 / 右 dock / 居中弹窗共用)
     #[inline]
     pub fn color_panel_header_band_fill(&self) -> Color32 {
-        // 略深于面板正文（= tab 条 / surface_elevated），标题区与内容区有层次
+        // 略深于面板正文(= tab 条 / surface_elevated)，标题区与内容区有层次
         self.surface_elevated()
     }
 
@@ -781,7 +781,7 @@ impl Theme {
         self.color_panel_surface()
     }
 
-    /// 标题条下分隔线（须强于 `color_tab_inactive_stroke`，暗夜勿用 7% 白边）
+    /// 标题条下分隔线(须强于 `color_tab_inactive_stroke`，暗夜勿用 7% 白边)
     #[inline]
     pub fn color_panel_header_divider(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -798,7 +798,7 @@ impl Theme {
         self.color_panel_header_divider()
     }
 
-    /// 单行/多行输入框底色（相对面板略提亮，勿过亮以免描边显得粗）
+    /// 单行/多行输入框底色(相对面板略提亮，勿过亮以免描边显得粗)
     #[inline]
     pub fn color_text_input_fill(&self) -> Color32 {
         if self.is_light_theme() {
@@ -825,7 +825,7 @@ impl Theme {
         }
     }
 
-    /// 输入框描边（§10.2：1px）
+    /// 输入框描边(§10.2：1px)
     #[inline]
     pub fn color_text_input_stroke(&self) -> Color32 {
         if self.uses_solid_fg_palette() {
@@ -835,7 +835,7 @@ impl Theme {
         }
     }
 
-    /// 输入框正文色（须明显亮于 [`color_form_hint`] / egui 占位符）
+    /// 输入框正文色(须明显亮于 [`color_form_hint`] / egui 占位符)
     #[inline]
     pub fn color_text_input_text(&self) -> Color32 {
         if self.uses_solid_fg_palette() {
@@ -846,7 +846,7 @@ impl Theme {
         }
     }
 
-    /// 输入框 Frame（圆角、内边距；modern 为透明底 + 下划线，由 [`form_singleline_field`] 绘制）
+    /// 输入框 Frame(圆角、内边距；modern 为透明底 + 下划线，由 [`form_singleline_field`] 绘制)
     pub fn frame_form_text_input(&self, focused: bool) -> egui::Frame {
         if self.uses_underline_inputs() {
             let _ = focused;
@@ -863,7 +863,7 @@ impl Theme {
         self.frame_boxed_text_input(focused)
     }
 
-    /// 始终有底+描边的输入框（AI 多行编辑器等；不受 underline 模式影响）
+    /// 始终有底+描边的输入框(AI 多行编辑器等；不受 underline 模式影响)
     pub fn frame_boxed_text_input(&self, focused: bool) -> egui::Frame {
         let stroke = if focused {
             egui::Stroke::new(self.stroke_width_panel().max(1.0), self.accent_color())
@@ -883,7 +883,7 @@ impl Theme {
             ))
     }
 
-    /// 面板标题行次要工具按钮底（≈ proto `.toolbar-btn.secondary`）
+    /// 面板标题行次要工具按钮底(≈ proto `.toolbar-btn.secondary`)
     #[inline]
     pub fn color_panel_toolbar_btn_fill(&self) -> Color32 {
         if self.is_light_theme() {
@@ -913,7 +913,7 @@ impl Theme {
         }
     }
 
-    /// 弹窗主按钮悬停底（须明显亮于 [`color_modal_primary_fill`]）
+    /// 弹窗主按钮悬停底(须明显亮于 [`color_modal_primary_fill`])
     #[inline]
     pub fn color_modal_primary_fill_hover(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -928,7 +928,7 @@ impl Theme {
         }
     }
 
-    /// 弹窗主按钮字（与 accent 底高对比）
+    /// 弹窗主按钮字(与 accent 底高对比)
     #[inline]
     pub fn color_modal_primary_text(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -979,7 +979,7 @@ impl Theme {
         }
     }
 
-    /// Segmented Control 外槽（比面板略深）
+    /// Segmented Control 外槽(比面板略深)
     #[inline]
     pub fn color_segment_track(&self) -> Color32 {
         if self.is_light_theme() {
@@ -1037,7 +1037,7 @@ impl Theme {
         self.divider_stroke_color()
     }
 
-    /// 无边框 inset 卡片底（比面板亮 3~5%）
+    /// 无边框 inset 卡片底(比面板亮 3~5%)
     #[inline]
     pub fn color_inset_section_fill(&self) -> Color32 {
         if self.is_light_theme() {
@@ -1109,7 +1109,7 @@ impl Theme {
         self.uses_modern_palette()
     }
 
-    /// egui 裸控件悬停底（暗夜中性灰，非 accent 紫）
+    /// egui 裸控件悬停底(暗夜中性灰，非 accent 紫)
     #[inline]
     pub fn color_widget_hover_fill(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -1157,7 +1157,7 @@ impl Theme {
         }
     }
 
-    /// 终端内联选区高亮（画在字形之下；暗色用半透明白，接近 Windows Terminal）。
+    /// 终端内联选区高亮(画在字形之下；暗色用半透明白，接近 Windows Terminal)。
     #[inline]
     pub fn color_terminal_selection(&self) -> Color32 {
         if self.is_light_theme() {
@@ -1167,7 +1167,7 @@ impl Theme {
         }
     }
 
-    /// 终端块状光标（闪烁时绘制整格实心块）
+    /// 终端块状光标(闪烁时绘制整格实心块)
     #[inline]
     pub fn color_terminal_cursor_block(&self) -> Color32 {
         if self.is_light_theme() {
@@ -1177,7 +1177,7 @@ impl Theme {
         }
     }
 
-    /// UI 文本拖选高亮底（勿用饱和 accent，否则 accent 色字会融进选区）
+    /// UI 文本拖选高亮底(勿用饱和 accent，否则 accent 色字会融进选区)
     #[inline]
     pub fn color_text_selection_bg(&self) -> Color32 {
         if self.is_light_theme() {
@@ -1187,7 +1187,7 @@ impl Theme {
         }
     }
 
-    /// UI 文本拖选字色（无内嵌颜色的标签会采用）
+    /// UI 文本拖选字色(无内嵌颜色的标签会采用)
     #[inline]
     pub fn color_text_selection_fg(&self) -> Color32 {
         if self.is_light_theme() {
@@ -1197,7 +1197,7 @@ impl Theme {
         }
     }
 
-    /// 会话标签强调色：有环境色标用色标；否则用主题 accent 系变体（与全局主题一致）。
+    /// 会话标签强调色：有环境色标用色标；否则用主题 accent 系变体(与全局主题一致)。
     pub fn session_tab_accent_color(&self, session: &crate::core::SessionConfig) -> Color32 {
         if let Some((r, g, b)) = crate::core::session_color_tag_accent_rgb(session) {
             return Color32::from_rgb(r, g, b);
@@ -1228,7 +1228,7 @@ impl Theme {
         palette[(h as usize) % palette.len()]
     }
 
-    /// 激活 Tab 底色（与终端区一致，整块标签可见）
+    /// 激活 Tab 底色(与终端区一致，整块标签可见)
     #[inline]
     pub fn color_tab_active_fill(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -1238,7 +1238,7 @@ impl Theme {
         }
     }
 
-    /// 未激活 Tab 默认底（标签形态，略强于透明）
+    /// 未激活 Tab 默认底(标签形态，略强于透明)
     #[inline]
     pub fn color_tab_inactive_fill(&self) -> Color32 {
         if self.is_light_theme() {
@@ -1262,7 +1262,7 @@ impl Theme {
         }
     }
 
-    /// 未激活 Tab 描边（勾勒标签轮廓）
+    /// 未激活 Tab 描边(勾勒标签轮廓)
     #[inline]
     pub fn color_tab_inactive_stroke(&self) -> Color32 {
         if self.is_light_theme() {
@@ -1280,7 +1280,7 @@ impl Theme {
         self.text_tertiary()
     }
 
-    /// 正文级次要字（弹窗说明、面板工具按钮）
+    /// 正文级次要字(弹窗说明、面板工具按钮)
     #[inline]
     pub fn color_body_text_muted(&self) -> Color32 {
         self.text_secondary()
@@ -1296,7 +1296,7 @@ impl Theme {
         }
     }
 
-    /// 面板次要操作按钮（未禁用）文字
+    /// 面板次要操作按钮(未禁用)文字
     #[inline]
     pub fn color_control_secondary_idle_text(&self) -> Color32 {
         if self.uses_modern_palette() && !self.is_light_theme() {
@@ -1309,7 +1309,7 @@ impl Theme {
         }
     }
 
-    /// 面板次要操作按钮（未禁用）图标
+    /// 面板次要操作按钮(未禁用)图标
     #[inline]
     pub fn color_control_secondary_idle_icon(&self) -> Color32 {
         self.color_control_secondary_idle_text()
@@ -1325,7 +1325,7 @@ impl Theme {
         }
     }
 
-    /// 面板工具按钮常态浅底（略亮于面板，可辨认为按钮）
+    /// 面板工具按钮常态浅底(略亮于面板，可辨认为按钮)
     #[inline]
     pub fn color_control_button_fill_idle(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -1385,7 +1385,7 @@ impl Theme {
         }
     }
 
-    /// 面板次要按钮描边（暗夜也保留描边，避免幽灵文字按钮）
+    /// 面板次要按钮描边(暗夜也保留描边，避免幽灵文字按钮)
     #[inline]
     pub fn color_control_secondary_stroke(&self, enabled: bool) -> egui::Stroke {
         let c = if !enabled {
@@ -1409,7 +1409,7 @@ impl Theme {
         }
     }
 
-    /// 禁用主按钮底色（暗夜勿用 accent 淡底 + 灰字）
+    /// 禁用主按钮底色(暗夜勿用 accent 淡底 + 灰字)
     #[inline]
     pub fn color_control_primary_disabled_fill(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -1425,13 +1425,13 @@ impl Theme {
         0.55
     }
 
-    /// 更弱说明/标签（版本号、底栏统计、状态 chip）
+    /// 更弱说明/标签(版本号、底栏统计、状态 chip)
     #[inline]
     pub fn color_caption_text(&self) -> Color32 {
         self.text_secondary()
     }
 
-    /// 极淡嵌底（chip、kbd、关于页信息块）
+    /// 极淡嵌底(chip、kbd、关于页信息块)
     #[inline]
     pub fn color_overlay_fill_subtle(&self) -> Color32 {
         if self.is_light_theme() {
@@ -1443,7 +1443,7 @@ impl Theme {
         }
     }
 
-    /// 状态栏工具图标默认字色（刻意弱于 caption，仅装饰性图标）
+    /// 状态栏工具图标默认字色(刻意弱于 caption，仅装饰性图标)
     #[inline]
     pub fn color_toolbar_glyph_idle(&self) -> Color32 {
         if self.is_light_theme() || self.uses_solid_fg_palette() {
@@ -1459,13 +1459,13 @@ impl Theme {
         self.text_secondary()
     }
 
-    /// Tab 外描边（与标签栏分隔）
+    /// Tab 外描边(与标签栏分隔)
     #[inline]
     pub fn color_tab_stroke(&self) -> Color32 {
         self.border_divider_color()
     }
 
-    /// Tab 栏图标按钮字色（× / ＋）
+    /// Tab 栏图标按钮字色(× / ＋)
     #[inline]
     pub fn color_tab_bar_icon(&self) -> Color32 {
         self.muted_secondary_text()
@@ -1477,7 +1477,7 @@ impl Theme {
         self.fg_high_color()
     }
 
-    /// Tab 栏图标按钮悬停底（亦用于弹窗 ×、侧栏图标等 `icon_hit_button`）
+    /// Tab 栏图标按钮悬停底(亦用于弹窗 ×、侧栏图标等 `icon_hit_button`)
     #[inline]
     pub fn color_tab_bar_icon_btn_hover_fill(&self) -> Color32 {
         if self.is_light_theme() {
@@ -1489,7 +1489,7 @@ impl Theme {
         }
     }
 
-    /// SFTP 文件列表区底色（表头 + 滚动列表，比面板略深）
+    /// SFTP 文件列表区底色(表头 + 滚动列表，比面板略深)
     #[inline]
     pub fn color_file_list_bg(&self) -> Color32 {
         if self.is_light_theme() {
@@ -1511,7 +1511,7 @@ impl Theme {
         }
     }
 
-    /// SFTP 本机/远端分区容器底（modern：inset 卡片）
+    /// SFTP 本机/远端分区容器底(modern：inset 卡片)
     #[inline]
     pub fn color_sftp_section_fill(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -1521,7 +1521,7 @@ impl Theme {
         }
     }
 
-    /// SFTP 地址栏 / 工具条一体底（比面板略深，无线框）
+    /// SFTP 地址栏 / 工具条一体底(比面板略深，无线框)
     #[inline]
     pub fn color_sftp_toolbar_fill(&self) -> Color32 {
         if self.uses_modern_palette() {
@@ -1545,7 +1545,7 @@ impl Theme {
         }
     }
 
-    /// SFTP 幽灵提交按钮描边（「+ 创建」等）
+    /// SFTP 幽灵提交按钮描边(「+ 创建」等)
     #[inline]
     pub fn color_sftp_ghost_btn_stroke(&self) -> Color32 {
         if self.is_light_theme() {
@@ -1561,14 +1561,14 @@ impl Theme {
         4.0
     }
 
-    /// SFTP 工具条统一行高（上传行 / 地址栏 / 创建行对齐）
+    /// SFTP 工具条统一行高(上传行 / 地址栏 / 创建行对齐)
     #[inline]
     pub fn size_sftp_toolbar_row_h(&self) -> f32 {
         (self.size_control_btn_h() + self.spacing_xs() * 2.0)
             .max(self.font_size_control_input() + 6.0)
     }
 
-    /// SFTP 地址栏 + 操作条（无描边圆角盒）
+    /// SFTP 地址栏 + 操作条(无描边圆角盒)
     pub fn frame_sftp_toolbar_band(&self) -> egui::Frame {
         egui::Frame::none()
             .fill(self.color_sftp_toolbar_fill())
@@ -1637,7 +1637,7 @@ impl Theme {
         }
     }
 
-    /// 危险强调字（断开、删除提示等）
+    /// 危险强调字(断开、删除提示等)
     #[inline]
     pub fn color_danger_emphasis(&self) -> Color32 {
         Color32::from_rgb(255, 138, 128)
@@ -1657,7 +1657,7 @@ impl Theme {
 
     // ── 尺寸：底栏 / 弹窗 / Tab / 列表 ──
 
-    /// 标题栏 / 工具条内嵌图标边长（×、排序、新建等，egui 逻辑点；图集 HiDPI 由纹理格负责）
+    /// 标题栏 / 工具条内嵌图标边长(×、排序、新建等，egui 逻辑点；图集 HiDPI 由纹理格负责)
     pub fn size_icon_glyph(&self) -> f32 {
         18.0
     }
@@ -1672,24 +1672,24 @@ impl Theme {
         3.0
     }
 
-    /// 底栏总高（改造后仅单行状态栏）
+    /// 底栏总高(改造后仅单行状态栏)
     pub fn size_bottom_chrome_total_h(&self) -> f32 {
         self.status_bar_height()
     }
 
-    /// 标题栏应用名（≈30% 白）
+    /// 标题栏应用名(≈30% 白)
     #[inline]
     pub fn color_title_bar_app_name(&self) -> Color32 {
         self.text_secondary()
     }
 
-    /// 标题栏 / 状态栏次要连接信息（≈20% / 12% 白）
+    /// 标题栏 / 状态栏次要连接信息(≈20% / 12% 白)
     #[inline]
     pub fn color_title_bar_conn_info(&self) -> Color32 {
         self.muted_tertiary_text()
     }
 
-    /// 状态栏连接文案（≈12% 白）
+    /// 状态栏连接文案(≈12% 白)
     #[inline]
     pub fn color_status_bar_conn(&self) -> Color32 {
         self.text_tertiary()
@@ -1700,12 +1700,12 @@ impl Theme {
         32.0
     }
 
-    /// 搜索框 / 表单单行输入统一字号（与控件档一致，避免撑满输入框高度）
+    /// 搜索框 / 表单单行输入统一字号(与控件档一致，避免撑满输入框高度)
     pub fn font_size_control_input(&self) -> f32 {
         self.font_size_ui_control()
     }
 
-    /// 次要 / 工具按钮统一字号（比正文小一档，减轻面板内按钮的生硬感）
+    /// 次要 / 工具按钮统一字号(比正文小一档，减轻面板内按钮的生硬感)
     pub fn font_size_control_btn(&self) -> f32 {
         self.font_size_ui_control()
     }
@@ -1719,17 +1719,17 @@ impl Theme {
         }
     }
 
-    /// 次要按钮最小宽度（取消、刷新等）
+    /// 次要按钮最小宽度(取消、刷新等)
     pub fn size_control_btn_min_w(&self) -> f32 {
         56.0
     }
 
-    /// 主按钮最小宽度（保存并连接等）
+    /// 主按钮最小宽度(保存并连接等)
     pub fn size_control_btn_min_w_primary(&self) -> f32 {
         96.0
     }
 
-    /// 弹窗底栏按钮高（与 [`size_control_btn_h`] 一致）
+    /// 弹窗底栏按钮高(与 [`size_control_btn_h`] 一致)
     pub fn size_modal_footer_btn_h(&self) -> f32 {
         self.size_control_btn_h()
     }
@@ -1751,7 +1751,7 @@ impl Theme {
         20.0
     }
 
-    /// Tab 行统一高度（内边距 + 图标区，保证 × / ＋ 垂直对齐）
+    /// Tab 行统一高度(内边距 + 图标区，保证 × / ＋ 垂直对齐)
     pub fn size_tab_bar_row_h(&self) -> f32 {
         self.spacing_tab_y() * 2.0 + self.size_tab_bar_icon_btn()
     }
@@ -1764,17 +1764,17 @@ impl Theme {
         20.0
     }
 
-    /// 侧栏标题行控件统一高度（对齐原型 sidebar-add 18px 量级）
+    /// 侧栏标题行控件统一高度(对齐原型 sidebar-add 18px 量级)
     pub fn size_sidebar_header_control_h(&self) -> f32 {
         20.0
     }
 
-    /// 侧栏标题行：＋ / − 方形按钮边长（原型 18px）
+    /// 侧栏标题行：＋ / − 方形按钮边长(原型 18px)
     pub fn size_sidebar_header_icon(&self) -> f32 {
         18.0
     }
 
-    /// 排序下拉宽度（容纳「最近连接」单行）
+    /// 排序下拉宽度(容纳「最近连接」单行)
     pub fn size_sidebar_sort_combo_w(&self) -> f32 {
         96.0
     }
@@ -1813,10 +1813,14 @@ impl Theme {
     }
 
     pub fn size_session_list_row_h(&self) -> f32 {
-        32.0
+        // 名称 + 主机两行；CJK 行盒高于字号，须留足高度，否则选中底盖不住字。
+        let name_h = self.font_size_connection_name() * 1.35;
+        let host_h = self.font_size_caption().max(10.0) * 1.3;
+        let pad = self.spacing_list_item_y() * 2.0;
+        (name_h + host_h + pad).ceil().max(46.0)
     }
 
-    /// 终端列底部内嵌查找条高度（单行：输入 + 导航 + 命中计数）
+    /// 终端列底部内嵌查找条高度(单行：输入 + 导航 + 命中计数)
     pub fn size_terminal_search_bar_h(&self) -> f32 {
         36.0
     }
@@ -1829,17 +1833,17 @@ impl Theme {
         4.0
     }
 
-    /// 右 dock / 片段面板标题行：工具按钮与关闭 × 统一高度（与 Tab 栏 × 同尺寸）
+    /// 右 dock / 片段面板标题行：工具按钮与关闭 × 统一高度(与 Tab 栏 × 同尺寸)
     pub fn size_panel_header_control_h(&self) -> f32 {
         self.size_tab_bar_icon_btn()
     }
 
-    /// 面板 / dock 标题行总高（与终端 Tab 条 [`size_tab_bar_row_h`] 一致）
+    /// 面板 / dock 标题行总高(与终端 Tab 条 [`size_tab_bar_row_h`] 一致)
     pub fn size_panel_header_row_h(&self) -> f32 {
         self.size_tab_bar_row_h()
     }
 
-    /// 标题行上下内边距（dock 标题行由 [`dock_header_horizontal`] 固定总高，此处为 0）
+    /// 标题行上下内边距(dock 标题行由 [`dock_header_horizontal`] 固定总高，此处为 0)
     pub fn spacing_panel_header_pad_y(&self) -> f32 {
         0.0
     }
@@ -1849,7 +1853,7 @@ impl Theme {
         self.size_panel_header_control_h()
     }
 
-    /// 标题行工具按钮字号（排序 / 新建等统一）
+    /// 标题行工具按钮字号(排序 / 新建等统一)
     pub fn font_size_panel_header_control(&self) -> f32 {
         self.font_size_control_btn()
     }
@@ -1859,12 +1863,12 @@ impl Theme {
         self.spacing_search_input_x()
     }
 
-    /// 标题行工具按钮最小宽度（短标签兜底）
+    /// 标题行工具按钮最小宽度(短标签兜底)
     pub fn size_panel_header_btn_min_w(&self) -> f32 {
         self.font_size_panel_header_control() * 2.0 + self.spacing_panel_header_btn_pad_x() * 2.0
     }
 
-    /// 片段面板筛选芯片行高（与标题行控件对齐）
+    /// 片段面板筛选芯片行高(与标题行控件对齐)
     pub fn size_panel_filter_chip_h(&self) -> f32 {
         self.size_sidebar_filter_chip_h()
     }
@@ -1948,7 +1952,7 @@ impl Theme {
         17.0
     }
 
-    // ── 边距 / Frame 工厂（egui Frame，非业务布局） ──
+    // ── 边距 / Frame 工厂(egui Frame，非业务布局) ──
 
     pub fn margin_sidebar_title(&self) -> egui::Margin {
         egui::Margin::symmetric(
@@ -1987,7 +1991,7 @@ impl Theme {
         egui::Margin::symmetric(6.0, 2.0)
     }
 
-    /// 顶栏 / 底栏 Panel 内边距（水平留白 + 垂直居中余量，避免字形被裁切）
+    /// 顶栏 / 底栏 Panel 内边距(水平留白 + 垂直居中余量，避免字形被裁切)
     pub fn margin_chrome_bar(&self) -> egui::Margin {
         egui::Margin::symmetric(self.spacing_status_bar_x(), 5.0)
     }
@@ -2010,12 +2014,12 @@ impl Theme {
         egui::Frame::none().inner_margin(self.margin_modal_content())
     }
 
-    /// 左连接栏 / 右 dock 外框（§7 圆角 6px + 半透明描边）
+    /// 左连接栏 / 右 dock 外框(§7 圆角 6px + 半透明描边)
     pub fn frame_region_panel(&self) -> egui::Frame {
         self.frame_region_panel_rounding(egui::Rounding::same(self.radius_panel()))
     }
 
-    /// 贴底栏的侧栏/面板：顶角与底角均不圆（与终端 Tab 条顶缘齐平）
+    /// 贴底栏的侧栏/面板：顶角与底角均不圆(与终端 Tab 条顶缘齐平)
     pub fn frame_region_panel_flush_bottom(&self) -> egui::Frame {
         self.frame_region_panel_rounding(egui::Rounding::ZERO)
     }
@@ -2028,7 +2032,7 @@ impl Theme {
             .inner_margin(self.region_content_margin())
     }
 
-    /// 终端列外框：顶部与 Tab 条平齐（无上圆角），底部圆角；外框描边由 [`crate::ui::chrome::paint_rect_border_ltr`] 单独绘制。
+    /// 终端列外框：顶部与 Tab 条平齐(无上圆角)，底部圆角；外框描边由 [`crate::ui::chrome::paint_rect_border_ltr`] 单独绘制。
     pub fn frame_terminal_column(&self) -> egui::Frame {
         egui::Frame::none()
             .fill(self.bg_terminal_color())
@@ -2041,7 +2045,7 @@ impl Theme {
             .inner_margin(egui::Margin::ZERO)
     }
 
-    /// 状态徽章（底栏连接、通知、片段统计等）
+    /// 状态徽章(底栏连接、通知、片段统计等)
     pub fn frame_status_chip(&self) -> egui::Frame {
         let border = self.divider_stroke_color();
         egui::Frame::none()
@@ -2054,7 +2058,7 @@ impl Theme {
             .inner_margin(self.margin_status_chip())
     }
 
-    /// 信息标签（连接元信息、分组名、弹窗标题条等，比 status_chip 略显眼）
+    /// 信息标签(连接元信息、分组名、弹窗标题条等，比 status_chip 略显眼)
     pub fn frame_label_tag(&self) -> egui::Frame {
         egui::Frame::none()
             .fill(self.color_chip_fill())
@@ -2063,7 +2067,7 @@ impl Theme {
             .inner_margin(self.margin_status_chip())
     }
 
-    /// 面板标题行底带（侧栏 / 右 dock / 弹窗共用内边距与底色）
+    /// 面板标题行底带(侧栏 / 右 dock / 弹窗共用内边距与底色)
     pub fn frame_panel_header_band(&self) -> egui::Frame {
         egui::Frame::none()
             .fill(self.color_panel_header_band_fill())
@@ -2079,7 +2083,7 @@ impl Theme {
             })
     }
 
-    /// 弹窗标题行底带（与正文同色；仅顶部圆角，底部分隔线由 [`crate::ui::chrome::modal_header`] 绘制）
+    /// 弹窗标题行底带(与正文同色；仅顶部圆角，底部分隔线由 [`crate::ui::chrome::modal_header`] 绘制)
     pub fn frame_modal_title_band(&self) -> egui::Frame {
         let r = self.radius_list_item();
         egui::Frame::none()
@@ -2140,7 +2144,7 @@ impl Theme {
         )
     }
 
-    // ── 字体大小（Token v2：全局 +1px，保持相对比例） ──
+    // ── 字体大小(Token v2：全局 +1px，保持相对比例) ──
 
     /// 10px — 角标 / team 标签
     pub fn font_size_tag(&self) -> f32 {
@@ -2167,17 +2171,17 @@ impl Theme {
         14.0
     }
 
-    /// 15px — 右 dock 大标题（监控、Git 等）
+    /// 15px — 右 dock 大标题(监控、Git 等)
     pub fn font_size_dock_title(&self) -> f32 {
         15.0
     }
 
-    /// 13px — 面板标题行（侧栏「连接」、右 dock、居中弹窗「新建会话」等，统一）
+    /// 13px — 面板标题行(侧栏「连接」、右 dock、居中弹窗「新建会话」等，统一)
     pub fn font_size_panel_header_title(&self) -> f32 {
         self.font_size_body()
     }
 
-    /// 居中弹窗主标题（与 [`font_size_panel_header_title`] 一致）
+    /// 居中弹窗主标题(与 [`font_size_panel_header_title`] 一致)
     pub fn font_size_modal_title(&self) -> f32 {
         self.font_size_panel_header_title()
     }
@@ -2213,15 +2217,15 @@ impl Theme {
     pub fn font_size_fragment_stats(&self) -> f32 {
         self.font_size_caption()
     }
-    /// 片段列表行右侧分类/标签（与统计同级，便于与标题行对齐）
+    /// 片段列表行右侧分类/标签(与统计同级，便于与标题行对齐)
     pub fn font_size_fragment_tag(&self) -> f32 {
         self.font_size_caption()
     }
-    /// 标题行额外行高（标题与标签垂直居中）
+    /// 标题行额外行高(标题与标签垂直居中)
     pub fn spacing_fragment_title_line_pad(&self) -> f32 {
         2.0
     }
-    /// 片段列表行最小高度（由三行字号 + 行距 + 内边距派生）
+    /// 片段列表行最小高度(由三行字号 + 行距 + 内边距派生)
     pub fn size_fragment_list_row_min_h(&self) -> f32 {
         let gap = self.spacing_fragment_row_line_gap();
         self.spacing_fragment_row_pad_y() * 2.0
@@ -2234,11 +2238,11 @@ impl Theme {
             + gap
             + self.font_size_fragment_stats()
     }
-    /// 片段列表主栏最小宽度（保证标题/命令至少可见）
+    /// 片段列表主栏最小宽度(保证标题/命令至少可见)
     pub fn size_fragment_list_main_min_w(&self) -> f32 {
         self.font_size_fragment_title() * 5.0
     }
-    /// 片段列表标签列最多占内容区宽度比例（§5 列表）
+    /// 片段列表标签列最多占内容区宽度比例(§5 列表)
     pub fn fragment_list_tag_max_width_frac(&self) -> f32 {
         0.45
     }
@@ -2275,12 +2279,12 @@ impl Theme {
         self.font_size_caption()
     }
 
-    // ── 间距系统（按设计规范 §8） ──
+    // ── 间距系统(按设计规范 §8) ──
     pub fn spacing_panel_gap(&self) -> f32 {
         6.0
     } // 面板间 gap
 
-    /// Dock 标题区分隔线到首行控件（搜索框等）
+    /// Dock 标题区分隔线到首行控件(搜索框等)
     #[inline]
     pub fn spacing_dock_section_gap(&self) -> f32 {
         if self.uses_modern_palette() {
@@ -2290,7 +2294,7 @@ impl Theme {
         }
     }
 
-    /// Dock 内相邻控件行（搜索框 ↔ 芯片 ↔ 工具按钮）
+    /// Dock 内相邻控件行(搜索框 ↔ 芯片 ↔ 工具按钮)
     #[inline]
     pub fn spacing_dock_control_gap(&self) -> f32 {
         if self.uses_modern_palette() {
@@ -2312,10 +2316,10 @@ impl Theme {
 
     pub fn spacing_panel_title_pad_x(&self) -> f32 {
         6.0
-    } // 面板标题左右 padding（收紧）
+    } // 面板标题左右 padding(收紧)
     pub fn spacing_panel_title_pad_y(&self) -> f32 {
         self.spacing_panel_header_pad_y()
-    } // 面板标题上下 padding（与 Tab 条对齐）
+    } // 面板标题上下 padding(与 Tab 条对齐)
     pub fn spacing_panel_content_x(&self) -> f32 {
         4.0
     } // 面板内容左右 padding
@@ -2330,10 +2334,10 @@ impl Theme {
     } // 搜索框区域上下 padding
     pub fn spacing_search_input_x(&self) -> f32 {
         6.0
-    } // 搜索框输入左右 padding（收紧）
+    } // 搜索框输入左右 padding(收紧)
     pub fn spacing_search_input_y(&self) -> f32 {
         6.0
-    } // 搜索框输入上下 padding（略增，避免字顶满框）
+    } // 搜索框输入上下 padding(略增，避免字顶满框)
     pub fn spacing_list_item_x(&self) -> f32 {
         10.0
     } // 列表条目左右 padding
@@ -2363,7 +2367,7 @@ impl Theme {
     pub fn spacing_fragment_row_line_gap(&self) -> f32 {
         self.spacing_sm()
     }
-    /// 片段标签列文字左右留白（用于测量列宽）
+    /// 片段标签列文字左右留白(用于测量列宽)
     pub fn spacing_fragment_tag_inner_x(&self) -> f32 {
         self.spacing_search_input_x() * 0.5
     }
@@ -2378,7 +2382,7 @@ impl Theme {
     } // Tab 圆点与文字间距
     pub fn spacing_tab_icon_gap(&self) -> f32 {
         4.0
-    } // Tab 标题与 × 间距（紧跟文案）
+    } // Tab 标题与 × 间距(紧跟文案)
     pub fn spacing_terminal_pad_x(&self) -> f32 {
         4.0
     } // 终端滚动区左右 padding
@@ -2392,22 +2396,22 @@ impl Theme {
     pub fn spacing_region_pad_y(&self) -> f32 {
         8.0
     }
-    /// 右 dock 正文区内边距（比通用 region 更紧凑）
+    /// 右 dock 正文区内边距(比通用 region 更紧凑)
     pub fn spacing_right_dock_pad_x(&self) -> f32 {
         4.0
     }
     pub fn spacing_right_dock_pad_y(&self) -> f32 {
         4.0
     }
-    /// 左栏｜终端｜右栏之间的缝隙（露出 Central 底色）
+    /// 左栏｜终端｜右栏之间的缝隙(露出 Central 底色)
     pub fn spacing_region_gap(&self) -> f32 {
         6.0
     }
-    /// 右 dock 与终端、相邻 dock 之间的 `bg_body` 缝宽（独立于 [`spacing_region_gap`]）。
+    /// 右 dock 与终端、相邻 dock 之间的 `bg_body` 缝宽(独立于 [`spacing_region_gap`])。
     pub fn spacing_dock_gap(&self) -> f32 {
         3.0
     }
-    /// 右 dock 面板与窗口右缘缝宽（细缝即可；小于 [`spacing_work_area_pad`]）
+    /// 右 dock 面板与窗口右缘缝宽(细缝即可；小于 [`spacing_work_area_pad`])
     pub fn spacing_right_dock_screen_inset(&self) -> f32 {
         // 统一左/右列宽：右 dock 不再额外吃掉可视宽度
         0.0
@@ -2417,7 +2421,7 @@ impl Theme {
         4.0
     }
 
-    /// 右 `SidePanel` 外框：在屏右缘留出 `bg_body` 缝（仅 `right` 非零）
+    /// 右 `SidePanel` 外框：在屏右缘留出 `bg_body` 缝(仅 `right` 非零)
     pub fn margin_right_dock_screen_outer(&self) -> egui::Margin {
         let g = self.spacing_right_dock_screen_inset();
         egui::Margin {
@@ -2469,7 +2473,7 @@ impl Theme {
     pub fn spacing_tool_btn_gap(&self) -> f32 {
         3.0
     } // 工具按钮间距
-    /// 右 dock 标题行「＋ / ×」距面板右缘（避免贴边被裁切）
+    /// 右 dock 标题行「＋ / ×」距面板右缘(避免贴边被裁切)
     pub fn spacing_dock_panel_trailing_pad(&self) -> f32 {
         4.0
     }
@@ -2480,7 +2484,7 @@ impl Theme {
     pub fn spacing_title_bar_x(&self) -> f32 {
         16.0
     } // 标题栏左右 padding
-    /// 顶栏菜单行左内边距（macOS 系统已占左侧，窗口内菜单更靠左）
+    /// 顶栏菜单行左内边距(macOS 系统已占左侧，窗口内菜单更靠左)
     pub fn spacing_menu_bar_left(&self) -> f32 {
         #[cfg(target_os = "macos")]
         {
@@ -2502,7 +2506,7 @@ impl Theme {
         8.0
     } // 主区域 body padding
 
-    // ── 圆角系统（按设计规范 §7） ──
+    // ── 圆角系统(按设计规范 §7) ──
     pub fn radius_window(&self) -> f32 {
         10.0
     } // 窗口
@@ -2535,14 +2539,14 @@ impl Theme {
     } // 状态栏按钮
     pub fn radius_tag(&self) -> f32 {
         3.0
-    } // 标签（team/personal）
+    } // 标签(team/personal)
     pub fn radius_category(&self) -> f32 {
         3.0
     } // 分类标签
     pub fn radius_restore_btn(&self) -> f32 {
         3.0
     } // 复原按钮
-    /// 标题栏红绿灯圆点半径（直径 11px，与原型 `.dot` 一致）
+    /// 标题栏红绿灯圆点半径(直径 11px，与原型 `.dot` 一致)
     pub fn radius_traffic_light(&self) -> f32 {
         5.5
     }
@@ -2588,11 +2592,11 @@ impl Theme {
     pub fn status_bar_height(&self) -> f32 {
         0.0
     }
-    /// 左侧 Activity Rail 宽度（全平台统一）。
+    /// 左侧 Activity Rail 宽度(全平台统一)。
     pub fn activity_rail_width(&self) -> f32 {
         48.0
     }
-    /// Rail 完全隐藏时的左缘恢复条宽度（可点开回）。
+    /// Rail 完全隐藏时的左缘恢复条宽度(可点开回)。
     pub fn activity_rail_collapsed_strip_width(&self) -> f32 {
         8.0
     }
@@ -2600,7 +2604,7 @@ impl Theme {
     pub fn size_activity_rail_btn(&self) -> f32 {
         40.0
     }
-    /// Activity Rail 内图标绘制边长（略大于通用 glyph，便于辨认）。
+    /// Activity Rail 内图标绘制边长(略大于通用 glyph，便于辨认)。
     pub fn size_activity_rail_icon(&self) -> f32 {
         22.0
     }
@@ -2624,7 +2628,7 @@ impl Theme {
     pub fn toast_title_body_gap(&self) -> f32 {
         4.0
     }
-    /// 按级别着色的 Toast 底（标题+正文布局用，一眼区分严重度）。
+    /// 按级别着色的 Toast 底(标题+正文布局用，一眼区分严重度)。
     pub fn toast_fill(&self, accent: Color32) -> Color32 {
         let base = if self.is_light_theme() {
             self.color_panel_surface()
@@ -2639,7 +2643,7 @@ impl Theme {
         let t = if self.is_light_theme() { 0.55 } else { 0.45 };
         Self::lerp_rgb(accent, self.chrome_bar_fill(), 1.0 - t)
     }
-    /// Toast 标题字色（跟级别走）。
+    /// Toast 标题字色(跟级别走)。
     pub fn toast_title_color(&self, accent: Color32) -> Color32 {
         if self.is_light_theme() {
             Self::lerp_rgb(accent, Color32::BLACK, 0.35)
@@ -2652,11 +2656,11 @@ impl Theme {
         let lerp = |x: u8, y: u8| ((x as f32) * (1.0 - t) + (y as f32) * t).round() as u8;
         Color32::from_rgb(lerp(a.r(), b.r()), lerp(a.g(), b.g()), lerp(a.b(), b.b()))
     }
-    /// 顶栏菜单行（终端 / 编辑 / 视图 / 工具 / 帮助）
+    /// 顶栏菜单行(终端 / 编辑 / 视图 / 工具 / 帮助)
     pub fn menu_bar_height(&self) -> f32 {
         32.0
     }
-    /// 顶栏 / 底栏内容区可用高度（Panel 高度减去垂直 margin）
+    /// 顶栏 / 底栏内容区可用高度(Panel 高度减去垂直 margin)
     pub fn chrome_bar_content_height(&self, bar_height: f32) -> f32 {
         (bar_height - self.margin_chrome_bar().sum().y).max(20.0)
     }
@@ -2668,7 +2672,7 @@ impl Theme {
     }
 
     // ── 常用 alpha 颜色辅助方法 ──
-    /// 暗夜：在表面上的前景 alpha（白字）；浅色/彩色：沿用 `fg_high` 的 RGB。
+    /// 暗夜：在表面上的前景 alpha(白字)；浅色/彩色：沿用 `fg_high` 的 RGB。
     pub fn fg_high_alpha(&self, alpha: u8) -> Color32 {
         if self.is_light_theme() || self.uses_solid_fg_palette() {
             let c = self.fg_high.to_color32();
@@ -2769,7 +2773,7 @@ impl Theme {
         self.red_alpha(128)
     } // 半透明红色
 
-    /// 图表网格线等极淡分隔（随前景色变化，适配明暗主题）
+    /// 图表网格线等极淡分隔(随前景色变化，适配明暗主题)
     pub fn subtle_line_color(&self) -> Color32 {
         self.fg_high_alpha(20)
     }

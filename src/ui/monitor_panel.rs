@@ -18,15 +18,15 @@ use crate::ui::theme::Theme;
 pub struct MonitorPanel {
     /// 监控器(None 表示未初始化)
     monitor: Option<Monitor>,
-    /// 是否自动刷新（默认开启，与产品稿「自动刷新 5s」一致）
+    /// 是否自动刷新(默认开启，与产品稿「自动刷新 5s」一致)
     auto_refresh: bool,
     /// 刷新间隔(秒)
     refresh_interval_secs: f32,
-    /// CPU 告警阈值（%）
+    /// CPU 告警阈值(%)
     alert_cpu_pct: f32,
-    /// 内存告警阈值（%）
+    /// 内存告警阈值(%)
     alert_mem_pct: f32,
-    /// 磁盘告警阈值（%）
+    /// 磁盘告警阈值(%)
     alert_disk_pct: f32,
     /// 上次 UI 刷新时间(秒,`egui` input time)
     last_ui_refresh: f64,
@@ -34,7 +34,7 @@ pub struct MonitorPanel {
     last_error: Option<String>,
     /// 经 shell 泵串行执行的 `exec` 结果通道(未完成时 UI 仍可交互)
     pending_raw: Option<Receiver<Result<String, String>>>,
-    /// 本帧 `SidePanel` 槽位矩形（`ui.max_rect()`，与布局占位一致）
+    /// 本帧 `SidePanel` 槽位矩形(`ui.max_rect()`，与布局占位一致)
     last_panel_slot_rect: Option<egui::Rect>,
     pending_send_to_ai: bool,
 }
@@ -183,7 +183,7 @@ impl MonitorPanel {
         self.monitor.is_some()
     }
 
-    /// 底栏摘要：CPU / 内存（监控侧栏打开且有有效采集数据时返回）
+    /// 底栏摘要：CPU / 内存(监控侧栏打开且有有效采集数据时返回)
     pub fn status_bar_metrics_line(
         &self,
         egui_ctx: &egui::Context,
@@ -204,12 +204,12 @@ impl MonitorPanel {
         ))
     }
 
-    /// 判断当前快照是否已具备有效指标（避免全零占位触发误告警）。
+    /// 判断当前快照是否已具备有效指标(避免全零占位触发误告警)。
     fn stats_look_valid(stats: &ServerStats) -> bool {
         stats.memory_total > 0 || stats.disk_total > 0 || stats.uptime_secs > 0
     }
 
-    /// 当前采样下超过阈值的告警文案（本地规则，Week 10 告警设置的最小可用版）。
+    /// 当前采样下超过阈值的告警文案(本地规则，Week 10 告警设置的最小可用版)。
     fn collect_alerts_with(
         loc: Locale,
         cpu_th: f32,
@@ -294,7 +294,7 @@ impl MonitorPanel {
         self.last_panel_slot_rect
     }
 
-    /// 注册监控栏槽位（须在 Central 之前）。正文见 [`show_foreground_panel`]。
+    /// 注册监控栏槽位(须在 Central 之前)。正文见 [`show_foreground_panel`]。
     pub fn show_side_panel(
         &mut self,
         ctx: &egui::Context,
@@ -332,7 +332,7 @@ impl MonitorPanel {
         let _ = theme;
     }
 
-    /// Central 之后绘制监控侧栏（避免被 CentralPanel 盖住）。
+    /// Central 之后绘制监控侧栏(避免被 CentralPanel 盖住)。
     pub fn show_foreground_panel(
         &mut self,
         ctx: &egui::Context,
@@ -527,7 +527,7 @@ impl MonitorPanel {
                 egui::RichText::new(i18n::tr(
                     ui.ctx(),
                     "When exceeded, show alerts in header and below (this session only).",
-                    "超出阈值时在标题与下方显示告警（仅当前会话）。",
+                    "超出阈值时在标题与下方显示告警(仅当前会话)。",
                 ))
                     .size(theme.font_size_small())
                     .color(theme.text_tertiary()),
@@ -842,7 +842,7 @@ impl MonitorPanel {
                 egui::RichText::new(i18n::tr(
                     ui.ctx(),
                     "Waiting for samples… (curve needs at least two refreshes)",
-                    "等待数据采集…（至少两次刷新后显示曲线）",
+                    "等待数据采集…(至少两次刷新后显示曲线)",
                 ))
                     .size(theme.font_size_menu_item())
                     .color(theme.text_tertiary()),
@@ -1295,7 +1295,7 @@ fn nearest_history_index(history: &[ServerStats], t0: std::time::Instant, plot_x
         .unwrap_or(0)
 }
 
-/// Frame 默认随内容收缩；右 dock 内卡片应铺满正文宽（勿 `set_min_width(max_rect)`）。
+/// Frame 默认随内容收缩；右 dock 内卡片应铺满正文宽(勿 `set_min_width(max_rect)`)。
 fn show_dock_frame<R>(
     ui: &mut egui::Ui,
     frame: egui::Frame,

@@ -1,7 +1,7 @@
 use super::{ActiveRightDock, MistTermApp};
 use eframe::egui;
 
-/// FUNCTIONAL_SPEC §8.2 窗口宽度档位（用于提示与底栏 chip）
+/// FUNCTIONAL_SPEC §8.2 窗口宽度档位(用于提示与底栏 chip)
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ResponsiveLayoutBand {
     Narrow,
@@ -31,11 +31,11 @@ impl MistTermApp {
 
     #[inline]
     pub(super) fn right_dock_open_allowed(w: f32) -> bool {
-        // 单抽屉布局：中等宽度即可打开（不再要求 ≥1200）。
+        // 单抽屉布局：中等宽度即可打开(不再要求 ≥1200)。
         w.is_finite() && w >= Self::RESP_LAYOUT_NARROW_LT_PX
     }
 
-    /// 关闭所有右侧 `SidePanel`（不含居中 `Window` 如片段库弹窗）
+    /// 关闭所有右侧 `SidePanel`(不含居中 `Window` 如片段库弹窗)
     pub(super) fn close_all_right_dock_panels(&mut self) {
         self.show_fragment_panel = false;
         self.show_monitor_panel = false;
@@ -50,7 +50,7 @@ impl MistTermApp {
         self.sync_monitor_panel_to_active_tab();
     }
 
-    /// 打开指定右 dock；先关闭其它（全平台单抽屉互斥）。
+    /// 打开指定右 dock；先关闭其它(全平台单抽屉互斥)。
     pub(super) fn open_right_dock_panel(&mut self, panel: ActiveRightDock) {
         self.close_all_right_dock_panels();
         match panel {
@@ -67,11 +67,13 @@ impl MistTermApp {
                 self.show_port_forward_panel = true;
                 self.port_forward_last_tab = self.active_tab;
             }
-            ActiveRightDock::Ai => self.show_ai_panel = true,
+            ActiveRightDock::Ai => {
+                self.show_ai_panel = true;
+            }
         }
     }
 
-    /// 窄屏收起连接抽屉与右面板；宽屏不再自动展开连接栏（由 Activity Rail 控制）。
+    /// 窄屏收起连接抽屉与右面板；宽屏不再自动展开连接栏(由 Activity Rail 控制)。
     pub(super) fn apply_responsive_layout(&mut self, ctx: &egui::Context) {
         let w = Self::layout_window_width(ctx);
         let Some(band) = Self::layout_band_from_width(w) else {
@@ -95,7 +97,7 @@ impl MistTermApp {
                 Self::RESP_LAYOUT_NARROW_LT_PX,
             ),
             UiLanguage::Zh => format!(
-                "窗口较窄（约 {:.0}px），拉宽到 {:.0}px 以上可打开面板",
+                "窗口较窄(约 {:.0}px)，拉宽到 {:.0}px 以上可打开面板",
                 window_width,
                 Self::RESP_LAYOUT_NARROW_LT_PX,
             ),
@@ -115,7 +117,7 @@ impl MistTermApp {
                 Self::RESP_LAYOUT_NARROW_LT_PX,
             ),
             UiLanguage::Zh => format!(
-                "窗口较窄（约 {:.0}px），拉宽到 {:.0}px 以上后再用 {k} 打开片段",
+                "窗口较窄(约 {:.0}px)，拉宽到 {:.0}px 以上后再用 {k} 打开片段",
                 window_width,
                 Self::RESP_LAYOUT_NARROW_LT_PX,
             ),

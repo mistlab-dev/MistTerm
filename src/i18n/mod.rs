@@ -125,9 +125,9 @@ pub fn session_sort_chip_short(ctx: &egui::Context, s: SessionSortBy) -> &'stati
 
 /// 会话「分组名」的展示层翻译。
 ///
-/// 分组名持久化在本地 [`SessionConfig::group`]（明文字符串），早期版本直接写中文的
+/// 分组名持久化在本地 [`SessionConfig::group`](明文字符串)，早期版本直接写中文的
 /// `"默认"` / `"团队"`；英文 UI 下会原封不动显示出中文。本函数把两个**保留词**归一化后走
-/// 翻译，用户自定义分组名（非匹配）按原样返回。
+/// 翻译，用户自定义分组名(非匹配)按原样返回。
 pub fn session_group_display_name(ctx: &egui::Context, stored_name: &str) -> String {
     let norm = stored_name.trim();
     // 兼容中文旧数据与英文 UI 创建的分组名
@@ -202,7 +202,7 @@ pub fn localize_backend_error(lang: UiLanguage, err: &str) -> String {
     }
     if s.starts_with("Transfer cancelled by user (") {
         return format!(
-            "传输已由用户取消（{}）",
+            "传输已由用户取消({})",
             crate::platform::terminal_interrupt_accel()
         );
     }

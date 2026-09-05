@@ -53,7 +53,7 @@ impl MistTermApp {
                             if crate::ui::chrome::modal_primary_button(
                                 ui,
                                 theme,
-                                crate::i18n::tr(ctx, "ZMODEM (recommended)", "ZMODEM（推荐）"),
+                                crate::i18n::tr(ctx, "ZMODEM (recommended)", "ZMODEM(推荐)"),
                             )
                                 .clicked()
                             {
@@ -162,7 +162,7 @@ impl MistTermApp {
                                 crate::i18n::tr(
                                     ctx,
                                     "Delete session profile for \"{0}\"? This cannot be undone.",
-                                    "确认删除「{0}」的会话配置？此操作不可恢复。",
+                                    "确认删除「{0}」的会话配置?此操作不可恢复。",
                                 )
                                 .replace("{0}", &del_name),
                             )
@@ -254,7 +254,7 @@ impl MistTermApp {
                                 crate::i18n::tr(
                                     ctx,
                                     "Local quick check flagged a sensitive operation (not a server policy):",
-                                    "本地快捷提示检测到敏感操作（非服务器强制策略）：",
+                                    "本地快捷提示检测到敏感操作(非服务器强制策略)：",
                                 )
                             })
                             .size(theme.font_size_normal())
@@ -358,7 +358,7 @@ impl MistTermApp {
                                     crate::i18n::tr(
                                         ctx,
                                         "Tab \"{0}\" is still connected or negotiating. Close anyway?",
-                                        "标签「{0}」仍连接或握手中，确定关闭？",
+                                        "标签「{0}」仍连接或握手中，确定关闭?",
                                     )
                                     .replace("{0}", &tab_title),
                                 )

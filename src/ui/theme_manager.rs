@@ -3,14 +3,14 @@ use eframe::egui::{self, Color32};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// 曾用其它存储名保存的内置暗色主题（加载配置时迁移到「暗夜」）
+/// 曾用其它存储名保存的内置暗色主题(加载配置时迁移到「暗夜」)
 const LEGACY_DARK_THEME_STORAGE_NAMES: &[&str] = &["Win11暗色", "现代暗色"];
 
 fn is_legacy_dark_theme_storage_name(name: &str) -> bool {
     LEGACY_DARK_THEME_STORAGE_NAMES.contains(&name)
 }
 
-/// 主题存储名是否为已废弃的内置暗色项（偏好/迁移用）
+/// 主题存储名是否为已废弃的内置暗色项(偏好/迁移用)
 pub fn is_deprecated_dark_theme_storage_name(name: &str) -> bool {
     is_legacy_dark_theme_storage_name(name)
 }
@@ -28,7 +28,7 @@ pub struct ThemeManager {
 }
 
 impl ThemeManager {
-    /// 创建新的主题管理器（包含所有内置主题）
+    /// 创建新的主题管理器(包含所有内置主题)
     pub fn new() -> Self {
         Self {
             themes: vec![
@@ -119,7 +119,7 @@ impl ThemeManager {
             .join("theme.json")
     }
 
-    /// 应用主题到 egui Context（同索引重复调用为 no-op）。
+    /// 应用主题到 egui Context(同索引重复调用为 no-op)。
     pub fn apply_theme(&mut self, ctx: &egui::Context) {
         if self.applied_ctx_index == Some(self.current) {
             return;
@@ -138,13 +138,13 @@ impl ThemeManager {
         // 应用自定义颜色
         style.visuals.panel_fill = theme.surface_panel();
         style.visuals.faint_bg_color = theme.surface_elevated();
-        // TextEdit / 裸输入框底色（勿用终端色，否则侧栏表单与面板融在一起）
+        // TextEdit / 裸输入框底色(勿用终端色，否则侧栏表单与面板融在一起)
         style.visuals.extreme_bg_color = theme.color_text_input_fill();
         style.visuals.window_fill = theme.surface_panel();
         style.visuals.window_stroke = theme.panel_stroke();
         style.visuals.widgets.noninteractive.weak_bg_fill = theme.surface_body();
 
-        // 按钮 / ComboBox：暗夜浅灰实底；其它主题透明底 + 悬停 accent 弱底（裸 checkbox 请用 form_checkbox）
+        // 按钮 / ComboBox：暗夜浅灰实底；其它主题透明底 + 悬停 accent 弱底(裸 checkbox 请用 form_checkbox)
         style.visuals.widgets.noninteractive.bg_fill = theme.color_subtle_inset_fill();
         style.visuals.widgets.noninteractive.bg_stroke = theme.divider_stroke();
         if theme.uses_modern_palette() {
@@ -170,7 +170,7 @@ impl ThemeManager {
             style.visuals.widgets.active.bg_fill = theme.color_widget_active_fill();
         }
 
-        // 文字颜色（语义 token；占位符仍建议 RichText + color_form_hint）
+        // 文字颜色(语义 token；占位符仍建议 RichText + color_form_hint)
         style.visuals.override_text_color = Some(theme.text_primary());
         let widget_label = if is_dark {
             theme.text_primary()
@@ -187,7 +187,7 @@ impl ThemeManager {
         style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, theme.text_primary());
         style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, theme.text_primary());
 
-        // 文本拖选（仅 TextEdit；菜单/列表选中用 list_row_*，见 apply_popup_widget_visuals）
+        // 文本拖选(仅 TextEdit；菜单/列表选中用 list_row_*，见 apply_popup_widget_visuals)
         style.visuals.selection.bg_fill = theme.color_text_selection_bg();
         style.visuals.selection.stroke.color = theme.color_text_selection_fg();
         style.visuals.hyperlink_color = theme.accent_color();
@@ -197,34 +197,35 @@ impl ThemeManager {
         style.spacing.item_spacing = egui::vec2(8.0, 8.0);
         style.spacing.button_padding = egui::vec2(12.0, 6.0);
 
-        // §0.2：TextStyle 档位与语义字号一致
+        // §0.2：TextStyle 档位与语义字号一致；界面比例字体统一走 ui_font_id（中英同一套）。
+        let ui_font = |size: f32| crate::platform::ui_font_id(size);
         style.text_styles.insert(
             egui::TextStyle::Name("xs9".into()),
-            egui::FontId::proportional(theme.font_size_tag()),
+            ui_font(theme.font_size_tag()),
         );
         style.text_styles.insert(
             egui::TextStyle::Name("sm10".into()),
-            egui::FontId::proportional(theme.font_size_caption()),
+            ui_font(theme.font_size_caption()),
         );
         style.text_styles.insert(
             egui::TextStyle::Name("md11".into()),
-            egui::FontId::proportional(theme.font_size_ui_control()),
+            ui_font(theme.font_size_ui_control()),
         );
         style.text_styles.insert(
             egui::TextStyle::Name("base12".into()),
-            egui::FontId::proportional(theme.font_size_body()),
+            ui_font(theme.font_size_body()),
         );
         style.text_styles.insert(
             egui::TextStyle::Name("lg13".into()),
-            egui::FontId::proportional(theme.font_size_terminal()),
+            ui_font(theme.font_size_terminal()),
         );
         style.text_styles.insert(
             egui::TextStyle::Name("xl15".into()),
-            egui::FontId::proportional(theme.font_size_dock_title()),
+            ui_font(theme.font_size_dock_title()),
         );
         style.text_styles.insert(
             egui::TextStyle::Body,
-            egui::FontId::proportional(theme.font_size_body()),
+            ui_font(theme.font_size_body()),
         );
         style.text_styles.insert(
             egui::TextStyle::Monospace,
@@ -232,15 +233,15 @@ impl ThemeManager {
         );
         style.text_styles.insert(
             egui::TextStyle::Button,
-            egui::FontId::proportional(theme.font_size_body()),
+            ui_font(theme.font_size_body()),
         );
         style.text_styles.insert(
             egui::TextStyle::Heading,
-            egui::FontId::proportional(theme.font_size_section_title()),
+            ui_font(theme.font_size_section_title()),
         );
         style.text_styles.insert(
             egui::TextStyle::Small,
-            egui::FontId::proportional(theme.font_size_caption()),
+            ui_font(theme.font_size_caption()),
         );
 
         ctx.set_style(style);
@@ -251,6 +252,12 @@ impl ThemeManager {
 
     fn invalidate_applied_style(&mut self) {
         self.applied_ctx_index = None;
+    }
+
+    /// 强制按当前主题重写 egui Style(字体热切换后调用)。
+    pub fn invalidate_and_apply(&mut self, ctx: &egui::Context) {
+        self.invalidate_applied_style();
+        self.apply_theme(ctx);
     }
 
     /// 获取当前主题
@@ -273,7 +280,7 @@ impl ThemeManager {
         &self.themes
     }
 
-    /// 切换到指定主题（按名称）
+    /// 切换到指定主题(按名称)
     pub fn set_theme(&mut self, name: &str) -> bool {
         for (i, theme) in self.themes.iter().enumerate() {
             if theme.name == name {
@@ -287,7 +294,7 @@ impl ThemeManager {
         false
     }
 
-    /// 切换到指定主题（按索引）
+    /// 切换到指定主题(按索引)
     pub fn set_theme_index(&mut self, index: usize) -> bool {
         if index < self.themes.len() {
             if self.current != index {

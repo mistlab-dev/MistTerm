@@ -1,4 +1,4 @@
-//! 云端同步 UI：设置项 + 导出/导入本地包（MVP，无真实账户 API）
+//! 云端同步 UI：设置项 + 导出/导入本地包(MVP，无真实账户 API)
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,7 +18,7 @@ use crate::ui::chrome;
 use crate::ui::layout_util;
 use crate::ui::theme::{Theme, ThemeManager};
 
-/// 导出/导入所需的本地路径与可变引用（由主窗口注入）
+/// 导出/导入所需的本地路径与可变引用(由主窗口注入)
 pub struct CloudSyncDeps<'a> {
     pub fragments_path: &'a PathBuf,
     pub sessions_path: &'a PathBuf,
@@ -30,17 +30,17 @@ pub struct CloudSyncDeps<'a> {
     pub audit: Option<&'a AuditLogger>,
 }
 
-/// 同步面板（右侧栏）
+/// 同步面板(右侧栏)
 pub struct CloudSyncPanel {
     pub open: bool,
     pub settings: CloudSyncSettings,
     pub message: String,
     /// 待宿主 `notify_error` 的失败文案。
     pending_toast_error: Option<String>,
-    /// 从同步包导入片段时是否与现有条目按 id 合并（否则整库替换）
+    /// 从同步包导入片段时是否与现有条目按 id 合并(否则整库替换)
     pub merge_fragments_on_package_import: bool,
     pending_import_dir: Option<PathBuf>,
-    /// 本帧 `SidePanel` 槽位（Central 之后 Foreground 重绘用）。
+    /// 本帧 `SidePanel` 槽位(Central 之后 Foreground 重绘用)。
     last_panel_slot_rect: Option<egui::Rect>,
 }
 
@@ -120,7 +120,7 @@ impl CloudSyncPanel {
                     theme,
                     loc.tr(
                         "Team account sign-in below; pack export does not include team tokens.",
-                        "下方可登录团队账户；同步包不含 team_tokens（安全）。",
+                        "下方可登录团队账户；同步包不含 team_tokens(安全)。",
                     ),
                 ));
             });
@@ -290,7 +290,7 @@ impl CloudSyncPanel {
             let preview = if wrote.is_empty() {
                 loc.tr(
                     "(Nothing selected to export or sources missing)",
-                    "（未勾选可导出项或源文件缺失）",
+                    "(未勾选可导出项或源文件缺失)",
                 )
                 .to_string()
             } else {
@@ -324,7 +324,7 @@ impl CloudSyncPanel {
         let Some(dir) = FileDialog::new()
             .set_title(loc.tr(
                 "Choose sync pack folder (fragments.json, sessions.json, …)",
-                "选择同步包目录（含 fragments.json、sessions.json 等）",
+                "选择同步包目录(含 fragments.json、sessions.json 等)",
             ))
             .pick_folder()
         else {
@@ -451,7 +451,7 @@ impl CloudSyncPanel {
                     parts.push(
                         loc.tr(
                             "Settings: restored from pack (restart may be needed for some options)",
-                            "偏好设置：已从包还原（部分选项可能需重启生效）",
+                            "偏好设置：已从包还原(部分选项可能需重启生效)",
                         )
                         .to_string(),
                     );
@@ -474,7 +474,7 @@ impl CloudSyncPanel {
                         svc.state = TeamState::load();
                     }
                     parts.push(
-                        loc.tr("Team state: restored (tokens not in pack)", "团队状态：已还原（包内不含令牌）")
+                        loc.tr("Team state: restored (tokens not in pack)", "团队状态：已还原(包内不含令牌)")
                             .to_string(),
                     );
                 }
@@ -533,7 +533,7 @@ impl CloudSyncPanel {
             return loc
                 .tr(
                     "Nothing importable here (enable items and ensure files exist)",
-                    "所选目录无可导入项（请勾选同步项且包内需含对应文件）",
+                    "所选目录无可导入项(请勾选同步项且包内需含对应文件)",
                 )
                 .to_string();
         }
@@ -555,7 +555,7 @@ impl CloudSyncPanel {
         parts.join(" · ")
     }
 
-    /// 仅占右栏布局槽（正文在 Central 之后 [`show_foreground_panel`] 绘制）。
+    /// 仅占右栏布局槽(正文在 Central 之后 [`show_foreground_panel`] 绘制)。
     #[inline]
     pub(crate) fn last_panel_slot_rect(&self) -> Option<egui::Rect> {
         self.last_panel_slot_rect
@@ -598,7 +598,7 @@ impl CloudSyncPanel {
         let _ = theme;
     }
 
-    /// Central 之后绘制云端同步正文（避免被 CentralPanel 盖住）。
+    /// Central 之后绘制云端同步正文(避免被 CentralPanel 盖住)。
     pub fn show_foreground_panel(
         &mut self,
         ctx: &egui::Context,
@@ -660,7 +660,7 @@ impl CloudSyncPanel {
                     i18n::tr(
                         ctx,
                         "Local sync pack: back up / restore config between folders (not online cloud storage)",
-                        "本地同步包：在文件夹间备份/恢复配置（非在线云盘）",
+                        "本地同步包：在文件夹间备份/恢复配置(非在线云盘)",
                     ),
                 ));
                 ui.add_space(theme.spacing_sm());
@@ -789,7 +789,7 @@ impl CloudSyncPanel {
                                 &mut cols[1],
                                 theme,
                                 &mut self.settings.sync_team_config,
-                                loc.tr("Team config (no tokens)", "团队配置（不含令牌）"),
+                                loc.tr("Team config (no tokens)", "团队配置(不含令牌)"),
                             );
                         });
                         ui.label(chrome::rich_caption(
@@ -830,7 +830,7 @@ impl CloudSyncPanel {
                             );
                             ui.label(chrome::rich_caption(
                                 theme,
-                                loc.tr("minutes (0 = manual only)", "分钟（0 = 仅手动）"),
+                                loc.tr("minutes (0 = manual only)", "分钟(0 = 仅手动)"),
                             ));
                         });
                         ui.label(chrome::rich_caption(
@@ -852,7 +852,7 @@ impl CloudSyncPanel {
                             ui,
                             theme,
                             &mut self.merge_fragments_on_package_import,
-                            loc.tr("Merge with existing library (skip duplicate ids)", "与现有库合并（按 id 跳过重复）"),
+                            loc.tr("Merge with existing library (skip duplicate ids)", "与现有库合并(按 id 跳过重复)"),
                         );
                         ui.label(chrome::rich_caption(
                             theme,
@@ -932,7 +932,7 @@ impl CloudSyncPanel {
                         if self.settings.sync_credentials && dir.join("credentials.json").exists() {
                             ui.label(loc.tr(
                                 "• Will overwrite local encrypted credentials (same device key required).",
-                                "• 将用包内凭证库覆盖本机加密文件（需同源设备密钥才解密）。",
+                                "• 将用包内凭证库覆盖本机加密文件(需同源设备密钥才解密)。",
                             ));
                         }
                         ui.horizontal(|ui| {

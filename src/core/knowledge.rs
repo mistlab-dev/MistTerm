@@ -1,7 +1,7 @@
-//! 团队知识检索与来源锚点（v1.1.3）。
+//! 团队知识检索与来源锚点(v1.1.3)。
 //!
-//! - 主检索：团队/个人命令片段（关键词意图打分，非 embedding）
-//! - 可选：MistDocs `GET /v1/teams/{id}/docs/search`（404 软失败）
+//! - 主检索：团队/个人命令片段(关键词意图打分，非 embedding)
+//! - 可选：MistDocs `GET /v1/teams/{id}/docs/search`(404 软失败)
 //! - 统一 [`KnowledgeHit`]，供拦截 Toast、「问：我们怎么」与 Model 兜底标明来源
 
 use crate::core::fragment_recommendations::{
@@ -42,12 +42,12 @@ impl KnowledgeSource {
             Self::TeamFragment => "团队片段",
             Self::PersonalFragment => "个人片段",
             Self::TeamDoc => "团队文档",
-            Self::Model => "模型（非团队知识）",
+            Self::Model => "模型 (非团队知识)",
         }
     }
 }
 
-/// 一条可展示的知识命中（片段或文档段落）。
+/// 一条可展示的知识命中(片段或文档段落)。
 #[derive(Debug, Clone)]
 pub struct KnowledgeHit {
     pub source: KnowledgeSource,
@@ -56,7 +56,7 @@ pub struct KnowledgeHit {
     pub body: String,
     /// 来源锚点：`fragment:{id}` / `doc:{id}#{slug}` / `model:fallback`
     pub anchor: String,
-    /// 排序分（越大越靠前）。
+    /// 排序分(越大越靠前)。
     pub score: i64,
     /// 若来自片段，保留完整统计以便插入/沉底。
     pub fragment: Option<FragmentStats>,
@@ -103,7 +103,7 @@ impl KnowledgeHit {
     }
 }
 
-/// MistDocs 搜索结果条目（与 Team API 契约对齐；服务端未实现时客户端得到空列表）。
+/// MistDocs 搜索结果条目(与 Team API 契约对齐；服务端未实现时客户端得到空列表)。
 #[derive(Debug, Clone, Default)]
 pub struct DocSearchHit {
     pub id: String,

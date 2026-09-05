@@ -1,7 +1,7 @@
 //! 主窗口布局 shell：egui 区域注册顺序见 `docs/product/LAYOUT.md`
 //!
 //! `MistTermApp::update` 负责 tick / 快捷键；本模块编排顶栏、Activity Rail、
-//! 右抽屉、中央工作区、Toast 与弹窗层（全平台统一，无常驻底栏）。
+//! 右抽屉、中央工作区、Toast 与弹窗层(全平台统一，无常驻底栏)。
 
 use super::*;
 use crate::core::SESSION_COLOR_TAGS;
@@ -13,8 +13,8 @@ impl MistTermApp {
         frame: &mut eframe::Frame,
         theme: &crate::ui::theme::Theme,
     ) {
-        // 顶栏：非 macOS 为窗口内菜单；macOS 用系统菜单栏（与 native_menu 安装时机解耦：
-        // 用 `cfg` 直接关掉应用内 top_chrome，避免首帧或安装失败时露出一条 chrome_bar 颜色）。
+        // 顶栏：非 macOS 为窗口内菜单；macOS 用系统菜单栏(与 native_menu 安装时机解耦：
+        // 用 `cfg` 直接关掉应用内 top_chrome，避免首帧或安装失败时露出一条 chrome_bar 颜色)。
         let pending = self.ssh_pending_import_count();
         let _ = pending; // SSH 待导入改走右下角需确认 Toast，顶栏不再显示 chip
         #[cfg(target_os = "macos")]
@@ -41,10 +41,10 @@ impl MistTermApp {
                 });
         }
 
-        // 左侧 Activity Rail（可完全隐藏；隐藏时仍保留左缘窄恢复条）。
+        // 左侧 Activity Rail(可完全隐藏；隐藏时仍保留左缘窄恢复条)。
         self.show_activity_rail(ctx, theme);
 
-        // 右侧单抽屉：须先于 Central 注册（Foreground 重绘依赖）。
+        // 右侧单抽屉：须先于 Central 注册(Foreground 重绘依赖)。
         self.right_dock_outer_left_x = None;
         let dock_col_w = layout_util::clamp_sidebar_width(self.sidebar_width);
 
@@ -70,7 +70,7 @@ impl MistTermApp {
             );
         }
 
-        // SFTP（右侧面板；切换终端标签时重置远端路径并重新拉列表）
+        // SFTP(右侧面板；切换终端标签时重置远端路径并重新拉列表)
         if self.show_sftp_panel {
             if self.sftp_last_tab != self.active_tab {
                 self.sftp_last_tab = self.active_tab;
@@ -85,7 +85,7 @@ impl MistTermApp {
             );
         }
 
-        // 系统监控：切换终端标签时改为采集当前 SSH 会话（与 SFTP 侧栏一致）
+        // 系统监控：切换终端标签时改为采集当前 SSH 会话(与 SFTP 侧栏一致)
         if self.show_monitor_panel {
             if self.monitor_last_tab != self.active_tab {
                 self.monitor_last_tab = self.active_tab;
@@ -124,7 +124,7 @@ impl MistTermApp {
 
         // 主内容区：侧边栏 + 终端
         egui::CentralPanel::default()
-            // 不在 Frame 上铺底色（Central 后绘会盖住右栏）；工作区底色由侧栏/终端列各自 Frame 承担
+            // 不在 Frame 上铺底色(Central 后绘会盖住右栏)；工作区底色由侧栏/终端列各自 Frame 承担
             .frame(egui::Frame::none())
             .show(ctx, |ui| {
                 layout_util::clip_ui_before_right_dock(ui, self.right_dock_outer_left_x);
@@ -144,12 +144,12 @@ impl MistTermApp {
                 const WORK_BOTTOM_GAP: f32 = 1.0;
                 let work_top = work.min.y;
                 let work_bottom = work.max.y - WORK_BOTTOM_GAP;
-                // 列布局垂直铺满到 work 底缘；顶部不留 `bg_body` 缝（tab 条 / 侧栏标题栏直接贴顶）。
+                // 列布局垂直铺满到 work 底缘；顶部不留 `bg_body` 缝(tab 条 / 侧栏标题栏直接贴顶)。
                 let work_body = egui::Rect::from_min_max(
                     egui::pos2(work_inner.min.x, work_top),
                     egui::pos2(work_inner.max.x, work_bottom),
                 );
-                // 仅铺中央槽位 bg_body（clip=work，不越过右栏）；右栏正文在 Central 后以 Foreground 绘制
+                // 仅铺中央槽位 bg_body(clip=work，不越过右栏)；右栏正文在 Central 后以 Foreground 绘制
                 let work_painter = ui.painter().with_clip_rect(work);
                 work_painter.rect_filled(work, 0.0, theme.bg_body_color());
                 let seam_y = work.max.y - WORK_BOTTOM_GAP;
@@ -160,11 +160,11 @@ impl MistTermApp {
                     ui.set_clip_rect(work);
                     let layout_h = (work_bottom - work_top).max(1.0);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
-                        // 连接栏 / 拖把 / 终端三段紧贴：拖把本身就是 `bg_body` 缝（与右 dock 缝同色等宽），
+                        // 连接栏 / 拖把 / 终端三段紧贴：拖把本身就是 `bg_body` 缝(与右 dock 缝同色等宽)，
                         // 不再叠 `region_gap`，否则视觉缝 = 6+1+6=13 与右 dock 5 不一致。
                         ui.spacing_mut().item_spacing = egui::vec2(0.0, 0.0);
                         ui.set_min_height(layout_h);
-                        // 须用已分配子项的右缘，勿用 max_rect.min.x（仍是整行左缘，终端会盖住侧栏）
+                        // 须用已分配子项的右缘，勿用 max_rect.min.x(仍是整行左缘，终端会盖住侧栏)
                         let mut col_left = ui.max_rect().min.x;
                         if !self.sidebar_collapsed {
                             let connected_sessions: HashSet<String> = self
@@ -250,7 +250,7 @@ impl MistTermApp {
                         }
 
                         if !self.sidebar_collapsed {
-                            // 拖把宽度 = `spacing_dock_gap`（5px），同时充当连接栏与终端之间的 `bg_body` 缝隙；
+                            // 拖把宽度 = `spacing_dock_gap`(5px)，同时充当连接栏与终端之间的 `bg_body` 缝隙；
                             // 这样左/右两侧 dock 与终端之间的视觉缝完全一致。
                             let drag_w = theme.spacing_dock_gap().max(1.0);
                             let (drag_rect, drag_resp) = ui.allocate_exact_size(
@@ -378,7 +378,7 @@ impl MistTermApp {
                                                             crate::i18n::tr(
                                                                 ctx,
                                                                 "Disconnect SSH (keep output)",
-                                                                "断开 SSH（保留输出）",
+                                                                "断开 SSH(保留输出)",
                                                             ),
                                                         )
                                                         .clicked()
@@ -1024,7 +1024,7 @@ impl MistTermApp {
                                 crate::i18n::tr(
                                     ctx,
                                     "~/.ssh/id_rsa (empty = password or default keys)",
-                                    "~/.ssh/id_rsa（留空则用密码或系统默认密钥）",
+                                    "~/.ssh/id_rsa(留空则用密码或系统默认密钥)",
                                 ),
                                 form_w,
                                 false,
@@ -1036,7 +1036,7 @@ impl MistTermApp {
                                 crate::i18n::tr(
                                     ctx,
                                     "Use SSH agent (ssh-agent / Pageant)",
-                                    "使用 SSH Agent（ssh-agent / Pageant）",
+                                    "使用 SSH Agent(ssh-agent / Pageant)",
                                 ),
                             );
 
@@ -1049,7 +1049,7 @@ impl MistTermApp {
                                 crate::i18n::tr(
                                     ctx,
                                     "bastion or user@bastion:22 (comma-separated hops)",
-                                    "bastion 或 user@bastion:22（多跳逗号分隔；匹配已保存会话名）",
+                                    "bastion 或 user@bastion:22(多跳逗号分隔；匹配已保存会话名)",
                                 ),
                                 form_w,
                                 false,
@@ -1086,7 +1086,7 @@ impl MistTermApp {
                                     .hint_text(crate::i18n::tr(
                                         ctx,
                                         "8080:127.0.0.1:80 (one per line)",
-                                        "8080:127.0.0.1:80（每行一条）",
+                                        "8080:127.0.0.1:80(每行一条)",
                                     )),
                             );
 
@@ -1106,7 +1106,7 @@ impl MistTermApp {
                                     .hint_text(crate::i18n::tr(
                                         ctx,
                                         "8080:127.0.0.1:3000 (one per line)",
-                                        "8080:127.0.0.1:3000（每行一条）",
+                                        "8080:127.0.0.1:3000(每行一条)",
                                     )),
                             );
 
@@ -1126,7 +1126,7 @@ impl MistTermApp {
                                     .hint_text(crate::i18n::tr(
                                         ctx,
                                         "1080 or 0.0.0.0:1080 (one per line)",
-                                        "1080 或 0.0.0.0:1080（每行一条）",
+                                        "1080 或 0.0.0.0:1080(每行一条)",
                                     )),
                             );
 
@@ -1427,7 +1427,7 @@ impl MistTermApp {
                             crate::ui::chrome::form_field_label(
                                 ui,
                                 theme,
-                                crate::i18n::tr(ctx, "Command to run (editable)", "将要执行（可编辑）"),
+                                crate::i18n::tr(ctx, "Command to run (editable)", "将要执行(可编辑)"),
                             );
                             crate::ui::chrome::form_multiline_field(
                                 ui,
@@ -1645,7 +1645,7 @@ impl MistTermApp {
             }
         }
 
-        // 变量输入对话框（片段库定义的变量；与命令里的 `<pod>` 等占位符可串联）
+        // 变量输入对话框(片段库定义的变量；与命令里的 `<pod>` 等占位符可串联)
         if self.variable_dialog.open {
             let ok_label_static = if self.variable_dialog.paste_after_fill {
                 crate::i18n::tr(ctx, "Insert into terminal", "插入终端")
@@ -1743,7 +1743,7 @@ impl MistTermApp {
                                             crate::i18n::tr(
                                                 ui.ctx(),
                                                 "Command to run (editable)",
-                                                "将要执行的命令（可编辑）",
+                                                "将要执行的命令(可编辑)",
                                             ),
                                         );
                                         crate::ui::chrome::form_multiline_field(
@@ -1841,7 +1841,7 @@ impl MistTermApp {
                                             crate::i18n::tr(
                                                 ctx,
                                                 "Snippet no longer exists (removed from library?)",
-                                                "找不到该片段（可能已从库中删除）",
+                                                "找不到该片段(可能已从库中删除)",
                                             )
                                             .to_string(),
                                         );

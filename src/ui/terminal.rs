@@ -3,10 +3,10 @@
 //!
 //! 显示终端模拟器、处理输入输出、集成 SSH 连接。
 //!
-//! **与本文件相关的传文件入口（与 SFTP 侧栏、终端内 `rz` 并列，互不合并实现）**：
-//! - **ZMODEM**：`rz` 检测 → `LrzszTransfer::start_send`（`zmodem2` + shell 泵）。
-//! - **直传·SCP**：[`TerminalView::start_upload`](TerminalView::start_upload)（当前为 `scp_send`）。
-//! - **直传·cat**：[`TerminalView::start_upload_to_remote`](TerminalView::start_upload_to_remote)（`cat >` 通道）。
+//! **与本文件相关的传文件入口(与 SFTP 侧栏、终端内 `rz` 并列，互不合并实现)**：
+//! - **ZMODEM**：`rz` 检测 → `LrzszTransfer::start_send`(`zmodem2` + shell 泵)。
+//! - **直传·SCP**：[`TerminalView::start_upload`](TerminalView::start_upload)(当前为 `scp_send`)。
+//! - **直传·cat**：[`TerminalView::start_upload_to_remote`](TerminalView::start_upload_to_remote)(`cat >` 通道)。
 
 use eframe::egui;
 use arboard::Clipboard;
@@ -38,10 +38,10 @@ struct TerminalVisualLayoutCache {
     line_height_bits: u32,
     fg: egui::Color32,
     bg: egui::Color32,
-    /// `None` = 无选区；否则为规范化绝对选区（列 end 开区间）。
+    /// `None` = 无选区；否则为规范化绝对选区(列 end 开区间)。
     selection: Option<(i32, usize, i32, usize)>,
     layout_job: egui::text::LayoutJob,
-    /// 与 `layout_job` 同行同列的格子底色（不含 egui background expand）。
+    /// 与 `layout_job` 同行同列的格子底色(不含 egui background expand)。
     cell_bgs: Vec<Vec<egui::Color32>>,
     formatted: String,
     /// 已排版的 galley；避免 TextEdit layouter 每帧 `layout_job` 打满 CPU。
@@ -73,7 +73,7 @@ impl TerminalVisualLayoutCache {
     }
 }
 
-/// 底栏展示的 SSH 连接状态（不写入 VTE scrollback）。
+/// 底栏展示的 SSH 连接状态(不写入 VTE scrollback)。
 #[derive(Clone, Debug)]
 pub struct ConnectionBarStatus {
     pub host_line: String,
@@ -92,7 +92,7 @@ fn truncate_connection_status(s: &str, max_chars: usize) -> String {
     }
 }
 
-/// 终端文本选择（绝对网格坐标：`Line.0` 可为负表示 scrollback，列 0-based）
+/// 终端文本选择(绝对网格坐标：`Line.0` 可为负表示 scrollback，列 0-based)
 #[derive(Clone, Debug, Default)]
 struct Selection {
     start_line: i32,
@@ -148,7 +148,7 @@ impl Selection {
     }
 }
 
-/// 右 dock 依赖 SSH 时的连接门闩（避免已断开仍显示「连接中」）。
+/// 右 dock 依赖 SSH 时的连接门闩(避免已断开仍显示「连接中」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RightDockSshGate {
     NoSession,
@@ -172,7 +172,7 @@ pub struct TerminalView {
     /// SSH 会话句柄
     ssh_handle: Option<SshSessionHandle>,
     
-    /// VT100/ANSI 终端模拟器（含光标、屏幕、滚动历史）
+    /// VT100/ANSI 终端模拟器(含光标、屏幕、滚动历史)
     terminal: VtTerminal,
     
     /// 连接状态
@@ -191,14 +191,14 @@ pub struct TerminalView {
     /// 命令片段面板可见性
     pub show_fragment_panel: bool,
     
-    /// 是否需要弹出文件选择对话框（检测到 rz 命令时设置）
+    /// 是否需要弹出文件选择对话框(检测到 rz 命令时设置)
     pub pending_rz_upload: bool,
     
-    /// 文件传输进度（文件名、已传字节、总字节）
+    /// 文件传输进度(文件名、已传字节、总字节)
     transfer_progress: Option<(String, u64, u64)>,
-    /// 当前传输是否为本机→远端（`rz` 上传）；用于文案与收尾
+    /// 当前传输是否为本机→远端(`rz` 上传)；用于文案与收尾
     transfer_outgoing: bool,
-    /// 连接成功后下一帧请求一次终端焦点（避免每帧 `request_focus` 与 PTY 光标叠成双光标）
+    /// 连接成功后下一帧请求一次终端焦点(避免每帧 `request_focus` 与 PTY 光标叠成双光标)
     pending_focus_terminal: bool,
     
     /// 下载目录
@@ -207,35 +207,35 @@ pub struct TerminalView {
     connected_at: Option<Instant>,
     connection_target: Option<(String, String)>,
     auto_follow_output: bool,
-    /// 用户点击终端后保持键盘输入，直到点击终端外区域（IME 框按 Enter 会 surrender_focus，不能只看 has_focus）
+    /// 用户点击终端后保持键盘输入，直到点击终端外区域(IME 框按 Enter 会 surrender_focus，不能只看 has_focus)
     terminal_wants_keyboard: bool,
     terminal_focused: bool,
     rz_control_mode_until: Option<Instant>,
-    /// 用户已在 shell 执行 `rz`/`lrz` 后，lrzsz 可能不发文本提示（如 `rz -bye`）而直接发 ZRQINIT。
+    /// 用户已在 shell 执行 `rz`/`lrz` 后，lrzsz 可能不发文本提示(如 `rz -bye`)而直接发 ZRQINIT。
     expect_rz_upload_until: Option<Instant>,
     /// 用户已在 shell 执行 `sz`/`lsz` 后，等待远端 ZRQINIT 以启动本机接收。
     expect_sz_download_until: Option<Instant>,
     upload_result_rx: Option<Receiver<Result<String, String>>>,
     command_usage: HashMap<String, u64>,
-    /// FUNCTIONAL_SPEC §2.4：超长粘贴分片发送（>10KB 时每批 4096 字节、间隔 5ms）
+    /// FUNCTIONAL_SPEC §2.4：超长粘贴分片发送(>10KB 时每批 4096 字节、间隔 5ms)
     paste_pending: Vec<u8>,
     paste_next_chunk_at: Option<Instant>,
-    /// 「仅断开 SSH 保留画面」后为 true：键盘输入写入 [`Self::disconnected_input_buffer`] 而非 PTY（FUNCTIONAL_SPEC §2.4）。
+    /// 「仅断开 SSH 保留画面」后为 true：键盘输入写入 [`Self::disconnected_input_buffer`] 而非 PTY(FUNCTIONAL_SPEC §2.4)。
     buffer_input_while_disconnected: bool,
-    /// 断线期间缓存的待发送字节（上限 [`Self::OFFLINE_INPUT_CAP`]）。
+    /// 断线期间缓存的待发送字节(上限 [`Self::OFFLINE_INPUT_CAP`])。
     disconnected_input_buffer: Vec<u8>,
     /// 重连且 shell 就绪后，若缓存非空则弹出是否重发。
     resend_offline_input_dialog_open: bool,
-    /// 整屏替换 VTE 或清屏时递增，与 [`VtTerminal::content_epoch`] 一并参与布局缓存键（FUNCTIONAL_SPEC §2.3.1）。
+    /// 整屏替换 VTE 或清屏时递增，与 [`VtTerminal::content_epoch`] 一并参与布局缓存键(FUNCTIONAL_SPEC §2.3.1)。
     vt_visual_generation: u64,
     visual_layout_cache: Option<TerminalVisualLayoutCache>,
-    /// 用户主动断开（`disconnect` / `disconnect_ssh_keep_buffer`）期间忽略随后到达的 `Disconnected`，避免误触发自动重连。
+    /// 用户主动断开(`disconnect` / `disconnect_ssh_keep_buffer`)期间忽略随后到达的 `Disconnected`，避免误触发自动重连。
     local_disconnect_intent: bool,
     /// 本轮 `process_ssh_messages` 后若曾为「非主动」断开则置位；由宿主 `take()` 后清除。
     unexpected_disconnect_notified: bool,
-    /// 连接成功/失败待宿主写入审计（`take_connect_audit` 取走）
+    /// 连接成功/失败待宿主写入审计(`take_connect_audit` 取走)
     pending_connect_audit: Option<(bool, String)>,
-    /// 服务器侧命令审计标记行解析（`MIST_AUDIT`）
+    /// 服务器侧命令审计标记行解析(`MIST_AUDIT`)
     server_audit_probe: ServerAuditProbe,
     /// 待宿主展示的服务器侧审计事件
     pending_server_audit: Vec<ServerAuditEvent>,
@@ -243,9 +243,9 @@ pub struct TerminalView {
     agent_audit_degraded: bool,
     /// 用户关闭降级横幅后，本连接周期内不再显示
     agent_audit_banner_dismissed: bool,
-    /// 连接失败待宿主 Toast（`take_pending_toast_error` 取走）
+    /// 连接失败待宿主 Toast(`take_pending_toast_error` 取走)
     pending_toast_error: Option<String>,
-    /// 拖入终端区域、待宿主处理的上传路径（§4.3.2）。
+    /// 拖入终端区域、待宿主处理的上传路径(§4.3.2)。
     pending_drop_upload_paths: Vec<PathBuf>,
     /// 大文件上传：用户选 ZMODEM 后先发 `rz -y`，握手检测到后再用此路径 `start_rz_upload`。
     zmodem_upload_after_rz_path: Option<PathBuf>,
@@ -258,33 +258,35 @@ pub struct TerminalView {
     pending_send_to_ai_text: Option<String>,
     /// 最近 PTY 输出尾部，用于跨 chunk 识别 ZMODEM 握手帧。
     zmodem_pty_detect_tail: Vec<u8>,
-    /// 当前行已键入字节（用于 Ctrl+R 命令历史，近似 PTY 行缓冲）
+    /// 当前行已键入字节(用于 Ctrl+R 命令历史，近似 PTY 行缓冲)
     typed_line_buffer: String,
-    /// 最近写入 PTY 的当前行（自动化可能无 egui Text 事件，仍可从出站字节识别 `rz`）
+    /// 最近写入 PTY 的当前行(自动化可能无 egui Text 事件，仍可从出站字节识别 `rz`)
     pty_outbound_line_buffer: String,
-    /// Enter 提交后待取走的整行命令（供命令历史 / 会话日志）
+    /// Enter 提交后待取走的整行命令(供命令历史 / 会话日志)
     submitted_line: Option<String>,
-    /// 待写入会话日志的命令（片段执行、Enter 提交等）
+    /// 待写入会话日志的命令(片段执行、Enter 提交等)
     pending_log_commands: Vec<String>,
     /// 待写入会话日志的 PTY 输出块
     pending_log_output: Vec<Vec<u8>>,
     /// 查找命中高亮：`(行, 列, 长度)` 均为 1-based 字符下标
     search_highlight: Option<(usize, usize, usize)>,
-    /// `show()` 每帧同步，用于无 `Context` 入参的路径（不影响 `process_ssh_messages` 内语言的一帧滞后）。
+    /// `show()` 每帧同步，用于无 `Context` 入参的路径(不影响 `process_ssh_messages` 内语言的一帧滞后)。
     ui_lang_last: UiLanguage,
-    /// 透明 IME 捕获框（须持有文本光标，winit 才会 `set_ime_allowed`）
+    /// 透明 IME 捕获框(须持有文本光标，winit 才会 `set_ime_allowed`)
     ime_capture: String,
+    /// 最近一帧终端 IME 框的 egui Id；UI 输入(含中文全角)抢焦点时须 surrender，否则 Composition 仍进终端。
+    last_ime_id: Option<egui::Id>,
 }
 
 impl TerminalView {
-    /// 断线缓存输入上限（字节）
+    /// 断线缓存输入上限(字节)
     const OFFLINE_INPUT_CAP: usize = 64 * 1024;
 
     const SFTP_RETRY_ATTEMPTS: usize = 160;
     const SFTP_RETRY_SLEEP_MS: u64 = 8;
     /// Scroll 内容与视口边框的极小余量，避免偶发裁切一个字形
     const INNER_TEXT_SLACK: f32 = 0.0;
-    /// ScrollArea **内容区内宽**（已不含纵向滚动条）→ TextEdit.desired_width
+    /// ScrollArea **内容区内宽**(已不含纵向滚动条)→ TextEdit.desired_width
     #[inline]
     fn text_width_in_scroll_viewport(scroll_inner_width: f32) -> f32 {
         (scroll_inner_width - Self::INNER_TEXT_SLACK).max(64.0)
@@ -314,55 +316,35 @@ impl TerminalView {
         })
     }
 
-    fn terminal_row_col_at_pointer(
-        text_top: f32,
-        rect: &egui::Rect,
-        pos: egui::Pos2,
-        cell_w: f32,
-        cell_h: f32,
-        line_count: usize,
-        line_char_len: Option<usize>,
-    ) -> (usize, usize) {
-        let rows = line_count.max(1);
-        let row_i = ((pos.y - text_top) / cell_h.max(1.0))
-            .floor()
-            .clamp(0.0, rows.saturating_sub(1) as f32) as usize;
-        let mut col = ((pos.x - rect.min.x).max(0.0) / cell_w.max(1.0)).floor() as usize;
-        if let Some(len) = line_char_len {
-            col = col.min(len);
-        }
-        (row_i, col)
-    }
-
     #[inline]
     fn line_char_len(lines: &[&str], line: usize) -> Option<usize> {
         lines.get(line).map(|s| s.chars().count())
     }
 
+    /// 点选/拖选命中：必须跟 galley 行盒一致。
+    /// 均匀 `cell_h = scroll_h/rows` 会与 epaint 每行 `round_to_pixel` 累积漂移，
+    /// HiDPI 下常偏到上一行（选区高亮对、指针下的行不对）。
     fn terminal_pointer_row_col(
-        text_top: f32,
-        rect: &egui::Rect,
+        text_draw_pos: egui::Pos2,
         pos: egui::Pos2,
-        cell_w: f32,
-        cell_h: f32,
+        galley: &egui::Galley,
         lines: &[&str],
     ) -> (usize, usize) {
-        let (row_i, mut col) = Self::terminal_row_col_at_pointer(
-            text_top,
-            rect,
-            pos,
-            cell_w,
-            cell_h,
-            lines.len(),
-            None,
-        );
+        if galley.rows.is_empty() {
+            return (0, 0);
+        }
+        let cursor = galley.cursor_from_pos(pos - text_draw_pos);
+        let row_i = cursor.rcursor.row.min(galley.rows.len().saturating_sub(1));
+        let mut col = cursor.rcursor.column;
         if let Some(len) = Self::line_char_len(lines, row_i) {
             col = col.min(len);
+        } else if let Some(grow) = galley.rows.get(row_i) {
+            col = col.min(grow.char_count_excluding_newline());
         }
         (row_i, col)
     }
 
-    /// 块状光标：与格子同高同顶（`row.height()`），勿另取 fonts.row_height 以免和 LayoutJob 行高不一致。
+    /// 块状光标：与格子同高同顶(`row.height()`)，勿另取 fonts.row_height 以免和 LayoutJob 行高不一致。
     fn terminal_block_cursor_rect(
         text_draw_pos: egui::Pos2,
         galley: &egui::Galley,
@@ -396,7 +378,7 @@ impl TerminalView {
                 .get(row_i + 1)
                 .map(|r| text_draw_pos.y + r.rect.min.y)
                 .unwrap_or_else(|| y + grow.height());
-            // 与下一行顶留 1px，消除选区底压行观感（不做 expand）。
+            // 与下一行顶留 1px，消除选区底压行观感(不做 expand)。
             let h = (next_y - y - 1.0).max(1.0);
             let mut x0 = 0usize;
             while x0 < row_bgs.len() {
@@ -437,6 +419,7 @@ impl TerminalView {
         ime_rect: egui::Rect,
         cell_h: f32,
     ) {
+        self.last_ime_id = Some(ime_id);
         ui.allocate_ui_at_rect(ime_rect, |ui| {
             ui.set_min_size(egui::vec2(ime_rect.width().max(8.0), ime_rect.height().max(cell_h)));
             ui.visuals_mut().override_text_color = Some(egui::Color32::TRANSPARENT);
@@ -464,6 +447,24 @@ impl TerminalView {
                 egui::text::CCursor::new(0),
             )));
             state.store(ui.ctx(), ime_id);
+        }
+    }
+
+    /// 把键盘/IME 让给 UI TextEdit(AI 草稿、偏好等)。
+    /// 半角 ASCII 的 `Event::Text` 可被多个监听者看到；全角标点走 IME Composition，只进「当前 IME 目标」。
+    /// 若不 surrender 终端 IME 框，全角 `，。` 会进已隐藏的 ime_capture 并被清空，AI 框像「打不出来」。
+    pub fn release_keyboard_for_ui_input(&mut self, ctx: &egui::Context) {
+        self.terminal_wants_keyboard = false;
+        self.terminal_focused = false;
+        self.pending_focus_terminal = false;
+        if let Some(id) = self.last_ime_id.take() {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
+        self.ime_capture.clear();
+        // 打开 AI/表单时清掉拖选灰底，避免盖住终端内容。
+        if !self.selection.is_empty() {
+            self.selection.clear();
+            self.visual_layout_cache = None;
         }
     }
 
@@ -501,7 +502,7 @@ impl TerminalView {
         Some((start, end))
     }
 
-    /// 本机状态行：truecolor ANSI（随主题），避免被 §2.3.2 输出压暗后在黑底上几乎看不见。
+    /// 本机状态行：truecolor ANSI(随主题)，避免被 §2.3.2 输出压暗后在黑底上几乎看不见。
     fn feed_user_error_line(&mut self, theme: &Theme, message: &str) {
         let line = format_user_error_line(theme, message);
         self.terminal.feed(line.as_bytes());
@@ -522,7 +523,7 @@ impl TerminalView {
         self.terminal.feed(line.as_bytes());
     }
 
-    /// §4.3.2：拖放文件到终端区域时收集路径（由宿主决定 SCP / ZMODEM）。
+    /// §4.3.2：拖放文件到终端区域时收集路径(由宿主决定 SCP / ZMODEM)。
     fn collect_file_drops_into(ui: &egui::Ui, pending: &mut Vec<PathBuf>) {
         if ui.ctx().input(|i| i.raw.dropped_files.is_empty()) {
             return;
@@ -603,7 +604,7 @@ impl TerminalView {
         if let Some(e) = last_err {
             let last = e.to_string();
             return Err(match locale.lang {
-                UiLanguage::Zh => format!("{}：重试超时（最后错误：{}）", label, last),
+                UiLanguage::Zh => format!("{}：重试超时(最后错误：{})", label, last),
                 UiLanguage::En => format!(
                     "{}: retry timed out (last error: {})",
                     label, last
@@ -620,7 +621,7 @@ impl TerminalView {
         text.contains("$ ") || text.contains("# ") || text.contains("> ")
     }
 
-    /// 上传旁路开启时默认不把 PTY 画进 VTE（避免 ZMODEM 二进制污染）；设 `MISTTERM_ZMODEM_MIRROR_RZ_TEXT=1` 可把**疑似纯文本**片段镜像到终端，便于看 `rz -vv`。
+    /// 上传旁路开启时默认不把 PTY 画进 VTE(避免 ZMODEM 二进制污染)；设 `MISTTERM_ZMODEM_MIRROR_RZ_TEXT=1` 可把**疑似纯文本**片段镜像到终端，便于看 `rz -vv`。
     fn mirror_rz_text_to_vte_enabled() -> bool {
         std::env::var("MISTTERM_ZMODEM_MIRROR_RZ_TEXT")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -702,6 +703,7 @@ impl TerminalView {
             search_highlight: None,
             ui_lang_last: UiLanguage::default(),
             ime_capture: String::new(),
+            last_ime_id: None,
         }
     }
 
@@ -716,7 +718,7 @@ impl TerminalView {
         self.pending_log_output.pop()
     }
 
-    /// Enter 提交后取走当前行命令（供命令历史记录）
+    /// Enter 提交后取走当前行命令(供命令历史记录)
     pub fn take_submitted_line(&mut self) -> Option<String> {
         self.submitted_line.take()
     }
@@ -730,7 +732,7 @@ impl TerminalView {
         }
     }
 
-    /// 记录本行提交（历史/rz·sz 探测）；**不**决定是否向 PTY 发回车。
+    /// 记录本行提交(历史/rz·sz 探测)；**不**决定是否向 PTY 发回车。
     /// 方向键改行、历史回忆时本地 buffer 常为空，若据此拦截 `\r` 会导致「能左右移却不能回车」。
     fn commit_typed_line_on_enter(&mut self) {
         let line = self.typed_line_buffer.trim().to_string();
@@ -837,6 +839,11 @@ impl TerminalView {
     fn send_pty_input(&mut self, handle: &SshSessionHandle, data: &[u8]) -> Result<(), String> {
         let __t0 = std::time::Instant::now();
         if !data.is_empty() {
+            // 键入时清选区，避免拖选灰底残留盖住新输出(对标 Windows Terminal)。
+            if !self.selection.is_empty() {
+                self.selection.clear();
+                self.visual_layout_cache = None;
+            }
             self.scroll_to_bottom_on_user_input();
         }
         let __t1 = std::time::Instant::now();
@@ -949,7 +956,7 @@ impl TerminalView {
         }
     }
 
-    /// 显示终端视图。`column_width` 须为宿主在 **标签栏下方** 为终端列 `allocate_ui_with_layout` 的宽度（勿用 `clip_rect`，常为整窗宽）。
+    /// 显示终端视图。`column_width` 须为宿主在 **标签栏下方** 为终端列 `allocate_ui_with_layout` 的宽度(勿用 `clip_rect`，常为整窗宽)。
     pub fn show(
         &mut self,
         ui: &mut egui::Ui,
@@ -991,7 +998,7 @@ impl TerminalView {
             }
         }
 
-        // Ctrl + 滚轮：缩放终端字体（不改变 PTY 行列，仅视觉）
+        // Ctrl + 滚轮：缩放终端字体(不改变 PTY 行列，仅视觉)
         let wheel = ui.ctx().input(|i| {
             let z = i.scroll_delta.y;
             if self.terminal_focused
@@ -1018,7 +1025,7 @@ impl TerminalView {
             if self.lrzsz.is_upload_pty_capture() {
                 ui.ctx().request_repaint();
             } else if terminal_dirty {
-                // 仅有输出/队列未排空时拉高帧率（top/vim 等）；空闲靠光标闪烁或用户输入触发重绘，避免单核打满。
+                // 仅有输出/队列未排空时拉高帧率(top/vim 等)；空闲靠光标闪烁或用户输入触发重绘，避免单核打满。
                 ui.ctx().request_repaint_after(Duration::from_millis(
                     crate::terminal::style::TERMINAL_LIVE_REPAINT_MS,
                 ));
@@ -1026,10 +1033,10 @@ impl TerminalView {
         }
 
         let column_width = column_width.clamp(1.0, 16_384.0);
-        // 宿主传入的列宽（已扣右侧 dock）；勿仅用 available_width，否则中央区 max_rect 仍可能盖住右栏。
+        // 宿主传入的列宽(已扣右侧 dock)；勿仅用 available_width，否则中央区 max_rect 仍可能盖住右栏。
         ui.set_max_width(column_width);
 
-        // 吃满宿主矩形，但不得超过 column_width（否则 Central 后绘会盖住右栏）
+        // 吃满宿主矩形，但不得超过 column_width(否则 Central 后绘会盖住右栏)
         let mut fill_region = ui.available_size();
         if fill_region.x.is_finite() {
             fill_region.x = fill_region.x.min(column_width);
@@ -1042,9 +1049,9 @@ impl TerminalView {
             ui.set_min_size(fill_region);
         }
         // 进度条在 Frame 内先占位；若仍用全高算行列，网格会高于 ScrollArea，滚动与「│」光标错位
-        // 与 Frame 内底部进度条占位一致（分隔线 + 两行文案 + ProgressBar）
+        // 与 Frame 内底部进度条占位一致(分隔线 + 两行文案 + ProgressBar)
         const TRANSFER_FOOTER_H: f32 = 72.0;
-        // README §2.4：主底栏承担状态；PTY 尺寸在 ScrollArea 内容区内按真实 viewport 同步（见下方）
+        // README §2.4：主底栏承担状态；PTY 尺寸在 ScrollArea 内容区内按真实 viewport 同步(见下方)
         egui::Frame::none()
             .fill(theme.bg_terminal_color())
             .inner_margin(theme.terminal_content_margin())
@@ -1262,14 +1269,14 @@ impl TerminalView {
                                 let _ = text;
                                 galley_for_layout.clone()
                             };
-                            // 勿让 TextEdit 自带拖选（visuals.selection 灰底）与终端格网选区叠成双色
+                            // 勿让 TextEdit 自带拖选(visuals.selection 灰底)与终端格网选区叠成双色
                             let prev_sel_bg = ui.visuals().selection.bg_fill;
                             let prev_sel_fg = ui.visuals().selection.stroke.color;
                             ui.visuals_mut().selection.bg_fill = egui::Color32::TRANSPARENT;
                             ui.visuals_mut().selection.stroke.color = egui::Color32::TRANSPARENT;
                             // VT 从视口顶铺格子。勿 BOTTOM：galley 略矮于容器时会把整屏沉底，Tab 下留出大块空白。
                             // PTY 行列已在 ScrollArea 外按 scroll_h 同步。
-                            // 勿用 ui.add_sized：其内部布局是 centered_and_justified（居中），
+                            // 勿用 ui.add_sized：其内部布局是 centered_and_justified(居中)，
                             // 会把比视口宽的行居中，导致提示符左侧被裁。用 LEFT 布局容器固定视口高。
                             let te_output = ui
                                 .allocate_ui_with_layout(
@@ -1319,7 +1326,7 @@ impl TerminalView {
                                 te_state.store(ui.ctx(), response.id);
                             }
                             let display_lines: Vec<&str> = display_owned.lines().collect();
-                            // 仅当存在非默认底色（ANSI/选区）时才自绘底并再铺一层 galley；
+                            // 仅当存在非默认底色(ANSI/选区)时才自绘底并再铺一层 galley；
                             // 否则 TextEdit 已画过字，二次铺屏会让 debug 下单核打满、界面像卡住。
                             let needs_cell_bg = cell_bgs.iter().flatten().any(|c| {
                                 *c != shell.terminal_bg && c.a() > 0
@@ -1363,7 +1370,7 @@ impl TerminalView {
                                 ui.memory_mut(|m| m.request_focus(ime_id));
                             }
 
-                            // 块状闪烁光标（UI 层绘制，勿再用 │ 字符占位）
+                            // 块状闪烁光标(UI 层绘制，勿再用 │ 字符占位)
                             if self.terminal_focused
                                 && !terminal_search_open
                                 && self.selection.is_empty()
@@ -1418,8 +1425,8 @@ impl TerminalView {
                                 self.show_terminal_ime_capture(ui, ime_id, ime_rect, cell_h);
                             }
 
-                            // === 文本选择（独立 interact 层，避免 TextEdit 抢鼠标） ===
-                            // 滚轮浏览 scrollback（与 alacritty 一致：Delta>0 向上翻历史）
+                            // === 文本选择(独立 interact 层，避免 TextEdit 抢鼠标) ===
+                            // 滚轮浏览 scrollback(与 alacritty 一致：Delta>0 向上翻历史)
                             if (select_resp.hovered()
                                 || response.hovered()
                                 || self.terminal_focused)
@@ -1436,11 +1443,9 @@ impl TerminalView {
                             if primary_double_clicked {
                                 if let Some(pos) = select_resp.interact_pointer_pos() {
                                     let (row_i, col) = Self::terminal_pointer_row_col(
-                                        text_top,
-                                        &text_rect,
+                                        text_draw_pos,
                                         pos,
-                                        cell_w,
-                                        cell_h,
+                                        &galley,
                                         &display_lines,
                                     );
                                     if let Some(line_text) = display_lines.get(row_i) {
@@ -1461,11 +1466,9 @@ impl TerminalView {
                             } else if primary_drag_started {
                                 if let Some(pos) = select_resp.interact_pointer_pos() {
                                     let (row_i, col) = Self::terminal_pointer_row_col(
-                                        text_top,
-                                        &text_rect,
+                                        text_draw_pos,
                                         pos,
-                                        cell_w,
-                                        cell_h,
+                                        &galley,
                                         &display_lines,
                                     );
                                     self.selection.set_from_viewport(
@@ -1488,11 +1491,9 @@ impl TerminalView {
                                 if drag_distance >= 3.0 {
                                     if let Some(pos) = select_resp.interact_pointer_pos() {
                                         let (row_i, col) = Self::terminal_pointer_row_col(
-                                            text_top,
-                                            &text_rect,
+                                            text_draw_pos,
                                             pos,
-                                            cell_w,
-                                            cell_h,
+                                            &galley,
                                             &display_lines,
                                         );
                                         self.selection.set_end_from_viewport(
@@ -1505,7 +1506,7 @@ impl TerminalView {
                                 }
                             }
 
-                            // 选区已写入 LayoutJob 的 TextFormat.background（字形之下），勿再后画矩形。
+                            // 选区已写入 LayoutJob 的 TextFormat.background(字形之下)，勿再后画矩形。
                             select_resp.context_menu(|ui| {
                                 crate::ui::chrome::apply_context_menu_style(ui, theme);
                                 if !self.selection.is_empty() {
@@ -1518,9 +1519,7 @@ impl TerminalView {
                                     {
                                         let text = self.get_selected_text();
                                         if !text.is_empty() {
-                                            if let Ok(mut clip) = Clipboard::new() {
-                                                let _ = clip.set_text(text);
-                                            }
+                                            ui.ctx().copy_text(text);
                                         }
                                         ui.close_menu();
                                     }
@@ -1618,7 +1617,7 @@ impl TerminalView {
                     ui.spacing_mut().scroll_bar_width = prev_scroll_w;
                     ui.visuals_mut().widgets.inactive.bg_fill = prev_inactive_fill;
 
-                    // 离开底部（display_offset>0）则停止自动跟随；滚回最新输出后恢复
+                    // 离开底部(display_offset>0)则停止自动跟随；滚回最新输出后恢复
                     self.auto_follow_output = self.terminal.is_scrolled_to_bottom();
                     let _ = scroll_output;
 
@@ -1717,7 +1716,7 @@ impl TerminalView {
         self.render_resend_offline_dialog(ui.ctx(), theme);
     }
 
-    /// `viewport`：ScrollArea **内容区**（inner）的宽 × 可视区高度（与 `max_height(scroll_h)` 一致），已不含 Frame inner_margin 与纵向滚动条占位。
+    /// `viewport`：ScrollArea **内容区**(inner)的宽 × 可视区高度(与 `max_height(scroll_h)` 一致)，已不含 Frame inner_margin 与纵向滚动条占位。
     fn sync_pty_size_with_ui(&mut self, ui: &egui::Ui, viewport: egui::Vec2, theme: &Theme) {
         let usable_width = Self::text_width_in_scroll_viewport(viewport.x).max(120.0);
         let usable_height = viewport.y.max(48.0);
@@ -1739,12 +1738,12 @@ impl TerminalView {
         }
     }
 
-    /// 非活动标签仅消费 SSH 接收队列；若有新内容写入 VTE 则返回 `true`（用于低频重绘）。
+    /// 非活动标签仅消费 SSH 接收队列；若有新内容写入 VTE 则返回 `true`(用于低频重绘)。
     pub fn pump_ssh_only(&mut self, theme: &Theme) -> bool {
         self.process_ssh_messages(theme)
     }
 
-    /// FUNCTIONAL_SPEC §2.4：超长粘贴分片写入 PTY（每批 4096 字节，间隔 5ms）。
+    /// FUNCTIONAL_SPEC §2.4：超长粘贴分片写入 PTY(每批 4096 字节，间隔 5ms)。
     fn flush_paste_queue(&mut self, ctx: &egui::Context) {
         const CHUNK: usize = 4096;
         const GAP: Duration = Duration::from_millis(5);
@@ -1817,7 +1816,7 @@ impl TerminalView {
                     SshMessage::Output { data, .. } => {
                         self.push_zmodem_detect_tail(&data);
                         let detect_buf = self.zmodem_detect_window();
-                        // 上传（本机 sz→远端 rz）时，PTY 上的 ZMODEM 帧只能经 SSH 泵线程到达此处；
+                        // 上传(本机 sz→远端 rz)时，PTY 上的 ZMODEM 帧只能经 SSH 泵线程到达此处；
                         // 必须旁路给 lrzsz，不得在另一线程对 Channel 再 read。
                         let text = String::from_utf8_lossy(&data);
                         let is_rz_prompt_text = text.contains("rz rz rz")
@@ -1938,7 +1937,7 @@ impl TerminalView {
 
                         self.lrzsz.feed_send_pty_output(&data);
                         if self.lrzsz.is_upload_pty_capture() {
-                            // 与 `rz_control_mode` 里「误判 shell 提示符」无关：二进制 ZACK 等绝不能进 VTE（否则 0x18 被当 C1）。
+                            // 与 `rz_control_mode` 里「误判 shell 提示符」无关：二进制 ZACK 等绝不能进 VTE(否则 0x18 被当 C1)。
                             if Self::mirror_rz_text_to_vte_enabled()
                                 && Self::pty_chunk_safe_to_mirror_vte(&data)
                             {
@@ -2129,7 +2128,7 @@ impl TerminalView {
         }
     }
 
-    /// 断线重连时由宿主在 `disconnect` / `connect` 之间保留/恢复（`connect()` 会清空缓存）。
+    /// 断线重连时由宿主在 `disconnect` / `connect` 之间保留/恢复(`connect()` 会清空缓存)。
     pub fn offline_input_snapshot(&self) -> (Vec<u8>, bool) {
         (
             self.disconnected_input_buffer.clone(),
@@ -2155,7 +2154,7 @@ impl TerminalView {
         self.disconnected_input_buffer.extend_from_slice(&data[..take]);
     }
 
-    /// 断线保留画面时：把按键写入本地缓冲（与 PTY 路径相同的字节序列，便于重发）。
+    /// 断线保留画面时：把按键写入本地缓冲(与 PTY 路径相同的字节序列，便于重发)。
     fn capture_inline_input_disconnected(&mut self, ui: &egui::Ui) {
         if self.resend_offline_input_dialog_open {
             return;
@@ -2345,7 +2344,7 @@ impl TerminalView {
                         n
                     ),
                     UiLanguage::Zh => format!(
-                        "共 {} 字节，是否发送到当前远程 shell？",
+                        "共 {} 字节，是否发送到当前远程 shell?",
                         n
                     ),
                 };
@@ -2413,7 +2412,7 @@ impl TerminalView {
         }
     }
 
-    /// 将键盘事件直接写入 PTY，由远端 shell 回显，避免「本地预览 + 回显」叠字（如 lsls）
+    /// 将键盘事件直接写入 PTY，由远端 shell 回显，避免「本地预览 + 回显」叠字(如 lsls)
     fn capture_inline_input(&mut self, ui: &egui::Ui) {
         if self.resend_offline_input_dialog_open {
             return;
@@ -2430,12 +2429,15 @@ impl TerminalView {
         let Some(handle) = self.ssh_handle.clone() else {
             return;
         };
-        if !self.terminal_wants_keyboard {
+        // 须用 terminal_focused(含 capture_pty_keyboard)，勿仅看 wants：
+        // AI 输入聚焦时 wants 可能仍为 true，否则 ,. 等 Text 会被写进 PTY 且干扰输入框。
+        if !self.terminal_focused {
             return;
         }
 
         let mut pending_paste: Option<String> = None;
         let mut ctrl_to_send: Vec<u8> = Vec::new();
+        let mut do_copy = false;
 
         ui.input_mut(|i| {
             if crate::ui::terminal_keys::consume_terminal_paste_shortcut(i) {
@@ -2445,7 +2447,7 @@ impl TerminalView {
                     }
                 }
             } else if crate::ui::terminal_keys::consume_terminal_copy_shortcut(i) {
-                let _ = self.shortcut_copy_to_clipboard();
+                do_copy = true;
             }
             // 强制拦截 Tab 焦点遍历，把 Tab/Shift+Tab 交给终端
             let tab_plain = i.consume_key(egui::Modifiers::NONE, egui::Key::Tab);
@@ -2461,11 +2463,11 @@ impl TerminalView {
                 // EventFilter 需上一帧已聚焦才生效；首帧 Tab 仍可能失焦
                 self.pending_focus_terminal = true;
             }
-            // Esc / F1–F12 / Insert / 带修饰方向键等（egui 常无 Text 事件）
+            // Esc / F1–F12 / Insert / 带修饰方向键等(egui 常无 Text 事件)
             if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
                 let _ = self.send_pty_input(&handle, bytes);
             }) {
-                // EventFilter 生效前的兜底（帧初 Tab/Esc/方向键抢焦点）
+                // EventFilter 生效前的兜底(帧初 Tab/Esc/方向键抢焦点)
                 self.pending_focus_terminal = true;
             }
             let mut sent_ctrl = [false; 32];
@@ -2477,7 +2479,7 @@ impl TerminalView {
             }) {
                 // pending_focus set after input_mut
             }
-            // 同一帧内可能既有 Key 又有 Text（如 Delete / 退格），避免重复或错发
+            // 同一帧内可能既有 Key 又有 Text(如 Delete / 退格)，避免重复或错发
             let mut backspace_key = false;
             let mut delete_key = false;
             // Text(\r/\n) 与 Key::Enter 常同帧到达；只发一次 `\r`。
@@ -2509,7 +2511,7 @@ impl TerminalView {
                         }
                     }
                     egui::Event::Text(text) => {
-                        // Enter：部分自动化（如 pywinauto）只发 Text(\r) 不发 Key::Enter。
+                        // Enter：部分自动化(如 pywinauto)只发 Text(\r) 不发 Key::Enter。
                         if text == "\n" || text == "\r" {
                             if !enter_sent {
                                 self.commit_typed_line_on_enter();
@@ -2543,7 +2545,7 @@ impl TerminalView {
                             if backspace_key || delete_key {
                                 continue;
                             }
-                            // macOS 上 Fn+Delete 等常只来 Text(DEL)，应发 xterm「向前删」而非裸 0x7f（易被当成怪字符/像空格）
+                            // macOS 上 Fn+Delete 等常只来 Text(DEL)，应发 xterm「向前删」而非裸 0x7f(易被当成怪字符/像空格)
                             #[cfg(target_os = "macos")]
                             {
                                 if let Err(e) = self.send_pty_input(&handle, b"\x1b[3~") {
@@ -2571,7 +2573,7 @@ impl TerminalView {
                         ..
                     } => {
                         if modifiers.command {
-                            // macOS：⌘C 复制 / ⌘V 粘贴（复制在帧初 consume；此处仅兜底 ⌘V）
+                            // macOS：⌘C 复制 / ⌘V 粘贴(复制在帧初 consume；此处仅兜底 ⌘V)
                             if *key == egui::Key::V {
                                 if let Ok(mut clip) = Clipboard::new() {
                                     if let Ok(text) = clip.get_text() {
@@ -2613,6 +2615,9 @@ impl TerminalView {
                 }
             }
         });
+        if do_copy {
+            let _ = self.shortcut_copy_to_clipboard(ui.ctx());
+        }
         if !ctrl_to_send.is_empty() {
             self.pending_focus_terminal = true;
             for b in ctrl_to_send {
@@ -2628,7 +2633,7 @@ impl TerminalView {
         }
     }
 
-    /// 粘贴或执行一整段命令：只写 PTY，不把内容再写入本地 buffer（回显由远端负责）
+    /// 粘贴或执行一整段命令：只写 PTY，不把内容再写入本地 buffer(回显由远端负责)
     pub fn send_command(&mut self, command: &str) {
         if !self.connected {
             return;
@@ -2659,7 +2664,7 @@ impl TerminalView {
         }
     }
 
-    /// 粘贴文本到终端：原样发到 PTY，不自动补回车；超长内容分片发送（FUNCTIONAL_SPEC §2.4）。
+    /// 粘贴文本到终端：原样发到 PTY，不自动补回车；超长内容分片发送(FUNCTIONAL_SPEC §2.4)。
     fn paste_text(&mut self, text: &str, ctx: &egui::Context) {
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
         if !self.connected {
@@ -2684,7 +2689,7 @@ impl TerminalView {
     }
 
     pub fn clear_screen(&mut self) {
-        // 清空滚动历史，保留当前屏幕内容（类似 tmux clear-history）
+        // 清空滚动历史，保留当前屏幕内容(类似 tmux clear-history)
         // 同时把光标移到屏幕顶部，方便继续输入
         self.terminal.clear_history();
         self.terminal.feed(b"\x1b[H");  // 光标移到左上角
@@ -2693,9 +2698,11 @@ impl TerminalView {
         self.selection.clear();
     }
 
-    /// 复制到剪贴板。`fallback_all` 为 true 时无选区则复制整屏（菜单「复制」）；
-    /// false 时仅复制选区（Ctrl+Shift+C，与 Windows Terminal 一致）。
-    fn copy_to_clipboard(&self, fallback_all: bool) -> bool {
+    /// 复制到剪贴板。`fallback_all` 为 true 时无选区则复制整屏(菜单「复制」)；
+    /// false 时仅复制选区(Ctrl+Shift+C，与 Windows Terminal 一致)。
+    /// 走 `ctx.copy_text`（eframe/winit 剪贴板），避免 UI 线程直调 arboard 与外部
+    /// PowerShell/自动化争用 OpenClipboard 时把整窗卡成「未响应」。
+    fn copy_to_clipboard(&self, ctx: &egui::Context, fallback_all: bool) -> bool {
         let text = self.get_selected_text();
         let text = if text.is_empty() && fallback_all {
             self.terminal.get_formatted_output()
@@ -2705,20 +2712,18 @@ impl TerminalView {
         if text.is_empty() {
             return false;
         }
-        Clipboard::new()
-            .ok()
-            .and_then(|mut c| c.set_text(text).ok())
-            .is_some()
+        ctx.copy_text(text);
+        true
     }
 
     /// 菜单「复制」：优先选区，否则复制当前屏格式化输出。
-    pub(crate) fn menu_copy_to_clipboard(&self) -> bool {
-        self.copy_to_clipboard(true)
+    pub(crate) fn menu_copy_to_clipboard(&self, ctx: &egui::Context) -> bool {
+        self.copy_to_clipboard(ctx, true)
     }
 
     /// 快捷键 Ctrl+Shift+C：仅复制选区；无选区时不复制。
-    pub(crate) fn shortcut_copy_to_clipboard(&self) -> bool {
-        self.copy_to_clipboard(false)
+    pub(crate) fn shortcut_copy_to_clipboard(&self, ctx: &egui::Context) -> bool {
+        self.copy_to_clipboard(ctx, false)
     }
 
     /// 菜单「粘贴」：从系统剪贴板粘贴到 PTY。
@@ -2753,12 +2758,12 @@ impl TerminalView {
         self.pending_send_to_ai_text.take()
     }
 
-    /// 当前选区文本（无选区时为空）。
+    /// 当前选区文本(无选区时为空)。
     pub fn selected_text(&self) -> String {
         self.get_selected_text()
     }
 
-    /// 终端缓冲区底部最近 `max_lines` 行（含 scrollback）。
+    /// 终端缓冲区底部最近 `max_lines` 行(含 scrollback)。
     pub fn tail_plain_text(&self, max_lines: usize) -> String {
         self.terminal.tail_plain_text(max_lines)
     }
@@ -2782,7 +2787,7 @@ impl TerminalView {
         v
     }
 
-    /// 获取选中的文本（按绝对网格坐标从缓冲区读取，滚动后仍正确）
+    /// 获取选中的文本(按绝对网格坐标从缓冲区读取，滚动后仍正确)
     fn get_selected_text(&self) -> String {
         if self.selection.is_empty() {
             return String::new();
@@ -2850,7 +2855,7 @@ impl TerminalView {
         self.rz_control_mode_until = None;
     }
 
-    /// 用户在文件选择器中取消 rz 上传后，强制恢复交互态（含 Ctrl+C 终止远端 rz）
+    /// 用户在文件选择器中取消 rz 上传后，强制恢复交互态(含 Ctrl+C 终止远端 rz)
     pub fn cancel_rz_upload_selection(&mut self) {
         self.pending_rz_upload = false;
         self.end_rz_handshake_capture();
@@ -2871,7 +2876,7 @@ impl TerminalView {
         }
     }
 
-    /// 用户取消 rz 文件选择时关闭 PTY 旁路（与 `app` 里取消 pick 配套）
+    /// 用户取消 rz 文件选择时关闭 PTY 旁路(与 `app` 里取消 pick 配套)
     pub fn end_rz_handshake_capture(&mut self) {
         if let Some(ref h) = self.ssh_handle {
             self.lrzsz.unregister_shell_pump_upload_feed(h);
@@ -2908,7 +2913,7 @@ impl TerminalView {
         }
     }
 
-    /// 轮询后台上传结果（有结果时返回并清空任务）
+    /// 轮询后台上传结果(有结果时返回并清空任务)
     pub fn poll_upload_result(&mut self) -> Option<Result<String, String>> {
         let Some(rx) = self.upload_result_rx.as_ref() else {
             return None;
@@ -3141,12 +3146,12 @@ impl TerminalView {
         self.connected
     }
 
-    /// 终端网格是否持有键盘焦点（用于全局快捷键与 Delete 等不与 PTY 抢键）
+    /// 终端网格是否持有键盘焦点(用于全局快捷键与 Delete 等不与 PTY 抢键)
     pub fn is_terminal_focused(&self) -> bool {
         self.terminal_focused
     }
 
-    /// 用户已点击终端并希望输入（Enter 后 IME 失焦时仍保持，直到点击终端外）。
+    /// 用户已点击终端并希望输入(Enter 后 IME 失焦时仍保持，直到点击终端外)。
     pub fn wants_terminal_keyboard(&self) -> bool {
         self.terminal_wants_keyboard
     }
@@ -3164,12 +3169,12 @@ impl TerminalView {
         self.ssh_manager.as_ref().cloned()
     }
 
-    /// 是否处于连接建立中（认证/启动 shell 阶段）
+    /// 是否处于连接建立中(认证/启动 shell 阶段)
     pub fn is_connecting(&self) -> bool {
         !self.connected && self.error_message.is_none() && self.ssh_manager.is_some()
     }
 
-    /// 右 dock（SFTP / 端口转发等）是否可绑定当前 SSH 会话。
+    /// 右 dock(SFTP / 端口转发等)是否可绑定当前 SSH 会话。
     pub fn right_dock_ssh_gate(&self) -> RightDockSshGate {
         if self.ssh_manager.is_none() && self.connection_target.is_none() {
             return RightDockSshGate::NoSession;
@@ -3185,7 +3190,7 @@ impl TerminalView {
         }
     }
 
-    /// 底栏连接状态（不写入终端 scrollback）。
+    /// 底栏连接状态(不写入终端 scrollback)。
     pub fn connection_status_for_bar(&self, theme: &Theme) -> Option<ConnectionBarStatus> {
         if self.ssh_manager.is_none() && self.connection_target.is_none() {
             return None;
@@ -3259,7 +3264,7 @@ impl TerminalView {
         }
     }
 
-    /// 连接错误摘要（供主窗口状态栏展示）
+    /// 连接错误摘要(供主窗口状态栏展示)
     pub fn connection_error_text(&self) -> Option<&str> {
         self.error_message.as_deref()
     }
@@ -3273,7 +3278,7 @@ impl TerminalView {
             .to_string()
     }
 
-    /// 将当前 `cols`/`rows` 同步到 SSH PTY（上传中跳过 `resize_pty` 后由传输结束路径调用）
+    /// 将当前 `cols`/`rows` 同步到 SSH PTY(上传中跳过 `resize_pty` 后由传输结束路径调用)
     fn flush_ssh_pty_size_after_transfer(&mut self) {
         if let Some(ref handle) = self.ssh_handle {
             if let Err(e) = handle.resize_pty(self.cols, self.rows) {
@@ -3296,7 +3301,7 @@ impl TerminalView {
 
         if let Some(ref handle) = self.ssh_handle {
             // 文件选择关闭等会导致 UI 行数突变并立刻 resize_pty；与 ZMODEM 首轮帧并发时，
-            // 远端 `rz` 易在握手中被 SIGWINCH 打乱，表现为约 10s 无入站再续（见用户日志）。
+            // 远端 `rz` 易在握手中被 SIGWINCH 打乱，表现为约 10s 无入站再续(见用户日志)。
             if self.lrzsz.is_upload_pty_capture() {
                 log::debug!(
                     "Deferring resize_pty during ZMODEM rz upload; UI is {}x{}, will sync after transfer",
@@ -3311,7 +3316,7 @@ impl TerminalView {
         }
     }
 
-    /// 断开连接（关闭 SSH 并清空本地终端网格，用于移除标签等场景）
+    /// 断开连接(关闭 SSH 并清空本地终端网格，用于移除标签等场景)
     pub fn disconnect(&mut self) {
         self.local_disconnect_intent = true;
         if let Some(ref h) = self.ssh_handle {
@@ -3342,7 +3347,7 @@ impl TerminalView {
         self.resend_offline_input_dialog_open = false;
     }
 
-    /// 仅断开 SSH，保留当前屏幕与滚动缓冲（FUNCTIONAL_SPEC §1.3.5：Tab 保留、输出冻结、不可再输入）
+    /// 仅断开 SSH，保留当前屏幕与滚动缓冲(FUNCTIONAL_SPEC §1.3.5：Tab 保留、输出冻结、不可再输入)
     pub fn disconnect_ssh_keep_buffer(&mut self) {
         self.local_disconnect_intent = true;
         if let Some(ref h) = self.ssh_handle {
@@ -3384,7 +3389,7 @@ impl TerminalView {
     pub const ERR_FRAGMENT_NO_SSH_HANDLE: &'static str = "__mistterm_fragment_no_ssh_handle";
     pub const FRAGMENT_SEND_FAILED_PREFIX: &'static str = "__mistterm_fragment_send_failed:";
 
-    /// 插入命令片段（自动添加回车）
+    /// 插入命令片段(自动添加回车)
     pub fn insert_fragment(&mut self, command: &str) -> Result<(), String> {
         if !self.connected {
             return Err(Self::ERR_FRAGMENT_NOT_CONNECTED.to_string());
@@ -3405,22 +3410,22 @@ impl TerminalView {
         })
     }
 
-    /// 取走拖入终端区域的上传路径（宿主每帧至多处理一次）。
+    /// 取走拖入终端区域的上传路径(宿主每帧至多处理一次)。
     pub fn take_drop_upload_paths(&mut self) -> Vec<PathBuf> {
         std::mem::take(&mut self.pending_drop_upload_paths)
     }
 
-    /// 非用户主动断开时为 `true` 一次（供自动重连等）；读取后清除。
+    /// 非用户主动断开时为 `true` 一次(供自动重连等)；读取后清除。
     pub fn take_unexpected_disconnect_notified(&mut self) -> bool {
         std::mem::take(&mut self.unexpected_disconnect_notified)
     }
 
-    /// 取走待上报的连接结果（`success`, `host`）。
+    /// 取走待上报的连接结果(`success`, `host`)。
     pub fn take_connect_audit(&mut self) -> Option<(bool, String)> {
         self.pending_connect_audit.take()
     }
 
-    /// 取走服务器侧命令审计事件（agent 经 PTY 回传的 `MIST_AUDIT` 行）。
+    /// 取走服务器侧命令审计事件(agent 经 PTY 回传的 `MIST_AUDIT` 行)。
     pub fn take_server_audit_events(&mut self) -> Vec<ServerAuditEvent> {
         std::mem::take(&mut self.pending_server_audit)
     }
@@ -3450,7 +3455,7 @@ impl TerminalView {
         self.pending_toast_error.take()
     }
 
-    /// 大文件走 ZMODEM：向 PTY 发送 `rz -y` 并在握手就绪后用 `path` 启动上传（FUNCTIONAL_SPEC §4.3）。
+    /// 大文件走 ZMODEM：向 PTY 发送 `rz -y` 并在握手就绪后用 `path` 启动上传(FUNCTIONAL_SPEC §4.3)。
     pub fn queue_zmodem_upload_after_rz(&mut self, path: PathBuf) {
         self.zmodem_upload_after_rz_path = Some(path);
         self.pending_rz_upload = false;
@@ -3462,12 +3467,12 @@ impl TerminalView {
         }
     }
 
-    /// 在完整终端缓冲（含 scrollback）中搜索。
+    /// 在完整终端缓冲(含 scrollback)中搜索。
     pub fn search_all(&self, query: &str, ignore_case: bool) -> Vec<crate::terminal::SearchHit> {
         self.terminal.search_all(query, ignore_case)
     }
 
-    /// 滚到命中行并返回视口内高亮坐标（1-based）。
+    /// 滚到命中行并返回视口内高亮坐标(1-based)。
     pub fn reveal_search_hit(
         &mut self,
         hit: crate::terminal::SearchHit,

@@ -1,10 +1,10 @@
-//! SSH 自动重连调度（FUNCTIONAL_SPEC §1.4）
+//! SSH 自动重连调度(FUNCTIONAL_SPEC §1.4)
 //!
 //! 纯业务规则，不依赖 egui / SSH 句柄；由 UI 每帧传入时间与标签状态。
 
 use std::time::{Duration, Instant};
 
-/// 默认最多自动重连次数（与产品文案一致）
+/// 默认最多自动重连次数(与产品文案一致)
 pub const DEFAULT_MAX_RECONNECT_ATTEMPTS: u8 = 5;
 
 /// 单标签的重连计划
@@ -14,7 +14,7 @@ pub struct TabReconnectSchedule {
     pub attempts: u8,
 }
 
-/// 写入状态栏的提示（本地化在 UI 层按语言格式化）
+/// 写入状态栏的提示(本地化在 UI 层按语言格式化)
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReconnectStatus {
     /// 已达自动重连次数上限，不再重试

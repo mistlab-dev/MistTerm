@@ -1,4 +1,4 @@
-//! 团队成员列表弹窗（`GET /v1/teams/{team_id}/members`）
+//! 团队成员列表弹窗(`GET /v1/teams/{team_id}/members`)
 
 use crate::core::team::{TeamMember, TeamService};
 use crate::ui::chrome;
@@ -146,7 +146,7 @@ fn localize_members_error(ctx: &egui::Context, msg: &str) -> String {
         return crate::i18n::tr(
             ctx,
             "Member list API is not available on the server yet.",
-            "服务端尚未提供成员列表接口（GET /v1/teams/{id}/members）。",
+            "服务端尚未提供成员列表接口(GET /v1/teams/{id}/members)。",
         )
         .to_string();
     }

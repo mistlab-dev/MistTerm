@@ -1,8 +1,8 @@
-//! 将 egui `Key` 映射为 xterm 风格字节序列（无 `Text` 事件的键须在此编码）。
+//! 将 egui `Key` 映射为 xterm 风格字节序列(无 `Text` 事件的键须在此编码)。
 
 use eframe::egui::{Event, InputState, Key, Modifiers};
 
-/// 是否应交给 MistTerm 应用快捷键（⌘/Ctrl 组合），勿发 PTY。
+/// 是否应交给 MistTerm 应用快捷键(⌘/Ctrl 组合)，勿发 PTY。
 #[inline]
 fn mods_reserved_for_app(mods: Modifiers) -> bool {
     mods.command
@@ -14,7 +14,7 @@ fn xterm_modifier_param(mods: Modifiers) -> u8 {
     1 + (mods.shift as u8) + (mods.alt as u8) * 2 + (mods.ctrl as u8) * 4
 }
 
-/// 方向 / Home / End / PgUp / PgDn（含 Shift/Ctrl/Alt 组合）
+/// 方向 / Home / End / PgUp / PgDn(含 Shift/Ctrl/Alt 组合)
 pub fn encode_nav_key(key: Key, mods: Modifiers) -> Option<Vec<u8>> {
     if mods_reserved_for_app(mods) {
         return None;
@@ -43,7 +43,7 @@ pub fn encode_nav_key(key: Key, mods: Modifiers) -> Option<Vec<u8>> {
     Some(format!("\x1b[1;{param}{suffix}").into_bytes())
 }
 
-/// Esc、F1–F12、Insert 等（通常无 `Event::Text`）
+/// Esc、F1–F12、Insert 等(通常无 `Event::Text`)
 pub fn encode_other_special_key(key: Key, mods: Modifiers) -> Option<Vec<u8>> {
     if mods_reserved_for_app(mods) {
         return None;
@@ -126,7 +126,7 @@ const CTRL_KEYS: [Key; 26] = [
     Key::Z,
 ];
 
-/// Ctrl+字母 → C0 控制字节（xterm / readline 惯例）。
+/// Ctrl+字母 → C0 控制字节(xterm / readline 惯例)。
 pub fn ctrl_byte_for_key(key: Key) -> Option<u8> {
     match key {
         Key::A => Some(0x01),
@@ -159,7 +159,7 @@ pub fn ctrl_byte_for_key(key: Key) -> Option<u8> {
     }
 }
 
-/// 终端剪贴板快捷键修饰键：macOS `⌘C`/`⌘V`；Win/Linux `Ctrl+Shift+C`/`Ctrl+Shift+V`（避开 shell 的 Ctrl+C/V）。
+/// 终端剪贴板快捷键修饰键：macOS `⌘C`/`⌘V`；Win/Linux `Ctrl+Shift+C`/`Ctrl+Shift+V`(避开 shell 的 Ctrl+C/V)。
 pub fn terminal_clipboard_modifiers() -> Modifiers {
     #[cfg(target_os = "macos")]
     {
@@ -200,47 +200,43 @@ fn consume_terminal_clipboard_key(i: &mut InputState, key: Key) -> bool {
     false
 }
 
-/// 消费终端复制快捷键（macOS ⌘C，Win/Linux Ctrl+Shift+C）。
+/// 消费终端复制快捷键(macOS ⌘C，Win/Linux Ctrl+Shift+C)。
 pub fn consume_terminal_copy_shortcut(i: &mut InputState) -> bool {
     consume_terminal_clipboard_key(i, Key::C)
 }
 
-/// 消费终端粘贴快捷键（macOS ⌘V，Win/Linux Ctrl+Shift+V）。
+/// 消费终端粘贴快捷键(macOS ⌘V，Win/Linux Ctrl+Shift+V)。
 pub fn consume_terminal_paste_shortcut(i: &mut InputState) -> bool {
     consume_terminal_clipboard_key(i, Key::V)
 }
 
-/// 消费 Ctrl(+Shift)+字母 Key 并编码为 C0 字节；跳过终端 Copy/Paste（Ctrl+Shift+C 复制选区、Ctrl+Shift+V 粘贴）。
+/// 消费 Ctrl(+Shift)+字母 Key 并编码为 C0 字节。
+///
+/// **不转发 Ctrl+Shift+字母**：MistTerm / Windows Terminal 把 Ctrl+Shift 留给应用快捷键
+/// (AI、分屏、复制等)；若再写成 C0 字节，会出现 `^A` 进 shell、会话名被当命令执行。
+/// Copy/Paste 仍由 [`consume_terminal_copy_shortcut`] / paste 单独处理。
 pub fn forward_ctrl_keys(i: &mut egui::InputState, mut send: impl FnMut(u8)) -> bool {
-    let combos = [
-        Modifiers {
-            ctrl: true,
-            ..Modifiers::NONE
-        },
-        Modifiers {
-            ctrl: true,
-            shift: true,
-            ..Modifiers::NONE
-        },
-    ];
+    let mods = Modifiers {
+        ctrl: true,
+        ..Modifiers::NONE
+    };
     let mut any = false;
-    for mods in combos {
-        for key in CTRL_KEYS {
-            if mods.shift && (key == Key::C || key == Key::V) {
-                continue;
-            }
-            if i.consume_key(mods, key) {
-                if let Some(byte) = ctrl_byte_for_key(key) {
-                    send(byte);
-                    any = true;
-                }
+    for key in CTRL_KEYS {
+        // 应用快捷键：Ctrl+J 连接搜索、Ctrl+K 片段搜索——绝不能变成 PTY 的 LF/VT。
+        if matches!(key, Key::J | Key::K) {
+            continue;
+        }
+        if i.consume_key(mods, key) {
+            if let Some(byte) = ctrl_byte_for_key(key) {
+                send(byte);
+                any = true;
             }
         }
     }
     any
 }
 
-/// Windows 等平台常以 `Event::Text` 送达 Ctrl 组合（如 `\x03`）；`sent` 去重避免与 Key 双发。
+/// Windows 等平台常以 `Event::Text` 送达 Ctrl 组合(如 `\x03`)；`sent` 去重避免与 Key 双发。
 pub fn try_forward_ctrl_text_byte(
     text: &str,
     ctrl: bool,
@@ -318,7 +314,7 @@ pub fn terminal_keyboard_event_filter() -> egui::EventFilter {
 }
 
 /// 消费并编码本帧内「无 Text」的特殊键；`send` 写入 PTY 或离线缓冲。
-/// 若本帧转发了任意键，返回 `true`（Esc/方向键等可能触发 egui 焦点变化时的兜底，见 `pending_focus_terminal`）。
+/// 若本帧转发了任意键，返回 `true`(Esc/方向键等可能触发 egui 焦点变化时的兜底，见 `pending_focus_terminal`)。
 pub fn forward_non_text_keys(i: &mut egui::InputState, mut send: impl FnMut(&[u8])) -> bool {
     let mut any_sent = false;
     for mods in MOD_COMBOS {
@@ -424,6 +420,74 @@ mod tests {
                 let mut sent = Vec::new();
                 assert!(forward_ctrl_keys(i, |b| sent.push(b)));
                 assert_eq!(sent, vec![0x03]);
+            });
+        });
+    }
+
+    #[test]
+    fn consume_primary_shift_key_eats_ctrl_shift_a() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.modifiers = crate::ui::keyboard_shortcuts::primary_shift_modifiers();
+                i.events.push(key_press(
+                    Key::A,
+                    crate::ui::keyboard_shortcuts::primary_shift_modifiers(),
+                ));
+                assert!(crate::ui::keyboard_shortcuts::consume_primary_shift_key(
+                    i,
+                    Key::A
+                ));
+                assert!(!i.key_pressed(Key::A));
+            });
+        });
+    }
+
+    #[test]
+    fn forward_ctrl_keys_skips_ctrl_j_and_k() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.events.push(key_press(
+                    Key::J,
+                    Modifiers {
+                        ctrl: true,
+                        ..Default::default()
+                    },
+                ));
+                let mut sent = Vec::new();
+                assert!(!forward_ctrl_keys(i, |b| sent.push(b)));
+                assert!(sent.is_empty(), "Ctrl+J must not become 0x0a for PTY");
+            });
+            ui.input_mut(|i| {
+                i.events.clear();
+                i.events.push(key_press(
+                    Key::K,
+                    Modifiers {
+                        ctrl: true,
+                        ..Default::default()
+                    },
+                ));
+                let mut sent = Vec::new();
+                assert!(!forward_ctrl_keys(i, |b| sent.push(b)));
+                assert!(sent.is_empty(), "Ctrl+K must not become 0x0b for PTY");
+            });
+        });
+    }
+
+    #[test]
+    fn forward_ctrl_keys_skips_ctrl_shift_letters() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.events.push(key_press(
+                    Key::A,
+                    Modifiers {
+                        ctrl: true,
+                        shift: true,
+                        ..Default::default()
+                    },
+                ));
+                let mut sent = Vec::new();
+                assert!(!forward_ctrl_keys(i, |b| sent.push(b)));
+                assert!(sent.is_empty(), "Ctrl+Shift+A must not become 0x01 for PTY");
             });
         });
     }

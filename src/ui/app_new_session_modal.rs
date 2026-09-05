@@ -140,7 +140,7 @@ impl MistTermApp {
                                 crate::i18n::tr(
                                     ctx,
                                     "~/.ssh/id_rsa (empty = password or default keys)",
-                                    "~/.ssh/id_rsa（留空则用密码或系统默认密钥）",
+                                    "~/.ssh/id_rsa(留空则用密码或系统默认密钥)",
                                 ),
                                 form_w,
                                 false,
@@ -152,7 +152,7 @@ impl MistTermApp {
                                 crate::i18n::tr(
                                     ctx,
                                     "Use SSH agent (ssh-agent / Pageant)",
-                                    "使用 SSH Agent（ssh-agent / Pageant）",
+                                    "使用 SSH Agent(ssh-agent / Pageant)",
                                 ),
                             );
 

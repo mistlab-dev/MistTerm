@@ -79,7 +79,7 @@ impl PortForwardPanel {
         std::mem::take(&mut self.pending_audits)
     }
 
-    /// 当前仍运行的转发数（不含已停止的运行时转发）。
+    /// 当前仍运行的转发数(不含已停止的运行时转发)。
     pub fn active_count_for(&self, ssh_session_id: SshSessionId) -> usize {
         self.by_ssh_session
             .get(&ssh_session_id)
@@ -94,7 +94,7 @@ impl PortForwardPanel {
             .unwrap_or(0)
     }
 
-    /// 移除已无对应 SSH 连接的会话条目（断开时 `ssh_session_id` 可能已不可用）。
+    /// 移除已无对应 SSH 连接的会话条目(断开时 `ssh_session_id` 可能已不可用)。
     pub fn retain_live_sessions(&mut self, live: &std::collections::HashSet<SshSessionId>) {
         let stale: Vec<SshSessionId> = self
             .by_ssh_session
@@ -113,7 +113,7 @@ impl PortForwardPanel {
         self.prune_stopped(ssh_session_id);
     }
 
-    /// 会话连接成功后登记配置中的转发（仅一次/ssh 会话）。
+    /// 会话连接成功后登记配置中的转发(仅一次/ssh 会话)。
     pub fn register_profile_forwards(
         &mut self,
         ssh_session_id: SshSessionId,

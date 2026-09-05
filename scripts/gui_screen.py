@@ -117,6 +117,15 @@ def maximize_window(hwnd: int) -> None:
     time.sleep(0.6)
 
 
+def _capture_screen_region(hwnd: int) -> "Image.Image":
+    """屏幕 BitBlt/ImageGrab：不向目标窗发 WM_PRINT，避免与 egui/winit 死锁成「未响应」。"""
+    from PIL import ImageGrab
+
+    left, top, right, bottom = window_rect(hwnd)
+    # 略扩边，避免无边框窗被裁切
+    return ImageGrab.grab(bbox=(left, top, max(left + 1, right), max(top + 1, bottom)))
+
+
 def _capture_print_window(hwnd: int) -> "Image.Image":
     from PIL import Image
 
@@ -182,19 +191,27 @@ def screenshot(
         maximize_window(hwnd)
         time.sleep(0.25)
 
+    img = None
     try:
-        img = _capture_print_window(hwnd)
+        img = _capture_screen_region(hwnd)
         img.save(str(path), format="PNG", optimize=False)
-    except Exception:
-        cl, ct, cr, cb = client_rect(hwnd)
+    except Exception as primary_err:
         try:
-            from PIL import ImageGrab
+            img = _capture_print_window(hwnd)
+            img.save(str(path), format="PNG", optimize=False)
+        except Exception:
+            cl, ct, cr, cb = client_rect(hwnd)
+            try:
+                from PIL import ImageGrab
 
-            img = ImageGrab.grab(bbox=(cl, ct, cr, cb))
-            img.save(path, format="PNG", optimize=False)
-        except Exception as e:
-            path.write_text(f"screenshot failed: {e}", encoding="utf-8")
-            return path
+                img = ImageGrab.grab(bbox=(cl, ct, cr, cb))
+                img.save(path, format="PNG", optimize=False)
+            except Exception as e:
+                path.write_text(
+                    f"screenshot failed: {primary_err}; fallback: {e}",
+                    encoding="utf-8",
+                )
+                return path
 
     print(f"    [截图] {path} ({img.size[0]}x{img.size[1]})", flush=True)
     return path

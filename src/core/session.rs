@@ -22,19 +22,19 @@ pub struct SessionConfig {
     pub port: u16,
     pub username: String,
     pub password: String,
-    /// SSH 私钥文件路径（空表示用密码或系统默认密钥）
+    /// SSH 私钥文件路径(空表示用密码或系统默认密钥)
     pub private_key_path: String,
-    /// 尝试 ssh-agent / Pageant 认证（在指定密钥之后、密码之前）。
+    /// 尝试 ssh-agent / Pageant 认证(在指定密钥之后、密码之前)。
     #[serde(default = "default_use_ssh_agent")]
     pub use_ssh_agent: bool,
     pub last_connected_at: Option<i64>,
-    /// 创建时间（排序用）
+    /// 创建时间(排序用)
     #[serde(default)]
     pub created_at: Option<i64>,
     /// 已从 ~/.ssh/config 导入的标记 `Host|HostName|Port`
     #[serde(default)]
     pub ssh_config_marker: Option<String>,
-    /// OpenSSH ProxyJump（完整跳板链见 P1）
+    /// OpenSSH ProxyJump(完整跳板链见 P1)
     #[serde(default)]
     pub proxy_jump: String,
     /// OpenSSH ProxyCommand
@@ -51,16 +51,16 @@ pub struct SessionConfig {
     pub keepalive_count_max: u8,
     #[serde(default = "default_keepalive_auto_reconnect")]
     pub keepalive_auto_reconnect: bool,
-    /// 密码/密钥来源（Vault 引用时不落盘明文）
+    /// 密码/密钥来源(Vault 引用时不落盘明文)
     #[serde(default)]
     pub secret_backend: SecretBackend,
-    /// 本地端口转发（每行 `local_port:remote_host:remote_port`，例 `8080:127.0.0.1:80`）
+    /// 本地端口转发(每行 `local_port:remote_host:remote_port`，例 `8080:127.0.0.1:80`)
     #[serde(default)]
     pub local_forwards_text: String,
-    /// 远程端口转发（每行 `remote_port:target_host:target_port`，例 `8080:127.0.0.1:3000`）
+    /// 远程端口转发(每行 `remote_port:target_host:target_port`，例 `8080:127.0.0.1:3000`)
     #[serde(default)]
     pub remote_forwards_text: String,
-    /// 动态 SOCKS 转发（每行 `port` 或 `bind:port`，例 `1080`）
+    /// 动态 SOCKS 转发(每行 `port` 或 `bind:port`，例 `1080`)
     #[serde(default)]
     pub dynamic_forwards_text: String,
 }
@@ -82,7 +82,7 @@ fn default_use_ssh_agent() -> bool {
     true
 }
 
-/// 侧栏颜色标签 → egui 色（由 UI 层调用）
+/// 侧栏颜色标签 → egui 色(由 UI 层调用)
 pub fn session_color_tag_rgb(tag: &str) -> Option<(u8, u8, u8)> {
     match tag {
         "red" => Some((239, 68, 68)),
@@ -161,7 +161,7 @@ impl Default for SessionConfig {
     }
 }
 
-/// 解析 `local_forwards_text`（每行 `local_port:remote_host:remote_port`）。
+/// 解析 `local_forwards_text`(每行 `local_port:remote_host:remote_port`)。
 pub fn parse_local_forwards_text(text: &str) -> Vec<crate::ssh::LocalPortForward> {
     text.lines()
         .filter_map(|line| {
@@ -206,7 +206,7 @@ pub fn parse_local_forwards_text(text: &str) -> Vec<crate::ssh::LocalPortForward
         .collect()
 }
 
-/// 解析 `remote_forwards_text`（每行 `remote_port:target_host:target_port`）。
+/// 解析 `remote_forwards_text`(每行 `remote_port:target_host:target_port`)。
 pub fn parse_remote_forwards_text(text: &str) -> Vec<crate::ssh::RemotePortForward> {
     text.lines()
         .filter_map(|line| {
@@ -292,7 +292,7 @@ pub fn append_dynamic_forward_line(text: &mut String, fwd: &crate::ssh::DynamicP
     text.push('\n');
 }
 
-/// 解析 `dynamic_forwards_text`（每行 `port` 或 `bind_address:port`）。
+/// 解析 `dynamic_forwards_text`(每行 `port` 或 `bind_address:port`)。
 pub fn parse_dynamic_forwards_text(text: &str) -> Vec<crate::ssh::DynamicPortForward> {
     text.lines()
         .filter_map(|line| {
@@ -420,7 +420,7 @@ pub struct SessionManager {
     sessions: Vec<SessionConfig>,
     file_path: PathBuf,
     device_key: [u8; 32],
-    /// 最近一次 `load` / `import` 产生的提示（启动时由 UI 取走展示）
+    /// 最近一次 `load` / `import` 产生的提示(启动时由 UI 取走展示)
     load_diagnostics: Vec<String>,
 }
 
@@ -488,7 +488,7 @@ impl SessionManager {
         Some((sessions, had_plaintext, warnings))
     }
 
-    /// 从会话备份 JSON 替换当前会话（路径可为同步包内的 `sessions.json`）
+    /// 从会话备份 JSON 替换当前会话(路径可为同步包内的 `sessions.json`)
     pub fn import_sessions_from_file_path(&mut self, path: &std::path::Path) -> io::Result<()> {
         let content = fs::read_to_string(path)?;
         let Some((sessions, had_plaintext, warnings)) =
@@ -496,7 +496,7 @@ impl SessionManager {
         else {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                "无法解析会话备份文件（JSON 格式或字段无效）",
+                "无法解析会话备份文件(JSON 格式或字段无效)",
             ));
         };
         self.load_diagnostics.extend(warnings);
@@ -525,7 +525,7 @@ impl SessionManager {
         manager
     }
 
-    /// 默认会话文件路径（与 `AppSettings` 同目录）。
+    /// 默认会话文件路径(与 `AppSettings` 同目录)。
     pub fn default_storage_path() -> PathBuf {
         let mut p = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
         p.push("mistterm");
@@ -555,7 +555,7 @@ impl SessionManager {
         manager
     }
 
-    /// 配置目录无会话时，尝试从旧版「当前工作目录」加载（只读，不自动覆盖主文件）。
+    /// 配置目录无会话时，尝试从旧版「当前工作目录」加载(只读，不自动覆盖主文件)。
     fn try_load_legacy_cwd_if_empty(&mut self) {
         if !self.sessions.is_empty() {
             return;
@@ -589,7 +589,7 @@ impl SessionManager {
         self.save();
     }
 
-    /// 取走并清空最近一次加载产生的诊断信息（供状态栏一次性展示）。
+    /// 取走并清空最近一次加载产生的诊断信息(供状态栏一次性展示)。
     pub fn take_load_diagnostics(&mut self) -> Vec<String> {
         std::mem::take(&mut self.load_diagnostics)
     }
@@ -608,7 +608,7 @@ impl SessionManager {
                 }
                 Err(e) => {
                     self.load_diagnostics.push(format!(
-                        "读取会话文件失败（已重试 3 次）：{}",
+                        "读取会话文件失败(已重试 3 次)：{}",
                         e
                     ));
                     return None;
@@ -618,7 +618,7 @@ impl SessionManager {
         None
     }
 
-    /// 解密 `mistterm-aes-v1` 信封，或返回原始明文 JSON（旧格式）。
+    /// 解密 `mistterm-aes-v1` 信封，或返回原始明文 JSON(旧格式)。
     fn unwrap_sessions_json_text(text: &str) -> Option<String> {
         if let Ok(env) = serde_json::from_str::<crate::security::encrypted_file::ConfigEnvelope>(text)
         {
@@ -645,7 +645,7 @@ impl SessionManager {
 
         let Some(inner) = Self::unwrap_sessions_json_text(&content) else {
             self.load_diagnostics
-                .push("会话文件解密失败（设备密钥可能已变更）".to_string());
+                .push("会话文件解密失败(设备密钥可能已变更)".to_string());
             return;
         };
 
@@ -653,7 +653,7 @@ impl SessionManager {
             Self::parse_stored_sessions_json(&self.device_key, &inner)
         else {
             self.load_diagnostics.push(
-                "无法解析会话文件（JSON 损坏或格式错误）".to_string(),
+                "无法解析会话文件(JSON 损坏或格式错误)".to_string(),
             );
             return;
         };
@@ -667,7 +667,7 @@ impl SessionManager {
         }
     }
 
-    /// 保存会话（整文件 device_key 加密）
+    /// 保存会话(整文件 device_key 加密)
     pub fn save(&self) {
         let mut stored = Vec::with_capacity(self.sessions.len());
         for cfg in &self.sessions {
@@ -731,17 +731,17 @@ impl SessionManager {
         self.list_sessions()
     }
 
-    /// 获取会话列表（只读切片）；侧栏、批量执行等所有列表场景统一入口。
+    /// 获取会话列表(只读切片)；侧栏、批量执行等所有列表场景统一入口。
     pub fn list_sessions(&self) -> &[SessionConfig] {
         &self.sessions
     }
 
-    /// 根据 ID 获取会话（在 HashMap/索引不存在时为 O(n)；会话列表通常 <1000 可接受）。
+    /// 根据 ID 获取会话(在 HashMap/索引不存在时为 O(n)；会话列表通常 <1000 可接受)。
     pub fn get_session(&self, id: &str) -> Option<&SessionConfig> {
         self.sessions.iter().find(|s| s.id == id)
     }
 
-    /// 按 ProxyJump token 匹配已保存会话（名称或主机）。
+    /// 按 ProxyJump token 匹配已保存会话(名称或主机)。
     pub fn find_session_for_jump_token(&self, token: &str) -> Option<&SessionConfig> {
         let token = token.trim();
         self.sessions
@@ -816,7 +816,7 @@ impl SessionManager {
         }
     }
 
-    /// 就地更新会话扩展字段（色标、KeepAlive 等）
+    /// 就地更新会话扩展字段(色标、KeepAlive 等)
     pub fn patch_session(&mut self, id: &str, patch: impl FnOnce(&mut SessionConfig)) -> bool {
         if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
             patch(session);
@@ -831,7 +831,7 @@ impl SessionManager {
         self.sessions.len()
     }
 
-    /// 会话存储文件路径（用于备份/导出）
+    /// 会话存储文件路径(用于备份/导出)
     pub fn storage_path(&self) -> &PathBuf {
         &self.file_path
     }

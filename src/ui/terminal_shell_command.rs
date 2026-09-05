@@ -8,7 +8,7 @@ fn shell_word_basename(word: &str) -> &str {
     word.rsplit(['\\', '/']).next().unwrap_or(word)
 }
 
-/// 判断用户在 shell 提交的是否为远端接收命令 `rz`/`lrz`（本机应对应 ZMODEM 发送）。
+/// 判断用户在 shell 提交的是否为远端接收命令 `rz`/`lrz`(本机应对应 ZMODEM 发送)。
 pub fn is_rz_shell_command(line: &str) -> bool {
     let base = shell_word_basename(first_shell_word(line));
     let lower = base.to_ascii_lowercase();

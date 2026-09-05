@@ -41,7 +41,7 @@ pub struct SftpPanel {
     local_selected: Option<PathBuf>,
     local_list_err: Option<String>,
     list_err: Option<String>,
-    /// 待写入底栏 `status_message` 的成功/失败提示（不在面板内渲染）。
+    /// 待写入底栏 `status_message` 的成功/失败提示(不在面板内渲染)。
     pending_status_ok: Option<String>,
     pending_status_err: Option<String>,
     busy: bool,
@@ -56,7 +56,7 @@ pub struct SftpPanel {
     pending_audit: Option<(&'static str, String)>,
     /// GUI 自动化：busy 时延后的下载任务
     deferred_gui_download: Option<(PathBuf, PathBuf)>,
-    /// 右 dock 槽位（用于 Central 之后前景重绘）
+    /// 右 dock 槽位(用于 Central 之后前景重绘)
     last_panel_slot_rect: Option<egui::Rect>,
     local_sort: FileSortState,
     remote_sort: FileSortState,
@@ -69,7 +69,7 @@ impl Default for SftpPanel {
 }
 
 impl SftpPanel {
-    /// 右 dock 正文区可用宽（与其它侧栏并排时须随槽位收缩）。
+    /// 右 dock 正文区可用宽(与其它侧栏并排时须随槽位收缩)。
     fn dock_field_width(ui: &mut egui::Ui) -> f32 {
         layout_util::set_width_to_available(ui);
         layout_util::finite_content_width_inset(ui, 0.0, 64.0, ui.available_width())
@@ -140,7 +140,7 @@ impl SftpPanel {
         self.xfer_context_menu(ui, theme, ctx, handle);
     }
 
-    /// 上传 / 下载 / 删除远端 — 文件列表右键菜单（点行或空白均可用）。
+    /// 上传 / 下载 / 删除远端 — 文件列表右键菜单(点行或空白均可用)。
     fn xfer_context_menu(
         &mut self,
         ui: &mut egui::Ui,
@@ -175,7 +175,7 @@ impl SftpPanel {
         }
     }
 
-    /// 列表空白区右键（传输菜单）。
+    /// 列表空白区右键(传输菜单)。
     fn paint_list_blank_context(
         ui: &mut egui::Ui,
         width: f32,
@@ -192,7 +192,7 @@ impl SftpPanel {
         response.context_menu(add_menu);
     }
 
-    /// 本机分区 chrome（标题/路径/导航/表头，不含列表滚动区）。
+    /// 本机分区 chrome(标题/路径/导航/表头，不含列表滚动区)。
     fn estimate_local_section_chrome(theme: &Theme) -> f32 {
         let band_h = theme.size_sftp_toolbar_row_h() + theme.spacing_xs() * 2.0;
         let caption = theme.font_size_caption() + theme.spacing_xs();
@@ -204,7 +204,7 @@ impl SftpPanel {
             + theme.size_file_list_row_h()
     }
 
-    /// 远端分区 chrome（标题/路径/导航/表头，不含列表滚动区；新建目录已改为弹窗）。
+    /// 远端分区 chrome(标题/路径/导航/表头，不含列表滚动区；新建目录已改为弹窗)。
     fn estimate_remote_section_chrome(theme: &Theme) -> f32 {
         let band_h = theme.size_sftp_toolbar_row_h() + theme.spacing_xs() * 2.0;
         let caption = theme.font_size_caption() + theme.spacing_xs();
@@ -216,7 +216,7 @@ impl SftpPanel {
             + theme.size_file_list_row_h()
     }
 
-    /// 在本机/远端分区绘制前，一次性拆分两侧文件列表可用高度（各约一半）。
+    /// 在本机/远端分区绘制前，一次性拆分两侧文件列表可用高度(各约一半)。
     fn split_file_list_heights(ui: &egui::Ui, theme: &Theme) -> (f32, f32) {
         let row_h = theme.size_file_list_row_h();
         let min_list = row_h * 2.5;
@@ -542,7 +542,7 @@ impl SftpPanel {
             return crate::i18n::tr(
                 ctx,
                 "SFTP channel busy (shell is using the connection). Wait a moment and tap Refresh.",
-                "SFTP 通道繁忙（终端正在占用连接），请稍候再点「刷新」重试。",
+                "SFTP 通道繁忙(终端正在占用连接)，请稍候再点「刷新」重试。",
             )
             .to_string();
         }
@@ -679,7 +679,7 @@ impl SftpPanel {
         Self::gui_automation_e2e_local_path()
     }
 
-    /// GUI 自动化：本机 E2E 文件路径（`%TEMP%/mistterm_downloads/<MISTTERM_E2E_FILE>`）。
+    /// GUI 自动化：本机 E2E 文件路径(`%TEMP%/mistterm_downloads/<MISTTERM_E2E_FILE>`)。
     pub fn gui_automation_e2e_local_path() -> Option<PathBuf> {
         if !Self::gui_automation_enabled() {
             return None;
@@ -711,7 +711,7 @@ impl SftpPanel {
             .map(|e| e.path.clone())
     }
 
-    /// GUI 自动化：上传 `MISTTERM_E2E_FILE`（或首个本机文件）。
+    /// GUI 自动化：上传 `MISTTERM_E2E_FILE`(或首个本机文件)。
     pub fn run_gui_automation_upload(
         &mut self,
         ctx: &egui::Context,
@@ -741,7 +741,7 @@ impl SftpPanel {
         }
     }
 
-    /// GUI 自动化：下载 `MISTTERM_E2E_FILE`（或首个远端文件）。
+    /// GUI 自动化：下载 `MISTTERM_E2E_FILE`(或首个远端文件)。
     pub fn run_gui_automation_download(
         &mut self,
         ctx: &egui::Context,
@@ -971,13 +971,13 @@ impl SftpPanel {
         });
     }
 
-    /// 右侧 SFTP 侧栏入口（`close_panel` 置为 true 时由宿主隐藏侧栏）
+    /// 右侧 SFTP 侧栏入口(`close_panel` 置为 true 时由宿主隐藏侧栏)
     #[inline]
     pub(crate) fn last_panel_slot_rect(&self) -> Option<egui::Rect> {
         self.last_panel_slot_rect
     }
 
-    /// 取出待显示在底栏的状态文案（成功/失败）；失败项优先于成功项。
+    /// 取出待显示在底栏的状态文案(成功/失败)；失败项优先于成功项。
     pub fn take_pending_status(&mut self) -> (Option<String>, Option<String>) {
         (
             self.pending_status_ok.take(),
@@ -1016,7 +1016,7 @@ impl SftpPanel {
         let _ = theme;
     }
 
-    /// Central 之后绘制 SFTP 前景正文（与 AI/监控一致，避免列壳层风格不一致）。
+    /// Central 之后绘制 SFTP 前景正文(与 AI/监控一致，避免列壳层风格不一致)。
     pub fn show_foreground_panel(
         &mut self,
         ctx: &egui::Context,
@@ -1520,7 +1520,7 @@ impl SftpPanel {
                     ui.label(
                         egui::RichText::new(format!(
                             "{} {}",
-                            crate::i18n::tr(ui.ctx(), "Delete?", "删除？"),
+                            crate::i18n::tr(ui.ctx(), "Delete?", "删除?"),
                             p.to_string_lossy()
                         ))
                         .small(),

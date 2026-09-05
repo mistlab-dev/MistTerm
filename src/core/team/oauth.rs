@@ -1,4 +1,4 @@
-//! 桌面端 OAuth：系统浏览器 + 本地 `127.0.0.1` 回调（见 `docs/tech/TEAM.md` §一 A.2.6）。
+//! 桌面端 OAuth：系统浏览器 + 本地 `127.0.0.1` 回调(见 `docs/tech/TEAM.md` §一 A.2.6)。
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -157,7 +157,7 @@ fn probe_desktop_oauth_bridge() -> Result<(), String> {
     ))
 }
 
-/// 启动前探测 OAuth 入口是否可达（避免打开 404 页面后空等）。
+/// 启动前探测 OAuth 入口是否可达(避免打开 404 页面后空等)。
 fn probe_oauth_start(
     api_base: &str,
     provider: OAuthProvider,
@@ -176,13 +176,13 @@ fn probe_oauth_start(
     }
     if status.as_u16() == 404 {
         return Err(
-            "团队 API 的 OAuth 接口尚未可用（/v1/oauth/google 返回 404）。\
+            "团队 API 的 OAuth 接口尚未可用(/v1/oauth/google 返回 404)。\
              请先用邮箱密码登录，或请后端部署 OAuth 并配置桌面 redirect_uri。"
                 .into(),
         );
     }
     Err(format!(
-        "无法启动 OAuth（HTTP {}）。请稍后重试或使用密码登录。",
+        "无法启动 OAuth(HTTP {})。请稍后重试或使用密码登录。",
         status.as_u16()
     ))
 }

@@ -1,9 +1,85 @@
-//! MistTerm 全局快捷键检测（与 readline/shell 常用 Ctrl 组合错开）。
+//! MistTerm 全局快捷键检测(与 readline/shell 常用 Ctrl 组合错开)。
 
 use eframe::egui::{self, Key};
 
 pub fn input_primary_mod(i: &egui::InputState) -> bool {
     i.modifiers.command || i.modifiers.ctrl
+}
+
+/// macOS：⌘⇧；Win/Linux：Ctrl+Shift。用于 AI / 分屏等应用快捷键(终端聚焦时也应生效)。
+pub fn primary_shift_modifiers() -> egui::Modifiers {
+    #[cfg(target_os = "macos")]
+    {
+        egui::Modifiers {
+            command: true,
+            shift: true,
+            ..egui::Modifiers::NONE
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        egui::Modifiers {
+            ctrl: true,
+            shift: true,
+            ..egui::Modifiers::NONE
+        }
+    }
+}
+
+/// 消费主修饰键+Shift+指定键；用于应用快捷键，避免事件再进 PTY。
+pub fn consume_primary_shift_key(i: &mut egui::InputState, key: Key) -> bool {
+    let mods = primary_shift_modifiers();
+    if i.consume_key(mods, key) {
+        return true;
+    }
+    if i.modifiers.matches(mods) && i.key_pressed(key) {
+        i.events.retain(|e| {
+            !matches!(
+                e,
+                egui::Event::Key {
+                    key: k,
+                    pressed: true,
+                    ..
+                } if *k == key
+            )
+        });
+        return true;
+    }
+    false
+}
+
+/// 消费主修饰键+指定键(无 Shift)；用于 Ctrl/⌘+J 等应用快捷键，避免再进 PTY。
+pub fn consume_primary_key(i: &mut egui::InputState, key: Key) -> bool {
+    if i.modifiers.shift || i.modifiers.alt {
+        return false;
+    }
+    #[cfg(target_os = "macos")]
+    let mods = egui::Modifiers {
+        command: true,
+        ..egui::Modifiers::NONE
+    };
+    #[cfg(not(target_os = "macos"))]
+    let mods = egui::Modifiers {
+        ctrl: true,
+        ..egui::Modifiers::NONE
+    };
+    if i.consume_key(mods, key) {
+        return true;
+    }
+    if i.modifiers.matches(mods) && i.key_pressed(key) {
+        i.events.retain(|e| {
+            !matches!(
+                e,
+                egui::Event::Key {
+                    key: k,
+                    pressed: true,
+                    ..
+                } if *k == key
+            )
+        });
+        return true;
+    }
+    false
 }
 
 pub fn tab_switch_modifiers(i: &egui::InputState) -> bool {
@@ -25,7 +101,7 @@ pub fn tab_index_key(n: u8) -> Option<Key> {
     }
 }
 
-/// macOS：⌘W；Win/Linux：Ctrl+Shift+W（Ctrl+W 留给 shell 删词）。
+/// macOS：⌘W；Win/Linux：Ctrl+Shift+W(Ctrl+W 留给 shell 删词)。
 pub fn close_tab_shortcut_pressed(i: &egui::InputState) -> bool {
     if !i.key_pressed(Key::W) {
         return false;
@@ -40,7 +116,7 @@ pub fn close_tab_shortcut_pressed(i: &egui::InputState) -> bool {
     }
 }
 
-/// macOS：⌘T；Win/Linux：Ctrl+Shift+T（Ctrl+T 留给 shell transpose-chars）。
+/// macOS：⌘T；Win/Linux：Ctrl+Shift+T(Ctrl+T 留给 shell transpose-chars)。
 pub fn new_tab_shortcut_pressed(i: &egui::InputState) -> bool {
     if !i.key_pressed(Key::T) {
         return false;
@@ -55,7 +131,7 @@ pub fn new_tab_shortcut_pressed(i: &egui::InputState) -> bool {
     }
 }
 
-/// macOS：⌘⌥←/→；Win/Linux：Ctrl+Shift+←/→（Alt+←/→ 留给 shell 按词移动）。
+/// macOS：⌘⌥←/→；Win/Linux：Ctrl+Shift+←/→(Alt+←/→ 留给 shell 按词移动)。
 pub fn split_pane_focus_shortcut_pressed(i: &egui::InputState) -> bool {
     if !i.key_pressed(Key::ArrowLeft) && !i.key_pressed(Key::ArrowRight) {
         return false;

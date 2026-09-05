@@ -285,7 +285,7 @@ pub fn show_fragment_shares_modal(
                         ui.horizontal(|ui| {
                             ui.label(chrome::rich_caption(
                                 theme,
-                                i18n::tr(ctx, "Expires in (hours, 0 = never)", "有效期（小时，0 = 永久）"),
+                                i18n::tr(ctx, "Expires in (hours, 0 = never)", "有效期(小时，0 = 永久)"),
                             ));
                             ui.add(
                                 egui::TextEdit::singleline(&mut state.expires_hours_str)
@@ -702,7 +702,7 @@ pub fn show_team_settings_modal(
                         ui.horizontal(|ui| {
                             ui.label(chrome::rich_caption(
                                 theme,
-                                i18n::tr(ctx, "Audit retention (days)", "审计保留（天）"),
+                                i18n::tr(ctx, "Audit retention (days)", "审计保留(天)"),
                             ));
                             ui.add(
                                 egui::TextEdit::singleline(&mut state.audit_retention_days_str)

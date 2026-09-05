@@ -1,6 +1,6 @@
-//! 团队平台 UI 片段（偏好设置 / 云端同步面板复用）。
+//! 团队平台 UI 片段(偏好设置 / 云端同步面板复用)。
 
-use eframe::egui::{self, RichText};
+use eframe::egui;
 
 use crate::core::team::{
     team_web_forgot_password_url, team_web_register_url, OAuthProvider, TeamService,
@@ -29,7 +29,7 @@ impl Default for TeamLoginForm {
 
 /// 绘制团队登录 / 团队选择 / 同步控件。
 ///
-/// `id_scope` 须在每处调用点唯一（如 `"preferences_team"` / `"cloud_sync_team"`），
+/// `id_scope` 须在每处调用点唯一(如 `"preferences_team"` / `"cloud_sync_team"`)，
 /// 避免偏好设置与云端同步同帧绘制时 egui 控件 ID 冲突。
 pub fn paint_team_controls(
     ui: &mut egui::Ui,
@@ -168,7 +168,7 @@ pub fn paint_team_controls(
                     i18n::tr(
                         ctx,
                         "Sign in with Google or GitHub: complete authorization in the browser tab opened by MistTerm until you see a success page—not the mistlab.dev dashboard alone. Or use email/password below.",
-                        "使用 Google 或 GitHub：请在 MistTerm 打开的浏览器标签里完成授权，直到出现「登录成功」页（仅登录网站控制台不算完成）。也可在下方用邮箱/密码登录。",
+                        "使用 Google 或 GitHub：请在 MistTerm 打开的浏览器标签里完成授权，直到出现「登录成功」页(仅登录网站控制台不算完成)。也可在下方用邮箱/密码登录。",
                     ),
                 )
                 .color(theme.color_form_hint()),
@@ -237,7 +237,7 @@ pub fn paint_team_controls(
                 theme,
                 "use_email",
                 &mut form.use_email,
-                i18n::tr(ctx, "Sign in with email (off = username)", "使用邮箱登录（关闭则用用户名）"),
+                i18n::tr(ctx, "Sign in with email (off = username)", "使用邮箱登录(关闭则用用户名)"),
             );
             chrome::form_field_label(
                 ui,
@@ -298,25 +298,27 @@ pub fn paint_team_controls(
             }
 
             ui.add_space(theme.spacing_xs());
-            ui.horizontal(|ui| {
+            // 固定行高 + 底对齐布局；文案避免中英硬混在同一链上(域名放悬停)。
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {
                 ui.spacing_mut().item_spacing.x = theme.spacing_md();
-                if ui
-                    .link(RichText::new(i18n::tr(
-                        ctx,
-                        "Register on mistlab.dev",
-                        "在 mistlab.dev 注册",
-                    )))
-                    .clicked()
+                ui.set_height(theme.size_panel_filter_chip_h());
+                if chrome::panel_caption_link_with_hover(
+                    ui,
+                    theme,
+                    i18n::tr(ctx, "Register", "去网站注册"),
+                    Some("mistlab.dev/register"),
+                )
+                .clicked()
                 {
                     shell::open_url(team_web_register_url());
                 }
-                if ui
-                    .link(RichText::new(i18n::tr(
-                        ctx,
-                        "Forgot password (web)",
-                        "忘记密码（网页）",
-                    )))
-                    .clicked()
+                if chrome::panel_caption_link_with_hover(
+                    ui,
+                    theme,
+                    i18n::tr(ctx, "Forgot password", "忘记密码"),
+                    Some("mistlab.dev/forgot-password"),
+                )
+                .clicked()
                 {
                     shell::open_url(team_web_forgot_password_url());
                 }

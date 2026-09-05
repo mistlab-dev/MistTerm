@@ -134,7 +134,7 @@ impl MistTermApp {
                 self.notify_error(err);
             }
         }
-        // 改宽手柄：全部 dock 正文之后、屏上左→右绘制，避免右邻 dock 正文挡住左缝（如监控+片段并排）。
+        // 改宽手柄：全部 dock 正文之后、屏上左→右绘制，避免右邻 dock 正文挡住左缝(如监控+片段并排)。
         if paint_right_dock_fg {
             if self.show_ai_panel {
                 crate::ui::chrome::show_right_dock_resize_grip_for_slot(

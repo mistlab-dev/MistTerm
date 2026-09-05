@@ -9,15 +9,15 @@ const SCREEN_WIDTH_FALLBACK: f32 = 1024.0;
 /// 低于此宽度视为无效，改用 [`SCREEN_WIDTH_FALLBACK`]。
 const SCREEN_WIDTH_MIN_VALID: f32 = 64.0;
 
-/// 左栏拖拽：相对窗口宽度的比例区间（[`left_sidebar_drag_clamp`]）。
+/// 左栏拖拽：相对窗口宽度的比例区间([`left_sidebar_drag_clamp`])。
 const LEFT_SIDEBAR_MIN_FRAC: f32 = 0.11;
 const LEFT_SIDEBAR_MAX_FRAC: f32 = 0.32;
 const LEFT_SIDEBAR_COLLAPSE_MIN_FRAC: f32 = 0.45;
 
-/// 侧栏 default/min/max 不可同时满足时的最小拖拽跨度（px）。
+/// 侧栏 default/min/max 不可同时满足时的最小拖拽跨度(px)。
 const PANEL_DRAG_MIN_GAP: f32 = 44.0;
 const PANEL_MIN_SPAN: f32 = 120.0;
-/// 左右 dock 可拖拽上限（设计规范 §3.4 / §8.1）
+/// 左右 dock 可拖拽上限(设计规范 §3.4 / §8.1)
 pub(super) const SIDE_PANEL_MAX_WIDTH_PX: f32 = 320.0;
 const SIDE_PANEL_MIN_WIDTH_PX: f32 = 160.0;
 const LEFT_SIDEBAR_DEFAULT_FRAC: f32 = 0.18;
@@ -91,22 +91,22 @@ pub fn clamp_f32(v: f32, lo: f32, hi: f32) -> f32 {
     }
 }
 
-/// egui 默认 `Frame::side_top_panel` 的 **水平** inner margin（左右各，与垂直 2px 无关）。
+/// egui 默认 `Frame::side_top_panel` 的 **水平** inner margin(左右各，与垂直 2px 无关)。
 /// 自定义侧栏 `frame` 时须在回调里传入实际左侧 inner margin。
 pub const EGUI_SIDE_PANEL_FRAME_MARGIN_X: f32 = 8.0;
 
-/// 命令片段 `SidePanel` 的 id（与 `egui::SidePanel::right` 一致，供 [`side_panel_state_rect`] 读取）。
+/// 命令片段 `SidePanel` 的 id(与 `egui::SidePanel::right` 一致，供 [`side_panel_state_rect`] 读取)。
 pub const FRAGMENT_PANEL_ID: &str = "fragment_panel";
 pub const MONITOR_PANEL_ID: &str = "monitor_panel";
 pub const AI_PANEL_ID: &str = "ai_panel";
 
-/// 读取上一帧 `SidePanel` 落盘的槽位矩形（用于 Central 之后 Foreground 重绘）。
+/// 读取上一帧 `SidePanel` 落盘的槽位矩形(用于 Central 之后 Foreground 重绘)。
 #[inline]
 pub fn side_panel_state_rect(ctx: &egui::Context, panel_id: &str) -> Option<egui::Rect> {
     egui::containers::panel::PanelState::load(ctx, egui::Id::new(panel_id)).map(|s| s.rect)
 }
 
-/// 将侧栏槽位右缘钉在 `screen` 右缘（`PanelState` 仅为内层内容矩形，勿直接作 Area 外框）。
+/// 将侧栏槽位右缘钉在 `screen` 右缘(`PanelState` 仅为内层内容矩形，勿直接作 Area 外框)。
 /// `screen_inset` 取 [`Theme::spacing_right_dock_screen_inset`].
 #[inline]
 pub fn pin_rect_to_screen_right_edge(
@@ -150,7 +150,7 @@ pub fn inset_slot_for_foreground_paint(
     r
 }
 
-/// 以右缘 + 已知宽重算 SidePanel 槽位（`max_rect.min.x` 漂移时宽会被压扁，须用 [`side_panel_row_width`]）。
+/// 以右缘 + 已知宽重算 SidePanel 槽位(`max_rect.min.x` 漂移时宽会被压扁，须用 [`side_panel_row_width`])。
 #[inline]
 pub fn anchor_right_dock_slot_to_right_edge(slot: egui::Rect, width: f32) -> egui::Rect {
     if !slot.is_positive() || !slot.max.x.is_finite() {
@@ -167,7 +167,7 @@ pub fn anchor_right_dock_slot_to_right_edge(slot: egui::Rect, width: f32) -> egu
     )
 }
 
-/// SidePanel 分列宽（表单/列表等内容区用）。
+/// SidePanel 分列宽(表单/列表等内容区用)。
 #[inline]
 pub fn right_dock_side_panel_width(ui: &egui::Ui) -> f32 {
     let max_r = ui.max_rect();
@@ -186,7 +186,7 @@ pub fn right_dock_side_panel_width(ui: &egui::Ui) -> f32 {
 }
 
 /// 从 SidePanel 内层 `max_rect.width()` 与布局默认宽推导槽位列宽。
-/// `max_rect` 漂成整窗宽时回落 `layout_width`；偏窄时至少 `layout_width`（见单测 `record_side_panel_slot_*`）。
+/// `max_rect` 漂成整窗宽时回落 `layout_width`；偏窄时至少 `layout_width`(见单测 `record_side_panel_slot_*`)。
 #[inline]
 pub fn side_panel_slot_layout_width(max_rect_width: f32, layout_width: f32) -> f32 {
     let layout = layout_width.max(SIDE_PANEL_MIN_WIDTH_PX);
@@ -227,7 +227,7 @@ pub fn side_panel_place_slot(
     r.intersect(screen)
 }
 
-/// SidePanel 回调内（仅调试/回退）：`max_rect.max.x - 分列宽`。
+/// SidePanel 回调内(仅调试/回退)：`max_rect.max.x - 分列宽`。
 #[inline]
 pub fn side_panel_column_slot(ui: &egui::Ui, layout_width: f32) -> egui::Rect {
     let max_r = ui.max_rect();
@@ -244,7 +244,7 @@ pub fn side_panel_column_slot_with_width(max_rect: egui::Rect, column_width: f32
     )
 }
 
-/// SidePanel `.show` 返回的 `response.rect` 锚定槽位（回退用）。
+/// SidePanel `.show` 返回的 `response.rect` 锚定槽位(回退用)。
 #[inline]
 pub fn side_panel_response_slot(
     response: &egui::Response,
@@ -257,7 +257,7 @@ pub fn side_panel_response_slot(
     Some(anchor_right_dock_slot_to_right_edge(r, r.width()).intersect(ctx.screen_rect()))
 }
 
-/// 从 `PanelState` 读槽位（仅无 response 时回退）；同样做右缘锚定。
+/// 从 `PanelState` 读槽位(仅无 response 时回退)；同样做右缘锚定。
 #[inline]
 pub fn right_dock_panel_slot_rect(ctx: &egui::Context, panel_id: &str) -> Option<egui::Rect> {
     side_panel_state_rect(ctx, panel_id)
@@ -266,13 +266,13 @@ pub fn right_dock_panel_slot_rect(ctx: &egui::Context, panel_id: &str) -> Option
         .map(|r| r.intersect(ctx.screen_rect()))
 }
 
-/// 对已存槽位再锚定一次（宽已正确时幂等；仅宽来自矩形自身，无 `Ui` 时用）。
+/// 对已存槽位再锚定一次(宽已正确时幂等；仅宽来自矩形自身，无 `Ui` 时用)。
 #[inline]
 pub fn fix_right_dock_slot_horizontal_drift(slot: egui::Rect) -> egui::Rect {
     anchor_right_dock_slot_to_right_edge(slot, slot.width())
 }
 
-/// Foreground 槽位：优先本帧 `SidePanel` 内槽位（与布局占位一致）；否则回退钉右缘。
+/// Foreground 槽位：优先本帧 `SidePanel` 内槽位(与布局占位一致)；否则回退钉右缘。
 #[inline]
 pub fn right_dock_foreground_slot(
     panel_slot_rect: Option<egui::Rect>,
@@ -288,7 +288,7 @@ pub fn right_dock_foreground_slot(
     right_dock_slot_rect(ctx, panel_id, profile, layout_content_rect, screen_inset)
 }
 
-/// 右 dock Foreground 槽位：宽取本帧布局内容或 `PanelState`，**右缘对齐屏右**（整块侧栏可见）。
+/// 右 dock Foreground 槽位：宽取本帧布局内容或 `PanelState`，**右缘对齐屏右**(整块侧栏可见)。
 #[inline]
 pub fn right_dock_slot_rect(
     ctx: &egui::Context,
@@ -318,7 +318,7 @@ pub fn right_dock_slot_rect(
     Some(slot)
 }
 
-/// Foreground 重绘用矩形（兼容旧名；优先 [`right_dock_slot_rect`] + 本帧布局 rect）。
+/// Foreground 重绘用矩形(兼容旧名；优先 [`right_dock_slot_rect`] + 本帧布局 rect)。
 #[inline]
 pub fn side_panel_foreground_rect(
     ctx: &egui::Context,
@@ -341,13 +341,13 @@ pub fn side_panel_foreground_rect(
     right_dock_slot_rect(ctx, panel_id, profile, None, screen_inset)
 }
 
-/// Foreground 内正文宽（扣 `region_panel_frame` 水平 inner margin，勿信 Area 内 clip≈整窗）。
+/// Foreground 内正文宽(扣 `region_panel_frame` 水平 inner margin，勿信 Area 内 clip≈整窗)。
 #[inline]
 pub fn side_panel_foreground_inner_width(slot: egui::Rect, margin: egui::Margin) -> f32 {
     (slot.width() - margin.left - margin.right).max(48.0)
 }
 
-/// Foreground 正文宽：来自 SidePanel 槽位 `inner`（随拖拽变化），夹在 profile 的 min/max 内。
+/// Foreground 正文宽：来自 SidePanel 槽位 `inner`(随拖拽变化)，夹在 profile 的 min/max 内。
 #[inline]
 pub fn right_dock_foreground_content_width(
     ctx: &egui::Context,
@@ -371,7 +371,7 @@ pub fn dock_scroll_content_width(ui: &egui::Ui, dock_w: f32) -> f32 {
     w.max(1.0)
 }
 
-/// 将出现竖向滚动条时的内容区宽（比 [`dock_scroll_content_width`] 少 `scroll_bar_width`）。
+/// 将出现竖向滚动条时的内容区宽(比 [`dock_scroll_content_width`] 少 `scroll_bar_width`)。
 #[inline]
 pub fn dock_scroll_viewport_width(ui: &egui::Ui, dock_w: f32) -> f32 {
     let w = dock_scroll_content_width(ui, dock_w);
@@ -383,7 +383,7 @@ pub fn dock_scroll_viewport_width(ui: &egui::Ui, dock_w: f32) -> f32 {
     }
 }
 
-/// 将 Ui 锁在右 dock 正文宽：仅 `set_max_width`，勿 `set_min_width`（ScrollArea 滚动条占位会裁切右缘）。
+/// 将 Ui 锁在右 dock 正文宽：仅 `set_max_width`，勿 `set_min_width`(ScrollArea 滚动条占位会裁切右缘)。
 #[inline]
 pub fn constrain_ui_to_right_dock_body(ui: &mut egui::Ui, body_w: f32) -> f32 {
     let w = dock_scroll_viewport_width(ui, body_w);
@@ -391,7 +391,7 @@ pub fn constrain_ui_to_right_dock_body(ui: &mut egui::Ui, body_w: f32) -> f32 {
     w
 }
 
-/// 右 dock / ScrollArea 子 Ui：以**当前**可用宽为上限（已含滚动条占位），勿信 ∞ 的 `available_width`。
+/// 右 dock / ScrollArea 子 Ui：以**当前**可用宽为上限(已含滚动条占位)，勿信 ∞ 的 `available_width`。
 /// ScrollArea 内 `max_rect` 可能仍为上帧图表撑开的宽，须与更窄的 `clip_rect` 取 min。
 #[inline]
 pub fn set_width_to_available(ui: &mut egui::Ui) -> f32 {
@@ -421,7 +421,7 @@ pub fn set_width_to_available(ui: &mut egui::Ui) -> f32 {
 }
 
 /// 在 `SidePanel::show` **之后**用槽位矩形记录右栏外缘左 x。
-/// 优先 [`right_dock_slot_rect`]（右缘对齐屏）；勿用内层 `response.rect` 的 min.x 当外缘（易偏左、中央区裁错）。
+/// 优先 [`right_dock_slot_rect`](右缘对齐屏)；勿用内层 `response.rect` 的 min.x 当外缘(易偏左、中央区裁错)。
 #[inline]
 pub fn record_right_dock_panel_rect(rect: &egui::Rect, acc: &mut Option<f32>) {
     if !rect.is_positive() {
@@ -437,13 +437,13 @@ pub fn record_right_dock_panel_rect(rect: &egui::Rect, acc: &mut Option<f32>) {
     });
 }
 
-/// 兼容：用 `response.rect` 记录（仅当尚无 [`right_dock_slot_rect`] 时作回退）。
+/// 兼容：用 `response.rect` 记录(仅当尚无 [`right_dock_slot_rect`] 时作回退)。
 #[inline]
 pub fn record_right_dock_panel(response: &egui::Response, acc: &mut Option<f32>) {
     record_right_dock_panel_rect(&response.rect, acc);
 }
 
-/// 将当前 Ui 的 clip 右缘收紧到右栏外缘（防止中央后绘盖住 dock）。
+/// 将当前 Ui 的 clip 右缘收紧到右栏外缘(防止中央后绘盖住 dock)。
 #[inline]
 pub fn clip_ui_before_right_dock(ui: &mut egui::Ui, right_dock_outer_left_x: Option<f32>) {
     let Some(dock_left) = right_dock_outer_left_x else {
@@ -459,13 +459,13 @@ pub fn clip_ui_before_right_dock(ui: &mut egui::Ui, right_dock_outer_left_x: Opt
     }
 }
 
-/// 主内容区底缘 y（状态栏顶线；主区/右 dock 不得越过）。
+/// 主内容区底缘 y(状态栏顶线；主区/右 dock 不得越过)。
 #[inline]
 pub fn workspace_bottom_y(screen: egui::Rect, status_bar_height: f32) -> f32 {
     (screen.max.y - status_bar_height.max(0.0)).max(screen.min.y)
 }
 
-/// 将矩形底缘裁到状态栏之上（防止侧栏/终端/右 dock 盖住底栏）。
+/// 将矩形底缘裁到状态栏之上(防止侧栏/终端/右 dock 盖住底栏)。
 #[inline]
 pub fn clamp_rect_above_status_bar(
     mut rect: egui::Rect,
@@ -483,7 +483,7 @@ pub fn clamp_rect_above_status_bar(
     rect
 }
 
-/// 工作区内缩 padding（列布局与终端宽度以此矩形为准）；**顶部不缩**，Tab/侧栏标题栏贴齐顶栏下沿。
+/// 工作区内缩 padding(列布局与终端宽度以此矩形为准)；**顶部不缩**，Tab/侧栏标题栏贴齐顶栏下沿。
 #[inline]
 pub fn work_area_inner_rect(work: egui::Rect, pad: f32) -> egui::Rect {
     if pad <= 0.0 || !pad.is_finite() {
@@ -517,7 +517,7 @@ pub fn side_panel_row_width(ui: &egui::Ui) -> f32 {
     }
 }
 
-/// 右 dock 内真实内容宽（勿用 2000px 上限，否则图表撑出侧栏被窗口裁切）
+/// 右 dock 内真实内容宽(勿用 2000px 上限，否则图表撑出侧栏被窗口裁切)
 #[inline]
 pub fn dock_panel_content_width(ui: &egui::Ui, min_w: f32, max_w: f32) -> f32 {
     let w = side_panel_row_width(ui);
@@ -571,7 +571,7 @@ pub fn terminal_column_width(
     (right_edge - col_left).max(1.0)
 }
 
-/// 中央区内某一列（如终端列）可用宽度（兼容旧调用；优先用 [`terminal_column_width`] + `work`）。
+/// 中央区内某一列(如终端列)可用宽度(兼容旧调用；优先用 [`terminal_column_width`] + `work`)。
 #[inline]
 pub fn column_width_before_right_dock(ui: &egui::Ui, right_dock_outer_left_x: Option<f32>) -> f32 {
     let col_left = ui.max_rect().min.x;
@@ -579,14 +579,14 @@ pub fn column_width_before_right_dock(ui: &egui::Ui, right_dock_outer_left_x: Op
     terminal_column_width(col_left, work_max_x, right_dock_outer_left_x)
 }
 
-/// 右栏/工具侧栏的宽度档位（比例系数在 [`side_panel_widths`] 内）。
+/// 右栏/工具侧栏的宽度档位(比例系数在 [`side_panel_widths`] 内)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SidePanelProfile {
-    /// 命令片段列表（偏窄）
+    /// 命令片段列表(偏窄)
     Fragment,
-    /// 凭证库、云端同步、SFTP 等（中等）
+    /// 凭证库、云端同步、SFTP 等(中等)
     Standard,
-    /// 系统监控（图表略宽）
+    /// 系统监控(图表略宽)
     Monitor,
 }
 
@@ -600,7 +600,7 @@ pub(super) fn screen_width(ctx: &egui::Context) -> f32 {
     }
 }
 
-/// 左栏会话列表拖拽范围：随窗口宽度变化（小窗不强行拉满，大窗不必死锁在 320）。
+/// 左栏会话列表拖拽范围：随窗口宽度变化(小窗不强行拉满，大窗不必死锁在 320)。
 #[inline]
 pub fn left_sidebar_drag_clamp(ctx: &egui::Context) -> (f32, f32) {
     let w = screen_width(ctx);
@@ -685,7 +685,7 @@ mod tests {
 
     #[test]
     fn side_panel_row_width_prefers_max_over_window_clip() {
-        // 模拟 SidePanel 根：max=320（槽位），clip=1200（整窗）
+        // 模拟 SidePanel 根：max=320(槽位)，clip=1200(整窗)
         let max_r = egui::Rect::from_min_max(egui::pos2(880.0, 0.0), egui::pos2(1200.0, 800.0));
         let clip_r = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1200.0, 800.0));
         let max_r_w = max_r.width();
@@ -739,7 +739,7 @@ mod tests {
 
     #[test]
     fn record_side_panel_slot_uses_layout_width_over_narrow_max_rect() {
-        // allocate 320 后 max_rect 仍只有 160 宽（多 dock 并排时偶发）
+        // allocate 320 后 max_rect 仍只有 160 宽(多 dock 并排时偶发)
         let max_r = egui::Rect::from_min_max(egui::pos2(1040.0, 28.0), egui::pos2(1200.0, 572.0));
         let layout_w = 320.0_f32;
         let mut w = layout_w.max(48.0);
