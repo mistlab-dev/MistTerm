@@ -1,6 +1,7 @@
 # 对话驱动下一代终端（设计稿）
 
 > 状态：调研完成 · **归入 v2.0 大版本，与 v1.1.3 发版分离** · 待单独立项实现  
+> 工作分支：`feature/v2-conversational-terminal`（可多轮改设计/实现，不直接上 main 发版）  
 > 日期：2026-09-05  
 > 关联：[`AI-INTERACTION-DESIGN.md`](../tech/AI-INTERACTION-DESIGN.md)、[`batch_exec`](../../src/core/batch_exec.rs)、概念稿 v4  
 > **UI 决策（2026-09-05）**：默认**沿用现有壳**（左会话 · 中终端 · 右 Dock AI），不另开「对话运维」全屏模式；能力加在右栏 AI 上。  

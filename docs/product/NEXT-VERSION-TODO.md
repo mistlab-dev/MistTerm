@@ -69,7 +69,8 @@
 
 ## v2.0 — 对话驱动运维（大版本 · 单独立项）
 
-> 设计稿：[`CONVERSATIONAL-TERMINAL.md`](CONVERSATIONAL-TERMINAL.md)。**不纳入 v1.1.3**；实现与发版与 1.x 线分开。
+> 设计稿：[`CONVERSATIONAL-TERMINAL.md`](CONVERSATIONAL-TERMINAL.md)。**不纳入 v1.1.3**。  
+> 分支：`feature/v2-conversational-terminal`（设计与实现可多轮迭代，合入/发版另议）。
 
 - [ ] Phase 1：`AgentRun`（含 Clarifying）+ 只读 Skill（磁盘等）+ L1/L2 门闩（选项 B 预留变更档）
 - [ ] Phase 1末/2：设置「允许对话变更」默认关 + restart/rollout 等 mutate Skill（强制 L2）
