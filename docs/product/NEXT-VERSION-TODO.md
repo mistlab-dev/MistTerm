@@ -2,7 +2,7 @@
 
 > 依据：产品方向（管得住 · 帮得上 · 不做手机终端）+ [`concept-desktop-calm.html`](concept-desktop-calm.html) v4。  
 > 原则：**不大改现有客户端壳**；增量做「审计拦截 ↔ 团队知识」交汇。  
-> 日期：2026-09-03 · 当前 release：v1.1.2 · 下一目标：v1.1.3
+> 日期：2026-09-05 · 当前实现目标：v1.1.3（相对 release v1.1.2）
 
 ---
 
@@ -35,7 +35,7 @@
 - [x] 服务器 / 本地 **block** 后：有命中则 Action Toast 推 **合规替代片段**
 - [x] 无命中时：保持原 Error Toast（不硬塞模型）
 - [x] 文案与本地审计区分保持一致（「本地检查」vs「服务器策略」）
-- [ ] 无命中时短提示「暂无团队替代」+ 可选 Model fallback（标明非团队知识）— 未做，避免空话打扰
+- [x] 无命中时短提示「暂无团队替代」+ 可选 Model fallback（标明非团队知识）
 
 ### D. v1.1 UI 收口（本轮）
 
@@ -46,26 +46,39 @@
 
 ---
 
-## v1.1.3 — 加深飞轮（下一期）
+## v1.1.3 — 加深飞轮（本轮实现）
 
 ### P0 治理闭环
 
-- [ ] **审计时间线**：展示本会话及近期 block / confirm / allow，只读、可按主机和结果筛选
-- [ ] **Agent 安装向导**：提供文档和客户端入口，明确安装、绑定、心跳检查，不改现有客户端壳
+- [x] **审计时间线**：展示本会话及近期 block / confirm / allow，只读、可按主机和结果筛选
+- [x] **Agent 安装向导**：提供文档和客户端入口，明确安装、绑定、心跳检查，不改现有客户端壳
 
 ### P1 知识闭环
 
-- [ ] 失败输出 / 成功路径 → **入库候选**（必须用户确认，禁止静默入库）
-- [ ] 拦截后推荐按当前主机 / 环境标签过滤，无标签时回退全局
-- [ ] 引用 MistDocs / 团队文档段落，并展示来源锚点
+- [x] 失败输出 / 成功路径 → **入库候选**（必须用户确认，禁止静默入库）
+- [x] 拦截后推荐按当前主机 / 环境标签过滤，无标签时回退全局
+- [x] 引用 MistDocs / 团队文档段落，并展示来源锚点  
+  - 说明：客户端已接 `GET /v1/teams/{id}/docs/search`（见 [`docs/tech/TEAM-DOCS.md`](../tech/TEAM-DOCS.md)）；服务端未实现时软失败为空，主检索仍为团队/个人片段，锚点形如 `fragment:{id}` / `doc:{id}#{slug}`
 
 ### P2 检索体验
 
-- [ ] 「问：我们怎么……」独立入口 / 语义检索；先检索团队知识，再模型兜底并标明来源
+- [x] 「问：我们怎么……」独立入口 / 语义检索；先检索团队知识，再模型兜底并标明来源  
+  - 入口：片段侧栏「问…」、团队菜单、Ask 对话框；检索为意图清洗 + 关键词打分（非 embedding）
 
 ---
 
-## v1.2 — 组织能力（后续）
+## v2.0 — 对话驱动运维（大版本 · 单独立项）
+
+> 设计稿：[`CONVERSATIONAL-TERMINAL.md`](CONVERSATIONAL-TERMINAL.md)。**不纳入 v1.1.3**；实现与发版与 1.x 线分开。
+
+- [ ] Phase 1：`AgentRun`（含 Clarifying）+ 只读 Skill（磁盘等）+ L1/L2 门闩（选项 B 预留变更档）
+- [ ] Phase 1末/2：设置「允许对话变更」默认关 + restart/rollout 等 mutate Skill（强制 L2）
+- [ ] Phase 2：多轮澄清 + 规则自适应多步；ProxyJump
+- [ ] Phase 3：LLM 动态规划；非白名单变更仍拒跑；不做自愈
+
+---
+
+## v1.2 — 组织能力（1.x 后续）
 
 - [ ] 策略可读视图（人能看懂「为什么拦」）
 - [ ] 多主机策略包
@@ -82,6 +95,13 @@
 2. 能否一键落到当前 SSH 会话  
 3. 拦截场景是否同时给出合规替代（有知识时）
 
+人工点验建议：
+
+- Block 有标签主机 vs 无标签回退
+- Ask 有命中「用到终端」/ 无命中「问 AI（非团队知识）」
+- 失败或频次达标后「保存为片段？」确认入库
+- 审计时间线筛选；Agent 安装向导复制命令
+
 ---
 
 ## 参考
@@ -90,4 +110,6 @@
 - 概念稿：`docs/product/concept-desktop-calm.html`（v4）
 - 既有客户端闭环：`docs/tech/CLIENT-TODO.md`（§1–§8 已完成；仅保留 GUI 人工点验建议）
 - 审计：`docs/tech/COMMAND-AUDIT.md`、`docs/tech/SERVER-SIDE-AUDIT.md`
-- 实现：`suggest_compliant_after_block`（`fragment_recommendations.rs`）+ `ToastAction::InsertSuggestedSnippet`
+- MistDocs 契约：`docs/tech/TEAM-DOCS.md`
+- 实现：`suggest_compliant_after_block_with_env` + `retrieve_team_knowledge` + `ToastAction::{AskAiFallback,ConfirmSaveCandidate}`
+- 对话运维（**v2.0**）：[`CONVERSATIONAL-TERMINAL.md`](CONVERSATIONAL-TERMINAL.md)

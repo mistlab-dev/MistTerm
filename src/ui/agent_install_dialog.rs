@@ -32,7 +32,9 @@ pub fn show_agent_install_modal(
         .default_size(modal_sz)
         .show(ctx, |ui| {
             chrome::modal_content_frame(theme).show(ui, |ui| {
-                chrome::modal_header_title_only(ui, theme, title, theme.font_size_modal_title());
+                if chrome::modal_header(ui, theme, title, theme.font_size_modal_title()) {
+                    should_close = true;
+                }
                 ui.label(
                     egui::RichText::new(crate::i18n::tr(
                         ctx,
@@ -68,12 +70,6 @@ pub fn show_agent_install_modal(
                         step(ui, theme, ctx, "4", "Check the heartbeat", "检查心跳", "On the audited host, run `mist-agent status`. In MistTeam, confirm the Agent appears online and that its host, team, and last heartbeat are correct.", "在被审计主机执行 `mist-agent status`；在 MistTeam 中确认 Agent 在线，并核对主机、团队和最近心跳。",);
                         step(ui, theme, ctx, "5", "Removal and recovery", "卸载与恢复", "Use `mist-agent-uninstall` on the host to remove the drop-in and agent files. Existing SSH connections are not interrupted; always verify access before closing the maintenance session.", "在主机执行 `mist-agent-uninstall` 移除配置和文件。现有 SSH 连接不会被中断；关闭维护会话前请先验证访问。",);
                     });
-                ui.add_space(theme.spacing_sm());
-                ui.horizontal(|ui| {
-                    if ui.button(crate::i18n::tr(ctx, "Close", "关闭")).clicked() {
-                        should_close = true;
-                    }
-                });
             });
         });
 
@@ -91,10 +87,10 @@ fn step(
     theme: &Theme,
     ctx: &egui::Context,
     number: &str,
-    title_en: &str,
-    title_zh: &str,
-    body_en: &str,
-    body_zh: &str,
+    title_en: &'static str,
+    title_zh: &'static str,
+    body_en: &'static str,
+    body_zh: &'static str,
 ) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(number).strong().color(theme.accent_color()));

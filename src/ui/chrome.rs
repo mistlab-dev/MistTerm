@@ -3753,31 +3753,9 @@ pub fn status_restore_chip(ui: &mut Ui, theme: &Theme, name: &str, count: usize)
     response
 }
 
-/// 弹窗标题行（仅标题，无 ×）。与底部「取消」成对，避免与标题栏关闭重复。
-///
-/// 标题底带需要横贯整个弹窗宽度（含越过 `modal_content_frame.inner_margin` 的 `mx` 留白），
-/// 所以在 frame 内部用 `horizontal` + `right_to_left` 占位强制填满可用宽度，
-/// 否则 frame 会按 `panel_header_title_leading` 的自然宽度收缩成左上角小 chip。
-pub fn modal_header_title_only(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) {
-    let _ = title_px;
-    let mx = theme.spacing_modal_content_x();
-    let my = theme.spacing_modal_content_y();
-    let band = theme
-        .frame_modal_title_band()
-        .outer_margin(egui::Margin {
-            left: -mx,
-            right: -mx,
-            top: -my,
-            bottom: 0.0,
-        })
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                panel_header_title_leading(ui, theme, IconId::Plus, title);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |_ui| {});
-            });
-        });
-    paint_modal_header_bottom_divider(ui, theme, band.response.rect);
-    ui.add_space(theme.spacing_modal_header_after_sep());
+/// 弹窗标题行（标题 + 右上角 ×）。与 [`modal_header`] 相同；保留此名以免旧调用点遗漏。
+pub fn modal_header_title_only(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> bool {
+    modal_header(ui, theme, title, title_px)
 }
 
 /// 弹窗标题行（标题 + 右侧 ×，用于仅通过标题栏关闭的弹窗）。

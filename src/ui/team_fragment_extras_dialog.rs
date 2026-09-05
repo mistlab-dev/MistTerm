@@ -16,8 +16,8 @@ use crate::ui::chrome;
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 
-fn modal_header_title(ui: &mut egui::Ui, theme: &Theme, title: &str) {
-    chrome::modal_header_title_only(ui, theme, title, chrome::modal_title_font_size(theme));
+fn modal_header_title(ui: &mut egui::Ui, theme: &Theme, title: &str) -> bool {
+    chrome::modal_header(ui, theme, title, chrome::modal_title_font_size(theme))
 }
 
 // ───────────────────────── 版本历史 ─────────────────────────
@@ -77,11 +77,13 @@ pub fn show_fragment_versions_modal(
         .show(ctx, |ui| {
             chrome::modal_content_frame(theme).show(ui, |ui| {
                 ui.push_id("team_fragment_versions_form", |ui| {
-                    modal_header_title(
+                    if modal_header_title(
                         ui,
                         theme,
                         i18n::tr(ctx, "Version history", "版本历史"),
-                    );
+                    ) {
+                        should_close = true;
+                    }
                     ui.label(
                         chrome::rich_caption(theme, &state.fragment_title).weak(),
                     );
@@ -269,11 +271,13 @@ pub fn show_fragment_shares_modal(
         .show(ctx, |ui| {
             chrome::modal_content_frame(theme).show(ui, |ui| {
                 ui.push_id("team_fragment_shares_form", |ui| {
-                    modal_header_title(
+                    if modal_header_title(
                         ui,
                         theme,
                         i18n::tr(ctx, "External shares", "外部分享"),
-                    );
+                    ) {
+                        should_close = true;
+                    }
                     ui.label(chrome::rich_caption(theme, &state.fragment_title).weak());
                     ui.add_space(theme.spacing_sm());
 
@@ -686,10 +690,12 @@ pub fn show_team_settings_modal(
         .show(ctx, |ui| {
             chrome::modal_content_frame(theme).show(ui, |ui| {
                 ui.push_id("team_settings_form", |ui| {
+                    if modal_header_title(ui, theme, i18n::tr(ctx, "Team settings", "团队设置")) {
+                        should_close = true;
+                    }
                     egui::ScrollArea::vertical()
                         .max_height(modal_sz.y - theme.spacing_lg() * 2.0)
                         .show(ui, |ui| {
-                    modal_header_title(ui, theme, i18n::tr(ctx, "Team settings", "团队设置"));
                     ui.add_space(theme.spacing_sm());
 
                     ui.add_enabled_ui(is_admin, |ui| {

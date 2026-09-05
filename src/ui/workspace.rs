@@ -755,6 +755,38 @@ impl MistTermApp {
             );
         }
 
+        if self.show_ask_knowledge_dialog {
+            let mut action = crate::ui::ask_knowledge_dialog::AskKnowledgeUiAction::None;
+            crate::ui::ask_knowledge_dialog::show_ask_knowledge_modal(
+                ctx,
+                theme,
+                &mut self.show_ask_knowledge_dialog,
+                &mut self.ask_knowledge_query,
+                &self.ask_knowledge_hits,
+                self.ask_knowledge_searched,
+                &mut action,
+            );
+            match action {
+                crate::ui::ask_knowledge_dialog::AskKnowledgeUiAction::Search => {
+                    self.run_ask_knowledge_search();
+                }
+                crate::ui::ask_knowledge_dialog::AskKnowledgeUiAction::UseHit(i) => {
+                    if let Some(hit) = self.ask_knowledge_hits.get(i) {
+                        if let Some(frag) = hit.fragment.clone() {
+                            self.begin_fragment_insert(ctx, &frag);
+                            self.show_ask_knowledge_dialog = false;
+                        }
+                    }
+                }
+                crate::ui::ask_knowledge_dialog::AskKnowledgeUiAction::AskModel => {
+                    let q = self.ask_knowledge_query.clone();
+                    self.show_ask_knowledge_dialog = false;
+                    self.open_ai_with_model_fallback(ctx, &q);
+                }
+                crate::ui::ask_knowledge_dialog::AskKnowledgeUiAction::None => {}
+            }
+        }
+
         let session_for_fragments = self
             .selected_session_id
             .as_deref()
@@ -897,7 +929,12 @@ impl MistTermApp {
 
                     crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                             ui.push_id("edit_session_form", |ui| {
-                            Self::modal_header_title_only(ui, theme, crate::i18n::tr(ctx, "Edit session", "编辑会话"));
+                            Self::modal_header_title_only(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Edit session", "编辑会话"),
+                                &mut should_close,
+                            );
 
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
                             Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Session name", "会话名称"));
@@ -1329,6 +1366,7 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 crate::i18n::tr(ctx, "Snippet placeholders", "填写片段变量"),
+                                &mut should_close,
                             );
                             ui.add_space(-2.0);
                             ui.label(
@@ -1535,6 +1573,7 @@ impl MistTermApp {
             let qsz = layout_util::centered_window_default_size(ctx, 0.40, 0.48);
             let qsz_v = egui::vec2(qsz[0], qsz[1]);
             let q_scroll_max = layout_util::dialog_scroll_max_height(ctx, 220.0);
+            let mut should_close = false;
             crate::ui::chrome::modal_window("quick_fragment_selector", theme, ctx)
                 .movable(true)
                 .resizable(true)
@@ -1546,6 +1585,7 @@ impl MistTermApp {
                             ui,
                             theme,
                             crate::i18n::tr(ctx, "Quick snippet picker", "快速选择片段"),
+                            &mut should_close,
                         );
                         let q_search_w = layout_util::finite_content_width(ui);
                         crate::ui::chrome::search_field(
@@ -1595,11 +1635,14 @@ impl MistTermApp {
                             )
                             .clicked()
                             {
-                                self.quick_selector.open = false;
+                                should_close = true;
                             }
                         });
                     });
                 });
+            if should_close {
+                self.quick_selector.open = false;
+            }
         }
 
         // 变量输入对话框（片段库定义的变量；与命令里的 `<pod>` 等占位符可串联）
@@ -1613,6 +1656,7 @@ impl MistTermApp {
             let var_sz = layout_util::centered_window_default_size(ctx, 0.36, 0.38);
             let var_sz_v = egui::vec2(var_sz[0], var_sz[1]);
             let scroll_h = layout_util::dialog_scroll_max_height(ctx, 240.0);
+            let mut should_close = false;
             crate::ui::chrome::modal_window("fragment_variable_modal", theme, ctx)
                 .id(egui::Id::new("mistterm_fragment_variable_dialog"))
                 .movable(true)
@@ -1625,6 +1669,7 @@ impl MistTermApp {
                             ui,
                             theme,
                             crate::i18n::tr(ui.ctx(), "Fill variables", "填写变量"),
+                            &mut should_close,
                         );
                         ui.label(crate::ui::chrome::rich_caption(
                             theme,
@@ -1818,6 +1863,11 @@ impl MistTermApp {
                         });
                     });
                 });
+            if should_close {
+                self.variable_dialog.open = false;
+                self.variable_dialog.paste_after_fill = false;
+                self.variable_dialog.last_finalize_error = None;
+            }
             ctx.move_to_top(egui::LayerId::new(
                 egui::Order::Middle,
                 egui::Id::new("mistterm_fragment_variable_dialog"),

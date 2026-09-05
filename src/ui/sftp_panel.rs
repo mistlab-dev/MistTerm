@@ -801,12 +801,14 @@ impl SftpPanel {
             .fixed_size(modal_sz)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
-                    crate::ui::chrome::modal_header_title_only(
+                    if crate::ui::chrome::modal_header(
                         ui,
                         theme,
                         crate::i18n::tr(ctx, "New folder", "新建目录"),
                         crate::ui::chrome::modal_title_font_size(theme),
-                    );
+                    ) {
+                        should_close = true;
+                    }
                     ui.label(
                         egui::RichText::new(format!(
                             "{} {}",

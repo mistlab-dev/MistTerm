@@ -43,68 +43,80 @@ impl TeamMembersDialog {
         }
 
         let title = crate::i18n::tr(ctx, "Team Members", "团队成员");
-        let mut keep_open = self.open;
-        egui::Window::new(title)
-            .id(egui::Id::new("team_members_dialog"))
-            .collapsible(false)
+        let mut open = self.open;
+        let mut should_close = false;
+        let modal_sz = egui::vec2(420.0, 420.0);
+        chrome::modal_window("team_members_dialog", theme, ctx)
+            .open(&mut open)
+            .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
+            .default_size(modal_sz)
+            .movable(true)
             .resizable(true)
-            .default_width(420.0)
-            .min_width(320.0)
             .show(ctx, |ui| {
-                layout_util::set_width_to_available(ui);
-                ui.label(
-                    chrome::rich_caption(
+                chrome::modal_content_frame(theme).show(ui, |ui| {
+                    if chrome::modal_header(
+                        ui,
                         theme,
-                        &format!(
-                            "{}: {}",
-                            crate::i18n::tr(ctx, "Team", "团队"),
-                            service.current_team_name()
-                        ),
-                    ),
-                );
-                ui.add_space(theme.spacing_sm());
-
-                if !service.is_logged_in() {
+                        title,
+                        chrome::modal_title_font_size(theme),
+                    ) {
+                        should_close = true;
+                    }
                     ui.label(
                         chrome::rich_caption(
                             theme,
-                            crate::i18n::tr(
-                                ctx,
-                                "Sign in under Preferences → Team to view members.",
-                                "请先在「偏好设置 → 团队平台」登录后再查看成员。",
+                            &format!(
+                                "{}: {}",
+                                crate::i18n::tr(ctx, "Team", "团队"),
+                                service.current_team_name()
                             ),
-                        )
-                        .color(theme.red_color()),
+                        ),
                     );
-                } else if service.is_busy() && service.team_members.is_empty() {
-                    ui.label(
-                        chrome::rich_caption(theme, crate::i18n::tr(ctx, "Loading…", "加载中…"))
-                            .color(theme.text_tertiary()),
-                    );
-                } else if let Some(err) = &service.team_members_error {
-                    ui.label(
-                        chrome::rich_caption(theme, &localize_members_error(ctx, err))
-                            .color(theme.red_color()),
-                    );
-                } else if service.team_members.is_empty() {
-                    ui.label(
-                        chrome::rich_caption(
-                            theme,
-                            crate::i18n::tr(ctx, "No members returned.", "暂无成员数据。"),
-                        )
-                        .color(theme.text_tertiary()),
-                    );
-                } else {
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .max_height(280.0)
-                        .show(ui, |ui| {
-                            paint_members_table(ui, theme, ctx, &service.team_members);
-                        });
-                }
+                    ui.add_space(theme.spacing_sm());
 
-                ui.add_space(theme.spacing_sm());
-                ui.horizontal(|ui| {
+                    if !service.is_logged_in() {
+                        ui.label(
+                            chrome::rich_caption(
+                                theme,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Sign in under Preferences → Team to view members.",
+                                    "请先在「偏好设置 → 团队平台」登录后再查看成员。",
+                                ),
+                            )
+                            .color(theme.red_color()),
+                        );
+                    } else if service.is_busy() && service.team_members.is_empty() {
+                        ui.label(
+                            chrome::rich_caption(
+                                theme,
+                                crate::i18n::tr(ctx, "Loading…", "加载中…"),
+                            )
+                            .color(theme.text_tertiary()),
+                        );
+                    } else if let Some(err) = &service.team_members_error {
+                        ui.label(
+                            chrome::rich_caption(theme, &localize_members_error(ctx, err))
+                                .color(theme.red_color()),
+                        );
+                    } else if service.team_members.is_empty() {
+                        ui.label(
+                            chrome::rich_caption(
+                                theme,
+                                crate::i18n::tr(ctx, "No members returned.", "暂无成员数据。"),
+                            )
+                            .color(theme.text_tertiary()),
+                        );
+                    } else {
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .max_height(280.0)
+                            .show(ui, |ui| {
+                                paint_members_table(ui, theme, ctx, &service.team_members);
+                            });
+                    }
+
+                    ui.add_space(theme.spacing_sm());
                     if chrome::panel_action_button_ex(
                         ui,
                         theme,
@@ -116,21 +128,13 @@ impl TeamMembersDialog {
                         service.spawn_list_team_members();
                         self.requested_fetch = true;
                     }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if chrome::panel_action_primary_button_ex(
-                            ui,
-                            theme,
-                            crate::i18n::tr(ctx, "Close", "关闭"),
-                            true,
-                        )
-                        .clicked()
-                        {
-                            keep_open = false;
-                        }
-                    });
                 });
             });
-        self.open = keep_open;
+
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            should_close = true;
+        }
+        self.open = open && !should_close;
         if !self.open {
             self.requested_fetch = false;
         }

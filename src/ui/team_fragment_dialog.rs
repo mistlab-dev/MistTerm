@@ -49,8 +49,8 @@ pub fn open_create_editor(editor: &mut TeamFragmentEditorState) {
     editor.lock_heartbeat_at = None;
 }
 
-fn modal_header_title(ui: &mut egui::Ui, theme: &Theme, title: &str) {
-    chrome::modal_header_title_only(ui, theme, title, chrome::modal_title_font_size(theme));
+fn modal_header_title(ui: &mut egui::Ui, theme: &Theme, title: &str) -> bool {
+    chrome::modal_header(ui, theme, title, chrome::modal_title_font_size(theme))
 }
 
 pub fn open_edit_editor(editor: &mut TeamFragmentEditorState, frag: &TeamFragment) {
@@ -121,7 +121,9 @@ pub fn show_team_fragment_editor_modal(
         .show(ctx, |ui| {
             crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                 ui.push_id("team_fragment_editor_form", |ui| {
-                    modal_header_title(ui, theme, title);
+                    if modal_header_title(ui, theme, title) {
+                        should_close = true;
+                    }
 
                     let form_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 460.0);
                     ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
@@ -329,11 +331,13 @@ pub fn show_team_fragment_conflict_modal(
         .show(ctx, |ui| {
             crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                 ui.push_id("team_fragment_conflict_form", |ui| {
-                    modal_header_title(
+                    if modal_header_title(
                         ui,
                         theme,
                         i18n::tr(ctx, "Revision conflict", "版本冲突"),
-                    );
+                    ) {
+                        should_close = true;
+                    }
                     ui.spacing_mut().item_spacing = egui::vec2(8.0, 6.0);
                     ui.label(i18n::tr(
                         ctx,

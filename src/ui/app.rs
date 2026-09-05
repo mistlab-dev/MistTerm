@@ -21,7 +21,10 @@ use crate::core::{
     FragmentStats, HangReporter, HangSnapshot, PortForwardKind, SecretBackend, SecretResolver,
     ServerAuditEvent, SessionConfig, SessionLogSettings, SessionLogWriter, SessionManager,
     SessionSortBy, SortBy, SshConfigCandidate, SshConfigParseResult, SshInfo, TeamService, TempKeyFile,
-    suggest_compliant_after_block, DEFAULT_RETENTION_DAYS,
+    suggest_compliant_after_block_with_env, DEFAULT_RETENTION_DAYS,
+    candidate_from_failed_command, candidate_from_success_recommendation,
+    retrieve_team_knowledge, clean_ask_intent, DocSearchHit, KnowledgeHit,
+    FragmentCandidate, SuggestionEnvContext,
 };
 use crate::ssh::{parse_jump_chain, parse_jump_endpoint, JumpHop, SshConfig};
 use crate::ui::ai_panel::AiPanel;
@@ -376,6 +379,19 @@ pub struct MistTermApp {
     audit_timeline: AuditTimeline,
     audit_timeline_host_filter: String,
     audit_timeline_outcome_filter: Option<TimelineOutcome>,
+    /// 「问：我们怎么……」对话框
+    show_ask_knowledge_dialog: bool,
+    ask_knowledge_query: String,
+    ask_knowledge_hits: Vec<KnowledgeHit>,
+    ask_knowledge_searched: bool,
+    /// 拦截无命中时预填给 AI 的问题
+    pending_ask_fallback_question: Option<String>,
+    /// 待用户确认写入个人库的候选
+    pending_fragment_candidate: Option<FragmentCandidate>,
+    /// 最近一次已提示的候选命令（防刷屏）
+    last_candidate_offer_command: String,
+    /// 历史记录后待弹出的成功路径候选（下一帧有 ctx 时弹出）
+    deferred_candidate_toast: Option<FragmentCandidate>,
     fragment_analytics_snapshot: crate::core::FragmentAnalyticsDashboard,
     fragment_analytics_range: crate::core::FragmentAnalyticsTimeRange,
     fragment_usage_log: crate::core::FragmentUsageLog,
@@ -492,6 +508,7 @@ fn server_audit_body(cmd_preview: &str, detail: &str) -> String {
 
 impl MistTermApp {
     /// 拦截后尝试推一条合规片段：有命中则带「用到终端」+（团队来源时）「存到个人库」。
+    /// 无命中：短提示「暂无团队替代」+ 可选「问 AI」。
     fn notify_block_with_compliant_suggestion(
         &mut self,
         ctx: &egui::Context,
@@ -502,10 +519,45 @@ impl MistTermApp {
     ) {
         let team = self.team_service.team_fragments_as_stats();
         let personal = self.fragment_manager.list().to_vec();
-        let suggestion =
-            suggest_compliant_after_block(blocked_command, &team, &personal);
+        let env = self.suggestion_env_for_tab(tab_idx);
+        let suggestion = suggest_compliant_after_block_with_env(
+            blocked_command,
+            &team,
+            &personal,
+            Some(&env),
+        );
         let Some(suggestion) = suggestion else {
-            self.notify_error_titled(title, body);
+            let tip = crate::i18n::tr(ctx, "No team alternative yet", "暂无团队替代");
+            let text = if body.is_empty() {
+                tip.to_string()
+            } else {
+                format!("{body} · {tip}")
+            };
+            self.pending_ask_fallback_question = Some(format!(
+                "{} {}",
+                crate::i18n::tr(ctx, "How do we safely replace:", "我们怎么安全替代："),
+                blocked_command.trim()
+            ));
+            let (secondary, secondary_label) =
+                if let Some(cand) = candidate_from_failed_command(blocked_command, &personal) {
+                    self.last_candidate_offer_command = cand.command.clone();
+                    self.pending_fragment_candidate = Some(cand);
+                    (
+                        Some(ToastAction::ConfirmSaveCandidate),
+                        Some(crate::i18n::tr(ctx, "Save as snippet", "保存为片段")),
+                    )
+                } else {
+                    (None, None)
+                };
+            self.push_dual_action_toast_titled(
+                ToastKind::Error,
+                title,
+                text,
+                ToastAction::AskAiFallback,
+                crate::i18n::tr(ctx, "Ask AI (not team knowledge)", "问 AI（非团队知识）"),
+                secondary,
+                secondary_label,
+            );
             return;
         };
         let source_label = match suggestion.source {
@@ -513,10 +565,11 @@ impl MistTermApp {
             _ => crate::i18n::tr(ctx, "Personal snippet", "个人片段"),
         };
         let frag_title = suggestion.fragment.title.clone();
+        let anchor = format!("fragment:{}", suggestion.fragment.id);
         let text = if body.is_empty() {
-            format!("{source_label}「{frag_title}」")
+            format!("{source_label}「{frag_title}」 · {anchor}")
         } else {
-            format!("{body} · {source_label}「{frag_title}」")
+            format!("{body} · {source_label}「{frag_title}」 · {anchor}")
         };
         self.pending_suggested_snippet = Some((tab_idx, suggestion.fragment));
         // 团队片段：次要「存到个人库」沉底；个人命中已在库中，不再提供沉底。
@@ -537,6 +590,165 @@ impl MistTermApp {
             secondary,
             secondary_label,
         );
+    }
+
+    fn suggestion_env_for_tab(&self, tab_idx: usize) -> SuggestionEnvContext {
+        let Some(tab) = self.tabs.get(tab_idx) else {
+            return SuggestionEnvContext::default();
+        };
+        let Some(pane) = tab.active_pane() else {
+            return SuggestionEnvContext::default();
+        };
+        let Some(session) = self.session_manager.get_session(&pane.session_id) else {
+            return SuggestionEnvContext::default();
+        };
+        let mut env_tags = Vec::new();
+        let host = session.host.clone();
+        let host_key = host.split(':').next().unwrap_or(&host);
+        for server in self.team_service.current_team_servers() {
+            if crate::core::team::cmd_audit_host_matches(&server.host, host_key)
+                || server.host.eq_ignore_ascii_case(host_key)
+            {
+                env_tags.extend(server.tags.clone());
+            }
+        }
+        SuggestionEnvContext::from_session(&session.host, &session.color_tag, &env_tags)
+    }
+
+    fn offer_fragment_candidate_toast(&mut self, ctx: &egui::Context, cand: FragmentCandidate) {
+        if cand.command == self.last_candidate_offer_command {
+            return;
+        }
+        self.last_candidate_offer_command = cand.command.clone();
+        let reason = match cand.reason {
+            crate::core::FragmentCandidateReason::FailedPath => {
+                crate::i18n::tr(ctx, "From failed / blocked path", "来自失败/拦截路径")
+            }
+            crate::core::FragmentCandidateReason::SuccessPath => {
+                crate::i18n::tr(ctx, "Frequent successful path", "来自常用成功路径")
+            }
+        };
+        let preview = command_preview(&cand.command, 80);
+        self.pending_fragment_candidate = Some(cand);
+        self.push_action_toast_titled(
+            ToastKind::Info,
+            crate::i18n::tr(ctx, "Save as snippet?", "保存为片段？"),
+            format!("{reason} · {preview}"),
+            ToastAction::ConfirmSaveCandidate,
+            crate::i18n::tr(ctx, "Save", "保存"),
+        );
+    }
+
+    fn save_fragment_candidate(&mut self, ctx: &egui::Context, cand: &FragmentCandidate) {
+        let personal = self.fragment_manager.list().to_vec();
+        let covered = personal.iter().any(|f| {
+            let a: String = f.command.split_whitespace().collect::<Vec<_>>().join(" ");
+            let b: String = cand.command.split_whitespace().collect::<Vec<_>>().join(" ");
+            a == b
+        });
+        if covered {
+            self.notify_auto(
+                crate::i18n::tr(ctx, "Already in personal library", "个人库已有相同命令")
+                    .to_string(),
+            );
+            return;
+        }
+        self.fragment_manager.add_fragment(
+            cand.title.clone(),
+            cand.command.clone(),
+            match cand.reason {
+                crate::core::FragmentCandidateReason::FailedPath => "from-failure".into(),
+                crate::core::FragmentCandidateReason::SuccessPath => "recommended".into(),
+            },
+        );
+        let _ = self
+            .fragment_manager
+            .save(&FragmentManager::default_config_path());
+        self.refresh_fragment_analytics_dashboard();
+        self.notify_auto(format!(
+            "{} {}",
+            crate::i18n::tr(ctx, "Snippet saved:", "已保存片段："),
+            cand.title
+        ));
+    }
+
+    pub(crate) fn open_ask_knowledge_dialog(&mut self) {
+        self.ask_knowledge_searched = false;
+        self.ask_knowledge_hits.clear();
+        if self.ask_knowledge_query.is_empty() && !self.fragment_search_query.is_empty() {
+            self.ask_knowledge_query = self.fragment_search_query.clone();
+        }
+        self.show_ask_knowledge_dialog = true;
+    }
+
+    fn run_ask_knowledge_search(&mut self) {
+        let q = self.ask_knowledge_query.clone();
+        let team = self.team_service.team_fragments_as_stats();
+        let personal = self.fragment_manager.list().to_vec();
+        let env = self
+            .active_tab
+            .map(|i| self.suggestion_env_for_tab(i))
+            .unwrap_or_default();
+        let docs = self.fetch_team_doc_hits_soft(&q);
+        self.ask_knowledge_hits = retrieve_team_knowledge(
+            &q,
+            &team,
+            &personal,
+            &docs,
+            Some(&env),
+            8,
+        );
+        self.ask_knowledge_searched = true;
+    }
+
+    fn fetch_team_doc_hits_soft(&self, query: &str) -> Vec<DocSearchHit> {
+        let cleaned = clean_ask_intent(query);
+        if cleaned.is_empty() || !self.team_service.is_logged_in() {
+            return Vec::new();
+        }
+        let Some(team_id) = self.team_service.state.current_team_id.clone() else {
+            return Vec::new();
+        };
+        let Some(access) = self.team_service.current_access_token() else {
+            return Vec::new();
+        };
+        let Ok(client) = crate::core::team::TeamClient::new(&self.team_service.api_base()) else {
+            return Vec::new();
+        };
+        match client.search_team_docs(&access, &team_id, &cleaned, 8) {
+            Ok(Some(resp)) => resp
+                .items
+                .into_iter()
+                .map(|i| DocSearchHit {
+                    id: i.id,
+                    title: i.title,
+                    excerpt: i.excerpt,
+                    slug: i.slug,
+                    score: i.score,
+                })
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub(crate) fn open_ai_with_model_fallback(&mut self, ctx: &egui::Context, question: &str) {
+        let q = question.trim();
+        if q.is_empty() {
+            return;
+        }
+        self.ai_panel.queue_model_fallback_question_and_send(q);
+        self.ai_panel.focus_draft_input(ctx);
+        if self.ensure_right_dock_allowed_or_warn(ctx) {
+            self.open_right_dock_panel(ActiveRightDock::Ai);
+            self.notify_auto(
+                crate::i18n::tr(
+                    ctx,
+                    "No team hit — asking AI (not team knowledge)",
+                    "暂无团队知识，已改问 AI（非团队知识）",
+                )
+                .to_string(),
+            );
+        }
     }
 
     /// 将拦截建议沉底到个人库（按命令去重；复制变量定义）。
@@ -783,6 +995,14 @@ impl MistTermApp {
             audit_timeline: AuditTimeline::new(),
             audit_timeline_host_filter: String::new(),
             audit_timeline_outcome_filter: None,
+            show_ask_knowledge_dialog: false,
+            ask_knowledge_query: String::new(),
+            ask_knowledge_hits: Vec::new(),
+            ask_knowledge_searched: false,
+            pending_ask_fallback_question: None,
+            pending_fragment_candidate: None,
+            last_candidate_offer_command: String::new(),
+            deferred_candidate_toast: None,
             fragment_analytics_snapshot: crate::core::FragmentAnalyticsDashboard::default(),
             fragment_analytics_range: crate::core::FragmentAnalyticsTimeRange::default(),
             fragment_usage_log: crate::core::FragmentUsageLog::load(),
@@ -1979,8 +2199,62 @@ impl MistTermApp {
                     .with_detail(detail),
             );
             self.command_history
-                .record(&command, Some(&sid), sname.as_deref(), false);
+                .record(&command, Some(&sid), sname.as_deref(), true);
+            // 成功路径：频次达标时延后弹确认入库（非静默）
+            self.queue_success_path_candidate_if_due();
+            // 失败路径：若终端尾部像错误，延后提示保存候选
+            self.queue_failed_path_candidate_if_due(&command);
         }
+    }
+
+    fn queue_success_path_candidate_if_due(&mut self) {
+        let personal = self.fragment_manager.list().to_vec();
+        let recs =
+            crate::core::recommend_from_history(&self.command_history, &personal, None, 3);
+        let Some(top) = recs.first() else {
+            return;
+        };
+        if top.command == self.last_candidate_offer_command {
+            return;
+        }
+        self.deferred_candidate_toast =
+            Some(candidate_from_success_recommendation(top));
+    }
+
+    fn queue_failed_path_candidate_if_due(&mut self, command: &str) {
+        let Some(idx) = self.active_tab else {
+            return;
+        };
+        let Some(tab) = self.tabs.get(idx) else {
+            return;
+        };
+        let Some(pane) = tab.active_pane() else {
+            return;
+        };
+        let tail = pane.terminal.tail_plain_text(30);
+        if !AiContext::looks_like_error_output(&tail) {
+            return;
+        }
+        let personal = self.fragment_manager.list().to_vec();
+        let Some(cand) = candidate_from_failed_command(command, &personal) else {
+            return;
+        };
+        if cand.command == self.last_candidate_offer_command {
+            return;
+        }
+        self.deferred_candidate_toast = Some(cand);
+    }
+
+    fn flush_deferred_candidate_toast(&mut self, ctx: &egui::Context) {
+        let Some(cand) = self.deferred_candidate_toast.take() else {
+            return;
+        };
+        if self.active_toast.is_some() {
+            // 有其它 Toast 时先挂起，下帧再试
+            self.deferred_candidate_toast = Some(cand);
+            return;
+        }
+        self.offer_fragment_candidate_toast(ctx, cand);
     }
 
     fn poll_session_log_commands(&mut self) {
@@ -2062,6 +2336,7 @@ impl MistTermApp {
             || self.show_fragment_analytics_dialog
             || self.show_audit_timeline_dialog
             || self.show_agent_install_dialog
+            || self.show_ask_knowledge_dialog
             || self.variable_dialog.open
             || self.fragment_library.open
             || self.show_terminal_search
@@ -2509,13 +2784,14 @@ impl MistTermApp {
         }
     }
 
-    fn modal_header_title_only(ui: &mut egui::Ui, theme: &crate::ui::theme::Theme, title: &str) {
-        crate::ui::chrome::modal_header_title_only(
-            ui,
-            theme,
-            title,
-            crate::ui::chrome::modal_title_font_size(theme),
-        );
+    /// 弹窗标题行（标题 + 右上角 ×）。与 [`Self::modal_header`] 相同。
+    fn modal_header_title_only(
+        ui: &mut egui::Ui,
+        theme: &crate::ui::theme::Theme,
+        title: &str,
+        should_close: &mut bool,
+    ) {
+        Self::modal_header(ui, theme, title, should_close);
     }
 
     /// 居中模态窗打开时不绘制右 dock Foreground，避免与弹窗标题栏 × 叠在同一位置。
@@ -3216,22 +3492,11 @@ impl MistTermApp {
     }
 
     fn add_fragment_from_recommendation(&mut self, ctx: &egui::Context, index: usize) {
-        let Some(rec) = self.fragment_recommendations.get(index) else {
+        let Some(rec) = self.fragment_recommendations.get(index).cloned() else {
             return;
         };
-        let title: String = rec.command.chars().take(40).collect();
-        let cmd = rec.command.clone();
-        self.fragment_manager
-            .add_fragment(title.clone(), cmd, "recommended".to_string());
-        let _ = self
-            .fragment_manager
-            .save(&FragmentManager::default_config_path());
-        self.refresh_fragment_analytics_dashboard();
-        self.notify_auto(format!(
-            "{} {}",
-            crate::i18n::tr(ctx, "Snippet added:", "已添加片段："),
-            title
-        ));
+        let cand = candidate_from_success_recommendation(&rec);
+        self.offer_fragment_candidate_toast(ctx, cand);
     }
 
     fn open_fragment_analytics_dialog(&mut self) {
@@ -3890,9 +4155,24 @@ impl MistTermApp {
 
     fn build_ai_session_context(&self) -> AiContext {
         let mut ai_ctx = AiContext::from_history(&self.command_history, 10);
-        if let Some(entry) = self.command_history.entries_newest_first().next() {
-            if !entry.success {
-                ai_ctx.last_failed_command = Some(entry.command.clone());
+        // 无可靠 exit code：优先用终端尾部错误样输出推断失败命令
+        if let Some(idx) = self.active_tab {
+            if let Some(tab) = self.tabs.get(idx) {
+                if let Some(pane) = tab.active_pane() {
+                    let tail = pane.terminal.tail_plain_text(40);
+                    if AiContext::looks_like_error_output(&tail) {
+                        if let Some(entry) = self.command_history.entries_newest_first().next() {
+                            ai_ctx.last_failed_command = Some(entry.command.clone());
+                        }
+                    }
+                }
+            }
+        }
+        if ai_ctx.last_failed_command.is_none() {
+            if let Some(entry) = self.command_history.entries_newest_first().next() {
+                if !entry.success {
+                    ai_ctx.last_failed_command = Some(entry.command.clone());
+                }
             }
         }
         if let Some(idx) = self.active_tab {
@@ -4746,6 +5026,17 @@ impl MistTermApp {
             .clicked()
             {
                 self.open_fragment_analytics_dialog();
+            }
+            if crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Search,
+                crate::i18n::tr(ui.ctx(), "Ask…", "问…"),
+                true,
+            )
+            .clicked()
+            {
+                self.open_ask_knowledge_dialog();
             }
         });
         ui.add_space(theme.spacing_dock_control_gap());
@@ -6568,6 +6859,7 @@ impl eframe::App for MistTermApp {
             ctx.request_repaint();
         }
         self.poll_command_history_from_active_tab();
+        self.flush_deferred_candidate_toast(ctx);
         self.poll_connect_audit_from_tabs(ctx);
         self.poll_session_log_commands();
         self.append_terminal_output_logs();

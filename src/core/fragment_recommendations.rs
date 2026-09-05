@@ -20,30 +20,208 @@ pub struct CompliantFragmentSuggestion {
     pub source: &'static str,
 }
 
+/// 当前会话环境：用于按主机/环境标签过滤推荐；无匹配时回退全局。
+#[derive(Debug, Clone, Default)]
+pub struct SuggestionEnvContext {
+    pub host: String,
+    pub color_tag: String,
+    pub env_tags: Vec<String>,
+}
+
+impl SuggestionEnvContext {
+    pub fn from_session(host: &str, color_tag: &str, env_tags: &[String]) -> Self {
+        Self {
+            host: host.trim().to_string(),
+            color_tag: color_tag.trim().to_string(),
+            env_tags: env_tags.to_vec(),
+        }
+    }
+
+    /// 用于匹配的小写标签集合（host 短名、color_tag、TeamServer tags）。
+    pub fn effective_match_tags(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let push_unique = |out: &mut Vec<String>, raw: &str| {
+            let t = raw.trim().to_lowercase();
+            if t.is_empty() {
+                return;
+            }
+            if !out.iter().any(|x| x == &t) {
+                out.push(t);
+            }
+        };
+        for t in &self.env_tags {
+            push_unique(&mut out, t);
+        }
+        if !self.color_tag.is_empty() {
+            push_unique(&mut out, &self.color_tag);
+        }
+        if !self.host.is_empty() {
+            let host = self.host.split(':').next().unwrap_or(&self.host);
+            push_unique(&mut out, host);
+            if let Some(short) = host.split('.').next() {
+                push_unique(&mut out, short);
+            }
+        }
+        out
+    }
+
+    pub fn fragment_matches(&self, f: &FragmentStats) -> bool {
+        let tags = self.effective_match_tags();
+        if tags.is_empty() {
+            return true;
+        }
+        let frag_tags_lower: Vec<String> = f.tags.iter().map(|t| t.to_lowercase()).collect();
+        let hay = format!(
+            "{} {} {}",
+            f.tags.join(" "),
+            f.category,
+            f.title
+        )
+        .to_lowercase();
+        tags.iter().any(|t| {
+            frag_tags_lower.iter().any(|ft| ft == t || ft.contains(t) || t.contains(ft.as_str()))
+                || hay.contains(t)
+        })
+    }
+}
+
+/// 入库候选原因（必须经用户确认，禁止静默写入）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FragmentCandidateReason {
+    FailedPath,
+    SuccessPath,
+}
+
+impl FragmentCandidateReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FailedPath => "failed_path",
+            Self::SuccessPath => "success_path",
+        }
+    }
+}
+
+/// 待用户确认后写入个人库的片段候选。
+#[derive(Debug, Clone)]
+pub struct FragmentCandidate {
+    pub command: String,
+    pub title: String,
+    pub reason: FragmentCandidateReason,
+}
+
+impl FragmentCandidate {
+    pub fn from_command(command: &str, reason: FragmentCandidateReason) -> Self {
+        let cmd = normalize_command(command);
+        let title: String = cmd.chars().take(40).collect();
+        Self {
+            command: cmd,
+            title,
+            reason,
+        }
+    }
+}
+
+/// 若命令尚未被个人库覆盖，生成失败路径入库候选。
+pub fn candidate_from_failed_command(
+    command: &str,
+    personal_fragments: &[FragmentStats],
+) -> Option<FragmentCandidate> {
+    let n = normalize_command(command);
+    if n.is_empty() || is_trivial_command(&n) {
+        return None;
+    }
+    if covered_by_library(&n, personal_fragments) {
+        return None;
+    }
+    Some(FragmentCandidate::from_command(&n, FragmentCandidateReason::FailedPath))
+}
+
+/// 将历史频次推荐转为需确认的成功路径候选（取第一条）。
+pub fn candidate_from_success_recommendation(
+    rec: &FragmentRecommendation,
+) -> FragmentCandidate {
+    FragmentCandidate {
+        command: rec.command.clone(),
+        title: rec.command.chars().take(40).collect(),
+        reason: FragmentCandidateReason::SuccessPath,
+    }
+}
+
 /// 从被拦截命令推断主题关键词，并在片段库中打分取 Top1。
 /// 刻意排除与拦截命令相同/明显同危的片段，避免「推荐再执行一遍危险命令」。
+/// `env` 非空时优先按主机/环境标签过滤；无匹配则回退全局库。
 pub fn suggest_compliant_after_block(
     blocked_command: &str,
     team_fragments: &[FragmentStats],
     personal_fragments: &[FragmentStats],
+) -> Option<CompliantFragmentSuggestion> {
+    suggest_compliant_after_block_with_env(
+        blocked_command,
+        team_fragments,
+        personal_fragments,
+        None,
+    )
+}
+
+pub fn suggest_compliant_after_block_with_env(
+    blocked_command: &str,
+    team_fragments: &[FragmentStats],
+    personal_fragments: &[FragmentStats],
+    env: Option<&SuggestionEnvContext>,
 ) -> Option<CompliantFragmentSuggestion> {
     let keywords = block_topic_keywords(blocked_command);
     if keywords.is_empty() {
         return None;
     }
     let blocked_norm = normalize_command(blocked_command);
-    if let Some(f) = best_compliant_match(&keywords, &blocked_norm, team_fragments) {
+
+    let team_scoped = scope_fragments(team_fragments, env);
+    let personal_scoped = scope_fragments(personal_fragments, env);
+
+    if let Some(f) = best_compliant_match(&keywords, &blocked_norm, &team_scoped) {
         return Some(CompliantFragmentSuggestion {
             fragment: f,
             source: "team",
         });
     }
-    best_compliant_match(&keywords, &blocked_norm, personal_fragments).map(|f| {
+    best_compliant_match(&keywords, &blocked_norm, &personal_scoped).map(|f| {
         CompliantFragmentSuggestion {
             fragment: f,
             source: "personal",
         }
     })
+}
+
+fn scope_fragments(
+    fragments: &[FragmentStats],
+    env: Option<&SuggestionEnvContext>,
+) -> Vec<FragmentStats> {
+    let Some(env) = env else {
+        return fragments.to_vec();
+    };
+    if env.effective_match_tags().is_empty() {
+        return fragments.to_vec();
+    }
+    let filtered: Vec<FragmentStats> = fragments
+        .iter()
+        .filter(|f| env.fragment_matches(f))
+        .cloned()
+        .collect();
+    if filtered.is_empty() {
+        fragments.to_vec()
+    } else {
+        filtered
+    }
+}
+
+/// 自然语言/拦截主题共用的关键词抽取（供 knowledge 检索）。
+pub fn query_topic_keywords(query: &str) -> Vec<String> {
+    block_topic_keywords(query)
+}
+
+/// 片段相对关键词的打分（供 knowledge 检索公开）。
+pub fn score_fragment_against_keywords(f: &FragmentStats, keywords: &[String]) -> i64 {
+    score_fragment_keywords(f, keywords)
 }
 
 fn block_topic_keywords(blocked: &str) -> Vec<String> {
@@ -123,6 +301,20 @@ fn is_noise_token(tok: &str) -> bool {
             | "for"
             | "from"
             | "with"
+            | "how"
+            | "what"
+            | "why"
+            | "can"
+            | "please"
+            // 中文问法噪声（「我们怎么清理」→ 保留「清理」）
+            | "我们"
+            | "你们"
+            | "怎么"
+            | "怎样"
+            | "如何"
+            | "请问"
+            | "帮我"
+            | "一下"
     ) || tok.chars().all(|c| c == '-')
 }
 
