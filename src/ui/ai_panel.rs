@@ -9,8 +9,9 @@ use std::thread;
 
 use crate::core::{
     delete_chat, extract_shell_commands, is_runnable_shell_command, load_chat,
-    prepare_terminal_context, resolve_system_prompt, save_chat, AiContext, AppSettings,
-    ChatEvent, ChatMessage, EnhancedPromptBuilder, PreparedTerminalContext, QuickAction,
+    looks_like_host_ops_intent, prepare_terminal_context, propose_step, resolve_system_prompt,
+    save_chat, summarize_batch_rows, AiContext, AgentPhase, AppSettings, BatchExecRow, ChatEvent,
+    ChatMessage, EnhancedPromptBuilder, PreparedTerminalContext, QuickAction, StepProposal,
     StoredAiMessage, StoredContextRef, TerminalSessionMeta, run_chat_with_key,
 };
 use crate::i18n::{self};
@@ -152,6 +153,21 @@ pub struct AiPanel {
     pending_model_fallback_label: bool,
     /// 预填问题后自动发送（「问 AI」兜底入口）。
     pending_auto_send: bool,
+    /// v2 多机 Agent 计划卡（无 Skill 目录；命令可改）。
+    agent_plan: Option<AgentPlanUi>,
+    /// 用户已确认、待 App 执行的命令。
+    pending_agent_exec: Option<String>,
+}
+
+struct AgentPlanUi {
+    intent: String,
+    command_edit: String,
+    rationale: String,
+    phase: AgentPhase,
+    target_count: usize,
+    gate_hint: String,
+    l2_armed: bool,
+    status: Option<String>,
 }
 
 impl Default for AiPanel {
@@ -163,7 +179,7 @@ impl Default for AiPanel {
 impl AiPanel {
     #[inline]
     pub fn is_busy(&self) -> bool {
-        self.busy || self.background.is_some()
+        self.busy || self.background.is_some() || self.agent_is_executing()
     }
 
     /// 取出待 Toast 的错误（失败/超时）；面板内仍保留 `last_error`。
@@ -203,7 +219,69 @@ impl AiPanel {
             models_status: None,
             pending_model_fallback_label: false,
             pending_auto_send: false,
+            agent_plan: None,
+            pending_agent_exec: None,
         }
+    }
+
+    /// 供 App 注入当前可选主机数量（计划卡展示）。
+    pub fn set_agent_target_count(&mut self, n: usize) {
+        if let Some(p) = &mut self.agent_plan {
+            p.target_count = n;
+        }
+    }
+
+    /// 取出待批量执行的命令（一步一确认之后）。
+    pub fn take_pending_agent_exec(&mut self) -> Option<String> {
+        self.pending_agent_exec.take()
+    }
+
+    pub fn agent_is_executing(&self) -> bool {
+        self.agent_plan
+            .as_ref()
+            .is_some_and(|p| p.phase == AgentPhase::Executing)
+    }
+
+    pub fn mark_agent_executing(&mut self) {
+        if let Some(p) = &mut self.agent_plan {
+            p.phase = AgentPhase::Executing;
+            p.status = Some("执行中…".into());
+        }
+        self.busy = true;
+    }
+
+    pub fn apply_agent_batch_results(&mut self, command: &str, rows: Vec<BatchExecRow>) {
+        let summary = summarize_batch_rows(command, &rows);
+        self.messages.push(UiMessage {
+            role: "assistant",
+            content: summary,
+            api_content: None,
+            context_refs: vec![],
+            commands: vec![],
+            source_label: Some("多机执行 · Agent".into()),
+        });
+        self.chat_dirty = true;
+        self.busy = false;
+        if let Some(p) = &mut self.agent_plan {
+            p.phase = AgentPhase::Done;
+            p.status = Some(format!("完成 · {} 台", rows.len()));
+        }
+        self.agent_plan = None;
+    }
+
+    pub fn abort_agent_with_message(&mut self, msg: String) {
+        self.messages.push(UiMessage {
+            role: "assistant",
+            content: msg,
+            api_content: None,
+            context_refs: vec![],
+            commands: vec![],
+            source_label: Some("多机执行 · 已取消".into()),
+        });
+        self.chat_dirty = true;
+        self.busy = false;
+        self.agent_plan = None;
+        self.pending_agent_exec = None;
     }
 
     /// 预填问题并标记为模型兜底（无团队知识命中）。
@@ -1075,8 +1153,8 @@ impl AiPanel {
                     ui.label(
                         egui::RichText::new(i18n::tr(
                             ctx,
-                            "Type below; attach terminal selections in the input area.",
-                            "在下方输入；终端选区会作为引用附在输入框中。",
+                            "Type below. For multi-host ops try: 查所有服务器磁盘 — or prefix 多机:",
+                            "在下方输入。多机运维可试：查所有服务器磁盘 — 或以「多机:」开头",
                         ))
                             .size(theme.font_size_small())
                             .color(theme.color_form_hint().gamma_multiply(0.85)),
@@ -1127,10 +1205,168 @@ impl AiPanel {
                 if self.is_awaiting_assistant_reply() {
                     self.render_generation_placeholder(ui, theme);
                 }
+                if self.agent_plan.is_some() {
+                    ui.add_space(theme.spacing_sm());
+                    self.render_agent_plan_card(ui, ctx, theme);
+                }
                 if let Some(action) = msg_action {
                     self.handle_message_action(ctx, app_settings, action);
                 }
             });
+    }
+
+    fn render_agent_plan_card(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+    ) {
+        let Some(plan) = self.agent_plan.as_mut() else {
+            return;
+        };
+        let executing = plan.phase == AgentPhase::Executing;
+        let mut clicked_confirm = false;
+        let mut clicked_cancel = false;
+        egui::Frame::none()
+            .fill(theme.color_subtle_inset_fill())
+            .stroke(theme.divider_stroke())
+            .rounding(egui::Rounding::same(theme.radius_list_item()))
+            .inner_margin(egui::vec2(12.0, 10.0))
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(i18n::tr(ctx, "Multi-host plan", "多机执行计划"))
+                        .strong()
+                        .size(theme.font_size_body()),
+                );
+                ui.add_space(theme.spacing_xs());
+                ui.label(
+                    egui::RichText::new(format!("「{}」", plan.intent))
+                        .size(theme.font_size_small())
+                        .color(theme.color_form_hint()),
+                );
+                ui.label(
+                    egui::RichText::new(&plan.rationale)
+                        .size(theme.font_size_small())
+                        .color(theme.color_form_hint()),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}: {}",
+                        i18n::tr(ctx, "Targets", "目标主机"),
+                        if plan.target_count == 0 {
+                            i18n::tr(ctx, "(resolving…)", "（解析中…）").to_string()
+                        } else {
+                            format!(
+                                "{} {}",
+                                plan.target_count,
+                                i18n::tr(ctx, "hosts", "台")
+                            )
+                        }
+                    ))
+                    .size(theme.font_size_small()),
+                );
+                ui.add_space(theme.spacing_xs());
+                ui.label(i18n::tr(ctx, "Command", "命令"));
+                ui.add_enabled_ui(!executing, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut plan.command_edit)
+                            .desired_width(ui.available_width())
+                            .desired_rows(2)
+                            .font(egui::TextStyle::Monospace),
+                    );
+                });
+                if !plan.gate_hint.is_empty() {
+                    ui.label(
+                        egui::RichText::new(&plan.gate_hint)
+                            .size(theme.font_size_small())
+                            .color(theme.color_form_hint()),
+                    );
+                }
+                if let Some(st) = &plan.status {
+                    ui.label(
+                        egui::RichText::new(st)
+                            .size(theme.font_size_small())
+                            .color(theme.color_status_online_muted()),
+                    );
+                }
+                ui.add_space(theme.spacing_xs());
+                ui.horizontal(|ui| {
+                    let confirm_label = if plan.l2_armed {
+                        i18n::tr(ctx, "I understand — run", "我已知晓，仍然执行")
+                    } else {
+                        i18n::tr(ctx, "Confirm run", "确认执行")
+                    };
+                    if ui
+                        .add_enabled(
+                            !executing && !plan.command_edit.trim().is_empty(),
+                            egui::Button::new(confirm_label),
+                        )
+                        .clicked()
+                    {
+                        clicked_confirm = true;
+                    }
+                    if ui
+                        .add_enabled(!executing, egui::Button::new(i18n::tr(ctx, "Cancel", "取消")))
+                        .clicked()
+                    {
+                        clicked_cancel = true;
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(i18n::tr(
+                        ctx,
+                        "Tip: prefix with 多机: to force this path; ordinary chat still needs AI settings.",
+                        "提示：以「多机:」开头可强制走此路径；普通问答仍需配置 AI。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(theme.color_form_hint()),
+                );
+            });
+
+        if clicked_confirm {
+            if let Some(p) = &mut self.agent_plan {
+                let cmd = p.command_edit.trim().to_string();
+                self.pending_agent_exec = Some(cmd);
+                if p.l2_armed {
+                    p.phase = AgentPhase::Executing;
+                    p.status = Some("已提交执行…".into());
+                }
+            }
+        }
+        if clicked_cancel {
+            self.agent_plan = None;
+            self.pending_agent_exec = None;
+            self.messages.push(UiMessage {
+                role: "assistant",
+                content: i18n::tr(
+                    ctx,
+                    "Cancelled multi-host plan.",
+                    "已取消多机执行计划。",
+                )
+                .to_string(),
+                api_content: None,
+                context_refs: vec![],
+                commands: vec![],
+                source_label: None,
+            });
+            self.chat_dirty = true;
+        }
+    }
+
+    pub fn agent_l2_armed(&self) -> bool {
+        self.agent_plan.as_ref().is_some_and(|p| p.l2_armed)
+    }
+
+    /// App：门闩要求 L2 时调用。
+    pub fn arm_agent_l2(&mut self, message: String) {
+        if let Some(p) = &mut self.agent_plan {
+            p.phase = AgentPhase::AwaitingL2;
+            p.l2_armed = true;
+            p.gate_hint = message;
+            p.status = Some("需要二次确认".into());
+        }
+        self.pending_agent_exec = None;
+        self.busy = false;
     }
 
     /// 渲染单条消息；`command_pick` 收集本帧内「执行」或命令卡片的点击。
@@ -1546,6 +1782,8 @@ impl AiPanel {
             self.messages.clear();
             self.last_error = None;
             self.input_status = None;
+            self.agent_plan = None;
+            self.pending_agent_exec = None;
             self.chat_dirty = true;
             self.flush_persisted_chat(true);
         }
@@ -1610,6 +1848,36 @@ impl AiPanel {
     }
 
     fn send_message(&mut self, ctx: &egui::Context, app_settings: &AppSettings) -> SendOutcome {
+        if self.busy || self.is_background_busy() || self.agent_is_executing() {
+            return SendOutcome::NotReady(
+                i18n::tr(ctx, "Wait for the current operation to finish", "请等待当前操作完成")
+                    .to_string(),
+            );
+        }
+        let question = self.draft_input.trim().to_string();
+        let has_context = !self.attached_contexts.is_empty();
+        if question.is_empty() && !has_context {
+            return SendOutcome::Empty;
+        }
+
+        // v2：多机运维意图 → Agent 计划卡（不依赖 API Key）
+        if !question.is_empty() && looks_like_host_ops_intent(&question) {
+            self.draft_input.clear();
+            let context_refs = std::mem::take(&mut self.attached_contexts);
+            self.messages.push(UiMessage {
+                role: "user",
+                content: question.clone(),
+                api_content: Some(question.clone()),
+                context_refs,
+                commands: vec![],
+                source_label: None,
+            });
+            let proposal = propose_step(&question);
+            self.begin_agent_plan(question, proposal);
+            self.chat_dirty = true;
+            return SendOutcome::Sent;
+        }
+
         if !self.can_chat(app_settings) {
             return SendOutcome::NotReady(
                 i18n::tr(ctx, "Configure API Key & model and save first", "请先配置 API Key 与模型并保存")
@@ -1620,17 +1888,6 @@ impl AiPanel {
             return SendOutcome::NotReady(
                 i18n::tr(ctx, "Enable AI first", "请先勾选「启用 AI」").to_string(),
             );
-        }
-        if self.busy || self.is_background_busy() {
-            return SendOutcome::NotReady(
-                i18n::tr(ctx, "Wait for the current operation to finish", "请等待当前操作完成")
-                    .to_string(),
-            );
-        }
-        let question = self.draft_input.trim().to_string();
-        let has_context = !self.attached_contexts.is_empty();
-        if question.is_empty() && !has_context {
-            return SendOutcome::Empty;
         }
         let display_question = if question.is_empty() {
             i18n::tr(
@@ -1662,6 +1919,20 @@ impl AiPanel {
         self.chat_dirty = true;
         self.start_chat_request(ctx, app_settings);
         SendOutcome::Sent
+    }
+
+    fn begin_agent_plan(&mut self, intent: String, proposal: StepProposal) {
+        self.agent_plan = Some(AgentPlanUi {
+            intent,
+            command_edit: proposal.command,
+            rationale: proposal.rationale,
+            phase: AgentPhase::AwaitingL1,
+            target_count: 0,
+            gate_hint: "确认后将在所选主机上短连接执行（不占用终端 Tab）".into(),
+            l2_armed: false,
+            status: None,
+        });
+        self.pending_agent_exec = None;
     }
 
     fn start_chat_request(&mut self, ctx: &egui::Context, app_settings: &AppSettings) {
