@@ -6,7 +6,7 @@
 > 关联：[`AI-INTERACTION-DESIGN.md`](../tech/AI-INTERACTION-DESIGN.md)、[`batch_exec`](../../src/core/batch_exec.rs)、概念稿 v4  
 > **UI 决策（2026-09-05）**：默认**沿用现有壳**（左会话 · 中终端 · 右 Dock AI），不另开「对话运维」全屏模式；能力加在右栏 AI 上。  
 > **范围决策（2026-09-05）**：**选项 B — 只读 + 受控变更**。只读巡检/排查为默认能力；变更类（如 restart / rollout）走**显式白名单**，强制 L2，默认仍偏保守。不做无人值守自愈（否决选项 C）。  
-> **抽象决策（2026-09-05）**：运维动作以 **Skill（技能）** 组织——不是散落的临时 shell，而是「可发现、可门闩、可多步」的能力包；对话 Agent 负责选 Skill / 填槽 / 按步执行。
+> **抽象决策（2026-09-05，重定）**：产品中心是 **Agent 循环 + 门闩 + MistTerm 执行基座**，**不是** Skill 目录（无论「每场景一个」还是「少量通用 Skill」）。命令与步骤由 Planner 动态产出；磁盘/CPU/内存等只是同一路径上的不同提议。内部可有执行原语函数，不对用户、不做成可浏览能力目录。
 
 ---
 
@@ -25,9 +25,9 @@
 
 | 能力 | 今天 | 下一代 |
 |------|------|--------|
-| AI 面板 | 聊天 →「用到终端」打**当前一台** | 同面板可触发 **多机工具**，结果回对话 |
-| 批量执行 | Tools → 手选主机 + 手输命令 | 由对话编排调用同一 `run_batch_parallel` |
-| 监控 `df` | 已连接会话单机采集 | 批量结果可复用 `parse_disk` 结构化 |
+| AI 面板 | 聊天 →「用到终端」打**当前一台** | 同面板可进入 **Agent 循环**（多机提议→确认→执行→回写） |
+| 批量执行 | Tools → 手选主机 + 手输命令 | Agent 编排调用同一 `run_batch_parallel`（执行基座） |
+| 监控 `df` | 已连接会话单机采集 | 批量结果可结构化；汇总不绑死某种指标 |
 | 产品壳 | 终端为主 + 右 Dock AI | **沿用同一布局**；仅增强 AI 气泡（计划卡 / 进度 / 汇总） |
 
 **非目标（本设计明确不做）**
@@ -36,7 +36,8 @@
 - 不做「绕过审计」的自动执行；危险命令仍走本地/服务器策略  
 - 不做完全取代经典终端（交互式 vim/top、长驻 PTY 仍用 Tab）  
 - MVP **不做**顶栏「经典 / 对话运维」双模式换壳（可选远期增强）  
-- 第一期不做任意开放式 Agent 上网/装包；工具白名单制
+- **不做 Skill / 能力目录**（用户不「选技能」；也不维护 per-metric 插件表）  
+- 不做无人值守自愈；第一期不开放任意高危变更自动执行  
 
 ---
 
@@ -77,35 +78,39 @@
 
 ---
 
-## 4. 架构：动态编排（核心）
+## 4. 架构：三层（AgentLoop / Gate / ExecutionBase）
 
-执行逻辑**默认按动态**设计，而不是「写死一条 df 流水线」。固定配方只是动态循环里的一种**种子计划**。
+产品不是 Skill 市场。执行逻辑默认动态：Planner 每轮产出下一步，门闩审命令串，基座跑 SSH。
 
 ### 4.0 一句话模型
 
 ```text
-用户意图（可能很含糊）
-  → 不够清楚？先多轮对话澄清（Ask），不碰 SSH
-  → 够清楚？提出「下一步执行」
-  → 门闩（审计 + 确认阶梯）
-  → 执行 tool（SSH/汇总）
-  → 写入观察
-  → 再澄清或再提议……直到结束或用户取消
+用户自然语言
+  → Agent 循环（澄清 / 提议下一步 / 等人）
+  → 门闩（审计 + L1/L2 + 只读/变更策略）
+  → MistTerm 执行基座（batch SSH / 会话目标 / 跳板）
+  → 观察写回对话 → 再循环
 ```
+
+| 层 | 是什么 | 不是什么 |
+|----|--------|----------|
+| **Agent 循环** | 状态机 + WorkingMemory + StepProposal | 场景插件列表 / Skill 目录 |
+| **Planner** | NL(+memory) → 下一步：命令、目标、是否结束 | `disk_skill.rs` / 用户可选技能菜单 |
+| **门闩（Gate）** | 审**最终命令串**；选项 B 只读/变更策略 | 「某个 Skill 天然安全」 |
+| **执行基座（ExecutionBase）** | 复用 `batch_exec`、`build_batch_targets`、跳板 | 再包一层用户可见 Tool/Skill 品牌 |
 
 两件事都是动态的，且可以**交织**：
 
 | 循环 | 产出 | 是否 SSH |
 |------|------|----------|
 | **澄清循环** | 问句 / 选项 / 填槽 | 否 |
-| **执行循环** | `StepProposal` → 确认 → tool | 是（过门闩后） |
+| **执行循环** | `StepProposal` → 确认 → 基座 exec | 是（过门闩后） |
 
-用户可能聊了十几轮才说清范围，中间改主意、插话、否定上一步——都正常。系统不假设「第 N 轮固定弹出某张卡」。
+用户可能聊了十几轮才说清范围——都正常。系统不假设「第 N 轮固定弹出某张卡」。
 
-**动态**指：澄清轮次不固定；每一步的命令与目标可随观察与用户话变化。  
+**不动态**的仍是门闩：审计/L0–L2、目标只缩不扩、步数与澄清轮次上限。
+
 **执行时机**（产品默认，见 §4.0.1）：**边聊边按步执行**——只对「当前已确认的那一步」开 SSH；不是聊完全部细节后再一次性连上狂跑，也不是每句闲聊都连服务器。
-
-**不动态**的仍是门闩：白名单/审计/L0–L2、目标只缩不扩、步数与澄清轮次上限。
 
 ### 4.0.1 边聊边执行，还是聊完再 SSH？
 
@@ -203,7 +208,6 @@ AgentRun
   memory:             WorkingMemory
   clarify_rounds / max_clarify_rounds
   step_index / max_steps
-  mode:               recipe | adaptive
 
 WorkingMemory
   observations[] / facts / user_notes
@@ -218,47 +222,37 @@ StepProposal          // 仅 Planning→执行用
   command / targets|selector / rationale / risk_hint / stop
 ```
 
-### 4.3 三种计划来源（都喂进同一循环）
+### 4.3 Planner：覆盖「取啥都有可能」
 
 | 来源 | 动态程度 | 何时用 |
 |------|----------|--------|
-| **A. Skill / 静态配方** | 低：种子步骤固定，跟进可仍动态 | MVP：`disk.usage` → `df -h`；实现快、可测 |
-| **B. 规则自适应** | 中：Skill 内 `if WARN then propose du` | Phase 2：多步跟进 |
-| **C. LLM 规划** | 高：每轮看 memory 选/组合 Skill 或填槽 | Phase 3；仍经同一门闩 |
+| **A. 轻量启发式** | 低 | 明显意图可猜默认命令（如「磁盘」→ 建议 `df -h`），仍只是**提议**，可改 |
+| **B. 规则自适应** | 中 | 看 memory 决定要不要跟进、目标怎么缩 |
+| **C. LLM 规划（主路径）** | 高 | 任意「查 CPU / 内存 / 端口 / 自定义」→ 产出下一步命令与说明 |
 
-### 4.3.1 和「Skill」的关系（正名）
+| 用户说 | Planner 提议（示例） | 之后 |
+|--------|----------------------|------|
+| 查所有机磁盘 | `df -h` | Gate → ExecutionBase |
+| 看看内存 | `free -h` | 同上 |
+| CPU 谁高 | `uptime` 或 `top -bn1 \| head` | 同上 |
+| 80 端口谁在听 | `ss -lntp \| grep :80` | 同上 |
+| 重启 nginx | `systemctl restart nginx` | mutate 门闩（选项 B） |
 
-前面说的「只读配方 / 变更白名单 / 运维包」，产品上就是 **Skill**：
+要点：
 
-```text
-Skill = 命名能力包
-  id / 标题 / 触发说法（NL 或 /命令）
-  风险档：readonly | mutate
-  槽位：host、ns、unit、threshold…
-  步骤模板或小型状态机（可动态 propose_next）
-  门闩策略：L1 / L1+L2；是否允许对话路径
-```
-
-| 概念 | 对应 |
-|------|------|
-| 查全机磁盘 | Skill `host.disk_usage`（readonly） |
-| 磁盘高再 du | 同一 Skill 的跟进步，或 `host.disk_du_followup` |
-| kubectl 高磁盘容器 | Skill `k8s.container_disk_hot`（readonly，多步） |
-| 重启 nginx | Skill `host.systemctl_restart`（mutate，须开设置 + L2） |
-
-Agent **不是**自由生成任意 shell 的万能脚本机；默认是 **选 Skill → 填槽 → 逐步确认执行**。  
-LLM 的价值：理解含糊话、填槽、在 Skill 目录里选型、写跟进理由——**不**绕过 Skill 门闩去「临时发明」高危命令（选项 B）。
-
-与 Cursor/IDE 的 Agent Skill 不同：这里是 **MistTerm 运行时 Skill**（SSH 执行层），可内置在客户端，后续也可团队分发（类片段/知识，但是可执行能力包）。
-
-静态「配方」= Skill 的一种实现；变更白名单 = mutate Skill 的允许列表。
+- **主路径**是 LLM（或 JSON 计划）根据用户话 + 观察产出 `command` + `target_scope` + `rationale`。  
+- **启发式**仅加速/离线兜底，不是架构分支。  
+- **跟进**仍由 Planner 看 memory 再提议，不是预制场景状态机。  
+- **禁止**：为每个指标/场景硬编码插件（`disk_*.rs`、`cpu_*.rs`）；也**禁止**做用户可浏览的 Skill/能力目录。  
+- 门闩认**最终命令字符串**，不认「这是某某场景所以安全」。  
+- 日后若有「快捷预填」（像片段），只是把常用命令填进 `StepProposal`，仍走同一三层，**另议**，不升格为产品中心。
 
 ### 4.4 循环伪代码
 
 ```text
 run = new AgentRun(intent, approved_targets)
 loop:
-  proposal = planner.next(run.intent, run.memory, run.mode)  // A/B/C
+  proposal = planner.next(run.intent, run.memory)  // A/B/C
   if proposal.stop or run.step_index >= max_steps:
     show_final_summary; break
   resolve targets = proposal.target_ids or eval(selector, memory)
@@ -266,13 +260,12 @@ loop:
   gate = audit(proposal.command) + confirm_ladder(L1/L2)
   if gate.block: break
   if user.reject: break or re-plan
-  rows = run_on_hosts(targets, command)
+  rows = execution_base.run_batch(targets, command)  // → run_batch_parallel
   memory.push(observe(rows))
   run.step_index += 1
-  // 可选：自动进入下一轮 Planning（仍要确认卡），或停住等用户点「继续跟进」
 ```
 
-**默认 UX**：每步执行完停在对话里，展示汇总 +「建议下一步」卡；用户点确认才进入下一步（动态，但人在环上）。  
+**默认 UX**：每步执行完停在对话里，展示汇总 +「建议下一步」卡；用户点确认才进入下一步。  
 设置项（后期）：「只读链自动续提议」——自动弹出下一步卡，**仍要人点确认**才 exec。
 
 ### 4.5 动态边界（防「越编越飞」）
@@ -281,58 +274,51 @@ loop:
 |------|------|
 | `max_steps` / Run | 如 5；超出必须用户明确「继续」并提高上限 |
 | 单步主机数 | 复用批量上限；跟进步默认 ≤ 上一步命中数 |
-| 命令来源 | MVP：配方/规则模板；LLM 仅可填模板槽位或白名单命令族 |
+| 命令来源 | Planner 提议的命令文本；用户可改；门闩审最终串 |
 | 目标扩容 | 禁止；要加机器必须用户改勾选并重新 L1 |
 | 变更类 | 默认整条对话路径关闭；开启后每步 L2 |
 | 失败策略 | 单主机失败记录在 memory；不默认对失败机改跑破坏性补救 |
 
-### 4.6 模块与 Tool
+### 4.6 模块与执行基座（内部 API，非 Skill）
 
 ```mermaid
 flowchart TB
-  user[User_NL_or_midchat]
-  panel[AiPanel]
-  loop[AgentLoop]
-  planner[Planner_recipe_rule_or_LLM]
-  gate[Audit_and_Confirm]
-  tools[ToolRuntime]
-  batch[run_batch_parallel]
+  user[User_NL]
+  agent[AgentLoop]
+  planner[Planner_LLM_or_heuristic]
+  gate[Gate_audit_L1_L2]
+  base[ExecutionBase_batch_SSH]
   mem[WorkingMemory]
-  user --> panel --> loop
-  loop --> planner --> loop
-  loop --> gate --> tools
-  tools --> batch
-  tools --> mem
-  mem --> planner
-  gate -->|cards| panel
-  mem -->|summary| panel
+  ui[AiPanel_plan_cards]
+  user --> ui --> agent
+  agent --> planner --> agent
+  agent --> gate --> base
+  base --> mem --> planner
+  gate --> ui
+  mem --> ui
 ```
 
 | 模块 | 职责 |
 |------|------|
 | `src/core/agent/run.rs` | `AgentRun` / 状态机 / max_steps |
 | `src/core/agent/memory.rs` | 观察与 facts |
-| `src/core/agent/planner.rs` | 配方 / 规则自适应 / LLM 提议 |
-| `src/core/agent/gate.rs` | 白名单 + `CmdAuditEngine` + L0–L2 |
-| `src/core/agent/summarize.rs` | df/free 等结构化 |
+| `src/core/agent/planner.rs` | 启发式 + LLM → `StepProposal` |
+| `src/core/agent/gate.rs` | mutate 策略 + `CmdAuditEngine` + L0–L2 |
+| `src/core/agent/summarize.rs` | 结果粗解析 + 可选 LLM 润色（不绑死 df） |
+| 执行基座 | 直接复用 `batch_exec` / `build_batch_targets`（App 侧编排）；**不**另做用户可见 Tool 品牌 |
 | `src/ui/ai_panel.rs` | 计划卡、进度、汇总、中途改意图 |
 
-| Tool | 参数 | 底层 |
-|------|------|------|
-| `list_targets` | scope / tags | `build_batch_targets` |
-| `run_on_hosts` | command, target_ids, parallel | `run_batch_parallel`（含 ProxyJump） |
-| `summarize_*` | rows | 本地结构化 |
-| `propose_next` | （内部）由 planner 调用 | 只产出 `StepProposal`，不执行 |
+内部函数若命名为 `run_on_hosts` / `summarize_rows`，仅为 Rust 调用约定，**不对用户暴露、不进能力目录**。
 
 ### 4.7 规划实现分期
 
-| 阶段 | Planner | 动态性 |
-|------|---------|--------|
-| Phase 1 | 配方种子 + 单步结束；**简单槽位澄清**（主机未匹配时问一句） | 用户可再问开启续 Run |
-| Phase 2 | 规则自适应 + **多轮澄清**（缺 ns/范围就 Ask，不固定轮数） | 真多步 + 人机来回说清 |
-| Phase 3 | LLM 澄清与 `StepProposal` 交织；中途改意图 | 开放动态；门闩不变 |
+| 阶段 | 内容 |
+|------|------|
+| Phase 1 | AgentLoop + Gate + ExecutionBase；计划卡；Planner 启发式或 LLM 填命令；任意只读多机同一路径 |
+| Phase 2 | 多轮澄清 + 按结果跟进；汇总增强 |
+| Phase 3 | LLM 主规划；mutate 命令白名单；可选预填（片段级，非 Skill 目录） |
 
-MVP 不依赖网关 function-calling；Phase 3 再接 `tools` 协议（若可用）。
+MVP 不依赖网关 function-calling；Phase 3 若网关支持再接结构化 tools 协议（仍是内部调用，不是 Skill 商店）。
 
 ### 4.8 多轮澄清（说很多轮才明白）
 
@@ -435,7 +421,7 @@ Round2 Planning → StepProposal{du …, selector: used>=90 → [C]}
   → L1（仅 C）→ … → Observing → stop 或再提议
 ```
 
-配方/规则/LLM 只决定「下一提议从哪来」；门闩与「目标 ⊆ approved_targets」不变。
+配方/规则/LLM 只决定「下一提议从哪来」；门闩与「目标 ⊆ approved_targets」不变。Planner 与三层架构一致，无场景 Skill。
 
 ### 5.3 拓扑：经 A 到 B/C/D
 
@@ -478,7 +464,7 @@ Step2: 仅对 WARN 主机 du …  （同一跳板链，目标子集）
 
 > 我想登录 xxx 服务器，然后用服务器上的 kubectl 命令查集群内的所有容器，然后进入所有容器里面查询磁盘利用率超过 90% 的容器，把容器名和 IP 返回给我，并按利用率排序
 
-**能力分期**：属 Phase 2/3（动态多步 + 非简单配方）。Phase 1 只会识别「要上某机跑命令」并引导拆步/开终端；下文按**目标形态**描述完整交互。
+**能力分期**：属 Phase 2/3（动态多步）。Phase 1 验证「NL→提议命令→确认→基座执行」同一路径；下文按**目标形态**描述完整交互。
 
 **系统先做的澄清（未执行任何 SSH）**
 
@@ -640,16 +626,17 @@ facts.with_pod_ip = 186
 
 | 档 | 判定（示意） | 对话行为 |
 |----|--------------|----------|
-| **只读** | 白名单配方：`df`/`free`/`uptime`/`uname`/`hostname`/`cat`（限路径）等 | L1 → 执行 |
+| **只读** | 门闩判定为只读（或未开变更且命令不匹配 mutate 模式） | L1 → 执行 |
 | **敏感读** | 命中 `read-dangerous`（如读密钥路径） | L1 + L2；汇总前加强脱敏 |
-| **变更/破坏** | 命中 `bash-dangerous` 或写类（`rm`/`mv`/`chmod`/`systemctl stop`/`reboot`…） | 默认 **L0 Block 对话多机**；若策略为 Confirm → L1+L2；禁止「一键全选 prod」无门闩 |
-| **未知** | 非白名单且未命中模式 | MVP：**拒跑或仅 L1+L2 且单机上限**（见 6.3）；禁止模型自由生成任意 shell 后无门闩全网跑 |
+| **变更/破坏** | 命中 `bash-dangerous` 或写类；或命中 mutate 白名单模式 | 未开设置则拒；开启后 L1+L2；高危默认 L0 |
+| **未知** | 无法判定 | MVP：按未知升 L2 或拒跑；禁止无门闩全网跑 |
 
 **MVP 硬约束（选项 B）**
 
-1. 对话路径默认以**只读配方**为主；变更须设置开启且命中**变更白名单**。  
-2. 非白名单命令 → **不执行**，提示改用经典终端或批量工具并走既有审计。  
-3. 设置项「允许对话发起变更类命令」**默认关**；开启后仍强制 **L1+L2**，且禁止对「全部主机」无名单一键确认（须显式勾选）；prod 目标并行降级。
+1. 对话路径默认以**只读**为主；变更须设置开启且命中 **mutate 命令模式白名单**。  
+2. 非允许变更 → **不执行**，提示改用经典终端或批量工具并走既有审计。  
+3. 「允许对话发起变更」**默认关**；开启后仍强制 **L1+L2**；prod 目标并行降级。  
+4. **无 Skill 目录**；不按指标拆实现文件。
 
 ### 6.3 爆炸半径控制
 
@@ -668,8 +655,8 @@ facts.with_pod_ip = 186
   → CmdAuditEngine.evaluate（本地内置 + 团队策略）
   → Block  → L0，结束
   → Confirm → L1 计划卡通过后，必须再过 L2
-  → Alert/Allow → 只读白名单内：L1 即可；非白名单：按 6.2 未知档
-  → 用户确认后才 run_batch_parallel
+  → Alert/Allow → 只读档：L1 即可；变更/未知：按 6.2  
+  → 用户确认后才 run_batch_parallel（ExecutionBase）
 ```
 
 日志：`agent.plan` / `agent.confirm_l1` / `agent.confirm_l2` / `agent.blocked` / `agent.exec` / `agent.summary`（含 target_count、action、command hash）。
@@ -680,7 +667,7 @@ facts.with_pod_ip = 186
 |----|------|
 | 密钥 | 仍走 Session / Vault；不把私钥送进模型 |
 | 脱敏 | 送 LLM 汇总前 `redact_for_ai`；敏感读结果默认不自动送模型，需用户点「送 AI 解释」 |
-| 模型不可信 | 计划以**解析后的命令文本**为准展示；不信任模型「这是安全的」话术；门闩只认审计结果 + 白名单 |
+| 模型不可信 | 计划以**解析后的命令文本**为准展示；不信任模型「这是安全的」话术；门闩只认审计结果 + mutate 策略 |
 | 无「绕过」入口 | 对话路径不提供「忽略策略执行」 |
 
 ---
@@ -689,37 +676,35 @@ facts.with_pod_ip = 186
 
 ### Phase 0 — 设计收口（本文）✅
 
-成文：沿用现有壳、**动态 Agent 循环**、确认阶梯、多步/跳板、非目标。
+成文：沿用现有壳、**三层抽象（AgentLoop / Gate / ExecutionBase）**、确认阶梯、多步/跳板、非目标；**明确不做 Skill 目录**。
 
 ### Phase 1 — MVP 闭环
 
-1. `AgentRun` 状态机（含 Clarifying；按 B 预留 risk/变更档）  
-2. 磁盘等只读配方 → L1/L2 → `run_on_hosts` → memory + 汇总  
-3. 用户可再发一句话续 Planning  
-4. 单测：状态机、门闩、危险不得单次确认全网跑  
+1. `AgentRun` + Gate + ExecutionBase（`run_batch_parallel`）  
+2. Planner：NL → 提议命令（启发式可猜常见项；同一路径支持任意只读/用户改命令）  
+3. L1/L2 按**命令串**；结果回右栏  
+4. **不建** Skill 目录、不建 per-metric 插件  
 
-### Phase 2 — 规则自适应 + 受控变更白名单
+### Phase 2 — 澄清、跟进、受控变更
 
-多轮澄清；`propose_next`；更多只读配方。  
-设置「允许对话变更」默认关；白名单 restart/rollout 等强制 L1+L2。
+多轮澄清；按结果跟进；「允许对话变更」+ mutate **命令模式**白名单（强制 L2）。
 
-### Phase 3 — LLM 动态规划
+### Phase 3 — LLM 主规划
 
-每轮 JSON `StepProposal`；中途改意图；只读链可选自动弹出下一步卡（仍确认后 exec）。
+每轮 JSON `StepProposal`；中途改意图；可选片段级预填（非 Skill 商店）。
 
 ### Phase 4 — 体验打磨
 
-历史落盘、配方市场；若右栏不够用再评估 AI 最大化。
+历史落盘；若右栏不够用再评估 AI 最大化。
 
 ---
 
 ## 8. 验收口径（Phase 1）
 
-1. 用户不打开「批量执行」窗，仅在右栏 AI 完成多机 `df -h`。  
-2. 目标默认覆盖「本地已存会话 ∪ 当前团队服务器」，可取消勾选。  
-3. **任意** `run_on_hosts` 执行前必须 L1；审计 Block 不能执行；审计 Confirm / 非只读必须 L2 或拒跑。  
-4. 对话内有跨主机汇总；布局不变。  
-5. 用测试命令模拟危险模式：对话路径不得「点一次确认就全网执行」。
+1. 用户不打开「批量执行」窗，在右栏用自然语言完成**任意只读多机命令**（磁盘/CPU/内存等走同一 Agent 路径）。  
+2. 目标可勾选；执行前必须 L1；Block/Confirm 按命令串升档。  
+3. **无**对外 Skill/能力目录；**无**按指标拆分的实现文件。  
+4. 对话内有汇总；布局不变；危险命令不得单次确认就全网执行。
 
 ---
 
@@ -727,7 +712,8 @@ facts.with_pod_ip = 186
 
 | 风险 | 缓解 |
 |------|------|
-| NL 误触发全网破坏 | 默认只读配方 + L1；危险 L0/L2；禁静默执行 |
+| NL 误触发全网破坏 | 默认只读 + L1；危险 L0/L2；禁静默执行 |
+| 做成 Skill 目录绑死场景 | 三层抽象；Planner 动态命令；禁止能力商店 |
 | 模型谎称安全 | 门闩只认审计与白名单，不认模型话术 |
 | 确认疲劳（点太多次） | 只读仅 L1；L2 仅 Confirm/变更；文案区分「例行巡检」vs「危险操作」 |
 | 多步连跑误伤 | 默认逐步确认；目标只缩不扩；每步重审 |
@@ -766,7 +752,7 @@ facts.with_pod_ip = 186
 |---|----------|----------|--------|------|
 | 1 | **多机健康巡检** | `uptime`/`free`/`df` 并行汇总 | ✅ | 与 Phase 1 完全同构；业界「早会巡检」刚需 |
 | 2 | **磁盘打满排查** | df → 定位 WARN 机 → du/日志体积 | ✅ | 动态多步 + 条件跟进的教科书场景 |
-| 3 | **服务是否在跑** | `systemctl is-active` / `ss -lntp` | ✅ | 只读配方即可 |
+| 3 | **服务是否在跑** | `systemctl is-active` / `ss -lntp` | ✅ | 只读提议即可 |
 | 4 | **拉日志 / 搜关键字** | `journalctl`/`tail`/`grep` 限行 | ✅ | 要截断与脱敏；适合短连接 |
 | 5 | **证书 / 时间 / DNS 抽查** | `openssl`/`timedatectl`/`dig` | ✅ | 只读批量 |
 | 6 | **K8s 只读诊断** | get/describe/logs/top；按结果跟进 | ✅ | §5.5；枚举→抽样→全量需爆炸半径确认 |
@@ -775,7 +761,7 @@ facts.with_pod_ip = 186
 | 9 | **跳板后内网机** | ProxyJump 达 B/C/D | ✅ | 会话已配跳板即可；嵌套 ssh 不做 |
 | 10 | **告警后定向排查** | 「web-3 CPU 高」多步只读 | ✅ | 澄清主机→采指标→拉日志；人在环可接受 |
 | 11 | **配置漂移抽查** | 多机 `cat`/`md5` 某文件对比 | ✅ | 汇总 diff；注意敏感读 L2 |
-| 12 | **发布后回检** | 多机 curl 本机端口 / 版本号 | ✅ | 只读探测配方 |
+| 12 | **发布后回检** | 多机 curl 本机端口 / 版本号 | ✅ | 只读探测 |
 | 13 | **重启服务 / 滚更** | `systemctl restart`/`kubectl rollout` | 🟡 | 变更类：默认关；开启后强制 L2 + 小爆炸半径 |
 | 14 | **磁盘止血** | truncate 日志、`docker prune` | 🟡 | 写操作；须 L2；部分命令近 Block |
 | 15 | **扩缩容 / 改资源** | HPA、limits、PVC 扩容 | 🟡 | 变更 + 常需集群权限；对话可提议，默认不自动 exec |
@@ -818,14 +804,16 @@ facts.with_pod_ip = 186
 
 | 项 | 约定 |
 |----|------|
-| 只读 | 默认开启；配方 + 动态跟进；L1 即可（Confirm 审计仍可升 L2） |
-| 受控变更 | **默认设置关闭**「允许对话发起变更」；用户开启后，仅白名单命令族可走对话路径 |
-| 变更白名单（初版建议） | `systemctl restart/reload <unit>`（unit 可再限）、`kubectl rollout restart/undo`（限 deployment/ns）、显式列出的「清日志 truncate 指定路径」等；**不含** `rm -rf`、`mkfs`、`dd`、集群 delete、DB failover |
+| 只读 | 默认开启；Planner 提议只读命令 → L1；Confirm 审计可升 L2 |
+| 受控变更 | **默认设置关闭**「允许对话发起变更」；开启后仅 **mutate 命令模式白名单**（如 `systemctl restart`）可走对话路径 |
+| 变更白名单（初版建议） | 命令模式：`systemctl restart/reload …`、`kubectl rollout restart/undo …` 等 |
+| 快捷预填（可选，另议） | 片段级预填常用命令 → `StepProposal`；**不是** Skill 目录 |
 | 门闩 | 凡变更：**L1 + L2**；含 prod 标签时卡片强调，并行强制降低（如 1） |
-| 非白名单变更 | 对话路径拒跑，引导经典终端 / 批量窗（仍受 `CmdAuditEngine`） |
+| 非允许变更 | 对话路径拒跑，引导经典终端 / 批量窗（仍受 `CmdAuditEngine`） |
 | 自愈 | 不自动执行变更；最多「建议下一步」等人确认 |
+| 抽象 | **AgentLoop / Gate / ExecutionBase**；不做 Skill 产品化 |
 
-Phase 1 仍可先交付只读闭环（磁盘等），变更白名单与设置项放在 Phase 1 末或 Phase 2，但**架构与门闩按 B 预留**（risk 档、设置位），避免以后拆模型。
+Phase 1 先交付只读 Agent 闭环；变更白名单与设置项放 Phase 1 末或 Phase 2；架构按 B 与三层预留。
 
 ---
 
@@ -833,7 +821,7 @@ Phase 1 仍可先交付只读闭环（磁盘等），变更白名单与设置项
 
 立项 Phase 1 后建议顺序：
 
-1. `AgentRun` / `WorkingMemory` / 门闩（动态循环骨架，即使先只跑单步）  
-2. 配方 planner + AI 计划卡  
-3. `run_on_hosts` + 结构化观察  
-4. Phase 2 规则 `propose_next`；Phase 3 LLM 动态提议  
+1. 文档收口（三层抽象）✅  
+2. `AgentRun` 状态机 + 计划卡 UI  
+3. 接 `run_batch_parallel` + 门闩  
+4. Planner：先启发式+可手改命令；再接 LLM JSON 提议  
