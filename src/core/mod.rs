@@ -83,8 +83,9 @@ pub use knowledge::{
     clean_ask_intent, retrieve_team_knowledge, DocSearchHit, KnowledgeHit, KnowledgeSource,
 };
 pub use agent::{
-    gate_decision, looks_like_host_ops_intent, propose_step, summarize_batch_rows, AgentPhase,
-    AgentRunSnapshot, GateDecision, GateLevel, StepProposal,
+    first_useful_line, gate_decision, looks_like_host_ops_intent, propose_step,
+    summarize_batch_rows, truncate_chars, AgentPhase, AgentRunSnapshot, GateDecision, GateLevel,
+    StepProposal,
 };
 pub use batch_exec::{
     format_batch_results_for_clipboard, run_batch_parallel, truncate_output, BatchExecJob,

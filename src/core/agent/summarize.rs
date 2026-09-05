@@ -1,90 +1,65 @@
-//! 将批量执行结果整理成对话可读摘要（不绑死单一指标）。
+//! 将批量执行结果整理成对话可读摘要（纯文本，供复制；UI 另有结构化卡片）。
 
 use crate::core::batch_exec::BatchExecRow;
 
+/// 短摘要（复制/持久化）；不含 HTML，不做 markdown 表。
 pub fn summarize_batch_rows(command: &str, rows: &[BatchExecRow]) -> String {
     let ok_n = rows.iter().filter(|r| r.ok).count();
     let fail_n = rows.len().saturating_sub(ok_n);
     let mut out = String::new();
     out.push_str(&format!(
-        "### 多机执行结果\n\n命令：`{command}`\n\n成功 {ok_n} / 共 {} · 失败 {fail_n}\n\n",
+        "多机执行 · `{command}`\n成功 {ok_n} / 共 {} · 失败 {fail_n}\n\n",
         rows.len()
     ));
-    out.push_str("| 主机 | 状态 | 摘要 |\n|------|------|------|\n");
-    for r in rows {
-        let status = if r.ok {
-            "OK".to_string()
-        } else if let Some(e) = &r.error {
-            format!("ERR: {e}")
+
+    // 失败优先，一眼能看出问题机
+    let mut ordered: Vec<&BatchExecRow> = rows.iter().collect();
+    ordered.sort_by_key(|r| r.ok);
+
+    for r in ordered {
+        let mark = if r.ok { "OK" } else { "FAIL" };
+        let detail = if r.ok {
+            first_useful_line(&r.output).unwrap_or_else(|| {
+                if r.output.trim().is_empty() {
+                    "—".into()
+                } else {
+                    truncate_chars(&r.output.replace('\n', " "), 72)
+                }
+            })
         } else {
-            "ERR".into()
+            r.error
+                .clone()
+                .unwrap_or_else(|| "failed".into())
         };
-        let summary = first_useful_line(&r.output).unwrap_or_else(|| {
-            if r.output.is_empty() {
-                "—".into()
-            } else {
-                truncate_chars(&r.output.replace('\n', " "), 80)
-            }
-        });
         out.push_str(&format!(
-            "| {} | {} | {} |\n",
-            escape_cell(&r.label),
-            escape_cell(&status),
-            escape_cell(&summary)
+            "[{mark}] {}  ·  {detail}  ({} ms)\n",
+            r.label, r.duration_ms
         ));
     }
-    if fail_n > 0 {
-        out.push_str("\n<details><summary>失败详情</summary>\n\n");
-        for r in rows.iter().filter(|r| !r.ok) {
-            out.push_str(&format!(
-                "**{}**\n```\n{}\n```\n\n",
-                r.label,
-                r.error.as_deref().unwrap_or("(no error text)")
-            ));
-        }
-        out.push_str("</details>\n");
-    }
-    out.push_str("\n<details><summary>按主机原始输出</summary>\n\n");
-    for r in rows {
-        out.push_str(&format!("**{}** ({} ms)\n```\n", r.label, r.duration_ms));
-        if r.output.is_empty() {
-            out.push_str("(empty)\n");
-        } else {
-            out.push_str(&truncate_chars(&r.output, 4000));
-            if !r.output.ends_with('\n') {
-                out.push('\n');
-            }
-        }
-        out.push_str("```\n\n");
-    }
-    out.push_str("</details>\n");
     out
 }
 
-fn first_useful_line(output: &str) -> Option<String> {
+pub fn first_useful_line(output: &str) -> Option<String> {
     for line in output.lines() {
         let t = line.trim();
         if t.is_empty() {
             continue;
         }
-        if t.to_lowercase().starts_with("filesystem") || t.starts_with("total") {
+        let low = t.to_lowercase();
+        if low.starts_with("filesystem") || low.starts_with("total") {
             continue;
         }
-        return Some(truncate_chars(t, 80));
+        return Some(truncate_chars(t, 96));
     }
     None
 }
 
-fn truncate_chars(s: &str, max: usize) -> String {
+pub fn truncate_chars(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         return s.to_string();
     }
     let head: String = s.chars().take(max).collect();
     format!("{head}…")
-}
-
-fn escape_cell(s: &str) -> String {
-    s.replace('|', "\\|").replace('\n', " ")
 }
 
 #[cfg(test)]
@@ -105,6 +80,35 @@ mod tests {
         }];
         let s = summarize_batch_rows("df -h", &rows);
         assert!(s.contains("web-1"));
-        assert!(s.contains("成功 1"));
+        assert!(s.contains("[OK]"));
+        assert!(!s.contains("<details>"));
+    }
+
+    #[test]
+    fn fails_listed_first() {
+        let rows = vec![
+            BatchExecRow {
+                target_id: "a".into(),
+                label: "ok-host".into(),
+                ok: true,
+                exit_code: Some(0),
+                output: "hello\n".into(),
+                error: None,
+                duration_ms: 1,
+            },
+            BatchExecRow {
+                target_id: "b".into(),
+                label: "bad-host".into(),
+                ok: false,
+                exit_code: None,
+                output: String::new(),
+                error: Some("timeout".into()),
+                duration_ms: 2,
+            },
+        ];
+        let s = summarize_batch_rows("uptime", &rows);
+        let bad = s.find("[FAIL]").unwrap();
+        let good = s.find("[OK]").unwrap();
+        assert!(bad < good);
     }
 }
