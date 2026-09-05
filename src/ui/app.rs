@@ -22,7 +22,8 @@ use crate::core::{
     ServerAuditEvent, SessionConfig, SessionLogSettings, SessionLogWriter, SessionManager,
     SessionSortBy, SortBy, SshConfigCandidate, SshConfigParseResult, SshInfo, TeamService, TempKeyFile,
     suggest_compliant_after_block_with_env, DEFAULT_RETENTION_DAYS,
-    candidate_from_failed_command, candidate_from_success_recommendation,
+    candidate_from_failed_command, candidate_from_just_ran_success,
+    candidate_from_success_recommendation,
     retrieve_team_knowledge, clean_ask_intent, DocSearchHit, KnowledgeHit,
     FragmentCandidate, SuggestionEnvContext,
 };
@@ -2203,25 +2204,27 @@ impl MistTermApp {
             );
             self.command_history
                 .record(&command, Some(&sid), sname.as_deref(), true);
-            // 成功路径：频次达标时延后弹确认入库（非静默）
-            self.queue_success_path_candidate_if_due();
+            // 成功路径：仅当「刚敲的这条」累计刚好达标时才弹（非每条命令弹最热门）
+            self.queue_success_path_candidate_if_due(&command);
             // 失败路径：若终端尾部像错误，延后提示保存候选
             self.queue_failed_path_candidate_if_due(&command);
         }
     }
 
-    fn queue_success_path_candidate_if_due(&mut self) {
+    fn queue_success_path_candidate_if_due(&mut self, just_ran: &str) {
         let personal = self.fragment_manager.list().to_vec();
-        let recs =
-            crate::core::recommend_from_history(&self.command_history, &personal, None, 3);
-        let Some(top) = recs.first() else {
+        let Some(cand) = candidate_from_just_ran_success(
+            &self.command_history,
+            &personal,
+            just_ran,
+            crate::core::SUCCESS_CANDIDATE_MIN_COUNT,
+        ) else {
             return;
         };
-        if top.command == self.last_candidate_offer_command {
+        if cand.command == self.last_candidate_offer_command {
             return;
         }
-        self.deferred_candidate_toast =
-            Some(candidate_from_success_recommendation(top));
+        self.deferred_candidate_toast = Some(cand);
     }
 
     fn queue_failed_path_candidate_if_due(&mut self, command: &str) {

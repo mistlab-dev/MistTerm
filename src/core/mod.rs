@@ -74,10 +74,12 @@ pub use fragment_analytics::{
 pub use fragment_usage_log::{FragmentUsageEvent, FragmentUsageLog, MemberPeriodStats};
 pub use fragment_recommendations::{
     build_efficiency_report_markdown, build_efficiency_report_pdf, candidate_from_failed_command,
-    candidate_from_success_recommendation, recommend_from_history, merge_recommendations,
-    query_topic_keywords, score_fragment_against_keywords, suggest_compliant_after_block,
+    candidate_from_just_ran_success, candidate_from_success_recommendation,
+    recommend_from_history, merge_recommendations, query_topic_keywords,
+    score_fragment_against_keywords, suggest_compliant_after_block,
     suggest_compliant_after_block_with_env, CompliantFragmentSuggestion, FragmentCandidate,
     FragmentCandidateReason, FragmentRecommendation, SuggestionEnvContext,
+    SUCCESS_CANDIDATE_MIN_COUNT,
 };
 pub use knowledge::{
     clean_ask_intent, retrieve_team_knowledge, DocSearchHit, KnowledgeHit, KnowledgeSource,

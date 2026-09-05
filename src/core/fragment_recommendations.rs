@@ -136,6 +136,9 @@ pub fn candidate_from_failed_command(
     Some(FragmentCandidate::from_command(&n, FragmentCandidateReason::FailedPath))
 }
 
+/// 成功路径入库：仅当「刚执行的这条」累计次数**刚好达到**阈值时提示（避免每敲一条都弹最热门命令）。
+pub const SUCCESS_CANDIDATE_MIN_COUNT: u32 = 5;
+
 /// 将历史频次推荐转为需确认的成功路径候选（取第一条）。
 pub fn candidate_from_success_recommendation(
     rec: &FragmentRecommendation,
@@ -145,6 +148,35 @@ pub fn candidate_from_success_recommendation(
         title: rec.command.chars().take(40).collect(),
         reason: FragmentCandidateReason::SuccessPath,
     }
+}
+
+/// 仅针对刚执行的命令：历史中出现次数刚好等于 `min_count` 且未入库时，生成成功路径候选。
+pub fn candidate_from_just_ran_success(
+    history: &CommandHistory,
+    personal_fragments: &[FragmentStats],
+    just_ran: &str,
+    min_count: u32,
+) -> Option<FragmentCandidate> {
+    let n = normalize_command(just_ran);
+    if n.is_empty() || is_trivial_command(&n) {
+        return None;
+    }
+    if covered_by_library(&n, personal_fragments) {
+        return None;
+    }
+    let count = history
+        .entries_newest_first()
+        .filter(|e| normalize_command(&e.command) == n)
+        .count() as u32;
+    // 刚好达标才弹一次；之后再跑不再因「最热门」反复打扰
+    if count != min_count {
+        return None;
+    }
+    Some(FragmentCandidate {
+        command: n.clone(),
+        title: n.chars().take(40).collect(),
+        reason: FragmentCandidateReason::SuccessPath,
+    })
 }
 
 /// 从被拦截命令推断主题关键词，并在片段库中打分取 Top1。
@@ -645,6 +677,29 @@ fn pdf_cjk_font_paths() -> Vec<std::path::PathBuf> {
 mod pdf_tests {
     use super::*;
     use crate::core::FragmentAnalyticsDashboard;
+
+    #[test]
+    fn just_ran_success_only_at_exact_threshold() {
+        use crate::core::command_history::CommandHistory;
+        let mut h = CommandHistory::new();
+        // 交错写入避免「连续相同合并」
+        for i in 0..4 {
+            h.record("ps -ef", Some("s"), Some("n"), true);
+            h.record(&format!("echo {i}"), Some("s"), Some("n"), true);
+        }
+        // 现有 4 次 ps -ef
+        assert!(candidate_from_just_ran_success(&h, &[], "ps -ef", 5).is_none());
+        h.record("echo x", Some("s"), Some("n"), true);
+        h.record("ps -ef", Some("s"), Some("n"), true); // 第 5 次
+        let c = candidate_from_just_ran_success(&h, &[], "ps -ef", 5).unwrap();
+        assert_eq!(c.command, "ps -ef");
+        // 再跑第 6 次不再弹
+        h.record("echo y", Some("s"), Some("n"), true);
+        h.record("ps -ef", Some("s"), Some("n"), true);
+        assert!(candidate_from_just_ran_success(&h, &[], "ps -ef", 5).is_none());
+        // 刚跑的是别的命令也不弹 ps
+        assert!(candidate_from_just_ran_success(&h, &[], "uptime", 5).is_none());
+    }
 
     #[test]
     fn efficiency_report_pdf_non_empty() {
