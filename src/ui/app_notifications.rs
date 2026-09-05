@@ -24,6 +24,10 @@ pub(crate) enum ToastAction {
     InsertSuggestedSnippet,
     /// 将合规片段建议沉底到个人库（团队片段副本 / 去重后写入）。
     SaveSuggestedSnippet,
+    /// 拦截无命中 / Ask 无命中：打开 AI 并标明非团队知识。
+    AskAiFallback,
+    /// 将 `pending_fragment_candidate` 写入个人库（用户确认）。
+    ConfirmSaveCandidate,
 }
 
 #[derive(Debug, Clone)]
@@ -534,6 +538,22 @@ impl MistTermApp {
                                 status_message_wrap_error(status_payload(&t.title, &t.text));
                         }
                     }
+                }
+            }
+            ToastAction::AskAiFallback => {
+                let q = self
+                    .pending_ask_fallback_question
+                    .take()
+                    .unwrap_or_else(|| self.ask_knowledge_query.clone());
+                self.pending_fragment_candidate = None;
+                self.clear_toast();
+                self.open_ai_with_model_fallback(ctx, &q);
+            }
+            ToastAction::ConfirmSaveCandidate => {
+                let pending = self.pending_fragment_candidate.take();
+                self.clear_toast();
+                if let Some(cand) = pending {
+                    self.save_fragment_candidate(ctx, &cand);
                 }
             }
         }

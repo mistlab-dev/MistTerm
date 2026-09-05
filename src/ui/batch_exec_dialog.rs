@@ -63,13 +63,24 @@ impl BatchExecDialog {
         let mut action = BatchExecUiAction::None;
         let title = crate::i18n::tr(ctx, "Batch run on servers", "批量多机执行");
         let mut keep_open = self.open;
-        egui::Window::new(title)
-            .id(egui::Id::new("batch_exec_dialog"))
-            .collapsible(false)
-            .resizable(true)
-            .default_size(egui::vec2(720.0, 520.0))
+        let mut should_close = false;
+        let modal_sz = egui::vec2(720.0, 520.0);
+        crate::ui::chrome::modal_window("batch_exec_dialog", theme, ctx)
+            .open(&mut keep_open)
+            .default_size(modal_sz)
             .min_width(480.0)
+            .movable(true)
+            .resizable(true)
             .show(ctx, |ui| {
+                crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
+                    if crate::ui::chrome::modal_header(
+                        ui,
+                        theme,
+                        title,
+                        theme.font_size_modal_title(),
+                    ) {
+                        should_close = true;
+                    }
                 ui.label(
                     egui::RichText::new(crate::i18n::tr(
                         ctx,
@@ -176,9 +187,6 @@ impl BatchExecDialog {
                     {
                         action = BatchExecUiAction::CopyResults;
                     }
-                    if ui.button(crate::i18n::tr(ctx, "Close", "关闭")).clicked() {
-                        keep_open = false;
-                    }
                 });
 
                 if !self.results.is_empty() {
@@ -223,7 +231,11 @@ impl BatchExecDialog {
                             }
                         });
                 }
+                });
             });
+        if should_close {
+            keep_open = false;
+        }
         self.open = keep_open;
         action
     }

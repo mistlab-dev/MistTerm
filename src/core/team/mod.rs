@@ -22,7 +22,8 @@ pub use models::{
     StorageUsageBucket, StorageUsageResponse, TeamFragment, TeamMember, TeamMembersResponse,
     TeamMembership, TeamRole, TeamServer, TeamSettings as TeamServerSettings, TeamSyncEntry,
     TeamSyncResponse, TeamUser, TeamsListResponse, TokenResponse, UpdateCmdAuditAgentRequest,
-    UpdateTeamFragmentRequest, cmd_audit_agent_available_for_host, cmd_audit_host_matches,
+    UpdateTeamFragmentRequest, TeamDocSearchItem, TeamDocSearchResponse,
+    cmd_audit_agent_available_for_host, cmd_audit_host_matches,
 };
 pub use sync_config::{apply_sync_response, apply_vault_for_team, parse_vault_credential_path};
 pub use service::{

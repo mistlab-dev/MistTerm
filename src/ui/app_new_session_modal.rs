@@ -29,6 +29,7 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 crate::i18n::tr(ctx, "New session", "新建会话"),
+                                &mut should_close,
                             );
 
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);

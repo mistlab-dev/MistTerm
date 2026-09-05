@@ -267,6 +267,16 @@ impl MistTermApp {
                 self.open_agent_install_dialog();
                 ui.close_menu();
             }
+            if crate::ui::chrome::popup_menu_button(
+                ui,
+                theme,
+                crate::i18n::tr(ctx, "Ask: how do we…", "问：我们怎么……"),
+            )
+            .clicked()
+            {
+                self.open_ask_knowledge_dialog();
+                ui.close_menu();
+            }
         });
         egui::menu::menu_button(ui, label(l.help_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);

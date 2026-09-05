@@ -210,6 +210,40 @@ impl TeamClient {
         )
     }
 
+    /// MistDocs 段落检索；404 / 未实现时返回 `Ok(None)`，由调用方回退到片段检索。
+    pub fn search_team_docs(
+        &self,
+        access_token: &str,
+        team_id: &str,
+        query: &str,
+        limit: u32,
+    ) -> Result<Option<super::models::TeamDocSearchResponse>, TeamApiError> {
+        let q = percent_encode_query(query);
+        let path = format!(
+            "/v1/teams/{team_id}/docs/search?q={q}&limit={}",
+            limit.max(1).min(20)
+        );
+        let req = self.http.get(self.url(&path)).bearer_auth(access_token);
+        let resp = req.send().map_err(|e| TeamApiError {
+            status: 0,
+            message: e.to_string(),
+            conflict_fragment: None,
+        })?;
+        if resp.status() == StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if resp.status() == StatusCode::NOT_IMPLEMENTED {
+            return Ok(None);
+        }
+        if resp.status().is_success() {
+            return Self::decode_response(resp).map(Some);
+        }
+        Err(Self::decode_error(
+            resp.status(),
+            resp.text().unwrap_or_default(),
+        ))
+    }
+
     pub fn get_fragment(
         &self,
         access_token: &str,

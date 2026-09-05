@@ -20,6 +20,7 @@ impl MistTermApp {
                 Scp,
             }
             let mut pick: Option<LargePick> = None;
+            let mut should_close = false;
             let modal_sz = layout_util::modal_quick_fragment_size(ctx);
             crate::ui::chrome::modal_window("large_upload_modal", theme, ctx)
                 .open(&mut open)
@@ -33,6 +34,7 @@ impl MistTermApp {
                             ui,
                             theme,
                             crate::i18n::tr(ctx, "Large file upload", "大文件上传"),
+                            &mut should_close,
                         );
                         ui.label(
                             egui::RichText::new(
@@ -79,7 +81,7 @@ impl MistTermApp {
                         }
                     });
                 });
-            if !open && pick.is_none() {
+            if (!open || should_close) && pick.is_none() {
                 pick = Some(LargePick::Dismiss);
             }
             match pick {
@@ -153,6 +155,7 @@ impl MistTermApp {
                             ui,
                             theme,
                             crate::i18n::tr(ctx, "Delete session", "删除会话"),
+                            &mut should_close,
                         );
                         ui.label(
                             egui::RichText::new(
@@ -238,6 +241,7 @@ impl MistTermApp {
                                     "本地检查：确认执行",
                                 )
                             },
+                            &mut should_close,
                         );
                         ui.label(
                             egui::RichText::new(if from_server {
@@ -343,7 +347,12 @@ impl MistTermApp {
                     .fixed_size(modal_sz)
                     .show(ctx, |ui| {
                         crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
-                            Self::modal_header_title_only(ui, theme, crate::i18n::tr(ctx, "Close tab", "关闭标签"));
+                            Self::modal_header_title_only(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Close tab", "关闭标签"),
+                                &mut should_close,
+                            );
                             ui.label(
                                 egui::RichText::new(
                                     crate::i18n::tr(

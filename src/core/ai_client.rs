@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -442,6 +442,10 @@ chmod +x check_domain.sh
     fn retryable_transport_error_matches_network_prefix() {
         assert!(super::is_retryable_transport_error("网络错误：connection refused"));
         assert!(!super::is_retryable_transport_error("API 401：unauthorized"));
+        assert!(!super::is_retryable_transport_error(
+            "请求超时（已配置 60 秒）。可在 AI 设置中增大「超时 (秒)」后点「重新生成」。"
+        ));
+        assert!(!super::is_retryable_transport_error("网络错误：operation timed out"));
     }
 
     #[test]
@@ -544,13 +548,48 @@ pub fn run_chat_with_key(
 }
 
 fn http_client(settings: &AiSettings) -> Result<reqwest::blocking::Client, String> {
+    http_client_timeout(configured_timeout_secs(settings))
+}
+
+fn configured_timeout_secs(settings: &AiSettings) -> u64 {
+    settings.timeout_secs.max(5)
+}
+
+fn http_client_timeout(timeout_secs: u64) -> Result<reqwest::blocking::Client, String> {
+    let secs = timeout_secs.max(5);
     reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(settings.timeout_secs.max(5)))
+        .connect_timeout(Duration::from_secs(secs.min(30)))
+        .timeout(Duration::from_secs(secs))
         .build()
         .map_err(|e| e.to_string())
 }
 
+fn format_timeout_error(secs: u64) -> String {
+    format!("请求超时（已配置 {secs} 秒）。可在 AI 设置中增大「超时 (秒)」后点「重新生成」。")
+}
+
+fn looks_like_timeout_error(err: &str) -> bool {
+    let e = err.to_ascii_lowercase();
+    e.contains("timed out")
+        || e.contains("timeout")
+        || err.contains("超时")
+        || e.contains("deadline has elapsed")
+}
+
+fn map_transport_error(err: &reqwest::Error, timeout_secs: u64) -> String {
+    let msg = err.to_string();
+    if err.is_timeout() || looks_like_timeout_error(&msg) {
+        format_timeout_error(timeout_secs)
+    } else {
+        format!("网络错误：{msg}")
+    }
+}
+
 fn is_retryable_transport_error(err: &str) -> bool {
+    // 超时不应再整段重试，否则实际等待 ≈ 超时 × (1+重试)，看起来像「超时配置不生效」。
+    if looks_like_timeout_error(err) {
+        return false;
+    }
     err.starts_with("网络错误：")
 }
 
@@ -558,13 +597,14 @@ fn send_with_retries<F>(settings: &AiSettings, mut send_once: F) -> Result<reqwe
 where
     F: FnMut() -> Result<reqwest::blocking::Response, reqwest::Error>,
 {
+    let timeout_secs = configured_timeout_secs(settings);
     let max = settings.request_retries;
     let mut attempt = 0u32;
     loop {
         match send_once() {
             Ok(resp) => return Ok(resp),
             Err(e) => {
-                let msg = format!("网络错误：{e}");
+                let msg = map_transport_error(&e, timeout_secs);
                 if attempt >= max || !is_retryable_transport_error(&msg) {
                     return Err(msg);
                 }
@@ -641,6 +681,8 @@ fn chat_streaming_with_key(
         let _ = tx.send(ChatEvent::Cancelled);
         return Ok(());
     }
+    let timeout_secs = configured_timeout_secs(settings);
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     let url = settings.chat_completions_url();
     let system = system_prompt_override
         .map(str::to_string)
@@ -675,6 +717,9 @@ fn chat_streaming_with_key(
         let _ = tx.send(ChatEvent::Cancelled);
         return Ok(());
     }
+    if Instant::now() >= deadline {
+        return Err(format_timeout_error(timeout_secs));
+    }
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().map_err(|e| e.to_string())?;
@@ -689,8 +734,18 @@ fn chat_streaming_with_key(
             let _ = tx.send(ChatEvent::Cancelled);
             return Ok(());
         }
+        if Instant::now() >= deadline {
+            return Err(format_timeout_error(timeout_secs));
+        }
         line.clear();
-        let n = reader.read_line(&mut line).map_err(|e| e.to_string())?;
+        let n = reader.read_line(&mut line).map_err(|e| {
+            let s = e.to_string();
+            if looks_like_timeout_error(&s) {
+                format_timeout_error(timeout_secs)
+            } else {
+                s
+            }
+        })?;
         if n == 0 {
             break;
         }
@@ -720,9 +775,17 @@ fn chat_streaming_with_key(
                 return Ok(());
             }
             Err(_e) if raw_body.trim().is_empty() => {
-                // 空 SSE 体时再回退非流式请求。
+                // 空 SSE 体时再回退非流式；用剩余时间预算，避免「超时×2」。
+                let remaining = deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_secs();
+                if remaining < 5 {
+                    return Err(format_timeout_error(timeout_secs));
+                }
+                let mut fallback = settings.clone();
+                fallback.timeout_secs = remaining;
                 return chat_blocking_with_key(
-                    settings,
+                    &fallback,
                     api_key,
                     messages,
                     cancel,

@@ -41,12 +41,14 @@ pub fn show_fragment_analytics_modal(
         .default_size(modal_sz)
         .show(ctx, |ui| {
             crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
-                crate::ui::chrome::modal_header_title_only(
+                if crate::ui::chrome::modal_header(
                     ui,
                     theme,
                     &title,
                     theme.font_size_modal_title(),
-                );
+                ) {
+                    should_close = true;
+                }
 
                 ui.horizontal(|ui| {
                     ui.label(
@@ -331,12 +333,6 @@ pub fn show_fragment_analytics_modal(
                         .clicked()
                     {
                         *action = FragmentAnalyticsUiAction::ExportEfficiencyReportPdf;
-                    }
-                    if ui
-                        .button(crate::i18n::tr(ctx, "Close", "关闭"))
-                        .clicked()
-                    {
-                        should_close = true;
                     }
                 });
             });

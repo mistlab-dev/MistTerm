@@ -213,3 +213,60 @@ fn suggest_compliant_skips_same_danger_command() {
 fn suggest_compliant_none_without_library() {
     assert!(suggest_compliant_after_block("rm -rf /", &[], &[]).is_none());
 }
+
+#[test]
+fn suggest_compliant_env_filter_prefers_tagged_then_fallback() {
+    use mistterm::core::{suggest_compliant_after_block_with_env, FragmentStats, SuggestionEnvContext};
+
+    let mut prod = FragmentStats::new(
+        "prod".into(),
+        "生产清理日志".into(),
+        "find /var/log -name '*.log' -mtime +7 -delete".into(),
+        "ops".into(),
+    );
+    prod.tags = vec!["prod".into(), "log".into()];
+
+    let mut staging = FragmentStats::new(
+        "stg".into(),
+        "预发清理".into(),
+        "truncate -s 0 /var/log/app.log".into(),
+        "ops".into(),
+    );
+    staging.tags = vec!["staging".into(), "log".into()];
+
+    let env = SuggestionEnvContext::from_session("db.prod.example", "red", &["prod".into()]);
+    let hit = suggest_compliant_after_block_with_env(
+        "rm -rf /var/log",
+        &[prod.clone(), staging.clone()],
+        &[],
+        Some(&env),
+    )
+    .expect("tagged hit");
+    assert_eq!(hit.fragment.id, "prod");
+
+    // 无匹配标签时回退全局（仍能命中 cleanup）
+    let env_other = SuggestionEnvContext::from_session("other", "", &["canary".into()]);
+    let hit2 = suggest_compliant_after_block_with_env(
+        "rm -rf /",
+        &[prod, staging],
+        &[],
+        Some(&env_other),
+    );
+    assert!(hit2.is_some());
+}
+
+#[test]
+fn candidate_from_failed_skips_library_and_trivial() {
+    use mistterm::core::{candidate_from_failed_command, FragmentStats};
+
+    assert!(candidate_from_failed_command("ls", &[]).is_none());
+    let personal = FragmentStats::new(
+        "p".into(),
+        "t".into(),
+        "systemctl restart nginx".into(),
+        "ops".into(),
+    );
+    assert!(candidate_from_failed_command("systemctl restart nginx", &[personal]).is_none());
+    let c = candidate_from_failed_command("systemctl restart redis", &[]).unwrap();
+    assert_eq!(c.reason.as_str(), "failed_path");
+}

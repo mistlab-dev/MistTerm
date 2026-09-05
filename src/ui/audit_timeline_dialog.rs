@@ -39,7 +39,9 @@ pub fn show_audit_timeline_modal(
         .default_size(modal_sz)
         .show(ctx, |ui| {
             chrome::modal_content_frame(theme).show(ui, |ui| {
-                chrome::modal_header_title_only(ui, theme, title, theme.font_size_modal_title());
+                if chrome::modal_header(ui, theme, title, theme.font_size_modal_title()) {
+                    should_close = true;
+                }
                 ui.label(
                     egui::RichText::new(crate::i18n::tr(
                         ctx,
@@ -142,9 +144,6 @@ pub fn show_audit_timeline_modal(
                 ui.add_space(theme.spacing_sm());
                 ui.horizontal(|ui| {
                     ui.label(format!("{} / {}", entries.len(), timeline.len()));
-                    if ui.button(crate::i18n::tr(ctx, "Close", "关闭")).clicked() {
-                        should_close = true;
-                    }
                 });
             });
         });

@@ -546,6 +546,31 @@ pub struct StorageUsageResponse {
     pub versions: StorageUsageBucket,
 }
 
+// ── MistDocs search（可选；服务端未实现时客户端 404 → 空）──
+
+/// `GET /v1/teams/{team_id}/docs/search?q=…` 单条命中。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TeamDocSearchItem {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    /// 段落摘录或正文片段。
+    #[serde(default)]
+    pub excerpt: String,
+    /// 段落锚点 slug（可空）。
+    #[serde(default)]
+    pub slug: String,
+    #[serde(default)]
+    pub score: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TeamDocSearchResponse {
+    #[serde(default)]
+    pub items: Vec<TeamDocSearchItem>,
+}
+
 impl CmdAuditAgent {
     /// `last_seen_at` 距今超过 `stale_secs`（默认 300）视为离线。
     pub fn is_online(&self, now: chrono::DateTime<chrono::Utc>, stale_secs: i64) -> bool {

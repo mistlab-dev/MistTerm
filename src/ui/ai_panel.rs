@@ -98,6 +98,8 @@ struct UiMessage {
     /// 本条 user 消息附带的终端选区引用（可多条）。
     context_refs: Vec<TerminalContextRef>,
     commands: Vec<String>,
+    /// 可选来源标签（如「模型 · 非团队知识」）。
+    source_label: Option<String>,
 }
 
 enum BackgroundJob {
@@ -146,6 +148,10 @@ pub struct AiPanel {
     /// 上次成功/失败拉取对应的 `base_url|key` 签名，避免每帧重复请求。
     models_fetch_signature: Option<String>,
     models_status: Option<String>,
+    /// 下一次发出的助手回复应标明「模型 / 非团队知识」。
+    pending_model_fallback_label: bool,
+    /// 预填问题后自动发送（「问 AI」兜底入口）。
+    pending_auto_send: bool,
 }
 
 impl Default for AiPanel {
@@ -195,6 +201,42 @@ impl AiPanel {
             models_fetch: None,
             models_fetch_signature: None,
             models_status: None,
+            pending_model_fallback_label: false,
+            pending_auto_send: false,
+        }
+    }
+
+    /// 预填问题并标记为模型兜底（无团队知识命中）。
+    pub fn queue_model_fallback_question(&mut self, question: &str) {
+        self.draft_input = question.trim().to_string();
+        self.pending_model_fallback_label = true;
+        self.pending_auto_send = false;
+    }
+
+    /// 预填后自动发送（从「问：我们怎么」无命中入口进入）。
+    pub fn queue_model_fallback_question_and_send(&mut self, question: &str) {
+        self.queue_model_fallback_question(question);
+        self.pending_auto_send = !self.draft_input.trim().is_empty();
+    }
+
+    fn flush_pending_auto_send(&mut self, ctx: &egui::Context, app_settings: &AppSettings) {
+        if !self.pending_auto_send {
+            return;
+        }
+        if self.busy || self.is_background_busy() {
+            return;
+        }
+        self.pending_auto_send = false;
+        match self.send_message(ctx, app_settings) {
+            SendOutcome::Sent => {
+                self.input_status = None;
+                ctx.request_repaint();
+            }
+            SendOutcome::Empty => {}
+            SendOutcome::NotReady(msg) => {
+                self.input_status = Some(msg);
+                // 保留草稿，用户修好配置后可手动发送
+            }
         }
     }
 
@@ -489,6 +531,7 @@ impl AiPanel {
         theme: &Theme,
         app_settings: &mut AppSettings,
     ) {
+        self.flush_pending_auto_send(ctx, app_settings);
         let ready = self.can_chat(app_settings);
         if !ready {
             ui.colored_label(
@@ -842,7 +885,13 @@ impl AiPanel {
                 ui,
                 theme,
                 egui::Id::new("ai_settings_timeout"),
-                |ui| ui.add(egui::DragValue::new(&mut settings.timeout_secs).speed(1)),
+                |ui| {
+                    ui.add(
+                        egui::DragValue::new(&mut settings.timeout_secs)
+                            .speed(1)
+                            .clamp_range(5..=600),
+                    )
+                },
             );
             ui.label(
                 egui::RichText::new(i18n::tr(ctx, "Retries", "重试次数"))
@@ -1134,6 +1183,14 @@ impl AiPanel {
                     );
                     ui.add_space(theme.spacing_xs());
                 }
+            }
+            if let Some(label) = &msg.source_label {
+                ui.label(
+                    egui::RichText::new(label)
+                        .size(theme.font_size_small())
+                        .strong()
+                        .color(theme.accent_color()),
+                );
             }
             if is_user {
                 if !msg.content.trim().is_empty() {
@@ -1600,6 +1657,7 @@ impl AiPanel {
             api_content: Some(user_body),
             context_refs,
             commands: vec![],
+            source_label: None,
         });
         self.chat_dirty = true;
         self.start_chat_request(ctx, app_settings);
@@ -1625,8 +1683,16 @@ impl AiPanel {
             .collect();
         let settings = app_settings.ai.clone();
         let base_prompt = resolve_system_prompt(&settings);
-        let system_prompt =
-            EnhancedPromptBuilder::new(&base_prompt, self.session_context.clone()).build();
+        let system_prompt = {
+            let mut p =
+                EnhancedPromptBuilder::new(&base_prompt, self.session_context.clone()).build();
+            if self.pending_model_fallback_label {
+                p.push_str(
+                    "\n\n[IMPORTANT] No team knowledge matched for this question. Clearly state that your answer is model-generated and is not from team documentation.",
+                );
+            }
+            p
+        };
         let api_key = match self.effective_api_key(app_settings) {
             Some(k) => k,
             None => {
@@ -1644,12 +1710,26 @@ impl AiPanel {
         self.busy = true;
         self.streaming = settings.stream_responses;
         self.last_error = None;
+        let source_label = if self.pending_model_fallback_label {
+            self.pending_model_fallback_label = false;
+            Some(
+                i18n::tr(
+                    ctx,
+                    "Model · not team knowledge",
+                    "模型 · 非团队知识",
+                )
+                .to_string(),
+            )
+        } else {
+            None
+        };
         self.messages.push(UiMessage {
             role: "assistant",
             content: String::new(),
             api_content: None,
             context_refs: vec![],
             commands: vec![],
+            source_label,
         });
         thread::spawn(move || {
             run_chat_with_key(
@@ -1679,6 +1759,9 @@ impl AiPanel {
                     return;
                 }
                 self.messages.truncate(idx);
+                self.last_error = None;
+                self.pending_toast_error = None;
+                self.input_status = None;
                 if self.messages.last().is_some_and(|m| m.role == "user") {
                     self.chat_dirty = true;
                     self.start_chat_request(ctx, app_settings);
@@ -1722,14 +1805,22 @@ impl AiPanel {
                     ctx.request_repaint();
                 }
                 Ok(ChatEvent::Failed(e)) => {
-                    if self
-                        .messages
-                        .last()
-                        .is_some_and(|m| m.role == "assistant" && m.content.is_empty())
-                    {
-                        self.messages.pop();
-                    }
                     let msg = i18n::localize_backend_error(i18n::language(ctx), &e);
+                    // 保留失败气泡，便于「重新生成」；勿丢掉空助手消息导致无法重试。
+                    if let Some(last) = self.messages.last_mut() {
+                        if last.role == "assistant" {
+                            if last.content.trim().is_empty() {
+                                last.content = format!("⚠️ {msg}");
+                            } else if !last.content.contains(&msg) {
+                                last.content.push_str(&format!("\n\n⚠️ {msg}"));
+                            }
+                            if last.source_label.is_none() {
+                                last.source_label = Some(
+                                    i18n::tr(ctx, "Request failed", "请求失败").to_string(),
+                                );
+                            }
+                        }
+                    }
                     self.last_error = Some(msg.clone());
                     self.pending_toast_error = Some(msg);
                     self.input_status = None;
@@ -1737,15 +1828,20 @@ impl AiPanel {
                     self.busy = false;
                     self.streaming = false;
                     self.chat_cancel = None;
+                    self.chat_dirty = true;
                     ctx.request_repaint();
                 }
                 Ok(ChatEvent::Cancelled) => {
-                    if self
-                        .messages
-                        .last()
-                        .is_some_and(|m| m.role == "assistant" && m.content.is_empty())
-                    {
-                        self.messages.pop();
+                    if let Some(last) = self.messages.last_mut() {
+                        if last.role == "assistant" && last.content.trim().is_empty() {
+                            last.content = format!(
+                                "⚠️ {}",
+                                i18n::tr(ctx, "Generation stopped", "已停止生成")
+                            );
+                            last.source_label = Some(
+                                i18n::tr(ctx, "Stopped", "已停止").to_string(),
+                            );
+                        }
                     }
                     self.input_status = Some(
                         i18n::tr(ctx, "Generation stopped", "已停止生成").to_string(),
@@ -2020,6 +2116,7 @@ fn stored_to_ui_message(m: StoredAiMessage) -> UiMessage {
             .map(stored_to_context_ref)
             .collect(),
         commands: m.commands,
+        source_label: None,
     }
 }
 
@@ -2161,6 +2258,7 @@ mod tests {
             api_content: None,
             context_refs: vec![ctx_ref],
             commands: vec![],
+            source_label: None,
         };
         let copied = message_copy_text(&msg);
         assert!(copied.contains("explain"));
