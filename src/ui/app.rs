@@ -10,7 +10,7 @@ use crate::core::batch_exec::{
 use crate::core::{
     append_dynamic_forward_line, append_local_forward_line, append_remote_forward_line,
     apply_vault_for_team, candidate_to_session, command_preview, default_ssh_config_path,
-    expand_command_template, expand_fragment_command_stages, expand_rhai_blocks,
+    expand_command_template, expand_fragment_command_stages, expand_rhai_blocks, gate_decision,
     is_already_imported, list_placeholder_keys, merge_rhai_context, parse_dynamic_forwards_text,
     parse_local_forwards_text, parse_remote_forwards_text, parse_ssh_config_file,
     parse_vault_credential_path, pending_imports, spawn_cleanup_old_logs, status_bar_summary,
@@ -467,6 +467,8 @@ pub struct MistTermApp {
     /// 批量多机 SSH 执行
     batch_exec_dialog: BatchExecDialog,
     batch_exec_rx: Option<std::sync::mpsc::Receiver<Vec<BatchExecRow>>>,
+    /// v2 Agent 多机执行结果：(command, rows)
+    agent_batch_rx: Option<std::sync::mpsc::Receiver<(String, Vec<BatchExecRow>)>>,
     /// UI 卡顿 watchdog（本地报告）
     hang_reporter: HangReporter,
     /// 统一 Toast（所有用户可见通知走这里）
@@ -1080,6 +1082,7 @@ impl MistTermApp {
             cmd_audit_agents_supported: true,
             batch_exec_dialog: BatchExecDialog::default(),
             batch_exec_rx: None,
+            agent_batch_rx: None,
             hang_reporter: HangReporter::start_default(),
             active_toast: None,
             pending_auto_connect_session: None,
@@ -4151,6 +4154,171 @@ impl MistTermApp {
                 );
             }
         }
+        self.poll_ai_agent_ops(ctx);
+    }
+
+    /// v2：AI 面板多机 Agent — 更新目标数、门闩、启动/回收批量结果。
+    fn poll_ai_agent_ops(&mut self, ctx: &egui::Context) {
+        let targets = self.build_batch_targets(ctx, true);
+        self.ai_panel.set_agent_target_count(targets.len());
+
+        if let Some(rx) = &self.agent_batch_rx {
+            match rx.try_recv() {
+                Ok((command, rows)) => {
+                    self.agent_batch_rx = None;
+                    self.ai_panel.apply_agent_batch_results(&command, rows);
+                    ctx.request_repaint();
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.agent_batch_rx = None;
+                    self.ai_panel.abort_agent_with_message(
+                        crate::i18n::tr(
+                            ctx,
+                            "Multi-host run channel disconnected.",
+                            "多机执行通道已断开。",
+                        )
+                        .to_string(),
+                    );
+                }
+            }
+        }
+
+        let Some(command) = self.ai_panel.take_pending_agent_exec() else {
+            return;
+        };
+        if self.agent_batch_rx.is_some() {
+            self.ai_panel.abort_agent_with_message(
+                crate::i18n::tr(
+                    ctx,
+                    "Another multi-host run is still in progress.",
+                    "已有多机任务在执行中。",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        if targets.is_empty() {
+            self.ai_panel.abort_agent_with_message(
+                crate::i18n::tr(
+                    ctx,
+                    "No hosts available. Save sessions or sign in to a team with servers.",
+                    "没有可用主机。请先保存会话，或登录含服务器的团队。",
+                )
+                .to_string(),
+            );
+            return;
+        }
+
+        let audit = self.cmd_audit_engine.check(&command);
+        let decision = gate_decision(audit, &command, false);
+        match decision.level {
+            crate::core::GateLevel::L0Block => {
+                self.record_cmd_audit_event(
+                    "command.blocked",
+                    &command,
+                    &decision.audit,
+                    AuditOutcome::Denied,
+                );
+                self.ai_panel
+                    .abort_agent_with_message(format!("L0 {}\n`{command}`", decision.message));
+                return;
+            }
+            crate::core::GateLevel::L2 => {
+                if !self.ai_panel.agent_l2_armed() {
+                    self.ai_panel.arm_agent_l2(decision.message);
+                    return;
+                }
+            }
+            crate::core::GateLevel::L1 => {}
+        }
+
+        self.start_agent_batch_exec(ctx, command, &targets);
+    }
+
+    fn start_agent_batch_exec(
+        &mut self,
+        ctx: &egui::Context,
+        command: String,
+        targets: &[BatchTarget],
+    ) {
+        let mut jobs = Vec::new();
+        for t in targets {
+            let id = t.id.clone();
+            if let Some(key) = id.strip_prefix(TEAM_TARGET_PREFIX) {
+                let Some(server) = self
+                    .team_service
+                    .current_team_servers()
+                    .into_iter()
+                    .find(|s| s.list_key() == key)
+                else {
+                    continue;
+                };
+                let session = self.team_server_to_session(ctx, &server);
+                let label = format!("{} · {}", server.name, server.host);
+                match self.session_to_ssh_config(&session) {
+                    Ok(config) => jobs.push(BatchExecJob {
+                        target_id: id,
+                        label,
+                        config,
+                    }),
+                    Err(e) => {
+                        self.ai_panel.abort_agent_with_message(format!(
+                            "{} {}: {e}",
+                            crate::i18n::tr(ctx, "Credential error for", "凭据错误："),
+                            label
+                        ));
+                        return;
+                    }
+                }
+            } else if let Some(session) = self.session_manager.get_session(&id) {
+                let label = format!("{} · {}", session.name, session.host);
+                match self.session_to_ssh_config(session) {
+                    Ok(config) => jobs.push(BatchExecJob {
+                        target_id: id,
+                        label,
+                        config,
+                    }),
+                    Err(e) => {
+                        self.ai_panel.abort_agent_with_message(format!(
+                            "{} {}: {e}",
+                            crate::i18n::tr(ctx, "Credential error for", "凭据错误："),
+                            label
+                        ));
+                        return;
+                    }
+                }
+            }
+        }
+        if jobs.is_empty() {
+            self.ai_panel.abort_agent_with_message(
+                crate::i18n::tr(
+                    ctx,
+                    "Could not build SSH jobs for selected hosts.",
+                    "无法为所选主机构建 SSH 任务。",
+                )
+                .to_string(),
+            );
+            return;
+        }
+
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Session, "agent.exec", AuditOutcome::Success)
+                .with_detail(serde_json::json!({
+                    "hosts": jobs.len(),
+                    "command_preview": command_preview(&command, 120),
+                })),
+        );
+        self.ai_panel.mark_agent_executing();
+        let parallel = 8usize;
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.agent_batch_rx = Some(rx);
+        let cmd = command.clone();
+        std::thread::spawn(move || {
+            let rows = run_batch_parallel(jobs, cmd.clone(), parallel);
+            let _ = tx.send((cmd, rows));
+        });
+        ctx.request_repaint();
     }
 
     fn build_ai_session_context(&self) -> AiContext {
