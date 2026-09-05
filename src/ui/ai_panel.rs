@@ -101,6 +101,25 @@ struct UiMessage {
     commands: Vec<String>,
     /// 可选来源标签（如「模型 · 非团队知识」）。
     source_label: Option<String>,
+    /// v2 多机结果卡（有则走结构化 UI，不用 markdown/HTML）。
+    agent_batch: Option<AgentBatchCard>,
+}
+
+#[derive(Clone)]
+struct AgentBatchCard {
+    command: String,
+    hosts: Vec<AgentHostRow>,
+}
+
+#[derive(Clone)]
+struct AgentHostRow {
+    label: String,
+    ok: bool,
+    exit_code: Option<i32>,
+    summary: String,
+    error: Option<String>,
+    output: String,
+    duration_ms: u64,
 }
 
 enum BackgroundJob {
@@ -252,6 +271,33 @@ impl AiPanel {
 
     pub fn apply_agent_batch_results(&mut self, command: &str, rows: Vec<BatchExecRow>) {
         let summary = summarize_batch_rows(command, &rows);
+        let mut hosts: Vec<AgentHostRow> = rows
+            .into_iter()
+            .map(|r| {
+                let summary = if r.ok {
+                    crate::core::first_useful_line(&r.output).unwrap_or_else(|| {
+                        if r.output.trim().is_empty() {
+                            "—".into()
+                        } else {
+                            crate::core::truncate_chars(&r.output.replace('\n', " "), 96)
+                        }
+                    })
+                } else {
+                    r.error.clone().unwrap_or_else(|| "failed".into())
+                };
+                AgentHostRow {
+                    label: r.label,
+                    ok: r.ok,
+                    exit_code: r.exit_code,
+                    summary,
+                    error: r.error,
+                    output: r.output,
+                    duration_ms: r.duration_ms,
+                }
+            })
+            .collect();
+        // 失败优先
+        hosts.sort_by_key(|h| h.ok);
         self.messages.push(UiMessage {
             role: "assistant",
             content: summary,
@@ -259,12 +305,16 @@ impl AiPanel {
             context_refs: vec![],
             commands: vec![],
             source_label: Some("多机执行 · Agent".into()),
+            agent_batch: Some(AgentBatchCard {
+                command: command.to_string(),
+                hosts,
+            }),
         });
         self.chat_dirty = true;
         self.busy = false;
         if let Some(p) = &mut self.agent_plan {
             p.phase = AgentPhase::Done;
-            p.status = Some(format!("完成 · {} 台", rows.len()));
+            p.status = Some("完成".into());
         }
         self.agent_plan = None;
     }
@@ -276,6 +326,7 @@ impl AiPanel {
             api_content: None,
             context_refs: vec![],
             commands: vec![],
+            agent_batch: None,
             source_label: Some("多机执行 · 已取消".into()),
         });
         self.chat_dirty = true;
@@ -1348,6 +1399,7 @@ impl AiPanel {
                 context_refs: vec![],
                 commands: vec![],
                 source_label: None,
+            agent_batch: None,
             });
             self.chat_dirty = true;
         }
@@ -1367,6 +1419,116 @@ impl AiPanel {
         }
         self.pending_agent_exec = None;
         self.busy = false;
+    }
+
+    fn render_agent_batch_card(
+        &self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+        batch: &AgentBatchCard,
+        width: f32,
+    ) {
+        let ok_n = batch.hosts.iter().filter(|h| h.ok).count();
+        let fail_n = batch.hosts.len().saturating_sub(ok_n);
+        ui.set_max_width(width.max(24.0));
+        ui.label(
+            egui::RichText::new(i18n::tr(ctx, "Multi-host results", "多机执行结果"))
+                .strong()
+                .size(theme.font_size_body()),
+        );
+        ui.label(
+            egui::RichText::new(format!(
+                "{} `{}`",
+                i18n::tr(ctx, "Command", "命令"),
+                batch.command
+            ))
+            .size(theme.font_size_small())
+            .monospace(),
+        );
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{} {} / {}",
+                    i18n::tr(ctx, "OK", "成功"),
+                    ok_n,
+                    batch.hosts.len()
+                ))
+                .size(theme.font_size_small())
+                .color(theme.color_status_online_muted()),
+            );
+            if fail_n > 0 {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "· {} {fail_n}",
+                        i18n::tr(ctx, "Failed", "失败")
+                    ))
+                    .size(theme.font_size_small())
+                    .strong()
+                    .color(theme.color_status_offline_muted()),
+                );
+            }
+        });
+        ui.add_space(theme.spacing_xs());
+
+        for (i, host) in batch.hosts.iter().enumerate() {
+            let status_color = if host.ok {
+                theme.color_status_online_muted()
+            } else {
+                theme.color_status_offline_muted()
+            };
+            let status_text = if host.ok {
+                i18n::tr(ctx, "OK", "成功")
+            } else {
+                i18n::tr(ctx, "FAIL", "失败")
+            };
+            let header = format!("{}  ·  {}", status_text, host.label);
+            egui::CollapsingHeader::new(
+                egui::RichText::new(header)
+                    .size(theme.font_size_small())
+                    .color(status_color)
+                    .strong(),
+            )
+            .id_source(("agent_host", msg_stable_id(&host.label), i))
+            .default_open(!host.ok)
+            .show(ui, |ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} · {} ms{}",
+                        host.summary,
+                        host.duration_ms,
+                        host.exit_code
+                            .map(|c| format!(" · exit {c}"))
+                            .unwrap_or_default()
+                    ))
+                    .size(theme.font_size_small())
+                    .color(theme.color_form_hint()),
+                );
+                if let Some(err) = &host.error {
+                    ui.label(
+                        egui::RichText::new(err)
+                            .size(theme.font_size_small())
+                            .color(theme.color_status_offline_muted()),
+                    );
+                }
+                if !host.output.trim().is_empty() {
+                    egui::ScrollArea::vertical()
+                        .max_height(160.0)
+                        .id_source(("agent_out", msg_stable_id(&host.label), i))
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&host.output)
+                                        .monospace()
+                                        .size(theme.font_size_small()),
+                                )
+                                .wrap(true),
+                            );
+                        });
+                }
+            });
+            ui.add_space(2.0);
+        }
     }
 
     /// 渲染单条消息；`command_pick` 收集本帧内「执行」或命令卡片的点击。
@@ -1432,6 +1594,8 @@ impl AiPanel {
                 if !msg.content.trim().is_empty() {
                     show_wrapped_user_text(ui, theme, &msg.content, body_w);
                 }
+            } else if let Some(batch) = &msg.agent_batch {
+                self.render_agent_batch_card(ui, ctx, theme, batch, body_w);
             } else {
                 show_assistant_text(ui, theme, &msg.content, body_w);
             }
@@ -1470,14 +1634,16 @@ impl AiPanel {
                             let _ = clip.set_text(msg.content.clone());
                         }
                     }
-                    if crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
-                        ui,
-                        theme,
-                        IconId::Refresh,
-                        i18n::tr(ctx, "Regenerate", "重新生成"),
-                        true,
-                    )
-                    .clicked()
+                    // 多机结果卡不提供「重新生成」（无模型回合可重放）
+                    if msg.agent_batch.is_none()
+                        && crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
+                            ui,
+                            theme,
+                            IconId::Refresh,
+                            i18n::tr(ctx, "Regenerate", "重新生成"),
+                            true,
+                        )
+                        .clicked()
                     {
                         *msg_action = Some(AiMessageAction::Regenerate(msg_index));
                     }
@@ -1871,6 +2037,7 @@ impl AiPanel {
                 context_refs,
                 commands: vec![],
                 source_label: None,
+            agent_batch: None,
             });
             let proposal = propose_step(&question);
             self.begin_agent_plan(question, proposal);
@@ -1915,6 +2082,7 @@ impl AiPanel {
             context_refs,
             commands: vec![],
             source_label: None,
+            agent_batch: None,
         });
         self.chat_dirty = true;
         self.start_chat_request(ctx, app_settings);
@@ -2001,6 +2169,7 @@ impl AiPanel {
             context_refs: vec![],
             commands: vec![],
             source_label,
+            agent_batch: None,
         });
         thread::spawn(move || {
             run_chat_with_key(
@@ -2362,6 +2531,14 @@ fn stored_to_context_ref(c: StoredContextRef) -> TerminalContextRef {
     }
 }
 
+fn msg_stable_id(label: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    label.hash(&mut h);
+    h.finish()
+}
+
 fn ui_message_to_stored(m: &UiMessage) -> StoredAiMessage {
     StoredAiMessage {
         role: m.role.to_string(),
@@ -2388,6 +2565,7 @@ fn stored_to_ui_message(m: StoredAiMessage) -> UiMessage {
             .collect(),
         commands: m.commands,
         source_label: None,
+            agent_batch: None,
     }
 }
 
@@ -2530,6 +2708,7 @@ mod tests {
             context_refs: vec![ctx_ref],
             commands: vec![],
             source_label: None,
+            agent_batch: None,
         };
         let copied = message_copy_text(&msg);
         assert!(copied.contains("explain"));

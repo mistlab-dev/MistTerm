@@ -10,4 +10,4 @@ mod summarize;
 pub use gate::{gate_decision, GateDecision, GateLevel};
 pub use planner::{looks_like_host_ops_intent, propose_step, StepProposal};
 pub use run::{AgentPhase, AgentRunSnapshot};
-pub use summarize::summarize_batch_rows;
+pub use summarize::{first_useful_line, summarize_batch_rows, truncate_chars};
