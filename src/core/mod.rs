@@ -85,13 +85,14 @@ pub use knowledge::{
     clean_ask_intent, retrieve_team_knowledge, DocSearchHit, KnowledgeHit, KnowledgeSource,
 };
 pub use agent::{
-    first_useful_line, gate_decision, host_result_summary, looks_like_host_ops_intent, propose_step,
-    summarize_batch_rows, truncate_chars, AgentPhase, AgentRunSnapshot, GateDecision, GateLevel,
-    StepProposal,
+    build_planner_system_prompt, first_useful_line, gate_decision, host_result_summary,
+    looks_like_host_ops_intent, parse_llm_plan_response, propose_step,
+    propose_step_with_context, summarize_batch_rows, truncate_chars, AgentPhase, AgentRunSnapshot,
+    GateDecision, GateLevel, HostExecutionSummary, LastBatchContext, StepProposal,
 };
 pub use batch_exec::{
     batch_endpoint_key, format_batch_results_for_clipboard, push_unique_batch_target,
-    run_batch_parallel, truncate_output, BatchExecJob, BatchExecRow, BatchTarget,
+    run_batch_parallel, run_batch_serial_fail_fast, truncate_output, BatchExecJob, BatchExecRow, BatchTarget,
     TEAM_TARGET_PREFIX,
 };
 pub use ssh_keygen::generate_ed25519;
