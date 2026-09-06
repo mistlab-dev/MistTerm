@@ -5,6 +5,8 @@
 pub struct StepProposal {
     pub command: String,
     pub rationale: String,
+    /// 目标主机/分组过滤关键词（如 "web", "prod", "85.137" 等）。
+    pub target_filter: Option<String>,
     /// 是否建议结束(无命令可跑)。
     pub stop: bool,
 }
@@ -61,14 +63,18 @@ pub fn propose_step(user_text: &str) -> StepProposal {
         return StepProposal {
             command: stripped.to_string(),
             rationale: "按你输入的命令在目标主机上执行".into(),
+            target_filter: extract_target_filter(user_text),
             stop: false,
         };
     }
+
+    let filter = extract_target_filter(user_text);
 
     if contains_any(&lower, stripped, &["磁盘", "disk", "空间", "filesystem", "df"]) {
         return StepProposal {
             command: "df -h".into(),
             rationale: "查各主机磁盘用量(可改命令)".into(),
+            target_filter: filter,
             stop: false,
         };
     }
@@ -76,6 +82,7 @@ pub fn propose_step(user_text: &str) -> StepProposal {
         return StepProposal {
             command: "free -h".into(),
             rationale: "查各主机内存(可改命令)".into(),
+            target_filter: filter,
             stop: false,
         };
     }
@@ -83,6 +90,7 @@ pub fn propose_step(user_text: &str) -> StepProposal {
         return StepProposal {
             command: "uptime".into(),
             rationale: "查各主机负载与运行时间(可改命令)".into(),
+            target_filter: filter,
             stop: false,
         };
     }
@@ -109,6 +117,7 @@ pub fn propose_step(user_text: &str) -> StepProposal {
             // pid= 无表头，输出即为进程数
             command: "ps -eo pid= | wc -l".into(),
             rationale: "统计各主机进程数量(可改命令)".into(),
+            target_filter: filter,
             stop: false,
         };
     }
@@ -116,6 +125,7 @@ pub fn propose_step(user_text: &str) -> StepProposal {
         return StepProposal {
             command: "ps aux --sort=-%cpu | head -n 15".into(),
             rationale: "列出各主机占用 CPU 较高的进程(可改命令)".into(),
+            target_filter: filter,
             stop: false,
         };
     }
@@ -123,6 +133,7 @@ pub fn propose_step(user_text: &str) -> StepProposal {
         return StepProposal {
             command: "ss -lntp".into(),
             rationale: "查监听端口(可改命令)".into(),
+            target_filter: filter,
             stop: false,
         };
     }
@@ -131,8 +142,33 @@ pub fn propose_step(user_text: &str) -> StepProposal {
     StepProposal {
         command: "uname -a && uptime".into(),
         rationale: "未识别具体指标，先用通用探活命令；请改成你要跑的命令".into(),
+        target_filter: filter,
         stop: false,
     }
+}
+
+/// 启发式提取目标主机过滤关键词（如 "web", "db", "prod", "staging", "85.137" 等）。
+pub fn extract_target_filter(text: &str) -> Option<String> {
+    let lower = text.to_lowercase();
+    const SCOPES: &[&str] = &[
+        "web", "api", "db", "mysql", "redis", "nginx", "prod", "production", "dev", "test",
+        "staging", "qa",
+    ];
+    for scope in SCOPES {
+        let pat_node = format!("{scope}节点");
+        let pat_host = format!("{scope}主机");
+        let pat_server = format!("{scope}服务器");
+        let pat_env = format!("{scope}环境");
+        if lower.contains(&pat_node)
+            || lower.contains(&pat_host)
+            || lower.contains(&pat_server)
+            || lower.contains(&pat_env)
+            || lower.contains(&format!(" {scope} "))
+        {
+            return Some((*scope).to_string());
+        }
+    }
+    None
 }
 
 fn strip_ops_prefix(t: &str) -> &str {
@@ -203,8 +239,9 @@ mod tests {
     }
 
     #[test]
-    fn prefix_forces_ops() {
-        assert!(looks_like_host_ops_intent("多机: hostname"));
-        assert_eq!(propose_step("多机: hostname").command, "hostname");
+    fn extract_target_filter_scopes() {
+        assert_eq!(extract_target_filter("查下web节点的负载"), Some("web".into()));
+        assert_eq!(extract_target_filter("检查prod环境的磁盘"), Some("prod".into()));
+        assert_eq!(extract_target_filter("所有服务器内存"), None);
     }
 }

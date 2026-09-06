@@ -91,7 +91,7 @@ pub use agent::{
 };
 pub use batch_exec::{
     batch_endpoint_key, format_batch_results_for_clipboard, push_unique_batch_target,
-    run_batch_parallel, truncate_output, BatchExecJob, BatchExecRow, BatchTarget,
+    run_batch_parallel, run_batch_serial_fail_fast, truncate_output, BatchExecJob, BatchExecRow, BatchTarget,
     TEAM_TARGET_PREFIX,
 };
 pub use ssh_keygen::generate_ed25519;
