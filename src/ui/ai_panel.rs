@@ -277,6 +277,29 @@ impl AiPanel {
         self.agent_plan.as_ref().and_then(|p| p.target_filter.clone())
     }
 
+    /// 提取最近一次多机执行结果上下文(用于多轮追问/下钻分析)。
+    pub fn last_agent_batch_context(&self) -> Option<crate::core::LastBatchContext> {
+        for msg in self.messages.iter().rev() {
+            if let Some(batch) = &msg.agent_batch {
+                let hosts = batch
+                    .hosts
+                    .iter()
+                    .map(|h| crate::core::HostExecutionSummary {
+                        label: format!("{} · {}", h.name, h.endpoint),
+                        ok: h.ok,
+                        exit_code: h.exit_code,
+                        summary: h.summary.clone(),
+                    })
+                    .collect();
+                return Some(crate::core::LastBatchContext {
+                    command: batch.command.clone(),
+                    hosts,
+                });
+            }
+        }
+        None
+    }
+
     /// 取出待批量执行的命令(一步一确认之后)。
     pub fn take_pending_agent_exec(&mut self) -> Option<String> {
         self.pending_agent_exec.take()
@@ -2209,22 +2232,28 @@ impl AiPanel {
         }
 
         // v2：多机运维意图 → Agent 计划卡(不依赖 API Key)
-        if !question.is_empty() && looks_like_host_ops_intent(&question) {
-            self.draft_input.clear();
-            let context_refs = std::mem::take(&mut self.attached_contexts);
-            self.messages.push(UiMessage {
-                role: "user",
-                content: question.clone(),
-                api_content: Some(question.clone()),
-                context_refs,
-                commands: vec![],
-                source_label: None,
-            agent_batch: None,
-            });
-            let proposal = propose_step(&question);
-            self.begin_agent_plan(question, proposal);
-            self.chat_dirty = true;
-            return SendOutcome::Sent;
+        let last_batch = self.last_agent_batch_context();
+        let is_ops = !question.is_empty()
+            && (looks_like_host_ops_intent(&question) || last_batch.is_some());
+        if is_ops {
+            let proposal = crate::core::propose_step_with_context(&question, last_batch.as_ref());
+            // 如果确实提议了具体的命令，进入多机 Agent 循环
+            if !proposal.stop {
+                self.draft_input.clear();
+                let context_refs = std::mem::take(&mut self.attached_contexts);
+                self.messages.push(UiMessage {
+                    role: "user",
+                    content: question.clone(),
+                    api_content: Some(question.clone()),
+                    context_refs,
+                    commands: vec![],
+                    source_label: None,
+                    agent_batch: None,
+                });
+                self.begin_agent_plan(question, proposal);
+                self.chat_dirty = true;
+                return SendOutcome::Sent;
+            }
         }
 
         if !self.can_chat(app_settings) {
