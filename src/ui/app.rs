@@ -4254,7 +4254,26 @@ impl MistTermApp {
 
     /// v2：AI 面板多机 Agent — 更新目标数、门闩、启动/回收批量结果。
     fn poll_ai_agent_ops(&mut self, ctx: &egui::Context) {
-        let targets = self.build_agent_batch_targets(ctx);
+        // 检查是否有工作台下钻请求开新 Tab 连入指定主机
+        if let Some(host_endpoint) = self.ai_panel.take_pending_connect_host() {
+            if let Some(session) = self
+                .session_manager
+                .list_sessions()
+                .iter()
+                .find(|s| s.host == host_endpoint || s.name == host_endpoint)
+                .cloned()
+            {
+                self.push_tab_connecting(ctx, &session);
+            }
+        }
+
+        let mut targets = self.build_agent_batch_targets(ctx);
+        if let Some(filter) = self.ai_panel.agent_target_filter() {
+            let f = filter.to_lowercase();
+            targets.retain(|t| {
+                t.label.to_lowercase().contains(&f) || t.group.to_lowercase().contains(&f)
+            });
+        }
         self.ai_panel.set_agent_target_count(targets.len());
 
         if let Some(rx) = &self.agent_batch_rx {
@@ -4405,12 +4424,17 @@ impl MistTermApp {
                 })),
         );
         self.ai_panel.mark_agent_executing();
+        let is_mutate = crate::core::agent::looks_like_mutate_command(&command);
         let parallel = 8usize;
         let (tx, rx) = std::sync::mpsc::channel();
         self.agent_batch_rx = Some(rx);
         let cmd = command.clone();
         std::thread::spawn(move || {
-            let rows = run_batch_parallel(jobs, cmd.clone(), parallel);
+            let rows = if is_mutate {
+                crate::core::run_batch_serial_fail_fast(jobs, cmd.clone())
+            } else {
+                crate::core::run_batch_parallel(jobs, cmd.clone(), parallel)
+            };
             let _ = tx.send((cmd, rows));
         });
         ctx.request_repaint();

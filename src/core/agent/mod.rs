@@ -7,7 +7,10 @@ mod planner;
 mod run;
 mod summarize;
 
-pub use gate::{gate_decision, GateDecision, GateLevel};
-pub use planner::{looks_like_host_ops_intent, propose_step, StepProposal};
+pub use gate::{gate_decision, looks_like_mutate_command, GateDecision, GateLevel};
+pub use planner::{
+    build_planner_system_prompt, looks_like_host_ops_intent, parse_llm_plan_response,
+    propose_step, propose_step_with_context, HostExecutionSummary, LastBatchContext, StepProposal,
+};
 pub use run::{AgentPhase, AgentRunSnapshot};
 pub use summarize::{first_useful_line, host_result_summary, summarize_batch_rows, truncate_chars};
