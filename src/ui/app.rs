@@ -4254,6 +4254,19 @@ impl MistTermApp {
 
     /// v2：AI 面板多机 Agent — 更新目标数、门闩、启动/回收批量结果。
     fn poll_ai_agent_ops(&mut self, ctx: &egui::Context) {
+        // 检查是否有工作台下钻请求开新 Tab 连入指定主机
+        if let Some(host_endpoint) = self.ai_panel.take_pending_connect_host() {
+            if let Some(session) = self
+                .session_manager
+                .list_sessions()
+                .iter()
+                .find(|s| s.host == host_endpoint || s.name == host_endpoint)
+                .cloned()
+            {
+                self.push_tab_connecting(ctx, &session);
+            }
+        }
+
         let mut targets = self.build_agent_batch_targets(ctx);
         if let Some(filter) = self.ai_panel.agent_target_filter() {
             let f = filter.to_lowercase();
