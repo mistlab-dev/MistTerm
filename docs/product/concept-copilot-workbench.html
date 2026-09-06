@@ -1,0 +1,931 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MistTerm · AI 智控台 (AI Ops Hub) SVG图标纯净版</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #090b0e;
+      --panel-bg: #12161c;
+      --panel-sub: #161b22;
+      --card-bg: #1c222b;
+      --card-hover: #232a35;
+      --border: rgba(255, 255, 255, 0.08);
+      --border-subtle: rgba(255, 255, 255, 0.04);
+      --border-focus: #38bdf8;
+      
+      --text: #f0f6fc;
+      --text-muted: #8b949e;
+      --text-faint: #57606a;
+      
+      --accent-teal: #38bdf8;
+      --accent-green: #3fb950;
+      --accent-red: #f85149;
+      --accent-yellow: #d29922;
+      --accent-purple: #bc8cff;
+      
+      --badge-green-bg: rgba(63, 185, 80, 0.12);
+      --badge-red-bg: rgba(248, 81, 73, 0.12);
+      --badge-yellow-bg: rgba(210, 153, 34, 0.12);
+      --badge-teal-bg: rgba(56, 189, 248, 0.12);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Geist', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      height: 100vh;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .icon-svg {
+      width: 14px;
+      height: 14px;
+      vertical-align: middle;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+
+    /* 左侧主终端区域 (模拟真实工作台上下文) */
+    .terminal-area {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border);
+      background: #08090d;
+    }
+    .term-titlebar {
+      height: 40px;
+      display: flex;
+      align-items: center;
+      background: #0d1117;
+      border-bottom: 1px solid var(--border);
+      padding: 0 14px;
+      justify-content: space-between;
+    }
+    .term-tabs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .term-tab {
+      font-size: 12px;
+      padding: 5px 12px;
+      border-radius: 6px;
+      background: transparent;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+    .term-tab.active {
+      background: #1c222b;
+      color: var(--text);
+      font-weight: 500;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+    .term-tab-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent-green);
+    }
+    .term-tab-add {
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px 8px;
+      font-size: 14px;
+    }
+    .term-body {
+      flex: 1;
+      padding: 16px 20px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12.5px;
+      line-height: 1.6;
+      color: #9cdcfe;
+      overflow-y: auto;
+      background: #06070a;
+    }
+    .term-prompt { color: #3fb950; }
+    .term-path { color: #58a6ff; }
+
+    /* 右侧 AI 智控台 */
+    .copilot-workbench {
+      width: 480px;
+      background: var(--panel-bg);
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      box-shadow: -6px 0 28px rgba(0, 0, 0, 0.5);
+      border-left: 1px solid var(--border);
+    }
+
+    /* 1. 顶部工作台状态条 */
+    .workbench-header {
+      padding: 12px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--border);
+      background: #10141a;
+    }
+    .wb-identity {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .wb-logo {
+      width: 24px;
+      height: 24px;
+      background: linear-gradient(135deg, #38bdf8, #818cf8);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #040914;
+    }
+    .wb-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .wb-engine-badge {
+      font-size: 10.5px;
+      padding: 2px 7px;
+      border-radius: 4px;
+      background: var(--badge-teal-bg);
+      color: var(--accent-teal);
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .wb-engine-badge::before {
+      content: '';
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--accent-teal);
+      box-shadow: 0 0 6px var(--accent-teal);
+    }
+    .wb-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .wb-history-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 5px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .wb-history-btn:hover {
+      background: var(--panel-sub);
+      color: var(--text);
+    }
+
+    /* 2. 指令交互栏 (Action Bar) */
+    .action-bar-container {
+      padding: 14px 18px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel-sub);
+    }
+    .action-input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+      background: #090c10;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      transition: all 0.2s ease;
+    }
+    .action-input-wrapper:focus-within {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.15);
+    }
+    .action-prefix-icon {
+      padding-left: 12px;
+      color: var(--accent-teal);
+      display: flex;
+      align-items: center;
+    }
+    .action-input {
+      width: 100%;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text);
+      font-size: 12.5px;
+      padding: 10px 10px;
+      font-family: inherit;
+    }
+    .action-input::placeholder { color: var(--text-faint); }
+    .action-tools {
+      display: flex;
+      align-items: center;
+      padding-right: 8px;
+      gap: 6px;
+    }
+    .action-tag-chip {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(188, 140, 255, 0.12);
+      color: var(--accent-purple);
+      border: 1px solid rgba(188, 140, 255, 0.2);
+    }
+    .action-enter-key {
+      font-size: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--text-muted);
+      background: #1c222b;
+      padding: 3px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+    }
+
+    /* 3. 中部滚动容器：工作看板 (Workbench Dashboard) */
+    .workbench-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    /* 模块A：规划与门闩卡 (Plan Card) */
+    .plan-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
+    .plan-card-header {
+      padding: 10px 14px;
+      background: rgba(255,255,255,0.02);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .plan-intent-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .gate-shield-badge {
+      font-size: 10.5px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-weight: 500;
+    }
+    .gate-shield-badge.readonly {
+      background: var(--badge-teal-bg);
+      color: var(--accent-teal);
+    }
+    .gate-shield-badge.mutate {
+      background: var(--badge-yellow-bg);
+      color: var(--accent-yellow);
+    }
+    .plan-card-body {
+      padding: 12px 14px;
+    }
+    .plan-rationale-text {
+      font-size: 11.5px;
+      color: var(--text-muted);
+      line-height: 1.5;
+      margin-bottom: 10px;
+    }
+    .plan-command-editor {
+      background: #0a0d12;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 12px;
+      margin-bottom: 12px;
+      position: relative;
+    }
+    .plan-command-input {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: #79c0ff;
+      background: transparent;
+      border: none;
+      outline: none;
+      width: 100%;
+    }
+    .plan-meta-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+      padding-top: 4px;
+      border-top: 1px solid var(--border-subtle);
+    }
+    .plan-scope-pills {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .scope-pill {
+      background: #12171f;
+      border: 1px solid var(--border);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--text);
+    }
+    .plan-card-footer {
+      padding: 10px 14px;
+      background: #141921;
+      border-top: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .plan-safety-hint {
+      font-size: 10.5px;
+      color: var(--text-faint);
+    }
+    .plan-action-btns {
+      display: flex;
+      gap: 8px;
+    }
+    .btn {
+      border: none;
+      outline: none;
+      padding: 6px 12px;
+      font-size: 11.5px;
+      font-weight: 500;
+      border-radius: 5px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    .btn-secondary {
+      background: #21262d;
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { background: #30363d; color: var(--text); }
+    .btn-primary {
+      background: #1f6feb;
+      color: #fff;
+    }
+    .btn-primary:hover { background: #388bfd; }
+
+    /* 模块B：执行看板与主机状态矩阵 (Board & Host Matrix) */
+    .exec-board {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
+    .board-top-status {
+      padding: 10px 14px;
+      background: #151a22;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .status-group {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 12px;
+    }
+    .status-item {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      font-weight: 500;
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+    }
+    .status-dot.ok { background: var(--accent-green); box-shadow: 0 0 6px var(--accent-green); }
+    .status-dot.fail { background: var(--accent-red); box-shadow: 0 0 6px var(--accent-red); }
+    .board-timing {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    /* 主机网格矩阵 Pills */
+    .hosts-matrix-grid {
+      padding: 12px 14px;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+      background: #10141a;
+      border-bottom: 1px solid var(--border);
+    }
+    .host-pill {
+      background: #181e26;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .host-pill:hover {
+      border-color: rgba(255,255,255,0.25);
+      background: var(--card-hover);
+    }
+    .host-pill.active {
+      border-color: var(--accent-teal);
+      background: rgba(56, 189, 248, 0.08);
+      box-shadow: 0 0 0 1px var(--accent-teal);
+    }
+    .host-pill.error-active {
+      border-color: var(--accent-red);
+      background: rgba(248, 81, 73, 0.08);
+      box-shadow: 0 0 0 1px var(--accent-red);
+    }
+    .pill-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .pill-title {
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .pill-ip {
+      font-size: 10px;
+      color: var(--text-faint);
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .pill-metric-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10.5px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      color: var(--text-muted);
+    }
+    .metric-val-danger { color: #ff7b72; font-weight: 600; display: inline-flex; align-items: center; gap: 3px; }
+    .metric-val-normal { color: #7ee787; }
+
+    /* 模块C：下钻控制台检查器 */
+    .host-inspector-drawer {
+      background: #0a0d12;
+      display: flex;
+      flex-direction: column;
+    }
+    .inspector-toolbar {
+      padding: 8px 14px;
+      background: #121720;
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .inspector-target-info {
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .target-badge-active {
+      color: var(--text);
+      font-weight: 600;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .inspector-actions {
+      display: flex;
+      gap: 6px;
+    }
+    .btn-link-action {
+      background: rgba(56, 189, 248, 0.1);
+      border: 1px solid rgba(56, 189, 248, 0.25);
+      color: var(--accent-teal);
+      font-size: 10.5px;
+      padding: 3px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .btn-link-action:hover {
+      background: rgba(56, 189, 248, 0.2);
+    }
+    .inspector-output-box {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      line-height: 1.55;
+      padding: 10px 14px;
+      color: #c9d1d9;
+      max-height: 180px;
+      overflow-y: auto;
+      background: #040508;
+    }
+    .log-hl-err { color: #f85149; background: rgba(248, 81, 73, 0.15); padding: 1px 4px; border-radius: 3px; }
+    .log-hl-cmd { color: #79c0ff; }
+    .log-hl-dim { color: #6e7681; }
+
+    /* 4. 底部智能下钻建议操作栏 */
+    .suggested-actions-footer {
+      padding: 12px 18px 14px;
+      background: #11141a;
+      border-top: 1px solid var(--border);
+    }
+    .footer-label-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .suggestions-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .suggestions-hint {
+      font-size: 10px;
+      color: var(--text-faint);
+    }
+    .action-chips-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .action-chip {
+      background: #181d24;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-size: 11px;
+      color: var(--text);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: all 0.15s ease;
+    }
+    .action-chip:hover {
+      background: #222933;
+      border-color: var(--accent-teal);
+      transform: translateX(2px);
+    }
+    .chip-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .chip-icon {
+      color: var(--accent-teal);
+      display: flex;
+      align-items: center;
+    }
+    .chip-target-scope {
+      font-size: 10px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: rgba(255,255,255,0.06);
+      color: var(--text-muted);
+    }
+    .chip-arrow {
+      color: var(--text-faint);
+      display: flex;
+      align-items: center;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- 左侧主终端区域 -->
+  <div class="terminal-area">
+    <div class="term-titlebar">
+      <div class="term-tabs">
+        <div class="term-tab active">
+          <span class="term-tab-dot"></span>
+          <span>web-prod-01 (10.0.4.12)</span>
+        </div>
+        <div class="term-tab">
+          <span class="term-tab-dot"></span>
+          <span>db-cluster-master (10.0.4.50)</span>
+        </div>
+        <div class="term-tab-add">+</div>
+      </div>
+      <span style="font-size: 11px; color: var(--text-faint); font-family: 'JetBrains Mono', monospace;">Vault SSH · root</span>
+    </div>
+    <div class="term-body">
+      <span class="term-prompt">root@web-prod-01</span>:<span class="term-path">~</span># uptime<br/>
+      15:02:18 up 84 days, 3:25, 2 users, load average: 1.12, 0.85, 0.44<br/>
+      <span class="term-prompt">root@web-prod-01</span>:<span class="term-path">~</span># df -h /<br/>
+      Filesystem      Size  Used Avail Use% Mounted on<br/>
+      /dev/vda1        99G   42G   53G  45% /<br/>
+      <span class="term-prompt">root@web-prod-01</span>:<span class="term-path">~</span># <span style="animation: blink 1s infinite;">_</span>
+    </div>
+  </div>
+
+  <!-- 右侧 AI 智控台 -->
+  <div class="copilot-workbench">
+    
+    <!-- 1. 顶部工作台状态条 -->
+    <div class="workbench-header">
+      <div class="wb-identity">
+        <div class="wb-logo">
+          <!-- 闪电 SVG -->
+          <svg class="icon-svg" style="width: 14px; height: 14px; stroke: #040914;" viewBox="0 0 24 24">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="currentColor"></polygon>
+          </svg>
+        </div>
+        <div class="wb-title">AI 智控台</div>
+        <div class="wb-engine-badge">GLM-5.2 Planner</div>
+      </div>
+      <div class="wb-controls">
+        <button class="wb-history-btn">
+          <!-- 历史记录列表图标 -->
+          <svg class="icon-svg" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+          <span>会话历史 (3)</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 2. 指令交互栏 (Action Bar) -->
+    <div class="action-bar-container">
+      <div class="action-input-wrapper">
+        <span class="action-prefix-icon">
+          <!-- 闪光/星标 SVG -->
+          <svg class="icon-svg" style="width: 15px; height: 15px;" viewBox="0 0 24 24">
+            <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"></path>
+          </svg>
+        </span>
+        <input 
+          type="text" 
+          class="action-input" 
+          value="查下 prod 节点谁把内存吃满了" 
+          placeholder="输入运维意图，如：排查报错机器、检查磁盘..."
+        />
+        <div class="action-tools">
+          <span class="action-tag-chip">prod 主机</span>
+          <span class="action-enter-key">↵ Enter</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. 中部滚动容器：工作看板 (Workbench Dashboard) -->
+    <div class="workbench-scroll">
+
+      <!-- 模块A：规划与门闩卡 (Plan Card) -->
+      <div class="plan-card">
+        <div class="plan-card-header">
+          <div class="plan-intent-title">
+            <!-- 剪贴板规划 SVG -->
+            <svg class="icon-svg" style="color: var(--accent-teal);" viewBox="0 0 24 24">
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+            </svg>
+            <span>下一步执行计划</span>
+          </div>
+          <div class="gate-shield-badge readonly">
+            <!-- 盾牌安全放行 SVG -->
+            <svg class="icon-svg" viewBox="0 0 24 24">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
+              <polyline points="9 12 11 14 15 10"></polyline>
+            </svg>
+            <span>Gate 门闩: 只读放行</span>
+          </div>
+        </div>
+        <div class="plan-card-body">
+          <div class="plan-rationale-text">
+            按内存使用率倒序排查进程前 10 名，已结合当前意图自动限定在 <code>prod</code> 环境节点。
+          </div>
+          <div class="plan-command-editor">
+            <input type="text" class="plan-command-input" value="ps aux --sort=-%mem | head -n 10" />
+            <span style="position: absolute; right: 10px; top: 8px; font-size: 10.5px; color: var(--text-faint); display: flex; align-items: center; gap: 4px;">
+              <svg class="icon-svg" style="width: 11px; height: 11px;" viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+              可直接修改
+            </span>
+          </div>
+          <div class="plan-meta-row">
+            <div class="plan-scope-pills">
+              <span>目标范围:</span>
+              <span class="scope-pill">4 台服务器</span>
+              <span class="scope-pill" style="color: var(--accent-purple);">过滤: prod</span>
+            </div>
+            <span style="color: var(--accent-green);">● 节点全部就绪</span>
+          </div>
+        </div>
+        <div class="plan-card-footer">
+          <span class="plan-safety-hint">短连接非交互并发执行</span>
+          <div class="plan-action-btns">
+            <button class="btn btn-secondary">放弃</button>
+            <button class="btn btn-primary">确认并在 4 台上执行 ↵</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 模块B：执行看板与主机状态矩阵 (Board & Host Matrix) -->
+      <div class="exec-board">
+        <div class="board-top-status">
+          <div class="status-group">
+            <span>上一轮批处理:</span>
+            <div class="status-item">
+              <span class="status-dot ok"></span>
+              <span style="color: var(--accent-green);">3 台正常</span>
+            </div>
+            <div class="status-item">
+              <span class="status-dot fail"></span>
+              <span style="color: var(--accent-red);">1 台告警 (OOM)</span>
+            </div>
+          </div>
+          <span class="board-timing">并发耗时 285ms</span>
+        </div>
+
+        <!-- 主机网格矩阵 Pills -->
+        <div class="hosts-matrix-grid">
+          
+          <div class="host-pill">
+            <div class="pill-header">
+              <span class="pill-title">web-prod-01</span>
+              <span class="status-dot ok"></span>
+            </div>
+            <span class="pill-ip">10.0.4.12</span>
+            <div class="pill-metric-badge">
+              <span>Top: java (app)</span>
+              <span class="metric-val-normal">42.1%</span>
+            </div>
+          </div>
+
+          <div class="host-pill error-active">
+            <div class="pill-header">
+              <span class="pill-title" style="color: var(--accent-red);">web-prod-02</span>
+              <span class="status-dot fail"></span>
+            </div>
+            <span class="pill-ip" style="color: #ff7b72;">10.0.4.15</span>
+            <div class="pill-metric-badge">
+              <span style="color: #ff7b72;">Top: java (app)</span>
+              <span class="metric-val-danger">
+                <!-- 警告三角 SVG -->
+                <svg class="icon-svg" style="width: 11px; height: 11px; stroke: #ff7b72;" viewBox="0 0 24 24"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+                92.4%
+              </span>
+            </div>
+          </div>
+
+          <div class="host-pill">
+            <div class="pill-header">
+              <span class="pill-title">api-prod-01</span>
+              <span class="status-dot ok"></span>
+            </div>
+            <span class="pill-ip">10.0.4.18</span>
+            <div class="pill-metric-badge">
+              <span>Top: nginx</span>
+              <span class="metric-val-normal">18.5%</span>
+            </div>
+          </div>
+
+          <div class="host-pill">
+            <div class="pill-header">
+              <span class="pill-title">api-prod-02</span>
+              <span class="status-dot ok"></span>
+            </div>
+            <span class="pill-ip">10.0.4.19</span>
+            <div class="pill-metric-badge">
+              <span>Top: node</span>
+              <span class="metric-val-normal">24.0%</span>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- 模块C：下钻控制台检查器 -->
+        <div class="host-inspector-drawer">
+          <div class="inspector-toolbar">
+            <div class="inspector-target-info">
+              <span>节点输出明细:</span>
+              <span class="target-badge-active">web-prod-02 (10.0.4.15)</span>
+            </div>
+            <div class="inspector-actions">
+              <button class="btn-link-action">
+                <svg class="icon-svg" style="width: 11px; height: 11px;" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                <span>开新 Tab 连入该机</span>
+              </button>
+            </div>
+          </div>
+          <div class="inspector-output-box">
+<span class="log-hl-dim">$ ps aux --sort=-%mem | head -n 5</span>
+USER       PID %CPU <span class="log-hl-err">%MEM</span>    VSZ   RSS TTY      STAT START   TIME COMMAND
+<span class="log-hl-err">app       4120  8.2 92.4 8412000 7812000 ?     Sl   Aug24 142:10 /usr/bin/java -jar server.jar</span>
+root         1  0.0  0.1 168920 11420 ?        Ss   Jun12   4:12 /sbin/init
+systemd   2190  0.0  0.1  45120  8910 ?        S    Jun12   0:15 /lib/systemd/systemd-journald
+dbus      2210  0.0  0.0  52100  4120 ?        Ss   Jun12   1:20 /usr/bin/dbus-daemon --system
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- 4. 底部智能下钻建议操作栏 -->
+    <div class="suggested-actions-footer">
+      <div class="footer-label-row">
+        <div class="suggestions-label">
+          <!-- 闪电/火花 SVG -->
+          <svg class="icon-svg" style="color: var(--accent-teal);" viewBox="0 0 24 24">
+            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+          </svg>
+          <span>意图跟进与诊断建议</span>
+        </div>
+        <span class="suggestions-hint">点击一键下钻提议</span>
+      </div>
+      <div class="action-chips-group">
+        <div class="action-chip">
+          <div class="chip-left">
+            <span class="chip-icon">
+              <!-- 放大镜搜索 SVG -->
+              <svg class="icon-svg" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            </span>
+            <span>查看 web-prod-02 Java 进程的 GC / OOM 日志</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span class="chip-target-scope">单机: 10.0.4.15</span>
+            <span class="chip-arrow">
+              <svg class="icon-svg" style="width: 12px; height: 12px;" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            </span>
+          </div>
+        </div>
+
+        <div class="action-chip">
+          <div class="chip-left">
+            <span class="chip-icon">
+              <!-- 条形图 SVG -->
+              <svg class="icon-svg" viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+            </span>
+            <span>检查全部 4 台节点的 Swap 分区与可用内存 (free -h)</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span class="chip-target-scope">全部 4 台</span>
+            <span class="chip-arrow">
+              <svg class="icon-svg" style="width: 12px; height: 12px;" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            </span>
+          </div>
+        </div>
+
+        <div class="action-chip">
+          <div class="chip-left">
+            <span class="chip-icon">
+              <!-- 剪贴板 SVG -->
+              <svg class="icon-svg" viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path><rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect></svg>
+            </span>
+            <span>复制异常节点 IP 列表到剪贴板</span>
+          </div>
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <span class="chip-arrow">
+              <svg class="icon-svg" style="width: 12px; height: 12px;" viewBox="0 0 24 24"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</body>
+</html>

@@ -130,6 +130,32 @@ pub fn run_batch_parallel(
     all
 }
 
+/// 串行执行并在首次遇到失败或非 0 exit code 时立即熔断（Fail-Fast）。
+/// 常用于高危/变更类批量任务，防止大面积故障扩大。
+pub fn run_batch_serial_fail_fast(
+    jobs: Vec<BatchExecJob>,
+    command: String,
+) -> Vec<BatchExecRow> {
+    let mut all = Vec::with_capacity(jobs.len());
+    for (_idx, job) in jobs.into_iter().enumerate() {
+        let label = job.label.clone();
+        let target_id = job.target_id.clone();
+        let row = run_one(job, &command);
+        let ok = row.ok;
+        all.push(row);
+        if !ok {
+            // 熔断：后续未执行的主机记录为熔断取消状态
+            tracing::warn!(
+                target = %target_id,
+                label = %label,
+                "batch serial execution aborted due to failure on host"
+            );
+            break;
+        }
+    }
+    all
+}
+
 pub fn format_batch_results_for_clipboard(rows: &[BatchExecRow]) -> String {
     rows.iter()
         .map(|r| {
