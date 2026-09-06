@@ -2668,16 +2668,17 @@ impl AiPanel {
             },
             BackgroundJob::Plan { rx, intent } => match rx.try_recv() {
                 Ok(Ok(proposal)) => {
+                    let intent = intent.clone();
                     self.background = None;
                     self.busy = false;
                     self.input_status = None;
-                    let intent_str = intent.clone();
                     self.begin_agent_plan(intent, proposal);
                     self.chat_dirty = true;
                     ctx.request_repaint();
                 }
                 Ok(Err(e)) => {
                     // LLM 规划失败或网络异常，平滑降级到启发式兜底
+                    let intent = intent.clone();
                     let fallback_proposal = crate::core::propose_step_with_context(&intent, self.last_agent_batch_context().as_ref());
                     self.background = None;
                     self.busy = false;
@@ -2691,6 +2692,7 @@ impl AiPanel {
                     ctx.request_repaint_after(std::time::Duration::from_millis(80));
                 }
                 Err(TryRecvError::Disconnected) => {
+                    let intent = intent.clone();
                     let fallback_proposal = crate::core::propose_step_with_context(&intent, self.last_agent_batch_context().as_ref());
                     self.background = None;
                     self.busy = false;
