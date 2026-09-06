@@ -470,8 +470,8 @@ pub struct MistTermApp {
     /// 批量多机 SSH 执行
     batch_exec_dialog: BatchExecDialog,
     batch_exec_rx: Option<std::sync::mpsc::Receiver<Vec<BatchExecRow>>>,
-    /// v2 Agent 多机执行结果：(command, rows)
-    agent_batch_rx: Option<std::sync::mpsc::Receiver<(String, Vec<BatchExecRow>)>>,
+    /// v2 Agent 多机执行结果：(command, rows, intent, rationale, gate_level, gate_armed, fail_fast)
+    agent_batch_rx: Option<std::sync::mpsc::Receiver<(String, Vec<BatchExecRow>, String, String, String, bool, bool)>>,
     /// UI 卡顿 watchdog(本地报告)
     hang_reporter: HangReporter,
     /// 统一 Toast(所有用户可见通知走这里)
@@ -4278,8 +4278,20 @@ impl MistTermApp {
 
         if let Some(rx) = &self.agent_batch_rx {
             match rx.try_recv() {
-                Ok((command, rows)) => {
+                Ok((command, rows, intent, rationale, gate_level, gate_armed, fail_fast)) => {
                     self.agent_batch_rx = None;
+                    if let Some(team_id) = self.team_service.state.current_team_id.as_deref() {
+                        self.team_service.spawn_batch_exec_report(
+                            team_id,
+                            intent,
+                            command.clone(),
+                            rationale,
+                            gate_level,
+                            gate_armed,
+                            fail_fast,
+                            &rows,
+                        );
+                    }
                     self.ai_panel.apply_agent_batch_results(&command, rows);
                     ctx.request_repaint();
                 }
@@ -4424,7 +4436,14 @@ impl MistTermApp {
                 })),
         );
         self.ai_panel.mark_agent_executing();
+        let (intent, rationale, l2_armed) = self.ai_panel.current_agent_plan_meta();
         let is_mutate = crate::core::agent::looks_like_mutate_command(&command);
+        let gate_level = if is_mutate {
+            "L2_MUTATE".to_string()
+        } else {
+            "L1_READONLY".to_string()
+        };
+        let fail_fast = is_mutate;
         let parallel = 8usize;
         let (tx, rx) = std::sync::mpsc::channel();
         self.agent_batch_rx = Some(rx);
@@ -4435,7 +4454,7 @@ impl MistTermApp {
             } else {
                 crate::core::run_batch_parallel(jobs, cmd.clone(), parallel)
             };
-            let _ = tx.send((cmd, rows));
+            let _ = tx.send((cmd, rows, intent, rationale, gate_level, l2_armed, fail_fast));
         });
         ctx.request_repaint();
     }

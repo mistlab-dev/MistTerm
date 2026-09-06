@@ -292,6 +292,15 @@ impl AiPanel {
         self.agent_plan.as_ref().and_then(|p| p.target_filter.clone())
     }
 
+    /// 供 App 获取当前执行计划的元数据（意图、规划理由、L2状态），用于审计上报
+    pub fn current_agent_plan_meta(&self) -> (String, String, bool) {
+        if let Some(p) = &self.agent_plan {
+            (p.intent.clone(), p.rationale.clone(), p.l2_armed)
+        } else {
+            (String::new(), String::new(), false)
+        }
+    }
+
     /// 提取最近一次多机执行结果上下文(用于多轮追问/下钻分析)。
     pub fn last_agent_batch_context(&self) -> Option<crate::core::LastBatchContext> {
         for msg in self.messages.iter().rev() {
