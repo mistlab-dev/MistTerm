@@ -4405,12 +4405,17 @@ impl MistTermApp {
                 })),
         );
         self.ai_panel.mark_agent_executing();
+        let is_mutate = crate::core::agent::looks_like_mutate_command(&command);
         let parallel = 8usize;
         let (tx, rx) = std::sync::mpsc::channel();
         self.agent_batch_rx = Some(rx);
         let cmd = command.clone();
         std::thread::spawn(move || {
-            let rows = run_batch_parallel(jobs, cmd.clone(), parallel);
+            let rows = if is_mutate {
+                crate::core::run_batch_serial_fail_fast(jobs, cmd.clone())
+            } else {
+                crate::core::run_batch_parallel(jobs, cmd.clone(), parallel)
+            };
             let _ = tx.send((cmd, rows));
         });
         ctx.request_repaint();
