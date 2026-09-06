@@ -86,8 +86,8 @@ pub use knowledge::{
 };
 pub use agent::{
     first_useful_line, gate_decision, host_result_summary, looks_like_host_ops_intent, propose_step,
-    summarize_batch_rows, truncate_chars, AgentPhase, AgentRunSnapshot, GateDecision, GateLevel,
-    StepProposal,
+    propose_step_with_context, summarize_batch_rows, truncate_chars, AgentPhase, AgentRunSnapshot,
+    GateDecision, GateLevel, HostExecutionSummary, LastBatchContext, StepProposal,
 };
 pub use batch_exec::{
     batch_endpoint_key, format_batch_results_for_clipboard, push_unique_batch_target,

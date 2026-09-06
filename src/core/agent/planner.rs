@@ -1,5 +1,19 @@
 //! Planner：NL → StepProposal(启发式；可手改；日后接 LLM)。
 
+#[derive(Debug, Clone)]
+pub struct HostExecutionSummary {
+    pub label: String,
+    pub ok: bool,
+    pub exit_code: Option<i32>,
+    pub summary: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct LastBatchContext {
+    pub command: String,
+    pub hosts: Vec<HostExecutionSummary>,
+}
+
 /// 下一步执行提议(尚未过门闩、未 SSH)。
 #[derive(Debug, Clone)]
 pub struct StepProposal {
@@ -48,15 +62,69 @@ pub fn looks_like_host_ops_intent(text: &str) -> bool {
         "看看服务器",
         "服务器上",
         "集群",
+        "排查报错",
+        "排查失败",
+        "看看报错",
+        "报错的那台",
+        "失败的那台",
+        "清理日志",
+        "清理大文件",
+        "占用详情",
     ];
     NEEDLES.iter().any(|n| lower.contains(&n.to_lowercase()) || t.contains(n))
 }
 
 /// 从自然语言启发式提议一条命令(可改)。
 pub fn propose_step(user_text: &str) -> StepProposal {
+    propose_step_with_context(user_text, None)
+}
+
+/// 结合上一轮执行上下文提议命令(多轮下钻/处置支持)。
+pub fn propose_step_with_context(
+    user_text: &str,
+    last_context: Option<&LastBatchContext>,
+) -> StepProposal {
     let t = user_text.trim();
     let stripped = strip_ops_prefix(t);
     let lower = stripped.to_lowercase();
+
+    // 1. 如果有上一轮上下文，优先尝试解析相对/跟进意图（如“排查报错的那台”、“清理磁盘超标机器”等）
+    if let Some(ctx) = last_context {
+        if contains_any(&lower, stripped, &["报错", "失败", "异常", "问题", "fail", "error"]) {
+            let failed_host = ctx.hosts.iter().find(|h| !h.ok);
+            if let Some(h) = failed_host {
+                let host_part = h.label.split(" · ").last().unwrap_or(&h.label);
+                return StepProposal {
+                    command: "journalctl -xe -n 50 --no-pager".into(),
+                    rationale: format!("针对上一轮报错主机 {host_part} 查看系统日志"),
+                    target_filter: Some(host_part.to_string()),
+                    stop: false,
+                };
+            }
+        }
+
+        if (contains_any(&lower, stripped, &["清理", "大文件", "日志", "clean", "find"])
+            && (ctx.command.contains("df") || contains_any(&lower, stripped, &["磁盘", "空间"])))
+        {
+            return StepProposal {
+                command: "du -sh /var/log/* 2>/dev/null | sort -rh | head -n 10".into(),
+                rationale: "检查各主机占用空间最大的日志文件以准备清理(只读排查)".into(),
+                target_filter: extract_target_filter(user_text),
+                stop: false,
+            };
+        }
+
+        if (contains_any(&lower, stripped, &["top", "高占用", "详情", "detail", "谁占的"])
+            && (ctx.command.contains("ps") || ctx.command.contains("free") || ctx.command.contains("uptime")))
+        {
+            return StepProposal {
+                command: "ps aux --sort=-%mem | head -n 10".into(),
+                rationale: "查看各主机内存/CPU占用最高的具体进程".into(),
+                target_filter: extract_target_filter(user_text),
+                stop: false,
+            };
+        }
+    }
 
     // 用户直接写了像命令的一行
     if looks_like_shell_line(stripped) {
@@ -243,5 +311,29 @@ mod tests {
         assert_eq!(extract_target_filter("查下web节点的负载"), Some("web".into()));
         assert_eq!(extract_target_filter("检查prod环境的磁盘"), Some("prod".into()));
         assert_eq!(extract_target_filter("所有服务器内存"), None);
+    }
+
+    #[test]
+    fn followup_failed_host() {
+        let last = LastBatchContext {
+            command: "systemctl status nginx".into(),
+            hosts: vec![
+                HostExecutionSummary {
+                    label: "web-1 · 10.0.0.1".into(),
+                    ok: true,
+                    exit_code: Some(0),
+                    summary: "active".into(),
+                },
+                HostExecutionSummary {
+                    label: "web-2 · 10.0.0.2".into(),
+                    ok: false,
+                    exit_code: Some(3),
+                    summary: "inactive".into(),
+                },
+            ],
+        };
+        let p = propose_step_with_context("看看报错那台的日志", Some(&last));
+        assert_eq!(p.command, "journalctl -xe -n 50 --no-pager");
+        assert_eq!(p.target_filter, Some("10.0.0.2".into()));
     }
 }
