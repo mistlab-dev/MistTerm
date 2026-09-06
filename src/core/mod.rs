@@ -85,7 +85,8 @@ pub use knowledge::{
     clean_ask_intent, retrieve_team_knowledge, DocSearchHit, KnowledgeHit, KnowledgeSource,
 };
 pub use agent::{
-    first_useful_line, gate_decision, host_result_summary, looks_like_host_ops_intent, propose_step,
+    build_planner_system_prompt, first_useful_line, gate_decision, host_result_summary,
+    looks_like_host_ops_intent, parse_llm_plan_response, propose_step,
     propose_step_with_context, summarize_batch_rows, truncate_chars, AgentPhase, AgentRunSnapshot,
     GateDecision, GateLevel, HostExecutionSummary, LastBatchContext, StepProposal,
 };

@@ -215,6 +215,61 @@ pub fn propose_step_with_context(
     }
 }
 
+/// 构建用于让 LLM 进行运维规划的 System Prompt。
+pub fn build_planner_system_prompt() -> String {
+    "你是 MistTerm 的多主机智能运维规划器 (Planner)。\
+用户的目标是在一批 Linux 服务器上排查或执行运维任务。\
+你需要根据用户的自然语言意图以及历史执行记录，规划出下一步应当执行的单条 shell 命令。\
+请严格以 JSON 格式输出，不要输出任何非 JSON 的闲聊文本。格式如下：\
+{\n  \"command\": \"具体要执行的 shell 命令\",\n  \"rationale\": \"提议该命令的简要理由（中文）\",\n  \"target_filter\": \"可选的目标主机过滤词（如 web, db, prod 等，无则为 null）\",\n  \"stop\": false\n}\
+注意：\
+1. 优先输出只读、安全的排查与诊断命令（如 df, free, ps, journalctl, ss, du 等）。\
+2. 尽量避免破坏性命令；若必须变更，保持最小化影响。\
+3. command 必须可以直接在 bash/sh 下执行，不要包含交互式提问参数。"
+        .to_string()
+}
+
+/// 解析 LLM 返回的 JSON 规划结果，失败则平滑降级。
+pub fn parse_llm_plan_response(response: &str) -> Option<StepProposal> {
+    let text = response.trim();
+    // 兼容 ```json ... ``` 包裹
+    let clean = if let Some(start) = text.find('{') {
+        if let Some(end) = text.rfind('}') {
+            if end > start {
+                &text[start..=end]
+            } else {
+                text
+            }
+        } else {
+            text
+        }
+    } else {
+        text
+    };
+
+    #[derive(serde::Deserialize)]
+    struct RawPlan {
+        command: Option<String>,
+        rationale: Option<String>,
+        target_filter: Option<String>,
+        stop: Option<bool>,
+    }
+
+    if let Ok(raw) = serde_json::from_str::<RawPlan>(clean) {
+        if let Some(cmd) = raw.command {
+            if !cmd.trim().is_empty() {
+                return Some(StepProposal {
+                    command: cmd.trim().to_string(),
+                    rationale: raw.rationale.unwrap_or_else(|| "AI 规划的执行命令".into()),
+                    target_filter: raw.target_filter.filter(|s| !s.trim().is_empty()),
+                    stop: raw.stop.unwrap_or(false),
+                });
+            }
+        }
+    }
+    None
+}
+
 /// 启发式提取目标主机过滤关键词（如 "web", "db", "prod", "staging", "85.137" 等）。
 pub fn extract_target_filter(text: &str) -> Option<String> {
     let lower = text.to_lowercase();
@@ -335,5 +390,24 @@ mod tests {
         let p = propose_step_with_context("看看报错那台的日志", Some(&last));
         assert_eq!(p.command, "journalctl -xe -n 50 --no-pager");
         assert_eq!(p.target_filter, Some("10.0.0.2".into()));
+    }
+
+    #[test]
+    fn parse_llm_plan_json() {
+        let json = r#"{"command": "du -sh /var/log/* | sort -hr | head -n 5", "rationale": "排查前5大日志文件", "target_filter": "web", "stop": false}"#;
+        let p = parse_llm_plan_response(json).unwrap();
+        assert_eq!(p.command, "du -sh /var/log/* | sort -hr | head -n 5");
+        assert_eq!(p.rationale, "排查前5大日志文件");
+        assert_eq!(p.target_filter, Some("web".into()));
+        assert!(!p.stop);
+    }
+
+    #[test]
+    fn parse_llm_plan_markdown_wrapped() {
+        let resp = "```json\n{\n  \"command\": \"ps aux --sort=-%cpu | head -n 10\",\n  \"rationale\": \"CPU高占用进程\"\n}\n```";
+        let p = parse_llm_plan_response(resp).unwrap();
+        assert_eq!(p.command, "ps aux --sort=-%cpu | head -n 10");
+        assert_eq!(p.rationale, "CPU高占用进程");
+        assert_eq!(p.target_filter, None);
     }
 }
