@@ -147,6 +147,10 @@ enum BackgroundJob {
     Chat {
         rx: Receiver<ChatEvent>,
     },
+    Plan {
+        rx: Receiver<Result<StepProposal, String>>,
+        intent: String,
+    },
     Save(Receiver<Result<String, String>>),
     Test(Receiver<Result<(), String>>),
 }
@@ -2231,29 +2235,33 @@ impl AiPanel {
             return SendOutcome::Empty;
         }
 
-        // v2：多机运维意图 → Agent 计划卡(不依赖 API Key)
+        // v2：多机运维意图 → Agent 计划卡
         let last_batch = self.last_agent_batch_context();
         let is_ops = !question.is_empty()
             && (looks_like_host_ops_intent(&question) || last_batch.is_some());
         if is_ops {
-            let proposal = crate::core::propose_step_with_context(&question, last_batch.as_ref());
-            // 如果确实提议了具体的命令，进入多机 Agent 循环
-            if !proposal.stop {
-                self.draft_input.clear();
-                let context_refs = std::mem::take(&mut self.attached_contexts);
-                self.messages.push(UiMessage {
-                    role: "user",
-                    content: question.clone(),
-                    api_content: Some(question.clone()),
-                    context_refs,
-                    commands: vec![],
-                    source_label: None,
-                    agent_batch: None,
-                });
+            let context_refs = std::mem::take(&mut self.attached_contexts);
+            self.messages.push(UiMessage {
+                role: "user",
+                content: question.clone(),
+                api_content: Some(question.clone()),
+                context_refs,
+                commands: vec![],
+                source_label: None,
+                agent_batch: None,
+            });
+            self.draft_input.clear();
+            self.chat_dirty = true;
+
+            // 优先检查是否有可用的 LLM 配置
+            if self.can_chat(app_settings) && app_settings.ai.enabled {
+                self.start_llm_plan_request(ctx, app_settings, question, last_batch);
+            } else {
+                // 未配置 AI 时，走启发式本地兜底
+                let proposal = crate::core::propose_step_with_context(&question, last_batch.as_ref());
                 self.begin_agent_plan(question, proposal);
-                self.chat_dirty = true;
-                return SendOutcome::Sent;
             }
+            return SendOutcome::Sent;
         }
 
         if !self.can_chat(app_settings) {
@@ -2313,6 +2321,72 @@ impl AiPanel {
             status: None,
         });
         self.pending_agent_exec = None;
+    }
+
+    fn start_llm_plan_request(
+        &mut self,
+        ctx: &egui::Context,
+        app_settings: &AppSettings,
+        intent: String,
+        last_batch: Option<crate::core::LastBatchContext>,
+    ) {
+        let api_key = match self.effective_api_key(app_settings) {
+            Some(k) => k,
+            None => {
+                let fallback = crate::core::propose_step_with_context(&intent, last_batch.as_ref());
+                self.begin_agent_plan(intent, fallback);
+                return;
+            }
+        };
+
+        let settings = app_settings.ai.clone();
+        let system_prompt = crate::core::build_planner_system_prompt();
+        let mut user_prompt = format!("用户运维意图：{intent}\n");
+        if let Some(lb) = last_batch {
+            user_prompt.push_str(&format!("\n上一轮批量执行的命令：{}\n各主机执行结果：\n", lb.command));
+            for h in lb.hosts {
+                user_prompt.push_str(&format!(
+                    "- [{}] {}: {}\n",
+                    if h.ok { "成功" } else { "失败" },
+                    h.label,
+                    h.summary
+                ));
+            }
+        }
+
+        let api_messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: system_prompt,
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: user_prompt,
+            },
+        ];
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.background = Some(BackgroundJob::Plan {
+            rx,
+            intent: intent.clone(),
+        });
+        self.busy = true;
+        self.input_status = Some(i18n::tr(ctx, "AI Planning...", "AI 正在规划运维步骤...").to_string());
+
+        thread::spawn(move || {
+            let res = crate::core::chat_completions_with_key(&settings, &api_key, &api_messages);
+            let proposal_res = match res {
+                Ok(resp_text) => {
+                    if let Some(p) = crate::core::parse_llm_plan_response(&resp_text) {
+                        Ok(p)
+                    } else {
+                        Err(format!("无法解析模型输出: {resp_text}"))
+                    }
+                }
+                Err(e) => Err(e),
+            };
+            let _ = tx.send(proposal_res);
+        });
     }
 
     fn start_chat_request(&mut self, ctx: &egui::Context, app_settings: &AppSettings) {
@@ -2516,6 +2590,39 @@ impl AiPanel {
                     self.busy = false;
                     self.streaming = false;
                     self.chat_cancel = None;
+                }
+            },
+            BackgroundJob::Plan { rx, intent } => match rx.try_recv() {
+                Ok(Ok(proposal)) => {
+                    self.background = None;
+                    self.busy = false;
+                    self.input_status = None;
+                    self.begin_agent_plan(intent, proposal);
+                    self.chat_dirty = true;
+                    ctx.request_repaint();
+                }
+                Ok(Err(e)) => {
+                    // LLM 规划失败或网络异常，平滑降级到启发式兜底
+                    let fallback_proposal = crate::core::propose_step_with_context(&intent, self.last_agent_batch_context().as_ref());
+                    self.background = None;
+                    self.busy = false;
+                    self.input_status = None;
+                    self.last_error = Some(format!("AI 规划降级: {e}"));
+                    self.begin_agent_plan(intent, fallback_proposal);
+                    self.chat_dirty = true;
+                    ctx.request_repaint();
+                }
+                Err(TryRecvError::Empty) => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(80));
+                }
+                Err(TryRecvError::Disconnected) => {
+                    let fallback_proposal = crate::core::propose_step_with_context(&intent, self.last_agent_batch_context().as_ref());
+                    self.background = None;
+                    self.busy = false;
+                    self.input_status = None;
+                    self.begin_agent_plan(intent, fallback_proposal);
+                    self.chat_dirty = true;
+                    ctx.request_repaint();
                 }
             },
             BackgroundJob::Save(rx) => match rx.try_recv() {
