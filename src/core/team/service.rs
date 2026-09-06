@@ -693,15 +693,21 @@ impl TeamService {
                 (r.label.clone(), r.label.clone())
             };
 
+            let summary = if r.ok {
+                crate::core::host_result_summary(&command, &r.output)
+            } else {
+                r.error.clone().unwrap_or_else(|| "failed".to_string())
+            };
+
             hosts.push(HostItem {
                 name,
                 endpoint,
                 ok: r.ok,
                 exit_code: r.exit_code,
-                summary: r.summary.clone(),
+                summary,
                 output: r.output.clone(),
                 error: r.error.clone().unwrap_or_default(),
-                duration_ms: r.duration_ms,
+                duration_ms: r.duration_ms as i64,
             });
         }
 
@@ -718,14 +724,20 @@ impl TeamService {
 
         thread::spawn(move || {
             let tokens = TeamTokenStore::default();
-            let Some(access) = tokens.load_access_token() else {
+            let Ok(access) = tokens.load_access_token() else {
                 return;
             };
-            let url = format!("{}/v1/teams/{}/batch-exec/report", api_base.trim_end_matches('/'), team_id);
-            let _ = ureq::post(&url)
-                .set("Authorization", &format!("Bearer {access}"))
-                .set("Content-Type", "application/json")
-                .send_json(&payload);
+            if let Ok(client) = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_secs(15))
+                .build()
+            {
+                let url = format!("{}/v1/teams/{}/batch-exec/report", api_base.trim_end_matches('/'), team_id);
+                let _ = client
+                    .post(&url)
+                    .header("Authorization", format!("Bearer {access}"))
+                    .json(&payload)
+                    .send();
+            }
         });
     }
 }
