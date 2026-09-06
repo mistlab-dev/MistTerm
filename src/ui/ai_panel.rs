@@ -302,6 +302,42 @@ fn extract_host_metric(command: &str, output: &str) -> Option<(String, String, b
     None
 }
 
+/// 列出已保存的 AI 会话：`(session_key, 标题, 修改时间)`，最新在前。
+fn list_chat_sessions() -> Vec<(String, String, std::time::SystemTime)> {
+    let dir = crate::core::ai_chat_store::chat_store_dir();
+    let mut out: Vec<(String, String, std::time::SystemTime)> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(key) = p.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string()) else {
+                continue;
+            };
+            if key.is_empty() {
+                continue;
+            }
+            let msgs = crate::core::load_chat(&key);
+            if msgs.is_empty() {
+                continue;
+            }
+            let title = msgs
+                .iter()
+                .find(|m| m.role == "user")
+                .map(|m| truncate_ui_line(&m.content, 26))
+                .unwrap_or_else(|| "(empty)".to_string());
+            let mtime = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            out.push((key, title, mtime));
+        }
+    }
+    out.sort_by(|a, b| b.2.cmp(&a.2));
+    out
+}
+
 /// 带底色的胶囊徽章：图标 + 文案（门闩、模型引擎等）。
 fn ops_badge(
     ui: &mut egui::Ui,
@@ -945,7 +981,9 @@ impl AiPanel {
                 let prev_gap_y = ui.spacing().item_spacing.y;
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let model_badge = truncate_ui_line(app_settings.ai.model.trim(), 18);
+                let cur_key = self.chat_session_key.clone();
                 let mut request_new_chat = false;
+                let mut switch_to: Option<String> = None;
                 theme.frame_right_dock_header_band().show(ui, |ui| {
                     layout_util::set_width_to_available(ui);
                     crate::ui::chrome::dock_header_horizontal(ui, theme, |ui| {
@@ -977,22 +1015,88 @@ impl AiPanel {
                             if crate::ui::chrome::panel_toolbar_icon_button(
                                 ui,
                                 theme,
-                                crate::ui::icons::IconId::Refresh,
+                                crate::ui::icons::IconId::Plus,
                                 i18n::tr(ctx, "New chat", "新对话"),
                             )
                             .clicked()
                             {
                                 request_new_chat = true;
                             }
+                            let hist = crate::ui::chrome::panel_toolbar_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Timer,
+                                i18n::tr(ctx, "Session history", "会话历史"),
+                            );
+                            let popup_id = ui.make_persistent_id("ai_history_popup");
+                            if hist.clicked() {
+                                ui.memory_mut(|m| m.toggle_popup(popup_id));
+                            }
+                            egui::popup_below_widget(ui, popup_id, &hist, |ui| {
+                                ui.set_min_width(200.0);
+                                ui.label(
+                                    egui::RichText::new(i18n::tr(ctx, "Session history", "会话历史"))
+                                        .size(theme.font_size_caption())
+                                        .color(theme.text_tertiary()),
+                                );
+                                ui.separator();
+                                let sessions = list_chat_sessions();
+                                if sessions.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(i18n::tr(
+                                            ctx,
+                                            "No saved sessions",
+                                            "暂无历史会话",
+                                        ))
+                                        .size(theme.font_size_small())
+                                        .color(theme.text_tertiary()),
+                                    );
+                                }
+                                for (key, title, _) in sessions {
+                                    let is_cur = key == cur_key;
+                                    let text = if is_cur {
+                                        format!("● {title}")
+                                    } else {
+                                        format!("   {title}")
+                                    };
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new(text)
+                                                    .size(theme.font_size_small())
+                                                    .color(if is_cur {
+                                                        theme.accent_color()
+                                                    } else {
+                                                        theme.text_primary()
+                                                    }),
+                                            )
+                                            .frame(false),
+                                        )
+                                        .clicked()
+                                    {
+                                        switch_to = Some(key);
+                                        ui.memory_mut(|m| m.close_popup());
+                                    }
+                                }
+                            });
                         });
                     });
                 });
-                if request_new_chat {
-                    self.messages.clear();
+                if let Some(key) = switch_to {
+                    self.set_chat_session_key(key, true);
                     self.agent_plan = None;
                     self.selected_host_idx = None;
                     self.last_error = None;
-                    self.chat_dirty = true;
+                }
+                if request_new_chat {
+                    let ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0);
+                    self.set_chat_session_key(format!("chat-{ms}"), true);
+                    self.agent_plan = None;
+                    self.selected_host_idx = None;
+                    self.last_error = None;
                 }
                 crate::ui::chrome::right_dock_header_divider(ui, theme);
                 ui.spacing_mut().item_spacing.y = prev_gap_y;
@@ -1062,9 +1166,12 @@ impl AiPanel {
             }
         }
         bind_row_width(ui);
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+        // 工作台式布局：指令栏固定在顶部（action bar），下方为可滚动的工作看板/对话区。
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             bind_row_width(ui);
             self.show_input_bar(ui, ctx, theme, app_settings, ready);
+            ui.add_space(theme.spacing_sm());
+            crate::ui::chrome::panel_header_divider(ui, theme);
             ui.add_space(theme.spacing_xs());
             let scroll_h = ui.available_height().max(64.0);
             ui.allocate_ui_with_layout(
@@ -1570,8 +1677,8 @@ impl AiPanel {
                     ui.label(
                         egui::RichText::new(i18n::tr(
                             ctx,
-                            "Type below. For multi-host ops try: 查所有服务器磁盘 — or prefix 多机:",
-                            "在下方输入。多机运维可试：查所有服务器磁盘 — 或以「多机:」开头",
+                            "Type above. For multi-host ops try: 查所有服务器磁盘 — or prefix 多机:",
+                            "在上方输入。多机运维可试：查所有服务器磁盘 — 或以「多机:」开头",
                         ))
                             .size(theme.font_size_small())
                             .color(theme.color_form_hint().gamma_multiply(0.85)),
