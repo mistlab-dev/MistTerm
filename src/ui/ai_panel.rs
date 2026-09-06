@@ -9,7 +9,7 @@ use std::thread;
 
 use crate::core::{
     delete_chat, extract_shell_commands, is_runnable_shell_command, load_chat,
-    looks_like_host_ops_intent, prepare_terminal_context, propose_step, resolve_system_prompt,
+    looks_like_host_ops_intent, prepare_terminal_context, resolve_system_prompt,
     save_chat, summarize_batch_rows, AiContext, AgentPhase, AppSettings, BatchExecRow, ChatEvent,
     ChatMessage, EnhancedPromptBuilder, PreparedTerminalContext, QuickAction, StepProposal,
     StoredAiMessage, StoredContextRef, TerminalSessionMeta, run_chat_with_key,
@@ -1343,7 +1343,7 @@ impl AiPanel {
         let mut clicked_cancel = false;
 
         egui::Frame::none()
-            .fill(theme.color_card_bg_fill())
+            .fill(theme.color_subtle_inset_fill())
             .stroke(theme.divider_stroke())
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::vec2(12.0, 10.0))
@@ -2671,6 +2671,7 @@ impl AiPanel {
                     self.background = None;
                     self.busy = false;
                     self.input_status = None;
+                    let intent_str = intent.clone();
                     self.begin_agent_plan(intent, proposal);
                     self.chat_dirty = true;
                     ctx.request_repaint();

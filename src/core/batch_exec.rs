@@ -137,7 +137,7 @@ pub fn run_batch_serial_fail_fast(
     command: String,
 ) -> Vec<BatchExecRow> {
     let mut all = Vec::with_capacity(jobs.len());
-    for (idx, job) in jobs.into_iter().enumerate() {
+    for (_idx, job) in jobs.into_iter().enumerate() {
         let label = job.label.clone();
         let target_id = job.target_id.clone();
         let row = run_one(job, &command);
