@@ -124,6 +124,12 @@ struct AgentHostRow {
     error: Option<String>,
     output: String,
     duration_ms: u64,
+    /// 结构化指标标签(如 "Top: java")；无法解析时为 None，回退 summary。
+    metric_label: Option<String>,
+    /// 结构化指标数值(如 "92.4%")。
+    metric_value: Option<String>,
+    /// 指标是否超过告警阈值(节点整体转告警红)。
+    metric_danger: bool,
 }
 
 fn split_batch_host_label(label: &str) -> (String, String) {
@@ -178,6 +184,122 @@ fn ops_render_console_output(ui: &mut egui::Ui, text: &str) {
             ui.label(egui::RichText::new(line).monospace().size(11.0).color(DIM));
         }
     }
+}
+
+/// 解析 `free`/`df` 等的大小值（支持 12G / 1.5Gi / 512M / 8192 等）为字节。
+fn ops_parse_size(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let split = s.find(|c: char| c.is_alphabetic()).unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    let n: f32 = num.trim().parse().ok()?;
+    let mult = match unit.to_ascii_lowercase().as_str() {
+        "" | "b" => 1.0,
+        "k" | "ki" | "kib" | "kb" => 1024.0,
+        "m" | "mi" | "mib" | "mb" => 1024.0 * 1024.0,
+        "g" | "gi" | "gib" | "gb" => 1024.0 * 1024.0 * 1024.0,
+        "t" | "ti" | "tib" | "tb" => 1024.0_f32.powi(4),
+        _ => 1.0,
+    };
+    Some(n * mult)
+}
+
+/// 告警阈值（使用率百分比）。
+const OPS_METRIC_DANGER: f32 = 85.0;
+
+/// 从命令输出提取一条关键指标：`(标签, 数值, 是否告警)`。
+/// 覆盖设计稿场景（`ps aux --sort=-%mem` 的 Top 进程 + %）以及常见运维命令。
+fn extract_host_metric(command: &str, output: &str) -> Option<(String, String, bool)> {
+    let cmd = command.to_ascii_lowercase();
+    let lines: Vec<&str> = output.lines().filter(|l| !l.trim().is_empty()).collect();
+
+    // ps aux（按 %MEM / %CPU 排序）：Top 进程 + 百分比
+    if cmd.contains("ps ") || cmd.starts_with("ps") {
+        let by_cpu = cmd.contains("%cpu");
+        for l in &lines {
+            let low = l.to_ascii_lowercase();
+            if low.contains("%mem") || (low.contains("pid") && low.contains("command")) {
+                continue; // 跳过表头
+            }
+            let cols: Vec<&str> = l.split_whitespace().collect();
+            // USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND...
+            if cols.len() >= 11 {
+                let pct = if by_cpu { cols[2] } else { cols[3] };
+                if let Ok(v) = pct.parse::<f32>() {
+                    let comm = cols[10..].join(" ");
+                    let first = comm.split_whitespace().next().unwrap_or(&comm);
+                    let base = first.rsplit('/').next().unwrap_or(first);
+                    let label = format!("Top: {}", truncate_ui_line(base, 14));
+                    return Some((label, format!("{pct}%"), v >= OPS_METRIC_DANGER));
+                }
+            }
+        }
+    }
+
+    // df：使用率最高的分区
+    if cmd.contains("df") {
+        let mut best: Option<(f32, String, String)> = None;
+        for l in &lines {
+            let cols: Vec<&str> = l.split_whitespace().collect();
+            if cols.len() >= 6 {
+                let usep = cols[cols.len() - 2];
+                let mount = cols[cols.len() - 1];
+                if let Some(v) = usep
+                    .strip_suffix('%')
+                    .and_then(|p| p.trim().parse::<f32>().ok())
+                {
+                    let take = best.as_ref().map_or(true, |(bv, ..)| v > *bv);
+                    if take {
+                        best = Some((v, mount.to_string(), usep.to_string()));
+                    }
+                }
+            }
+        }
+        if let Some((v, mount, usep)) = best {
+            let label = format!("Disk {}", truncate_ui_line(&mount, 12));
+            return Some((label, usep, v >= OPS_METRIC_DANGER));
+        }
+    }
+
+    // free：内存使用率
+    if cmd.contains("free") {
+        for l in &lines {
+            if l.trim_start().to_ascii_lowercase().starts_with("mem") {
+                let cols: Vec<&str> = l.split_whitespace().collect();
+                if cols.len() >= 3 {
+                    if let (Some(total), Some(used)) =
+                        (ops_parse_size(cols[1]), ops_parse_size(cols[2]))
+                    {
+                        if total > 0.0 {
+                            let pct = (used / total * 100.0).round();
+                            return Some((
+                                "Mem".to_string(),
+                                format!("{pct:.0}%"),
+                                pct >= OPS_METRIC_DANGER,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // uptime：负载
+    if cmd.contains("uptime") {
+        if let Some(l) = lines.first() {
+            if let Some(idx) = l.find("load average:") {
+                let rest = &l[idx + "load average:".len()..];
+                let first = rest.split(',').next().unwrap_or("").trim();
+                if !first.is_empty() {
+                    return Some(("Load".to_string(), first.to_string(), false));
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// 带底色的胶囊徽章：图标 + 文案（门闩、模型引擎等）。
@@ -489,6 +611,14 @@ impl AiPanel {
                         120,
                     )
                 };
+                let (metric_label, metric_value, metric_danger) = if r.ok {
+                    match extract_host_metric(command, &r.output) {
+                        Some((l, v, d)) => (Some(l), Some(v), d),
+                        None => (None, None, false),
+                    }
+                } else {
+                    (None, None, false)
+                };
                 AgentHostRow {
                     name,
                     endpoint,
@@ -498,6 +628,9 @@ impl AiPanel {
                     error: r.error,
                     output: r.output,
                     duration_ms: r.duration_ms,
+                    metric_label,
+                    metric_value,
+                    metric_danger,
                 }
             })
             .collect();
@@ -1770,8 +1903,12 @@ impl AiPanel {
         width: f32,
         msg_index: usize,
     ) {
-        let ok_n = batch.hosts.iter().filter(|h| h.ok).count();
-        let fail_n = batch.hosts.len().saturating_sub(ok_n);
+        let fail_n = batch
+            .hosts
+            .iter()
+            .filter(|h| !h.ok || h.metric_danger)
+            .count();
+        let ok_n = batch.hosts.len().saturating_sub(fail_n);
         ui.set_max_width(width.max(24.0));
 
         // 顶层汇总条：状态点统计 + 并发耗时
@@ -1846,20 +1983,29 @@ impl AiPanel {
 
         let mut next_selected = self.selected_host_idx;
         let num_hosts = batch.hosts.len();
+        let cols = if num_hosts <= 1 { 1 } else { 2 };
+        let col_w = if cols == 1 {
+            ui.available_width()
+        } else {
+            (ui.available_width() - 12.0) / 2.0
+        };
 
         egui::Grid::new(format!("host_matrix_grid_{msg_index}"))
-            .num_columns(2)
+            .num_columns(cols)
             .spacing(egui::vec2(8.0, 8.0))
-            .min_col_width((ui.available_width() - 12.0) / 2.0)
+            .min_col_width(col_w)
             .show(ui, |ui| {
                 for (idx, host) in batch.hosts.iter().enumerate() {
+                    let alert = !host.ok || host.metric_danger;
                     let is_selected = self.selected_host_idx == Some(idx)
-                        || (self.selected_host_idx.is_none() && !host.ok);
-                    let accent_color = if host.ok {
-                        theme.green_color()
-                    } else {
+                        || (self.selected_host_idx.is_none() && alert);
+                    let accent_color = if alert {
                         theme.red_color()
+                    } else {
+                        theme.green_color()
                     };
+                    let danger_text = egui::Color32::from_rgb(255, 123, 114);
+                    let normal_val = egui::Color32::from_rgb(126, 231, 135);
 
                     let frame = egui::Frame::none()
                         .fill(if is_selected {
@@ -1880,80 +2026,103 @@ impl AiPanel {
 
                     let resp = frame.show(ui, |ui| {
                         ui.set_width((ui.available_width() - 8.0).max(60.0));
+                        // 名称 + 状态点
                         ui.horizontal(|ui| {
                             let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
                             ui.painter().circle_filled(dot_rect.center(), 3.5, accent_color);
-
                             ui.label(
                                 egui::RichText::new(&host.name)
                                     .strong()
                                     .size(theme.font_size_small())
-                                    .color(if is_selected { theme.text_primary() } else { theme.text_secondary() }),
-                            );
-                            if !host.ok {
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        let px = theme.font_size_caption();
-                                        let (wr, _) = ui.allocate_exact_size(
-                                            egui::vec2(px, px),
-                                            egui::Sense::hover(),
-                                        );
-                                        crate::ui::icons::paint_icon(
-                                            ui,
-                                            wr,
-                                            crate::ui::icons::IconId::Warning,
-                                            theme.red_color(),
-                                            px,
-                                        );
-                                    },
-                                );
-                            }
-                        });
-                        ui.label(
-                            egui::RichText::new(&host.endpoint)
-                                .monospace()
-                                .size(10.0)
-                                .color(theme.color_form_hint()),
-                        );
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            let px = 11.0;
-                            let mcolor = if !host.ok {
-                                theme.red_color()
-                            } else {
-                                theme.text_tertiary()
-                            };
-                            let (mr, _) =
-                                ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
-                            crate::ui::icons::paint_icon(
-                                ui,
-                                mr,
-                                crate::ui::icons::IconId::Chart,
-                                mcolor,
-                                px,
-                            );
-                            ui.label(
-                                egui::RichText::new(truncate_ui_line(&host.summary, 38))
-                                    .size(10.5)
-                                    .color(if !host.ok {
-                                        theme.red_color()
+                                    .color(if alert {
+                                        danger_text
+                                    } else if is_selected {
+                                        theme.text_primary()
                                     } else {
                                         theme.text_secondary()
                                     }),
                             );
                         });
+                        // 主机地址
+                        ui.label(
+                            egui::RichText::new(&host.endpoint)
+                                .monospace()
+                                .size(10.0)
+                                .color(if alert { danger_text } else { theme.color_form_hint() }),
+                        );
+                        // 指标 badge：Top 进程 + 百分比(绿/红 + danger 三角)；无结构化指标回退 summary
+                        if let Some(val) = host.metric_value.clone() {
+                            ui.horizontal(|ui| {
+                                if let Some(lbl) = &host.metric_label {
+                                    ui.label(
+                                        egui::RichText::new(lbl)
+                                            .size(10.5)
+                                            .color(if alert { danger_text } else { theme.text_secondary() }),
+                                    );
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(&val)
+                                                .monospace()
+                                                .strong()
+                                                .size(10.5)
+                                                .color(if host.metric_danger {
+                                                    danger_text
+                                                } else {
+                                                    normal_val
+                                                }),
+                                        );
+                                        if host.metric_danger {
+                                            let px = 11.0;
+                                            let (wr, _) = ui.allocate_exact_size(
+                                                egui::vec2(px, px),
+                                                egui::Sense::hover(),
+                                            );
+                                            crate::ui::icons::paint_icon(
+                                                ui,
+                                                wr,
+                                                crate::ui::icons::IconId::Warning,
+                                                danger_text,
+                                                px,
+                                            );
+                                        }
+                                    },
+                                );
+                            });
+                        } else {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                let px = 11.0;
+                                let mcolor = if alert { danger_text } else { theme.text_tertiary() };
+                                let (mr, _) =
+                                    ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                                crate::ui::icons::paint_icon(
+                                    ui,
+                                    mr,
+                                    crate::ui::icons::IconId::Chart,
+                                    mcolor,
+                                    px,
+                                );
+                                ui.label(
+                                    egui::RichText::new(truncate_ui_line(&host.summary, 38))
+                                        .size(10.5)
+                                        .color(if alert { danger_text } else { theme.text_secondary() }),
+                                );
+                            });
+                        }
                     }).response;
 
                     if resp.interact(egui::Sense::click()).clicked() {
                         next_selected = Some(idx);
                     }
 
-                    if (idx + 1) % 2 == 0 {
+                    if (idx + 1) % cols == 0 {
                         ui.end_row();
                     }
                 }
-                if num_hosts % 2 != 0 {
+                if num_hosts % cols != 0 {
                     ui.end_row();
                 }
             });
