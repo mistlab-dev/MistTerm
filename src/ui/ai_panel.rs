@@ -1942,11 +1942,15 @@ impl AiPanel {
                                 clicked_confirm = true;
                             }
                             if ui
-                                .add_enabled(
-                                    !executing,
-                                    egui::Button::new(i18n::tr(ctx, "Cancel", "放弃")),
-                                )
-                                .clicked()
+                                .add_enabled_ui(!executing, |ui| {
+                                    crate::ui::chrome::panel_toolbar_button(
+                                        ui,
+                                        theme,
+                                        i18n::tr(ctx, "Cancel", "放弃"),
+                                    )
+                                    .clicked()
+                                })
+                                .inner
                             {
                                 clicked_cancel = true;
                             }
@@ -2726,11 +2730,53 @@ impl AiPanel {
         });
 
         ui.add_space(theme.spacing_sm());
-        // 精简底栏：左侧附带；右侧固定「发送」(+ 清空对话图标)，右侧留缝避免裁切。
-        let toolbar_pad_r = 8.0;
+        // 底栏第一行：附带上下文（次要，左对齐，窄面板自动换行）
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            if ui
+                .add_enabled_ui(can_type, |ui| {
+                    crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
+                        ui,
+                        theme,
+                        IconId::TerminalPrompt,
+                        i18n::tr(ctx, "Attach terminal", "附带终端"),
+                        true,
+                    )
+                    .on_hover_text(i18n::tr(
+                        ctx,
+                        "Attach the last 50 lines from the active terminal (no copy needed)",
+                        "附带当前活动终端最近 50 行(无需手动复制)",
+                    ))
+                    .clicked()
+                })
+                .inner
+            {
+                attach_terminal_clicked = true;
+            }
+            if ui
+                .add_enabled_ui(can_type, |ui| {
+                    crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
+                        ui,
+                        theme,
+                        IconId::Attachment,
+                        i18n::tr(ctx, "Attach selection", "附带选区"),
+                        true,
+                    )
+                    .on_hover_text(i18n::tr(
+                        ctx,
+                        "Attach the current terminal selection (no copy needed)",
+                        "附带当前终端选区(无需手动复制)",
+                    ))
+                    .clicked()
+                })
+                .inner
+            {
+                attach_selection_clicked = true;
+            }
+        });
+        ui.add_space(6.0);
+        // 底栏第二行：主操作（右对齐）发送/停止 + 清空
         ui.horizontal(|ui| {
-            let max_w = (ui.available_width() - toolbar_pad_r).max(96.0);
-            ui.set_max_width(max_w);
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if generating {
@@ -2783,49 +2829,6 @@ impl AiPanel {
                     )
                     .clicked();
                 }
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if ui
-                        .add_enabled_ui(can_type, |ui| {
-                            crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
-                                ui,
-                                theme,
-                                IconId::TerminalPrompt,
-                                i18n::tr(ctx, "Attach terminal", "附带终端"),
-                                true,
-                            )
-                            .on_hover_text(i18n::tr(
-                                ctx,
-                                "Attach the last 50 lines from the active terminal (no copy needed)",
-                                "附带当前活动终端最近 50 行(无需手动复制)",
-                            ))
-                            .clicked()
-                        })
-                        .inner
-                    {
-                        attach_terminal_clicked = true;
-                    }
-                    if ui
-                        .add_enabled_ui(can_type, |ui| {
-                            crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
-                                ui,
-                                theme,
-                                IconId::Attachment,
-                                i18n::tr(ctx, "Attach selection", "附带选区"),
-                                true,
-                            )
-                            .on_hover_text(i18n::tr(
-                                ctx,
-                                "Attach the current terminal selection (no copy needed)",
-                                "附带当前终端选区(无需手动复制)",
-                            ))
-                            .clicked()
-                        })
-                        .inner
-                    {
-                        attach_selection_clicked = true;
-                    }
-                });
             });
         });
         if attach_terminal_clicked {
