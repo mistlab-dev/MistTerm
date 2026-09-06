@@ -1453,6 +1453,60 @@ impl AiPanel {
                     );
                 }
 
+                // 策略可读性解释（Policy Explainer 增强展开区）
+                let is_mutate = crate::core::agent::looks_like_mutate_command(&plan.command_edit);
+                let audit_mock = crate::core::cmd_audit::CmdAuditResult {
+                    allowed: !is_mutate,
+                    action: if is_mutate {
+                        crate::core::cmd_audit::CmdAuditAction::Confirm
+                    } else {
+                        crate::core::cmd_audit::CmdAuditAction::Allow
+                    },
+                    matches: vec![],
+                };
+                let explanation = crate::core::agent::explain_policy_decision(
+                    &plan.command_edit,
+                    &audit_mock,
+                    is_mutate,
+                );
+
+                if is_mutate || plan.l2_armed {
+                    ui.add_space(theme.spacing_xs());
+                    egui::Frame::none()
+                        .fill(egui::Color32::from_rgb(26, 20, 15))
+                        .stroke(egui::Stroke::new(1.0, theme.amber_color().gamma_multiply(0.4)))
+                        .rounding(egui::Rounding::same(6.0))
+                        .inner_margin(egui::vec2(8.0, 6.0))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("⚠️ 风险根因：{}", explanation.title))
+                                        .size(theme.font_size_caption())
+                                        .strong()
+                                        .color(theme.amber_color()),
+                                );
+                            });
+                            ui.label(
+                                egui::RichText::new(&explanation.reason)
+                                    .size(11.0)
+                                    .color(theme.text_secondary()),
+                            );
+                            if let Some(sug) = &explanation.suggestion {
+                                ui.add_space(2.0);
+                                ui.label(
+                                    egui::RichText::new(format!("💡 建议替代：{sug}"))
+                                        .size(10.5)
+                                        .color(theme.accent_color()),
+                                );
+                            }
+                            ui.label(
+                                egui::RichText::new(format!("🛡️ 放行条件：{}", explanation.pass_condition))
+                                    .size(10.0)
+                                    .color(theme.color_form_hint()),
+                            );
+                        });
+                }
+
                 if let Some(st) = &plan.status {
                     ui.add_space(theme.spacing_xs());
                     ui.label(
