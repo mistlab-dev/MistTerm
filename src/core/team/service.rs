@@ -642,4 +642,90 @@ impl TeamService {
             let _ = tx.send(result);
         });
     }
+
+    /// AI 智控台多机执行审计流水上报（后台异步线程，不阻塞 UI 渲染）
+    pub fn spawn_batch_exec_report(
+        &self,
+        team_id: &str,
+        intent: String,
+        command: String,
+        rationale: String,
+        gate_level: String,
+        gate_armed: bool,
+        fail_fast: bool,
+        rows: &[crate::core::BatchExecRow],
+    ) {
+        if !self.is_logged_in() || team_id.is_empty() {
+            return;
+        }
+        let api_base = self.api_base();
+        let team_id = team_id.to_string();
+
+        #[derive(serde::Serialize)]
+        struct HostItem {
+            name: String,
+            endpoint: String,
+            ok: bool,
+            exit_code: Option<i32>,
+            summary: String,
+            output: String,
+            error: String,
+            duration_ms: i64,
+        }
+
+        #[derive(serde::Serialize)]
+        struct ReportPayload {
+            intent: String,
+            command: String,
+            rationale: String,
+            gate_level: String,
+            gate_armed: bool,
+            fail_fast: bool,
+            total_hosts: usize,
+            hosts: Vec<HostItem>,
+        }
+
+        let mut hosts = Vec::with_capacity(rows.len());
+        for r in rows {
+            let (name, endpoint) = if let Some((n, ep)) = r.label.split_once(" · ") {
+                (n.trim().to_string(), ep.trim().to_string())
+            } else {
+                (r.label.clone(), r.label.clone())
+            };
+
+            hosts.push(HostItem {
+                name,
+                endpoint,
+                ok: r.ok,
+                exit_code: r.exit_code,
+                summary: r.summary.clone(),
+                output: r.output.clone(),
+                error: r.error.clone().unwrap_or_default(),
+                duration_ms: r.duration_ms,
+            });
+        }
+
+        let payload = ReportPayload {
+            intent,
+            command,
+            rationale,
+            gate_level,
+            gate_armed,
+            fail_fast,
+            total_hosts: rows.len(),
+            hosts,
+        };
+
+        thread::spawn(move || {
+            let tokens = TeamTokenStore::default();
+            let Some(access) = tokens.load_access_token() else {
+                return;
+            };
+            let url = format!("{}/v1/teams/{}/batch-exec/report", api_base.trim_end_matches('/'), team_id);
+            let _ = ureq::post(&url)
+                .set("Authorization", &format!("Bearer {access}"))
+                .set("Content-Type", "application/json")
+                .send_json(&payload);
+        });
+    }
 }
