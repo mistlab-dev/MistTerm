@@ -205,6 +205,7 @@ struct AgentPlanUi {
     rationale: String,
     phase: AgentPhase,
     target_count: usize,
+    target_filter: Option<String>,
     gate_hint: String,
     l2_armed: bool,
     status: Option<String>,
@@ -269,6 +270,11 @@ impl AiPanel {
         if let Some(p) = &mut self.agent_plan {
             p.target_count = n;
         }
+    }
+
+    /// 供 App 读取当前计划是否有目标过滤要求。
+    pub fn agent_target_filter(&self) -> Option<String> {
+        self.agent_plan.as_ref().and_then(|p| p.target_filter.clone())
     }
 
     /// 取出待批量执行的命令(一步一确认之后)。
@@ -1320,19 +1326,24 @@ impl AiPanel {
                         .size(theme.font_size_small())
                         .color(theme.color_form_hint()),
                 );
+                let target_label = if let Some(ref filter) = plan.target_filter {
+                    if plan.target_count == 0 {
+                        format!("{} ({}：{})", i18n::tr(ctx, "(resolving…)", "(解析中…)"), i18n::tr(ctx, "filter", "过滤"), filter)
+                    } else {
+                        format!("{} {} ({}：{})", plan.target_count, i18n::tr(ctx, "hosts", "台"), i18n::tr(ctx, "filter", "过滤"), filter)
+                    }
+                } else {
+                    if plan.target_count == 0 {
+                        i18n::tr(ctx, "(resolving…)", "(解析中…)").to_string()
+                    } else {
+                        format!("{} {}", plan.target_count, i18n::tr(ctx, "hosts", "台"))
+                    }
+                };
                 ui.label(
                     egui::RichText::new(format!(
                         "{}: {}",
                         i18n::tr(ctx, "Targets", "目标主机"),
-                        if plan.target_count == 0 {
-                            i18n::tr(ctx, "(resolving…)", "(解析中…)").to_string()
-                        } else {
-                            format!(
-                                "{} {}",
-                                plan.target_count,
-                                i18n::tr(ctx, "hosts", "台")
-                            )
-                        }
+                        target_label
                     ))
                     .size(theme.font_size_small()),
                 );
@@ -2267,6 +2278,7 @@ impl AiPanel {
             rationale: proposal.rationale,
             phase: AgentPhase::AwaitingL1,
             target_count: 0,
+            target_filter: proposal.target_filter,
             gate_hint: "确认后将在所选主机上短连接执行(不占用终端 Tab)".into(),
             l2_armed: false,
             status: None,
