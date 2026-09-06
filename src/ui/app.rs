@@ -4254,7 +4254,13 @@ impl MistTermApp {
 
     /// v2：AI 面板多机 Agent — 更新目标数、门闩、启动/回收批量结果。
     fn poll_ai_agent_ops(&mut self, ctx: &egui::Context) {
-        let targets = self.build_agent_batch_targets(ctx);
+        let mut targets = self.build_agent_batch_targets(ctx);
+        if let Some(filter) = self.ai_panel.agent_target_filter() {
+            let f = filter.to_lowercase();
+            targets.retain(|t| {
+                t.label.to_lowercase().contains(&f) || t.group.to_lowercase().contains(&f)
+            });
+        }
         self.ai_panel.set_agent_target_count(targets.len());
 
         if let Some(rx) = &self.agent_batch_rx {
