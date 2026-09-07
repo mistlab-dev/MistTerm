@@ -908,7 +908,15 @@ impl MistTermApp {
         self.session_log_dialog
             .show(ctx, theme, &self.session_log_settings);
         let help_shortcuts = crate::ui::app::mistterm_functional_spec_shortcuts(ctx);
-        if let Some(error) = self.help_docs_dialog.show(ctx, theme, &help_shortcuts) {
+        let onboarding_status = crate::ui::help_docs_dialog::OnboardingStatus {
+            connected: !self.tabs.is_empty(),
+            team_logged_in: self.team_service.is_logged_in(),
+            ai_configured: self.app_settings.ai.has_api_key(),
+        };
+        if let Some(error) =
+            self.help_docs_dialog
+                .show(ctx, theme, &help_shortcuts, onboarding_status)
+        {
             self.notify_error(error);
         }
 
