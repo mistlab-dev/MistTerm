@@ -24,54 +24,70 @@ pub fn explain_policy_decision(command: &str, audit: &CmdAuditResult, is_mutate:
     let cmd = command.trim();
     let cmd_lower = cmd.to_lowercase();
 
-    // 1. 匹配命中的具体规则/模式
+    // 1. 基于命令文本的高危模式（独立于是否命中本地审计规则；
+    //    AI 智控台调用时传入的 audit.matches 可能为空，因此文本特征优先判定）
+    let matched_msg = audit
+        .matches
+        .first()
+        .map(|m| m.message.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let matched_rm = audit
+        .matches
+        .first()
+        .is_some_and(|m| m.rule_id.contains("rm"));
+
+    if matched_rm || cmd_lower.starts_with("rm ") || cmd_lower.contains("rm -rf") {
+        return PolicyExplanation {
+            title: "触发高危删除防护 (Root/Recursive Delete)".into(),
+            reason: match &matched_msg {
+                Some(msg) => format!(
+                    "检测到递归或强制删除操作（{msg}）。在生产或集群批量环境中极易导致不可逆的数据丢失。"
+                ),
+                None => "检测到递归或强制删除操作。在生产或集群批量环境中极易导致不可逆的数据丢失。"
+                    .to_string(),
+            },
+            risk_tier: "严重高危 (Destructive)".into(),
+            suggestion: Some("建议改用 'mv ... /tmp/' 软归档，或使用具备测试参数的清理脚本。".into()),
+            pass_condition: "需在单一主机交互式终端中人工确认后执行，禁止在 AI 智控台批量无监督运行。".into(),
+        };
+    }
+
+    if cmd_lower.contains("drop ") || cmd_lower.contains("truncate ") {
+        return PolicyExplanation {
+            title: "触发数据库高危 DDL 保护 (Data Destruction)".into(),
+            reason: "检测到 DROP 或 TRUNCATE 数据库对象操作，直接影响生产持久化数据。".into(),
+            risk_tier: "严重高危 (Data Loss)".into(),
+            suggestion: Some("请通过专门的数据库变更审批流执行，或先备份快照后再做迁移。".into()),
+            pass_condition: "需团队 Admin 审批，并走受控的 SQL 变更工单流程。".into(),
+        };
+    }
+
+    if cmd_lower.contains("iptables") || cmd_lower.contains("nft ") {
+        return PolicyExplanation {
+            title: "触发网络防火墙安全门闩 (Network Isolation Risk)".into(),
+            reason: "刷新或清空防火墙规则可能导致主机公网暴露，或立即切断 SSH 运维通道导致失联。".into(),
+            risk_tier: "网络高危 (Connectivity Loss)".into(),
+            suggestion: Some("建议使用 'iptables -L -n -v' 先检查现有规则，单条定向增删。".into()),
+            pass_condition: "需具备带外带内自愈机制或在单机带定时回滚任务下执行。".into(),
+        };
+    }
+
+    if cmd_lower.contains("reboot") || cmd_lower.contains("shutdown") || cmd_lower.contains("poweroff") {
+        return PolicyExplanation {
+            title: "触发主机电源与停机防线 (Host Shutdown)".into(),
+            reason: "下发了整机重启或关机指令，会导致正在承载的业务立即中断。".into(),
+            risk_tier: "可用性致命 (Outage Risk)".into(),
+            suggestion: Some("建议使用 'uptime' 查看运行状态，或走分批灰度排水与重启流程。".into()),
+            pass_condition: "需确认该节点已完成负载下线，并在变更窗口期内操作。".into(),
+        };
+    }
+
+    // 2. 命中审计黑名单（依赖本地审计规则命中）
     if let Some(m) = audit.matches.first() {
-        let msg = m.message.trim();
-        let rule_id = m.rule_id.as_str();
-
-        if rule_id.contains("rm") || cmd_lower.starts_with("rm ") || cmd_lower.contains("rm -rf") {
-            return PolicyExplanation {
-                title: "触发高危删除防护 (Root/Recursive Delete)".into(),
-                reason: format!("检测到递归或强制删除操作（{}）。在生产或集群批量环境中极易导致不可逆的数据丢失。", msg),
-                risk_tier: "严重高危 (Destructive)".into(),
-                suggestion: Some("建议改用 'mv ... /tmp/' 软归档，或使用具备测试参数的清理脚本。".into()),
-                pass_condition: "需在单一主机交互式终端中人工确认后执行，禁止在 AI 智控台批量无监督运行。".into(),
-            };
-        }
-
-        if cmd_lower.contains("drop ") || cmd_lower.contains("truncate ") {
-            return PolicyExplanation {
-                title: "触发数据库高危 DDL 保护 (Data Destruction)".into(),
-                reason: "检测到 DROP 或 TRUNCATE 数据库对象操作，直接影响生产持久化数据。".into(),
-                risk_tier: "严重高危 (Data Loss)".into(),
-                suggestion: Some("请通过专门的数据库变更审批流执行，或先备份快照后再做迁移。".into()),
-                pass_condition: "需团队 Admin 审批，并走受控的 SQL 变更工单流程。".into(),
-            };
-        }
-
-        if cmd_lower.contains("iptables") || cmd_lower.contains("nft ") {
-            return PolicyExplanation {
-                title: "触发网络防火墙安全门闩 (Network Isolation Risk)".into(),
-                reason: "刷新或清空防火墙规则可能导致主机公网暴露，或立即切断 SSH 运维通道导致失联。".into(),
-                risk_tier: "网络高危 (Connectivity Loss)".into(),
-                suggestion: Some("建议使用 'iptables -L -n -v' 先检查现有规则，单条定向增删。".into()),
-                pass_condition: "需具备带外带内自愈机制或在单机带定时回滚任务下执行。".into(),
-            };
-        }
-
-        if cmd_lower.contains("reboot") || cmd_lower.contains("shutdown") || cmd_lower.contains("poweroff") {
-            return PolicyExplanation {
-                title: "触发主机电源与停机防线 (Host Shutdown)".into(),
-                reason: "下发了整机重启或关机指令，会导致正在承载的业务立即中断。".into(),
-                risk_tier: "可用性致命 (Outage Risk)".into(),
-                suggestion: Some("建议使用 'uptime' 查看运行状态，或走分批灰度排水与重启流程。".into()),
-                pass_condition: "需确认该节点已完成负载下线，并在变更窗口期内操作。".into(),
-            };
-        }
-
         if audit.action == CmdAuditAction::Block {
+            let msg = m.message.trim();
             return PolicyExplanation {
-                title: format!("命中安全黑名单策略 ({})", rule_id),
+                title: format!("命中安全黑名单策略 ({})", m.rule_id),
                 reason: if !msg.is_empty() { msg.to_string() } else { "命令包含团队安全基线明确禁止的特征模式。".to_string() },
                 risk_tier: "规则拦截 (Policy Block)".into(),
                 suggestion: None,
