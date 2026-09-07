@@ -2758,8 +2758,6 @@ impl AiPanel {
         }
         let _row_w = bind_row_width(ui);
         let mut send_clicked = false;
-        let mut clear_draft_clicked = false;
-        let mut clear_chat_clicked = false;
         let mut attach_terminal_clicked = false;
         let mut attach_selection_clicked = false;
 
@@ -2768,9 +2766,19 @@ impl AiPanel {
             .session_meta
             .as_ref()
             .and_then(|m| m.session_name.clone().or_else(|| m.host.clone()));
-        theme.frame_boxed_text_input(focused).show(ui, |ui| {
-            let inner_w =
-                (ui.available_width() - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0);
+        // 输入容器：接近设计稿 action-input-wrapper 的深底 + 聚焦 teal 描边
+        let input_border = if focused {
+            egui::Stroke::new(1.5, theme.accent_color())
+        } else {
+            egui::Stroke::new(1.0, theme.divider_stroke().color)
+        };
+        egui::Frame::none()
+            .fill(egui::Color32::from_rgb(9, 12, 16))
+            .stroke(input_border)
+            .rounding(egui::Rounding::same(8.0))
+            .inner_margin(egui::vec2(10.0, 8.0))
+            .show(ui, |ui| {
+            let inner_w = (ui.available_width() - 4.0).max(48.0);
             if !self.attached_contexts.is_empty() {
                 self.show_attached_context_chip_row(ui, ctx, theme);
                 if self.attached_contexts.iter().any(|c| c.truncated) {
@@ -2834,23 +2842,17 @@ impl AiPanel {
         });
 
         ui.add_space(theme.spacing_sm());
-        // 底栏第一行：附带上下文（次要，左对齐，窄面板自动换行）
-        ui.horizontal_wrapped(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+        // 底栏单行：左侧附带上下文（紧凑图标），右侧发送 / 停止
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
             if ui
                 .add_enabled_ui(can_type, |ui| {
-                    crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
+                    crate::ui::chrome::panel_toolbar_icon_button(
                         ui,
                         theme,
                         IconId::TerminalPrompt,
-                        i18n::tr(ctx, "Attach terminal", "附带终端"),
-                        true,
+                        i18n::tr(ctx, "Attach last 50 terminal lines", "附带终端最近 50 行"),
                     )
-                    .on_hover_text(i18n::tr(
-                        ctx,
-                        "Attach the last 50 lines from the active terminal (no copy needed)",
-                        "附带当前活动终端最近 50 行(无需手动复制)",
-                    ))
                     .clicked()
                 })
                 .inner
@@ -2859,29 +2861,18 @@ impl AiPanel {
             }
             if ui
                 .add_enabled_ui(can_type, |ui| {
-                    crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
+                    crate::ui::chrome::panel_toolbar_icon_button(
                         ui,
                         theme,
                         IconId::Attachment,
-                        i18n::tr(ctx, "Attach selection", "附带选区"),
-                        true,
+                        i18n::tr(ctx, "Attach terminal selection", "附带终端选区"),
                     )
-                    .on_hover_text(i18n::tr(
-                        ctx,
-                        "Attach the current terminal selection (no copy needed)",
-                        "附带当前终端选区(无需手动复制)",
-                    ))
                     .clicked()
                 })
                 .inner
             {
                 attach_selection_clicked = true;
             }
-        });
-        ui.add_space(6.0);
-        // 底栏第二行：主操作（右对齐）发送/停止 + 清空
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if generating {
                     if crate::ui::chrome::panel_solid_primary_button_with_icon_ex(
@@ -2911,28 +2902,6 @@ impl AiPanel {
                         })
                         .inner;
                 }
-                clear_chat_clicked = ui
-                    .add_enabled_ui(can_type && !self.messages.is_empty(), |ui| {
-                        crate::ui::chrome::panel_outlined_icon_button(
-                            ui,
-                            theme,
-                            IconId::Trash,
-                            i18n::tr(ctx, "Clear chat", "清空对话"),
-                            true,
-                        )
-                        .clicked()
-                    })
-                    .inner;
-                if can_type && !self.draft_input.is_empty() {
-                    clear_draft_clicked = crate::ui::chrome::panel_outlined_icon_button(
-                        ui,
-                        theme,
-                        IconId::Cross,
-                        i18n::tr(ctx, "Clear draft only", "仅清空输入框"),
-                        true,
-                    )
-                    .clicked();
-                }
             });
         });
         if attach_terminal_clicked {
@@ -2940,20 +2909,6 @@ impl AiPanel {
         }
         if attach_selection_clicked {
             self.attach_selection_requested = true;
-        }
-        if clear_draft_clicked {
-            self.draft_input.clear();
-            self.attached_contexts.clear();
-            self.input_status = None;
-        }
-        if clear_chat_clicked && !self.messages.is_empty() {
-            self.messages.clear();
-            self.last_error = None;
-            self.input_status = None;
-            self.agent_plan = None;
-            self.pending_agent_exec = None;
-            self.chat_dirty = true;
-            self.flush_persisted_chat(true);
         }
         if (send_clicked || enter_send) && can_send {
             match self.send_message(ctx, app_settings) {
