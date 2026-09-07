@@ -156,6 +156,7 @@ mod tests {
             team_id: String::new(),
             title: title.to_string(),
             command: format!("echo {id}"),
+            linked_docs: Vec::new(),
             category: String::new(),
             tags: "[]".to_string(),
             variables: "{}".to_string(),

@@ -67,24 +67,32 @@
 
 ---
 
-## v2.0 — 对话驱动运维（大版本 · 单独立项）
+## v2.0 — 对话驱动运维（大版本 · 已落地于 AI 智控台 / Ops Hub）
 
-> 设计稿：[`CONVERSATIONAL-TERMINAL.md`](CONVERSATIONAL-TERMINAL.md)。**不纳入 v1.1.3**。  
-> 分支：`feature/v2-conversational-terminal`（设计与实现可多轮迭代，合入/发版另议）。
+> 设计稿：[`CONVERSATIONAL-TERMINAL.md`](CONVERSATIONAL-TERMINAL.md)。  
+> 实现：AI 智控台（Ops Copilot Workbench）— `src/core/agent/*` + `src/ui/ai_panel.rs`，随 PR #6/#8 合入 `main`。
 
-- [ ] Phase 1：AgentLoop + Gate + ExecutionBase（NL→提议命令→L1/L2→batch SSH→回对话）；**无 Skill 目录**
-- [ ] Phase 1末/2：多轮澄清 + 跟进；「允许对话变更」+ mutate 命令模式白名单（L2）
-- [ ] Phase 2/3：LLM 主规划；可选片段级预填（非 Skill 商店）
-- [ ] 不做自愈；不做 per-scenario / 能力目录
+- [x] Phase 1：AgentLoop + Gate + ExecutionBase（NL→提议命令→L1/L2→batch SSH→回对话）；**无 Skill 目录**
+  - 实现：`agent::{planner, gate, run}`；`propose_step` / `gate_decision`（L0/L1/L2）/ batch SSH 执行 + 主机结果矩阵回面板
+- [x] Phase 1末/2：多轮澄清 + 跟进；「允许对话变更」+ mutate 命令模式白名单（L2）
+  - 实现：`LastBatchContext` 跟进上下文；`looks_like_mutate_command` + L2 二次确认门闩
+- [x] Phase 2/3：LLM 主规划；可选片段级预填（非 Skill 商店）
+  - 实现：`build_planner_system_prompt` / `parse_llm_plan_response`，失败时启发式兜底 `propose_step_with_context`
+- [x] 不做自愈；不做 per-scenario / 能力目录（约束已遵守）
 
 ---
 
 ## v1.2 — 组织能力（1.x 后续）
 
-- [ ] 策略可读视图（人能看懂「为什么拦」）
+- [x] 策略可读视图（人能看懂「为什么拦」）
+  - 实现：`agent::explainer`（`explain_policy_decision` / `PolicyExplanation`：风险根因 + 放行条件 + 安全替代命令），已接入 AI 智控台门闩解释区
+- [x] 按主机/环境的知识分层；新人 onboarding 路径
+  - 分层：片段推荐已按主机/环境标签过滤（`fragment_recommendations::SuggestionEnvContext`，`env_tags` 非空优先、无匹配回退全局）
+  - onboarding：新增「新人上手」引导（帮助菜单入口 + 分步清单：连接主机 → 登录团队 → 命令审计 → AI 智控台），见 `src/ui/onboarding_dialog.rs`
 - [ ] 多主机策略包
-- [ ] 按主机/环境的知识分层；新人 onboarding 路径
+  - 现状：客户端已消费服务端审计策略；「策略包」（成组可分发的策略规则集）需服务端下发契约配合，暂列为服务端依赖项
 - [ ] 若有手机能力：仅只读状态 / 审批点头——**仍不做交互式终端**
+  - 现状：MistTerm 为桌面 GUI（`eframe`/`egui`），无移动端载体；本项不适用当前客户端代码库
 
 ---
 

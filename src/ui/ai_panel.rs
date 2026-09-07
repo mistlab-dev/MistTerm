@@ -1928,9 +1928,21 @@ impl AiPanel {
                         .rounding(egui::Rounding::same(6.0))
                         .inner_margin(egui::vec2(8.0, 6.0))
                         .show(ui, |ui| {
+                            // 风险根因（Warning 图标，替代原 emoji，避免字体缺字渲染成方块）
                             ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                let px = theme.font_size_caption();
+                                let (r, _) = ui
+                                    .allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                                crate::ui::icons::paint_icon(
+                                    ui,
+                                    r,
+                                    crate::ui::icons::IconId::Warning,
+                                    theme.amber_color(),
+                                    px,
+                                );
                                 ui.label(
-                                    egui::RichText::new(format!("⚠️ 风险根因：{}", explanation.title))
+                                    egui::RichText::new(format!("风险根因：{}", explanation.title))
                                         .size(theme.font_size_caption())
                                         .strong()
                                         .color(theme.amber_color()),
@@ -1943,17 +1955,48 @@ impl AiPanel {
                             );
                             if let Some(sug) = &explanation.suggestion {
                                 ui.add_space(2.0);
-                                ui.label(
-                                    egui::RichText::new(format!("💡 建议替代：{sug}"))
-                                        .size(10.5)
-                                        .color(theme.accent_color()),
-                                );
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 4.0;
+                                    let px = 11.0;
+                                    let (r, _) = ui.allocate_exact_size(
+                                        egui::vec2(px, px),
+                                        egui::Sense::hover(),
+                                    );
+                                    crate::ui::icons::paint_icon(
+                                        ui,
+                                        r,
+                                        crate::ui::icons::IconId::Rocket,
+                                        theme.accent_color(),
+                                        px,
+                                    );
+                                    ui.label(
+                                        egui::RichText::new(format!("建议替代：{sug}"))
+                                            .size(10.5)
+                                            .color(theme.accent_color()),
+                                    );
+                                });
                             }
-                            ui.label(
-                                egui::RichText::new(format!("🛡️ 放行条件：{}", explanation.pass_condition))
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                let px = 10.0;
+                                let (r, _) = ui
+                                    .allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                                crate::ui::icons::paint_icon(
+                                    ui,
+                                    r,
+                                    crate::ui::icons::IconId::Check,
+                                    theme.color_form_hint(),
+                                    px,
+                                );
+                                ui.label(
+                                    egui::RichText::new(format!(
+                                        "放行条件：{}",
+                                        explanation.pass_condition
+                                    ))
                                     .size(10.0)
                                     .color(theme.color_form_hint()),
-                            );
+                                );
+                            });
                         });
                 }
 
