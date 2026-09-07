@@ -1175,12 +1175,10 @@ impl AiPanel {
             }
         }
         bind_row_width(ui);
-        // 工作台式布局：指令栏固定在顶部（action bar），下方为可滚动的工作看板/对话区。
-        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+        // 聊天式布局：输入栏贴底，对话/工作看板在其上方向上增长。
+        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
             bind_row_width(ui);
             self.show_input_bar(ui, ctx, theme, app_settings, ready);
-            ui.add_space(theme.spacing_sm());
-            crate::ui::chrome::panel_header_divider(ui, theme);
             ui.add_space(theme.spacing_xs());
             let scroll_h = ui.available_height().max(64.0);
             ui.allocate_ui_with_layout(
@@ -1686,8 +1684,8 @@ impl AiPanel {
                     ui.label(
                         egui::RichText::new(i18n::tr(
                             ctx,
-                            "Type above. For multi-host ops try: 查所有服务器磁盘 — or prefix 多机:",
-                            "在上方输入。多机运维可试：查所有服务器磁盘 — 或以「多机:」开头",
+                            "Type below. For multi-host ops try: 查所有服务器磁盘 — or prefix 多机:",
+                            "在下方输入。多机运维可试：查所有服务器磁盘 — 或以「多机:」开头",
                         ))
                             .size(theme.font_size_small())
                             .color(theme.color_form_hint().gamma_multiply(0.85)),
