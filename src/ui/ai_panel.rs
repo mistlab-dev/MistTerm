@@ -124,6 +124,12 @@ struct AgentHostRow {
     error: Option<String>,
     output: String,
     duration_ms: u64,
+    /// 结构化指标标签(如 "Top: java")；无法解析时为 None，回退 summary。
+    metric_label: Option<String>,
+    /// 结构化指标数值(如 "92.4%")。
+    metric_value: Option<String>,
+    /// 指标是否超过告警阈值(节点整体转告警红)。
+    metric_danger: bool,
 }
 
 fn split_batch_host_label(label: &str) -> (String, String) {
@@ -141,6 +147,299 @@ fn truncate_ui_line(s: &str, max_chars: usize) -> String {
     }
     let head: String = t.chars().take(max_chars.saturating_sub(1)).collect();
     format!("{head}…")
+}
+
+/// 设计稿中「过滤 / 意图范围」用的紫色。
+const OPS_PURPLE: egui::Color32 = egui::Color32::from_rgb(188, 140, 255);
+
+/// 控制台输出逐行语法高亮：命令行(蓝)/ 异常行(红底)/ 普通行(灰)。
+fn ops_render_console_output(ui: &mut egui::Ui, text: &str) {
+    const CMD: egui::Color32 = egui::Color32::from_rgb(121, 192, 255);
+    const ERR: egui::Color32 = egui::Color32::from_rgb(248, 81, 73);
+    const DIM: egui::Color32 = egui::Color32::from_rgb(201, 209, 217);
+    const ERR_KW: [&str; 12] = [
+        "error", "fail", "oom", "killed", "cannot", "denied", "refused", "no such", "panic",
+        "traceback", "fatal", "warn",
+    ];
+    ui.spacing_mut().item_spacing.y = 1.0;
+    for raw in text.lines() {
+        let line = raw.trim_end();
+        if line.is_empty() {
+            ui.label(egui::RichText::new(" ").monospace().size(11.0));
+            continue;
+        }
+        let trimmed = line.trim_start();
+        let lower = line.to_ascii_lowercase();
+        if trimmed.starts_with("$ ") || trimmed.starts_with("# ") {
+            ui.label(egui::RichText::new(line).monospace().size(11.0).color(CMD));
+        } else if ERR_KW.iter().any(|k| lower.contains(k)) {
+            ui.label(
+                egui::RichText::new(line)
+                    .monospace()
+                    .size(11.0)
+                    .color(ERR)
+                    .background_color(egui::Color32::from_rgba_unmultiplied(248, 81, 73, 38)),
+            );
+        } else {
+            ui.label(egui::RichText::new(line).monospace().size(11.0).color(DIM));
+        }
+    }
+}
+
+/// 解析 `free`/`df` 等的大小值（支持 12G / 1.5Gi / 512M / 8192 等）为字节。
+fn ops_parse_size(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let split = s.find(|c: char| c.is_alphabetic()).unwrap_or(s.len());
+    let (num, unit) = s.split_at(split);
+    let n: f32 = num.trim().parse().ok()?;
+    let mult = match unit.to_ascii_lowercase().as_str() {
+        "" | "b" => 1.0,
+        "k" | "ki" | "kib" | "kb" => 1024.0,
+        "m" | "mi" | "mib" | "mb" => 1024.0 * 1024.0,
+        "g" | "gi" | "gib" | "gb" => 1024.0 * 1024.0 * 1024.0,
+        "t" | "ti" | "tib" | "tb" => 1024.0_f32.powi(4),
+        _ => 1.0,
+    };
+    Some(n * mult)
+}
+
+/// 告警阈值（使用率百分比）。
+const OPS_METRIC_DANGER: f32 = 85.0;
+
+/// 从命令输出提取一条关键指标：`(标签, 数值, 是否告警)`。
+/// 覆盖设计稿场景（`ps aux --sort=-%mem` 的 Top 进程 + %）以及常见运维命令。
+fn extract_host_metric(command: &str, output: &str) -> Option<(String, String, bool)> {
+    let cmd = command.to_ascii_lowercase();
+    let lines: Vec<&str> = output.lines().filter(|l| !l.trim().is_empty()).collect();
+
+    // ps aux（按 %MEM / %CPU 排序）：Top 进程 + 百分比
+    if cmd.contains("ps ") || cmd.starts_with("ps") {
+        let by_cpu = cmd.contains("%cpu");
+        for l in &lines {
+            let low = l.to_ascii_lowercase();
+            if low.contains("%mem") || (low.contains("pid") && low.contains("command")) {
+                continue; // 跳过表头
+            }
+            let cols: Vec<&str> = l.split_whitespace().collect();
+            // USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND...
+            if cols.len() >= 11 {
+                let pct = if by_cpu { cols[2] } else { cols[3] };
+                if let Ok(v) = pct.parse::<f32>() {
+                    let comm = cols[10..].join(" ");
+                    let first = comm.split_whitespace().next().unwrap_or(&comm);
+                    let base = first.rsplit('/').next().unwrap_or(first);
+                    let label = format!("Top: {}", truncate_ui_line(base, 14));
+                    return Some((label, format!("{pct}%"), v >= OPS_METRIC_DANGER));
+                }
+            }
+        }
+    }
+
+    // df：使用率最高的分区
+    if cmd.contains("df") {
+        let mut best: Option<(f32, String, String)> = None;
+        for l in &lines {
+            let cols: Vec<&str> = l.split_whitespace().collect();
+            if cols.len() >= 6 {
+                let usep = cols[cols.len() - 2];
+                let mount = cols[cols.len() - 1];
+                if let Some(v) = usep
+                    .strip_suffix('%')
+                    .and_then(|p| p.trim().parse::<f32>().ok())
+                {
+                    let take = best.as_ref().map_or(true, |(bv, ..)| v > *bv);
+                    if take {
+                        best = Some((v, mount.to_string(), usep.to_string()));
+                    }
+                }
+            }
+        }
+        if let Some((v, mount, usep)) = best {
+            let label = format!("Disk {}", truncate_ui_line(&mount, 12));
+            return Some((label, usep, v >= OPS_METRIC_DANGER));
+        }
+    }
+
+    // free：内存使用率
+    if cmd.contains("free") {
+        for l in &lines {
+            if l.trim_start().to_ascii_lowercase().starts_with("mem") {
+                let cols: Vec<&str> = l.split_whitespace().collect();
+                if cols.len() >= 3 {
+                    if let (Some(total), Some(used)) =
+                        (ops_parse_size(cols[1]), ops_parse_size(cols[2]))
+                    {
+                        if total > 0.0 {
+                            let pct = (used / total * 100.0).round();
+                            return Some((
+                                "Mem".to_string(),
+                                format!("{pct:.0}%"),
+                                pct >= OPS_METRIC_DANGER,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // uptime：负载
+    if cmd.contains("uptime") {
+        if let Some(l) = lines.first() {
+            if let Some(idx) = l.find("load average:") {
+                let rest = &l[idx + "load average:".len()..];
+                let first = rest.split(',').next().unwrap_or("").trim();
+                if !first.is_empty() {
+                    return Some(("Load".to_string(), first.to_string(), false));
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// 列出已保存的 AI 会话：`(session_key, 标题, 修改时间)`，最新在前。
+fn list_chat_sessions() -> Vec<(String, String, std::time::SystemTime)> {
+    let dir = crate::core::ai_chat_store::chat_store_dir();
+    let mut out: Vec<(String, String, std::time::SystemTime)> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(&dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(key) = p.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string()) else {
+                continue;
+            };
+            if key.is_empty() {
+                continue;
+            }
+            let msgs = crate::core::load_chat(&key);
+            if msgs.is_empty() {
+                continue;
+            }
+            let title = msgs
+                .iter()
+                .find(|m| m.role == "user")
+                .map(|m| truncate_ui_line(&m.content, 26))
+                .unwrap_or_else(|| "(empty)".to_string());
+            let mtime = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            out.push((key, title, mtime));
+        }
+    }
+    out.sort_by(|a, b| b.2.cmp(&a.2));
+    out
+}
+
+/// 带底色的胶囊徽章：图标 + 文案（门闩、模型引擎等）。
+fn ops_badge(
+    ui: &mut egui::Ui,
+    icon: crate::ui::icons::IconId,
+    text: &str,
+    color: egui::Color32,
+    px: f32,
+) {
+    egui::Frame::none()
+        .fill(color.gamma_multiply(0.15))
+        .rounding(egui::Rounding::same(4.0))
+        .inner_margin(egui::vec2(6.0, 2.0))
+        .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+            crate::ui::icons::paint_icon(ui, r, icon, color, px);
+            ui.label(egui::RichText::new(text).size(px).strong().color(color));
+        });
+}
+
+/// 描边药丸（目标范围 scope）。
+fn ops_scope_pill(ui: &mut egui::Ui, theme: &Theme, text: &str, color: egui::Color32) {
+    egui::Frame::none()
+        .fill(theme.color_subtle_inset_fill())
+        .stroke(egui::Stroke::new(1.0, theme.divider_stroke().color))
+        .rounding(egui::Rounding::same(4.0))
+        .inner_margin(egui::vec2(6.0, 1.0))
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(text)
+                    .size(theme.font_size_caption())
+                    .color(color),
+            );
+        });
+}
+
+/// 发光状态点 + 文案。
+fn ops_status_dot_label(ui: &mut egui::Ui, theme: &Theme, color: egui::Color32, text: &str) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 5.0;
+        let (r, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
+        ui.painter().circle_filled(r.center(), 3.5, color);
+        ui.label(
+            egui::RichText::new(text)
+                .size(theme.font_size_caption())
+                .color(color)
+                .strong(),
+        );
+    });
+}
+
+/// 智能下钻建议 chip：图标 + 文案 + 可选 scope 标签 + 右侧箭头。返回是否被点击。
+fn ops_suggestion_chip(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    icon: crate::ui::icons::IconId,
+    text: &str,
+    scope: Option<&str>,
+    accent: egui::Color32,
+) -> bool {
+    let resp = egui::Frame::none()
+        .fill(theme.color_subtle_inset_fill())
+        .stroke(egui::Stroke::new(1.0, theme.divider_stroke().color))
+        .rounding(egui::Rounding::same(6.0))
+        .inner_margin(egui::vec2(10.0, 7.0))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                let px = theme.font_size_body();
+                let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                crate::ui::icons::paint_icon(ui, r, icon, accent, px);
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(truncate_ui_line(text, 24))
+                        .size(theme.font_size_small())
+                        .color(theme.text_primary()),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let ap = theme.font_size_caption();
+                    let (ar, _) = ui.allocate_exact_size(egui::vec2(ap, ap), egui::Sense::hover());
+                    crate::ui::icons::paint_icon(
+                        ui,
+                        ar,
+                        crate::ui::icons::IconId::ChevronRight,
+                        theme.text_tertiary(),
+                        ap,
+                    );
+                });
+            });
+            if let Some(s) = scope {
+                ui.horizontal(|ui| {
+                    ui.add_space(theme.font_size_body() + 4.0);
+                    ops_scope_pill(ui, theme, s, theme.text_secondary());
+                });
+            }
+        })
+        .response
+        .interact(egui::Sense::click());
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp.clicked()
 }
 
 enum BackgroundJob {
@@ -357,6 +656,14 @@ impl AiPanel {
                         120,
                     )
                 };
+                let (metric_label, metric_value, metric_danger) = if r.ok {
+                    match extract_host_metric(command, &r.output) {
+                        Some((l, v, d)) => (Some(l), Some(v), d),
+                        None => (None, None, false),
+                    }
+                } else {
+                    (None, None, false)
+                };
                 AgentHostRow {
                     name,
                     endpoint,
@@ -366,6 +673,9 @@ impl AiPanel {
                     error: r.error,
                     output: r.output,
                     duration_ms: r.duration_ms,
+                    metric_label,
+                    metric_value,
+                    metric_danger,
                 }
             })
             .collect();
@@ -679,15 +989,28 @@ impl AiPanel {
             |ui, _body_w| {
                 let prev_gap_y = ui.spacing().item_spacing.y;
                 ui.spacing_mut().item_spacing.y = 0.0;
+                let model_badge = truncate_ui_line(app_settings.ai.model.trim(), 18);
+                let cur_key = self.chat_session_key.clone();
+                let mut request_new_chat = false;
+                let mut switch_to: Option<String> = None;
                 theme.frame_right_dock_header_band().show(ui, |ui| {
                     layout_util::set_width_to_available(ui);
                     crate::ui::chrome::dock_header_horizontal(ui, theme, |ui| {
                         crate::ui::chrome::panel_header_title_leading(
                             ui,
                             theme,
-                            crate::ui::icons::IconId::Api,
-                            i18n::tr(ctx, "AI Assistant", "AI 助手"),
+                            crate::ui::icons::IconId::Rocket,
+                            i18n::tr(ctx, "AI Assistant", "AI 智控台"),
                         );
+                        if !model_badge.is_empty() {
+                            ops_badge(
+                                ui,
+                                crate::ui::icons::IconId::Api,
+                                &format!("{model_badge} Planner"),
+                                theme.accent_color(),
+                                theme.font_size_caption(),
+                            );
+                        }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if crate::ui::chrome::dock_close_icon_button(
                                 ui,
@@ -698,9 +1021,92 @@ impl AiPanel {
                             {
                                 *open = false;
                             }
+                            if crate::ui::chrome::panel_toolbar_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Plus,
+                                i18n::tr(ctx, "New chat", "新对话"),
+                            )
+                            .clicked()
+                            {
+                                request_new_chat = true;
+                            }
+                            let hist = crate::ui::chrome::panel_toolbar_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Timer,
+                                i18n::tr(ctx, "Session history", "会话历史"),
+                            );
+                            let popup_id = ui.make_persistent_id("ai_history_popup");
+                            if hist.clicked() {
+                                ui.memory_mut(|m| m.toggle_popup(popup_id));
+                            }
+                            egui::popup_below_widget(ui, popup_id, &hist, |ui| {
+                                ui.set_min_width(200.0);
+                                ui.label(
+                                    egui::RichText::new(i18n::tr(ctx, "Session history", "会话历史"))
+                                        .size(theme.font_size_caption())
+                                        .color(theme.text_tertiary()),
+                                );
+                                ui.separator();
+                                let sessions = list_chat_sessions();
+                                if sessions.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(i18n::tr(
+                                            ctx,
+                                            "No saved sessions",
+                                            "暂无历史会话",
+                                        ))
+                                        .size(theme.font_size_small())
+                                        .color(theme.text_tertiary()),
+                                    );
+                                }
+                                for (key, title, _) in sessions {
+                                    let is_cur = key == cur_key;
+                                    let text = if is_cur {
+                                        format!("● {title}")
+                                    } else {
+                                        format!("   {title}")
+                                    };
+                                    if ui
+                                        .add(
+                                            egui::Button::new(
+                                                egui::RichText::new(text)
+                                                    .size(theme.font_size_small())
+                                                    .color(if is_cur {
+                                                        theme.accent_color()
+                                                    } else {
+                                                        theme.text_primary()
+                                                    }),
+                                            )
+                                            .frame(false),
+                                        )
+                                        .clicked()
+                                    {
+                                        switch_to = Some(key);
+                                        ui.memory_mut(|m| m.close_popup());
+                                    }
+                                }
+                            });
                         });
                     });
                 });
+                if let Some(key) = switch_to {
+                    self.set_chat_session_key(key, true);
+                    self.agent_plan = None;
+                    self.selected_host_idx = None;
+                    self.last_error = None;
+                }
+                if request_new_chat {
+                    let ms = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_millis())
+                        .unwrap_or(0);
+                    self.set_chat_session_key(format!("chat-{ms}"), true);
+                    self.agent_plan = None;
+                    self.selected_host_idx = None;
+                    self.last_error = None;
+                }
                 crate::ui::chrome::right_dock_header_divider(ui, theme);
                 ui.spacing_mut().item_spacing.y = prev_gap_y;
                 ui.add_space(theme.spacing_xs());
@@ -769,9 +1175,12 @@ impl AiPanel {
             }
         }
         bind_row_width(ui);
-        ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
+        // 工作台式布局：指令栏固定在顶部（action bar），下方为可滚动的工作看板/对话区。
+        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
             bind_row_width(ui);
             self.show_input_bar(ui, ctx, theme, app_settings, ready);
+            ui.add_space(theme.spacing_sm());
+            crate::ui::chrome::panel_header_divider(ui, theme);
             ui.add_space(theme.spacing_xs());
             let scroll_h = ui.available_height().max(64.0);
             ui.allocate_ui_with_layout(
@@ -1277,8 +1686,8 @@ impl AiPanel {
                     ui.label(
                         egui::RichText::new(i18n::tr(
                             ctx,
-                            "Type below. For multi-host ops try: 查所有服务器磁盘 — or prefix 多机:",
-                            "在下方输入。多机运维可试：查所有服务器磁盘 — 或以「多机:」开头",
+                            "Type above. For multi-host ops try: 查所有服务器磁盘 — or prefix 多机:",
+                            "在上方输入。多机运维可试：查所有服务器磁盘 — 或以「多机:」开头",
                         ))
                             .size(theme.font_size_small())
                             .color(theme.color_form_hint().gamma_multiply(0.85)),
@@ -1357,8 +1766,18 @@ impl AiPanel {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::vec2(12.0, 10.0))
             .show(ui, |ui| {
-                // 顶栏：标题 + Gate 门闩徽章
+                // 顶栏：剪贴板图标 + 标题 + Gate 门闩徽章
                 ui.horizontal(|ui| {
+                    let px = theme.font_size_body();
+                    let (ir, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                    crate::ui::icons::paint_icon(
+                        ui,
+                        ir,
+                        crate::ui::icons::IconId::Copy,
+                        theme.accent_color(),
+                        px,
+                    );
+                    ui.add_space(2.0);
                     ui.label(
                         egui::RichText::new(i18n::tr(ctx, "Execution Plan", "下一步执行计划"))
                             .strong()
@@ -1366,18 +1785,20 @@ impl AiPanel {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if plan.l2_armed {
-                            ui.label(
-                                egui::RichText::new(i18n::tr(ctx, "Gate: High Risk (L2)", "Gate 门闩: 变更高危 (需确认)"))
-                                    .size(theme.font_size_caption())
-                                    .color(theme.amber_color())
-                                    .strong(),
+                            ops_badge(
+                                ui,
+                                crate::ui::icons::IconId::Warning,
+                                i18n::tr(ctx, "Gate: High Risk", "门闩: 变更高危"),
+                                theme.amber_color(),
+                                theme.font_size_caption(),
                             );
                         } else {
-                            ui.label(
-                                egui::RichText::new(i18n::tr(ctx, "Gate: Readonly Allowed", "Gate 门闩: 只读放行"))
-                                    .size(theme.font_size_caption())
-                                    .color(theme.accent_color())
-                                    .strong(),
+                            ops_badge(
+                                ui,
+                                crate::ui::icons::IconId::Check,
+                                i18n::tr(ctx, "Gate: Readonly", "门闩: 只读放行"),
+                                theme.accent_color(),
+                                theme.font_size_caption(),
                             );
                         }
                     });
@@ -1391,6 +1812,26 @@ impl AiPanel {
                 );
 
                 ui.add_space(theme.spacing_xs());
+
+                // 命令编辑提示
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    let px = 11.0;
+                    let (er, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                    crate::ui::icons::paint_icon(
+                        ui,
+                        er,
+                        crate::ui::icons::IconId::Settings,
+                        theme.text_tertiary(),
+                        px,
+                    );
+                    ui.label(
+                        egui::RichText::new(i18n::tr(ctx, "Command · editable", "执行命令 · 可直接修改"))
+                            .size(10.5)
+                            .color(theme.text_tertiary()),
+                    );
+                });
+                ui.add_space(2.0);
 
                 // 命令输入框：单行高亮，支持直接修改
                 egui::Frame::none()
@@ -1410,37 +1851,46 @@ impl AiPanel {
                         });
                     });
 
-                let target_label = if let Some(ref filter) = plan.target_filter {
-                    if plan.target_count == 0 {
-                        format!("{} ({}：{})", i18n::tr(ctx, "(resolving…)", "(解析中…)"), i18n::tr(ctx, "filter", "过滤"), filter)
-                    } else {
-                        format!("{} {} ({}：{})", plan.target_count, i18n::tr(ctx, "hosts", "台"), i18n::tr(ctx, "filter", "过滤"), filter)
-                    }
-                } else {
-                    if plan.target_count == 0 {
-                        i18n::tr(ctx, "(resolving…)", "(解析中…)").to_string()
-                    } else {
-                        format!("{} {}", plan.target_count, i18n::tr(ctx, "hosts", "台"))
-                    }
-                };
-
+                ui.add_space(theme.spacing_xs());
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
                     ui.label(
-                        egui::RichText::new(format!(
-                            "{}: {}",
-                            i18n::tr(ctx, "Targets", "目标范围"),
-                            target_label
-                        ))
-                        .size(theme.font_size_caption())
-                        .color(theme.text_secondary()),
+                        egui::RichText::new(format!("{}:", i18n::tr(ctx, "Targets", "目标范围")))
+                            .size(theme.font_size_caption())
+                            .color(theme.text_secondary()),
                     );
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(
-                            egui::RichText::new(i18n::tr(ctx, "Short SSH batch", "非交互并发执行"))
-                                .size(10.5)
-                                .color(theme.color_form_hint()),
+                    if plan.target_count > 0 {
+                        ops_scope_pill(
+                            ui,
+                            theme,
+                            &format!("{} {}", plan.target_count, i18n::tr(ctx, "hosts", "台")),
+                            theme.text_primary(),
                         );
+                    } else {
+                        ops_scope_pill(
+                            ui,
+                            theme,
+                            i18n::tr(ctx, "(resolving…)", "(解析中…)"),
+                            theme.text_secondary(),
+                        );
+                    }
+                    if let Some(ref filter) = plan.target_filter {
+                        ops_scope_pill(
+                            ui,
+                            theme,
+                            &format!("{}: {}", i18n::tr(ctx, "filter", "过滤"), filter),
+                            OPS_PURPLE,
+                        );
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if plan.target_count > 0 {
+                            ops_status_dot_label(
+                                ui,
+                                theme,
+                                theme.green_color(),
+                                i18n::tr(ctx, "hosts ready", "节点就绪"),
+                            );
+                        }
                     });
                 });
 
@@ -1518,36 +1968,57 @@ impl AiPanel {
 
                 ui.add_space(theme.spacing_sm());
 
-                // 操作按钮
-                ui.horizontal(|ui| {
-                    let confirm_label = if plan.l2_armed {
-                        i18n::tr(ctx, "I understand — run", "我已知晓，仍然执行 ↵")
-                    } else {
-                        i18n::tr(ctx, "Confirm and Run ↵", "确认并执行 ↵")
-                    };
-
-                    if ui
-                        .add_enabled(
-                            !executing && !plan.command_edit.trim().is_empty(),
-                            egui::Button::new(
-                                egui::RichText::new(confirm_label)
-                                    .size(theme.font_size_small())
-                                    .color(egui::Color32::WHITE),
-                            )
-                            .fill(theme.accent_color()),
-                        )
-                        .clicked()
-                    {
-                        clicked_confirm = true;
-                    }
-
-                    if ui
-                        .add_enabled(!executing, egui::Button::new(i18n::tr(ctx, "Cancel", "放弃")))
-                        .clicked()
-                    {
-                        clicked_cancel = true;
-                    }
-                });
+                // Footer：安全提示 + 操作按钮
+                egui::Frame::none()
+                    .fill(theme.color_panel_header_band_fill())
+                    .rounding(egui::Rounding::same(5.0))
+                    .inner_margin(egui::vec2(10.0, 7.0))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(i18n::tr(
+                                ctx,
+                                "Short non-interactive parallel run",
+                                "短连接 · 非交互并发执行",
+                            ))
+                            .size(10.5)
+                            .color(theme.text_tertiary()),
+                        );
+                        ui.add_space(4.0);
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let confirm_label = if plan.l2_armed {
+                                i18n::tr(ctx, "I understand — run", "我已知晓，仍然执行 ↵")
+                            } else {
+                                i18n::tr(ctx, "Confirm and Run ↵", "确认并执行 ↵")
+                            };
+                            if ui
+                                .add_enabled(
+                                    !executing && !plan.command_edit.trim().is_empty(),
+                                    egui::Button::new(
+                                        egui::RichText::new(confirm_label)
+                                            .size(theme.font_size_small())
+                                            .color(egui::Color32::WHITE),
+                                    )
+                                    .fill(theme.accent_color()),
+                                )
+                                .clicked()
+                            {
+                                clicked_confirm = true;
+                            }
+                            if ui
+                                .add_enabled_ui(!executing, |ui| {
+                                    crate::ui::chrome::panel_toolbar_button(
+                                        ui,
+                                        theme,
+                                        i18n::tr(ctx, "Cancel", "放弃"),
+                                    )
+                                    .clicked()
+                                })
+                                .inner
+                            {
+                                clicked_cancel = true;
+                            }
+                        });
+                    });
             });
 
         if clicked_confirm {
@@ -1606,11 +2077,16 @@ impl AiPanel {
         width: f32,
         msg_index: usize,
     ) {
-        let ok_n = batch.hosts.iter().filter(|h| h.ok).count();
-        let fail_n = batch.hosts.len().saturating_sub(ok_n);
+        let fail_n = batch
+            .hosts
+            .iter()
+            .filter(|h| !h.ok || h.metric_danger)
+            .count();
+        let ok_n = batch.hosts.len().saturating_sub(fail_n);
         ui.set_max_width(width.max(24.0));
 
-        // 顶层汇总条：成功/失败统计与耗时
+        // 顶层汇总条：状态点统计 + 并发耗时
+        let elapsed_ms = batch.hosts.iter().map(|h| h.duration_ms).max().unwrap_or(0);
         egui::Frame::none()
             .fill(theme.color_panel_header_band_fill())
             .stroke(theme.divider_stroke())
@@ -1618,45 +2094,48 @@ impl AiPanel {
             .inner_margin(egui::vec2(10.0, 8.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 10.0;
                     ui.label(
-                        egui::RichText::new(i18n::tr(ctx, "Batch Exec", "多机批处理"))
+                        egui::RichText::new(i18n::tr(ctx, "Batch Exec", "上一轮批处理"))
                             .size(theme.font_size_caption())
                             .color(theme.text_secondary()),
                     );
+                    ops_status_dot_label(
+                        ui,
+                        theme,
+                        theme.green_color(),
+                        &format!("{ok_n} {}", i18n::tr(ctx, "OK", "正常")),
+                    );
+                    if fail_n > 0 {
+                        ops_status_dot_label(
+                            ui,
+                            theme,
+                            theme.red_color(),
+                            &format!("{fail_n} {}", i18n::tr(ctx, "alert", "告警")),
+                        );
+                    }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if fail_n > 0 {
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "{} {fail_n}",
-                                    i18n::tr(ctx, "Failed", "失败")
-                                ))
-                                .size(theme.font_size_caption())
-                                .strong()
-                                .color(theme.red_color()),
-                            );
-                            ui.label(
-                                egui::RichText::new("·")
-                                    .size(theme.font_size_caption())
-                                    .color(theme.text_secondary()),
-                            );
-                        }
                         ui.label(
                             egui::RichText::new(format!(
-                                "{} {ok_n}/{}",
-                                i18n::tr(ctx, "OK", "正常"),
-                                batch.hosts.len()
+                                "{} {elapsed_ms}ms",
+                                i18n::tr(ctx, "elapsed", "并发耗时")
                             ))
+                            .monospace()
                             .size(theme.font_size_caption())
-                            .strong()
-                            .color(if fail_n > 0 {
-                                theme.text_secondary()
-                            } else {
-                                theme.green_color()
-                            }),
+                            .color(theme.text_secondary()),
+                        );
+                        let px = theme.font_size_caption();
+                        let (tr, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                        crate::ui::icons::paint_icon(
+                            ui,
+                            tr,
+                            crate::ui::icons::IconId::Timer,
+                            theme.text_tertiary(),
+                            px,
                         );
                     });
                 });
-                ui.add_space(2.0);
+                ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(&batch.command)
                         .monospace()
@@ -1678,20 +2157,29 @@ impl AiPanel {
 
         let mut next_selected = self.selected_host_idx;
         let num_hosts = batch.hosts.len();
+        let cols = if num_hosts <= 1 { 1 } else { 2 };
+        let col_w = if cols == 1 {
+            ui.available_width()
+        } else {
+            (ui.available_width() - 12.0) / 2.0
+        };
 
         egui::Grid::new(format!("host_matrix_grid_{msg_index}"))
-            .num_columns(2)
+            .num_columns(cols)
             .spacing(egui::vec2(8.0, 8.0))
-            .min_col_width((ui.available_width() - 12.0) / 2.0)
+            .min_col_width(col_w)
             .show(ui, |ui| {
                 for (idx, host) in batch.hosts.iter().enumerate() {
+                    let alert = !host.ok || host.metric_danger;
                     let is_selected = self.selected_host_idx == Some(idx)
-                        || (self.selected_host_idx.is_none() && !host.ok);
-                    let accent_color = if host.ok {
-                        theme.green_color()
-                    } else {
+                        || (self.selected_host_idx.is_none() && alert);
+                    let accent_color = if alert {
                         theme.red_color()
+                    } else {
+                        theme.green_color()
                     };
+                    let danger_text = egui::Color32::from_rgb(255, 123, 114);
+                    let normal_val = egui::Color32::from_rgb(126, 231, 135);
 
                     let frame = egui::Frame::none()
                         .fill(if is_selected {
@@ -1712,39 +2200,103 @@ impl AiPanel {
 
                     let resp = frame.show(ui, |ui| {
                         ui.set_width((ui.available_width() - 8.0).max(60.0));
+                        // 名称 + 状态点
                         ui.horizontal(|ui| {
                             let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
                             ui.painter().circle_filled(dot_rect.center(), 3.5, accent_color);
-
                             ui.label(
                                 egui::RichText::new(&host.name)
                                     .strong()
                                     .size(theme.font_size_small())
-                                    .color(if is_selected { theme.text_primary() } else { theme.text_secondary() }),
+                                    .color(if alert {
+                                        danger_text
+                                    } else if is_selected {
+                                        theme.text_primary()
+                                    } else {
+                                        theme.text_secondary()
+                                    }),
                             );
                         });
+                        // 主机地址
                         ui.label(
                             egui::RichText::new(&host.endpoint)
                                 .monospace()
                                 .size(10.0)
-                                .color(theme.color_form_hint()),
+                                .color(if alert { danger_text } else { theme.color_form_hint() }),
                         );
-                        ui.label(
-                            egui::RichText::new(&host.summary)
-                                .size(10.5)
-                                .color(if !host.ok { theme.red_color() } else { theme.text_secondary() }),
-                        );
+                        // 指标 badge：Top 进程 + 百分比(绿/红 + danger 三角)；无结构化指标回退 summary
+                        if let Some(val) = host.metric_value.clone() {
+                            ui.horizontal(|ui| {
+                                if let Some(lbl) = &host.metric_label {
+                                    ui.label(
+                                        egui::RichText::new(lbl)
+                                            .size(10.5)
+                                            .color(if alert { danger_text } else { theme.text_secondary() }),
+                                    );
+                                }
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(&val)
+                                                .monospace()
+                                                .strong()
+                                                .size(10.5)
+                                                .color(if host.metric_danger {
+                                                    danger_text
+                                                } else {
+                                                    normal_val
+                                                }),
+                                        );
+                                        if host.metric_danger {
+                                            let px = 11.0;
+                                            let (wr, _) = ui.allocate_exact_size(
+                                                egui::vec2(px, px),
+                                                egui::Sense::hover(),
+                                            );
+                                            crate::ui::icons::paint_icon(
+                                                ui,
+                                                wr,
+                                                crate::ui::icons::IconId::Warning,
+                                                danger_text,
+                                                px,
+                                            );
+                                        }
+                                    },
+                                );
+                            });
+                        } else {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 4.0;
+                                let px = 11.0;
+                                let mcolor = if alert { danger_text } else { theme.text_tertiary() };
+                                let (mr, _) =
+                                    ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                                crate::ui::icons::paint_icon(
+                                    ui,
+                                    mr,
+                                    crate::ui::icons::IconId::Chart,
+                                    mcolor,
+                                    px,
+                                );
+                                ui.label(
+                                    egui::RichText::new(truncate_ui_line(&host.summary, 38))
+                                        .size(10.5)
+                                        .color(if alert { danger_text } else { theme.text_secondary() }),
+                                );
+                            });
+                        }
                     }).response;
 
                     if resp.interact(egui::Sense::click()).clicked() {
                         next_selected = Some(idx);
                     }
 
-                    if (idx + 1) % 2 == 0 {
+                    if (idx + 1) % cols == 0 {
                         ui.end_row();
                     }
                 }
-                if num_hosts % 2 != 0 {
+                if num_hosts % cols != 0 {
                     ui.end_row();
                 }
             });
@@ -1757,16 +2309,26 @@ impl AiPanel {
             ui.add_space(theme.spacing_sm());
 
             egui::Frame::none()
-                .fill(egui::Color32::from_rgb(8, 10, 14))
+                .fill(egui::Color32::from_rgb(4, 5, 8))
                 .stroke(theme.divider_stroke())
                 .rounding(egui::Rounding::same(6.0))
                 .inner_margin(egui::vec2(10.0, 8.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
+                        let px = theme.font_size_caption();
+                        let (ir, _) =
+                            ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                        crate::ui::icons::paint_icon(
+                            ui,
+                            ir,
+                            crate::ui::icons::IconId::TerminalPrompt,
+                            theme.text_secondary(),
+                            px,
+                        );
                         ui.label(
                             egui::RichText::new(format!(
-                                "{} {}:",
-                                i18n::tr(ctx, "Console", "输出明细"),
+                                "{} {}",
+                                i18n::tr(ctx, "Console output", "节点输出明细"),
                                 host.name
                             ))
                             .size(theme.font_size_caption())
@@ -1780,20 +2342,20 @@ impl AiPanel {
                         );
 
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui
-                                .button(
-                                    egui::RichText::new(i18n::tr(ctx, "↗ Connect Tab", "↗ 开新 Tab 连入"))
-                                        .size(10.5)
-                                        .color(theme.accent_color()),
-                                )
-                                .clicked()
+                            if crate::ui::chrome::panel_toolbar_button_with_icon(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Plug,
+                                i18n::tr(ctx, "Connect Tab", "开新 Tab 连入"),
+                            )
+                            .clicked()
                             {
                                 self.pending_connect_host = Some(host.endpoint.clone());
                             }
                         });
                     });
 
-                    ui.add_space(4.0);
+                    ui.add_space(6.0);
 
                     let out = if host.output.trim().is_empty() {
                         host.error.as_deref().unwrap_or("(无标准输出)")
@@ -1803,76 +2365,102 @@ impl AiPanel {
 
                     egui::ScrollArea::vertical()
                         .id_source(format!("host_inspector_scroll_{msg_index}_{sel_idx}"))
-                        .max_height(140.0)
+                        .max_height(160.0)
                         .show(ui, |ui| {
-                            ui.label(
-                                egui::RichText::new(out)
-                                    .monospace()
-                                    .size(11.0)
-                                    .color(if !host.ok {
-                                        egui::Color32::from_rgb(255, 123, 114)
-                                    } else {
-                                        egui::Color32::from_rgb(201, 209, 217)
-                                    }),
-                            );
+                            ops_render_console_output(ui, out);
                         });
                 });
         }
 
-        // —— 底部智能下钻建议药丸 (Suggested Action Chips) ——
+        // —— 底部智能下钻建议 (Suggested Action Chips) ——
         ui.add_space(theme.spacing_sm());
-        ui.label(
-            egui::RichText::new(i18n::tr(ctx, "Suggested Next Actions", "智能下钻建议 (点击一键规划)"))
-                .size(theme.font_size_caption())
-                .color(theme.color_form_hint()),
+        crate::ui::chrome::section_title_row(
+            ui,
+            theme,
+            crate::ui::icons::IconId::Rocket,
+            i18n::tr(ctx, "Suggested Next Actions", "意图跟进与诊断建议"),
+            theme.accent_color(),
         );
-        ui.add_space(2.0);
+        ui.add_space(theme.spacing_xs());
 
-        let failed_host = batch.hosts.iter().find(|h| !h.ok);
-        let mut chip_clicked_text = None;
+        let failed_hosts: Vec<&AgentHostRow> = batch.hosts.iter().filter(|h| !h.ok).collect();
+        let total = batch.hosts.len();
+        let scope_all = format!(
+            "{} {} {}",
+            i18n::tr(ctx, "all", "全部"),
+            total,
+            i18n::tr(ctx, "hosts", "台")
+        );
+        let mut chip_clicked_text: Option<String> = None;
+        let mut copy_ips: Option<String> = None;
 
         ui.vertical(|ui| {
-            if let Some(fh) = failed_host {
+            ui.spacing_mut().item_spacing.y = 6.0;
+            if let Some(fh) = failed_hosts.first() {
                 let prompt = format!("查看 {} 的系统与报错日志", fh.name);
-                if ui
-                    .button(
-                        egui::RichText::new(format!("🔍 {prompt}"))
-                            .size(11.0)
-                            .color(theme.accent_color()),
-                    )
-                    .clicked()
-                {
+                let scope = format!("{}: {}", i18n::tr(ctx, "host", "单机"), fh.endpoint);
+                if ops_suggestion_chip(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::Search,
+                    &prompt,
+                    Some(scope.as_str()),
+                    theme.accent_color(),
+                ) {
                     chip_clicked_text = Some(prompt);
                 }
             }
 
-            let prompt_swap = "检查所有主机的 Swap 分区与可用内存 free -h";
-            if ui
-                .button(
-                    egui::RichText::new(format!("📊 {prompt_swap}"))
-                        .size(11.0)
-                        .color(theme.text_secondary()),
-                )
-                .clicked()
-            {
-                chip_clicked_text = Some(prompt_swap.to_string());
+            let prompt_swap = "检查所有主机的 Swap 分区与可用内存 (free -h)".to_string();
+            if ops_suggestion_chip(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Chart,
+                &prompt_swap,
+                Some(scope_all.as_str()),
+                theme.accent_color(),
+            ) {
+                chip_clicked_text = Some(prompt_swap);
             }
 
-            let prompt_proc = "排查各主机 CPU 占用最高的进程详情";
-            if ui
-                .button(
-                    egui::RichText::new(format!("📋 {prompt_proc}"))
-                        .size(11.0)
-                        .color(theme.text_secondary()),
-                )
-                .clicked()
-            {
-                chip_clicked_text = Some(prompt_proc.to_string());
+            let prompt_proc = "排查各主机 CPU 占用最高的进程详情".to_string();
+            if ops_suggestion_chip(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Cpu,
+                &prompt_proc,
+                Some(scope_all.as_str()),
+                theme.accent_color(),
+            ) {
+                chip_clicked_text = Some(prompt_proc);
+            }
+
+            if !failed_hosts.is_empty() {
+                let ips = failed_hosts
+                    .iter()
+                    .map(|h| h.endpoint.clone())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                if ops_suggestion_chip(
+                    ui,
+                    theme,
+                    crate::ui::icons::IconId::Copy,
+                    i18n::tr(ctx, "Copy failed host IPs", "复制异常节点 IP 列表到剪贴板"),
+                    None,
+                    theme.accent_color(),
+                ) {
+                    copy_ips = Some(ips);
+                }
             }
         });
 
         if let Some(text) = chip_clicked_text {
             self.draft_input = text;
+        }
+        if let Some(ips) = copy_ips {
+            ui.output_mut(|o| o.copied_text = ips);
+            self.input_status =
+                Some(i18n::tr(ctx, "Copied host IPs", "已复制异常节点 IP").to_string());
         }
     }
 
@@ -2135,6 +2723,10 @@ impl AiPanel {
         let mut attach_selection_clicked = false;
 
         // 输入框单独成框，按钮放在框外，避免窄 dock 里左右布局互相踩踏。
+        let ops_scope_name = self
+            .session_meta
+            .as_ref()
+            .and_then(|m| m.session_name.clone().or_else(|| m.host.clone()));
         theme.frame_boxed_text_input(focused).show(ui, |ui| {
             let inner_w =
                 (ui.available_width() - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0);
@@ -2152,6 +2744,30 @@ impl AiPanel {
                 }
                 ui.add_space(theme.spacing_xs());
             }
+            // 运维意图范围提示（星标 + 当前会话主机）
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                let px = theme.font_size_caption();
+                let (sr, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                crate::ui::icons::paint_icon(
+                    ui,
+                    sr,
+                    crate::ui::icons::IconId::Rocket,
+                    theme.accent_color(),
+                    px,
+                );
+                if let Some(s) = ops_scope_name.as_deref() {
+                    ops_scope_pill(ui, theme, &format!("@ {s}"), theme.accent_color());
+                } else {
+                    ui.label(
+                        egui::RichText::new(i18n::tr(ctx, "Ops intent", "运维意图"))
+                            .size(px)
+                            .color(theme.text_tertiary()),
+                    );
+                }
+            });
+            ui.add_space(4.0);
+
             let prev_override = ui.style_mut().visuals.override_text_color;
             ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
             ui.add(
@@ -2177,11 +2793,53 @@ impl AiPanel {
         });
 
         ui.add_space(theme.spacing_sm());
-        // 精简底栏：左侧附带；右侧固定「发送」(+ 清空对话图标)，右侧留缝避免裁切。
-        let toolbar_pad_r = 8.0;
+        // 底栏第一行：附带上下文（次要，左对齐，窄面板自动换行）
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            if ui
+                .add_enabled_ui(can_type, |ui| {
+                    crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
+                        ui,
+                        theme,
+                        IconId::TerminalPrompt,
+                        i18n::tr(ctx, "Attach terminal", "附带终端"),
+                        true,
+                    )
+                    .on_hover_text(i18n::tr(
+                        ctx,
+                        "Attach the last 50 lines from the active terminal (no copy needed)",
+                        "附带当前活动终端最近 50 行(无需手动复制)",
+                    ))
+                    .clicked()
+                })
+                .inner
+            {
+                attach_terminal_clicked = true;
+            }
+            if ui
+                .add_enabled_ui(can_type, |ui| {
+                    crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
+                        ui,
+                        theme,
+                        IconId::Attachment,
+                        i18n::tr(ctx, "Attach selection", "附带选区"),
+                        true,
+                    )
+                    .on_hover_text(i18n::tr(
+                        ctx,
+                        "Attach the current terminal selection (no copy needed)",
+                        "附带当前终端选区(无需手动复制)",
+                    ))
+                    .clicked()
+                })
+                .inner
+            {
+                attach_selection_clicked = true;
+            }
+        });
+        ui.add_space(6.0);
+        // 底栏第二行：主操作（右对齐）发送/停止 + 清空
         ui.horizontal(|ui| {
-            let max_w = (ui.available_width() - toolbar_pad_r).max(96.0);
-            ui.set_max_width(max_w);
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if generating {
@@ -2234,49 +2892,6 @@ impl AiPanel {
                     )
                     .clicked();
                 }
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    if ui
-                        .add_enabled_ui(can_type, |ui| {
-                            crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
-                                ui,
-                                theme,
-                                IconId::TerminalPrompt,
-                                i18n::tr(ctx, "Attach terminal", "附带终端"),
-                                true,
-                            )
-                            .on_hover_text(i18n::tr(
-                                ctx,
-                                "Attach the last 50 lines from the active terminal (no copy needed)",
-                                "附带当前活动终端最近 50 行(无需手动复制)",
-                            ))
-                            .clicked()
-                        })
-                        .inner
-                    {
-                        attach_terminal_clicked = true;
-                    }
-                    if ui
-                        .add_enabled_ui(can_type, |ui| {
-                            crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
-                                ui,
-                                theme,
-                                IconId::Attachment,
-                                i18n::tr(ctx, "Attach selection", "附带选区"),
-                                true,
-                            )
-                            .on_hover_text(i18n::tr(
-                                ctx,
-                                "Attach the current terminal selection (no copy needed)",
-                                "附带当前终端选区(无需手动复制)",
-                            ))
-                            .clicked()
-                        })
-                        .inner
-                    {
-                        attach_selection_clicked = true;
-                    }
-                });
             });
         });
         if attach_terminal_clicked {

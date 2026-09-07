@@ -629,9 +629,9 @@ pub fn side_panel_widths(ctx: &egui::Context, profile: SidePanelProfile) -> (f32
             max_frac: 0.30,
         },
         SidePanelProfile::Standard => PanelWidthSpec {
-            default_frac: 0.22,
-            min_frac: 0.17,
-            max_frac: 0.46,
+            default_frac: 0.27,
+            min_frac: 0.20,
+            max_frac: 0.48,
         },
         SidePanelProfile::Monitor => PanelWidthSpec {
             default_frac: 0.215,
