@@ -55,6 +55,7 @@ fn make_fragment(command: impl Into<String>, vars: &[&str]) -> FragmentStats {
         total_time_ms: 0,
         last_used: None,
         source_status: String::new(),
+        linked_docs: Vec::new(),
     }
 }
 
