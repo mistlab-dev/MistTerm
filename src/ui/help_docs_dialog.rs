@@ -72,10 +72,19 @@ fn quick_steps(ctx: &egui::Context) -> Vec<QuickStep> {
     ]
 }
 
+/// 新人上手清单的完成状态（由 App 传入，用于动态勾选）。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OnboardingStatus {
+    pub connected: bool,
+    pub team_logged_in: bool,
+    pub ai_configured: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HelpPage {
     #[default]
     QuickStart,
+    Onboarding,
     Shortcuts,
     Features,
 }
@@ -84,6 +93,7 @@ impl HelpPage {
     fn label(self, ctx: &egui::Context) -> &'static str {
         match self {
             Self::QuickStart => crate::i18n::tr(ctx, "Quick start", "快速入门"),
+            Self::Onboarding => crate::i18n::tr(ctx, "Getting started", "新人上手"),
             Self::Shortcuts => crate::i18n::tr(ctx, "Keyboard shortcuts", "键盘快捷键"),
             Self::Features => crate::i18n::tr(ctx, "Feature guide", "功能指南"),
         }
@@ -107,6 +117,7 @@ impl HelpDocsDialog {
         ctx: &egui::Context,
         theme: &Theme,
         shortcuts_text: &str,
+        onboarding: OnboardingStatus,
     ) -> Option<String> {
         if !self.open {
             return None;
@@ -139,6 +150,9 @@ impl HelpDocsDialog {
                         .show(ui, |ui| {
                             match self.page {
                                 HelpPage::QuickStart => render_quick_start(ui, theme, ctx),
+                                HelpPage::Onboarding => {
+                                    render_onboarding(ui, theme, ctx, onboarding)
+                                }
                                 HelpPage::Shortcuts => {
                                     render_shortcuts(ui, theme, ctx, shortcuts_text)
                                 }
@@ -158,7 +172,12 @@ impl HelpDocsDialog {
 fn render_help_tabs(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, page: &mut HelpPage) {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = theme.spacing_sm();
-        for tab in [HelpPage::QuickStart, HelpPage::Shortcuts, HelpPage::Features] {
+        for tab in [
+            HelpPage::Onboarding,
+            HelpPage::QuickStart,
+            HelpPage::Shortcuts,
+            HelpPage::Features,
+        ] {
             let selected = *page == tab;
             let label = RichText::new(tab.label(ctx))
                 .size(theme.font_size_connection_name())
@@ -209,6 +228,180 @@ fn render_quick_start(ui: &mut Ui, theme: &Theme, ctx: &egui::Context) {
         crate::i18n::tr(ctx, "Official site", "官网"),
         tip,
     );
+}
+
+// ── Onboarding page (new-user checklist) ────────────────────────────
+
+struct OnboardStep {
+    title: String,
+    detail: String,
+    done: bool,
+    optional: bool,
+}
+
+fn render_onboarding(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status: OnboardingStatus) {
+    ui.label(
+        RichText::new(crate::i18n::tr(
+            ctx,
+            "Getting started with MistTerm",
+            "MistTerm 新人上手",
+        ))
+        .size(theme.font_size_empty_state())
+        .strong()
+        .color(theme.text_primary()),
+    );
+    ui.label(
+        RichText::new(crate::i18n::tr(
+            ctx,
+            "A short checklist to get productive — items auto-check as you go.",
+            "跟着清单几步上手，完成的项会自动打勾。",
+        ))
+        .size(theme.font_size_panel_title())
+        .color(theme.color_form_hint()),
+    );
+    ui.add_space(theme.spacing_lg());
+
+    let steps = vec![
+        OnboardStep {
+            title: crate::i18n::tr(ctx, "Connect to your first server", "连接第一台服务器").to_string(),
+            detail: crate::i18n::tr(
+                ctx,
+                "Left sidebar → pick or create a connection; double-click / Enter opens a terminal.",
+                "左侧栏选择或新建连接；双击 / 回车打开终端。",
+            )
+            .to_string(),
+            done: status.connected,
+            optional: false,
+        },
+        OnboardStep {
+            title: crate::i18n::tr(ctx, "Try command snippets", "试用命令片段").to_string(),
+            detail: crate::i18n::tr(
+                ctx,
+                "Activity Rail → Fragments: browse the marketplace or save your own; click to send to the terminal.",
+                "活动栏 → 命令片段：浏览市场或保存自己的片段，点击发送到终端。",
+            )
+            .to_string(),
+            done: false,
+            optional: true,
+        },
+        OnboardStep {
+            title: crate::i18n::tr(ctx, "Log in to your team", "登录团队（治理）").to_string(),
+            detail: crate::i18n::tr(
+                ctx,
+                "Tools → Team Login: sync sessions and enable command audit / policy governance.",
+                "菜单「工具」→ 团队登录：同步会话并启用命令审计 / 策略治理。",
+            )
+            .to_string(),
+            done: status.team_logged_in,
+            optional: false,
+        },
+        OnboardStep {
+            title: crate::i18n::tr(ctx, "Understand command audit", "了解命令审计").to_string(),
+            detail: crate::i18n::tr(
+                ctx,
+                "Risky commands get a readable block/confirm explanation (why + safe alternative). Bypassing is never taught.",
+                "高危命令会给出可读的拦截 / 确认解释（为什么拦 + 安全替代），不教绕过。",
+            )
+            .to_string(),
+            done: false,
+            optional: true,
+        },
+        OnboardStep {
+            title: crate::i18n::tr(ctx, "Set up the AI Ops Hub", "配置 AI 智控台").to_string(),
+            detail: crate::i18n::tr(
+                ctx,
+                "Tools → AI Settings: add your API key, then plan and run ops commands across hosts in natural language.",
+                "菜单「工具」→ AI 设置：填入 API Key，即可用自然语言规划并跨主机执行运维命令。",
+            )
+            .to_string(),
+            done: status.ai_configured,
+            optional: false,
+        },
+    ];
+
+    let required_total = steps.iter().filter(|s| !s.optional).count();
+    let required_done = steps.iter().filter(|s| !s.optional && s.done).count();
+
+    for (i, step) in steps.iter().enumerate() {
+        render_onboard_row(ui, theme, ctx, i + 1, step);
+        if i + 1 < steps.len() {
+            ui.add_space(theme.spacing_md());
+        }
+    }
+
+    ui.add_space(theme.spacing_lg());
+    render_tip_box(
+        ui,
+        theme,
+        crate::i18n::tr(ctx, "Progress", "进度"),
+        &format!(
+            "{} {}/{}",
+            crate::i18n::tr(ctx, "Required steps done:", "必做步骤完成："),
+            required_done,
+            required_total
+        ),
+    );
+}
+
+fn render_onboard_row(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, index: usize, step: &OnboardStep) {
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = theme.spacing_md();
+        let circle_r = 13.0;
+        let circle_d = circle_r * 2.0;
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(circle_d, circle_d), egui::Sense::hover());
+        let center = rect.center();
+        {
+            let painter = ui.painter().with_clip_rect(ui.max_rect());
+            if step.done {
+                painter.circle_filled(center, circle_r, theme.green_color().gamma_multiply(0.18));
+                painter.circle_stroke(center, circle_r, egui::Stroke::new(1.0, theme.green_color()));
+            } else {
+                painter.circle_filled(center, circle_r, theme.accent_a13());
+                painter.circle_stroke(center, circle_r, egui::Stroke::new(1.0, theme.accent_alpha(89)));
+                painter.text(
+                    center,
+                    egui::Align2::CENTER_CENTER,
+                    format!("{index}"),
+                    FontId::proportional(theme.font_size_connection_name()),
+                    theme.accent_color(),
+                );
+            }
+        }
+        if step.done {
+            crate::ui::icons::paint_icon(
+                ui,
+                rect,
+                crate::ui::icons::IconId::Check,
+                theme.green_color(),
+                15.0,
+            );
+        }
+        ui.vertical(|ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(&step.title)
+                        .size(theme.font_size_connection_name())
+                        .strong()
+                        .color(theme.text_primary()),
+                );
+                let (label, color) = if step.done {
+                    (crate::i18n::tr(ctx, "Done", "已完成"), theme.green_color())
+                } else if step.optional {
+                    (crate::i18n::tr(ctx, "Optional", "可选"), theme.color_form_hint())
+                } else {
+                    (crate::i18n::tr(ctx, "To do", "待办"), theme.amber_color())
+                };
+                ui.label(RichText::new(label).size(theme.font_size_caption()).color(color));
+            });
+            ui.add_space(2.0);
+            ui.label(
+                RichText::new(&step.detail)
+                    .size(theme.font_size_panel_title())
+                    .color(theme.color_form_label()),
+            );
+        });
+    });
 }
 
 fn render_shortcuts(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, raw: &str) {

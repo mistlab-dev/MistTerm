@@ -280,6 +280,16 @@ impl MistTermApp {
         });
         egui::menu::menu_button(ui, label(l.help_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
+            if crate::ui::chrome::popup_menu_button(
+                ui,
+                theme,
+                crate::i18n::tr(ctx, "Getting started", "新人上手"),
+            )
+            .clicked()
+            {
+                self.help_docs_dialog.open_page(HelpPage::Onboarding);
+                ui.close_menu();
+            }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.help_guide).clicked() {
                 self.help_docs_dialog.open_page(HelpPage::QuickStart);
                 ui.close_menu();
