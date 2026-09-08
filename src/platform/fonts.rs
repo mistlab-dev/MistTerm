@@ -109,6 +109,22 @@ pub fn configure_egui_fonts(ctx: &egui::Context, terminal_preset: TerminalFontPr
         false
     };
 
+    // UI 拉丁字体：Geist（对齐设计稿的现代无衬线），置 Proportional 首位；
+    // CJK 仍作缺字兜底（中文回退 NotoSansSC，英文/数字用 Geist）。
+    {
+        const GEIST_UI: &[u8] = include_bytes!("../../assets/fonts/Geist-Regular.ttf");
+        let name = "geist-ui".to_string();
+        fonts
+            .font_data
+            .insert(name.clone(), egui::FontData::from_static(GEIST_UI));
+        let entry = fonts
+            .families
+            .entry(egui::FontFamily::Proportional)
+            .or_default();
+        entry.retain(|n| n != &name);
+        entry.insert(0, name);
+    }
+
     CJK_FONT_LOADED.store(loaded, Ordering::Relaxed);
     ctx.set_fonts(fonts);
     if !loaded {
