@@ -152,6 +152,13 @@ fn truncate_ui_line(s: &str, max_chars: usize) -> String {
 /// 设计稿中「过滤 / 意图范围」用的紫色。
 const OPS_PURPLE: egui::Color32 = egui::Color32::from_rgb(188, 140, 255);
 
+// AI 面板配色（对齐 concept-copilot-workbench 深色分层）：
+// 面板底(暗) < 次级容器 < 卡片(浮起、更浅)；输入框最深。
+const OPS_PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x12, 0x16, 0x1c);
+const OPS_SUB_BG: egui::Color32 = egui::Color32::from_rgb(0x16, 0x1b, 0x22);
+const OPS_CARD_BG: egui::Color32 = egui::Color32::from_rgb(0x1c, 0x22, 0x2b);
+const OPS_INPUT_BG: egui::Color32 = egui::Color32::from_rgb(0x09, 0x0c, 0x10);
+
 /// 控制台输出逐行语法高亮：命令行(蓝)/ 异常行(红底)/ 普通行(灰)。
 fn ops_render_console_output(ui: &mut egui::Ui, text: &str) {
     const CMD: egui::Color32 = egui::Color32::from_rgb(121, 192, 255);
@@ -361,7 +368,7 @@ fn ops_badge(
 /// 描边药丸（目标范围 scope）。
 fn ops_scope_pill(ui: &mut egui::Ui, theme: &Theme, text: &str, color: egui::Color32) {
     egui::Frame::none()
-        .fill(theme.color_subtle_inset_fill())
+        .fill(OPS_CARD_BG)
         .stroke(egui::Stroke::new(1.0, theme.divider_stroke().color))
         .rounding(egui::Rounding::same(4.0))
         .inner_margin(egui::vec2(6.0, 1.0))
@@ -399,7 +406,7 @@ fn ops_suggestion_chip(
     accent: egui::Color32,
 ) -> bool {
     let resp = egui::Frame::none()
-        .fill(theme.color_subtle_inset_fill())
+        .fill(OPS_CARD_BG)
         .stroke(egui::Stroke::new(1.0, theme.divider_stroke().color))
         .rounding(egui::Rounding::same(6.0))
         .inner_margin(egui::vec2(10.0, 7.0))
@@ -1140,6 +1147,8 @@ impl AiPanel {
         app_settings: &mut AppSettings,
     ) {
         self.flush_pending_auto_send(ctx, app_settings);
+        // 面板整体底色（暗色面板，卡片/输入框浮其上形成层次，对齐设计稿）
+        ui.painter().rect_filled(ui.max_rect(), 0.0, OPS_PANEL_BG);
         let ready = self.can_chat(app_settings);
         if !ready {
             ui.colored_label(
@@ -1759,7 +1768,7 @@ impl AiPanel {
         let mut clicked_cancel = false;
 
         egui::Frame::none()
-            .fill(theme.color_subtle_inset_fill())
+            .fill(OPS_CARD_BG)
             .stroke(theme.divider_stroke())
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::vec2(12.0, 10.0))
@@ -1833,7 +1842,7 @@ impl AiPanel {
 
                 // 命令输入框：单行高亮，支持直接修改
                 egui::Frame::none()
-                    .fill(egui::Color32::from_rgb(10, 13, 18))
+                    .fill(OPS_INPUT_BG)
                     .stroke(theme.divider_stroke())
                     .rounding(egui::Rounding::same(5.0))
                     .inner_margin(egui::vec2(8.0, 6.0))
@@ -2011,7 +2020,7 @@ impl AiPanel {
 
                 // Footer：安全提示 + 操作按钮
                 egui::Frame::none()
-                    .fill(theme.color_panel_header_band_fill())
+                    .fill(OPS_SUB_BG)
                     .rounding(egui::Rounding::same(5.0))
                     .inner_margin(egui::vec2(10.0, 7.0))
                     .show(ui, |ui| {
@@ -2129,7 +2138,7 @@ impl AiPanel {
         // 顶层汇总条：状态点统计 + 并发耗时
         let elapsed_ms = batch.hosts.iter().map(|h| h.duration_ms).max().unwrap_or(0);
         egui::Frame::none()
-            .fill(theme.color_panel_header_band_fill())
+            .fill(OPS_SUB_BG)
             .stroke(theme.divider_stroke())
             .rounding(egui::Rounding::same(theme.radius_list_item()))
             .inner_margin(egui::vec2(10.0, 8.0))
@@ -2226,7 +2235,7 @@ impl AiPanel {
                         .fill(if is_selected {
                             accent_color.gamma_multiply(0.12)
                         } else {
-                            theme.color_subtle_inset_fill()
+                            OPS_CARD_BG
                         })
                         .stroke(egui::Stroke::new(
                             if is_selected { 1.5 } else { 1.0 },
@@ -2521,7 +2530,7 @@ impl AiPanel {
         let bubble_fill = if is_user {
             theme.color_ai_user_bubble_fill()
         } else {
-            theme.color_subtle_inset_fill()
+            OPS_CARD_BG
         };
         let bubble_stroke = if is_user {
             egui::Stroke::new(
@@ -2708,7 +2717,7 @@ impl AiPanel {
         ui.horizontal(|ui| {
             ui.add_space(safe_pad);
             egui::Frame::none()
-                .fill(theme.color_subtle_inset_fill())
+                .fill(OPS_CARD_BG)
                 .stroke(theme.divider_stroke())
                 .rounding(theme.radius_list_item())
                 .inner_margin(egui::vec2(12.0, 10.0))
@@ -2773,7 +2782,7 @@ impl AiPanel {
             egui::Stroke::new(1.0, theme.divider_stroke().color)
         };
         egui::Frame::none()
-            .fill(egui::Color32::from_rgb(9, 12, 16))
+            .fill(OPS_INPUT_BG)
             .stroke(input_border)
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::vec2(10.0, 8.0))
