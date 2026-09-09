@@ -467,6 +467,9 @@ pub struct AiPanel {
     attached_contexts: Vec<TerminalContextRef>,
     session_meta: Option<TerminalSessionMeta>,
     chat_session_key: String,
+    /// 会话历史下拉缓存：避免历史弹窗打开时每帧 `read_dir` + 解析所有会话 JSON。
+    /// `None` 表示尚未加载；点击历史按钮时置 `None` 以便下次打开刷新。
+    chat_sessions_cache: Option<Vec<(String, String, std::time::SystemTime)>>,
     chat_dirty: bool,
     background: Option<BackgroundJob>,
     busy: bool,
@@ -549,6 +552,7 @@ impl AiPanel {
             attached_contexts: Vec::new(),
             session_meta: None,
             chat_session_key: "global".to_string(),
+            chat_sessions_cache: None,
             chat_dirty: false,
             background: None,
             busy: false,
@@ -1000,6 +1004,9 @@ impl AiPanel {
                 let cur_key = self.chat_session_key.clone();
                 let mut request_new_chat = false;
                 let mut switch_to: Option<String> = None;
+                // 历史列表缓存快照：弹窗打开时只在首帧扫描，避免每帧读盘解析所有会话。
+                let mut history_local = self.chat_sessions_cache.clone();
+                let mut history_invalidate = false;
                 theme.frame_right_dock_header_band().show(ui, |ui| {
                     layout_util::set_width_to_available(ui);
                     crate::ui::chrome::dock_header_horizontal(ui, theme, |ui| {
@@ -1054,6 +1061,7 @@ impl AiPanel {
                             );
                             let popup_id = ui.make_persistent_id("ai_history_popup");
                             if hist.clicked() {
+                                history_invalidate = true;
                                 ui.memory_mut(|m| m.toggle_popup(popup_id));
                             }
                             egui::popup_below_widget(ui, popup_id, &hist, |ui| {
@@ -1064,7 +1072,8 @@ impl AiPanel {
                                         .color(theme.text_tertiary()),
                                 );
                                 ui.separator();
-                                let sessions = list_chat_sessions();
+                                let sessions =
+                                    history_local.get_or_insert_with(list_chat_sessions);
                                 if sessions.is_empty() {
                                     ui.label(
                                         egui::RichText::new(i18n::tr(
@@ -1076,8 +1085,8 @@ impl AiPanel {
                                         .color(theme.text_tertiary()),
                                     );
                                 }
-                                for (key, title, _) in sessions {
-                                    let is_cur = key == cur_key;
+                                for (key, title, _) in sessions.iter() {
+                                    let is_cur = key == &cur_key;
                                     let text = if is_cur {
                                         format!("● {title}")
                                     } else {
@@ -1098,7 +1107,7 @@ impl AiPanel {
                                         )
                                         .clicked()
                                     {
-                                        switch_to = Some(key);
+                                        switch_to = Some(key.clone());
                                         ui.memory_mut(|m| m.close_popup());
                                     }
                                 }
@@ -1106,6 +1115,13 @@ impl AiPanel {
                         });
                     });
                 });
+                if history_invalidate {
+                    // 点击历史按钮：强制刷新，保证下次打开能反映新保存/切换的会话。
+                    self.chat_sessions_cache = Some(list_chat_sessions());
+                } else {
+                    // 保留本帧的扫描结果（若弹窗打开时首帧扫描过）。
+                    self.chat_sessions_cache = history_local;
+                }
                 if let Some(key) = switch_to {
                     self.set_chat_session_key(key, true);
                     self.agent_plan = None;
