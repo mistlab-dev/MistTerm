@@ -1003,6 +1003,7 @@ impl AiPanel {
                 theme.frame_right_dock_header_band().show(ui, |ui| {
                     layout_util::set_width_to_available(ui);
                     crate::ui::chrome::dock_header_horizontal(ui, theme, |ui| {
+                        // 左侧：图标 + 标题（+ 模型徽标，仅当剩余空间足够时显示）
                         crate::ui::chrome::panel_header_title_leading(
                             ui,
                             theme,
@@ -1010,14 +1011,21 @@ impl AiPanel {
                             i18n::tr(ctx, "AI Assistant", "AI 智控台"),
                         );
                         if !model_badge.is_empty() {
-                            ops_badge(
-                                ui,
-                                crate::ui::icons::IconId::Api,
-                                &format!("{model_badge} Planner"),
-                                theme.accent_color(),
-                                theme.font_size_caption(),
-                            );
+                            let px = theme.font_size_caption();
+                            // 徽标宽度估算 + 为右侧按钮预留固定宽度；不够就不画，避免重叠。
+                            let badge_w = model_badge.chars().count() as f32 * px * 0.65 + 34.0;
+                            const BUTTONS_RESERVE: f32 = 132.0;
+                            if ui.available_width() >= badge_w + BUTTONS_RESERVE {
+                                ops_badge(
+                                    ui,
+                                    crate::ui::icons::IconId::Api,
+                                    &model_badge,
+                                    theme.accent_color(),
+                                    px,
+                                );
+                            }
                         }
+                        // 右侧：历史 / 新对话 / 关闭（右对齐，占据剩余空间）
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if crate::ui::chrome::dock_close_icon_button(
                                 ui,
