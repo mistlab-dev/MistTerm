@@ -1147,8 +1147,10 @@ impl AiPanel {
         app_settings: &mut AppSettings,
     ) {
         self.flush_pending_auto_send(ctx, app_settings);
-        // 面板整体底色（暗色面板，卡片/输入框浮其上形成层次，对齐设计稿）
-        ui.painter().rect_filled(ui.max_rect(), 0.0, OPS_PANEL_BG);
+        // 面板正文底色（暗色面板，卡片/输入框浮其上形成层次，对齐设计稿）。
+        // 只填充标题栏「下方」的可用区域，避免盖住已绘制的头部标题/按钮。
+        ui.painter()
+            .rect_filled(ui.available_rect_before_wrap(), 0.0, OPS_PANEL_BG);
         let ready = self.can_chat(app_settings);
         if !ready {
             ui.colored_label(
