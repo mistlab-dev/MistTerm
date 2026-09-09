@@ -7647,6 +7647,12 @@ impl eframe::App for MistTermApp {
         // 须在终端/非活动窗格泵完 SSH 之后再取 MIST_AUDIT，否则本帧事件会空转。
         self.poll_server_audit_from_tabs(ctx);
         self.process_ai_bridge(ctx);
+
+        // 低频兜底重绘：eframe 响应式模式空闲时不重绘，遇到系统截图/窗口遮挡/外接屏
+        // 切换等「不产生输入事件」的场景会停在旧帧看似「卡死」，同时也会触发卡顿看门狗
+        // 误报。每秒至少醒一次即可自愈（空闲开销可忽略）；真正的主线程 hang（update 被
+        // 阻塞 >3s）依然会被 hang_reporter 正常检出。
+        ctx.request_repaint_after(Duration::from_secs(1));
     }
 }
 
