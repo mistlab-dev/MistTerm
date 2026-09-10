@@ -6946,6 +6946,14 @@ impl eframe::App for MistTermApp {
         let _ = self.command_history.save();
     }
 
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // 此刻 save() 已执行、状态已落盘。装退出看门狗兜底：若后续 wgpu 拆卸
+        // (`painter.destroy()`) 或某个 Drop（如审计 worker join）在个别环境下长时间
+        // 阻塞，看门狗会在很短的宽限期后强制退出进程，避免「⌘Q 后卡死不退出」。
+        // 正常情况下进程会先一步干净退出，守护线程随之消亡、不会触发。
+        crate::platform::arm_quit_watchdog();
+    }
+
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if let Some(name) = self.pending_auto_connect_session.take() {
             if let Some(session) = self

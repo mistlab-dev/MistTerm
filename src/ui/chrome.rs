@@ -2995,6 +2995,24 @@ pub fn form_multiline_field(
     rows: usize,
     password: bool,
 ) -> Response {
+    form_multiline_field_hinted(ui, theme, id, text, "", desired_width, rows, password)
+}
+
+/// 多行输入框，带占位提示。与 [`form_multiline_field`] 采用**完全相同**的外框与内宽
+/// 计算(`frame_form_text_input` + 与单行框一致的左右内缩)，确保多行框与单行框右边距对齐、
+/// 底色/边框风格统一(修复编辑会话弹窗里 -L/-R/-D 三个多行框曾用裸 `TextEdit` 导致的
+/// 「样式不一致、右边距超出」问题)。
+#[allow(clippy::too_many_arguments)]
+pub fn form_multiline_field_hinted(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    text: &mut String,
+    hint: &str,
+    desired_width: f32,
+    rows: usize,
+    password: bool,
+) -> Response {
     let focused = ui.memory(|m| m.has_focus(id));
     let underline = theme.uses_underline_inputs();
     let inner_w = if underline {
@@ -3004,6 +3022,8 @@ pub fn form_multiline_field(
     };
     let shown = theme.frame_form_text_input(focused).show(ui, |ui| {
         with_underline_field_visuals(ui, theme, |ui| {
+            let prev_override = ui.style_mut().visuals.override_text_color;
+            ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
             let mut edit = egui::TextEdit::multiline(text)
                 .id(id)
                 .frame(false)
@@ -3011,10 +3031,15 @@ pub fn form_multiline_field(
                 .desired_rows(rows)
                 .text_color(theme.color_text_input_text())
                 .font(egui::FontId::proportional(theme.font_size_control_input()));
+            if !hint.is_empty() {
+                edit = edit.hint_text(hint_rich(theme, hint, theme.font_size_control_input()));
+            }
             if password {
                 edit = edit.password(true);
             }
-            ui.add(edit)
+            let response = ui.add(edit);
+            ui.style_mut().visuals.override_text_color = prev_override;
+            response
         })
     });
     if underline {
