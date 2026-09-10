@@ -933,7 +933,6 @@ impl MistTermApp {
                 .show(ctx, |ui| {
                     let required_missing =
                         self.edit_session_name.trim().is_empty() || self.edit_session_host.trim().is_empty();
-                    let form_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
 
                     crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                             ui.push_id("edit_session_form", |ui| {
@@ -944,6 +943,17 @@ impl MistTermApp {
                                 &mut should_close,
                             );
 
+                            // 编辑会话字段远多于新建（代理 / 三种端口转发 / 保活 / Vault…），
+                            // 固定尺寸弹窗很容易超高。此处让头部与底部「保存 / 取消」按钮固定，
+                            // 中间字段区放进竖向滚动区：既保证按钮始终可见，也能滚到最底部内容。
+                            // form_w 在滚动区内重新计算，自动扣掉滚动条宽度，右边距不再溢出。
+                            let footer_reserve = 64.0;
+                            let scroll_h = (ui.available_height() - footer_reserve).max(160.0);
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .max_height(scroll_h)
+                                .show(ui, |ui| {
+                            let form_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
                             Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Session name", "会话名称"));
                             Self::ui_form_singleline(
@@ -1087,15 +1097,19 @@ impl MistTermApp {
                                     "本地端口转发 (-L)",
                                 ),
                             );
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.edit_session_local_forwards_text)
-                                    .desired_width(form_w)
-                                    .desired_rows(2)
-                                    .hint_text(crate::i18n::tr(
-                                        ctx,
-                                        "8080:127.0.0.1:80 (one per line)",
-                                        "8080:127.0.0.1:80(每行一条)",
-                                    )),
+                            crate::ui::chrome::form_multiline_field_hinted(
+                                ui,
+                                theme,
+                                ui.make_persistent_id("edit_session_local_forwards"),
+                                &mut self.edit_session_local_forwards_text,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "8080:127.0.0.1:80 (one per line)",
+                                    "8080:127.0.0.1:80(每行一条)",
+                                ),
+                                form_w,
+                                2,
+                                false,
                             );
 
                             Self::ui_field_label(
@@ -1107,15 +1121,19 @@ impl MistTermApp {
                                     "远程端口转发 (-R)",
                                 ),
                             );
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.edit_session_remote_forwards_text)
-                                    .desired_width(form_w)
-                                    .desired_rows(2)
-                                    .hint_text(crate::i18n::tr(
-                                        ctx,
-                                        "8080:127.0.0.1:3000 (one per line)",
-                                        "8080:127.0.0.1:3000(每行一条)",
-                                    )),
+                            crate::ui::chrome::form_multiline_field_hinted(
+                                ui,
+                                theme,
+                                ui.make_persistent_id("edit_session_remote_forwards"),
+                                &mut self.edit_session_remote_forwards_text,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "8080:127.0.0.1:3000 (one per line)",
+                                    "8080:127.0.0.1:3000(每行一条)",
+                                ),
+                                form_w,
+                                2,
+                                false,
                             );
 
                             Self::ui_field_label(
@@ -1127,15 +1145,19 @@ impl MistTermApp {
                                     "动态转发 (-D / SOCKS5)",
                                 ),
                             );
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.edit_session_dynamic_forwards_text)
-                                    .desired_width(form_w)
-                                    .desired_rows(2)
-                                    .hint_text(crate::i18n::tr(
-                                        ctx,
-                                        "1080 or 0.0.0.0:1080 (one per line)",
-                                        "1080 或 0.0.0.0:1080(每行一条)",
-                                    )),
+                            crate::ui::chrome::form_multiline_field_hinted(
+                                ui,
+                                theme,
+                                ui.make_persistent_id("edit_session_dynamic_forwards"),
+                                &mut self.edit_session_dynamic_forwards_text,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "1080 or 0.0.0.0:1080 (one per line)",
+                                    "1080 或 0.0.0.0:1080(每行一条)",
+                                ),
+                                form_w,
+                                2,
+                                false,
                             );
 
                             Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Group", "分组"));
@@ -1256,6 +1278,8 @@ impl MistTermApp {
                                         .color(theme.red_a128()),
                                 );
                             }
+
+                                }); // 结束字段可滚动区
 
                             ui.add_space(theme.spacing_list_item_x());
                             crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
