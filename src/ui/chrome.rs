@@ -1630,6 +1630,12 @@ fn icon_only_button_size(theme: &Theme, min_w: f32) -> egui::Vec2 {
     egui::vec2(side, h)
 }
 
+/// 面板标题行纯图标边长(对齐 Tab ×；须低于 [`Theme::size_panel_header_row_h`] 以免裁顶)。
+fn header_toolbar_icon_button_size(theme: &Theme) -> egui::Vec2 {
+    let side = theme.size_panel_header_control_h();
+    egui::vec2(side, side)
+}
+
 /// 仅图标(方形容器)，悬停显示 `tooltip`。
 fn paint_icon_only_button(
     ui: &mut Ui,
@@ -1639,7 +1645,24 @@ fn paint_icon_only_button(
     min_w: f32,
     can_activate: bool,
 ) -> Response {
-    let size = icon_only_button_size(theme, min_w);
+    paint_icon_only_button_at(
+        ui,
+        theme,
+        icon,
+        variant,
+        icon_only_button_size(theme, min_w),
+        can_activate,
+    )
+}
+
+fn paint_icon_only_button_at(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    variant: ControlButtonVariant,
+    size: egui::Vec2,
+    can_activate: bool,
+) -> Response {
     let rounding = theme.radius_list_item();
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = response.hovered();
@@ -1697,7 +1720,9 @@ fn paint_icon_only_button(
     };
 
     ui.painter().rect(rect, rounding, fill, stroke);
-    let icon_px = theme.size_icon_glyph();
+    let icon_px = theme
+        .size_icon_glyph()
+        .min((size.y - 6.0).max(12.0));
     let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(icon_px, icon_px));
     icons::paint_icon(ui, icon_rect, icon, icon_color, icon_px);
     if hovered {
@@ -1782,18 +1807,19 @@ pub fn panel_ghost_action_button(
 }
 
 /// 标题行 / 工具栏纯图标按钮(悬停文案见 `tooltip`)。
+/// 使用标题行控件边长，避免高于 dock 标题行被裁切顶部描边。
 pub fn panel_toolbar_icon_button(
     ui: &mut Ui,
     theme: &Theme,
     icon: IconId,
     tooltip: &str,
 ) -> Response {
-    paint_icon_only_button(
+    paint_icon_only_button_at(
         ui,
         theme,
         icon,
         ControlButtonVariant::Secondary,
-        theme.size_panel_header_btn_min_w(),
+        header_toolbar_icon_button_size(theme),
         true,
     )
     .on_hover_text(tooltip)
@@ -1968,6 +1994,167 @@ pub fn rich_caption(theme: &Theme, text: &str) -> RichText {
 
 pub fn form_field_label(ui: &mut Ui, theme: &Theme, text: &str) {
     ui.label(rich_form_label(theme, text));
+}
+
+/// 与步进器/数字框同一行时用：占位高度对齐控件，文字垂直居中。
+pub fn form_inline_label(ui: &mut Ui, theme: &Theme, text: &str) {
+    let h = form_stepper_row_h(theme);
+    let font = egui::FontId::proportional(theme.font_size_form_label());
+    let color = theme.color_form_label();
+    let galley = ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font, color));
+    let w = galley.size().x.ceil() + 2.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), Sense::hover());
+    ui.painter().galley(
+        egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5),
+        galley,
+    );
+}
+
+/// 表单控件行：固定行高 + 垂直居中，避免标签/输入/步进器/复选框基线错乱。
+pub fn form_control_row<R>(ui: &mut Ui, theme: &Theme, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let row_h = form_stepper_row_h(theme);
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), row_h),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_height(row_h);
+            ui.spacing_mut().item_spacing.x = theme.spacing_sm();
+            add(ui)
+        },
+    )
+    .inner
+}
+
+/// 左标签(固定宽) + 右侧控件，窄面板里一项一行，基线对齐。
+pub fn form_labeled_control_row<R>(
+    ui: &mut Ui,
+    theme: &Theme,
+    label: &str,
+    label_w: f32,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    form_control_row(ui, theme, |ui| {
+        let h = form_stepper_row_h(theme);
+        let font = egui::FontId::proportional(theme.font_size_form_label());
+        let color = theme.color_form_label();
+        let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, color));
+        let w = label_w.max(galley.size().x.ceil() + 4.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), Sense::hover());
+        ui.painter().galley(
+            egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5),
+            galley,
+        );
+        add(ui)
+    })
+}
+
+/// 步进器统一行高(偏好表单与标签对齐用)。
+pub fn form_stepper_row_h_for_layout(theme: &Theme) -> f32 {
+    form_stepper_row_h(theme)
+}
+
+fn form_stepper_row_h(theme: &Theme) -> f32 {
+    24.0_f32.max(theme.size_control_btn_h().min(26.0))
+}
+
+fn form_stepper_btn_side(theme: &Theme) -> f32 {
+    form_stepper_row_h(theme)
+}
+
+/// 控件行内的单行输入：高度与步进器一致，文字垂直居中。
+pub fn form_inline_singleline(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    text: &mut String,
+    hint: &str,
+    desired_width: f32,
+    password: bool,
+) -> Response {
+    let row_h = form_stepper_row_h(theme);
+    let focused = ui.memory(|m| m.has_focus(id));
+    let width = desired_width.max(48.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
+    let underline = theme.uses_underline_inputs();
+    if underline {
+        let w = theme.hairline_width(ui.ctx());
+        let line_y = theme.snap_y_to_pixel(ui.ctx(), rect.bottom() - w * 0.5);
+        let line_color = if focused {
+            theme.color_input_underline_focus()
+        } else {
+            theme.color_input_underline_idle()
+        };
+        ui.painter()
+            .hline(rect.x_range(), line_y, Stroke::new(w, line_color));
+    } else {
+        let stroke = if focused {
+            egui::Stroke::new(theme.stroke_width_panel().max(1.0), theme.accent_color())
+        } else {
+            egui::Stroke::new(
+                theme.stroke_width_panel().max(1.0),
+                theme.color_text_input_stroke(),
+            )
+        };
+        ui.painter().rect(
+            rect,
+            theme.radius_search_input(),
+            theme.color_text_input_fill(),
+            stroke,
+        );
+    }
+    let inner = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 2.0, rect.top()),
+        egui::vec2((width - 4.0).max(8.0), row_h),
+    );
+    ui.allocate_ui_at_rect(inner, |ui| {
+        ui.set_min_size(inner.size());
+        ui.set_max_size(inner.size());
+        with_underline_field_visuals(ui, theme, |ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let prev_override = ui.style_mut().visuals.override_text_color;
+                ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
+                let mut edit = egui::TextEdit::singleline(text)
+                    .id(id)
+                    .frame(false)
+                    .desired_width((width - 8.0).max(40.0))
+                    .margin(egui::vec2(0.0, 0.0))
+                    .vertical_align(egui::Align::Center)
+                    .text_color(theme.color_text_input_text())
+                    .font(egui::FontId::proportional(theme.font_size_control_input()));
+                if !hint.is_empty() {
+                    edit = edit.hint_text(hint_rich(theme, hint, theme.font_size_control_input()));
+                }
+                if password {
+                    edit = edit.password(true);
+                }
+                let response = ui.add(edit);
+                ui.style_mut().visuals.override_text_color = prev_override;
+                response
+            })
+            .inner
+        })
+    })
+    .inner
+}
+
+/// 控件行内复选框：占满行高并垂直居中。
+pub fn form_inline_checkbox(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: impl std::hash::Hash,
+    value: &mut bool,
+    text: &str,
+) -> Response {
+    let row_h = form_stepper_row_h(theme);
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width().min(160.0), row_h),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_max_height(row_h);
+            form_checkbox_with_id(ui, theme, id, value, text)
+        },
+    )
+    .inner
 }
 
 /// 统一复选框：未选中时浅底 + 描边始终可见；勾选为 accent 底 + 浅色勾。
@@ -2985,7 +3172,7 @@ pub fn form_singleline_field(
     shown.inner
 }
 
-/// 多行输入框(modern：透明底 + 底边线)
+/// 多行输入框：始终用有底边框(不下划线)，避免「上面光标、下面一根线」的假高行。
 pub fn form_multiline_field(
     ui: &mut Ui,
     theme: &Theme,
@@ -2995,15 +3182,37 @@ pub fn form_multiline_field(
     rows: usize,
     password: bool,
 ) -> Response {
+    form_multiline_field_with_hint(ui, theme, id, text, "", desired_width, rows, password)
+}
+
+/// 带占位提示的多行输入。
+pub fn form_multiline_field_with_hint(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    text: &mut String,
+    hint: &str,
+    desired_width: f32,
+    rows: usize,
+    password: bool,
+) -> Response {
     let focused = ui.memory(|m| m.has_focus(id));
-    let underline = theme.uses_underline_inputs();
-    let inner_w = if underline {
-        desired_width.max(48.0)
-    } else {
-        (desired_width - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0)
-    };
-    let shown = theme.frame_form_text_input(focused).show(ui, |ui| {
-        with_underline_field_visuals(ui, theme, |ui| {
+    let rows = rows.max(1).min(8);
+    let pad_y = 4.0;
+    let inner_w = (desired_width - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0);
+    egui::Frame::none()
+        .fill(theme.color_text_input_fill())
+        .stroke(if focused {
+            egui::Stroke::new(theme.stroke_width_panel().max(1.0), theme.accent_color())
+        } else {
+            egui::Stroke::new(
+                theme.stroke_width_panel().max(1.0),
+                theme.color_text_input_stroke(),
+            )
+        })
+        .rounding(theme.radius_search_input())
+        .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), pad_y))
+        .show(ui, |ui| {
             let mut edit = egui::TextEdit::multiline(text)
                 .id(id)
                 .frame(false)
@@ -3011,16 +3220,40 @@ pub fn form_multiline_field(
                 .desired_rows(rows)
                 .text_color(theme.color_text_input_text())
                 .font(egui::FontId::proportional(theme.font_size_control_input()));
+            if !hint.is_empty() {
+                edit = edit.hint_text(hint_rich(theme, hint, theme.font_size_control_input()));
+            }
             if password {
                 edit = edit.password(true);
             }
             ui.add(edit)
         })
-    });
-    if underline {
-        paint_form_field_underline(ui, theme, shown.response.rect, focused);
-    }
-    shown.inner
+        .inner
+}
+
+/// 统一下拉：控件字号与表单输入一致，弹出层走 [`apply_menu_popup_style`]。
+pub fn form_combo<R>(
+    ui: &mut Ui,
+    theme: &Theme,
+    id_salt: impl std::hash::Hash,
+    selected_text: impl Into<egui::WidgetText>,
+    width: f32,
+    add_contents: impl FnOnce(&mut Ui) -> R,
+) -> egui::InnerResponse<Option<R>> {
+    let font = egui::FontId::proportional(theme.font_size_control_input());
+    ui.style_mut()
+        .text_styles
+        .insert(egui::TextStyle::Button, font.clone());
+    ui.style_mut()
+        .text_styles
+        .insert(egui::TextStyle::Body, font);
+    egui::ComboBox::from_id_source(id_salt)
+        .selected_text(selected_text)
+        .width(width.max(48.0))
+        .show_ui(ui, |ui| {
+            apply_menu_popup_style(ui, theme);
+            add_contents(ui)
+        })
 }
 
 /// 只读多行文本：支持鼠标拖选与 Ctrl/Cmd+C(`&str` 缓冲不可编辑)。
@@ -4087,7 +4320,8 @@ pub fn panel_quick_prompt_chip(ui: &mut Ui, theme: &Theme, label: &str) -> Respo
     response
 }
 
-/// 数字框(`DragValue` 等)包进与单行输入相同的底+描边，字号与表单输入一致。
+/// 数字框包进与单行输入相同的底+描边，字号与表单输入一致。
+/// 若内层仍是 `DragValue`，会盖掉其 ↔ 拖动手势光标(应优先改用步进器)。
 pub fn form_drag_value_field(
     ui: &mut Ui,
     theme: &Theme,
@@ -4113,5 +4347,343 @@ pub fn form_drag_value_field(
     if underline {
         paint_form_field_underline(ui, theme, shown.response.rect, focused);
     }
-    shown.inner
+    // DragValue 默认悬停为 ResizeHorizontal；偏好类数字框不应露出可拖暗示。
+    shown.inner.on_hover_cursor(CursorIcon::Text)
+}
+
+/// 步进器中间的数字框：固定宽高，不随父布局被拉高。
+fn form_stepper_value_field(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    width: f32,
+    add_field: impl FnOnce(&mut Ui) -> Response,
+) -> Response {
+    let focused = ui.memory(|m| m.has_focus(id));
+    let row_h = form_stepper_row_h(theme);
+    let stroke = if focused {
+        egui::Stroke::new(theme.stroke_width_panel().max(1.0), theme.accent_color())
+    } else {
+        egui::Stroke::new(
+            theme.stroke_width_panel().max(1.0),
+            theme.color_text_input_stroke(),
+        )
+    };
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
+    ui.painter().rect(
+        rect,
+        theme.radius_search_input(),
+        theme.color_text_input_fill(),
+        stroke,
+    );
+    let inner = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 4.0, rect.top()),
+        egui::vec2((width - 8.0).max(8.0), row_h),
+    );
+    let mut edit = ui
+        .allocate_ui_at_rect(inner, |ui| {
+            ui.set_min_size(inner.size());
+            ui.set_max_size(inner.size());
+            let font = egui::FontId::proportional(theme.font_size_control_input());
+            ui.style_mut()
+                .text_styles
+                .insert(egui::TextStyle::Body, font.clone());
+            ui.style_mut()
+                .text_styles
+                .insert(egui::TextStyle::Button, font);
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                add_field(ui)
+            })
+            .inner
+        })
+        .inner;
+    if edit.hovered() || ui.rect_contains_pointer(rect) {
+        ui.ctx().set_cursor_icon(CursorIcon::Text);
+    }
+    edit = edit.on_hover_cursor(CursorIcon::Text);
+    edit
+}
+
+fn form_stepper_btn(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
+    let side = form_stepper_btn_side(theme);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(side, side), Sense::click());
+    let hovered = response.hovered();
+    let pressed = response.is_pointer_button_down_on();
+    let (fill, text_c, _) = secondary_control_button_colors(theme, true, hovered, pressed);
+    ui.painter().rect(
+        rect,
+        theme.radius_list_item(),
+        fill,
+        theme.color_control_secondary_stroke(true),
+    );
+    let galley = ui.painter().layout_no_wrap(
+        label.to_owned(),
+        egui::FontId::proportional(theme.font_size_body()),
+        text_c,
+    );
+    ui.painter().galley(
+        egui::pos2(
+            rect.center().x - galley.size().x * 0.5,
+            rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
+    response
+}
+
+fn form_stepper_row<R>(
+    ui: &mut Ui,
+    theme: &Theme,
+    field_w: f32,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> R {
+    let row_h = form_stepper_row_h(theme);
+    let btn = form_stepper_btn_side(theme);
+    let gap = theme.spacing_xs();
+    let total_w = btn + gap + field_w + gap + btn;
+    ui.allocate_ui_with_layout(
+        egui::vec2(total_w, row_h),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_height(row_h);
+            ui.spacing_mut().item_spacing.x = gap;
+            add(ui)
+        },
+    )
+    .inner
+}
+
+/// 整数步进器：`−` 数字框 `＋`。固定行高，点加减或框内键入。
+pub fn form_u32_stepper(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    value: &mut u32,
+    range: std::ops::RangeInclusive<u32>,
+    step: u32,
+) -> Response {
+    let min_v = *range.start();
+    let max_v = *range.end();
+    let step = step.max(1);
+    let mut changed = false;
+    let edit_buf_id = id.with("stepper_buf");
+    let field_w = 48.0;
+
+    let mut response = form_stepper_row(ui, theme, field_w, |ui| {
+        if form_stepper_btn(ui, theme, "−").clicked() {
+            let next = value.saturating_sub(step).max(min_v);
+            if next != *value {
+                *value = next;
+                changed = true;
+                ui.ctx().data_mut(|d| d.remove::<String>(edit_buf_id));
+            }
+        }
+
+        let focused = ui.memory(|m| m.has_focus(id));
+        let mut text = if focused {
+            ui.ctx()
+                .data(|d| d.get_temp::<String>(edit_buf_id))
+                .unwrap_or_else(|| value.to_string())
+        } else {
+            value.to_string()
+        };
+        let edit = form_stepper_value_field(ui, theme, id, field_w, |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut text)
+                    .id(id)
+                    .desired_width(field_w - 8.0)
+                    .horizontal_align(egui::Align::Center)
+                    .vertical_align(egui::Align::Center)
+                    .margin(egui::vec2(0.0, 0.0))
+                    .frame(false),
+            )
+        });
+        if edit.has_focus() {
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(edit_buf_id, text.clone()));
+        }
+        if edit.changed() {
+            if let Ok(n) = text.trim().parse::<u32>() {
+                let n = n.clamp(min_v, max_v);
+                if n != *value {
+                    *value = n;
+                    changed = true;
+                }
+            }
+        }
+        if edit.lost_focus() {
+            ui.ctx().data_mut(|d| d.remove::<String>(edit_buf_id));
+            if let Ok(n) = text.trim().parse::<u32>() {
+                let n = n.clamp(min_v, max_v);
+                if n != *value {
+                    *value = n;
+                    changed = true;
+                }
+            }
+        }
+
+        if form_stepper_btn(ui, theme, "+").clicked() {
+            let next = (*value).saturating_add(step).min(max_v);
+            if next != *value {
+                *value = next;
+                changed = true;
+                ui.ctx().data_mut(|d| d.remove::<String>(edit_buf_id));
+            }
+        }
+        edit
+    });
+
+    if changed {
+        response.mark_changed();
+    }
+    response
+}
+
+/// `u8` 步进器(如 KeepAlive 超时次数)。
+pub fn form_u8_stepper(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    value: &mut u8,
+    range: std::ops::RangeInclusive<u8>,
+    step: u8,
+) -> Response {
+    let mut v = u32::from(*value);
+    let r = form_u32_stepper(
+        ui,
+        theme,
+        id,
+        &mut v,
+        u32::from(*range.start())..=u32::from(*range.end()),
+        u32::from(step.max(1)),
+    );
+    *value = v as u8;
+    r
+}
+
+/// `u16` 步进器(如端口)。
+pub fn form_u16_stepper(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    value: &mut u16,
+    range: std::ops::RangeInclusive<u16>,
+    step: u16,
+) -> Response {
+    let mut v = u32::from(*value);
+    let r = form_u32_stepper(
+        ui,
+        theme,
+        id,
+        &mut v,
+        u32::from(*range.start())..=u32::from(*range.end()),
+        u32::from(step.max(1)),
+    );
+    *value = v as u16;
+    r
+}
+
+/// `f32` 步进器(如字号)；逻辑同 [`form_u32_stepper`]。
+pub fn form_f32_stepper(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    step: f32,
+    suffix: &str,
+) -> Response {
+    let min_v = *range.start();
+    let max_v = *range.end();
+    let step = step.abs().max(0.01);
+    let mut changed = false;
+    let edit_buf_id = id.with("stepper_buf");
+    let field_w = 64.0;
+
+    let mut response = form_stepper_row(ui, theme, field_w, |ui| {
+        if form_stepper_btn(ui, theme, "−").clicked() {
+            let next = (*value - step).clamp(min_v, max_v);
+            if (next - *value).abs() > f32::EPSILON {
+                *value = next;
+                changed = true;
+                ui.ctx().data_mut(|d| d.remove::<String>(edit_buf_id));
+            }
+        }
+
+        let focused = ui.memory(|m| m.has_focus(id));
+        let mut text = if focused {
+            ui.ctx()
+                .data(|d| d.get_temp::<String>(edit_buf_id))
+                .unwrap_or_else(|| format_stepper_f32(*value, suffix))
+        } else {
+            format_stepper_f32(*value, suffix)
+        };
+        let edit = form_stepper_value_field(ui, theme, id, field_w, |ui| {
+            ui.add(
+                egui::TextEdit::singleline(&mut text)
+                    .id(id)
+                    .desired_width(field_w - 8.0)
+                    .horizontal_align(egui::Align::Center)
+                    .vertical_align(egui::Align::Center)
+                    .margin(egui::vec2(0.0, 0.0))
+                    .frame(false),
+            )
+        });
+        if edit.has_focus() {
+            ui.ctx()
+                .data_mut(|d| d.insert_temp(edit_buf_id, text.clone()));
+        }
+        if edit.changed() {
+            let raw = text.trim().trim_end_matches(suffix).trim();
+            if let Ok(n) = raw.parse::<f32>() {
+                let n = n.clamp(min_v, max_v);
+                if (n - *value).abs() > f32::EPSILON {
+                    *value = n;
+                    changed = true;
+                }
+            }
+        }
+        if edit.lost_focus() {
+            ui.ctx().data_mut(|d| d.remove::<String>(edit_buf_id));
+            let raw = text.trim().trim_end_matches(suffix).trim();
+            if let Ok(n) = raw.parse::<f32>() {
+                let n = n.clamp(min_v, max_v);
+                if (n - *value).abs() > f32::EPSILON {
+                    *value = n;
+                    changed = true;
+                }
+            }
+        }
+
+        if form_stepper_btn(ui, theme, "+").clicked() {
+            let next = (*value + step).clamp(min_v, max_v);
+            if (next - *value).abs() > f32::EPSILON {
+                *value = next;
+                changed = true;
+                ui.ctx().data_mut(|d| d.remove::<String>(edit_buf_id));
+            }
+        }
+        edit
+    });
+
+    if changed {
+        response.mark_changed();
+    }
+    response
+}
+
+fn format_stepper_f32(v: f32, suffix: &str) -> String {
+    let num = if (v - v.round()).abs() < 0.05 {
+        format!("{}", v.round() as i32)
+    } else {
+        format!("{v:.1}")
+    };
+    if suffix.is_empty() {
+        num
+    } else {
+        format!("{num}{suffix}")
+    }
 }

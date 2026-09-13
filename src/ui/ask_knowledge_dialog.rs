@@ -56,19 +56,26 @@ pub fn show_ask_knowledge_modal(
                 ui.add_space(theme.spacing_sm());
 
                 ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(query)
-                            .desired_width(420.0)
-                            .hint_text(crate::i18n::tr(
-                                ctx,
-                                "e.g. how do we clean logs safely",
-                                "例如：我们怎么安全清理日志",
-                            )),
+                    chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        egui::Id::new("ask_knowledge_query"),
+                        query,
+                        crate::i18n::tr(
+                            ctx,
+                            "e.g. how do we clean logs safely",
+                            "例如：我们怎么安全清理日志",
+                        ),
+                        420.0,
+                        false,
                     );
                     let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if ui
-                        .button(crate::i18n::tr(ctx, "Search", "检索"))
-                        .clicked()
+                    if chrome::panel_action_primary_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Search", "检索"),
+                    )
+                    .clicked()
                         || (enter && !query.trim().is_empty())
                     {
                         *action = AskKnowledgeUiAction::Search;
@@ -122,13 +129,16 @@ pub fn show_ask_knowledge_modal(
                                             .monospace(),
                                     );
                                     if hit.fragment.is_some()
-                                        && ui
-                                            .button(crate::i18n::tr(
+                                        && chrome::panel_action_primary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(
                                                 ctx,
                                                 "Use in terminal",
                                                 "用到终端",
-                                            ))
-                                            .clicked()
+                                            ),
+                                        )
+                                        .clicked()
                                     {
                                         *action = AskKnowledgeUiAction::UseHit(i);
                                     }
@@ -140,17 +150,20 @@ pub fn show_ask_knowledge_modal(
 
                 if searched && hits.is_empty() {
                     ui.add_space(theme.spacing_sm());
-                    let ask = ui
-                        .button(crate::i18n::tr(
+                    let ask = chrome::panel_action_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(
                             ctx,
                             "Ask AI instead…",
                             "改用 AI 回答…",
-                        ))
-                        .on_hover_text(crate::i18n::tr(
-                            ctx,
-                            "Close this dialog, open the AI panel, and ask the model. The answer will be labeled as not team knowledge.",
-                            "关闭本对话框，打开右侧 AI 面板并向模型提问；回答会标明「非团队知识」。",
-                        ));
+                        ),
+                    )
+                    .on_hover_text(crate::i18n::tr(
+                        ctx,
+                        "Close this dialog, open the AI panel, and ask the model. The answer will be labeled as not team knowledge.",
+                        "关闭本对话框，打开右侧 AI 面板并向模型提问；回答会标明「非团队知识」。",
+                    ));
                     if ask.clicked() {
                         *action = AskKnowledgeUiAction::AskModel;
                     }

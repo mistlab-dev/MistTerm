@@ -1087,15 +1087,19 @@ impl MistTermApp {
                                     "本地端口转发 (-L)",
                                 ),
                             );
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.edit_session_local_forwards_text)
-                                    .desired_width(form_w)
-                                    .desired_rows(2)
-                                    .hint_text(crate::i18n::tr(
-                                        ctx,
-                                        "8080:127.0.0.1:80 (one per line)",
-                                        "8080:127.0.0.1:80(每行一条)",
-                                    )),
+                            crate::ui::chrome::form_multiline_field_with_hint(
+                                ui,
+                                theme,
+                                egui::Id::new("edit_session_local_forwards"),
+                                &mut self.edit_session_local_forwards_text,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "8080:127.0.0.1:80 (one per line)",
+                                    "8080:127.0.0.1:80(每行一条)",
+                                ),
+                                form_w,
+                                2,
+                                false,
                             );
 
                             Self::ui_field_label(
@@ -1107,15 +1111,19 @@ impl MistTermApp {
                                     "远程端口转发 (-R)",
                                 ),
                             );
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.edit_session_remote_forwards_text)
-                                    .desired_width(form_w)
-                                    .desired_rows(2)
-                                    .hint_text(crate::i18n::tr(
-                                        ctx,
-                                        "8080:127.0.0.1:3000 (one per line)",
-                                        "8080:127.0.0.1:3000(每行一条)",
-                                    )),
+                            crate::ui::chrome::form_multiline_field_with_hint(
+                                ui,
+                                theme,
+                                egui::Id::new("edit_session_remote_forwards"),
+                                &mut self.edit_session_remote_forwards_text,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "8080:127.0.0.1:3000 (one per line)",
+                                    "8080:127.0.0.1:3000(每行一条)",
+                                ),
+                                form_w,
+                                2,
+                                false,
                             );
 
                             Self::ui_field_label(
@@ -1127,15 +1135,19 @@ impl MistTermApp {
                                     "动态转发 (-D / SOCKS5)",
                                 ),
                             );
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.edit_session_dynamic_forwards_text)
-                                    .desired_width(form_w)
-                                    .desired_rows(2)
-                                    .hint_text(crate::i18n::tr(
-                                        ctx,
-                                        "1080 or 0.0.0.0:1080 (one per line)",
-                                        "1080 或 0.0.0.0:1080(每行一条)",
-                                    )),
+                            crate::ui::chrome::form_multiline_field_with_hint(
+                                ui,
+                                theme,
+                                egui::Id::new("edit_session_dynamic_forwards"),
+                                &mut self.edit_session_dynamic_forwards_text,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "1080 or 0.0.0.0:1080 (one per line)",
+                                    "1080 或 0.0.0.0:1080(每行一条)",
+                                ),
+                                form_w,
+                                2,
+                                false,
                             );
 
                             Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Group", "分组"));
@@ -1150,17 +1162,20 @@ impl MistTermApp {
                             );
 
                             Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Accent color tag", "环境色标"));
-                            egui::ComboBox::from_id_source("edit_session_color")
-                                .selected_text(crate::i18n::session_color_tag(
+                            crate::ui::chrome::form_combo(
+                                ui,
+                                theme,
+                                "edit_session_color",
+                                crate::i18n::session_color_tag(
                                     ctx,
                                     SESSION_COLOR_TAGS
                                         .iter()
                                         .find(|(v, _)| *v == self.edit_session_color_tag.as_str())
                                         .map(|(v, _)| *v)
                                         .unwrap_or_else(|| self.edit_session_color_tag.as_str()),
-                                ))
-                                .show_ui(ui, |ui| {
-                                    crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                                ),
+                                form_w,
+                                |ui| {
                                     for (value, _) in SESSION_COLOR_TAGS {
                                         let label = crate::i18n::session_color_tag(ctx, value);
                                         if ui
@@ -1172,10 +1187,11 @@ impl MistTermApp {
                                             .clicked()
                                         {}
                                     }
-                                });
+                                },
+                            );
 
                             ui.label(
-                                egui::RichText::new(crate::i18n::tr(ctx, "Connection keep-alive", "连接保活"))
+                                egui::RichText::new(crate::i18n::tr(ctx, "Connection keep-alive", "保持连接"))
                                     .size(theme.font_size_panel_title())
                                     .strong()
                                     .color(theme.color_form_label()),
@@ -1185,45 +1201,36 @@ impl MistTermApp {
                                 theme,
                                 "edit_session_keepalive_enabled",
                                 &mut self.edit_session_keepalive_enabled,
-                                crate::i18n::tr(ctx, "Enable keepalive pings", "启用心跳保持"),
+                                crate::i18n::tr(ctx, "Enable keepalive pings", "空闲时发送心跳，防止被断开"),
                             );
                             if self.edit_session_keepalive_enabled {
-                                ui.horizontal(|ui| {
-                                    crate::ui::chrome::form_field_label(
+                                crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                                    crate::ui::chrome::form_inline_label(
                                         ui,
                                         theme,
-                                        crate::i18n::tr(ctx, "Interval (s)", "间隔(秒)"),
+                                        crate::i18n::tr(ctx, "Interval (s)", "每隔(秒)"),
                                     );
-                                    crate::ui::chrome::form_drag_value_field(
+                                    crate::ui::chrome::form_u32_stepper(
                                         ui,
                                         theme,
                                         egui::Id::new("edit_sess_ka_interval"),
-                                        |ui| {
-                                            ui.add(
-                                                egui::DragValue::new(
-                                                    &mut self.edit_session_keepalive_interval_secs,
-                                                )
-                                                .clamp_range(5..=300),
-                                            )
-                                        },
+                                        &mut self.edit_session_keepalive_interval_secs,
+                                        5..=300,
+                                        5,
                                     );
-                                    crate::ui::chrome::form_field_label(
+                                    ui.add_space(theme.spacing_md());
+                                    crate::ui::chrome::form_inline_label(
                                         ui,
                                         theme,
-                                        crate::i18n::tr(ctx, "Max timeouts", "超时次数"),
+                                        crate::i18n::tr(ctx, "Max timeouts", "连续无应答"),
                                     );
-                                    crate::ui::chrome::form_drag_value_field(
+                                    crate::ui::chrome::form_u8_stepper(
                                         ui,
                                         theme,
                                         egui::Id::new("edit_sess_ka_count"),
-                                        |ui| {
-                                            ui.add(
-                                                egui::DragValue::new(
-                                                    &mut self.edit_session_keepalive_count_max,
-                                                )
-                                                .clamp_range(1..=20),
-                                            )
-                                        },
+                                        &mut self.edit_session_keepalive_count_max,
+                                        1..=20,
+                                        1,
                                     );
                                 });
                             }
@@ -1407,27 +1414,14 @@ impl MistTermApp {
                             }
                             ui.separator();
                             ui.horizontal(|ui| {
-                                let px = theme.font_size_fragment_dialog_body();
-                                let (r, _) =
-                                    ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
-                                crate::ui::icons::paint_icon(
+                                if crate::ui::chrome::panel_action_button_with_icon_ex(
                                     ui,
-                                    r,
+                                    theme,
                                     crate::ui::icons::IconId::Refresh,
-                                    theme.color_body_text_muted(),
-                                    px,
-                                );
-                                if ui
-                                    .add(
-                                        crate::ui::chrome::panel_toolbar_button_widget(
-                                            theme,
-                                            egui::RichText::new(crate::i18n::tr(ctx, "Recompute command", "根据变量重算命令"))
-                                                .size(theme.font_size_fragment_dialog_body())
-                                                .color(theme.color_body_text_muted()),
-                                        )
-                                        .min_size(egui::vec2(0.0, theme.size_fragment_var_field_min_h())),
-                                    )
-                                    .clicked()
+                                    crate::i18n::tr(ctx, "Recompute command", "根据变量重算命令"),
+                                    true,
+                                )
+                                .clicked()
                                 {
                                     self.sync_pending_fragment_command_edit();
                                 }
@@ -1447,8 +1441,7 @@ impl MistTermApp {
                                 false,
                             );
                             ui.add_space(theme.spacing_sm());
-                            ui.horizontal(|ui| {
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
                                     let insert_label = match self.fragment_vars_completion {
                                         FragmentVarsCompletion::PasteInsertStats => {
                                             crate::i18n::tr(ctx, "Insert into terminal", "插入终端")
@@ -1459,7 +1452,7 @@ impl MistTermApp {
                                     };
                                     if ui
                                         .add(crate::ui::chrome::modal_primary_button_with_icon_widget(
-                                            theme,
+                                            th,
                                             crate::ui::icons::IconId::TerminalPrompt,
                                             insert_label,
                                         ))
@@ -1556,14 +1549,14 @@ impl MistTermApp {
                                     }
                                     if crate::ui::chrome::modal_secondary_icon_button(
                                         ui,
-                                        theme,
+                                        th,
                                         crate::ui::icons::IconId::Cross,
                                         crate::i18n::tr(ctx, "Cancel", "取消"),
                                     )
-                        .clicked() {
+                                    .clicked()
+                                    {
                                         should_close = true;
                                     }
-                                });
                             });
                         });
                 });

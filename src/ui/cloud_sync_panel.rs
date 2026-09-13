@@ -810,27 +810,23 @@ impl CloudSyncPanel {
                         .weak());
 
                         ui.add_space(theme.spacing_panel_gap());
-                        chrome::form_field_label(
-                            ui,
-                            theme,
-                            loc.tr("Auto-sync interval", "自动同步间隔"),
-                        );
-                        ui.horizontal(|ui| {
-                            chrome::form_drag_value_field(
+                        chrome::form_control_row(ui, theme, |ui| {
+                            chrome::form_inline_label(
+                                ui,
+                                theme,
+                                loc.tr("Every (min)", "每隔(分钟)"),
+                            );
+                            chrome::form_u32_stepper(
                                 ui,
                                 theme,
                                 egui::Id::new("cloud_sync_freq_min"),
-                                |ui| {
-                                    ui.add(
-                                        egui::DragValue::new(&mut self.settings.frequency_minutes)
-                                            .speed(1.0)
-                                            .prefix(loc.tr("Every ", "每 ")),
-                                    )
-                                },
+                                &mut self.settings.frequency_minutes,
+                                0..=24 * 60,
+                                5,
                             );
                             ui.label(chrome::rich_caption(
                                 theme,
-                                loc.tr("minutes (0 = manual only)", "分钟(0 = 仅手动)"),
+                                loc.tr("0 = manual only", "填 0 表示仅手动同步"),
                             ));
                         });
                         ui.label(chrome::rich_caption(

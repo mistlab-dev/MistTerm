@@ -182,15 +182,18 @@ impl MistTermApp {
                     crate::i18n::tr(ctx, "Language", "界面语言"),
                 );
                 let mut lang = self.app_settings.ui_language;
-                egui::ComboBox::from_id_source("pref_ui_language")
-                    .selected_text(lang.label_in_self())
-                    .width(layout_util::finite_content_width(ui))
-                    .show_ui(ui, |ui| {
-                        crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                crate::ui::chrome::form_combo(
+                    ui,
+                    theme,
+                    "pref_ui_language",
+                    lang.label_in_self(),
+                    layout_util::finite_content_width(ui),
+                    |ui| {
                         for option in crate::i18n::UiLanguage::ALL {
                             ui.selectable_value(&mut lang, option, option.label_in_self());
                         }
-                    });
+                    },
+                );
                 if lang != self.app_settings.ui_language {
                     self.app_settings.ui_language = lang;
                     let _ = self.app_settings.save();
@@ -257,45 +260,45 @@ impl MistTermApp {
                         crate::platform::TerminalFontPreset::CascadiaMono => "Cascadia Mono",
                         crate::platform::TerminalFontPreset::JetBrainsMono => "JetBrains Mono",
                     };
-                egui::ComboBox::from_id_source("preferences_terminal_font_preset")
-                    .selected_text(preset_label(ctx, preset))
-                    .show_ui(ui, |ui| {
-                        crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                crate::ui::chrome::form_combo(
+                    ui,
+                    theme,
+                    "preferences_terminal_font_preset",
+                    preset_label(ctx, preset),
+                    layout_util::finite_content_width(ui),
+                    |ui| {
                         for p in crate::platform::TerminalFontPreset::ALL {
                             ui.selectable_value(&mut preset, p, preset_label(ctx, p));
                         }
-                    });
+                    },
+                );
                 if preset != self.terminal_font_preset {
                     self.terminal_font_preset = preset;
                     self.apply_terminal_font_preferences(ctx);
                 }
 
-                ui.horizontal(|ui| {
-                    ui.label(
-                        RichText::new(crate::i18n::tr(ctx, "Font size", "字号"))
-                            .size(theme.font_size_small())
-                            .color(theme.color_form_hint()),
+                // 固定行高，避免控件被拉高、标签与输入基线错位
+                crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                    crate::ui::chrome::form_inline_label(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Font size", "字号"),
                     );
                     let mut size = self.terminal_font_size;
-                    if crate::ui::chrome::form_drag_value_field(
+                    if crate::ui::chrome::form_f32_stepper(
                         ui,
                         theme,
                         egui::Id::new("pref_terminal_font_size"),
-                        |ui| {
-                            ui.add(
-                                egui::DragValue::new(&mut size)
-                                    .speed(0.25)
-                                    .clamp_range(
-                                        crate::platform::TERMINAL_FONT_SIZE_MIN
-                                            ..=crate::platform::TERMINAL_FONT_SIZE_MAX,
-                                    )
-                                    .suffix(" px"),
-                            )
-                        },
+                        &mut size,
+                        crate::platform::TERMINAL_FONT_SIZE_MIN
+                            ..=crate::platform::TERMINAL_FONT_SIZE_MAX,
+                        1.0,
+                        " px",
                     )
                     .changed()
                     {
-                        self.terminal_font_size = crate::platform::clamp_terminal_font_size(size);
+                        self.terminal_font_size =
+                            crate::platform::clamp_terminal_font_size(size);
                         self.apply_terminal_font_size_to_all_terminals();
                         ctx.request_repaint();
                     }
@@ -338,23 +341,23 @@ impl MistTermApp {
             label_color,
             false,
             |ui| {
-                let pref_w = layout_util::finite_content_width(ui);
                 let mut ar = self.auto_reconnect_enabled;
-                if ui
-                    .checkbox(
-                        &mut ar,
-                        crate::i18n::tr(
-                            ctx,
-                            "Reconnect automatically after network loss (up to 5 times, exponential backoff)",
-                            "网络断开后自动重连(最多 5 次，指数退避)",
-                        ),
-                    )
-                    .on_hover_text(crate::i18n::tr(
+                if crate::ui::chrome::form_checkbox(
+                    ui,
+                    theme,
+                    &mut ar,
+                    crate::i18n::tr(
                         ctx,
-                        "Default off. Only reconnects on unexpected drops; manual disconnect will not auto-reconnect.",
-                        "默认关闭。开启后仅在意外断线时自动重连；手动点击「断开」不会重连。",
-                    ))
-                    .changed()
+                        "Reconnect automatically after disconnect (up to 5 tries, longer waits each time)",
+                        "断线后自动重连（最多 5 次，间隔逐渐加长）",
+                    ),
+                )
+                .on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Off by default. Only reconnects after unexpected drops — not when you click Disconnect.",
+                    "默认关闭。仅在意外断线时重连；你手动点「断开」不会重连。",
+                ))
+                .changed()
                 {
                     self.auto_reconnect_enabled = ar;
                 }
@@ -366,58 +369,52 @@ impl MistTermApp {
                     &mut ka,
                     crate::i18n::tr(
                         ctx,
-                        "Enable SSH keepalive by default for new sessions",
-                        "新建会话默认启用 SSH KeepAlive",
+                        "Keep connections alive when idle (for new sessions)",
+                        "空闲时保持连接（新建连接默认开启）",
                     ),
                 )
                 .changed()
                 {
                     self.default_keepalive_enabled = ka;
                 }
-                ui.horizontal(|ui| {
-                    crate::ui::chrome::form_field_label(
+                crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                    crate::ui::chrome::form_inline_label(
                         ui,
                         theme,
-                        crate::i18n::tr(ctx, "Interval (s)", "间隔(秒)"),
+                        crate::i18n::tr(ctx, "Ping every (s)", "每隔(秒)"),
                     );
-                    crate::ui::chrome::form_drag_value_field(
+                    crate::ui::chrome::form_u32_stepper(
                         ui,
                         theme,
                         egui::Id::new("pref_ka_interval"),
-                        |ui| {
-                            ui.add(
-                                egui::DragValue::new(&mut self.default_keepalive_interval_secs)
-                                    .clamp_range(5..=300),
-                            )
-                        },
+                        &mut self.default_keepalive_interval_secs,
+                        5..=300,
+                        5,
                     );
-                    crate::ui::chrome::form_field_label(
+                    ui.add_space(theme.spacing_md());
+                    crate::ui::chrome::form_inline_label(
                         ui,
                         theme,
-                        crate::i18n::tr(ctx, "Max timeouts", "超时次数"),
+                        crate::i18n::tr(ctx, "Give up after", "连续无应答"),
                     );
-                    crate::ui::chrome::form_drag_value_field(
+                    crate::ui::chrome::form_u8_stepper(
                         ui,
                         theme,
                         egui::Id::new("pref_ka_count"),
-                        |ui| {
-                            ui.add(
-                                egui::DragValue::new(&mut self.default_keepalive_count_max)
-                                    .clamp_range(1..=20),
-                            )
-                        },
+                        &mut self.default_keepalive_count_max,
+                        1..=20,
+                        1,
                     );
                 });
                 ui.label(
                     RichText::new(crate::i18n::tr(
                         ctx,
-                        "Note: libssh2 only configures keepalive intervals; max timeouts is saved on sessions — full semantics may evolve.",
-                        "说明：libssh2 仅支持心跳间隔；超时次数用于会话配置，完整判定见后续版本。",
+                        "Sends a small ping so idle sessions are not dropped. After several missed replies the connection may be treated as lost.",
+                        "定时发一次轻量探测，减少空闲被服务器踢下线。连续多次无应答时，可能判定连接已断开。",
                     ))
                     .size(theme.font_size_small())
                     .color(text_low),
                 );
-                let _ = pref_w;
             },
         );
     }
@@ -454,22 +451,19 @@ impl MistTermApp {
                     self.session_log_enabled = log_on;
                     self.session_log_settings.enabled = log_on;
                 }
-                ui.horizontal(|ui| {
-                    crate::ui::chrome::form_field_label(
+                crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                    crate::ui::chrome::form_inline_label(
                         ui,
                         theme,
                         crate::i18n::tr(ctx, "Retention (days)", "保留天数"),
                     );
-                    crate::ui::chrome::form_drag_value_field(
+                    crate::ui::chrome::form_u32_stepper(
                         ui,
                         theme,
                         egui::Id::new("pref_log_retention"),
-                        |ui| {
-                            ui.add(
-                                egui::DragValue::new(&mut self.session_log_settings.retention_days)
-                                    .clamp_range(1..=365),
-                            )
-                        },
+                        &mut self.session_log_settings.retention_days,
+                        1..=365,
+                        1,
                     );
                 });
                 let mut ansi = self.session_log_settings.include_ansi;
@@ -477,7 +471,7 @@ impl MistTermApp {
                     ui,
                     theme,
                     &mut ansi,
-                    crate::i18n::tr(ctx, "Include ANSI colors in logs", "日志包含 ANSI 颜色"),
+                    crate::i18n::tr(ctx, "Include ANSI colors in logs", "日志保留终端颜色代码"),
                 )
                 .changed()
                 {
@@ -519,12 +513,13 @@ impl MistTermApp {
             false,
             |ui| {
                 let pref_w = layout_util::finite_content_width(ui);
-                if ui
-                    .checkbox(
-                        &mut self.app_settings.vault.enabled,
-                        crate::i18n::tr(ctx, "Enable Vault integration", "启用 Vault 集成"),
-                    )
-                    .changed()
+                if crate::ui::chrome::form_checkbox(
+                    ui,
+                    theme,
+                    &mut self.app_settings.vault.enabled,
+                    crate::i18n::tr(ctx, "Enable Vault integration", "启用密码库（HashiCorp Vault）"),
+                )
+                .changed()
                 {
                     self.app_settings.vault.team_auto_apply = false;
                     self.app_settings.vault.managed_by_team_id = None;
@@ -570,7 +565,7 @@ impl MistTermApp {
                 crate::ui::chrome::form_field_label(
                     ui,
                     theme,
-                    crate::i18n::tr(ctx, "Namespace", "Namespace"),
+                    crate::i18n::tr(ctx, "Namespace", "命名空间（可选）"),
                 );
                 let vault_ns = crate::ui::chrome::form_singleline_field(
                     ui,
@@ -587,7 +582,7 @@ impl MistTermApp {
                 crate::ui::chrome::form_field_label(
                     ui,
                     theme,
-                    crate::i18n::tr(ctx, "Default KV mount", "默认 KV mount"),
+                    crate::i18n::tr(ctx, "Default KV mount", "默认密钥路径"),
                 );
                 let vault_mount = crate::ui::chrome::form_singleline_field(
                     ui,
@@ -602,45 +597,42 @@ impl MistTermApp {
                     let _ = self.app_settings.save();
                 }
                 let mut auth = self.app_settings.vault.auth;
-                egui::ComboBox::from_id_source("pref_vault_auth")
-                    .selected_text(match auth {
-                        crate::core::VaultAuthSettings::None => {
-                            crate::i18n::tr(ctx, "Not configured", "未配置").to_owned()
-                        }
-                        crate::core::VaultAuthSettings::Token => {
-                            crate::i18n::tr(ctx, "Token (Keychain)", "Token (存钥匙串)").to_owned()
-                        }
-                        crate::core::VaultAuthSettings::AppRole => {
-                            crate::i18n::tr(ctx, "AppRole (Keychain)", "AppRole (存钥匙串)")
-                                .to_owned()
-                        }
-                    })
-                    .width(pref_w)
-                    .show_ui(ui, |ui| {
-                        crate::ui::chrome::apply_menu_popup_style(ui, theme);
-                        for v in [
-                            crate::core::VaultAuthSettings::None,
-                            crate::core::VaultAuthSettings::Token,
-                            crate::core::VaultAuthSettings::AppRole,
-                        ] {
-                            let label = match v {
-                                crate::core::VaultAuthSettings::None => {
-                                    crate::i18n::tr(ctx, "Not configured", "未配置")
-                                }
-                                crate::core::VaultAuthSettings::Token => {
-                                    crate::i18n::tr(ctx, "Token (Keychain)", "Token (存钥匙串)")
-                                }
-                                crate::core::VaultAuthSettings::AppRole => crate::i18n::tr(
-                                    ctx,
-                                    "AppRole (Keychain)",
-                                    "AppRole (存钥匙串)",
-                                ),
-                            };
-                            if ui.selectable_label(auth == v, label).clicked() {
-                                auth = v;
+                let auth_label = match auth {
+                    crate::core::VaultAuthSettings::None => {
+                        crate::i18n::tr(ctx, "Not configured", "未配置").to_owned()
+                    }
+                    crate::core::VaultAuthSettings::Token => {
+                        crate::i18n::tr(ctx, "Token (Keychain)", "令牌（存系统钥匙串）").to_owned()
+                    }
+                    crate::core::VaultAuthSettings::AppRole => {
+                        crate::i18n::tr(ctx, "AppRole (Keychain)", "AppRole（存系统钥匙串）")
+                            .to_owned()
+                    }
+                };
+                crate::ui::chrome::form_combo(ui, theme, "pref_vault_auth", auth_label, pref_w, |ui| {
+                    for v in [
+                        crate::core::VaultAuthSettings::None,
+                        crate::core::VaultAuthSettings::Token,
+                        crate::core::VaultAuthSettings::AppRole,
+                    ] {
+                        let label = match v {
+                            crate::core::VaultAuthSettings::None => {
+                                crate::i18n::tr(ctx, "Not configured", "未配置")
                             }
+                            crate::core::VaultAuthSettings::Token => {
+                                crate::i18n::tr(ctx, "Token (Keychain)", "令牌（存系统钥匙串）")
+                            }
+                            crate::core::VaultAuthSettings::AppRole => crate::i18n::tr(
+                                ctx,
+                                "AppRole (Keychain)",
+                                "AppRole（存系统钥匙串）",
+                            ),
+                        };
+                        if ui.selectable_label(auth == v, label).clicked() {
+                            auth = v;
                         }
-                    });
+                    }
+                });
                 if auth != self.app_settings.vault.auth {
                     self.app_settings.vault.auth = auth;
                     self.app_settings.vault.team_auto_apply = false;
@@ -751,37 +743,36 @@ impl MistTermApp {
             ui,
             theme,
             "audit",
-            crate::i18n::tr(ctx, "Security audit (SIEM)", "安全审计 (SIEM)"),
+            crate::i18n::tr(ctx, "Activity audit", "操作审计"),
             label_color,
             false,
             |ui| {
                 let pref_w = layout_util::finite_content_width(ui);
-                if ui
-                    .checkbox(
-                        &mut self.app_settings.audit.enabled,
-                        crate::i18n::tr(ctx, "Enable audit log", "启用审计日志"),
-                    )
-                    .changed()
+                if crate::ui::chrome::form_checkbox(
+                    ui,
+                    theme,
+                    &mut self.app_settings.audit.enabled,
+                    crate::i18n::tr(ctx, "Enable audit log", "启用审计日志"),
+                )
+                .changed()
                 {
                     self.audit_logger
                         .update_settings(self.app_settings.audit.clone());
                     let _ = self.app_settings.save();
                 }
-                ui.horizontal(|ui| {
-                    crate::ui::chrome::form_field_label(
+                crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                    crate::ui::chrome::form_inline_label(
                         ui,
                         theme,
                         crate::i18n::tr(ctx, "Retention (days)", "保留天数"),
                     );
-                    let r = crate::ui::chrome::form_drag_value_field(
+                    let r = crate::ui::chrome::form_u32_stepper(
                         ui,
                         theme,
                         egui::Id::new("pref_audit_retention"),
-                        |ui| {
-                            ui.add(egui::DragValue::new(
-                                &mut self.app_settings.audit.retention_days,
-                            ))
-                        },
+                        &mut self.app_settings.audit.retention_days,
+                        1..=3650,
+                        1,
                     );
                     if r.changed() {
                         let _ = self.app_settings.save();
@@ -793,8 +784,8 @@ impl MistTermApp {
                     &mut self.app_settings.audit.log_command_preview,
                     crate::i18n::tr(
                         ctx,
-                        "Log command previews (truncated when plaintext is withheld)",
-                        "记录命令预览(不含完整明文时可截断)",
+                        "Log a short summary of commands run",
+                        "记录执行过的命令摘要",
                     ),
                 );
                 // 团队 HTTP 上报由登录后的 configure_team_audit_sink 自动配置
@@ -803,16 +794,16 @@ impl MistTermApp {
                     ui,
                     theme,
                     &mut self.app_settings.audit.syslog.enabled,
-                    "Syslog (UDP/TCP)",
+                    crate::i18n::tr(ctx, "Also send to a Syslog server", "同时发送到 Syslog 服务器"),
                 );
-                ui.horizontal(|ui| {
-                    crate::ui::chrome::form_field_label(
+                crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                    crate::ui::chrome::form_inline_label(
                         ui,
                         theme,
                         crate::i18n::tr(ctx, "Host", "主机"),
                     );
-                    let host_w = (pref_w * 0.55).max(120.0);
-                    crate::ui::chrome::form_singleline_field(
+                    let host_w = (pref_w * 0.45).max(120.0);
+                    crate::ui::chrome::form_inline_singleline(
                         ui,
                         theme,
                         egui::Id::new("pref_audit_syslog_host"),
@@ -821,24 +812,23 @@ impl MistTermApp {
                         host_w,
                         false,
                     );
-                    crate::ui::chrome::form_field_label(
+                    crate::ui::chrome::form_inline_label(
                         ui,
                         theme,
                         crate::i18n::tr(ctx, "Port", "端口"),
                     );
-                    crate::ui::chrome::form_drag_value_field(
+                    crate::ui::chrome::form_u16_stepper(
                         ui,
                         theme,
                         egui::Id::new("pref_audit_syslog_port"),
-                        |ui| {
-                            ui.add(egui::DragValue::new(
-                                &mut self.app_settings.audit.syslog.port,
-                            ))
-                        },
+                        &mut self.app_settings.audit.syslog.port,
+                        1..=65535,
+                        1,
                     );
-                    crate::ui::chrome::form_checkbox(
+                    crate::ui::chrome::form_inline_checkbox(
                         ui,
                         theme,
+                        "pref_audit_syslog_tcp",
                         &mut self.app_settings.audit.syslog.use_tcp,
                         "TCP",
                     );

@@ -100,17 +100,19 @@ impl NewSessionDialog {
                         false,
                     );
 
-                    ui.horizontal(|ui| {
-                        crate::ui::chrome::form_field_label(
+                    crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                        crate::ui::chrome::form_inline_label(
                             ui,
                             theme,
                             crate::i18n::tr(ctx, "Port", "端口"),
                         );
-                        crate::ui::chrome::form_drag_value_field(
+                        crate::ui::chrome::form_u16_stepper(
                             ui,
                             theme,
                             egui::Id::new("legacy_new_session_port"),
-                            |ui| ui.add(egui::DragValue::new(&mut self.port).speed(1.0)),
+                            &mut self.port,
+                            1..=65535,
+                            1,
                         );
                     });
 

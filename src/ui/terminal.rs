@@ -1668,22 +1668,12 @@ impl TerminalView {
                                 .text(egui::RichText::new(detail).color(theme.text_primary())),
                         );
                         ui.horizontal(|ui| {
-                            if ui
-                                .add(
-                                    egui::Button::new(
-                                        egui::RichText::new(crate::i18n::tr(
-                                            ui.ctx(),
-                                            "Stop transfer",
-                                            "停止传输",
-                                        ))
-                                        .strong()
-                                        .color(egui::Color32::WHITE),
-                                    )
-                                    .fill(theme.red_color())
-                                    .stroke(egui::Stroke::new(1.0, theme.red_color()))
-                                    .min_size(egui::vec2(68.0, 22.0)),
-                                )
-                                .clicked()
+                            if crate::ui::chrome::modal_danger_button(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ui.ctx(), "Stop transfer", "停止传输"),
+                            )
+                            .clicked()
                             {
                                 stop_transfer_clicked = true;
                             }
@@ -2367,14 +2357,15 @@ impl TerminalView {
                     );
                 }
                 ui.add_space(theme.spacing_list_item_x());
-                ui.horizontal(|ui| {
+                crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
                     if crate::ui::chrome::modal_primary_button_with_icon(
                         ui,
-                        theme,
+                        th,
                         crate::ui::icons::IconId::Upload,
                         crate::i18n::tr(ui.ctx(), "Send to remote", "发送到远端"),
                     )
-                    .clicked() {
+                    .clicked()
+                    {
                         if let Some(handle) = self.ssh_handle.clone() {
                             let chunks: Vec<Vec<u8>> = self
                                 .disconnected_input_buffer
@@ -2391,11 +2382,12 @@ impl TerminalView {
                     }
                     if crate::ui::chrome::modal_secondary_icon_button(
                         ui,
-                        theme,
+                        th,
                         crate::ui::icons::IconId::Trash,
                         crate::i18n::tr(ui.ctx(), "Discard buffer", "丢弃缓存"),
                     )
-                        .clicked() {
+                    .clicked()
+                    {
                         self.disconnected_input_buffer.clear();
                         self.buffer_input_while_disconnected = false;
                         self.resend_offline_input_dialog_open = false;

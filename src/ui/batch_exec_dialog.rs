@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use eframe::egui;
 
 use crate::core::batch_exec::{BatchExecRow, BatchTarget};
-use crate::ui::theme::Theme;
+use crate::ui::{layout_util, theme::Theme};
 
 pub struct BatchExecDialog {
     pub open: bool,
@@ -85,7 +85,7 @@ impl BatchExecDialog {
                     egui::RichText::new(crate::i18n::tr(
                         ctx,
                         "Runs one command per host over a separate SSH connection (no terminal tabs).",
-                        "每台主机单独建连并执行命令(不占用终端标签)。",
+                        "每台主机单独建立连接并执行命令（不占用终端标签）。",
                     ))
                     .size(theme.font_size_caption())
                     .color(theme.text_tertiary()),
@@ -93,59 +93,102 @@ impl BatchExecDialog {
                 ui.add_space(theme.spacing_sm());
 
                 ui.label(crate::i18n::tr(ctx, "Command", "命令"));
-                ui.add(
-                    egui::TextEdit::multiline(&mut self.command)
-                        .desired_rows(3)
-                        .hint_text("uptime && hostname")
-                        .font(egui::TextStyle::Monospace),
+                crate::ui::chrome::form_multiline_field_with_hint(
+                    ui,
+                    theme,
+                    egui::Id::new("batch_exec_command"),
+                    &mut self.command,
+                    "uptime && hostname",
+                    layout_util::finite_content_width(ui),
+                    3,
+                    false,
                 );
 
-                ui.horizontal(|ui| {
-                    ui.label(crate::i18n::tr(ctx, "Max parallel", "最大并行"));
-                    ui.add(egui::DragValue::new(&mut self.max_parallel).speed(0.1));
-                    self.max_parallel = self.max_parallel.clamp(1, 16);
-                    ui.checkbox(
+                crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                    crate::ui::chrome::form_inline_label(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Max parallel", "同时执行台数"),
+                    );
+                    crate::ui::chrome::form_u32_stepper(
+                        ui,
+                        theme,
+                        egui::Id::new("batch_max_parallel"),
+                        &mut self.max_parallel,
+                        1..=16,
+                        1,
+                    );
+                    crate::ui::chrome::form_inline_checkbox(
+                        ui,
+                        theme,
+                        "batch_include_team",
                         &mut self.include_team_servers,
                         crate::i18n::tr(ctx, "Include team servers", "包含团队服务器"),
                     );
                 });
 
                 ui.horizontal(|ui| {
-                    if ui
-                        .button(crate::i18n::tr(ctx, "Select all visible", "全选当前列表"))
-                        .clicked()
+                    ui.spacing_mut().item_spacing.x = theme.spacing_sm();
+                    if crate::ui::chrome::panel_action_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Select all visible", "全选当前列表"),
+                    )
+                    .clicked()
                     {
                         for t in filtered_targets(targets, &self.select_filter) {
                             self.selected.insert(t.id.clone());
                         }
                     }
-                    if ui
-                        .button(crate::i18n::tr(ctx, "Clear selection", "清空选择"))
-                        .clicked()
+                    if crate::ui::chrome::panel_action_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Clear selection", "清空选择"),
+                    )
+                    .clicked()
                     {
                         self.selected.clear();
                     }
-                    ui.label(format!(
-                        "{}: {}",
-                        crate::i18n::tr(ctx, "Selected", "已选"),
-                        self.selected.len()
-                    ));
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{}: {}",
+                            crate::i18n::tr(ctx, "Selected", "已选"),
+                            self.selected.len()
+                        ))
+                        .size(theme.font_size_caption())
+                        .color(theme.text_tertiary()),
+                    );
                 });
 
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.select_filter)
-                        .hint_text(crate::i18n::tr(ctx, "Filter hosts…", "筛选主机…")),
+                ui.add_space(theme.spacing_xs());
+                crate::ui::chrome::form_singleline_field(
+                    ui,
+                    theme,
+                    egui::Id::new("batch_host_filter"),
+                    &mut self.select_filter,
+                    crate::i18n::tr(ctx, "Filter hosts…", "筛选主机…"),
+                    ui.available_width(),
+                    false,
                 );
 
-                ui.separator();
+                ui.add_space(theme.spacing_sm());
                 ui.label(crate::i18n::tr(ctx, "Targets", "目标主机"));
                 egui::ScrollArea::vertical()
                     .max_height(140.0)
                     .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = theme.spacing_sm();
                         for t in filtered_targets(targets, &self.select_filter) {
                             let mut checked = self.selected.contains(&t.id);
                             ui.horizontal(|ui| {
-                                if ui.checkbox(&mut checked, "").changed() {
+                                if crate::ui::chrome::form_checkbox_with_id(
+                                    ui,
+                                    theme,
+                                    &t.id,
+                                    &mut checked,
+                                    "",
+                                )
+                                .changed()
+                                {
                                     if checked {
                                         self.selected.insert(t.id.clone());
                                     } else {
@@ -161,18 +204,21 @@ impl BatchExecDialog {
                         }
                     });
 
-                ui.separator();
-                ui.horizontal(|ui| {
-                    let can_run = !self.running
-                        && !self.command.trim().is_empty()
-                        && !self.selected.is_empty();
+                ui.add_space(theme.spacing_sm());
+                let can_run = !self.running
+                    && !self.command.trim().is_empty()
+                    && !self.selected.is_empty();
+                crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
                     if ui
-                        .add_enabled(can_run, egui::Button::new(crate::i18n::tr(
-                            ctx,
-                            "Run on selected",
-                            "在选中主机上执行",
-                        )))
+                        .add(
+                            crate::ui::chrome::modal_primary_button_widget(
+                                th,
+                                crate::i18n::tr(ctx, "Run on selected", "在选中主机上执行"),
+                            )
+                            .can_activate(can_run),
+                        )
                         .clicked()
+                        && can_run
                     {
                         action = BatchExecUiAction::Run;
                     }
@@ -180,10 +226,13 @@ impl BatchExecDialog {
                         ui.spinner();
                         ui.label(crate::i18n::tr(ctx, "Running…", "执行中…"));
                     }
-                    if ui
-                        .button(crate::i18n::tr(ctx, "Copy results", "复制结果"))
-                        .clicked()
-                        && !self.results.is_empty()
+                    if crate::ui::chrome::panel_action_button_ex(
+                        ui,
+                        th,
+                        crate::i18n::tr(ctx, "Copy results", "复制结果"),
+                        !self.results.is_empty(),
+                    )
+                    .clicked()
                     {
                         action = BatchExecUiAction::CopyResults;
                     }

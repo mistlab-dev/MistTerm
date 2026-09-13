@@ -160,18 +160,21 @@ pub fn show_team_fragment_editor_modal(
                     );
 
                     chrome::form_field_label(ui, theme, i18n::tr(ctx, "Status", "状态"));
-                    egui::ComboBox::from_id_source("team_frag_status")
-                        .width(form_w)
-                        .selected_text(i18n::tr(ctx, status_display(&editor.status), status_display(&editor.status)))
-                        .show_ui(ui, |ui| {
-                            chrome::apply_menu_popup_style(ui, theme);
+                    chrome::form_combo(
+                        ui,
+                        theme,
+                        "team_frag_status",
+                        i18n::tr(ctx, status_display(&editor.status), status_display(&editor.status)),
+                        form_w,
+                        |ui| {
                             for (val, label) in STATUS_OPTIONS {
                                 let text = i18n::tr(ctx, label, label);
                                 if ui.selectable_label(editor.status.as_str() == *val, text).clicked() {
                                     editor.status = val.to_string();
                                 }
                             }
-                        });
+                        },
+                    );
                     ui.add_space(4.0);
 
                     if !editor.error.is_empty() {
@@ -368,11 +371,23 @@ pub fn show_team_fragment_conflict_modal(
                         );
                     }
                     ui.add_space(theme.spacing_sm());
-                    crate::ui::chrome::modal_footer_actions(ui, theme, |ui, _th| {
-                        if ui.button(i18n::tr(ctx, "Cancel", "取消")).clicked() {
+                    crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
+                        if chrome::modal_secondary_button(
+                            ui,
+                            th,
+                            i18n::tr(ctx, "Cancel", "取消"),
+                        )
+                        .clicked()
+                        {
                             should_close = true;
                         }
-                        if ui.button(i18n::tr(ctx, "Merge", "合并")).clicked() {
+                        if chrome::modal_primary_button(
+                            ui,
+                            th,
+                            i18n::tr(ctx, "Merge", "合并"),
+                        )
+                        .clicked()
+                        {
                             let mut base = state.server.clone();
                             base.title = state.pending_title.clone();
                             base.command = format!(
@@ -385,9 +400,12 @@ pub fn show_team_fragment_conflict_modal(
                                 Err(e) => state.error = e,
                             }
                         }
-                        if ui
-                            .button(i18n::tr(ctx, "Keep mine", "保留本地编辑"))
-                            .clicked()
+                        if chrome::modal_secondary_button(
+                            ui,
+                            th,
+                            i18n::tr(ctx, "Keep mine", "保留本地编辑"),
+                        )
+                        .clicked()
                         {
                             let mut base = state.server.clone();
                             base.title = state.pending_title.clone();
@@ -397,9 +415,12 @@ pub fn show_team_fragment_conflict_modal(
                                 Err(e) => state.error = e,
                             }
                         }
-                        if ui
-                            .button(i18n::tr(ctx, "Use server", "以服务端为准"))
-                            .clicked()
+                        if chrome::modal_secondary_button(
+                            ui,
+                            th,
+                            i18n::tr(ctx, "Use server", "以服务端为准"),
+                        )
+                        .clicked()
                         {
                             let base = state.server.clone();
                             match apply_conflict_resolution(service, &base, audit) {

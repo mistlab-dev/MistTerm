@@ -123,16 +123,22 @@ pub fn show_fragment_versions_modal(
                                 ui.label(chrome::rich_caption(theme, &v.title));
                                 ui.monospace(&v.command);
                                 ui.horizontal(|ui| {
-                                    if ui
-                                        .button(i18n::tr(ctx, "Copy command", "复制命令"))
-                                        .clicked()
+                                    if chrome::panel_action_button(
+                                        ui,
+                                        theme,
+                                        i18n::tr(ctx, "Copy command", "复制命令"),
+                                    )
+                                    .clicked()
                                     {
                                         ctx.copy_text(v.command.clone());
                                     }
                                     if can_edit
-                                        && ui
-                                            .button(i18n::tr(ctx, "Restore", "恢复此版本"))
-                                            .clicked()
+                                        && chrome::panel_action_button(
+                                            ui,
+                                            theme,
+                                            i18n::tr(ctx, "Restore", "恢复此版本"),
+                                        )
+                                        .clicked()
                                     {
                                         restore_revision = Some(v.revision);
                                     }
@@ -282,20 +288,27 @@ pub fn show_fragment_shares_modal(
                     ui.add_space(theme.spacing_sm());
 
                     if can_edit {
-                        ui.horizontal(|ui| {
-                            ui.label(chrome::rich_caption(
+                        chrome::form_control_row(ui, theme, |ui| {
+                            chrome::form_inline_label(
+                                ui,
                                 theme,
                                 i18n::tr(ctx, "Expires in (hours, 0 = never)", "有效期(小时，0 = 永久)"),
-                            ));
-                            ui.add(
-                                egui::TextEdit::singleline(&mut state.expires_hours_str)
-                                    .desired_width(60.0),
                             );
-                            if chrome::modal_primary_button_with_icon(
+                            chrome::form_inline_singleline(
+                                ui,
+                                theme,
+                                egui::Id::new("team_frag_share_expires_hours"),
+                                &mut state.expires_hours_str,
+                                "",
+                                60.0,
+                                false,
+                            );
+                            if chrome::panel_action_primary_button_with_icon_ex(
                                 ui,
                                 theme,
                                 crate::ui::icons::IconId::Plus,
                                 i18n::tr(ctx, "Create link", "生成链接"),
+                                true,
                             )
                             .clicked()
                             {
@@ -314,7 +327,13 @@ pub fn show_fragment_shares_modal(
                                 )
                                 .strong(),
                             );
-                            if ui.button(i18n::tr(ctx, "Copy URL", "复制链接")).clicked() {
+                            if chrome::panel_action_button(
+                                ui,
+                                theme,
+                                i18n::tr(ctx, "Copy URL", "复制链接"),
+                            )
+                            .clicked()
+                            {
                                 ctx.copy_text(state.last_share_url.clone());
                             }
                         });
@@ -354,9 +373,12 @@ pub fn show_fragment_shares_modal(
                                 });
                                 ui.horizontal(|ui| {
                                     if can_edit
-                                        && ui
-                                            .button(i18n::tr(ctx, "Revoke", "撤销"))
-                                            .clicked()
+                                        && chrome::modal_danger_button(
+                                            ui,
+                                            theme,
+                                            i18n::tr(ctx, "Revoke", "撤销"),
+                                        )
+                                        .clicked()
                                     {
                                         revoke_share = Some(s.id.clone());
                                     }
@@ -620,7 +642,7 @@ fn paint_cmd_audit_agents_section(
                     } else {
                         i18n::tr(ctx, "Enable", "启用")
                     };
-                    if ui.button(label).clicked() {
+                    if chrome::panel_action_button(ui, theme, label).clicked() {
                         toggle = Some((agent.id.clone(), !agent.enabled));
                     }
                 } else {
@@ -699,21 +721,31 @@ pub fn show_team_settings_modal(
                     ui.add_space(theme.spacing_sm());
 
                     ui.add_enabled_ui(is_admin, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label(chrome::rich_caption(
+                        chrome::form_control_row(ui, theme, |ui| {
+                            chrome::form_inline_label(
+                                ui,
                                 theme,
                                 i18n::tr(ctx, "Audit retention (days)", "审计保留(天)"),
-                            ));
-                            ui.add(
-                                egui::TextEdit::singleline(&mut state.audit_retention_days_str)
-                                    .desired_width(80.0),
+                            );
+                            chrome::form_inline_singleline(
+                                ui,
+                                theme,
+                                egui::Id::new("team_settings_audit_retention_days"),
+                                &mut state.audit_retention_days_str,
+                                "",
+                                80.0,
+                                false,
                             );
                         });
-                        ui.checkbox(
+                        chrome::form_checkbox(
+                            ui,
+                            theme,
                             &mut state.allow_guest_access,
                             i18n::tr(ctx, "Allow guest access", "允许访客访问"),
                         );
-                        ui.checkbox(
+                        chrome::form_checkbox(
+                            ui,
+                            theme,
                             &mut state.require_mfa,
                             i18n::tr(ctx, "Require MFA", "强制多因素认证"),
                         );

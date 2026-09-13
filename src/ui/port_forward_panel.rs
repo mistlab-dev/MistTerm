@@ -368,9 +368,12 @@ impl PortForwardPanel {
                 }
                 if stoppable {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .small_button(crate::i18n::tr(ctx, "Stop", "停止"))
-                            .clicked()
+                        if crate::ui::chrome::chrome_small_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(ctx, "Stop", "停止"),
+                        )
+                        .clicked()
                         {
                             stop_idx = Some(i);
                         }
@@ -452,7 +455,9 @@ impl PortForwardPanel {
             self.draw_form_fields(ui, ctx, theme);
         });
 
-        ui.checkbox(
+        crate::ui::chrome::form_checkbox(
+            ui,
+            theme,
             &mut self.save_to_session,
             crate::i18n::tr(ctx, "Save to session profile", "保存到会话配置"),
         );
@@ -477,9 +482,13 @@ impl PortForwardPanel {
     fn draw_form_fields(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, theme: &Theme) {
         match self.form_kind {
             ForwardFormKind::Local | ForwardFormKind::Dynamic => {
-                ui.horizontal(|ui| {
-                    ui.label(crate::i18n::tr(ctx, "Bind", "绑定"));
-                    crate::ui::chrome::form_singleline_field(
+                crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                    crate::ui::chrome::form_inline_label(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Bind", "绑定"),
+                    );
+                    crate::ui::chrome::form_inline_singleline(
                         ui,
                         theme,
                         egui::Id::new("pf_bind_address"),
@@ -488,8 +497,12 @@ impl PortForwardPanel {
                         100.0,
                         false,
                     );
-                    ui.label(crate::i18n::tr(ctx, "Port", "端口"));
-                    crate::ui::chrome::form_singleline_field(
+                    crate::ui::chrome::form_inline_label(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Port", "端口"),
+                    );
+                    crate::ui::chrome::form_inline_singleline(
                         ui,
                         theme,
                         egui::Id::new("pf_local_port_ld"),
@@ -501,9 +514,13 @@ impl PortForwardPanel {
                 });
             }
             ForwardFormKind::Remote => {
-                ui.horizontal(|ui| {
-                    ui.label(crate::i18n::tr(ctx, "Remote port", "远端端口"));
-                    crate::ui::chrome::form_singleline_field(
+                crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                    crate::ui::chrome::form_inline_label(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Remote port", "远端端口"),
+                    );
+                    crate::ui::chrome::form_inline_singleline(
                         ui,
                         theme,
                         egui::Id::new("pf_local_port_r"),
@@ -517,9 +534,13 @@ impl PortForwardPanel {
         }
 
         if self.form_kind == ForwardFormKind::Local {
-            ui.horizontal(|ui| {
-                ui.label(crate::i18n::tr(ctx, "Target", "目标"));
-                crate::ui::chrome::form_singleline_field(
+            crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                crate::ui::chrome::form_inline_label(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "Target", "目标"),
+                );
+                crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
                     egui::Id::new("pf_remote_host_l"),
@@ -528,8 +549,8 @@ impl PortForwardPanel {
                     120.0,
                     false,
                 );
-                ui.label(":");
-                crate::ui::chrome::form_singleline_field(
+                crate::ui::chrome::form_inline_label(ui, theme, ":");
+                crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
                     egui::Id::new("pf_remote_port_l"),
@@ -540,9 +561,13 @@ impl PortForwardPanel {
                 );
             });
         } else if self.form_kind == ForwardFormKind::Remote {
-            ui.horizontal(|ui| {
-                ui.label(crate::i18n::tr(ctx, "Target", "目标"));
-                crate::ui::chrome::form_singleline_field(
+            crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                crate::ui::chrome::form_inline_label(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "Target", "目标"),
+                );
+                crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
                     egui::Id::new("pf_remote_host_r"),
@@ -551,8 +576,8 @@ impl PortForwardPanel {
                     120.0,
                     false,
                 );
-                ui.label(":");
-                crate::ui::chrome::form_singleline_field(
+                crate::ui::chrome::form_inline_label(ui, theme, ":");
+                crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
                     egui::Id::new("pf_remote_port_r"),

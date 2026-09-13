@@ -199,22 +199,25 @@ impl SessionLogDialog {
                                     p.file_name().and_then(|s| s.to_str().map(str::to_string))
                                 })
                                 .collect();
-                            egui::ComboBox::from_id_source("session_log_file")
-                                .selected_text(
-                                    names
-                                        .get(self.selected_file)
-                                        .cloned()
-                                        .unwrap_or_default(),
-                                )
-                                .show_ui(ui, |ui| {
-                                    crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                            let selected_name = names
+                                .get(self.selected_file)
+                                .cloned()
+                                .unwrap_or_default();
+                            crate::ui::chrome::form_combo(
+                                ui,
+                                theme,
+                                "session_log_file",
+                                selected_name,
+                                ui.available_width().min(220.0),
+                                |ui| {
                                     for (i, name) in names.iter().enumerate() {
                                         if ui.selectable_label(self.selected_file == i, name).clicked() {
                                             self.selected_file = i;
                                             reload = true;
                                         }
                                     }
-                                });
+                                },
+                            );
                             if chrome::panel_action_icon_button(
                                 ui,
                                 theme,

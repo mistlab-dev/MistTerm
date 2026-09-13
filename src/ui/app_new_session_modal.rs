@@ -161,17 +161,20 @@ impl MistTermApp {
                                 theme,
                                 crate::i18n::tr(ctx, "Accent color tag", "环境色标"),
                             );
-                            egui::ComboBox::from_id_source("new_session_color")
-                                .selected_text(crate::i18n::session_color_tag(
+                            crate::ui::chrome::form_combo(
+                                ui,
+                                theme,
+                                "new_session_color",
+                                crate::i18n::session_color_tag(
                                     ctx,
                                     SESSION_COLOR_TAGS
                                         .iter()
                                         .find(|(v, _)| *v == self.new_session_color_tag.as_str())
                                         .map(|(v, _)| *v)
                                         .unwrap_or_else(|| self.new_session_color_tag.as_str()),
-                                ))
-                                .show_ui(ui, |ui| {
-                                    crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                                ),
+                                form_w,
+                                |ui| {
                                     for (value, _) in SESSION_COLOR_TAGS {
                                         let label = crate::i18n::session_color_tag(ctx, value);
                                         ui.selectable_value(
@@ -180,7 +183,8 @@ impl MistTermApp {
                                             label,
                                         );
                                     }
-                                });
+                                },
+                            );
 
                             if required_missing {
                                 ui.add_space(theme.spacing_sm());

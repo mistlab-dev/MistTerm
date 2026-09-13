@@ -69,17 +69,18 @@ pub fn paint_team_controls(
                     .clone()
                     .unwrap_or_default();
                 let teams = service.state.teams.clone();
-                egui::ComboBox::from_id_source(ui.make_persistent_id("current_team"))
-                    .selected_text(
-                        teams
-                            .iter()
-                            .find(|m| m.team.id == current)
-                            .map(|m| m.team.name.as_str())
-                            .unwrap_or("—"),
-                    )
-                    .width(pref_w.min(ui.available_width()))
-                    .show_ui(ui, |ui| {
-                        chrome::apply_menu_popup_style(ui, theme);
+                let selected = teams
+                    .iter()
+                    .find(|m| m.team.id == current)
+                    .map(|m| m.team.name.as_str())
+                    .unwrap_or("—");
+                chrome::form_combo(
+                    ui,
+                    theme,
+                    "current_team",
+                    selected,
+                    pref_w.min(ui.available_width()),
+                    |ui| {
                         for m in &teams {
                             let label = format!("{} ({})", m.team.name, m.role);
                             if ui
@@ -94,7 +95,8 @@ pub fn paint_team_controls(
                                 action = TeamUiAction::TeamChanged;
                             }
                         }
-                    });
+                    },
+                );
             }
 
             ui.horizontal(|ui| {

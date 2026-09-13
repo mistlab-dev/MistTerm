@@ -55,7 +55,13 @@ pub fn show_agent_install_modal(
                         ui.add_space(theme.spacing_xs());
                         ui.horizontal(|ui| {
                             ui.add(egui::Label::new(egui::RichText::new(command).monospace()).wrap(true));
-                            if ui.button(crate::i18n::tr(ctx, "Copy", "复制")).clicked() {
+                            if chrome::panel_action_button(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Copy", "复制"),
+                            )
+                            .clicked()
+                            {
                                 if let Ok(mut clipboard) = arboard::Clipboard::new() {
                                     if clipboard.set_text(command).is_ok() {
                                         *command_copied = true;

@@ -49,36 +49,36 @@ impl MistTermApp {
                             .color(theme.color_body_text_muted()),
                         );
                         ui.add_space(theme.spacing_list_item_x());
-                        ui.horizontal(|ui| {
+                        crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
                             if crate::ui::chrome::modal_primary_button(
                                 ui,
-                                theme,
+                                th,
                                 crate::i18n::tr(ctx, "ZMODEM (recommended)", "ZMODEM(推荐)"),
                             )
-                                .clicked()
+                            .clicked()
                             {
                                 pick = Some(LargePick::Zmodem);
                             }
                             if crate::ui::chrome::modal_secondary_button(
                                 ui,
-                                theme,
+                                th,
                                 crate::i18n::tr(ctx, "Use SCP anyway", "仍用 SCP"),
                             )
-                                .clicked()
+                            .clicked()
                             {
                                 pick = Some(LargePick::Scp);
                             }
+                            if crate::ui::chrome::modal_secondary_icon_button(
+                                ui,
+                                th,
+                                crate::ui::icons::IconId::Cross,
+                                crate::i18n::tr(ctx, "Cancel", "取消"),
+                            )
+                            .clicked()
+                            {
+                                pick = Some(LargePick::Dismiss);
+                            }
                         });
-                        ui.add_space(theme.spacing_md());
-                        if crate::ui::chrome::modal_secondary_icon_button(
-                            ui,
-                            theme,
-                            crate::ui::icons::IconId::Cross,
-                            crate::i18n::tr(ctx, "Cancel", "取消"),
-                        )
-                        .clicked() {
-                            pick = Some(LargePick::Dismiss);
-                        }
                     });
                 });
             if (!open || should_close) && pick.is_none() {
@@ -297,7 +297,7 @@ impl MistTermApp {
                                 th,
                                 crate::ui::icons::IconId::Check,
                                 if from_server {
-                                    crate::i18n::tr(ctx, "Approve and send", "放行并发送")
+                                    crate::i18n::tr(ctx, "Approve and send", "确认并发送")
                                 } else {
                                     crate::i18n::tr(ctx, "Confirm send", "确认发送")
                                 },

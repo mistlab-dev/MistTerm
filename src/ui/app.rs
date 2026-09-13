@@ -3864,8 +3864,7 @@ impl MistTermApp {
                 {
                     self.terminal_search_step(1);
                 }
-                if ui
-                    .checkbox(&mut self.terminal_search_ignore_case, "Aa")
+                if crate::ui::chrome::form_checkbox(ui, theme, &mut self.terminal_search_ignore_case, "Aa")
                     .on_hover_text(crate::i18n::tr(&ctx, "Ignore case", "忽略大小写"))
                     .changed()
                 {
@@ -5467,12 +5466,13 @@ impl MistTermApp {
                 let loading =
                     self.market_catalog_refresh_rx.is_some() || self.market_catalog.loading_more;
                 ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(
-                            !loading,
-                            egui::Button::new(crate::i18n::tr(ui.ctx(), "Load more", "加载更多")),
-                        )
-                        .clicked()
+                    if crate::ui::chrome::panel_action_button_ex(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ui.ctx(), "Load more", "加载更多"),
+                        !loading,
+                    )
+                    .clicked()
                     {
                         self.start_market_catalog_load_more();
                     }
