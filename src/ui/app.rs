@@ -6946,6 +6946,11 @@ impl eframe::App for MistTermApp {
         let _ = self.command_history.save();
     }
 
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // save() 已落盘。若后续 wgpu 拆卸或某处 Drop 卡住，看门狗在宽限期后强制退出。
+        crate::platform::arm_quit_watchdog();
+    }
+
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if let Some(name) = self.pending_auto_connect_session.take() {
             if let Some(session) = self
