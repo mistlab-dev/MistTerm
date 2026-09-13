@@ -5,6 +5,7 @@ pub mod docs;
 pub mod fonts;
 pub mod logging;
 pub mod paths;
+pub mod quit_watchdog;
 pub mod shell;
 pub mod shortcuts;
 #[cfg(target_os = "macos")]
@@ -29,6 +30,7 @@ pub use fonts::{
 };
 pub use logging::init_runtime_logging;
 pub use paths::{default_ssh_config_path, home_dir, home_dir_display_hint};
+pub use quit_watchdog::arm_quit_watchdog;
 pub use shell::{open_file, open_url, reveal_directory};
 pub use shortcuts::{
     accel, accel_enter, accel_literal, accel_shift, close_tab_accel, close_tab_help_line, help_line,

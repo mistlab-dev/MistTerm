@@ -933,7 +933,6 @@ impl MistTermApp {
                 .show(ctx, |ui| {
                     let required_missing =
                         self.edit_session_name.trim().is_empty() || self.edit_session_host.trim().is_empty();
-                    let form_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
 
                     crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                             ui.push_id("edit_session_form", |ui| {
@@ -944,6 +943,14 @@ impl MistTermApp {
                                 &mut should_close,
                             );
 
+                            // 字段远多于新建：头部与底部按钮固定，中间可滚。
+                            let footer_reserve = 64.0;
+                            let scroll_h = (ui.available_height() - footer_reserve).max(160.0);
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .max_height(scroll_h)
+                                .show(ui, |ui| {
+                            let form_w = layout_util::finite_content_width_inset(ui, 4.0, 300.0, 340.0);
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
                             Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Session name", "会话名称"));
                             Self::ui_form_singleline(
@@ -1263,6 +1270,8 @@ impl MistTermApp {
                                         .color(theme.red_a128()),
                                 );
                             }
+
+                                }); // end scrollable fields
 
                             ui.add_space(theme.spacing_list_item_x());
                             crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
