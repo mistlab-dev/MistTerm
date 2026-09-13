@@ -546,17 +546,22 @@ fn render_one_pane(
                     header_rect.right_top() + egui::vec2(-22.0, 2.0),
                     egui::vec2(20.0, header_h - 4.0),
                 );
-                if ui
-                    .put(close_rect, egui::Button::new("×").small())
+                ui.allocate_ui_at_rect(close_rect, |ui| {
+                    if crate::ui::chrome::chrome_small_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Close,
+                    )
                     .on_hover_text(i18n::tr(
                         ui.ctx(),
                         "Close split pane",
                         "关闭分屏窗格",
                     ))
                     .clicked()
-                {
-                    close_pane(pane_idx);
-                }
+                    {
+                        close_pane(pane_idx);
+                    }
+                });
                 if header_resp.drag_started() {
                     tab.drag_source_pane = Some(pane_idx);
                 }

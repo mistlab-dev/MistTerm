@@ -53,18 +53,25 @@ pub fn show_audit_timeline_modal(
                 );
                 ui.add_space(theme.spacing_sm());
 
-                ui.horizontal(|ui| {
-                    ui.label(crate::i18n::tr(ctx, "Host", "主机"));
-                    ui.add(
-                        egui::TextEdit::singleline(host_filter)
-                            .desired_width(190.0)
-                            .hint_text(crate::i18n::tr(ctx, "Filter host…", "筛选主机…")),
+                crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                    chrome::form_inline_label(ui, theme, crate::i18n::tr(ctx, "Host", "主机"));
+                    chrome::form_inline_singleline(
+                        ui,
+                        theme,
+                        egui::Id::new("audit_timeline_host_filter"),
+                        host_filter,
+                        crate::i18n::tr(ctx, "Filter host…", "筛选主机…"),
+                        190.0,
+                        false,
                     );
-                    ui.label(crate::i18n::tr(ctx, "Outcome", "结果"));
-                    egui::ComboBox::from_id_source("audit_timeline_outcome")
-                        .selected_text(outcome_label(ctx, *outcome_filter))
-                        .show_ui(ui, |ui| {
-                            chrome::apply_menu_popup_style(ui, theme);
+                    chrome::form_inline_label(ui, theme, crate::i18n::tr(ctx, "Outcome", "结果"));
+                    chrome::form_combo(
+                        ui,
+                        theme,
+                        "audit_timeline_outcome",
+                        outcome_label(ctx, *outcome_filter),
+                        140.0,
+                        |ui| {
                             ui.selectable_value(
                                 outcome_filter,
                                 None,
@@ -82,8 +89,15 @@ pub fn show_audit_timeline_modal(
                                     outcome_label(ctx, Some(outcome)),
                                 );
                             }
-                        });
-                    if ui.button(crate::i18n::tr(ctx, "Clear", "清空")).clicked() {
+                        },
+                    );
+                    if chrome::panel_action_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Clear", "清空"),
+                    )
+                    .clicked()
+                    {
                         *action = AuditTimelineUiAction::Clear;
                     }
                 });
@@ -162,7 +176,7 @@ fn outcome_label(ctx: &egui::Context, outcome: Option<TimelineOutcome>) -> &'sta
         None => crate::i18n::tr(ctx, "All", "全部"),
         Some(TimelineOutcome::Blocked) => crate::i18n::tr(ctx, "Blocked", "已拦截"),
         Some(TimelineOutcome::Confirmed) => crate::i18n::tr(ctx, "Confirmed", "已确认"),
-        Some(TimelineOutcome::Allowed) => crate::i18n::tr(ctx, "Allowed", "已放行"),
+        Some(TimelineOutcome::Allowed) => crate::i18n::tr(ctx, "Allowed", "已允许"),
         Some(TimelineOutcome::Info) => crate::i18n::tr(ctx, "Info", "记录"),
     }
 }

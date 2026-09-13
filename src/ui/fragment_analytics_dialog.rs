@@ -3,6 +3,7 @@
 use eframe::egui;
 
 use crate::core::{FragmentAnalyticsDashboard, FragmentAnalyticsTimeRange};
+use crate::ui::chrome;
 use crate::ui::theme::Theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -57,13 +58,17 @@ pub fn show_fragment_analytics_modal(
                             .color(theme.text_tertiary()),
                     );
                     let lang = crate::i18n::language(ctx);
-                    egui::ComboBox::from_id_source("fragment_analytics_range")
-                        .selected_text(match lang {
-                            crate::i18n::UiLanguage::Zh => range.label_zh(),
-                            crate::i18n::UiLanguage::En => range.label_en(),
-                        })
-                        .show_ui(ui, |ui| {
-                            crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                    let range_label = match lang {
+                        crate::i18n::UiLanguage::Zh => range.label_zh(),
+                        crate::i18n::UiLanguage::En => range.label_en(),
+                    };
+                    chrome::form_combo(
+                        ui,
+                        theme,
+                        "fragment_analytics_range",
+                        range_label,
+                        ui.available_width().min(160.0),
+                        |ui| {
                             for candidate in [
                                 FragmentAnalyticsTimeRange::AllTime,
                                 FragmentAnalyticsTimeRange::Last7Days,
@@ -78,10 +83,14 @@ pub fn show_fragment_analytics_modal(
                                     *action = FragmentAnalyticsUiAction::Refresh;
                                 }
                             }
-                        });
-                    if ui
-                        .button(crate::i18n::tr(ctx, "Refresh", "刷新"))
-                        .clicked()
+                        },
+                    );
+                    if chrome::panel_action_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Refresh", "刷新"),
+                    )
+                    .clicked()
                     {
                         *action = FragmentAnalyticsUiAction::Refresh;
                     }
@@ -290,13 +299,12 @@ pub fn show_fragment_analytics_modal(
                             for (i, r) in recommendations.iter().enumerate() {
                                 ui.horizontal(|ui| {
                                     ui.label(format!("· `{}` — {}×", r.command, r.count));
-                                    if ui
-                                        .small_button(crate::i18n::tr(
-                                            ctx,
-                                            "Add",
-                                            "添加",
-                                        ))
-                                        .clicked()
+                                    if chrome::chrome_small_accent_button(
+                                        ui,
+                                        theme,
+                                        crate::i18n::tr(ctx, "Add", "添加"),
+                                    )
+                                    .clicked()
                                     {
                                         *action = FragmentAnalyticsUiAction::AddRecommendation(i);
                                     }
@@ -308,29 +316,30 @@ pub fn show_fragment_analytics_modal(
 
                 ui.add_space(theme.spacing_md());
                 ui.horizontal(|ui| {
-                    if ui
-                        .button(crate::i18n::tr(ctx, "Export JSON", "导出 JSON"))
-                        .clicked()
+                    if chrome::panel_action_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Export JSON", "导出 JSON"),
+                    )
+                    .clicked()
                     {
                         *action = FragmentAnalyticsUiAction::ExportJson;
                     }
-                    if ui
-                        .button(crate::i18n::tr(
-                            ctx,
-                            "Efficiency report",
-                            "效率报告",
-                        ))
-                        .clicked()
+                    if chrome::panel_action_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Efficiency report", "效率报告"),
+                    )
+                    .clicked()
                     {
                         *action = FragmentAnalyticsUiAction::ExportEfficiencyReport;
                     }
-                    if ui
-                        .button(crate::i18n::tr(
-                            ctx,
-                            "Export PDF",
-                            "导出 PDF",
-                        ))
-                        .clicked()
+                    if chrome::panel_action_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Export PDF", "导出 PDF"),
+                    )
+                    .clicked()
                     {
                         *action = FragmentAnalyticsUiAction::ExportEfficiencyReportPdf;
                     }

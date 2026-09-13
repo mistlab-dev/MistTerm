@@ -157,8 +157,6 @@ const OPS_PURPLE: egui::Color32 = egui::Color32::from_rgb(188, 140, 255);
 const OPS_PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x12, 0x16, 0x1c);
 const OPS_SUB_BG: egui::Color32 = egui::Color32::from_rgb(0x16, 0x1b, 0x22);
 const OPS_CARD_BG: egui::Color32 = egui::Color32::from_rgb(0x1c, 0x22, 0x2b);
-const OPS_INPUT_BG: egui::Color32 = egui::Color32::from_rgb(0x09, 0x0c, 0x10);
-
 /// 控制台输出逐行语法高亮：命令行(蓝)/ 异常行(红底)/ 普通行(灰)。
 fn ops_render_console_output(ui: &mut egui::Ui, text: &str) {
     const CMD: egui::Color32 = egui::Color32::from_rgb(121, 192, 255);
@@ -345,7 +343,7 @@ fn list_chat_sessions() -> Vec<(String, String, std::time::SystemTime)> {
     out
 }
 
-/// 带底色的胶囊徽章：图标 + 文案（门闩、模型引擎等）。
+/// 带底色的胶囊徽章：图标 + 文案（风险提示、模型引擎等）。
 fn ops_badge(
     ui: &mut egui::Ui,
     icon: crate::ui::icons::IconId,
@@ -1092,20 +1090,19 @@ impl AiPanel {
                                     } else {
                                         format!("   {title}")
                                     };
-                                    if ui
-                                        .add(
-                                            egui::Button::new(
-                                                egui::RichText::new(text)
-                                                    .size(theme.font_size_small())
-                                                    .color(if is_cur {
-                                                        theme.accent_color()
-                                                    } else {
-                                                        theme.text_primary()
-                                                    }),
-                                            )
-                                            .frame(false),
+                                    if is_cur {
+                                        if crate::ui::chrome::chrome_small_accent_button(
+                                            ui, theme, &text,
                                         )
                                         .clicked()
+                                        {
+                                            switch_to = Some(key.clone());
+                                            ui.memory_mut(|m| m.close_popup());
+                                        }
+                                    } else if crate::ui::chrome::chrome_small_button(
+                                        ui, theme, &text,
+                                    )
+                                    .clicked()
                                     {
                                         switch_to = Some(key.clone());
                                         ui.memory_mut(|m| m.close_popup());
@@ -1383,7 +1380,7 @@ impl AiPanel {
             i18n::tr(ctx, "Enable AI", "启用 AI"),
         );
         ui.add_space(theme.spacing_sm());
-        crate::ui::chrome::form_field_label(ui, theme, i18n::tr(ctx, "API base URL", "API 地址"));
+        crate::ui::chrome::form_field_label(ui, theme, i18n::tr(ctx, "API base URL", "接口地址"));
         crate::ui::chrome::form_singleline_field(
             ui,
             theme,
@@ -1393,11 +1390,11 @@ impl AiPanel {
             field_w,
             false,
         );
-        crate::ui::chrome::form_field_label(ui, theme, "API Key");
+        crate::ui::chrome::form_field_label(ui, theme, i18n::tr(ctx, "API Key", "访问密钥"));
         if self.key_configured_stored && self.settings_key_input.is_empty() {
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new(i18n::tr(ctx, "Saved encrypted locally", "已加密保存在本机配置"))
+                    egui::RichText::new(i18n::tr(ctx, "Saved encrypted locally", "已加密保存在本机"))
                         .size(theme.font_size_caption())
                         .color(theme.green_color()),
                 );
@@ -1405,7 +1402,7 @@ impl AiPanel {
                     ui,
                     theme,
                     IconId::Key,
-                    i18n::tr(ctx, "Change Key", "更换 Key"),
+                    i18n::tr(ctx, "Change Key", "更换密钥"),
                     true,
                 )
                 .clicked()
@@ -1416,7 +1413,7 @@ impl AiPanel {
             });
         }
         let key_hint = if self.key_configured_stored {
-            i18n::tr(ctx, "Enter new key, then Save", "输入新 Key 后点保存")
+            i18n::tr(ctx, "Enter new key, then Save", "输入新密钥后点保存")
         } else {
             "sk-..."
         };
@@ -1440,13 +1437,13 @@ impl AiPanel {
                     ui,
                     theme,
                     IconId::Refresh,
-                    i18n::tr(ctx, "Refresh model list", "刷新模型列表"),
+                    i18n::tr(ctx, "Refresh model list", "刷新可用模型"),
                     true,
                 )
                 .on_hover_text(i18n::tr(
                     ctx,
                     "Fetch models from API",
-                    "从 API 拉取模型列表",
+                    "从服务端刷新可用模型",
                 ))
                 .clicked()
             {
@@ -1459,31 +1456,27 @@ impl AiPanel {
             } else {
                 settings.model.clone()
             };
-            let font = egui::FontId::proportional(theme.font_size_control_input());
-            ui.style_mut()
-                .text_styles
-                .insert(egui::TextStyle::Button, font.clone());
-            ui.style_mut()
-                .text_styles
-                .insert(egui::TextStyle::Body, font);
-            egui::ComboBox::from_id_source("ai_model_select")
-                .selected_text(current)
-                .width(field_w.min(ui.available_width()))
-                .show_ui(ui, |ui| {
-                    crate::ui::chrome::apply_menu_popup_style(ui, theme);
+            crate::ui::chrome::form_combo(
+                ui,
+                theme,
+                "ai_model_select",
+                current,
+                field_w.min(ui.available_width()),
+                |ui| {
                     for id in &self.available_models {
                         if ui.selectable_label(settings.model == *id, id).clicked() {
                             settings.model = id.clone();
                         }
                     }
-                });
+                },
+            );
         } else {
             crate::ui::chrome::form_singleline_field(
                 ui,
                 theme,
                 ui.make_persistent_id("ai_settings_model"),
                 &mut settings.model,
-                i18n::tr(ctx, "Enter model ID", "输入模型 ID"),
+                i18n::tr(ctx, "Enter model ID", "输入模型名称"),
                 field_w,
                 false,
             );
@@ -1492,7 +1485,7 @@ impl AiPanel {
                     egui::RichText::new(i18n::tr(
                         ctx,
                         "Could not load models from API — enter the model ID manually.",
-                        "无法从 API 拉取模型列表，请手动输入模型 ID。",
+                        "无法自动获取模型列表，请手动输入模型名称。",
                     ))
                     .size(theme.font_size_caption())
                     .color(theme.amber_color()),
@@ -1507,78 +1500,96 @@ impl AiPanel {
             );
         }
         ui.add_space(theme.spacing_sm());
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = theme.spacing_sm();
-            ui.label(
-                egui::RichText::new(i18n::tr(ctx, "Max tokens", "最大 tokens"))
-                    .size(theme.font_size_form_label())
-                    .color(theme.color_form_label()),
-            );
-            crate::ui::chrome::form_drag_value_field(
-                ui,
-                theme,
-                egui::Id::new("ai_settings_max_tokens"),
-                |ui| ui.add(egui::DragValue::new(&mut settings.max_tokens).speed(32)),
-            );
-            ui.label(
-                egui::RichText::new(i18n::tr(ctx, "Timeout (s)", "超时 (秒)"))
-                    .size(theme.font_size_form_label())
-                    .color(theme.color_form_label()),
-            );
-            crate::ui::chrome::form_drag_value_field(
-                ui,
-                theme,
-                egui::Id::new("ai_settings_timeout"),
-                |ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut settings.timeout_secs)
-                            .speed(1)
-                            .clamp_range(5..=600),
-                    )
-                },
-            );
-            ui.label(
-                egui::RichText::new(i18n::tr(ctx, "Retries", "重试次数"))
-                    .size(theme.font_size_form_label())
-                    .color(theme.color_form_label()),
-            );
-            crate::ui::chrome::form_drag_value_field(
-                ui,
-                theme,
-                egui::Id::new("ai_settings_retries"),
-                |ui| ui.add(egui::DragValue::new(&mut settings.request_retries).speed(1)),
-            );
-        });
+        // 窄面板里一项一行，避免三组挤一行被压扁错位
+        let label_w = 96.0;
+        crate::ui::chrome::form_labeled_control_row(
+            ui,
+            theme,
+            i18n::tr(ctx, "Max tokens", "回复长度"),
+            label_w,
+            |ui| {
+                crate::ui::chrome::form_u32_stepper(
+                    ui,
+                    theme,
+                    egui::Id::new("ai_settings_max_tokens"),
+                    &mut settings.max_tokens,
+                    256..=128_000,
+                    256,
+                );
+            },
+        );
+        crate::ui::chrome::form_labeled_control_row(
+            ui,
+            theme,
+            i18n::tr(ctx, "Timeout (s)", "等待超时(秒)"),
+            label_w,
+            |ui| {
+                let mut timeout = settings.timeout_secs.min(600) as u32;
+                if crate::ui::chrome::form_u32_stepper(
+                    ui,
+                    theme,
+                    egui::Id::new("ai_settings_timeout"),
+                    &mut timeout,
+                    5..=600,
+                    1,
+                )
+                .changed()
+                {
+                    settings.timeout_secs = u64::from(timeout);
+                }
+            },
+        );
+        crate::ui::chrome::form_labeled_control_row(
+            ui,
+            theme,
+            i18n::tr(ctx, "Retries", "失败重试"),
+            label_w,
+            |ui| {
+                crate::ui::chrome::form_u32_stepper(
+                    ui,
+                    theme,
+                    egui::Id::new("ai_settings_retries"),
+                    &mut settings.request_retries,
+                    0..=10,
+                    1,
+                );
+            },
+        );
         crate::ui::chrome::form_checkbox(
             ui,
             theme,
             &mut settings.stream_responses,
-            i18n::tr(ctx, "Stream responses", "流式输出"),
+            i18n::tr(ctx, "Stream responses", "边生成边显示回复"),
         );
         crate::ui::chrome::form_checkbox(
             ui,
             theme,
             &mut settings.attach_session_meta,
-            i18n::tr(ctx, "Attach session info", "附带会话信息"),
+            i18n::tr(ctx, "Attach session info", "附带当前连接信息"),
         );
         crate::ui::chrome::form_checkbox(
             ui,
             theme,
             &mut settings.persist_chats,
-            i18n::tr(ctx, "Persist chat history", "保存对话历史"),
+            i18n::tr(ctx, "Persist chat history", "保存对话记录"),
         );
         crate::ui::chrome::form_field_label(
             ui,
             theme,
-            i18n::tr(ctx, "System prompt (optional)", "System prompt (可选)"),
+            i18n::tr(ctx, "System prompt (optional)", "角色说明（可选）"),
         );
-        crate::ui::chrome::form_multiline_field(
+        crate::ui::chrome::form_multiline_field_with_hint(
             ui,
             theme,
             ui.make_persistent_id("ai_settings_system_prompt"),
             &mut settings.system_prompt,
+            i18n::tr(
+                ctx,
+                "e.g. You are a helpful ops assistant…",
+                "例如：你是一名运维助手，回答请简洁…",
+            ),
             field_w,
-            3,
+            2,
             false,
         );
         let setup_busy = self.is_background_busy();
@@ -1799,7 +1810,7 @@ impl AiPanel {
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::vec2(12.0, 10.0))
             .show(ui, |ui| {
-                // 顶栏：剪贴板图标 + 标题 + Gate 门闩徽章
+                // 顶栏：剪贴板图标 + 标题 + 风险提示徽章
                 ui.horizontal(|ui| {
                     let px = theme.font_size_body();
                     let (ir, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
@@ -1821,7 +1832,7 @@ impl AiPanel {
                             ops_badge(
                                 ui,
                                 crate::ui::icons::IconId::Warning,
-                                i18n::tr(ctx, "Gate: High Risk", "门闩: 变更高危"),
+                                i18n::tr(ctx, "High risk — confirm first", "高危变更，需先确认"),
                                 theme.amber_color(),
                                 theme.font_size_caption(),
                             );
@@ -1829,7 +1840,7 @@ impl AiPanel {
                             ops_badge(
                                 ui,
                                 crate::ui::icons::IconId::Check,
-                                i18n::tr(ctx, "Gate: Readonly", "门闩: 只读放行"),
+                                i18n::tr(ctx, "Read-only — safe to run", "只读命令，可执行"),
                                 theme.accent_color(),
                                 theme.font_size_caption(),
                             );
@@ -1867,22 +1878,17 @@ impl AiPanel {
                 ui.add_space(2.0);
 
                 // 命令输入框：单行高亮，支持直接修改
-                egui::Frame::none()
-                    .fill(OPS_INPUT_BG)
-                    .stroke(theme.divider_stroke())
-                    .rounding(egui::Rounding::same(5.0))
-                    .inner_margin(egui::vec2(8.0, 6.0))
-                    .show(ui, |ui| {
-                        ui.add_enabled_ui(!executing, |ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut plan.command_edit)
-                                    .desired_width(ui.available_width())
-                                    .font(egui::TextStyle::Monospace)
-                                    .frame(false)
-                                    .text_color(egui::Color32::from_rgb(121, 192, 255)),
-                            );
-                        });
-                    });
+                ui.add_enabled_ui(!executing, |ui| {
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        egui::Id::new("ai_plan_command_edit"),
+                        &mut plan.command_edit,
+                        "",
+                        ui.available_width(),
+                        false,
+                    );
+                });
 
                 ui.add_space(theme.spacing_xs());
                 ui.horizontal(|ui| {
@@ -2023,7 +2029,7 @@ impl AiPanel {
                                 );
                                 ui.label(
                                     egui::RichText::new(format!(
-                                        "放行条件：{}",
+                                        "执行条件：{}",
                                         explanation.pass_condition
                                     ))
                                     .size(10.0)
@@ -2066,30 +2072,23 @@ impl AiPanel {
                             } else {
                                 i18n::tr(ctx, "Confirm and Run ↵", "确认并执行 ↵")
                             };
-                            if ui
-                                .add_enabled(
-                                    !executing && !plan.command_edit.trim().is_empty(),
-                                    egui::Button::new(
-                                        egui::RichText::new(confirm_label)
-                                            .size(theme.font_size_small())
-                                            .color(egui::Color32::WHITE),
-                                    )
-                                    .fill(theme.accent_color()),
-                                )
-                                .clicked()
+                            if crate::ui::chrome::panel_action_primary_button_ex(
+                                ui,
+                                theme,
+                                confirm_label,
+                                !executing && !plan.command_edit.trim().is_empty(),
+                            )
+                            .clicked()
                             {
                                 clicked_confirm = true;
                             }
-                            if ui
-                                .add_enabled_ui(!executing, |ui| {
-                                    crate::ui::chrome::panel_toolbar_button(
-                                        ui,
-                                        theme,
-                                        i18n::tr(ctx, "Cancel", "放弃"),
-                                    )
-                                    .clicked()
-                                })
-                                .inner
+                            if crate::ui::chrome::panel_action_button_ex(
+                                ui,
+                                theme,
+                                i18n::tr(ctx, "Cancel", "放弃"),
+                                !executing,
+                            )
+                            .clicked()
                             {
                                 clicked_cancel = true;
                             }
@@ -2801,79 +2800,61 @@ impl AiPanel {
             .session_meta
             .as_ref()
             .and_then(|m| m.session_name.clone().or_else(|| m.host.clone()));
-        // 输入容器：接近设计稿 action-input-wrapper 的深底 + 聚焦 teal 描边
-        let input_border = if focused {
-            egui::Stroke::new(1.5, theme.accent_color())
-        } else {
-            egui::Stroke::new(1.0, theme.divider_stroke().color)
-        };
-        egui::Frame::none()
-            .fill(OPS_INPUT_BG)
-            .stroke(input_border)
-            .rounding(egui::Rounding::same(8.0))
-            .inner_margin(egui::vec2(10.0, 8.0))
-            .show(ui, |ui| {
-            let inner_w = (ui.available_width() - 4.0).max(48.0);
-            if !self.attached_contexts.is_empty() {
-                self.show_attached_context_chip_row(ui, ctx, theme);
-                if self.attached_contexts.iter().any(|c| c.truncated) {
-                    ui.colored_label(
-                        theme.amber_color(),
-                        i18n::tr(
-                            ctx,
-                            "Some selections were truncated to fit model limits.",
-                            "部分选区已截断以适配模型上限。",
-                        ),
-                    );
-                }
-                ui.add_space(theme.spacing_xs());
-            }
-            // 运维意图范围提示（星标 + 当前会话主机）
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                let px = theme.font_size_caption();
-                let (sr, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
-                crate::ui::icons::paint_icon(
-                    ui,
-                    sr,
-                    crate::ui::icons::IconId::Rocket,
-                    theme.accent_color(),
-                    px,
+        if !self.attached_contexts.is_empty() {
+            self.show_attached_context_chip_row(ui, ctx, theme);
+            if self.attached_contexts.iter().any(|c| c.truncated) {
+                ui.colored_label(
+                    theme.amber_color(),
+                    i18n::tr(
+                        ctx,
+                        "Some selections were truncated to fit model limits.",
+                        "部分选区已截断以适配模型上限。",
+                    ),
                 );
-                if let Some(s) = ops_scope_name.as_deref() {
-                    ops_scope_pill(ui, theme, &format!("@ {s}"), theme.accent_color());
-                } else {
-                    ui.label(
-                        egui::RichText::new(i18n::tr(ctx, "Ops intent", "运维意图"))
-                            .size(px)
-                            .color(theme.text_tertiary()),
-                    );
-                }
-            });
-            ui.add_space(4.0);
-
-            let prev_override = ui.style_mut().visuals.override_text_color;
-            ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
-            ui.add(
-                egui::TextEdit::multiline(&mut self.draft_input)
-                    .id(draft_id)
-                    .frame(false)
-                    .interactive(can_type)
-                    .hint_text(crate::ui::chrome::hint_rich(
-                        theme,
-                        i18n::tr(
-                            ctx,
-                            "Ask a question… Enter to send · Shift+Enter for newline",
-                            "输入问题… Enter 发送 · Shift+Enter 换行",
-                        ),
-                        theme.font_size_control_input(),
-                    ))
-                    .desired_rows(3)
-                    .desired_width(inner_w)
-                    .text_color(theme.color_text_input_text())
-                    .font(crate::platform::ui_font_id(theme.font_size_control_input())),
+            }
+            ui.add_space(theme.spacing_xs());
+        }
+        // 运维意图范围提示（星标 + 当前会话主机）
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let px = theme.font_size_caption();
+            let (sr, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+            crate::ui::icons::paint_icon(
+                ui,
+                sr,
+                crate::ui::icons::IconId::Rocket,
+                theme.accent_color(),
+                px,
             );
-            ui.style_mut().visuals.override_text_color = prev_override;
+            if let Some(s) = ops_scope_name.as_deref() {
+                ops_scope_pill(ui, theme, &format!("@ {s}"), theme.accent_color());
+            } else {
+                ui.label(
+                    egui::RichText::new(i18n::tr(ctx, "Ops intent", "运维意图"))
+                        .size(px)
+                        .color(theme.text_tertiary()),
+                );
+            }
+        });
+        ui.add_space(4.0);
+
+        let draft_w = ui.available_width();
+        let hint = i18n::tr(
+            ctx,
+            "Ask a question… Enter to send · Shift+Enter for newline",
+            "输入问题… Enter 发送 · Shift+Enter 换行",
+        );
+        ui.add_enabled_ui(can_type, |ui| {
+            crate::ui::chrome::form_multiline_field_with_hint(
+                ui,
+                theme,
+                draft_id,
+                &mut self.draft_input,
+                hint,
+                draft_w,
+                3,
+                false,
+            );
         });
 
         ui.add_space(theme.spacing_sm());

@@ -289,12 +289,15 @@ impl CredentialPanel {
             field_w,
             false,
         );
-        ui.horizontal(|ui| {
-            chrome::form_field_label(ui, theme, i18n::tr(ui.ctx(), "Category", "类别"));
-            egui::ComboBox::from_id_source("cred_cat")
-                .selected_text(i18n::credential_category(ui.ctx(), panel.form_category))
-                .show_ui(ui, |ui| {
-                    crate::ui::chrome::apply_menu_popup_style(ui, theme);
+        chrome::form_control_row(ui, theme, |ui| {
+            chrome::form_inline_label(ui, theme, i18n::tr(ui.ctx(), "Category", "类别"));
+            chrome::form_combo(
+                ui,
+                theme,
+                "cred_cat",
+                i18n::credential_category(ui.ctx(), panel.form_category),
+                (ui.available_width() - 8.0).max(120.0),
+                |ui| {
                     for v in [
                         CredentialCategory::Server,
                         CredentialCategory::Database,
@@ -309,14 +312,18 @@ impl CredentialPanel {
                             panel.form_category = v;
                         }
                     }
-                });
+                },
+            );
         });
-        ui.horizontal(|ui| {
-            chrome::form_field_label(ui, theme, i18n::tr(ui.ctx(), "Auth", "认证"));
-            egui::ComboBox::from_id_source("cred_auth")
-                .selected_text(i18n::credential_auth_kind(ui.ctx(), panel.form_auth))
-                .show_ui(ui, |ui| {
-                    crate::ui::chrome::apply_menu_popup_style(ui, theme);
+        chrome::form_control_row(ui, theme, |ui| {
+            chrome::form_inline_label(ui, theme, i18n::tr(ui.ctx(), "Auth", "认证"));
+            chrome::form_combo(
+                ui,
+                theme,
+                "cred_auth",
+                i18n::credential_auth_kind(ui.ctx(), panel.form_auth),
+                (ui.available_width() - 8.0).max(120.0),
+                |ui| {
                     for v in [
                         CredentialAuthKind::Password,
                         CredentialAuthKind::SshKey,
@@ -329,7 +336,8 @@ impl CredentialPanel {
                             panel.form_auth = v;
                         }
                     }
-                });
+                },
+            );
         });
         chrome::form_field_label(ui, theme, i18n::tr(ui.ctx(), "Host", "主机"));
         chrome::form_singleline_field(
@@ -341,11 +349,16 @@ impl CredentialPanel {
             field_w,
             false,
         );
-        ui.horizontal(|ui| {
-            chrome::form_field_label(ui, theme, i18n::tr(ui.ctx(), "Port", "端口"));
-            chrome::form_drag_value_field(ui, theme, egui::Id::new("cred_form_port"), |ui| {
-                ui.add(egui::DragValue::new(&mut panel.form_port).speed(0.0))
-            });
+        chrome::form_control_row(ui, theme, |ui| {
+            chrome::form_inline_label(ui, theme, i18n::tr(ui.ctx(), "Port", "端口"));
+            chrome::form_u16_stepper(
+                ui,
+                theme,
+                egui::Id::new("cred_form_port"),
+                &mut panel.form_port,
+                1..=65535,
+                1,
+            );
         });
         chrome::form_field_label(
             ui,
