@@ -88,6 +88,24 @@ fn init_logging(verbose: u8) {
         .init();
 }
 
+/// 把本地 argv 按 POSIX shell 规则重组为单条远端命令。
+/// 每个参数用单引号包裹，内嵌单引号转 '\''——保证
+/// `mist exec t -- bash -c 'echo hi; exit 42'` 原样到达远端 shell。
+fn shell_join(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| {
+            if a.chars().all(|c| c.is_ascii_alphanumeric() || "_+-=./:@%,".contains(c))
+                && !a.is_empty()
+            {
+                a.clone()
+            } else {
+                format!("'{}'", a.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 fn main() {
     let cli = Cli::parse();
     init_logging(cli.verbose);
@@ -104,8 +122,19 @@ fn main() {
             parallel,
             ..
         } => {
-            let cmd_str = command.join(" ");
             if *all_targets || group.is_some() {
+                // 批量模式下没有 target 位置参数，如果用户没写 -- 分隔，
+                // 第一个词可能被 clap 误解析进了 target，需要拼回 command
+                let mut full_cmd = Vec::new();
+                if let Some(t) = target {
+                    full_cmd.push(t.clone());
+                }
+                full_cmd.extend_from_slice(command);
+                let cmd_str = shell_join(&full_cmd);
+                if cmd_str.is_empty() {
+                    eprintln!("错误: 缺少要执行的命令");
+                    std::process::exit(1);
+                }
                 exec::run_batch(
                     &mut ctx,
                     group.as_deref(),
@@ -116,7 +145,7 @@ fn main() {
                     cli.json,
                 )
             } else {
-                let cmd_str = command.join(" ");
+                let cmd_str = shell_join(command);
                 if cmd_str.is_empty() {
                     eprintln!("错误: 缺少要执行的命令");
                     std::process::exit(1);
