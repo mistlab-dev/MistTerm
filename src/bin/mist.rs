@@ -98,6 +98,62 @@ enum Cmd {
         #[arg(short = 'D', long = "dynamic")]
         dynamics: Vec<String>,
     },
+
+    /// 命令片段管理与执行
+    Frag {
+        #[command(subcommand)]
+        sub: FragCmd,
+    },
+
+    /// 从 OpenSSH ~/.ssh/config 导入会话
+    ImportSshConfig {
+        /// 自定义 ssh config 文件路径（默认 ~/.ssh/config）
+        #[arg(short, long)]
+        file: Option<std::path::PathBuf>,
+
+        /// 仅打印将导入的会话，不写入存储
+        #[arg(long)]
+        dry_run: bool,
+
+        /// 覆盖已存在的同名会话（默认跳过）
+        #[arg(long)]
+        overwrite: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum FragCmd {
+    /// 列出所有保存的命令片段
+    List,
+
+    /// 运行指定片段
+    Run {
+        /// 片段标题或 ID
+        name: String,
+
+        /// 目标会话（单机执行模式）
+        target: Option<String>,
+
+        /// 按分组批量执行
+        #[arg(long, conflicts_with = "all_targets")]
+        group: Option<String>,
+
+        /// 对所有已保存会话批量执行
+        #[arg(long = "all")]
+        all_targets: bool,
+
+        /// 串行执行，遇失败熔断（默认并行）
+        #[arg(long)]
+        serial: bool,
+
+        /// 并行度（1-16，默认 8）
+        #[arg(long, default_value_t = 8)]
+        parallel: usize,
+
+        /// 模板变量赋值：key=value，可传多次
+        #[arg(short = 'v', long = "var")]
+        vars: Vec<String>,
+    },
 }
 
 fn init_logging(verbose: u8) {
@@ -191,6 +247,38 @@ fn main() {
             remotes,
             dynamics,
         } => mistterm::cli::fwd::run_fwd(&mut ctx, target, locals, remotes, dynamics),
+        Cmd::Frag { sub } => match sub {
+            FragCmd::List => mistterm::cli::frag::run_list(cli.json),
+            FragCmd::Run {
+                name,
+                target,
+                group,
+                all_targets,
+                serial,
+                parallel,
+                vars,
+            } => mistterm::cli::frag::run_run(
+                &mut ctx,
+                name,
+                target.as_deref(),
+                group.as_deref(),
+                *all_targets,
+                *serial,
+                *parallel,
+                vars,
+                cli.json,
+            ),
+        },
+        Cmd::ImportSshConfig {
+            file,
+            dry_run,
+            overwrite,
+        } => mistterm::cli::import_ssh::run_import(
+            &mut ctx,
+            file.clone(),
+            *dry_run,
+            *overwrite,
+        ),
     };
 
     let exit = match code {
