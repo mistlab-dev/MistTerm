@@ -4,7 +4,9 @@
 
 pub mod context;
 pub mod exec;
+pub mod frag;
 pub mod fwd;
+pub mod import_ssh;
 pub mod ls;
 pub mod sftp_cmds;
 pub mod ssh_cmd;
