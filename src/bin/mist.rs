@@ -27,6 +27,12 @@ enum Cmd {
         group: Option<String>,
     },
 
+    /// 交互式连接并打开 Shell：mist ssh <target>
+    Ssh {
+        /// 目标：会话名/id/host，或 user@host[:port]
+        target: String,
+    },
+
     /// 在目标上执行命令
     Exec {
         /// 目标：会话名/id/host，或 user@host[:port]
@@ -74,6 +80,24 @@ enum Cmd {
         /// <target>:<remote-path>（以 / 结尾则保留文件名）
         spec: String,
     },
+
+    /// 端口转发：启动指定规则或会话中已配置的转发规则（前台运行，Ctrl+C 停止）
+    Fwd {
+        /// 目标：会话名/id/host，或 user@host[:port]
+        target: String,
+
+        /// 本地端口转发：[bind_addr:]local_port:remote_host:remote_port，可指定多个
+        #[arg(short = 'L', long = "local")]
+        locals: Vec<String>,
+
+        /// 远程端口转发：[bind_addr:]remote_port:target_host:target_port，可指定多个
+        #[arg(short = 'R', long = "remote")]
+        remotes: Vec<String>,
+
+        /// 动态 SOCKS5 转发：[bind_addr:]local_port，可指定多个
+        #[arg(short = 'D', long = "dynamic")]
+        dynamics: Vec<String>,
+    },
 }
 
 fn init_logging(verbose: u8) {
@@ -113,6 +137,7 @@ fn main() {
     let mut ctx = CliContext::load();
     let code = match &cli.cmd {
         Cmd::Ls { group } => ls::run(&ctx, group.as_deref(), cli.json).map(|_| 0),
+        Cmd::Ssh { target } => mistterm::cli::ssh_cmd::run_ssh(&mut ctx, target),
         Cmd::Exec {
             target,
             command,
@@ -160,6 +185,12 @@ fn main() {
         Cmd::Rls { spec } => sftp_cmds::run_rls(&mut ctx, spec, cli.json),
         Cmd::Get { spec, local } => sftp_cmds::run_get(&mut ctx, spec, local),
         Cmd::Put { local, spec } => sftp_cmds::run_put(&mut ctx, local, spec),
+        Cmd::Fwd {
+            target,
+            locals,
+            remotes,
+            dynamics,
+        } => mistterm::cli::fwd::run_fwd(&mut ctx, target, locals, remotes, dynamics),
     };
 
     let exit = match code {
