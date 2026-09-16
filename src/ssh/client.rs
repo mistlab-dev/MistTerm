@@ -266,8 +266,9 @@ impl SshClient {
         channel
             .read_to_end(&mut output)
             .map_err(|e| format!("读取输出失败: {e}"))?;
-        let code = channel.exit_status().unwrap_or(-1);
+        // 必须先 wait_close：远端 exit-status 消息在关闭流程中才被处理
         let _ = channel.wait_close();
+        let code = channel.exit_status().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output).into_owned();
         Ok((stdout, code))
     }
