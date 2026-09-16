@@ -4,8 +4,10 @@
 
 pub mod context;
 pub mod exec;
+pub mod fwd;
 pub mod ls;
 pub mod sftp_cmds;
+pub mod ssh_cmd;
 
 use anyhow::{Context, Result};
 use crate::core::session::{SessionConfig, SessionManager};

@@ -111,6 +111,7 @@ shellexpand = "3.1"
 clap = { version = "4", features = ["derive"] }
 dirs = "5.0"
 chrono = "0.4"
+crossterm = "0.27"
 # 片段命令中 {{ ... }} 表达式（md5/base64 等），默认沙箱、无 IO
 rhai = "1.19"
 
