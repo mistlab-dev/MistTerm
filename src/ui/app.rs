@@ -4275,6 +4275,30 @@ impl MistTermApp {
         }
         self.ai_panel.set_agent_target_count(targets.len());
 
+        // 持续同步团队片段与个人知识库到 AI 面板（供 Planner 作为 Prompt 上下文召回）
+        let team_frags = self.team_service.team_fragments_as_stats();
+        let personal_frags = self.fragment_manager.list().to_vec();
+        let env = self
+            .active_tab
+            .map(|i| self.suggestion_env_for_tab(i))
+            .unwrap_or_default();
+        let query_for_knowledge = self.ai_panel.current_agent_plan_meta().0;
+        let query = if query_for_knowledge.is_empty() {
+            "运维"
+        } else {
+            &query_for_knowledge
+        };
+        let doc_hits = self.fetch_team_doc_hits_soft(query);
+        let knowledge_hits = retrieve_team_knowledge(
+            query,
+            &team_frags,
+            &personal_frags,
+            &doc_hits,
+            Some(&env),
+            6,
+        );
+        self.ai_panel.update_team_knowledge_cache(knowledge_hits);
+
         if let Some(rx) = &self.agent_batch_rx {
             match rx.try_recv() {
                 Ok((command, rows, intent, rationale, gate_level, gate_armed, fail_fast)) => {

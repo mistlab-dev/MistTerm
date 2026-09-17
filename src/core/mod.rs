@@ -85,10 +85,11 @@ pub use knowledge::{
     clean_ask_intent, retrieve_team_knowledge, DocSearchHit, KnowledgeHit, KnowledgeSource,
 };
 pub use agent::{
-    build_planner_system_prompt, first_useful_line, gate_decision, host_result_summary,
-    looks_like_host_ops_intent, parse_llm_plan_response, propose_step,
-    propose_step_with_context, summarize_batch_rows, truncate_chars, AgentPhase, AgentRunSnapshot,
-    GateDecision, GateLevel, HostExecutionSummary, LastBatchContext, StepProposal,
+    build_planner_system_prompt, build_planner_system_prompt_with_knowledge, first_useful_line,
+    gate_decision, host_result_summary, looks_like_host_ops_intent, parse_llm_plan_response,
+    propose_step, propose_step_with_context, summarize_batch_rows, truncate_chars, AgentPhase,
+    AgentRunSnapshot, GateDecision, GateLevel, HostExecutionSummary, KnowledgeReference,
+    LastBatchContext, StepProposal,
 };
 pub use batch_exec::{
     batch_endpoint_key, format_batch_results_for_clipboard, push_unique_batch_target,

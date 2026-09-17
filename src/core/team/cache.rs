@@ -173,6 +173,7 @@ mod tests {
             success_count: 0,
             total_time_ms: 0,
             last_used_at: None,
+            linked_docs: vec![],
         }
     }
 

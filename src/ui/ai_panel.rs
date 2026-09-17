@@ -512,6 +512,8 @@ pub struct AiPanel {
     selected_host_idx: Option<usize>,
     /// 待外发创建终端会话的目标主机(如点击了「开新 Tab 连入该机」)
     pending_connect_host: Option<String>,
+    /// 团队已缓存的标准知识上下文（由 App 注入，用于让 Planner 学习团队肌肉记忆）
+    team_knowledge_cache: Vec<crate::core::KnowledgeHit>,
 }
 
 struct AgentPlanUi {
@@ -524,6 +526,7 @@ struct AgentPlanUi {
     gate_hint: String,
     l2_armed: bool,
     status: Option<String>,
+    knowledge_ref: Option<crate::core::KnowledgeReference>,
 }
 
 impl Default for AiPanel {
@@ -580,7 +583,13 @@ impl AiPanel {
             pending_agent_exec: None,
             selected_host_idx: None,
             pending_connect_host: None,
+            team_knowledge_cache: Vec::new(),
         }
+    }
+
+    /// 供 App 注入当前团队/个人片段及文档检索命中，注入 Planner 形成肌肉记忆
+    pub fn update_team_knowledge_cache(&mut self, hits: Vec<crate::core::KnowledgeHit>) {
+        self.team_knowledge_cache = hits;
     }
 
     /// 供 App 取出待连接的主机（如点击了「开新 Tab 连入」）
@@ -1855,6 +1864,26 @@ impl AiPanel {
                         .color(theme.color_form_hint()),
                 );
 
+                // 若引用了团队知识/标准片段，展示高亮知识徽章与锚点来源
+                if let Some(ref kref) = plan.knowledge_ref {
+                    ui.add_space(2.0);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        ops_badge(
+                            ui,
+                            crate::ui::icons::IconId::Fragment,
+                            &format!("团队知识引用: {}", kref.title),
+                            theme.accent_color(),
+                            theme.font_size_caption(),
+                        );
+                        ui.label(
+                            egui::RichText::new(format!("({})", kref.anchor))
+                                .size(10.0)
+                                .color(theme.text_tertiary()),
+                        );
+                    });
+                }
+
                 ui.add_space(theme.spacing_xs());
 
                 // 命令编辑提示
@@ -3083,6 +3112,7 @@ impl AiPanel {
             gate_hint: "确认后将在所选主机上短连接执行(不占用终端 Tab)".into(),
             l2_armed: false,
             status: None,
+            knowledge_ref: proposal.knowledge_ref,
         });
         self.pending_agent_exec = None;
     }
@@ -3104,7 +3134,35 @@ impl AiPanel {
         };
 
         let settings = app_settings.ai.clone();
-        let system_prompt = crate::core::build_planner_system_prompt();
+        
+        // 构建知识上下文（提取团队/个人已沉淀的标准命令片段或文档摘要）
+        let mut knowledge_context = String::new();
+        if !self.team_knowledge_cache.is_empty() {
+            for (idx, hit) in self.team_knowledge_cache.iter().take(5).enumerate() {
+                let src_name = match hit.source {
+                    crate::core::KnowledgeSource::TeamFragment => "团队标准片段",
+                    crate::core::KnowledgeSource::PersonalFragment => "个人命令片段",
+                    crate::core::KnowledgeSource::TeamDoc => "团队运维文档",
+                    _ => "知识库",
+                };
+                let clean_body = hit.body.trim().replace('\n', " ");
+                knowledge_context.push_str(&format!(
+                    "{}. [{}] {} (anchor: {})\n   命令/摘要：{}\n",
+                    idx + 1,
+                    src_name,
+                    hit.title,
+                    hit.anchor,
+                    clean_body
+                ));
+            }
+        }
+
+        let system_prompt = if knowledge_context.is_empty() {
+            crate::core::build_planner_system_prompt()
+        } else {
+            crate::core::build_planner_system_prompt_with_knowledge(Some(&knowledge_context))
+        };
+
         let mut user_prompt = format!("用户运维意图：{intent}\n");
         if let Some(lb) = last_batch {
             user_prompt.push_str(&format!("\n上一轮批量执行的命令：{}\n各主机执行结果：\n", lb.command));
