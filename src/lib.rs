@@ -2,6 +2,7 @@
 //!
 //! 与 `main.rs` 中的模块树保持一致。
 
+pub mod cli;
 pub mod core;
 pub mod i18n;
 pub mod platform;
