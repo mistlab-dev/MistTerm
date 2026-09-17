@@ -14,6 +14,19 @@ pub struct LastBatchContext {
     pub hosts: Vec<HostExecutionSummary>,
 }
 
+/// 提议来源或引用的团队知识。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KnowledgeReference {
+    /// 来源类型："team_fragment" | "personal_fragment" | "team_doc"
+    pub source_type: String,
+    /// 来源标题（片段名称或文档标题）
+    pub title: String,
+    /// 引用锚点（如 fragment:xxx 或 doc:xxx）
+    pub anchor: String,
+    /// 推荐的原版标准命令或参考段落
+    pub snippet: Option<String>,
+}
+
 /// 下一步执行提议(尚未过门闩、未 SSH)。
 #[derive(Debug, Clone)]
 pub struct StepProposal {
@@ -23,6 +36,8 @@ pub struct StepProposal {
     pub target_filter: Option<String>,
     /// 是否建议结束(无命令可跑)。
     pub stop: bool,
+    /// 引用的团队知识库/片段来源（如有）。
+    pub knowledge_ref: Option<KnowledgeReference>,
 }
 
 /// 粗判：用户是否在要「上多机跑命令」而不是普通问答。
@@ -99,6 +114,7 @@ pub fn propose_step_with_context(
                     rationale: format!("针对上一轮报错主机 {host_part} 查看系统日志"),
                     target_filter: Some(host_part.to_string()),
                     stop: false,
+                    knowledge_ref: None,
                 };
             }
         }
@@ -111,6 +127,7 @@ pub fn propose_step_with_context(
                 rationale: "检查各主机占用空间最大的日志文件以准备清理(只读排查)".into(),
                 target_filter: extract_target_filter(user_text),
                 stop: false,
+                knowledge_ref: None,
             };
         }
 
@@ -122,6 +139,7 @@ pub fn propose_step_with_context(
                 rationale: "查看各主机内存/CPU占用最高的具体进程".into(),
                 target_filter: extract_target_filter(user_text),
                 stop: false,
+                knowledge_ref: None,
             };
         }
     }
@@ -133,6 +151,7 @@ pub fn propose_step_with_context(
             rationale: "按你输入的命令在目标主机上执行".into(),
             target_filter: extract_target_filter(user_text),
             stop: false,
+            knowledge_ref: None,
         };
     }
 
@@ -144,6 +163,7 @@ pub fn propose_step_with_context(
             rationale: "查各主机磁盘用量(可改命令)".into(),
             target_filter: filter,
             stop: false,
+            knowledge_ref: None,
         };
     }
     if contains_any(&lower, stripped, &["内存", "memory", "mem ", "free"]) {
@@ -152,6 +172,7 @@ pub fn propose_step_with_context(
             rationale: "查各主机内存(可改命令)".into(),
             target_filter: filter,
             stop: false,
+            knowledge_ref: None,
         };
     }
     if contains_any(&lower, stripped, &["cpu", "负载", "load", "uptime"]) {
@@ -160,6 +181,7 @@ pub fn propose_step_with_context(
             rationale: "查各主机负载与运行时间(可改命令)".into(),
             target_filter: filter,
             stop: false,
+            knowledge_ref: None,
         };
     }
     if contains_any(
@@ -187,6 +209,7 @@ pub fn propose_step_with_context(
             rationale: "统计各主机进程数量(可改命令)".into(),
             target_filter: filter,
             stop: false,
+            knowledge_ref: None,
         };
     }
     if contains_any(&lower, stripped, &["进程", "process", "processes", "ps "]) {
@@ -195,6 +218,7 @@ pub fn propose_step_with_context(
             rationale: "列出各主机占用 CPU 较高的进程(可改命令)".into(),
             target_filter: filter,
             stop: false,
+            knowledge_ref: None,
         };
     }
     if contains_any(&lower, stripped, &["谁在听", "端口", "listening", "ss -", "netstat"]) {
@@ -203,6 +227,7 @@ pub fn propose_step_with_context(
             rationale: "查监听端口(可改命令)".into(),
             target_filter: filter,
             stop: false,
+            knowledge_ref: None,
         };
     }
 
@@ -212,21 +237,36 @@ pub fn propose_step_with_context(
         rationale: "未识别具体指标，先用通用探活命令；请改成你要跑的命令".into(),
         target_filter: filter,
         stop: false,
+        knowledge_ref: None,
     }
 }
 
-/// 构建用于让 LLM 进行运维规划的 System Prompt。
-pub fn build_planner_system_prompt() -> String {
-    "你是 MistTerm 的多主机智能运维规划器 (Planner)。\
+/// 构建用于让 LLM 进行运维规划的 System Prompt，并可选择性注入团队已沉淀的标准知识库（Snippets 与 Docs）。
+pub fn build_planner_system_prompt_with_knowledge(knowledge_context: Option<&str>) -> String {
+    let mut base = "你是 MistTerm 的多主机智能运维规划器 (Planner)。\
 用户的目标是在一批 Linux 服务器上排查或执行运维任务。\
 你需要根据用户的自然语言意图以及历史执行记录，规划出下一步应当执行的单条 shell 命令。\
 请严格以 JSON 格式输出，不要输出任何非 JSON 的闲聊文本。格式如下：\
-{\n  \"command\": \"具体要执行的 shell 命令\",\n  \"rationale\": \"提议该命令的简要理由（中文）\",\n  \"target_filter\": \"可选的目标主机过滤词（如 web, db, prod 等，无则为 null）\",\n  \"stop\": false\n}\
+{\n  \"command\": \"具体要执行的 shell 命令\",\n  \"rationale\": \"提议该命令的简要理由（中文）\",\n  \"target_filter\": \"可选的目标主机过滤词（如 web, db, prod 等，无则为 null）\",\n  \"stop\": false,\n  \"referenced_knowledge_anchor\": \"若采用了下方参考知识，填写对应 anchor（如 fragment:id 或 doc:id）；否则为 null\"\n}\
 注意：\
 1. 优先输出只读、安全的排查与诊断命令（如 df, free, ps, journalctl, ss, du 等）。\
-2. 尽量避免破坏性命令；若必须变更，保持最小化影响。\
-3. command 必须可以直接在 bash/sh 下执行，不要包含交互式提问参数。"
-        .to_string()
+2. 若用户意图与下方给出的【团队已验证的标准运维知识/命令片段】相匹配，应优先采纳团队的标准做法，不要自行臆测随意编写高风险命令。\
+3. 尽量避免破坏性命令；若必须变更，保持最小化影响。\
+4. command 必须可以直接在 bash/sh 下执行，不要包含交互式提问参数。"
+        .to_string();
+
+    if let Some(kc) = knowledge_context {
+        if !kc.trim().is_empty() {
+            base.push_str("\n\n【团队知识库与标准片段参考（肌肉记忆）】：\n");
+            base.push_str(kc);
+        }
+    }
+    base
+}
+
+/// 构建用于让 LLM 进行运维规划的 System Prompt（无额外知识上下文）。
+pub fn build_planner_system_prompt() -> String {
+    build_planner_system_prompt_with_knowledge(None)
 }
 
 /// 解析 LLM 返回的 JSON 规划结果，失败则平滑降级。
@@ -253,16 +293,26 @@ pub fn parse_llm_plan_response(response: &str) -> Option<StepProposal> {
         rationale: Option<String>,
         target_filter: Option<String>,
         stop: Option<bool>,
+        referenced_knowledge_anchor: Option<String>,
     }
 
     if let Ok(raw) = serde_json::from_str::<RawPlan>(clean) {
         if let Some(cmd) = raw.command {
             if !cmd.trim().is_empty() {
+                let knowledge_ref = raw.referenced_knowledge_anchor.filter(|a| !a.trim().is_empty()).map(|anchor| {
+                    KnowledgeReference {
+                        source_type: if anchor.starts_with("doc:") { "team_doc".into() } else { "team_fragment".into() },
+                        title: "团队标准实践引用".into(),
+                        anchor,
+                        snippet: None,
+                    }
+                });
                 return Some(StepProposal {
                     command: cmd.trim().to_string(),
                     rationale: raw.rationale.unwrap_or_else(|| "AI 规划的执行命令".into()),
                     target_filter: raw.target_filter.filter(|s| !s.trim().is_empty()),
                     stop: raw.stop.unwrap_or(false),
+                    knowledge_ref,
                 });
             }
         }
@@ -400,6 +450,15 @@ mod tests {
         assert_eq!(p.rationale, "排查前5大日志文件");
         assert_eq!(p.target_filter, Some("web".into()));
         assert!(!p.stop);
+    }
+
+    #[test]
+    fn parse_llm_plan_with_knowledge_ref() {
+        let json = r#"{"command": "systemctl restart nginx", "rationale": "按团队标准重启", "target_filter": "web", "stop": false, "referenced_knowledge_anchor": "fragment:frag_123"}"#;
+        let p = parse_llm_plan_response(json).unwrap();
+        assert_eq!(p.command, "systemctl restart nginx");
+        assert_eq!(p.knowledge_ref.as_ref().unwrap().anchor, "fragment:frag_123");
+        assert_eq!(p.knowledge_ref.as_ref().unwrap().source_type, "team_fragment");
     }
 
     #[test]
