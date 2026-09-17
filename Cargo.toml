@@ -109,6 +109,7 @@ regex = "1.10"
 parking_lot = "0.12"
 shellexpand = "3.1"
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
 dirs = "5.0"
 chrono = "0.4"
 crossterm = "0.27"

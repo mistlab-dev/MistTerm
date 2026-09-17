@@ -1,6 +1,7 @@
 //! `mist` — MistTerm 命令行入口（P1：ls / exec / get / put / rls）。
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::{generate, Shell};
 use mistterm::cli::{exec, ls, sftp_cmds, CliContext};
 
 #[derive(Parser)]
@@ -118,6 +119,13 @@ enum Cmd {
         /// 覆盖已存在的同名会话（默认跳过）
         #[arg(long)]
         overwrite: bool,
+    },
+
+    /// 生成 Shell 自动补全脚本 (bash, zsh, fish, powershell, elvish)
+    Completion {
+        /// 目标 Shell
+        #[arg(value_enum)]
+        shell: Shell,
     },
 }
 
@@ -279,6 +287,12 @@ fn main() {
             *dry_run,
             *overwrite,
         ),
+        Cmd::Completion { shell } => {
+            let mut cmd = Cli::command();
+            let bin_name = cmd.get_name().to_string();
+            generate(*shell, &mut cmd, bin_name, &mut std::io::stdout());
+            Ok(0)
+        }
     };
 
     let exit = match code {
