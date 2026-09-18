@@ -166,6 +166,7 @@ jobs:
           fi
 
           if [ "${{ matrix.target }}" = "universal-apple-darwin" ]; then
+            mkdir -p "target/${{ matrix.target }}/release"
             for BIN in "$BIN_NAME" mist; do
               cargo build --release --bin "$BIN" --target aarch64-apple-darwin "${features_arg[@]}"
               cargo build --release --bin "$BIN" --target x86_64-apple-darwin "${features_arg[@]}"
