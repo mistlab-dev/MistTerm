@@ -166,16 +166,18 @@ jobs:
           fi
 
           if [ "${{ matrix.target }}" = "universal-apple-darwin" ]; then
-            cargo build --release --bin "$BIN_NAME" --target aarch64-apple-darwin "${features_arg[@]}"
-            cargo build --release --bin "$BIN_NAME" --target x86_64-apple-darwin "${features_arg[@]}"
-            mkdir -p "target/${{ matrix.target }}/release"
-            lipo -create -output \
-              "target/${{ matrix.target }}/release/$BIN_NAME" \
-              "target/aarch64-apple-darwin/release/$BIN_NAME" \
-              "target/x86_64-apple-darwin/release/$BIN_NAME"
-            file "target/${{ matrix.target }}/release/$BIN_NAME"
+            for BIN in "$BIN_NAME" mist; do
+              cargo build --release --bin "$BIN" --target aarch64-apple-darwin "${features_arg[@]}"
+              cargo build --release --bin "$BIN" --target x86_64-apple-darwin "${features_arg[@]}"
+              lipo -create -output \
+                "target/${{ matrix.target }}/release/$BIN" \
+                "target/aarch64-apple-darwin/release/$BIN" \
+                "target/x86_64-apple-darwin/release/$BIN"
+            done
+            file "target/${{ matrix.target }}/release/$BIN_NAME" "target/${{ matrix.target }}/release/mist"
           else
             cargo build --release --bin "$BIN_NAME" --target "${{ matrix.target }}" "${features_arg[@]}"
+            cargo build --release --bin mist --target "${{ matrix.target }}" "${features_arg[@]}"
           fi
 
       - name: Build release binary (Windows)
@@ -187,6 +189,8 @@ jobs:
           $featuresArg = @()
           if ($features) { $featuresArg = @("--features", $features) }
           cargo build --release --bin $env:BIN_NAME --target "${{ matrix.target }}" @featuresArg
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --release --bin mist --target "${{ matrix.target }}" @featuresArg
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Build Windows installer
@@ -225,6 +229,7 @@ jobs:
 
             if [ "${{ runner.os }}" = "Windows" ]; then
               cp "target/${{ matrix.target }}/release/$BIN_NAME.exe" "$STAGE/"
+              cp "target/${{ matrix.target }}/release/mist.exe" "$STAGE/"
             elif [ "${{ runner.os }}" = "macOS" ]; then
               # 打成 Mist.app，避免用户双击裸二进制时先弹出 Terminal.app
               MIST_BINARY="target/${{ matrix.target }}/release/$BIN_NAME" \
@@ -232,6 +237,7 @@ jobs:
                 bash scripts/bundle-macos.sh
               # 附带裸二进制，供 CLI / install.sh 使用；GUI 请用 Mist.app
               cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
+              cp "target/${{ matrix.target }}/release/mist" "$STAGE/"
               printf '%s\n' \
                 'MistTerm for macOS' \
                 '==================' \
@@ -244,6 +250,7 @@ jobs:
                 > "$STAGE/README-macOS.txt"
             else
               cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
+              cp "target/${{ matrix.target }}/release/mist" "$STAGE/"
             fi
             [ -f README.md ] && cp README.md "$STAGE/" || true
             [ -f docs/en/INSTALL.md ] && cp docs/en/INSTALL.md "$STAGE/INSTALL.md" || true
@@ -295,6 +302,14 @@ jobs:
 
       - name: List artifacts
         run: ls -la dist/
+
+      - name: Generate SHA256 checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
