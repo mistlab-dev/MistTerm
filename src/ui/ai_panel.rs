@@ -489,6 +489,8 @@ pub struct AiPanel {
     attach_terminal_tail_requested: bool,
     /// 输入栏「附带选区」按钮：由 App 读取并注入当前终端选区。
     attach_selection_requested: bool,
+    /// 输入栏「附带最近报错」按钮：由 App 读取并注入结构化执行日志中的最近失败记录。
+    attach_recent_failure_requested: bool,
     /// 当前活动终端会话上下文(命令历史、SSH 信息等)，用于增强 system prompt。
     session_context: AiContext,
     last_panel_slot_rect: Option<egui::Rect>,
@@ -566,6 +568,7 @@ impl AiPanel {
             draft_input_focused: false,
             attach_terminal_tail_requested: false,
             attach_selection_requested: false,
+            attach_recent_failure_requested: false,
             session_context: AiContext::default(),
             last_panel_slot_rect: None,
             available_models: Vec::new(),
@@ -842,6 +845,10 @@ impl AiPanel {
 
     pub fn take_attach_selection_request(&mut self) -> bool {
         std::mem::replace(&mut self.attach_selection_requested, false)
+    }
+
+    pub fn take_attach_recent_failure_request(&mut self) -> bool {
+        std::mem::replace(&mut self.attach_recent_failure_requested, false)
     }
 
     pub fn set_session_context(&mut self, context: AiContext) {
@@ -2888,6 +2895,24 @@ impl AiPanel {
                 .inner
             {
                 attach_selection_clicked = true;
+            }
+            let mut attach_failure_clicked = false;
+            if ui
+                .add_enabled_ui(can_type, |ui| {
+                    crate::ui::chrome::panel_toolbar_icon_button(
+                        ui,
+                        theme,
+                        IconId::WarningTriangle,
+                        i18n::tr(ctx, "Attach recent failure log", "附带最近失败日志"),
+                    )
+                    .clicked()
+                })
+                .inner
+            {
+                attach_failure_clicked = true;
+            }
+            if attach_failure_clicked {
+                self.attach_recent_failure_requested = true;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if generating {
