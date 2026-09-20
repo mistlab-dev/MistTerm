@@ -119,6 +119,26 @@ enum Cmd {
         #[arg(long)]
         overwrite: bool,
     },
+
+    /// 查看与提炼排错 SOP（P3：会话结构化日志）
+    Sop {
+        #[command(subcommand)]
+        sub: SopCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum SopCmd {
+    /// 导出最近执行记录为 Markdown 格式的排错 SOP 草稿
+    Extract {
+        /// 读取最近 N 条记录（默认 10）
+        #[arg(short = 'n', long, default_value_t = 10)]
+        last: usize,
+
+        /// 指定 SOP 标题
+        #[arg(short, long)]
+        title: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -279,6 +299,19 @@ fn main() {
             *dry_run,
             *overwrite,
         ),
+        Cmd::Sop { sub } => match sub {
+            SopCmd::Extract { last, title } => {
+                let records = mistterm::cli::session_log::read_recent_records(*last)?;
+                if records.is_empty() {
+                    eprintln!("未找到执行记录（~/.mist/logs/exec-history.jsonl 为空）");
+                    Ok(0)
+                } else {
+                    let md = mistterm::cli::session_log::extract_sop_markdown(&records, title.as_deref());
+                    println!("{md}");
+                    Ok(0)
+                }
+            }
+        },
     };
 
     let exit = match code {

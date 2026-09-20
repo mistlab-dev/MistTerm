@@ -8,6 +8,7 @@ pub mod frag;
 pub mod fwd;
 pub mod import_ssh;
 pub mod ls;
+pub mod session_log;
 pub mod sftp_cmds;
 pub mod ssh_cmd;
 
