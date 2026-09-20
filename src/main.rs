@@ -11,6 +11,7 @@
 //! - lrzsz 层 (lrzsz/): ZMODEM 文件传输协议
 //! - security 层 (security/): 密钥链管理
 
+pub mod cli;
 pub mod core;
 pub mod i18n;
 pub mod platform;
