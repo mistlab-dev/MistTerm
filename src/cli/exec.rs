@@ -1,15 +1,18 @@
 //! `mist exec` — 单机 / 批量远程执行。
 
+use std::time::Instant;
+
 use anyhow::Result;
+use serde::Serialize;
+
 use crate::core::batch_exec::{
     run_batch_parallel, run_batch_serial_fail_fast, BatchExecJob, BatchExecRow,
 };
+use crate::core::exec_history::{append_record, record_batch_rows, ExecLogRecord};
 use crate::core::session::SessionConfig;
 use crate::ssh::SshClient;
-use serde::Serialize;
 
 use super::context::record_history;
-use super::session_log::{append_record, ExecLogRecord};
 use super::CliContext;
 
 #[derive(Serialize)]
@@ -87,6 +90,7 @@ pub fn run_single(
     let config = ctx.ssh_config(&session)?;
     let label = format!("{}@{}:{}", session.username, session.host, session.port);
 
+    let start = Instant::now();
     let mut client = SshClient::new(config);
     client
         .connect()
@@ -95,6 +99,7 @@ pub fn run_single(
 
     let result = client.exec_command(command);
     client.disconnect();
+    let duration_ms = start.elapsed().as_millis() as u64;
 
     let (output, code) = match result {
         Ok((out, c)) => (out, c),
@@ -106,7 +111,7 @@ pub fn run_single(
                 command,
                 None,
                 false,
-                0,
+                duration_ms,
                 &format!("exec failed: {e}"),
                 "single",
             );
@@ -123,7 +128,7 @@ pub fn run_single(
         command,
         Some(code),
         ok,
-        0,
+        duration_ms,
         &output,
         "single",
     );
@@ -140,7 +145,7 @@ pub fn run_single(
             } else {
                 Some(format!("exit code {code}"))
             },
-            duration_ms: 0,
+            duration_ms,
         };
         println!("{}", serde_json::to_string_pretty(&row)?);
     } else {
@@ -174,10 +179,15 @@ pub fn run_batch(
         anyhow::bail!("没有匹配的目标会话");
     }
 
+    // 仅保留成功建 job 的会话，保证后续 zip / 历史写入与 rows 一一对应。
     let mut jobs = Vec::with_capacity(targets.len());
+    let mut job_sessions = Vec::with_capacity(targets.len());
     for s in &targets {
         match to_job(ctx, s) {
-            Ok(j) => jobs.push(j),
+            Ok(j) => {
+                jobs.push(j);
+                job_sessions.push(s.clone());
+            }
             Err(e) => {
                 eprintln!("跳过 {}: {e}", s.name);
             }
@@ -193,25 +203,14 @@ pub fn run_batch(
         run_batch_parallel(jobs, command.to_string(), parallel)
     };
 
-    // 记录历史：每台一条（成功与否都记）
-    let session_batch_id = format!("batch-{}", chrono::Utc::now().timestamp_millis());
-    for (s, r) in targets.iter().zip(rows.iter()) {
+    debug_assert_eq!(job_sessions.len(), rows.len());
+    for (s, r) in job_sessions.iter().zip(rows.iter()) {
         record_history(command, Some(&s.id), Some(&s.name), r.ok);
-        let log_record = ExecLogRecord::new(
-            &session_batch_id,
-            &r.label,
-            command,
-            r.exit_code,
-            r.ok,
-            r.duration_ms,
-            &r.output,
-            "batch",
-        );
-        append_record(&log_record);
         if r.ok {
             ctx.mark_connected(s);
         }
     }
+    record_batch_rows(command, &rows, "batch");
 
     print_rows(&rows, json);
     Ok(worst_exit_code(&rows))

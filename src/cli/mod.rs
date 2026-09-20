@@ -13,10 +13,10 @@ pub mod sftp_cmds;
 pub mod ssh_cmd;
 
 use anyhow::{Context, Result};
-use crate::core::session::{SessionConfig, SessionManager};
 use crate::core::secret_resolver::SecretResolver;
-use crate::ssh::{JumpHop, SshConfig};
-use crate::ssh::{parse_jump_chain, parse_jump_endpoint};
+use crate::core::session::{SessionConfig, SessionManager};
+use crate::core::ssh_build;
+use crate::ssh::SshConfig;
 
 /// CLI 运行上下文：会话存储 + 应用设置（Vault 等）。
 pub struct CliContext {
@@ -36,77 +36,10 @@ impl CliContext {
         SecretResolver::new(self.settings.vault.clone())
     }
 
-    /// 与 GUI `session_to_ssh_config` 对齐：SessionConfig → SshConfig
+    /// SessionConfig → SshConfig（与 GUI 共用 `core::ssh_build`）。
     pub fn ssh_config(&self, session: &SessionConfig) -> Result<SshConfig> {
-        let resolver = self.resolver();
-        let resolved = resolver
-            .resolve_session(session)
-            .map_err(|e| anyhow::anyhow!("解析凭据失败 ({}): {}", session.name, e))?;
-        let jump_hops = self.resolve_jump_hops(session)?;
-        let interval = if session.keepalive_enabled {
-            session.keepalive_interval_secs.max(1)
-        } else {
-            0
-        };
-        Ok(SshConfig {
-            host: session.host.clone(),
-            port: session.port,
-            username: session.username.clone(),
-            password: resolved.password,
-            private_key_path: resolved.private_key_path,
-            use_ssh_agent: session.use_ssh_agent,
-            keepalive_interval_secs: interval,
-            keepalive_count_max: session.keepalive_count_max.max(1),
-            proxy_jump: session.proxy_jump.clone(),
-            proxy_command: session.proxy_command.clone(),
-            jump_hops,
-            local_forwards: crate::core::session::parse_local_forwards_text(
-                &session.local_forwards_text,
-            ),
-            remote_forwards: crate::core::session::parse_remote_forwards_text(
-                &session.remote_forwards_text,
-            ),
-            dynamic_forwards: crate::core::session::parse_dynamic_forwards_text(
-                &session.dynamic_forwards_text,
-            ),
-        })
-    }
-
-    /// 与 GUI `resolve_proxy_jump_hops` 对齐。
-    fn resolve_jump_hops(&self, session: &SessionConfig) -> Result<Vec<JumpHop>> {
-        let chain = parse_jump_chain(&session.proxy_jump);
-        if chain.is_empty() {
-            return Ok(Vec::new());
-        }
-        let resolver = self.resolver();
-        let mut hops = Vec::with_capacity(chain.len());
-        for token in &chain {
-            if let Some(js) = self.sessions.find_session_for_jump_token(token) {
-                let resolved = resolver
-                    .resolve_session(js)
-                    .map_err(|e| anyhow::anyhow!("{} ({}): {}", token, js.name, e))?;
-                hops.push(JumpHop {
-                    host: js.host.clone(),
-                    port: js.port,
-                    username: js.username.clone(),
-                    password: resolved.password,
-                    private_key_path: resolved.private_key_path,
-                    use_ssh_agent: js.use_ssh_agent,
-                });
-            } else {
-                let ep = parse_jump_endpoint(token, &session.username)
-                    .map_err(|e| anyhow::anyhow!(e))?;
-                hops.push(JumpHop {
-                    host: ep.host,
-                    port: ep.port,
-                    username: ep.username,
-                    password: String::new(),
-                    private_key_path: String::new(),
-                    use_ssh_agent: session.use_ssh_agent,
-                });
-            }
-        }
-        Ok(hops)
+        ssh_build::session_to_ssh_config(session, &self.sessions, &self.resolver())
+            .map_err(|e| anyhow::anyhow!("解析凭据失败 ({}): {}", session.name, e))
     }
 
     /// 按 name / id / host 匹配已保存会话。

@@ -1,6 +1,6 @@
 //! MistTerm 库入口：供集成测试与二进制共用同一套模块。
 //!
-//! 与 `main.rs` 中的模块树保持一致。
+//! GUI（`src/main.rs`）与 CLI（`src/bin/mist.rs`）仅作入口，模块树只维护于此。
 
 pub mod cli;
 pub mod core;
