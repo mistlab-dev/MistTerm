@@ -301,12 +301,15 @@ fn main() {
         ),
         Cmd::Sop { sub } => match sub {
             SopCmd::Extract { last, title } => {
-                match mistterm::cli::session_log::read_recent_records(*last) {
+                match mistterm::core::exec_history::read_recent_records(*last) {
                     Ok(records) => {
                         if records.is_empty() {
                             eprintln!("未找到执行记录（~/.mist/logs/exec-history.jsonl 为空）");
                         } else {
-                            let md = mistterm::cli::session_log::extract_sop_markdown(&records, title.as_deref());
+                            let md = mistterm::core::exec_history::extract_sop_markdown(
+                                &records,
+                                title.as_deref(),
+                            );
                             println!("{md}");
                         }
                         Ok(0)
