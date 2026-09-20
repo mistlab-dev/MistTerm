@@ -248,6 +248,8 @@ enum ActiveRightDock {
 
 /// 主应用程序
 pub struct MistTermApp {
+    /// 全局应用动作总线
+    action_bus: crate::ui::action::ActionBus,
     /// 会话管理器
     session_manager: SessionManager,
     /// 命令片段管理器
@@ -956,6 +958,7 @@ impl MistTermApp {
             last_responsive_layout_band: None,
             tabs: Vec::new(),
             active_tab: None,
+            action_bus: crate::ui::action::ActionBus::new(),
             status_message: String::new(),
             show_new_session_dialog: false,
             show_edit_session_dialog: false,
@@ -4304,6 +4307,116 @@ impl MistTermApp {
         self.poll_ai_agent_ops(ctx);
     }
 
+    /// 集中处理 ActionBus 中的事件队列（单向数据流）
+    pub(crate) fn process_actions(&mut self, ctx: &egui::Context) {
+        use crate::ui::action::{AppAction, NotificationLevel, RightDockKind};
+        let mut actions = Vec::new();
+        while let Some(act) = self.action_bus.pop() {
+            actions.push(act);
+        }
+
+        for act in actions {
+            match act {
+                AppAction::ConnectSession(target) => {
+                    if let Some(session) = self
+                        .session_manager
+                        .list_sessions()
+                        .iter()
+                        .find(|s| s.id == target || s.name == target || s.host == target)
+                        .cloned()
+                    {
+                        self.push_tab_connecting(ctx, &session);
+                    }
+                }
+                AppAction::OpenRightDock(kind) => {
+                    let dock = match kind {
+                        RightDockKind::Ai => ActiveRightDock::Ai,
+                        RightDockKind::Monitor => ActiveRightDock::Monitor,
+                        RightDockKind::Sftp => ActiveRightDock::Sftp,
+                    };
+                    if self.ensure_right_dock_allowed_or_warn(ctx) {
+                        self.open_right_dock_panel(dock);
+                    }
+                }
+                AppAction::CloseRightDock => {
+                    self.close_right_dock();
+                }
+                AppAction::CopyToClipboard(text) => {
+                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                        let _ = cb.set_text(text);
+                    }
+                }
+                AppAction::Notify { message, level } => match level {
+                    NotificationLevel::Info | NotificationLevel::Success => {
+                        self.notify_auto(message);
+                    }
+                    NotificationLevel::Warning => {
+                        self.notify_warning(message);
+                    }
+                    NotificationLevel::Error => {
+                        self.notify_error(message);
+                    }
+                },
+                AppAction::AiAttachContext { source, text } => {
+                    self.ai_panel.attach_context_labeled(source.as_deref(), text);
+                    self.ai_panel.focus_draft_input(ctx);
+                    if self.ensure_right_dock_allowed_or_warn(ctx) {
+                        self.open_right_dock_panel(ActiveRightDock::Ai);
+                    }
+                }
+                AppAction::AiExecTerminalCommand(cmd) => {
+                    if let Some(idx) = self.active_tab {
+                        if self.tabs.get_mut(idx).is_some() {
+                            let audit = self.cmd_audit_engine.check(&cmd);
+                            match self.send_audited_command_active(ctx, &cmd) {
+                                CommandSendResult::Sent => {
+                                    self.record_cmd_audit_event(
+                                        "command.ai_suggested",
+                                        &cmd,
+                                        &audit,
+                                        crate::core::AuditOutcome::Success,
+                                    );
+                                    self.notify_auto(terminal_command_status_message(ctx, &cmd));
+                                }
+                                CommandSendResult::Blocked(_)
+                                | CommandSendResult::NeedsConfirm { .. } => {}
+                                CommandSendResult::NotConnected => {
+                                    self.notify_auto(
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "No active terminal tab; cannot run command",
+                                            "无活动终端标签，无法执行命令",
+                                        )
+                                        .to_string(),
+                                    );
+                                }
+                            }
+                            ctx.request_repaint();
+                        }
+                    }
+                }
+                AppAction::AttachTerminalSelectionToAi => {
+                    self.send_terminal_selection_to_ai(ctx);
+                }
+                AppAction::AttachTerminalTailToAi(lines) => {
+                    self.attach_terminal_tail_to_ai(ctx, lines);
+                }
+                AppAction::AttachRecentFailureToAi => {
+                    self.attach_recent_failure_to_ai(ctx);
+                }
+                AppAction::OpenQuickConnectDialog => {
+                    self.show_new_session_dialog = true;
+                }
+                AppAction::OpenPreferencesDialog => {
+                    self.show_preferences_dialog = true;
+                }
+                AppAction::OpenSnippetsDialog => {
+                    self.show_fragments_dialog = true;
+                }
+            }
+        }
+    }
+
     /// v2：AI 面板多机 Agent — 更新目标数、门闩、启动/回收批量结果。
     fn poll_ai_agent_ops(&mut self, ctx: &egui::Context) {
         // 检查是否有工作台下钻请求开新 Tab 连入指定主机
@@ -7229,6 +7342,7 @@ impl eframe::App for MistTermApp {
         self.poll_connect_audit_from_tabs(ctx);
         self.poll_session_log_commands();
         self.append_terminal_output_logs();
+        self.process_actions(ctx);
 
         if let Some(ti) = self.active_tab {
             if let Some(pane) = self.tabs.get_mut(ti).and_then(|t| t.active_pane_mut()) {
