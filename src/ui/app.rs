@@ -4339,7 +4339,7 @@ impl MistTermApp {
                     }
                 }
                 AppAction::CloseRightDock => {
-                    self.close_right_dock();
+                    self.close_all_right_dock_panels();
                 }
                 AppAction::CopyToClipboard(text) => {
                     if let Ok(mut cb) = arboard::Clipboard::new() {
@@ -4350,10 +4350,7 @@ impl MistTermApp {
                     NotificationLevel::Info | NotificationLevel::Success => {
                         self.notify_auto(message);
                     }
-                    NotificationLevel::Warning => {
-                        self.notify_warning(message);
-                    }
-                    NotificationLevel::Error => {
+                    NotificationLevel::Warning | NotificationLevel::Error => {
                         self.notify_error(message);
                     }
                 },

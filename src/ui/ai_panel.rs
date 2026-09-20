@@ -2902,7 +2902,7 @@ impl AiPanel {
                     crate::ui::chrome::panel_toolbar_icon_button(
                         ui,
                         theme,
-                        IconId::WarningTriangle,
+                        IconId::Warning,
                         i18n::tr(ctx, "Attach recent failure log", "附带最近失败日志"),
                     )
                     .clicked()
