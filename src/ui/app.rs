@@ -4115,6 +4115,56 @@ impl MistTermApp {
         }
     }
 
+    pub(crate) fn attach_recent_failure_to_ai(&mut self, ctx: &egui::Context) {
+        let records = match crate::cli::session_log::read_recent_records(50) {
+            Ok(r) => r,
+            Err(_) => Vec::new(),
+        };
+        let failures: Vec<_> = records.into_iter().filter(|r| !r.ok).collect();
+        if failures.is_empty() {
+            self.notify_auto(
+                crate::i18n::tr(
+                    ctx,
+                    "No recent execution failures found in log",
+                    "未在日志中检测到最近的执行报错",
+                )
+                .to_string(),
+            );
+            return;
+        }
+
+        let mut formatted = String::from("### 最近执行失败记录（来自结构化执行日志）:\n\n");
+        for (idx, f) in failures.iter().rev().take(3).enumerate() {
+            formatted.push_str(&format!(
+                "**[{}] 目标: `{}` | 命令: `{}` | 退出码: {:?}**\n",
+                idx + 1,
+                f.target,
+                f.command,
+                f.exit_code
+            ));
+            if !f.output_summary.trim().is_empty() {
+                formatted.push_str("```\n");
+                formatted.push_str(f.output_summary.trim());
+                formatted.push_str("\n```\n\n");
+            }
+        }
+
+        self.ai_panel
+            .attach_context_labeled(Some("recent_failure"), formatted);
+        self.ai_panel.focus_draft_input(ctx);
+        if self.ensure_right_dock_allowed_or_warn(ctx) {
+            self.open_right_dock_panel(ActiveRightDock::Ai);
+            self.notify_auto(
+                crate::i18n::tr(
+                    ctx,
+                    "Recent failure log attached to AI",
+                    "最近报错日志已附带至 AI",
+                )
+                .to_string(),
+            );
+        }
+    }
+
     /// 终端「发送到 AI」与 AI 面板「用到终端」桥接。
     pub(crate) fn process_ai_bridge(&mut self, ctx: &egui::Context) {
         self.sync_ai_chat_session();
@@ -4205,6 +4255,9 @@ impl MistTermApp {
         }
         if self.ai_panel.take_attach_selection_request() {
             self.send_terminal_selection_to_ai(ctx);
+        }
+        if self.ai_panel.take_attach_recent_failure_request() {
+            self.attach_recent_failure_to_ai(ctx);
         }
         if open_ai && self.ensure_right_dock_allowed_or_warn(ctx) {
             self.open_right_dock_panel(ActiveRightDock::Ai);
