@@ -3,23 +3,7 @@
 //! Windows 使用 GUI 子系统，避免启动时额外弹出控制台窗口（见 `windows_subsystem`）。
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
-//! 架构分层:
-//! - UI 层 (ui/): egui 界面
-//! - 核心层 (core/): 会话管理、连接管理
-//! - SSH 层 (ssh/): SSH 连接和通信
-//! - 终端层 (terminal/): 终端模拟和 ANSI 解析
-//! - lrzsz 层 (lrzsz/): ZMODEM 文件传输协议
-//! - security 层 (security/): 密钥链管理
-
-pub mod cli;
-pub mod core;
-pub mod i18n;
-pub mod platform;
-pub mod ssh;
-pub mod terminal;
-pub mod ui;
-pub mod security;
-pub mod monitor;
+//! 架构分层见 `mistterm` 库（`src/lib.rs`）；本文件仅为 GUI 入口。
 
 use eframe::egui;
 use mistterm::ui::MistTermApp;
@@ -30,7 +14,7 @@ fn main() -> eframe::Result<()> {
     embed_plist::embed_info_plist!("../Info.plist");
 
     mistterm::platform::init_runtime_logging();
-    
+
     log::info!("Mist starting");
 
     // macOS：菜单栏显示名（避免显示可执行文件名 mistterm）
@@ -52,7 +36,7 @@ fn main() -> eframe::Result<()> {
         icon_data: Some(mistterm::ui::icons::app_window_icon_data()),
         ..Default::default()
     };
-    
+
     eframe::run_native(
         mistterm::platform::APP_DISPLAY_NAME,
         options,

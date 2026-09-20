@@ -53,14 +53,19 @@ impl BatchExecDialog {
         if !self.open {
             return BatchExecUiAction::None;
         }
+        let mut action = BatchExecUiAction::None;
         if let Some(ch) = rx {
             if let Ok(rows) = ch.try_recv() {
                 self.results = rows;
                 self.running = false;
+                crate::core::exec_history::record_batch_rows(
+                    &self.command,
+                    &self.results,
+                    "gui_batch",
+                );
             }
         }
 
-        let mut action = BatchExecUiAction::None;
         let title = crate::i18n::tr(ctx, "Batch run on servers", "批量多机执行");
         let mut keep_open = self.open;
         let mut should_close = false;
