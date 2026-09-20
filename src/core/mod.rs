@@ -17,6 +17,8 @@ pub mod fragment_recommendations;
 pub mod knowledge;
 pub mod agent;
 pub mod batch_exec;
+pub mod exec_history;
+pub mod ssh_build;
 pub mod ssh_keygen;
 pub mod fragment_expr;
 pub mod fragment_command;
@@ -94,6 +96,13 @@ pub use batch_exec::{
     batch_endpoint_key, format_batch_results_for_clipboard, push_unique_batch_target,
     run_batch_parallel, run_batch_serial_fail_fast, truncate_output, BatchExecJob, BatchExecRow, BatchTarget,
     TEAM_TARGET_PREFIX,
+};
+pub use exec_history::{
+    append_record, extract_sop_markdown, get_log_file_path, read_recent_records, record_batch_rows,
+    truncate_output_summary, ExecLogRecord,
+};
+pub use ssh_build::{
+    build_ssh_config, keepalive_from_session, resolve_proxy_jump_hops, session_to_ssh_config,
 };
 pub use ssh_keygen::generate_ed25519;
 pub use market::{

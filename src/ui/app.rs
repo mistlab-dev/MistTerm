@@ -27,7 +27,7 @@ use crate::core::{
     retrieve_team_knowledge, clean_ask_intent, DocSearchHit, KnowledgeHit,
     FragmentCandidate, SuggestionEnvContext,
 };
-use crate::ssh::{parse_jump_chain, parse_jump_endpoint, JumpHop, SshConfig};
+use crate::ssh::{JumpHop, SshConfig};
 use crate::ui::ai_panel::AiPanel;
 use crate::ui::batch_exec_dialog::{BatchExecDialog, BatchExecUiAction};
 use crate::ui::cloud_sync_panel::{CloudSyncDeps, CloudSyncPanel};
@@ -2076,38 +2076,8 @@ impl MistTermApp {
 
     /// 将 `ProxyJump` 各跳解析为连接凭据(匹配已保存会话名/主机，或 `user@host:port`)。
     fn resolve_proxy_jump_hops(&self, session: &SessionConfig) -> Result<Vec<JumpHop>, String> {
-        let chain = parse_jump_chain(&session.proxy_jump);
-        if chain.is_empty() {
-            return Ok(Vec::new());
-        }
         let resolver = SecretResolver::new(self.app_settings.vault.clone());
-        let mut hops = Vec::with_capacity(chain.len());
-        for token in &chain {
-            if let Some(js) = self.session_manager.find_session_for_jump_token(token) {
-                let resolved = resolver
-                    .resolve_session(js)
-                    .map_err(|e| format!("{} ({}): {}", token, js.name, e))?;
-                hops.push(JumpHop {
-                    host: js.host.clone(),
-                    port: js.port,
-                    username: js.username.clone(),
-                    password: resolved.password,
-                    private_key_path: resolved.private_key_path,
-                    use_ssh_agent: js.use_ssh_agent,
-                });
-            } else {
-                let ep = parse_jump_endpoint(token, &session.username)?;
-                hops.push(JumpHop {
-                    host: ep.host,
-                    port: ep.port,
-                    username: ep.username,
-                    password: String::new(),
-                    private_key_path: String::new(),
-                    use_ssh_agent: session.use_ssh_agent,
-                });
-            }
-        }
-        Ok(hops)
+        crate::core::ssh_build::resolve_proxy_jump_hops(session, &self.session_manager, &resolver)
     }
 
     fn session_keepalive_params(&self, session: &SessionConfig) -> (bool, u32, u8) {
@@ -3204,23 +3174,15 @@ impl MistTermApp {
             .map_err(|e| e.to_string())?;
         let jump_hops = self.resolve_proxy_jump_hops(session)?;
         let (ka_on, ka_int, ka_max) = self.session_keepalive_params(session);
-        let interval = if ka_on { ka_int.max(1) } else { 0 };
-        Ok(SshConfig {
-            host: session.host.clone(),
-            port: session.port,
-            username: session.username.clone(),
-            password: resolved.password,
-            private_key_path: resolved.private_key_path,
-            use_ssh_agent: session.use_ssh_agent,
-            keepalive_interval_secs: interval,
-            keepalive_count_max: ka_max,
-            proxy_jump: session.proxy_jump.clone(),
-            proxy_command: session.proxy_command.clone(),
+        Ok(crate::core::ssh_build::build_ssh_config(
+            session,
+            resolved.password,
+            resolved.private_key_path,
             jump_hops,
-            local_forwards: parse_local_forwards_text(&session.local_forwards_text),
-            remote_forwards: parse_remote_forwards_text(&session.remote_forwards_text),
-            dynamic_forwards: parse_dynamic_forwards_text(&session.dynamic_forwards_text),
-        })
+            ka_on,
+            ka_int,
+            ka_max,
+        ))
     }
 
     fn batch_exec_allowed(&mut self, ctx: &egui::Context, command: &str) -> bool {
@@ -4119,7 +4081,7 @@ impl MistTermApp {
     }
 
     pub(crate) fn attach_recent_failure_to_ai(&mut self, ctx: &egui::Context) {
-        let records = match crate::cli::session_log::read_recent_records(50) {
+        let records = match crate::core::exec_history::read_recent_records(50) {
             Ok(r) => r,
             Err(_) => Vec::new(),
         };
@@ -4168,17 +4130,14 @@ impl MistTermApp {
         }
     }
 
-    /// 终端「发送到 AI」与 AI 面板「用到终端」桥接。
+    /// 终端「发送到 AI」与 AI 面板桥接：把面板/终端 pending 意图写入 ActionBus。
     pub(crate) fn process_ai_bridge(&mut self, ctx: &egui::Context) {
+        use crate::ui::action::AppAction;
+
         self.sync_ai_chat_session();
         self.ai_panel
             .set_session_context(self.build_ai_session_context());
-        let mut open_ai = false;
-        let mut attach_text: Option<String> = None;
-        let mut attach_source: Option<&str> = None;
-        let mut tail_empty = false;
-        let mut monitor_empty = false;
-        let mut session_log_empty = false;
+
         if let Some(idx) = self.active_tab {
             if let Some(tab) = self.tabs.get_mut(idx) {
                 if let Some(pane) = tab.active_pane_mut() {
@@ -4193,116 +4152,65 @@ impl MistTermApp {
                             .terminal
                             .take_pending_send_to_ai_text()
                             .unwrap_or_else(|| pane.terminal.selected_text());
-                        attach_text = Some(text);
-                        open_ai = true;
+                        self.action_bus.dispatch(AppAction::AiAttachContext {
+                            source: None,
+                            text,
+                        });
                     }
                     if pane.terminal.take_pending_send_tail_to_ai() {
-                        let text = pane.terminal.tail_plain_text(50);
-                        if text.trim().is_empty() {
-                            tail_empty = true;
-                        } else {
-                            attach_text = Some(text);
-                            open_ai = true;
-                        }
+                        self.action_bus
+                            .dispatch(AppAction::AttachTerminalTailToAi(50));
                     }
                 }
             }
         }
         if self.monitor_panel.take_pending_send_to_ai() {
             if let Some(text) = self.monitor_panel.snapshot_for_ai() {
-                attach_text = Some(text);
-                attach_source = Some("monitor");
-                open_ai = true;
-            } else {
-                monitor_empty = true;
-                open_ai = true;
-            }
-        }
-        if self.session_log_dialog.take_pending_send_to_ai() {
-            if let Some(text) = self.session_log_dialog.content_for_ai() {
-                attach_text = Some(text);
-                attach_source = Some("session_log");
-                open_ai = true;
-            } else {
-                session_log_empty = true;
-                open_ai = true;
-            }
-        }
-        if tail_empty {
-            self.notify_auto(
-                crate::i18n::tr(ctx, "Terminal buffer is empty", "终端缓冲区为空").to_string(),
-            );
-        }
-        if monitor_empty {
-            self.notify_auto(
-                crate::i18n::tr(
-                    ctx,
-                    "No monitor data yet)); wait for a refresh",
-                    "尚无监控数据，请等待刷新",
-                )
-                .to_string(),
-            );
-        }
-        if session_log_empty {
-            self.notify_auto(
-                crate::i18n::tr(ctx, "Session log is empty", "会话日志为空").to_string(),
-            );
-        }
-        if let Some(text) = attach_text {
-            self.ai_panel.attach_context_labeled(attach_source, text);
-            self.ai_panel.focus_draft_input(ctx);
-            open_ai = true;
-        }
-        if self.ai_panel.take_attach_terminal_tail_request() {
-            self.attach_terminal_tail_to_ai(ctx, 50);
-        }
-        if self.ai_panel.take_attach_selection_request() {
-            self.send_terminal_selection_to_ai(ctx);
-        }
-        if self.ai_panel.take_attach_recent_failure_request() {
-            self.attach_recent_failure_to_ai(ctx);
-        }
-        if open_ai && self.ensure_right_dock_allowed_or_warn(ctx) {
-            self.open_right_dock_panel(ActiveRightDock::Ai);
-        }
-        if let Some(cmd) = self.ai_panel.take_command_for_terminal() {
-            if let Some(idx) = self.active_tab {
-                if self.tabs.get_mut(idx).is_some() {
-                    let audit = self.cmd_audit_engine.check(&cmd);
-                    match self.send_audited_command_active(ctx, &cmd) {
-                        CommandSendResult::Sent => {
-                            self.record_cmd_audit_event(
-                                "command.ai_suggested",
-                                &cmd,
-                                &audit,
-                                crate::core::AuditOutcome::Success,
-                            );
-                            self.notify_auto(terminal_command_status_message(ctx, &cmd));
-                        }
-                        CommandSendResult::Blocked(_) | CommandSendResult::NeedsConfirm { .. } => {}
-                        CommandSendResult::NotConnected => {
-                            self.notify_auto(
-                                crate::i18n::tr(
-                                    ctx,
-                                    "No active terminal tab)); cannot run command",
-                                    "无活动终端标签，无法执行命令",
-                                )
-                                .to_string(),
-                            );
-                        }
-                    }
-                    ctx.request_repaint();
-                }
+                self.action_bus.dispatch(AppAction::AiAttachContext {
+                    source: Some("monitor".into()),
+                    text,
+                });
             } else {
                 self.notify_auto(
                     crate::i18n::tr(
                         ctx,
-                        "No active terminal tab)); cannot run command",
-                        "无活动终端标签，无法执行命令",
+                        "No monitor data yet; wait for a refresh",
+                        "尚无监控数据，请等待刷新",
                     )
                     .to_string(),
                 );
+                self.action_bus
+                    .dispatch(AppAction::OpenRightDock(crate::ui::action::RightDockKind::Ai));
             }
+        }
+        if self.session_log_dialog.take_pending_send_to_ai() {
+            if let Some(text) = self.session_log_dialog.content_for_ai() {
+                self.action_bus.dispatch(AppAction::AiAttachContext {
+                    source: Some("session_log".into()),
+                    text,
+                });
+            } else {
+                self.notify_auto(
+                    crate::i18n::tr(ctx, "Session log is empty", "会话日志为空").to_string(),
+                );
+                self.action_bus
+                    .dispatch(AppAction::OpenRightDock(crate::ui::action::RightDockKind::Ai));
+            }
+        }
+        if self.ai_panel.take_attach_terminal_tail_request() {
+            self.action_bus
+                .dispatch(AppAction::AttachTerminalTailToAi(50));
+        }
+        if self.ai_panel.take_attach_selection_request() {
+            self.action_bus
+                .dispatch(AppAction::AttachTerminalSelectionToAi);
+        }
+        if self.ai_panel.take_attach_recent_failure_request() {
+            self.action_bus.dispatch(AppAction::AttachRecentFailureToAi);
+        }
+        if let Some(cmd) = self.ai_panel.take_command_for_terminal() {
+            self.action_bus
+                .dispatch(AppAction::AiExecTerminalCommand(cmd));
         }
         self.poll_ai_agent_ops(ctx);
     }
@@ -4390,6 +4298,15 @@ impl MistTermApp {
                             }
                             ctx.request_repaint();
                         }
+                    } else {
+                        self.notify_auto(
+                            crate::i18n::tr(
+                                ctx,
+                                "No active terminal tab; cannot run command",
+                                "无活动终端标签，无法执行命令",
+                            )
+                            .to_string(),
+                        );
                     }
                 }
                 AppAction::AttachTerminalSelectionToAi => {
@@ -4416,17 +4333,12 @@ impl MistTermApp {
 
     /// v2：AI 面板多机 Agent — 更新目标数、门闩、启动/回收批量结果。
     fn poll_ai_agent_ops(&mut self, ctx: &egui::Context) {
-        // 检查是否有工作台下钻请求开新 Tab 连入指定主机
+        use crate::ui::action::AppAction;
+
+        // 工作台下钻：经 ActionBus 开 Tab 连接
         if let Some(host_endpoint) = self.ai_panel.take_pending_connect_host() {
-            if let Some(session) = self
-                .session_manager
-                .list_sessions()
-                .iter()
-                .find(|s| s.host == host_endpoint || s.name == host_endpoint)
-                .cloned()
-            {
-                self.push_tab_connecting(ctx, &session);
-            }
+            self.action_bus
+                .dispatch(AppAction::ConnectSession(host_endpoint));
         }
 
         let mut targets = self.build_agent_batch_targets(ctx);
@@ -4442,6 +4354,7 @@ impl MistTermApp {
             match rx.try_recv() {
                 Ok((command, rows, intent, rationale, gate_level, gate_armed, fail_fast)) => {
                     self.agent_batch_rx = None;
+                    crate::core::exec_history::record_batch_rows(&command, &rows, "gui_agent");
                     if let Some(team_id) = self.team_service.state.current_team_id.as_deref() {
                         self.team_service.spawn_batch_exec_report(
                             team_id,
@@ -7339,7 +7252,6 @@ impl eframe::App for MistTermApp {
         self.poll_connect_audit_from_tabs(ctx);
         self.poll_session_log_commands();
         self.append_terminal_output_logs();
-        self.process_actions(ctx);
 
         if let Some(ti) = self.active_tab {
             if let Some(pane) = self.tabs.get_mut(ti).and_then(|t| t.active_pane_mut()) {
@@ -7816,6 +7728,8 @@ impl eframe::App for MistTermApp {
         // 须在终端/非活动窗格泵完 SSH 之后再取 MIST_AUDIT，否则本帧事件会空转。
         self.poll_server_audit_from_tabs(ctx);
         self.process_ai_bridge(ctx);
+        // 须在 bridge / agent 把意图写入总线之后再 drain，保证同帧生效。
+        self.process_actions(ctx);
 
         // 低频兜底重绘：eframe 响应式模式空闲时不重绘，遇到系统截图/窗口遮挡/外接屏
         // 切换等「不产生输入事件」的场景会停在旧帧看似「卡死」，同时也会触发卡顿看门狗
