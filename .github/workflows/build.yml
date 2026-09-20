@@ -117,6 +117,7 @@ jobs:
         run: brew install libssh2 pkg-config
 
       # Avoid ilammy/msvc-dev-cmd (still declares Node 20; upstream Node 24 PR unmerged).
+      # Capture VsDevCmd env the same way: run the bat under cmd, then persist diffs to GITHUB_ENV.
       - name: Setup MSVC environment
         if: runner.os == 'Windows'
         shell: pwsh
@@ -130,16 +131,26 @@ jobs:
           if (-not $vs) { throw "MSVC installation not found" }
           $devcmd = Join-Path $vs "Common7\Tools\VsDevCmd.bat"
           if (-not (Test-Path $devcmd)) { throw "VsDevCmd.bat not found at $devcmd" }
-          $temp = [System.IO.Path]::GetTempFileName()
-          cmd /c "`"$devcmd`" -arch=x64 -host_arch=x64 -no_logo && set > `"$temp`""
-          if ($LASTEXITCODE -ne 0) { throw "VsDevCmd.bat failed with exit $LASTEXITCODE" }
-          Get-Content $temp | ForEach-Object {
-            if ($_ -match '^(PATH|INCLUDE|LIB|LIBPATH|VCINSTALLDIR|WindowsSdkDir|WindowsSDKVersion|WindowsSdkVerBinPath)=(.*)$') {
-              Add-Content -Path $env:GITHUB_ENV -Value "$($Matches[1])=$($Matches[2])"
-            }
+
+          $out = cmd /c "call `"$devcmd`" -arch=x64 -host_arch=x64 -no_logo && set"
+          if ($LASTEXITCODE -ne 0 -or -not $out) {
+            throw "VsDevCmd.bat failed with exit $LASTEXITCODE"
           }
-          Remove-Item $temp -Force
-          Write-Host "MSVC environment exported from $vs"
+
+          $written = 0
+          $sawPath = $false
+          foreach ($line in $out) {
+            if ($line -notmatch '^([^=]+)=(.*)$') { continue }
+            $name = $Matches[1]
+            $value = $Matches[2]
+            # Skip cmd pseudo-vars ("=C:", "=ExitCode") — already excluded by the pattern.
+            if ([Environment]::GetEnvironmentVariable($name) -eq $value) { continue }
+            if ($name -ieq 'Path') { $name = 'PATH'; $sawPath = $true }
+            Add-Content -Path $env:GITHUB_ENV -Value "$name=$value" -Encoding utf8
+            $written++
+          }
+          if (-not $sawPath) { throw "VsDevCmd.bat left PATH unchanged — toolchain missing" }
+          Write-Host "MSVC environment from $vs ($written vars)"
 
       - name: Run unit tests (Linux)
         if: matrix.run_unit_tests
