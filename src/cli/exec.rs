@@ -9,6 +9,7 @@ use crate::ssh::SshClient;
 use serde::Serialize;
 
 use super::context::record_history;
+use super::session_log::{append_record, ExecLogRecord};
 use super::CliContext;
 
 #[derive(Serialize)]
@@ -99,11 +100,34 @@ pub fn run_single(
         Ok((out, c)) => (out, c),
         Err(e) => {
             record_history(command, Some(&session.id), Some(&session.name), false);
+            let log_record = ExecLogRecord::new(
+                &session.id,
+                &label,
+                command,
+                None,
+                false,
+                0,
+                &format!("exec failed: {e}"),
+                "single",
+            );
+            append_record(&log_record);
             anyhow::bail!("exec 失败 {label}: {e}");
         }
     };
     let ok = code == 0;
     record_history(command, Some(&session.id), Some(&session.name), ok);
+
+    let log_record = ExecLogRecord::new(
+        &session.id,
+        &label,
+        command,
+        Some(code),
+        ok,
+        0,
+        &output,
+        "single",
+    );
+    append_record(&log_record);
 
     if json {
         let row = ExecJsonRow {
@@ -170,8 +194,20 @@ pub fn run_batch(
     };
 
     // 记录历史：每台一条（成功与否都记）
+    let session_batch_id = format!("batch-{}", chrono::Utc::now().timestamp_millis());
     for (s, r) in targets.iter().zip(rows.iter()) {
         record_history(command, Some(&s.id), Some(&s.name), r.ok);
+        let log_record = ExecLogRecord::new(
+            &session_batch_id,
+            &r.label,
+            command,
+            r.exit_code,
+            r.ok,
+            r.duration_ms,
+            &r.output,
+            "batch",
+        );
+        append_record(&log_record);
         if r.ok {
             ctx.mark_connected(s);
         }
