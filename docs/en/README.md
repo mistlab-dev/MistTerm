@@ -29,7 +29,13 @@ Entry points for product and engineering docs. End-user guide (with screenshots)
 | [SECURITY.md](../tech/SECURITY.md) | Security & encryption |
 | [COMMAND-AUDIT.md](../tech/COMMAND-AUDIT.md) | Command audit |
 | [AI-INTERACTION-DESIGN.md](../tech/AI-INTERACTION-DESIGN.md) | AI panel |
+| [CLI-DESIGN.md](../tech/CLI-DESIGN.md) | `mist` CLI (landed: ls/exec/ssh/rls/get/put/fwd/frag/import/sop) |
 | [TEAM.md](../tech/TEAM.md) | Team platform |
+| [TEAM-DOCS.md](../tech/TEAM-DOCS.md) | Team docs binding |
+| [SERVER-SIDE-AUDIT.md](../tech/SERVER-SIDE-AUDIT.md) | Server-side command audit |
+| [CLIENT-TODO.md](../tech/CLIENT-TODO.md) | Client-side backlog |
+| [CONVERSATIONAL-TERMINAL.md](../product/CONVERSATIONAL-TERMINAL.md) | Conversational terminal concept |
+| [NEXT-VERSION-TODO.md](../product/NEXT-VERSION-TODO.md) | Next version backlog |
 
 ## Install
 

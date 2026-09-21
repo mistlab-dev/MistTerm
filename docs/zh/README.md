@@ -29,7 +29,13 @@
 | [SECURITY.md](../tech/SECURITY.md) | 安全与加密 |
 | [COMMAND-AUDIT.md](../tech/COMMAND-AUDIT.md) | 命令审计 |
 | [AI-INTERACTION-DESIGN.md](../tech/AI-INTERACTION-DESIGN.md) | AI 面板 |
+| [CLI-DESIGN.md](../tech/CLI-DESIGN.md) | `mist` 命令行（已落地：ls/exec/ssh/rls/get/put/fwd/frag/import/sop） |
 | [TEAM.md](../tech/TEAM.md) | 团队平台 |
+| [TEAM-DOCS.md](../tech/TEAM-DOCS.md) | 团队文档绑定 |
+| [SERVER-SIDE-AUDIT.md](../tech/SERVER-SIDE-AUDIT.md) | 服务端命令审计 |
+| [CLIENT-TODO.md](../tech/CLIENT-TODO.md) | 客户端待办 |
+| [CONVERSATIONAL-TERMINAL.md](../product/CONVERSATIONAL-TERMINAL.md) | 对话式终端概念稿 |
+| [NEXT-VERSION-TODO.md](../product/NEXT-VERSION-TODO.md) | 下一版本待办 |
 
 ## 安装
 

@@ -44,11 +44,14 @@ Details: [docs/en/INSTALL.md](docs/en/INSTALL.md).
 | **Files** | SFTP side panel; ZMODEM (`rz` / `sz`) with progress |
 | **Snippets** | Personal library + variables; marketplace; usage analytics |
 | **Ops** | Host monitor; port forward; batch exec; session logs |
+| **CLI** | `mist` headless CLI sharing the same session store — `ls` / `exec` (single + `--group` / `--all` batch) / `ssh` / `rls` / `get` / `put` / `fwd` / `frag` / `import-ssh-config` / `sop extract`. See [docs/tech/CLI-DESIGN.md](docs/tech/CLI-DESIGN.md) |
 | **Team** | [mistlab.dev](https://mistlab.dev) sync; Git cloud backup; HashiCorp Vault |
 | **AI** | Built-in assistant panel (your API key, local config) |
 | **UX** | English / 简体中文; themes; **Activity Rail** (hide with ⌘/Ctrl+B); Toast notifications (no bottom status bar) |
 
 ### Quick start
+
+Running the GUI binary `Mist` with **no arguments** launches the desktop UI directly (builds since v1.1.17).
 
 1. Launch **Mist**
 2. **⌘N / Ctrl+N** — new session (or open the connection list from the left Activity Rail)
@@ -113,11 +116,14 @@ cargo build --release --bin Mist
 | **文件** | SFTP 侧栏；ZMODEM（`rz` / `sz`）与进度 |
 | **片段** | 个人命令库与变量；市场模板；使用统计 |
 | **运维** | 主机监控；端口转发；批量执行；会话日志 |
+| **命令行** | `mist` 无头 CLI，与 GUI 共享同一份会话库——`ls` / `exec`（单机 + `--group` / `--all` 批量）/ `ssh` / `rls` / `get` / `put` / `fwd` / `frag` / `import-ssh-config` / `sop extract`。详见 [docs/tech/CLI-DESIGN.md](docs/tech/CLI-DESIGN.md) |
 | **团队** | [mistlab.dev](https://mistlab.dev) 同步；Git 云备份；HashiCorp Vault |
 | **AI** | 内置助手（自备 API Key，配置在本机） |
 | **体验** | 中/英界面；主题；**活动栏**（⌘/Ctrl+B 可隐藏）；右下角 Toast（已无常驻底栏） |
 
 ### 快速上手
+
+GUI 二进制 `Mist` **不带任何参数**运行即直接拉起桌面界面（v1.1.17 起）。
 
 1. 启动 **Mist**
 2. **⌘N / Ctrl+N** 新建会话（或从左侧**活动栏**打开连接列表）
