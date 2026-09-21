@@ -214,11 +214,8 @@ fn main() {
     let cmd = match &cli.cmd {
         Some(c) => c,
         None => {
-            // 无子命令时默认打印帮助信息，避免闪退与非零报错
-            use clap::CommandFactory;
-            Cli::command().print_help().ok();
-            println!();
-            std::process::exit(0);
+            // 无子命令时默认拉起 GUI 桌面界面
+            return mistterm::platform::run_gui();
         }
     };
     let code = match cmd {
