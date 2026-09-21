@@ -15,7 +15,7 @@ struct Cli {
     verbose: u8,
 
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -211,7 +211,17 @@ fn main() {
     init_logging(cli.verbose);
 
     let mut ctx = CliContext::load();
-    let code = match &cli.cmd {
+    let cmd = match &cli.cmd {
+        Some(c) => c,
+        None => {
+            // 无子命令时默认打印帮助信息，避免闪退与非零报错
+            use clap::CommandFactory;
+            Cli::command().print_help().ok();
+            println!();
+            std::process::exit(0);
+        }
+    };
+    let code = match cmd {
         Cmd::Ls { group } => ls::run(&ctx, group.as_deref(), cli.json).map(|_| 0),
         Cmd::Ssh { target } => mistterm::cli::ssh_cmd::run_ssh(&mut ctx, target),
         Cmd::Exec {
