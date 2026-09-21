@@ -50,3 +50,43 @@ pub fn apply_preferred_english_input_source() {
 
 #[cfg(not(target_os = "macos"))]
 pub fn apply_preferred_english_input_source() {}
+
+/// 启动 MistTerm GUI 界面
+pub fn run_gui() {
+    log::info!("Mist GUI starting");
+
+    #[cfg(target_os = "macos")]
+    {
+        set_application_display_name();
+        activate_gui_application();
+    }
+
+    apply_preferred_english_input_source();
+
+    let options = eframe::NativeOptions {
+        maximized: false,
+        initial_window_size: Some(eframe::egui::vec2(1200.0, 820.0)),
+        max_window_size: None,
+        app_id: Some("mistterm".to_string()),
+        icon_data: Some(crate::ui::icons::app_window_icon_data()),
+        ..Default::default()
+    };
+
+    if let Err(e) = eframe::run_native(
+        APP_DISPLAY_NAME,
+        options,
+        Box::new(|cc| {
+            if !configure_egui_fonts(
+                &cc.egui_ctx,
+                TerminalFontPreset::default(),
+            ) {
+                log::warn!("CJK font not loaded; Chinese UI text may show as tofu");
+            }
+            crate::ui::icons::UiIcons::install(&cc.egui_ctx);
+            Box::new(crate::ui::MistTermApp::new(cc))
+        }),
+    ) {
+        eprintln!("Failed to launch GUI: {e}");
+        std::process::exit(1);
+    }
+}
