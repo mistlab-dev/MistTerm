@@ -1,5 +1,10 @@
 # MistTerm CLI 设计
 
+> **状态：已全部落地（2026-09-21）**
+> 二进制：`mist`（`src/bin/mist.rs` + `src/cli/`），与 GUI 共享 `~/.config/mistterm/sessions.json`。
+> 另：GUI 二进制 `Mist` 在**无子命令**裸调用时默认直接拉起桌面 GUI（`ff9b479`），
+> 不再打印 help 后退出；`mist` CLI 与 `Mist` GUI 是两个独立 bin。
+
 目标:为 MistTerm 增加一个命令行入口 `mist`,复用现有 `mistterm` lib 的会话存储、SSH、SFTP、批量执行、端口转发能力,让服务器上保存的连接配置可以直接在终端/脚本里用,也作为 GUI 之外的无头(headless)使用方式。
 
 ## 定位与边界
@@ -94,11 +99,36 @@ path = "src/bin/mist_cli.rs"
 - `exec`/`ssh` 成功后更新 `last_connected_at` 并 `save()` —— 与 GUI 行为一致,最近连接排序保持同步。
 - 写历史:`exec`/`frag run` 记录进 `core::command_history`,GUI 历史面板可见。
 
-## 分期
+## 实际落地命令（`src/bin/mist.rs`）
 
-- **P1(先落地)**:`ls` / `exec`(单机+批量) / `get` / `put` / `rls` / `--json` / target 解析。全部非交互,复用度最高,无新并发复杂度。
-- **P2**:`mist ssh` 交互 shell(raw mode + 窗口resize + escape)、`mist fwd`。
-- **P3**:`frag run`、`import-ssh-config`、team sync(登录态复用 `TeamTokenStore`)、shell 补全脚本(`clap_complete`)。
+```text
+mist ls [--group <g>]                 列出已保存会话
+mist ssh <target>                     交互式 shell
+mist exec <target> <cmd...>           单机执行（退出码透传）
+mist exec --group <g> <cmd...>        按分组批量（默认并行 8）
+mist exec --all <cmd...>              全量批量
+     --serial                         串行 + 失败熔断
+     --parallel <1-16>                并行度
+mist rls <target>:<path>              列远端目录
+mist get <target>:<remote> <local>    下载
+mist put <local> <target>:<remote>    上传
+mist fwd <target> [-L ...] [-R ...] [-D ...]   端口转发（前台，Ctrl+C 停止）
+mist frag list                        列出片段
+mist frag run <name> [target] [-v k=v] [--group <g>|--all] [--serial] [--parallel N]
+mist import-ssh-config [-f <file>] [--dry-run] [--overwrite]
+mist sop extract [-n <N>] [-t <title>]  从 exec-history.jsonl 提炼 Markdown 排错 SOP
+
+全局：--json（结构化输出）、-v/-vv（日志级别，输出到 stderr）
+```
+
+模块划分：`src/cli/{context,ls,exec,ssh_cmd,sftp_cmds,fwd,frag,import_ssh,session_log}.rs`。
+
+## 分期（历史计划 → 实际状态）
+
+- **P1** ✅：`ls` / `exec`(单机+批量) / `get` / `put` / `rls` / `--json` / target 解析。
+- **P2** ✅：`mist ssh` 交互 shell（raw mode + 窗口 resize + escape）、`mist fwd`（含 `-L`/`-R`/`-D`）。
+- **P3** ✅：`frag run`、`import-ssh-config`、`sop extract`。
+  仍待办：team sync 登录态复用（`TeamTokenStore`）、shell 补全脚本（`clap_complete`）。
 
 ## 风险点
 
