@@ -5913,17 +5913,8 @@ impl MistTermApp {
                 work.sort_by_key(|f| std::cmp::Reverse(f.usage_count));
             }
             _ => {
-                let sort = self.fragment_sort_by;
-                match sort {
-                    SortBy::UsageCount => work.sort_by_key(|f| std::cmp::Reverse(f.usage_count)),
-                    SortBy::SuccessRate => work.sort_by(|a, b| {
-                        b.success_rate()
-                            .partial_cmp(&a.success_rate())
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    }),
-                    SortBy::LastUsed => work.sort_by_key(|f| std::cmp::Reverse(f.last_used)),
-                    SortBy::Name => work.sort_by(|a, b| a.title.cmp(&b.title)),
-                }
+                // §5.3：已归档片段恒置底（稳定排序，不影响组内相对次序）。
+                crate::core::sort_fragments_with_archived_last(&mut work, self.fragment_sort_by);
             }
         }
 
