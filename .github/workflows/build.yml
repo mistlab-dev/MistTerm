@@ -222,10 +222,26 @@ jobs:
           $features = "${{ matrix.cargo_features }}"
           $featuresArg = @()
           if ($features) { $featuresArg = @("--features", $features) }
+          $outDir = "target/${{ matrix.target }}/release"
+          $stash = Join-Path $env:RUNNER_TEMP "mistterm-bins"
+          New-Item -ItemType Directory -Force -Path $stash | Out-Null
+
+          # Windows FS is case-insensitive: Mist.exe and mist.exe are the same path.
+          # Build GUI first, stash it, then build CLI under a distinct name.
           cargo build --release --bin $env:BIN_NAME --target "${{ matrix.target }}" @featuresArg
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item -Force (Join-Path $outDir "$env:BIN_NAME.exe") (Join-Path $stash "Mist.exe")
+
           cargo build --release --bin mist --target "${{ matrix.target }}" @featuresArg
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item -Force (Join-Path $outDir "mist.exe") (Join-Path $stash "mist-cli.exe")
+
+          # Restore GUI to the path packaging/installer expect.
+          Copy-Item -Force (Join-Path $stash "Mist.exe") (Join-Path $outDir "Mist.exe")
+          Copy-Item -Force (Join-Path $stash "mist-cli.exe") (Join-Path $outDir "mist-cli.exe")
+          # Convenience launcher so `mist` still works from PATH after unzip.
+          Set-Content -Path (Join-Path $outDir "mist.cmd") -Value "@echo off`r`n`"%~dp0mist-cli.exe`" %*`r`n" -Encoding ASCII
+          Write-Host "Stashed GUI+CLI to $stash (avoid Mist/mist collision)"
 
       - name: Build Windows installer
         if: runner.os == 'Windows'
@@ -262,8 +278,10 @@ jobs:
             mkdir -p "$STAGE"
 
             if [ "${{ runner.os }}" = "Windows" ]; then
+              # Distinct names: Mist.exe (GUI) + mist-cli.exe (CLI). mist.exe would collide on NTFS.
               cp "target/${{ matrix.target }}/release/$BIN_NAME.exe" "$STAGE/"
-              cp "target/${{ matrix.target }}/release/mist.exe" "$STAGE/"
+              cp "target/${{ matrix.target }}/release/mist-cli.exe" "$STAGE/"
+              cp "target/${{ matrix.target }}/release/mist.cmd" "$STAGE/"
             elif [ "${{ runner.os }}" = "macOS" ]; then
               # 打成 Mist.app，避免用户双击裸二进制时先弹出 Terminal.app
               MIST_BINARY="target/${{ matrix.target }}/release/$BIN_NAME" \
