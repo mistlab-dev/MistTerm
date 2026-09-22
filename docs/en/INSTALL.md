@@ -12,6 +12,8 @@ Mist is the SSH terminal GUI built from this repository (`cargo` binary name: **
 
 UI defaults to **English**. Switch to Simplified Chinese in **Preferences → Language** (saved in `~/.config/mistterm/settings.json` on Unix).
 
+Open Preferences via **Terminal → Preferences**, **Tools → Preferences**, or **Ctrl+,** (macOS: **⌘,**).
+
 ## Quick install
 
 ### macOS / Linux
