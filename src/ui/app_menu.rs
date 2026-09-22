@@ -205,6 +205,11 @@ impl MistTermApp {
         });
         egui::menu::menu_button(ui, label(l.tools_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.preferences).clicked() {
+                self.show_preferences_dialog = true;
+                ui.close_menu();
+            }
+            ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.ai_settings).clicked() {
                 self.show_ai_settings_dialog = true;
                 ui.close_menu();

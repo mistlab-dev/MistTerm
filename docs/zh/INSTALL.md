@@ -12,6 +12,8 @@ Mist 是本仓库构建的 SSH 终端 GUI（`cargo` 二进制名：**Mist**）�
 
 界面默认 **英文**，可在 **偏好设置 → 语言** 切换为简体中文（Unix 下写入 `~/.config/mistterm/settings.json`）。
 
+打开偏好设置：**终端 → 偏好设置**、**工具 → 偏好设置**，或快捷键 **Ctrl+,**（macOS：**⌘,**）。
+
 ## 快速安装
 
 ### macOS / Linux
