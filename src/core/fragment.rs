@@ -304,6 +304,34 @@ pub enum SortBy {
     Name,
 }
 
+/// 判定片段是否被归档（服务端 `status = "archived"`）
+///
+/// 空字符串同样视为归档：客户端仅有「团队同步片段」会写入
+/// `source_status`，本地孤立片段该字段为空，若按「非 published 即归档」
+/// 处理会把本地片段整体压到底部，因此这里只认显式归档值。
+pub fn is_archived_status(status: &str) -> bool {
+    status.eq_ignore_ascii_case("archived")
+}
+
+/// 团队片段列表专用排序：先按选定的 `SortBy` 维度，再保证已归档项恒居末尾。
+///
+/// 排序本身稳定（slice::sort_by / sort_by_key 均为稳定排序），因此同一
+/// 归档层级内仍保留调用方此前排好的相对次序，可用于任何 scope。
+pub fn sort_fragments_with_archived_last(items: &mut [FragmentStats], sort_by: SortBy) {
+    match sort_by {
+        SortBy::UsageCount => items.sort_by_key(|f| std::cmp::Reverse(f.usage_count)),
+        SortBy::SuccessRate => items.sort_by(|a, b| {
+            b.success_rate()
+                .partial_cmp(&a.success_rate())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        SortBy::LastUsed => items.sort_by_key(|f| std::cmp::Reverse(f.last_used)),
+        SortBy::Name => items.sort_by(|a, b| a.title.cmp(&b.title)),
+    }
+    // 稳定排序：归档项下沉，且不打乱它们在组内的原有次序。
+    items.sort_by_key(|f| is_archived_status(&f.source_status));
+}
+
 /// 合并导入片段时的摘要
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FragmentMergeReport {
@@ -883,5 +911,69 @@ mod tests {
                 || frag.category.to_lowercase().contains("docker");
             assert!(found);
         }
+    }
+
+    #[test]
+    fn archived_status_matches_only_explicit_archived() {
+        assert!(is_archived_status("archived"));
+        assert!(is_archived_status("Archived"));
+        assert!(!is_archived_status("published"));
+        assert!(!is_archived_status("draft"));
+        assert!(!is_archived_status(""));
+    }
+
+    #[test]
+    fn archived_fragments_sink_to_bottom_for_every_sort() {
+        let make = |id: &str, title: &str, usage: u32, status: &str| {
+            let mut f = FragmentStats::new(
+                id.to_string(),
+                title.to_string(),
+                "cmd".to_string(),
+                "cat".to_string(),
+            );
+            f.usage_count = usage;
+            f.source_status = status.to_string();
+            f
+        };
+        // 故意把 archived 放在最前面，验证会被压到底部
+        let base = vec![
+            make("a", "Zeta", 1, "archived"),
+            make("b", "Alpha", 9, "published"),
+            make("c", "Beta", 5, "draft"),
+            make("d", "Yankee", 7, "archived"),
+        ];
+
+        for sort in [
+            SortBy::UsageCount,
+            SortBy::SuccessRate,
+            SortBy::LastUsed,
+            SortBy::Name,
+        ] {
+            let mut items = base.clone();
+            sort_fragments_with_archived_last(&mut items, sort);
+            let first_archived = items
+                .iter()
+                .position(|f| is_archived_status(&f.source_status))
+                .expect("archived items present");
+            assert!(
+                items[first_archived..]
+                    .iter()
+                    .all(|f| is_archived_status(&f.source_status)),
+                "archived items must be contiguous at the tail for {sort:?}"
+            );
+            assert_eq!(items.len(), 4);
+        }
+
+        // Name 排序下确认层级内部仍按名称升序：Alpha < Beta | Yanke < Zeta
+        let mut by_name = base.clone();
+        sort_fragments_with_archived_last(&mut by_name, SortBy::Name);
+        let titles: Vec<&str> = by_name.iter().map(|f| f.title.as_str()).collect();
+        assert_eq!(titles, vec!["Alpha", "Beta", "Yankee", "Zeta"]);
+
+        // UsageCount 降序且归档置底
+        let mut by_usage = base.clone();
+        sort_fragments_with_archived_last(&mut by_usage, SortBy::UsageCount);
+        let ids: Vec<&str> = by_usage.iter().map(|f| f.id.as_str()).collect();
+        assert_eq!(ids, vec!["b", "c", "d", "a"]);
     }
 }
