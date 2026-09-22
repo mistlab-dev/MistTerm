@@ -8,6 +8,10 @@
 
 `mist` 与 MistTerm 共享同一本地存储（`~/.config/mistterm` 或平台等效路径）。无需重复输入密码或导入密钥。
 
+**Windows 发行包注意：** 因 NTFS 不区分大小写，CLI 文件名为 `mist-cli.exe`，同目录附带 `mist.cmd`（可直接敲 `mist …`）。请勿指望与 GUI 的 `Mist.exe` 并存两个仅大小写不同的 `mist.exe`。
+
+连接 / 执行失败时进程退出码为 **非 0**（业务错误一般为 `1`），便于脚本与 CI 判断成败。
+
 ```bash
 # 查看帮助
 mist --help

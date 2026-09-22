@@ -67,6 +67,14 @@ $exe = Find-BuiltExe -Triple $Target
 $stage = Join-Path $Root "dist\installer-stage"
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 Copy-Item -Force $exe (Join-Path $stage "$BinName.exe")
+# Optional CLI bits (present after CI Windows build that stashes mist-cli)
+$cliDir = if ($Target) { Join-Path $Root "target\$Target\release" } else { Join-Path $Root "target\release" }
+foreach ($name in @("mist-cli.exe", "mist.cmd")) {
+    $src = Join-Path $cliDir $name
+    if (Test-Path $src) {
+        Copy-Item -Force $src (Join-Path $stage $name)
+    }
+}
 
 $iscc = Find-Iscc -Override $IsccPath
 Write-Host "==> Compiling installer with: $iscc"

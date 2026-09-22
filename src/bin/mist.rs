@@ -215,7 +215,9 @@ fn main() {
         Some(c) => c,
         None => {
             // 无子命令时默认拉起 GUI 桌面界面
-            return mistterm::platform::run_gui();
+            mistterm::platform::run_gui();
+            // GUI 正常退出视为成功；不要落到下方 Ok(0) 以外的路径。
+            std::process::exit(0);
         }
     };
     let code = match cmd {
@@ -327,11 +329,13 @@ fn main() {
         },
     };
 
+    // 约定：连接/执行/IO 等业务错误 → 1；仅 clap 用法错误由 clap 自行非 0 退出。
+    // 子命令返回的 Ok(code) 透传远端/进程退出码（可为 0）。
     let exit = match code {
         Ok(c) => c,
         Err(e) => {
             eprintln!("mist: {e:#}");
-            2
+            1
         }
     };
     std::process::exit(exit);
