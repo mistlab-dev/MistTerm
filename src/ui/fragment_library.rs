@@ -636,7 +636,11 @@ impl FragmentLibraryState {
                                         self.status_msg.starts_with(i18n::tr(ctx, "New fragment:", "新建片段："));
                                     ui.label(
                                         egui::RichText::new(&self.status_msg)
-                                            .size(if accent_hint { 13.0 } else { 12.0 })
+                                            .size(if accent_hint {
+                                                theme.font_size_body()
+                                            } else {
+                                                theme.font_size_ui_control()
+                                            })
                                             .color(if accent_hint {
                                                 theme.text_secondary()
                                             } else {

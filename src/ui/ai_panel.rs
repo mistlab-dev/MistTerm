@@ -149,44 +149,38 @@ fn truncate_ui_line(s: &str, max_chars: usize) -> String {
     format!("{head}…")
 }
 
-/// 设计稿中「过滤 / 意图范围」用的紫色。
-const OPS_PURPLE: egui::Color32 = egui::Color32::from_rgb(188, 140, 255);
-
-// AI 面板配色（对齐 concept-copilot-workbench 深色分层）：
-// 面板底(暗) < 次级容器 < 卡片(浮起、更浅)；输入框最深。
-const OPS_PANEL_BG: egui::Color32 = egui::Color32::from_rgb(0x12, 0x16, 0x1c);
-const OPS_SUB_BG: egui::Color32 = egui::Color32::from_rgb(0x16, 0x1b, 0x22);
-const OPS_CARD_BG: egui::Color32 = egui::Color32::from_rgb(0x1c, 0x22, 0x2b);
-/// 控制台输出逐行语法高亮：命令行(蓝)/ 异常行(红底)/ 普通行(灰)。
-fn ops_render_console_output(ui: &mut egui::Ui, text: &str) {
-    const CMD: egui::Color32 = egui::Color32::from_rgb(121, 192, 255);
-    const ERR: egui::Color32 = egui::Color32::from_rgb(248, 81, 73);
-    const DIM: egui::Color32 = egui::Color32::from_rgb(201, 209, 217);
+/// 控制台输出逐行语法高亮：命令行 / 异常行 / 普通行，颜色与字号走主题 token。
+fn ops_render_console_output(ui: &mut egui::Ui, theme: &Theme, text: &str) {
+    let cmd = theme.color_ops_console_cmd();
+    let err = theme.color_ops_console_error();
+    let dim = theme.color_ops_console_text();
+    let err_bg = theme.color_ops_console_error_bg();
+    let px = theme.font_size_caption();
     const ERR_KW: [&str; 12] = [
         "error", "fail", "oom", "killed", "cannot", "denied", "refused", "no such", "panic",
         "traceback", "fatal", "warn",
     ];
-    ui.spacing_mut().item_spacing.y = 1.0;
+    ui.spacing_mut().item_spacing.y = theme.spacing_xs().min(2.0);
     for raw in text.lines() {
         let line = raw.trim_end();
         if line.is_empty() {
-            ui.label(egui::RichText::new(" ").monospace().size(11.0));
+            ui.label(egui::RichText::new(" ").monospace().size(px));
             continue;
         }
         let trimmed = line.trim_start();
         let lower = line.to_ascii_lowercase();
         if trimmed.starts_with("$ ") || trimmed.starts_with("# ") {
-            ui.label(egui::RichText::new(line).monospace().size(11.0).color(CMD));
+            ui.label(egui::RichText::new(line).monospace().size(px).color(cmd));
         } else if ERR_KW.iter().any(|k| lower.contains(k)) {
             ui.label(
                 egui::RichText::new(line)
                     .monospace()
-                    .size(11.0)
-                    .color(ERR)
-                    .background_color(egui::Color32::from_rgba_unmultiplied(248, 81, 73, 38)),
+                    .size(px)
+                    .color(err)
+                    .background_color(err_bg),
             );
         } else {
-            ui.label(egui::RichText::new(line).monospace().size(11.0).color(DIM));
+            ui.label(egui::RichText::new(line).monospace().size(px).color(dim));
         }
     }
 }
@@ -366,7 +360,7 @@ fn ops_badge(
 /// 描边药丸（目标范围 scope）。
 fn ops_scope_pill(ui: &mut egui::Ui, theme: &Theme, text: &str, color: egui::Color32) {
     egui::Frame::none()
-        .fill(OPS_CARD_BG)
+        .fill(theme.color_ops_card_fill())
         .stroke(egui::Stroke::new(1.0, theme.divider_stroke().color))
         .rounding(egui::Rounding::same(4.0))
         .inner_margin(egui::vec2(6.0, 1.0))
@@ -377,6 +371,63 @@ fn ops_scope_pill(ui: &mut egui::Ui, theme: &Theme, text: &str, color: egui::Col
                     .color(color),
             );
         });
+}
+
+/// 主机卡指标行：左侧标签截断，右侧数值占固定宽，避免 Mem 与百分比叠字。
+fn ops_metric_value_row(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    label: &str,
+    label_color: egui::Color32,
+    value: &str,
+    value_color: egui::Color32,
+    danger_icon: bool,
+) {
+    let px = theme.font_size_tag();
+    let gap = theme.spacing_xs().max(4.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        let value_w = ui.fonts(|f| {
+            f.layout_no_wrap(
+                value.to_owned(),
+                egui::FontId::monospace(px),
+                value_color,
+            )
+            .size()
+            .x
+        });
+        let icon_w = if danger_icon { px + gap } else { 0.0 };
+        let left_w = (ui.available_width() - value_w - icon_w - gap).max(px * 2.0);
+        let row_h = px + 2.0;
+        let (left_rect, _) =
+            ui.allocate_exact_size(egui::vec2(left_w, row_h), egui::Sense::hover());
+        let mut left = ui.child_ui(left_rect, egui::Layout::left_to_right(egui::Align::Center));
+        left.set_clip_rect(left_rect);
+        left.add(
+            egui::Label::new(egui::RichText::new(label).size(px).color(label_color))
+                .truncate(true)
+                .wrap(false),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                egui::RichText::new(value)
+                    .monospace()
+                    .strong()
+                    .size(px)
+                    .color(value_color),
+            );
+            if danger_icon {
+                let (wr, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                crate::ui::icons::paint_icon(
+                    ui,
+                    wr,
+                    crate::ui::icons::IconId::Warning,
+                    value_color,
+                    px,
+                );
+            }
+        });
+    });
 }
 
 /// 发光状态点 + 文案。
@@ -404,7 +455,7 @@ fn ops_suggestion_chip(
     accent: egui::Color32,
 ) -> bool {
     let resp = egui::Frame::none()
-        .fill(OPS_CARD_BG)
+        .fill(theme.color_ops_card_fill())
         .stroke(egui::Stroke::new(1.0, theme.divider_stroke().color))
         .rounding(egui::Rounding::same(6.0))
         .inner_margin(egui::vec2(10.0, 7.0))
@@ -1177,8 +1228,11 @@ impl AiPanel {
         self.flush_pending_auto_send(ctx, app_settings);
         // 面板正文底色（暗色面板，卡片/输入框浮其上形成层次，对齐设计稿）。
         // 只填充标题栏「下方」的可用区域，避免盖住已绘制的头部标题/按钮。
-        ui.painter()
-            .rect_filled(ui.available_rect_before_wrap(), 0.0, OPS_PANEL_BG);
+        ui.painter().rect_filled(
+            ui.available_rect_before_wrap(),
+            0.0,
+            theme.color_ops_canvas(),
+        );
         let ready = self.can_chat(app_settings);
         if !ready {
             ui.colored_label(
@@ -1812,7 +1866,7 @@ impl AiPanel {
         let mut clicked_cancel = false;
 
         egui::Frame::none()
-            .fill(OPS_CARD_BG)
+            .fill(theme.color_ops_card_fill())
             .stroke(theme.divider_stroke())
             .rounding(egui::Rounding::same(8.0))
             .inner_margin(egui::vec2(12.0, 10.0))
@@ -1867,7 +1921,7 @@ impl AiPanel {
                 // 命令编辑提示
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
-                    let px = 11.0;
+                    let px = theme.font_size_caption();
                     let (er, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
                     crate::ui::icons::paint_icon(
                         ui,
@@ -1878,7 +1932,7 @@ impl AiPanel {
                     );
                     ui.label(
                         egui::RichText::new(i18n::tr(ctx, "Command · editable", "执行命令 · 可直接修改"))
-                            .size(10.5)
+                            .size(px)
                             .color(theme.text_tertiary()),
                     );
                 });
@@ -1925,7 +1979,7 @@ impl AiPanel {
                             ui,
                             theme,
                             &format!("{}: {}", i18n::tr(ctx, "filter", "过滤"), filter),
-                            OPS_PURPLE,
+                            theme.color_ops_filter_accent(),
                         );
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1968,9 +2022,10 @@ impl AiPanel {
 
                 if is_mutate || plan.l2_armed {
                     ui.add_space(theme.spacing_xs());
+                    let warn = theme.amber_color();
                     egui::Frame::none()
-                        .fill(egui::Color32::from_rgb(26, 20, 15))
-                        .stroke(egui::Stroke::new(1.0, theme.amber_color().gamma_multiply(0.4)))
+                        .fill(theme.toast_fill(warn))
+                        .stroke(egui::Stroke::new(1.0, theme.toast_stroke_color(warn)))
                         .rounding(egui::Rounding::same(6.0))
                         .inner_margin(egui::vec2(8.0, 6.0))
                         .show(ui, |ui| {
@@ -1980,30 +2035,31 @@ impl AiPanel {
                                 let px = theme.font_size_caption();
                                 let (r, _) = ui
                                     .allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
+                                let warn_title = theme.toast_title_color(warn);
                                 crate::ui::icons::paint_icon(
                                     ui,
                                     r,
                                     crate::ui::icons::IconId::Warning,
-                                    theme.amber_color(),
+                                    warn_title,
                                     px,
                                 );
                                 ui.label(
                                     egui::RichText::new(format!("风险根因：{}", explanation.title))
                                         .size(theme.font_size_caption())
                                         .strong()
-                                        .color(theme.amber_color()),
+                                        .color(warn_title),
                                 );
                             });
                             ui.label(
                                 egui::RichText::new(&explanation.reason)
-                                    .size(11.0)
+                                    .size(theme.font_size_caption())
                                     .color(theme.text_secondary()),
                             );
                             if let Some(sug) = &explanation.suggestion {
                                 ui.add_space(2.0);
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 4.0;
-                                    let px = 11.0;
+                                    let px = theme.font_size_caption();
                                     let (r, _) = ui.allocate_exact_size(
                                         egui::vec2(px, px),
                                         egui::Sense::hover(),
@@ -2017,14 +2073,14 @@ impl AiPanel {
                                     );
                                     ui.label(
                                         egui::RichText::new(format!("建议替代：{sug}"))
-                                            .size(10.5)
+                                            .size(px)
                                             .color(theme.accent_color()),
                                     );
                                 });
                             }
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 4.0;
-                                let px = 10.0;
+                                let px = theme.font_size_tag();
                                 let (r, _) = ui
                                     .allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
                                 crate::ui::icons::paint_icon(
@@ -2039,7 +2095,7 @@ impl AiPanel {
                                         "执行条件：{}",
                                         explanation.pass_condition
                                     ))
-                                    .size(10.0)
+                                    .size(px)
                                     .color(theme.color_form_hint()),
                                 );
                             });
@@ -2059,7 +2115,7 @@ impl AiPanel {
 
                 // Footer：安全提示 + 操作按钮
                 egui::Frame::none()
-                    .fill(OPS_SUB_BG)
+                    .fill(theme.color_ops_sub_fill())
                     .rounding(egui::Rounding::same(5.0))
                     .inner_margin(egui::vec2(10.0, 7.0))
                     .show(ui, |ui| {
@@ -2069,7 +2125,7 @@ impl AiPanel {
                                 "Short non-interactive parallel run",
                                 "短连接 · 非交互并发执行",
                             ))
-                            .size(10.5)
+                            .size(theme.font_size_caption())
                             .color(theme.text_tertiary()),
                         );
                         ui.add_space(4.0);
@@ -2170,7 +2226,7 @@ impl AiPanel {
         // 顶层汇总条：状态点统计 + 并发耗时
         let elapsed_ms = batch.hosts.iter().map(|h| h.duration_ms).max().unwrap_or(0);
         egui::Frame::none()
-            .fill(OPS_SUB_BG)
+            .fill(theme.color_ops_sub_fill())
             .stroke(theme.divider_stroke())
             .rounding(egui::Rounding::same(theme.radius_list_item()))
             .inner_margin(egui::vec2(10.0, 8.0))
@@ -2256,18 +2312,18 @@ impl AiPanel {
                     let is_selected = self.selected_host_idx == Some(idx)
                         || (self.selected_host_idx.is_none() && alert);
                     let accent_color = if alert {
-                        theme.red_color()
+                        theme.color_status_negative_text()
                     } else {
-                        theme.green_color()
+                        theme.color_status_positive_text()
                     };
-                    let danger_text = egui::Color32::from_rgb(255, 123, 114);
-                    let normal_val = egui::Color32::from_rgb(126, 231, 135);
+                    let danger_text = theme.color_status_negative_text();
+                    let normal_val = theme.color_status_positive_text();
 
                     let frame = egui::Frame::none()
                         .fill(if is_selected {
-                            accent_color.gamma_multiply(0.12)
+                            theme.color_status_selected_fill(accent_color)
                         } else {
-                            OPS_CARD_BG
+                            theme.color_ops_card_fill()
                         })
                         .stroke(egui::Stroke::new(
                             if is_selected { 1.5 } else { 1.0 },
@@ -2281,76 +2337,69 @@ impl AiPanel {
                         .inner_margin(egui::vec2(8.0, 6.0));
 
                     let resp = frame.show(ui, |ui| {
-                        ui.set_width((ui.available_width() - 8.0).max(60.0));
-                        // 名称 + 状态点
+                        let inner_w = (ui.available_width() - 8.0).max(60.0);
+                        ui.set_width(inner_w);
+                        ui.set_max_width(inner_w);
+                        let meta_px = theme.font_size_tag();
                         ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = theme.spacing_xs().max(4.0);
                             let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(7.0, 7.0), egui::Sense::hover());
                             ui.painter().circle_filled(dot_rect.center(), 3.5, accent_color);
-                            ui.label(
-                                egui::RichText::new(&host.name)
-                                    .strong()
-                                    .size(theme.font_size_small())
-                                    .color(if alert {
-                                        danger_text
-                                    } else if is_selected {
-                                        theme.text_primary()
-                                    } else {
-                                        theme.text_secondary()
-                                    }),
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&host.name)
+                                        .strong()
+                                        .size(theme.font_size_small())
+                                        .color(if alert {
+                                            danger_text
+                                        } else if is_selected {
+                                            theme.text_primary()
+                                        } else {
+                                            theme.text_secondary()
+                                        }),
+                                )
+                                .truncate(true)
+                                .wrap(false),
                             );
                         });
-                        // 主机地址
-                        ui.label(
-                            egui::RichText::new(&host.endpoint)
-                                .monospace()
-                                .size(10.0)
-                                .color(if alert { danger_text } else { theme.color_form_hint() }),
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&host.endpoint)
+                                    .monospace()
+                                    .size(meta_px)
+                                    .color(if alert {
+                                        danger_text
+                                    } else {
+                                        theme.color_form_hint()
+                                    }),
+                            )
+                            .truncate(true)
+                            .wrap(false),
                         );
-                        // 指标 badge：Top 进程 + 百分比(绿/红 + danger 三角)；无结构化指标回退 summary
                         if let Some(val) = host.metric_value.clone() {
-                            ui.horizontal(|ui| {
-                                if let Some(lbl) = &host.metric_label {
-                                    ui.label(
-                                        egui::RichText::new(lbl)
-                                            .size(10.5)
-                                            .color(if alert { danger_text } else { theme.text_secondary() }),
-                                    );
-                                }
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.label(
-                                            egui::RichText::new(&val)
-                                                .monospace()
-                                                .strong()
-                                                .size(10.5)
-                                                .color(if host.metric_danger {
-                                                    danger_text
-                                                } else {
-                                                    normal_val
-                                                }),
-                                        );
-                                        if host.metric_danger {
-                                            let px = 11.0;
-                                            let (wr, _) = ui.allocate_exact_size(
-                                                egui::vec2(px, px),
-                                                egui::Sense::hover(),
-                                            );
-                                            crate::ui::icons::paint_icon(
-                                                ui,
-                                                wr,
-                                                crate::ui::icons::IconId::Warning,
-                                                danger_text,
-                                                px,
-                                            );
-                                        }
-                                    },
-                                );
-                            });
+                            let label = host.metric_label.clone().unwrap_or_default();
+                            let value_color = if host.metric_danger {
+                                danger_text
+                            } else {
+                                normal_val
+                            };
+                            ops_metric_value_row(
+                                ui,
+                                theme,
+                                &label,
+                                if alert {
+                                    danger_text
+                                } else {
+                                    theme.text_secondary()
+                                },
+                                &val,
+                                value_color,
+                                host.metric_danger,
+                            );
                         } else {
                             ui.horizontal(|ui| {
                                 ui.spacing_mut().item_spacing.x = 4.0;
-                                let px = 11.0;
+                                let px = theme.font_size_caption();
                                 let mcolor = if alert { danger_text } else { theme.text_tertiary() };
                                 let (mr, _) =
                                     ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
@@ -2361,10 +2410,18 @@ impl AiPanel {
                                     mcolor,
                                     px,
                                 );
-                                ui.label(
-                                    egui::RichText::new(truncate_ui_line(&host.summary, 38))
-                                        .size(10.5)
-                                        .color(if alert { danger_text } else { theme.text_secondary() }),
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(truncate_ui_line(&host.summary, 38))
+                                            .size(px)
+                                            .color(if alert {
+                                                danger_text
+                                            } else {
+                                                theme.text_secondary()
+                                            }),
+                                    )
+                                    .truncate(true)
+                                    .wrap(false),
                                 );
                             });
                         }
@@ -2391,7 +2448,7 @@ impl AiPanel {
             ui.add_space(theme.spacing_sm());
 
             egui::Frame::none()
-                .fill(egui::Color32::from_rgb(4, 5, 8))
+                .fill(theme.color_ops_console_fill())
                 .stroke(theme.divider_stroke())
                 .rounding(egui::Rounding::same(6.0))
                 .inner_margin(egui::vec2(10.0, 8.0))
@@ -2449,7 +2506,7 @@ impl AiPanel {
                         .id_source(format!("host_inspector_scroll_{msg_index}_{sel_idx}"))
                         .max_height(160.0)
                         .show(ui, |ui| {
-                            ops_render_console_output(ui, out);
+                            ops_render_console_output(ui, theme, out);
                         });
                 });
         }
@@ -2562,7 +2619,7 @@ impl AiPanel {
         let bubble_fill = if is_user {
             theme.color_ai_user_bubble_fill()
         } else {
-            OPS_CARD_BG
+            theme.color_ops_card_fill()
         };
         let bubble_stroke = if is_user {
             egui::Stroke::new(
@@ -2749,7 +2806,7 @@ impl AiPanel {
         ui.horizontal(|ui| {
             ui.add_space(safe_pad);
             egui::Frame::none()
-                .fill(OPS_CARD_BG)
+                .fill(theme.color_ops_card_fill())
                 .stroke(theme.divider_stroke())
                 .rounding(theme.radius_list_item())
                 .inner_margin(egui::vec2(12.0, 10.0))

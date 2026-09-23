@@ -92,13 +92,11 @@ fn file_kind_name_color(theme: &Theme, kind: SftpFileKind, selected: bool) -> Co
     match kind {
         SftpFileKind::Dir => theme.accent_color(),
         SftpFileKind::Hidden => theme.text_tertiary(),
-        SftpFileKind::Archive => theme.amber_color(),
-        SftpFileKind::Image => theme.green_color(),
+        SftpFileKind::Archive | SftpFileKind::Config => theme.color_status_warning_text(),
+        SftpFileKind::Image => theme.color_status_positive_text(),
         SftpFileKind::Code => theme.accent_color(),
-        SftpFileKind::Config => theme.amber_color().gamma_multiply(0.88),
-        SftpFileKind::Document => theme.text_secondary(),
-        SftpFileKind::Executable => theme.red_color(),
-        SftpFileKind::Plain => theme.text_secondary(),
+        SftpFileKind::Document | SftpFileKind::Plain => theme.text_secondary(),
+        SftpFileKind::Executable => theme.color_status_negative_text(),
     }
 }
 
@@ -114,11 +112,10 @@ fn file_kind_meta_color(theme: &Theme, kind: SftpFileKind, selected: bool) -> Co
         SftpFileKind::Dir | SftpFileKind::Hidden | SftpFileKind::Document | SftpFileKind::Plain => {
             theme.text_tertiary()
         }
-        SftpFileKind::Archive => theme.amber_color().gamma_multiply(0.78),
-        SftpFileKind::Image => theme.green_color().gamma_multiply(0.78),
-        SftpFileKind::Code => theme.accent_color().gamma_multiply(0.78),
-        SftpFileKind::Config => theme.amber_color().gamma_multiply(0.72),
-        SftpFileKind::Executable => theme.red_color().gamma_multiply(0.78),
+        SftpFileKind::Archive | SftpFileKind::Config => theme.color_status_warning_text(),
+        SftpFileKind::Image => theme.color_status_positive_text(),
+        SftpFileKind::Code => theme.accent_color(),
+        SftpFileKind::Executable => theme.color_status_negative_text(),
     }
 }
 

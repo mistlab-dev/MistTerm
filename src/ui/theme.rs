@@ -1637,22 +1637,147 @@ impl Theme {
         }
     }
 
-    /// 危险强调字(断开、删除提示等)
+    /// 危险强调字(断开、删除提示等)。浅色压暗、非暗夜暗底提亮，勿固定暗夜浅粉。
     #[inline]
     pub fn color_danger_emphasis(&self) -> Color32 {
-        Color32::from_rgb(255, 138, 128)
+        self.color_status_negative_text()
     }
 
-    /// 监控告警块淡红底
+    /// 成功指标、在线数值。浅色压暗，小字在卡片上仍可读。
+    #[inline]
+    pub fn color_status_positive_text(&self) -> Color32 {
+        if self.is_light_theme() {
+            Self::lerp_rgb(self.green_color(), Color32::from_rgb(10, 60, 20), 0.35)
+        } else {
+            self.green_color()
+        }
+    }
+
+    /// 警告强调字。浅色压暗，避免琥珀在白底上发飘。
+    #[inline]
+    pub fn color_status_warning_text(&self) -> Color32 {
+        if self.is_light_theme() {
+            Self::lerp_rgb(self.amber_color(), Color32::BLACK, 0.35)
+        } else {
+            self.amber_color()
+        }
+    }
+
+    /// 失败 / 告警数值。
+    #[inline]
+    pub fn color_status_negative_text(&self) -> Color32 {
+        if self.is_light_theme() {
+            Self::lerp_rgb(self.red_color(), Color32::BLACK, 0.12)
+        } else if self.uses_modern_palette() {
+            self.red_color()
+        } else {
+            Self::lerp_rgb(self.red_color(), Color32::WHITE, 0.28)
+        }
+    }
+
+    /// 主机卡选中底：状态色半透明叠在卡片上（勿 `gamma_multiply`，浅色会变成近黑块）。
+    #[inline]
+    pub fn color_status_selected_fill(&self, status: Color32) -> Color32 {
+        let alpha = if self.is_light_theme() { 48 } else { 56 };
+        Color32::from_rgba_unmultiplied(status.r(), status.g(), status.b(), alpha)
+    }
+
+    /// Ops / AI 工作台正文底（比 dock 面板沉一层）。
+    #[inline]
+    pub fn color_ops_canvas(&self) -> Color32 {
+        if self.is_light_theme() {
+            self.surface_body()
+        } else {
+            Self::nudge_rgb(self.surface_panel(), -10)
+        }
+    }
+
+    /// Ops 次级条（汇总、计划页脚）。
+    #[inline]
+    pub fn color_ops_sub_fill(&self) -> Color32 {
+        if self.is_light_theme() {
+            Self::lerp_rgb(self.surface_body(), self.surface_panel(), 0.45)
+        } else {
+            Self::nudge_rgb(self.surface_panel(), -4)
+        }
+    }
+
+    /// Ops 卡片（执行计划、批处理主机、助手气泡）。
+    #[inline]
+    pub fn color_ops_card_fill(&self) -> Color32 {
+        if self.is_light_theme() {
+            self.surface_panel()
+        } else {
+            Self::nudge_rgb(self.surface_panel(), 8)
+        }
+    }
+
+    /// 主机控制台井。浅色用终端白底；暗色比画布再沉一层。
+    #[inline]
+    pub fn color_ops_console_fill(&self) -> Color32 {
+        if self.is_light_theme() {
+            self.surface_terminal()
+        } else {
+            Self::nudge_rgb(self.color_ops_canvas(), -14)
+        }
+    }
+
+    /// 控制台命令行字色。
+    #[inline]
+    pub fn color_ops_console_cmd(&self) -> Color32 {
+        if self.is_light_theme() {
+            self.accent_color()
+        } else {
+            Self::lerp_rgb(self.accent_color(), Color32::WHITE, 0.35)
+        }
+    }
+
+    /// 控制台异常行字色。
+    #[inline]
+    pub fn color_ops_console_error(&self) -> Color32 {
+        self.color_status_negative_text()
+    }
+
+    /// 控制台普通行字色。
+    #[inline]
+    pub fn color_ops_console_text(&self) -> Color32 {
+        self.text_secondary()
+    }
+
+    /// 控制台异常行淡底（半透明，叠在控制台井上）。
+    #[inline]
+    pub fn color_ops_console_error_bg(&self) -> Color32 {
+        let err = self.red_color();
+        let alpha = if self.is_light_theme() { 36 } else { 56 };
+        Color32::from_rgba_unmultiplied(err.r(), err.g(), err.b(), alpha)
+    }
+
+    /// 过滤范围标签。与主 accent 区分，并保证在卡片上可读。
+    #[inline]
+    pub fn color_ops_filter_accent(&self) -> Color32 {
+        let violet = Color32::from_rgb(168, 120, 235);
+        if self.is_light_theme() {
+            Self::lerp_rgb(violet, Color32::from_rgb(72, 32, 140), 0.55)
+        } else {
+            Self::lerp_rgb(violet, Color32::WHITE, 0.15)
+        }
+    }
+
+    /// 监控告警块淡红底（向面板色混合，正文仍用 `text_primary`）。
     #[inline]
     pub fn color_alert_box_fill(&self) -> Color32 {
-        self.red_color().gamma_multiply(0.12)
+        let t = if self.is_light_theme() { 0.10 } else { 0.16 };
+        Self::lerp_rgb(self.surface_panel(), self.red_color(), t)
     }
 
-    /// 监控告警块描边
+    /// 监控告警块描边。
     #[inline]
     pub fn color_alert_box_stroke(&self) -> Color32 {
-        self.red_color().gamma_multiply(0.45)
+        if self.is_light_theme() {
+            Self::lerp_rgb(self.red_color(), Color32::BLACK, 0.2)
+        } else {
+            Self::lerp_rgb(self.red_color(), Color32::WHITE, 0.2)
+        }
     }
 
     // ── 尺寸：底栏 / 弹窗 / Tab / 列表 ──
@@ -2656,6 +2781,11 @@ impl Theme {
         let lerp = |x: u8, y: u8| ((x as f32) * (1.0 - t) + (y as f32) * t).round() as u8;
         Color32::from_rgb(lerp(a.r(), b.r()), lerp(a.g(), b.g()), lerp(a.b(), b.b()))
     }
+
+    fn nudge_rgb(color: Color32, delta: i16) -> Color32 {
+        let adj = |v: u8| (i16::from(v) + delta).clamp(0, 255) as u8;
+        Color32::from_rgb(adj(color.r()), adj(color.g()), adj(color.b()))
+    }
     /// 顶栏菜单行(终端 / 编辑 / 视图 / 工具 / 帮助)
     pub fn menu_bar_height(&self) -> f32 {
         32.0
@@ -3021,6 +3151,98 @@ mod theme_semantic_tests {
                 hover_lum > idle_lum,
                 "{}: hover fill should be brighter than idle",
                 theme.name
+            );
+        }
+    }
+
+    #[test]
+    fn all_builtin_themes_ops_and_alert_surfaces_readable() {
+        for theme in all_builtin_themes() {
+            let card = theme.color_ops_card_fill();
+            let canvas = theme.color_ops_canvas();
+            let console = theme.color_ops_console_fill();
+            let alert = theme.color_alert_box_fill();
+            let min_body = 4.5;
+            let min_meta = 3.0;
+            for (label, fg, bg, min) in [
+                ("primary/canvas", theme.text_primary(), canvas, min_body),
+                ("primary/card", theme.text_primary(), card, min_body),
+                ("secondary/card", theme.text_secondary(), card, min_meta),
+                (
+                    "danger/card",
+                    theme.color_status_negative_text(),
+                    card,
+                    min_meta,
+                ),
+                (
+                    "positive/card",
+                    theme.color_status_positive_text(),
+                    card,
+                    min_meta,
+                ),
+                (
+                    "filter/card",
+                    theme.color_ops_filter_accent(),
+                    card,
+                    min_meta,
+                ),
+                (
+                    "danger/panel",
+                    theme.color_danger_emphasis(),
+                    theme.surface_panel(),
+                    min_meta,
+                ),
+                (
+                    "warning/panel",
+                    theme.color_status_warning_text(),
+                    theme.surface_panel(),
+                    min_meta,
+                ),
+                (
+                    "console cmd",
+                    theme.color_ops_console_cmd(),
+                    console,
+                    min_meta,
+                ),
+                (
+                    "console err",
+                    theme.color_ops_console_error(),
+                    console,
+                    min_meta,
+                ),
+                (
+                    "console text",
+                    theme.color_ops_console_text(),
+                    console,
+                    min_meta,
+                ),
+                ("primary/console", theme.text_primary(), console, min_body),
+                ("alert body", theme.text_primary(), alert, min_body),
+                (
+                    "alert title",
+                    theme.color_status_negative_text(),
+                    alert,
+                    min_meta,
+                ),
+            ] {
+                let ratio = contrast_ratio(fg, bg);
+                assert!(
+                    ratio >= min,
+                    "{} {}: contrast {:.2} < {min}",
+                    theme.name,
+                    label,
+                    ratio
+                );
+            }
+            let warn = theme.amber_color();
+            let warn_fill = theme.toast_fill(warn);
+            let warn_title = theme.toast_title_color(warn);
+            let warn_cr = contrast_ratio(warn_title, warn_fill);
+            assert!(
+                warn_cr >= min_meta,
+                "{}: warning title contrast {:.2}",
+                theme.name,
+                warn_cr
             );
         }
     }
