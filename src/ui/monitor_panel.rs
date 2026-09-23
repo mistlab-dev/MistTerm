@@ -409,7 +409,7 @@ impl MonitorPanel {
                                             5.0,
                                             |t| {
                                                 t.size(theme.font_size_medium())
-                                                    .color(theme.red_color())
+                                                    .color(theme.color_status_negative_text())
                                             },
                                         );
                                     }
@@ -569,7 +569,7 @@ impl MonitorPanel {
                     ui.label(
                         egui::RichText::new(i18n::tr(ui.ctx(), "Current alerts", "当前告警"))
                             .size(theme.font_size_medium())
-                            .color(theme.red_color()),
+                            .color(theme.color_status_negative_text()),
                     );
                     ui.add_space(4.0);
                     for line in &alerts {
@@ -738,7 +738,7 @@ impl MonitorPanel {
                 err,
                 theme.font_size_small(),
                 6.0,
-                |t| t.size(theme.font_size_small()).color(theme.red_color()),
+                |t| t.size(theme.font_size_small()).color(theme.color_status_negative_text()),
             );
         }
     }

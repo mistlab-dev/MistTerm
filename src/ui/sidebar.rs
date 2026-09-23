@@ -254,23 +254,60 @@ impl Sidebar {
                             )),
                             egui::Layout::left_to_right(egui::Align::Center),
                         );
-                        row_ui.label(
-                            egui::RichText::new(&server.name)
-                                .size(theme.font_size_connection_name())
-                                .color(theme.text_secondary()),
+                        let endpoint =
+                            format!("{}@{}:{}", server.username, server.host, server.port);
+                        let meta_px = theme.font_size_connection_meta();
+                        let measured_endpoint_w = row_ui.fonts(|f| {
+                            f.layout_no_wrap(
+                                endpoint.clone(),
+                                egui::FontId::proportional(meta_px),
+                                theme.text_tertiary(),
+                            )
+                            .size()
+                            .x
+                        });
+                        let gap = theme.spacing_sm().max(6.0);
+                        let avail = row_ui.available_width();
+                        let row_h = row_ui.available_height();
+                        let endpoint_w =
+                            measured_endpoint_w.min((avail - gap - 36.0).max(28.0));
+                        let name_w = (avail - gap - endpoint_w).max(0.0);
+                        let (name_rect, _) = row_ui.allocate_exact_size(
+                            egui::vec2(name_w, row_h),
+                            egui::Sense::hover(),
                         );
-                        row_ui.with_layout(
+                        let mut name_ui = row_ui.child_ui(
+                            name_rect,
+                            egui::Layout::left_to_right(egui::Align::Center),
+                        );
+                        name_ui.set_clip_rect(name_rect);
+                        name_ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&server.name)
+                                    .size(theme.font_size_connection_name())
+                                    .color(theme.text_secondary()),
+                            )
+                            .truncate(true)
+                            .wrap(false),
+                        );
+                        row_ui.add_space(gap);
+                        let (end_rect, _) = row_ui.allocate_exact_size(
+                            egui::vec2(endpoint_w, row_h),
+                            egui::Sense::hover(),
+                        );
+                        let mut end_ui = row_ui.child_ui(
+                            end_rect,
                             egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                ui.label(
-                                    egui::RichText::new(format!(
-                                        "{}@{}:{}",
-                                        server.username, server.host, server.port
-                                    ))
-                                    .size(theme.font_size_connection_meta())
+                        );
+                        end_ui.set_clip_rect(end_rect);
+                        end_ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(endpoint)
+                                    .size(meta_px)
                                     .color(theme.text_tertiary()),
-                                );
-                            },
+                            )
+                            .truncate(true)
+                            .wrap(false),
                         );
                         if response.clicked() {
                             connect_team_server_key = Some(server.list_key());
@@ -456,39 +493,83 @@ impl Sidebar {
                                 .painter()
                                 .circle_filled(dot_rect.center(), dot_r, status_color);
                             row_ui.add_space(theme.spacing_tab_dot_text());
-                            row_ui.vertical(|ui| {
-                                ui.spacing_mut().item_spacing.y = 0.0;
-                                ui.label(
+                            let status_text_color = if connected_sessions.contains(&session.id) {
+                                theme.color_status_online_muted()
+                            } else {
+                                theme.color_status_offline_muted()
+                            };
+                            let status_px = theme.font_size_connection_meta();
+                            let measured_status_w = row_ui.fonts(|f| {
+                                f.layout_no_wrap(
+                                    status_text.clone(),
+                                    egui::FontId::proportional(status_px),
+                                    status_text_color,
+                                )
+                                .size()
+                                .x
+                            });
+                            let gap = theme.spacing_sm().max(6.0);
+                            let avail = row_ui.available_width();
+                            let status_w =
+                                measured_status_w.min((avail - gap - 36.0).max(28.0));
+                            let text_w = (avail - gap - status_w).max(0.0);
+                            let text_h = row_ui.available_height();
+                            let (text_rect, _) = row_ui.allocate_exact_size(
+                                egui::vec2(text_w, text_h),
+                                egui::Sense::hover(),
+                            );
+                            let mut text_ui =
+                                row_ui.child_ui(text_rect, egui::Layout::top_down(egui::Align::Min));
+                            text_ui.set_clip_rect(text_rect);
+                            text_ui.spacing_mut().item_spacing.y = 0.0;
+                            text_ui.set_width(text_w);
+                            let name_color = if is_selected {
+                                theme.text_primary()
+                            } else {
+                                theme.text_secondary()
+                            };
+                            text_ui.add(
+                                egui::Label::new(
                                     egui::RichText::new(&session.name)
                                         .size(theme.font_size_connection_name())
-                                        .color(if is_selected {
-                                            theme.text_primary()
-                                        } else {
-                                            theme.text_secondary()
-                                        }),
-                                );
-                                let host_line = if session.port != 22 {
-                                    format!("{}:{}", session.host, session.port)
-                                } else {
-                                    session.host.clone()
-                                };
-                                ui.label(
+                                        .color(name_color),
+                                )
+                                .truncate(true)
+                                .wrap(false),
+                            );
+                            let host_line = if session.port != 22 {
+                                format!("{}:{}", session.host, session.port)
+                            } else {
+                                session.host.clone()
+                            };
+                            text_ui.add(
+                                egui::Label::new(
                                     egui::RichText::new(host_line)
-                                        .size(theme.font_size_caption().max(10.0))
+                                        .size(theme.font_size_caption())
                                         .color(theme.color_caption_text()),
-                                );
-                            });
-                            row_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                ui.label(
+                                )
+                                .truncate(true)
+                                .wrap(false),
+                            );
+                            row_ui.add_space(gap);
+                            let (status_rect, _) = row_ui.allocate_exact_size(
+                                egui::vec2(status_w, text_h),
+                                egui::Sense::hover(),
+                            );
+                            let mut status_ui = row_ui.child_ui(
+                                status_rect,
+                                egui::Layout::right_to_left(egui::Align::Center),
+                            );
+                            status_ui.set_clip_rect(status_rect);
+                            status_ui.add(
+                                egui::Label::new(
                                     egui::RichText::new(status_text)
-                                        .size(theme.font_size_connection_meta())
-                                        .color(if connected_sessions.contains(&session.id) {
-                                            theme.color_status_online_muted()
-                                        } else {
-                                            theme.color_status_offline_muted()
-                                        }),
-                                );
-                            });
+                                        .size(status_px)
+                                        .color(status_text_color),
+                                )
+                                .truncate(true)
+                                .wrap(false),
+                            );
                             
                             if response.clicked() {
                                 selected_session_id = Some(session.id.clone());
