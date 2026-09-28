@@ -37,6 +37,16 @@ __pycache__/
 .env.local
 .env.*.local
 
+# Apple Developer ID / 公证材料（私钥、p12、API Key 切勿入库）
+secrets/apple-signing/*.key
+secrets/apple-signing/*.csr
+secrets/apple-signing/*.p12
+secrets/apple-signing/*.p8
+secrets/apple-signing/*.pem
+secrets/apple-signing/*.cer
+secrets/apple-signing/*.pwd
+secrets/apple-signing/github-secrets.env
+
 # 构建输出
 dist/
 build/
