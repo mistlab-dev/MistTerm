@@ -256,6 +256,14 @@ jobs:
 
       - name: Package artifact
         shell: bash
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_PRIVATE_KEY: ${{ secrets.APPSTORE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
           NAME="$BIN_NAME-${{ matrix.platform }}"
@@ -272,7 +280,7 @@ jobs:
             MIST_BINARY="target/${{ matrix.target }}/release/$BIN_NAME" \
               bash scripts/bundle-macos.sh
             artifact="$NAME.dmg"
-            bash scripts/package-macos-dmg.sh "target/release/Mist.app" "dist/$artifact"
+            bash scripts/sign-and-notarize-macos.sh "target/release/Mist.app" "dist/$artifact"
           else
             STAGE="dist/$NAME"
             mkdir -p "$STAGE"
@@ -287,15 +295,25 @@ jobs:
               MIST_BINARY="target/${{ matrix.target }}/release/$BIN_NAME" \
                 MIST_APP_OUT="$STAGE/Mist.app" \
                 bash scripts/bundle-macos.sh
-              # 附带裸二进制，供 CLI / install.sh 使用；GUI 请用 Mist.app
+
+              # Developer ID 签名 + 公证（Mist.app 与 DMG）
+              rm -rf target/aarch64-apple-darwin/release/{build,deps,examples,incremental} || true
+              rm -rf target/x86_64-apple-darwin/release/{build,deps,examples,incremental} || true
+              DMG_OUT="dist/${NAME}.dmg"
+              bash scripts/sign-and-notarize-macos.sh "$STAGE/Mist.app" "$DMG_OUT"
+              echo "MACOS_DMG_PATH=$DMG_OUT" >> "$GITHUB_ENV"
+              echo "MACOS_DMG_NAME=${NAME}.dmg" >> "$GITHUB_ENV"
+
+              # 附带裸二进制，供 CLI / install.sh 使用；GUI 请用已公证的 Mist.app
               cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
               cp "target/${{ matrix.target }}/release/mist" "$STAGE/"
               printf '%s\n' \
                 'MistTerm for macOS' \
                 '==================' \
-                'GUI (recommended, no Terminal popup):' \
+                'GUI (recommended, notarized Mist.app):' \
                 '  open Mist.app' \
                 '  or drag Mist.app to /Applications' \
+                '  Prefer the .dmg release asset when available.' \
                 '' \
                 'Do not double-click the bare Mist binary in Finder,' \
                 'or macOS will open Terminal.app first.' \
@@ -328,6 +346,14 @@ jobs:
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: ${{ env.ARTIFACT_PATH }}
+          if-no-files-found: error
+
+      - name: Upload macOS DMG
+        if: runner.os == 'macOS' && env.MACOS_DMG_PATH != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.MACOS_DMG_NAME }}
+          path: ${{ env.MACOS_DMG_PATH }}
           if-no-files-found: error
 
       - name: Upload Windows installer
@@ -376,7 +402,7 @@ jobs:
 
             Pick the archive for your platform:
 
-            - **macOS**: `Mist-macos-universal.tar.gz`
+            - **macOS**: `Mist-macos-universal.dmg` (signed + notarized, recommended) or `Mist-macos-universal.tar.gz`
             - **Linux**: `Mist-linux-x86_64.tar.gz`
             - **Windows**: `MistTerm-*-windows-x86_64-setup.exe` (recommended) or `Mist-windows-x86_64.zip`
 
