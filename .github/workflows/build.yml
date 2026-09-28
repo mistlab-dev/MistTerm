@@ -300,7 +300,12 @@ jobs:
               rm -rf target/aarch64-apple-darwin/release/{build,deps,examples,incremental} || true
               rm -rf target/x86_64-apple-darwin/release/{build,deps,examples,incremental} || true
               DMG_OUT="dist/${NAME}.dmg"
+              echo "::notice title=macOS signing::bundle done; starting codesign + notary (poll heartbeats every 20s, timeout 20m)"
+              echo "APP=$STAGE/Mist.app"
+              echo "DMG=$DMG_OUT"
+              date -u +"sign_notarize_start=%Y-%m-%dT%H:%M:%SZ"
               bash scripts/sign-and-notarize-macos.sh "$STAGE/Mist.app" "$DMG_OUT"
+              date -u +"sign_notarize_end=%Y-%m-%dT%H:%M:%SZ"
               echo "MACOS_DMG_PATH=$DMG_OUT" >> "$GITHUB_ENV"
               echo "MACOS_DMG_NAME=${NAME}.dmg" >> "$GITHUB_ENV"
 
