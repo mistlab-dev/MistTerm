@@ -152,6 +152,18 @@ jobs:
           if (-not $sawPath) { throw "VsDevCmd.bat left PATH unchanged — toolchain missing" }
           Write-Host "MSVC environment from $vs ($written vars)"
 
+      - name: Check egui lock re-entrancy
+        if: matrix.run_unit_tests
+        shell: bash
+        run: |
+          python3 scripts/check-egui-reentrancy.py --self-test
+          python3 scripts/check-egui-reentrancy.py
+
+      - name: Check third-party license notices
+        if: matrix.run_unit_tests
+        shell: bash
+        run: python3 scripts/generate-third-party-licenses.py --check
+
       - name: Run unit tests (Linux)
         if: matrix.run_unit_tests
         shell: bash
