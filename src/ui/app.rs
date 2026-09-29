@@ -2,7 +2,7 @@
 //!
 //! 包含主窗口、侧边栏、终端区域等。
 //!
-//! 传文件三种入口彼此独立：**终端内 `rz`+ZMODEM**、**SFTP 侧栏**、**工具栏「上传」SCP 直传**(另见 `TerminalView::start_upload_to_remote` 的 cat 直传 API)。
+//! 传文件三种入口彼此独立：**终端内 `rz`+ZMODEM**、**SFTP 侧栏**、**工具栏「上传」SCP 直传**。
 
 use crate::core::batch_exec::{
     run_batch_parallel, BatchExecJob, BatchExecRow, BatchTarget, TEAM_TARGET_PREFIX,
@@ -279,6 +279,8 @@ pub struct MistTermApp {
     show_new_session_dialog: bool,
     show_edit_session_dialog: bool,
     show_about_dialog: bool,
+    /// 关于 → 开源许可(第三方许可证全文)
+    show_licenses_dialog: bool,
     /// 原型 / 常见桌面习惯：⌘, 偏好设置(主题等)
     show_preferences_dialog: bool,
     /// 偏好设置 → Vault Token 输入草稿(不落盘；保存时写入钥匙串)
@@ -963,6 +965,7 @@ impl MistTermApp {
             show_new_session_dialog: false,
             show_edit_session_dialog: false,
             show_about_dialog: false,
+            show_licenses_dialog: false,
             show_preferences_dialog: false,
             pref_vault_token_draft: String::new(),
             show_fragments_dialog: false,
@@ -2314,6 +2317,7 @@ impl MistTermApp {
         self.show_new_session_dialog
             || self.show_edit_session_dialog
             || self.show_about_dialog
+            || self.show_licenses_dialog
             || self.show_preferences_dialog
             || self.show_fragments_dialog
             || self.show_fragment_vars_dialog
@@ -7251,6 +7255,10 @@ impl eframe::App for MistTermApp {
                 }
             }
         }
+        for p in ctx.input(crate::ui::terminal::TerminalView::unplaced_dropped_files) {
+            log::info!("file dropped without pointer position, routing to active tab: {}", p.display());
+            self.enqueue_upload_for_active_tab(ctx, p);
+        }
 
         let now = Instant::now();
         use crate::core::{
@@ -7634,29 +7642,8 @@ impl eframe::App for MistTermApp {
                     });
                 }
             }
-            // egui 0.23 无 Key::Comma；⌘/Ctrl+, 常表现为 Text(",") + 主修饰键。
-            // 仅匹配半角 ","；全角 "，" 是用户输入，绝不当快捷键、也绝不吞掉。
-            // 勿在 AI/表单 TextEdit 聚焦时吞掉裸 ","。
-            let prefs_shortcut = ctx.input_mut(|i| {
-                if !self.app_shortcut_overrides_terminal(i) || !Self::input_primary_mod(i) {
-                    return false;
-                }
-                if ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
-                    return false;
-                }
-                let mut hit = false;
-                i.events.retain(|e| {
-                    if let egui::Event::Text(t) = e {
-                        if t.as_str() == "," {
-                            hit = true;
-                            return false;
-                        }
-                    }
-                    true
-                });
-                hit
-            });
-            if prefs_shortcut {
+            let overrides_terminal = ctx.input(|i| self.app_shortcut_overrides_terminal(i));
+            if crate::ui::keyboard_shortcuts::consume_preferences_shortcut(ctx, overrides_terminal) {
                 self.show_preferences_dialog = true;
             }
             let primary_tab_cycle = ctx.input(|i| {
@@ -7933,6 +7920,10 @@ mod preferences_dialog;
 /// 工作区确认类模态窗(大文件上传 / 删会话 / 命令审计 / 关标签)
 #[path = "app_workspace_confirm_modals.rs"]
 mod workspace_confirm_modals;
+
+/// 开源许可模态窗(关于 → 开源许可)
+#[path = "app_licenses_modal.rs"]
+mod licenses_modal;
 
 /// 新建会话模态窗
 #[path = "app_new_session_modal.rs"]

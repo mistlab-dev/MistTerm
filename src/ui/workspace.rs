@@ -881,20 +881,33 @@ impl MistTermApp {
                                     });
                             });
                         ui.add_space(theme.spacing_md());
-                        if crate::ui::chrome::modal_secondary_icon_button(
-                            ui,
-                            theme,
-                            crate::ui::icons::IconId::Alert,
-                            crate::i18n::tr(ctx, "Report an issue", "问题反馈"),
-                        )
-                        .clicked()
-                        {
-                            self.open_report_issue(ctx);
-                        }
+                        ui.horizontal(|ui| {
+                            if crate::ui::chrome::modal_secondary_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Alert,
+                                crate::i18n::tr(ctx, "Report an issue", "问题反馈"),
+                            )
+                            .clicked()
+                            {
+                                self.open_report_issue(ctx);
+                            }
+                            if crate::ui::chrome::modal_secondary_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::File,
+                                crate::i18n::tr(ctx, "Open-source licenses", "开源许可"),
+                            )
+                            .clicked()
+                            {
+                                self.show_licenses_dialog = true;
+                            }
+                        });
                     });
                 });
             self.show_about_dialog = open && !should_close;
         }
+        self.render_licenses_modal(ctx, theme);
 
         if self.show_preferences_dialog {
             self.show_preferences_modal(ctx, theme);
