@@ -1,10 +1,11 @@
 //! UI 卡顿（主线程疑似无响应）诊断：本地落盘 JSON 报告。
 //!
-//! 第一版仅本地记录，不做网络上报。
+//! 仅本地记录，不做网络上报。macOS 上同时用系统 `sample` 抓一份全线程栈，
+//! 与 JSON 报告同目录存放，用户无需复现即可定位卡在哪把锁 / 哪个调用上。
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -15,6 +16,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 const DEFAULT_HANG_THRESHOLD_MS: u64 = 3_000;
 /// watchdog 检查间隔（不必过密）。
 const DEFAULT_POLL_MS: u64 = 500;
+/// 每次卡顿抓栈时长（秒）。
+const STACK_SAMPLE_SECS: u32 = 2;
+/// 栈文件单个可达数百 KB，只保留最近若干份。
+const MAX_STACK_SAMPLES: usize = 10;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HangSnapshot {
@@ -49,6 +54,10 @@ struct HangReport {
     stale_for_ms: u64,
     threshold_ms: u64,
     snapshot: HangSnapshot,
+    /// 同目录下的全线程栈文件名（抓栈成功时）。
+    stack_sample_file: Option<String>,
+    /// 抓栈失败原因（不支持的平台 / 权限不足等）。
+    stack_sample_error: Option<String>,
 }
 
 /// UI 卡顿本地报告器（watchdog 线程 + 心跳 + 快照）。
@@ -63,6 +72,7 @@ struct Inner {
     threshold_ms: u64,
     poll_ms: u64,
     snapshot: Mutex<HangSnapshot>,
+    capture_stacks: bool,
 }
 
 impl HangReporter {
@@ -79,6 +89,7 @@ impl HangReporter {
             threshold_ms,
             poll_ms,
             snapshot: Mutex::new(HangSnapshot::default()),
+            capture_stacks: std::env::var_os("MIST_HANG_NO_STACKS").is_none(),
         });
         spawn_watchdog(inner.clone());
         Self { inner }
@@ -142,12 +153,35 @@ fn check_and_dump_if_hung(inner: &Inner) {
     if last_reported == last {
         return;
     }
+    let mut report = build_report(inner, now, stale_for_ms);
+    if inner.capture_stacks {
+        attach_stack_sample(&mut report);
+    }
+    let _ = write_report(&report);
+    log::warn!(
+        "UI hang suspected: stale_for_ms={} threshold_ms={} busy_hint={} panels={} stacks={}",
+        report.stale_for_ms,
+        report.threshold_ms,
+        report.snapshot.busy_hint,
+        report.snapshot.panel_state,
+        report
+            .stack_sample_file
+            .as_deref()
+            .or(report.stack_sample_error.as_deref())
+            .unwrap_or("-")
+    );
+    inner
+        .last_reported_heartbeat_ms
+        .store(last, Ordering::Relaxed);
+}
+
+fn build_report(inner: &Inner, now: u64, stale_for_ms: u64) -> HangReport {
     let snapshot = inner
         .snapshot
         .lock()
         .map(|g| g.clone())
         .unwrap_or_else(|_| HangSnapshot::default());
-    let report = HangReport {
+    HangReport {
         event: "ui_hang_suspected",
         version: env!("CARGO_PKG_VERSION"),
         os: std::env::consts::OS,
@@ -156,18 +190,81 @@ fn check_and_dump_if_hung(inner: &Inner) {
         stale_for_ms,
         threshold_ms: inner.threshold_ms,
         snapshot,
+        stack_sample_file: None,
+        stack_sample_error: None,
+    }
+}
+
+fn attach_stack_sample(report: &mut HangReport) {
+    let dir = match ensure_hang_report_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            report.stack_sample_error = Some(e);
+            return;
+        }
     };
-    let _ = write_report(&report);
-    log::warn!(
-        "UI hang suspected: stale_for_ms={} threshold_ms={} busy_hint={} panels={}",
-        report.stale_for_ms,
-        report.threshold_ms,
-        report.snapshot.busy_hint,
-        report.snapshot.panel_state
-    );
-    inner
-        .last_reported_heartbeat_ms
-        .store(last, Ordering::Relaxed);
+    let name = stack_sample_filename(report.timestamp_unix_ms);
+    match capture_process_stacks(std::process::id(), &dir.join(&name), STACK_SAMPLE_SECS) {
+        Ok(()) => report.stack_sample_file = Some(name),
+        Err(e) => report.stack_sample_error = Some(e),
+    }
+    prune_stack_samples(&dir, MAX_STACK_SAMPLES);
+}
+
+fn stack_sample_filename(timestamp_unix_ms: u64) -> String {
+    format!("hang-{timestamp_unix_ms}.sample.txt")
+}
+
+/// 用系统工具抓 `pid` 的全线程栈写入 `out`。主线程卡死时进程内无法自救，只能借外部进程采样。
+#[cfg(target_os = "macos")]
+fn capture_process_stacks(pid: u32, out: &Path, secs: u32) -> Result<(), String> {
+    let output = std::process::Command::new("/usr/bin/sample")
+        .arg(pid.to_string())
+        .arg(secs.to_string())
+        .arg("-file")
+        .arg(out)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("spawn sample failed: {e}"))?;
+    if out.is_file() {
+        Ok(())
+    } else {
+        Err(format!(
+            "sample exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn capture_process_stacks(_pid: u32, _out: &Path, _secs: u32) -> Result<(), String> {
+    Err("stack capture not supported on this OS".to_string())
+}
+
+fn prune_stack_samples(dir: &Path, keep: usize) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut samples: Vec<(u64, PathBuf)> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            let ts = name
+                .strip_prefix("hang-")?
+                .strip_suffix(".sample.txt")?
+                .parse::<u64>()
+                .ok()?;
+            Some((ts, e.path()))
+        })
+        .collect();
+    if samples.len() <= keep {
+        return;
+    }
+    samples.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
+    for (_, path) in samples.into_iter().skip(keep) {
+        let _ = fs::remove_file(path);
+    }
 }
 
 fn write_report(report: &HangReport) -> Result<PathBuf, String> {
@@ -275,7 +372,50 @@ mod tests {
             threshold_ms,
             poll_ms,
             snapshot: Mutex::new(HangSnapshot::default()),
+            capture_stacks: false,
         }
+    }
+
+    #[test]
+    fn report_without_capture_has_no_stack_fields_set() {
+        let report = build_report(&fresh_inner(10, 1), 1_234, 5_000);
+        assert!(report.stack_sample_file.is_none());
+        assert!(report.stack_sample_error.is_none());
+        let json = serde_json::to_string(&report).unwrap();
+        assert!(json.contains("\"stack_sample_file\":null"));
+    }
+
+    #[test]
+    fn prune_stack_samples_keeps_newest_only() {
+        let dir = tempfile::tempdir().unwrap();
+        for ts in [100u64, 300, 200, 500, 400] {
+            fs::write(dir.path().join(stack_sample_filename(ts)), b"x").unwrap();
+        }
+        fs::write(dir.path().join("hang-999.json"), b"{}").unwrap();
+        prune_stack_samples(dir.path(), 2);
+        let mut left: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(
+            left,
+            vec![
+                "hang-400.sample.txt".to_string(),
+                "hang-500.sample.txt".to_string(),
+                "hang-999.json".to_string(),
+            ]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn capture_process_stacks_samples_own_process_on_macos() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("self.sample.txt");
+        capture_process_stacks(std::process::id(), &out, 1).expect("sample should succeed");
+        let text = fs::read_to_string(&out).unwrap();
+        assert!(text.contains("Call graph"), "unexpected sample output");
     }
 
     #[test]

@@ -151,4 +151,5 @@ opt-level = 3
 # 用 thin LTO：链接时间显著降低（CI ~2-3x），二进制体积比 fat LTO 大 ~10-20%，
 # 运行性能差异基本无感。GUI / IO 类应用切 thin 性价比最高。
 lto = "thin"
-strip = true
+# 只剥调试信息、保留符号表：hang 报告里的线程栈（hang_reporter 调 `sample`）才有函数名。
+strip = "debuginfo"
