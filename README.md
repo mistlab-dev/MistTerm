@@ -76,7 +76,7 @@ cargo test --test zmodem_integration_test
 
 ### Contributing & license
 
-Issues and PRs: [github.com/mistlab-dev/MistTerm](https://github.com/mistlab-dev/MistTerm). **AGPL-3.0** — see [LICENSE](LICENSE).
+Issues and PRs: [github.com/mistlab-dev/MistTerm](https://github.com/mistlab-dev/MistTerm). **AGPL-3.0** — see [LICENSE](LICENSE). Contributions are accepted under the [contributor license terms](CONTRIBUTING.md#contributor-license-terms). Third-party notices: [resources/THIRD_PARTY_LICENSES.txt](resources/THIRD_PARTY_LICENSES.txt) (also in the app under **About → Open-source licenses**).
 
 ---
 
@@ -148,7 +148,7 @@ cargo test --test zmodem_integration_test
 
 ### 贡献与许可
 
-Issue / PR：[github.com/mistlab-dev/MistTerm](https://github.com/mistlab-dev/MistTerm)。**AGPL-3.0**，见 [LICENSE](LICENSE)。
+Issue / PR：[github.com/mistlab-dev/MistTerm](https://github.com/mistlab-dev/MistTerm)。**AGPL-3.0**，见 [LICENSE](LICENSE)。提交贡献即表示同意[贡献者授权条款](CONTRIBUTING.md#贡献者授权条款中文摘要)。第三方许可声明见 [resources/THIRD_PARTY_LICENSES.txt](resources/THIRD_PARTY_LICENSES.txt)(App 内：**关于 → 开源许可**)。
 
 ---
 
