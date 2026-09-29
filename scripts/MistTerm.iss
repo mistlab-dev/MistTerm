@@ -34,6 +34,7 @@ WizardStyle=modern
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
+SetupIconFile=..\assets\app-icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 CloseApplications=force
 
