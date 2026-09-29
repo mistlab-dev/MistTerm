@@ -668,12 +668,14 @@ fn draw_m_letter_cell(p: &mut CellPainter<'_>, stroke_w: f32) {
     p.segs(M_LETTER_SEGS, stroke_w);
 }
 
-const APP_ICON_FONT: &[u8] = include_bytes!("../../assets/fonts/NotoSansSC-Regular.otf");
-
-/// 霓虹青(参考图地平面 / 外发光)
+/// 霓虹青(提示符外发光 / 雾气)
 const APP_ICON_CYAN: [u8; 3] = [55, 175, 255];
-/// 字标核心高光白
+/// 提示符核心高光白
 const APP_ICON_TEXT_CORE: [u8; 4] = [238, 246, 255, 255];
+/// macOS 打包源图规格(`scripts/bundle-macos.sh` 由它生成 .icns)
+const APP_ICON_BUNDLE_SIZE: u32 = 1024;
+const APP_ICON_BUNDLE_PAD_FRAC: f32 = 0.02;
+const APP_ICON_BUNDLE_CORNER_FRAC: f32 = 0.10;
 
 /// 图标透明外圈比例：macOS Dock squircle 需留白；Windows 任务栏为方角缩放，留白会显得更小。
 fn app_icon_outer_pad_frac() -> f32 {
@@ -686,13 +688,15 @@ fn app_icon_outer_pad_frac() -> f32 {
     }
 }
 
-/// 窗口 / Dock / 任务栏图标(霓虹 Mist 字标 + 圆角底板)。
+/// 圆角比例：macOS 连续圆角；Windows 任务栏再套方角缩放，圆角过大会吃掉有效面积
+fn app_icon_corner_frac() -> f32 {
+    if cfg!(windows) { 0.10 } else { 0.165 }
+}
+
+/// 窗口 / Dock / 任务栏图标(霓虹 `>_` + 底部烟雾)。
 pub fn app_window_icon_data() -> eframe::IconData {
     const SIZE: u32 = 256;
-    let pad = (SIZE as f32 * app_icon_outer_pad_frac()).round() as u32;
-    let mut img = RgbaImage::from_pixel(SIZE, SIZE, Rgba([0, 0, 0, 0]));
-    let edge = SIZE - pad;
-    paint_mist_app_icon(&mut img, pad, edge, edge);
+    let img = render_app_icon(SIZE, app_icon_outer_pad_frac(), app_icon_corner_frac());
     eframe::IconData {
         rgba: img.into_raw(),
         width: SIZE,
@@ -700,40 +704,286 @@ pub fn app_window_icon_data() -> eframe::IconData {
     }
 }
 
-/// 导出 PNG 预览(`cargo run --bin export_app_icon`)。
-pub fn export_app_icon_png(path: &std::path::Path) -> Result<(), image::ImageError> {
-    let icon = app_window_icon_data();
-    let img = image::RgbaImage::from_raw(icon.width, icon.height, icon.rgba)
-        .expect("app icon buffer size mismatch");
-    img.save(path)
+/// 按任意尺寸原生绘制应用图标(外圈透明)。
+pub fn render_app_icon(size: u32, pad_frac: f32, corner_frac: f32) -> RgbaImage {
+    let pad = (size as f32 * pad_frac).round() as u32;
+    let mut img = RgbaImage::from_pixel(size, size, Rgba([0, 0, 0, 0]));
+    let edge = size - pad;
+    paint_mist_app_icon(&mut img, pad, edge, edge, corner_frac);
+    img
 }
 
-/// 在 `[x0,x1)×[y0,y1)` 内绘制 Mist 品牌图标(参考霓虹字标 + 底部地光)。
-fn paint_mist_app_icon(img: &mut RgbaImage, x0: u32, x1: u32, y1: u32) {
+/// 按 macOS 打包规格渲染(预览不同尺寸用)。
+pub fn render_app_icon_bundle(size: u32) -> RgbaImage {
+    render_app_icon(size, APP_ICON_BUNDLE_PAD_FRAC, APP_ICON_BUNDLE_CORNER_FRAC)
+}
+
+/// 导出窗口图标 PNG 预览(`cargo run --bin export_app_icon`)。
+pub fn export_app_icon_png(path: &std::path::Path) -> Result<(), image::ImageError> {
+    render_app_icon(256, app_icon_outer_pad_frac(), app_icon_corner_frac()).save(path)
+}
+
+/// 导出 macOS 打包用 1024 源图(`cargo run --bin export_app_icon`)。
+pub fn export_app_icon_bundle_png(path: &std::path::Path) -> Result<(), image::ImageError> {
+    render_app_icon_bundle(APP_ICON_BUNDLE_SIZE).save(path)
+}
+
+/// `>_` 相对底板宽度的缩放
+const APP_ICON_PROMPT_SCALE: f32 = 0.62;
+
+/// 在 `[x0,x1)×[y0,y1)` 内绘制 Mist 品牌图标：居中霓虹 `>_`，底部烟雾。
+fn paint_mist_app_icon(img: &mut RgbaImage, x0: u32, x1: u32, y1: u32, corner_frac: f32) {
     let y0 = x0;
     let w = (x1 - x0) as f32;
     let h = (y1 - y0) as f32;
     let ox = x0 as f32;
     let oy = y0 as f32;
-    let cx = ox + w * 0.5;
-    let cy = oy + h * 0.35;
-    let tw = if cfg!(windows) { w * 0.80 } else { w * 0.72 };
-    let text_bottom = wordmark_metrics("Mist", cx, cy, tw)
-        .map(|m| m.text_bottom)
-        .unwrap_or(cy + 18.0);
-    // 镜面线：落在正文与倒影之间的中部
-    const TEXT_MIRROR_GAP: f32 = 24.0;
-    let mirror_y = text_bottom + TEXT_MIRROR_GAP * 0.86;
 
-    fill_vertical_gradient(img, x0, y0, x1, y1, [10, 14, 32], [3, 5, 16]);
-    paint_bottom_floor_glow(img, ox, oy, w, h);
-    draw_wordmark_reflection(img, "Mist", cx, cy, mirror_y, tw);
-    paint_mirror_surface_line(img, ox + w * 0.12, ox + w * 0.88, mirror_y);
-    draw_neon_wordmark(img, "Mist", cx, cy, tw);
+    fill_vertical_gradient(img, x0, y0, x1, y1, [19, 27, 52], [8, 11, 26]);
+    paint_mist_smoke(img, x0, y0, x1, y1);
 
-    // 圆角遮罩：macOS 连续圆角；Windows 任务栏再套方角缩放，圆角过大会吃掉有效面积
-    let radius = w.min(h) * if cfg!(windows) { 0.10 } else { 0.165 };
+    let mut neon = NeonMask::new(img.width(), img.height());
+    add_prompt_centered(&mut neon, ox + w * 0.5, oy + h * 0.45, w * APP_ICON_PROMPT_SCALE);
+    neon.composite(img, w);
+
+    let radius = w.min(h) * corner_frac;
+    paint_window_border(img, ox, oy, ox + w, oy + h, radius, (w * 0.008).max(1.0));
     apply_rounded_alpha_mask(img, ox, oy, ox + w, oy + h, radius);
+}
+
+/// `>` 几何(以 `scale` = 1 时的底板宽度为单位)
+const CHEVRON_W: f32 = 0.20;
+const CHEVRON_HALF_H: f32 = 0.155;
+const PROMPT_HALF_STROKE: f32 = 0.042;
+const CURSOR_GAP: f32 = 0.08;
+const CURSOR_W: f32 = 0.27;
+
+/// `>` 描边：左端点 x = `left`，垂直中心 = `cy`
+fn add_chevron(neon: &mut NeonMask, left: f32, cy: f32, scale: f32) {
+    let hw = scale * PROMPT_HALF_STROKE;
+    let a = (left, cy - scale * CHEVRON_HALF_H);
+    let b = (left + scale * CHEVRON_W, cy);
+    let c = (left, cy + scale * CHEVRON_HALF_H);
+    neon.add_sdf((a.0 - hw, a.1 - hw, b.0 + hw, c.1 + hw), |px, py| {
+        dist_to_segment(px, py, a, b).min(dist_to_segment(px, py, b, c)) - hw
+    });
+}
+
+/// 下划线光标：底边与 `>` 下端对齐
+fn add_cursor(neon: &mut NeonMask, x0: f32, x1: f32, bottom: f32, half_stroke: f32) {
+    let (y0, r) = (bottom - half_stroke * 2.0, half_stroke * 0.35);
+    neon.add_sdf((x0, y0, x1, bottom), |px, py| sdf_rounded_rect(px, py, x0, y0, x1, bottom, r));
+}
+
+/// `>_`：`left` 为 `>` 左端点，`cy` 为垂直中心
+fn add_prompt(neon: &mut NeonMask, left: f32, cy: f32, scale: f32) {
+    let hw = scale * PROMPT_HALF_STROKE;
+    add_chevron(neon, left, cy, scale);
+    let x0 = left + scale * (CHEVRON_W + CURSOR_GAP);
+    add_cursor(neon, x0, x0 + scale * CURSOR_W, cy + scale * CHEVRON_HALF_H + hw, hw);
+}
+
+/// `>_` 以可见外框中心定位
+fn add_prompt_centered(neon: &mut NeonMask, cx: f32, cy: f32, scale: f32) {
+    let hw = scale * PROMPT_HALF_STROKE;
+    let span = scale * (CHEVRON_W + CURSOR_GAP + CURSOR_W) + hw;
+    add_prompt(neon, cx - span * 0.5 + hw, cy, scale);
+}
+
+/// 霓虹层覆盖率遮罩：图形先合成，再统一模糊出外发光
+struct NeonMask {
+    w: usize,
+    h: usize,
+    cov: Vec<f32>,
+}
+
+impl NeonMask {
+    fn new(w: u32, h: u32) -> Self {
+        let (w, h) = (w as usize, h as usize);
+        Self { w, h, cov: vec![0.0; w * h] }
+    }
+
+    fn max_at(&mut self, x: i32, y: i32, c: f32) {
+        if x < 0 || y < 0 || x as usize >= self.w || y as usize >= self.h {
+            return;
+        }
+        let i = y as usize * self.w + x as usize;
+        self.cov[i] = self.cov[i].max(c);
+    }
+
+    fn add_sdf(&mut self, bounds: (f32, f32, f32, f32), sdf: impl Fn(f32, f32) -> f32) {
+        let x0 = (bounds.0 - 2.0).floor().max(0.0) as i32;
+        let y0 = (bounds.1 - 2.0).floor().max(0.0) as i32;
+        let x1 = (bounds.2 + 2.0).ceil().min(self.w as f32 - 1.0) as i32;
+        let y1 = (bounds.3 + 2.0).ceil().min(self.h as f32 - 1.0) as i32;
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                let c = (0.5 - sdf(x as f32 + 0.5, y as f32 + 0.5)).clamp(0.0, 1.0);
+                self.max_at(x, y, c);
+            }
+        }
+    }
+
+    /// 三次盒式模糊近似高斯
+    fn blurred(&self, radius: f32) -> Vec<f32> {
+        let r = (radius / 1.7).round().max(1.0) as usize;
+        let mut a = self.cov.clone();
+        let mut tmp = vec![0.0; a.len()];
+        for _ in 0..3 {
+            box_blur_pass(&a, &mut tmp, self.w, self.h, r, self.w, 1);
+            box_blur_pass(&tmp, &mut a, self.h, self.w, r, 1, self.w);
+        }
+        a
+    }
+
+    /// 宽外发光 + 窄外发光 + 白色核心
+    fn composite(&self, img: &mut RgbaImage, plate_w: f32) {
+        let wide = self.blurred(plate_w * 0.06);
+        let tight = self.blurred(plate_w * 0.012);
+        let c = APP_ICON_CYAN;
+        let core = APP_ICON_TEXT_CORE;
+        for (i, &cov) in self.cov.iter().enumerate() {
+            let (x, y) = ((i % self.w) as i32, (i / self.w) as i32);
+            let a1 = ((wide[i] * 1.6).min(1.0) * 110.0).round() as u8;
+            let a2 = ((tight[i] * 1.5).min(1.0) * 200.0).round() as u8;
+            let a3 = (cov * core[3] as f32).round() as u8;
+            blend_pixel(img, x, y, [c[0], c[1], c[2], a1]);
+            blend_pixel(img, x, y, [c[0], c[1], c[2], a2]);
+            blend_pixel(img, x, y, [core[0], core[1], core[2], a3]);
+        }
+    }
+}
+
+/// 一维盒式模糊：沿 `len` 方向(步长 `step`)处理 `lines` 条线(线间步长 `line_step`)，界外视为 0
+fn box_blur_pass(
+    src: &[f32],
+    dst: &mut [f32],
+    len: usize,
+    lines: usize,
+    r: usize,
+    line_step: usize,
+    step: usize,
+) {
+    let norm = 1.0 / (2 * r + 1) as f32;
+    for line in 0..lines {
+        let base = line * line_step;
+        let at = |k: usize| src[base + k * step];
+        let mut sum: f32 = (0..=r.min(len - 1)).map(at).sum();
+        for k in 0..len {
+            dst[base + k * step] = sum * norm;
+            if k + r + 1 < len {
+                sum += at(k + r + 1);
+            }
+            if k >= r {
+                sum -= at(k - r);
+            }
+        }
+    }
+}
+
+/// 底部烟雾：波浪上沿 + 扭曲噪声丝缕，坐标按底板归一化，各尺寸形态一致
+fn paint_mist_smoke(img: &mut RgbaImage, x0: u32, y0: u32, x1: u32, y1: u32) {
+    const DEEP: [f32; 3] = [28.0, 78.0, 140.0];
+    const BRIGHT: [f32; 3] = [80.0, 175.0, 240.0];
+    let w = (x1 - x0) as f32;
+    let h = (y1 - y0) as f32;
+    let v_start = 0.55;
+    for y in ((y0 as f32 + h * v_start) as u32)..y1 {
+        let v = (y - y0) as f32 / h;
+        for x in x0..x1 {
+            let u = (x - x0) as f32 / w;
+            let edge = 0.70 + 0.045 * (u * 5.3 + 0.7).sin() + 0.06 * (fbm(u * 2.5, 3.1) - 0.5);
+            let body = smoothstep(edge - 0.08, edge + 0.26, v);
+            if body <= 0.0 {
+                continue;
+            }
+            let wx = u * 2.2 + 1.0 * fbm(u * 1.5 + 4.1, v * 2.5 + 1.7);
+            let wy = v * 4.0 + 1.0 * fbm(u * 1.5 + 8.3, v * 2.5 + 2.9);
+            let n = fbm(wx, wy);
+            let wisp = (1.0 - (2.0 * n - 1.0).abs()).powi(2);
+            let density = (body * (0.35 + 0.50 * n + 0.35 * wisp)).clamp(0.0, 1.0);
+            let t = (n * 0.5 + wisp * 0.3 + body * 0.2).clamp(0.0, 1.0);
+            let c = |i: usize| (DEEP[i] + (BRIGHT[i] - DEEP[i]) * t).round() as u8;
+            let a = (density * 150.0).round() as u8;
+            blend_pixel(img, x as i32, y as i32, [c(0), c(1), c(2), a]);
+        }
+    }
+}
+
+fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+fn hash_noise(ix: i32, iy: i32) -> f32 {
+    let mut h = (ix as u32).wrapping_mul(374_761_393) ^ (iy as u32).wrapping_mul(668_265_263);
+    h = (h ^ (h >> 13)).wrapping_mul(1_274_126_177);
+    ((h ^ (h >> 16)) & 0x00ff_ffff) as f32 / 16_777_215.0
+}
+
+fn value_noise(x: f32, y: f32) -> f32 {
+    let (ix, iy) = (x.floor() as i32, y.floor() as i32);
+    let (fx, fy) = (x - x.floor(), y - y.floor());
+    let (sx, sy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
+    let top = hash_noise(ix, iy) + (hash_noise(ix + 1, iy) - hash_noise(ix, iy)) * sx;
+    let bottom = hash_noise(ix, iy + 1) + (hash_noise(ix + 1, iy + 1) - hash_noise(ix, iy + 1)) * sx;
+    top + (bottom - top) * sy
+}
+
+/// 分形噪声，输出约 0..1
+fn fbm(x: f32, y: f32) -> f32 {
+    let (mut sum, mut amp, mut freq, mut norm) = (0.0, 0.5, 1.0, 0.0);
+    for _ in 0..4 {
+        sum += value_noise(x * freq, y * freq) * amp;
+        norm += amp;
+        amp *= 0.5;
+        freq *= 2.0;
+    }
+    sum / norm
+}
+
+/// 沿底板内侧的细描边，深色 Dock / 任务栏上也能看清窗口轮廓
+fn paint_window_border(img: &mut RgbaImage, x0: f32, y0: f32, x1: f32, y1: f32, r: f32, width: f32) {
+    paint_sdf(img, (x0, y0, x1, y1), [120, 200, 255, 70], 0.0, |px, py| {
+        (sdf_rounded_rect(px, py, x0, y0, x1, y1, r) + width * 0.5).abs() - width * 0.5
+    });
+}
+
+fn dist_to_segment(px: f32, py: f32, a: (f32, f32), b: (f32, f32)) -> f32 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = (dx * dx + dy * dy).max(1e-6);
+    let t = (((px - a.0) * dx + (py - a.1) * dy) / len2).clamp(0.0, 1.0);
+    let (qx, qy) = (a.0 + dx * t - px, a.1 + dy * t - py);
+    (qx * qx + qy * qy).sqrt()
+}
+
+/// 按 SDF(负值 = 内侧)着色：`glow == 0` 时抗锯齿实心；否则内侧满色、外侧 `glow` 像素内平方衰减。
+fn paint_sdf(
+    img: &mut RgbaImage,
+    bounds: (f32, f32, f32, f32),
+    color: [u8; 4],
+    glow: f32,
+    sdf: impl Fn(f32, f32) -> f32,
+) {
+    let m = glow + 2.0;
+    let x0 = (bounds.0 - m).floor().max(0.0) as i32;
+    let y0 = (bounds.1 - m).floor().max(0.0) as i32;
+    let x1 = (bounds.2 + m).ceil().min(img.width() as f32 - 1.0) as i32;
+    let y1 = (bounds.3 + m).ceil().min(img.height() as f32 - 1.0) as i32;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let d = sdf(x as f32 + 0.5, y as f32 + 0.5);
+            let cov = if glow > 0.0 {
+                if d <= 0.0 { 1.0 } else { (1.0 - d / glow).max(0.0).powi(2) }
+            } else {
+                (0.5 - d).clamp(0.0, 1.0)
+            };
+            let a = (color[3] as f32 * cov).round() as u8;
+            if a > 0 {
+                blend_pixel(img, x, y, [color[0], color[1], color[2], a]);
+            }
+        }
+    }
 }
 
 /// 圆角矩形 SDF(负值 = 内侧)
@@ -746,7 +996,7 @@ fn sdf_rounded_rect(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32
     let qy = (py - cy).abs() - hy;
     let ax = qx.max(0.0);
     let ay = qy.max(0.0);
-    (ax * ax + ay * ay).sqrt() - r + qx.min(qy).min(0.0)
+    (ax * ax + ay * ay).sqrt() - r + qx.max(qy).min(0.0)
 }
 
 fn rounded_rect_coverage(px: f32, py: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> f32 {
@@ -770,159 +1020,6 @@ fn apply_rounded_alpha_mask(img: &mut RgbaImage, x0: f32, y0: f32, x1: f32, y1: 
             }
         }
     }
-}
-
-/// 底部径向地光(参考图蓝色光池)
-fn paint_bottom_floor_glow(img: &mut RgbaImage, ox: f32, oy: f32, w: f32, h: f32) {
-    let c = APP_ICON_CYAN;
-    draw_soft_ellipse(img, ox + w * 0.5, oy + h * 0.92, w * 0.62, h * 0.28, [c[0], c[1], c[2], 48]);
-    draw_soft_ellipse(img, ox + w * 0.5, oy + h * 0.82, w * 0.48, h * 0.20, [c[0], c[1], c[2], 100]);
-    draw_soft_ellipse(img, ox + w * 0.5, oy + h * 0.72, w * 0.36, h * 0.14, [c[0], c[1], c[2], 130]);
-    draw_soft_ellipse(img, ox + w * 0.5, oy + h * 0.64, w * 0.22, h * 0.08, [200, 230, 255, 40]);
-}
-
-/// 霓虹「Mist」：外发光 + 下半青 + 核心白
-fn draw_neon_wordmark(img: &mut RgbaImage, text: &str, cx: f32, cy: f32, target_width: f32) {
-    const GLOW: &[(f32, f32, u8)] = &[
-        (0.0, 0.0, 42),
-        (-2.0, 0.0, 28),
-        (2.0, 0.0, 28),
-        (0.0, -2.0, 28),
-        (0.0, 2.0, 28),
-        (-3.0, -1.0, 18),
-        (3.0, 1.0, 18),
-        (-1.0, 2.0, 16),
-        (1.0, -2.0, 16),
-        (-4.0, 0.0, 10),
-        (4.0, 0.0, 10),
-        (0.0, -4.0, 10),
-        (0.0, 4.0, 10),
-    ];
-    let glow_color = [APP_ICON_CYAN[0], APP_ICON_CYAN[1], APP_ICON_CYAN[2]];
-    for &(dx, dy, a) in GLOW {
-        let _ = draw_wordmark(
-            img,
-            text,
-            cx + dx,
-            cy + dy,
-            target_width,
-            [glow_color[0], glow_color[1], glow_color[2], a],
-            WordmarkDrawOpts::default(),
-        );
-    }
-    let _ = draw_wordmark(
-        img,
-        text,
-        cx,
-        cy + 2.0,
-        target_width,
-        [APP_ICON_CYAN[0], APP_ICON_CYAN[1], APP_ICON_CYAN[2], 210],
-        WordmarkDrawOpts::default(),
-    );
-    let _ = draw_wordmark(img, text, cx, cy, target_width, APP_ICON_TEXT_CORE, WordmarkDrawOpts::default());
-}
-
-/// 镜面地平面亮线(在字标下方，作为反射分界)
-fn paint_mirror_surface_line(img: &mut RgbaImage, x0: f32, x1: f32, y: f32) {
-    let core = [140, 230, 255, 155];
-    let glow = [APP_ICON_CYAN[0], APP_ICON_CYAN[1], APP_ICON_CYAN[2]];
-    for dy in -3i32..=2 {
-        let t = dy.unsigned_abs();
-        let a = match t {
-            0 => 155u8,
-            1 => 95,
-            2 => 48,
-            _ => 22,
-        };
-        let row = (y + dy as f32).round() as i32;
-        let x_start = x0.round() as i32;
-        let x_end = x1.round() as i32;
-        for x in x_start..=x_end {
-            let c = if t == 0 { core } else { [glow[0], glow[1], glow[2], a] };
-            blend_pixel(img, x, row, c);
-        }
-    }
-}
-
-/// 字标在镜面下方的倒影(随深度衰减)
-fn draw_wordmark_reflection(
-    img: &mut RgbaImage,
-    text: &str,
-    center_x: f32,
-    center_y: f32,
-    mirror_y: f32,
-    target_width: f32,
-) {
-    let color = [APP_ICON_CYAN[0], APP_ICON_CYAN[1], APP_ICON_CYAN[2], 140];
-    let _ = draw_wordmark(
-        img,
-        text,
-        center_x,
-        center_y,
-        target_width,
-        color,
-        WordmarkDrawOpts {
-            mirror_y: Some(mirror_y),
-            mirror_fade_depth: REFLECT_DEPTH,
-            mirror_strength: 0.26,
-            mirror_peak_boost: 0.09,
-            ..WordmarkDrawOpts::default()
-        },
-    );
-}
-
-const REFLECT_DEPTH: f32 = 46.0;
-
-struct WordmarkMetrics {
-    text_bottom: f32,
-}
-
-struct WordmarkDrawOpts {
-    mirror_y: Option<f32>,
-    mirror_fade_depth: f32,
-    mirror_strength: f32,
-    /// 贴近视平线处略提亮，镜面更清晰
-    mirror_peak_boost: f32,
-    /// 首字母 M 相对其余字号的放大倍率
-    cap_m_scale: f32,
-}
-
-impl Default for WordmarkDrawOpts {
-    fn default() -> Self {
-        Self {
-            mirror_y: None,
-            mirror_fade_depth: 36.0,
-            mirror_strength: 0.4,
-            mirror_peak_boost: 0.0,
-            cap_m_scale: 1.14,
-        }
-    }
-}
-
-#[inline]
-fn wordmark_char_size(ch: char, base: f32, cap_m_scale: f32) -> f32 {
-    if ch == 'M' {
-        base * cap_m_scale
-    } else {
-        base
-    }
-}
-
-fn wordmark_metrics(text: &str, _center_x: f32, center_y: f32, target_width: f32) -> Option<WordmarkMetrics> {
-    use ab_glyph::{Font, FontRef, PxScale, ScaleFont};
-
-    let font = FontRef::try_from_slice(APP_ICON_FONT).ok()?;
-    let cap_m = WordmarkDrawOpts::default().cap_m_scale;
-    let mut size = target_width / measure_text_width(&font, text, 1.0, cap_m);
-    size = size.clamp(18.0, 128.0);
-    let scaled = font.as_scaled(PxScale::from(size));
-    let ascent = scaled.ascent();
-    let descent = scaled.descent();
-    let baseline_y = center_y + (ascent + descent) * 0.5 - descent;
-    let m_extra = size * (cap_m - 1.0) * 0.35;
-    Some(WordmarkMetrics {
-        text_bottom: baseline_y + descent + m_extra,
-    })
 }
 
 fn fill_vertical_gradient(
@@ -950,37 +1047,6 @@ fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
     (a as f32 + (b as f32 - a as f32) * t).round() as u8
 }
 
-fn draw_soft_ellipse(
-    img: &mut RgbaImage,
-    cx: f32,
-    cy: f32,
-    rx: f32,
-    ry: f32,
-    color: [u8; 4],
-) {
-    if rx < 1.0 || ry < 1.0 || color[3] == 0 {
-        return;
-    }
-    let x0 = (cx - rx - 2.0).floor().max(0.0) as i32;
-    let x1 = (cx + rx + 2.0).ceil().min(img.width() as f32 - 1.0) as i32;
-    let y0 = (cy - ry - 2.0).floor().max(0.0) as i32;
-    let y1 = (cy + ry + 2.0).ceil().min(img.height() as f32 - 1.0) as i32;
-    for y in y0..=y1 {
-        for x in x0..=x1 {
-            let nx = (x as f32 + 0.5 - cx) / rx;
-            let ny = (y as f32 + 0.5 - cy) / ry;
-            let d2 = nx * nx + ny * ny;
-            if d2 <= 1.0 {
-                let edge = (1.0 - d2).powf(1.35);
-                let a = ((color[3] as f32) * edge).round() as u8;
-                if a > 0 {
-                    blend_pixel(img, x, y, [color[0], color[1], color[2], a]);
-                }
-            }
-        }
-    }
-}
-
 fn blend_pixel(img: &mut RgbaImage, x: i32, y: i32, fg: [u8; 4]) {
     if fg[3] == 0 || x < 0 || y < 0 {
         return;
@@ -1005,92 +1071,6 @@ fn blend_pixel(img: &mut RgbaImage, x: i32, y: i32, fg: [u8; 4]) {
         blend(fg[2], p[2]),
         (out_a * 255.0).round() as u8,
     ]);
-}
-
-fn draw_wordmark(
-    img: &mut RgbaImage,
-    text: &str,
-    center_x: f32,
-    center_y: f32,
-    target_width: f32,
-    color: [u8; 4],
-    opts: WordmarkDrawOpts,
-) -> bool {
-    use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
-
-    let font = match FontRef::try_from_slice(APP_ICON_FONT) {
-        Ok(f) => f,
-        Err(_) => return false,
-    };
-    let cap_m = opts.cap_m_scale;
-    let mut size = target_width / measure_text_width(&font, text, 1.0, cap_m);
-    size = size.clamp(18.0, 128.0);
-    let base_scale = PxScale::from(size);
-    let base_scaled = font.as_scaled(base_scale);
-    let width = measure_text_width(&font, text, size, cap_m);
-    let ascent = base_scaled.ascent();
-    let descent = base_scaled.descent();
-    let baseline_x = center_x - width * 0.5;
-    let baseline_y = center_y + (ascent + descent) * 0.5 - descent;
-
-    let mut pen_x = baseline_x;
-    let mut prev: Option<(ab_glyph::GlyphId, f32)> = None;
-    for ch in text.chars() {
-        let ch_size = wordmark_char_size(ch, size, cap_m);
-        let ch_scale = PxScale::from(ch_size);
-        let ch_scaled = font.as_scaled(ch_scale);
-        let gid = ch_scaled.glyph_id(ch);
-        if let Some((p, _)) = prev {
-            pen_x += base_scaled.kern(p, gid);
-        }
-        let glyph = gid.with_scale_and_position(ch_scale, point(pen_x, baseline_y));
-        if let Some(outline) = font.outline_glyph(glyph) {
-            let b = outline.px_bounds();
-            outline.draw(|gx, gy, cov| {
-                let px = (b.min.x + gx as f32).round() as i32;
-                let py = (b.min.y + gy as f32).round() as i32;
-                if let Some(mirror_y) = opts.mirror_y {
-                    let py_ref = (2.0 * mirror_y - (b.min.y + gy as f32)).round() as i32;
-                    if py_ref as f32 > mirror_y + 0.5 {
-                        let depth = py_ref as f32 - mirror_y;
-                        let t = (1.0 - depth / opts.mirror_fade_depth).clamp(0.0, 1.0);
-                        let fade = t * t * opts.mirror_strength + t * opts.mirror_peak_boost;
-                        let a = (cov * color[3] as f32 * fade).round() as u8;
-                        if a > 0 {
-                            blend_pixel(img, px, py_ref, [color[0], color[1], color[2], a]);
-                        }
-                    }
-                    return;
-                }
-                let a = (cov * color[3] as f32).round() as u8;
-                if a == 0 {
-                    return;
-                }
-                blend_pixel(img, px, py, [color[0], color[1], color[2], a]);
-            });
-        }
-        pen_x += ch_scaled.h_advance(gid);
-        prev = Some((gid, ch_size));
-    }
-    true
-}
-
-fn measure_text_width(font: &impl ab_glyph::Font, text: &str, size: f32, cap_m_scale: f32) -> f32 {
-    use ab_glyph::{PxScale, ScaleFont};
-    let base_scaled = font.as_scaled(PxScale::from(size));
-    let mut w = 0.0;
-    let mut prev: Option<ab_glyph::GlyphId> = None;
-    for ch in text.chars() {
-        let ch_size = wordmark_char_size(ch, size, cap_m_scale);
-        let ch_scaled = font.as_scaled(PxScale::from(ch_size));
-        let gid = ch_scaled.glyph_id(ch);
-        if let Some(p) = prev {
-            w += base_scaled.kern(p, gid);
-        }
-        w += ch_scaled.h_advance(gid);
-        prev = Some(gid);
-    }
-    w
 }
 
 fn put_px(img: &mut RgbaImage, x: i32, y: i32, a: u8) {
