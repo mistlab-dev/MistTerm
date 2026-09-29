@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/app-icon-preview.png" width="128" height="128" alt="MistTerm"></p>
+
 # MistTerm
 
 [English](#english) · [简体中文](#简体中文)
