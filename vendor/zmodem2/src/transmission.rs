@@ -514,6 +514,8 @@ pub struct Sender {
     peer_cap_byte: u8,
     /// ZFILE 线材兼容模式（在重邀 recover 时自动轮换）。
     zfile_wire_mode: ZfileWireMode,
+    /// 不论对端 ZRINIT 是否声明 `ESCCTL`，都转义全部控制字符（见 [`Sender::set_force_escctl`]）。
+    force_escctl: bool,
 }
 
 impl Sender {
@@ -547,9 +549,19 @@ impl Sender {
             last_wait_file_pos_recover_at: None,
             peer_cap_byte: 0,
             zfile_wire_mode: zfile_wire_mode_default(),
+            force_escctl: false,
         };
         sender.queue_zrqinit()?;
         Ok(sender)
+    }
+
+    /// 始终按 `ESCCTL` 转义全部控制字符（等同 lrzsz `sz -e`），不依赖对端 ZRINIT 声明。
+    ///
+    /// BSD/macOS 的 tty 在 raw 模式下仍可能吞掉 `^V`/`^O` 等控制字符，仅用基础转义表时子包 CRC 失败，
+    /// `rz` 反复 ZRPOS 后放弃。转义表是线程局部的，须在使用该 `Sender` 的线程上调用。
+    pub fn set_force_escctl(&mut self, on: bool) {
+        self.force_escctl = on;
+        zdle::set_escctl(on || (self.peer_cap_byte & Zrinit::ESCCTL.bits()) != 0);
     }
 
     /// Starts sending a file with the provided metadata.
@@ -744,7 +756,7 @@ impl Sender {
         self.peer_cap_byte
     }
 
-    /// 当前发送侧是否在使用 `ESCCTL` 转义；由 `update_receiver_caps` 根据对端 ZRINIT 设置。
+    /// 当前发送侧是否在使用 `ESCCTL` 转义；由 `update_receiver_caps` 根据对端 ZRINIT（或强制开关）设置。
     #[must_use]
     pub fn escctl_enabled(&self) -> bool {
         zdle::escctl_enabled()
@@ -1032,7 +1044,7 @@ impl Sender {
         self.peer_cap_byte = caps;
         // 对端 `rz -e/-bye` 在 ZRINIT 里声明 `ESCCTL`，要求发送端把所有控制字符 ZDLE-escape；
         // 否则子包通过 PTY 时被 tty 截断、对端 CRC 失败、不停重发 ZRINIT 直至回退 X/YMODEM。
-        let want_escctl = (caps & Zrinit::ESCCTL.bits()) != 0;
+        let want_escctl = self.force_escctl || (caps & Zrinit::ESCCTL.bits()) != 0;
         zdle::set_escctl(want_escctl);
         let rx_buf_size = u16::from_le_bytes([flags[0], flags[1]]) as usize;
         let can_ovio = (caps & Zrinit::CANOVIO.bits()) != 0;

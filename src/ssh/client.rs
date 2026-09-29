@@ -150,6 +150,38 @@ pub fn tick_keepalive(session: &Session) {
     let _ = session.keepalive_send();
 }
 
+/// 在 `session` 上打开交互式 shell 通道（`cols`/`rows` 为字符网格，需与本地终端模拟器一致）。
+pub fn open_shell_channel(session: &Session, cols: u32, rows: u32) -> Result<ssh2::Channel, String> {
+    // 打开 channel/shell 时使用阻塞模式，避免 Session(-37) Would block
+    let _guard = SessionBlockingGuard::new(session);
+
+    let mut channel = session
+        .channel_session()
+        .map_err(|e| format!("Failed to open channel: {}", e))?;
+
+    let cols = cols.clamp(20, 512);
+    let rows = rows.clamp(5, 256);
+    let px_w = cols.saturating_mul(9);
+    let px_h = rows.saturating_mul(16);
+
+    // 请求 PTY（尺寸错误会导致远端按 80 列换行、vim 只开一行等）
+    channel
+        .request_pty(
+            "xterm-256color",
+            None,
+            Some((cols, rows, px_w, px_h)),
+        )
+        .map_err(|e| format!("Failed to request PTY: {}", e))?;
+
+    // 启动 shell
+    channel
+        .shell()
+        .map_err(|e| format!("Failed to start shell: {}", e))?;
+
+    log::info!("Shell channel opened");
+    Ok(channel)
+}
+
 /// SSH 客户端
 pub struct SshClient {
     session: Option<Session>,
@@ -187,37 +219,8 @@ impl SshClient {
 
     /// 打开交互式 shell 通道（`cols`/`rows` 为字符网格，需与本地终端模拟器一致）
     pub fn open_shell(&mut self, cols: u32, rows: u32) -> Result<ssh2::Channel, String> {
-        let session = self.session.as_mut()
-            .ok_or("Not connected")?;
-
-        // 打开 channel/shell 时使用阻塞模式，避免 Session(-37) Would block
-        let _guard = SessionBlockingGuard::new(session);
-
-        let mut channel = session
-            .channel_session()
-            .map_err(|e| format!("Failed to open channel: {}", e))?;
-
-        let cols = cols.clamp(20, 512);
-        let rows = rows.clamp(5, 256);
-        let px_w = cols.saturating_mul(9);
-        let px_h = rows.saturating_mul(16);
-
-        // 请求 PTY（尺寸错误会导致远端按 80 列换行、vim 只开一行等）
-        channel
-            .request_pty(
-                "xterm-256color",
-                None,
-                Some((cols, rows, px_w, px_h)),
-            )
-            .map_err(|e| format!("Failed to request PTY: {}", e))?;
-
-        // 启动 shell
-        channel
-            .shell()
-            .map_err(|e| format!("Failed to start shell: {}", e))?;
-
-        log::info!("Shell channel opened");
-        Ok(channel)
+        let session = self.session.as_ref().ok_or("Not connected")?;
+        open_shell_channel(session, cols, rows)
     }
 
     /// 发送数据到 SSH 通道
@@ -252,10 +255,12 @@ impl SshClient {
     }
 
     /// 非交互 `exec`（独立 channel，不占用已打开的 shell）。
+    ///
+    /// 仅供 CLI / 批量执行在**独立连接**上跑用户命令：命令可能长时间无输出，故不设超时。
     pub fn exec_command(&mut self, command: &str) -> Result<(String, i32), String> {
         use std::io::Read;
         let session = self.session.as_mut().ok_or("Not connected")?;
-        let _guard = SessionBlockingGuard::new(session);
+        let _guard = SessionBlockingGuard::with_timeout(session, 0);
         let mut channel = session
             .channel_session()
             .map_err(|e| format!("打开 exec 通道失败: {e}"))?;
@@ -271,6 +276,14 @@ impl SshClient {
         let code = channel.exit_status().unwrap_or(-1);
         let stdout = String::from_utf8_lossy(&output).into_owned();
         Ok((stdout, code))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_session_for_test(session: Session) -> Self {
+        Self {
+            session: Some(session),
+            config: SshConfig::default(),
+        }
     }
 
     /// 获取 SSH 会话（用于文件传输等高级操作）
