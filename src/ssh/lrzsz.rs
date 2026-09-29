@@ -454,7 +454,6 @@ impl LrzszTransfer {
             if let Some(ref chan) = *chan_lock {
                 if let Ok(mut c) = chan.lock() {
                     let _ = c.write_all(data);
-                    let _ = c.flush();
                     log::debug!("ZMODEM wrote {} bytes to channel", data.len());
                 }
             }

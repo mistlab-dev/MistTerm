@@ -5,15 +5,13 @@
 //!
 //! **与本文件相关的传文件入口(与 SFTP 侧栏、终端内 `rz` 并列，互不合并实现)**：
 //! - **ZMODEM**：`rz` 检测 → `LrzszTransfer::start_send`(`zmodem2` + shell 泵)。
-//! - **直传·SCP**：[`TerminalView::start_upload`](TerminalView::start_upload)(当前为 `scp_send`)。
-//! - **直传·cat**：[`TerminalView::start_upload_to_remote`](TerminalView::start_upload_to_remote)(`cat >` 通道)。
+//! - **直传·SCP**：[`TerminalView::start_upload`](TerminalView::start_upload)(`crate::ssh::ScpUpload`，分块排在 shell 泵线程)。
 
 use eframe::egui;
 use arboard::Clipboard;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
-use std::thread;
 use std::time::{Duration, Instant};
 use crate::core::{ServerAuditEvent, ServerAuditProbe};
 use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, LrzszTransfer, TransferEvent, format_ssh_connect_error};
@@ -282,8 +280,6 @@ impl TerminalView {
     /// 断线缓存输入上限(字节)
     const OFFLINE_INPUT_CAP: usize = 64 * 1024;
 
-    const SFTP_RETRY_ATTEMPTS: usize = 160;
-    const SFTP_RETRY_SLEEP_MS: u64 = 8;
     /// Scroll 内容与视口边框的极小余量，避免偶发裁切一个字形
     const INNER_TEXT_SLACK: f32 = 0.0;
     /// ScrollArea **内容区内宽**(已不含纵向滚动条)→ TextEdit.desired_width
@@ -549,72 +545,24 @@ impl TerminalView {
         });
     }
 
-    fn is_would_block_text(msg: &str) -> bool {
-        let msg = msg.to_lowercase();
-        msg.contains("would block")
-            || msg.contains("eagain")
-            || msg.contains("resource temporarily unavailable")
-            || msg.contains("libssh2_error_eagain")
-            || msg.contains("try again")
-    }
-
-    fn is_would_block_like(err: &std::io::Error) -> bool {
-        if err.kind() == std::io::ErrorKind::WouldBlock
-            || err.kind() == std::io::ErrorKind::Interrupted
-        {
-            return true;
+    /// 本帧拖入但无指针位置的文件(从 Finder 等其他应用拖入时，系统拖拽期间窗口收不到
+    /// 鼠标移动，egui 指针位置为空)：[`Self::collect_file_drops_into`] 无法判定落在哪个
+    /// 终端，交由宿主投给活动终端。有指针位置时返回空，仍按落点归属终端。
+    pub(crate) fn unplaced_dropped_files(input: &egui::InputState) -> Vec<PathBuf> {
+        if input.pointer.interact_pos().is_some() {
+            return Vec::new();
         }
-        Self::is_would_block_text(&err.to_string())
+        input
+            .raw
+            .dropped_files
+            .iter()
+            .filter_map(|f| f.path.clone())
+            .collect()
     }
 
     #[inline]
     fn locale_last(&self) -> crate::i18n::Locale {
         crate::i18n::Locale::from(self.ui_lang_last)
-    }
-
-    fn retry_sftp_op<T, E, F>(
-        locale: crate::i18n::Locale,
-        mut op: F,
-        label_en: &'static str,
-        label_zh: &'static str,
-    ) -> Result<T, String>
-    where
-        F: FnMut() -> Result<T, E>,
-        E: std::fmt::Display,
-    {
-        let label = locale.tr(label_en, label_zh);
-        let mut last_err: Option<E> = None;
-        for _ in 0..Self::SFTP_RETRY_ATTEMPTS {
-            match op() {
-                Ok(v) => return Ok(v),
-                Err(e) => {
-                    let msg = e.to_string();
-                    if Self::is_would_block_text(&msg) {
-                        last_err = Some(e);
-                        thread::sleep(Duration::from_millis(Self::SFTP_RETRY_SLEEP_MS));
-                        continue;
-                    }
-                    return Err(match locale.lang {
-                        UiLanguage::Zh => format!("{}：{}", label, msg),
-                        UiLanguage::En => format!("{}: {}", label, msg),
-                    });
-                }
-            }
-        }
-        if let Some(e) = last_err {
-            let last = e.to_string();
-            return Err(match locale.lang {
-                UiLanguage::Zh => format!("{}：重试超时(最后错误：{})", label, last),
-                UiLanguage::En => format!(
-                    "{}: retry timed out (last error: {})",
-                    label, last
-                ),
-            });
-        }
-        Err(match locale.lang {
-            UiLanguage::Zh => format!("{}：重试失败", label),
-            UiLanguage::En => format!("{}: retry failed", label),
-        })
     }
 
     fn contains_shell_prompt_fragment(text: &str) -> bool {
@@ -2937,20 +2885,11 @@ impl TerminalView {
             );
         }
 
-        let session_id = self.session_id.ok_or_else(|| {
+        let handle = self.ssh_handle.as_ref().ok_or_else(|| {
             loc_ui
                 .tr("No SSH session", "没有 SSH 会话")
                 .to_string()
         })?;
-        let session = self
-            .ssh_manager
-            .as_ref()
-            .and_then(|m| m.get_session(session_id))
-            .ok_or_else(|| {
-                loc_ui
-                    .tr("Could not acquire SSH session", "获取 SSH 会话失败")
-                    .to_string()
-            })?;
 
         let file_name = path
             .file_name()
@@ -2962,150 +2901,10 @@ impl TerminalView {
             .to_string_lossy()
             .to_string();
 
-        let path_buf = path.to_path_buf();
         let remote_path = format!("./{}", file_name);
         let (tx, rx) = mpsc::channel::<Result<String, String>>();
+        crate::ssh::ScpUpload::start(handle, path, remote_path, loc_ui, tx)?;
         self.upload_result_rx = Some(rx);
-        let lang = self.ui_lang_last;
-
-        thread::spawn(move || {
-            let locale = crate::i18n::Locale::from(lang);
-            let result = (|| -> Result<String, String> {
-                let data = std::fs::read(&path_buf).map_err(|e| {
-                    format!(
-                        "{} {}",
-                        locale.tr("Failed to read file:", "读取文件失败："),
-                        e
-                    )
-                })?;
-                let total_size = data.len();
-                log::info!(
-                    "Starting SSH SCP upload: {} ({} bytes)",
-                    path_buf.display(),
-                    total_size
-                );
-                // 用 SCP 直传替代 cat >，避免 wait_close 卡住导致无回执
-                let mut scp = session
-                    .scp_send(Path::new(&remote_path), 0o644, total_size as u64, None)
-                    .map_err(|e| {
-                        format!(
-                            "{} {}",
-                            locale.tr("Failed to open SCP channel:", "创建 SCP 通道失败："),
-                            e
-                        )
-                    })?;
-                use std::io::Write;
-                scp.write_all(&data).map_err(|e| {
-                    format!(
-                        "{} {}",
-                        locale.tr("SCP write failed:", "SCP 写入失败："),
-                        e
-                    )
-                })?;
-                scp.send_eof().map_err(|e| {
-                    format!(
-                        "{} {}",
-                        locale.tr("SCP send_eof failed:", "SCP 发送 EOF 失败："),
-                        e
-                    )
-                })?;
-                scp.wait_eof().map_err(|e| {
-                    format!(
-                        "{} {}",
-                        locale.tr("SCP wait_eof failed:", "SCP 等待 EOF 失败："),
-                        e
-                    )
-                })?;
-                scp.close().map_err(|e| {
-                    format!(
-                        "{} {}",
-                        locale.tr("SCP close failed:", "SCP 关闭失败："),
-                        e
-                    )
-                })?;
-                scp.wait_close().map_err(|e| {
-                    format!(
-                        "{} {}",
-                        locale.tr("SCP wait_close failed:", "SCP 等待关闭失败："),
-                        e
-                    )
-                })?;
-                Ok(remote_path.clone())
-            })();
-
-            let _ = tx.send(result);
-        });
-
-        Ok(())
-    }
-
-    pub fn start_upload_to_remote(&mut self, local_path: &Path, remote_path: &str) -> Result<(), String> {
-        let loc = self.locale_last();
-        let session_id = self.session_id.ok_or_else(|| {
-            loc.tr("No SSH session", "没有 SSH 会话").to_string()
-        })?;
-        let session = self
-            .ssh_manager
-            .as_ref()
-            .and_then(|m| m.get_session(session_id))
-            .ok_or_else(|| {
-                loc.tr("Could not acquire SSH session", "获取 SSH 会话失败")
-                    .to_string()
-            })?;
-
-        let data = std::fs::read(local_path).map_err(|e| {
-            format!(
-                "{} {}",
-                loc.tr("Failed to read local file:", "读取本地文件失败："),
-                e
-            )
-        })?;
-        let sftp = Self::retry_sftp_op(
-            loc,
-            || session.sftp(),
-            "Failed to open SFTP channel",
-            "创建 SFTP 通道失败",
-        )?;
-        let mut remote = Self::retry_sftp_op(
-            loc,
-            || sftp.create(Path::new(remote_path)),
-            "Failed to create remote file",
-            "创建远端文件失败",
-        )?;
-
-        use std::io::Write;
-        let mut written = 0usize;
-        while written < data.len() {
-            match remote.write(&data[written..]) {
-                Ok(0) => {
-                    return Err(
-                        loc.tr(
-                            "SFTP upload stalled: peer stopped accepting data",
-                            "SFTP 上传中断：远端未继续接收数据",
-                        )
-                        .to_string(),
-                    );
-                }
-                Ok(n) => written += n,
-                Err(e) => {
-                    if Self::is_would_block_like(&e) {
-                        thread::sleep(Duration::from_millis(8));
-                        continue;
-                    }
-                    return Err(format!(
-                        "{} {}",
-                        loc.tr("SFTP write failed:", "SFTP 上传写入失败："),
-                        e
-                    ));
-                }
-            }
-        }
-        Self::retry_sftp_op(
-            loc,
-            || remote.flush(),
-            "SFTP upload flush failed",
-            "SFTP 上传 flush 失败",
-        )?;
         Ok(())
     }
 
@@ -3494,5 +3293,48 @@ fn human_readable_size(size: u64) -> String {
 impl Default for TerminalView {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod drop_tests {
+    use super::*;
+
+    fn frame(ctx: &egui::Context, events: Vec<egui::Event>, dropped: &[&str]) -> Vec<PathBuf> {
+        let raw = egui::RawInput {
+            events,
+            dropped_files: dropped
+                .iter()
+                .map(|p| egui::DroppedFile {
+                    path: Some(PathBuf::from(p)),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let mut out = Vec::new();
+        let _ = ctx.run(raw, |ctx| {
+            out = ctx.input(TerminalView::unplaced_dropped_files);
+        });
+        out
+    }
+
+    #[test]
+    fn drop_from_other_app_without_pointer_goes_to_host() {
+        let ctx = egui::Context::default();
+        frame(&ctx, vec![egui::Event::PointerMoved(egui::pos2(50.0, 50.0))], &[]);
+        frame(&ctx, vec![egui::Event::PointerGone], &[]);
+        frame(&ctx, vec![], &[]);
+        assert_eq!(
+            frame(&ctx, vec![], &["/tmp/a.bin"]),
+            vec![PathBuf::from("/tmp/a.bin")]
+        );
+    }
+
+    #[test]
+    fn drop_with_known_pointer_is_left_to_the_pane_under_it() {
+        let ctx = egui::Context::default();
+        frame(&ctx, vec![egui::Event::PointerMoved(egui::pos2(50.0, 50.0))], &[]);
+        assert!(frame(&ctx, vec![], &["/tmp/a.bin"]).is_empty());
     }
 }

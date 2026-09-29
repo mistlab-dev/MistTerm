@@ -2,6 +2,7 @@
 //!
 //! 提供 SFTP 客户端封装，支持文件浏览、上传、下载、删除等操作。
 
+use super::SessionBlockingGuard;
 use ssh2::{Session, Sftp};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -63,33 +64,25 @@ impl SftpEntry {
 /// `[Session(-43)] Timeout waiting for status message` 或 `EAGAIN/-37`）。
 ///
 /// 本结构构造时把会话切到 blocking 模式（SFTP 握手需要多个 RTT，非阻塞模式
-/// 单次调用推不动状态机），Drop 时复位 non-blocking 让 shell 泵继续非阻塞
+/// 单次调用推不动状态机）并设超时，Drop 时复位 non-blocking 让 shell 泵继续非阻塞
 /// 读写——参考 `manager.rs::exec_on_cloned_session` 的相同模式。
 pub struct SftpClient {
+    // 字段按声明顺序 drop：`sftp` 须在 `_blocking` 恢复非阻塞之前关闭。
     sftp: Sftp,
-    session: Session,
+    _blocking: SessionBlockingGuard,
 }
 
 impl SftpClient {
     /// 从 SSH 会话创建 SFTP 客户端。`session` 必须由 shell 泵线程传入。
     pub fn new(session: &Session) -> Result<Self, String> {
-        session.set_blocking(true);
-        match session.sftp() {
-            Ok(sftp) => Ok(Self {
-                sftp,
-                session: session.clone(),
-            }),
-            Err(e) => {
-                session.set_blocking(false);
-                Err(format!("Failed to create SFTP channel: {}", e))
-            }
-        }
-    }
-}
-
-impl Drop for SftpClient {
-    fn drop(&mut self) {
-        self.session.set_blocking(false);
+        let blocking = SessionBlockingGuard::new(session);
+        let sftp = session
+            .sftp()
+            .map_err(|e| format!("Failed to create SFTP channel: {}", e))?;
+        Ok(Self {
+            sftp,
+            _blocking: blocking,
+        })
     }
 }
 

@@ -95,6 +95,8 @@ pub type ShellPumpTx = std::sync::mpsc::SyncSender<ShellPumpCommand>;
 /// shell 泵命令队列容量（条）
 const SHELL_PUMP_QUEUE_CAP: usize = 512;
 const RESIZE_QUEUE_CAP: usize = 16;
+/// 泵线程上一次 `exec_remote` 单次阻塞调用最长等待（毫秒）。
+const PUMP_EXEC_TIMEOUT_MS: u32 = 15_000;
 
 /// SSH 消息类型
 #[derive(Debug, Clone)]
@@ -384,6 +386,9 @@ impl SshManager {
     }
 
     /// 写入 PTY：按 libssh2 **写窗口**分块，遇窗口满 / EAGAIN 时先读入站再短睡，避免 ZMODEM 大包死循环。
+    ///
+    /// 不能调用 `Channel::flush()`：ssh2 的 flush 是 `libssh2_channel_flush_ex`，会丢弃尚未读取的入站数据，
+    /// 且 libssh2 ≤1.11.1 对不足 4 字节的数据包会算出约 2^32 的窗口退还量，服务端随即关闭通道（libssh2#2020）。
     pub(crate) fn write_pty_with_drain(
         channel: &mut Channel,
         data: &[u8],
@@ -516,36 +521,6 @@ impl SshManager {
                 thread::sleep(Duration::from_micros(150));
             }
         }
-
-        let mut flush_no_progress = 0usize;
-        loop {
-            match channel.flush() {
-                Ok(()) => break,
-                Err(e) if Self::is_retryable_write_error(&e) => {
-                    flush_no_progress += 1;
-                    if flush_no_progress > MAX_NO_PROGRESS {
-                        return Err(e);
-                    }
-                    if Self::pump_channel_reads(
-                        channel,
-                        read_buffer,
-                        message_tx,
-                        session_id,
-                        upload_bypass,
-                        None,
-                    )
-                    .is_err()
-                    {
-                        return Err(std::io::Error::new(
-                            std::io::ErrorKind::ConnectionAborted,
-                            "channel closed",
-                        ));
-                    }
-                    thread::sleep(Duration::from_micros(150));
-                }
-                Err(e) => return Err(e),
-            }
-        }
         Ok(())
     }
 
@@ -610,16 +585,19 @@ impl SshManager {
 
         let mgr_for_pump = self.clone();
 
-        let channel = {
-            let mut sessions = sessions.lock().unwrap();
-            let session = sessions
-                .get_mut(&session_id)
+        // 全局 `sessions` 锁只用来取句柄；开通道是网络往返，必须在锁外做，
+        // 否则一台主机卡住会连带所有会话与 UI 线程。
+        let session = {
+            let sessions = sessions.lock().unwrap();
+            let client = sessions
+                .get(&session_id)
                 .ok_or_else(|| format!("Session {} not found", session_id))?;
-            if !session.is_connected() {
+            if !client.is_connected() {
                 return Err(format!("Session {} is not connected", session_id));
             }
-            session.open_shell(initial_cols, initial_rows)?
+            client.get_session().clone()
         };
+        let channel = super::client::open_shell_channel(&session, initial_cols, initial_rows)?;
 
         shell_pump::spawn_shell_pump(
             channel,
@@ -651,9 +629,8 @@ impl SshManager {
     }
 
     pub(crate) fn tick_session_keepalive(&self, session_id: SshSessionId) {
-        let sessions = self.sessions.lock().unwrap();
-        if let Some(client) = sessions.get(&session_id) {
-            super::client::tick_keepalive(client.get_session());
+        if let Some(session) = self.get_session(session_id) {
+            super::client::tick_keepalive(&session);
         }
     }
 
@@ -670,7 +647,8 @@ impl SshManager {
 
     fn exec_on_cloned_session(session: &ssh2::Session, command: &str) -> Result<String, String> {
         use std::io::Read;
-        let _guard = SessionBlockingGuard::new(session);
+        // 在 shell 泵线程执行，期间 PTY 读写暂停，超时要比默认更短。
+        let _guard = SessionBlockingGuard::with_timeout(session, PUMP_EXEC_TIMEOUT_MS);
         let mut channel = session
             .channel_session()
             .map_err(|e| format!("打开 exec 通道失败: {}", e))?;
@@ -1580,5 +1558,75 @@ mod tests {
             "switching to a tab whose pump is stuck froze the UI thread — resize_pty must be non-blocking"
         );
         let _ = a_pump.join();
+    }
+
+    /// 一个 libssh2 内部锁被长期占住的会话：阻塞握手连到一个只 accept、从不回 banner 的服务端。
+    /// drop 返回的 `TcpStream`（服务端一侧）后握手失败、锁释放。
+    fn session_with_inner_lock_held() -> (ssh2::Session, std::net::TcpStream) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = std::net::TcpStream::connect(addr).unwrap();
+        let (server_side, _) = listener.accept().unwrap();
+        let mut session = ssh2::Session::new().unwrap();
+        session.set_tcp_stream(client);
+        session.set_blocking(true);
+        let mut hs = session.clone();
+        std::thread::spawn(move || {
+            let _ = hs.handshake();
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        (session, server_side)
+    }
+
+    fn manager_with_stuck_session(id: SshSessionId) -> (SshManager, std::net::TcpStream) {
+        let (mgr, _rx) = SshManager::new();
+        let (session, server_side) = session_with_inner_lock_held();
+        mgr.sessions
+            .lock()
+            .unwrap()
+            .insert(id, SshClient::with_session_for_test(session));
+        (mgr, server_side)
+    }
+
+    // 回归：某台主机网络卡住时，对它的 keepalive 不能占着全局 `sessions` 锁，
+    // 否则其它会话的泵线程、UI 线程取 session 时全被连带卡死。
+    #[test]
+    fn keepalive_on_stuck_session_does_not_hold_global_lock() {
+        let (mgr, server_side) = manager_with_stuck_session(7);
+        let ka = mgr.clone();
+        let ka_thread = std::thread::spawn(move || ka.tick_session_keepalive(7));
+        std::thread::sleep(Duration::from_millis(200));
+
+        let probe = mgr.clone();
+        let unblocked = completes_within(Duration::from_secs(1), move || {
+            let _ = probe.session_count();
+        });
+        drop(server_side);
+        let _ = ka_thread.join();
+        assert!(
+            unblocked,
+            "tick_session_keepalive held the global sessions lock while blocked on one session"
+        );
+    }
+
+    #[test]
+    fn open_shell_on_stuck_session_does_not_hold_global_lock() {
+        let (mgr, server_side) = manager_with_stuck_session(8);
+        let opener = mgr.clone();
+        let open_thread = std::thread::spawn(move || {
+            let _ = opener.start_interactive_shell(8, 80, 24);
+        });
+        std::thread::sleep(Duration::from_millis(200));
+
+        let probe = mgr.clone();
+        let unblocked = completes_within(Duration::from_secs(1), move || {
+            let _ = probe.session_count();
+        });
+        drop(server_side);
+        let _ = open_thread.join();
+        assert!(
+            unblocked,
+            "start_interactive_shell held the global sessions lock while opening a channel"
+        );
     }
 }

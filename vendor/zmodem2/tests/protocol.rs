@@ -155,6 +155,32 @@ fn test_sender_wait_file_pos_zrqinit_then_zrinit_both_queue_outgoing() {
     );
 }
 
+/// 对端 ZRINIT 未声明 ESCCTL 时，强制开关仍须转义 `^V`/`^O` 等控制字符（BSD/macOS tty 会吞掉它们）。
+#[test]
+fn test_sender_force_escctl_escapes_control_bytes_without_peer_request() {
+    let payload: Vec<u8> = (0u8..=0xff).collect();
+    let mut sender = Sender::new().unwrap();
+    sender.set_force_escctl(true);
+    sender.advance_outgoing(sender.drain_outgoing().len());
+    sender.start_file(b"ctl.bin", payload.len() as u32).unwrap();
+
+    for frame in [Frame::ZRINIT, Frame::ZRPOS] {
+        let mut bytes = Vec::new();
+        Header::new(Encoding::ZHEX, frame, &[0; 4]).write(&mut bytes).unwrap();
+        assert!(sender.feed_incoming(&bytes).unwrap() > 0);
+        sender.advance_outgoing(sender.drain_outgoing().len());
+    }
+    assert!(sender.escctl_enabled());
+
+    let request = sender.poll_file().expect("file request after ZRPOS");
+    sender.feed_file(&payload[..request.len]).unwrap();
+    let wire = sender.drain_outgoing();
+    assert!(!wire.is_empty());
+    for ctl in [0x16u8, 0x0f, 0x03, 0x1a] {
+        assert!(!wire.contains(&ctl), "raw control byte 0x{ctl:02x} on the wire");
+    }
+}
+
 #[test]
 fn test_sender_wait_file_pos_retry_queues_outgoing() {
     let mut sender = Sender::new().unwrap();
