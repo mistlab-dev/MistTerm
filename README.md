@@ -1,14 +1,22 @@
-<p align="center"><img src="assets/app-icon-preview.png" width="128" height="128" alt="MistTerm"></p>
+<p align="center">
+  <img src="assets/app-icon-preview.png" width="128" height="128" alt="MistTerm">
+</p>
 
-# MistTerm
+<h1 align="center">MistTerm</h1>
 
-[English](#english) · [简体中文](#简体中文)
+<p align="center">
+  Modern SSH terminal for DevOps and backend developers — Rust, GPU UI, multi-tab.
+</p>
 
-[![Release](https://img.shields.io/github/v/release/mistlab-dev/MistTerm)](https://github.com/mistlab-dev/MistTerm/releases/latest)
-[![Website](https://img.shields.io/badge/website-mistlab.dev-blue)](https://mistlab.dev)
-[![License](https://img.shields.io/badge/license-AGPL--3.0-lightgrey)](LICENSE)
+<p align="center">
+  <a href="https://github.com/mistlab-dev/MistTerm/releases/latest"><img src="https://img.shields.io/github/v/release/mistlab-dev/MistTerm" alt="Release"></a>
+  <a href="https://mistlab.dev"><img src="https://img.shields.io/badge/website-mistlab.dev-blue" alt="Website"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-lightgrey" alt="License"></a>
+</p>
 
-Modern SSH terminal for DevOps and backend developers — Rust, GPU UI, multi-tab.
+<p align="center">
+  <a href="#english">English</a> · <a href="#简体中文">简体中文</a>
+</p>
 
 ---
 
