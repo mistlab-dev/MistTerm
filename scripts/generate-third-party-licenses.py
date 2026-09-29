@@ -41,7 +41,7 @@ Do not edit it by hand.
 
 def cargo_metadata() -> dict:
     out = subprocess.run(
-        ["cargo", "metadata", "--format-version", "1", "--locked", "--all-features"],
+        ["cargo", "metadata", "--format-version", "1", "--all-features"],
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -132,16 +132,42 @@ def render(packages: list[dict]) -> str:
     return "\n".join(out) + "\n"
 
 
+def listed_components(text: str) -> set[tuple[str, str]]:
+    """(crate name, license) pairs from the Components section; versions ignored."""
+    pairs: set[tuple[str, str]] = set()
+    lines = text.split("\n")
+    try:
+        start = lines.index("Components") + 3
+    except ValueError:
+        return pairs
+    for line in lines[start:]:
+        if not line.strip():
+            break
+        name, _version, spdx = line.split(maxsplit=2)
+        pairs.add((name, spdx.strip()))
+    return pairs
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--check", action="store_true", help="fail if the file is out of date")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="fail if crates or their licenses differ from the committed file "
+        "(versions are ignored: Cargo.lock is not committed, so CI resolves fresh patch versions)",
+    )
     args = parser.parse_args()
 
     packages = shipped_packages(cargo_metadata())
     content = render(packages)
     if args.check:
         current = OUT.read_text(encoding="utf-8") if OUT.exists() else ""
-        if current != content:
+        want, have = listed_components(content), listed_components(current)
+        if want != have:
+            for name, spdx in sorted(want - have):
+                print(f"  missing: {name} ({spdx})", file=sys.stderr)
+            for name, spdx in sorted(have - want):
+                print(f"  stale:   {name} ({spdx})", file=sys.stderr)
             print(
                 f"{OUT.relative_to(ROOT)} is out of date; run "
                 "`python3 scripts/generate-third-party-licenses.py` and commit the result.",
