@@ -410,6 +410,7 @@ pub(super) fn run_upload_zmodem2(
     }
 
     let mut sender = ZmodemSender::new().map_err(|e| format!("ZMODEM Sender::new: {}", e))?;
+    sender.set_force_escctl(true);
     // `Sender::new()` 会排队 ZRQINIT（接收端邀请语）；远端 `rz` 已在发 ZRQINIT，本机作为发送端
     // 应回复 ZRINIT（由 vendor/zmodem2 对 ZRQINIT 的处理完成），勿再向 PTY 写入第二条 ZRQINIT。
     let drop_pre = {

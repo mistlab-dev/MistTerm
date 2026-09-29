@@ -67,7 +67,14 @@ pub fn local_sshd_available() -> bool {
     sess.handshake().is_ok()
 }
 
-/// 连接并密码认证；失败返回 `None`（调用方应 skip 测试）。
+/// 可选私钥路径（`MISTTERM_TEST_SSH_KEY`），用于只开公钥认证的测试 sshd。
+pub fn ssh_key_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("MISTTERM_TEST_SSH_KEY")
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+}
+
+/// 连接并认证（私钥 → 密码 → agent）；失败返回 `None`（调用方应 skip 测试）。
 pub fn connect_local_sshd() -> Option<Session> {
     if !local_sshd_available() {
         return None;
@@ -81,7 +88,10 @@ pub fn connect_local_sshd() -> Option<Session> {
     sess.handshake().ok()?;
     let user = ssh_user();
     let pass = ssh_password();
-    if sess.userauth_password(&user, &pass).is_err()
+    let key_ok = ssh_key_path()
+        .is_some_and(|key| sess.userauth_pubkey_file(&user, None, &key, None).is_ok());
+    if !key_ok
+        && sess.userauth_password(&user, &pass).is_err()
         && sess.userauth_agent(&user).is_err()
     {
         return None;
