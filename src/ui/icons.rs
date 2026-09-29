@@ -677,10 +677,14 @@ const APP_ICON_BUNDLE_SIZE: u32 = 1024;
 const APP_ICON_BUNDLE_PAD_FRAC: f32 = 0.02;
 const APP_ICON_BUNDLE_CORNER_FRAC: f32 = 0.10;
 
+/// Windows 任务栏 / exe 资源图标规格(`assets/app-icon.ico` 同样使用)
+pub const APP_ICON_WINDOWS_PAD_FRAC: f32 = 0.02;
+pub const APP_ICON_WINDOWS_CORNER_FRAC: f32 = 0.10;
+
 /// 图标透明外圈比例：macOS Dock squircle 需留白；Windows 任务栏为方角缩放，留白会显得更小。
 fn app_icon_outer_pad_frac() -> f32 {
     if cfg!(windows) {
-        0.02
+        APP_ICON_WINDOWS_PAD_FRAC
     } else if cfg!(target_os = "macos") {
         0.08
     } else {
@@ -690,7 +694,7 @@ fn app_icon_outer_pad_frac() -> f32 {
 
 /// 圆角比例：macOS 连续圆角；Windows 任务栏再套方角缩放，圆角过大会吃掉有效面积
 fn app_icon_corner_frac() -> f32 {
-    if cfg!(windows) { 0.10 } else { 0.165 }
+    if cfg!(windows) { APP_ICON_WINDOWS_CORNER_FRAC } else { 0.165 }
 }
 
 /// 窗口 / Dock / 任务栏图标(霓虹 `>_` + 底部烟雾)。
