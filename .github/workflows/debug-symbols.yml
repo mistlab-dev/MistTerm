@@ -1,0 +1,52 @@
+name: Debug Symbols (macOS arm64, non-stripped)
+
+# 临时工作流：产出与 v1.1.20 相同代码、相同 flag、但 **strip=false** 的 macOS arm64 二进制，
+# 用于对线上 stripped 崩溃/卡死样本做符号化定位。用完删除。
+on:
+  push:
+    branches: ['cursor/debug-symbols-tabswitch-3e9f']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # 与发布构建保持一致的 codegen（仅覆盖 strip），保证函数地址与线上 1.1.20 对齐。
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_STRIP: "false"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install macOS dependencies
+        run: brew install libssh2 pkg-config
+
+      - name: Build (release, non-stripped)
+        run: |
+          cargo build --release --bin Mist \
+            --target aarch64-apple-darwin \
+            --features vendored-openssl
+
+      - name: Verify symbols present
+        run: |
+          BIN=target/aarch64-apple-darwin/release/Mist
+          file "$BIN"
+          echo "nm symbol count:"; nm "$BIN" 2>/dev/null | wc -l
+
+      - name: Upload non-stripped binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: Mist-macos-arm64-symbols
+          path: target/aarch64-apple-darwin/release/Mist
+          if-no-files-found: error
