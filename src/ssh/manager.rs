@@ -198,22 +198,47 @@ impl SshSessionHandle {
     }
 
     /// 高优先级写入 PTY，绕过普通输入/ZMODEM 队列；用于中止 ZMODEM 等紧急控制。
+    ///
+    /// 与 [`Self::pump_send`] 同理使用 `try_send`（非阻塞）：泵线程被长读/写卡住、
+    /// `interrupt_tx` 队列打满时**绝不阻塞调用方（UI 线程）**，避免整界面冻死。
     pub fn send_priority_interrupt(&self, data: Vec<u8>) -> Result<(), String> {
         self.interrupt_tx
-            .send(data)
-            .map_err(|e| format!("Interrupt send failed: {}", e))
+            .try_send(data)
+            .map_err(|e| match e {
+                std::sync::mpsc::TrySendError::Full(_) => {
+                    "interrupt queue full, dropped".to_string()
+                }
+                std::sync::mpsc::TrySendError::Disconnected(_) => {
+                    "interrupt queue disconnected".to_string()
+                }
+            })
     }
 
     pub fn shell_pump_tx(&self) -> ShellPumpTx {
         self.pump_tx.clone()
     }
 
+    /// 排入一次 PTY 尺寸变更。
+    ///
+    /// **必须用 `try_send`（非阻塞）**：切换终端标签、拖拽/最大化窗口时 UI 线程会频繁调用本方法；
+    /// 若此刻该会话的 shell 泵线程正卡在阻塞网络读（`recv`）或 `write_pty_with_drain` 上、
+    /// 没在排空 `resize_rx`，有界队列（`RESIZE_QUEUE_CAP`）很快填满。旧代码用阻塞 `send`，
+    /// 一旦队满就把 UI 线程 park 在同步队列上 → **整个界面在切 tab 时冻死**
+    /// （主线程栈表现为 `SyncSender::send` → `_pthread_cond_wait`）。
+    /// resize 是幂等的、下一帧会按最新尺寸再发一次，队满时直接丢弃本次无害。
     pub fn resize_pty(&self, cols: u32, rows: u32) -> Result<(), String> {
         let cols = cols.clamp(20, 512);
         let rows = rows.clamp(5, 256);
         self.resize_tx
-            .send((cols, rows))
-            .map_err(|e| format!("Resize failed: {}", e))
+            .try_send((cols, rows))
+            .map_err(|e| match e {
+                std::sync::mpsc::TrySendError::Full(_) => {
+                    "resize queue full, dropped (will re-send next frame)".to_string()
+                }
+                std::sync::mpsc::TrySendError::Disconnected(_) => {
+                    "resize queue disconnected".to_string()
+                }
+            })
     }
 
     /// 将远程一次 `exec` 排入 **shell 泵线程**，与 PTY 读写在同一 OS 线程互斥执行。
@@ -1425,9 +1450,83 @@ mod shell_pump {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::sync::mpsc::sync_channel;
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
     #[test]
     fn manager_new_drops_cleanly() {
         let (mgr, _rx) = super::SshManager::new();
         drop(mgr);
+    }
+
+    /// 在独立线程里跑 `f`，`dur` 内完成返回 true；否则（被阻塞）返回 false。
+    fn completes_within<F: FnOnce() + Send + 'static>(dur: Duration, f: F) -> bool {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            f();
+            let _ = tx.send(());
+        });
+        rx.recv_timeout(dur).is_ok()
+    }
+
+    /// 构造一个各队列**已被填满**、且接收端一直不排空（模拟 shell 泵卡在阻塞读）的会话句柄。
+    /// 返回句柄与需要保活的接收端（drop 掉会让通道断开，改变 send 行为）。
+    #[allow(clippy::type_complexity)]
+    fn handle_with_full_queues() -> (
+        SshSessionHandle,
+        (
+            Receiver<ShellPumpCommand>,
+            Receiver<Vec<u8>>,
+            Receiver<(u32, u32)>,
+        ),
+    ) {
+        let (pump_tx, pump_rx) = sync_channel::<ShellPumpCommand>(SHELL_PUMP_QUEUE_CAP);
+        let (interrupt_tx, interrupt_rx) = sync_channel::<Vec<u8>>(8);
+        let (resize_tx, resize_rx) = sync_channel::<(u32, u32)>(RESIZE_QUEUE_CAP);
+        for _ in 0..RESIZE_QUEUE_CAP {
+            resize_tx.try_send((80, 24)).expect("prefill resize queue");
+        }
+        for _ in 0..8 {
+            interrupt_tx.try_send(vec![0x03]).expect("prefill interrupt queue");
+        }
+        let handle = SshSessionHandle {
+            session_id: 0,
+            pump_tx,
+            interrupt_tx,
+            resize_tx,
+            upload_bypass_slot: Arc::new(Mutex::new(None)),
+        };
+        (handle, (pump_rx, interrupt_rx, resize_rx))
+    }
+
+    // 回归防护：切换主机 tab 时 UI 线程会调 `resize_pty`。若该会话的 shell 泵正卡在阻塞读、
+    // 没排空 resize 队列，阻塞版 `send` 会把 UI 线程 park 在满队列上导致整界面冻死
+    // （sample 主线程栈：SyncSender::send → _pthread_cond_wait）。这里要求它满队列时**立即返回**。
+    #[test]
+    fn resize_pty_does_not_block_when_queue_full() {
+        let (handle, keep) = handle_with_full_queues();
+        let finished = completes_within(Duration::from_secs(2), move || {
+            let _ = handle.resize_pty(100, 40);
+            drop(keep);
+        });
+        assert!(
+            finished,
+            "resize_pty blocked on a full queue — UI-thread freeze regression (use try_send)"
+        );
+    }
+
+    #[test]
+    fn send_priority_interrupt_does_not_block_when_queue_full() {
+        let (handle, keep) = handle_with_full_queues();
+        let finished = completes_within(Duration::from_secs(2), move || {
+            let _ = handle.send_priority_interrupt(vec![0x03]);
+            drop(keep);
+        });
+        assert!(
+            finished,
+            "send_priority_interrupt blocked on a full queue — UI-thread freeze regression (use try_send)"
+        );
     }
 }
