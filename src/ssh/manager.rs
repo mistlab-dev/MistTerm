@@ -1471,34 +1471,43 @@ mod tests {
         rx.recv_timeout(dur).is_ok()
     }
 
-    /// 构造一个各队列**已被填满**、且接收端一直不排空（模拟 shell 泵卡在阻塞读）的会话句柄。
-    /// 返回句柄与需要保活的接收端（drop 掉会让通道断开，改变 send 行为）。
-    #[allow(clippy::type_complexity)]
-    fn handle_with_full_queues() -> (
-        SshSessionHandle,
-        (
-            Receiver<ShellPumpCommand>,
-            Receiver<Vec<u8>>,
-            Receiver<(u32, u32)>,
-        ),
-    ) {
+    /// 接收端三件套：`(pump_rx, interrupt_rx, resize_rx)`。持有它们即可让对应通道保持连通；
+    /// **不去读** `resize_rx` 就等于模拟「shell 泵卡在阻塞读、没排空 resize 队列」。
+    type SessionReceivers = (
+        Receiver<ShellPumpCommand>,
+        Receiver<Vec<u8>>,
+        Receiver<(u32, u32)>,
+    );
+
+    /// 构造一个与真实 shell 会话同构（同样的有界 `sync_channel` 容量）的句柄 + 其接收端。
+    fn new_session_handle(session_id: SshSessionId) -> (SshSessionHandle, SessionReceivers) {
         let (pump_tx, pump_rx) = sync_channel::<ShellPumpCommand>(SHELL_PUMP_QUEUE_CAP);
         let (interrupt_tx, interrupt_rx) = sync_channel::<Vec<u8>>(8);
         let (resize_tx, resize_rx) = sync_channel::<(u32, u32)>(RESIZE_QUEUE_CAP);
-        for _ in 0..RESIZE_QUEUE_CAP {
-            resize_tx.try_send((80, 24)).expect("prefill resize queue");
-        }
-        for _ in 0..8 {
-            interrupt_tx.try_send(vec![0x03]).expect("prefill interrupt queue");
-        }
         let handle = SshSessionHandle {
-            session_id: 0,
+            session_id,
             pump_tx,
             interrupt_tx,
             resize_tx,
             upload_bypass_slot: Arc::new(Mutex::new(None)),
         };
         (handle, (pump_rx, interrupt_rx, resize_rx))
+    }
+
+    /// 在 [`new_session_handle`] 基础上把 resize / interrupt 队列**预填满**，
+    /// 且接收端一直不排空（模拟 shell 泵卡在阻塞读）。
+    fn handle_with_full_queues() -> (SshSessionHandle, SessionReceivers) {
+        let (handle, rxs) = new_session_handle(0);
+        for _ in 0..RESIZE_QUEUE_CAP {
+            handle.resize_tx.try_send((80, 24)).expect("prefill resize queue");
+        }
+        for _ in 0..8 {
+            handle
+                .interrupt_tx
+                .try_send(vec![0x03])
+                .expect("prefill interrupt queue");
+        }
+        (handle, rxs)
     }
 
     // 回归防护：切换主机 tab 时 UI 线程会调 `resize_pty`。若该会话的 shell 泵正卡在阻塞读、
@@ -1528,5 +1537,48 @@ mod tests {
             finished,
             "send_priority_interrupt blocked on a full queue — UI-thread freeze regression (use try_send)"
         );
+    }
+
+    /// 端到端场景回归：**在两台主机的 tab 之间切换，而目标主机的 shell 泵正卡在阻塞读**。
+    ///
+    /// 切到某个终端 tab 会让它重新变可见、尺寸重算，UI 线程随即对该会话连发多次
+    /// `resize_pty()`（响应式布局 / 拖拽 / 最大化都会连发）。若该会话的泵此刻卡在阻塞
+    /// 网络读、没排空 `resize_rx`，有界队列（`RESIZE_QUEUE_CAP`）很快填满：
+    /// 旧代码用阻塞 `send`，第 `RESIZE_QUEUE_CAP+1` 次就把 UI 线程 park 在同步队列上
+    /// → **整界面在切 tab 时冻死**（对应用户 macOS `sample` 主线程栈
+    /// `SyncSender::send → _pthread_cond_wait`）。
+    ///
+    /// 本用例还原该场景：主机 A 的泵健康（有后台线程持续排空），主机 B 的泵卡住
+    /// （接收端一直不读）。模拟「切到 B 的 tab」时 UI 线程对 B 连发远超队列容量的 resize，
+    /// 断言 UI 线程**全程不阻塞**。若把 `resize_pty` 改回阻塞 `send`，本用例会超时失败。
+    #[test]
+    fn switching_to_tab_whose_pump_is_stuck_does_not_freeze_ui() {
+        // 主机 A：泵健康——起一个线程持续排空它的 resize 队列。
+        let (host_a, a_rxs) = new_session_handle(0);
+        let a_pump = std::thread::spawn(move || {
+            let (_pump_rx, _int_rx, resize_rx) = a_rxs;
+            while resize_rx.recv_timeout(Duration::from_millis(50)).is_ok() {}
+        });
+
+        // 主机 B：泵卡在阻塞读——接收端一直不读（drop 会断开通道，故必须持有到调用结束）。
+        let (host_b, b_rxs) = new_session_handle(1);
+
+        // 模拟一次「切到 B 的 tab」：UI 线程对 B 连发远超队列容量（16）的 resize，
+        // 顺带切回 A 也发几次。全部必须在超时内完成 —— 即 UI 线程不被冻住。
+        let finished = completes_within(Duration::from_secs(3), move || {
+            for i in 0..(RESIZE_QUEUE_CAP as u32 * 4) {
+                let _ = host_b.resize_pty(80 + i % 5, 24 + i % 3);
+            }
+            for _ in 0..8 {
+                let _ = host_a.resize_pty(100, 40);
+            }
+            drop(b_rxs); // 调用结束后再断开 B 的通道
+        });
+
+        assert!(
+            finished,
+            "switching to a tab whose pump is stuck froze the UI thread — resize_pty must be non-blocking"
+        );
+        let _ = a_pump.join();
     }
 }
