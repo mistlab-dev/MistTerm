@@ -5914,7 +5914,11 @@ impl MistTermApp {
                 if work.is_empty() {
                     work = source.iter().filter(|f| search_match(f)).cloned().collect();
                 }
-                work.sort_by_key(|f| std::cmp::Reverse(f.usage_count));
+                // Same rule as the default list: archived items stay last.
+                crate::core::sort_fragments_with_archived_last(
+                    &mut work,
+                    crate::core::SortBy::UsageCount,
+                );
             }
             _ => {
                 // §5.3：已归档片段恒置底（稳定排序，不影响组内相对次序）。
