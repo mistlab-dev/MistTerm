@@ -4,10 +4,12 @@
 //! - `minisign-primary.pub`：日常发布用的钥匙。
 //! - `minisign-backup.pub`：离线保存的备用钥匙。日常私钥泄露时，用它签发一个换钥版本，老客户端仍能验证。
 //!
-//! 在 Tian 于自己电脑上生成正式密钥之前，这两个文件是**占位符**：
-//! - 普通构建：占位符被忽略，客户端没有可信公钥，检查更新会明确提示「无法验证更新」，不会信任任何清单。
-//! - 官方发布构建（`MIST_DIST_CHANNEL=github-release`）：`build.rs` 发现占位符会**直接让构建失败**，
-//!   保证不会发出一个更新功能失效的正式版本。
+//! 两把都是 Tian 在自己电脑上生成的正式公钥（私钥加密保存在他那里，主钥私钥另存为 CI `release` 环境 secret）：
+//! - 主钥 key ID `2F850D3521ADC099`
+//! - 备用钥 key ID `E3C0CEA51587625C`
+//!
+//! 防呆仍保留：如果文件被换回占位符（含 `PLACEHOLDER`），普通构建会忽略它（没有可信公钥，检查更新会提示
+//! 「无法验证更新」）；官方发布构建（`MIST_DIST_CHANNEL=github-release`）则由 `build.rs` **直接让构建失败**。
 //!
 //! 测试构建（`--features update-test`）额外信任编译时传入的临时测试公钥 `MIST_UPDATE_TEST_PUBKEY`，
 //! 正式构建不包含这个 feature（`build.rs` 也禁止二者同时出现）。
@@ -57,6 +59,33 @@ mod tests {
             pubkey_line("untrusted comment: PLACEHOLDER\nPLACEHOLDER_KEY\n"),
             None
         );
+    }
+
+    /// 仓库里提交的正式公钥：格式正确、key ID 与注释一致、两把不同。换钥时同步更新这里的期望值。
+    #[test]
+    fn embedded_production_keys_are_valid() {
+        let expected = [
+            (PRIMARY_PUBKEY_FILE, "2F850D3521ADC099"),
+            (BACKUP_PUBKEY_FILE, "E3C0CEA51587625C"),
+        ];
+        let mut lines = Vec::new();
+        for (file, key_id) in expected {
+            let line = pubkey_line(file).expect("embedded key must not be a placeholder");
+            minisign_verify::PublicKey::from_base64(line).expect("embedded key must parse");
+            assert!(
+                file.lines().next().unwrap_or("").ends_with(key_id),
+                "comment must name key ID {key_id}"
+            );
+            use base64::Engine;
+            let raw = base64::engine::general_purpose::STANDARD.decode(line).unwrap();
+            assert_eq!(&raw[..2], b"Ed");
+            let id: String = raw[2..10].iter().rev().map(|b| format!("{b:02X}")).collect();
+            assert_eq!(id, key_id);
+            lines.push(line);
+        }
+        assert_ne!(lines[0], lines[1], "primary and backup keys must differ");
+        #[cfg(not(feature = "update-test"))]
+        assert_eq!(embedded_pubkeys(), lines);
     }
 
     #[test]
