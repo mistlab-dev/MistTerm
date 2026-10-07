@@ -51,6 +51,7 @@ pub enum MacMenuAction {
     HelpShortcuts,
     HelpReportIssue,
     About,
+    CheckForUpdates,
 }
 
 /// 持有 muda 菜单句柄与条目 id，供事件分发与状态同步。
@@ -63,6 +64,7 @@ pub struct NativeAppMenu {
     _tools_menu: Submenu,
     _help_menu: Submenu,
     about: MenuItem,
+    check_updates: MenuItem,
     preferences: MenuItem,
     quit: MenuItem,
     new_session: MenuItem,
@@ -114,6 +116,8 @@ impl NativeAppMenu {
 
         let app_menu = Submenu::new(APP_DISPLAY_NAME, true);
         let about = MenuItem::with_id("mistterm.app.about", l.about, true, None);
+        let check_updates =
+            MenuItem::with_id("mistterm.app.check_updates", l.check_updates, true, None);
         let preferences = MenuItem::with_id(
             "mistterm.app.preferences",
             l.preferences,
@@ -127,6 +131,7 @@ impl NativeAppMenu {
             Some(Accelerator::new(Some(Modifiers::SUPER), Code::KeyQ)),
         );
         app_menu.append(&about)?;
+        app_menu.append(&check_updates)?;
         app_menu.append(&PredefinedMenuItem::separator())?;
         app_menu.append(&preferences)?;
         app_menu.append(&PredefinedMenuItem::separator())?;
@@ -342,6 +347,7 @@ impl NativeAppMenu {
             _tools_menu: tools,
             _help_menu: help,
             about,
+            check_updates,
             preferences,
             quit,
             new_session,
@@ -384,6 +390,7 @@ impl NativeAppMenu {
     fn apply_locale(&self, lang: UiLanguage) {
         let l = menu::labels(lang);
         let _ = self.about.set_text(l.about);
+        let _ = self.check_updates.set_text(l.check_updates);
         let _ = self.preferences.set_text(l.preferences);
         let _ = self.quit.set_text(l.quit);
         let _ = self._terminal_menu.set_text(l.terminal_menu);
@@ -501,6 +508,7 @@ fn build_theme_submenu(
 fn action_for_id(id: &str) -> Option<MacMenuAction> {
     match id {
         "mistterm.app.about" | "mistterm.help.about" => Some(MacMenuAction::About),
+        "mistterm.app.check_updates" => Some(MacMenuAction::CheckForUpdates),
         "mistterm.app.preferences" => Some(MacMenuAction::Preferences),
         "mistterm.app.quit" => Some(MacMenuAction::Quit),
         "mistterm.terminal.import_ssh" | "mistterm.file.import_ssh" => Some(MacMenuAction::ImportSsh),

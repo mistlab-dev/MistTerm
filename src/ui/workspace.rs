@@ -880,6 +880,8 @@ impl MistTermApp {
                                         }
                                     });
                             });
+                        ui.add_space(theme.spacing_sm());
+                        self.update_about_row(ui, ctx, theme);
                         ui.add_space(theme.spacing_md());
                         ui.horizontal(|ui| {
                             if crate::ui::chrome::modal_secondary_icon_button(
@@ -908,6 +910,7 @@ impl MistTermApp {
             self.show_about_dialog = open && !should_close;
         }
         self.render_licenses_modal(ctx, theme);
+        self.render_update_dialog(ctx, theme);
 
         if self.show_preferences_dialog {
             self.show_preferences_modal(ctx, theme);

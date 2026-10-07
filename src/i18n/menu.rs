@@ -53,6 +53,7 @@ pub struct MacMenuLabels {
     pub help_online_docs: &'static str,
     pub help_report_issue: &'static str,
     pub help_about: &'static str,
+    pub check_updates: &'static str,
 }
 
 pub fn labels(lang: UiLanguage) -> MacMenuLabels {
@@ -108,5 +109,6 @@ pub fn labels(lang: UiLanguage) -> MacMenuLabels {
         help_online_docs: loc.tr("Online Documentation", "在线文档"),
         help_report_issue: loc.tr("Report an Issue", "问题反馈"),
         help_about: loc.tr("About Mist", "关于 Mist"),
+        check_updates: loc.tr("Check for Updates…", "检查更新…"),
     }
 }

@@ -281,6 +281,8 @@ pub struct MistTermApp {
     show_about_dialog: bool,
     /// 关于 → 开源许可(第三方许可证全文)
     show_licenses_dialog: bool,
+    /// 自动更新：后台检查状态与「软件更新」窗口。
+    update_ui: update::UpdateUi,
     /// 原型 / 常见桌面习惯：⌘, 偏好设置(主题等)
     show_preferences_dialog: bool,
     /// 偏好设置 → Vault Token 输入草稿(不落盘；保存时写入钥匙串)
@@ -966,6 +968,7 @@ impl MistTermApp {
             show_edit_session_dialog: false,
             show_about_dialog: false,
             show_licenses_dialog: false,
+            update_ui: update::UpdateUi::new(),
             show_preferences_dialog: false,
             pref_vault_token_draft: String::new(),
             show_fragments_dialog: false,
@@ -2318,6 +2321,7 @@ impl MistTermApp {
             || self.show_edit_session_dialog
             || self.show_about_dialog
             || self.show_licenses_dialog
+            || self.update_ui.dialog_open()
             || self.show_preferences_dialog
             || self.show_fragments_dialog
             || self.show_fragment_vars_dialog
@@ -6932,6 +6936,7 @@ impl MistTermApp {
                 self.open_report_issue(ctx);
             }
             MacMenuAction::About => self.show_about_dialog = true,
+            MacMenuAction::CheckForUpdates => self.update_check_now(ctx),
         }
     }
 
@@ -7100,6 +7105,8 @@ impl eframe::App for MistTermApp {
         self.release_terminal_keyboard_if_ui_typing(ctx);
         self.poll_market_catalog_refresh(ctx);
         self.poll_market_catalog_debounce();
+        self.update_tick(ctx);
+        self.update_handle_close(frame);
 
         #[cfg(target_os = "macos")]
         self.poll_native_menu_bar(ctx, frame);
@@ -7928,6 +7935,9 @@ mod workspace_confirm_modals;
 /// 开源许可模态窗(关于 → 开源许可)
 #[path = "app_licenses_modal.rs"]
 mod licenses_modal;
+
+#[path = "app_update.rs"]
+mod update;
 
 /// 新建会话模态窗
 #[path = "app_new_session_modal.rs"]
