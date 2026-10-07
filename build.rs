@@ -52,20 +52,25 @@ fn check_update_signing_config() {
     if env::var_os("CARGO_FEATURE_UPDATE_TEST").is_some() {
         panic!("the update-test feature must never be enabled in an official release build");
     }
+    let mut keys = Vec::new();
     for f in &key_files {
         let content = std::fs::read_to_string(f).unwrap_or_default();
-        if let Err(why) = validate_pubkey_file(&content) {
-            panic!(
+        match validate_pubkey_file(&content) {
+            Ok(key) => keys.push(key),
+            Err(why) => panic!(
                 "official release build needs the real update signing public key in {}: {why}. \
                  See docs/release/AUTO_UPDATE.md (Tian generates the key pair on his own computer).",
                 f.display()
-            );
+            ),
         }
+    }
+    if keys[0] == keys[1] {
+        panic!("primary and backup update signing public keys must be different keys");
     }
 }
 
 /// minisign 公钥文件：一行 `untrusted comment:`，一行 base64（42 字节 → 56 个字符，以 `RW` 开头）。
-fn validate_pubkey_file(content: &str) -> Result<(), &'static str> {
+fn validate_pubkey_file(content: &str) -> Result<String, &'static str> {
     if content.contains("PLACEHOLDER") {
         return Err("file still contains the PLACEHOLDER key");
     }
@@ -80,7 +85,7 @@ fn validate_pubkey_file(content: &str) -> Result<(), &'static str> {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'=');
     if ok {
-        Ok(())
+        Ok(key.to_string())
     } else {
         Err("key line is not a minisign Ed25519 public key")
     }
