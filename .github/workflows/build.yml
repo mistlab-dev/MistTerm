@@ -21,7 +21,7 @@ env:
   CARGO_PROFILE_RELEASE_DEBUG: "0"
   BIN_NAME: Mist
   # 只有推送 v* 标签的正式构建才标记为官方发布渠道（github-release）。
-  # build.rs 在这种构建里会检查内置的更新公钥：仍是占位符就直接失败，
+  # build.rs 在这种构建里会检查内置的更新公钥（占位符 / 格式错误 / 主备相同都会直接失败），
   # 防止发出一个永远无法自动更新的版本。手动触发的测试构建不受影响。
   MIST_DIST_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/v') && 'github-release' || '' }}
 
