@@ -48,6 +48,7 @@ pub use port_forward::{
     parse_forward_form, status_bar_summary, ForwardFormInput, ForwardFormKind, PortForwardKind,
 };
 pub mod secret_resolver;
+pub mod updater;
 
 pub use session::{
     append_dynamic_forward_line, append_local_forward_line, append_remote_forward_line,
