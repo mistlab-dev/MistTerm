@@ -47,15 +47,23 @@
 - **替换前先试运行**：新程序 `--version` 跑通才替换；旧版本放进 `.mist-update-backup/`，失败自动恢复，用户也可 `mist update --rollback`。
 - **同一时间只有一个更新**：`update.lock` 文件锁（GUI 与 CLI 共用）。
 
-### 公钥占位符
+### 内置公钥
 
-仓库里现在的两个 `.pub` 文件是**占位符**（不是真钥匙）：
+两把正式公钥已提交（2026-10-07，由 Tian 在自己电脑上生成；私钥加密保存在他那里，从未经过共享机器）：
 
-- 普通构建：没有可信公钥，检查更新会明确报"这个版本没有配置更新签名密钥"，不会信任任何清单。
-- 正式发版构建（推 `v*` 标签，CI 设置 `MIST_DIST_CHANNEL=github-release`）：`build.rs` 发现占位符或
-  `update-test` 特性会**直接构建失败**。所以在 Tian 提交真实公钥之前，**推标签发版会失败，这是故意的**——
-  避免发出一个永远收不到更新的版本。
-- 测试密钥只在 `--features update-test` 构建里生效（`MIST_UPDATE_TEST_PUBKEY`），正式构建禁止开启该特性。
+| 文件 | 用途 | key ID |
+| --- | --- | --- |
+| `resources/update/minisign-primary.pub` | 日常发版签名（私钥放 CI `release` 环境） | `2F850D3521ADC099` |
+| `resources/update/minisign-backup.pub` | 离线备用，**不进 CI**；主钥泄露/丢失时签发换钥版本 | `E3C0CEA51587625C` |
+
+- 单元测试 `core::updater::keys::tests::embedded_production_keys_are_valid` 会核对格式、key ID，并确认两把不同；换钥时要同步改测试里的期望值。
+- 防呆仍在：正式发版构建（推 `v*` 标签，CI 设置 `MIST_DIST_CHANNEL=github-release`）里，`build.rs` 发现公钥文件
+  是占位符 / 格式不对 / 两把相同，或开启了 `update-test` 特性，会**直接构建失败**。
+- 测试密钥只在 `--features update-test` 构建里额外生效（`MIST_UPDATE_TEST_PUBKEY`，端到端测试每次临时生成），正式构建禁止开启该特性。
+
+**换钥流程（主钥泄露或丢失时）**：生成新主钥 → 更新 `minisign-primary.pub` 和上面的测试 → 用**备用钥**签发这个换钥版本的
+`latest.json`（老客户端信任备用钥，所以能验证并升级）→ 把 CI 的 `MINISIGN_SECRET_KEY` / `MINISIGN_PASSWORD` 换成新主钥。
+注意：CI 的 sign job 默认用 `minisign-primary.pub` 验证，签换钥版本时需临时改成备用钥的公钥文件。
 
 ## 4. CI 流程（`.github/workflows/build.yml`）
 
@@ -77,21 +85,15 @@ preflight（版本号一致性 + 清单脚本自测）
 
 **请在自己的电脑上做，不要在共享机器上生成私钥。**
 
-1. 安装 minisign（macOS：`brew install minisign`）。
-2. 生成两对密钥，各设一个强密码：
-   ```sh
-   minisign -G -p mistterm-primary.pub -s mistterm-primary.key
-   minisign -G -p mistterm-backup.pub  -s mistterm-backup.key
-   ```
-3. 离线备份两把私钥和密码（例如加密 U 盘 + 密码管理器），备用钥平时**不要**放进 CI。
-4. 把两个 `.pub` 文件的内容（两行文字，可以公开）发给开发，替换 `resources/update/minisign-primary.pub`
-   和 `minisign-backup.pub` 后合并。
-5. GitHub 仓库 → Settings → Environments → 新建 `release`：Required reviewers 设为自己；
+1. ~~安装 minisign，生成两对密钥~~ ✅ 已完成（2026-10-07）。
+2. 离线备份两把私钥和密码（例如加密 U 盘 + 密码管理器），备用钥平时**不要**放进 CI。
+3. ~~把两个 `.pub` 文件提交进仓库~~ ✅ 已完成。
+4. GitHub 仓库 → Settings → Environments → 新建 `release`：Required reviewers 设为自己；
    Deployment branches and tags 只允许 `v*` 标签。
-6. 在 `release` 环境里添加 secrets：
+5. 在 `release` 环境里添加 secrets：
    - `MINISIGN_SECRET_KEY`：`mistterm-primary.key` 的完整内容
    - `MINISIGN_PASSWORD`：主钥密码
-7. （以后）镜像：在服务器上给 nginx 配好 `/downloads/mistterm/` 目录（**注意别被网站的 SPA 回退规则吃掉**，
+6. （以后）镜像：在服务器上给 nginx 配好 `/downloads/mistterm/` 目录（**注意别被网站的 SPA 回退规则吃掉**，
    不存在的文件要返回 404 而不是首页），准备只能写该目录的部署密钥，再实现并打开 `mirror` job。
 
 ## 6. 发版步骤（准备好之后）
