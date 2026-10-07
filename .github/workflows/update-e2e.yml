@@ -1,0 +1,136 @@
+name: Update E2E
+
+# 自动更新的离线端到端测试：本机起一个假的发布服务器，用测试密钥签名，
+# 全程不连真实服务器、不发布任何东西（只有 contents: read 权限）。
+on:
+  pull_request:
+    paths:
+      - 'src/core/updater/**'
+      - 'src/cli/update.rs'
+      - 'src/ui/app_update.rs'
+      - 'src/bin/mist.rs'
+      - 'build.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'resources/update/**'
+      - 'examples/update_test_sign.rs'
+      - 'scripts/gen-update-manifest.py'
+      - 'scripts/update-e2e/**'
+      - '.github/workflows/update-e2e.yml'
+  workflow_dispatch:
+    inputs:
+      windows:
+        description: 'Also run the Windows job (portable zip; no GUI check)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+
+jobs:
+  linux:
+    name: Linux (offline e2e)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mistterm-update-e2e
+          cache-on-failure: true
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config mold \
+            libssl-dev libssh2-1-dev \
+            libx11-dev libxkbcommon-dev \
+            libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libfontconfig1-dev libgtk-3-dev libdbus-1-dev \
+            xvfb xauth libgl1-mesa-dri libegl1
+
+      - name: Updater unit tests
+        env:
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
+        run: cargo test --locked --release --lib core::updater
+
+      - name: Offline end-to-end tests
+        env:
+          RUSTFLAGS: -C link-arg=-fuse-ld=mold
+        run: python3 scripts/update-e2e/run_e2e.py --no-gui
+
+  # 只在手动触发并勾选时运行；同样不发布任何东西。
+  windows:
+    name: Windows (offline e2e, manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.windows
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mistterm-update-e2e-windows
+          cache-on-failure: true
+
+      # Avoid ilammy/msvc-dev-cmd (still declares Node 20; upstream Node 24 PR unmerged).
+      # Capture VsDevCmd env the same way: run the bat under cmd, then persist diffs to GITHUB_ENV.
+      - name: Setup MSVC environment
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "vswhere.exe not found" }
+          $vs = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if (-not $vs) { throw "MSVC installation not found" }
+          $devcmd = Join-Path $vs "Common7\Tools\VsDevCmd.bat"
+          if (-not (Test-Path $devcmd)) { throw "VsDevCmd.bat not found at $devcmd" }
+
+          $out = cmd /c "call `"$devcmd`" -arch=x64 -host_arch=x64 -no_logo && set"
+          if ($LASTEXITCODE -ne 0 -or -not $out) {
+            throw "VsDevCmd.bat failed with exit $LASTEXITCODE"
+          }
+
+          $written = 0
+          $sawPath = $false
+          foreach ($line in $out) {
+            if ($line -notmatch '^([^=]+)=(.*)$') { continue }
+            $name = $Matches[1]
+            $value = $Matches[2]
+            # Skip cmd pseudo-vars ("=C:", "=ExitCode") — already excluded by the pattern.
+            if ([Environment]::GetEnvironmentVariable($name) -eq $value) { continue }
+            if ($name -ieq 'Path') { $name = 'PATH'; $sawPath = $true }
+            Add-Content -Path $env:GITHUB_ENV -Value "$name=$value" -Encoding utf8
+            $written++
+          }
+          if (-not $sawPath) { throw "VsDevCmd.bat left PATH unchanged — toolchain missing" }
+          Write-Host "MSVC environment from $vs ($written vars)"
+
+      - name: Offline end-to-end tests
+        shell: pwsh
+        env:
+          MIST_E2E_CARGO_FEATURES: vendored-openssl
+        run: python scripts/update-e2e/run_e2e.py --no-gui

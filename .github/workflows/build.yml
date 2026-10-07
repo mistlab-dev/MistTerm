@@ -20,6 +20,10 @@ env:
   CARGO_PROFILE_TEST_DEBUG: "0"
   CARGO_PROFILE_RELEASE_DEBUG: "0"
   BIN_NAME: Mist
+  # 只有推送 v* 标签的正式构建才标记为官方发布渠道（github-release）。
+  # build.rs 在这种构建里会检查内置的更新公钥：仍是占位符就直接失败，
+  # 防止发出一个永远无法自动更新的版本。手动触发的测试构建不受影响。
+  MIST_DIST_CHANNEL: ${{ startsWith(github.ref, 'refs/tags/v') && 'github-release' || '' }}
 
 jobs:
   # 发版前置检查：标签 = Cargo.toml = Info.plist，否则装好的新版会把自己当旧版，更新提示会反复出现。
@@ -40,6 +44,10 @@ jobs:
           else
             python3 scripts/check-version-consistency.py
           fi
+
+      - name: Self-test update manifest generator
+        shell: bash
+        run: python3 scripts/gen-update-manifest.py --self-test
 
   # 三平台并行。单元测试 + 集成测试仅在 Linux（mold + 系统 OpenSSL，最快）；
   # Windows / macOS 只 release 构建 + 打包，依赖 rust-cache 复用增量编译。
@@ -401,9 +409,126 @@ jobs:
           path: dist/MistTerm-*-windows-x86_64-setup.exe
           if-no-files-found: error
 
+  # ---------------------------------------------------------------------------
+  # 自动更新（P1）：生成 latest.json → 用 minisign 签名 → 与安装包一起发布。
+  # 设计与发版步骤见 docs/release/AUTO_UPDATE.md。
+  # ---------------------------------------------------------------------------
+  manifest:
+    name: Update manifest
+    needs: platform
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS and latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          ls -la dist/
+          (cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+          VERSION="${GITHUB_REF_NAME#v}"
+          notes_args=()
+          for lang in zh en; do
+            f="docs/release/notes/v${VERSION}.${lang}.md"
+            if [ -f "$f" ]; then notes_args+=("--notes-${lang}" "$f"); fi
+          done
+          # 镜像（mistlab.dev）上传还没开通：MIST_MIRROR_ENABLED 不是 'true' 时不写镜像地址。
+          mirror_args=()
+          if [ "${{ vars.MIST_MIRROR_ENABLED }}" = "true" ] && [ -n "${{ vars.MIST_MIRROR_BASE_URL }}" ]; then
+            mirror_args+=(--mirror-base "${{ vars.MIST_MIRROR_BASE_URL }}/v${VERSION}")
+          fi
+          python3 scripts/gen-update-manifest.py \
+            --tag "$GITHUB_REF_NAME" \
+            --dist dist \
+            --out dist/latest.json \
+            --url-order github,mirror \
+            "${notes_args[@]}" "${mirror_args[@]}"
+          cat dist/latest.json
+          python3 scripts/gen-update-manifest.py --trusted-comment-of dist/latest.json > dist/latest.json.tc
+          echo "Trusted comment: $(cat dist/latest.json.tc)"
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: update-manifest
+          path: |
+            dist/latest.json
+            dist/latest.json.tc
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  # 签名私钥只放在 `release` 环境的 secrets 里（Tian 审批后才会运行）。
+  # 这个 job 不签出 PR 代码之外的东西，也不接触安装包本身，只签两个小文件。
+  sign:
+    name: Sign update manifest
+    needs: manifest
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    environment: release
+    steps:
+      - name: Checkout (for the committed public key)
+        uses: actions/checkout@v6
+
+      - name: Download manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: update-manifest
+          path: dist
+
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+
+      - name: Sign latest.json and SHA256SUMS
+        shell: bash
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY}" ] || [ -z "${MINISIGN_PASSWORD}" ]; then
+            echo "::error::MINISIGN_SECRET_KEY / MINISIGN_PASSWORD are not set in the 'release' environment. See docs/release/AUTO_UPDATE.md."
+            exit 1
+          fi
+          umask 077
+          KEY="$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$KEY"
+          trap 'rm -f "$KEY"' EXIT
+          TC="$(cat dist/latest.json.tc)"
+          printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$KEY" -m dist/latest.json -t "$TC" -c "mistterm update manifest"
+          printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$KEY" -m dist/SHA256SUMS -t "mistterm SHA256SUMS ${GITHUB_REF_NAME}" -c "mistterm checksums"
+          rm -f "$KEY"
+
+      - name: Verify with the committed public key
+        shell: bash
+        run: |
+          set -euo pipefail
+          # 用仓库里提交的公钥（也就是客户端内置的那把）验证，私钥和公钥对不上就不发布。
+          minisign -V -p resources/update/minisign-primary.pub -m dist/latest.json
+          minisign -V -p resources/update/minisign-primary.pub -m dist/SHA256SUMS
+          grep -q "^trusted comment: $(cat dist/latest.json.tc)\$" dist/latest.json.minisig
+
+      - name: Upload signatures
+        uses: actions/upload-artifact@v7
+        with:
+          name: update-signatures
+          path: |
+            dist/latest.json.minisig
+            dist/SHA256SUMS.minisig
+          if-no-files-found: error
+
   release:
     name: Publish Release
-    needs: platform
+    needs: [platform, sign]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -418,13 +543,18 @@ jobs:
       - name: List artifacts
         run: ls -la dist/
 
-      - name: Generate SHA256 checksums
+      # SHA256SUMS / latest.json 由 manifest job 生成并已签名，这里只核对，不重算。
+      - name: Verify checksums and drop helper files
         shell: bash
         run: |
           set -euo pipefail
           cd dist
-          sha256sum * > SHA256SUMS
-          cat SHA256SUMS
+          rm -f latest.json.tc
+          sha256sum -c SHA256SUMS
+          for f in latest.json latest.json.minisig SHA256SUMS SHA256SUMS.minisig; do
+            test -s "$f" || { echo "::error::missing $f"; exit 1; }
+          done
+          ls -la
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
@@ -446,3 +576,18 @@ jobs:
             - Website: https://mistlab.dev
             - Documentation: https://github.com/mistlab-dev/MistTerm/tree/main/docs
             - Issues: https://github.com/mistlab-dev/MistTerm/issues
+
+  # 镜像上传（mistlab.dev/downloads/mistterm/...）——尚未开通。
+  # TODO(Tian)：配置好 nginx 的 /downloads 目录和只能写该目录的部署密钥后，
+  # 把仓库变量 MIST_MIRROR_ENABLED 设为 'true'，并在这里实现 rsync 上传
+  # （先传安装包，再传 latest.json / .minisig，保证用户永远看不到"清单已更新、文件还没到"的状态）。
+  mirror:
+    name: Mirror to mistlab.dev (disabled)
+    needs: release
+    if: startsWith(github.ref, 'refs/tags/v') && vars.MIST_MIRROR_ENABLED == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Not implemented yet
+        run: |
+          echo "::error::Mirror upload is not implemented yet (see docs/release/AUTO_UPDATE.md). Unset MIST_MIRROR_ENABLED."
+          exit 1
