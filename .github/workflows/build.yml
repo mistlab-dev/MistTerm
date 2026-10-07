@@ -22,10 +22,30 @@ env:
   BIN_NAME: Mist
 
 jobs:
+  # 发版前置检查：标签 = Cargo.toml = Info.plist，否则装好的新版会把自己当旧版，更新提示会反复出现。
+  preflight:
+    name: Version consistency
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check version consistency
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 scripts/check-version-consistency.py --self-test
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            python3 scripts/check-version-consistency.py --tag "$GITHUB_REF_NAME"
+          else
+            python3 scripts/check-version-consistency.py
+          fi
+
   # 三平台并行。单元测试 + 集成测试仅在 Linux（mold + 系统 OpenSSL，最快）；
   # Windows / macOS 只 release 构建 + 打包，依赖 rust-cache 复用增量编译。
   platform:
     name: ${{ matrix.platform }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -176,8 +196,8 @@ jobs:
           if [ -n "$features" ]; then
             features_arg=(--features "$features")
           fi
-          cargo test --release --lib --tests "${features_arg[@]}"
-          cargo test --release --examples "${features_arg[@]}"
+          cargo test --locked --release --lib --tests "${features_arg[@]}"
+          cargo test --locked --release --examples "${features_arg[@]}"
 
       - name: Setup SSH test server
         if: matrix.run_integration_tests
@@ -194,8 +214,8 @@ jobs:
           RUSTFLAGS: ${{ matrix.use_mold && '-C link-arg=-fuse-ld=mold' || '' }}
         run: |
           set -euo pipefail
-          cargo test --release --test zmodem_integration_test
-          cargo test --release --test zmodem_integration_test test_ssh_connect -- --ignored --exact
+          cargo test --locked --release --test zmodem_integration_test
+          cargo test --locked --release --test zmodem_integration_test test_ssh_connect -- --ignored --exact
 
       - name: Build release binary (Unix)
         if: runner.os != 'Windows'
@@ -213,8 +233,8 @@ jobs:
           if [ "${{ matrix.target }}" = "universal-apple-darwin" ]; then
             mkdir -p "target/${{ matrix.target }}/release"
             for BIN in "$BIN_NAME" mist; do
-              cargo build --release --bin "$BIN" --target aarch64-apple-darwin "${features_arg[@]}"
-              cargo build --release --bin "$BIN" --target x86_64-apple-darwin "${features_arg[@]}"
+              cargo build --locked --release --bin "$BIN" --target aarch64-apple-darwin "${features_arg[@]}"
+              cargo build --locked --release --bin "$BIN" --target x86_64-apple-darwin "${features_arg[@]}"
               lipo -create -output \
                 "target/${{ matrix.target }}/release/$BIN" \
                 "target/aarch64-apple-darwin/release/$BIN" \
@@ -222,8 +242,8 @@ jobs:
             done
             file "target/${{ matrix.target }}/release/$BIN_NAME" "target/${{ matrix.target }}/release/mist"
           else
-            cargo build --release --bin "$BIN_NAME" --target "${{ matrix.target }}" "${features_arg[@]}"
-            cargo build --release --bin mist --target "${{ matrix.target }}" "${features_arg[@]}"
+            cargo build --locked --release --bin "$BIN_NAME" --target "${{ matrix.target }}" "${features_arg[@]}"
+            cargo build --locked --release --bin mist --target "${{ matrix.target }}" "${features_arg[@]}"
           fi
 
       - name: Build release binary (Windows)
@@ -240,11 +260,11 @@ jobs:
 
           # Windows FS is case-insensitive: Mist.exe and mist.exe are the same path.
           # Build GUI first, stash it, then build CLI under a distinct name.
-          cargo build --release --bin $env:BIN_NAME --target "${{ matrix.target }}" @featuresArg
+          cargo build --locked --release --bin $env:BIN_NAME --target "${{ matrix.target }}" @featuresArg
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item -Force (Join-Path $outDir "$env:BIN_NAME.exe") (Join-Path $stash "Mist.exe")
 
-          cargo build --release --bin mist --target "${{ matrix.target }}" @featuresArg
+          cargo build --locked --release --bin mist --target "${{ matrix.target }}" @featuresArg
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item -Force (Join-Path $outDir "mist.exe") (Join-Path $stash "mist-cli.exe")
 

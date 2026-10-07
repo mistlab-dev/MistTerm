@@ -818,7 +818,7 @@ impl MistTermApp {
             let version_line = format!(
                 "{} v{}",
                 crate::i18n::tr(ctx, "Version:", "版本："),
-                env!("CARGO_PKG_VERSION")
+                crate::platform::APP_VERSION
             );
             let shortcuts = mistterm_functional_spec_shortcuts(ctx);
             let modal_sz = layout_util::modal_about_size_for_content(

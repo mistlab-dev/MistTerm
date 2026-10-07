@@ -55,7 +55,7 @@ build/
 
 # Rust
 /target
-Cargo.lock
+# Cargo.lock 需要入库：发布构建要可复现（CI 用 --locked 构建）。
 sessions.json
 *.bak
 tarpaulin-report.html

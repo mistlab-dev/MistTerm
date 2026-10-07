@@ -7,8 +7,10 @@ Mist 是本仓库构建的 SSH 终端 GUI（`cargo` 二进制名：**Mist**）�
 | 平台 | 最低版本 | 说明 |
 |------|----------|------|
 | macOS | 10.15+ | Xcode 命令行工具、`libssh2`、`pkg-config` |
-| Linux | glibc 2.17+ | `libssh2`、OpenSSL 开发包、`pkg-config` |
+| Linux | glibc 2.39+（官方预编译包） | `libssh2`、OpenSSL 开发包、`pkg-config` |
 | Windows | 10+ | Rust + MSVC；`libssh2` 通过 vcpkg（见下文） |
+
+Release 里的 Linux 预编译包在 Ubuntu 24.04 上构建，需要 glibc 2.39 或更新（例如 Ubuntu 24.04+、Debian 13+、Fedora 40+）。可以用 `ldd --version` 查看本机版本；更老的系统请按下文从源码编译。
 
 界面默认 **英文**，可在 **偏好设置 → 语言** 切换为简体中文（Unix 下写入 `~/.config/mistterm/settings.json`）。
 
