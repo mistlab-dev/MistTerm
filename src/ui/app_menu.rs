@@ -354,6 +354,11 @@ impl MistTermApp {
                 },
             );
             ui.separator();
+            let update_label = self.update_menu_label(ctx);
+            if crate::ui::chrome::popup_menu_button(ui, theme, &update_label).clicked() {
+                self.update_check_now(ctx);
+                ui.close_menu();
+            }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.help_about).clicked() {
                 self.show_about_dialog = true;
                 ui.close_menu();

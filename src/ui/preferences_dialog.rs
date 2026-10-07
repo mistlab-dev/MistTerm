@@ -200,6 +200,8 @@ impl MistTermApp {
                     crate::i18n::set_language(ctx, lang);
                     ctx.request_repaint();
                 }
+                ui.add_space(theme.spacing_panel_gap());
+                self.update_preferences_section(ui, ctx, theme, text_low);
             },
         );
     }
