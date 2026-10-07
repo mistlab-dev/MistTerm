@@ -339,6 +339,7 @@ jobs:
               # Developer ID 签名 + 公证（Mist.app 与 DMG）
               rm -rf target/aarch64-apple-darwin/release/{build,deps,examples,incremental} || true
               rm -rf target/x86_64-apple-darwin/release/{build,deps,examples,incremental} || true
+              df -h . || true
               DMG_OUT="dist/${NAME}.dmg"
               echo "::notice title=macOS signing::bundle done; starting codesign + notary (poll heartbeats every 20s, timeout 20m)"
               echo "APP=$STAGE/Mist.app"
