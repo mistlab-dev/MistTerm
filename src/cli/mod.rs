@@ -11,6 +11,7 @@ pub mod ls;
 pub mod session_log;
 pub mod sftp_cmds;
 pub mod ssh_cmd;
+pub mod update;
 
 use anyhow::{Context, Result};
 use crate::core::secret_resolver::SecretResolver;
