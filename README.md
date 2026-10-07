@@ -69,6 +69,12 @@ Running the GUI binary `Mist` with **no arguments** launches the desktop UI dire
 4. **⌘K / Ctrl+K** — snippets; **View** menu or Activity Rail — SFTP / Monitor / AI / Forward
 5. **⌘B / Ctrl+B** — show / hide Activity Rail (left-edge strip restores it when hidden)
 
+### Updates & privacy
+
+Mist checks for a new version shortly after it starts and then once a day. It only tells you about it: installing waits for your click, and Mist never restarts on its own. On Linux and Windows you can update with one click; on macOS Mist shows you how to update by hand. From the terminal: `mist update --check`, `mist update` (same as `mist self-update`), and `mist update --rollback`.
+
+The check is a single request to mistlab.dev and GitHub that carries only the Mist version and system type, with no account or device information. As with any website, those servers can see your IP address. Updates are signed and checked before anything is installed. To turn checks off, clear **Preferences → General → Check for updates automatically**, or set `MIST_DISABLE_UPDATE_CHECK=1`, which also blocks manual checks. Details: [docs/release/AUTO_UPDATE.md](docs/release/AUTO_UPDATE.md).
+
 ### Documentation
 
 | | |
@@ -140,6 +146,12 @@ GUI 二进制 `Mist` **不带任何参数**运行即直接拉起桌面界面（v
 3. 双击已保存连接，或 **⌘T / Ctrl+T** 开新标签
 4. **⌘K / Ctrl+K** 片段；**视图**菜单或活动栏打开 SFTP / 监控 / AI / 转发
 5. **⌘B / Ctrl+B** 显示 / 隐藏活动栏（隐藏后点左缘窄条可恢复）
+
+### 更新与隐私
+
+Mist 启动后过一会儿检查一次有没有新版本，之后每天检查一次。有新版本只会提醒你，装不装由你点按钮决定，Mist 也不会自己重启。Linux 和 Windows 可以一键更新；macOS 上会告诉你怎么手动更新。命令行里可以用 `mist update --check`、`mist update`（也可以写 `mist self-update`）和 `mist update --rollback`（退回上一个版本）。
+
+检查更新只会向 mistlab.dev 和 GitHub 发一次请求，只带 Mist 版本号和系统类型，不带账号或设备信息。和访问任何网站一样，对方能看到你的 IP 地址。新版本都有签名，安装前会先核对。不想检查的话，可以在 **偏好设置 → 常规** 里取消「自动检查更新」；或者设置环境变量 `MIST_DISABLE_UPDATE_CHECK=1`，这样连手动检查也会关掉。详见 [docs/release/AUTO_UPDATE.md](docs/release/AUTO_UPDATE.md)。
 
 ### 文档
 

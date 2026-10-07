@@ -73,7 +73,7 @@ jobs:
       - name: Offline end-to-end tests
         env:
           RUSTFLAGS: -C link-arg=-fuse-ld=mold
-        run: python3 scripts/update-e2e/run_e2e.py --no-gui
+        run: python3 scripts/update-e2e/run_e2e.py
 
   # 只在手动触发并勾选时运行；同样不发布任何东西。
   windows:

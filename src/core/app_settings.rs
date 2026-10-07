@@ -22,6 +22,9 @@ pub struct AppSettings {
     pub ai: AiSettings,
     #[serde(default)]
     pub team: TeamSettings,
+    /// 自动更新偏好（默认：自动检查开、后台下载关）。
+    #[serde(default)]
+    pub update: crate::core::updater::UpdateSettings,
 }
 
 impl Default for AppSettings {
@@ -32,6 +35,7 @@ impl Default for AppSettings {
             audit: AuditSettings::default(),
             ai: AiSettings::default(),
             team: TeamSettings::default(),
+            update: crate::core::updater::UpdateSettings::default(),
         }
     }
 }

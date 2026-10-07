@@ -28,6 +28,8 @@ pub(crate) enum ToastAction {
     AskAiFallback,
     /// 将 `pending_fragment_candidate` 写入个人库(用户确认)。
     ConfirmSaveCandidate,
+    /// 有新版本：打开「软件更新」窗口。
+    OpenUpdateDialog,
 }
 
 #[derive(Debug, Clone)]
@@ -271,6 +273,13 @@ impl MistTermApp {
             secondary_action,
             secondary_action_label,
         });
+    }
+
+    /// 当前是否有一条等用户处理、不会自动消失的提示(新的提醒应等它处理完)。
+    pub(crate) fn has_pending_action_toast(&self) -> bool {
+        self.active_toast
+            .as_ref()
+            .is_some_and(|t| t.action.is_some() && t.until.is_none())
     }
 
     pub(crate) fn notify_info(&mut self, text: impl Into<String>) {
@@ -555,6 +564,10 @@ impl MistTermApp {
                 if let Some(cand) = pending {
                     self.save_fragment_candidate(ctx, &cand);
                 }
+            }
+            ToastAction::OpenUpdateDialog => {
+                self.clear_toast();
+                self.update_open_dialog();
             }
         }
     }
