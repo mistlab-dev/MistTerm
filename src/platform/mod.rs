@@ -8,6 +8,7 @@ pub mod paths;
 pub mod quit_watchdog;
 pub mod shell;
 pub mod shortcuts;
+pub mod version;
 #[cfg(target_os = "macos")]
 mod macos_launch;
 #[cfg(target_os = "macos")]
@@ -32,6 +33,7 @@ pub use logging::init_runtime_logging;
 pub use paths::{default_ssh_config_path, home_dir, home_dir_display_hint};
 pub use quit_watchdog::arm_quit_watchdog;
 pub use shell::{open_file, open_url, reveal_directory};
+pub use version::{print_version_line, APP_VERSION};
 pub use shortcuts::{
     accel, accel_enter, accel_literal, accel_shift, close_tab_accel, close_tab_help_line, help_line,
     new_tab_accel, new_tab_help_line, primary_modifier_label, split_pane_focus_accel,

@@ -625,7 +625,7 @@ fn render_bottom_links(
         )
         .clicked()
         {
-            let url = crate::platform::github_new_issue_url(env!("CARGO_PKG_VERSION"));
+            let url = crate::platform::github_new_issue_url(crate::platform::APP_VERSION);
             if !crate::platform::open_url(&url) {
                 *error = Some(crate::i18n::tr(
                     ctx,

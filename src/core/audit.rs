@@ -13,7 +13,7 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 use rand::Rng;
 
-const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+const APP_VERSION: &str = crate::platform::APP_VERSION;
 const MAX_FILE_BYTES: u64 = 32 * 1024 * 1024;
 const HTTP_QUEUE_CAP: usize = 512;
 
@@ -61,7 +61,7 @@ pub struct AuditActor {
     pub os_user: String,
     /// 本机主机名（`$HOSTNAME` / `%COMPUTERNAME%`，获取不到时为 `"unknown"`）。
     pub hostname: String,
-    /// 生成事件时的 MistTerm 版本号（`env!("CARGO_PKG_VERSION")`）。
+    /// 生成事件时的 MistTerm 版本号（`crate::platform::APP_VERSION`）。
     pub app_version: String,
 }
 
