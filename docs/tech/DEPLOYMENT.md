@@ -28,7 +28,7 @@
 | 平台 | 版本 | 依赖 |
 |-----|------|-----|
 | macOS | 10.15+ | libssh2 |
-| Linux | glibc 2.17+ | libssh2 |
+| Linux | glibc 2.39+（官方预编译包在 Ubuntu 24.04 上构建） | libssh2 |
 | Windows | 10+ | libssh2.dll |
 
 **界面字体与图标**

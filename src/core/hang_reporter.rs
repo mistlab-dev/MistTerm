@@ -183,7 +183,7 @@ fn build_report(inner: &Inner, now: u64, stale_for_ms: u64) -> HangReport {
         .unwrap_or_else(|_| HangSnapshot::default());
     HangReport {
         event: "ui_hang_suspected",
-        version: env!("CARGO_PKG_VERSION"),
+        version: crate::platform::APP_VERSION,
         os: std::env::consts::OS,
         arch: std::env::consts::ARCH,
         timestamp_unix_ms: now,

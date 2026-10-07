@@ -4690,7 +4690,7 @@ impl MistTermApp {
     }
 
     pub(crate) fn open_report_issue(&mut self, ctx: &egui::Context) {
-        let url = crate::platform::github_new_issue_url(env!("CARGO_PKG_VERSION"));
+        let url = crate::platform::github_new_issue_url(crate::platform::APP_VERSION);
         if !crate::platform::open_url(&url) {
             self.notify_auto(
                 crate::i18n::tr(ctx, "Failed to open browser", "无法打开浏览器").to_string(),
@@ -4757,7 +4757,7 @@ impl MistTermApp {
             return;
         };
         let url = crate::platform::github_new_issue_url_with_body(
-            env!("CARGO_PKG_VERSION"),
+            crate::platform::APP_VERSION,
             "UI freeze diagnostics",
             &summary,
         );
