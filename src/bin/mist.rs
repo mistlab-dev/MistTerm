@@ -6,7 +6,7 @@ use mistterm::cli::{exec, ls, sftp_cmds, CliContext};
 #[derive(Parser)]
 #[command(name = "mist", version = mistterm::platform::APP_VERSION, about = "MistTerm CLI — 复用 GUI 会话配置的命令行 SSH 工具")]
 struct Cli {
-    /// 输出 JSON（ls/exec/rls 支持）
+    /// 输出 JSON（ls/exec/rls/update 支持）
     #[arg(long, global = true)]
     json: bool,
 
@@ -120,6 +120,28 @@ enum Cmd {
         overwrite: bool,
     },
 
+    /// 检查并安装 MistTerm 新版本（也可用 `mist self-update`）
+    ///
+    /// 退出码：0 已是最新或已更新；10 有新版本但没有安装；1 出错。
+    #[command(visible_alias = "self-update")]
+    Update {
+        /// 只检查，不安装（0 已是最新，10 有新版本，1 出错）
+        #[arg(long)]
+        check: bool,
+
+        /// 不询问，直接安装（用于脚本）
+        #[arg(short, long)]
+        yes: bool,
+
+        /// 退回到上一个版本（更新时保留了一份备份）
+        #[arg(long, conflicts_with = "check")]
+        rollback: bool,
+
+        /// 允许安装比当前更低的版本（排查问题时手动回退用）
+        #[arg(long, hide = true)]
+        allow_downgrade: bool,
+    },
+
     /// 查看与提炼排错 SOP（P3：会话结构化日志）
     Sop {
         #[command(subcommand)]
@@ -209,6 +231,24 @@ fn shell_join(argv: &[String]) -> String {
 fn main() {
     let cli = Cli::parse();
     init_logging(cli.verbose);
+
+    // 更新命令不需要会话和设置，在加载它们之前处理。
+    if let Some(Cmd::Update {
+        check,
+        yes,
+        rollback,
+        allow_downgrade,
+    }) = &cli.cmd
+    {
+        let args = mistterm::cli::update::UpdateArgs {
+            check: *check,
+            json: cli.json,
+            yes: *yes,
+            rollback: *rollback,
+            allow_downgrade: *allow_downgrade,
+        };
+        std::process::exit(mistterm::cli::update::run(&args));
+    }
 
     let mut ctx = CliContext::load();
     let cmd = match &cli.cmd {
@@ -308,6 +348,7 @@ fn main() {
             *dry_run,
             *overwrite,
         ),
+        Cmd::Update { .. } => unreachable!("handled before loading the CLI context"),
         Cmd::Sop { sub } => match sub {
             SopCmd::Extract { last, title } => {
                 match mistterm::core::exec_history::read_recent_records(*last) {
