@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use mistterm::cli::{exec, ls, sftp_cmds, CliContext};
 
 #[derive(Parser)]
-#[command(name = "mist", version, about = "MistTerm CLI — 复用 GUI 会话配置的命令行 SSH 工具")]
+#[command(name = "mist", version = mistterm::platform::APP_VERSION, about = "MistTerm CLI — 复用 GUI 会话配置的命令行 SSH 工具")]
 struct Cli {
     /// 输出 JSON（ls/exec/rls 支持）
     #[arg(long, global = true)]

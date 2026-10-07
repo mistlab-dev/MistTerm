@@ -7,8 +7,10 @@ Mist is the SSH terminal GUI built from this repository (`cargo` binary name: **
 | Platform | Minimum | Notes |
 |----------|---------|--------|
 | macOS | 10.15+ | Xcode CLI tools, `libssh2`, `pkg-config` |
-| Linux | glibc 2.17+ | `libssh2`, OpenSSL dev headers, `pkg-config` |
+| Linux | glibc 2.39+ (prebuilt release) | `libssh2`, OpenSSL dev headers, `pkg-config` |
 | Windows | 10+ | Rust + MSVC; `libssh2` via vcpkg (see below) |
+
+The prebuilt Linux release is built on Ubuntu 24.04 and needs glibc 2.39 or newer (for example Ubuntu 24.04+, Debian 13+, Fedora 40+). Check yours with `ldd --version`; on older systems, build from source as described below.
 
 UI defaults to **English**. Switch to Simplified Chinese in **Preferences → Language** (saved in `~/.config/mistterm/settings.json` on Unix).
 

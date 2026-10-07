@@ -452,7 +452,7 @@ cargo flamegraph --bin mistterm
 | 平台 | 支持状态 | 说明 |
 |-----|---------|------|
 | macOS | ✅ 完全支持 | Apple Silicon + Intel |
-| Linux | ✅ 完全支持 | glibc 2.17+ |
+| Linux | ✅ 完全支持 | 官方预编译包需要 glibc 2.39+ |
 | Windows | ✅ 完全支持 | Windows 10+ |
 
 ### 6.3 依赖更新策略
