@@ -362,6 +362,9 @@ pub fn install_files(
             r => r,
         });
         if let Err(e) = copy_synced(src, &dst) {
+            log::warn!("updater: copy to {} failed: {e}", dst.display());
+            // 复制可能已经建出了这个文件，一起删掉，不留临时文件
+            let _ = std::fs::remove_file(&dst);
             cleanup_staged(&staged);
             return Err(map_io(dir, e));
         }
@@ -494,7 +497,9 @@ fn copy_synced(src: &Path, dst: &Path) -> std::io::Result<()> {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(dst, std::fs::Permissions::from_mode(0o755))?;
     }
-    std::fs::File::open(dst)?.sync_all()?;
+    // Windows：FlushFileBuffers 需要可写句柄，只读打开再 sync_all 会报「拒绝访问」
+    // （这就是 Windows 便携版更新一直报「没有权限写入」的原因）。
+    std::fs::OpenOptions::new().write(true).open(dst)?.sync_all()?;
     Ok(())
 }
 
