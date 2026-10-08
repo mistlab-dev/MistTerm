@@ -153,6 +153,13 @@ fn install(args: &UpdateArgs, info: &UpdateInfo) -> i32 {
                 print_json(serde_json::json!({ "installer_started": version }));
             } else {
                 println!("安装程序已在后台启动，会关闭 Mist 并安装 {version}。");
+                let backed_up = exe
+                    .parent()
+                    .and_then(apply::backup_version)
+                    .is_some_and(|v| v == crate::core::updater::APP_VERSION);
+                if backed_up {
+                    println!("装好后如需退回当前版本：mist update --rollback");
+                }
             }
             0
         }
