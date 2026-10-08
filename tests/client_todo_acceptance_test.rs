@@ -75,6 +75,9 @@ fn doc_agent_offline_shows_degraded() {
         status: "active".into(),
         last_seen_at: Some(stale),
         enabled: true,
+        hostname: String::new(),
+        ips: String::new(),
+        online: None,
     }];
     assert!(!cmd_audit_agent_available_for_host(&agents, "prod-1", now, 300));
 }
@@ -89,6 +92,9 @@ fn doc_agent_online_available() {
         status: "active".into(),
         last_seen_at: Some(now.to_rfc3339()),
         enabled: true,
+        hostname: String::new(),
+        ips: String::new(),
+        online: None,
     }];
     assert!(cmd_audit_agent_available_for_host(&agents, "prod-1", now, 300));
     assert!(cmd_audit_host_matches("prod-1", "prod-1"));

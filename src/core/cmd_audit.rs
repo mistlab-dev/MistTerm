@@ -320,6 +320,13 @@ impl CmdAuditEngine {
         self.last_sync = Some(Instant::now());
     }
 
+    /// 启动时用本地缓存的规则先顶上，但不算「已同步」：
+    /// 团队服务一空闲就会马上去服务端拉最新规则，而不是等满一个同步周期。
+    pub fn apply_cached(&mut self, payload: CmdAuditSyncPayload) {
+        self.apply_sync(payload);
+        self.last_sync = None;
+    }
+
     pub fn needs_sync(&self) -> bool {
         match self.last_sync {
             None => true,
@@ -750,6 +757,23 @@ fn parse_mist_audit_line(line: &[u8]) -> Option<ServerAuditEvent> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn cached_rules_apply_but_still_need_sync() {
+        let mut engine = CmdAuditEngine::default();
+        let payload: CmdAuditSyncPayload = serde_json::from_value(serde_json::json!({
+            "enabled": true,
+            "policy": {"team_id": "t", "enabled": true},
+            "rules": [{"id": "r1", "name": "demo", "pattern": "b1-demo", "match_type": "contains",
+                       "scope": "command", "action": "block", "priority": 1, "enabled": true}],
+            "sync_interval_sec": 300
+        }))
+        .unwrap();
+        engine.apply_cached(payload.clone());
+        assert!(engine.needs_sync(), "cached rules must not count as a fresh sync");
+        engine.apply_sync(payload);
+        assert!(!engine.needs_sync());
+    }
     use super::*;
 
     #[test]
