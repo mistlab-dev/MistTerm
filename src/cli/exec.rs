@@ -87,8 +87,11 @@ pub fn run_single(
     json: bool,
 ) -> Result<i32> {
     let session = ctx.resolve_target(target)?;
-    let config = ctx.ssh_config(&session)?;
     let label = format!("{}@{}:{}", session.username, session.host, session.port);
+    if let Err(code) = super::exec_gate::check_before_exec(command, &[label.clone()], ctx.exec_yes, json) {
+        return Ok(code);
+    }
+    let config = ctx.ssh_config(&session)?;
 
     let start = Instant::now();
     let mut client = SshClient::new(config);
@@ -97,7 +100,7 @@ pub fn run_single(
         .map_err(|e| anyhow::anyhow!("连接失败 {label}: {e}"))?;
     ctx.mark_connected(&session);
 
-    let result = client.exec_command(command);
+    let result = client.exec_command_merged(command);
     client.disconnect();
     let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -177,6 +180,13 @@ pub fn run_batch(
 
     if targets.is_empty() {
         anyhow::bail!("没有匹配的目标会话");
+    }
+    let labels: Vec<String> = targets
+        .iter()
+        .map(|s| format!("{}@{}:{}", s.username, s.host, s.port))
+        .collect();
+    if let Err(code) = super::exec_gate::check_before_exec(command, &labels, ctx.exec_yes, json) {
+        return Ok(code);
     }
 
     // 仅保留成功建 job 的会话，保证后续 zip / 历史写入与 rows 一一对应。

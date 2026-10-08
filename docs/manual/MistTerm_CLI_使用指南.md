@@ -69,9 +69,14 @@ mist ssh root@192.168.1.50:2202
 # 在指定目标上运行命令
 mist exec web-01 uptime
 
-# 执行复杂复合命令（内部自动做 POSIX 引号转义与安全包裹）
+# 整条命令放在一对引号里：管道、分号交给远端 shell（和 ssh host '...' 一样）
+mist exec web-01 -- "journalctl -u nginx --since '1 hour ago' | grep -i error | tail -n 20"
+
+# 多个参数时逐个加引号再拼起来
 mist exec web-01 -- bash -c 'echo "hello from $HOSTNAME"; uptime'
 ```
+
+远端的报错信息（stderr）会和输出一起显示。
 
 #### 批量执行 (`--group` / `--all`)
 ```bash
@@ -84,9 +89,22 @@ mist exec --all uptime
 # 控制并行度（默认 8 并发，范围 1-16）
 mist exec --group prod --parallel 4 "df -h /"
 
-# 串行执行并在首次失败时熔断
-mist exec --group prod --serial "systemctl reload nginx"
+# 串行执行并在首次失败时熔断（会改动服务器，需要确认，见下）
+mist exec --yes --group prod --serial "systemctl reload nginx"
 ```
+
+#### 执行前确认（和桌面版一致）
+
+- 只读的命令（看日志、进程、磁盘、`curl` 健康检查等）直接执行。
+- 会改动服务器的命令（`rm`、`systemctl restart`、写文件等）和看不出是否只读的命令要确认：
+  在终端里直接运行时会问「确认执行吗？」，输入 `y` 回车才执行；
+  被脚本或 AI 助手调用时不执行，退出码 76，提示加 `--yes`。
+- `--yes` 表示已经有人确认过，必须紧跟在 `exec` 后面：`mist exec --yes web-01 -- systemctl restart nginx`。
+- 团队命令策略（桌面版同步下来的）同样生效：要求确认的按上面处理；禁止的不执行，退出码 77，加 `--yes` 也不行。
+- 每条命令（执行、确认、拦下、取消）都写进审计日志，和桌面版同一份；执行结果另记在 `~/.mist/logs/exec-history.jsonl`。
+- `mist frag run` 同样处理（`mist frag run --yes 片段 目标`）。
+
+让 Codex、Claude Code 这类 AI 助手使用 mist，见《让AI助手用mist查服务器》。
 
 ---
 
