@@ -585,7 +585,7 @@ impl CredentialPanel {
                                 panel.form_name.trim().replace(' ', "_")
                             )
                         };
-                        if let Some(path) = rfd::FileDialog::new()
+                        if let Some(path) = crate::ui::file_dialog::FileDialog::new()
                             .set_file_name(&default_name)
                             .save_file()
                         {

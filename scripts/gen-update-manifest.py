@@ -43,6 +43,10 @@ def platform_files(version: str) -> dict[str, dict]:
     """Platform key -> how the release file is named and handled."""
     return {
         "linux-x86_64": {"name": "Mist-linux-x86_64.tar.gz", "kind": "tar.gz", "auto_update": True},
+        # 只含命令行 `mist` 的静态（musl）包：不依赖 glibc，CentOS 7 这类老系统和 ARM 服务器也能用。
+        # 静态版 `mist update` 只认这两个条目；桌面版和老客户端不会用到它们。
+        "linux-x86_64-cli": {"name": "mist-cli-linux-x86_64.tar.gz", "kind": "tar.gz", "auto_update": True, "static": True},
+        "linux-aarch64-cli": {"name": "mist-cli-linux-aarch64.tar.gz", "kind": "tar.gz", "auto_update": True, "static": True},
         "windows-x86_64-setup": {
             "name": f"MistTerm-{version}-windows-x86_64-setup.exe",
             "kind": "inno-setup",
@@ -153,6 +157,10 @@ def build_manifest(
             glibc = min_glibc or max_glibc_in_tarball(path)
             if glibc:
                 entry["min_glibc"] = glibc
+        if spec.get("static"):
+            glibc = max_glibc_in_tarball(path, members=("mist",))
+            if glibc:
+                raise SystemExit(f"{spec['name']}: static CLI package must not need glibc (found GLIBC_{glibc})")
         if not entry["auto_update"]:
             entry["manual_url"] = DOWNLOAD_PAGE
         if not entry["urls"]:
@@ -191,6 +199,14 @@ def self_test() -> int:
                 tf.addfile(info, io.BytesIO(data))
         (dist / "Mist-linux-x86_64.tar.gz").write_bytes(buf.getvalue())
         (dist / "Mist-macos-universal.tar.gz").write_bytes(b"mac")
+        for arch in ("x86_64", "aarch64"):
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+                data = b"\x7fELF...static musl..."
+                info = tarfile.TarInfo(f"mist-cli-linux-{arch}/mist")
+                info.size = len(data)
+                tf.addfile(info, io.BytesIO(data))
+            (dist / f"mist-cli-linux-{arch}.tar.gz").write_bytes(buf.getvalue())
         m = build_manifest(
             version="1.2.0",
             dist=dist,
@@ -205,6 +221,26 @@ def self_test() -> int:
         assert m["platforms"]["macos-universal"]["auto_update"] is False
         assert m["platforms"]["macos-universal"]["manual_url"] == DOWNLOAD_PAGE
         assert "windows-x86_64-setup" not in m["platforms"]
+        for key in ("linux-x86_64-cli", "linux-aarch64-cli"):
+            cli = m["platforms"][key]
+            assert cli["kind"] == "tar.gz" and cli["auto_update"] is True, cli
+            assert "min_glibc" not in cli, cli
+            assert cli["urls"][0].endswith("/" + cli["name"]), cli
+        # A "static" CLI package that actually links glibc must be rejected.
+        good_cli = (dist / "mist-cli-linux-aarch64.tar.gz").read_bytes()
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            data = b"\x7fELF...GLIBC_2.17..."
+            info = tarfile.TarInfo("mist-cli-linux-aarch64/mist")
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+        (dist / "mist-cli-linux-aarch64.tar.gz").write_bytes(buf.getvalue())
+        try:
+            build_manifest(version="1.2.0", dist=dist, require=["linux-x86_64"])
+            raise AssertionError("glibc-linked CLI package not detected")
+        except SystemExit:
+            pass
+        (dist / "mist-cli-linux-aarch64.tar.gz").write_bytes(good_cli)
         assert trusted_comment(m) == "mistterm stable 1.2.0 2026-10-05T12:00:00Z"
         m2 = build_manifest(version="1.2.0", dist=dist, require=["linux-x86_64"],
                             mirror_base="https://mistlab.dev/x", url_order="mirror,github")

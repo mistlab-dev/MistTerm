@@ -20,6 +20,8 @@ Usage:
     python3 scripts/update-e2e/run_e2e.py              # build + run
     python3 scripts/update-e2e/run_e2e.py --skip-build # reuse binaries from a previous run
     python3 scripts/update-e2e/run_e2e.py --no-gui     # skip the Xvfb GUI check
+    python3 scripts/update-e2e/run_e2e.py --static-cli # Linux static (musl) `mist` only; needs
+                                                       # cargo-zigbuild + the x86_64-unknown-linux-musl target
 """
 
 from __future__ import annotations
@@ -51,6 +53,9 @@ CLI = "mist-cli.exe" if IS_WIN else "mist"
 PLATFORM_KEY = "windows-x86_64-portable" if IS_WIN else "linux-x86_64"
 ASSET = "Mist-windows-x86_64.zip" if IS_WIN else "Mist-linux-x86_64.tar.gz"
 EXIT_AVAILABLE = 10
+# --static-cli: the static (musl) Linux CLI package `mist-cli-linux-x86_64.tar.gz` (only `mist`).
+STATIC = False
+STATIC_TARGET = "x86_64-unknown-linux-musl"
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -78,6 +83,24 @@ def feature_list() -> str:
     return "update-test" + ("," + extra if extra else "")
 
 
+def target_root() -> pathlib.Path:
+    return pathlib.Path(os.environ.get("CARGO_TARGET_DIR") or ROOT / "target")
+
+
+def profile_dir(profile: str) -> pathlib.Path:
+    """Where cargo puts binaries/examples for this run (musl target dir in --static-cli mode)."""
+    return target_root() / STATIC_TARGET / profile if STATIC else target_root() / profile
+
+
+def cargo_cmd(profile: str, *what: str) -> list[str]:
+    flags = ["--release"] if profile == "release" else []
+    if STATIC:
+        # Same flags as the release workflow's cli-linux job, plus update-test.
+        return ["cargo", "zigbuild", *flags, "--target", STATIC_TARGET, "--no-default-features",
+                "--features", "update-test,vendored-openssl", *what]
+    return ["cargo", "build", *flags, "--features", feature_list(), *what]
+
+
 def cargo_env(extra: dict) -> dict:
     env = os.environ.copy()
     env.update(extra)
@@ -87,13 +110,16 @@ def cargo_env(extra: dict) -> dict:
 def build_variant(version: str, pubkey: str, out_dir: pathlib.Path, profile: str) -> None:
     env = cargo_env({"MIST_BUILD_VERSION": version, "MIST_UPDATE_TEST_PUBKEY": pubkey})
     env.pop("MIST_DIST_CHANNEL", None)
-    flags = ["--release"] if profile == "release" else []
-    target_dir = ROOT / "target" / profile
+    target_dir = profile_dir(profile)
     out_dir.mkdir(parents=True, exist_ok=True)
+    if STATIC:
+        run(cargo_cmd(profile, "--bin", "mist"), env=env)
+        shutil.copy2(target_dir / "mist", out_dir / "mist")
+        return
     # Build the GUI first and copy it out: on Windows Mist.exe and mist.exe are the same path.
-    run(["cargo", "build", *flags, "--features", feature_list(), "--bin", "Mist"], env=env)
+    run(cargo_cmd(profile, "--bin", "Mist"), env=env)
     shutil.copy2(target_dir / f"Mist{EXE}", out_dir / f"Mist{EXE}")
-    run(["cargo", "build", *flags, "--features", feature_list(), "--bin", "mist"], env=env)
+    run(cargo_cmd(profile, "--bin", "mist"), env=env)
     if IS_WIN:
         shutil.copy2(target_dir / "mist.exe", out_dir / "mist-cli.exe")
         (out_dir / "mist.cmd").write_text('@echo off\r\n"%~dp0mist-cli.exe" %*\r\n', encoding="ascii")
@@ -103,7 +129,7 @@ def build_variant(version: str, pubkey: str, out_dir: pathlib.Path, profile: str
 
 def package_new(new_dir: pathlib.Path, dist: pathlib.Path) -> pathlib.Path:
     dist.mkdir(parents=True, exist_ok=True)
-    top = "Mist-windows-x86_64" if IS_WIN else "Mist-linux-x86_64"
+    top = "Mist-windows-x86_64" if IS_WIN else ASSET.removesuffix(".tar.gz")
     out = dist / ASSET
     if IS_WIN:
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -127,9 +153,8 @@ def package_new(new_dir: pathlib.Path, dist: pathlib.Path) -> pathlib.Path:
 class Signer:
     def __init__(self, work: pathlib.Path, profile: str):
         self.dir = work / "keys"
-        flags = ["--release"] if profile == "release" else []
-        run(["cargo", "build", *flags, "--features", feature_list(), "--example", "update_test_sign"])
-        self.tool = ROOT / "target" / profile / "examples" / f"update_test_sign{EXE}"
+        run(cargo_cmd(profile, "--example", "update_test_sign"))
+        self.tool = profile_dir(profile) / "examples" / f"update_test_sign{EXE}"
         out = capture([str(self.tool), "keygen", str(self.dir)])
         if out.returncode != 0:
             raise SystemExit(out.stderr)
@@ -407,6 +432,29 @@ def run_scenarios(e: Env, port: int, old_dir: pathlib.Path) -> None:
            and not (env_home / "update-state.json").exists(), cp.stderr)
 
 
+def static_scenarios(e: Env, port: int, old_dir: pathlib.Path) -> None:
+    """Extra checks for the static CLI package (--static-cli)."""
+    base = f"http://127.0.0.1:{port}"
+    install = e.install
+
+    # 15. A desktop `Mist` sitting next to the static `mist` (e.g. both in ~/.local/bin) is left alone.
+    reset_install(old_dir, install)
+    desktop = install / "Mist"
+    desktop.write_text("#!/bin/sh\necho Mist 1.90.0\n")
+    desktop.chmod(0o755)
+    before = desktop.read_bytes()
+    cp = e.cli(["update", "--yes"], [f"{base}/good/latest.json"], e.fresh_home())
+    expect("static: only mist is replaced, a desktop Mist next to it is untouched",
+           cp.returncode == 0 and program_version(install / "mist") == NEW and desktop.read_bytes() == before,
+           f"{cp.stdout}{cp.stderr} mist={program_version(install / 'mist')}")
+
+    # 16. Manifest without the CLI package: never fall back to the desktop (glibc) package.
+    reset_install(old_dir, install)
+    cp = e.cli(["update", "--yes"], [f"{base}/guionly/latest.json"], e.fresh_home())
+    expect("static: desktop-only manifest is not installed by the static CLI",
+           cp.returncode == EXIT_AVAILABLE and program_version(install / "mist") == OLD, cp.stdout + cp.stderr)
+
+
 def gui_check(e: Env, port: int, old_dir: pathlib.Path) -> None:
     """Start the old GUI under Xvfb and confirm its background check runs and finds 1.91.0."""
     if IS_WIN or not shutil.which("xvfb-run"):
@@ -465,7 +513,20 @@ def main() -> int:
     ap.add_argument("--profile", choices=["release", "debug"], default="release")
     ap.add_argument("--skip-build", action="store_true")
     ap.add_argument("--no-gui", action="store_true")
+    ap.add_argument("--static-cli", action="store_true",
+                    help="test the static (musl) Linux CLI package instead of the desktop package")
     a = ap.parse_args()
+    if a.static_cli:
+        if IS_WIN:
+            raise SystemExit("--static-cli is Linux only")
+        global STATIC, PROGRAMS, PLATFORM_KEY, ASSET
+        STATIC = True
+        PROGRAMS = ["mist"]
+        PLATFORM_KEY = "linux-x86_64-cli"
+        ASSET = "mist-cli-linux-x86_64.tar.gz"
+        a.no_gui = True
+        if a.work == ROOT / "target" / "update-e2e":
+            a.work = ROOT / "target" / "update-e2e-static"
 
     work: pathlib.Path = a.work.resolve()
     old_dir, new_dir = work / "bin-old", work / "bin-new"
@@ -474,7 +535,7 @@ def main() -> int:
         signer = Signer.__new__(Signer)
         signer.dir = work / "keys"
         signer.key = signer.dir / "test.key"
-        signer.tool = ROOT / "target" / a.profile / "examples" / f"update_test_sign{EXE}"
+        signer.tool = profile_dir(a.profile) / "examples" / f"update_test_sign{EXE}"
         signer.pubkey = keyfile.read_text().strip()
     else:
         shutil.rmtree(work, ignore_errors=True)
@@ -527,8 +588,18 @@ def main() -> int:
         fb["platforms"][PLATFORM_KEY]["urls"] = [f"{base}/missing/{ASSET}", f"{base}/mirror/v{NEW}/{ASSET}"]
         write_variant(www, "fallback", fb, signer)
 
+        if STATIC:
+            # A manifest that only has the desktop package: the static CLI must not install it.
+            gui_only = json.loads(json.dumps(m))
+            desk = dict(gui_only["platforms"].pop(PLATFORM_KEY), name="Mist-linux-x86_64.tar.gz")
+            desk["urls"] = [u.replace(ASSET, desk["name"]) for u in desk["urls"]]
+            gui_only["platforms"] = {"linux-x86_64": desk}
+            write_variant(www, "guionly", gui_only, signer)
+
         e = Env(work, work / "install")
         run_scenarios(e, port, old_dir)
+        if STATIC:
+            static_scenarios(e, port, old_dir)
         if not a.no_gui:
             gui_check(e, port, old_dir)
 

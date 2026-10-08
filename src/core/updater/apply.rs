@@ -37,6 +37,9 @@ const MAX_EXTRACTED_FILE: u64 = 1024 * 1024 * 1024;
 pub fn program_files() -> &'static [&'static str] {
     if cfg!(windows) {
         &["Mist.exe", "mist-cli.exe", "mist.cmd"]
+    } else if cfg!(target_env = "musl") {
+        // 静态命令行版：包里只有 `mist`，也只替换 `mist`（同目录即使有桌面版 `Mist` 也不碰）。
+        &["mist"]
     } else {
         &["Mist", "mist"]
     }

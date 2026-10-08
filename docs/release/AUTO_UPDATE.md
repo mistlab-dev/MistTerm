@@ -7,6 +7,7 @@
 | 平台 / 安装方式 | 行为 |
 | --- | --- |
 | Linux 压缩包（`Mist` + `mist` 在同一个可写目录） | 提醒 + 一键更新（下载 → 校验 → 替换 → 提示重启） |
+| Linux 命令行静态版（`mist-cli-linux-*.tar.gz` / 官网 `/install`） | `mist update` 一键更新，只换 `mist`（见 [CLI_STATIC.md](CLI_STATIC.md)） |
 | Windows 安装版（Inno Setup，目录里有 `unins000.exe`） | 提醒 + "安装并重启"：静默运行新安装程序，装完自动重新打开 |
 | Windows 便携版（zip） | 提醒 + 一键更新（同 Linux） |
 | macOS | **只提醒**，给出手动更新步骤和下载页（签名/公证/改 Bundle ID 是 P5） |
@@ -27,6 +28,7 @@
 | `latest.json` | 更新清单：版本、发布时间、各平台文件名/大小/SHA-256/下载地址、更新说明 |
 | `latest.json.minisig` | 清单的 minisign 签名 |
 | `SHA256SUMS` / `SHA256SUMS.minisig` | 所有文件的校验和及其签名（给手动下载的用户核对用） |
+| `mist-cli-linux-x86_64.tar.gz` / `mist-cli-linux-aarch64.tar.gz` | 命令行静态版（不依赖 glibc），清单键名 `linux-x86_64-cli` / `linux-aarch64-cli` |
 
 客户端按顺序取清单（`src/core/updater/mod.rs` 的 `STABLE_MANIFEST_URLS`）：
 
@@ -70,13 +72,15 @@
 ```
 preflight（版本号一致性 + 清单脚本自测）
   → platform ×3（构建、打包；正式构建会检查公钥）
+  + cli-linux ×2（命令行静态版 x86_64 / aarch64：确认是静态程序，六个发行版冒烟测试，打包）
   → manifest（生成 SHA256SUMS + latest.json，不需要任何密钥）
   → sign（environment: release，需 Tian 批准；用 MINISIGN_SECRET_KEY 签名，再用仓库里的公钥验一遍）
   → release（一次性发布全部文件，含 latest.json 和签名）
   → mirror（镜像上传；仓库变量 MIST_MIRROR_ENABLED != 'true' 时跳过，目前未实现）
 ```
 
-- 触发条件没变：只有推 `v*` 标签或手动触发才运行；合并 PR **不会**发版。手动触发不会进入 manifest/sign/release。
+- 触发条件没变：只有推 `v*` 标签或手动触发才运行；合并 PR **不会**发版。手动触发会跑 manifest 当作检查
+  （版本号取 Cargo.toml，产物只留在这次运行里），**不会**进入 sign/release。
 - 签名 job 只签两个小文件，私钥写到临时文件、用完即删，从不打印。
 - `Update E2E` 工作流（`.github/workflows/update-e2e.yml`）：PR 修改更新相关代码时在 Linux 上跑离线端到端测试；
   Windows 版只能手动触发（勾选 `windows`）。两者都只有只读权限，不发布任何东西。
@@ -111,6 +115,7 @@ preflight（版本号一致性 + 清单脚本自测）
 cargo test --release --lib core::updater          # 单元测试
 python3 scripts/update-e2e/run_e2e.py             # 离线端到端（构建 1.90.0/1.91.0 两个测试版，起假服务器）
 python3 scripts/update-e2e/run_e2e.py --no-gui    # 跳过 Xvfb 下的 GUI 检查
+python3 scripts/update-e2e/run_e2e.py --static-cli  # 命令行静态版（需要 cargo-zigbuild + musl target）
 python3 scripts/gen-update-manifest.py --self-test
 ```
 

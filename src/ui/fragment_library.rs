@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use eframe::egui;
-use rfd::FileDialog;
+use crate::ui::file_dialog::FileDialog;
 
 use crate::core::{
     FragmentManager, FragmentMergeReport, FragmentStats, FragmentVariable, SortBy,
