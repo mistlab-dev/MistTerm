@@ -188,3 +188,13 @@ mist import-ssh-config -f /path/to/custom_ssh_config
 # 强制覆盖已存在的同名会话
 mist import-ssh-config --overwrite
 ```
+
+### 7.1 从 Xshell、FinalShell 导入 (`mist import`)
+
+```bash
+mist import xshell <Sessions 文件夹 | .xsh | .xts> [--dry-run]
+mist import finalshell <FinalShell 数据目录> [--dry-run]
+mist import auto <路径>
+```
+
+主机、分组、端口、用户名都会导入；密码能读出就一起导入，读不出的导入后在桌面版里编辑会话填上。Xshell 5.1 以后的密码怎么读出、哪些设置不会带过来，见 [从 Xshell 和 FinalShell 导入](./从Xshell和FinalShell导入.md)。
