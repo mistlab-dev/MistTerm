@@ -1,7 +1,7 @@
 //! Command audit Agent installation guide.
 //!
 //! The client deliberately does not execute remote installation commands. This dialog
-//! explains enrollment, installation, binding, and heartbeat verification, and lets the
+//! explains enrollment, installation, binding, and how to check the install, and lets the
 //! user copy the documented command for an administrator to run on the audited host.
 
 use eframe::egui;
@@ -22,7 +22,7 @@ pub fn show_agent_install_modal(
     let mut should_close = false;
     let modal_sz = egui::vec2(680.0, 560.0);
     let title = crate::i18n::tr(ctx, "Install command audit Agent", "安装命令审计 Agent");
-    let command = "curl -sL https://mistlab.dev/install | bash -s -- <team_id> <api_base> <enroll_token>";
+    let command = "curl -fsSL https://mistlab.dev/install-agent | sudo bash -s -- <team_id> <enroll_token>";
 
     chrome::modal_window("agent_install", theme, ctx)
         .open(&mut dialog_open)
@@ -51,7 +51,7 @@ pub fn show_agent_install_modal(
                     .max_height(390.0)
                     .show(ui, |ui| {
                         step(ui, theme, ctx, "1", "Create an enrollment token", "生成一次性安装令牌", "A team administrator creates a one-time enrollment token in the MistTeam console. It is bound to the team and should be pasted only on the intended host.", "团队管理员在 MistTeam 控制台生成一次性安装令牌。令牌绑定团队，只应粘贴到目标主机。",);
-                        step(ui, theme, ctx, "2", "Run the installer", "运行安装脚本", "Run the command below on the audited server with root privileges. You may replace <api_base> with the team API base when needed.", "在被审计服务器上以 root 权限运行下面的命令；必要时可将 <api_base> 替换为团队 API 基址。",);
+                        step(ui, theme, ctx, "2", "Run the installer", "运行安装脚本", "Run the command below on the audited server with root privileges. The console shows it with your team ID and token filled in. Self-hosted team server: put its API base before the token. (https://mistlab.dev/install is the mist CLI, not this.)", "在被审计服务器上以 root 权限运行下面的命令；控制台生成令牌时会给出填好团队 ID 和令牌的完整命令。自建团队服务器：在令牌前加上它的 API 地址。（https://mistlab.dev/install 是 mist 命令行，不是这个。）",);
                         ui.add_space(theme.spacing_xs());
                         ui.horizontal(|ui| {
                             ui.add(egui::Label::new(egui::RichText::new(command).monospace()).wrap(true));
@@ -73,7 +73,7 @@ pub fn show_agent_install_modal(
                             ui.label(egui::RichText::new(crate::i18n::tr(ctx, "Command copied to clipboard.", "命令已复制到剪贴板。")) .color(theme.accent_color()));
                         }
                         step(ui, theme, ctx, "3", "Bind and configure sshd", "绑定并配置 sshd", "The installer enrolls the host, writes /etc/mist-agent/config, installs the transparent wrapper, and adds an sshd ForceCommand drop-in. It validates sshd before reloading it.", "安装脚本会注册主机、写入 /etc/mist-agent/config、安装透明 wrapper，并添加 sshd ForceCommand 配置；重载前会先校验 sshd。",);
-                        step(ui, theme, ctx, "4", "Check the heartbeat", "检查心跳", "On the audited host, run `mist-agent status`. In MistTeam, confirm the Agent appears online and that its host, team, and last heartbeat are correct.", "在被审计主机执行 `mist-agent status`；在 MistTeam 中确认 Agent 在线，并核对主机、团队和最近心跳。",);
+                        step(ui, theme, ctx, "4", "Check the install", "检查安装", "On the audited host, run `mist-agent status`: it shows the team, the agent ID and whether the team server is reachable. The host also appears in the console's command audit list. Today only commands the root account runs directly with ssh host \"command\" are recorded; there is no online heartbeat yet.", "在被审计主机执行 `mist-agent status`：会显示团队、Agent ID 和能否连上团队服务器；控制台「命令审计」列表里也能看到这台主机。目前只记录 root 账号通过 ssh 主机 \"命令\" 直接执行的命令；还没有在线心跳。",);
                         step(ui, theme, ctx, "5", "Removal and recovery", "卸载与恢复", "Use `mist-agent-uninstall` on the host to remove the drop-in and agent files. Existing SSH connections are not interrupted; always verify access before closing the maintenance session.", "在主机执行 `mist-agent-uninstall` 移除配置和文件。现有 SSH 连接不会被中断；关闭维护会话前请先验证访问。",);
                     });
             });
