@@ -75,6 +75,40 @@ jobs:
           RUSTFLAGS: -C link-arg=-fuse-ld=mold
         run: python3 scripts/update-e2e/run_e2e.py
 
+  # 命令行静态版（musl，mist-cli-linux-x86_64.tar.gz）：只换 `mist`，不碰同目录的桌面版，也不会去装桌面版的包。
+  linux-static-cli:
+    name: Linux static CLI (offline e2e)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CARGO_ZIGBUILD_VERSION: "0.23.4"
+      ZIGLANG_VERSION: "0.17.0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mistterm-update-e2e-static
+          cache-on-failure: true
+
+      - name: Install zig + cargo-zigbuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/zig-venv"
+          "$RUNNER_TEMP/zig-venv/bin/pip" install --quiet "ziglang==${ZIGLANG_VERSION}" "cargo-zigbuild==${CARGO_ZIGBUILD_VERSION}"
+          echo "$RUNNER_TEMP/zig-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Offline end-to-end tests (static CLI)
+        run: python3 scripts/update-e2e/run_e2e.py --static-cli
+
   # 只在手动触发并勾选时运行；同样不发布任何东西。
   windows:
     name: Windows (offline e2e, manual)

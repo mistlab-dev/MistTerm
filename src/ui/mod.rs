@@ -33,6 +33,7 @@ pub mod monitor_panel;
 pub mod ai_panel;
 mod markdown_view;
 pub mod theme;
+pub mod file_dialog;
 pub mod sftp_panel;
 pub mod port_forward_panel;
 pub mod fragment_library;

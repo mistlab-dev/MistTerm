@@ -52,9 +52,7 @@ impl InstallKind {
     /// 清单中对应的平台条目。
     pub fn asset_key(&self) -> Option<&'static str> {
         match self {
-            InstallKind::LinuxPortable { .. } => {
-                (std::env::consts::ARCH == "x86_64").then_some(platform_keys::LINUX_X86_64)
-            }
+            InstallKind::LinuxPortable { .. } => linux_asset_key(cfg!(target_env = "musl"), std::env::consts::ARCH),
             InstallKind::WindowsPortable { .. } => {
                 (std::env::consts::ARCH == "x86_64").then_some(platform_keys::WINDOWS_X86_64_PORTABLE)
             }
@@ -72,6 +70,19 @@ impl InstallKind {
             InstallKind::LinuxPortable { dir } | InstallKind::WindowsPortable { dir } => Some(dir),
             _ => None,
         }
+    }
+}
+
+/// Linux 压缩包对应的清单条目。
+///
+/// 静态（musl）构建只有命令行 `mist`，只从只含 CLI 的包更新，不会去拉桌面版的包；
+/// glibc 构建（桌面版压缩包里的 `Mist` / `mist`）照旧用 `linux-x86_64`。
+pub fn linux_asset_key(static_cli: bool, arch: &str) -> Option<&'static str> {
+    match (static_cli, arch) {
+        (true, "x86_64") => Some(platform_keys::LINUX_X86_64_CLI),
+        (true, "aarch64") => Some(platform_keys::LINUX_AARCH64_CLI),
+        (false, "x86_64") => Some(platform_keys::LINUX_X86_64),
+        _ => None,
     }
 }
 
@@ -189,6 +200,15 @@ pub fn local_glibc_version() -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linux_asset_keys() {
+        assert_eq!(linux_asset_key(false, "x86_64"), Some("linux-x86_64"));
+        assert_eq!(linux_asset_key(false, "aarch64"), None);
+        assert_eq!(linux_asset_key(true, "x86_64"), Some("linux-x86_64-cli"));
+        assert_eq!(linux_asset_key(true, "aarch64"), Some("linux-aarch64-cli"));
+        assert_eq!(linux_asset_key(true, "riscv64"), None);
+    }
 
     #[test]
     fn source_build_is_notify_only() {
