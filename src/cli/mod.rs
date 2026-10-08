@@ -7,6 +7,7 @@ pub mod exec;
 pub mod exec_gate;
 pub mod frag;
 pub mod fwd;
+pub mod import_foreign;
 pub mod import_ssh;
 pub mod ls;
 pub mod session_log;

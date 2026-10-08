@@ -1255,6 +1255,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "des"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ffdd80ce8ce993de27e9f063a444a4d53ce8e8db4c1f00cc03af5ad5a9867a1e"
+dependencies = [
+ "cipher",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3465,12 +3474,14 @@ dependencies = [
  "clap",
  "core-foundation",
  "crossterm",
+ "des",
  "dirs 5.0.1",
  "eframe",
  "egui 0.23.0",
  "egui_extras",
  "egui_plot",
  "embed_plist",
+ "encoding_rs",
  "flate2",
  "genpdf",
  "hkdf",
