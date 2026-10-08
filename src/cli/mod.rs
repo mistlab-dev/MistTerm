@@ -4,6 +4,7 @@
 
 pub mod context;
 pub mod exec;
+pub mod exec_gate;
 pub mod frag;
 pub mod fwd;
 pub mod import_foreign;
@@ -24,6 +25,10 @@ use crate::ssh::SshConfig;
 pub struct CliContext {
     pub sessions: SessionManager,
     pub settings: crate::core::app_settings::AppSettings,
+    /// `--yes`：人已经确认过，会改动服务器 / 看不出是否只读的命令也执行（团队策略拦截的仍不执行）。
+    pub exec_yes: bool,
+    /// `--json` 输出（把关提示也用 JSON）。
+    pub json: bool,
 }
 
 impl CliContext {
@@ -31,6 +36,8 @@ impl CliContext {
         Self {
             sessions: SessionManager::new(),
             settings: crate::core::app_settings::AppSettings::load(),
+            exec_yes: false,
+            json: false,
         }
     }
 
