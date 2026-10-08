@@ -8,7 +8,10 @@ use crate::core::team::{
     create_team_fragment_blocking, lock_team_fragment_blocking, unlock_team_fragment_blocking,
     update_team_fragment_blocking, TeamFragment, TeamService,
 };
-use crate::core::{AuditCategory, AuditEvent, AuditOutcome, AuditLogger};
+use crate::core::{
+    validate_shortcut, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, FragmentShortcut,
+    FragmentShortcutStore, ShortcutConflict,
+};
 use crate::i18n;
 use crate::ui::chrome;
 use crate::ui::layout_util;
@@ -27,6 +30,10 @@ pub struct TeamFragmentEditorState {
     /// 编辑中持有的服务端锁
     pub lock_held_id: Option<String>,
     pub lock_heartbeat_at: Option<Instant>,
+    /// 仅本地生效的快捷键（不写入团队服务端）
+    pub shortcut: Option<FragmentShortcut>,
+    pub capturing_shortcut: bool,
+    pub shortcut_error: String,
 }
 
 #[derive(Debug, Clone)]
@@ -47,13 +54,20 @@ pub fn open_create_editor(editor: &mut TeamFragmentEditorState) {
     editor.error.clear();
     editor.lock_held_id = None;
     editor.lock_heartbeat_at = None;
+    editor.shortcut = None;
+    editor.capturing_shortcut = false;
+    editor.shortcut_error.clear();
 }
 
 fn modal_header_title(ui: &mut egui::Ui, theme: &Theme, title: &str) -> bool {
     chrome::modal_header(ui, theme, title, chrome::modal_title_font_size(theme))
 }
 
-pub fn open_edit_editor(editor: &mut TeamFragmentEditorState, frag: &TeamFragment) {
+pub fn open_edit_editor(
+    editor: &mut TeamFragmentEditorState,
+    frag: &TeamFragment,
+    shortcuts: &FragmentShortcutStore,
+) {
     editor.open = true;
     editor.editing = Some(frag.clone());
     editor.title = frag.title.clone();
@@ -63,6 +77,9 @@ pub fn open_edit_editor(editor: &mut TeamFragmentEditorState, frag: &TeamFragmen
     editor.error.clear();
     editor.lock_held_id = None;
     editor.lock_heartbeat_at = None;
+    editor.shortcut = shortcuts.get(&frag.id).cloned();
+    editor.capturing_shortcut = false;
+    editor.shortcut_error.clear();
 }
 
 pub fn show_team_fragment_editor_modal(
@@ -71,6 +88,7 @@ pub fn show_team_fragment_editor_modal(
     service: &mut TeamService,
     editor: &mut TeamFragmentEditorState,
     conflict: &mut Option<TeamFragmentConflictState>,
+    shortcuts: &mut FragmentShortcutStore,
     audit: &AuditLogger,
 ) {
     if !editor.open {
@@ -175,6 +193,80 @@ pub fn show_team_fragment_editor_modal(
                             }
                         },
                     );
+
+                    chrome::form_field_label(
+                        ui,
+                        theme,
+                        i18n::tr(ctx, "Shortcut (local only)", "快捷键（仅本机）"),
+                    );
+                    ui.horizontal(|ui| {
+                        let label = editor
+                            .shortcut
+                            .as_ref()
+                            .map(|s| s.display_label())
+                            .unwrap_or_else(|| {
+                                if editor.capturing_shortcut {
+                                    i18n::tr(ctx, "Press keys…", "请按下组合键…").to_string()
+                                } else {
+                                    i18n::tr(ctx, "None", "无").to_string()
+                                }
+                            });
+                        ui.label(egui::RichText::new(label).monospace());
+                        let capture_lbl = if editor.capturing_shortcut {
+                            i18n::tr(ctx, "Cancel", "取消录制")
+                        } else {
+                            i18n::tr(ctx, "Record", "录制")
+                        };
+                        if chrome::panel_action_button_ex(ui, theme, capture_lbl, true).clicked() {
+                            editor.capturing_shortcut = !editor.capturing_shortcut;
+                            editor.shortcut_error.clear();
+                        }
+                        if editor.shortcut.is_some()
+                            && chrome::panel_action_button_ex(
+                                ui,
+                                theme,
+                                i18n::tr(ctx, "Clear", "清除"),
+                                true,
+                            )
+                            .clicked()
+                        {
+                            editor.shortcut = None;
+                            editor.capturing_shortcut = false;
+                            editor.shortcut_error.clear();
+                        }
+                    });
+                    if editor.capturing_shortcut {
+                        if let Some(sc) = poll_team_shortcut_capture(ctx) {
+                            let except = editor.editing.as_ref().map(|f| f.id.as_str());
+                            match validate_shortcut(shortcuts, &sc, except) {
+                                Ok(()) => {
+                                    editor.shortcut = Some(sc);
+                                    editor.capturing_shortcut = false;
+                                    editor.shortcut_error.clear();
+                                }
+                                Err(err) => {
+                                    editor.shortcut_error = team_shortcut_conflict_message(ctx, &err);
+                                }
+                            }
+                        }
+                    }
+                    if !editor.shortcut_error.is_empty() {
+                        ui.label(
+                            chrome::rich_caption(theme, &editor.shortcut_error)
+                                .color(theme.red_color()),
+                        );
+                    }
+                    ui.label(
+                        chrome::rich_caption(
+                            theme,
+                            i18n::tr(
+                                ctx,
+                                "Shortcut is saved on this computer only; teammates are unaffected.",
+                                "快捷键只保存在本机，不影响其他成员。",
+                            ),
+                        )
+                        .weak(),
+                    );
                     ui.add_space(4.0);
 
                     if !editor.error.is_empty() {
@@ -214,6 +306,14 @@ pub fn show_team_fragment_editor_modal(
                                 .to_string();
                                 return;
                             }
+                            let except = editor.editing.as_ref().map(|f| f.id.as_str());
+                            if let Some(sc) = &editor.shortcut {
+                                if let Err(err) = validate_shortcut(shortcuts, sc, except) {
+                                    editor.shortcut_error =
+                                        team_shortcut_conflict_message(ctx, &err);
+                                    return;
+                                }
+                            }
                             let cat = editor.category.trim();
                             let cat_opt = if cat.is_empty() {
                                 None
@@ -234,6 +334,11 @@ pub fn show_team_fragment_editor_modal(
                                     status_opt,
                                 ) {
                                     Ok(updated) => {
+                                        persist_team_fragment_shortcut(
+                                            shortcuts,
+                                            &updated.id,
+                                            editor.shortcut.clone(),
+                                        );
                                         audit.record(
                                             AuditEvent::new(
                                                 AuditCategory::Fragment,
@@ -279,6 +384,11 @@ pub fn show_team_fragment_editor_modal(
                                     status_opt,
                                 ) {
                                     Ok(created) => {
+                                        persist_team_fragment_shortcut(
+                                            shortcuts,
+                                            &created.id,
+                                            editor.shortcut.clone(),
+                                        );
                                         audit.record(
                                             AuditEvent::new(
                                                 AuditCategory::Fragment,
@@ -469,4 +579,84 @@ fn status_display(status: &str) -> &'static str {
         "archived" => "Archived",
         _ => "Published",
     }
+}
+
+fn persist_team_fragment_shortcut(
+    store: &mut FragmentShortcutStore,
+    fragment_id: &str,
+    shortcut: Option<FragmentShortcut>,
+) {
+    match shortcut {
+        Some(sc) => store.set(fragment_id.to_string(), sc),
+        None => store.clear(fragment_id),
+    }
+    let _ = store.save();
+}
+
+fn team_shortcut_conflict_message(ctx: &egui::Context, err: &ShortcutConflict) -> String {
+    match err {
+        ShortcutConflict::NeedsModifier => i18n::tr(
+            ctx,
+            "Shortcut needs a modifier key (⌘/Ctrl/Alt/Shift).",
+            "快捷键需要包含修饰键（⌘/Ctrl/Alt/Shift）。",
+        )
+        .to_string(),
+        ShortcutConflict::ShellCtrlLetter => i18n::tr(
+            ctx,
+            "Ctrl+letter is reserved for the shell.",
+            "Ctrl+字母留给 shell，不能用作片段快捷键。",
+        )
+        .to_string(),
+        ShortcutConflict::ReservedApp(label) => format!(
+            "{} ({label})",
+            i18n::tr(
+                ctx,
+                "Conflicts with a built-in shortcut",
+                "与应用内置快捷键冲突",
+            )
+        ),
+        ShortcutConflict::OtherFragment(_) => i18n::tr(
+            ctx,
+            "This shortcut is already used by another snippet.",
+            "该快捷键已被另一条片段占用。",
+        )
+        .to_string(),
+    }
+}
+
+fn poll_team_shortcut_capture(ctx: &egui::Context) -> Option<FragmentShortcut> {
+    ctx.input(|i| {
+        for ev in &i.events {
+            if let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = ev
+            {
+                let name = format!("{:?}", key);
+                if name.eq_ignore_ascii_case("Control")
+                    || name.eq_ignore_ascii_case("Ctrl")
+                    || name.eq_ignore_ascii_case("Shift")
+                    || name.eq_ignore_ascii_case("Alt")
+                    || name.eq_ignore_ascii_case("Command")
+                    || name.eq_ignore_ascii_case("MacCmd")
+                    || name.eq_ignore_ascii_case("Meta")
+                {
+                    continue;
+                }
+                if name.is_empty() {
+                    continue;
+                }
+                return Some(FragmentShortcut::new(
+                    name,
+                    modifiers.ctrl,
+                    modifiers.shift,
+                    modifiers.alt,
+                    modifiers.command || modifiers.mac_cmd,
+                ));
+            }
+        }
+        None
+    })
 }
