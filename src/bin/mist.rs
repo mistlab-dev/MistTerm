@@ -57,6 +57,11 @@ enum Cmd {
         /// 并行度（1-16，默认 8）
         #[arg(long, default_value_t = 8)]
         parallel: usize,
+
+        /// 人已确认：会改动服务器、或看不出是否只读的命令也执行（团队策略拦截的仍不执行）。
+        /// 要写在目标前面：mist exec --yes web-01 -- systemctl restart nginx
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 
     /// 列出远端目录：mist rls <target>:<path>
@@ -221,6 +226,11 @@ enum FragCmd {
         /// 模板变量赋值：key=value，可传多次
         #[arg(short = 'v', long = "var")]
         vars: Vec<String>,
+
+        /// 人已确认：会改动服务器、或看不出是否只读的命令也执行（团队策略拦截的仍不执行）。
+        /// 要写在目标前面：mist frag run --yes 重启nginx web-01
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
 }
 
@@ -239,7 +249,14 @@ fn init_logging(verbose: u8) {
 /// 把本地 argv 按 POSIX shell 规则重组为单条远端命令。
 /// 每个参数用单引号包裹，内嵌单引号转 '\''——保证
 /// `mist exec t -- bash -c 'echo hi; exit 42'` 原样到达远端 shell。
+/// 把命令参数拼成远端要执行的一行。
+///
+/// 只有一个参数时原样使用（和 `ssh host 'a | b'` 一样）：`mist exec web -- "df -h | tail -1"`
+/// 里的管道、分号要交给远端 shell。多个参数时逐个加引号（保持原来的行为）。
 fn shell_join(argv: &[String]) -> String {
+    if let [one] = argv {
+        return one.trim().to_string();
+    }
     argv.iter()
         .map(|a| {
             if a.chars().all(|c| c.is_ascii_alphanumeric() || "_+-=./:@%,".contains(c))
@@ -252,6 +269,18 @@ fn shell_join(argv: &[String]) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// `--yes` 写在别处时直接报错（见 `exec_gate::yes_flag_right_after`）。
+fn require_yes_position(yes: bool, sub: &[&str], usage: &str) {
+    if !yes {
+        return;
+    }
+    let args: Vec<String> = std::env::args().collect();
+    if !mistterm::cli::exec_gate::yes_flag_right_after(&args, sub) {
+        eprintln!("错误: --yes 要紧跟在 {} 后面，例如：{usage}", sub.join(" "));
+        std::process::exit(2);
+    }
 }
 
 fn main() {
@@ -277,6 +306,7 @@ fn main() {
     }
 
     let mut ctx = CliContext::load();
+    ctx.json = cli.json;
     let cmd = match &cli.cmd {
         Some(c) => c,
         None => {
@@ -296,8 +326,10 @@ fn main() {
             all_targets,
             serial,
             parallel,
-            ..
+            yes,
         } => {
+            require_yes_position(*yes, &["exec"], "mist exec --yes <目标> -- <命令>");
+            ctx.exec_yes = *yes;
             if *all_targets || group.is_some() {
                 // 批量模式下没有 target 位置参数，如果用户没写 -- 分隔，
                 // 第一个词可能被 clap 误解析进了 target，需要拼回 command
@@ -352,7 +384,11 @@ fn main() {
                 serial,
                 parallel,
                 vars,
-            } => mistterm::cli::frag::run_run(
+                yes,
+            } => {
+                require_yes_position(*yes, &["frag", "run"], "mist frag run --yes <片段> <目标>");
+                ctx.exec_yes = *yes;
+                mistterm::cli::frag::run_run(
                 &mut ctx,
                 name,
                 target.as_deref(),
@@ -362,7 +398,8 @@ fn main() {
                 *parallel,
                 vars,
                 cli.json,
-            ),
+            )
+            }
         },
         Cmd::ImportSshConfig {
             file,
