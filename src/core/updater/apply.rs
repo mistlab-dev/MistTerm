@@ -152,7 +152,10 @@ pub fn apply_update(
                 exe: exe.to_path_buf(),
             }
         }
-        InstallKind::WindowsInstaller { .. } => {
+        InstallKind::WindowsInstaller { dir } => {
+            if let Err(e) = backup_before_installer(dir, super::APP_VERSION) {
+                log::warn!("updater: no rollback backup for the installer edition: {e}");
+            }
             launch_installer(&archive, relaunch_after_installer)?;
             ApplyOutcome::InstallerStarted {
                 version: version.clone(),
@@ -303,13 +306,24 @@ fn write_limited<R: std::io::Read>(reader: &mut R, target: &Path) -> Result<(), 
 
 /// 运行 `程序 --version`，确认输出里有期望的版本号。
 pub fn smoke_test(program: &Path, expected_version: &str) -> Result<(), UpdateError> {
-    let mut child = Command::new(program)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| UpdateError::SmokeTest(format!("cannot start: {e}")))?;
+    // 刚写完的文件偶尔会报「文本文件忙」(Linux ETXTBSY：别的线程 fork 时短暂继承了写句柄)，稍等重试。
+    let mut attempts = 0;
+    let mut child = loop {
+        match Command::new(program)
+            .arg("--version")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        {
+            Ok(c) => break c,
+            Err(e) if cfg!(unix) && e.raw_os_error() == Some(26) && attempts < 20 => {
+                attempts += 1;
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Err(e) => return Err(UpdateError::SmokeTest(format!("cannot start: {e}"))),
+        }
+    };
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         match child.try_wait() {
@@ -425,6 +439,13 @@ pub fn install_files(
     }
 
     // 4. 记录备份对应的版本，再替换掉上一份备份。
+    finalize_backup(dir, &bak_tmp, old_version);
+    log::info!("updater: installed {new_version} into {}", dir.display());
+    Ok(())
+}
+
+/// 把准备好的 `bak_tmp` 定为当前备份（写入版本号，替换掉上一份）。
+fn finalize_backup(dir: &Path, bak_tmp: &Path, old_version: &str) {
     let meta = BackupMeta {
         version: old_version.to_string(),
         saved_at: chrono::Utc::now().to_rfc3339(),
@@ -438,10 +459,34 @@ pub fn install_files(
         let parked = dir.join(format!("{BACKUP_OLD_PREFIX}{}", chrono::Utc::now().timestamp_millis()));
         let _ = std::fs::rename(&bak, parked);
     }
-    if let Err(e) = std::fs::rename(&bak_tmp, &bak) {
+    if let Err(e) = std::fs::rename(bak_tmp, &bak) {
         log::warn!("updater: could not finalize backup dir: {e}");
     }
-    log::info!("updater: installed {new_version} into {}", dir.display());
+}
+
+/// Windows 安装版：运行新的安装程序前，把当前的程序文件复制一份进备份目录，
+/// 之后 `mist update --rollback` 就能像便携版一样退回（再执行一次回到新版本）。
+/// 装在没有写权限的位置（例如所有用户的 Program Files）时会失败，调用方只记日志、照常更新。
+pub fn backup_before_installer(dir: &Path, current_version: &str) -> std::io::Result<()> {
+    let bak_tmp = dir.join(BACKUP_TMP_DIR);
+    let _ = std::fs::remove_dir_all(&bak_tmp);
+    std::fs::create_dir_all(&bak_tmp)?;
+    let mut copied = 0;
+    for name in program_files() {
+        let src = dir.join(name);
+        if src.is_file() {
+            if let Err(e) = copy_synced(&src, &bak_tmp.join(name)) {
+                let _ = std::fs::remove_dir_all(&bak_tmp);
+                return Err(e);
+            }
+            copied += 1;
+        }
+    }
+    if copied == 0 {
+        let _ = std::fs::remove_dir_all(&bak_tmp);
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no program files to back up"));
+    }
+    finalize_backup(dir, &bak_tmp, current_version);
     Ok(())
 }
 
@@ -832,6 +877,40 @@ mod tests {
         std::fs::set_permissions(&install, std::fs::Permissions::from_mode(0o755)).unwrap();
         assert!(matches!(err, UpdateError::NotWritable(_)), "{err:?}");
         smoke_test(&install.join("mist"), "1.0.0").unwrap();
+    }
+
+    #[test]
+    fn installer_edition_backup_then_rollback_roundtrip() {
+        // 回退由新装好的那版 mist 执行，所以「当前版本」= 正在运行的版本（APP_VERSION）。
+        let new = super::super::APP_VERSION;
+        let old = "0.9.0";
+        let dir = tempfile::tempdir().unwrap();
+        let names = program_files();
+        let write_all = |v: &str| {
+            for n in names {
+                fake_program(&dir.path().join(n), n.trim_end_matches(".exe").trim_end_matches(".cmd"), v);
+            }
+        };
+        write_all(old);
+        backup_before_installer(dir.path(), old).unwrap();
+        assert_eq!(backup_version(dir.path()).as_deref(), Some(old));
+        // 安装程序把文件换成新版本
+        write_all(new);
+        let exe = dir.path().join(names[0]);
+        assert_eq!(rollback(&exe).unwrap(), old);
+        assert!(std::fs::read_to_string(&exe).unwrap().contains(old));
+        assert_eq!(backup_version(dir.path()).as_deref(), Some(new));
+        // 再执行一次回到新版本
+        assert_eq!(rollback(&exe).unwrap(), new);
+        assert!(std::fs::read_to_string(&exe).unwrap().contains(new));
+    }
+
+    #[test]
+    fn backup_before_installer_needs_program_files() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(backup_before_installer(dir.path(), "1.2.0").is_err());
+        assert!(backup_version(dir.path()).is_none());
+        assert!(!dir.path().join(BACKUP_TMP_DIR).exists());
     }
 
     #[test]
