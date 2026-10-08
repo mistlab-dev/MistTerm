@@ -42,6 +42,7 @@ use crate::ui::session_log_dialog::SessionLogDialog;
 use crate::ui::sftp_panel::SftpPanel;
 use crate::ui::sidebar::Sidebar;
 use crate::ui::ssh_config_import_dialog::SshConfigImportDialog;
+use crate::ui::foreign_import_dialog::ForeignImportDialog;
 use crate::ui::tab_pane::{TabLayout, TerminalPane, TerminalTab};
 use crate::ui::team_fragment_dialog::{
     open_create_editor, open_edit_editor, show_team_fragment_conflict_modal,
@@ -441,6 +442,7 @@ pub struct MistTermApp {
     command_history: CommandHistory,
     command_history_overlay: CommandHistoryOverlay,
     ssh_import_dialog: SshConfigImportDialog,
+    foreign_import_dialog: ForeignImportDialog,
     ssh_config_candidates: Vec<SshConfigCandidate>,
     ssh_config_path: std::path::PathBuf,
     ssh_import_banner_dismissed: bool,
@@ -484,6 +486,10 @@ pub struct MistTermApp {
     active_toast: Option<ActiveToast>,
     /// GUI 自动化：首帧按会话名自动连接(`MISTTERM_AUTO_CONNECT`)
     pending_auto_connect_session: Option<String>,
+    /// 启动参数里的 `ssh://` 链接（浏览器点链接打开 Mist 时），首帧处理。
+    pending_ssh_url: Option<Result<crate::core::ssh_url::SshUrl, String>>,
+    /// 设置里「ssh:// 链接」一项的状态（打开设置时查一次）。
+    pub(crate) ssh_url_handler_status: Option<crate::platform::url_handler::HandlerStatus>,
 }
 
 /// 命令确认弹窗状态(本地快捷提示或服务器侧策略)
@@ -1101,6 +1107,8 @@ impl MistTermApp {
             hang_reporter: HangReporter::start_default(),
             active_toast: None,
             pending_auto_connect_session: None,
+            pending_ssh_url: None,
+            ssh_url_handler_status: None,
             auto_reconnect_enabled: false,
             terminal_font_preset: crate::platform::TerminalFontPreset::default(),
             terminal_font_size: crate::platform::DEFAULT_TERMINAL_FONT_SIZE,
@@ -1108,6 +1116,7 @@ impl MistTermApp {
             command_history: CommandHistory::new(),
             command_history_overlay: CommandHistoryOverlay::default(),
             ssh_import_dialog: SshConfigImportDialog::default(),
+            foreign_import_dialog: ForeignImportDialog::default(),
             ssh_config_candidates: Vec::new(),
             ssh_config_path: default_ssh_config_path(),
             ssh_import_banner_dismissed: false,
@@ -1183,6 +1192,12 @@ impl MistTermApp {
                 }
             }
         }
+
+        // 浏览器里点 ssh:// 链接：系统把链接作为参数传进来
+        app.pending_ssh_url = std::env::args()
+            .skip(1)
+            .find(|a| a.trim().to_ascii_lowercase().starts_with("ssh://"))
+            .map(|a| crate::core::ssh_url::parse_ssh_url(&a));
 
         // 启动诊断 / 字体问题走 Toast；不再显示「就绪」。
         if !boot_diagnostics.is_empty() {
@@ -1967,6 +1982,70 @@ impl MistTermApp {
         }
     }
 
+    pub(crate) fn open_foreign_import_dialog(&mut self) {
+        let existing = self.session_manager.list_sessions().to_vec();
+        self.foreign_import_dialog.open_dialog(&existing);
+    }
+
+    /// 把从 Xshell / FinalShell 读出的会话加进会话列表。
+    fn import_foreign_candidates(
+        &mut self,
+        ctx: &egui::Context,
+        candidates: Vec<crate::core::foreign_import::ForeignCandidate>,
+    ) {
+        let mut names: Vec<String> = self
+            .session_manager
+            .list_sessions()
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+        let mut added = 0usize;
+        let mut without_password = 0usize;
+        let mut sources = std::collections::BTreeSet::new();
+        for c in &candidates {
+            if !c.importable()
+                || crate::core::foreign_import::is_already_imported(c, self.session_manager.list_sessions())
+            {
+                continue;
+            }
+            let mut cfg = crate::core::foreign_import::candidate_to_session(c, &names);
+            if !self.default_keepalive_enabled {
+                cfg.keepalive_enabled = false;
+            } else {
+                cfg.keepalive_interval_secs = self.default_keepalive_interval_secs;
+                cfg.keepalive_count_max = self.default_keepalive_count_max;
+            }
+            cfg.keepalive_auto_reconnect = self.auto_reconnect_enabled;
+            if cfg.password.is_empty() {
+                without_password += 1;
+            }
+            names.push(cfg.name.clone());
+            sources.insert(c.source.label());
+            self.session_manager.add_session(cfg);
+            added += 1;
+        }
+        if added == 0 {
+            return;
+        }
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Session, "session.import_foreign", AuditOutcome::Success)
+                .with_detail(serde_json::json!({
+                    "count": added,
+                    "source": sources.into_iter().collect::<Vec<_>>().join(","),
+                })),
+        );
+        self.notify_auto(match crate::i18n::language(ctx) {
+            crate::i18n::UiLanguage::En if without_password > 0 => format!(
+                "Imported {added} session(s); {without_password} have no password yet — right-click a session → Edit to fill it in"
+            ),
+            crate::i18n::UiLanguage::En => format!("Imported {added} session(s)"),
+            crate::i18n::UiLanguage::Zh if without_password > 0 => format!(
+                "已导入 {added} 个会话；其中 {without_password} 个没有密码，请右键会话 →「编辑」填上"
+            ),
+            crate::i18n::UiLanguage::Zh => format!("已导入 {added} 个会话"),
+        });
+    }
+
     fn poll_connect_audit_from_tabs(&mut self, ctx: &egui::Context) {
         let mut toast_errors: Vec<(usize, String)> = Vec::new();
         for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
@@ -2340,6 +2419,7 @@ impl MistTermApp {
             || self.quick_selector.open
             || self.large_upload_pending_path.is_some()
             || self.ssh_import_dialog.open
+            || self.foreign_import_dialog.open
             || self.command_history_overlay.open
             || self.session_log_dialog.open
             || self.team_members_dialog.open
@@ -2835,6 +2915,7 @@ impl MistTermApp {
             || self.show_ai_settings_dialog
             || self.variable_dialog.open
             || self.ssh_import_dialog.open
+            || self.foreign_import_dialog.open
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
             || self.cmd_audit_confirm.is_some()
@@ -5018,6 +5099,62 @@ impl MistTermApp {
     }
 
     /// 创建并连接会话
+    /// 打开 `ssh://` 链接：已保存的主机直接连接；没保存过的打开「新建会话」并填好主机、端口、用户名。
+    fn open_ssh_url(
+        &mut self,
+        ctx: &egui::Context,
+        url: Result<crate::core::ssh_url::SshUrl, String>,
+    ) {
+        let url = match url {
+            Ok(u) => u,
+            Err(e) => {
+                self.notify_warn(format!(
+                    "{}{e}",
+                    crate::i18n::tr(ctx, "Cannot open the ssh:// link: ", "打不开这个 ssh:// 链接：")
+                ));
+                return;
+            }
+        };
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Session, "session.open_ssh_url", AuditOutcome::Success)
+                .with_host(&url.host)
+                .with_detail(serde_json::json!({ "port": url.port })),
+        );
+        if url.had_password {
+            self.notify_warn(
+                crate::i18n::tr(
+                    ctx,
+                    "The link contained a password; it was ignored.",
+                    "链接里带了密码，没有使用。",
+                )
+                .to_string(),
+            );
+        }
+        let saved = crate::core::ssh_url::match_saved_session(&url, self.session_manager.list_sessions()).cloned();
+        if let Some(session) = saved {
+            self.selected_session_id = Some(session.id.clone());
+            self.push_tab_connecting(ctx, &session);
+            return;
+        }
+        self.reset_new_session_form();
+        self.new_session_name = url.display();
+        self.new_session_host = url.host.clone();
+        self.new_session_port = url.port;
+        self.new_session_port_str = url.port.to_string();
+        self.new_session_username = url.user.clone().unwrap_or_default();
+        self.show_new_session_dialog = true;
+        self.notify_auto(match crate::i18n::language(ctx) {
+            crate::i18n::UiLanguage::En => format!(
+                "{} is not saved yet. Fill in the password (or choose a key), then click Save & connect.",
+                url.display()
+            ),
+            crate::i18n::UiLanguage::Zh => format!(
+                "{} 还没保存过。填上密码（或选择私钥）后点「保存并连接」。",
+                url.display()
+            ),
+        });
+    }
+
     fn create_and_connect_session(&mut self, ctx: &egui::Context) {
         if self.new_session_name.is_empty() || self.new_session_host.is_empty() {
             self.notify_auto(
@@ -6650,6 +6787,13 @@ impl MistTermApp {
                     if crate::ui::chrome::popup_menu_button(ui, &theme, &import_label).clicked() {
                         self.open_ssh_import_dialog(ui.ctx());
                     }
+                    let foreign_label = format!(
+                        "{}…",
+                        crate::i18n::menu::labels(crate::i18n::language(ui.ctx())).import_foreign
+                    );
+                    if crate::ui::chrome::popup_menu_button(ui, &theme, &foreign_label).clicked() {
+                        self.open_foreign_import_dialog();
+                    }
                 });
 
                 let row_w = ui.available_width();
@@ -6865,6 +7009,7 @@ impl MistTermApp {
         use crate::platform::macos_menu::MacMenuAction;
         match action {
             MacMenuAction::ImportSsh => self.open_ssh_import_dialog(ctx),
+            MacMenuAction::ImportForeign => self.open_foreign_import_dialog(),
             MacMenuAction::NewSession => self.show_new_session_dialog = true,
             MacMenuAction::NewTab => self.open_new_tab_from_selection(ctx),
             MacMenuAction::Preferences => self.show_preferences_dialog = true,
@@ -7033,6 +7178,9 @@ impl eframe::App for MistTermApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if let Some(url) = self.pending_ssh_url.take() {
+            self.open_ssh_url(ctx, url);
+        }
         if let Some(name) = self.pending_auto_connect_session.take() {
             if let Some(session) = self
                 .session_manager

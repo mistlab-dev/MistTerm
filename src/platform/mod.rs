@@ -8,6 +8,7 @@ pub mod paths;
 pub mod quit_watchdog;
 pub mod shell;
 pub mod shortcuts;
+pub mod url_handler;
 pub mod version;
 #[cfg(target_os = "macos")]
 mod macos_launch;
