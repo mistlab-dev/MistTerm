@@ -28,6 +28,7 @@ pub mod reconnect;
 pub mod upload_policy;
 pub mod ssh_config_importer;
 pub mod ssh_url;
+pub mod foreign_import;
 pub mod command_history;
 pub mod session_logger;
 pub mod session_sort;
