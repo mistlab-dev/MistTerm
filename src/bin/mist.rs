@@ -120,6 +120,32 @@ enum Cmd {
         overwrite: bool,
     },
 
+    /// 从 Xshell 或 FinalShell 导入会话（主机、分组、端口、用户名；能读出的密码一起导入）
+    ///
+    /// Xshell：选 Sessions 文件夹、单个 .xsh，或 Xshell「文件 → 导出」得到的 .xts。
+    /// FinalShell：选数据目录（里面有 conn 文件夹）。
+    /// Xshell 设了主密码时，用环境变量 MIST_XSHELL_MASTER_PASSWORD 提供。
+    Import {
+        /// 来源：xshell、finalshell；不写则自动判断
+        #[arg(value_parser = ["xshell", "finalshell", "auto"])]
+        source: String,
+
+        /// 文件或文件夹路径
+        path: std::path::PathBuf,
+
+        /// 只预览，不保存
+        #[arg(long)]
+        dry_run: bool,
+
+        /// 原电脑的 Windows 账号名（解 Xshell 5.1 以后的密码用；在原电脑上运行 `whoami /user` 可查）
+        #[arg(long)]
+        windows_user: Option<String>,
+
+        /// 原电脑 Windows 账号的 SID（形如 S-1-5-21-…）
+        #[arg(long)]
+        windows_sid: Option<String>,
+    },
+
     /// 检查并安装 MistTerm 新版本（也可用 `mist self-update`）
     ///
     /// 退出码：0 已是最新或已更新；10 有新版本但没有安装；1 出错。
@@ -347,6 +373,26 @@ fn main() {
             file.clone(),
             *dry_run,
             *overwrite,
+        ),
+        Cmd::Import {
+            source,
+            path,
+            dry_run,
+            windows_user,
+            windows_sid,
+        } => mistterm::cli::import_foreign::run_import(
+            &mut ctx,
+            mistterm::cli::import_foreign::ImportArgs {
+                source: match source.as_str() {
+                    "xshell" => Some(mistterm::core::foreign_import::ForeignSource::Xshell),
+                    "finalshell" => Some(mistterm::core::foreign_import::ForeignSource::FinalShell),
+                    _ => None,
+                },
+                path,
+                dry_run: *dry_run,
+                windows_user: windows_user.clone(),
+                windows_sid: windows_sid.clone(),
+            },
         ),
         Cmd::Update { .. } => unreachable!("handled before loading the CLI context"),
         Cmd::Sop { sub } => match sub {
