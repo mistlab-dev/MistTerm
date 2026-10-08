@@ -58,7 +58,7 @@ use crate::ui::terminal::TerminalView;
 use crate::ui::theme::ThemeManager;
 use crate::ui::vault_form::VaultSecretForm;
 use eframe::egui;
-use rfd::FileDialog;
+use crate::ui::file_dialog::FileDialog;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::time::{Duration, Instant};
@@ -3530,7 +3530,7 @@ impl MistTermApp {
             "mistterm-efficiency-{}.pdf",
             chrono::Local::now().format("%Y%m%d")
         );
-        let Some(path) = rfd::FileDialog::new()
+        let Some(path) = crate::ui::file_dialog::FileDialog::new()
             .set_file_name(&default_name)
             .add_filter("PDF", &["pdf"])
             .save_file()
@@ -3589,7 +3589,7 @@ impl MistTermApp {
             "mistterm-analytics-{}.json",
             chrono::Local::now().format("%Y%m%d")
         );
-        if let Some(path) = rfd::FileDialog::new()
+        if let Some(path) = crate::ui::file_dialog::FileDialog::new()
             .set_file_name(&default_name)
             .add_filter("JSON", &["json"])
             .save_file()

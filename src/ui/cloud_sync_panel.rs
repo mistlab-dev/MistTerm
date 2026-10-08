@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use eframe::egui;
-use rfd::FileDialog;
+use crate::ui::file_dialog::FileDialog;
 
 use crate::core::{
     AppSettings, AuditCategory, AuditEvent, AuditLogger, AuditOutcome, CloudSyncSettings,

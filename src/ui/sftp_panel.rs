@@ -11,7 +11,7 @@ use crate::ui::terminal::TerminalView;
 use crate::ui::theme::Theme;
 use chrono::Utc;
 use eframe::egui::{self, Sense};
-use rfd::FileDialog;
+use crate::ui::file_dialog::FileDialog;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use sftp_file_table::{

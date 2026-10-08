@@ -64,6 +64,9 @@ pub struct PlatformAsset {
 /// 平台条目的键名。
 pub mod platform_keys {
     pub const LINUX_X86_64: &str = "linux-x86_64";
+    /// 只含命令行 `mist` 的静态（musl）版本，不依赖系统 glibc；官网 `/install` 装的就是它。
+    pub const LINUX_X86_64_CLI: &str = "linux-x86_64-cli";
+    pub const LINUX_AARCH64_CLI: &str = "linux-aarch64-cli";
     pub const WINDOWS_X86_64_SETUP: &str = "windows-x86_64-setup";
     pub const WINDOWS_X86_64_PORTABLE: &str = "windows-x86_64-portable";
     pub const MACOS_UNIVERSAL: &str = "macos-universal";

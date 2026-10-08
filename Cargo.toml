@@ -11,6 +11,10 @@ repository = "https://github.com/mistlab-dev/MistTerm"
 license = "AGPL-3.0-or-later"
 
 [features]
+default = ["file-dialogs"]
+# 桌面版的系统文件选择框（rfd，Linux 上依赖 GTK3）。只编命令行 `mist` 的静态版本（musl）时关掉，
+# 见 docs/release/CLI_STATIC.md。
+file-dialogs = ["dep:rfd"]
 # 让 ssh2 / openssl-sys 自带源码编译 OpenSSL，便于 CI 跨平台构建（macOS universal 等）。
 vendored-openssl = ["ssh2/vendored-openssl"]
 # 仅用于自动更新的端到端测试：信任编译时传入的临时测试公钥、允许 http://127.0.0.1 假服务器、
@@ -40,6 +44,8 @@ path = "src/bin/rz_upload_smoke.rs"
 [[bin]]
 name = "Mist"
 path = "src/main.rs"
+# 桌面版必须带文件选择框；`--no-default-features` 的静态 CLI 构建不会编它。
+required-features = ["file-dialogs"]
 
 [[bin]]
 name = "mist"
@@ -78,7 +84,7 @@ arboard = "3.3"
 keyring = "2.3"
 
 # File dialogs (cross-platform)
-rfd = "0.12"
+rfd = { version = "0.12", optional = true }
 
 # Config
 serde = { version = "1.0", features = ["derive"] }
