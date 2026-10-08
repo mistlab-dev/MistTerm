@@ -40,6 +40,10 @@ impl MistTermApp {
                 self.open_ssh_import_dialog(ctx);
                 ui.close_menu();
             }
+            if crate::ui::chrome::popup_menu_button(ui, theme, &format!("{}…", l.import_foreign)).clicked() {
+                self.open_foreign_import_dialog();
+                ui.close_menu();
+            }
             ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.close_tab).clicked() {
                 self.request_close_active_tab();
