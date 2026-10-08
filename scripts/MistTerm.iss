@@ -60,6 +60,13 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesn
 Source: "..\docs\en\INSTALL.md"; DestDir: "{app}"; DestName: "INSTALL.md"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\docs\zh\INSTALL.md"; DestDir: "{app}"; DestName: "INSTALL.zh.md"; Flags: ignoreversion skipifsourcedoesntexist
 
+[UninstallDelete]
+; Backups made by the in-app updater so "mist update --rollback" can go back one version.
+Type: filesandordirs; Name: "{app}\.mist-update-backup"
+Type: filesandordirs; Name: "{app}\.mist-update-backup.tmp"
+Type: filesandordirs; Name: "{app}\.mist-update-backup.old-*"
+Type: files; Name: "{app}\.mist-update-new-*"
+
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"; Comment: "MistTerm SSH Terminal"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
