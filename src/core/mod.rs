@@ -11,6 +11,7 @@
 
 pub mod session;
 pub mod fragment;
+pub mod fragment_shortcuts;
 pub mod fragment_analytics;
 pub mod fragment_usage_log;
 pub mod fragment_recommendations;
@@ -115,6 +116,9 @@ pub use fragment::{
     expand_command_template, expand_fragment_command_stages, list_placeholder_keys,
     is_archived_status, sort_fragments_with_archived_last, substitute_angle_placeholders,
     FragmentManager, FragmentMergeReport, FragmentStats, FragmentVariable, LinkedDoc, SortBy,
+};
+pub use fragment_shortcuts::{
+    validate_shortcut, FragmentShortcut, FragmentShortcutStore, ShortcutConflict,
 };
 pub use fragment_expr::{expand_rhai_blocks, merge_rhai_context};
 pub use fragment_command::{build_fragment_command_preview, finalize_fragment_command_text};

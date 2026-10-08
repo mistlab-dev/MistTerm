@@ -797,6 +797,7 @@ impl MistTermApp {
             &mut self.fragment_manager,
             &mut self.fragment_sort_by,
             &fragment_cfg,
+            &mut self.fragment_shortcut_store,
             session_for_fragments.as_ref(),
             theme,
         );
