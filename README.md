@@ -33,7 +33,7 @@
 | **Windows** | `MistTerm-*-windows-x86_64-setup.exe` (installer) or `.zip` |
 | **macOS** | `Mist-macos-universal.tar.gz` / `.dmg` when published |
 | **Linux** | `Mist-linux-x86_64.tar.gz` |
-| **Linux CLI only** (static, any distro, x86_64 / ARM64; after 1.2.0) | `mist-cli-linux-x86_64.tar.gz` / `mist-cli-linux-aarch64.tar.gz`, or `curl -fsSL https://mistlab.dev/install \| bash` |
+| **Linux CLI only** (static, any distro, x86_64 / ARM64; 1.2.1+) | `mist-cli-linux-x86_64.tar.gz` / `mist-cli-linux-aarch64.tar.gz`, or `curl -fsSL https://mistlab.dev/install \| bash` |
 
 **From source** (developers):
 
@@ -112,7 +112,7 @@ Issues and PRs: [github.com/mistlab-dev/MistTerm](https://github.com/mistlab-dev
 | **Windows** | `MistTerm-*-windows-x86_64-setup.exe`（安装包）或 `.zip` 便携版 |
 | **macOS** | `Mist-macos-universal.tar.gz` / 发布页中的 `.dmg` |
 | **Linux** | `Mist-linux-x86_64.tar.gz` |
-| **Linux 只要命令行**（静态版，任意发行版，x86_64 / ARM64；1.2.0 之后的版本） | `mist-cli-linux-x86_64.tar.gz` / `mist-cli-linux-aarch64.tar.gz`，或 `curl -fsSL https://mistlab.dev/install \| bash` |
+| **Linux 只要命令行**（静态版，任意发行版，x86_64 / ARM64；1.2.1 起） | `mist-cli-linux-x86_64.tar.gz` / `mist-cli-linux-aarch64.tar.gz`，或 `curl -fsSL https://mistlab.dev/install \| bash` |
 
 **从源码构建**（开发者）：
 
