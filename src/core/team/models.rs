@@ -507,6 +507,15 @@ pub struct CmdAuditAgent {
     pub last_seen_at: Option<String>,
     #[serde(default = "default_true_bool")]
     pub enabled: bool,
+    /// 心跳上报的主机名(服务端 1.18 起返回)。
+    #[serde(default)]
+    pub hostname: String,
+    /// 心跳上报的本机 IP，逗号分隔(服务端 1.18 起返回)。
+    #[serde(default)]
+    pub ips: String,
+    /// 服务端算好的在线状态(最近 3 分钟有心跳)。
+    #[serde(default)]
+    pub online: Option<bool>,
 }
 
 fn default_true_bool() -> bool {
@@ -585,6 +594,9 @@ impl CmdAuditAgent {
         if status == "offline" || status == "disabled" {
             return false;
         }
+        if let Some(online) = self.online {
+            return online;
+        }
         let Some(raw) = self.last_seen_at.as_deref() else {
             return status == "active" || status == "online";
         };
@@ -616,7 +628,14 @@ pub fn cmd_audit_agent_available_for_host(
     stale_secs: i64,
 ) -> bool {
     agents.iter().any(|a| {
-        cmd_audit_host_matches(host, &a.host) && a.is_online(now, stale_secs)
+        // 会话常用 IP 连接，而 agent 登记的是主机名；心跳里报的主机名和 IP 也算数。
+        let host_ok = cmd_audit_host_matches(host, &a.host)
+            || cmd_audit_host_matches(host, &a.hostname)
+            || a
+                .ips
+                .split(',')
+                .any(|ip| cmd_audit_host_matches(host, ip));
+        host_ok && a.is_online(now, stale_secs)
     })
 }
 
@@ -641,6 +660,9 @@ mod cmd_audit_agent_tests {
             status: "active".into(),
             last_seen_at: Some(recent),
             enabled: true,
+            hostname: String::new(),
+            ips: String::new(),
+            online: None,
         };
         assert!(agent.is_online(now, 300));
         let mut disabled = agent.clone();
@@ -657,9 +679,19 @@ mod cmd_audit_agent_tests {
             status: "active".into(),
             last_seen_at: Some(now.to_rfc3339()),
             enabled: true,
+            hostname: "prod-1".into(),
+            ips: "10.0.0.5,172.17.0.2".into(),
+            online: None,
         }];
         assert!(cmd_audit_agent_available_for_host(&agents, "prod-1", now, 300));
         assert!(!cmd_audit_agent_available_for_host(&agents, "prod-2", now, 300));
+        // 会话用 IP 连接时，按心跳里报的 IP 对上 agent
+        assert!(cmd_audit_agent_available_for_host(&agents, "172.17.0.2", now, 300));
+        assert!(!cmd_audit_agent_available_for_host(&agents, "172.17.0.3", now, 300));
+        // 服务端给的 online=false 优先(心跳停了)
+        let mut stale = agents.clone();
+        stale[0].online = Some(false);
+        assert!(!cmd_audit_agent_available_for_host(&stale, "172.17.0.2", now, 300));
     }
 }
 
