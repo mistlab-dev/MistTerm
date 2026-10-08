@@ -6333,9 +6333,12 @@ impl MistTermApp {
             }
             match self.audited_command_at(ctx, tab_idx, command, insert_only) {
                 CommandSendResult::Sent => {
-                    let dur_ms = start.elapsed().as_millis().max(1) as u64;
-                    if let Some(fid) = fragment_id {
-                        self.record_fragment_execution(fid, true, dur_ms);
+                    // 只放进输入行时还没执行，不算一次成功执行。
+                    if !insert_only {
+                        let dur_ms = start.elapsed().as_millis().max(1) as u64;
+                        if let Some(fid) = fragment_id {
+                            self.record_fragment_execution(fid, true, dur_ms);
+                        }
                     }
                     if insert_only {
                         self.notify_auto(inserted_command_status_message(ctx, command));
