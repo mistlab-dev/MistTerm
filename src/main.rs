@@ -12,6 +12,26 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
 
+    // `Mist --register-ssh-url`：不启动界面，把浏览器里的 ssh:// 链接交给 Mist 打开（Windows、Linux）。
+    // 安装脚本 / 便携版可以用；界面里在「设置 → 连接」也有同样的按钮。
+    if std::env::args().skip(1).any(|a| a == "--register-ssh-url") {
+        match mistterm::platform::url_handler::register() {
+            Ok(()) => {
+                let st = mistterm::platform::url_handler::status();
+                if st == mistterm::platform::url_handler::HandlerStatus::ThisApp {
+                    println!("ssh:// links will open in Mist");
+                    return Ok(());
+                }
+                eprintln!("registered, but the system still reports: {st:?}");
+                std::process::exit(1);
+            }
+            Err(e) => {
+                eprintln!("register ssh:// handler failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+
     // macOS：嵌入 Info.plist，使菜单栏/Dock 显示 Mist 而非可执行文件名 mistterm
     #[cfg(target_os = "macos")]
     embed_plist::embed_info_plist!("../Info.plist");
