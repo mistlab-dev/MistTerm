@@ -672,29 +672,37 @@ fn draw_m_letter_cell(p: &mut CellPainter<'_>, stroke_w: f32) {
 const APP_ICON_CYAN: [u8; 3] = [55, 175, 255];
 /// 提示符核心高光白
 const APP_ICON_TEXT_CORE: [u8; 4] = [238, 246, 255, 255];
-/// macOS 打包源图规格(`scripts/bundle-macos.sh` 由它生成 .icns)
+/// macOS 打包源图规格(`scripts/bundle-macos.sh` 由它生成 .icns)。
+/// 对齐 Apple 1024 模板：本体约 824×824、四周各约 100px 透明边、圆角约 185px。
 const APP_ICON_BUNDLE_SIZE: u32 = 1024;
-const APP_ICON_BUNDLE_PAD_FRAC: f32 = 0.02;
-const APP_ICON_BUNDLE_CORNER_FRAC: f32 = 0.10;
+const APP_ICON_BUNDLE_PAD_FRAC: f32 = 100.0 / 1024.0;
+/// 相对底板边长的圆角比例（185 / 824）。
+const APP_ICON_BUNDLE_CORNER_FRAC: f32 = 185.0 / 824.0;
 
 /// Windows 任务栏 / exe 资源图标规格(`assets/app-icon.ico` 同样使用)
 pub const APP_ICON_WINDOWS_PAD_FRAC: f32 = 0.02;
 pub const APP_ICON_WINDOWS_CORNER_FRAC: f32 = 0.10;
 
-/// 图标透明外圈比例：macOS Dock squircle 需留白；Windows 任务栏为方角缩放，留白会显得更小。
+/// 图标透明外圈比例：macOS 与打包 .icns 同一套规格；Windows 任务栏留白宜小。
 fn app_icon_outer_pad_frac() -> f32 {
     if cfg!(windows) {
         APP_ICON_WINDOWS_PAD_FRAC
     } else if cfg!(target_os = "macos") {
-        0.08
+        APP_ICON_BUNDLE_PAD_FRAC
     } else {
         0.05
     }
 }
 
-/// 圆角比例：macOS 连续圆角；Windows 任务栏再套方角缩放，圆角过大会吃掉有效面积
+/// 圆角比例：macOS 与打包源图一致；Windows 任务栏再套方角缩放，圆角过大会吃掉有效面积。
 fn app_icon_corner_frac() -> f32 {
-    if cfg!(windows) { APP_ICON_WINDOWS_CORNER_FRAC } else { 0.165 }
+    if cfg!(windows) {
+        APP_ICON_WINDOWS_CORNER_FRAC
+    } else if cfg!(target_os = "macos") {
+        APP_ICON_BUNDLE_CORNER_FRAC
+    } else {
+        0.165
+    }
 }
 
 /// 窗口 / Dock / 任务栏图标(霓虹 `>_` + 底部烟雾)。

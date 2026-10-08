@@ -18,7 +18,8 @@ use crate::core::{
     CmdAuditAlertRequest, CmdAuditCacheStore, CmdAuditEngine, CmdAuditResult, CmdAuditSource,
     AuditTimeline, TimelineEntry, TimelineOutcome,
     CommandHistory, CommandSendResult, Credential, CredentialAuthKind, FragmentManager,
-    FragmentStats, HangReporter, HangSnapshot, PortForwardKind, SecretBackend, SecretResolver,
+    FragmentShortcutStore, FragmentStats, HangReporter, HangSnapshot, PortForwardKind,
+    SecretBackend, SecretResolver,
     ServerAuditEvent, SessionConfig, SessionLogSettings, SessionLogWriter, SessionManager,
     SessionSortBy, SortBy, SshConfigCandidate, SshConfigParseResult, SshInfo, TeamService, TempKeyFile,
     suggest_compliant_after_block_with_env, DEFAULT_RETENTION_DAYS,
@@ -255,6 +256,8 @@ pub struct MistTermApp {
     session_manager: SessionManager,
     /// 命令片段管理器
     fragment_manager: FragmentManager,
+    /// 片段快捷键本地映射（含团队片段；不随团队同步）
+    fragment_shortcut_store: FragmentShortcutStore,
 
     /// 当前选中的会话 ID
     selected_session_id: Option<String>,
@@ -964,6 +967,7 @@ impl MistTermApp {
                 .unwrap_or_else(|_| {
                     FragmentManager::init_from_market_or_defaults(Some(&_market_cache))
                 }),
+            fragment_shortcut_store: FragmentShortcutStore::load(),
             selected_session_id,
             sidebar_collapsed: true,
             activity_rail_collapsed: false,
@@ -5813,7 +5817,11 @@ impl MistTermApp {
                 {
                     if let Some(id) = self.team_fragment_selected_id.clone() {
                         if let Some(frag) = self.team_service.find_team_fragment(&id) {
-                            open_edit_editor(&mut self.team_fragment_editor, &frag);
+                            open_edit_editor(
+                                &mut self.team_fragment_editor,
+                                &frag,
+                                &self.fragment_shortcut_store,
+                            );
                         }
                     }
                 }
@@ -6231,6 +6239,62 @@ impl MistTermApp {
                 }
             });
         ui.visuals_mut().extreme_bg_color = prev_extreme;
+    }
+
+    fn resolve_fragment_stats_by_id(&self, id: &str) -> Option<FragmentStats> {
+        if let Some(f) = self.fragment_manager.get_by_id(id) {
+            return Some(f.clone());
+        }
+        if let Some(tf) = self.team_service.find_team_fragment(id) {
+            let team_name = self.team_service.current_team_name();
+            return Some(tf.to_fragment_stats(&team_name));
+        }
+        None
+    }
+
+    /// 匹配并消费一条片段快捷键；命中时返回 fragment id。
+    fn poll_fragment_shortcut(&mut self, ctx: &egui::Context) -> Option<String> {
+        let mut matched: Option<(String, String)> = None; // (fragment_id, key_name)
+        ctx.input(|i| {
+            for ev in &i.events {
+                if let egui::Event::Key {
+                    key,
+                    pressed: true,
+                    modifiers,
+                    ..
+                } = ev
+                {
+                    let name = format!("{:?}", key);
+                    if let Some(fid) = self.fragment_shortcut_store.find_matching_fragment_id(
+                        &name,
+                        modifiers.ctrl,
+                        modifiers.shift,
+                        modifiers.alt,
+                        modifiers.command || modifiers.mac_cmd,
+                    ) {
+                        matched = Some((fid, name));
+                        break;
+                    }
+                }
+            }
+        });
+        let Some((fid, key_name)) = matched else {
+            return None;
+        };
+        // 吞掉该键，避免再进终端 PTY
+        ctx.input_mut(|i| {
+            i.events.retain(|e| {
+                !matches!(
+                    e,
+                    egui::Event::Key {
+                        key,
+                        pressed: true,
+                        ..
+                    } if format!("{:?}", key) == key_name
+                )
+            });
+        });
+        Some(fid)
     }
 
     /// 从右侧片段列表点击：支持片段库定义的变量、命令里的 `<占位符>`，以及会话字段替换。
@@ -7409,6 +7473,7 @@ impl eframe::App for MistTermApp {
             &mut self.team_service,
             &mut self.team_fragment_editor,
             &mut self.team_fragment_conflict,
+            &mut self.fragment_shortcut_store,
             &self.audit_logger,
         );
         show_team_fragment_conflict_modal(
@@ -7947,6 +8012,19 @@ impl eframe::App for MistTermApp {
             if let Some(ref sid) = self.selected_session_id.clone() {
                 if let Some(s) = self.session_manager.get_session(sid) {
                     self.delete_session_confirm = Some((sid.clone(), s.name.clone()));
+                }
+            }
+        }
+
+        // 片段自定义快捷键：终端聚焦时也要生效，并吞掉按键避免进 PTY。
+        if self.app_global_shortcuts_enabled()
+            && !self.fragment_library.open
+            && !self.team_fragment_editor.open
+            && !self.team_fragment_editor.capturing_shortcut
+        {
+            if let Some(fid) = self.poll_fragment_shortcut(ctx) {
+                if let Some(frag) = self.resolve_fragment_stats_by_id(&fid) {
+                    self.begin_fragment_insert(ctx, &frag, false);
                 }
             }
         }
