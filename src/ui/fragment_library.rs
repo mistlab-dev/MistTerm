@@ -7,7 +7,8 @@ use eframe::egui;
 use crate::ui::file_dialog::FileDialog;
 
 use crate::core::{
-    FragmentManager, FragmentMergeReport, FragmentStats, FragmentVariable, SortBy,
+    validate_shortcut, FragmentManager, FragmentMergeReport, FragmentShortcut,
+    FragmentShortcutStore, FragmentStats, FragmentVariable, ShortcutConflict, SortBy,
     expand_command_template, expand_rhai_blocks, list_placeholder_keys, merge_rhai_context,
 };
 use crate::core::session::SessionConfig;
@@ -35,6 +36,11 @@ pub struct FragmentLibraryState {
     pub import_merge: bool,
     /// 点击「➕ 新建」后，在下一帧把焦点落在标题框，避免用户以为没有反应
     focus_title_next_frame: bool,
+    /// 正在录制快捷键
+    capturing_shortcut: bool,
+    /// 表单中的快捷键草稿（未保存）
+    form_shortcut: Option<FragmentShortcut>,
+    shortcut_error: String,
 }
 
 impl FragmentLibraryState {
@@ -53,9 +59,12 @@ impl FragmentLibraryState {
         self.form_tags.clear();
         self.form_variables.clear();
         self.focus_title_next_frame = false;
+        self.capturing_shortcut = false;
+        self.form_shortcut = None;
+        self.shortcut_error.clear();
     }
 
-    fn load_from_fragment(&mut self, f: &FragmentStats) {
+    fn load_from_fragment(&mut self, f: &FragmentStats, shortcuts: &FragmentShortcutStore) {
         self.focus_title_next_frame = false;
         self.editing_id = Some(f.id.clone());
         self.form_title = f.title.clone();
@@ -65,6 +74,9 @@ impl FragmentLibraryState {
         self.form_variables = f.variables.iter().map(|v| {
             (v.name.clone(), v.description.clone(), v.default_value.clone().unwrap_or_default())
         }).collect();
+        self.form_shortcut = shortcuts.get(&f.id).cloned();
+        self.capturing_shortcut = false;
+        self.shortcut_error.clear();
     }
 
     fn parse_tags(&self) -> Vec<String> {
@@ -82,6 +94,7 @@ impl FragmentLibraryState {
         manager: &mut FragmentManager,
         sort_by: &mut SortBy,
         fragment_cfg_path: &PathBuf,
+        shortcuts: &mut FragmentShortcutStore,
         session_hint: Option<&SessionConfig>,
         theme: &crate::ui::theme::Theme,
     ) -> bool {
@@ -323,7 +336,7 @@ impl FragmentLibraryState {
                                         .on_hover_text(&f.command)
                                         .clicked()
                                     {
-                                        self.load_from_fragment(f);
+                                        self.load_from_fragment(f, shortcuts);
                                     }
                                 }
                             });
@@ -421,6 +434,101 @@ impl FragmentLibraryState {
                                     edit_w,
                                     5,
                                     false,
+                                );
+
+                                crate::ui::chrome::form_field_label(
+                                    ui,
+                                    theme,
+                                    i18n::tr(ui.ctx(), "Shortcut", "快捷键"),
+                                );
+                                ui.horizontal(|ui| {
+                                    let label = self
+                                        .form_shortcut
+                                        .as_ref()
+                                        .map(|s| s.display_label())
+                                        .unwrap_or_else(|| {
+                                            if self.capturing_shortcut {
+                                                i18n::tr(
+                                                    ui.ctx(),
+                                                    "Press keys…",
+                                                    "请按下组合键…",
+                                                )
+                                                .to_string()
+                                            } else {
+                                                i18n::tr(ui.ctx(), "None", "无").to_string()
+                                            }
+                                        });
+                                    ui.label(
+                                        egui::RichText::new(label)
+                                            .monospace()
+                                            .size(theme.font_size_ui_control()),
+                                    );
+                                    let capture_lbl = if self.capturing_shortcut {
+                                        i18n::tr(ui.ctx(), "Cancel", "取消录制")
+                                    } else {
+                                        i18n::tr(ui.ctx(), "Record", "录制")
+                                    };
+                                    if crate::ui::chrome::panel_action_button_ex(
+                                        ui,
+                                        theme,
+                                        capture_lbl,
+                                        true,
+                                    )
+                                    .clicked()
+                                    {
+                                        self.capturing_shortcut = !self.capturing_shortcut;
+                                        self.shortcut_error.clear();
+                                    }
+                                    if self.form_shortcut.is_some()
+                                        && crate::ui::chrome::panel_action_button_ex(
+                                            ui,
+                                            theme,
+                                            i18n::tr(ui.ctx(), "Clear", "清除"),
+                                            true,
+                                        )
+                                        .clicked()
+                                    {
+                                        self.form_shortcut = None;
+                                        self.capturing_shortcut = false;
+                                        self.shortcut_error.clear();
+                                    }
+                                });
+                                if self.capturing_shortcut {
+                                    if let Some(sc) = poll_shortcut_capture(ui.ctx()) {
+                                        match validate_shortcut(
+                                            shortcuts,
+                                            &sc,
+                                            self.editing_id.as_deref(),
+                                        ) {
+                                            Ok(()) => {
+                                                self.form_shortcut = Some(sc);
+                                                self.capturing_shortcut = false;
+                                                self.shortcut_error.clear();
+                                            }
+                                            Err(err) => {
+                                                self.shortcut_error = shortcut_conflict_message(
+                                                    ui.ctx(),
+                                                    &err,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                if !self.shortcut_error.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new(&self.shortcut_error)
+                                            .size(theme.font_size_caption())
+                                            .color(theme.red_color()),
+                                    );
+                                }
+                                ui.label(
+                                    egui::RichText::new(i18n::tr(
+                                        ui.ctx(),
+                                        "Works in the terminal. Avoid Ctrl+letter (shell) and built-in app shortcuts.",
+                                        "在终端内生效。请避开 Ctrl+字母（留给 shell）以及应用内置快捷键。",
+                                    ))
+                                    .size(theme.font_size_caption())
+                                    .color(theme.text_tertiary()),
                                 );
 
                                 ui.label(egui::RichText::new(i18n::tr(ui.ctx(), "Variables", "变量定义")).strong());
@@ -577,7 +685,25 @@ impl FragmentLibraryState {
                                             })
                                             .collect();
 
-                                        if let Some(id) = &self.editing_id {
+                                        let shortcut_ok = if let Some(sc) = &self.form_shortcut {
+                                            match validate_shortcut(
+                                                shortcuts,
+                                                sc,
+                                                self.editing_id.as_deref(),
+                                            ) {
+                                                Ok(()) => true,
+                                                Err(err) => {
+                                                    self.shortcut_error =
+                                                        shortcut_conflict_message(ctx, &err);
+                                                    false
+                                                }
+                                            }
+                                        } else {
+                                            true
+                                        };
+                                        if !shortcut_ok {
+                                            // 冲突时不保存片段本体
+                                        } else if let Some(id) = &self.editing_id {
                                             let ok = manager.update_fragment_with_vars(
                                                 id,
                                                 self.form_title.trim().to_string(),
@@ -587,6 +713,11 @@ impl FragmentLibraryState {
                                                 variables,
                                             );
                                             if ok {
+                                                persist_fragment_shortcut(
+                                                    shortcuts,
+                                                    id,
+                                                    self.form_shortcut.clone(),
+                                                );
                                                 if manager.save(fragment_cfg_path).is_ok() {
                                                     self.status_msg =
                                                         i18n::tr(ctx, "Saved", "已保存").to_string();
@@ -597,13 +728,20 @@ impl FragmentLibraryState {
                                                 }
                                             }
                                         } else {
-                                            manager.add_fragment_with_all(
+                                            let added = manager.add_fragment_with_all(
                                                 self.form_title.trim().to_string(),
                                                 self.form_command.clone(),
                                                 self.form_category.trim().to_string(),
                                                 tags,
                                                 variables,
                                             );
+                                            let new_id = added.id.clone();
+                                            persist_fragment_shortcut(
+                                                shortcuts,
+                                                &new_id,
+                                                self.form_shortcut.clone(),
+                                            );
+                                            self.editing_id = Some(new_id);
                                             if manager.save(fragment_cfg_path).is_ok() {
                                                 self.status_msg =
                                                     i18n::tr(ctx, "Fragment added", "已添加片段")
@@ -623,6 +761,8 @@ impl FragmentLibraryState {
                                             if manager.remove_fragment(&id)
                                                 && manager.save(fragment_cfg_path).is_ok()
                                             {
+                                                shortcuts.clear(&id);
+                                                let _ = shortcuts.save();
                                                 self.clear_form();
                                                 self.status_msg =
                                                     i18n::tr(ctx, "Deleted", "已删除").to_string();
@@ -661,4 +801,86 @@ impl FragmentLibraryState {
 
         saved
     }
+}
+
+fn persist_fragment_shortcut(
+    store: &mut FragmentShortcutStore,
+    fragment_id: &str,
+    shortcut: Option<FragmentShortcut>,
+) {
+    match shortcut {
+        Some(sc) => store.set(fragment_id.to_string(), sc),
+        None => store.clear(fragment_id),
+    }
+    let _ = store.save();
+}
+
+fn shortcut_conflict_message(ctx: &egui::Context, err: &ShortcutConflict) -> String {
+    match err {
+        ShortcutConflict::NeedsModifier => i18n::tr(
+            ctx,
+            "Shortcut needs a modifier key (⌘/Ctrl/Alt/Shift).",
+            "快捷键需要包含修饰键（⌘/Ctrl/Alt/Shift）。",
+        )
+        .to_string(),
+        ShortcutConflict::ShellCtrlLetter => i18n::tr(
+            ctx,
+            "Ctrl+letter is reserved for the shell.",
+            "Ctrl+字母留给 shell，不能用作片段快捷键。",
+        )
+        .to_string(),
+        ShortcutConflict::ReservedApp(label) => format!(
+            "{} ({label})",
+            i18n::tr(
+                ctx,
+                "Conflicts with a built-in shortcut",
+                "与应用内置快捷键冲突",
+            )
+        ),
+        ShortcutConflict::OtherFragment(_) => i18n::tr(
+            ctx,
+            "This shortcut is already used by another snippet.",
+            "该快捷键已被另一条片段占用。",
+        )
+        .to_string(),
+    }
+}
+
+/// 从当前帧输入捕获一条「按下」的快捷键（忽略单独修饰键）。
+fn poll_shortcut_capture(ctx: &egui::Context) -> Option<FragmentShortcut> {
+    ctx.input(|i| {
+        for ev in &i.events {
+            if let egui::Event::Key {
+                key,
+                pressed: true,
+                modifiers,
+                ..
+            } = ev
+            {
+                let name = format!("{:?}", key);
+                // 忽略单独修饰键事件（若平台上报）
+                if name.eq_ignore_ascii_case("Control")
+                    || name.eq_ignore_ascii_case("Ctrl")
+                    || name.eq_ignore_ascii_case("Shift")
+                    || name.eq_ignore_ascii_case("Alt")
+                    || name.eq_ignore_ascii_case("Command")
+                    || name.eq_ignore_ascii_case("MacCmd")
+                    || name.eq_ignore_ascii_case("Meta")
+                {
+                    continue;
+                }
+                if name.is_empty() {
+                    continue;
+                }
+                return Some(FragmentShortcut::new(
+                    name,
+                    modifiers.ctrl,
+                    modifiers.shift,
+                    modifiers.alt,
+                    modifiers.command || modifiers.mac_cmd,
+                ));
+            }
+        }
+        None
+    })
 }
