@@ -183,6 +183,26 @@ fn default_sync_interval() -> u64 {
     300
 }
 
+/// 本地检查的决定写进团队命令记录（`POST .../command-audit/logs`）。
+#[derive(Debug, Clone, Serialize)]
+pub struct CmdAuditClientLogRequest {
+    pub command: String,
+    pub host: String,
+    /// block / confirmed / cancelled / alert
+    pub action_taken: String,
+}
+
+/// 本地审计事件名 → 团队命令记录里的动作；不是「决定」的事件(如 AI 建议已发送)返回 None。
+pub fn client_log_action(event: &str) -> Option<&'static str> {
+    match event {
+        "command.blocked" => Some("block"),
+        "command.confirmed" => Some("confirmed"),
+        "command.cancelled" => Some("cancelled"),
+        "command.alert" => Some("alert"),
+        _ => None,
+    }
+}
+
 /// 团队命令审计告警上报（`POST .../command-audit/alerts`）
 #[derive(Debug, Clone, Serialize)]
 pub struct CmdAuditAlertRequest {
@@ -704,6 +724,15 @@ fn parse_mist_audit_line(line: &[u8]) -> Option<ServerAuditEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn client_log_action_maps_only_decisions() {
+        assert_eq!(client_log_action("command.blocked"), Some("block"));
+        assert_eq!(client_log_action("command.confirmed"), Some("confirmed"));
+        assert_eq!(client_log_action("command.cancelled"), Some("cancelled"));
+        assert_eq!(client_log_action("command.alert"), Some("alert"));
+        assert_eq!(client_log_action("command.ai_suggested"), None);
+    }
 
     #[test]
     fn blocks_rm_rf_root_when_policy_enabled() {

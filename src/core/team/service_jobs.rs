@@ -252,6 +252,17 @@ pub(super) fn do_cmd_audit_report_alert(
     })
 }
 
+pub(super) fn do_cmd_audit_report_log(
+    api_base: &str,
+    team_id: &str,
+    request: &crate::core::cmd_audit::CmdAuditClientLogRequest,
+    tokens: &TeamTokenStore,
+) -> Result<(), String> {
+    with_auth_retry(api_base, tokens, |access, client| {
+        client.cmd_audit_report_log(access, team_id, request)
+    })
+}
+
 pub(super) fn do_report_fragment_usage(
     api_base: &str,
     team_id: &str,

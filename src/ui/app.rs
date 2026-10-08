@@ -1322,6 +1322,19 @@ impl MistTermApp {
         audit: &CmdAuditResult,
         outcome: AuditOutcome,
     ) {
+        self.record_cmd_audit_event_for(action, command, audit, outcome, None);
+    }
+
+    /// `host_label`：命令不只发往当前标签那一台时(批量执行、AI 多机)，写进命令记录的主机说明。
+    fn record_cmd_audit_event_for(
+        &mut self,
+        action: &str,
+        command: &str,
+        audit: &CmdAuditResult,
+        outcome: AuditOutcome,
+        host_label: Option<&str>,
+    ) {
+        let mut log_host = host_label.map(str::to_string).unwrap_or_default();
         let preview = command_preview(command, 200);
         let matches: Vec<serde_json::Value> = audit
             .matches
@@ -1348,6 +1361,9 @@ impl MistTermApp {
                 let sid = tab.primary_session_id();
                 ev = ev.with_resource(&sid);
                 if let Some(s) = self.session_manager.get_session(&sid) {
+                    if host_label.is_none() {
+                        log_host = s.host.clone();
+                    }
                     ev = ev.with_detail(serde_json::json!({
                         "command_preview": command_preview(command, 200),
                         "host": s.host,
@@ -1359,12 +1375,25 @@ impl MistTermApp {
         }
         self.audit_logger.record(ev);
 
-        let action_taken = match action {
-            "command.confirmed" => "confirmed",
-            "command.alert" => "alert",
-            _ => "blocked",
-        };
-        self.report_cmd_audit_alert_to_team(command, audit, action_taken);
+        // 本地检查的决定(拦下 / 确认后发送 / 取消 / 提醒)写进团队「命令记录」，
+        // 也照旧进告警列表；「AI 建议已发送」不是决定，不上报。
+        if let Some(log_action) = crate::core::cmd_audit::client_log_action(action) {
+            let alert_action = match log_action {
+                "block" => "blocked",
+                other => other,
+            };
+            self.report_cmd_audit_alert_to_team(command, audit, alert_action);
+            if let Some(team_id) = self.team_service.state.current_team_id.clone() {
+                self.team_service.spawn_cmd_audit_report_log(
+                    &team_id,
+                    crate::core::cmd_audit::CmdAuditClientLogRequest {
+                        command: command.to_string(),
+                        host: log_host,
+                        action_taken: log_action.to_string(),
+                    },
+                );
+            }
+        }
     }
 
     /// 将已经完成的本地/服务器审计结果写入只读内存时间线。
@@ -3276,13 +3305,15 @@ impl MistTermApp {
 
     fn batch_exec_allowed(&mut self, ctx: &egui::Context, command: &str) -> bool {
         let audit = self.cmd_audit_engine.check(command);
+        let batch_label = crate::i18n::tr(ctx, "several servers (batch run)", "多台(批量执行)");
         match audit.action {
             CmdAuditAction::Block => {
-                self.record_cmd_audit_event(
+                self.record_cmd_audit_event_for(
                     "command.blocked",
                     command,
                     &audit,
                     AuditOutcome::Denied,
+                    Some(batch_label),
                 );
                 self.notify_error_titled(
                     crate::i18n::tr(
@@ -3306,11 +3337,12 @@ impl MistTermApp {
                 false
             }
             CmdAuditAction::Alert => {
-                self.record_cmd_audit_event(
+                self.record_cmd_audit_event_for(
                     "command.alert",
                     command,
                     &audit,
                     AuditOutcome::Success,
+                    Some(batch_label),
                 );
                 true
             }
@@ -4504,11 +4536,16 @@ impl MistTermApp {
         let decision = gate_decision(audit, &command, false);
         match decision.level {
             crate::core::GateLevel::L0Block => {
-                self.record_cmd_audit_event(
+                self.record_cmd_audit_event_for(
                     "command.blocked",
                     &command,
                     &decision.audit,
                     AuditOutcome::Denied,
+                    Some(crate::i18n::tr(
+                        ctx,
+                        "several servers (AI ops assistant)",
+                        "多台(AI 运维助手)",
+                    )),
                 );
                 self.ai_panel
                     .abort_agent_with_message(format!("L0 {}\n`{command}`", decision.message));

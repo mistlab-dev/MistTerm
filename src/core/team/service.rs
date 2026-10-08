@@ -12,7 +12,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use self::service_jobs::{
-    do_cmd_audit_report_alert, do_report_fragment_usage, run_job, TeamJob,
+    do_cmd_audit_report_alert, do_cmd_audit_report_log, do_report_fragment_usage, run_job, TeamJob,
 };
 pub use self::service_blocking::{
     create_fragment_share_blocking, create_team_fragment_blocking,
@@ -165,6 +165,25 @@ impl TeamService {
         thread::spawn(move || {
             let tokens = TeamTokenStore::default();
             let _ = do_cmd_audit_report_alert(&api_base, &team_id, &request, &tokens);
+        });
+    }
+
+    /// 把本地检查的决定写进团队命令记录(后台发送，失败不影响终端)。
+    pub fn spawn_cmd_audit_report_log(
+        &self,
+        team_id: &str,
+        request: crate::core::cmd_audit::CmdAuditClientLogRequest,
+    ) {
+        if !self.is_logged_in() || team_id.is_empty() {
+            return;
+        }
+        let api_base = self.api_base();
+        let team_id = team_id.to_string();
+        thread::spawn(move || {
+            let tokens = TeamTokenStore::default();
+            if let Err(e) = do_cmd_audit_report_log(&api_base, &team_id, &request, &tokens) {
+                log::warn!("command log report failed: {e}");
+            }
         });
     }
 

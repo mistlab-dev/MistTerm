@@ -174,6 +174,19 @@ impl TeamClient {
         )
     }
 
+    pub fn cmd_audit_report_log(
+        &self,
+        access_token: &str,
+        team_id: &str,
+        body: &crate::core::cmd_audit::CmdAuditClientLogRequest,
+    ) -> Result<(), TeamApiError> {
+        self.post_json_empty(
+            &format!("/v1/teams/{team_id}/command-audit/logs"),
+            Some(access_token),
+            body,
+        )
+    }
+
     pub fn list_cmd_audit_agents(
         &self,
         access_token: &str,
