@@ -278,6 +278,29 @@ impl SshClient {
         Ok((stdout, code))
     }
 
+    /// 同 [`Self::exec_command`]，但把远端 stderr 合进输出（`mist exec` 用：报错信息不能丢）。
+    pub fn exec_command_merged(&mut self, command: &str) -> Result<(String, i32), String> {
+        use std::io::Read;
+        let session = self.session.as_mut().ok_or("Not connected")?;
+        let _guard = SessionBlockingGuard::with_timeout(session, 0);
+        let mut channel = session
+            .channel_session()
+            .map_err(|e| format!("打开 exec 通道失败: {e}"))?;
+        channel
+            .handle_extended_data(ssh2::ExtendedData::Merge)
+            .map_err(|e| format!("exec 失败: {e}"))?;
+        channel
+            .exec(command)
+            .map_err(|e| format!("exec 失败: {e}"))?;
+        let mut output = Vec::new();
+        channel
+            .read_to_end(&mut output)
+            .map_err(|e| format!("读取输出失败: {e}"))?;
+        let _ = channel.wait_close();
+        let code = channel.exit_status().unwrap_or(-1);
+        Ok((String::from_utf8_lossy(&output).into_owned(), code))
+    }
+
     #[cfg(test)]
     pub(crate) fn with_session_for_test(session: Session) -> Self {
         Self {
