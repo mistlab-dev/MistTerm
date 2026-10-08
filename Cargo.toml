@@ -101,6 +101,10 @@ rand = "0.8"
 base64 = "0.21"
 hkdf = "0.12"
 sha2 = "0.10"
+# 导入 FinalShell 会话时解开它保存的密码（DES）
+des = "0.8"
+# 读 Xshell 会话文件（UTF-16 / GBK）
+encoding_rs = "0.8"
 
 # HTTP（Vault API、审计远程 sink）
 reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "rustls-tls"] }

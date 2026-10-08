@@ -1,0 +1,1 @@
+{"id": "h9", "name": "deleted-host", "host": "10.9.9.9", "port": 22, "user_name": "root", "password": "", "parent_id": "root", "authentication_type": 1, "conection_type": 100, "secret_key_id": "", "proxy_id": "0", "port_forwarding_list": [], "remote_port_forwarding": {}, "description": "", "terminal_encoding": "UTF-8", "order": 0, "delete_time": 0}

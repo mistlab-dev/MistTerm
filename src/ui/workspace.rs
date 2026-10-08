@@ -921,6 +921,12 @@ impl MistTermApp {
         if let Some(indices) = self.ssh_import_dialog.show(ctx, theme) {
             self.import_ssh_indices(ctx, &indices);
         }
+        if self.foreign_import_dialog.open {
+            let existing = self.session_manager.list_sessions().to_vec();
+            if let Some(chosen) = self.foreign_import_dialog.show(ctx, theme, &existing) {
+                self.import_foreign_candidates(ctx, chosen);
+            }
+        }
         self.session_log_dialog
             .show(ctx, theme, &self.session_log_settings);
         let help_shortcuts = crate::ui::app::mistterm_functional_spec_shortcuts(ctx);
