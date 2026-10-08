@@ -3180,6 +3180,39 @@ impl TerminalView {
     pub const ERR_FRAGMENT_NO_SSH_HANDLE: &'static str = "__mistterm_fragment_no_ssh_handle";
     pub const FRAGMENT_SEND_FAILED_PREFIX: &'static str = "__mistterm_fragment_send_failed:";
 
+    /// 多行命令没法只放进输入行：shell 会一行一行直接执行。
+    pub const ERR_INSERT_MULTILINE: &'static str = "__mistterm_insert_multiline";
+
+    /// 是否是多行命令(去掉空行后超过一行)。
+    pub fn is_multiline_command(command: &str) -> bool {
+        command
+            .replace("\r\n", "\n")
+            .replace('\r', "\n")
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .count()
+            > 1
+    }
+
+    /// 把命令放进当前输入行，不加回车、不执行，由用户检查后自己按回车。
+    pub fn insert_command_text(&mut self, command: &str) -> Result<(), String> {
+        if !self.connected {
+            return Err(Self::ERR_FRAGMENT_NOT_CONNECTED.to_string());
+        }
+        if Self::is_multiline_command(command) {
+            return Err(Self::ERR_INSERT_MULTILINE.to_string());
+        }
+        let loc = self.locale_last();
+        let Some(handle) = self.ssh_handle.clone() else {
+            return Err(loc
+                .tr("SSH session handle unavailable", "连接句柄不可用")
+                .to_string());
+        };
+        let line = command.trim_matches(|c| c == '\r' || c == '\n').trim_end();
+        self.send_pty_input(&handle, line.as_bytes())
+            .map_err(|e| format!("{}: {}", loc.tr("Send failed", "发送失败"), e))
+    }
+
     /// 插入命令片段(自动添加回车)
     pub fn insert_fragment(&mut self, command: &str) -> Result<(), String> {
         if !self.connected {
@@ -3336,5 +3369,19 @@ mod drop_tests {
         let ctx = egui::Context::default();
         frame(&ctx, vec![egui::Event::PointerMoved(egui::pos2(50.0, 50.0))], &[]);
         assert!(frame(&ctx, vec![], &["/tmp/a.bin"]).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod insert_only_tests {
+    use super::*;
+
+    #[test]
+    fn multiline_detection_ignores_blank_lines() {
+        assert!(!TerminalView::is_multiline_command("df -h"));
+        assert!(!TerminalView::is_multiline_command("df -h\n"));
+        assert!(!TerminalView::is_multiline_command("\n  df -h  \r\n\n"));
+        assert!(TerminalView::is_multiline_command("cd /tmp\nls"));
+        assert!(TerminalView::is_multiline_command("cd /tmp\r\nls"));
     }
 }

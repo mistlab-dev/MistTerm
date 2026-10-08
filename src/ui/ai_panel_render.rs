@@ -393,8 +393,8 @@ pub(super) fn show_command_card(
                     )
                     .on_hover_text(i18n::tr(
                         ctx,
-                        "Send this command to the active terminal (same as pressing Enter)",
-                        "将该命令发送到活动终端并执行(等同按 Enter)",
+                        "Put this command on the active terminal's input line without running it; check it, then press Enter",
+                        "把这条命令放进当前终端的输入行，不会自动执行；检查后自己按回车",
                     ))
                     .clicked();
                 });
