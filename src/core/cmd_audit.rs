@@ -132,6 +132,8 @@ struct CompiledRule {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CmdAuditMatch {
     pub rule_id: String,
+    /// 给人看的规则名（团队规则的名称 / 内置规则的说明）；没有就留空，界面不显示内部 ID。
+    pub name: String,
     pub source: String,
     pub level: String,
     pub message: String,
@@ -410,6 +412,41 @@ fn allow_result() -> CmdAuditResult {
     }
 }
 
+/// 内部 ID（UUID、`pack:<id>:<n>` 之类）不该给人看。
+pub fn looks_like_internal_id(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() {
+        return true;
+    }
+    if t.starts_with("pack:") || t.starts_with("rule_") || t.starts_with("rule-") {
+        return true;
+    }
+    let hex_dash = t.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+    hex_dash && t.len() >= 8 && t.chars().any(|c| c.is_ascii_digit())
+}
+
+/// 确认/拦截弹窗里给人看的规则说明：有名字用名字，没有就说是哪一类规则，不显示内部 ID。
+pub fn match_display_name(m: &CmdAuditMatch, zh: bool) -> String {
+    let kind = match (m.source.as_str(), zh) {
+        ("custom", true) => "团队规则",
+        ("custom", false) => "team rule",
+        ("builtin", true) => "内置规则",
+        ("builtin", false) => "built-in rule",
+        ("server", true) => "服务器上的规则",
+        ("server", false) => "server rule",
+        (_, true) => "规则",
+        (_, false) => "rule",
+    };
+    let name = m.name.trim();
+    if name.is_empty() || looks_like_internal_id(name) {
+        kind.to_string()
+    } else if zh {
+        format!("{name}（{kind}）")
+    } else {
+        format!("{name} ({kind})")
+    }
+}
+
 fn audit_match_result(
     action: CmdAuditAction,
     source: &str,
@@ -423,6 +460,11 @@ fn audit_match_result(
         action,
         matches: vec![CmdAuditMatch {
             rule_id: rule_id.to_string(),
+            name: if !name_fallback.trim().is_empty() {
+                name_fallback.trim().to_string()
+            } else {
+                message.trim().to_string()
+            },
             source: source.into(),
             level: level.into(),
             message: if message.is_empty() {
@@ -538,6 +580,11 @@ impl ServerAuditEvent {
                     "server".into()
                 } else {
                     self.rule.clone()
+                },
+                name: if looks_like_internal_id(&self.rule) {
+                    String::new()
+                } else {
+                    self.rule.trim().to_string()
                 },
                 source: "server".into(),
                 level: match self.action {
@@ -704,6 +751,48 @@ fn parse_mist_audit_line(line: &[u8]) -> Option<ServerAuditEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_name_never_shows_internal_ids() {
+        let mut m = CmdAuditMatch {
+            rule_id: "3f2a9c1e-7b4d-4e2a-9f10-2c3d4e5f6a7b".into(),
+            name: "禁止删库".into(),
+            source: "custom".into(),
+            level: "custom".into(),
+            message: String::new(),
+            action: CmdAuditAction::Confirm,
+        };
+        assert_eq!(match_display_name(&m, true), "禁止删库（团队规则）");
+        m.name = m.rule_id.clone();
+        assert_eq!(match_display_name(&m, true), "团队规则");
+        m.name.clear();
+        assert_eq!(match_display_name(&m, false), "team rule");
+        assert!(looks_like_internal_id("pack:12:0"));
+        assert!(!looks_like_internal_id("DROP DATABASE"));
+        assert!(!looks_like_internal_id("deadbeef")); // 没有数字的词不当成 ID
+    }
+
+    #[test]
+    fn custom_rule_match_carries_rule_name() {
+        let r = audit_match_result(
+            CmdAuditAction::Confirm,
+            "custom",
+            "custom",
+            "abc-123",
+            "",
+            "重启前确认",
+        );
+        assert_eq!(r.matches[0].name, "重启前确认");
+        let r = audit_match_result(
+            CmdAuditAction::Confirm,
+            "custom",
+            "custom",
+            "abc-123",
+            "说明",
+            "",
+        );
+        assert_eq!(r.matches[0].name, "说明");
+    }
 
     #[test]
     fn blocks_rm_rf_root_when_policy_enabled() {
