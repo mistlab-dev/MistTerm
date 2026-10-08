@@ -565,6 +565,8 @@ pub struct AiPanel {
     selected_host_idx: Option<usize>,
     /// 待外发创建终端会话的目标主机(如点击了「开新 Tab 连入该机」)
     pending_connect_host: Option<String>,
+    /// 这次排查期间不再询问的只读命令类别（换对话 / 新对话时清空；改动命令从不放行）。
+    readonly_trust: std::collections::BTreeSet<crate::core::agent::ReadOnlyKind>,
 }
 
 struct AgentPlanUi {
@@ -577,6 +579,8 @@ struct AgentPlanUi {
     gate_hint: String,
     l2_armed: bool,
     status: Option<String>,
+    /// 计划卡上「这次排查期间，同类只读命令不再问」是否勾选。
+    trust_same_kind: bool,
 }
 
 impl Default for AiPanel {
@@ -634,6 +638,7 @@ impl AiPanel {
             pending_agent_exec: None,
             selected_host_idx: None,
             pending_connect_host: None,
+            readonly_trust: std::collections::BTreeSet::new(),
         }
     }
 
@@ -862,6 +867,8 @@ impl AiPanel {
         self.chat_session_key = key;
         self.messages.clear();
         self.last_error = None;
+        // 换了对话就是新的排查：之前放行的只读类别作废。
+        self.readonly_trust.clear();
         if persist {
             self.load_persisted_chat();
         }
@@ -1864,6 +1871,9 @@ impl AiPanel {
         let executing = plan.phase == AgentPhase::Executing;
         let mut clicked_confirm = false;
         let mut clicked_cancel = false;
+        let mut clicked_revoke_trust = false;
+        let trust_snapshot = self.readonly_trust.clone();
+        let cmd_class = crate::core::agent::classify_command(&plan.command_edit);
 
         egui::Frame::none()
             .fill(theme.color_ops_card_fill())
@@ -1898,13 +1908,29 @@ impl AiPanel {
                                 theme.font_size_caption(),
                             );
                         } else {
-                            ops_badge(
-                                ui,
-                                crate::ui::icons::IconId::Check,
-                                i18n::tr(ctx, "Read-only — safe to run", "只读命令，可执行"),
-                                theme.accent_color(),
-                                theme.font_size_caption(),
-                            );
+                            match &cmd_class {
+                                crate::core::agent::CommandClass::ReadOnly { .. } => ops_badge(
+                                    ui,
+                                    crate::ui::icons::IconId::Check,
+                                    i18n::tr(ctx, "Read-only", "只读命令"),
+                                    theme.accent_color(),
+                                    theme.font_size_caption(),
+                                ),
+                                crate::core::agent::CommandClass::Mutating { .. } => ops_badge(
+                                    ui,
+                                    crate::ui::icons::IconId::Warning,
+                                    i18n::tr(ctx, "Changes the server", "会改动服务器"),
+                                    theme.amber_color(),
+                                    theme.font_size_caption(),
+                                ),
+                                crate::core::agent::CommandClass::Unknown { .. } => ops_badge(
+                                    ui,
+                                    crate::ui::icons::IconId::Warning,
+                                    i18n::tr(ctx, "Not sure it's read-only", "看不出是否只读，请先看一眼"),
+                                    theme.amber_color(),
+                                    theme.font_size_caption(),
+                                ),
+                            }
                         }
                     });
                 });
@@ -2102,6 +2128,58 @@ impl AiPanel {
                         });
                 }
 
+                // 「这次排查期间，同类只读命令不再问」：只对只读命令出现；改动命令和看不懂的命令每次都问。
+                if let crate::core::agent::CommandClass::ReadOnly { kinds } = &cmd_class {
+                    if !executing && !plan.l2_armed {
+                        ui.add_space(theme.spacing_xs());
+                        let text = if i18n::tr(ctx, "en", "zh") == "zh" {
+                            format!(
+                                "这次排查期间，「{}」这类只读命令不再问",
+                                kinds_label_zh(kinds.iter())
+                            )
+                        } else {
+                            format!(
+                                "Don't ask again for read-only commands like this ({}) during this troubleshooting session",
+                                kinds.iter().map(|k| k.label_en()).collect::<Vec<_>>().join(", ")
+                            )
+                        };
+                        crate::ui::chrome::form_checkbox_with_id(
+                            ui,
+                            theme,
+                            "ai_plan_trust_same_kind",
+                            &mut plan.trust_same_kind,
+                            &text,
+                        );
+                    }
+                }
+                if !trust_snapshot.is_empty() {
+                    ui.add_space(theme.spacing_xs());
+                    ui.horizontal(|ui| {
+                        let line = if i18n::tr(ctx, "en", "zh") == "zh" {
+                            format!("这次排查期间不再询问：{}", kinds_label_zh(trust_snapshot.iter()))
+                        } else {
+                            format!(
+                                "Not asking again this session: {}",
+                                trust_snapshot.iter().map(|k| k.label_en()).collect::<Vec<_>>().join(", ")
+                            )
+                        };
+                        ui.label(
+                            egui::RichText::new(line)
+                                .size(theme.font_size_caption())
+                                .color(theme.color_form_hint()),
+                        );
+                        if crate::ui::chrome::chrome_small_button(
+                            ui,
+                            theme,
+                            i18n::tr(ctx, "Ask every time again", "恢复每次确认"),
+                        )
+                        .clicked()
+                        {
+                            clicked_revoke_trust = true;
+                        }
+                    });
+                }
+
                 if let Some(st) = &plan.status {
                     ui.add_space(theme.spacing_xs());
                     ui.label(
@@ -2162,11 +2240,25 @@ impl AiPanel {
         if clicked_confirm {
             if let Some(p) = &mut self.agent_plan {
                 let cmd = p.command_edit.trim().to_string();
+                if p.trust_same_kind {
+                    // 按「实际要执行的命令」重新判断；只有只读命令才会记住类别。
+                    if let crate::core::agent::CommandClass::ReadOnly { kinds } =
+                        crate::core::agent::classify_command(&cmd)
+                    {
+                        self.readonly_trust.extend(kinds);
+                    }
+                }
                 self.pending_agent_exec = Some(cmd);
                 if p.l2_armed {
                     p.phase = AgentPhase::Executing;
                     p.status = Some("已提交执行…".into());
                 }
+            }
+        }
+        if clicked_revoke_trust {
+            self.readonly_trust.clear();
+            if let Some(p) = &mut self.agent_plan {
+                p.trust_same_kind = false;
             }
         }
         if clicked_cancel {
@@ -3165,8 +3257,20 @@ impl AiPanel {
             gate_hint: "确认后将在所选主机上短连接执行(不占用终端 Tab)".into(),
             l2_armed: false,
             status: None,
+            trust_same_kind: false,
         });
         self.pending_agent_exec = None;
+        if let Some(p) = &mut self.agent_plan {
+            let class = crate::core::agent::classify_command(&p.command_edit);
+            if crate::core::agent::readonly_auto_run_allowed(&class, &self.readonly_trust) {
+                // 只读且类别已放行：直接交给 App；App 仍会过命令审计（需要确认/拦截照常生效）。
+                p.status = Some(format!(
+                    "这次排查已允许「{}」这类只读命令，直接执行",
+                    kinds_label_zh(class.kinds().into_iter().flatten())
+                ));
+                self.pending_agent_exec = Some(p.command_edit.trim().to_string());
+            }
+        }
     }
 
     fn start_llm_plan_request(
@@ -3882,4 +3986,9 @@ mod tests {
         assert!(copied.contains("explain"));
         assert!(copied.contains("err: fail"));
     }
+}
+
+/// 只读类别的中文名，用「、」连接。
+fn kinds_label_zh<'a>(kinds: impl IntoIterator<Item = &'a crate::core::agent::ReadOnlyKind>) -> String {
+    kinds.into_iter().map(|k| k.label_zh()).collect::<Vec<_>>().join("、")
 }
