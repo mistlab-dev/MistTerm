@@ -12,7 +12,7 @@ Mist is the SSH terminal GUI built from this repository (`cargo` binary name: **
 
 The prebuilt Linux release is built on Ubuntu 24.04 and needs glibc 2.39 or newer (for example Ubuntu 24.04+, Debian 13+, Fedora 40+). Check yours with `ldd --version`; on older systems, build from source as described below.
 
-Only need the `mist` command line (typical on servers)? Releases after 1.2.0 also ship static builds, `mist-cli-linux-x86_64.tar.gz` and `mist-cli-linux-aarch64.tar.gz`, that need no glibc and run on CentOS 7, Rocky 8/9, Ubuntu 20.04/22.04, Debian 12 and ARM servers; `curl -fsSL https://mistlab.dev/install | bash` picks the right one. See [docs/release/CLI_STATIC.md](../release/CLI_STATIC.md).
+Only need the `mist` command line (typical on servers)? From 1.2.1, releases also ship static builds, `mist-cli-linux-x86_64.tar.gz` and `mist-cli-linux-aarch64.tar.gz`, that need no glibc and run on CentOS 7, Rocky 8/9, Ubuntu 20.04/22.04, Debian 12 and ARM servers; `curl -fsSL https://mistlab.dev/install | bash` picks the right one. See [docs/release/CLI_STATIC.md](../release/CLI_STATIC.md).
 
 UI defaults to **English**. Switch to Simplified Chinese in **Preferences → Language** (saved in `~/.config/mistterm/settings.json` on Unix).
 
