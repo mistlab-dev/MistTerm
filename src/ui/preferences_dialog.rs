@@ -417,8 +417,86 @@ impl MistTermApp {
                     .size(theme.font_size_small())
                     .color(text_low),
                 );
+                if crate::platform::url_handler::supported() {
+                    ui.add_space(theme.spacing_panel_gap());
+                    self.preferences_ssh_url_row(ui, ctx, theme, text_low);
+                }
             },
         );
+    }
+
+    /// 「浏览器里的 ssh:// 链接」：显示当前由谁打开，可一键改成 MistTerm。
+    fn preferences_ssh_url_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+        text_low: egui::Color32,
+    ) {
+        use crate::platform::url_handler::{self, HandlerStatus};
+        if self.ssh_url_handler_status.is_none() {
+            self.ssh_url_handler_status = Some(url_handler::status());
+        }
+        let status = self.ssh_url_handler_status.clone().unwrap_or(HandlerStatus::Unsupported);
+        let zh = crate::i18n::language(ctx) == crate::i18n::UiLanguage::Zh;
+        crate::ui::chrome::form_control_row(ui, theme, |ui| {
+            crate::ui::chrome::form_inline_label(
+                ui,
+                theme,
+                crate::i18n::tr(ctx, "ssh:// links in the browser", "浏览器里的 ssh:// 链接"),
+            );
+            let label = if status == HandlerStatus::ThisApp {
+                crate::i18n::tr(ctx, "Opened by MistTerm", "已用 MistTerm 打开")
+            } else {
+                crate::i18n::tr(ctx, "Open with MistTerm", "用 MistTerm 打开")
+            };
+            if crate::ui::chrome::panel_action_button_ex(ui, theme, label, status != HandlerStatus::ThisApp)
+                .clicked()
+            {
+                match url_handler::register() {
+                    Ok(()) => {
+                        self.ssh_url_handler_status = Some(url_handler::status());
+                        self.audit_logger.record(AuditEvent::new(
+                            AuditCategory::Config,
+                            "settings.ssh_url_handler",
+                            AuditOutcome::Success,
+                        ));
+                        self.notify_auto(
+                            crate::i18n::tr(
+                                ctx,
+                                "ssh:// links will now open in MistTerm",
+                                "以后点 ssh:// 链接会用 MistTerm 打开",
+                            )
+                            .to_string(),
+                        );
+                    }
+                    Err(e) => self.notify_warn(format!(
+                        "{}{e}",
+                        crate::i18n::tr(ctx, "Could not set it: ", "没设置成功：")
+                    )),
+                }
+            }
+        });
+        let hint = match &status {
+            HandlerStatus::ThisApp => None,
+            HandlerStatus::Other(who) => Some(if zh {
+                format!("现在由别的程序打开（{who}）。点按钮改成 MistTerm。")
+            } else {
+                format!("Currently opened by another program ({who}).")
+            }),
+            HandlerStatus::None => Some(
+                crate::i18n::tr(
+                    ctx,
+                    "No program opens ssh:// links yet.",
+                    "现在没有程序打开 ssh:// 链接。",
+                )
+                .to_string(),
+            ),
+            HandlerStatus::Unsupported => None,
+        };
+        if let Some(h) = hint {
+            ui.label(RichText::new(h).size(theme.font_size_small()).color(text_low));
+        }
     }
 
     fn preferences_section_terminal_logs(

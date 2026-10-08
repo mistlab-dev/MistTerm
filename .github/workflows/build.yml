@@ -294,6 +294,52 @@ jobs:
           if (-not (Test-Path $iscc)) { throw "ISCC not found after Inno Setup install" }
           powershell -ExecutionPolicy Bypass -File scripts/package-windows-installer.ps1 -SkipBuild -Target "${{ matrix.target }}" -IsccPath $iscc
 
+      # ssh:// 链接：便携版（Mist.exe --register-ssh-url）和安装程序的选项都要写对注册表，
+      # 系统按链接要真的把 Mist 带着链接启动起来，卸载要清干净。
+      - name: Smoke test ssh:// link handler (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $key = "HKCU:\Software\Classes\ssh\shell\open\command"
+          function Get-SshCommand { (Get-ItemProperty -Path $key -ErrorAction SilentlyContinue).'(default)' }
+          function Stop-Mist { Get-Process Mist -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
+
+          # 1) portable: Mist.exe --register-ssh-url
+          $exe = (Resolve-Path "target/${{ matrix.target }}/release/Mist.exe").Path
+          $p = Start-Process -FilePath $exe -ArgumentList "--register-ssh-url" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "--register-ssh-url exit $($p.ExitCode)" }
+          $want = "`"$exe`" `"%1`""
+          if ((Get-SshCommand) -ne $want) { throw "portable: got '$(Get-SshCommand)', want '$want'" }
+          Write-Host "portable OK: $want"
+
+          # 2) the shell opens an ssh:// link with Mist (same path a browser click takes)
+          Start-Process "ssh://ci-user@127.0.0.1:2222"
+          $found = $null
+          for ($i = 0; $i -lt 20 -and -not $found; $i++) {
+            Start-Sleep -Milliseconds 500
+            $found = Get-CimInstance Win32_Process -Filter "Name='Mist.exe'" | Where-Object { $_.CommandLine -like "*ssh://ci-user@127.0.0.1:2222*" }
+          }
+          Stop-Mist
+          if (-not $found) { throw "Mist was not started for the ssh:// link" }
+          Write-Host "launched: $(@($found)[0].CommandLine)"
+          Remove-Item -Recurse -Force "HKCU:\Software\Classes\ssh"
+
+          # 3) installer with the ssh:// task; uninstall removes it
+          $setup = (Get-ChildItem dist/MistTerm-*-windows-x86_64-setup.exe | Select-Object -First 1).FullName
+          $dir = Join-Path $env:RUNNER_TEMP "mist-ssh-url-install"
+          $p = Start-Process -FilePath $setup -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/CURRENTUSER","/TASKS=sshurl","/DIR=`"$dir`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exit $($p.ExitCode)" }
+          Start-Sleep -Seconds 2
+          Stop-Mist
+          $want = "`"$dir\Mist.exe`" `"%1`""
+          if ((Get-SshCommand) -ne $want) { throw "installer: got '$(Get-SshCommand)', want '$want'" }
+          Write-Host "installer OK: $want"
+          $p = Start-Process -FilePath (Join-Path $dir "unins000.exe") -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait -PassThru
+          for ($i = 0; $i -lt 20 -and (Test-Path "HKCU:\Software\Classes\ssh"); $i++) { Start-Sleep -Milliseconds 500 }
+          if (Test-Path "HKCU:\Software\Classes\ssh") { throw "uninstall left HKCU\Software\Classes\ssh behind" }
+          Write-Host "uninstall OK"
+
       - name: Package artifact
         shell: bash
         env:
