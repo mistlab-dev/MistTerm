@@ -352,12 +352,15 @@ pub fn install_files(
     let mut staged: Vec<(String, PathBuf)> = Vec::new();
     let cleanup_staged = |staged: &[(String, PathBuf)]| {
         for (_, p) in staged {
-            let _ = std::fs::remove_file(p);
+            let _ = retry_busy("remove", p, || std::fs::remove_file(p));
         }
     };
     for (name, src) in items {
         let dst = dir.join(format!("{STAGED_PREFIX}{name}"));
-        let _ = std::fs::remove_file(&dst);
+        let _ = retry_busy("remove", &dst, || match std::fs::remove_file(&dst) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            r => r,
+        });
         if let Err(e) = copy_synced(src, &dst) {
             cleanup_staged(&staged);
             return Err(map_io(dir, e));
@@ -394,7 +397,7 @@ pub fn install_files(
                 break;
             }
         }
-        if let Err(e) = std::fs::rename(staged_path, &target) {
+        if let Err(e) = retry_busy("rename", staged_path, || std::fs::rename(staged_path, &target)) {
             // 这一项本身回滚：Windows 上旧文件已被移走，要放回去。
             if had_old {
                 restore_from_backup(&backup, &target);
@@ -447,6 +450,43 @@ fn map_io(dir: &Path, e: std::io::Error) -> UpdateError {
     }
 }
 
+/// Windows 上刚写好 / 刚运行过的 exe 常被杀毒软件或索引服务短暂占用，改名、删除会报
+/// 「拒绝访问」或「文件正被使用」。这类错误等一会儿重试（最多约 10 秒）；其它系统直接执行一次。
+fn retry_busy<T>(what: &str, path: &Path, mut op: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    #[cfg(windows)]
+    {
+        const ERROR_SHARING_VIOLATION: i32 = 32;
+        const ERROR_LOCK_VIOLATION: i32 = 33;
+        let mut wait = Duration::from_millis(100);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            match op() {
+                Ok(v) => return Ok(v),
+                Err(e)
+                    if (e.kind() == std::io::ErrorKind::PermissionDenied
+                        || matches!(e.raw_os_error(), Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)))
+                        && Instant::now() < deadline =>
+                {
+                    log::warn!("updater: {what} {} busy ({e}); retrying", path.display());
+                    std::thread::sleep(wait);
+                    wait = (wait * 2).min(Duration::from_secs(1));
+                }
+                Err(e) => {
+                    log::warn!("updater: {what} {} failed: {e}", path.display());
+                    return Err(e);
+                }
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        op().map_err(|e| {
+            log::warn!("updater: {what} {} failed: {e}", path.display());
+            e
+        })
+    }
+}
+
 fn copy_synced(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::fs::copy(src, dst)?;
     #[cfg(unix)]
@@ -470,7 +510,7 @@ fn move_old_to_backup(target: &Path, backup: &Path) -> std::io::Result<()> {
     }
     #[cfg(not(unix))]
     {
-        std::fs::rename(target, backup)
+        retry_busy("rename", target, || std::fs::rename(target, backup))
     }
 }
 
@@ -489,9 +529,9 @@ fn restore_from_backup(backup: &Path, target: &Path) {
     #[cfg(not(unix))]
     {
         if target.exists() {
-            let _ = std::fs::remove_file(target);
+            let _ = retry_busy("remove", target, || std::fs::remove_file(target));
         }
-        let _ = std::fs::rename(backup, target);
+        let _ = retry_busy("rename", backup, || std::fs::rename(backup, target));
     }
 }
 
