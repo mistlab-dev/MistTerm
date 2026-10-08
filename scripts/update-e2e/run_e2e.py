@@ -71,7 +71,9 @@ def run(cmd, env=None, check=True, cwd=ROOT, timeout=None) -> subprocess.Complet
 
 
 def capture(cmd, env=None, timeout=120) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout,
+    # Our programs print UTF-8 (Chinese messages); Windows' default code page (cp1252) can't decode it.
+    return subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=timeout,
                           stdin=subprocess.DEVNULL)
 
 
