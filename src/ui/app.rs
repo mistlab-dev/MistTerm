@@ -42,6 +42,7 @@ use crate::ui::session_log_dialog::SessionLogDialog;
 use crate::ui::sftp_panel::SftpPanel;
 use crate::ui::sidebar::Sidebar;
 use crate::ui::ssh_config_import_dialog::SshConfigImportDialog;
+use crate::ui::foreign_import_dialog::ForeignImportDialog;
 use crate::ui::tab_pane::{TabLayout, TerminalPane, TerminalTab};
 use crate::ui::team_fragment_dialog::{
     open_create_editor, open_edit_editor, show_team_fragment_conflict_modal,
@@ -441,6 +442,7 @@ pub struct MistTermApp {
     command_history: CommandHistory,
     command_history_overlay: CommandHistoryOverlay,
     ssh_import_dialog: SshConfigImportDialog,
+    foreign_import_dialog: ForeignImportDialog,
     ssh_config_candidates: Vec<SshConfigCandidate>,
     ssh_config_path: std::path::PathBuf,
     ssh_import_banner_dismissed: bool,
@@ -1108,6 +1110,7 @@ impl MistTermApp {
             command_history: CommandHistory::new(),
             command_history_overlay: CommandHistoryOverlay::default(),
             ssh_import_dialog: SshConfigImportDialog::default(),
+            foreign_import_dialog: ForeignImportDialog::default(),
             ssh_config_candidates: Vec::new(),
             ssh_config_path: default_ssh_config_path(),
             ssh_import_banner_dismissed: false,
@@ -1966,6 +1969,70 @@ impl MistTermApp {
         }
     }
 
+    pub(crate) fn open_foreign_import_dialog(&mut self) {
+        let existing = self.session_manager.list_sessions().to_vec();
+        self.foreign_import_dialog.open_dialog(&existing);
+    }
+
+    /// 把从 Xshell / FinalShell 读出的会话加进会话列表。
+    fn import_foreign_candidates(
+        &mut self,
+        ctx: &egui::Context,
+        candidates: Vec<crate::core::foreign_import::ForeignCandidate>,
+    ) {
+        let mut names: Vec<String> = self
+            .session_manager
+            .list_sessions()
+            .iter()
+            .map(|s| s.name.clone())
+            .collect();
+        let mut added = 0usize;
+        let mut without_password = 0usize;
+        let mut sources = std::collections::BTreeSet::new();
+        for c in &candidates {
+            if !c.importable()
+                || crate::core::foreign_import::is_already_imported(c, self.session_manager.list_sessions())
+            {
+                continue;
+            }
+            let mut cfg = crate::core::foreign_import::candidate_to_session(c, &names);
+            if !self.default_keepalive_enabled {
+                cfg.keepalive_enabled = false;
+            } else {
+                cfg.keepalive_interval_secs = self.default_keepalive_interval_secs;
+                cfg.keepalive_count_max = self.default_keepalive_count_max;
+            }
+            cfg.keepalive_auto_reconnect = self.auto_reconnect_enabled;
+            if cfg.password.is_empty() {
+                without_password += 1;
+            }
+            names.push(cfg.name.clone());
+            sources.insert(c.source.label());
+            self.session_manager.add_session(cfg);
+            added += 1;
+        }
+        if added == 0 {
+            return;
+        }
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Session, "session.import_foreign", AuditOutcome::Success)
+                .with_detail(serde_json::json!({
+                    "count": added,
+                    "source": sources.into_iter().collect::<Vec<_>>().join(","),
+                })),
+        );
+        self.notify_auto(match crate::i18n::language(ctx) {
+            crate::i18n::UiLanguage::En if without_password > 0 => format!(
+                "Imported {added} session(s); {without_password} have no password yet — right-click a session → Edit to fill it in"
+            ),
+            crate::i18n::UiLanguage::En => format!("Imported {added} session(s)"),
+            crate::i18n::UiLanguage::Zh if without_password > 0 => format!(
+                "已导入 {added} 个会话；其中 {without_password} 个没有密码，请右键会话 →「编辑」填上"
+            ),
+            crate::i18n::UiLanguage::Zh => format!("已导入 {added} 个会话"),
+        });
+    }
+
     fn poll_connect_audit_from_tabs(&mut self, ctx: &egui::Context) {
         let mut toast_errors: Vec<(usize, String)> = Vec::new();
         for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
@@ -2339,6 +2406,7 @@ impl MistTermApp {
             || self.quick_selector.open
             || self.large_upload_pending_path.is_some()
             || self.ssh_import_dialog.open
+            || self.foreign_import_dialog.open
             || self.command_history_overlay.open
             || self.session_log_dialog.open
             || self.team_members_dialog.open
@@ -2834,6 +2902,7 @@ impl MistTermApp {
             || self.show_ai_settings_dialog
             || self.variable_dialog.open
             || self.ssh_import_dialog.open
+            || self.foreign_import_dialog.open
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
             || self.cmd_audit_confirm.is_some()
@@ -6649,6 +6718,13 @@ impl MistTermApp {
                     if crate::ui::chrome::popup_menu_button(ui, &theme, &import_label).clicked() {
                         self.open_ssh_import_dialog(ui.ctx());
                     }
+                    let foreign_label = format!(
+                        "{}…",
+                        crate::i18n::menu::labels(crate::i18n::language(ui.ctx())).import_foreign
+                    );
+                    if crate::ui::chrome::popup_menu_button(ui, &theme, &foreign_label).clicked() {
+                        self.open_foreign_import_dialog();
+                    }
                 });
 
                 let row_w = ui.available_width();
@@ -6864,6 +6940,7 @@ impl MistTermApp {
         use crate::platform::macos_menu::MacMenuAction;
         match action {
             MacMenuAction::ImportSsh => self.open_ssh_import_dialog(ctx),
+            MacMenuAction::ImportForeign => self.open_foreign_import_dialog(),
             MacMenuAction::NewSession => self.show_new_session_dialog = true,
             MacMenuAction::NewTab => self.open_new_tab_from_selection(ctx),
             MacMenuAction::Preferences => self.show_preferences_dialog = true,

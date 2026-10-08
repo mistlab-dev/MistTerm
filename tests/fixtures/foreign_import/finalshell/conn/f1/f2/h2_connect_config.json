@@ -1,0 +1,1 @@
+{"id": "h2", "name": "db-01", "host": "10.0.1.21", "port": 2222, "user_name": "dba", "password": "yA1jB/ofAIDyrA8RI5hE+omYgDYkl4B/", "parent_id": "f2", "authentication_type": 1, "conection_type": 100, "secret_key_id": "", "proxy_id": "p9", "port_forwarding_list": [], "remote_port_forwarding": {}, "description": "", "terminal_encoding": "UTF-8", "order": 0, "delete_time": 0}

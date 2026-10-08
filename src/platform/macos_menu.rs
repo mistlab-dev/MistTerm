@@ -19,6 +19,7 @@ use muda::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MacMenuAction {
     ImportSsh,
+    ImportForeign,
     NewSession,
     NewTab,
     Preferences,
@@ -70,6 +71,7 @@ pub struct NativeAppMenu {
     new_session: MenuItem,
     new_tab: MenuItem,
     import_ssh: MenuItem,
+    import_foreign: MenuItem,
     close_tab: MenuItem,
     disconnect: MenuItem,
     reconnect: MenuItem,
@@ -153,6 +155,12 @@ impl NativeAppMenu {
         );
         let import_ssh =
             MenuItem::with_id("mistterm.terminal.import_ssh", l.import_ssh, true, None);
+        let import_foreign = MenuItem::with_id(
+            "mistterm.terminal.import_foreign",
+            format!("{}…", l.import_foreign),
+            true,
+            None,
+        );
         let close_tab = MenuItem::with_id(
             "mistterm.terminal.close_tab",
             l.close_tab,
@@ -170,6 +178,7 @@ impl NativeAppMenu {
         terminal_menu.append(&new_session)?;
         terminal_menu.append(&new_tab)?;
         terminal_menu.append(&import_ssh)?;
+        terminal_menu.append(&import_foreign)?;
         terminal_menu.append(&PredefinedMenuItem::separator())?;
         terminal_menu.append(&close_tab)?;
         terminal_menu.append(&PredefinedMenuItem::separator())?;
@@ -353,6 +362,7 @@ impl NativeAppMenu {
             new_session,
             new_tab,
             import_ssh,
+            import_foreign,
             close_tab,
             disconnect,
             reconnect,
@@ -397,6 +407,7 @@ impl NativeAppMenu {
         let _ = self.new_session.set_text(l.new_session);
         let _ = self.new_tab.set_text(l.new_tab);
         let _ = self.import_ssh.set_text(l.import_ssh);
+        let _ = self.import_foreign.set_text(format!("{}…", l.import_foreign));
         let _ = self.close_tab.set_text(l.close_tab);
         let _ = self.disconnect.set_text(l.disconnect);
         let _ = self.reconnect.set_text(l.reconnect);
@@ -512,6 +523,7 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.app.preferences" => Some(MacMenuAction::Preferences),
         "mistterm.app.quit" => Some(MacMenuAction::Quit),
         "mistterm.terminal.import_ssh" | "mistterm.file.import_ssh" => Some(MacMenuAction::ImportSsh),
+        "mistterm.terminal.import_foreign" => Some(MacMenuAction::ImportForeign),
         "mistterm.terminal.new_session" | "mistterm.file.new_session" => Some(MacMenuAction::NewSession),
         "mistterm.terminal.new_tab" => Some(MacMenuAction::NewTab),
         "mistterm.terminal.close_tab" | "mistterm.file.close_tab" => Some(MacMenuAction::CloseTab),
