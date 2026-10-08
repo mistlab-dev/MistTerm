@@ -313,16 +313,19 @@ jobs:
           if ((Get-SshCommand) -ne $want) { throw "portable: got '$(Get-SshCommand)', want '$want'" }
           Write-Host "portable OK: $want"
 
-          # 2) the shell opens an ssh:// link with Mist (same path a browser click takes)
+          # 2) the shell opens an ssh:// link with Mist (same path a browser click takes).
+          #    MIST_SSH_URL_PROBE makes Mist write the arguments it got to a file and exit (no GUI on the runner).
+          $probe = Join-Path $env:RUNNER_TEMP "ssh-url-probe.txt"
+          Remove-Item -Force $probe -ErrorAction SilentlyContinue
+          $env:MIST_SSH_URL_PROBE = $probe
           Start-Process "ssh://ci-user@127.0.0.1:2222"
-          $found = $null
-          for ($i = 0; $i -lt 20 -and -not $found; $i++) {
-            Start-Sleep -Milliseconds 500
-            $found = Get-CimInstance Win32_Process -Filter "Name='Mist.exe'" | Where-Object { $_.CommandLine -like "*ssh://ci-user@127.0.0.1:2222*" }
-          }
+          for ($i = 0; $i -lt 40 -and -not (Test-Path $probe); $i++) { Start-Sleep -Milliseconds 500 }
+          Remove-Item Env:\MIST_SSH_URL_PROBE
           Stop-Mist
-          if (-not $found) { throw "Mist was not started for the ssh:// link" }
-          Write-Host "launched: $(@($found)[0].CommandLine)"
+          if (-not (Test-Path $probe)) { throw "Mist was not started for the ssh:// link" }
+          $got = Get-Content -Raw $probe
+          if ($got.Trim() -ne "ssh://ci-user@127.0.0.1:2222") { throw "Mist got unexpected arguments: '$got'" }
+          Write-Host "launched with: $got"
           Remove-Item -Recurse -Force "HKCU:\Software\Classes\ssh"
 
           # 3) installer with the ssh:// task; uninstall removes it
