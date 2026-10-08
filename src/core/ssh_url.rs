@@ -168,6 +168,15 @@ mod tests {
     }
 
     #[test]
+    fn windows_adds_trailing_slash() {
+        // Windows 打开链接时会补一个结尾的 /
+        let u = parse_ssh_url("ssh://ci-user@127.0.0.1:2222/").unwrap();
+        assert_eq!((u.user.as_deref(), u.host.as_str(), u.port), (Some("ci-user"), "127.0.0.1", 2222));
+        let u = parse_ssh_url("ssh://web-01/").unwrap();
+        assert_eq!((u.host.as_str(), u.port), ("web-01", 22));
+    }
+
+    #[test]
     fn matches_saved_sessions() {
         let list = vec![
             sess("a", "root", "Web-01.example.com", 22, Some(5)),
