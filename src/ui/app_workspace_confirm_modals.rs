@@ -274,15 +274,20 @@ impl MistTermApp {
                             ui.add_space(theme.spacing_sm());
                             ui.label(
                                 egui::RichText::new(format!(
-                                    "{} {} ({})",
+                                    "{} {}",
                                     crate::i18n::tr(ctx, "Rule:", "匹配规则:"),
-                                    m.rule_id,
-                                    m.level,
+                                    crate::core::cmd_audit::match_display_name(
+                                        m,
+                                        matches!(
+                                            crate::i18n::language(ctx),
+                                            crate::i18n::UiLanguage::Zh
+                                        ),
+                                    ),
                                 ))
                                 .size(theme.font_size_small())
                                 .color(theme.color_body_text_muted()),
                             );
-                            if !m.message.is_empty() {
+                            if !m.message.is_empty() && m.message.trim() != m.name.trim() {
                                 ui.label(
                                     egui::RichText::new(&m.message)
                                         .size(theme.font_size_small())
