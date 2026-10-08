@@ -59,6 +59,11 @@ STATIC_TARGET = "x86_64-unknown-linux-musl"
 
 RESULTS: list[tuple[str, bool, str]] = []
 
+# The Windows runner console is cp1252; our log echoes Chinese program output.
+for _stream in (sys.stdout, sys.stderr):
+    with contextlib.suppress(AttributeError, ValueError):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 
 def log(msg: str) -> None:
     print(f"[e2e] {msg}", flush=True)
@@ -71,7 +76,9 @@ def run(cmd, env=None, check=True, cwd=ROOT, timeout=None) -> subprocess.Complet
 
 
 def capture(cmd, env=None, timeout=120) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout,
+    # Our programs print UTF-8 (Chinese messages); Windows' default code page (cp1252) can't decode it.
+    return subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=timeout,
                           stdin=subprocess.DEVNULL)
 
 
