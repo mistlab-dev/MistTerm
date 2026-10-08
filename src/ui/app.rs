@@ -486,6 +486,10 @@ pub struct MistTermApp {
     active_toast: Option<ActiveToast>,
     /// GUI 自动化：首帧按会话名自动连接(`MISTTERM_AUTO_CONNECT`)
     pending_auto_connect_session: Option<String>,
+    /// 启动参数里的 `ssh://` 链接（浏览器点链接打开 Mist 时），首帧处理。
+    pending_ssh_url: Option<Result<crate::core::ssh_url::SshUrl, String>>,
+    /// 设置里「ssh:// 链接」一项的状态（打开设置时查一次）。
+    pub(crate) ssh_url_handler_status: Option<crate::platform::url_handler::HandlerStatus>,
 }
 
 /// 命令确认弹窗状态(本地快捷提示或服务器侧策略)
@@ -1103,6 +1107,8 @@ impl MistTermApp {
             hang_reporter: HangReporter::start_default(),
             active_toast: None,
             pending_auto_connect_session: None,
+            pending_ssh_url: None,
+            ssh_url_handler_status: None,
             auto_reconnect_enabled: false,
             terminal_font_preset: crate::platform::TerminalFontPreset::default(),
             terminal_font_size: crate::platform::DEFAULT_TERMINAL_FONT_SIZE,
@@ -1186,6 +1192,12 @@ impl MistTermApp {
                 }
             }
         }
+
+        // 浏览器里点 ssh:// 链接：系统把链接作为参数传进来
+        app.pending_ssh_url = std::env::args()
+            .skip(1)
+            .find(|a| a.trim().to_ascii_lowercase().starts_with("ssh://"))
+            .map(|a| crate::core::ssh_url::parse_ssh_url(&a));
 
         // 启动诊断 / 字体问题走 Toast；不再显示「就绪」。
         if !boot_diagnostics.is_empty() {
@@ -5086,6 +5098,62 @@ impl MistTermApp {
     }
 
     /// 创建并连接会话
+    /// 打开 `ssh://` 链接：已保存的主机直接连接；没保存过的打开「新建会话」并填好主机、端口、用户名。
+    fn open_ssh_url(
+        &mut self,
+        ctx: &egui::Context,
+        url: Result<crate::core::ssh_url::SshUrl, String>,
+    ) {
+        let url = match url {
+            Ok(u) => u,
+            Err(e) => {
+                self.notify_warn(format!(
+                    "{}{e}",
+                    crate::i18n::tr(ctx, "Cannot open the ssh:// link: ", "打不开这个 ssh:// 链接：")
+                ));
+                return;
+            }
+        };
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Session, "session.open_ssh_url", AuditOutcome::Success)
+                .with_host(&url.host)
+                .with_detail(serde_json::json!({ "port": url.port })),
+        );
+        if url.had_password {
+            self.notify_warn(
+                crate::i18n::tr(
+                    ctx,
+                    "The link contained a password; it was ignored.",
+                    "链接里带了密码，没有使用。",
+                )
+                .to_string(),
+            );
+        }
+        let saved = crate::core::ssh_url::match_saved_session(&url, self.session_manager.list_sessions()).cloned();
+        if let Some(session) = saved {
+            self.selected_session_id = Some(session.id.clone());
+            self.push_tab_connecting(ctx, &session);
+            return;
+        }
+        self.reset_new_session_form();
+        self.new_session_name = url.display();
+        self.new_session_host = url.host.clone();
+        self.new_session_port = url.port;
+        self.new_session_port_str = url.port.to_string();
+        self.new_session_username = url.user.clone().unwrap_or_default();
+        self.show_new_session_dialog = true;
+        self.notify_auto(match crate::i18n::language(ctx) {
+            crate::i18n::UiLanguage::En => format!(
+                "{} is not saved yet. Fill in the password (or choose a key), then click Save & connect.",
+                url.display()
+            ),
+            crate::i18n::UiLanguage::Zh => format!(
+                "{} 还没保存过。填上密码（或选择私钥）后点「保存并连接」。",
+                url.display()
+            ),
+        });
+    }
+
     fn create_and_connect_session(&mut self, ctx: &egui::Context) {
         if self.new_session_name.is_empty() || self.new_session_host.is_empty() {
             self.notify_auto(
@@ -7109,6 +7177,9 @@ impl eframe::App for MistTermApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        if let Some(url) = self.pending_ssh_url.take() {
+            self.open_ssh_url(ctx, url);
+        }
         if let Some(name) = self.pending_auto_connect_session.take() {
             if let Some(session) = self
                 .session_manager
