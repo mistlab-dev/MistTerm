@@ -1258,7 +1258,8 @@ impl MistTermApp {
             return;
         };
         if let Some(payload) = CmdAuditCacheStore::load().payload_for_team(tid) {
-            self.cmd_audit_engine.apply_sync(payload);
+            // 启动时的同步常因团队服务正忙被跳过；用 apply_cached 让下一帧空闲时立刻补拉。
+            self.cmd_audit_engine.apply_cached(payload);
         }
     }
 
