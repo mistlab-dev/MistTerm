@@ -12,6 +12,8 @@ Mist 是本仓库构建的 SSH 终端 GUI（`cargo` 二进制名：**Mist**）�
 
 Release 里的 Linux 预编译包在 Ubuntu 24.04 上构建，需要 glibc 2.39 或更新（例如 Ubuntu 24.04+、Debian 13+、Fedora 40+）。可以用 `ldd --version` 查看本机版本；更老的系统请按下文从源码编译。
 
+只要命令行 `mist`（服务器上常见）：1.2.0 之后的版本另外提供静态版 `mist-cli-linux-x86_64.tar.gz` 和 `mist-cli-linux-aarch64.tar.gz`，不依赖 glibc，CentOS 7、Rocky 8/9、Ubuntu 20.04/22.04、Debian 12 和 ARM 服务器都能直接用；`curl -fsSL https://mistlab.dev/install | bash` 会自动选对。详见 [docs/release/CLI_STATIC.md](../release/CLI_STATIC.md)。
+
 界面默认 **英文**，可在 **偏好设置 → 语言** 切换为简体中文（Unix 下写入 `~/.config/mistterm/settings.json`）。
 
 打开偏好设置：**终端 → 偏好设置**、**工具 → 偏好设置**，或快捷键 **Ctrl+,**（macOS：**⌘,**）。

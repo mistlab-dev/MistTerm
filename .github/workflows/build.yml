@@ -411,13 +411,148 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
+  # 命令行 `mist` 的 Linux 静态版（musl）：x86_64 + aarch64。
+  # 不依赖系统 glibc / GTK / OpenSSL，CentOS 7 这类老系统和 ARM 服务器也能直接用；官网 /install 装的就是它。
+  # 桌面版 Mist-linux-x86_64.tar.gz 不变。说明见 docs/release/CLI_STATIC.md。
+  # ---------------------------------------------------------------------------
+  cli-linux:
+    name: cli-linux-${{ matrix.arch }}
+    needs: preflight
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            target: x86_64-unknown-linux-musl
+            docker_platform: amd64
+          - arch: aarch64
+            target: aarch64-unknown-linux-musl
+            docker_platform: arm64
+    env:
+      CARGO_ZIGBUILD_VERSION: "0.23.4"
+      ZIGLANG_VERSION: "0.17.0"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Verify release tag is on main
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG_SHA="$(git rev-parse HEAD)"
+          git fetch origin main --force
+          if ! git merge-base --is-ancestor "$TAG_SHA" origin/main; then
+            echo "::error::Release tag ($TAG_SHA) is not on origin/main. Merge to main before tagging."
+            exit 1
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: mistterm
+          key: cli-${{ matrix.target }}
+          cache-on-failure: true
+
+      # zig 作为 C 编译器和链接器：一台 x86_64 机器就能交叉编出两种架构的静态程序（OpenSSL / libssh2 / zlib 都从源码编）。
+      - name: Install zig + cargo-zigbuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/zig-venv"
+          "$RUNNER_TEMP/zig-venv/bin/pip" install --quiet "ziglang==${ZIGLANG_VERSION}" "cargo-zigbuild==${CARGO_ZIGBUILD_VERSION}"
+          echo "$RUNNER_TEMP/zig-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Build static mist
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo zigbuild --locked --release --bin mist \
+            --no-default-features --features vendored-openssl \
+            --target "${{ matrix.target }}"
+
+      - name: Check the binary is fully static
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="target/${{ matrix.target }}/release/mist"
+          file "$BIN"
+          file "$BIN" | grep -q 'statically linked'
+          if readelf -l "$BIN" | grep -qi 'interpreter'; then
+            echo "::error::$BIN has a dynamic loader (PT_INTERP); expected a static binary"; exit 1
+          fi
+          if readelf -d "$BIN" 2>/dev/null | grep -q NEEDED; then
+            echo "::error::$BIN needs shared libraries"; readelf -d "$BIN"; exit 1
+          fi
+          if grep -aq 'GLIBC_[0-9]' "$BIN"; then
+            echo "::error::$BIN references glibc symbol versions"; exit 1
+          fi
+
+      - name: Set up QEMU (arm64 smoke test)
+        if: matrix.arch == 'aarch64'
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      # centos:7 / rockylinux:8 / rockylinux:9 / ubuntu:20.04 / ubuntu:22.04 / debian:12，
+      # 每个跑 mist --version、mist ls、mist exec（连脚本自己起的一次性 sshd）。
+      - name: Smoke test on old and new distros
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECT_VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)" \
+            bash scripts/cli-static-smoke.sh "target/${{ matrix.target }}/release/mist" "${{ matrix.docker_platform }}"
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          NAME="mist-cli-linux-${{ matrix.arch }}"
+          STAGE="dist/$NAME"
+          mkdir -p "$STAGE"
+          cp "target/${{ matrix.target }}/release/mist" "$STAGE/mist"
+          chmod 0755 "$STAGE/mist"
+          cp LICENSE "$STAGE/"
+          [ -f resources/THIRD_PARTY_LICENSES.txt ] && cp resources/THIRD_PARTY_LICENSES.txt "$STAGE/" || true
+          printf '%s\n' \
+            'mist - MistTerm command line (static build, no glibc needed)' \
+            '' \
+            'Install:  curl -fsSL https://mistlab.dev/install | bash' \
+            'Manual:   install -m 0755 mist ~/.local/bin/mist' \
+            'Update:   mist update' \
+            '' \
+            'Docs: https://github.com/mistlab-dev/MistTerm/tree/main/docs' \
+            > "$STAGE/README.txt"
+          tar -C dist -czf "dist/$NAME.tar.gz" "$NAME"
+          tar -tzvf "dist/$NAME.tar.gz"
+          echo "ARTIFACT_PATH=dist/$NAME.tar.gz" >> "$GITHUB_ENV"
+          echo "ARTIFACT_NAME=$NAME.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.ARTIFACT_PATH }}
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
   # 自动更新（P1）：生成 latest.json → 用 minisign 签名 → 与安装包一起发布。
   # 设计与发版步骤见 docs/release/AUTO_UPDATE.md。
   # ---------------------------------------------------------------------------
+  # 手动触发（workflow_dispatch）的测试构建也会生成一份清单（版本取 Cargo.toml），只作为构建产物检查，
+  # 不签名、不发布：sign / release 仍然只在 v* 标签上运行。
   manifest:
     name: Update manifest
-    needs: platform
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [platform, cli-linux]
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -435,7 +570,12 @@ jobs:
           set -euo pipefail
           ls -la dist/
           (cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS)
-          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)"
+            echo "::notice title=Dry run::not a tag build; manifest for v${VERSION} is a build check only (not signed, not published)"
+          fi
           notes_args=()
           for lang in zh en; do
             f="docs/release/notes/v${VERSION}.${lang}.md"
@@ -447,7 +587,7 @@ jobs:
             mirror_args+=(--mirror-base "${{ vars.MIST_MIRROR_BASE_URL }}/v${VERSION}")
           fi
           python3 scripts/gen-update-manifest.py \
-            --tag "$GITHUB_REF_NAME" \
+            --version "$VERSION" \
             --dist dist \
             --out dist/latest.json \
             --url-order github,mirror \
@@ -455,6 +595,18 @@ jobs:
           cat dist/latest.json
           python3 scripts/gen-update-manifest.py --trusted-comment-of dist/latest.json > dist/latest.json.tc
           echo "Trusted comment: $(cat dist/latest.json.tc)"
+          # 静态命令行包必须在 SHA256SUMS 和 latest.json 里。
+          for f in mist-cli-linux-x86_64.tar.gz mist-cli-linux-aarch64.tar.gz; do
+            grep -q "  $f\$" dist/SHA256SUMS || { echo "::error::$f missing from SHA256SUMS"; exit 1; }
+          done
+          python3 - <<'CHECK'
+          import json
+          m = json.load(open("dist/latest.json"))
+          for key in ("linux-x86_64-cli", "linux-aarch64-cli"):
+              a = m["platforms"][key]
+              assert a["kind"] == "tar.gz" and a["auto_update"] and "min_glibc" not in a, (key, a)
+          print("latest.json CLI entries:", {k: m["platforms"][k]["name"] for k in ("linux-x86_64-cli", "linux-aarch64-cli")})
+          CHECK
 
       - name: Upload manifest
         uses: actions/upload-artifact@v7
@@ -529,7 +681,7 @@ jobs:
 
   release:
     name: Publish Release
-    needs: [platform, sign]
+    needs: [platform, cli-linux, sign]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     permissions:
@@ -571,7 +723,8 @@ jobs:
             Pick the archive for your platform:
 
             - **macOS**: `Mist-macos-universal.dmg` (signed + notarized, recommended) or `Mist-macos-universal.tar.gz`
-            - **Linux**: `Mist-linux-x86_64.tar.gz`
+            - **Linux**: `Mist-linux-x86_64.tar.gz` (desktop app + `mist` CLI, needs a recent glibc)
+            - **Linux CLI only** (static, any distro incl. CentOS 7): `mist-cli-linux-x86_64.tar.gz`, `mist-cli-linux-aarch64.tar.gz` — or `curl -fsSL https://mistlab.dev/install | bash`
             - **Windows**: `MistTerm-*-windows-x86_64-setup.exe` (recommended) or `Mist-windows-x86_64.zip`
 
             - Website: https://mistlab.dev
