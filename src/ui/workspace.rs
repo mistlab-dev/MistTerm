@@ -773,7 +773,7 @@ impl MistTermApp {
                 crate::ui::ask_knowledge_dialog::AskKnowledgeUiAction::UseHit(i) => {
                     if let Some(hit) = self.ask_knowledge_hits.get(i) {
                         if let Some(frag) = hit.fragment.clone() {
-                            self.begin_fragment_insert(ctx, &frag);
+                            self.begin_fragment_insert(ctx, &frag, true);
                             self.show_ask_knowledge_dialog = false;
                         }
                     }

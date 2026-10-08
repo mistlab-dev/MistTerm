@@ -526,7 +526,7 @@ impl MistTermApp {
                     if tab_idx < self.tabs.len() {
                         self.active_tab = Some(tab_idx);
                     }
-                    self.begin_fragment_insert(ctx, &fragment);
+                    self.begin_fragment_insert(ctx, &fragment, true);
                 }
             }
             ToastAction::SaveSuggestedSnippet => {

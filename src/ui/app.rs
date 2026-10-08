@@ -423,6 +423,8 @@ pub struct MistTermApp {
     fragment_filter_status: String,
     /// 连接就绪后要插入的片段(标签索引、片段 id、命令)
     pending_fragment_insert: Option<(usize, Option<String>, String)>,
+    /// 下一次片段插入是否只放进输入行(「用到终端」)，不执行。
+    fragment_insert_only: bool,
 
     /// 主题管理器
     theme_manager: ThemeManager,
@@ -502,6 +504,8 @@ struct CmdAuditConfirmState {
     /// 服务器侧可选放行令牌
     approve_token: String,
     started: Instant,
+    /// 确认后只把命令放进输入行、不执行(「用到终端」)。
+    insert_only: bool,
 }
 
 fn server_audit_detail(ev: &ServerAuditEvent) -> String {
@@ -1044,6 +1048,7 @@ impl MistTermApp {
             fragment_filter_category: "all".to_string(),
             fragment_filter_status: "all".to_string(),
             pending_fragment_insert: None,
+            fragment_insert_only: false,
             new_session_name: String::new(),
             new_session_host: String::new(),
             new_session_port: 22,
@@ -1432,6 +1437,39 @@ impl MistTermApp {
         tab_idx: usize,
         command: &str,
     ) -> CommandSendResult {
+        self.audited_command_at(ctx, tab_idx, command, false)
+    }
+
+    /// 「用到终端」：同样先过命令审计(拦截/确认照旧)，通过后只把命令放进输入行，不执行。
+    pub(crate) fn insert_audited_command_at(
+        &mut self,
+        ctx: &egui::Context,
+        tab_idx: usize,
+        command: &str,
+    ) -> CommandSendResult {
+        self.audited_command_at(ctx, tab_idx, command, true)
+    }
+
+    /// 多行命令放进终端就会被逐行执行，所以不放：复制到剪贴板并说明。
+    fn notify_multiline_not_inserted(&mut self, ctx: &egui::Context, command: &str) {
+        ctx.copy_text(command.to_string());
+        self.notify_auto(
+            crate::i18n::tr(
+                ctx,
+                "This command has several lines; putting it in the terminal would run it line by line. Copied to the clipboard instead.",
+                "这条命令有多行，放进终端会被一行一行直接执行，所以没有放进去，已复制到剪贴板。",
+            )
+            .to_string(),
+        );
+    }
+
+    fn audited_command_at(
+        &mut self,
+        ctx: &egui::Context,
+        tab_idx: usize,
+        command: &str,
+        insert_only: bool,
+    ) -> CommandSendResult {
         if tab_idx >= self.tabs.len() {
             return CommandSendResult::NotConnected;
         }
@@ -1490,6 +1528,7 @@ impl MistTermApp {
                     source: CmdAuditSource::Local,
                     approve_token: String::new(),
                     started: Instant::now(),
+                    insert_only,
                 });
                 return CommandSendResult::NeedsConfirm {
                     command: command.to_string(),
@@ -1522,7 +1561,22 @@ impl MistTermApp {
             }
         }
         if let Some(pane) = self.tabs.get_mut(tab_idx).and_then(|t| t.active_pane_mut()) {
-            pane.terminal.send_command(command);
+            if insert_only {
+                if let Err(e) = pane.terminal.insert_command_text(command) {
+                    if e == TerminalView::ERR_INSERT_MULTILINE {
+                        self.notify_multiline_not_inserted(ctx, command);
+                    } else {
+                        self.notify_error(format!(
+                            "{} {}",
+                            crate::i18n::tr(ctx, "Insert failed:", "插入失败："),
+                            localize_terminal_insert_fragment_error(ctx, &e)
+                        ));
+                    }
+                    return CommandSendResult::NotConnected;
+                }
+            } else {
+                pane.terminal.send_command(command);
+            }
         }
         CommandSendResult::Sent
     }
@@ -1571,8 +1625,14 @@ impl MistTermApp {
                     let approve = format!("MIST_AUDIT_APPROVE\t{}", state.approve_token);
                     pane.terminal.send_command(&approve);
                 }
-                pane.terminal.send_command(&state.command);
-                self.notify_auto(terminal_command_status_message(ctx, &state.command));
+                if state.insert_only {
+                    if pane.terminal.insert_command_text(&state.command).is_ok() {
+                        self.notify_auto(inserted_command_status_message(ctx, &state.command));
+                    }
+                } else {
+                    pane.terminal.send_command(&state.command);
+                    self.notify_auto(terminal_command_status_message(ctx, &state.command));
+                }
             }
         } else if matches!(state.source, CmdAuditSource::Local) {
             self.record_cmd_audit_event(
@@ -1693,6 +1753,7 @@ impl MistTermApp {
                     source: CmdAuditSource::Server,
                     approve_token: ev.token,
                     started: Instant::now(),
+                    insert_only: false,
                 });
             }
             CmdAuditAction::Allow => {
@@ -4362,7 +4423,12 @@ impl MistTermApp {
                     if let Some(idx) = self.active_tab {
                         if self.tabs.get_mut(idx).is_some() {
                             let audit = self.cmd_audit_engine.check(&cmd);
-                            match self.send_audited_command_active(ctx, &cmd) {
+                            if TerminalView::is_multiline_command(&cmd) {
+                                self.notify_multiline_not_inserted(ctx, &cmd);
+                                ctx.request_repaint();
+                                continue;
+                            }
+                            match self.insert_audited_command_at(ctx, idx, &cmd) {
                                 CommandSendResult::Sent => {
                                     self.record_cmd_audit_event(
                                         "command.ai_suggested",
@@ -4370,7 +4436,7 @@ impl MistTermApp {
                                         &audit,
                                         crate::core::AuditOutcome::Success,
                                     );
-                                    self.notify_auto(terminal_command_status_message(ctx, &cmd));
+                                    self.notify_auto(inserted_command_status_message(ctx, &cmd));
                                 }
                                 CommandSendResult::Blocked(_)
                                 | CommandSendResult::NeedsConfirm { .. } => {}
@@ -6134,7 +6200,7 @@ impl MistTermApp {
                         );
                     }
                     if row_resp.title.clicked() {
-                        self.begin_fragment_insert(ui.ctx(), frag);
+                        self.begin_fragment_insert(ui.ctx(), frag, false);
                     } else if is_team_scope && row_resp.row.clicked() {
                         self.team_fragment_selected_id = Some(frag.id.clone());
                     }
@@ -6167,7 +6233,14 @@ impl MistTermApp {
     }
 
     /// 从右侧片段列表点击：支持片段库定义的变量、命令里的 `<占位符>`，以及会话字段替换。
-    fn begin_fragment_insert(&mut self, egui_ctx: &egui::Context, fragment: &FragmentStats) {
+    /// `insert_only`：「用到终端」只放进输入行不执行；否则点片段就执行(都先过命令审计)。
+    fn begin_fragment_insert(
+        &mut self,
+        egui_ctx: &egui::Context,
+        fragment: &FragmentStats,
+        insert_only: bool,
+    ) {
+        self.fragment_insert_only = insert_only;
         if self.active_tab.is_none() {
             self.notify_auto(
                 crate::i18n::tr(egui_ctx, "Open a terminal tab first", "请先打开终端标签")
@@ -6249,45 +6322,58 @@ impl MistTermApp {
         let Some(pane) = tab.active_pane_mut() else {
             return;
         };
-        match pane.terminal.insert_fragment(command) {
-            Ok(_) => {
-                let dur_ms = start.elapsed().as_millis().max(1) as u64;
-                if let Some(fid) = fragment_id {
-                    self.record_fragment_execution(fid, true, dur_ms);
-                }
-                self.notify_auto(format!(
-                    "{} {}",
-                    crate::i18n::tr(ctx, "Inserted command:", "插入命令："),
-                    command
-                ));
+        let insert_only = self.fragment_insert_only;
+        let connecting = pane.terminal.is_connecting();
+        // 片段也先过命令审计：拦截 / 确认和从命令库执行一样；「用到终端」通过后只放进输入行。
+        if pane.terminal.is_connected() {
+            if insert_only && TerminalView::is_multiline_command(command) {
+                self.notify_multiline_not_inserted(ctx, command);
+                return;
             }
-            Err(e) => {
-                if e == TerminalView::ERR_FRAGMENT_NOT_CONNECTED && pane.terminal.is_connecting() {
-                    self.pending_fragment_insert = Some((
-                        tab_idx,
-                        fragment_id.map(|id| id.to_string()),
-                        command.to_string(),
-                    ));
-                    self.notify_auto(
-                        crate::i18n::tr(
-                            ctx,
-                            "Connecting… fragment will insert when the session is ready",
-                            "连接建立中，片段将在连接成功后自动插入",
-                        )
-                        .to_string(),
-                    );
-                } else {
+            match self.audited_command_at(ctx, tab_idx, command, insert_only) {
+                CommandSendResult::Sent => {
                     let dur_ms = start.elapsed().as_millis().max(1) as u64;
                     if let Some(fid) = fragment_id {
-                        self.record_fragment_execution(fid, false, dur_ms);
+                        self.record_fragment_execution(fid, true, dur_ms);
                     }
-                    self.notify_error(format!(
-                        "{} {}",
-                        crate::i18n::tr(ctx, "Insert failed:", "插入失败："),
-                        localize_terminal_insert_fragment_error(ctx, &e)
-                    ));
+                    if insert_only {
+                        self.notify_auto(inserted_command_status_message(ctx, command));
+                    } else {
+                        self.notify_auto(terminal_command_status_message(ctx, command));
+                    }
                 }
+                CommandSendResult::Blocked(_) | CommandSendResult::NeedsConfirm { .. } => {}
+                CommandSendResult::NotConnected => {}
             }
+            return;
+        }
+        if connecting {
+            self.pending_fragment_insert = Some((
+                tab_idx,
+                fragment_id.map(|id| id.to_string()),
+                command.to_string(),
+            ));
+            self.notify_auto(
+                crate::i18n::tr(
+                    ctx,
+                    "Connecting… fragment will insert when the session is ready",
+                    "连接建立中，片段将在连接成功后自动插入",
+                )
+                .to_string(),
+            );
+        } else {
+            let dur_ms = start.elapsed().as_millis().max(1) as u64;
+            if let Some(fid) = fragment_id {
+                self.record_fragment_execution(fid, false, dur_ms);
+            }
+            self.notify_error(format!(
+                "{} {}",
+                crate::i18n::tr(ctx, "Insert failed:", "插入失败："),
+                localize_terminal_insert_fragment_error(
+                    ctx,
+                    TerminalView::ERR_FRAGMENT_NOT_CONNECTED
+                )
+            ));
         }
     }
 
@@ -7879,6 +7965,7 @@ impl eframe::App for MistTermApp {
 impl MistTermApp {
     /// 执行命令片段(⌘J 快速选择)：会话占位符展开；片段库变量与 `<自定义>` 占位符弹窗填写。
     fn execute_fragment(&mut self, ctx: &egui::Context, fragment: &FragmentStats) {
+        self.fragment_insert_only = false;
         if self.selected_session_id.is_none() {
             self.notify_auto(
                 crate::i18n::tr(
@@ -8098,6 +8185,25 @@ mod menu;
 /// 右 dock Foreground pass(gutter → 面板 → resize grip)
 #[path = "app_workspace_foreground.rs"]
 mod workspace_foreground;
+
+/// 「用到终端」之后的提示：命令已经在输入行里，还没执行。
+fn inserted_command_status_message(ctx: &egui::Context, cmd: &str) -> String {
+    let first = cmd.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("");
+    let preview = if first.chars().count() > 56 {
+        let head: String = first.chars().take(56).collect();
+        format!("{head}…")
+    } else {
+        first.to_string()
+    };
+    format!(
+        "{} {preview}",
+        crate::i18n::tr(
+            ctx,
+            "In the terminal, not run yet — check it, then press Enter:",
+            "已放进终端，还没执行，检查后按回车：",
+        )
+    )
+}
 
 fn terminal_command_status_message(ctx: &egui::Context, cmd: &str) -> String {
     use crate::i18n::{language, UiLanguage};
