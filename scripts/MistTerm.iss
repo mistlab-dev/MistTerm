@@ -43,6 +43,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon,{#AppName}}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "sshurl"; Description: "Open ssh:// links in the browser with {#AppName}"; Check: not IsInAppUpdate
+
+[Registry]
+Root: HKA; Subkey: "Software\Classes\ssh"; ValueType: string; ValueName: ""; ValueData: "URL:SSH Protocol"; Flags: uninsdeletekey; Tasks: sshurl
+Root: HKA; Subkey: "Software\Classes\ssh"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""; Tasks: sshurl
+Root: HKA; Subkey: "Software\Classes\ssh\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"",0"; Tasks: sshurl
+Root: HKA; Subkey: "Software\Classes\ssh\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\{#AppExe}"" ""%1"""; Tasks: sshurl
 
 [Files]
 Source: "{#SourceDir}\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
@@ -72,4 +79,11 @@ end;
 function ShouldRelaunch(): Boolean;
 begin
   Result := WizardSilent() and (ExpandConstant('{param:RELAUNCH|0}') = '1');
+end;
+
+// In-app update (silent + /RELAUNCH=1): don't offer the ssh:// task, so an update never
+// silently takes ssh:// links away from a program the user picked.
+function IsInAppUpdate(): Boolean;
+begin
+  Result := ShouldRelaunch();
 end;
