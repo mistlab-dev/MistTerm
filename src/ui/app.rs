@@ -1141,6 +1141,21 @@ impl MistTermApp {
             default_keepalive_interval_secs: 30,
             default_keepalive_count_max: 3,
         };
+        // 片段已经不在了（本机删掉的个人片段，或任一团队缓存里都找不到的团队片段），快捷键一并清掉。
+        {
+            let personal = &app.fragment_manager;
+            let team_cache = &app.team_service.cache;
+            let removed = app.fragment_shortcut_store.prune_missing(|id| {
+                personal.get_by_id(id).is_some()
+                    || team_cache
+                        .by_team
+                        .values()
+                        .any(|list| list.iter().any(|f| f.id == id))
+            });
+            if removed > 0 {
+                let _ = app.fragment_shortcut_store.save();
+            }
+        }
 
         if let Some(storage) = cc.storage {
             if let Some(p) =
@@ -5841,6 +5856,9 @@ impl MistTermApp {
                             &id,
                         ) {
                             Ok(()) => {
+                                if self.fragment_shortcut_store.clear(&id) {
+                                    let _ = self.fragment_shortcut_store.save();
+                                }
                                 self.audit_logger.record(
                                     AuditEvent::new(
                                         AuditCategory::Fragment,
@@ -8025,6 +8043,9 @@ impl eframe::App for MistTermApp {
             if let Some(fid) = self.poll_fragment_shortcut(ctx) {
                 if let Some(frag) = self.resolve_fragment_stats_by_id(&fid) {
                     self.begin_fragment_insert(ctx, &frag, false);
+                } else if self.fragment_shortcut_store.clear(&fid) {
+                    // 片段已被删掉（比如团队同步删了），顺手把快捷键也去掉。
+                    let _ = self.fragment_shortcut_store.save();
                 }
             }
         }
