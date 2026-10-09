@@ -22,7 +22,7 @@
 │  show_sftp         │            │  命令提示符 + 输出               │
 │  fragment_panel    │ 🔍 搜索    │  光标闪烁                       │
 │  credential_panel  │            │  搜索覆盖层(⌘F)                  │
-│  cloud_sync_panel  │ 会话列表   │  Ctrl+R 覆盖层(⌘⇧J)             │
+│  cloud_sync_panel  │ 会话列表   │  命令历史覆盖层(工具菜单)       │
 │                    │ * 色点标记  │  大文件上传确认                  │
 │                    │ * 状态指示  │                                  │
 │                    │ * 选中高亮  │                                  │
