@@ -41,6 +41,8 @@ pub struct FragmentLibraryState {
     /// 表单中的快捷键草稿（未保存）
     form_shortcut: Option<FragmentShortcut>,
     shortcut_error: String,
+    /// `MISTTERM_GUI_AUTOMATION=1`：下一帧执行与点「保存」相同的逻辑
+    gui_automation_save_requested: bool,
 }
 
 impl FragmentLibraryState {
@@ -62,6 +64,37 @@ impl FragmentLibraryState {
         self.capturing_shortcut = false;
         self.form_shortcut = None;
         self.shortcut_error.clear();
+    }
+
+    /// `MISTTERM_GUI_AUTOMATION=1`：打开库并进入「新建」表单（标题下一帧聚焦）。
+    pub(crate) fn open_new_for_gui_automation(&mut self) {
+        self.open = true;
+        self.clear_form();
+        self.focus_title_next_frame = true;
+        self.status_msg.clear();
+    }
+
+    /// `MISTTERM_GUI_AUTOMATION=1`：进入快捷键录制（随后由测试脚本按下目标组合键）。
+    pub(crate) fn begin_shortcut_capture_for_gui_automation(&mut self) {
+        if !self.open {
+            return;
+        }
+        self.capturing_shortcut = true;
+        self.shortcut_error.clear();
+    }
+
+    /// `MISTTERM_GUI_AUTOMATION=1`：请求保存当前表单（与点「保存」相同）。
+    pub(crate) fn request_save_for_gui_automation(&mut self) {
+        if !self.open {
+            return;
+        }
+        self.gui_automation_save_requested = true;
+    }
+
+    /// `MISTTERM_GUI_AUTOMATION=1`：关闭片段库窗口。
+    pub(crate) fn close_for_gui_automation(&mut self) {
+        self.open = false;
+        self.capturing_shortcut = false;
     }
 
     fn load_from_fragment(&mut self, f: &FragmentStats, shortcuts: &FragmentShortcutStore) {
@@ -655,18 +688,21 @@ impl FragmentLibraryState {
                                 });
 
                                 ui.horizontal(|ui| {
-                                    if crate::ui::chrome::panel_action_primary_button_with_icon_ex(
+                                    let can_save = !self.form_title.trim().is_empty()
+                                        && !self.form_category.trim().is_empty();
+                                    let save_clicked = crate::ui::chrome::panel_action_primary_button_with_icon_ex(
                                         ui,
                                         theme,
                                         crate::ui::icons::IconId::Check,
                                         i18n::tr(ctx, "Save", "保存"),
-                                        !self.form_title.trim().is_empty()
-                                            && !self.form_category.trim().is_empty(),
+                                        can_save,
                                     )
                                     .clicked()
-                                        && !self.form_title.trim().is_empty()
-                                        && !self.form_category.trim().is_empty()
-                                    {
+                                        || self.gui_automation_save_requested;
+                                    if self.gui_automation_save_requested {
+                                        self.gui_automation_save_requested = false;
+                                    }
+                                    if save_clicked && can_save {
                                         let tags = self.parse_tags();
                                         let variables: Vec<FragmentVariable> = self.form_variables
                                             .iter()
