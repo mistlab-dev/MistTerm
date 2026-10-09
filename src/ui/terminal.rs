@@ -2642,7 +2642,7 @@ impl TerminalView {
     /// false 时仅复制选区(Ctrl+Shift+C，与 Windows Terminal 一致)。
     /// 走 `ctx.copy_text`（eframe/winit 剪贴板），避免 UI 线程直调 arboard 与外部
     /// PowerShell/自动化争用 OpenClipboard 时把整窗卡成「未响应」。
-    fn copy_to_clipboard(&self, ctx: &egui::Context, fallback_all: bool) -> bool {
+    fn copy_to_clipboard(&self, ctx: &egui::Context, fallback_all: bool) -> Option<String> {
         let text = self.get_selected_text();
         let text = if text.is_empty() && fallback_all {
             self.terminal.get_formatted_output()
@@ -2650,19 +2650,20 @@ impl TerminalView {
             text
         };
         if text.is_empty() {
-            return false;
+            return None;
         }
-        ctx.copy_text(text);
-        true
+        ctx.copy_text(text.clone());
+        Some(text)
     }
 
     /// 菜单「复制」：优先选区，否则复制当前屏格式化输出。
     pub(crate) fn menu_copy_to_clipboard(&self, ctx: &egui::Context) -> bool {
-        self.copy_to_clipboard(ctx, true)
+        self.copy_to_clipboard(ctx, true).is_some()
     }
 
     /// 快捷键 Ctrl+Shift+C：仅复制选区；无选区时不复制。
-    pub(crate) fn shortcut_copy_to_clipboard(&self, ctx: &egui::Context) -> bool {
+    /// 返回放进剪贴板的文字(无选区为 `None`)，供调用方在帧末核对是否被别的控件覆盖。
+    pub(crate) fn shortcut_copy_to_clipboard(&self, ctx: &egui::Context) -> Option<String> {
         self.copy_to_clipboard(ctx, false)
     }
 

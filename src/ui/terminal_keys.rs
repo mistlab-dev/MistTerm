@@ -201,13 +201,27 @@ fn consume_terminal_clipboard_key(i: &mut InputState, key: Key) -> bool {
 }
 
 /// 消费终端复制快捷键(macOS ⌘C，Win/Linux Ctrl+Shift+C)。
+///
+/// egui-winit 在 ⌘C / Ctrl+C(含 Ctrl+Shift+C) 时除了 Key 事件还会再发一个 `Event::Copy`。
+/// 终端里那个透明的 IME 输入框(空字符串、持有焦点)收到 `Event::Copy` 会把「空串」写进
+/// `copied_text`，把我们刚放进去的选区覆盖掉：提示「已复制」，剪贴板却没变。
+/// 所以命中快捷键时把同一帧的 `Event::Copy` 一起吞掉。
 pub fn consume_terminal_copy_shortcut(i: &mut InputState) -> bool {
-    consume_terminal_clipboard_key(i, Key::C)
+    if consume_terminal_clipboard_key(i, Key::C) {
+        i.events.retain(|e| !matches!(e, Event::Copy));
+        return true;
+    }
+    false
 }
 
 /// 消费终端粘贴快捷键(macOS ⌘V，Win/Linux Ctrl+Shift+V)。
+/// 同理吞掉同帧的 `Event::Paste`：粘贴由我们自己读剪贴板写进 PTY，别再交给其它输入框。
 pub fn consume_terminal_paste_shortcut(i: &mut InputState) -> bool {
-    consume_terminal_clipboard_key(i, Key::V)
+    if consume_terminal_clipboard_key(i, Key::V) {
+        i.events.retain(|e| !matches!(e, Event::Paste(_)));
+        return true;
+    }
+    false
 }
 
 /// 消费 Ctrl(+Shift)+字母 Key 并编码为 C0 字节。
@@ -350,6 +364,7 @@ pub fn forward_non_text_keys(i: &mut egui::InputState, mut send: impl FnMut(&[u8
 mod tests {
     use super::*;
     use eframe::egui::{Event, Key, Modifiers};
+    use eframe::egui;
 
     fn key_press(key: Key, modifiers: Modifiers) -> Event {
         Event::Key {
@@ -592,6 +607,69 @@ mod tests {
                 assert!(forward_non_text_keys(i, |b| sent.push(b.to_vec())));
                 assert_eq!(sent, vec![b"\x1b[15~".to_vec()]);
             });
+        });
+    }
+
+    /// 回归：⌘C(Win/Linux 为 Ctrl+Shift+C) 时 egui-winit 同帧还会发 `Event::Copy`；
+    /// 终端的透明 IME 框(空串、有焦点)收到它会把 `copied_text` 覆盖成空串。
+    #[test]
+    fn copy_shortcut_survives_focused_empty_ime_box() {
+        fn run(consume: bool) -> String {
+            let ctx = egui::Context::default();
+            let ime_id = egui::Id::new("ime_capture_test");
+            let mut input = egui::RawInput::default();
+            input.modifiers = terminal_clipboard_modifiers();
+            input.events = vec![
+                Event::Copy,
+                Event::Key {
+                    key: Key::C,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: terminal_clipboard_modifiers(),
+                },
+            ];
+            ctx.memory_mut(|m| m.request_focus(ime_id));
+            let out = ctx.run(input, |ctx| {
+                // 与 app.rs 的顺序一致：先处理复制快捷键，再画终端(含 IME 框)。
+                let hit = ctx.input_mut(|i| {
+                    if consume {
+                        consume_terminal_copy_shortcut(i)
+                    } else {
+                        consume_terminal_clipboard_key(i, Key::C)
+                    }
+                });
+                assert!(hit);
+                ctx.copy_text("selected text".to_string());
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut ime = String::new();
+                    ui.add(egui::TextEdit::singleline(&mut ime).id(ime_id));
+                });
+            });
+            out.platform_output.copied_text
+        }
+        // 只吞 Key、不吞 Event::Copy(旧行为)：被 IME 框覆盖成空串。
+        assert_eq!(run(false), "");
+        // 修好后：选区保留。
+        assert_eq!(run(true), "selected text");
+    }
+
+    #[test]
+    fn paste_shortcut_drops_paste_event() {
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        input.modifiers = terminal_clipboard_modifiers();
+        input.events = vec![
+            Event::Paste("x".into()),
+            Event::Key {
+                key: Key::V,
+                pressed: true,
+                repeat: false,
+                modifiers: terminal_clipboard_modifiers(),
+            },
+        ];
+        let _ = ctx.run(input, |ctx| {
+            assert!(ctx.input_mut(consume_terminal_paste_shortcut));
+            assert!(ctx.input(|i| !i.events.iter().any(|e| matches!(e, Event::Paste(_)))));
         });
     }
 }
