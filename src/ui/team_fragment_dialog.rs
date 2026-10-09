@@ -267,6 +267,13 @@ pub fn show_team_fragment_editor_modal(
                         )
                         .weak(),
                     );
+                    ui.label(
+                        chrome::rich_caption(theme, {
+                            let (en, zh) = ShortcutConflict::rule_hint();
+                            i18n::tr(ctx, en, zh)
+                        })
+                        .weak(),
+                    );
                     ui.add_space(4.0);
 
                     if !editor.error.is_empty() {
@@ -588,39 +595,18 @@ fn persist_team_fragment_shortcut(
 ) {
     match shortcut {
         Some(sc) => store.set(fragment_id.to_string(), sc),
-        None => store.clear(fragment_id),
+        None => {
+            store.clear(fragment_id);
+        }
     }
     let _ = store.save();
 }
 
 fn team_shortcut_conflict_message(ctx: &egui::Context, err: &ShortcutConflict) -> String {
-    match err {
-        ShortcutConflict::NeedsModifier => i18n::tr(
-            ctx,
-            "Shortcut needs a modifier key (⌘/Ctrl/Alt/Shift).",
-            "快捷键需要包含修饰键（⌘/Ctrl/Alt/Shift）。",
-        )
-        .to_string(),
-        ShortcutConflict::ShellCtrlLetter => i18n::tr(
-            ctx,
-            "Ctrl+letter is reserved for the shell.",
-            "Ctrl+字母留给 shell，不能用作片段快捷键。",
-        )
-        .to_string(),
-        ShortcutConflict::ReservedApp(label) => format!(
-            "{} ({label})",
-            i18n::tr(
-                ctx,
-                "Conflicts with a built-in shortcut",
-                "与应用内置快捷键冲突",
-            )
-        ),
-        ShortcutConflict::OtherFragment(_) => i18n::tr(
-            ctx,
-            "This shortcut is already used by another snippet.",
-            "该快捷键已被另一条片段占用。",
-        )
-        .to_string(),
+    let (en, zh) = err.message();
+    match i18n::language(ctx) {
+        i18n::UiLanguage::Zh => zh,
+        _ => en,
     }
 }
 
@@ -648,13 +634,17 @@ fn poll_team_shortcut_capture(ctx: &egui::Context) -> Option<FragmentShortcut> {
                 if name.is_empty() {
                     continue;
                 }
-                return Some(FragmentShortcut::new(
-                    name,
-                    modifiers.ctrl,
-                    modifiers.shift,
-                    modifiers.alt,
-                    modifiers.command || modifiers.mac_cmd,
-                ));
+                // Windows/Linux 上 egui 把 Ctrl 同时报成 ctrl 和 command，这里统一成 Ctrl。
+                return Some(
+                    FragmentShortcut::new(
+                        name,
+                        modifiers.ctrl,
+                        modifiers.shift,
+                        modifiers.alt,
+                        modifiers.command || modifiers.mac_cmd,
+                    )
+                    .normalized(),
+                );
             }
         }
         None

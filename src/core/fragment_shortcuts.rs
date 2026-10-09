@@ -31,6 +31,32 @@ impl FragmentShortcut {
         }
     }
 
+    /// 按平台统一修饰键：Windows/Linux 上 egui 会把 Ctrl 同时报成 `ctrl` 和 `command`，
+    /// 这里合并成 `ctrl`（`command = false`）；macOS 上 `command` 就是 ⌘，原样保留。
+    pub fn normalized_for(&self, platform: KeyPlatform) -> Self {
+        let mut out = self.clone();
+        if platform == KeyPlatform::Other {
+            out.ctrl = self.ctrl || self.command;
+            out.command = false;
+        }
+        out
+    }
+
+    /// 按当前平台统一修饰键（录制、保存、匹配都走这里）。
+    pub fn normalized(&self) -> Self {
+        self.normalized_for(KeyPlatform::current())
+    }
+
+    fn same_combo(&self, other: &Self, platform: KeyPlatform) -> bool {
+        let a = self.normalized_for(platform);
+        let b = other.normalized_for(platform);
+        a.key.eq_ignore_ascii_case(&b.key)
+            && a.ctrl == b.ctrl
+            && a.shift == b.shift
+            && a.alt == b.alt
+            && a.command == b.command
+    }
+
     pub fn matches(
         &self,
         key: &str,
@@ -39,11 +65,8 @@ impl FragmentShortcut {
         alt: bool,
         command: bool,
     ) -> bool {
-        self.key.eq_ignore_ascii_case(key)
-            && self.ctrl == ctrl
-            && self.shift == shift
-            && self.alt == alt
-            && self.command == command
+        let pressed = FragmentShortcut::new(key, ctrl, shift, alt, command);
+        self.same_combo(&pressed, KeyPlatform::current())
     }
 
     /// 人类可读标签（⌘⇧J / Ctrl+Shift+J）。
@@ -80,6 +103,24 @@ impl FragmentShortcut {
             }
             parts.push(pretty_key(&self.key));
             parts.join("+")
+        }
+    }
+}
+
+/// 快捷键规则按哪种键盘来判断（测试里可以指定，平时用 [`KeyPlatform::current`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyPlatform {
+    Mac,
+    /// Windows / Linux
+    Other,
+}
+
+impl KeyPlatform {
+    pub fn current() -> Self {
+        if cfg!(target_os = "macos") {
+            KeyPlatform::Mac
+        } else {
+            KeyPlatform::Other
         }
     }
 }
@@ -132,7 +173,13 @@ impl FragmentShortcutStore {
     }
 
     pub fn load() -> Self {
-        crate::security::encrypted_file::load_encrypted_json(&Self::default_path())
+        let mut store: Self =
+            crate::security::encrypted_file::load_encrypted_json(&Self::default_path());
+        // 1.2.2 测试版在 Windows/Linux 上存下的组合键带着 `command`，读进来时统一一下。
+        for sc in store.bindings.values_mut() {
+            *sc = sc.normalized();
+        }
+        store
     }
 
     pub fn save(&self) -> io::Result<()> {
@@ -144,11 +191,18 @@ impl FragmentShortcutStore {
     }
 
     pub fn set(&mut self, fragment_id: String, shortcut: FragmentShortcut) {
-        self.bindings.insert(fragment_id, shortcut);
+        self.bindings.insert(fragment_id, shortcut.normalized());
     }
 
-    pub fn clear(&mut self, fragment_id: &str) {
-        self.bindings.remove(fragment_id);
+    pub fn clear(&mut self, fragment_id: &str) -> bool {
+        self.bindings.remove(fragment_id).is_some()
+    }
+
+    /// 去掉片段已经不存在的快捷键；返回去掉了几条。
+    pub fn prune_missing(&mut self, exists: impl Fn(&str) -> bool) -> usize {
+        let before = self.bindings.len();
+        self.bindings.retain(|id, _| exists(id));
+        before - self.bindings.len()
     }
 
     /// 查找占用同一组合键的其它片段 id。
@@ -157,11 +211,20 @@ impl FragmentShortcutStore {
         shortcut: &FragmentShortcut,
         except_fragment_id: Option<&str>,
     ) -> Option<String> {
+        self.conflict_fragment_id_for(shortcut, except_fragment_id, KeyPlatform::current())
+    }
+
+    fn conflict_fragment_id_for(
+        &self,
+        shortcut: &FragmentShortcut,
+        except_fragment_id: Option<&str>,
+        platform: KeyPlatform,
+    ) -> Option<String> {
         self.bindings.iter().find_map(|(id, sc)| {
             if except_fragment_id == Some(id.as_str()) {
                 return None;
             }
-            if sc == shortcut {
+            if sc.same_combo(shortcut, platform) {
                 Some(id.clone())
             } else {
                 None
@@ -190,70 +253,108 @@ impl FragmentShortcutStore {
 /// 校验失败原因（给 UI 提示）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ShortcutConflict {
-    /// 需要至少一个修饰键
+    /// 没有修饰键，或只按了 Shift
     NeedsModifier,
-    /// Ctrl+字母留给 shell（无 Shift/Alt/⌘）
+    /// Ctrl+键留给 shell（Ctrl+C、Ctrl+R……；Mac 上不带 ⌘ 的 Ctrl 组合也一样）
     ShellCtrlLetter,
+    /// 组合不对：Windows/Linux 要 Ctrl+Shift，Mac 要带 ⌘（Alt/Option 组合在终端里会打字或按词移动）
+    NeedsCombo,
     /// 与内置应用快捷键冲突
     ReservedApp(String),
     /// 与另一条片段快捷键冲突
     OtherFragment(String),
 }
 
-/// 内置应用快捷键（与 `app_shortcuts` / `keyboard_shortcuts` 对齐的简化集合）。
-fn reserved_app_shortcuts() -> Vec<FragmentShortcut> {
+impl ShortcutConflict {
+    /// 给用户看的提示 (英文, 中文)。
+    pub fn message(&self) -> (String, String) {
+        let rule_en = if cfg!(target_os = "macos") {
+            "Use a ⌘ combination, for example ⌘⇧Y."
+        } else {
+            "Use Ctrl+Shift+key, for example Ctrl+Shift+Y."
+        };
+        let rule_zh = if cfg!(target_os = "macos") {
+            "请用带 ⌘ 的组合，比如 ⌘⇧Y。"
+        } else {
+            "请用 Ctrl+Shift+键，比如 Ctrl+Shift+Y。"
+        };
+        match self {
+            ShortcutConflict::NeedsModifier => (
+                format!("A single key or Shift+key can't be a snippet shortcut. {rule_en}"),
+                format!("单个键或 Shift+键不能当片段快捷键。{rule_zh}"),
+            ),
+            ShortcutConflict::ShellCtrlLetter => (
+                format!("Ctrl+key belongs to the shell (Ctrl+C, Ctrl+R and so on). {rule_en}"),
+                format!("Ctrl+键留给 shell 用（比如 Ctrl+C、Ctrl+R）。{rule_zh}"),
+            ),
+            ShortcutConflict::NeedsCombo => (
+                format!(
+                    "Alt/Option combinations type characters or move by word in the terminal. {rule_en}"
+                ),
+                format!("Alt/Option 组合在终端里会打出字符或按词移动。{rule_zh}"),
+            ),
+            ShortcutConflict::ReservedApp(label) => (
+                format!("Conflicts with a built-in shortcut ({label})."),
+                format!("和应用自带的快捷键冲突（{label}）。"),
+            ),
+            ShortcutConflict::OtherFragment(_) => (
+                "This shortcut is already used by another snippet.".into(),
+                "这个快捷键已经给另一条片段用了。".into(),
+            ),
+        }
+    }
+
+    /// 录制区下方的说明 (英文, 中文)。
+    pub fn rule_hint() -> (&'static str, &'static str) {
+        if cfg!(target_os = "macos") {
+            (
+                "Works in the terminal. Use a ⌘ combination (for example ⌘⇧Y); built-in shortcuts can't be used.",
+                "在终端里也能用。请用带 ⌘ 的组合（比如 ⌘⇧Y），应用自带的快捷键不能用。",
+            )
+        } else {
+            (
+                "Works in the terminal. Use Ctrl+Shift+key (for example Ctrl+Shift+Y); built-in shortcuts can't be used.",
+                "在终端里也能用。请用 Ctrl+Shift+键（比如 Ctrl+Shift+Y），应用自带的快捷键不能用。",
+            )
+        }
+    }
+}
+
+/// 内置快捷键（与 `app.rs` / `keyboard_shortcuts.rs` / `terminal_keys.rs` 对齐），已按平台统一修饰键。
+fn reserved_app_shortcuts(platform: KeyPlatform) -> Vec<FragmentShortcut> {
     let mut out = Vec::new();
-    let primary = |key: &str, shift: bool| -> FragmentShortcut {
-        #[cfg(target_os = "macos")]
-        {
-            FragmentShortcut::new(key, false, shift, false, true)
+    match platform {
+        KeyPlatform::Mac => {
+            let cmd = |k: &str| FragmentShortcut::new(k, false, false, false, true);
+            let cmd_shift = |k: &str| FragmentShortcut::new(k, false, true, false, true);
+            // 应用快捷键 + 系统编辑键（复制、粘贴、全选、撤销……）
+            for k in [
+                "N", "E", "J", "K", "B", "H", "F", "T", "W", "Q", "M", "C", "V", "X", "A", "Z",
+                "Tab",
+            ] {
+                out.push(cmd(k));
+            }
+            for n in 1..=9 {
+                out.push(cmd(&format!("Num{n}")));
+            }
+            // ⌘⇧：片段选择器、AI、分屏等；⌘⇧3/4/5 是系统截图
+            for k in ["J", "A", "L", "D", "U", "N", "E", "H", "Z", "Tab", "Num3", "Num4", "Num5"] {
+                out.push(cmd_shift(k));
+            }
+            out.push(FragmentShortcut::new("ArrowLeft", false, false, true, true));
+            out.push(FragmentShortcut::new("ArrowRight", false, false, true, true));
+            out.push(FragmentShortcut::new("F", true, false, false, true)); // 全屏 ⌃⌘F
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            // Win/Linux：无 Shift 的主修饰键是 Ctrl；带 Shift 的应用键是 Ctrl+Shift。
-            FragmentShortcut::new(key, true, shift, false, false)
+        KeyPlatform::Other => {
+            let ctrl_shift = |k: &str| FragmentShortcut::new(k, true, true, false, false);
+            // Ctrl+Shift：标签、片段选择器、AI、分屏、终端复制粘贴、SFTP 等
+            for k in [
+                "T", "W", "J", "A", "L", "D", "U", "S", "C", "V", "N", "E", "H", "Tab",
+                "ArrowLeft", "ArrowRight", "F9", "F10", "Backspace", "Escape",
+            ] {
+                out.push(ctrl_shift(k));
+            }
         }
-    };
-
-    for k in ["N", "E", "J", "K", "B", "H", "F", "Comma"] {
-        out.push(primary(k, false));
-    }
-    // 标签 1–9
-    for n in 1..=9 {
-        out.push(primary(&format!("Num{n}"), false));
-    }
-    out.push(primary("Tab", false));
-    out.push(primary("Tab", true));
-
-    #[cfg(target_os = "macos")]
-    {
-        out.push(FragmentShortcut::new("T", false, false, false, true));
-        out.push(FragmentShortcut::new("W", false, false, false, true));
-        out.push(FragmentShortcut::new("Q", false, false, false, true));
-        out.push(FragmentShortcut::new("H", false, false, false, true));
-        out.push(FragmentShortcut::new("M", false, false, false, true));
-        out.push(FragmentShortcut::new("J", false, true, false, true)); // quick picker
-        out.push(FragmentShortcut::new("A", false, true, false, true));
-        out.push(FragmentShortcut::new("L", false, true, false, true));
-        out.push(FragmentShortcut::new("D", false, true, false, true));
-        out.push(FragmentShortcut::new("U", false, true, false, true));
-        out.push(FragmentShortcut::new("ArrowLeft", false, false, true, true));
-        out.push(FragmentShortcut::new("ArrowRight", false, false, true, true));
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        out.push(FragmentShortcut::new("T", true, true, false, false));
-        out.push(FragmentShortcut::new("W", true, true, false, false));
-        out.push(FragmentShortcut::new("J", true, true, false, false));
-        out.push(FragmentShortcut::new("A", true, true, false, false));
-        out.push(FragmentShortcut::new("L", true, true, false, false));
-        out.push(FragmentShortcut::new("D", true, true, false, false));
-        out.push(FragmentShortcut::new("U", true, true, false, false));
-        out.push(FragmentShortcut::new("S", true, true, false, false));
-        out.push(FragmentShortcut::new("ArrowLeft", true, true, false, false));
-        out.push(FragmentShortcut::new("ArrowRight", true, true, false, false));
-        out.push(FragmentShortcut::new("F9", true, true, false, false));
-        out.push(FragmentShortcut::new("F10", true, true, false, false));
     }
     out
 }
@@ -263,33 +364,57 @@ fn is_letter_key(key: &str) -> bool {
     k.len() == 1 && k.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
 }
 
-/// 校验快捷键是否可保存。
+/// 校验快捷键是否可保存（按当前平台）。
 pub fn validate_shortcut(
     store: &FragmentShortcutStore,
     shortcut: &FragmentShortcut,
     except_fragment_id: Option<&str>,
 ) -> Result<(), ShortcutConflict> {
-    if !shortcut.ctrl && !shortcut.shift && !shortcut.alt && !shortcut.command {
+    validate_shortcut_for(store, shortcut, except_fragment_id, KeyPlatform::current())
+}
+
+/// 规则（尽量小，和内置快捷键一致）：
+/// - Windows/Linux：必须同时按 Ctrl+Shift（可再加 Alt）。Ctrl+键留给 shell，Alt 组合在终端里按词移动。
+/// - Mac：必须带 ⌘。Ctrl 组合留给 shell，Option 组合会打出字符。
+/// - 单个键、只按 Shift 一律不行；内置快捷键和别的片段占用的也不行。
+pub fn validate_shortcut_for(
+    store: &FragmentShortcutStore,
+    shortcut: &FragmentShortcut,
+    except_fragment_id: Option<&str>,
+    platform: KeyPlatform,
+) -> Result<(), ShortcutConflict> {
+    let sc = shortcut.normalized_for(platform);
+    if !sc.ctrl && !sc.alt && !sc.command {
         return Err(ShortcutConflict::NeedsModifier);
     }
 
-    // Ctrl+字母（无 Shift/Alt/⌘）留给 shell
-    if shortcut.ctrl
-        && !shortcut.shift
-        && !shortcut.alt
-        && !shortcut.command
-        && is_letter_key(&shortcut.key)
-    {
-        return Err(ShortcutConflict::ShellCtrlLetter);
+    let primary_ok = match platform {
+        KeyPlatform::Mac => sc.command,
+        KeyPlatform::Other => sc.ctrl && sc.shift,
+    };
+    if !primary_ok {
+        if sc.ctrl && !sc.alt {
+            // Ctrl+键 / Ctrl+数字（Win/Linux 上 Ctrl+1..9 也是切标签）
+            if is_letter_key(&sc.key) || platform == KeyPlatform::Mac {
+                return Err(ShortcutConflict::ShellCtrlLetter);
+            }
+            if let Some(n) = sc.key.strip_prefix("Num") {
+                if !n.is_empty() {
+                    return Err(ShortcutConflict::ReservedApp(sc.display_label()));
+                }
+            }
+            return Err(ShortcutConflict::ShellCtrlLetter);
+        }
+        return Err(ShortcutConflict::NeedsCombo);
     }
 
-    for reserved in reserved_app_shortcuts() {
-        if &reserved == shortcut {
+    for reserved in reserved_app_shortcuts(platform) {
+        if reserved.same_combo(&sc, platform) {
             return Err(ShortcutConflict::ReservedApp(reserved.display_label()));
         }
     }
 
-    if let Some(other) = store.conflict_fragment_id(shortcut, except_fragment_id) {
+    if let Some(other) = store.conflict_fragment_id_for(&sc, except_fragment_id, platform) {
         return Err(ShortcutConflict::OtherFragment(other));
     }
 
@@ -300,34 +425,136 @@ pub fn validate_shortcut(
 mod tests {
     use super::*;
 
+    const WIN: KeyPlatform = KeyPlatform::Other;
+    const MAC: KeyPlatform = KeyPlatform::Mac;
+
+    /// Windows/Linux 上 egui 实际报上来的样子：按 Ctrl 时 ctrl 和 command 都是 true。
+    fn win(key: &str, ctrl: bool, shift: bool, alt: bool) -> FragmentShortcut {
+        FragmentShortcut::new(key, ctrl, shift, alt, ctrl)
+    }
+
+    fn check(sc: &FragmentShortcut, p: KeyPlatform) -> Result<(), ShortcutConflict> {
+        validate_shortcut_for(&FragmentShortcutStore::default(), sc, None, p)
+    }
+
     #[test]
-    fn shell_ctrl_letter_rejected() {
-        let store = FragmentShortcutStore::default();
-        let sc = FragmentShortcut::new("A", true, false, false, false);
+    fn win_ctrl_letters_rejected_even_with_command_flag() {
+        for k in ["A", "C", "R", "D", "Z", "L"] {
+            assert_eq!(
+                check(&win(k, true, false, false), WIN),
+                Err(ShortcutConflict::ShellCtrlLetter),
+                "Ctrl+{k}"
+            );
+        }
+    }
+
+    #[test]
+    fn win_builtin_shortcuts_rejected() {
+        assert!(matches!(
+            check(&win("T", true, true, false), WIN),
+            Err(ShortcutConflict::ReservedApp(_))
+        ));
+        assert!(matches!(
+            check(&win("C", true, true, false), WIN),
+            Err(ShortcutConflict::ReservedApp(_))
+        ));
+        assert!(matches!(
+            check(&win("Num1", true, false, false), WIN),
+            Err(ShortcutConflict::ReservedApp(_))
+        ));
+    }
+
+    #[test]
+    fn shift_only_and_bare_keys_rejected() {
+        for p in [WIN, MAC] {
+            assert_eq!(
+                check(&FragmentShortcut::new("A", false, true, false, false), p),
+                Err(ShortcutConflict::NeedsModifier)
+            );
+            assert_eq!(
+                check(&FragmentShortcut::new("F5", false, false, false, false), p),
+                Err(ShortcutConflict::NeedsModifier)
+            );
+        }
+    }
+
+    #[test]
+    fn alt_and_option_only_rejected() {
         assert_eq!(
-            validate_shortcut(&store, &sc, None),
+            check(&FragmentShortcut::new("A", false, false, true, false), MAC),
+            Err(ShortcutConflict::NeedsCombo)
+        );
+        assert_eq!(
+            check(&FragmentShortcut::new("A", false, true, true, false), MAC),
+            Err(ShortcutConflict::NeedsCombo)
+        );
+        assert_eq!(
+            check(&win("B", false, false, true), WIN),
+            Err(ShortcutConflict::NeedsCombo)
+        );
+        // Mac 上不带 ⌘ 的 Ctrl 组合留给 shell
+        assert_eq!(
+            check(&FragmentShortcut::new("Y", true, true, false, false), MAC),
             Err(ShortcutConflict::ShellCtrlLetter)
         );
     }
 
     #[test]
-    fn ctrl_shift_letter_ok_on_non_mac_style() {
-        let store = FragmentShortcutStore::default();
-        let sc = FragmentShortcut::new("Y", true, true, false, false);
-        // May still hit reserved on some platforms; Y is free.
-        assert!(validate_shortcut(&store, &sc, None).is_ok());
+    fn mac_builtin_and_edit_keys_rejected() {
+        for k in ["C", "V", "A", "Z", "T", "Num1"] {
+            assert!(
+                matches!(
+                    check(&FragmentShortcut::new(k, false, false, false, true), MAC),
+                    Err(ShortcutConflict::ReservedApp(_))
+                ),
+                "⌘{k}"
+            );
+        }
     }
 
     #[test]
-    fn other_fragment_conflict() {
-        let mut store = FragmentShortcutStore::default();
-        let sc = FragmentShortcut::new("Y", true, true, false, false);
-        store.set("a".into(), sc.clone());
+    fn valid_combos_accepted() {
+        assert_eq!(check(&win("Y", true, true, false), WIN), Ok(()));
+        assert_eq!(check(&win("Y", true, true, true), WIN), Ok(()));
         assert_eq!(
-            validate_shortcut(&store, &sc, Some("b")),
+            check(&FragmentShortcut::new("Y", false, true, false, true), MAC),
+            Ok(())
+        );
+        assert_eq!(
+            check(&FragmentShortcut::new("Y", false, false, true, true), MAC),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn other_fragment_conflict_ignores_command_flag() {
+        let mut store = FragmentShortcutStore::default();
+        // 旧版存下的（不带 command）与新录制的（带 command）是同一个组合
+        store
+            .bindings
+            .insert("a".into(), FragmentShortcut::new("Y", true, true, false, false));
+        assert_eq!(
+            validate_shortcut_for(&store, &win("Y", true, true, false), Some("b"), WIN),
             Err(ShortcutConflict::OtherFragment("a".into()))
         );
-        assert!(validate_shortcut(&store, &sc, Some("a")).is_ok());
+        assert!(validate_shortcut_for(&store, &win("Y", true, true, false), Some("a"), WIN).is_ok());
+    }
+
+    #[test]
+    fn normalized_merges_command_into_ctrl_on_win_linux() {
+        let sc = win("Y", true, true, false).normalized_for(WIN);
+        assert!(sc.ctrl && !sc.command);
+        let mac = FragmentShortcut::new("Y", false, true, false, true).normalized_for(MAC);
+        assert!(mac.command && !mac.ctrl);
+    }
+
+    #[test]
+    fn prune_drops_missing_fragments() {
+        let mut store = FragmentShortcutStore::default();
+        store.set("keep".into(), win("Y", true, true, false));
+        store.set("gone".into(), win("K", true, true, false));
+        assert_eq!(store.prune_missing(|id| id == "keep"), 1);
+        assert!(store.get("keep").is_some() && store.get("gone").is_none());
     }
 
     #[test]
