@@ -112,7 +112,8 @@ pub fn close_tab_shortcut_pressed(i: &egui::InputState) -> bool {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        i.modifiers.ctrl && i.modifiers.shift && !i.modifiers.command
+        // egui-winit 在 Win/Linux 上按住 Ctrl 时 command 也为 true，不能再要求 !command。
+        i.modifiers.ctrl && i.modifiers.shift
     }
 }
 
@@ -127,7 +128,8 @@ pub fn new_tab_shortcut_pressed(i: &egui::InputState) -> bool {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        i.modifiers.ctrl && i.modifiers.shift && !i.modifiers.command
+        // egui-winit 在 Win/Linux 上按住 Ctrl 时 command 也为 true，不能再要求 !command。
+        i.modifiers.ctrl && i.modifiers.shift
     }
 }
 
@@ -145,10 +147,7 @@ pub fn split_pane_focus_shortcut_pressed(i: &egui::InputState) -> bool {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        i.modifiers.ctrl
-            && i.modifiers.shift
-            && !i.modifiers.command
-            && !i.modifiers.alt
+        i.modifiers.ctrl && i.modifiers.shift && !i.modifiers.alt
     }
 }
 

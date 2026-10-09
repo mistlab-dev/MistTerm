@@ -258,6 +258,8 @@ pub struct MistTermApp {
     fragment_manager: FragmentManager,
     /// 片段快捷键本地映射（含团队片段；不随团队同步）
     fragment_shortcut_store: FragmentShortcutStore,
+    /// 本帧键盘复制的选区文字，帧末核对后再提示「已复制」。
+    pending_terminal_copy: Option<String>,
 
     /// 当前选中的会话 ID
     selected_session_id: Option<String>,
@@ -968,6 +970,7 @@ impl MistTermApp {
                     FragmentManager::init_from_market_or_defaults(Some(&_market_cache))
                 }),
             fragment_shortcut_store: FragmentShortcutStore::load(),
+            pending_terminal_copy: None,
             selected_session_id,
             sidebar_collapsed: true,
             activity_rail_collapsed: false,
@@ -4830,12 +4833,26 @@ impl MistTermApp {
         let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) else {
             return;
         };
-        if pane.terminal.shortcut_copy_to_clipboard(ctx) {
-            self.notify_auto(
-                crate::i18n::tr(ctx, "Copied to clipboard", "已复制到剪贴板").to_string(),
-            );
+        // 提示放到帧末：先核对本帧结束时交给系统剪贴板的确实是这段文字。
+        if let Some(text) = pane.terminal.shortcut_copy_to_clipboard(ctx) {
+            self.pending_terminal_copy = Some(text);
             ctx.request_repaint();
         }
+    }
+
+    /// 帧末核对键盘复制：若本帧别的输入框把 `copied_text` 改掉了(曾经的 ⌘C 失效原因)，
+    /// 重新写回选区再提示；提示只在真正交给剪贴板的内容是选区时出现。
+    fn finish_terminal_copy_shortcut(&mut self, ctx: &egui::Context) {
+        let Some(text) = self.pending_terminal_copy.take() else {
+            return;
+        };
+        if ctx.output(|o| o.copied_text != text) {
+            log::warn!("terminal copy: clipboard text was overwritten in the same frame; re-applying");
+            ctx.copy_text(text);
+        }
+        self.notify_auto(
+            crate::i18n::tr(ctx, "Copied to clipboard", "已复制到剪贴板").to_string(),
+        );
     }
 
     pub(crate) fn menu_paste_to_terminal(&mut self, ctx: &egui::Context) {
@@ -6311,6 +6328,9 @@ impl MistTermApp {
                     } if format!("{:?}", key) == key_name
                 )
             });
+            // ⌘⇧C/X/V、Ctrl+Shift+X 等片段快捷键：egui-winit 同帧还会发 Copy/Cut/Paste，
+            // 一并吞掉，免得被 IME 框或刚打开的变量窗口当成复制/粘贴。
+            crate::ui::terminal_keys::drop_clipboard_events(i);
         });
         Some(fid)
     }
@@ -8056,6 +8076,8 @@ impl eframe::App for MistTermApp {
         self.process_ai_bridge(ctx);
         // 须在 bridge / agent 把意图写入总线之后再 drain，保证同帧生效。
         self.process_actions(ctx);
+        // 须在所有 UI(含终端 IME 框)画完之后。
+        self.finish_terminal_copy_shortcut(ctx);
 
         // 低频兜底重绘：eframe 响应式模式空闲时不重绘，遇到系统截图/窗口遮挡/外接屏
         // 切换等「不产生输入事件」的场景会停在旧帧看似「卡死」，同时也会触发卡顿看门狗
