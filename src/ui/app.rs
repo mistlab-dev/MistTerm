@@ -6328,6 +6328,9 @@ impl MistTermApp {
                     } if format!("{:?}", key) == key_name
                 )
             });
+            // ⌘⇧C/X/V、Ctrl+Shift+X 等片段快捷键：egui-winit 同帧还会发 Copy/Cut/Paste，
+            // 一并吞掉，免得被 IME 框或刚打开的变量窗口当成复制/粘贴。
+            crate::ui::terminal_keys::drop_clipboard_events(i);
         });
         Some(fid)
     }

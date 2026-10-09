@@ -200,6 +200,13 @@ fn consume_terminal_clipboard_key(i: &mut InputState, key: Key) -> bool {
     false
 }
 
+/// 丢掉本帧 egui-winit 随 ⌘/Ctrl+C/X/V 附带发出的 `Copy` / `Cut` / `Paste` 事件。
+/// 应用已经自己处理了这个按键时调用，避免终端里的透明 IME 框等再处理一遍。
+pub fn drop_clipboard_events(i: &mut InputState) {
+    i.events
+        .retain(|e| !matches!(e, Event::Copy | Event::Cut | Event::Paste(_)));
+}
+
 /// 消费终端复制快捷键(macOS ⌘C，Win/Linux Ctrl+Shift+C)。
 ///
 /// egui-winit 在 ⌘C / Ctrl+C(含 Ctrl+Shift+C) 时除了 Key 事件还会再发一个 `Event::Copy`。
@@ -671,5 +678,292 @@ mod tests {
             assert!(ctx.input_mut(consume_terminal_paste_shortcut));
             assert!(ctx.input(|i| !i.events.iter().any(|e| matches!(e, Event::Paste(_)))));
         });
+    }
+
+    // ── 快捷键审计：同一帧里，egui-winit 附带的语义事件 + 有焦点的空 IME 框，会不会把应用动作搅掉 ──
+
+    /// 按 egui-winit 0.23 在 Windows/Linux 上的做法生成一次按键的事件：
+    /// `command` 跟随 Ctrl；⌘/Ctrl+C/X/V 额外发 Copy/Cut/Paste；按住 Ctrl 时不发 Text。
+    fn winit_like(key: Key, mods: Modifiers, ch: Option<&str>) -> egui::RawInput {
+        let mods = Modifiers {
+            command: mods.ctrl || mods.command,
+            ..mods
+        };
+        let mut events = Vec::new();
+        if mods.command && key == Key::C {
+            events.push(Event::Copy);
+        }
+        if mods.command && key == Key::X {
+            events.push(Event::Cut);
+        }
+        if mods.command && key == Key::V {
+            events.push(Event::Paste("CLIP".into()));
+        }
+        events.push(Event::Key {
+            key,
+            pressed: true,
+            repeat: false,
+            modifiers: mods,
+        });
+        if let Some(c) = ch {
+            if !mods.ctrl && !mods.command {
+                events.push(Event::Text(c.into()));
+            }
+        }
+        egui::RawInput {
+            modifiers: mods,
+            events,
+            ..Default::default()
+        }
+    }
+
+    struct Outcome {
+        copied: String,
+        ime_focused: bool,
+        ime_text_seen: String,
+        text_left_for_pty: usize,
+    }
+
+    /// 一帧：先跑应用的快捷键处理(`handler`；返回 true 表示应用自己往剪贴板放了 "APP")，
+    /// 再画终端那个有焦点的空 IME 框；看剪贴板、焦点、IME 框里有没有被塞东西、还剩多少 Text 会进 PTY。
+    fn one_frame(input: egui::RawInput, handler: impl FnOnce(&mut InputState) -> bool) -> Outcome {
+        let ctx = egui::Context::default();
+        let ime_id = egui::Id::new("ime_capture_audit");
+        // 先跑三帧让 IME 框存在、拿到焦点并锁住焦点(和真实终端一样，按键之前它就已经有焦点)。
+        for frame in 0..3 {
+            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut t = String::new();
+                    ui.add(
+                        egui::TextEdit::singleline(&mut t)
+                            .id(ime_id)
+                            .lock_focus(true),
+                    );
+                });
+                // 和真实终端一样只请求一次焦点(每帧请求会把焦点锁重置掉)
+                if frame == 0 {
+                    ctx.memory_mut(|m| m.request_focus(ime_id));
+                }
+            });
+        }
+        let mut ime_text_seen = String::new();
+        let mut text_left_for_pty = 0;
+        let out = ctx.run(input, |ctx| {
+            let app_copied = ctx.input_mut(handler);
+            if app_copied {
+                ctx.copy_text("APP".into());
+            }
+            text_left_for_pty = ctx.input(|i| {
+                i.events
+                    .iter()
+                    .filter(|e| matches!(e, Event::Text(_)))
+                    .count()
+            });
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let mut t = String::new();
+                ui.add(
+                    egui::TextEdit::singleline(&mut t)
+                        .id(ime_id)
+                        .lock_focus(true),
+                );
+                ime_text_seen = t;
+            });
+        });
+        Outcome {
+            copied: out.platform_output.copied_text,
+            ime_focused: ctx.memory(|m| m.has_focus(ime_id)),
+            ime_text_seen,
+            text_left_for_pty,
+        }
+    }
+
+    fn cs() -> Modifiers {
+        Modifiers {
+            ctrl: true,
+            shift: true,
+            ..Modifiers::NONE
+        }
+    }
+
+    #[test]
+    fn audit_copy_and_paste_shortcuts() {
+        // Ctrl+Shift+C：修好前(只吞 Key)剪贴板被 IME 框改成空串；修好后保留。
+        let before = one_frame(winit_like(Key::C, cs(), None), |i| {
+            consume_terminal_clipboard_key(i, Key::C)
+        });
+        assert_eq!(before.copied, "", "旧行为：被覆盖");
+        let after = one_frame(
+            winit_like(Key::C, cs(), None),
+            consume_terminal_copy_shortcut,
+        );
+        assert_eq!(after.copied, "APP");
+        assert!(after.ime_focused);
+
+        // Ctrl+Shift+V：旧行为下 Paste 事件被塞进 IME 框(随后被清空，所以没有实际危害)；现在直接丢掉。
+        let before = one_frame(winit_like(Key::V, cs(), None), |i| {
+            consume_terminal_clipboard_key(i, Key::V);
+            false
+        });
+        assert_eq!(before.ime_text_seen, "CLIP");
+        let after = one_frame(winit_like(Key::V, cs(), None), |i| {
+            assert!(consume_terminal_paste_shortcut(i));
+            false
+        });
+        assert_eq!(after.ime_text_seen, "");
+        assert!(after.ime_focused);
+    }
+
+    #[test]
+    fn audit_app_shortcuts_not_undone_by_ime_box() {
+        use crate::ui::keyboard_shortcuts as ks;
+        // 假设应用这一帧也往剪贴板放了东西(如复制)，看 IME 框会不会把它改掉、会不会丢焦点、会不会留下 Text 进 PTY。
+        let cases: Vec<(
+            &str,
+            egui::RawInput,
+            Box<dyn FnOnce(&mut InputState) -> bool>,
+        )> = vec![
+            (
+                "Ctrl+Shift+A AI",
+                winit_like(Key::A, cs(), None),
+                Box::new(|i| {
+                    assert!(ks::consume_primary_shift_key(i, Key::A));
+                    true
+                }),
+            ),
+            (
+                "Ctrl+Shift+L",
+                winit_like(Key::L, cs(), None),
+                Box::new(|i| {
+                    assert!(ks::consume_primary_shift_key(i, Key::L));
+                    true
+                }),
+            ),
+            (
+                "Ctrl+Shift+D split",
+                winit_like(Key::D, cs(), None),
+                Box::new(|i| {
+                    assert!(ks::consume_primary_shift_key(i, Key::D));
+                    true
+                }),
+            ),
+            (
+                "Ctrl+Shift+U",
+                winit_like(Key::U, cs(), None),
+                Box::new(|i| {
+                    assert!(ks::consume_primary_shift_key(i, Key::U));
+                    true
+                }),
+            ),
+            (
+                "Ctrl+J search",
+                winit_like(Key::J, Modifiers::CTRL, None),
+                Box::new(|i| {
+                    assert!(ks::consume_primary_key(i, Key::J));
+                    true
+                }),
+            ),
+            (
+                "Ctrl+K snippets",
+                winit_like(Key::K, Modifiers::CTRL, None),
+                Box::new(|i| {
+                    assert!(ks::consume_primary_key(i, Key::K));
+                    true
+                }),
+            ),
+            (
+                "Ctrl+F find",
+                winit_like(Key::F, Modifiers::CTRL, None),
+                Box::new(|i| {
+                    assert!(i.consume_key(Modifiers::CTRL, Key::F));
+                    true
+                }),
+            ),
+            // 只看 key_pressed、不吞按键的：按键会留给 IME 框
+            (
+                "Ctrl+Shift+W close tab",
+                winit_like(Key::W, cs(), None),
+                Box::new(|i| {
+                    assert!(ks::close_tab_shortcut_pressed(i));
+                    true
+                }),
+            ),
+            (
+                "Ctrl+Shift+T new tab",
+                winit_like(Key::T, cs(), None),
+                Box::new(|i| {
+                    assert!(ks::new_tab_shortcut_pressed(i));
+                    true
+                }),
+            ),
+            (
+                "Ctrl+1 tab",
+                winit_like(Key::Num1, Modifiers::CTRL, None),
+                Box::new(|i| {
+                    assert!(ks::tab_switch_modifiers(i) && i.key_pressed(Key::Num1));
+                    true
+                }),
+            ),
+            (
+                "Ctrl+Tab",
+                winit_like(Key::Tab, Modifiers::CTRL, None),
+                Box::new(|i| {
+                    assert!(i.key_pressed(Key::Tab));
+                    true
+                }),
+            ),
+            (
+                "Ctrl+Shift+Right pane",
+                winit_like(Key::ArrowRight, cs(), None),
+                Box::new(|i| {
+                    assert!(ks::split_pane_focus_shortcut_pressed(i));
+                    true
+                }),
+            ),
+            (
+                "Ctrl+Shift+J picker",
+                winit_like(Key::J, cs(), None),
+                Box::new(|i| {
+                    assert!(i.key_pressed(Key::J));
+                    true
+                }),
+            ),
+            (
+                "Ctrl+N new session",
+                winit_like(Key::N, Modifiers::CTRL, None),
+                Box::new(|i| {
+                    assert!(i.key_pressed(Key::N));
+                    true
+                }),
+            ),
+            // 片段快捷键 Ctrl+Shift+X：egui-winit 还会发 Cut；片段处理时一并丢掉
+            (
+                "snippet Ctrl+Shift+X",
+                winit_like(Key::X, cs(), None),
+                Box::new(|i| {
+                    drop_clipboard_events(i);
+                    true
+                }),
+            ),
+            // 片段快捷键 Ctrl+Shift+Alt+Y(Windows 上 Ctrl+Alt 可能是 AltGr，能出字符)：按住 Ctrl 时 egui-winit 不发 Text
+            (
+                "snippet Ctrl+Shift+Alt+Y",
+                winit_like(Key::Y, Modifiers { alt: true, ..cs() }, Some("¥")),
+                Box::new(|_| true),
+            ),
+        ];
+        for (name, input, handler) in cases {
+            let o = one_frame(input, handler);
+            assert_eq!(o.copied, "APP", "{name}: 剪贴板被改掉");
+            assert!(o.ime_focused, "{name}: IME 框丢了焦点");
+            assert_eq!(o.ime_text_seen, "", "{name}: IME 框被塞了文字");
+            assert_eq!(o.text_left_for_pty, 0, "{name}: 还有 Text 会进终端");
+        }
+    }
+
+    #[test]
+    fn audit_snippet_cut_without_drop_would_clobber() {
+        // 证明 drop_clipboard_events 有必要：Ctrl+Shift+X 的 Cut 留给 IME 框会把本帧剪贴板改成空串。
+        let o = one_frame(winit_like(Key::X, cs(), None), |_| true);
+        assert_eq!(o.copied, "");
     }
 }
