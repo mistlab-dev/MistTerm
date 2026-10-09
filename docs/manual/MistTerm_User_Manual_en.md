@@ -184,8 +184,8 @@ Passwords and session info are **encrypted locally**. When switching computers, 
 
 *Fig 6-2: Find in terminal*
 
-- **Ctrl+R** (when terminal is focused): search and re-run history commands
-- **Tools → Command History**: browse recently executed commands
+- **Ctrl+R**: left to the shell (for example bash reverse history search); Mist does not intercept it
+- **Tools → Command History**: open Mist's command history panel to search and re-run recent commands
 
 ![Command history](screenshots/17-command-history.png)
 
@@ -437,15 +437,15 @@ The following uses **Windows** keys; on macOS, replace **Ctrl** with **⌘** (e.
 |----------|----------|
 | **Ctrl+N** | New session |
 | **Ctrl+E** | Edit selected session |
-| **Ctrl+T** | New terminal tab for selected session |
-| **Ctrl+W** | Close current tab |
+| **Ctrl+Shift+T** | New terminal tab for selected session (Mac: **⌘T**) |
+| **Ctrl+Shift+W** | Close current tab (Mac: **⌘W**) |
 | **Ctrl+Tab** / **Ctrl+Shift+Tab** | Next / previous tab |
 | **Ctrl+1 … Ctrl+9** | Switch to tab N |
 | **Ctrl+J** | Focus connection search (sidebar) |
 | **Ctrl+K** | Focus snippet search |
 | **Ctrl+Shift+J** | Quick snippet selector |
 | **Ctrl+F** / **F3** | Find in terminal |
-| **Ctrl+R** | Command history search (in terminal) |
+| **Ctrl+R** | Left to the shell (Mist does not intercept it); command history panel: **Tools → Command History** |
 | **Ctrl+Shift+A** | AI assistant panel |
 | **Ctrl+Shift+L** | Send terminal selection to AI |
 | **Ctrl+Shift+D** / **Ctrl+Shift+U** | Split terminal left/right / top/bottom |
