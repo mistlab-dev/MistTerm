@@ -563,4 +563,46 @@ mod tests {
         let label = sc.display_label();
         assert!(label.contains('J') || label.contains('j'));
     }
+
+    /// GUI E2E 落盘后：本机配置里应能读到 Ctrl+Shift+Y（或用户自测组合）。
+    /// 默认忽略；跑完 `.tmp-gui-define-fragment-shortcut.py` 后用
+    /// `cargo test --lib gui_e2e_fragment_shortcut_binding_persisted -- --ignored --nocapture`。
+    #[test]
+    #[ignore]
+    fn gui_e2e_fragment_shortcut_binding_persisted() {
+        let store = FragmentShortcutStore::load();
+        eprintln!("bindings={:?}", store.bindings.len());
+        for (id, sc) in &store.bindings {
+            eprintln!("  {id} -> {}", sc.display_label());
+        }
+        assert!(
+            store.bindings.values().any(|sc| {
+                sc.key.eq_ignore_ascii_case("O") && sc.shift && (sc.ctrl || sc.command)
+            }) || store.bindings.values().any(|sc| {
+                sc.key.eq_ignore_ascii_case("Y") && sc.shift && (sc.ctrl || sc.command)
+            }),
+            "expected a Ctrl+Shift+O/Y fragment shortcut after GUI E2E"
+        );
+    }
+
+    /// 与 `poll_fragment_shortcut` 一致：egui `Key` 的 `Debug` 名 + Win 上 ctrl/command 同开。
+    #[test]
+    fn find_matching_follows_egui_key_debug_and_win_modifiers() {
+        let mut store = FragmentShortcutStore::default();
+        store.set("frag1".into(), win("Y", true, true, false));
+        assert_eq!(
+            store.find_matching_fragment_id("Y", true, true, false, true),
+            Some("frag1".into())
+        );
+        assert!(
+            store
+                .find_matching_fragment_id("Y", true, false, false, true)
+                .is_none()
+        );
+        assert!(
+            store
+                .find_matching_fragment_id("Z", true, true, false, true)
+                .is_none()
+        );
+    }
 }

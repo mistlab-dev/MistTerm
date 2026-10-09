@@ -2,7 +2,7 @@
 //!
 //! 规则（与 docs/release/AUTO_UPDATE.md 一致）：
 //! - 默认启动 10 秒后检查一次，之后每 24 小时（加一点随机间隔）检查一次；偏好设置里可关闭。
-//! - 只提醒，安装必须用户点按钮；**绝不自动重启**。
+//! - 默认后台先下载；安装必须用户点按钮；装失败再给「打开下载页」；**绝不自动重启**。
 //! - 网络请求和文件操作都在后台线程，界面线程只收消息。
 
 use super::*;
@@ -797,9 +797,15 @@ impl MistTermApp {
                             ui.add_space(theme.spacing_md());
                             let auto = info.plan.is_auto();
                             let installer = info.plan.uses_installer();
+                            let install_failed =
+                                matches!(self.update_ui.phase, Phase::InstallFailed(_));
+                            let offer_manual =
+                                update_dialog_offer_manual_download(auto, install_failed);
                             crate::ui::chrome::modal_footer_actions(ui, theme, |ui, theme| {
                                 if auto {
-                                    let label = if installer {
+                                    let label = if install_failed {
+                                        crate::i18n::tr(ctx, "Try Again", "再试一次")
+                                    } else if installer {
                                         crate::i18n::tr(ctx, "Install and Restart", "安装并重启")
                                     } else {
                                         crate::i18n::tr(ctx, "Install Update", "安装更新")
@@ -808,6 +814,18 @@ impl MistTermApp {
                                         act = Act::Install;
                                     }
                                 } else if crate::ui::chrome::modal_primary_button(ui, theme, crate::i18n::tr(ctx, "Open Download Page", "打开下载页")).clicked() {
+                                    act = Act::OpenDownload;
+                                }
+                                // Auto 安装失败，或本来就是 Manual：给出/保留手动下载
+                                if auto
+                                    && offer_manual
+                                    && crate::ui::chrome::modal_secondary_button(
+                                        ui,
+                                        theme,
+                                        crate::i18n::tr(ctx, "Open Download Page", "打开下载页"),
+                                    )
+                                    .clicked()
+                                {
                                     act = Act::OpenDownload;
                                 }
                                 if crate::ui::chrome::modal_secondary_button(ui, theme, crate::i18n::tr(ctx, "Later", "稍后")).clicked() {
@@ -1045,5 +1063,24 @@ impl MistTermApp {
         ));
         ui.add_space(theme.spacing_sm());
         self.update_about_row(ui, ctx, theme);
+    }
+}
+
+/// 更新对话框是否额外提供「打开下载页」：Manual 主按钮已是下载页；Auto 仅安装失败时追加。
+fn update_dialog_offer_manual_download(auto_plan: bool, install_failed: bool) -> bool {
+    auto_plan && install_failed
+}
+
+#[cfg(test)]
+mod update_dialog_tests {
+    use super::*;
+
+    #[test]
+    fn auto_plan_adds_manual_download_only_after_install_fails() {
+        assert!(!update_dialog_offer_manual_download(true, false));
+        assert!(update_dialog_offer_manual_download(true, true));
+        // Manual 计划由主按钮打开下载页，不再额外追加
+        assert!(!update_dialog_offer_manual_download(false, false));
+        assert!(!update_dialog_offer_manual_download(false, true));
     }
 }

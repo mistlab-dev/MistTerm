@@ -22,7 +22,7 @@ pub struct AppSettings {
     pub ai: AiSettings,
     #[serde(default)]
     pub team: TeamSettings,
-    /// 自动更新偏好（默认：自动检查开、后台下载关）。
+    /// 自动更新偏好（默认：自动检查开、后台下载开）。
     #[serde(default)]
     pub update: crate::core::updater::UpdateSettings,
 }
@@ -51,7 +51,8 @@ impl AppSettings {
     pub fn load() -> Self {
         let path = Self::default_path();
         let mut settings: Self = crate::security::encrypted_file::load_encrypted_json(&path);
-        let changed = settings.ai.migrate_legacy_secrets();
+        let mut changed = settings.ai.migrate_legacy_secrets();
+        changed |= settings.update.migrate_auto_download_default_on();
         settings.team.lock_to_product_defaults();
         if changed {
             let _ = settings.save();

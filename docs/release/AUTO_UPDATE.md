@@ -13,7 +13,7 @@
 | macOS | **只提醒**，给出手动更新步骤和下载页（签名/公证/改 Bundle ID 是 P5） |
 | 包管理器 / 源码构建 / 无写权限目录 / glibc 太旧 | 只提醒，并说明原因和该怎么做（例如 `sudo mist update`） |
 
-- 默认：**自动检查开、自动下载关、从不自动重启**。偏好设置 → 通用 里可关。
+- 默认：**自动检查开、自动下载开、从不自动重启**。发现新版先在后台下好；安装仍需用户点按钮，装失败再引导打开下载页。偏好设置 → 通用 里可关。
 - 环境变量 `MIST_DISABLE_UPDATE_CHECK=1`：彻底关闭（GUI 和 CLI 都不联网检查）。
 - CLI：`mist update --check`（有新版退出码 10）、`mist update`（= `mist self-update`）、`mist update --rollback`。
   CLI 不会在其它命令里主动提示更新。

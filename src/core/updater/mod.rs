@@ -79,9 +79,12 @@ pub struct UpdateSettings {
     /// 启动后和运行中每天自动检查一次（默认开）。
     #[serde(default = "default_true")]
     pub auto_check: bool,
-    /// 发现新版后在后台先下载好（默认关；安装仍需用户点按钮）。
-    #[serde(default)]
+    /// 发现新版后在后台先下载好（默认开；安装仍需用户点按钮，失败再引导手动下载）。
+    #[serde(default = "default_true")]
     pub auto_download: bool,
+    /// 已按「默认后台下载开」从旧默认值 `false` 迁移过一次。
+    #[serde(default)]
+    pub auto_download_default_on_applied: bool,
     #[serde(default)]
     pub channel: UpdateChannel,
 }
@@ -94,9 +97,22 @@ impl Default for UpdateSettings {
     fn default() -> Self {
         Self {
             auto_check: true,
-            auto_download: false,
+            auto_download: true,
+            auto_download_default_on_applied: true,
             channel: UpdateChannel::Stable,
         }
+    }
+}
+
+impl UpdateSettings {
+    /// 旧版默认把 `auto_download` 写成 false；升级后改成默认开（只迁一次，之后用户关掉会保留）。
+    pub fn migrate_auto_download_default_on(&mut self) -> bool {
+        if self.auto_download_default_on_applied {
+            return false;
+        }
+        self.auto_download = true;
+        self.auto_download_default_on_applied = true;
+        true
     }
 }
 
@@ -174,12 +190,52 @@ mod tests {
 
     #[test]
     fn settings_defaults_match_policy() {
-        // 决策 6：默认自动检查开、自动下载关。
+        // 默认自动检查开、自动下载开；装不上再提示手动下载。
         let s = UpdateSettings::default();
         assert!(s.auto_check);
-        assert!(!s.auto_download);
+        assert!(s.auto_download);
+        assert!(s.auto_download_default_on_applied);
+        // 缺字段时两项都是 true；迁移标记缺省为 false，由 AppSettings::load 补一次。
         let parsed: UpdateSettings = serde_json::from_str("{}").unwrap();
-        assert_eq!(parsed, s);
+        assert!(parsed.auto_check);
+        assert!(parsed.auto_download);
+        assert!(!parsed.auto_download_default_on_applied);
+    }
+
+    #[test]
+    fn migrate_turns_on_legacy_auto_download_once() {
+        let mut s = UpdateSettings {
+            auto_check: true,
+            auto_download: false,
+            auto_download_default_on_applied: false,
+            channel: UpdateChannel::Stable,
+        };
+        assert!(s.migrate_auto_download_default_on());
+        assert!(s.auto_download);
+        assert!(s.auto_download_default_on_applied);
+        s.auto_download = false;
+        assert!(!s.migrate_auto_download_default_on());
+        assert!(!s.auto_download);
+    }
+
+    #[test]
+    fn legacy_saved_json_without_migration_flag_turns_download_on() {
+        // 旧客户端 Default / 偏好页保存出来的形状（没有迁移标记）
+        let mut s: UpdateSettings = serde_json::from_str(
+            r#"{"auto_check":true,"auto_download":false,"channel":"stable"}"#,
+        )
+        .unwrap();
+        assert!(!s.auto_download);
+        assert!(!s.auto_download_default_on_applied);
+        assert!(s.migrate_auto_download_default_on());
+        assert!(s.auto_download);
+        // 再序列化后应带上迁移标记，避免反复覆盖用户选择
+        let again: UpdateSettings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert!(again.auto_download_default_on_applied);
+        let mut again = again;
+        again.auto_download = false;
+        assert!(!again.migrate_auto_download_default_on());
+        assert!(!again.auto_download);
     }
 
     #[test]
