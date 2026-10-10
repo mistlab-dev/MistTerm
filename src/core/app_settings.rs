@@ -25,6 +25,9 @@ pub struct AppSettings {
     /// 自动更新偏好（默认：自动检查开、后台下载开）。
     #[serde(default)]
     pub update: crate::core::updater::UpdateSettings,
+    /// 首次启动已自动展示「新人上手」帮助页（只弹一次）。
+    #[serde(default)]
+    pub onboarding_help_shown: bool,
 }
 
 impl Default for AppSettings {
@@ -36,6 +39,7 @@ impl Default for AppSettings {
             ai: AiSettings::default(),
             team: TeamSettings::default(),
             update: crate::core::updater::UpdateSettings::default(),
+            onboarding_help_shown: false,
         }
     }
 }

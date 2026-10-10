@@ -9,6 +9,8 @@ use uuid::Uuid;
 
 use super::session::SessionConfig;
 
+const STARTER_FRAGMENTS_JSON: &str = include_str!("../../assets/starter_fragments.json");
+
 /// 命令片段变量定义
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FragmentVariable {
@@ -372,7 +374,16 @@ impl FragmentManager {
         }
     }
 
-    /// Initialize from market catalog if available, otherwise start empty.
+    /// 内置只读运维片段（首次创建个人库或市场缓存为空时使用）。
+    pub fn from_starter_fragments() -> Self {
+        let mut manager = Self::new();
+        if let Err(e) = manager.import_from_json(STARTER_FRAGMENTS_JSON) {
+            tracing::warn!("starter fragments parse failed: {e}");
+        }
+        manager
+    }
+
+    /// Initialize from market catalog if available, otherwise seed starter snippets.
     pub fn init_from_market_or_defaults(market: Option<&crate::core::market::MarketFragmentCache>) -> Self {
         let mut manager = Self {
             fragments: Vec::new(),
@@ -398,6 +409,9 @@ impl FragmentManager {
                 manager.rebuild_id_map();
             }
         }
+        if manager.fragments.is_empty() {
+            manager = Self::from_starter_fragments();
+        }
         manager
     }
 
@@ -414,10 +428,11 @@ impl FragmentManager {
 
     /// 从文件加载
     pub fn load(path: &PathBuf) -> io::Result<Self> {
+        let first_create = !path.exists();
         let mut manager: FragmentManager =
             crate::security::encrypted_file::load_encrypted_json(path);
-        if manager.fragments.is_empty() && !path.exists() {
-            manager = Self::new();
+        if manager.fragments.is_empty() && first_create {
+            manager = Self::from_starter_fragments();
             manager.save(path)?;
             return Ok(manager);
         }
@@ -718,6 +733,17 @@ impl FragmentManager {
 mod tests {
     use super::*;
     use crate::core::session::SessionConfig;
+
+    #[test]
+    fn starter_fragments_embed_loads() {
+        let m = FragmentManager::from_starter_fragments();
+        assert!(
+            m.fragments.len() >= 8,
+            "expected starter library, got {}",
+            m.fragments.len()
+        );
+        assert!(m.fragments.iter().any(|f| f.command.contains("df")));
+    }
 
     #[test]
     fn test_substitute_angle_placeholders() {

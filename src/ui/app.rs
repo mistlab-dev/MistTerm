@@ -950,6 +950,7 @@ impl MistTermApp {
     /// 创建新的应用实例
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let app_settings = AppSettings::load();
+        let show_onboarding_help = !app_settings.onboarding_help_shown;
         let team_service = TeamService::new(app_settings.team.clone());
         let boot_loc = crate::i18n::Locale::from(app_settings.ui_language);
         let audit_logger = AuditLogger::new(app_settings.audit.clone());
@@ -1275,6 +1276,12 @@ impl MistTermApp {
                     "cat /etc/shadow — block",
                 ),
             }
+        }
+
+        if show_onboarding_help {
+            app.help_docs_dialog.open_page(HelpPage::Onboarding);
+            app.app_settings.onboarding_help_shown = true;
+            let _ = app.app_settings.save();
         }
 
         app

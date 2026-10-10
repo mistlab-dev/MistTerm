@@ -299,23 +299,23 @@ fn render_onboarding(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status: On
             title: crate::i18n::tr(ctx, "Understand command audit", "了解命令审计").to_string(),
             detail: crate::i18n::tr(
                 ctx,
-                "Risky commands get a readable block/confirm explanation (why + safe alternative). Bypassing is never taught.",
-                "高危命令会给出可读的拦截 / 确认解释（为什么拦 + 安全替代），不教绕过。",
+                "Covers snippets, batch exec, AI-planned ops, and command history — not free-form typing in the interactive terminal yet. Server-side agent audit applies only to documented root / ssh-command paths.",
+                "覆盖片段、批量执行、AI 规划运维与命令历史 — 交互式终端里随手键入的内容尚未纳入。服务端 Agent 审计仅覆盖文档化的 root / ssh-command 路径。",
             )
             .to_string(),
             done: false,
             optional: true,
         },
         OnboardStep {
-            title: crate::i18n::tr(ctx, "Set up the AI Ops Hub", "配置 AI 智控台").to_string(),
+            title: crate::i18n::tr(ctx, "Try multi-host ops (no API key)", "试用多机运维（无需 API Key）").to_string(),
             detail: crate::i18n::tr(
                 ctx,
-                "Tools → AI Settings: add your API key, then plan and run ops commands across hosts in natural language.",
-                "菜单「工具」→ AI 设置：填入 API Key，即可用自然语言规划并跨主机执行运维命令。",
+                "View → AI Ops Hub: ask in natural language (e.g. check disk on all servers). The built-in planner runs read-only ops without an API key; add a key only for chat / LLM planning.",
+                "「视图」→ AI 智控台：用自然语言提问（如「查所有服务器磁盘」）。内置规划器无需 API Key 即可执行只读运维；对话与 LLM 规划才需配置 Key。",
             )
             .to_string(),
             done: status.ai_configured,
-            optional: false,
+            optional: true,
         },
     ];
 
@@ -496,6 +496,12 @@ fn feature_sections() -> Vec<FeatureSection> {
             desc_zh: "实时查看远程主机 CPU、内存、磁盘、网络状态。无需安装代理，通过 SSH 命令获取。",
         },
         FeatureSection {
+            icon: "🔀",
+            title: "Port Forwarding",
+            desc_en: "Local (-L), remote (-R), and dynamic SOCKS (-D) forwards from the Port Forward panel or `mist fwd` in the CLI — no second SSH window.",
+            desc_zh: "端口转发面板或 CLI `mist fwd` 支持本地 (-L)、远程 (-R) 与动态 SOCKS (-D)，无需另开 SSH 窗口。",
+        },
+        FeatureSection {
             icon: "👥",
             title: "Team Platform",
             desc_en: "Connect to MistLab team server for shared sessions, credential management, fragment analytics, and role-based access control.",
@@ -516,8 +522,8 @@ fn feature_sections() -> Vec<FeatureSection> {
         FeatureSection {
             icon: "🤖",
             title: "AI Assistant",
-            desc_en: "Built-in AI panel for command suggestions, error analysis, and terminal assistance. Configure your API key in Preferences.",
-            desc_zh: "内置 AI 面板，提供命令建议、错误分析和终端辅助。在偏好设置中配置 API Key。",
+            desc_en: "Multi-host read-only ops work without an API key (built-in planner). Add an OpenAI-compatible key in Tools → AI Settings for chat, explanations, and LLM-assisted planning.",
+            desc_zh: "多机只读运维无需 API Key（内置规划器）。对话、解释与 LLM 规划需在「工具 → AI 设置」配置 OpenAI 兼容 Key。",
         },
         FeatureSection {
             icon: "📤",
@@ -536,6 +542,12 @@ fn feature_sections() -> Vec<FeatureSection> {
             title: "Session Logs",
             desc_en: "Automatic session logging with searchable history. Audit trails for compliance and review.",
             desc_zh: "自动会话记录，可搜索历史。满足审计合规和操作回溯需求。",
+        },
+        FeatureSection {
+            icon: "🛡️",
+            title: "Command Audit",
+            desc_en: "Team policy on snippets, batch runs, AI-planned ops, and command history. Interactive PTY typing is not audited yet; server agent coverage is limited to documented root / ssh-command paths.",
+            desc_zh: "团队策略覆盖片段、批量、AI 规划与命令历史；交互式 PTY 键入尚未审计；服务端 Agent 仅覆盖文档化的 root / ssh-command 路径。",
         },
     ]
 }
