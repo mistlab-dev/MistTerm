@@ -64,6 +64,10 @@ pub(crate) struct UpdateUi {
     /// 有新版本，等没有别的需要确认的提示时再弹出。
     notify_pending: bool,
     prefetched: bool,
+    /// 后台下载正在进行（这时 `rx` 被它占着）。
+    prefetching: bool,
+    /// 后台下载中点了「安装」：下完接着装。
+    install_after_prefetch: bool,
     confirm: Option<Confirm>,
     close_requested: bool,
 }
@@ -86,6 +90,8 @@ impl UpdateUi {
             startup_exe,
             notify_pending: false,
             prefetched: false,
+            prefetching: false,
+            install_after_prefetch: false,
             confirm: None,
             close_requested: false,
         }
@@ -97,6 +103,40 @@ impl UpdateUi {
 
     fn busy(&self) -> bool {
         self.rx.is_some()
+    }
+
+    /// 菜单「检查更新」时后台已有任务在跑。
+    fn check_now_while_busy(&mut self) {
+        // 后台下载占着通道时不能再检查；刚查到的新版本就是最新结果，窗口直接显示它（含「正在下载」）。
+        if !self.prefetching {
+            self.phase = Phase::Checking;
+        }
+    }
+
+    /// 后台下载中点了「安装」：返回 true 表示已记下，下完接着装。
+    fn queue_install_during_prefetch(&mut self) -> bool {
+        if self.prefetching {
+            self.install_after_prefetch = true;
+        }
+        self.prefetching
+    }
+
+    /// 后台下载结束（成功或失败）。返回 true 表示要接着安装。
+    fn on_prefetch_finished(&mut self, ok: bool) -> bool {
+        self.rx = None;
+        self.prefetching = false;
+        if ok {
+            self.prefetched = true;
+        }
+        if matches!(self.phase, Phase::Checking) {
+            self.phase = if self.info.is_some() {
+                Phase::Available
+            } else {
+                Phase::Idle
+            };
+        }
+        // 下载失败也照样去装：安装会自己重新下载，出错时显示原因和「打开下载页」。
+        std::mem::take(&mut self.install_after_prefetch)
     }
 
     fn available_version(&self) -> Option<&str> {
@@ -233,9 +273,7 @@ impl MistTermApp {
         match self.update_ui.phase {
             // 正在下载 / 已装好：直接打开窗口看状态，不重新检查。
             Phase::Working(_) | Phase::Installed(_) => {}
-            _ if self.update_ui.busy() => {
-                self.update_ui.phase = Phase::Checking;
-            }
+            _ if self.update_ui.busy() => self.update_ui.check_now_while_busy(),
             _ => self.update_start_check(ctx, true),
         }
     }
@@ -296,6 +334,7 @@ impl MistTermApp {
 
     fn update_start_install(&mut self, ctx: &egui::Context) {
         if self.update_ui.busy() {
+            self.update_ui.queue_install_during_prefetch();
             return;
         }
         let Some(info) = self.update_ui.info.clone() else {
@@ -368,6 +407,8 @@ impl MistTermApp {
             });
         if spawned.is_err() {
             self.update_ui.rx = None;
+        } else {
+            self.update_ui.prefetching = true;
         }
     }
 
@@ -399,10 +440,11 @@ impl MistTermApp {
                     self.update_on_applied(ctx, result);
                 }
                 Msg::Prefetched(result) => {
-                    self.update_ui.rx = None;
-                    match result {
-                        Ok(()) => self.update_ui.prefetched = true,
-                        Err(e) => log::info!("updater: background download skipped: {e}"),
+                    if let Err(e) = &result {
+                        log::info!("updater: background download skipped: {e}");
+                    }
+                    if self.update_ui.on_prefetch_finished(result.is_ok()) {
+                        self.update_start_install(ctx);
                     }
                 }
             }
@@ -605,6 +647,8 @@ impl MistTermApp {
         let connected = self.update_connected_sessions();
         let info = self.update_ui.info.clone();
         let prefetched = self.update_ui.prefetched;
+        let prefetching = self.update_ui.prefetching;
+        let install_queued = self.update_ui.install_after_prefetch;
 
         crate::ui::chrome::modal_window("update_modal", theme, ctx)
             .open(&mut open)
@@ -721,6 +765,17 @@ impl MistTermApp {
                                     format!("Download size: {}", human_size(size))
                                 };
                                 hint(ui, &line);
+                            }
+                            if prefetching {
+                                ui.horizontal(|ui| {
+                                    ui.spinner();
+                                    let text = if install_queued {
+                                        crate::i18n::tr(ctx, "Downloading the update… It will install when the download finishes.", "正在下载更新…下载完会接着安装。")
+                                    } else {
+                                        crate::i18n::tr(ctx, "Downloading the update in the background…", "正在后台下载更新…")
+                                    };
+                                    body(ui, text);
+                                });
                             }
                             ui.add_space(theme.spacing_sm());
                             let notes = if zh { &info.manifest.notes.zh } else { &info.manifest.notes.en };
@@ -1082,5 +1137,73 @@ mod update_dialog_tests {
         // Manual 计划由主按钮打开下载页，不再额外追加
         assert!(!update_dialog_offer_manual_download(false, false));
         assert!(!update_dialog_offer_manual_download(false, true));
+    }
+
+    fn test_ui(phase: Phase) -> UpdateUi {
+        let json = crate::core::updater::manifest::tests::sample_json("9.9.9", "2026-10-10T00:00:00Z");
+        let manifest = serde_json::from_str(&json).unwrap();
+        UpdateUi {
+            phase,
+            info: Some(Box::new(UpdateInfo {
+                current: semver::Version::new(1, 2, 5),
+                manifest,
+                source_url: String::new(),
+                plan: InstallPlan::Manual {
+                    reason: updater::check::ManualReason::SourceBuild,
+                    asset: None,
+                    download_url: String::new(),
+                },
+            })),
+            rx: None,
+            cancel: Arc::new(AtomicBool::new(false)),
+            show_dialog: true,
+            next_auto_check: Instant::now(),
+            last_checked_unix: None,
+            startup_exe: None,
+            notify_pending: false,
+            prefetched: false,
+            prefetching: true,
+            install_after_prefetch: false,
+            confirm: None,
+            close_requested: false,
+        }
+    }
+
+    /// 后台下载中点「检查更新」，下载结束后窗口要回到「有新版本」（带安装按钮），不能一直转圈。
+    #[test]
+    fn manual_check_during_background_download_does_not_spin_forever() {
+        for ok in [true, false] {
+            let mut ui = test_ui(Phase::Available);
+            ui.check_now_while_busy();
+            assert!(!ui.on_prefetch_finished(ok));
+            assert!(
+                matches!(ui.phase, Phase::Available),
+                "download ok={ok}: phase stays {:?}",
+                ui.phase
+            );
+            assert!(!ui.prefetching);
+            assert_eq!(ui.prefetched, ok);
+        }
+        // 即使已经处于「正在检查」（例如旧逻辑留下的），下载结束也要回到「有新版本」。
+        let mut ui = test_ui(Phase::Checking);
+        ui.on_prefetch_finished(true);
+        assert!(matches!(ui.phase, Phase::Available));
+    }
+
+    /// 后台下载中点「安装」：先记下（窗口显示正在下载），下载结束后接着安装；下载失败也照样去装（安装会自己重新下载并报错）。
+    #[test]
+    fn install_click_during_background_download_installs_when_done() {
+        for ok in [true, false] {
+            let mut ui = test_ui(Phase::Available);
+            assert!(ui.queue_install_during_prefetch(), "click must be remembered");
+            assert!(ui.install_after_prefetch);
+            assert!(ui.on_prefetch_finished(ok), "download ok={ok}: must go on to install");
+            assert!(!ui.install_after_prefetch);
+        }
+        // 没在后台下载时（例如正在检查），点安装不排队。
+        let mut ui = test_ui(Phase::Available);
+        ui.prefetching = false;
+        assert!(!ui.queue_install_during_prefetch());
+        assert!(!ui.on_prefetch_finished(true));
     }
 }
