@@ -10,7 +10,7 @@
 | Linux 命令行静态版（`mist-cli-linux-*.tar.gz` / 官网 `/install`） | `mist update` 一键更新，只换 `mist`（见 [CLI_STATIC.md](CLI_STATIC.md)） |
 | Windows 安装版（Inno Setup，目录里有 `unins000.exe`） | 提醒 + "安装并重启"：静默运行新安装程序，装完自动重新打开 |
 | Windows 便携版（zip） | 提醒 + 一键更新（同 Linux） |
-| macOS | **只提醒**，给出手动更新步骤和下载页（签名/公证/改 Bundle ID 是 P5） |
+| macOS | **只提醒**，给出手动更新步骤和下载页（安装包已签名并公证；一键更新和改 Bundle ID 是 P5） |
 | 包管理器 / 源码构建 / 无写权限目录 / glibc 太旧 | 只提醒，并说明原因和该怎么做（例如 `sudo mist update`） |
 
 - 默认：**自动检查开、自动下载开、从不自动重启**。发现新版先在后台下好；安装仍需用户点按钮，装失败再引导打开下载页。偏好设置 → 通用 里可关。
