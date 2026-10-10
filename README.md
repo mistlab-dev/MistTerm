@@ -5,12 +5,14 @@
 <h1 align="center">MistTerm</h1>
 
 <p align="center">
-  Modern SSH terminal for DevOps and backend developers — Rust, GPU UI, multi-tab.
+  Free team SSH terminal — short-lived certificates, command audit, shared commands, AI batch ops. Rust + GPU UI.
 </p>
 
 <p align="center">
   <a href="https://github.com/mistlab-dev/MistTerm/releases/latest"><img src="https://img.shields.io/github/v/release/mistlab-dev/MistTerm" alt="Release"></a>
   <a href="https://mistlab.dev"><img src="https://img.shields.io/badge/website-mistlab.dev-blue" alt="Website"></a>
+  <a href="https://mistlab.dev/docs.html"><img src="https://img.shields.io/badge/docs-3%20min%20quick%20start-green" alt="Docs"></a>
+  <a href="https://github.com/mistlab-dev/MistTerm/discussions"><img src="https://img.shields.io/badge/community-discussions-purple" alt="Discussions"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-lightgrey" alt="License"></a>
 </p>
 
@@ -53,22 +55,25 @@ Details: [docs/en/INSTALL.md](docs/en/INSTALL.md).
 |------|----------------|
 | **Terminal** | Async SSH (tokio + ssh2); egui + Alacritty grid; multi-tab / split panes; password, key, agent, Vault CA |
 | **Files** | SFTP side panel; ZMODEM (`rz` / `sz`) with progress |
-| **Snippets** | Personal library + variables; marketplace; usage analytics |
-| **Ops** | Host monitor; port forward; batch exec; session logs |
+| **Snippets** | Built-in starter commands on first launch; personal library + variables; marketplace; usage analytics |
+| **Ops** | Host monitor; port forward (`mist fwd`); batch exec; session logs |
 | **CLI** | `mist` headless CLI sharing the same session store — `ls` / `exec` (single + `--group` / `--all` batch) / `ssh` / `rls` / `get` / `put` / `fwd` / `frag` / `import-ssh-config` / `sop extract`. See [docs/tech/CLI-DESIGN.md](docs/tech/CLI-DESIGN.md) |
-| **Team** | [mistlab.dev](https://mistlab.dev) sync; Git cloud backup; HashiCorp Vault |
-| **AI** | Built-in assistant panel (your API key, local config) |
-| **UX** | English / 简体中文; themes; **Activity Rail** (hide with ⌘/Ctrl+B); Toast notifications (no bottom status bar) |
+| **Team** | Free hosted sync at [mistlab.dev](https://mistlab.dev); short-lived certs for small teams; command records |
+| **AI** | Multi-host disk/memory/log plans **without** an API key; optional BYO model for chat |
+| **Audit** | Records snippets / history / AI / batch (interactive PTY typing not covered yet) |
+| **UX** | English / 简体中文; first-launch onboarding; themes; **Activity Rail** (hide with ⌘/Ctrl+B) |
 
 ### Quick start
 
 Running the GUI binary `Mist` with **no arguments** launches the desktop UI directly (builds since v1.1.17).
 
-1. Launch **Mist**
-2. **⌘N / Ctrl+N** — new session (or open the connection list from the left Activity Rail)
-3. Connect — double-click a saved session, or **⌘T / Ctrl+T** for a new tab
-4. **⌘K / Ctrl+K** — snippets; **View** menu or Activity Rail — SFTP / Monitor / AI / Forward
-5. **⌘B / Ctrl+B** — show / hide Activity Rail (left-edge strip restores it when hidden)
+1. Download from [Releases](https://github.com/mistlab-dev/MistTerm/releases/latest) or see the [3-minute guide](https://mistlab.dev/docs.html)
+2. Launch **Mist** — onboarding opens once; starter commands are already in the library
+3. **⌘N / Ctrl+N** — new session; connect; run a starter snippet (disk / memory)
+4. Optional: sign in at mistlab.dev for team certs & audit; try AI “check disk on all servers” (no API key)
+5. **⌘K / Ctrl+K** — snippets; Activity Rail — SFTP / Monitor / AI / Forward
+
+Community: [Discussions](https://github.com/mistlab-dev/MistTerm/discussions) · Stories: [mistlab.dev/stories](https://mistlab.dev/stories/)
 
 ### Updates & privacy
 
@@ -101,7 +106,9 @@ Issues and PRs: [github.com/mistlab-dev/MistTerm](https://github.com/mistlab-dev
 
 ## 简体中文
 
-面向开发与运维的现代化 SSH 终端，Rust 构建。
+免费的团队 SSH 终端：短时证书、命令审计、共用命令、AI 批量运维。Rust 构建。
+
+官网快速开始：[mistlab.dev/docs.html](https://mistlab.dev/docs.html) · 社区：[Discussions](https://github.com/mistlab-dev/MistTerm/discussions)
 
 ### 安装
 
@@ -132,22 +139,25 @@ cargo build --release --bin Mist
 |------|------|
 | **终端** | tokio + ssh2 异步 SSH；egui + Alacritty 网格；多标签 / 分屏；密码、密钥、Agent、Vault 证书 |
 | **文件** | SFTP 侧栏；ZMODEM（`rz` / `sz`）与进度 |
-| **片段** | 个人命令库与变量；市场模板；使用统计 |
-| **运维** | 主机监控；端口转发；批量执行；会话日志 |
+| **片段** | 首次安装自带示例命令；个人命令库与变量；市场模板；使用统计 |
+| **运维** | 主机监控；端口转发（`mist fwd`）；批量执行；会话日志 |
 | **命令行** | `mist` 无头 CLI，与 GUI 共享同一份会话库——`ls` / `exec`（单机 + `--group` / `--all` 批量）/ `ssh` / `rls` / `get` / `put` / `fwd` / `frag` / `import-ssh-config` / `sop extract`。详见 [docs/tech/CLI-DESIGN.md](docs/tech/CLI-DESIGN.md) |
-| **团队** | [mistlab.dev](https://mistlab.dev) 同步；Git 云备份；HashiCorp Vault |
-| **AI** | 内置助手（自备 API Key，配置在本机） |
-| **体验** | 中/英界面；主题；**活动栏**（⌘/Ctrl+B 可隐藏）；右下角 Toast（已无常驻底栏） |
+| **团队** | [mistlab.dev](https://mistlab.dev) 免费托管同步；小团队短时证书；命令记录 |
+| **AI** | 多机磁盘/内存/日志计划**无需** API Key；对话可自带模型 |
+| **审计** | 覆盖常用命令 / 历史 / AI / 批量（终端手输暂未覆盖） |
+| **体验** | 中/英界面；首次新手引导；主题；**活动栏**（⌘/Ctrl+B 可隐藏） |
 
 ### 快速上手
 
 GUI 二进制 `Mist` **不带任何参数**运行即直接拉起桌面界面（v1.1.17 起）。
 
-1. 启动 **Mist**
-2. **⌘N / Ctrl+N** 新建会话（或从左侧**活动栏**打开连接列表）
-3. 双击已保存连接，或 **⌘T / Ctrl+T** 开新标签
-4. **⌘K / Ctrl+K** 片段；**视图**菜单或活动栏打开 SFTP / 监控 / AI / 转发
-5. **⌘B / Ctrl+B** 显示 / 隐藏活动栏（隐藏后点左缘窄条可恢复）
+1. 从 [Releases](https://github.com/mistlab-dev/MistTerm/releases/latest) 下载，或看 [3 分钟指南](https://mistlab.dev/docs.html)
+2. 启动 **Mist**——首次弹出新手引导，命令库已有示例
+3. **⌘N / Ctrl+N** 新建会话并连接，跑一条示例命令（磁盘/内存）
+4. 可选：在 mistlab.dev 登录团队开证书与审计；AI 侧栏试「查所有服务器磁盘」（无需 Key）
+5. **⌘K / Ctrl+K** 片段；活动栏打开 SFTP / 监控 / AI / 转发
+
+社区：[Discussions](https://github.com/mistlab-dev/MistTerm/discussions) · 案例：[mistlab.dev/stories](https://mistlab.dev/stories/)
 
 ### 更新与隐私
 

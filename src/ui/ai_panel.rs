@@ -1242,13 +1242,14 @@ impl AiPanel {
         );
         let ready = self.can_chat(app_settings);
         if !ready {
-            ui.colored_label(
-                theme.amber_color(),
-                i18n::tr(
+            ui.label(
+                egui::RichText::new(i18n::tr(
                     ctx,
-                    "Configure OpenAI-compatible API URL, API Key, and model in Tools → AI Settings.",
-                    "请在「工具 → AI 设置」中配置 OpenAI 兼容 API 地址、API Key 与模型。",
-                ),
+                    "Multi-host ops work without an API Key — use natural language below (built-in planner). For chat, explain, and LLM planning, configure API URL, Key, and model in Tools → AI Settings.",
+                    "多机运维无需 API Key — 在下方用自然语言提问即可（内置规划器）。对话、解释与 LLM 规划请在「工具 → AI 设置」配置接口、Key 与模型。",
+                ))
+                .size(theme.font_size_small())
+                .color(theme.color_form_hint()),
             );
             ui.add_space(theme.spacing_sm());
         } else if !app_settings.ai.enabled {
@@ -1798,8 +1799,8 @@ impl AiPanel {
                     ui.label(
                         egui::RichText::new(i18n::tr(
                             ctx,
-                            "Type below. For multi-host ops try: 查所有服务器磁盘 — or prefix 多机:",
-                            "在下方输入。多机运维可试：查所有服务器磁盘 — 或以「多机:」开头",
+                            "No API Key needed for multi-host read-only ops — type below (e.g. check disk on all servers) or prefix 多机:. API Key is only for chat / LLM planning.",
+                            "多机只读运维无需 API Key — 在下方输入（如「查所有服务器磁盘」）或以「多机:」开头；API Key 仅用于对话与 LLM 规划。",
                         ))
                             .size(theme.font_size_small())
                             .color(theme.color_form_hint().gamma_multiply(0.85)),
@@ -3699,6 +3700,18 @@ fn build_user_api_body(
 impl AiPanel {
     fn quick_action_chips(&self, ctx: &egui::Context) -> Vec<(String, QuickAction)> {
         let mut chips = vec![
+            (
+                i18n::tr(ctx, "Check disk (all hosts)", "查所有服务器磁盘").to_string(),
+                QuickAction::ExplainSelection,
+            ),
+            (
+                i18n::tr(ctx, "Check memory (all hosts)", "查所有服务器内存").to_string(),
+                QuickAction::ExplainSelection,
+            ),
+            (
+                i18n::tr(ctx, "Recent error logs", "查最近错误日志").to_string(),
+                QuickAction::ExplainSelection,
+            ),
             (
                 i18n::tr(ctx, "Explain this error", "解释这条报错").to_string(),
                 QuickAction::ExplainSelection,
