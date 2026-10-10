@@ -28,6 +28,13 @@ pub struct AppSettings {
     /// 首次启动已自动展示「新人上手」帮助页（只弹一次）。
     #[serde(default)]
     pub onboarding_help_shown: bool,
+    /// 团队多机「确认并执行」走 mist-server 控制面（Plan/Lease/Run），默认开启。
+    #[serde(default = "default_true")]
+    pub control_plane_plans: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for AppSettings {
@@ -40,6 +47,7 @@ impl Default for AppSettings {
             team: TeamSettings::default(),
             update: crate::core::updater::UpdateSettings::default(),
             onboarding_help_shown: false,
+            control_plane_plans: true,
         }
     }
 }

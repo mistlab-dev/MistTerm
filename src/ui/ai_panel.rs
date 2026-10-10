@@ -1440,14 +1440,24 @@ impl AiPanel {
         let mut do_save = false;
         let mut do_test = false;
         {
-        let settings = &mut app_settings.ai;
         let field_w = ui.available_width().max(120.0);
         crate::ui::chrome::form_checkbox(
             ui,
             theme,
-            &mut settings.enabled,
+            &mut app_settings.ai.enabled,
             i18n::tr(ctx, "Enable AI", "启用 AI"),
         );
+        crate::ui::chrome::form_checkbox(
+            ui,
+            theme,
+            &mut app_settings.control_plane_plans,
+            i18n::tr(
+                ctx,
+                "Team multi-host runs via control plane (server-side)",
+                "团队多机执行走控制面（服务端 Runner）",
+            ),
+        );
+        let settings = &mut app_settings.ai;
         ui.add_space(theme.spacing_sm());
         crate::ui::chrome::form_field_label(ui, theme, i18n::tr(ctx, "API base URL", "接口地址"));
         crate::ui::chrome::form_singleline_field(
