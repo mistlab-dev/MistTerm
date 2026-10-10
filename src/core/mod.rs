@@ -18,6 +18,7 @@ pub mod fragment_recommendations;
 pub mod knowledge;
 pub mod agent;
 pub mod batch_exec;
+pub mod controlplane;
 pub mod exec_history;
 pub mod ssh_build;
 pub mod ssh_keygen;

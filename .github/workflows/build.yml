@@ -668,7 +668,7 @@ jobs:
             dist/SHA256SUMS
           if-no-files-found: error
 
-  # 签名私钥只放在 `release` 环境的 secrets 里（Tian 审批后才会运行）。
+  # 签名私钥放在 `release` 环境 secrets（无人工审批门闩；推 v* 标签后自动签名发布）。
   # 这个 job 不签出 PR 代码之外的东西，也不接触安装包本身，只签两个小文件。
   sign:
     name: Sign update manifest
@@ -699,7 +699,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${MINISIGN_SECRET_KEY}" ] || [ -z "${MINISIGN_PASSWORD}" ]; then
-            echo "::error::MINISIGN_SECRET_KEY / MINISIGN_PASSWORD are not set in the 'release' environment. See docs/release/AUTO_UPDATE.md."
+            echo "::error::MINISIGN_SECRET_KEY / MINISIGN_PASSWORD are not set (release environment secrets). See docs/release/AUTO_UPDATE.md."
             exit 1
           fi
           umask 077

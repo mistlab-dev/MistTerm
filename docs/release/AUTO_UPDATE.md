@@ -74,38 +74,39 @@ preflight（版本号一致性 + 清单脚本自测）
   → platform ×3（构建、打包；正式构建会检查公钥）
   + cli-linux ×2（命令行静态版 x86_64 / aarch64：确认是静态程序，六个发行版冒烟测试，打包）
   → manifest（生成 SHA256SUMS + latest.json，不需要任何密钥）
-  → sign（environment: release，需 Tian 批准；用 MINISIGN_SECRET_KEY 签名，再用仓库里的公钥验一遍）
+  → sign（environment: release；**无人工审批**；用 MINISIGN_SECRET_KEY 签名，再用仓库公钥验一遍）
   → release（一次性发布全部文件，含 latest.json 和签名）
   → mirror（镜像上传；仓库变量 MIST_MIRROR_ENABLED != 'true' 时跳过，目前未实现）
 ```
 
 - 触发条件没变：只有推 `v*` 标签或手动触发才运行；合并 PR **不会**发版。手动触发会跑 manifest 当作检查
   （版本号取 Cargo.toml，产物只留在这次运行里），**不会**进入 sign/release。
+- 推 `v*` 标签后 sign → release **自动跑完**，无需在 Actions 里点批准。
 - 签名 job 只签两个小文件，私钥写到临时文件、用完即删，从不打印。
 - `Update E2E` 工作流（`.github/workflows/update-e2e.yml`）：PR 修改更新相关代码时在 Linux 上跑离线端到端测试；
   Windows 版只能手动触发（勾选 `windows`）。两者都只有只读权限，不发布任何东西。
 
-## 5. Tian 需要做的一次性准备（1.2.0 之前）
+## 5. 一次性准备（已完成项可跳过）
 
 **请在自己的电脑上做，不要在共享机器上生成私钥。**
 
 1. ~~安装 minisign，生成两对密钥~~ ✅ 已完成（2026-10-07）。
 2. 离线备份两把私钥和密码（例如加密 U 盘 + 密码管理器），备用钥平时**不要**放进 CI。
 3. ~~把两个 `.pub` 文件提交进仓库~~ ✅ 已完成。
-4. GitHub 仓库 → Settings → Environments → 新建 `release`：Required reviewers 设为自己；
-   Deployment branches and tags 只允许 `v*` 标签。
+4. GitHub 仓库 → Settings → Environments → `release`：存放签名 secrets；**不要**再开 Required reviewers
+   （推 `v*` 即自动签名发布）。Deployment branches/tags 可限制为 `v*`。
 5. 在 `release` 环境里添加 secrets：
    - `MINISIGN_SECRET_KEY`：`mistterm-primary.key` 的完整内容
    - `MINISIGN_PASSWORD`：主钥密码
 6. （以后）镜像：在服务器上给 nginx 配好 `/downloads/mistterm/` 目录（**注意别被网站的 SPA 回退规则吃掉**，
    不存在的文件要返回 404 而不是首页），准备只能写该目录的部署密钥，再实现并打开 `mirror` job。
 
-## 6. 发版步骤（准备好之后）
+## 6. 发版步骤
 
 1. 改 `Cargo.toml` 和 仓库根目录的 `Info.plist` 的版本号（`python3 scripts/check-version-consistency.py` 检查）。
 2. 可选：写 `docs/release/notes/v<版本>.zh.md` / `.en.md`。
 3. 合并到 main，打标签 `v<版本>` 推送。
-4. 在 Actions 里批准 `release` 环境的 sign job。
+4. 等待 Actions 自动完成 sign + GitHub Release（无需人工批准）。
 5. 发布后核对：`curl -sL https://github.com/mistlab-dev/MistTerm/releases/latest/download/latest.json`，
    旧版本运行 `mist update --check` 应提示新版本。
 

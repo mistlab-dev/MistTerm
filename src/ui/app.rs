@@ -4619,7 +4619,151 @@ impl MistTermApp {
             crate::core::GateLevel::L1 => {}
         }
 
+        if self.app_settings.control_plane_plans {
+            if let Some(team_id) = self.team_service.state.current_team_id.clone() {
+                if self.start_agent_control_plane(ctx, command.clone(), &targets, &team_id) {
+                    return;
+                }
+            }
+        }
         self.start_agent_batch_exec(ctx, command, &targets);
+    }
+
+    /// Team-server targets → mist-server Plan/Lease/Run. Returns false to fall back to local SSH.
+    fn start_agent_control_plane(
+        &mut self,
+        ctx: &egui::Context,
+        command: String,
+        targets: &[BatchTarget],
+        team_id: &str,
+    ) -> bool {
+        use crate::core::controlplane::{
+            infer_environment, ControlPlaneClient, CreatePlanRequest, PlanStep,
+        };
+        use crate::core::team::TeamRole;
+
+        let mut host_ids = Vec::new();
+        let mut tags = Vec::new();
+        let mut labels: Vec<(String, String)> = Vec::new();
+        for t in targets {
+            let Some(key) = t.id.strip_prefix(TEAM_TARGET_PREFIX) else {
+                continue;
+            };
+            let Some(server) = self
+                .team_service
+                .current_team_servers()
+                .into_iter()
+                .find(|s| s.list_key() == key)
+            else {
+                continue;
+            };
+            if server.id.is_empty() {
+                continue;
+            }
+            let href = format!("host:{}", server.id);
+            host_ids.push(href.clone());
+            labels.push((href, t.label.clone()));
+            tags.extend(server.tags.clone());
+        }
+        if host_ids.is_empty() {
+            return false;
+        }
+
+        let api_base = self.team_service.api_base();
+        let bearer = match self.team_service.access_token_for_api() {
+            Ok(t) => t,
+            Err(e) => {
+                self.ai_panel
+                    .abort_agent_with_message(format!("control plane auth: {e}"));
+                return true;
+            }
+        };
+        let auto_approve = self.team_service.state.current_role() == TeamRole::Admin;
+        let readonly = !crate::core::agent::looks_like_mutate_command(&command);
+        let environment = infer_environment(&tags);
+        let (intent, rationale, l2_armed) = self.ai_panel.current_agent_plan_meta();
+        let is_mutate = !readonly;
+        let gate_level = if is_mutate {
+            "L2_MUTATE".to_string()
+        } else {
+            "L1_READONLY".to_string()
+        };
+        let fail_fast = is_mutate;
+
+        self.audit_logger.record(
+            AuditEvent::new(AuditCategory::Session, "agent.cp_exec", AuditOutcome::Success)
+                .with_detail(serde_json::json!({
+                    "hosts": host_ids.len(),
+                    "environment": environment,
+                    "command_preview": command_preview(&command, 120),
+                })),
+        );
+        self.ai_panel.mark_agent_executing();
+
+        let req = CreatePlanRequest {
+            intent: if intent.trim().is_empty() {
+                "MistTerm agent".into()
+            } else {
+                intent.clone()
+            },
+            environment,
+            steps: vec![PlanStep {
+                effector: "ssh".into(),
+                targets: host_ids,
+                command: command.clone(),
+                readonly,
+            }],
+        };
+        let team_id = team_id.to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.agent_batch_rx = Some(rx);
+        std::thread::spawn(move || {
+            let result = (|| {
+                let client = ControlPlaneClient::new(&api_base).map_err(|e| e)?;
+                client.execute_plan_blocking(
+                    &team_id,
+                    &bearer,
+                    &req,
+                    &labels,
+                    auto_approve,
+                    300,
+                )
+            })();
+            match result {
+                Ok((cmd, rows)) => {
+                    let _ = tx.send((
+                        cmd,
+                        rows,
+                        intent,
+                        rationale,
+                        gate_level,
+                        l2_armed,
+                        fail_fast,
+                    ));
+                }
+                Err(e) => {
+                    let _ = tx.send((
+                        command,
+                        vec![BatchExecRow {
+                            target_id: "cp".into(),
+                            label: "control-plane".into(),
+                            ok: false,
+                            exit_code: None,
+                            output: String::new(),
+                            error: Some(e),
+                            duration_ms: 0,
+                        }],
+                        intent,
+                        rationale,
+                        gate_level,
+                        l2_armed,
+                        fail_fast,
+                    ));
+                }
+            }
+        });
+        ctx.request_repaint();
+        true
     }
 
     fn start_agent_batch_exec(

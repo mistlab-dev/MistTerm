@@ -211,6 +211,11 @@ impl TeamService {
         self.tokens.load_access_token().ok()
     }
 
+    /// Fresh access token (refreshes if near expiry). For control-plane / blocking API calls.
+    pub fn access_token_for_api(&self) -> Result<String, String> {
+        ensure_access_token(&self.api_base(), &self.tokens)
+    }
+
     pub fn logout(&mut self) {
         self.tokens.clear();
         self.state.clear_session();
