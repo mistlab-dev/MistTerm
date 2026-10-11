@@ -274,13 +274,13 @@ impl ControlPlaneClient {
     ) -> Result<(String, Vec<BatchExecRow>), String> {
         let created = self
             .create_plan(team_id, bearer, req, None)
-            .map_err(|e| format!("create plan: {e}"))?;
+            .map_err(|e| format!("提交自动执行失败: {e}"))?;
         let mut plan = created.plan;
         let mut lease = created.lease;
 
         if plan.status == "denied" {
             return Err(format!(
-                "plan denied ({})",
+                "已被规则拒绝（{}）",
                 created.code.unwrap_or_else(|| "denied.policy".into())
             ));
         }
@@ -294,7 +294,7 @@ impl ControlPlaneClient {
                     .collect();
                 let approved = self
                     .approve_plan(team_id, bearer, &plan.id, &targets)
-                    .map_err(|e| format!("approve plan: {e}"))?;
+                    .map_err(|e| format!("同意上机失败: {e}"))?;
                 plan = approved.plan;
                 lease = approved.lease;
             } else {
@@ -309,8 +309,8 @@ impl ControlPlaneClient {
                             waiting_rows(
                                 target_labels,
                                 &format!(
-                                    "waiting for approval (plan {}) — approve in mistlab Console",
-                                    plan.id
+                                    "等待控制台「自动执行」审批（plan {}）— https://mistlab.dev/dashboard?team={}&cp_plan={}",
+                                    plan.id, team_id, plan.id
                                 ),
                             ),
                         ));
@@ -322,24 +322,27 @@ impl ControlPlaneClient {
                     if plan.status == "allow" || plan.status == "allow_auto" {
                         lease = Some(
                             self.claim_lease(team_id, bearer, &plan.id)
-                                .map_err(|e| format!("claim lease: {e}"))?,
+                                .map_err(|e| format!("领取执行许可失败: {e}"))?,
                         );
                         break;
                     }
                     if plan.status == "denied" {
-                        return Err("plan denied by approver".into());
+                        return Err("管理员已拒绝此次上机".into());
                     }
                 }
             }
         }
 
         let Some(lease) = lease.take().filter(|l| !l.token.is_empty()) else {
-            return Err(format!("no lease for plan {} (status={})", plan.id, plan.status));
+            return Err(format!(
+                "没有可用的执行许可（plan {}，状态 {}）",
+                plan.id, plan.status
+            ));
         };
 
         let run = self
             .start_run(team_id, bearer, &plan.id, &lease.token)
-            .map_err(|e| format!("start run: {e}"))?;
+            .map_err(|e| format!("开始执行失败: {e}"))?;
 
         let label_by_id: std::collections::HashMap<&str, &str> = target_labels
             .iter()

@@ -4674,7 +4674,7 @@ impl MistTermApp {
             Ok(t) => t,
             Err(e) => {
                 self.ai_panel
-                    .abort_agent_with_message(format!("control plane auth: {e}"));
+                    .abort_agent_with_message(format!("自动执行登录失败: {e}"));
                 return true;
             }
         };
