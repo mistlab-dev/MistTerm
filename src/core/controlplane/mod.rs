@@ -214,6 +214,31 @@ impl ControlPlaneClient {
         Self::decode(resp)
     }
 
+    pub fn claim_lease(
+        &self,
+        team_id: &str,
+        bearer: &str,
+        plan_id: &str,
+    ) -> Result<Lease, TeamApiError> {
+        let path = format!("/v1/teams/{team_id}/cp/plans/{plan_id}/lease");
+        let resp = self
+            .http
+            .post(self.url(&path))
+            .bearer_auth(bearer)
+            .json(&serde_json::json!({}))
+            .send()
+            .map_err(|e| TeamApiError {
+                status: 0,
+                message: e.to_string(),
+                conflict_fragment: None,
+            })?;
+        #[derive(Deserialize)]
+        struct ClaimResp {
+            lease: Lease,
+        }
+        Ok(Self::decode::<ClaimResp>(resp)?.lease)
+    }
+
     pub fn start_run(
         &self,
         team_id: &str,
@@ -295,20 +320,11 @@ impl ControlPlaneClient {
                         .get_plan(team_id, bearer, &plan.id)
                         .map_err(|e| format!("poll plan: {e}"))?;
                     if plan.status == "allow" || plan.status == "allow_auto" {
-                        // Lease only returned on approve response; non-admin waiters stop here.
-                        return Ok((
-                            req.steps
-                                .first()
-                                .map(|s| s.command.clone())
-                                .unwrap_or_default(),
-                            waiting_rows(
-                                target_labels,
-                                &format!(
-                                    "plan {} approved — re-confirm to run with a fresh lease, or run from Console",
-                                    plan.id
-                                ),
-                            ),
-                        ));
+                        lease = Some(
+                            self.claim_lease(team_id, bearer, &plan.id)
+                                .map_err(|e| format!("claim lease: {e}"))?,
+                        );
+                        break;
                     }
                     if plan.status == "denied" {
                         return Err("plan denied by approver".into());
