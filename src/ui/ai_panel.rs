@@ -1454,7 +1454,7 @@ impl AiPanel {
             i18n::tr(
                 ctx,
                 "Team multi-host runs via control plane (server-side)",
-                "团队多机执行走控制面（服务端 Runner）",
+                "团队多机执行走「自动执行」（服务端代跑，先审批）",
             ),
         );
         let settings = &mut app_settings.ai;
