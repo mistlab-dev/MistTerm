@@ -694,23 +694,25 @@ mod pdf_tests {
     fn just_ran_success_only_at_exact_threshold() {
         use crate::core::command_history::CommandHistory;
         let mut h = CommandHistory::new();
+        // 用非 trivial 命令：`ps`/`uptime` 等已被 is_trivial_command 排除，不会出候选
+        let cmd = "systemctl status sshd";
         // 交错写入避免「连续相同合并」
         for i in 0..4 {
-            h.record("ps -ef", Some("s"), Some("n"), true);
+            h.record(cmd, Some("s"), Some("n"), true);
             h.record(&format!("echo {i}"), Some("s"), Some("n"), true);
         }
-        // 现有 4 次 ps -ef
-        assert!(candidate_from_just_ran_success(&h, &[], "ps -ef", 5).is_none());
+        // 现有 4 次
+        assert!(candidate_from_just_ran_success(&h, &[], cmd, 5).is_none());
         h.record("echo x", Some("s"), Some("n"), true);
-        h.record("ps -ef", Some("s"), Some("n"), true); // 第 5 次
-        let c = candidate_from_just_ran_success(&h, &[], "ps -ef", 5).unwrap();
-        assert_eq!(c.command, "ps -ef");
+        h.record(cmd, Some("s"), Some("n"), true); // 第 5 次
+        let c = candidate_from_just_ran_success(&h, &[], cmd, 5).unwrap();
+        assert_eq!(c.command, cmd);
         // 再跑第 6 次不再弹
         h.record("echo y", Some("s"), Some("n"), true);
-        h.record("ps -ef", Some("s"), Some("n"), true);
-        assert!(candidate_from_just_ran_success(&h, &[], "ps -ef", 5).is_none());
-        // 刚跑的是别的命令也不弹 ps
-        assert!(candidate_from_just_ran_success(&h, &[], "uptime", 5).is_none());
+        h.record(cmd, Some("s"), Some("n"), true);
+        assert!(candidate_from_just_ran_success(&h, &[], cmd, 5).is_none());
+        // 刚跑的是别的命令也不弹
+        assert!(candidate_from_just_ran_success(&h, &[], "journalctl -xe", 5).is_none());
     }
 
     #[test]
