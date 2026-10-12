@@ -793,6 +793,18 @@ impl Theme {
         }
     }
 
+    /// 标签栏与终端之间的分隔线（比面板标题分隔更淡，避免「一道白杠」）。
+    #[inline]
+    pub fn color_tab_bar_divider(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            self.fg_high_alpha(10)
+        } else if self.is_light_theme() {
+            Color32::from_rgba_unmultiplied(0, 0, 0, 16)
+        } else {
+            self.fg_high_alpha(18)
+        }
+    }
+
     #[inline]
     pub fn color_modal_header_divider(&self) -> Color32 {
         self.color_panel_header_divider()

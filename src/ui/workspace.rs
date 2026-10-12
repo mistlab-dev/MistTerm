@@ -13,14 +13,25 @@ impl MistTermApp {
         frame: &mut eframe::Frame,
         theme: &crate::ui::theme::Theme,
     ) {
-        // 顶栏：非 macOS 为窗口内菜单；macOS 用系统菜单栏(与 native_menu 安装时机解耦：
-        // 用 `cfg` 直接关掉应用内 top_chrome，避免首帧或安装失败时露出一条 chrome_bar 颜色)。
+        // 顶栏：
+        // - 普通模式：非 macOS 显示窗口内菜单；macOS 用系统菜单栏(应用内 top_chrome 高度 0)。
+        // - 沉浸式：Win/Linux 关掉系统边框，自绘标题栏并把会话标签放进去；macOS 仍保留系统标题栏。
         let pending = self.ssh_pending_import_count();
         let _ = pending; // SSH 待导入改走右下角需确认 Toast，顶栏不再显示 chip
-        #[cfg(target_os = "macos")]
-        let top_chrome_height = 0.0;
-        #[cfg(not(target_os = "macos"))]
-        let top_chrome_height = theme.top_chrome_total_height();
+        let immersive = self.activity_rail_collapsed;
+        self.sync_window_decorations_for_immersive(frame, immersive);
+        let custom_caption = immersive && !cfg!(target_os = "macos");
+        let top_chrome_height = if immersive {
+            if custom_caption {
+                theme.title_bar_height().max(theme.size_tab_bar_row_h())
+            } else {
+                theme.size_tab_bar_row_h()
+            }
+        } else if cfg!(target_os = "macos") {
+            0.0
+        } else {
+            theme.top_chrome_total_height()
+        };
         if top_chrome_height > 0.0 {
             egui::TopBottomPanel::top("top_chrome")
                 .exact_height(top_chrome_height)
@@ -30,14 +41,82 @@ impl MistTermApp {
                     let bar_bg = ui.max_rect();
                     ui.painter()
                         .rect_filled(bar_bg, 0.0, theme.chrome_bar_fill());
-                    let _title_actions = crate::ui::chrome::render_top_chrome_panel(
-                        ui,
-                        theme,
-                        !self.uses_native_menu_bar(),
-                        |ui| self.show_application_menu_bar(ui, ctx, theme, frame),
-                        0,
-                        false,
-                    );
+                    if immersive {
+                        ui.set_clip_rect(bar_bg);
+                        let prev_padding = ui.spacing().button_padding;
+                        let prev_item_spacing = ui.spacing().item_spacing;
+                        ui.spacing_mut().button_padding =
+                            egui::vec2(theme.spacing_tab_x(), theme.spacing_tab_y());
+                        ui.spacing_mut().item_spacing =
+                            egui::vec2(theme.spacing_region_gap(), 0.0);
+                        if custom_caption {
+                            let caption_w = 40.0 * 3.0;
+                            let tabs_rect = egui::Rect::from_min_max(
+                                bar_bg.min,
+                                egui::pos2(bar_bg.max.x - caption_w, bar_bg.max.y),
+                            );
+                            let caption_rect = egui::Rect::from_min_max(
+                                egui::pos2(bar_bg.max.x - caption_w, bar_bg.min.y),
+                                bar_bg.max,
+                            );
+                            ui.allocate_ui_at_rect(tabs_rect, |ui| {
+                                ui.set_min_height(top_chrome_height);
+                                ui.horizontal(|ui| {
+                                    ui.set_min_height(top_chrome_height);
+                                    self.render_session_tab_strip(ui, ctx, theme);
+                                    let drag_w = ui.available_width().max(8.0);
+                                    crate::ui::chrome::title_bar_drag_region(
+                                        ui,
+                                        frame,
+                                        egui::vec2(drag_w, top_chrome_height),
+                                    );
+                                });
+                            });
+                            ui.allocate_ui_at_rect(caption_rect, |ui| {
+                                ui.set_min_height(top_chrome_height);
+                                let maximized = frame.info().window_info.maximized;
+                                let caps = crate::ui::chrome::window_caption_buttons(
+                                    ui,
+                                    theme,
+                                    maximized,
+                                    top_chrome_height,
+                                );
+                                if caps.minimize {
+                                    frame.set_minimized(true);
+                                }
+                                if caps.toggle_maximize {
+                                    frame.set_maximized(!maximized);
+                                }
+                                if caps.close {
+                                    frame.close();
+                                }
+                            });
+                        } else {
+                            ui.horizontal(|ui| {
+                                ui.set_min_height(top_chrome_height);
+                                if cfg!(target_os = "macos") {
+                                    ui.add_space(72.0);
+                                }
+                                self.render_session_tab_strip(ui, ctx, theme);
+                            });
+                        }
+                        ui.spacing_mut().button_padding = prev_padding;
+                        ui.spacing_mut().item_spacing = prev_item_spacing;
+                        ui.painter().hline(
+                            bar_bg.x_range(),
+                            bar_bg.max.y - 0.5,
+                            egui::Stroke::new(1.0, theme.color_tab_bar_divider()),
+                        );
+                    } else {
+                        let _title_actions = crate::ui::chrome::render_top_chrome_panel(
+                            ui,
+                            theme,
+                            !self.uses_native_menu_bar(),
+                            |ui| self.show_application_menu_bar(ui, ctx, theme, frame),
+                            0,
+                            false,
+                        );
+                    }
                 });
         }
 
@@ -299,285 +378,45 @@ impl MistTermApp {
                                     ui.set_clip_rect(col_clip);
                                     let saved_col_item_spacing = ui.spacing().item_spacing;
                                     ui.spacing_mut().item_spacing.y = 0.0;
-                                    let terminal_header_row_h = theme.size_tab_bar_row_h();
-                                    let tab_row_w = term_col_w;
-                                    let tab_row_rect = egui::Rect::from_min_size(
-                                        ui.cursor().min,
-                                        egui::vec2(tab_row_w, terminal_header_row_h),
-                                    );
-                                    ui.allocate_ui_at_rect(tab_row_rect, |ui| {
-                                        ui.painter().rect_filled(
-                                            tab_row_rect,
-                                            egui::Rounding::ZERO,
-                                            theme.color_panel_header_band_fill(),
+                                    let mut tab_row_rect = egui::Rect::NOTHING;
+                                    let mut tab_sep_stroke = egui::Stroke::NONE;
+                                    if !immersive {
+                                        let terminal_header_row_h = theme.size_tab_bar_row_h();
+                                        let tab_row_w = term_col_w;
+                                        tab_row_rect = egui::Rect::from_min_size(
+                                            ui.cursor().min,
+                                            egui::vec2(tab_row_w, terminal_header_row_h),
                                         );
-                                        ui.set_clip_rect(tab_row_rect);
-                                        ui.set_min_width(tab_row_w);
-                                        let prev_padding = ui.spacing().button_padding;
-                                        let prev_item_spacing = ui.spacing().item_spacing;
-                                        ui.spacing_mut().button_padding = egui::vec2(
-                                            theme.spacing_tab_x(),
-                                            theme.spacing_tab_y(),
-                                        );
-                                        ui.spacing_mut().item_spacing =
-                                            egui::vec2(theme.spacing_region_gap(), 0.0);
-                                        ui.horizontal(|ui| {
-                                            ui.set_min_height(terminal_header_row_h);
-                                            let mut to_close = None;
-                                            let mut close_others = None;
-                                            let mut close_right = None;
-                                            let mut disconnect_ssh_idx = None;
-                                            let mut reconnect_idx = None;
-                                            let mut split_h_idx = None;
-                                            let mut split_v_idx = None;
-                                            let mut unsplit_idx = None;
-                                            let mut close_pane_tab = None;
-                                            for (idx, tab) in self.tabs.iter().enumerate() {
-                                                let active = self.active_tab == Some(idx);
-                                                let tab_label = tab.display_title();
-                                                let tab_hover = self
-                                                    .session_manager
-                                                    .get_session(&tab.primary_session_id())
-                                                    .map(|s| {
-                                                        format!(
-                                                            "{} · {}@{}",
-                                                            s.name, s.username, s.host
-                                                        )
-                                                    })
-                                                    .unwrap_or_else(|| tab_label.clone());
-                                                let env_color = self
-                                                    .session_manager
-                                                    .get_session(&tab.primary_session_id())
-                                                    .map(|s| theme.session_tab_accent_color(s));
-                                                let tab_chip = crate::ui::chrome::session_tab_chip(
-                                                    ui,
-                                                    theme,
-                                                    &tab_label,
-                                                    active,
-                                                    tab.any_connected(),
-                                                    false,
-                                                    env_color,
-                                                );
-                                                let tab_resp =
-                                                    tab_chip.response.on_hover_text(tab_hover);
-                                                if tab_chip.close_clicked {
-                                                    to_close = Some(idx);
-                                                } else if tab_resp.clicked() {
-                                                    self.active_tab = Some(idx);
-                                                    self.selected_session_id =
-                                                        Some(tab.primary_session_id());
-                                                }
-                                                tab_resp.context_menu(|ui| {
-                                                    crate::ui::chrome::apply_context_menu_style(
-                                                        ui, theme,
-                                                    );
-                                                    if tab.any_connected_or_connecting()
-                                                        && crate::ui::chrome::popup_menu_button(
-                                                            ui,
-                                                            theme,
-                                                            crate::i18n::tr(
-                                                                ctx,
-                                                                "Disconnect SSH (keep output)",
-                                                                "断开 SSH(保留输出)",
-                                                            ),
-                                                        )
-                                                        .clicked()
-                                                    {
-                                                        disconnect_ssh_idx = Some(idx);
-                                                        ui.close_menu();
-                                                    }
-                                                    if crate::ui::chrome::popup_menu_button(
-                                                        ui,
-                                                        theme,
-                                                        crate::i18n::tr(
-                                                            ctx,
-                                                            "Reconnect this tab",
-                                                            "重连此标签",
-                                                        ),
-                                                    )
-                                                    .clicked()
-                                                    {
-                                                        reconnect_idx = Some(idx);
-                                                        ui.close_menu();
-                                                    }
-                                                    ui.separator();
-                                                    if tab.can_split() {
-                                                        if crate::ui::chrome::popup_menu_button(
-                                                            ui,
-                                                            theme,
-                                                            crate::i18n::tr(
-                                                                ctx,
-                                                                "Split left / right",
-                                                                "左右分屏",
-                                                            ),
-                                                        )
-                                                        .clicked()
-                                                        {
-                                                            split_h_idx = Some(idx);
-                                                            ui.close_menu();
-                                                        }
-                                                        if crate::ui::chrome::popup_menu_button(
-                                                            ui,
-                                                            theme,
-                                                            crate::i18n::tr(
-                                                                ctx,
-                                                                "Split top / bottom",
-                                                                "上下分屏",
-                                                            ),
-                                                        )
-                                                        .clicked()
-                                                        {
-                                                            split_v_idx = Some(idx);
-                                                            ui.close_menu();
-                                                        }
-                                                    }
-                                                    if tab.is_split() {
-                                                        if crate::ui::chrome::popup_menu_button(
-                                                            ui,
-                                                            theme,
-                                                            crate::i18n::tr(
-                                                                ctx,
-                                                                "Close active pane",
-                                                                "关闭当前窗格",
-                                                            ),
-                                                        )
-                                                        .clicked()
-                                                        {
-                                                            close_pane_tab =
-                                                                Some((idx, tab.active_pane));
-                                                            ui.close_menu();
-                                                        }
-                                                        if crate::ui::chrome::popup_menu_button(
-                                                            ui,
-                                                            theme,
-                                                            crate::i18n::tr(
-                                                                ctx,
-                                                                "Merge split panes",
-                                                                "合并分屏",
-                                                            ),
-                                                        )
-                                                        .clicked()
-                                                        {
-                                                            unsplit_idx = Some(idx);
-                                                            ui.close_menu();
-                                                        }
-                                                    }
-                                                    ui.separator();
-                                                    if crate::ui::chrome::popup_menu_button(
-                                                        ui,
-                                                        theme,
-                                                        crate::i18n::tr(
-                                                            ctx,
-                                                            "Close other tabs",
-                                                            "关闭其他标签",
-                                                        ),
-                                                    )
-                                                    .clicked()
-                                                    {
-                                                        close_others = Some(idx);
-                                                        ui.close_menu();
-                                                    }
-                                                    if crate::ui::chrome::popup_menu_button(
-                                                        ui,
-                                                        theme,
-                                                        crate::i18n::tr(
-                                                            ctx,
-                                                            "Close tabs to the right",
-                                                            "关闭右侧标签",
-                                                        ),
-                                                    )
-                                                    .clicked()
-                                                    {
-                                                        close_right = Some(idx);
-                                                        ui.close_menu();
-                                                    }
-                                                });
-                                            }
-                                            if crate::ui::chrome::tab_bar_new_tab_button(ui, theme)
-                                                .clicked()
-                                            {
-                                                if self.selected_session_id.is_some() {
-                                                    self.open_new_tab_from_selection(ctx);
-                                                } else {
-                                                    self.show_new_session_dialog = true;
-                                                }
-                                            }
-                                            if let Some(idx) = to_close {
-                                                self.request_close_tab_at(idx);
-                                            }
-                                            if let Some(idx) = disconnect_ssh_idx {
-                                                self.disconnect_ssh_keep_buffer_at(ctx, idx);
-                                            }
-                                            if let Some(idx) = reconnect_idx {
-                                                self.reconnect_tab_at(ctx, idx);
-                                            }
-                                            if let Some(idx) = split_h_idx {
-                                                self.active_tab = Some(idx);
-                                                self.split_tab_at(
-                                                    ctx,
-                                                    idx,
-                                                    crate::ui::tab_pane::TabLayout::SplitHorizontal,
-                                                );
-                                            }
-                                            if let Some(idx) = split_v_idx {
-                                                self.active_tab = Some(idx);
-                                                self.split_tab_at(
-                                                    ctx,
-                                                    idx,
-                                                    crate::ui::tab_pane::TabLayout::SplitVertical,
-                                                );
-                                            }
-                                            if let Some(idx) = unsplit_idx {
-                                                self.active_tab = Some(idx);
-                                                self.unsplit_tab_at(ctx, idx);
-                                            }
-                                            if let Some((ti, pi)) = close_pane_tab {
-                                                self.active_tab = Some(ti);
-                                                self.close_pane_tab_at(ctx, ti, pi);
-                                            }
-                                            if let Some(idx) = close_others {
-                                                if idx < self.tabs.len() {
-                                                    let kept = self.tabs.remove(idx);
-                                                    for t in self.tabs.iter_mut() {
-                                                        t.disconnect_all_panes();
-                                                    }
-                                                    self.tabs.clear();
-                                                    self.tabs.push(kept);
-                                                    self.active_tab = Some(0);
-                                                    self.selected_session_id = self
-                                                        .tabs
-                                                        .first()
-                                                        .map(|t| t.primary_session_id());
-                                                }
-                                            }
-                                            if let Some(idx) = close_right {
-                                                if idx + 1 < self.tabs.len() {
-                                                    for t in self.tabs.iter_mut().skip(idx + 1) {
-                                                        t.disconnect_all_panes();
-                                                    }
-                                                    self.tabs.truncate(idx + 1);
-                                                    self.active_tab = Some(idx);
-                                                    self.selected_session_id = self
-                                                        .tabs
-                                                        .get(idx)
-                                                        .map(|t| t.primary_session_id());
-                                                }
-                                            }
+                                        ui.allocate_ui_at_rect(tab_row_rect, |ui| {
+                                            ui.painter().rect_filled(
+                                                tab_row_rect,
+                                                egui::Rounding::ZERO,
+                                                theme.color_panel_header_band_fill(),
+                                            );
+                                            ui.set_clip_rect(tab_row_rect);
+                                            ui.set_min_width(tab_row_w);
+                                            let prev_padding = ui.spacing().button_padding;
+                                            let prev_item_spacing = ui.spacing().item_spacing;
+                                            ui.spacing_mut().button_padding = egui::vec2(
+                                                theme.spacing_tab_x(),
+                                                theme.spacing_tab_y(),
+                                            );
+                                            ui.spacing_mut().item_spacing =
+                                                egui::vec2(theme.spacing_region_gap(), 0.0);
+                                            ui.horizontal(|ui| {
+                                                ui.set_min_height(terminal_header_row_h);
+                                                self.render_session_tab_strip(ui, ctx, theme);
+                                            });
+                                            ui.spacing_mut().button_padding = prev_padding;
+                                            ui.spacing_mut().item_spacing = prev_item_spacing;
                                         });
-                                        ui.spacing_mut().button_padding = prev_padding;
-                                        ui.spacing_mut().item_spacing = prev_item_spacing;
-                                    });
-                                    // 分隔线在终端正文之后再以 Foreground 重画一次，
-                                    // 避免终端顶边背景盖住这条线（清屏后又露出来的现象）。
-                                    let tab_sep_stroke = egui::Stroke::new(
-                                        1.0,
-                                        theme.color_panel_header_divider(),
-                                    );
-                                    ui.painter().hline(
-                                        tab_row_rect.x_range(),
-                                        tab_row_rect.max.y - 0.5,
-                                        tab_sep_stroke,
-                                    );
+                                        // 只记 stroke，等终端正文之后再画一次，避免双线叠亮；
+                                        // 也不用 Foreground，以免盖住顶栏菜单。
+                                        tab_sep_stroke = egui::Stroke::new(
+                                            1.0,
+                                            theme.color_tab_bar_divider(),
+                                        );
+                                    }
 
                                     let search_h = if self.show_terminal_search {
                                         theme.size_terminal_search_bar_h()
@@ -657,17 +496,15 @@ impl MistTermApp {
                                             }
                                         },
                                     );
-                                    ui.painter()
-                                        .clone()
-                                        .with_layer_id(egui::LayerId::new(
-                                            egui::Order::Foreground,
-                                            egui::Id::new("mist_tab_bar_sep"),
-                                        ))
-                                        .hline(
+                                    // 终端正文之后重画分隔线，盖住清屏后的顶边；
+                                    // 必须留在 Middle，勿用 Foreground（否则会盖住顶栏下拉菜单）。
+                                    if !immersive && tab_row_rect != egui::Rect::NOTHING {
+                                        ui.painter().hline(
                                             tab_row_rect.x_range(),
                                             tab_row_rect.max.y - 0.5,
                                             tab_sep_stroke,
                                         );
+                                    }
                                     if self.show_terminal_search
                                         && self.show_terminal_search_bar(ui, theme)
                                     {
@@ -676,16 +513,31 @@ impl MistTermApp {
                                     }
                                     if self.command_history_overlay.open {
                                         if let Some(idx) = self.active_tab {
-                                            if let Some(tab) = self.tabs.get(idx) {
-                                                let rect = tab
-                                                    .active_pane()
-                                                    .map(|p| p.last_term_rect)
-                                                    .unwrap_or(egui::Rect::NOTHING);
+                                            let (rect, active_sid, active_sname) =
+                                                if let Some(tab) = self.tabs.get(idx) {
+                                                    let rect = tab
+                                                        .active_pane()
+                                                        .map(|p| p.last_term_rect)
+                                                        .unwrap_or(egui::Rect::NOTHING);
+                                                    let sid = tab.primary_session_id();
+                                                    let name = self
+                                                        .session_manager
+                                                        .get_session(&sid)
+                                                        .map(|s| s.name.clone());
+                                                    (Some(rect), Some(sid), name)
+                                                } else {
+                                                    (None, None, None)
+                                                };
+                                            if let (Some(rect), Some(active_sid)) =
+                                                (rect, active_sid)
+                                            {
                                                 match self.command_history_overlay.show(
                                                     ctx,
                                                     theme,
                                                     &self.command_history,
                                                     rect,
+                                                    Some(active_sid.as_str()),
+                                                    active_sname.as_deref(),
                                                 ) {
                                                     CommandHistoryAction::Close => {
                                                         self.command_history_overlay.open = false;
@@ -705,6 +557,14 @@ impl MistTermApp {
                                                             self.command_history_overlay
                                                                 .selected -= 1;
                                                         }
+                                                    }
+                                                    CommandHistoryAction::ComposeFragment {
+                                                        title,
+                                                        commands,
+                                                    } => {
+                                                        self.save_composed_fragment_from_history(
+                                                            ctx, title, commands,
+                                                        );
                                                     }
                                                     CommandHistoryAction::None => {}
                                                 }
@@ -1978,4 +1838,257 @@ impl MistTermApp {
             app.dismiss_agent_audit_banner_active();
         }
     }
+
+    /// 会话标签条：标签芯片 + 新建 + 右键菜单动作。沉浸式顶栏与普通模式终端列共用。
+    pub(crate) fn render_session_tab_strip(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+    ) {
+        ui.horizontal(|ui| {
+            let mut to_close = None;
+            let mut close_others = None;
+            let mut close_right = None;
+            let mut disconnect_ssh_idx = None;
+            let mut reconnect_idx = None;
+            let mut split_h_idx = None;
+            let mut split_v_idx = None;
+            let mut unsplit_idx = None;
+            let mut close_pane_tab = None;
+            for (idx, tab) in self.tabs.iter().enumerate() {
+                let active = self.active_tab == Some(idx);
+                let tab_label = tab.display_title();
+                let tab_hover = self
+                    .session_manager
+                    .get_session(&tab.primary_session_id())
+                    .map(|s| {
+                        format!(
+                            "{} · {}@{}",
+                            s.name, s.username, s.host
+                        )
+                    })
+                    .unwrap_or_else(|| tab_label.clone());
+                let env_color = self
+                    .session_manager
+                    .get_session(&tab.primary_session_id())
+                    .map(|s| theme.session_tab_accent_color(s));
+                let tab_chip = crate::ui::chrome::session_tab_chip(
+                    ui,
+                    theme,
+                    &tab_label,
+                    active,
+                    tab.any_connected(),
+                    false,
+                    env_color,
+                );
+                let tab_resp =
+                    tab_chip.response.on_hover_text(tab_hover);
+                if tab_chip.close_clicked {
+                    to_close = Some(idx);
+                } else if tab_resp.clicked() {
+                    self.active_tab = Some(idx);
+                    self.selected_session_id =
+                        Some(tab.primary_session_id());
+                }
+                tab_resp.context_menu(|ui| {
+                    crate::ui::chrome::apply_context_menu_style(
+                        ui, theme,
+                    );
+                    if tab.any_connected_or_connecting()
+                        && crate::ui::chrome::popup_menu_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(
+                                ctx,
+                                "Disconnect SSH (keep output)",
+                                "断开 SSH(保留输出)",
+                            ),
+                        )
+                        .clicked()
+                    {
+                        disconnect_ssh_idx = Some(idx);
+                        ui.close_menu();
+                    }
+                    if crate::ui::chrome::popup_menu_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(
+                            ctx,
+                            "Reconnect this tab",
+                            "重连此标签",
+                        ),
+                    )
+                    .clicked()
+                    {
+                        reconnect_idx = Some(idx);
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    if tab.can_split() {
+                        if crate::ui::chrome::popup_menu_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(
+                                ctx,
+                                "Split left / right",
+                                "左右分屏",
+                            ),
+                        )
+                        .clicked()
+                        {
+                            split_h_idx = Some(idx);
+                            ui.close_menu();
+                        }
+                        if crate::ui::chrome::popup_menu_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(
+                                ctx,
+                                "Split top / bottom",
+                                "上下分屏",
+                            ),
+                        )
+                        .clicked()
+                        {
+                            split_v_idx = Some(idx);
+                            ui.close_menu();
+                        }
+                    }
+                    if tab.is_split() {
+                        if crate::ui::chrome::popup_menu_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(
+                                ctx,
+                                "Close active pane",
+                                "关闭当前窗格",
+                            ),
+                        )
+                        .clicked()
+                        {
+                            close_pane_tab =
+                                Some((idx, tab.active_pane));
+                            ui.close_menu();
+                        }
+                        if crate::ui::chrome::popup_menu_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(
+                                ctx,
+                                "Merge split panes",
+                                "合并分屏",
+                            ),
+                        )
+                        .clicked()
+                        {
+                            unsplit_idx = Some(idx);
+                            ui.close_menu();
+                        }
+                    }
+                    ui.separator();
+                    if crate::ui::chrome::popup_menu_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(
+                            ctx,
+                            "Close other tabs",
+                            "关闭其他标签",
+                        ),
+                    )
+                    .clicked()
+                    {
+                        close_others = Some(idx);
+                        ui.close_menu();
+                    }
+                    if crate::ui::chrome::popup_menu_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(
+                            ctx,
+                            "Close tabs to the right",
+                            "关闭右侧标签",
+                        ),
+                    )
+                    .clicked()
+                    {
+                        close_right = Some(idx);
+                        ui.close_menu();
+                    }
+                });
+            }
+            if crate::ui::chrome::tab_bar_new_tab_button(ui, theme)
+                .clicked()
+            {
+                if self.selected_session_id.is_some() {
+                    self.open_new_tab_from_selection(ctx);
+                } else {
+                    self.show_new_session_dialog = true;
+                }
+            }
+            if let Some(idx) = to_close {
+                self.request_close_tab_at(idx);
+            }
+            if let Some(idx) = disconnect_ssh_idx {
+                self.disconnect_ssh_keep_buffer_at(ctx, idx);
+            }
+            if let Some(idx) = reconnect_idx {
+                self.reconnect_tab_at(ctx, idx);
+            }
+            if let Some(idx) = split_h_idx {
+                self.active_tab = Some(idx);
+                self.split_tab_at(
+                    ctx,
+                    idx,
+                    crate::ui::tab_pane::TabLayout::SplitHorizontal,
+                );
+            }
+            if let Some(idx) = split_v_idx {
+                self.active_tab = Some(idx);
+                self.split_tab_at(
+                    ctx,
+                    idx,
+                    crate::ui::tab_pane::TabLayout::SplitVertical,
+                );
+            }
+            if let Some(idx) = unsplit_idx {
+                self.active_tab = Some(idx);
+                self.unsplit_tab_at(ctx, idx);
+            }
+            if let Some((ti, pi)) = close_pane_tab {
+                self.active_tab = Some(ti);
+                self.close_pane_tab_at(ctx, ti, pi);
+            }
+            if let Some(idx) = close_others {
+                if idx < self.tabs.len() {
+                    let kept = self.tabs.remove(idx);
+                    for t in self.tabs.iter_mut() {
+                        t.disconnect_all_panes();
+                    }
+                    self.tabs.clear();
+                    self.tabs.push(kept);
+                    self.active_tab = Some(0);
+                    self.selected_session_id = self
+                        .tabs
+                        .first()
+                        .map(|t| t.primary_session_id());
+                }
+            }
+            if let Some(idx) = close_right {
+                if idx + 1 < self.tabs.len() {
+                    for t in self.tabs.iter_mut().skip(idx + 1) {
+                        t.disconnect_all_panes();
+                    }
+                    self.tabs.truncate(idx + 1);
+                    self.active_tab = Some(idx);
+                    self.selected_session_id = self
+                        .tabs
+                        .get(idx)
+                        .map(|t| t.primary_session_id());
+                }
+            }
+                                        
+        });
+    }
+
 }

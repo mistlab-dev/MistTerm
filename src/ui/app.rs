@@ -117,7 +117,7 @@ struct MistTermUiPersist {
     session_log_include_ansi: bool,
     #[serde(default)]
     ssh_import_banner_dismissed: bool,
-    /// 左侧 Activity Rail 是否隐藏(默认显示)。
+    /// 沉浸式模式(默认关)：藏活动栏与顶栏菜单，标签进顶栏。持久化字段名沿用旧键。
     #[serde(default)]
     activity_rail_collapsed: bool,
 }
@@ -266,8 +266,10 @@ pub struct MistTermApp {
 
     /// 侧边栏状态
     sidebar_collapsed: bool,
-    /// 左侧 Activity Rail 隐藏后完全不占位；默认 false=显示。
+    /// 沉浸式：藏活动栏与顶栏菜单，标签进顶栏；默认 false。
     activity_rail_collapsed: bool,
+    /// 最近一次应用到窗口的 decorations 状态(避免每帧 set_decorations)。
+    window_decorated_applied: Option<bool>,
     sidebar_width: f32,
     /// 用户曾主动折叠左侧连接栏；宽屏时响应式不自动展开(FUNCTIONAL_SPEC §8 注意)
     sidebar_user_dismissed_responsive: bool,
@@ -698,6 +700,69 @@ impl MistTermApp {
         ));
     }
 
+    /// 命令历史多选合成：至少 2 条，按时间正序换行拼成一条多行片段。
+    pub(crate) fn save_composed_fragment_from_history(
+        &mut self,
+        ctx: &egui::Context,
+        title: String,
+        commands: Vec<String>,
+    ) {
+        let lines: Vec<String> = commands
+            .into_iter()
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty())
+            .collect();
+        if lines.len() < 2 {
+            self.notify_auto(
+                crate::i18n::tr(
+                    ctx,
+                    "A snippet needs at least 2 commands",
+                    "命令片段至少需要 2 条命令",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        let body = lines.join("\n");
+        let personal = self.fragment_manager.list().to_vec();
+        let covered = personal.iter().any(|f| {
+            let a: String = f.command.split_whitespace().collect::<Vec<_>>().join(" ");
+            let b: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
+            a == b
+        });
+        if covered {
+            self.notify_auto(
+                crate::i18n::tr(
+                    ctx,
+                    "Already in personal library",
+                    "个人库已有相同命令片段",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        let title = {
+            let t = title.trim();
+            if t.is_empty() {
+                format!("组合 · {} 条", lines.len())
+            } else {
+                t.to_string()
+            }
+        };
+        self.fragment_manager
+            .add_fragment(title.clone(), body, "from-history".into());
+        let _ = self
+            .fragment_manager
+            .save(&FragmentManager::default_config_path());
+        self.refresh_fragment_analytics_dashboard();
+        self.notify_auto(format!(
+            "{} {}（{}）",
+            crate::i18n::tr(ctx, "Snippet saved:", "已保存片段："),
+            title,
+            crate::i18n::tr(ctx, "multi-line", "多行")
+        ));
+    }
+
     pub(crate) fn open_ask_knowledge_dialog(&mut self) {
         self.ask_knowledge_searched = false;
         self.ask_knowledge_hits.clear();
@@ -975,6 +1040,7 @@ impl MistTermApp {
             selected_session_id,
             sidebar_collapsed: true,
             activity_rail_collapsed: false,
+            window_decorated_applied: None,
             sidebar_width: layout_util::default_sidebar_width(&cc.egui_ctx),
             sidebar_user_dismissed_responsive: true,
             last_responsive_layout_band: None,
@@ -4079,13 +4145,31 @@ impl MistTermApp {
         }
     }
 
-    /// 显示/隐藏左侧 Activity Rail；隐藏时同步收起连接抽屉。
+    /// 沉浸式模式（原「隐藏活动栏」）：藏左侧活动栏与顶栏菜单，会话标签抬到顶栏；
+    /// 开启时同步收起连接列表。
     pub(crate) fn toggle_activity_rail(&mut self) {
         self.activity_rail_collapsed = !self.activity_rail_collapsed;
         if self.activity_rail_collapsed {
             self.sidebar_collapsed = true;
             self.sidebar_user_dismissed_responsive = true;
         }
+    }
+
+    /// Win/Linux 沉浸式关掉系统标题栏，退出时恢复；macOS 保持系统边框。
+    pub(crate) fn sync_window_decorations_for_immersive(
+        &mut self,
+        frame: &mut eframe::Frame,
+        immersive: bool,
+    ) {
+        if cfg!(target_os = "macos") {
+            return;
+        }
+        let want_decorated = !immersive;
+        if self.window_decorated_applied == Some(want_decorated) {
+            return;
+        }
+        frame.set_decorations(want_decorated);
+        self.window_decorated_applied = Some(want_decorated);
     }
 
     /// 切换右侧系统监控面板。
@@ -7421,6 +7505,15 @@ impl MistTermApp {
             MacMenuAction::HelpShortcuts => {
                 self.help_docs_dialog.open_page(HelpPage::Shortcuts);
             }
+            MacMenuAction::AskKnowledge => {
+                self.open_ask_knowledge_dialog();
+            }
+            MacMenuAction::AuditTimeline => {
+                self.open_audit_timeline_dialog();
+            }
+            MacMenuAction::InstallAuditAgent => {
+                self.open_agent_install_dialog();
+            }
             MacMenuAction::HelpReportIssue => {
                 self.open_report_issue(ctx);
             }
@@ -8056,7 +8149,7 @@ impl eframe::App for MistTermApp {
             }) {
                 self.focus_fragment_panel_search(ctx);
             }
-            // ⌘B / Ctrl+B：显示/隐藏 Activity Rail
+            // ⌘B / Ctrl+B：沉浸式模式（藏活动栏+菜单，标签进顶栏）
             if ctx.input(|i| {
                 self.app_shortcut_overrides_terminal(i)
                     && Self::input_primary_mod(i)

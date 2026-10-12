@@ -7,6 +7,17 @@ pub fn apply_menu_popup_style(ui: &mut Ui, theme: &Theme) {
     ui.style_mut().spacing.item_spacing = egui::vec2(4.0, 2.0);
 }
 
+/// 菜单分组小标题（不可点；与分隔线搭配用）。
+pub fn popup_menu_section_label(ui: &mut Ui, theme: &Theme, text: &str) {
+    ui.add_space(4.0);
+    ui.label(
+        RichText::new(text)
+            .size(theme.font_size_caption())
+            .color(theme.text_tertiary()),
+    );
+    ui.add_space(2.0);
+}
+
 /// 右键菜单 / 终端 Tab 菜单等(与顶栏菜单同色)
 #[inline]
 pub fn apply_context_menu_style(ui: &mut Ui, theme: &Theme) {
