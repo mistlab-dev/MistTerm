@@ -124,20 +124,52 @@ impl AiContext {
     }
 
     /// 终端输出是否像错误信息（启发式）。
+    ///
+    /// 刻意不用裸词 `error`/`failed` 子串匹配：`ps -ef` 等进程列表里进程名常带这些词，
+    /// 会误判成功命令并弹出「保存为片段?」。
     pub fn looks_like_error_output(text: &str) -> bool {
         let lower = text.to_lowercase();
-        [
-            "error",
-            "failed",
-            "failure",
+        const PHRASES: &[&str] = &[
             "permission denied",
-            "not found",
-            "fatal",
-            "panic",
-            "denied",
-        ]
-        .iter()
-        .any(|k| lower.contains(k))
+            "access denied",
+            "no such file",
+            "no such directory",
+            "command not found",
+            "not found:",
+            "cannot open",
+            "can't open",
+            "no such",
+            "connection refused",
+            "connection timed out",
+            "operation not permitted",
+            "error:",
+            "failed:",
+            "failure:",
+            "fatal:",
+            "panic:",
+            "traceback (most recent call last)",
+        ];
+        if PHRASES.iter().any(|k| lower.contains(k)) {
+            return true;
+        }
+        // 行首常见 shell / 工具报错前缀（只看末尾若干行，贴近刚执行完的输出）
+        for line in lower.lines().rev().take(16) {
+            let t = line.trim_start();
+            if t.starts_with("error ")
+                || t.starts_with("error\t")
+                || t.starts_with("failed ")
+                || t.starts_with("fatal ")
+                || t.starts_with("panic ")
+                || t.starts_with("bash:")
+                || t.starts_with("zsh:")
+                || t.starts_with("sh:")
+                || t.starts_with("fish:")
+                || t.starts_with("sudo:")
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// 为 QuickAction 构建提示词
@@ -366,7 +398,13 @@ mod tests {
     #[test]
     fn looks_like_error_detects_common_patterns() {
         assert!(AiContext::looks_like_error_output("Permission denied"));
+        assert!(AiContext::looks_like_error_output("bash: foo: command not found"));
+        assert!(AiContext::looks_like_error_output("Error: boom"));
         assert!(!AiContext::looks_like_error_output("all ok"));
+        // ps -ef 进程名里带 error 不应误判
+        assert!(!AiContext::looks_like_error_output(
+            "root  123  0.0  0.1 /usr/libexec/errorreporter --daemon\nuser 456 ps -ef"
+        ));
     }
 
     #[test]

@@ -2391,7 +2391,8 @@ impl MistTermApp {
         let Some(pane) = tab.active_pane() else {
             return;
         };
-        let tail = pane.terminal.tail_plain_text(30);
+        // 只看末尾几行，避免往上翻到更早失败输出把成功命令当成失败路径。
+        let tail = pane.terminal.tail_plain_text(10);
         if !AiContext::looks_like_error_output(&tail) {
             return;
         }
