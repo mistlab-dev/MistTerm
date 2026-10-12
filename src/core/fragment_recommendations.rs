@@ -430,8 +430,10 @@ fn is_trivial_command(cmd: &str) -> bool {
         first,
         "cd"
             | "ls"
+            | "ll"
             | "pwd"
             | "clear"
+            | "cls"
             | "exit"
             | "logout"
             | ":"
@@ -439,7 +441,17 @@ fn is_trivial_command(cmd: &str) -> bool {
             | "echo"
             | "true"
             | "false"
-    ) && c.split_whitespace().count() <= 2
+            | "ps"
+            | "top"
+            | "htop"
+            | "whoami"
+            | "date"
+            | "uname"
+            | "df"
+            | "free"
+            | "id"
+            | "uptime"
+    ) && c.split_whitespace().count() <= 4
 }
 
 fn covered_by_library(cmd: &str, fragments: &[FragmentStats]) -> bool {

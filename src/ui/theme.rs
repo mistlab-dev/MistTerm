@@ -1157,13 +1157,24 @@ impl Theme {
         }
     }
 
-    /// 终端内联选区高亮(画在字形之下；暗色用半透明白，接近 Windows Terminal)。
+    /// 终端内联选区高亮(画在字形之下)。
+    /// 暗色用更实的浅底 + 深字，避免灰字压在浅灰选区上看不清。
     #[inline]
     pub fn color_terminal_selection(&self) -> Color32 {
         if self.is_light_theme() {
-            self.accent_alpha(72)
+            self.accent_alpha(140)
         } else {
-            Color32::from_rgba_unmultiplied(255, 255, 255, 56)
+            Color32::from_rgb(196, 204, 220)
+        }
+    }
+
+    /// 终端选区内的字色（与 [`Self::color_terminal_selection`] 成对，保证对比度）。
+    #[inline]
+    pub fn color_terminal_selection_fg(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::WHITE
+        } else {
+            Color32::from_rgb(18, 20, 28)
         }
     }
 

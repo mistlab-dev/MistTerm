@@ -567,10 +567,16 @@ impl MistTermApp {
                                         ui.spacing_mut().button_padding = prev_padding;
                                         ui.spacing_mut().item_spacing = prev_item_spacing;
                                     });
+                                    // 分隔线在终端正文之后再以 Foreground 重画一次，
+                                    // 避免终端顶边背景盖住这条线（清屏后又露出来的现象）。
+                                    let tab_sep_stroke = egui::Stroke::new(
+                                        1.0,
+                                        theme.color_panel_header_divider(),
+                                    );
                                     ui.painter().hline(
                                         tab_row_rect.x_range(),
                                         tab_row_rect.max.y - 0.5,
-                                        egui::Stroke::new(1.0, theme.color_panel_header_divider()),
+                                        tab_sep_stroke,
                                     );
 
                                     let search_h = if self.show_terminal_search {
@@ -651,6 +657,17 @@ impl MistTermApp {
                                             }
                                         },
                                     );
+                                    ui.painter()
+                                        .clone()
+                                        .with_layer_id(egui::LayerId::new(
+                                            egui::Order::Foreground,
+                                            egui::Id::new("mist_tab_bar_sep"),
+                                        ))
+                                        .hline(
+                                            tab_row_rect.x_range(),
+                                            tab_row_rect.max.y - 0.5,
+                                            tab_sep_stroke,
+                                        );
                                     if self.show_terminal_search
                                         && self.show_terminal_search_bar(ui, theme)
                                     {

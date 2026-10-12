@@ -1055,7 +1055,14 @@ impl TerminalView {
                         Some((sl, sc, el, ec))
                     };
                     let selection_arg = selection_key.map(|(sl, sc, el, ec)| {
-                        (sl, sc, el, ec, theme.color_terminal_selection())
+                        (
+                            sl,
+                            sc,
+                            el,
+                            ec,
+                            theme.color_terminal_selection(),
+                            theme.color_terminal_selection_fg(),
+                        )
                     });
                     let cache_key = (
                         self.vt_visual_generation,

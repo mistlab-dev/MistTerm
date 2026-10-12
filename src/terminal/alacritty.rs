@@ -316,7 +316,8 @@ impl Terminal {
     ///
     /// **背景不写入 `TextFormat.background`**：egui 会对 background 做 `expand(1.0)`，
     /// 在终端密排下会压住下一行字形。调用方须在文本之下自绘 `cell_bgs`，再铺 galley。
-    /// `selection`: 绝对网格选区 `(start_line, start_col, end_line, end_col)`（列 end 开区间）+ 选区底色。
+    /// `selection`: 绝对网格选区 `(start_line, start_col, end_line, end_col)`（列 end 开区间）
+    /// + 选区底色 + 选区字色。
     pub fn get_layout_job(
         &self,
         font_size: f32,
@@ -324,7 +325,7 @@ impl Terminal {
         cell_w: f32,
         shell: &TerminalShellStyle,
         highlight: Option<(usize, usize, usize)>,
-        selection: Option<(i32, usize, i32, usize, Color32)>,
+        selection: Option<(i32, usize, i32, usize, Color32, Color32)>,
     ) -> (LayoutJob, Vec<Vec<Color32>>) {
         let default_fg = shell.default_fg;
         let terminal_bg = shell.terminal_bg;
@@ -366,7 +367,7 @@ impl Terminal {
             }
         }
 
-        if let Some((sl, sc, el, ec, sel_bg)) = selection {
+        if let Some((sl, sc, el, ec, sel_bg, sel_fg)) = selection {
             let offset = content.display_offset;
             for abs_line in sl..=el {
                 let pt = Point::new(Line(abs_line), Column(0));
@@ -382,6 +383,7 @@ impl Terminal {
                 let c0 = c0.min(self.width);
                 let c1 = c1.min(self.width);
                 for x in c0..c1 {
+                    rows[y][x].1 = sel_fg;
                     rows[y][x].2 = sel_bg;
                 }
             }
