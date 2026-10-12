@@ -59,10 +59,6 @@ impl MistTermApp {
                 ui.close_menu();
             }
             ui.separator();
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.preferences).clicked() {
-                self.show_preferences_dialog = true;
-                ui.close_menu();
-            }
             if crate::ui::chrome::popup_menu_button(ui, theme, crate::i18n::tr(ctx, "Quit", "退出"))
                 .clicked()
             {
@@ -213,11 +209,11 @@ impl MistTermApp {
                 self.show_preferences_dialog = true;
                 ui.close_menu();
             }
-            ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.ai_settings).clicked() {
                 self.show_ai_settings_dialog = true;
                 ui.close_menu();
             }
+            ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.fragment_library).clicked() {
                 self.fragment_library.open = true;
                 ui.close_menu();
@@ -241,49 +237,27 @@ impl MistTermApp {
                 }
                 ui.close_menu();
             }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.team_account).clicked() {
-                self.show_preferences_dialog = true;
-                ui.close_menu();
-            }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.cloud_sync).clicked() {
-                if self.ensure_right_dock_allowed_or_warn(ctx) {
-                    self.open_right_dock_panel(ActiveRightDock::CloudSync);
-                }
-                ui.close_menu();
-            }
             ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.session_logs).clicked() {
                 self.menu_open_session_log_browser(ctx);
                 ui.close_menu();
             }
-            if crate::ui::chrome::popup_menu_button(
-                ui,
-                theme,
-                crate::i18n::tr(ctx, "Audit timeline", "审计时间线"),
-            )
-            .clicked()
-            {
-                self.open_audit_timeline_dialog();
+        });
+        egui::menu::menu_button(ui, label(l.team_menu), |ui| {
+            crate::ui::chrome::apply_menu_popup_style(ui, theme);
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.team_sign_in).clicked() {
+                self.show_preferences_dialog = true;
                 ui.close_menu();
             }
-            if crate::ui::chrome::popup_menu_button(
-                ui,
-                theme,
-                crate::i18n::tr(ctx, "Install audit Agent", "安装审计 Agent"),
-            )
-            .clicked()
-            {
-                self.open_agent_install_dialog();
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.team_members).clicked() {
+                self.team_members_dialog.open(&mut self.team_service);
                 ui.close_menu();
             }
-            if crate::ui::chrome::popup_menu_button(
-                ui,
-                theme,
-                crate::i18n::tr(ctx, "Ask: how do we…", "问：我们怎么……"),
-            )
-            .clicked()
-            {
-                self.open_ask_knowledge_dialog();
+            ui.separator();
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.cloud_sync).clicked() {
+                if self.ensure_right_dock_allowed_or_warn(ctx) {
+                    self.open_right_dock_panel(ActiveRightDock::CloudSync);
+                }
                 ui.close_menu();
             }
         });
@@ -317,6 +291,20 @@ impl MistTermApp {
                 }
                 ui.close_menu();
             }
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.ask_knowledge).clicked() {
+                self.open_ask_knowledge_dialog();
+                ui.close_menu();
+            }
+            ui.separator();
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.audit_timeline).clicked() {
+                self.open_audit_timeline_dialog();
+                ui.close_menu();
+            }
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.install_audit_agent).clicked() {
+                self.open_agent_install_dialog();
+                ui.close_menu();
+            }
+            ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.help_report_issue).clicked() {
                 self.open_report_issue(ctx);
                 ui.close_menu();

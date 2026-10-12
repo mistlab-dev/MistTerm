@@ -50,6 +50,9 @@ pub enum MacMenuAction {
     HelpUserGuide,
     HelpOnlineDocs,
     HelpShortcuts,
+    AskKnowledge,
+    AuditTimeline,
+    InstallAuditAgent,
     HelpReportIssue,
     About,
     CheckForUpdates,
@@ -100,6 +103,9 @@ pub struct NativeAppMenu {
     help_guide: MenuItem,
     help_online_docs: MenuItem,
     help_keys: MenuItem,
+    ask_knowledge: MenuItem,
+    audit_timeline: MenuItem,
+    install_audit_agent: MenuItem,
     help_report_issue: MenuItem,
     help_about: MenuItem,
     last_lang: Option<UiLanguage>,
@@ -324,6 +330,16 @@ impl NativeAppMenu {
         let help_online_docs =
             MenuItem::with_id("mistterm.help.online_docs", l.help_online_docs, true, None);
         let help_keys = MenuItem::with_id("mistterm.help.shortcuts", l.help_shortcuts, true, None);
+        let ask_knowledge =
+            MenuItem::with_id("mistterm.help.ask_knowledge", l.ask_knowledge, true, None);
+        let audit_timeline =
+            MenuItem::with_id("mistterm.help.audit_timeline", l.audit_timeline, true, None);
+        let install_audit_agent = MenuItem::with_id(
+            "mistterm.help.install_audit_agent",
+            l.install_audit_agent,
+            true,
+            None,
+        );
         let help_report_issue =
             MenuItem::with_id("mistterm.help.report_issue", l.help_report_issue, true, None);
         let help_about = MenuItem::with_id("mistterm.help.about", l.help_about, true, None);
@@ -331,6 +347,11 @@ impl NativeAppMenu {
         help.append(&help_keys)?;
         help.append(&PredefinedMenuItem::separator())?;
         help.append(&help_online_docs)?;
+        help.append(&ask_knowledge)?;
+        help.append(&PredefinedMenuItem::separator())?;
+        help.append(&audit_timeline)?;
+        help.append(&install_audit_agent)?;
+        help.append(&PredefinedMenuItem::separator())?;
         help.append(&help_report_issue)?;
         help.append(&PredefinedMenuItem::separator())?;
         help.append(&help_about)?;
@@ -391,6 +412,9 @@ impl NativeAppMenu {
             help_guide,
             help_online_docs,
             help_keys,
+            ask_knowledge,
+            audit_timeline,
+            install_audit_agent,
             help_report_issue,
             help_about,
             last_lang: Some(lang),
@@ -435,6 +459,9 @@ impl NativeAppMenu {
         let _ = self.help_guide.set_text(l.help_guide);
         let _ = self.help_online_docs.set_text(l.help_online_docs);
         let _ = self.help_keys.set_text(l.help_shortcuts);
+        let _ = self.ask_knowledge.set_text(l.ask_knowledge);
+        let _ = self.audit_timeline.set_text(l.audit_timeline);
+        let _ = self.install_audit_agent.set_text(l.install_audit_agent);
         let _ = self.help_report_issue.set_text(l.help_report_issue);
         let _ = self.help_about.set_text(l.help_about);
     }
@@ -551,6 +578,9 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.help.guide" => Some(MacMenuAction::HelpUserGuide),
         "mistterm.help.online_docs" => Some(MacMenuAction::HelpOnlineDocs),
         "mistterm.help.shortcuts" => Some(MacMenuAction::HelpShortcuts),
+        "mistterm.help.ask_knowledge" => Some(MacMenuAction::AskKnowledge),
+        "mistterm.help.audit_timeline" => Some(MacMenuAction::AuditTimeline),
+        "mistterm.help.install_audit_agent" => Some(MacMenuAction::InstallAuditAgent),
         "mistterm.help.report_issue" => Some(MacMenuAction::HelpReportIssue),
         _ if id.starts_with("mistterm.view.theme.") => {
             id.strip_prefix("mistterm.view.theme.")

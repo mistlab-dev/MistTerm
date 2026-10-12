@@ -1186,7 +1186,8 @@ fn paint_vscode_tab_bottom_indicator(
         egui::pos2(rect.left(), top),
         egui::pos2(rect.right(), bottom),
     );
-    painter.rect_filled(bar, 0.0, theme.accent_color());
+    // 略淡于满色 accent，避免标签底指示条刺眼
+    painter.rect_filled(bar, 0.0, theme.accent_dim_color());
 }
 
 /// 终端区会话 Tab：整块底色(圆点 + 标题 + 关闭)，对齐 proto `.tab`。
@@ -3074,7 +3075,7 @@ pub use chrome_menu::{
     menu_item_label, menu_item_label_accel, menu_item_label_accel_shift, menu_theme_check_slot,
     menu_theme_item, menu_toggle_item, popup_menu_button, popup_menu_button_accel,
     popup_menu_button_accel_shift, popup_menu_button_enabled, popup_menu_button_shortcut,
-    popup_menu_button_shortcut_enabled, prime_menu_popup_width,
+    popup_menu_button_shortcut_enabled, popup_menu_section_label, prime_menu_popup_width,
 };
 
 /// 偏好 / 设置区小节标题(与表单标签区分层级)
@@ -3541,6 +3542,115 @@ pub fn title_bar_traffic_lights(ui: &mut Ui, theme: &Theme) {
         ui.painter().circle_filled(egui::pos2(x, cy), r, color);
         x += r * 2.0 + gap;
     }
+}
+
+/// 自绘标题栏窗口按钮(Win/Linux 无边框沉浸式用)。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WindowCaptionActions {
+    pub minimize: bool,
+    pub toggle_maximize: bool,
+    pub close: bool,
+}
+
+pub fn window_caption_buttons(
+    ui: &mut Ui,
+    theme: &Theme,
+    maximized: bool,
+    bar_h: f32,
+) -> WindowCaptionActions {
+    let mut out = WindowCaptionActions::default();
+    let btn_w = 40.0;
+    let btn_h = bar_h;
+    let icon = theme.size_icon_glyph().min(12.0);
+    let idle = theme.color_toolbar_glyph_idle();
+    let hover = theme.color_toolbar_glyph_hover();
+
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.horizontal(|ui| {
+            // Minimize
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(btn_w, btn_h), Sense::click());
+            if resp.hovered() {
+                ui.painter()
+                    .rect_filled(r, 0.0, theme.fg_high_alpha(18));
+            }
+            let c = if resp.hovered() { hover } else { idle };
+            let y = r.center().y;
+            ui.painter().line_segment(
+                [
+                    egui::pos2(r.center().x - icon * 0.45, y),
+                    egui::pos2(r.center().x + icon * 0.45, y),
+                ],
+                Stroke::new(1.2, c),
+            );
+            if resp.clicked() {
+                out.minimize = true;
+            }
+
+            // Maximize / Restore
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(btn_w, btn_h), Sense::click());
+            if resp.hovered() {
+                ui.painter()
+                    .rect_filled(r, 0.0, theme.fg_high_alpha(18));
+            }
+            let c = if resp.hovered() { hover } else { idle };
+            let s = icon * 0.85;
+            let rect = egui::Rect::from_center_size(r.center(), egui::vec2(s, s));
+            if maximized {
+                // restore: two overlapping squares
+                let a = rect.translate(egui::vec2(1.5, -1.5));
+                let b = rect.translate(egui::vec2(-1.5, 1.5));
+                ui.painter().rect_stroke(a, 0.0, Stroke::new(1.1, c));
+                ui.painter().rect_filled(
+                    b,
+                    0.0,
+                    theme.chrome_bar_fill(),
+                );
+                ui.painter().rect_stroke(b, 0.0, Stroke::new(1.1, c));
+            } else {
+                ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.1, c));
+            }
+            if resp.clicked() {
+                out.toggle_maximize = true;
+            }
+
+            // Close
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(btn_w, btn_h), Sense::click());
+            if resp.hovered() {
+                ui.painter()
+                    .rect_filled(r, 0.0, Color32::from_rgb(196, 43, 28));
+            }
+            let c = if resp.hovered() {
+                Color32::WHITE
+            } else {
+                idle
+            };
+            let icon_rect =
+                egui::Rect::from_center_size(r.center(), egui::vec2(icon + 2.0, icon + 2.0));
+            icons::paint_icon(ui, icon_rect, IconId::Close, c, icon + 2.0);
+            if resp.clicked() {
+                out.close = true;
+            }
+        });
+    });
+    out
+}
+
+/// 标题栏可拖拽空白区：按住拖动窗口；双击切换最大化。
+pub fn title_bar_drag_region(
+    ui: &mut Ui,
+    frame: &mut eframe::Frame,
+    size: egui::Vec2,
+) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    if resp.double_clicked() {
+        let maximized = frame.info().window_info.maximized;
+        frame.set_maximized(!maximized);
+    } else if resp.is_pointer_button_down_on() {
+        frame.drag_window();
+    }
+    let _ = rect;
+    resp
 }
 
 /// 状态栏内容区可用高度(与底栏 Panel 内边距一致)。

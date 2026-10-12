@@ -54,7 +54,8 @@ class RECT(ctypes.Structure):
 
 
 user32 = ctypes.windll.user32
-MENU_X = [16, 82, 132, 178, 228]  # Terminal, Edit, View, Tools, Help (en UI ~1200px)
+# Terminal, Edit, View, Tools, Team, Help (zh UI + custom chrome, window client ~)
+MENU_X = [51, 78, 120, 160, 200, 240]  # calibrated 1200x800 non-immersive
 ITEM_H = 28
 SEP_H = 8
 
@@ -529,49 +530,60 @@ class GuiWalker:
         self.run_step("menu View > Theme (switch)", view_theme, "menu.view")
 
         # ── Tools menu ──
+        # Preferences, AI Settings | Fragments… | Credentials | Session Logs
         tools_fids = {
+            "Preferences": "dialog.preferences",
             "AI Settings": "panel.ai_settings",
             "Fragment Library": "dialog.fragment_lib",
             "Quick Fragment Picker": "panel.snippets",
             "Command History": "terminal.history",
             "Batch Run on Servers": "dialog.batch_exec",
             "Credentials": "dialog.credentials",
-            "Team Account": "dialog.team",
-            "Cloud Sync": "dialog.cloud_sync",
             "Browse Session Logs": "dialog.session_logs",
         }
         tools_rows = [
-            ("AI Settings", 0),
-            ("Fragment Library", 1),
-            ("Quick Fragment Picker", 2),
-            ("Command History", 3),
-            ("Batch Run on Servers", 4),
-            ("Credentials", 5),
-            ("Team Account", 6),
-            ("Cloud Sync", 7),
-            ("Browse Session Logs", 8),
+            ("Preferences", 0, 0),
+            ("AI Settings", 1, 0),
+            ("Fragment Library", 2, SEP_H),
+            ("Quick Fragment Picker", 3, SEP_H),
+            ("Command History", 4, SEP_H),
+            ("Batch Run on Servers", 5, SEP_H),
+            ("Credentials", 6, SEP_H * 2),
+            ("Browse Session Logs", 7, SEP_H * 3),
         ]
-        tools_extra = 0
-        for name, row in tools_rows:
-            if row >= 5:
-                tools_extra = SEP_H
-            if row >= 8:
-                tools_extra = SEP_H * 2
+        for name, row, extra in tools_rows:
 
-            def action(r=row, e=tools_extra):
+            def action(r=row, e=extra):
                 x = self.open_menu(3)
                 self.pick_item(x, r, e)
 
             self.run_step(f"menu Tools > {name}", action, tools_fids.get(name, "menu.view"))
 
+        # ── Team menu ──
+        for name, row, extra, fid in [
+            ("Sign In & Account", 0, 0, "dialog.team"),
+            ("Team Members", 1, 0, "dialog.team"),
+            ("Cloud Sync", 2, SEP_H, "dialog.cloud_sync"),
+        ]:
+            self.run_step(
+                f"menu Team > {name}",
+                lambda r=row, e=extra: self.pick_item(self.open_menu(4), r, e),
+                fid,
+            )
+
         # ── Help menu ──
+        # Getting started, Quick Start, Shortcuts | Online Docs, Ask | Audit… | Report…
         for name, row, extra in [
-            ("Quick Start", 0, 0),
-            ("Keyboard Shortcuts", 1, 0),
+            ("Getting started", 0, 0),
+            ("Quick Start", 1, 0),
+            ("Keyboard Shortcuts", 2, 0),
+            ("Ask how we do it…", 4, SEP_H),
+            ("Audit Timeline", 5, SEP_H * 2),
+            ("Install Audit Agent", 6, SEP_H * 2),
         ]:
             self.run_step(
                 f"menu Help > {name}",
-                lambda r=row, e=extra: self.pick_item(self.open_menu(4), r, e),
+                lambda r=row, e=extra: self.pick_item(self.open_menu(5), r, e),
                 "dialog.help",
             )
 

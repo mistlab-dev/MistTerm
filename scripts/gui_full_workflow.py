@@ -48,7 +48,8 @@ SSH_USER = "mistterm_test"
 SSH_PASS = "mistterm123"
 SSH_HOST = "127.0.0.1"
 REMOTE_FILE = "gui_e2e_upload.txt"
-MENU_X = [16, 82, 132, 178, 228]
+# Terminal, Edit, View, Tools, Team, Help (zh UI + custom chrome)
+MENU_X = [51, 78, 120, 160, 200, 240]  # calibrated 1200x800 non-immersive
 ITEM_H = 28
 SEP_H = 8
 
@@ -371,7 +372,7 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path, cov: CoverageTrack
     def ai_settings() -> None:
         dismiss_esc()
         x = gui.open_menu(3)
-        gui.pick_menu(x, 0)
+        gui.pick_menu(x, 1)  # Preferences=0, AI Settings=1
         time.sleep(0.8)
         dismiss_esc(2)
 
@@ -424,11 +425,11 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path, cov: CoverageTrack
     def tools_extra() -> None:
         dismiss_esc()
         x = gui.open_menu(3)
-        gui.pick_menu(x, 1)
+        gui.pick_menu(x, 2, SEP_H)  # Fragment Library
         time.sleep(0.7)
         dismiss_esc(2)
         x = gui.open_menu(3)
-        gui.pick_menu(x, 3, SEP_H)
+        gui.pick_menu(x, 4, SEP_H)  # Command History
         time.sleep(0.7)
         dismiss_esc(2)
 
@@ -447,8 +448,8 @@ def run_workflow(gui: MistGui, marker: str, local_file: Path, cov: CoverageTrack
 
     def help_quick() -> None:
         dismiss_esc()
-        x = gui.open_menu(4)
-        gui.pick_menu(x, 0)
+        x = gui.open_menu(5)
+        gui.pick_menu(x, 1)  # Quick Start (after Getting started)
         time.sleep(0.7)
         dismiss_esc(2)
 

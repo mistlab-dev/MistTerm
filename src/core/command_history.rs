@@ -176,16 +176,36 @@ impl CommandHistory {
     }
 
     pub fn search(&self, query: &str, ignore_case: bool) -> Vec<HistoryEntry> {
+        self.search_filtered(query, ignore_case, None)
+    }
+
+    /// 搜索历史；`session_id` 有值时只保留该会话写下的记录（活动标签筛选）。
+    pub fn search_filtered(
+        &self,
+        query: &str,
+        ignore_case: bool,
+        session_id: Option<&str>,
+    ) -> Vec<HistoryEntry> {
         let q = query.trim();
-        if q.is_empty() {
-            return self.entries.iter().rev().cloned().collect();
-        }
+        let q_lower = if ignore_case {
+            q.to_lowercase()
+        } else {
+            String::new()
+        };
         self.entries
             .iter()
             .rev()
             .filter(|e| {
+                if let Some(sid) = session_id {
+                    if e.session_id.as_deref() != Some(sid) {
+                        return false;
+                    }
+                }
+                if q.is_empty() {
+                    return true;
+                }
                 if ignore_case {
-                    e.command.to_lowercase().contains(&q.to_lowercase())
+                    e.command.to_lowercase().contains(&q_lower)
                 } else {
                     e.command.contains(q)
                 }
@@ -231,5 +251,21 @@ mod tests {
         let r = h.search("dock", true);
         assert_eq!(r.len(), 1);
         assert!(r[0].command.contains("docker"));
+    }
+
+    #[test]
+    fn search_filtered_by_session() {
+        let mut h = CommandHistory {
+            entries: VecDeque::new(),
+            persist_path: PathBuf::from("/tmp/unused"),
+            dirty: false,
+            load_rx: None,
+        };
+        h.record("uptime", Some("s1"), Some("a"), true);
+        h.record("df -h", Some("s2"), Some("b"), true);
+        h.record("free -m", Some("s1"), Some("a"), true);
+        let r = h.search_filtered("", true, Some("s1"));
+        assert_eq!(r.len(), 2);
+        assert!(r.iter().all(|e| e.session_id.as_deref() == Some("s1")));
     }
 }
