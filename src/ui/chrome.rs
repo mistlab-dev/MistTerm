@@ -1256,7 +1256,15 @@ pub fn session_tab_chip(
         } else {
             8
         };
-        Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
+        if theme.is_light_theme() {
+            // 浅底上半透明叠色几乎看不出来(当前标签像没选中)；按比例混成实色。
+            let t = a as f32 / 255.0 * 1.6;
+            let base = theme.bg_tab_bar_color();
+            let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+            Color32::from_rgb(mix(base.r(), c.r()), mix(base.g(), c.g()), mix(base.b(), c.b()))
+        } else {
+            Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
+        }
     } else if modern {
         if tab_hot && !active {
             theme.color_widget_hover_fill()
@@ -2362,7 +2370,8 @@ pub fn filter_chip_row_with_sort(
         })
         .show(ui, |ui| {
             let row_w = ui.available_width().max(96.0);
-            if theme.uses_modern_palette() {
+            // 所有主题都用胶囊分段 + 排序 chip 的布局(暗夜设计稿)。
+            if true {
                 let sort_w = panel_sort_chip_width(ui, theme, sort_chip_display);
                 ui.horizontal(|ui| {
                     ui.set_max_width(row_w);
@@ -2625,7 +2634,8 @@ pub fn segmented_control_row(
     if items.is_empty() {
         return None;
     }
-    if !theme.uses_modern_palette() {
+    // 所有内置主题统一用胶囊分段控件(与暗夜设计稿一致)；颜色由各主题令牌决定。
+    if false {
         let mut picked = None;
         let chip_h = theme.size_panel_filter_chip_h();
         let chip_gap = theme.spacing_panel_gap();

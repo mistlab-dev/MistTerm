@@ -1150,13 +1150,8 @@ impl Theme {
     /// 片段 team 标签字色
     #[inline]
     pub fn color_fragment_tag_text(&self) -> Color32 {
-        if self.uses_modern_palette() {
-            self.text_secondary()
-        } else if self.is_light_theme() || self.uses_solid_fg_palette() {
-            self.accent_color()
-        } else {
-            self.accent_alpha(115)
-        }
+        // 片段标签统一用次级文字色(与暗夜设计稿一致)，不再在浅色/海洋/森林里变成链接蓝。
+        self.text_secondary()
     }
 
     /// 片段 team 标签淡底
@@ -1256,6 +1251,9 @@ impl Theme {
     pub fn color_tab_active_fill(&self) -> Color32 {
         if self.uses_modern_palette() {
             self.color_tab_inactive_fill()
+        } else if self.is_light_theme() {
+            // 浅色：当前标签用淡主色底，和未选中(白底+描边)一眼区分开。
+            self.accent_dim_color()
         } else {
             self.bg_terminal_color()
         }

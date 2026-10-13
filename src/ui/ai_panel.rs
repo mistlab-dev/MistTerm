@@ -105,13 +105,13 @@ struct UiMessage {
     agent_batch: Option<AgentBatchCard>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct AgentBatchCard {
     command: String,
     hosts: Vec<AgentHostRow>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 struct AgentHostRow {
     /// 会话/服务器显示名
     name: String,
@@ -373,6 +373,19 @@ fn ops_scope_pill(ui: &mut egui::Ui, theme: &Theme, text: &str, color: egui::Col
         });
 }
 
+/// 指标标签显示用本地化(Mem/Load/Disk/Top → 内存/负载/磁盘/最高)。
+fn localize_metric_label(ctx: &egui::Context, label: &str) -> String {
+    if i18n::language(ctx) != i18n::UiLanguage::Zh {
+        return label.to_string();
+    }
+    for (en, zh) in [("Mem", "内存"), ("Load", "负载"), ("Disk", "磁盘"), ("Top:", "最高:")] {
+        if let Some(rest) = label.strip_prefix(en) {
+            return format!("{zh}{rest}");
+        }
+    }
+    label.to_string()
+}
+
 /// 主机卡指标行：左侧标签截断，右侧数值占固定宽，避免 Mem 与百分比叠字。
 fn ops_metric_value_row(
     ui: &mut egui::Ui,
@@ -516,6 +529,8 @@ pub struct AiPanel {
     attached_contexts: Vec<TerminalContextRef>,
     session_meta: Option<TerminalSessionMeta>,
     chat_session_key: String,
+    /// 上次从终端标签同步来的会话 key；只有它变了才切换，避免每帧把「新对话」覆盖回去。
+    synced_tab_session_key: String,
     /// 会话历史下拉缓存：避免历史弹窗打开时每帧 `read_dir` + 解析所有会话 JSON。
     /// `None` 表示尚未加载；点击历史按钮时置 `None` 以便下次打开刷新。
     chat_sessions_cache: Option<Vec<(String, String, std::time::SystemTime)>>,
@@ -607,6 +622,7 @@ impl AiPanel {
             attached_contexts: Vec::new(),
             session_meta: None,
             chat_session_key: "global".to_string(),
+            synced_tab_session_key: "global".to_string(),
             chat_sessions_cache: None,
             chat_dirty: false,
             background: None,
@@ -857,6 +873,15 @@ impl AiPanel {
         }
     }
 
+    /// 跟随当前终端标签切换对话；标签没变时保留用户手动开的新对话 / 历史对话。
+    pub fn sync_tab_session_key(&mut self, key: String, persist: bool) {
+        if self.synced_tab_session_key == key {
+            return;
+        }
+        self.synced_tab_session_key = key.clone();
+        self.set_chat_session_key(key, persist);
+    }
+
     pub fn set_chat_session_key(&mut self, key: String, persist: bool) {
         if self.chat_session_key == key {
             return;
@@ -1015,7 +1040,7 @@ impl AiPanel {
                         egui::RichText::new(i18n::tr(
                             ctx,
                             "OpenAI-compatible APIs; API Key is encrypted locally in settings.json and not routed through team servers.",
-                            "OpenAI 兼容接口；API Key 加密保存在本机 settings.json，不经团队服务器。",
+                            "OpenAI 兼容接口；访问密钥加密保存在本机 settings.json，不经团队服务器。",
                         ))
                         .size(theme.font_size_small())
                         .color(text_low),
@@ -1246,7 +1271,7 @@ impl AiPanel {
                 egui::RichText::new(i18n::tr(
                     ctx,
                     "Multi-host ops work without an API Key — use natural language below (built-in planner). For chat, explain, and LLM planning, configure API URL, Key, and model in Tools → AI Settings.",
-                    "多机运维无需 API Key — 在下方用自然语言提问即可（内置规划器）。对话、解释与 LLM 规划请在「工具 → AI 设置」配置接口、Key 与模型。",
+                    "多机运维无需访问密钥 — 在下方用自然语言提问即可（内置规划器）。对话、解释与大模型规划请在「工具 → AI 设置」配置接口、密钥与模型。",
                 ))
                 .size(theme.font_size_small())
                 .color(theme.color_form_hint()),
@@ -1754,7 +1779,7 @@ impl AiPanel {
                 if saved_key {
                     loc.tr(
                         "API Key encrypted and saved — you can ask below",
-                        "已加密保存 API Key，可在下方输入问题",
+                        "已加密保存访问密钥，可在下方输入问题",
                     )
                     .to_string()
                 } else {
@@ -1774,7 +1799,7 @@ impl AiPanel {
             return;
         }
         let Some(key) = self.effective_api_key(app_settings) else {
-            self.test_status = Some(i18n::tr(ctx, "Fill in API Key first", "请先填写 API Key").into());
+            self.test_status = Some(i18n::tr(ctx, "Fill in API Key first", "请先填写访问密钥").into());
             return;
         };
         self.test_status = Some(i18n::tr(ctx, "Testing connection…", "测试连接中…").into());
@@ -1810,7 +1835,7 @@ impl AiPanel {
                         egui::RichText::new(i18n::tr(
                             ctx,
                             "No API Key needed for multi-host read-only ops — type below (e.g. check disk on all servers) or prefix 多机:. API Key is only for chat / LLM planning.",
-                            "多机只读运维无需 API Key — 在下方输入（如「查所有服务器磁盘」）或以「多机:」开头；API Key 仅用于对话与 LLM 规划。",
+                            "多机只读运维无需访问密钥 — 在下方输入（如「查所有服务器磁盘」）或以「多机:」开头；访问密钥仅用于对话与大模型规划。",
                         ))
                             .size(theme.font_size_small())
                             .color(theme.color_form_hint().gamma_multiply(0.85)),
@@ -1829,13 +1854,17 @@ impl AiPanel {
                     let chip_h = theme
                         .size_panel_filter_chip_h()
                         .max(theme.size_control_btn_h() - 2.0);
+                    // 未配置/后台忙(输入框不可编辑)时快捷提问也不可点，避免填进灰掉的输入框。
+                    let chips_enabled = self.can_chat(app_settings) && !self.is_background_busy();
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                         ui.set_min_height(chip_h);
+                        ui.set_enabled(chips_enabled);
                         for (label, action) in self.quick_action_chips(ctx) {
                             if crate::ui::chrome::panel_quick_prompt_chip(ui, theme, &label)
                                 .on_hover_text(i18n::tr(ctx, "Fill input", "填入输入框"))
                                 .clicked()
+                                && chips_enabled
                             {
                                 self.apply_quick_action(action, &label);
                             }
@@ -2399,11 +2428,14 @@ impl AiPanel {
         let mut next_selected = self.selected_host_idx;
         let num_hosts = batch.hosts.len();
         let cols = if num_hosts <= 1 { 1 } else { 2 };
+        // 卡片外宽 = 内容宽 + 左右内边距(8×2) + 描边；两列 + 列间距 8 正好等于面板宽，不再溢出右边。
+        const CARD_H_OVERHEAD: f32 = 8.0 * 2.0 + 3.0;
         let col_w = if cols == 1 {
             ui.available_width()
         } else {
-            (ui.available_width() - 12.0) / 2.0
+            ((ui.available_width() - 8.0) / 2.0).floor()
         };
+        let card_inner_w = (col_w - CARD_H_OVERHEAD).max(60.0);
 
         egui::Grid::new(format!("host_matrix_grid_{msg_index}"))
             .num_columns(cols)
@@ -2440,7 +2472,7 @@ impl AiPanel {
                         .inner_margin(egui::vec2(8.0, 6.0));
 
                     let resp = frame.show(ui, |ui| {
-                        let inner_w = (ui.available_width() - 8.0).max(60.0);
+                        let inner_w = card_inner_w;
                         ui.set_width(inner_w);
                         ui.set_max_width(inner_w);
                         let meta_px = theme.font_size_tag();
@@ -2480,7 +2512,10 @@ impl AiPanel {
                             .wrap(false),
                         );
                         if let Some(val) = host.metric_value.clone() {
-                            let label = host.metric_label.clone().unwrap_or_default();
+                            let label = localize_metric_label(
+                                ctx,
+                                host.metric_label.as_deref().unwrap_or_default(),
+                            );
                             let value_color = if host.metric_danger {
                                 danger_text
                             } else {
@@ -3009,7 +3044,7 @@ impl AiPanel {
         let hint = i18n::tr(
             ctx,
             "Ask a question… Enter to send · Shift+Enter for newline",
-            "输入问题… Enter 发送 · Shift+Enter 换行",
+            "输入问题… 回车发送 · Shift+回车换行",
         );
         ui.add_enabled_ui(can_type, |ui| {
             crate::ui::chrome::form_multiline_field_with_hint(
@@ -3098,7 +3133,7 @@ impl AiPanel {
                                 i18n::tr(ctx, "Send", "发送"),
                                 true,
                             )
-                            .on_hover_text(i18n::tr(ctx, "Send (Enter)", "发送 (Enter)"))
+                            .on_hover_text(i18n::tr(ctx, "Send (Enter)", "发送 (回车)"))
                             .clicked()
                         })
                         .inner;
@@ -3215,7 +3250,7 @@ impl AiPanel {
 
         if !self.can_chat(app_settings) {
             return SendOutcome::NotReady(
-                i18n::tr(ctx, "Configure API Key & model and save first", "请先配置 API Key 与模型并保存")
+                i18n::tr(ctx, "Configure API Key & model and save first", "请先配置访问密钥与模型并保存")
                     .to_string(),
             );
         }
@@ -3382,7 +3417,7 @@ impl AiPanel {
         let api_key = match self.effective_api_key(app_settings) {
             Some(k) => k,
             None => {
-                let msg = i18n::tr(ctx, "Fill in and save API Key first", "请先填写并保存 API Key")
+                let msg = i18n::tr(ctx, "Fill in and save API Key first", "请先填写并保存访问密钥")
                     .to_string();
                 self.last_error = Some(msg.clone());
                 self.pending_toast_error = Some(msg);
@@ -3841,6 +3876,10 @@ fn ui_message_to_stored(m: &UiMessage) -> StoredAiMessage {
         api_content: m.api_content.clone(),
         context_refs: m.context_refs.iter().map(context_ref_to_stored).collect(),
         commands: m.commands.clone(),
+        batch: m
+            .agent_batch
+            .as_ref()
+            .and_then(|b| serde_json::to_value(b).ok()),
     }
 }
 
@@ -3860,7 +3899,7 @@ fn stored_to_ui_message(m: StoredAiMessage) -> UiMessage {
             .collect(),
         commands: m.commands,
         source_label: None,
-            agent_batch: None,
+        agent_batch: m.batch.and_then(|v| serde_json::from_value(v).ok()),
     }
 }
 
