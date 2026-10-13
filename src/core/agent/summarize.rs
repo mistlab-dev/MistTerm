@@ -17,7 +17,7 @@ pub fn summarize_batch_rows(command: &str, rows: &[BatchExecRow]) -> String {
     ordered.sort_by_key(|r| r.ok);
 
     for r in ordered {
-        let mark = if r.ok { "OK" } else { "FAIL" };
+        let mark = if r.ok { "正常" } else { "失败" };
         let detail = if r.ok {
             host_result_summary(command, &r.output)
         } else {
@@ -92,7 +92,7 @@ mod tests {
         }];
         let s = summarize_batch_rows("df -h", &rows);
         assert!(s.contains("web-1"));
-        assert!(s.contains("[OK]"));
+        assert!(s.contains("[正常]"));
         assert!(!s.contains("<details>"));
     }
 
@@ -127,8 +127,8 @@ mod tests {
             },
         ];
         let s = summarize_batch_rows("uptime", &rows);
-        let bad = s.find("[FAIL]").unwrap();
-        let good = s.find("[OK]").unwrap();
+        let bad = s.find("[失败]").unwrap();
+        let good = s.find("[正常]").unwrap();
         assert!(bad < good);
     }
 }

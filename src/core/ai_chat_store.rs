@@ -25,6 +25,9 @@ pub struct StoredAiMessage {
     pub context_refs: Vec<StoredContextRef>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<String>,
+    /// 多机执行结果卡片(结构化主机网格)，重新打开对话时仍按网格显示。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch: Option<serde_json::Value>,
 }
 
 pub fn chat_store_dir() -> PathBuf {
@@ -92,6 +95,7 @@ mod tests {
                 source_key: None,
             }],
             commands: vec![],
+            batch: None,
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: StoredAiMessage = serde_json::from_str(&json).unwrap();

@@ -572,7 +572,22 @@ impl MistTermApp {
             ));
             return;
         };
-        let mut cmd = std::process::Command::new(&exe);
+        // macOS：整包替换后用 `open -n Mist.app` 重开，让系统按新包重新注册/校验。
+        let mac_app = if cfg!(target_os = "macos") {
+            exe.ancestors()
+                .find(|p| p.extension().is_some_and(|e| e == "app"))
+                .map(|p| p.to_path_buf())
+        } else {
+            None
+        };
+        let mut cmd = match &mac_app {
+            Some(app) => {
+                let mut c = std::process::Command::new("/usr/bin/open");
+                c.arg("-n").arg(app);
+                c
+            }
+            None => std::process::Command::new(&exe),
+        };
         match apply::spawn_detached(&mut cmd) {
             Ok(()) => {
                 self.update_ui.close_requested = true;

@@ -641,6 +641,7 @@ jobs:
             --dist dist \
             --out dist/latest.json \
             --url-order github,mirror \
+            --macos-auto-update \
             "${notes_args[@]}" "${mirror_args[@]}"
           cat dist/latest.json
           python3 scripts/gen-update-manifest.py --trusted-comment-of dist/latest.json > dist/latest.json.tc

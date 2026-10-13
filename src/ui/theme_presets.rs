@@ -34,8 +34,8 @@ impl Theme {
             bg_window: Color32Serializable::new(248, 248, 250), // #f8f8fa 面板
             bg_terminal: Color32Serializable::new(255, 255, 255), // #ffffff 终端区最亮
             bg_tab_bar: Color32Serializable::new(238, 240, 244), // 顶/底栏与面板区分
-            bg_hover: Color32Serializable::with_alpha(0, 0, 0, 22),
-            bg_selected: Color32Serializable::with_alpha(102, 126, 234, 48),
+            bg_hover: Color32Serializable::with_alpha(0, 0, 0, 34),
+            bg_selected: Color32Serializable::with_alpha(102, 126, 234, 96),
             // === 文字(实色，浅底须更深以保证侧栏/监控可读)===
             fg_high: Color32Serializable::new(20, 22, 26), // #14161a
             fg_medium: Color32Serializable::new(46, 50, 56), // #2e3238
