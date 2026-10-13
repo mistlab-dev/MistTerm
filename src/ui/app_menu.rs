@@ -29,6 +29,10 @@ impl MistTermApp {
                 self.open_new_tab_from_selection(ctx);
                 ui.close_menu();
             }
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.local_shell).clicked() {
+                self.open_local_shell_tab(ctx);
+                ui.close_menu();
+            }
             if crate::ui::chrome::popup_menu_button_enabled(
                 ui,
                 theme,

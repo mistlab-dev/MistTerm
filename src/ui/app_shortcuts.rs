@@ -34,6 +34,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {}\n\
              {}\n\
              {}\n\
+             {}\n\
              {} — switch to tab N\n\
              {} — next tab (Shift reverses)\n\
              {}\n\
@@ -50,6 +51,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::help_line("N", "New session"),
             s::help_line("E", "Edit selected session"),
             s::new_tab_help_line("New terminal tab"),
+            s::local_shell_help_line("Local shell tab"),
             s::close_tab_help_line("Close current tab"),
             s::accel_literal("1–9"),
             s::accel_literal("Tab"),
@@ -74,6 +76,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {}\n\
              {}\n\
              {}\n\
+             {}\n\
              {} — 切换第 N 个标签\n\
              {} — 下一标签；加 Shift 为上一标签\n\
              {}\n\
@@ -90,6 +93,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::help_line("N", "新建会话"),
             s::help_line("E", "编辑所选会话"),
             s::new_tab_help_line("新终端标签"),
+            s::local_shell_help_line("本机终端标签"),
             s::close_tab_help_line("关闭当前标签"),
             s::accel_literal("1–9"),
             s::accel_literal("Tab"),

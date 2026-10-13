@@ -120,6 +120,22 @@ pub fn new_tab_help_line(description: &str) -> String {
     format!("{} — {}", new_tab_accel(), description)
 }
 
+/// 本机终端：macOS ⌘⌥T；Win/Linux Ctrl+Alt+T。
+pub fn local_shell_accel() -> String {
+    #[cfg(target_os = "macos")]
+    {
+        format!("{} + Option + T", primary_modifier_label())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        format!("{} + Alt + T", primary_modifier_label())
+    }
+}
+
+pub fn local_shell_help_line(description: &str) -> String {
+    format!("{} — {}", local_shell_accel(), description)
+}
+
 /// 分屏窗格切换焦点：macOS ⌘⌥←/→；Win/Linux Ctrl+Shift+←/→（Alt+←/→ 留给 shell 按词移动）。
 pub fn split_pane_focus_accel() -> String {
     #[cfg(target_os = "macos")]

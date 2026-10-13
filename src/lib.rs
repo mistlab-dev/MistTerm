@@ -5,6 +5,7 @@
 pub mod cli;
 pub mod core;
 pub mod i18n;
+pub mod local_shell;
 pub mod platform;
 pub mod ssh;
 pub mod terminal;
