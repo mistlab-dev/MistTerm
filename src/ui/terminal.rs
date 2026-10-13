@@ -227,6 +227,8 @@ pub struct TerminalView {
     /// 整屏替换 VTE 或清屏时递增，与 [`VtTerminal::content_epoch`] 一并参与布局缓存键(FUNCTIONAL_SPEC §2.3.1)。
     vt_visual_generation: u64,
     visual_layout_cache: Option<TerminalVisualLayoutCache>,
+    /// 诊断：最早一条未绘制输出的到达时刻（µs，见 ssh::manager::probe_now_us）。
+    repaint_probe_received_us: Option<u64>,
     /// 用户主动断开(`disconnect` / `disconnect_ssh_keep_buffer`)期间忽略随后到达的 `Disconnected`，避免误触发自动重连。
     local_disconnect_intent: bool,
     /// 本轮 `process_ssh_messages` 后若曾为「非主动」断开则置位；由宿主 `take()` 后清除。
@@ -628,6 +630,7 @@ impl TerminalView {
             resend_offline_input_dialog_open: false,
             vt_visual_generation: 0,
             visual_layout_cache: None,
+            repaint_probe_received_us: None,
             local_disconnect_intent: false,
             unexpected_disconnect_notified: false,
             pending_connect_audit: None,
@@ -915,6 +918,7 @@ impl TerminalView {
     ) {
         self.ui_lang_last = crate::i18n::language(ui.ctx());
         // 先处理网络与键盘，再绘制，避免输入/输出滞后一帧
+        crate::ssh::set_repaint_context(ui.ctx());
         let terminal_dirty = self.process_ssh_messages(theme);
         self.flush_paste_queue(ui.ctx());
         self.process_transfer_events(theme, ui.ctx());
@@ -972,7 +976,7 @@ impl TerminalView {
             // ZMODEM 上传时 PTY 回包经 UI 旁路进 lrzsz；须高频重绘以免 `mpsc` 积压导致「等 ZACK」式卡顿。
             if self.lrzsz.is_upload_pty_capture() {
                 ui.ctx().request_repaint();
-            } else if terminal_dirty {
+            } else if terminal_dirty || self.repaint_probe_received_us.is_some() {
                 // 仅有输出/队列未排空时拉高帧率(top/vim 等)；空闲靠光标闪烁或用户输入触发重绘，避免单核打满。
                 ui.ctx().request_repaint_after(Duration::from_millis(
                     crate::terminal::style::TERMINAL_LIVE_REPAINT_MS,
@@ -1308,6 +1312,14 @@ impl TerminalView {
                                     cell_w,
                                 );
                                 painter.galley(text_draw_pos, galley.clone());
+                                if let Some(t) = self.repaint_probe_received_us.take() {
+                                    let ms = crate::ssh::probe_now_us().saturating_sub(t) as f64 / 1000.0;
+                                    if ms > 200.0 {
+                                        log::warn!(target: "repaint_lag", "SLOW output->frame {:.1} ms (>200ms)", ms);
+                                    } else {
+                                        log::debug!(target: "repaint_lag", "frame drawn after output {:.1} ms", ms);
+                                    }
+                                }
                             }
                             let ime_id = response.id.with("terminal_ime");
                             if !terminal_search_open {
@@ -1764,6 +1776,16 @@ impl TerminalView {
                         batch.push(msg);
                     }
                     Err(_) => break,
+                }
+            }
+            if !batch.is_empty() {
+                let oldest = crate::ssh::take_oldest_pending_us();
+                if let Some(t) = oldest {
+                    let now = crate::ssh::probe_now_us();
+                    log::debug!(target: "repaint_lag", "drain msgs={} bytes={} delay_since_recv_ms={:.1} more_pending={}", batch.len(), bytes, now.saturating_sub(t) as f64 / 1000.0, more_pending);
+                    if self.repaint_probe_received_us.is_none() {
+                        self.repaint_probe_received_us = Some(t);
+                    }
                 }
             }
             for msg in batch {
