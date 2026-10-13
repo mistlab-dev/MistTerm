@@ -229,6 +229,9 @@ pub struct TerminalView {
     visual_layout_cache: Option<TerminalVisualLayoutCache>,
     /// 诊断：最早一条未绘制输出的到达时刻（µs，见 ssh::manager::probe_now_us）。
     repaint_probe_received_us: Option<u64>,
+    repaint_probe_cache_hit: bool,
+    repaint_probe_row_hash: Option<u64>,
+    repaint_probe_epoch: u64,
     /// 用户主动断开(`disconnect` / `disconnect_ssh_keep_buffer`)期间忽略随后到达的 `Disconnected`，避免误触发自动重连。
     local_disconnect_intent: bool,
     /// 本轮 `process_ssh_messages` 后若曾为「非主动」断开则置位；由宿主 `take()` 后清除。
@@ -631,6 +634,9 @@ impl TerminalView {
             vt_visual_generation: 0,
             visual_layout_cache: None,
             repaint_probe_received_us: None,
+            repaint_probe_cache_hit: false,
+            repaint_probe_row_hash: None,
+            repaint_probe_epoch: 0,
             local_disconnect_intent: false,
             unexpected_disconnect_notified: false,
             pending_connect_audit: None,
@@ -1089,6 +1095,7 @@ impl TerminalView {
                         shell.terminal_bg,
                         selection_key,
                     );
+                    self.repaint_probe_cache_hit = false;
                     let (layout_job, cell_bgs, display_owned) =
                         if let Some(ref c) = self.visual_layout_cache {
                             if c.matches(
@@ -1102,6 +1109,7 @@ impl TerminalView {
                                 cache_key.7,
                                 cache_key.8,
                             ) {
+                                self.repaint_probe_cache_hit = true;
                                 (
                                     c.layout_job.clone(),
                                     c.cell_bgs.clone(),
@@ -1295,6 +1303,34 @@ impl TerminalView {
                                 te_state.store(ui.ctx(), response.id);
                             }
                             let display_lines: Vec<&str> = display_owned.lines().collect();
+                            if log::log_enabled!(target: "repaint_lag", log::Level::Debug) {
+                                use std::hash::{Hash, Hasher};
+                                let cur = self.terminal.viewport_cursor();
+                                let row_txt = cur
+                                    .and_then(|c| display_lines.get(c.row).copied())
+                                    .unwrap_or("");
+                                let mut h = std::collections::hash_map::DefaultHasher::new();
+                                row_txt.hash(&mut h);
+                                let hv = h.finish();
+                                let epoch = self.terminal.content_epoch();
+                                let row_changed = self.repaint_probe_row_hash != Some(hv);
+                                if row_changed || self.repaint_probe_epoch != epoch {
+                                    // 只记长度、位置与是否变化，绝不记录行内容或哈希。
+                                    log::debug!(
+                                        target: "repaint_lag",
+                                        "frame paint epoch={} cache_hit={} cursor={:?} row_len={} row_changed={} galley_rows={} text_rect_h={:.1}",
+                                        epoch,
+                                        self.repaint_probe_cache_hit,
+                                        cur.map(|c| (c.row, c.col)),
+                                        row_txt.trim_end().chars().count(),
+                                        row_changed,
+                                        galley.rows.len(),
+                                        text_rect.height(),
+                                    );
+                                    self.repaint_probe_row_hash = Some(hv);
+                                    self.repaint_probe_epoch = epoch;
+                                }
+                            }
                             // 仅当存在非默认底色(ANSI/选区)时才自绘底并再铺一层 galley；
                             // 否则 TextEdit 已画过字，二次铺屏会让 debug 下单核打满、界面像卡住。
                             let needs_cell_bg = cell_bgs.iter().flatten().any(|c| {
@@ -2479,6 +2515,23 @@ impl TerminalView {
                 }
             }
 
+            for event in &i.events {
+                match event {
+                    egui::Event::CompositionStart => {
+                        log::debug!(target: "repaint_lag", "ime composition start");
+                    }
+                    egui::Event::CompositionUpdate(t) => {
+                        log::debug!(target: "repaint_lag", "ime preedit update len={}", t.chars().count());
+                    }
+                    egui::Event::Text(t) => {
+                        log::debug!(target: "repaint_lag", "key text event len={}", t.chars().count());
+                    }
+                    egui::Event::CompositionEnd(t) => {
+                        log::debug!(target: "repaint_lag", "ime commit len={}", t.chars().count());
+                    }
+                    _ => {}
+                }
+            }
             for event in &i.events {
                 match event {
                     egui::Event::CompositionEnd(text) => {

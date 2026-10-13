@@ -48,6 +48,25 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for TeeWriter {
 pub fn init_runtime_logging() {
     use tracing_subscriber::{EnvFilter, fmt};
 
+    // 诊断开关文件：存在 ~/mist-debug-log 时无需环境变量即可写 ~/mist-repaint.log（便于 Finder/Dock 启动）。
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let switch_file = home.as_ref().map(|h| h.join("mist-debug-log")).filter(|p| p.exists());
+    if switch_file.is_some() {
+        if std::env::var("RUST_LOG").is_err() {
+            std::env::set_var("RUST_LOG", "info,repaint_lag=debug");
+        }
+        if std::env::var("MIST_LOG_FILE").is_err() {
+            if let Some(h) = &home {
+                std::env::set_var("MIST_LOG_FILE", h.join("mist-repaint.log"));
+            }
+        }
+    }
+    eprintln!(
+        "[Mist] logging: RUST_LOG={:?} MIST_LOG_FILE={:?} switch_file={}",
+        std::env::var("RUST_LOG").ok(),
+        std::env::var("MIST_LOG_FILE").ok(),
+        switch_file.is_some()
+    );
     let force = std::env::var("MIST_LOG").is_ok() || std::env::var("RUST_LOG").is_ok();
     let stderr_tty = std::io::stderr().is_terminal();
     let log_file_path = std::env::var("MIST_LOG_FILE")
