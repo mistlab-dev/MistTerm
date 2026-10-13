@@ -10,6 +10,46 @@ use std::sync::mpsc::{self, sync_channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
+
+/// UI 唤醒：SSH 线程收到输出后主动请求重绘，不再依赖光标闪烁定时器。
+static REPAINT_CTX: std::sync::OnceLock<egui::Context> = std::sync::OnceLock::new();
+static PROBE_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+/// 最早一条尚未被 UI 取走的输出到达时刻（微秒+1，相对 PROBE_EPOCH）；0 = 无积压。
+static OLDEST_PENDING_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// UI 每帧调用一次即可（只有第一次生效）。
+pub fn set_repaint_context(ctx: &egui::Context) {
+    if REPAINT_CTX.get().is_none() {
+        let _ = REPAINT_CTX.set(ctx.clone());
+    }
+}
+
+pub fn probe_now_us() -> u64 {
+    PROBE_EPOCH.get_or_init(std::time::Instant::now).elapsed().as_micros() as u64 + 1
+}
+
+/// UI 取走消息时调用：返回最早积压输出的到达时刻并清零。
+pub fn take_oldest_pending_us() -> Option<u64> {
+    match OLDEST_PENDING_US.swap(0, Ordering::AcqRel) {
+        0 => None,
+        v => Some(v),
+    }
+}
+
+/// 只记字节数与时间，绝不记录内容。
+fn notify_ui(session_id: SshSessionId, kind: &str, bytes: usize) {
+    let now = probe_now_us();
+    if kind == "output" {
+        let _ = OLDEST_PENDING_US.compare_exchange(0, now, Ordering::AcqRel, Ordering::Relaxed);
+    }
+    log::debug!(target: "repaint_lag", "ssh {} queued session={} bytes={} t_us={}", kind, session_id, bytes, now);
+    if let Some(ctx) = REPAINT_CTX.get() {
+        ctx.request_repaint();
+        log::trace!(target: "repaint_lag", "repaint requested session={}", session_id);
+    } else {
+        log::debug!(target: "repaint_lag", "repaint ctx not set yet session={}", session_id);
+    }
+}
 use std::time::Duration;
 use ssh2::Channel;
 
@@ -348,6 +388,7 @@ impl SshManager {
             match channel.read(read_buffer) {
                 Ok(0) => {
                     let _ = message_tx.send(SshMessage::Disconnected { session_id });
+                    notify_ui(session_id, "disconnected", 0);
                     return Err(());
                 }
                 Ok(n) => {
@@ -366,6 +407,7 @@ impl SshManager {
                             session_id,
                             data: read_buffer[..n].to_vec(),
                         });
+                        notify_ui(session_id, "output", n);
                     }
                 }
                 Err(e) if Self::is_retryable_read_error(&e) => {
@@ -379,6 +421,7 @@ impl SshManager {
                         session_id,
                         error: format!("Read error: {}", e),
                     });
+                    notify_ui(session_id, "error", 0);
                     return Err(());
                 }
             }
@@ -561,6 +604,7 @@ impl SshManager {
                         session_id,
                         error: e,
                     });
+                    notify_ui(session_id, "error", 0);
                 }
             }
         });
