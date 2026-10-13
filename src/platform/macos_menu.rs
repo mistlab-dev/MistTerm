@@ -22,6 +22,7 @@ pub enum MacMenuAction {
     ImportForeign,
     NewSession,
     NewTab,
+    LocalShell,
     Preferences,
     CloseTab,
     DisconnectSsh,
@@ -73,6 +74,7 @@ pub struct NativeAppMenu {
     quit: MenuItem,
     new_session: MenuItem,
     new_tab: MenuItem,
+    local_shell: MenuItem,
     import_ssh: MenuItem,
     import_foreign: MenuItem,
     close_tab: MenuItem,
@@ -159,6 +161,15 @@ impl NativeAppMenu {
             true,
             None,
         );
+        let local_shell = MenuItem::with_id(
+            "mistterm.terminal.local_shell",
+            l.local_shell,
+            true,
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::ALT),
+                Code::KeyT,
+            )),
+        );
         let import_ssh =
             MenuItem::with_id("mistterm.terminal.import_ssh", l.import_ssh, true, None);
         let import_foreign = MenuItem::with_id(
@@ -183,6 +194,7 @@ impl NativeAppMenu {
             MenuItem::with_id("mistterm.terminal.reconnect", l.reconnect, true, None);
         terminal_menu.append(&new_session)?;
         terminal_menu.append(&new_tab)?;
+        terminal_menu.append(&local_shell)?;
         terminal_menu.append(&import_ssh)?;
         terminal_menu.append(&import_foreign)?;
         terminal_menu.append(&PredefinedMenuItem::separator())?;
@@ -382,6 +394,7 @@ impl NativeAppMenu {
             quit,
             new_session,
             new_tab,
+            local_shell,
             import_ssh,
             import_foreign,
             close_tab,
@@ -430,6 +443,7 @@ impl NativeAppMenu {
         let _ = self._terminal_menu.set_text(l.terminal_menu);
         let _ = self.new_session.set_text(l.new_session);
         let _ = self.new_tab.set_text(l.new_tab);
+        let _ = self.local_shell.set_text(l.local_shell);
         let _ = self.import_ssh.set_text(l.import_ssh);
         let _ = self.import_foreign.set_text(format!("{}…", l.import_foreign));
         let _ = self.close_tab.set_text(l.close_tab);
@@ -553,6 +567,7 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.terminal.import_foreign" => Some(MacMenuAction::ImportForeign),
         "mistterm.terminal.new_session" | "mistterm.file.new_session" => Some(MacMenuAction::NewSession),
         "mistterm.terminal.new_tab" => Some(MacMenuAction::NewTab),
+        "mistterm.terminal.local_shell" => Some(MacMenuAction::LocalShell),
         "mistterm.terminal.close_tab" | "mistterm.file.close_tab" => Some(MacMenuAction::CloseTab),
         "mistterm.terminal.disconnect" | "mistterm.file.disconnect" => Some(MacMenuAction::DisconnectSsh),
         "mistterm.terminal.reconnect" | "mistterm.file.reconnect" => Some(MacMenuAction::ReconnectTab),

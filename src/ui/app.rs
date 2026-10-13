@@ -2210,7 +2210,14 @@ impl MistTermApp {
                     toast_errors.push((tab_idx, err));
                 }
                 if let Some((ok, host)) = pane.terminal.take_connect_audit() {
-                    let action = if ok {
+                    let is_local = pane.terminal.is_local_shell() || host == "local";
+                    let action = if is_local {
+                        if ok {
+                            "shell.connect"
+                        } else {
+                            "shell.connect.failure"
+                        }
+                    } else if ok {
                         "connect.success"
                     } else {
                         "connect.failure"
@@ -2222,10 +2229,10 @@ impl MistTermApp {
                     };
                     self.audit_logger.record(
                         AuditEvent::new(AuditCategory::Session, action, outcome)
-                            .with_host(&host)
+                            .with_host(if is_local { "local" } else { &host })
                             .with_session(&pane.session_id),
                     );
-                    if ok {
+                    if ok && !is_local {
                         self.audit_logger.record(
                             AuditEvent::new(
                                 AuditCategory::Session,
@@ -2370,6 +2377,10 @@ impl MistTermApp {
     }
 
     fn tab_auto_reconnect_enabled(&self, session_id: &str) -> bool {
+        // 本机终端不入侧栏会话，也不走 SSH 自动重连。
+        if session_id.starts_with("local:") {
+            return false;
+        }
         self.session_manager
             .get_session(session_id)
             .map(|s| s.keepalive_auto_reconnect)
@@ -2927,6 +2938,39 @@ impl MistTermApp {
         if idx >= self.tabs.len() {
             return;
         }
+        let was_local = self
+            .tabs
+            .get(idx)
+            .and_then(|t| t.active_terminal())
+            .is_some_and(|t| t.is_local_shell());
+        if was_local {
+            crate::local_shell::set_repaint_context(ctx);
+            let mut terminal = self.new_terminal_view();
+            if let Err(e) = terminal.connect_local_shell() {
+                self.notify_error(match crate::i18n::language(ctx) {
+                    crate::i18n::UiLanguage::En => format!("Failed to reopen local shell: {e}"),
+                    crate::i18n::UiLanguage::Zh => format!("无法重新打开本机终端：{e}"),
+                });
+                return;
+            }
+            let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) else {
+                return;
+            };
+            pane.ssh_auto_reconnect_next = None;
+            pane.ssh_auto_reconnect_attempts = 0;
+            pane.session_id = format!(
+                "local:{}",
+                terminal.ssh_session_id().unwrap_or(0)
+            );
+            pane.terminal = terminal;
+            pane.ssh_temp_key = None;
+            self.notify_auto(
+                crate::i18n::tr(ctx, "Reconnecting local shell…", "正在重新打开本机终端…")
+                    .to_string(),
+            );
+            ctx.request_repaint();
+            return;
+        }
         let (sid, offline) = {
             let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) else {
                 return;
@@ -2984,6 +3028,15 @@ impl MistTermApp {
     /// 活动标签：SCP 直传或弹出 ≥10MB 选择(与拖放共用，FUNCTIONAL_SPEC §4.3)
     fn enqueue_upload_for_active_tab(&mut self, ctx: &egui::Context, path: std::path::PathBuf) {
         use crate::core::{decide_upload_dispatch, format_bytes_short, UploadDispatch};
+
+        if self.current_terminal().is_some_and(|t| t.is_local_shell()) {
+            self.notify_warn(crate::i18n::tr(
+                ctx,
+                "File transfer needs an SSH session — local shell tabs are unsupported.",
+                "文件传输需要 SSH 会话，本机终端标签不支持。",
+            ));
+            return;
+        }
 
         match decide_upload_dispatch(path.as_path(), self.active_tab.is_some()) {
             UploadDispatch::NoActiveTab => {
@@ -3960,6 +4013,43 @@ impl MistTermApp {
     }
 
     /// ⌘T / Ctrl+T：为左侧当前选中会话新开标签；未选中时提示(与 ⌘N 新建配置区分)
+    /// 一键打开本机终端标签（不写入侧栏 `sessions.json`）。
+    pub(crate) fn open_local_shell_tab(&mut self, ctx: &egui::Context) {
+        crate::local_shell::set_repaint_context(ctx);
+        let mut terminal = self.new_terminal_view();
+        if let Err(e) = terminal.connect_local_shell() {
+            self.notify_error(match crate::i18n::language(ctx) {
+                crate::i18n::UiLanguage::En => format!("Failed to open local shell: {e}"),
+                crate::i18n::UiLanguage::Zh => format!("无法打开本机终端：{e}"),
+            });
+            return;
+        }
+        let base = crate::i18n::tr(ctx, "Local Shell", "本机终端").to_string();
+        let dup = self
+            .tabs
+            .iter()
+            .filter(|t| t.panes.iter().any(|p| p.terminal.is_local_shell()))
+            .count();
+        let title = if dup == 0 {
+            base
+        } else {
+            format!("{} #{}", base, dup + 1)
+        };
+        let session_id = format!(
+            "local:{}",
+            terminal.ssh_session_id().unwrap_or(0)
+        );
+        self.tabs.push(TerminalTab::single(TerminalPane::new(
+            session_id,
+            title,
+            terminal,
+        )));
+        let idx = self.tabs.len() - 1;
+        self.ensure_tab_log_writer(idx);
+        self.active_tab = Some(idx);
+        ctx.request_repaint();
+    }
+
     fn open_new_tab_from_selection(&mut self, ctx: &egui::Context) {
         let Some(ref sid) = self.selected_session_id else {
             let t = crate::platform::accel("T");
@@ -4129,6 +4219,12 @@ impl MistTermApp {
     pub(crate) fn toggle_sftp_panel(&mut self, ctx: &egui::Context) {
         if self.show_sftp_panel {
             self.close_all_right_dock_panels();
+        } else if self.current_terminal().is_some_and(|t| t.is_local_shell()) {
+            self.notify_warn(crate::i18n::tr(
+                ctx,
+                "SFTP needs an SSH session — local shell tabs are unsupported.",
+                "SFTP 需要 SSH 会话，本机终端标签不支持。",
+            ));
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
             self.open_right_dock_panel(ActiveRightDock::Sftp);
             self.sftp_last_tab = None;
@@ -4185,6 +4281,12 @@ impl MistTermApp {
     pub(crate) fn toggle_port_forward_panel(&mut self, ctx: &egui::Context) {
         if self.show_port_forward_panel {
             self.close_all_right_dock_panels();
+        } else if self.current_terminal().is_some_and(|t| t.is_local_shell()) {
+            self.notify_warn(crate::i18n::tr(
+                ctx,
+                "Port forwarding needs an SSH session — local shell tabs are unsupported.",
+                "端口转发需要 SSH 会话，本机终端标签不支持。",
+            ));
         } else if self.ensure_right_dock_allowed_or_warn(ctx) {
             self.open_right_dock_panel(ActiveRightDock::PortForward);
         }
@@ -7380,6 +7482,7 @@ impl MistTermApp {
             MacMenuAction::ImportForeign => self.open_foreign_import_dialog(),
             MacMenuAction::NewSession => self.show_new_session_dialog = true,
             MacMenuAction::NewTab => self.open_new_tab_from_selection(ctx),
+            MacMenuAction::LocalShell => self.open_local_shell_tab(ctx),
             MacMenuAction::Preferences => self.show_preferences_dialog = true,
             MacMenuAction::CloseTab => self.request_close_active_tab(),
             MacMenuAction::DisconnectSsh => self.disconnect_ssh_keep_buffer_active(ctx),
@@ -8077,6 +8180,12 @@ impl eframe::App for MistTermApp {
                     && crate::ui::keyboard_shortcuts::new_tab_shortcut_pressed(i)
             }) {
                 self.open_new_tab_from_selection(ctx);
+            }
+            if ctx.input_mut(|i| {
+                self.app_shortcut_overrides_terminal(i)
+                    && crate::ui::keyboard_shortcuts::consume_local_shell_shortcut(i)
+            }) {
+                self.open_local_shell_tab(ctx);
             }
             if ctx.input_mut(|i| {
                 self.app_shortcut_overrides_terminal(i)

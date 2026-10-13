@@ -1,6 +1,6 @@
 [package]
 name = "mistterm"
-version = "1.2.11"
+version = "1.2.13"
 edition = "2021"
 autobins = false
 default-run = "Mist"
@@ -132,6 +132,8 @@ rhai = "1.19"
 ab_glyph = "0.2"
 image = "0.24"
 alacritty_terminal = "0.26.0"
+# 本机终端（Win ConPTY / Unix PTY）
+portable-pty = "0.8"
 # ZMODEM 协议（lrzsz 路径专用；与 SFTP / cat 直传无关）
 zmodem2 = { path = "vendor/zmodem2" }
 egui_plot = "0.23"
