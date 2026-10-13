@@ -1,0 +1,29 @@
+# 临时：PR #49 的 macOS 未签名测试包（无密钥、无签名、不发布）。合并前删除。
+name: macOS unsigned test build
+on:
+  push:
+    branches: [fix/macos-titlebar-tabs]
+  workflow_dispatch:
+jobs:
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Build universal
+        run: |
+          set -euo pipefail
+          mkdir -p target/universal-apple-darwin/release
+          for BIN in Mist mist; do
+            cargo build --locked --release --bin "$BIN" --target aarch64-apple-darwin --features vendored-openssl
+            cargo build --locked --release --bin "$BIN" --target x86_64-apple-darwin --features vendored-openssl
+            lipo -create -output "target/universal-apple-darwin/release/$BIN" \
+              "target/aarch64-apple-darwin/release/$BIN" "target/x86_64-apple-darwin/release/$BIN"
+          done
+          MIST_BINARY=target/universal-apple-darwin/release/Mist MIST_APP_OUT=out/Mist.app bash scripts/bundle-macos.sh
+          cd out && ditto -c -k --keepParent Mist.app Mist-macos-unsigned.zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Mist-macos-unsigned
+          path: out/Mist-macos-unsigned.zip
+          retention-days: 7
