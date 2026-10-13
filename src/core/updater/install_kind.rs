@@ -68,6 +68,8 @@ impl InstallKind {
     pub fn replace_dir(&self) -> Option<&Path> {
         match self {
             InstallKind::LinuxPortable { dir } | InstallKind::WindowsPortable { dir } => Some(dir),
+            // 替换 .app 需要能写它所在的目录(改名旧包 + 放入新包)。
+            InstallKind::MacApp { app, .. } => app.parent(),
             _ => None,
         }
     }

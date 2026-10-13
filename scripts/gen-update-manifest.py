@@ -220,6 +220,9 @@ def self_test() -> int:
         assert linux["urls"][1].startswith("https://mistlab.dev/"), linux["urls"]
         assert m["platforms"]["macos-universal"]["auto_update"] is False
         assert m["platforms"]["macos-universal"]["manual_url"] == DOWNLOAD_PAGE
+        m_mac = build_manifest(version="1.2.0", dist=dist, require=["linux-x86_64"], macos_auto_update=True)
+        assert m_mac["platforms"]["macos-universal"]["auto_update"] is True
+        assert "manual_url" not in m_mac["platforms"]["macos-universal"]
         assert "windows-x86_64-setup" not in m["platforms"]
         for key in ("linux-x86_64-cli", "linux-aarch64-cli"):
             cli = m["platforms"][key]

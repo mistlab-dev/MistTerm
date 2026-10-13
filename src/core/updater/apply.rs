@@ -161,6 +161,13 @@ pub fn apply_update(
                 version: version.clone(),
             }
         }
+        InstallKind::MacApp { app, translocated: false } if asset.kind == KIND_TAR_GZ => {
+            install_mac_app(&archive, app)?;
+            ApplyOutcome::Installed {
+                version: version.clone(),
+                exe: exe.to_path_buf(),
+            }
+        }
         other => {
             return Err(UpdateError::NotAutoInstallable(format!("{other:?}")));
         }
@@ -171,6 +178,60 @@ pub fn apply_update(
         let _ = state.save();
     }
     Ok(outcome)
+}
+
+/// macOS：把签名的 `Mist-macos-universal.tar.gz` 解到 .app 旁边的临时目录，
+/// `codesign --verify` 通过后整包替换（旧包先改名 .bak，失败就改回来）。
+pub fn install_mac_app(archive: &Path, app: &Path) -> Result<(), UpdateError> {
+    let parent = app
+        .parent()
+        .ok_or_else(|| UpdateError::Install("bad app path".into()))?;
+    let staging = parent.join(".Mist-update-staging");
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|_| UpdateError::NotWritable(parent.to_path_buf()))?;
+    let cleanup = |r: Result<(), UpdateError>| {
+        let _ = std::fs::remove_dir_all(&staging);
+        r
+    };
+    // 系统 tar 保留 .app 里的符号链接和权限，签名才校验得过。
+    let st = std::process::Command::new("/usr/bin/tar")
+        .arg("-xzf")
+        .arg(archive)
+        .arg("-C")
+        .arg(&staging)
+        .status()
+        .map_err(|e| UpdateError::Install(format!("tar: {e}")));
+    match st {
+        Ok(s) if s.success() => {}
+        Ok(s) => return cleanup(Err(UpdateError::Install(format!("tar exited with {s}")))),
+        Err(e) => return cleanup(Err(e)),
+    }
+    let new_app = [staging.join("Mist.app"), staging.join("Mist-macos-universal").join("Mist.app")]
+        .into_iter()
+        .find(|p| p.join("Contents").is_dir());
+    let Some(new_app) = new_app else {
+        return cleanup(Err(UpdateError::Install("Mist.app missing from update package".into())));
+    };
+    let verified = std::process::Command::new("/usr/bin/codesign")
+        .args(["--verify", "--deep", "--strict"])
+        .arg(&new_app)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !verified {
+        return cleanup(Err(UpdateError::Install("new Mist.app failed codesign --verify".into())));
+    }
+    let backup = parent.join("Mist.app.bak");
+    let _ = std::fs::remove_dir_all(&backup);
+    if std::fs::rename(app, &backup).is_err() {
+        return cleanup(Err(UpdateError::NotWritable(parent.to_path_buf())));
+    }
+    if let Err(e) = std::fs::rename(&new_app, app) {
+        let _ = std::fs::rename(&backup, app);
+        return cleanup(Err(UpdateError::Install(format!("replace Mist.app: {e}"))));
+    }
+    let _ = std::fs::remove_dir_all(&backup);
+    cleanup(Ok(()))
 }
 
 /// 从压缩包更新 `dir` 中的程序文件（只更新目录里已有的程序，以及当前正在运行的这个）。
