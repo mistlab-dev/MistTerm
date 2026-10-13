@@ -2497,7 +2497,15 @@ pub fn fragment_list_row(
     let content_w = (row_w - 2.0 * pad_x).max(0.0);
     let tag_col_w = fragment_list_tag_column_width(ui, theme, row.tag_label, content_w);
     let title_col_w = (content_w - gap - tag_col_w).max(0.0);
-    let row_h = theme.size_fragment_list_row_min_h();
+    // 行高按内容算(标题+命令+统计三行)，保证悬停背景盖住统计行。
+    let (cmd_h, stats_h) = ui.fonts(|f| {
+        (
+            f.row_height(&egui::FontId::monospace(theme.font_size_fragment_cmd())),
+            f.row_height(&egui::FontId::proportional(theme.font_size_fragment_stats())),
+        )
+    });
+    let content_h = title_line_h + cmd_h + stats_h + 2.0 * line_gap + 2.0 * pad_y;
+    let row_h = theme.size_fragment_list_row_min_h().max(content_h.ceil());
 
     let (row_rect, row_response) =
         ui.allocate_at_least(egui::vec2(row_w, row_h), egui::Sense::click());
