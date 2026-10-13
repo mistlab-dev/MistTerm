@@ -1311,58 +1311,56 @@ pub fn session_tab_chip(
         paint_vscode_tab_bottom_indicator(ui.painter(), ui.ctx(), rect, theme);
     }
     let mut close_clicked = false;
-    let mut row_ui = ui.child_ui(inner, egui::Layout::left_to_right(egui::Align::Center));
-    row_ui.horizontal(|ui| {
-        // 显式间距：避免 Label/item_spacing 把 × 挤出或叠到标题上。
-        ui.spacing_mut().item_spacing.x = 0.0;
-        // 圆点只表示在线/离线；会话身份用左侧色条 + 底色
-        let status_color = if online {
-            theme.green_color()
-        } else {
-            theme.color_tab_offline_dot()
-        };
-        let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(5.0, 5.0), egui::Sense::hover());
-        ui.painter()
-            .circle_filled(dot_rect.center(), 2.5, status_color);
-        ui.add_space(gap_dot);
-        // 按测量宽度精确占位，勿用会占满剩余宽度的默认 Label。
-        let label_size = egui::vec2(
-            label_galley.size().x,
-            label_galley.size().y.max(close_slot * 0.6),
-        );
-        let (label_rect, _) = ui.allocate_exact_size(label_size, egui::Sense::hover());
-        let label_pos = egui::pos2(
-            label_rect.min.x,
-            label_rect.center().y - label_galley.size().y * 0.5,
-        );
-        ui.painter().galley(label_pos, label_galley);
-        ui.add_space(gap_close);
-        // × 紧跟标题；始终占位，仅切换绘制，避免显隐导致 hover 闪烁。
-        let close_visible = show_close || active || tab_hot;
-        let close_tooltip = format!(
-            "{} · {}",
-            crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
-            crate::platform::accel("W")
-        );
-        let close_resp = theme_icon_hit_revealed(
-            ui,
-            theme,
-            IconId::Close,
-            close_slot,
-            theme.size_icon_glyph(),
-            theme.color_tab_bar_icon(),
-            theme.color_tab_bar_icon_hover(),
-            close_visible,
-        );
-        let close_resp = if close_visible {
-            close_resp.on_hover_text(close_tooltip.as_str())
-        } else {
-            close_resp
-        };
-        if close_visible && close_resp.clicked() {
-            close_clicked = true;
-        }
-    });
+    // 圆点/标题/× 都按 tab 矩形的垂直中线绝对定位(标题按字形墨迹居中)，
+    // 不靠嵌套 horizontal 的行高推算，避免 macOS 标题栏里内容偏下。
+    let cy = rect.center().y;
+    let status_color = if online {
+        theme.green_color()
+    } else {
+        theme.color_tab_offline_dot()
+    };
+    let dot_center = egui::pos2(inner.min.x + 2.5, cy);
+    ui.painter().circle_filled(dot_center, 2.5, status_color);
+    let ink = label_galley
+        .rows
+        .first()
+        .map(|r| r.visuals.mesh_bounds)
+        .filter(|b| b.is_positive())
+        .unwrap_or_else(|| egui::Rect::from_min_size(egui::Pos2::ZERO, label_galley.size()));
+    let label_x = inner.min.x + 5.0 + gap_dot;
+    let label_w = label_galley.size().x;
+    ui.painter()
+        .galley(egui::pos2(label_x, cy - ink.center().y), label_galley);
+    // × 紧跟标题；始终占位，仅切换绘制，避免显隐导致 hover 闪烁。
+    let close_visible = show_close || active || tab_hot;
+    let close_tooltip = format!(
+        "{} · {}",
+        crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
+        crate::platform::accel("W")
+    );
+    let close_rect = egui::Rect::from_center_size(
+        egui::pos2(label_x + label_w + gap_close + close_slot * 0.5, cy),
+        egui::vec2(close_slot, close_slot),
+    );
+    let mut close_ui = ui.child_ui(close_rect, egui::Layout::left_to_right(egui::Align::Center));
+    let close_resp = theme_icon_hit_revealed(
+        &mut close_ui,
+        theme,
+        IconId::Close,
+        close_slot,
+        theme.size_icon_glyph(),
+        theme.color_tab_bar_icon(),
+        theme.color_tab_bar_icon_hover(),
+        close_visible,
+    );
+    let close_resp = if close_visible {
+        close_resp.on_hover_text(close_tooltip.as_str())
+    } else {
+        close_resp
+    };
+    if close_visible && close_resp.clicked() {
+        close_clicked = true;
+    }
     SessionTabChipResult {
         response,
         close_clicked,
