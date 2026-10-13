@@ -296,6 +296,9 @@ impl MistTermApp {
                                 if sidebar_output.create_session_clicked {
                                     self.show_new_session_dialog = true;
                                 }
+                                if sidebar_output.local_shell_clicked {
+                                    self.open_local_shell_tab(ctx);
+                                }
                                 if sidebar_output.collapse_clicked {
                                     self.sidebar_collapsed = true;
                                     self.sidebar_user_dismissed_responsive = true;
