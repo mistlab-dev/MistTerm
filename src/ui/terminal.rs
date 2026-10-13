@@ -1000,9 +1000,17 @@ impl TerminalView {
         // 与 Frame 内底部进度条占位一致(分隔线 + 两行文案 + ProgressBar)
         const TRANSFER_FOOTER_H: f32 = 72.0;
         // README §2.4：主底栏承担状态；PTY 尺寸在 ScrollArea 内容区内按真实 viewport 同步(见下方)
+        // 格高被夹到字号×FACTOR 后，首行字形会高出格子顶边；标签栏移到顶栏后(macOS / 沉浸式)
+        // 终端上方不再有 tab 行兜住，首行会被裁掉一截。顶边按溢出量补齐。
+        let mut content_margin = theme.terminal_content_margin();
+        content_margin.top += ui.ctx().fonts(|f| {
+            let natural = f.row_height(&egui::FontId::monospace(self.font_size));
+            let cell = Self::measure_terminal_line_height(f, self.font_size, theme.text_primary());
+            (natural - cell).max(0.0).ceil()
+        });
         egui::Frame::none()
             .fill(theme.bg_terminal_color())
-            .inner_margin(theme.terminal_content_margin())
+            .inner_margin(content_margin)
             .show(ui, |ui| {
                 // Scroll 滑道、Multiline/TextEdit(code_editor) 背板都用「极暗底色」；
                 // 设为终端同色，否则会露出比 bg_terminal 更浅的灰条。
