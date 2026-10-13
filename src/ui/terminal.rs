@@ -1006,7 +1006,9 @@ impl TerminalView {
         content_margin.top += ui.ctx().fonts(|f| {
             let natural = f.row_height(&egui::FontId::monospace(self.font_size));
             let cell = Self::measure_terminal_line_height(f, self.font_size, theme.text_primary());
-            (natural - cell).max(0.0).ceil()
+            // 字体声明的行高不一定罩得住真实字形(macOS 上 Menlo/回退字体)，
+            // 再给一个按字号的保底，任何字体/字号首行都不会被顶栏裁到。
+            (natural - cell).max(self.font_size * 0.4).ceil()
         });
         egui::Frame::none()
             .fill(theme.bg_terminal_color())

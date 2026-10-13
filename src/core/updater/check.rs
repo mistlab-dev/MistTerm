@@ -291,11 +291,11 @@ pub fn plan_install(
                 upgrade_hint,
             })
         }
-        InstallKind::MacApp { translocated, .. } => {
-            return manual(ManualReason::MacOs {
-                translocated: *translocated,
-            })
+        // 被 macOS 临时挪位(translocation)时没法原地替换，仍提示先移到「应用程序」。
+        InstallKind::MacApp { translocated: true, .. } => {
+            return manual(ManualReason::MacOs { translocated: true })
         }
+        InstallKind::MacApp { .. } => {}
         InstallKind::MacBinary { .. } => return manual(ManualReason::MacOs { translocated: false }),
         InstallKind::Unknown => return manual(ManualReason::Unrecognized),
         InstallKind::LinuxPortable { .. }
@@ -313,6 +313,7 @@ pub fn plan_install(
         InstallKind::LinuxPortable { .. } => asset.kind == KIND_TAR_GZ,
         InstallKind::WindowsPortable { .. } => asset.kind == KIND_ZIP,
         InstallKind::WindowsInstaller { .. } => asset.kind == KIND_INNO_SETUP,
+        InstallKind::MacApp { .. } => asset.kind == KIND_TAR_GZ,
         _ => false,
     };
     if !kind_ok {
@@ -393,21 +394,32 @@ mod tests {
     }
 
     #[test]
-    fn macos_is_notify_only() {
+    fn macos_follows_publisher_flag_and_translocation() {
         let kind = InstallKind::MacApp {
             app: "/Applications/Mist.app".into(),
             translocated: false,
         };
-        let plan = plan_install(&manifest(), &kind, None, |_| true);
-        match plan {
-            InstallPlan::Manual {
-                reason, download_url, ..
-            } => {
-                assert_eq!(reason, ManualReason::MacOs { translocated: false });
-                assert_eq!(download_url, "https://mistlab.dev/download.html");
-            }
-            other => panic!("{other:?}"),
-        }
+        // 清单关掉 macOS 自动更新时仍只提醒。
+        assert!(matches!(
+            plan_install(&manifest(), &kind, None, |_| true),
+            InstallPlan::Manual { reason: ManualReason::DisabledByPublisher, .. }
+        ));
+        let mut m = manifest();
+        m.platforms.get_mut("macos-universal").unwrap().auto_update = true;
+        assert!(matches!(plan_install(&m, &kind, None, |_| true), InstallPlan::Auto { .. }));
+        // 目录不可写：给手动下载的提示。
+        assert!(matches!(
+            plan_install(&m, &kind, None, |_| false),
+            InstallPlan::Manual { reason: ManualReason::NotWritable(_), .. }
+        ));
+        let moved = InstallKind::MacApp {
+            app: "/private/var/folders/x/AppTranslocation/A/d/Mist.app".into(),
+            translocated: true,
+        };
+        assert!(matches!(
+            plan_install(&m, &moved, None, |_| true),
+            InstallPlan::Manual { reason: ManualReason::MacOs { translocated: true }, .. }
+        ));
     }
 
     #[test]

@@ -5016,7 +5016,7 @@ impl MistTermApp {
             .map(|pane| format!("session_{}", pane.session_id))
             .unwrap_or_else(|| "global".to_string());
         let persist = self.app_settings.ai.persist_chats;
-        self.ai_panel.set_chat_session_key(key, persist);
+        self.ai_panel.sync_tab_session_key(key, persist);
     }
 
     pub(crate) fn menu_open_command_history(&mut self, ctx: &egui::Context) {
