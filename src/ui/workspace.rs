@@ -21,7 +21,9 @@ impl MistTermApp {
         let immersive = self.activity_rail_collapsed;
         self.sync_window_decorations_for_immersive(frame, immersive);
         let custom_caption = immersive && !cfg!(target_os = "macos");
-        let top_chrome_height = if immersive {
+        // macOS 用 fullsize content view：标签始终画在标题栏那一行(红绿灯右侧)。
+        let tabs_in_top = immersive || cfg!(target_os = "macos");
+        let top_chrome_height = if tabs_in_top {
             if custom_caption {
                 theme.title_bar_height().max(theme.size_tab_bar_row_h())
             } else {
@@ -41,7 +43,7 @@ impl MistTermApp {
                     let bar_bg = ui.max_rect();
                     ui.painter()
                         .rect_filled(bar_bg, 0.0, theme.chrome_bar_fill());
-                    if immersive {
+                    if tabs_in_top {
                         ui.set_clip_rect(bar_bg);
                         let prev_padding = ui.spacing().button_padding;
                         let prev_item_spacing = ui.spacing().item_spacing;
@@ -98,6 +100,14 @@ impl MistTermApp {
                                     ui.add_space(72.0);
                                 }
                                 self.render_session_tab_strip(ui, ctx, theme);
+                                if cfg!(target_os = "macos") {
+                                    let drag_w = ui.available_width().max(8.0);
+                                    crate::ui::chrome::title_bar_drag_region(
+                                        ui,
+                                        frame,
+                                        egui::vec2(drag_w, top_chrome_height),
+                                    );
+                                }
                             });
                         }
                         ui.spacing_mut().button_padding = prev_padding;
@@ -380,7 +390,7 @@ impl MistTermApp {
                                     ui.spacing_mut().item_spacing.y = 0.0;
                                     let mut tab_row_rect = egui::Rect::NOTHING;
                                     let mut tab_sep_stroke = egui::Stroke::NONE;
-                                    if !immersive {
+                                    if !tabs_in_top {
                                         let terminal_header_row_h = theme.size_tab_bar_row_h();
                                         let tab_row_w = term_col_w;
                                         tab_row_rect = egui::Rect::from_min_size(
@@ -498,7 +508,7 @@ impl MistTermApp {
                                     );
                                     // 终端正文之后重画分隔线，盖住清屏后的顶边；
                                     // 必须留在 Middle，勿用 Foreground（否则会盖住顶栏下拉菜单）。
-                                    if !immersive && tab_row_rect != egui::Rect::NOTHING {
+                                    if !tabs_in_top && tab_row_rect != egui::Rect::NOTHING {
                                         ui.painter().hline(
                                             tab_row_rect.x_range(),
                                             tab_row_rect.max.y - 0.5,

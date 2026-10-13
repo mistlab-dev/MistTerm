@@ -6331,65 +6331,6 @@ impl MistTermApp {
             }
         };
 
-        match self.fragment_list_scope {
-            FragmentListScope::Personal => {
-                let mut top: Vec<_> = self
-                    .fragment_manager
-                    .get_all()
-                    .iter()
-                    .filter(|f| f.usage_count > 0)
-                    .cloned()
-                    .collect();
-                top.sort_by_key(|f| std::cmp::Reverse(f.usage_count));
-                top.truncate(5);
-                if !top.is_empty() {
-                    ui.label(
-                        egui::RichText::new(crate::i18n::tr(
-                            ui.ctx(),
-                            "Top snippets (local usage)",
-                            "常用片段(本地统计)",
-                        ))
-                        .size(theme.font_size_small())
-                        .color(theme.text_tertiary()),
-                    );
-                    for f in &top {
-                        ui.label(
-                            egui::RichText::new(format!("· {} — {}×", f.title, f.usage_count))
-                                .size(theme.font_size_small())
-                                .color(theme.color_body_text_muted()),
-                        );
-                    }
-                    ui.add_space(theme.spacing_sm());
-                }
-            }
-            FragmentListScope::Team if self.team_service.is_logged_in() => {
-                let mut top = self.team_service.team_fragments_as_stats();
-                top.retain(|f| f.usage_count > 0);
-                top.sort_by_key(|f| std::cmp::Reverse(f.usage_count));
-                top.truncate(5);
-                if !top.is_empty() {
-                    ui.label(
-                        egui::RichText::new(crate::i18n::tr(
-                            ui.ctx(),
-                            "Team Top snippets",
-                            "团队常用片段",
-                        ))
-                        .size(theme.font_size_small())
-                        .color(theme.text_tertiary()),
-                    );
-                    for f in &top {
-                        ui.label(
-                            egui::RichText::new(format!("· {} — {}×", f.title, f.usage_count))
-                                .size(theme.font_size_small())
-                                .color(theme.color_body_text_muted()),
-                        );
-                    }
-                    ui.add_space(theme.spacing_sm());
-                }
-            }
-            _ => {}
-        }
-
         let mut work: Vec<FragmentStats> =
             source.iter().filter(|f| search_match(f)).cloned().collect();
 

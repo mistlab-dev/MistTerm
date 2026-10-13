@@ -66,7 +66,8 @@ pub fn run_gui() {
 
     apply_preferred_english_input_source();
 
-    let options = eframe::NativeOptions {
+    #[allow(unused_mut)]
+    let mut options = eframe::NativeOptions {
         maximized: false,
         initial_window_size: Some(eframe::egui::vec2(1200.0, 820.0)),
         max_window_size: None,
@@ -74,6 +75,12 @@ pub fn run_gui() {
         icon_data: Some(crate::ui::icons::app_window_icon_data()),
         ..Default::default()
     };
+
+    // macOS：内容延伸到标题栏，标签和红绿灯同一行(透明标题栏)。
+    #[cfg(target_os = "macos")]
+    {
+        options.fullsize_content = true;
+    }
 
     if let Err(e) = eframe::run_native(
         APP_DISPLAY_NAME,
