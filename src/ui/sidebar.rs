@@ -20,6 +20,8 @@ pub struct SidebarOutput {
     pub collapse_clicked: bool,
     pub view_log_session_id: Option<String>,
     pub connect_team_server_key: Option<String>,
+    /// 连接栏「本机终端」入口（不写入 sessions.json）
+    pub local_shell_clicked: bool,
 }
 
 /// 左栏整列(导入条 + 圆角面板)的附加动作
@@ -124,6 +126,7 @@ impl Sidebar {
         let mut collapse_clicked = false;
         let mut view_log_session_id = None;
         let mut connect_team_server_key: Option<String> = None;
+        let mut local_shell_clicked = false;
 
         let body_h = panel_h.max(120.0);
         let response = ui.allocate_ui_with_layout(
@@ -223,6 +226,106 @@ impl Sidebar {
                 }
 
                 ui.add_space(theme.spacing_dock_control_gap());
+
+                // 固定入口：本机终端（不写入 sessions.json；菜单快捷键仍可用）
+                let local_label = crate::i18n::tr(ui.ctx(), "Local Shell", "本机终端");
+                let local_q = search_query.trim().to_lowercase();
+                let local_visible = local_q.is_empty()
+                    || local_label.to_lowercase().contains(&local_q)
+                    || "local shell".contains(&local_q)
+                    || "localhost".contains(&local_q)
+                    || "本机终端".contains(search_query.trim())
+                    || "本机".contains(search_query.trim());
+                if local_visible {
+                    let row_h = theme.size_session_list_row_h();
+                    let row_inner_w = layout_util::finite_avail_minus(ui, 0.0, 80.0, width);
+                    let (row_rect, response) = ui.allocate_exact_size(
+                        egui::vec2(row_inner_w, row_h),
+                        egui::Sense::click(),
+                    );
+                    let bg = if response.hovered() {
+                        theme.list_row_hover_bg()
+                    } else {
+                        egui::Color32::TRANSPARENT
+                    };
+                    ui.painter()
+                        .rect_filled(row_rect, theme.radius_list_item(), bg);
+                    let accent = theme.accent_color();
+                    let accent_bar = egui::Rect::from_min_max(
+                        row_rect.left_top(),
+                        egui::pos2(row_rect.left() + 3.0, row_rect.bottom()),
+                    );
+                    ui.painter().rect_filled(
+                        accent_bar,
+                        egui::Rounding::ZERO,
+                        accent.gamma_multiply(0.9),
+                    );
+                    let mut row_ui = ui.child_ui(
+                        row_rect.shrink2(egui::vec2(
+                            theme.spacing_list_item_x(),
+                            theme.spacing_list_item_y(),
+                        )),
+                        egui::Layout::left_to_right(egui::Align::Center),
+                    );
+                    let icon_px = theme.font_size_connection_name() + 2.0;
+                    let (icon_rect, _) = row_ui.allocate_exact_size(
+                        egui::vec2(icon_px, icon_px),
+                        egui::Sense::hover(),
+                    );
+                    crate::ui::icons::paint_icon(
+                        ui,
+                        icon_rect,
+                        crate::ui::icons::IconId::TerminalPrompt,
+                        theme.text_secondary(),
+                        icon_px,
+                    );
+                    row_ui.add_space(theme.spacing_tab_dot_text());
+                    let text_h = row_ui.available_height();
+                    let text_w = row_ui.available_width();
+                    let (text_rect, _) =
+                        row_ui.allocate_exact_size(egui::vec2(text_w, text_h), egui::Sense::hover());
+                    let mut text_ui =
+                        row_ui.child_ui(text_rect, egui::Layout::top_down(egui::Align::Min));
+                    text_ui.set_clip_rect(text_rect);
+                    text_ui.spacing_mut().item_spacing.y = 0.0;
+                    text_ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(local_label)
+                                .size(theme.font_size_connection_name())
+                                .color(theme.text_secondary()),
+                        )
+                        .truncate(true)
+                        .wrap(false),
+                    );
+                    let sub = format!(
+                        "{} · {}",
+                        crate::local_shell::default_shell_program(),
+                        crate::platform::shortcuts::local_shell_accel()
+                    );
+                    text_ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(sub)
+                                .size(theme.font_size_caption())
+                                .color(theme.color_caption_text()),
+                        )
+                        .truncate(true)
+                        .wrap(false),
+                    );
+                    let tip = format!(
+                        "{} · {}",
+                        crate::i18n::tr(
+                            ui.ctx(),
+                            "Open a local shell tab (not saved to connections)",
+                            "打开本机终端标签（不写入连接列表）",
+                        ),
+                        crate::platform::shortcuts::local_shell_accel()
+                    );
+                    let response = response.on_hover_text(tip);
+                    if response.clicked() {
+                        local_shell_clicked = true;
+                    }
+                    ui.add_space(theme.spacing_list_item_gap());
+                }
 
                 if !team_servers.is_empty() {
                     ui.add_space(theme.spacing_panel_gap());
@@ -627,6 +730,7 @@ impl Sidebar {
             collapse_clicked,
             view_log_session_id,
             connect_team_server_key,
+            local_shell_clicked,
         }
     }
 }
