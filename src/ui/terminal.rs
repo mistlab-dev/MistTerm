@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 use crate::core::{ServerAuditEvent, ServerAuditProbe};
+use crate::local_shell::LocalShellHandle;
 use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, LrzszTransfer, TransferEvent, format_ssh_connect_error};
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line, Point};
@@ -154,6 +155,16 @@ pub enum RightDockSshGate {
     Connecting,
     Disconnected,
     Failed(String),
+    /// 本机终端标签：无远端 SSH，SFTP/转发不可用
+    LocalShell,
+}
+
+/// 终端连接类型：远端 SSH 或本机 PTY shell。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ConnectionKind {
+    #[default]
+    Ssh,
+    Local,
 }
 
 /// 终端视图组件
@@ -169,6 +180,12 @@ pub struct TerminalView {
     
     /// SSH 会话句柄
     ssh_handle: Option<SshSessionHandle>,
+
+    /// 本机 PTY 句柄（[`ConnectionKind::Local`]）
+    local_handle: Option<LocalShellHandle>,
+
+    /// SSH 远端或本机 shell
+    connection_kind: ConnectionKind,
     
     /// VT100/ANSI 终端模拟器(含光标、屏幕、滚动历史)
     terminal: VtTerminal,
@@ -598,6 +615,8 @@ impl TerminalView {
             ssh_manager: None,
             ssh_rx: None,
             ssh_handle: None,
+            local_handle: None,
+            connection_kind: ConnectionKind::Ssh,
             terminal: VtTerminal::new(80, 24),
             connected: false,
             error_message: None,
@@ -784,7 +803,22 @@ impl TerminalView {
         }
     }
 
-    fn send_pty_input(&mut self, handle: &SshSessionHandle, data: &[u8]) -> Result<(), String> {
+    fn has_pty_writer(&self) -> bool {
+        match self.connection_kind {
+            ConnectionKind::Local => self
+                .local_handle
+                .as_ref()
+                .map(|h| h.is_alive())
+                .unwrap_or(false),
+            ConnectionKind::Ssh => self.ssh_handle.is_some(),
+        }
+    }
+
+    pub fn is_local_shell(&self) -> bool {
+        self.connection_kind == ConnectionKind::Local
+    }
+
+    fn send_pty_input(&mut self, data: &[u8]) -> Result<(), String> {
         let __t0 = std::time::Instant::now();
         if !data.is_empty() {
             // 键入时清选区，避免拖选灰底残留盖住新输出(对标 Windows Terminal)。
@@ -795,9 +829,30 @@ impl TerminalView {
             self.scroll_to_bottom_on_user_input();
         }
         let __t1 = std::time::Instant::now();
+        if self.is_local_shell() {
+            let __res = self
+                .local_handle
+                .as_ref()
+                .ok_or_else(|| "local shell handle missing".to_string())?
+                .send_input(data);
+            let __t3 = std::time::Instant::now();
+            let __total = (__t3 - __t0).as_micros() as u64;
+            if __total >= 5_000 {
+                log::warn!(
+                    "TERM_SLOW send_pty_input(local) total={}us n={}",
+                    __total,
+                    data.len()
+                );
+            }
+            return __res;
+        }
         self.note_pty_outbound_for_rz(data);
         let __t2 = std::time::Instant::now();
-        let __res = handle.send_input(data);
+        let __res = self
+            .ssh_handle
+            .as_ref()
+            .ok_or_else(|| "ssh handle missing".to_string())?
+            .send_input(data);
         let __t3 = std::time::Instant::now();
         let __total = (__t3 - __t0).as_micros() as u64;
         if __total >= 5_000 {
@@ -879,6 +934,8 @@ impl TerminalView {
                 self.buffer_input_while_disconnected = false;
                 self.disconnected_input_buffer.clear();
                 self.resend_offline_input_dialog_open = false;
+                self.connection_kind = ConnectionKind::Ssh;
+                self.local_handle = None;
                 self.session_id = Some(session_id);
                 self.ssh_manager = Some(manager);
                 self.ssh_rx = Some(rx);
@@ -902,6 +959,35 @@ impl TerminalView {
                 self.error_message = Some(msg);
             }
         }
+    }
+
+    /// 打开本机默认 shell（不写入侧栏会话列表）。
+    pub fn connect_local_shell(&mut self) -> Result<(), String> {
+        let (rx, handle) = crate::local_shell::spawn_local_shell(self.cols, self.rows)?;
+        self.buffer_input_while_disconnected = false;
+        self.disconnected_input_buffer.clear();
+        self.resend_offline_input_dialog_open = false;
+        self.connection_kind = ConnectionKind::Local;
+        self.session_id = Some(handle.session_id);
+        self.local_handle = Some(handle);
+        self.ssh_manager = None;
+        self.ssh_handle = None;
+        self.ssh_rx = Some(rx);
+        self.connected = false;
+        self.error_message = None;
+        self.terminal = VtTerminal::new(self.cols as usize, self.rows as usize);
+        self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
+        self.visual_layout_cache = None;
+        self.local_disconnect_intent = false;
+        self.connected_at = None;
+        self.agent_audit_degraded = false;
+        self.agent_audit_banner_dismissed = false;
+        self.connection_target = Some(("local".to_string(), "local".to_string()));
+        self.pending_rz_upload = false;
+        self.zmodem_upload_after_rz_path = None;
+        self.expect_rz_upload_until = None;
+        self.expect_sz_download_until = None;
+        Ok(())
     }
 
     /// 显示终端视图。`column_width` 须为宿主在 **标签栏下方** 为终端列 `allocate_ui_with_layout` 的宽度(勿用 `clip_rect`，常为整窗宽)。
@@ -1712,11 +1798,11 @@ impl TerminalView {
             self.paste_next_chunk_at = None;
             return;
         }
-        let Some(handle) = self.ssh_handle.clone() else {
+        if !self.has_pty_writer() {
             self.paste_pending.clear();
             self.paste_next_chunk_at = None;
             return;
-        };
+        }
 
         let now = Instant::now();
         if let Some(t) = self.paste_next_chunk_at {
@@ -1728,7 +1814,7 @@ impl TerminalView {
 
         let n = CHUNK.min(self.paste_pending.len());
         let chunk: Vec<u8> = self.paste_pending.drain(..n).collect();
-        if let Err(e) = self.send_pty_input(&handle, &chunk) {
+        if let Err(e) = self.send_pty_input(&chunk) {
             log::error!("PTY write (paste chunk): {}", e);
         }
 
@@ -1769,6 +1855,14 @@ impl TerminalView {
             for msg in batch {
                 match msg {
                     SshMessage::Output { data, .. } => {
+                        if self.is_local_shell() {
+                            if !data.is_empty() {
+                                self.pending_log_output.push(data.clone());
+                                self.terminal.feed(&data);
+                                vte_dirty = true;
+                            }
+                            continue;
+                        }
                         self.push_zmodem_detect_tail(&data);
                         let detect_buf = self.zmodem_detect_window();
                         // 上传(本机 sz→远端 rz)时，PTY 上的 ZMODEM 帧只能经 SSH 泵线程到达此处；
@@ -1938,9 +2032,11 @@ impl TerminalView {
                         self.terminal_focused = true;
                         self.pending_focus_terminal = true;
                         self.auto_follow_output = true;
-                        
-                        // 启动交互式 shell
-                        if let Some(ref manager) = self.ssh_manager {
+
+                        if self.is_local_shell() {
+                            // local_handle 已在 connect_local_shell 挂好
+                        } else if let Some(ref manager) = self.ssh_manager {
+                            // 启动交互式 shell
                             if let Some(session_id) = self.session_id {
                                 match manager.start_interactive_shell(session_id, self.cols, self.rows) {
                                     Ok(handle) => {
@@ -2331,14 +2427,14 @@ impl TerminalView {
                     )
                     .clicked()
                     {
-                        if let Some(handle) = self.ssh_handle.clone() {
+                        if self.has_pty_writer() {
                             let chunks: Vec<Vec<u8>> = self
                                 .disconnected_input_buffer
                                 .chunks(4096)
                                 .map(|c| c.to_vec())
                                 .collect();
                             for chunk in chunks {
-                                let _ = self.send_pty_input(&handle, &chunk);
+                                let _ = self.send_pty_input(&chunk);
                             }
                         }
                         self.disconnected_input_buffer.clear();
@@ -2383,9 +2479,9 @@ impl TerminalView {
         if !self.connected {
             return;
         }
-        let Some(handle) = self.ssh_handle.clone() else {
+        if !self.has_pty_writer() {
             return;
-        };
+        }
         // 须用 terminal_focused(含 capture_pty_keyboard)，勿仅看 wants：
         // AI 输入聚焦时 wants 可能仍为 true，否则 ,. 等 Text 会被写进 PTY 且干扰输入框。
         if !self.terminal_focused {
@@ -2416,13 +2512,13 @@ impl TerminalView {
                 egui::Key::Tab,
             );
             if tab_plain || tab_shift {
-                let _ = self.send_pty_input(&handle, b"\t");
+                let _ = self.send_pty_input(b"\t");
                 // EventFilter 需上一帧已聚焦才生效；首帧 Tab 仍可能失焦
                 self.pending_focus_terminal = true;
             }
             // Esc / F1–F12 / Insert / 带修饰方向键等(egui 常无 Text 事件)
             if crate::ui::terminal_keys::forward_non_text_keys(i, |bytes| {
-                let _ = self.send_pty_input(&handle, bytes);
+                let _ = self.send_pty_input(bytes);
             }) {
                 // EventFilter 生效前的兜底(帧初 Tab/Esc/方向键抢焦点)
                 self.pending_focus_terminal = true;
@@ -2462,7 +2558,7 @@ impl TerminalView {
                     egui::Event::CompositionEnd(text) => {
                         if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
                             self.track_typed_text(text);
-                            if let Err(e) = self.send_pty_input(&handle, text.as_bytes()) {
+                            if let Err(e) = self.send_pty_input(text.as_bytes()) {
                                 log::error!("PTY write (ime): {}", e);
                             }
                         }
@@ -2472,7 +2568,7 @@ impl TerminalView {
                         if text == "\n" || text == "\r" {
                             if !enter_sent {
                                 self.commit_typed_line_on_enter();
-                                if let Err(e) = self.send_pty_input(&handle, b"\r") {
+                                if let Err(e) = self.send_pty_input(b"\r") {
                                     log::error!("PTY write (enter text): {}", e);
                                 }
                                 enter_sent = true;
@@ -2505,21 +2601,21 @@ impl TerminalView {
                             // macOS 上 Fn+Delete 等常只来 Text(DEL)，应发 xterm「向前删」而非裸 0x7f(易被当成怪字符/像空格)
                             #[cfg(target_os = "macos")]
                             {
-                                if let Err(e) = self.send_pty_input(&handle, b"\x1b[3~") {
+                                if let Err(e) = self.send_pty_input(b"\x1b[3~") {
                                     log::error!("PTY write (delete seq): {}", e);
                                 }
                                 continue;
                             }
                             #[cfg(not(target_os = "macos"))]
                             {
-                                if let Err(e) = self.send_pty_input(&handle, &[0x7f]) {
+                                if let Err(e) = self.send_pty_input(&[0x7f]) {
                                     log::error!("PTY write (del): {}", e);
                                 }
                                 continue;
                             }
                         }
                         self.track_typed_text(text);
-                        if let Err(e) = self.send_pty_input(&handle, text.as_bytes()) {
+                        if let Err(e) = self.send_pty_input(text.as_bytes()) {
                             log::error!("PTY write (text): {}", e);
                         }
                     }
@@ -2543,7 +2639,7 @@ impl TerminalView {
                             egui::Key::Enter => {
                                 if !enter_sent {
                                     self.commit_typed_line_on_enter();
-                                    if let Err(e) = self.send_pty_input(&handle, b"\r") {
+                                    if let Err(e) = self.send_pty_input(b"\r") {
                                         log::error!("PTY write (enter): {}", e);
                                     }
                                     enter_sent = true;
@@ -2551,13 +2647,13 @@ impl TerminalView {
                             }
                             egui::Key::Backspace => {
                                 self.track_backspace();
-                                if let Err(e) = self.send_pty_input(&handle, &[0x7f]) {
+                                if let Err(e) = self.send_pty_input(&[0x7f]) {
                                     log::error!("PTY write (bs): {}", e);
                                 }
                             }
                             // xterm / xterm-256color：Forward Delete 为 CSI 3 ~
                             egui::Key::Delete => {
-                                if let Err(e) = self.send_pty_input(&handle, b"\x1b[3~") {
+                                if let Err(e) = self.send_pty_input(b"\x1b[3~") {
                                     log::error!("PTY write (delete): {}", e);
                                 }
                             }
@@ -2580,7 +2676,7 @@ impl TerminalView {
             for b in ctrl_to_send {
                 if b == 0x03 && self.lrzsz.is_active() {
                     let _ = self.cancel_zmodem_transfer();
-                } else if let Err(e) = self.send_pty_input(&handle, &[b]) {
+                } else if let Err(e) = self.send_pty_input(&[b]) {
                     log::error!("PTY write (ctrl): {}", e);
                 }
             }
@@ -2609,13 +2705,13 @@ impl TerminalView {
                 self.note_sz_shell_command_submitted();
             }
         }
-        let Some(handle) = self.ssh_handle.clone() else {
+        if !self.has_pty_writer() {
             return;
-        };
+        }
         for line in lines {
             let mut payload = line.to_string();
             payload.push('\r');
-            if let Err(e) = self.send_pty_input(&handle, payload.as_bytes()) {
+            if let Err(e) = self.send_pty_input(payload.as_bytes()) {
                 log::error!("PTY write (command): {}", e);
             }
         }
@@ -2631,12 +2727,12 @@ impl TerminalView {
             }
             return;
         }
-        let Some(handle) = self.ssh_handle.clone() else {
+        if !self.has_pty_writer() {
             return;
-        };
+        }
         const LONG_PASTE: usize = 10 * 1024;
         if normalized.len() <= LONG_PASTE {
-            if let Err(e) = self.send_pty_input(&handle, normalized.as_bytes()) {
+            if let Err(e) = self.send_pty_input(normalized.as_bytes()) {
                 log::error!("PTY write (paste): {}", e);
             }
             return;
@@ -2980,11 +3076,19 @@ impl TerminalView {
 
     /// 是否处于连接建立中(认证/启动 shell 阶段)
     pub fn is_connecting(&self) -> bool {
+        if self.is_local_shell() {
+            return !self.connected
+                && self.error_message.is_none()
+                && self.local_handle.is_some();
+        }
         !self.connected && self.error_message.is_none() && self.ssh_manager.is_some()
     }
 
     /// 右 dock(SFTP / 端口转发等)是否可绑定当前 SSH 会话。
     pub fn right_dock_ssh_gate(&self) -> RightDockSshGate {
+        if self.is_local_shell() {
+            return RightDockSshGate::LocalShell;
+        }
         if self.ssh_manager.is_none() && self.connection_target.is_none() {
             return RightDockSshGate::NoSession;
         }
@@ -3108,6 +3212,14 @@ impl TerminalView {
         self.rows = rows;
         self.terminal.resize(cols as usize, rows as usize);
 
+        if self.is_local_shell() {
+            if let Some(ref handle) = self.local_handle {
+                if let Err(e) = handle.resize_pty(cols, rows) {
+                    log::error!("Failed to resize local PTY: {}", e);
+                }
+            }
+            return;
+        }
         if let Some(ref handle) = self.ssh_handle {
             // 文件选择关闭等会导致 UI 行数突变并立刻 resize_pty；与 ZMODEM 首轮帧并发时，
             // 远端 `rz` 易在握手中被 SIGWINCH 打乱，表现为约 10s 无入站再续(见用户日志)。
@@ -3128,6 +3240,9 @@ impl TerminalView {
     /// 断开连接(关闭 SSH 并清空本地终端网格，用于移除标签等场景)
     pub fn disconnect(&mut self) {
         self.local_disconnect_intent = true;
+        if let Some(ref h) = self.local_handle {
+            h.request_stop();
+        }
         if let Some(ref h) = self.ssh_handle {
             self.lrzsz.unregister_shell_pump_upload_feed(h);
         }
@@ -3136,6 +3251,8 @@ impl TerminalView {
         self.clear_rz_control_mode();
         self.connected = false;
         self.ssh_handle = None;
+        self.local_handle = None;
+        self.connection_kind = ConnectionKind::Ssh;
         self.ssh_manager = None;
         self.ssh_rx = None;
         self.session_id = None;
@@ -3159,6 +3276,9 @@ impl TerminalView {
     /// 仅断开 SSH，保留当前屏幕与滚动缓冲(FUNCTIONAL_SPEC §1.3.5：Tab 保留、输出冻结、不可再输入)
     pub fn disconnect_ssh_keep_buffer(&mut self) {
         self.local_disconnect_intent = true;
+        if let Some(ref h) = self.local_handle {
+            h.request_stop();
+        }
         if let Some(ref h) = self.ssh_handle {
             self.lrzsz.unregister_shell_pump_upload_feed(h);
         }
@@ -3167,6 +3287,8 @@ impl TerminalView {
         self.clear_rz_control_mode();
         self.connected = false;
         self.ssh_handle = None;
+        self.local_handle = None;
+        // 保留 connection_kind=Local 以便 UI 文案；rx 关闭后不再读写
         self.ssh_manager = None;
         self.ssh_rx = None;
         self.session_id = None;
@@ -3221,13 +3343,13 @@ impl TerminalView {
             return Err(Self::ERR_INSERT_MULTILINE.to_string());
         }
         let loc = self.locale_last();
-        let Some(handle) = self.ssh_handle.clone() else {
+        if !self.has_pty_writer() {
             return Err(loc
                 .tr("SSH session handle unavailable", "连接句柄不可用")
                 .to_string());
-        };
+        }
         let line = command.trim_matches(|c| c == '\r' || c == '\n').trim_end();
-        self.send_pty_input(&handle, line.as_bytes())
+        self.send_pty_input(line.as_bytes())
             .map_err(|e| format!("{}: {}", loc.tr("Send failed", "发送失败"), e))
     }
 
@@ -3237,13 +3359,13 @@ impl TerminalView {
             return Err(Self::ERR_FRAGMENT_NOT_CONNECTED.to_string());
         }
         let loc = self.locale_last();
-        let Some(handle) = self.ssh_handle.clone() else {
+        if !self.has_pty_writer() {
             return Err(loc
                 .tr("SSH session handle unavailable", "连接句柄不可用")
                 .to_string());
-        };
+        }
         let input = format!("{}\r", command);
-        self.send_pty_input(&handle, input.as_bytes()).map_err(|e| {
+        self.send_pty_input(input.as_bytes()).map_err(|e| {
             format!(
                 "{}: {}",
                 loc.tr("Send failed", "发送失败"),
@@ -3302,10 +3424,8 @@ impl TerminalView {
         self.zmodem_upload_after_rz_path = Some(path);
         self.pending_rz_upload = false;
         self.note_rz_shell_command_submitted();
-        if self.connected {
-            if let Some(h) = self.ssh_handle.clone() {
-                let _ = self.send_pty_input(&h, b"\nrz -y\r");
-            }
+        if self.connected && self.ssh_handle.is_some() {
+            let _ = self.send_pty_input(b"\nrz -y\r");
         }
     }
 
