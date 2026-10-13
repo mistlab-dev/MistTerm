@@ -133,6 +133,35 @@ pub fn new_tab_shortcut_pressed(i: &egui::InputState) -> bool {
     }
 }
 
+/// 本机终端：macOS ⌘⌥T；Win/Linux Ctrl+Alt+T（避开新建标签的 Ctrl+Shift+T / ⌘T）。
+pub fn consume_local_shell_shortcut(i: &mut egui::InputState) -> bool {
+    let mods = egui::Modifiers {
+        #[cfg(target_os = "macos")]
+        command: true,
+        #[cfg(not(target_os = "macos"))]
+        ctrl: true,
+        alt: true,
+        ..egui::Modifiers::NONE
+    };
+    if i.consume_key(mods, Key::T) {
+        return true;
+    }
+    if i.modifiers.matches(mods) && i.key_pressed(Key::T) {
+        i.events.retain(|e| {
+            !matches!(
+                e,
+                egui::Event::Key {
+                    key: Key::T,
+                    pressed: true,
+                    ..
+                }
+            )
+        });
+        return true;
+    }
+    false
+}
+
 /// macOS：⌘⌥←/→；Win/Linux：Ctrl+Shift+←/→(Alt+←/→ 留给 shell 按词移动)。
 pub fn split_pane_focus_shortcut_pressed(i: &egui::InputState) -> bool {
     if !i.key_pressed(Key::ArrowLeft) && !i.key_pressed(Key::ArrowRight) {
