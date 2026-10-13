@@ -4119,6 +4119,17 @@ pub fn show_right_dock_ssh_gate(
             );
             false
         }
+        RightDockSshGate::LocalShell => {
+            ui.label(
+                RichText::new(crate::i18n::tr(
+                    ctx,
+                    "Local shell tab — SFTP and port forwarding need an SSH session.",
+                    "本机终端标签 — SFTP / 端口转发需连接 SSH 会话。",
+                ))
+                .color(theme.text_tertiary()),
+            );
+            false
+        }
     }
 }
 

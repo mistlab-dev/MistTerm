@@ -296,6 +296,9 @@ impl MistTermApp {
                                 if sidebar_output.create_session_clicked {
                                     self.show_new_session_dialog = true;
                                 }
+                                if sidebar_output.local_shell_clicked {
+                                    self.open_local_shell_tab(ctx);
+                                }
                                 if sidebar_output.collapse_clicked {
                                     self.sidebar_collapsed = true;
                                     self.sidebar_user_dismissed_responsive = true;
@@ -1879,10 +1882,21 @@ impl MistTermApp {
                         )
                     })
                     .unwrap_or_else(|| tab_label.clone());
+                let sid = tab.primary_session_id();
                 let env_color = self
                     .session_manager
-                    .get_session(&tab.primary_session_id())
-                    .map(|s| theme.session_tab_accent_color(s));
+                    .get_session(&sid)
+                    .map(|s| theme.session_tab_accent_color(s))
+                    .or_else(|| {
+                        // 本机终端不入 sessions.json，仍按 id 给强调底色，避免现代主题下「空心」标签。
+                        if sid.starts_with("local:")
+                            || tab.panes.iter().any(|p| p.terminal.is_local_shell())
+                        {
+                            Some(theme.session_tab_accent_from_id(&sid))
+                        } else {
+                            None
+                        }
+                    });
                 let tab_chip = crate::ui::chrome::session_tab_chip(
                     ui,
                     theme,

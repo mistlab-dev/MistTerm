@@ -1224,7 +1224,9 @@ impl Theme {
     }
 
     /// 无色标时：在 accent / accent_dim 附近取稳定变体，不引入彩虹色。
-    fn session_tab_accent_from_id(&self, session_id: &str) -> Color32 {
+    ///
+    /// 本机终端等无侧栏会话的标签也可直接用会话 id（如 `local:…`）取色。
+    pub fn session_tab_accent_from_id(&self, session_id: &str) -> Color32 {
         let a = self.accent_color();
         let d = self.accent_dim_color();
         let mid = Color32::from_rgb(
