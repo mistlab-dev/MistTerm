@@ -54,17 +54,6 @@ pub fn apply_preferred_english_input_source() {
 #[cfg(not(target_os = "macos"))]
 pub fn apply_preferred_english_input_source() {}
 
-/// 当前输入源是普通键盘布局（非拼音等输入法）。非 macOS 返回 false（保持原有组字处理）。
-#[cfg(target_os = "macos")]
-pub fn input_source_is_plain_layout() -> bool {
-    macos_ime::current_source_is_keyboard_layout()
-}
-
-#[cfg(not(target_os = "macos"))]
-pub fn input_source_is_plain_layout() -> bool {
-    false
-}
-
 /// 启动 MistTerm GUI 界面
 pub fn run_gui() {
     log::info!("Mist GUI starting");

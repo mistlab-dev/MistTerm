@@ -698,7 +698,10 @@ fn strip_leading_pty_noise(mut line: &[u8]) -> &[u8] {
                     line = &line[1..];
                     while let Some((&b, rest)) = line.split_first() {
                         line = rest;
-                        if b.is_ascii_alphabetic() {
+                        // CSI 结束字节是 0x40..=0x7E（含 `@` = ICH 插入字符、`~` 等），不只是字母。
+                        // 以前只认字母：行中插字时 shell 回显 `ESC[1@X` 会把 `X` 当成 CSI 的一部分，
+                        // 整段被当成「可能是 MIST_AUDIT 前缀」扣住，直到回车才显示。
+                        if (0x40..=0x7e).contains(&b) {
                             break;
                         }
                     }
@@ -757,6 +760,17 @@ fn parse_mist_audit_line(line: &[u8]) -> Option<ServerAuditEvent> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ich_insert_echo_is_not_held() {
+        // 行中插字：bash/readline 回显 ICH + 字符
+        let mut p = super::ServerAuditProbe::new();
+        let (out, ev) = p.feed(b"\x1b[1@X");
+        assert!(ev.is_empty());
+        assert_eq!(out, b"\x1b[1@X");
+        let (out, _) = p.feed(b"\x1b[@Y");
+        assert_eq!(out, b"\x1b[@Y");
+    }
+
 
     #[test]
     fn cached_rules_apply_but_still_need_sync() {
