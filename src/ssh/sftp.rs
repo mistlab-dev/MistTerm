@@ -3,10 +3,11 @@
 //! 提供 SFTP 客户端封装，支持文件浏览、上传、下载、删除等操作。
 
 use super::SessionBlockingGuard;
-use ssh2::{Session, Sftp};
-use std::io::{Read, Write};
+use chrono::{DateTime, TimeZone, Utc};
+use ssh2::{OpenFlags, OpenType, Session, Sftp};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
-use chrono::{DateTime, Utc, TimeZone};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// libssh2 在 shell 占用会话时可能返回 Would block / EAGAIN。
 /// 现在 SFTP 操作走 blocking 模式（见 `SftpClient`），正常路径上不会再出现，
@@ -36,6 +37,31 @@ pub struct SftpEntry {
     pub modified: DateTime<Utc>,
     /// 完整路径
     pub path: PathBuf,
+}
+
+/// 上传/下载写模式。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteMode {
+    /// 截断目标并从 0 开始写。
+    Overwrite,
+    /// 从已有目标大小继续写（断点续传）。
+    Resume,
+}
+
+/// 带进度/取消的传输结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferResult {
+    Completed { bytes: u64 },
+    Cancelled { bytes_done: u64 },
+    /// 目标已完整（续传时大小已对齐），未再传。
+    Skipped,
+}
+
+/// 传输进度回调参数。
+#[derive(Debug, Clone, Copy)]
+pub struct TransferProgress {
+    pub done: u64,
+    pub total: u64,
 }
 
 impl SftpEntry {
@@ -199,68 +225,355 @@ impl SftpClient {
             ))
     }
 
-    /// 下载文件到本地
+    /// 下载文件到本地（整文件覆盖，无进度）。
     pub fn download(&self, remote_path: &Path, local_path: &Path) -> Result<u64, String> {
+        match self.download_ex(
+            remote_path,
+            local_path,
+            WriteMode::Overwrite,
+            None,
+            &mut |_| {},
+        )? {
+            TransferResult::Completed { bytes } => Ok(bytes),
+            TransferResult::Cancelled { bytes_done } => {
+                Err(format!("download cancelled after {bytes_done} bytes"))
+            }
+            TransferResult::Skipped => Ok(0),
+        }
+    }
+
+    /// 上传文件到远程（整文件覆盖，无进度）。
+    pub fn upload(&self, local_path: &Path, remote_path: &Path) -> Result<u64, String> {
+        match self.upload_ex(
+            local_path,
+            remote_path,
+            WriteMode::Overwrite,
+            None,
+            &mut |_| {},
+        )? {
+            TransferResult::Completed { bytes } => Ok(bytes),
+            TransferResult::Cancelled { bytes_done } => {
+                Err(format!("upload cancelled after {bytes_done} bytes"))
+            }
+            TransferResult::Skipped => Ok(0),
+        }
+    }
+
+    /// 带进度 / 取消 / 续传的下载。
+    pub fn download_ex(
+        &self,
+        remote_path: &Path,
+        local_path: &Path,
+        mode: WriteMode,
+        cancel: Option<&AtomicBool>,
+        on_progress: &mut dyn FnMut(TransferProgress),
+    ) -> Result<TransferResult, String> {
+        let remote_stat = self
+            .sftp
+            .stat(remote_path)
+            .map_err(|e| format!("Failed to stat remote {}: {e}", remote_path.display()))?;
+        let total = remote_stat.size.unwrap_or(0);
+        let existing = if local_path.exists() {
+            std::fs::metadata(local_path)
+                .map(|m| m.len())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+
+        let resume_from = match mode {
+            WriteMode::Overwrite => 0,
+            WriteMode::Resume => {
+                if existing >= total && total > 0 {
+                    on_progress(TransferProgress {
+                        done: total,
+                        total,
+                    });
+                    return Ok(TransferResult::Skipped);
+                }
+                existing.min(total)
+            }
+        };
+
         let mut remote_file = self
             .sftp
             .open(remote_path)
-            .map_err(|e| format!("Failed to open remote file {}: {}", remote_path.display(), e))?;
+            .map_err(|e| format!("Failed to open remote file {}: {e}", remote_path.display()))?;
+        if resume_from > 0 {
+            remote_file
+                .seek(SeekFrom::Start(resume_from))
+                .map_err(|e| format!("Failed to seek remote file: {e}"))?;
+        }
 
-        let mut local_file = std::fs::File::create(local_path)
-            .map_err(|e| format!("Failed to create local file {}: {}", local_path.display(), e))?;
+        if let Some(parent) = local_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let mut local_file = if resume_from > 0 {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(local_path)
+                .map_err(|e| format!("Failed to open local file {}: {e}", local_path.display()))?
+        } else {
+            std::fs::File::create(local_path)
+                .map_err(|e| format!("Failed to create local file {}: {e}", local_path.display()))?
+        };
+        if resume_from > 0 {
+            local_file
+                .seek(SeekFrom::Start(resume_from))
+                .map_err(|e| format!("Failed to seek local file: {e}"))?;
+        }
 
         const CHUNK: usize = 256 * 1024;
         let mut buf = [0u8; CHUNK];
-        let mut total = 0u64;
+        let mut done = resume_from;
+        on_progress(TransferProgress { done, total });
         loop {
+            if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                return Ok(TransferResult::Cancelled { bytes_done: done });
+            }
             let n = remote_file
                 .read(&mut buf)
-                .map_err(|e| format!("Failed to read remote file: {}", e))?;
+                .map_err(|e| format!("Failed to read remote file: {e}"))?;
             if n == 0 {
                 break;
             }
             local_file
                 .write_all(&buf[..n])
-                .map_err(|e| format!("Failed to write local file: {}", e))?;
-            total += n as u64;
+                .map_err(|e| format!("Failed to write local file: {e}"))?;
+            done += n as u64;
+            on_progress(TransferProgress { done, total });
         }
-
-        Ok(total)
+        Ok(TransferResult::Completed { bytes: done })
     }
 
-    /// 上传文件到远程
-    pub fn upload(&self, local_path: &Path, remote_path: &Path) -> Result<u64, String> {
+    /// 带进度 / 取消 / 续传的上传。
+    pub fn upload_ex(
+        &self,
+        local_path: &Path,
+        remote_path: &Path,
+        mode: WriteMode,
+        cancel: Option<&AtomicBool>,
+        on_progress: &mut dyn FnMut(TransferProgress),
+    ) -> Result<TransferResult, String> {
         let mut local_file = std::fs::File::open(local_path)
-            .map_err(|e| format!("Failed to open local file {}: {}", local_path.display(), e))?;
+            .map_err(|e| format!("Failed to open local file {}: {e}", local_path.display()))?;
+        let total = local_file
+            .metadata()
+            .map(|m| m.len())
+            .map_err(|e| format!("Failed to stat local file: {e}"))?;
 
-        let mut remote_file = self
+        let existing = self
             .sftp
-            .create(remote_path)
-            .map_err(|e| format!("Failed to create remote file {}: {}", remote_path.display(), e))?;
+            .stat(remote_path)
+            .ok()
+            .and_then(|s| s.size)
+            .unwrap_or(0);
+
+        let resume_from = match mode {
+            WriteMode::Overwrite => 0,
+            WriteMode::Resume => {
+                if existing >= total && total > 0 {
+                    on_progress(TransferProgress {
+                        done: total,
+                        total,
+                    });
+                    return Ok(TransferResult::Skipped);
+                }
+                existing.min(total)
+            }
+        };
+
+        let mut remote_file = if resume_from > 0 {
+            self.sftp
+                .open_mode(
+                    remote_path,
+                    OpenFlags::WRITE | OpenFlags::CREATE,
+                    0o644,
+                    OpenType::File,
+                )
+                .map_err(|e| {
+                    format!("Failed to open remote for resume {}: {e}", remote_path.display())
+                })?
+        } else {
+            self.sftp.create(remote_path).map_err(|e| {
+                format!("Failed to create remote file {}: {e}", remote_path.display())
+            })?
+        };
+        if resume_from > 0 {
+            remote_file
+                .seek(SeekFrom::Start(resume_from))
+                .map_err(|e| format!("Failed to seek remote file: {e}"))?;
+            local_file
+                .seek(SeekFrom::Start(resume_from))
+                .map_err(|e| format!("Failed to seek local file: {e}"))?;
+        }
 
         const CHUNK: usize = 256 * 1024;
         let mut buf = [0u8; CHUNK];
-        let mut file_size = 0u64;
+        let mut done = resume_from;
+        on_progress(TransferProgress { done, total });
         loop {
+            if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                let _ = remote_file.flush();
+                let _ = remote_file.close();
+                return Ok(TransferResult::Cancelled { bytes_done: done });
+            }
             let n = local_file
                 .read(&mut buf)
-                .map_err(|e| format!("Failed to read local file: {}", e))?;
+                .map_err(|e| format!("Failed to read local file: {e}"))?;
             if n == 0 {
                 break;
             }
             remote_file
                 .write_all(&buf[..n])
-                .map_err(|e| format!("Failed to write remote file: {}", e))?;
-            file_size += n as u64;
+                .map_err(|e| format!("Failed to write remote file: {e}"))?;
+            done += n as u64;
+            on_progress(TransferProgress { done, total });
         }
 
-        std::io::Write::flush(&mut remote_file)
-            .map_err(|e| format!("Failed to flush remote file: {}", e))?;
+        remote_file
+            .flush()
+            .map_err(|e| format!("Failed to flush remote file: {e}"))?;
         remote_file
             .close()
-            .map_err(|e| format!("Failed to close remote file: {}", e))?;
+            .map_err(|e| format!("Failed to close remote file: {e}"))?;
 
-        Ok(file_size)
+        Ok(TransferResult::Completed { bytes: done })
+    }
+
+    /// 远端文件是否存在（用于覆盖/续传决策）。
+    pub fn exists(&self, path: &Path) -> bool {
+        self.sftp.stat(path).is_ok()
+    }
+
+    /// 远端文件大小；不存在则为 `None`。
+    pub fn remote_size(&self, path: &Path) -> Option<u64> {
+        self.sftp.stat(path).ok().and_then(|s| s.size)
+    }
+
+    /// 远端 mtime（Unix 秒）；不存在则为 `None`。
+    pub fn remote_mtime(&self, path: &Path) -> Option<u64> {
+        self.sftp.stat(path).ok().and_then(|s| s.mtime)
+    }
+
+    /// 修改远端权限（仅权限位，常见如 `0o644` / `0o755`）。
+    pub fn chmod(&self, path: &Path, mode: u32) -> Result<(), String> {
+        let mode = mode & 0o7777;
+        self.sftp
+            .setstat(
+                path,
+                ssh2::FileStat {
+                    size: None,
+                    uid: None,
+                    gid: None,
+                    perm: Some(mode),
+                    atime: None,
+                    mtime: None,
+                },
+            )
+            .map_err(|e| format!("Failed to chmod {}: {e}", path.display()))
+    }
+
+    /// 递归修改权限；`cancel` 为 true 时提前停止。
+    pub fn chmod_recursive(
+        &self,
+        path: &Path,
+        mode: u32,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<usize, String> {
+        let mut n = 0usize;
+        self.chmod(path, mode)?;
+        n += 1;
+        let stat = self
+            .sftp
+            .stat(path)
+            .map_err(|e| format!("Failed to stat {}: {e}", path.display()))?;
+        if !stat.is_dir() {
+            return Ok(n);
+        }
+        for entry in self.list_dir(path)? {
+            if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                return Ok(n);
+            }
+            n += self.chmod_recursive(&entry.path, mode, cancel)?;
+        }
+        Ok(n)
+    }
+
+    /// 逐级创建远端目录（已存在则跳过）。
+    pub fn mkdir_p(&self, path: &Path) -> Result<(), String> {
+        if path.as_os_str().is_empty() || path == Path::new(".") || path == Path::new("/") {
+            return Ok(());
+        }
+        if self.exists(path) {
+            return Ok(());
+        }
+        if let Some(parent) = path.parent() {
+            if parent != path {
+                self.mkdir_p(parent)?;
+            }
+        }
+        match self.mkdir(path) {
+            Ok(()) => Ok(()),
+            Err(e) if self.exists(path) => {
+                let _ = e;
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// 递归收集远端树：`(绝对路径, 相对路径, 是否目录)`。相对路径相对 `root`。
+    pub fn collect_tree(
+        &self,
+        root: &Path,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<Vec<(PathBuf, PathBuf, bool)>, String> {
+        let mut out = Vec::new();
+        self.collect_tree_into(root, root, &mut out, cancel)?;
+        Ok(out)
+    }
+
+    fn collect_tree_into(
+        &self,
+        root: &Path,
+        dir: &Path,
+        out: &mut Vec<(PathBuf, PathBuf, bool)>,
+        cancel: Option<&AtomicBool>,
+    ) -> Result<(), String> {
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Ok(());
+        }
+        let entries = self.list_dir(dir)?;
+        if entries.is_empty() {
+            let rel = dir.strip_prefix(root).unwrap_or(dir).to_path_buf();
+            if dir != root {
+                out.push((dir.to_path_buf(), rel, true));
+            }
+            return Ok(());
+        }
+        for entry in entries {
+            if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+                return Ok(());
+            }
+            let rel = entry
+                .path
+                .strip_prefix(root)
+                .unwrap_or(&entry.path)
+                .to_path_buf();
+            if entry.is_dir {
+                let before = out.len();
+                self.collect_tree_into(root, &entry.path, out, cancel)?;
+                if out.len() == before {
+                    // 空目录
+                    out.push((entry.path, rel, true));
+                }
+            } else {
+                out.push((entry.path, rel, false));
+            }
+        }
+        Ok(())
     }
 
     /// 获取文件属性
