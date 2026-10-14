@@ -66,10 +66,11 @@ pub enum IconId {
     ArrowEnter,
     Copy,
     Settings,
+    Download,
 }
 
 impl IconId {
-    pub const COUNT: usize = 48;
+    pub const COUNT: usize = 49;
 
     pub fn index(self) -> u32 {
         self as u32
@@ -79,6 +80,7 @@ impl IconId {
         match self {
             IconId::Fragment => Some("命令片段"),
             IconId::Upload => Some("上传"),
+            IconId::Download => Some("下载"),
             IconId::Search => Some("搜索"),
             IconId::Monitor => Some("系统监控"),
             IconId::Folder => Some("SFTP 文件"),
@@ -348,6 +350,7 @@ fn all_icon_ids() -> [IconId; IconId::COUNT] {
         IconId::ArrowEnter,
         IconId::Copy,
         IconId::Settings,
+        IconId::Download,
     ]
 }
 
@@ -452,6 +455,15 @@ fn draw_icon_cell(img: &mut RgbaImage, id: IconId, cell: u32) {
         }
         IconId::Upload => p.segs(
             &[(0.5, 0.72, 0.5, 0.28), (0.35, 0.42, 0.5, 0.28), (0.65, 0.42, 0.5, 0.28), (0.22, 0.78, 0.78, 0.78)],
+            w,
+        ),
+        IconId::Download => p.segs(
+            &[
+                (0.5, 0.28, 0.5, 0.72),
+                (0.35, 0.58, 0.5, 0.72),
+                (0.65, 0.58, 0.5, 0.72),
+                (0.22, 0.22, 0.78, 0.22),
+            ],
             w,
         ),
         IconId::Search => {

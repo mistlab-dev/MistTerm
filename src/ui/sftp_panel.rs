@@ -2,10 +2,20 @@
 
 #[path = "sftp_file_table.rs"]
 mod sftp_file_table;
+#[path = "sftp_xfer.rs"]
+mod sftp_xfer;
+#[path = "sftp_bookmarks.rs"]
+mod sftp_bookmarks;
+#[path = "sftp_tree.rs"]
+mod sftp_tree;
+#[path = "sftp_select.rs"]
+mod sftp_select;
 
 use crate::core::{AuditCategory, AuditEvent, AuditLogger, AuditOutcome};
 use crate::i18n::UiLanguage;
-use crate::ssh::{SftpClient, SftpEntry, SshSessionHandle};
+use crate::ssh::{
+    SftpClient, SftpEntry, SshSessionHandle, TransferProgress, TransferResult, WriteMode,
+};
 use crate::ui::layout_util;
 use crate::ui::terminal::TerminalView;
 use crate::ui::theme::Theme;
@@ -19,6 +29,16 @@ use sftp_file_table::{
     paint_file_table_header, paint_file_table_row, sort_local_entries, sort_remote_entries,
     system_time_to_utc,
 };
+use sftp_bookmarks::SftpBookmarkStore;
+use sftp_select::SelectionSet;
+use sftp_tree::{collect_local_tree, looks_like_editable_text};
+use sftp_xfer::{
+    format_bytes, paint_xfer_strip, resolve_write_mode_mtime, OverwritePolicy,
+    XferKind, XferQueue, XferState, XferStripAction,
+};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Instant;
 
 enum SftpJobResult {
     Listed {
@@ -26,6 +46,74 @@ enum SftpJobResult {
         result: Result<Vec<SftpEntry>, String>,
     },
     Msg(Result<String, String>),
+    TransferDone {
+        id: u64,
+        kind: XferKind,
+        remote: PathBuf,
+        result: Result<TransferResult, String>,
+    },
+    UploadTreeReady {
+        files: Vec<(PathBuf, PathBuf)>,
+    },
+    DownloadTreeReady {
+        files: Vec<(PathBuf, PathBuf)>,
+    },
+    TreeCollectErr(String),
+    RemoveMany(Result<String, String>),
+    ChmodDone(Result<String, String>),
+    EditPrepared {
+        remote: PathBuf,
+        result: Result<(PathBuf, u64, u64), String>,
+    },
+    EditConflictCheck {
+        remote: PathBuf,
+        local: PathBuf,
+        session_size: u64,
+        session_mtime: u64,
+        result: Result<(u64, u64), String>,
+    },
+}
+
+#[derive(Clone)]
+struct RemoteEditSession {
+    remote: PathBuf,
+    local: PathBuf,
+    remote_size: u64,
+    remote_mtime: u64,
+    local_mtime_at_open: Option<std::time::SystemTime>,
+}
+
+#[derive(Clone)]
+enum PendingDeletePrompt {
+    One(PathBuf),
+    Many(Vec<PathBuf>),
+}
+
+/// 传输目标已存在时的待确认操作。
+enum PendingOverwrite {
+    Upload {
+        remote: PathBuf,
+        local: PathBuf,
+        source_size: u64,
+        dest_size: u64,
+    },
+    Download {
+        remote: PathBuf,
+        local: PathBuf,
+        source_size: u64,
+        dest_size: u64,
+    },
+    UploadMany {
+        cwd: PathBuf,
+        locals: Vec<PathBuf>,
+        conflict_names: Vec<String>,
+    },
+}
+
+struct XferProgressEvent {
+    id: u64,
+    done: u64,
+    total: u64,
 }
 
 pub struct SftpPanel {
@@ -33,12 +121,28 @@ pub struct SftpPanel {
     cwd: PathBuf,
     entries: Vec<SftpEntry>,
     path_edit: String,
-    remote_selected: Option<PathBuf>,
+    remote_selected: SelectionSet,
     /// 本机当前目录
     local_cwd: PathBuf,
     local_entries: Vec<LocalEntry>,
     local_path_edit: String,
-    local_selected: Option<PathBuf>,
+    local_selected: SelectionSet,
+    local_filter: String,
+    remote_filter: String,
+    bookmarks: SftpBookmarkStore,
+    host_key: String,
+    remote_edit: Option<RemoteEditSession>,
+    edit_dirty: bool,
+    pending_edit_upload: Option<(PathBuf, PathBuf)>,
+    pending_edit_conflict: Option<(PathBuf, PathBuf)>,
+    show_chmod_dialog: bool,
+    chmod_octal: String,
+    chmod_recursive: bool,
+    pending_chmod_recursive_confirm: bool,
+    tree_cancel: Option<Arc<AtomicBool>>,
+    tree_busy: bool,
+    deferred_upload_files: Vec<(PathBuf, PathBuf)>,
+    deferred_download_files: Vec<(PathBuf, PathBuf)>,
     local_list_err: Option<String>,
     list_err: Option<String>,
     /// 待写入底栏 `status_message` 的成功/失败提示(不在面板内渲染)。
@@ -46,9 +150,16 @@ pub struct SftpPanel {
     pending_status_err: Option<String>,
     busy: bool,
     rx: Option<Receiver<SftpJobResult>>,
+    /// 传输进度（与 SessionJob 并行试投，UI 每帧 drain）。
+    xfer_progress_rx: Option<Receiver<XferProgressEvent>>,
+    xfer: XferQueue,
     mkdir_name: String,
     show_mkdir_dialog: bool,
-    pending_delete: Option<PathBuf>,
+    pending_delete: Option<PendingDeletePrompt>,
+    pending_overwrite: Option<PendingOverwrite>,
+    show_rename_dialog: bool,
+    rename_from: Option<PathBuf>,
+    rename_name: String,
     pending_refresh_after_op: bool,
     /// 面板打开后与切换标签时为 true，触发一次列表加载
     pending_auto_list: bool,
@@ -82,24 +193,933 @@ impl SftpPanel {
         w
     }
 
-    /// 本机选中文件 → (远端目标路径, 本机源路径)。
+    /// 本机单选且为文件 → (远端目标路径, 本机源路径)。
     fn local_upload_job(&self) -> Option<(PathBuf, PathBuf)> {
-        self.local_selected.as_ref().and_then(|p| {
-            self.local_entries
-                .iter()
-                .find(|e| &e.path == p && !e.is_dir)
-                .map(|e| (self.cwd.join(&e.name), e.path.clone()))
-        })
+        if self.local_selected.len() != 1 {
+            return None;
+        }
+        let p = self.local_selected.primary()?.clone();
+        self.local_entries
+            .iter()
+            .find(|e| e.path == p && !e.is_dir)
+            .map(|e| (self.cwd.join(&e.name), e.path.clone()))
     }
 
-    /// 远端选中文件 → (远端源路径, 本机目标路径)。
+    /// 远端单选且为文件 → (远端源路径, 本机目标路径)。
     fn remote_download_job(&self) -> Option<(PathBuf, PathBuf)> {
-        self.remote_selected.as_ref().and_then(|p| {
-            self.entries
+        if self.remote_selected.len() != 1 {
+            return None;
+        }
+        let p = self.remote_selected.primary()?.clone();
+        self.entries
+            .iter()
+            .find(|e| e.path == p && !e.is_dir)
+            .map(|e| (e.path.clone(), self.local_cwd.join(&e.name)))
+    }
+
+    fn has_local_upload_selection(&self) -> bool {
+        !self.busy && !self.tree_busy && !self.local_selected.is_empty()
+    }
+
+    fn has_remote_download_selection(&self) -> bool {
+        !self.busy && !self.tree_busy && !self.remote_selected.is_empty()
+    }
+
+    fn filtered_local_entries(&self) -> Vec<&LocalEntry> {
+        let f = self.local_filter.trim().to_lowercase();
+        self.local_entries
+            .iter()
+            .filter(|e| f.is_empty() || e.name.to_lowercase().contains(&f))
+            .collect()
+    }
+
+    fn filtered_remote_entries(&self) -> Vec<&SftpEntry> {
+        let f = self.remote_filter.trim().to_lowercase();
+        self.entries
+            .iter()
+            .filter(|e| f.is_empty() || e.name.to_lowercase().contains(&f))
+            .collect()
+    }
+
+    #[allow(dead_code)] // 供后续快捷键/批量操作复用
+    fn visible_local_paths(&self) -> Vec<PathBuf> {
+        self.filtered_local_entries()
+            .into_iter()
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
+    #[allow(dead_code)]
+    fn visible_remote_paths(&self) -> Vec<PathBuf> {
+        self.filtered_remote_entries()
+            .into_iter()
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
+    fn sync_local_selection_after_list(&mut self) {
+        let visible: std::collections::HashSet<_> =
+            self.local_entries.iter().map(|e| e.path.clone()).collect();
+        self.local_selected
+            .items
+            .retain(|p| visible.contains(p));
+        if self.local_selected.anchor.as_ref().is_some_and(|a| !visible.contains(a)) {
+            self.local_selected.anchor = self.local_selected.items.iter().next().cloned();
+        }
+    }
+
+    fn sync_remote_selection_after_list(&mut self) {
+        let visible: std::collections::HashSet<_> =
+            self.entries.iter().map(|e| e.path.clone()).collect();
+        self.remote_selected
+            .items
+            .retain(|p| visible.contains(p));
+        if self.remote_selected.anchor.as_ref().is_some_and(|a| !visible.contains(a)) {
+            self.remote_selected.anchor = self.remote_selected.items.iter().next().cloned();
+        }
+    }
+
+    fn parse_octal_mode(input: &str) -> Option<u32> {
+        let s = input.trim();
+        if s.is_empty() {
+            return None;
+        }
+        u32::from_str_radix(s, 8).ok().map(|m| m & 0o777)
+    }
+
+    fn permissions_display_to_octal(perm: &str) -> Option<String> {
+        let triplet = if perm.len() >= 10 {
+            &perm[1..10]
+        } else if perm.len() == 9 {
+            perm
+        } else {
+            return None;
+        };
+        if triplet.len() != 9 {
+            return None;
+        }
+        let mut mode = 0u32;
+        for (i, c) in triplet.chars().enumerate() {
+            let bit = match c {
+                'r' if i % 3 == 0 => 4,
+                'w' if i % 3 == 1 => 2,
+                'x' if i % 3 == 2 => 1,
+                '-' => 0,
+                _ => return None,
+            };
+            let shift = 6 - (i / 3) * 3 - (2 - i % 3);
+            mode |= bit << shift;
+        }
+        Some(format!("{mode:o}"))
+    }
+
+    fn edit_temp_path(remote: &Path, name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join("mistterm_sftp_edit");
+        let _ = std::fs::create_dir_all(&dir);
+        let safe: String = name
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let stem = if safe.is_empty() { "edit.txt".into() } else { safe };
+        let mut path = dir.join(&stem);
+        if path.exists() {
+            let hash = format!("{:x}", remote.to_string_lossy().len());
+            path = dir.join(format!("{stem}.{hash}"));
+        }
+        path
+    }
+
+    fn poll_remote_edit(&mut self) {
+        let Some(session) = self.remote_edit.as_ref() else {
+            self.edit_dirty = false;
+            return;
+        };
+        let Ok(meta) = std::fs::metadata(&session.local) else {
+            return;
+        };
+        let Ok(m) = meta.modified() else {
+            return;
+        };
+        self.edit_dirty = session
+            .local_mtime_at_open
+            .map(|open| m != open)
+            .unwrap_or(true);
+    }
+
+    fn upload_selected_local(&mut self, handle: &SshSessionHandle, ctx: &egui::Context) {
+        let roots: Vec<PathBuf> = self.local_selected.paths_vec();
+        if roots.is_empty() {
+            return;
+        }
+        let needs_tree = roots.len() > 1
+            || roots.iter().any(|p| {
+                self.local_entries
+                    .iter()
+                    .find(|e| e.path == *p)
+                    .is_some_and(|e| e.is_dir)
+                    || p.is_dir()
+            });
+        if !needs_tree {
+            if roots.len() == 1 {
+                if let Some((r, l)) = self.local_upload_job() {
+                    self.request_upload(handle, r, l, ctx);
+                    return;
+                }
+            }
+            self.request_upload_many(handle, self.cwd.clone(), roots, ctx);
+            return;
+        }
+        self.spawn_collect_local_upload(handle, roots, self.cwd.clone(), ctx);
+    }
+
+    fn download_selected_remote(&mut self, handle: &SshSessionHandle, ctx: &egui::Context) {
+        let roots: Vec<PathBuf> = self.remote_selected.paths_vec();
+        if roots.is_empty() {
+            return;
+        }
+        let all_files = roots.iter().all(|p| {
+            self.entries.iter().any(|e| e.path == *p && !e.is_dir)
+        });
+        if roots.len() == 1 && all_files {
+            if let Some((r, l)) = self.remote_download_job() {
+                self.request_download(handle, r, l, ctx);
+                return;
+            }
+        }
+        self.spawn_collect_remote_download(handle, roots, self.local_cwd.clone(), ctx);
+    }
+
+    fn spawn_collect_local_upload(
+        &mut self,
+        handle: &SshSessionHandle,
+        roots: Vec<PathBuf>,
+        remote_base: PathBuf,
+        ctx: &egui::Context,
+    ) {
+        if self.busy || self.rx.is_some() {
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.tree_cancel = Some(cancel.clone());
+        self.tree_busy = true;
+        self.busy = true;
+        self.enqueue(handle, ctx, move |session| {
+            let outcome = (|| -> Result<Vec<(PathBuf, PathBuf)>, String> {
+                let mut files = Vec::new();
+                let mut mkdirs = Vec::new();
+                for root in roots {
+                    for (local, rel, empty) in collect_local_tree(&root, Some(&cancel))? {
+                        let remote = remote_base.join(&rel);
+                        if empty {
+                            mkdirs.push(remote);
+                        } else {
+                            files.push((local, remote));
+                        }
+                    }
+                }
+                let client = SftpClient::new(session)?;
+                for d in mkdirs {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Ok(Vec::new());
+                    }
+                    client.mkdir_p(&d)?;
+                }
+                Ok(files)
+            })();
+            match outcome {
+                Ok(files) => SftpJobResult::UploadTreeReady { files },
+                Err(e) => SftpJobResult::TreeCollectErr(e),
+            }
+        });
+    }
+
+    fn spawn_collect_remote_download(
+        &mut self,
+        handle: &SshSessionHandle,
+        roots: Vec<PathBuf>,
+        local_base: PathBuf,
+        ctx: &egui::Context,
+    ) {
+        if self.busy || self.rx.is_some() {
+            return;
+        }
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.tree_cancel = Some(cancel.clone());
+        self.tree_busy = true;
+        self.busy = true;
+        self.enqueue(handle, ctx, move |session| {
+            let outcome = (|| -> Result<Vec<(PathBuf, PathBuf)>, String> {
+                let client = SftpClient::new(session)?;
+                let mut files = Vec::new();
+                let mut local_mkdirs = Vec::new();
+                for root in roots {
+                    for (remote, rel, empty) in client.collect_tree(&root, Some(&cancel))? {
+                        let local = local_base.join(&rel);
+                        if empty {
+                            local_mkdirs.push(local);
+                        } else {
+                            files.push((remote, local));
+                        }
+                    }
+                }
+                for d in local_mkdirs {
+                    if cancel.load(Ordering::Relaxed) {
+                        return Ok(Vec::new());
+                    }
+                    std::fs::create_dir_all(&d)
+                        .map_err(|e| format!("mkdir {}: {e}", d.display()))?;
+                }
+                Ok(files)
+            })();
+            match outcome {
+                Ok(files) => SftpJobResult::DownloadTreeReady { files },
+                Err(e) => SftpJobResult::TreeCollectErr(e),
+            }
+        });
+    }
+
+    fn cancel_tree_collect(&mut self) {
+        if let Some(c) = &self.tree_cancel {
+            c.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn start_remote_edit(
+        &mut self,
+        handle: &SshSessionHandle,
+        entry: &SftpEntry,
+        ctx: &egui::Context,
+    ) {
+        if self.busy || self.rx.is_some() {
+            return;
+        }
+        if entry.is_dir {
+            return;
+        }
+        if !looks_like_editable_text(&entry.name, entry.size) {
+            self.pending_status_err = Some(
+                crate::i18n::tr(
+                    ctx,
+                    "File too large or not text — use Download instead",
+                    "文件过大或非文本，请用「下载」",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        let remote = entry.path.clone();
+        let local = Self::edit_temp_path(&remote, &entry.name);
+        self.busy = true;
+        self.enqueue(handle, ctx, move |session| {
+            let result = (|| -> Result<(PathBuf, u64, u64), String> {
+                let client = SftpClient::new(session)?;
+                let size = client.remote_size(&remote).unwrap_or(0);
+                let mtime = client.remote_mtime(&remote).unwrap_or(0);
+                client.download_ex(
+                    &remote,
+                    &local,
+                    WriteMode::Overwrite,
+                    None,
+                    &mut |_| {},
+                )?;
+                Ok((local, size, mtime))
+            })();
+            SftpJobResult::EditPrepared { remote, result }
+        });
+    }
+
+    fn request_edit_upload(&mut self, handle: &SshSessionHandle, ctx: &egui::Context) {
+        let Some(session) = self.remote_edit.clone() else {
+            return;
+        };
+        if self.busy || self.rx.is_some() {
+            return;
+        }
+        self.busy = true;
+        let remote = session.remote.clone();
+        let local = session.local.clone();
+        let session_size = session.remote_size;
+        let session_mtime = session.remote_mtime;
+        self.enqueue(handle, ctx, move |session| {
+            let result = (|| -> Result<(u64, u64), String> {
+                let client = SftpClient::new(session)?;
+                let size = client.remote_size(&remote).unwrap_or(0);
+                let mtime = client.remote_mtime(&remote).unwrap_or(0);
+                Ok((size, mtime))
+            })();
+            SftpJobResult::EditConflictCheck {
+                remote,
+                local,
+                session_size,
+                session_mtime,
+                result,
+            }
+        });
+    }
+
+    fn spawn_chmod(
+        &mut self,
+        handle: &SshSessionHandle,
+        paths: Vec<PathBuf>,
+        mode: u32,
+        recursive: bool,
+        ctx: &egui::Context,
+    ) {
+        if self.busy || paths.is_empty() {
+            return;
+        }
+        self.busy = true;
+        let cancel = Arc::new(AtomicBool::new(false));
+        let lang = crate::i18n::language(ctx);
+        self.enqueue(handle, ctx, move |session| {
+            let msg = (|| -> Result<String, String> {
+                let client = SftpClient::new(session)?;
+                let mut n = 0usize;
+                for p in &paths {
+                    if cancel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if recursive {
+                        n += client.chmod_recursive(p, mode, Some(&cancel))?;
+                    } else {
+                        client.chmod(p, mode)?;
+                        n += 1;
+                    }
+                }
+                Ok(match lang {
+                    UiLanguage::En => format!("Updated permissions on {n} item(s)"),
+                    UiLanguage::Zh => format!("已更新 {n} 项权限"),
+                })
+            })();
+            SftpJobResult::ChmodDone(msg)
+        });
+    }
+
+    fn spawn_remove_many(
+        &mut self,
+        handle: &SshSessionHandle,
+        paths: Vec<PathBuf>,
+        ctx: &egui::Context,
+    ) {
+        if self.busy || paths.is_empty() {
+            return;
+        }
+        self.busy = true;
+        self.pending_audit = Some(("sftp.delete", format!("{} items", paths.len())));
+        let lang = crate::i18n::language(ctx);
+        self.enqueue(handle, ctx, move |session| {
+            let msg = (|| -> Result<String, String> {
+                let client = SftpClient::new(session)?;
+                let mut n = 0usize;
+                for p in &paths {
+                    client.remove(p)?;
+                    n += 1;
+                }
+                Ok(match lang {
+                    UiLanguage::En => format!("Deleted {n} remote item(s)"),
+                    UiLanguage::Zh => format!("已删除 {n} 个远端项"),
+                })
+            })();
+            SftpJobResult::RemoveMany(msg)
+        });
+    }
+
+    fn paint_bookmark_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        ctx: &egui::Context,
+        side_local: bool,
+        current_path: PathBuf,
+        navigate: &mut Option<PathBuf>,
+    ) {
+        ui.horizontal(|ui| {
+            let is_bookmarked = if side_local {
+                self.bookmarks
+                    .local
+                    .iter()
+                    .any(|p| PathBuf::from(p) == current_path)
+            } else {
+                self.bookmarks
+                    .remote_bookmarks(&self.host_key)
+                    .iter()
+                    .any(|p| PathBuf::from(p) == current_path)
+            };
+            let star = if is_bookmarked { "★" } else { "☆" };
+            let tip = crate::i18n::tr(ctx, "Bookmark this path", "收藏此路径");
+            if ui
+                .add(
+                    egui::Button::new(
+                        egui::RichText::new(star).size(theme.font_size_body()),
+                    )
+                    .min_size(egui::vec2(22.0, 22.0)),
+                )
+                .on_hover_text(tip)
+                .clicked()
+            {
+                if side_local {
+                    if is_bookmarked {
+                        self.bookmarks
+                            .remove_local_bookmark(&current_path.to_string_lossy());
+                    } else {
+                        self.bookmarks.add_local_bookmark(&current_path);
+                    }
+                } else if is_bookmarked {
+                    self.bookmarks.remove_remote_bookmark(
+                        &self.host_key,
+                        &current_path.to_string_lossy(),
+                    );
+                } else {
+                    self.bookmarks
+                        .add_remote_bookmark(&self.host_key, &current_path);
+                }
+            }
+            let jump_lbl = crate::i18n::tr(ctx, "Paths", "路径");
+            egui::ComboBox::from_id_source(if side_local {
+                "sftp_local_paths"
+            } else {
+                "sftp_remote_paths"
+            })
+            .selected_text(jump_lbl)
+            .width(ui.available_width().max(80.0))
+            .show_ui(ui, |ui| {
+                let section = |ui: &mut egui::Ui, title: &str| {
+                    ui.label(
+                        egui::RichText::new(title)
+                            .small()
+                            .color(theme.text_tertiary()),
+                    );
+                };
+                section(
+                    ui,
+                    crate::i18n::tr(ctx, "Bookmarks", "收藏"),
+                );
+                let bookmarks: Vec<String> = if side_local {
+                    self.bookmarks.local.clone()
+                } else {
+                    self.bookmarks
+                        .remote_bookmarks(&self.host_key)
+                        .to_vec()
+                };
+                for p in bookmarks {
+                    if ui.selectable_label(false, &p).clicked() {
+                        *navigate = Some(PathBuf::from(&p));
+                    }
+                }
+                section(
+                    ui,
+                    crate::i18n::tr(ctx, "Recent", "最近"),
+                );
+                let recent: Vec<String> = if side_local {
+                    self.bookmarks.recent_local.clone()
+                } else {
+                    self.bookmarks.recent_remote(&self.host_key).to_vec()
+                };
+                for p in recent {
+                    if ui.selectable_label(false, &p).clicked() {
+                        *navigate = Some(PathBuf::from(&p));
+                    }
+                }
+            });
+        });
+    }
+
+    fn remote_basename_exists(&self, name: &str) -> bool {
+        self.entries.iter().any(|e| e.name == name)
+    }
+
+    fn remote_entry_size(&self, name: &str) -> u64 {
+        self.entries
+            .iter()
+            .find(|e| e.name == name)
+            .map(|e| e.size)
+            .unwrap_or(0)
+    }
+
+    fn enqueue_xfer(
+        &mut self,
+        handle: &SshSessionHandle,
+        kind: XferKind,
+        local: PathBuf,
+        remote: PathBuf,
+        mode: WriteMode,
+        ctx: &egui::Context,
+    ) {
+        let total_hint = match kind {
+            XferKind::Upload => std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0),
+            XferKind::Download => self
+                .entries
                 .iter()
-                .find(|e| &e.path == p && !e.is_dir)
-                .map(|e| (e.path.clone(), self.local_cwd.join(&e.name)))
-        })
+                .find(|e| e.path == remote)
+                .map(|e| e.size)
+                .unwrap_or(0),
+        };
+        self.xfer.push(kind, local, remote, mode, total_hint);
+        self.kick_xfer_queue(handle, ctx);
+    }
+
+    /// 上传：按覆盖策略决定询问 / 覆盖 / 跳过 / 续传。
+    fn request_upload(
+        &mut self,
+        handle: &SshSessionHandle,
+        remote: PathBuf,
+        local: PathBuf,
+        ctx: &egui::Context,
+    ) {
+        let name = remote
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        let source_size = std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
+        let dest_exists = !name.is_empty() && self.remote_basename_exists(&name);
+        let dest_size = if dest_exists {
+            self.remote_entry_size(&name)
+        } else {
+            0
+        };
+        self.resolve_and_enqueue_upload(handle, remote, local, source_size, dest_exists, dest_size, ctx);
+    }
+
+    fn resolve_and_enqueue_upload(
+        &mut self,
+        handle: &SshSessionHandle,
+        remote: PathBuf,
+        local: PathBuf,
+        source_size: u64,
+        dest_exists: bool,
+        dest_size: u64,
+        ctx: &egui::Context,
+    ) {
+        if !dest_exists || dest_size == 0 {
+            self.enqueue_xfer(handle, XferKind::Upload, local, remote, WriteMode::Overwrite, ctx);
+            return;
+        }
+        match self.xfer.policy {
+            OverwritePolicy::Ask => {
+                self.pending_overwrite = Some(PendingOverwrite::Upload {
+                    remote,
+                    local,
+                    source_size,
+                    dest_size,
+                });
+            }
+            OverwritePolicy::OverwriteAll => {
+                self.enqueue_xfer(handle, XferKind::Upload, local, remote, WriteMode::Overwrite, ctx);
+            }
+            OverwritePolicy::SkipAll => {
+                self.pending_status_ok = Some(
+                    crate::i18n::tr(ctx, "Skipped existing file", "已跳过同名文件").to_string(),
+                );
+            }
+            OverwritePolicy::ResumeAll => {
+                if dest_size < source_size {
+                    self.enqueue_xfer(handle, XferKind::Upload, local, remote, WriteMode::Resume, ctx);
+                } else if dest_size == source_size {
+                    self.pending_status_ok = Some(
+                        crate::i18n::tr(ctx, "Already complete — skipped", "已完整，已跳过")
+                            .to_string(),
+                    );
+                } else {
+                    self.enqueue_xfer(handle, XferKind::Upload, local, remote, WriteMode::Overwrite, ctx);
+                }
+            }
+            OverwritePolicy::IfNewerAll => {
+                let src_m = std::fs::metadata(&local)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
+                let entry = remote
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|name| self.entries.iter().find(|e| e.name == name));
+                let dst_m = entry.map(|e| e.modified.timestamp().max(0) as u64);
+                match resolve_write_mode_mtime(
+                    OverwritePolicy::IfNewerAll,
+                    dest_exists,
+                    dest_size,
+                    source_size,
+                    src_m,
+                    dst_m,
+                ) {
+                    Some(mode) => {
+                        self.enqueue_xfer(handle, XferKind::Upload, local, remote, mode, ctx);
+                    }
+                    None => {
+                        self.pending_status_ok = Some(
+                            crate::i18n::tr(ctx, "Already up to date — skipped", "已是最新，已跳过")
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// 下载：按覆盖策略决定询问 / 覆盖 / 跳过 / 续传。
+    fn request_download(
+        &mut self,
+        handle: &SshSessionHandle,
+        remote: PathBuf,
+        local: PathBuf,
+        ctx: &egui::Context,
+    ) {
+        let source_size = self
+            .entries
+            .iter()
+            .find(|e| e.path == remote)
+            .map(|e| e.size)
+            .unwrap_or(0);
+        let dest_exists = local.exists();
+        let dest_size = if dest_exists {
+            std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0)
+        } else {
+            0
+        };
+        self.resolve_and_enqueue_download(
+            handle,
+            remote,
+            local,
+            source_size,
+            dest_exists,
+            dest_size,
+            ctx,
+        );
+    }
+
+    fn resolve_and_enqueue_download(
+        &mut self,
+        handle: &SshSessionHandle,
+        remote: PathBuf,
+        local: PathBuf,
+        source_size: u64,
+        dest_exists: bool,
+        dest_size: u64,
+        ctx: &egui::Context,
+    ) {
+        if !dest_exists || dest_size == 0 {
+            self.enqueue_xfer(handle, XferKind::Download, local, remote, WriteMode::Overwrite, ctx);
+            return;
+        }
+        match self.xfer.policy {
+            OverwritePolicy::Ask => {
+                self.pending_overwrite = Some(PendingOverwrite::Download {
+                    remote,
+                    local,
+                    source_size,
+                    dest_size,
+                });
+            }
+            OverwritePolicy::OverwriteAll => {
+                self.enqueue_xfer(handle, XferKind::Download, local, remote, WriteMode::Overwrite, ctx);
+            }
+            OverwritePolicy::SkipAll => {
+                self.pending_status_ok = Some(
+                    crate::i18n::tr(ctx, "Skipped existing file", "已跳过同名文件").to_string(),
+                );
+            }
+            OverwritePolicy::ResumeAll => {
+                if dest_size < source_size {
+                    self.enqueue_xfer(handle, XferKind::Download, local, remote, WriteMode::Resume, ctx);
+                } else if dest_size == source_size {
+                    self.pending_status_ok = Some(
+                        crate::i18n::tr(ctx, "Already complete — skipped", "已完整，已跳过")
+                            .to_string(),
+                    );
+                } else {
+                    self.enqueue_xfer(handle, XferKind::Download, local, remote, WriteMode::Overwrite, ctx);
+                }
+            }
+            OverwritePolicy::IfNewerAll => {
+                let src_m = self
+                    .entries
+                    .iter()
+                    .find(|e| e.path == remote)
+                    .map(|e| e.modified.timestamp().max(0) as u64);
+                let dst_m = std::fs::metadata(&local)
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs());
+                match resolve_write_mode_mtime(
+                    OverwritePolicy::IfNewerAll,
+                    dest_exists,
+                    dest_size,
+                    source_size,
+                    src_m,
+                    dst_m,
+                ) {
+                    Some(mode) => {
+                        self.enqueue_xfer(handle, XferKind::Download, local, remote, mode, ctx);
+                    }
+                    None => {
+                        self.pending_status_ok = Some(
+                            crate::i18n::tr(ctx, "Already up to date — skipped", "已是最新，已跳过")
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn request_upload_many(
+        &mut self,
+        handle: &SshSessionHandle,
+        cwd: PathBuf,
+        locals: Vec<PathBuf>,
+        ctx: &egui::Context,
+    ) {
+        let mut conflict_names = Vec::new();
+        for local in &locals {
+            if let Some(name) = local.file_name().and_then(|n| n.to_str()) {
+                if self.remote_basename_exists(name) {
+                    conflict_names.push(name.to_string());
+                }
+            }
+        }
+        if !conflict_names.is_empty() && self.xfer.policy == OverwritePolicy::Ask {
+            self.pending_overwrite = Some(PendingOverwrite::UploadMany {
+                cwd,
+                locals,
+                conflict_names,
+            });
+            return;
+        }
+        for local in locals {
+            let fname = local
+                .file_name()
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("upload.bin"));
+            let remote = cwd.join(&fname);
+            let name = fname.to_string_lossy().into_owned();
+            let source_size = std::fs::metadata(&local).map(|m| m.len()).unwrap_or(0);
+            let src_m = std::fs::metadata(&local)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
+            let dest_exists = self.remote_basename_exists(&name);
+            let dest_size = self.remote_entry_size(&name);
+            let dst_m = self
+                .entries
+                .iter()
+                .find(|e| e.name == name)
+                .map(|e| e.modified.timestamp().max(0) as u64);
+            match resolve_write_mode_mtime(
+                self.xfer.policy,
+                dest_exists,
+                dest_size,
+                source_size,
+                src_m,
+                dst_m,
+            ) {
+                Some(mode) => self.enqueue_xfer(handle, XferKind::Upload, local, remote, mode, ctx),
+                None if self.xfer.policy == OverwritePolicy::SkipAll
+                    || (dest_exists && dest_size == source_size) => {}
+                None => self.enqueue_xfer(
+                    handle,
+                    XferKind::Upload,
+                    local,
+                    remote,
+                    WriteMode::Overwrite,
+                    ctx,
+                ),
+            }
+        }
+    }
+
+    fn confirm_overwrite_with_mode(
+        &mut self,
+        handle: &SshSessionHandle,
+        ctx: &egui::Context,
+        mode: WriteMode,
+        set_policy: Option<OverwritePolicy>,
+    ) {
+        if let Some(p) = set_policy {
+            self.xfer.policy = p;
+        }
+        match self.pending_overwrite.take() {
+            Some(PendingOverwrite::Upload { remote, local, .. }) => {
+                self.enqueue_xfer(handle, XferKind::Upload, local, remote, mode, ctx);
+            }
+            Some(PendingOverwrite::Download { remote, local, .. }) => {
+                self.enqueue_xfer(handle, XferKind::Download, local, remote, mode, ctx);
+            }
+            Some(PendingOverwrite::UploadMany { cwd, locals, .. }) => {
+                for local in locals {
+                    let fname = local
+                        .file_name()
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| PathBuf::from("upload.bin"));
+                    let remote = cwd.join(&fname);
+                    self.enqueue_xfer(handle, XferKind::Upload, local, remote, mode, ctx);
+                }
+            }
+            None => {}
+        }
+    }
+
+    fn skip_pending_overwrite(
+        &mut self,
+        handle: &SshSessionHandle,
+        ctx: &egui::Context,
+        set_policy: Option<OverwritePolicy>,
+    ) {
+        if let Some(p) = set_policy {
+            self.xfer.policy = p;
+        }
+        // UploadMany：跳过冲突项，仍上传无冲突文件。
+        if let Some(PendingOverwrite::UploadMany { cwd, locals, conflict_names }) =
+            self.pending_overwrite.take()
+        {
+            let conflict: std::collections::HashSet<&str> =
+                conflict_names.iter().map(|s| s.as_str()).collect();
+            for local in locals {
+                let name = local
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if conflict.contains(name.as_str()) {
+                    continue;
+                }
+                let remote = cwd.join(&name);
+                self.enqueue_xfer(handle, XferKind::Upload, local, remote, WriteMode::Overwrite, ctx);
+            }
+        } else {
+            self.pending_overwrite = None;
+        }
+        self.pending_status_ok = Some(
+            crate::i18n::tr(ctx, "Skipped existing file", "已跳过同名文件").to_string(),
+        );
+    }
+
+    fn begin_rename_selected(&mut self) {
+        let Some(path) = self.remote_selected.primary().cloned() else {
+            return;
+        };
+        if self.remote_selected.len() != 1 {
+            return;
+        }
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() || name == "." || name == ".." {
+            return;
+        }
+        self.rename_from = Some(path);
+        self.rename_name = name;
+        self.show_rename_dialog = true;
     }
 
     /// 本机文件行右键：打开 / 在文件管理器中显示，以及传输相关项。
@@ -151,25 +1171,81 @@ impl SftpPanel {
         crate::ui::chrome::apply_context_menu_style(ui, theme);
         let upload = self.local_upload_job();
         let download = self.remote_download_job();
-        let delete = self.remote_selected.clone();
+        let delete_paths: Vec<PathBuf> = self.remote_selected.paths_vec();
+        let can_edit = self.remote_selected.len() == 1
+            && self.remote_selected.primary().and_then(|p| {
+                self.entries
+                    .iter()
+                    .find(|e| &e.path == p)
+                    .filter(|e| !e.is_dir && looks_like_editable_text(&e.name, e.size))
+            })
+            .is_some();
         let upload_lbl = crate::i18n::tr(ctx, "Upload", "上传");
         let download_lbl = crate::i18n::tr(ctx, "Download", "下载");
         let delete_lbl = crate::i18n::tr(ctx, "Delete remote", "删除远端");
-        if let Some((remote, local)) = upload {
+        if !self.local_selected.is_empty() {
             if crate::ui::chrome::popup_menu_button(ui, theme, upload_lbl).clicked() {
-                self.spawn_upload(handle, remote, local, ctx);
+                self.upload_selected_local(handle, ctx);
+                ui.close_menu();
+            }
+        } else if let Some((remote, local)) = upload {
+            if crate::ui::chrome::popup_menu_button(ui, theme, upload_lbl).clicked() {
+                self.request_upload(handle, remote, local, ctx);
                 ui.close_menu();
             }
         }
-        if let Some((remote, local)) = download {
+        if !self.remote_selected.is_empty() {
             if crate::ui::chrome::popup_menu_button(ui, theme, download_lbl).clicked() {
-                self.spawn_download(handle, remote, local, ctx);
+                self.download_selected_remote(handle, ctx);
+                ui.close_menu();
+            }
+        } else if let Some((remote, local)) = download {
+            if crate::ui::chrome::popup_menu_button(ui, theme, download_lbl).clicked() {
+                self.request_download(handle, remote, local, ctx);
                 ui.close_menu();
             }
         }
-        if let Some(p) = delete {
+        if can_edit {
+            let edit_lbl = crate::i18n::tr(ctx, "Edit", "编辑");
+            if crate::ui::chrome::popup_menu_button(ui, theme, edit_lbl).clicked() {
+                if let Some(p) = self.remote_selected.primary() {
+                    if let Some(entry) = self.entries.iter().find(|e| &e.path == p) {
+                        let entry = entry.clone();
+                        self.start_remote_edit(handle, &entry, ctx);
+                    }
+                }
+                ui.close_menu();
+            }
+        }
+        let rename_lbl = crate::i18n::tr(ctx, "Rename", "重命名");
+        if self.remote_selected.len() == 1
+            && crate::ui::chrome::popup_menu_button(ui, theme, rename_lbl).clicked()
+        {
+            self.begin_rename_selected();
+            ui.close_menu();
+        }
+        let chmod_lbl = crate::i18n::tr(ctx, "Permissions…", "权限…");
+        if !delete_paths.is_empty()
+            && crate::ui::chrome::popup_menu_button(ui, theme, chmod_lbl).clicked()
+        {
+            if let Some(p) = self.remote_selected.primary() {
+                if let Some(entry) = self.entries.iter().find(|e| &e.path == p) {
+                    self.chmod_octal = Self::permissions_display_to_octal(&entry.permissions)
+                        .unwrap_or_else(|| "644".into());
+                }
+            }
+            self.chmod_recursive = false;
+            self.pending_chmod_recursive_confirm = false;
+            self.show_chmod_dialog = true;
+            ui.close_menu();
+        }
+        if !delete_paths.is_empty() {
             if crate::ui::chrome::popup_menu_button(ui, theme, delete_lbl).clicked() {
-                self.pending_delete = Some(p);
+                self.pending_delete = if delete_paths.len() == 1 {
+                    Some(PendingDeletePrompt::One(delete_paths[0].clone()))
+                } else {
+                    Some(PendingDeletePrompt::Many(delete_paths))
+                };
                 ui.close_menu();
             }
         }
@@ -238,20 +1314,42 @@ impl SftpPanel {
             cwd: PathBuf::from("."),
             entries: Vec::new(),
             path_edit: ".".to_string(),
-            remote_selected: None,
+            remote_selected: SelectionSet::default(),
             local_cwd: local_root.clone(),
             local_entries: Vec::new(),
             local_path_edit: local_root.to_string_lossy().into_owned(),
-            local_selected: None,
+            local_selected: SelectionSet::default(),
+            local_filter: String::new(),
+            remote_filter: String::new(),
+            bookmarks: SftpBookmarkStore::load(),
+            host_key: String::new(),
+            remote_edit: None,
+            edit_dirty: false,
+            pending_edit_upload: None,
+            pending_edit_conflict: None,
+            show_chmod_dialog: false,
+            chmod_octal: "644".to_string(),
+            chmod_recursive: false,
+            pending_chmod_recursive_confirm: false,
+            tree_cancel: None,
+            tree_busy: false,
+            deferred_upload_files: Vec::new(),
+            deferred_download_files: Vec::new(),
             local_list_err: None,
             list_err: None,
             pending_status_ok: None,
             pending_status_err: None,
             busy: false,
             rx: None,
+            xfer_progress_rx: None,
+            xfer: XferQueue::new(),
             mkdir_name: String::new(),
             show_mkdir_dialog: false,
             pending_delete: None,
+            pending_overwrite: None,
+            show_rename_dialog: false,
+            rename_from: None,
+            rename_name: String::new(),
             pending_refresh_after_op: false,
             pending_auto_list: false,
             pending_audit: None,
@@ -275,22 +1373,41 @@ impl SftpPanel {
         self.cwd = PathBuf::from(".");
         self.entries.clear();
         self.path_edit = ".".to_string();
-        self.remote_selected = None;
+        self.remote_selected.clear();
         let local_root = std::env::temp_dir().join("mistterm_downloads");
         let _ = std::fs::create_dir_all(&local_root);
         self.local_cwd = local_root.clone();
         self.local_entries.clear();
         self.local_path_edit = local_root.to_string_lossy().into_owned();
-        self.local_selected = None;
+        self.local_selected.clear();
+        self.local_filter.clear();
+        self.remote_filter.clear();
+        self.remote_edit = None;
+        self.edit_dirty = false;
+        self.pending_edit_upload = None;
+        self.pending_edit_conflict = None;
+        self.show_chmod_dialog = false;
+        self.chmod_recursive = false;
+        self.pending_chmod_recursive_confirm = false;
+        self.tree_cancel = None;
+        self.tree_busy = false;
+        self.deferred_upload_files.clear();
+        self.deferred_download_files.clear();
         self.local_list_err = None;
         self.list_err = None;
         self.pending_status_ok = None;
         self.pending_status_err = None;
         self.busy = false;
         self.rx = None;
+        self.xfer_progress_rx = None;
+        self.xfer.clear();
         self.mkdir_name.clear();
         self.show_mkdir_dialog = false;
         self.pending_delete = None;
+        self.pending_overwrite = None;
+        self.show_rename_dialog = false;
+        self.rename_from = None;
+        self.rename_name.clear();
         self.pending_refresh_after_op = false;
         self.pending_auto_list = false;
         self.pending_audit = None;
@@ -305,11 +1422,56 @@ impl SftpPanel {
         ctx: &egui::Context,
         audit: &AuditLogger,
     ) {
+        self.poll_xfer_progress();
         self.poll_rx(audit, crate::i18n::language(ctx));
         if !self.busy && self.rx.is_none() {
+            self.flush_deferred_transfers(handle, ctx);
+            self.kick_xfer_queue(handle, ctx);
             if let Some((remote, local)) = self.deferred_gui_download.take() {
                 self.spawn_download(handle, remote, local, ctx);
             }
+        }
+    }
+
+    fn flush_deferred_transfers(&mut self, handle: &SshSessionHandle, ctx: &egui::Context) {
+        if self.busy || self.rx.is_some() {
+            return;
+        }
+        let uploads = std::mem::take(&mut self.deferred_upload_files);
+        for (local, remote) in uploads {
+            self.request_upload(handle, remote, local, ctx);
+        }
+        let downloads = std::mem::take(&mut self.deferred_download_files);
+        for (remote, local) in downloads {
+            self.request_download(handle, remote, local, ctx);
+        }
+    }
+
+    fn record_sftp_audit(&mut self, audit: &AuditLogger, ok: bool, detail: Option<&str>) {
+        let Some((action, resource)) = self.pending_audit.take() else {
+            return;
+        };
+        let outcome = if ok {
+            AuditOutcome::Success
+        } else {
+            AuditOutcome::Failure
+        };
+        let mut ev = AuditEvent::new(AuditCategory::Session, action, outcome).with_resource(&resource);
+        if let Some(d) = detail {
+            ev = ev.with_detail(serde_json::json!({ "error": d }));
+        }
+        audit.record(ev);
+        if let Some(scp_action) = action.strip_prefix("sftp.") {
+            let mut ev2 = AuditEvent::new(
+                AuditCategory::Session,
+                format!("file.scp.{scp_action}"),
+                outcome,
+            )
+            .with_resource(resource);
+            if let Some(d) = detail {
+                ev2 = ev2.with_detail(serde_json::json!({ "error": d }));
+            }
+            audit.record(ev2);
         }
     }
 
@@ -323,9 +1485,13 @@ impl SftpPanel {
                     Ok(entries) => {
                         self.entries = entries;
                         self.apply_remote_sort();
-                        self.cwd = dir;
+                        self.cwd = dir.clone();
                         self.sync_remote_path_from_cwd();
                         self.list_err = None;
+                        self.sync_remote_selection_after_list();
+                        if !self.host_key.is_empty() {
+                            self.bookmarks.touch_recent_remote(&self.host_key, &dir);
+                        }
                     }
                     Err(e) => {
                         self.list_err = Some(e);
@@ -337,53 +1503,80 @@ impl SftpPanel {
             Ok(SftpJobResult::Msg(result)) => {
                 match result {
                     Ok(msg) => {
-                        if let Some((action, resource)) = self.pending_audit.take() {
-                            audit.record(
-                                AuditEvent::new(
-                                    AuditCategory::Session,
-                                    action,
-                                    AuditOutcome::Success,
-                                )
-                                .with_resource(&resource),
-                            );
-                            if let Some(scp_action) = action.strip_prefix("sftp.") {
-                                audit.record(
-                                    AuditEvent::new(
-                                        AuditCategory::Session,
-                                        format!("file.scp.{scp_action}"),
-                                        AuditOutcome::Success,
-                                    )
-                                    .with_resource(resource),
-                                );
-                            }
-                        }
+                        self.record_sftp_audit(audit, true, None);
                         self.pending_status_ok = Some(msg);
                         self.pending_refresh_after_op = true;
                         self.refresh_local_list();
                     }
                     Err(e) => {
-                        if let Some((action, resource)) = self.pending_audit.take() {
-                            audit.record(
-                                AuditEvent::new(
-                                    AuditCategory::Session,
-                                    action,
-                                    AuditOutcome::Failure,
-                                )
-                                .with_resource(&resource)
-                                .with_detail(serde_json::json!({ "error": e })),
-                            );
-                            if let Some(scp_action) = action.strip_prefix("sftp.") {
-                                audit.record(
-                                    AuditEvent::new(
-                                        AuditCategory::Session,
-                                        format!("file.scp.{scp_action}"),
-                                        AuditOutcome::Failure,
-                                    )
-                                    .with_resource(resource)
-                                    .with_detail(serde_json::json!({ "error": e })),
-                                );
+                        self.record_sftp_audit(audit, false, Some(&e));
+                        self.pending_status_err = Some(e);
+                    }
+                }
+                self.busy = false;
+                self.rx = None;
+            }
+            Ok(SftpJobResult::TransferDone {
+                id,
+                kind,
+                remote,
+                result,
+            }) => {
+                self.xfer_progress_rx = None;
+                match result {
+                    Ok(TransferResult::Completed { bytes }) => {
+                        self.record_sftp_audit(audit, true, None);
+                        self.xfer.finish(id, XferState::Done, bytes, None);
+                        let name = remote.to_string_lossy();
+                        let msg = match (kind, lang) {
+                            (XferKind::Upload, UiLanguage::En) => {
+                                format!("Uploaded {bytes} bytes → {name}")
                             }
-                        }
+                            (XferKind::Upload, UiLanguage::Zh) => {
+                                format!("已上传 {bytes} bytes → {name}")
+                            }
+                            (XferKind::Download, UiLanguage::En) => {
+                                format!("Downloaded {name} → {bytes} bytes")
+                            }
+                            (XferKind::Download, UiLanguage::Zh) => {
+                                format!("已下载 {name} → {bytes} bytes")
+                            }
+                        };
+                        self.pending_status_ok = Some(msg);
+                        self.pending_refresh_after_op = true;
+                        self.refresh_local_list();
+                    }
+                    Ok(TransferResult::Cancelled { bytes_done }) => {
+                        self.pending_audit.take();
+                        self.xfer.finish(
+                            id,
+                            XferState::Cancelled,
+                            bytes_done,
+                            Some(
+                                crate::i18n::Locale::from(lang)
+                                    .tr("Cancelled", "已取消")
+                                    .to_string(),
+                            ),
+                        );
+                        self.pending_status_ok = Some(
+                            crate::i18n::Locale::from(lang)
+                                .tr("Transfer cancelled", "传输已取消")
+                                .to_string(),
+                        );
+                    }
+                    Ok(TransferResult::Skipped) => {
+                        self.record_sftp_audit(audit, true, None);
+                        self.xfer.finish(id, XferState::Skipped, 0, None);
+                        self.pending_status_ok = Some(
+                            crate::i18n::Locale::from(lang)
+                                .tr("Already complete — skipped", "已完整，已跳过")
+                                .to_string(),
+                        );
+                    }
+                    Err(e) => {
+                        self.record_sftp_audit(audit, false, Some(&e));
+                        self.xfer
+                            .finish(id, XferState::Failed, 0, Some(e.clone()));
                         self.pending_status_err = Some(e);
                     }
                 }
@@ -394,6 +1587,9 @@ impl SftpPanel {
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.busy = false;
                 self.rx = None;
+                self.xfer_progress_rx = None;
+                self.tree_busy = false;
+                self.tree_cancel = None;
                 self.pending_status_err = Some(
                     crate::i18n::Locale::from(lang)
                         .tr(
@@ -402,6 +1598,106 @@ impl SftpPanel {
                         )
                         .to_string(),
                 );
+            }
+            Ok(SftpJobResult::UploadTreeReady { files }) => {
+                self.busy = false;
+                self.rx = None;
+                self.tree_busy = false;
+                self.tree_cancel = None;
+                self.deferred_upload_files.extend(files);
+            }
+            Ok(SftpJobResult::DownloadTreeReady { files }) => {
+                self.busy = false;
+                self.rx = None;
+                self.tree_busy = false;
+                self.tree_cancel = None;
+                self.deferred_download_files.extend(files);
+            }
+            Ok(SftpJobResult::TreeCollectErr(e)) => {
+                self.busy = false;
+                self.rx = None;
+                self.tree_busy = false;
+                self.tree_cancel = None;
+                self.pending_status_err = Some(e);
+            }
+            Ok(SftpJobResult::RemoveMany(result)) => {
+                match result {
+                    Ok(msg) => {
+                        self.record_sftp_audit(audit, true, None);
+                        self.pending_status_ok = Some(msg);
+                        self.pending_refresh_after_op = true;
+                    }
+                    Err(e) => {
+                        self.record_sftp_audit(audit, false, Some(&e));
+                        self.pending_status_err = Some(e);
+                    }
+                }
+                self.busy = false;
+                self.rx = None;
+            }
+            Ok(SftpJobResult::ChmodDone(result)) => {
+                match result {
+                    Ok(msg) => {
+                        self.record_sftp_audit(audit, true, None);
+                        self.pending_status_ok = Some(msg);
+                        self.pending_refresh_after_op = true;
+                    }
+                    Err(e) => {
+                        self.pending_status_err = Some(e);
+                    }
+                }
+                self.busy = false;
+                self.rx = None;
+            }
+            Ok(SftpJobResult::EditPrepared { remote, result }) => {
+                self.busy = false;
+                self.rx = None;
+                match result {
+                    Ok((local, size, mtime)) => {
+                        let open_mtime = std::fs::metadata(&local).ok().and_then(|m| m.modified().ok());
+                        if let Err(e) = crate::platform::open_file(&local) {
+                            self.pending_status_err =
+                                Some(crate::i18n::localize_backend_error(lang, &e));
+                        } else {
+                            self.remote_edit = Some(RemoteEditSession {
+                                remote,
+                                local,
+                                remote_size: size,
+                                remote_mtime: mtime,
+                                local_mtime_at_open: open_mtime,
+                            });
+                            self.edit_dirty = false;
+                        }
+                    }
+                    Err(e) => self.pending_status_err = Some(e),
+                }
+            }
+            Ok(SftpJobResult::EditConflictCheck {
+                remote,
+                local,
+                session_size,
+                session_mtime,
+                result,
+            }) => {
+                self.busy = false;
+                self.rx = None;
+                match result {
+                    Ok((cur_size, cur_mtime)) => {
+                        if cur_size != session_size || cur_mtime != session_mtime {
+                            self.pending_edit_conflict = Some((remote, local));
+                        } else {
+                            self.deferred_upload_files.push((local.clone(), remote));
+                            if let Some(session) = self.remote_edit.as_mut() {
+                                session.remote_size = cur_size;
+                                session.remote_mtime = cur_mtime;
+                                session.local_mtime_at_open =
+                                    std::fs::metadata(&local).ok().and_then(|m| m.modified().ok());
+                                self.edit_dirty = false;
+                            }
+                        }
+                    }
+                    Err(e) => self.pending_status_err = Some(e),
+                }
             }
         }
     }
@@ -504,8 +1800,9 @@ impl SftpPanel {
             );
             return;
         }
-        self.local_cwd = p;
+        self.local_cwd = p.clone();
         self.sync_local_path_from_cwd();
+        self.bookmarks.touch_recent_local(&p);
         self.refresh_local_list();
     }
 
@@ -515,15 +1812,11 @@ impl SftpPanel {
                 self.local_entries = entries;
                 self.apply_local_sort();
                 self.local_list_err = None;
-                if let Some(sel) = &self.local_selected {
-                    if !sel.starts_with(&self.local_cwd) {
-                        self.local_selected = None;
-                    }
-                }
+                self.sync_local_selection_after_list();
             }
             Err(e) => {
                 self.local_entries.clear();
-                self.local_selected = None;
+                self.local_selected.clear();
                 self.local_list_err = Some(e);
             }
         }
@@ -583,6 +1876,7 @@ impl SftpPanel {
         });
     }
 
+    /// GUI 自动化 / 兼容入口：直接入队覆盖上传。
     fn spawn_upload(
         &mut self,
         handle: &SshSessionHandle,
@@ -590,36 +1884,10 @@ impl SftpPanel {
         local: PathBuf,
         ctx: &egui::Context,
     ) {
-        if self.busy {
-            return;
-        }
-        self.busy = true;
-        self.pending_audit = Some((
-            "sftp.upload",
-            remote.to_string_lossy().into_owned(),
-        ));
-        let lang = crate::i18n::language(ctx);
-        self.enqueue(handle, ctx, move |session| {
-            let msg = (|| -> Result<String, String> {
-                let client = SftpClient::new(session)?;
-                let n = client.upload(&local, &remote)?;
-                Ok(match lang {
-                    UiLanguage::En => format!(
-                        "Uploaded {} bytes → {}",
-                        n,
-                        remote.to_string_lossy()
-                    ),
-                    UiLanguage::Zh => format!(
-                        "已上传 {} bytes → {}",
-                        n,
-                        remote.to_string_lossy()
-                    ),
-                })
-            })();
-            SftpJobResult::Msg(msg)
-        });
+        self.enqueue_xfer(handle, XferKind::Upload, local, remote, WriteMode::Overwrite, ctx);
     }
 
+    /// GUI 自动化 / 兼容入口：直接入队覆盖下载。
     fn spawn_download(
         &mut self,
         handle: &SshSessionHandle,
@@ -627,34 +1895,101 @@ impl SftpPanel {
         local: PathBuf,
         ctx: &egui::Context,
     ) {
-        if self.busy {
+        self.enqueue_xfer(handle, XferKind::Download, local, remote, WriteMode::Overwrite, ctx);
+    }
+
+    fn kick_xfer_queue(&mut self, handle: &SshSessionHandle, ctx: &egui::Context) {
+        if self.busy || self.rx.is_some() {
             return;
         }
+        let Some(item) = self.xfer.take_next_queued() else {
+            return;
+        };
+        let id = item.id;
+        let kind = item.kind;
+        let local = item.local.clone();
+        let remote = item.remote.clone();
+        let mode = item.mode;
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.xfer.cancel = Some(cancel.clone());
+        let (prog_tx, prog_rx) = mpsc::sync_channel::<XferProgressEvent>(16);
+        self.xfer_progress_rx = Some(prog_rx);
         self.busy = true;
-        self.pending_audit = Some((
-            "sftp.download",
-            remote.to_string_lossy().into_owned(),
-        ));
-        let lang = crate::i18n::language(ctx);
-        self.enqueue(handle, ctx, move |session| {
-            let msg = (|| -> Result<String, String> {
+        let audit_action = match kind {
+            XferKind::Upload => "sftp.upload",
+            XferKind::Download => "sftp.download",
+        };
+        self.pending_audit = Some((audit_action, remote.to_string_lossy().into_owned()));
+        let (tx, rx) = mpsc::channel();
+        self.rx = Some(rx);
+        let ctx2 = ctx.clone();
+        let result = handle.enqueue_session_job(move |session| {
+            let outcome = (|| -> Result<TransferResult, String> {
                 let client = SftpClient::new(session)?;
-                let n = client.download(&remote, &local)?;
-                Ok(match lang {
-                    UiLanguage::En => format!(
-                        "Downloaded {} → {} bytes",
-                        remote.to_string_lossy(),
-                        n
-                    ),
-                    UiLanguage::Zh => format!(
-                        "已下载 {} → {} bytes",
-                        remote.to_string_lossy(),
-                        n
-                    ),
-                })
+                let mut last_report = Instant::now();
+                let mut on_progress = |p: TransferProgress| {
+                    let now = Instant::now();
+                    if now.duration_since(last_report).as_millis() >= 80 || p.done == p.total {
+                        let _ = prog_tx.try_send(XferProgressEvent {
+                            id,
+                            done: p.done,
+                            total: p.total,
+                        });
+                        last_report = now;
+                        ctx2.request_repaint();
+                    }
+                };
+                match kind {
+                    XferKind::Upload => {
+                        client.upload_ex(&local, &remote, mode, Some(&cancel), &mut on_progress)
+                    }
+                    XferKind::Download => {
+                        client.download_ex(&remote, &local, mode, Some(&cancel), &mut on_progress)
+                    }
+                }
             })();
-            SftpJobResult::Msg(msg)
+            let _ = tx.send(SftpJobResult::TransferDone {
+                id,
+                kind,
+                remote,
+                result: outcome,
+            });
+            ctx2.request_repaint();
         });
+        if let Err(e) = result {
+            self.busy = false;
+            self.rx = None;
+            self.xfer_progress_rx = None;
+            self.xfer.finish(id, XferState::Failed, 0, Some(e.clone()));
+            self.pending_status_err = Some(e);
+        }
+    }
+
+    fn poll_xfer_progress(&mut self) {
+        let Some(rx) = &self.xfer_progress_rx else {
+            return;
+        };
+        while let Ok(ev) = rx.try_recv() {
+            self.xfer.mark_running_progress(ev.id, ev.done, ev.total);
+        }
+    }
+
+    fn handle_xfer_strip_action(
+        &mut self,
+        action: XferStripAction,
+        handle: &SshSessionHandle,
+        ctx: &egui::Context,
+    ) {
+        match action {
+            XferStripAction::None => {}
+            XferStripAction::CancelActive => self.xfer.request_cancel_active(),
+            XferStripAction::Retry(id) => {
+                self.xfer.retry_failed(id);
+                self.kick_xfer_queue(handle, ctx);
+            }
+            XferStripAction::Remove(id) => self.xfer.remove(id),
+            XferStripAction::PruneFinished => self.xfer.prune_finished(),
+        }
     }
 
     /// Windows/macOS GUI E2E：由 `MISTTERM_GUI_AUTOMATION=1` 启用，配合 Ctrl+Shift+F9/F10。
@@ -723,11 +2058,11 @@ impl SftpPanel {
         self.refresh_local_list();
         if let Some(name) = Self::env_e2e_filename() {
             if let Some(path) = Self::pick_local_by_name(&self.local_entries, &name) {
-                self.local_selected = Some(path);
+                self.local_selected.set_only(path);
             }
-        } else if self.local_selected.is_none() {
+        } else if self.local_selected.is_empty() {
             if let Some(e) = self.local_entries.iter().find(|e| !e.is_dir) {
-                self.local_selected = Some(e.path.clone());
+                self.local_selected.set_only(e.path.clone());
             }
         }
         if let Some((remote, local)) = self.local_upload_job() {
@@ -754,7 +2089,7 @@ impl SftpPanel {
             } else {
                 self.cwd.join(name)
             }
-        } else if let Some(path) = self.remote_selected.clone() {
+        } else if let Some(path) = self.remote_selected.primary().cloned() {
             path
         } else {
             self.entries
@@ -872,6 +2207,274 @@ impl SftpPanel {
         }
     }
 
+    fn show_rename_dialog_ui(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        handle: &SshSessionHandle,
+    ) {
+        if !self.show_rename_dialog {
+            return;
+        }
+        let mut open = true;
+        let mut should_close = false;
+        let mut do_rename = false;
+        let rename_id = egui::Id::new("sftp_rename_modal_name");
+        let rename_hint = crate::i18n::tr(ctx, "New name", "新名称");
+        let can_rename = !self.busy && !self.rename_name.trim().is_empty();
+        let modal_sz = layout_util::modal_confirm_size(ctx);
+        let from_label = self
+            .rename_from
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let resp = crate::ui::chrome::modal_window("sftp_rename_modal", theme, ctx)
+            .open(&mut open)
+            .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
+            .movable(true)
+            .resizable(false)
+            .fixed_size(modal_sz)
+            .show(ctx, |ui| {
+                crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
+                    if crate::ui::chrome::modal_header(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Rename", "重命名"),
+                        crate::ui::chrome::modal_title_font_size(theme),
+                    ) {
+                        should_close = true;
+                    }
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} {}",
+                            crate::i18n::tr(ctx, "Current:", "当前："),
+                            from_label,
+                        ))
+                        .size(theme.font_size_small())
+                        .color(theme.text_tertiary()),
+                    );
+                    ui.add_space(theme.spacing_md());
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        rename_id,
+                        &mut self.rename_name,
+                        rename_hint,
+                        ui.available_width().max(160.0),
+                        false,
+                    );
+                    ui.add_space(theme.spacing_lg());
+                    crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
+                        if crate::ui::chrome::modal_primary_icon_button(
+                            ui,
+                            th,
+                            crate::ui::icons::IconId::Check,
+                            crate::i18n::tr(ctx, "Rename", "重命名"),
+                        )
+                        .clicked()
+                            && can_rename
+                        {
+                            do_rename = true;
+                            should_close = true;
+                        }
+                        if crate::ui::chrome::modal_secondary_icon_button(
+                            ui,
+                            th,
+                            crate::ui::icons::IconId::Cross,
+                            crate::i18n::tr(ctx, "Cancel", "取消"),
+                        )
+                        .clicked()
+                        {
+                            should_close = true;
+                        }
+                    });
+                })
+            });
+        if let Some(inner) = resp {
+            crate::ui::chrome::raise_window_response(ctx, &inner.response);
+        }
+        ctx.memory_mut(|m| m.request_focus(rename_id));
+        if do_rename {
+            if let Some(from) = self.rename_from.take() {
+                let new_name = self.rename_name.trim().to_string();
+                self.rename_name.clear();
+                let parent = from.parent().map(PathBuf::from).unwrap_or_else(|| self.cwd.clone());
+                let to = parent.join(new_name);
+                self.spawn_rename(handle, from, to, ctx);
+            }
+        }
+        if !open || should_close {
+            self.show_rename_dialog = false;
+            if !do_rename {
+                self.rename_from = None;
+                self.rename_name.clear();
+            }
+        }
+    }
+
+    fn show_chmod_dialog_ui(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        handle: &SshSessionHandle,
+    ) {
+        if !self.show_chmod_dialog {
+            return;
+        }
+        let paths: Vec<PathBuf> = self.remote_selected.paths_vec();
+        if paths.is_empty() {
+            self.show_chmod_dialog = false;
+            return;
+        }
+        let perm_hint = self
+            .remote_selected
+            .primary()
+            .and_then(|p| self.entries.iter().find(|e| &e.path == p))
+            .map(|e| e.permissions.clone())
+            .unwrap_or_default();
+        let mut open = true;
+        let mut should_close = false;
+        let mut do_apply = false;
+        let oct_id = egui::Id::new("sftp_chmod_octal");
+        let modal_sz = layout_util::modal_confirm_size(ctx);
+        let resp = crate::ui::chrome::modal_window("sftp_chmod_modal", theme, ctx)
+            .open(&mut open)
+            .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
+            .movable(true)
+            .resizable(false)
+            .fixed_size(modal_sz)
+            .show(ctx, |ui| {
+                crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
+                    if crate::ui::chrome::modal_header(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Permissions", "权限"),
+                        crate::ui::chrome::modal_title_font_size(theme),
+                    ) {
+                        should_close = true;
+                    }
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{} {}  ·  {} {}",
+                            crate::i18n::tr(ctx, "Current:", "当前："),
+                            perm_hint,
+                            crate::i18n::tr(ctx, "Items:", "项数："),
+                            paths.len(),
+                        ))
+                        .size(theme.font_size_small())
+                        .color(theme.text_tertiary()),
+                    );
+                    ui.add_space(theme.spacing_md());
+                    ui.label(crate::i18n::tr(ctx, "Octal (e.g. 644)", "八进制（如 644）"));
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        oct_id,
+                        &mut self.chmod_octal,
+                        "644",
+                        ui.available_width().max(120.0),
+                        false,
+                    );
+                    ui.checkbox(
+                        &mut self.chmod_recursive,
+                        crate::i18n::tr(ctx, "Include subfolders", "包含子目录"),
+                    );
+                    if self.pending_chmod_recursive_confirm && self.chmod_recursive {
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr(
+                                ctx,
+                                "Recursive chmod affects many files. Confirm again.",
+                                "递归改权限影响范围大，请再次确认。",
+                            ))
+                            .small()
+                            .color(theme.amber_color()),
+                        );
+                    }
+                    ui.add_space(theme.spacing_lg());
+                    crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
+                        if crate::ui::chrome::modal_primary_icon_button(
+                            ui,
+                            th,
+                            crate::ui::icons::IconId::Check,
+                            crate::i18n::tr(ctx, "Apply", "应用"),
+                        )
+                        .clicked()
+                        {
+                            do_apply = true;
+                        }
+                        if crate::ui::chrome::modal_secondary_icon_button(
+                            ui,
+                            th,
+                            crate::ui::icons::IconId::Cross,
+                            crate::i18n::tr(ctx, "Cancel", "取消"),
+                        )
+                        .clicked()
+                        {
+                            should_close = true;
+                        }
+                    });
+                })
+            });
+        if let Some(inner) = resp {
+            crate::ui::chrome::raise_window_response(ctx, &inner.response);
+        }
+        if do_apply {
+            if self.chmod_recursive && !self.pending_chmod_recursive_confirm {
+                self.pending_chmod_recursive_confirm = true;
+            } else if let Some(mode) = Self::parse_octal_mode(&self.chmod_octal) {
+                should_close = true;
+                self.show_chmod_dialog = false;
+                self.pending_chmod_recursive_confirm = false;
+                self.spawn_chmod(handle, paths, mode, self.chmod_recursive, ctx);
+            } else {
+                self.pending_status_err = Some(
+                    crate::i18n::tr(ctx, "Invalid octal mode", "八进制权限无效").to_string(),
+                );
+            }
+        }
+        if !open || should_close {
+            self.show_chmod_dialog = false;
+            self.pending_chmod_recursive_confirm = false;
+        }
+    }
+
+    fn spawn_rename(
+        &mut self,
+        handle: &SshSessionHandle,
+        from: PathBuf,
+        to: PathBuf,
+        ctx: &egui::Context,
+    ) {
+        if self.busy {
+            return;
+        }
+        if from == to {
+            return;
+        }
+        self.busy = true;
+        self.pending_audit = Some(("sftp.rename", to.to_string_lossy().into_owned()));
+        let lang = crate::i18n::language(ctx);
+        self.enqueue(handle, ctx, move |session| {
+            let msg = (|| -> Result<String, String> {
+                let client = SftpClient::new(session)?;
+                client.rename(&from, &to)?;
+                Ok(match lang {
+                    UiLanguage::En => format!(
+                        "Renamed {} → {}",
+                        from.to_string_lossy(),
+                        to.to_string_lossy()
+                    ),
+                    UiLanguage::Zh => format!(
+                        "已重命名 {} → {}",
+                        from.to_string_lossy(),
+                        to.to_string_lossy()
+                    ),
+                })
+            })();
+            SftpJobResult::Msg(msg)
+        });
+    }
+
     fn spawn_mkdir(&mut self, handle: &SshSessionHandle, path: PathBuf, ctx: &egui::Context) {
         if self.busy {
             return;
@@ -912,6 +2515,7 @@ impl SftpPanel {
         });
     }
 
+    #[allow(dead_code)] // 兼容入口；拖放/工具栏走 request_upload_many
     fn spawn_upload_many(
         &mut self,
         handle: &SshSessionHandle,
@@ -919,56 +2523,7 @@ impl SftpPanel {
         locals: Vec<PathBuf>,
         ctx: &egui::Context,
     ) {
-        if self.busy || locals.is_empty() {
-            return;
-        }
-        self.busy = true;
-        self.pending_audit = Some(("sftp.upload_batch", cwd.to_string_lossy().into_owned()));
-        let lang = crate::i18n::language(ctx);
-        self.enqueue(handle, ctx, move |session| {
-            let msg = (|| -> Result<String, String> {
-                let client = SftpClient::new(session)?;
-                let mut ok_n = 0usize;
-                let mut total_bytes = 0u64;
-                let mut err_lines = Vec::new();
-                for local in locals {
-                    let fname = local
-                        .file_name()
-                        .map(PathBuf::from)
-                        .unwrap_or_else(|| PathBuf::from("upload.bin"));
-                    let remote_path = cwd.join(&fname);
-                    match client.upload(&local, &remote_path) {
-                        Ok(n) => {
-                            ok_n += 1;
-                            total_bytes += n;
-                        }
-                        Err(e) => err_lines.push(format!("{}: {}", local.display(), e)),
-                    }
-                }
-                if ok_n == 0 && !err_lines.is_empty() {
-                    return Err(err_lines.join("\n"));
-                }
-                let mut s = match lang {
-                    UiLanguage::En => format!(
-                        "Uploaded {} file(s), {} bytes total",
-                        ok_n, total_bytes
-                    ),
-                    UiLanguage::Zh => format!(
-                        "已上传 {} 个文件，合计 {} bytes",
-                        ok_n, total_bytes
-                    ),
-                };
-                if !err_lines.is_empty() {
-                    s.push_str(match lang {
-                        UiLanguage::En => "\nSome uploads failed:\n",
-                        UiLanguage::Zh => "\n部分失败：\n",
-                    });
-                    s.push_str(&err_lines.join("\n"));
-                }
-                Ok(s)
-            })();
-            SftpJobResult::Msg(msg)
-        });
+        self.request_upload_many(handle, cwd, locals, ctx);
     }
 
     /// 右侧 SFTP 侧栏入口(`close_panel` 置为 true 时由宿主隐藏侧栏)
@@ -1062,7 +2617,9 @@ impl SftpPanel {
         close_panel: &mut bool,
         body_w: f32,
     ) {
+        self.poll_xfer_progress();
         self.poll_rx(audit, crate::i18n::language(ctx));
+        self.poll_remote_edit();
 
         let content_w = layout_util::constrain_ui_to_right_dock_body(ui, body_w);
 
@@ -1084,7 +2641,18 @@ impl SftpPanel {
             );
         });
         if header_closed {
-            *close_panel = true;
+            if self.edit_dirty {
+                self.pending_status_err = Some(
+                    crate::i18n::tr(
+                        ctx,
+                        "You have unsaved remote edits. Upload or discard them before closing.",
+                        "还有未回传的修改，请先上传或放弃后再关面板。",
+                    )
+                    .to_string(),
+                );
+            } else {
+                *close_panel = true;
+            }
         }
         crate::ui::chrome::right_dock_header_divider(ui, theme);
         ui.spacing_mut().item_spacing.y = prev_gap_y;
@@ -1108,6 +2676,11 @@ impl SftpPanel {
             ui.label(egui::RichText::new(crate::i18n::tr(ctx, "Session unavailable", "会话不可用")).color(theme.red_color()));
             return;
         };
+
+        self.host_key = t.connection_server_text();
+        if !self.busy && self.rx.is_none() {
+            self.flush_deferred_transfers(&handle, ctx);
+        }
 
         let download_dir_path = PathBuf::from(t.download_dir());
 
@@ -1169,6 +2742,14 @@ impl SftpPanel {
             let refresh_lbl = crate::i18n::tr(ui.ctx(), "Refresh", "刷新");
             let browse_short = crate::i18n::tr(ui.ctx(), "Browse", "浏览");
             let browse_tip = crate::i18n::tr(ui.ctx(), "Browse…", "浏览…");
+            let upload_lbl = crate::i18n::tr(ui.ctx(), "Upload", "上传");
+            let upload_tip = crate::i18n::tr(
+                ui.ctx(),
+                "Upload selected item(s)",
+                "上传所选本机项",
+            );
+            let can_upload = self.has_local_upload_selection();
+            let mut jump_local: Option<PathBuf> = None;
             let up_ok = self.local_cwd.parent().is_some();
             let local_nav = [
                 crate::ui::chrome::ButtonGroupAction {
@@ -1194,6 +2775,12 @@ impl SftpPanel {
                     label: browse_short,
                     enabled: true,
                     tooltip: browse_tip,
+                },
+                crate::ui::chrome::ButtonGroupAction {
+                    icon: crate::ui::icons::IconId::Upload,
+                    label: upload_lbl,
+                    enabled: can_upload,
+                    tooltip: upload_tip,
                 },
             ];
             if theme.uses_modern_palette() {
@@ -1223,6 +2810,7 @@ impl SftpPanel {
                             if let Some(parent) = self.local_cwd.parent() {
                                 self.local_cwd = parent.to_path_buf();
                                 self.sync_local_path_from_cwd();
+                                self.local_selected.clear();
                                 self.refresh_local_list();
                             }
                         }
@@ -1231,12 +2819,36 @@ impl SftpPanel {
                             if let Some(dir) = FileDialog::new().pick_folder() {
                                 self.local_cwd = dir;
                                 self.sync_local_path_from_cwd();
+                                self.local_selected.clear();
                                 self.refresh_local_list();
                             }
                         }
+                        4 => self.upload_selected_local(&handle, ctx),
                         _ => {}
                     }
                 }
+                ui.add_space(theme.spacing_xs());
+                self.paint_bookmark_row(
+                    ui,
+                    theme,
+                    ctx,
+                    true,
+                    self.local_cwd.clone(),
+                    &mut jump_local,
+                );
+                ui.add_space(theme.spacing_xs());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(ctx, "Filter", "筛选"))
+                            .small()
+                            .color(theme.text_tertiary()),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.local_filter)
+                            .hint_text(crate::i18n::tr(ctx, "Name…", "文件名…"))
+                            .desired_width(ui.available_width().max(80.0)),
+                    );
+                });
             } else {
                 let field_w = Self::dock_field_width(ui);
                 let path_resp = crate::ui::chrome::form_singleline_field(
@@ -1309,6 +2921,69 @@ impl SftpPanel {
                             self.refresh_local_list();
                         }
                     }
+                    if crate::ui::chrome::panel_action_button_with_icon_ex(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Upload,
+                        upload_lbl,
+                        can_upload,
+                    )
+                    .clicked()
+                    {
+                        self.upload_selected_local(&handle, ctx);
+                    }
+                });
+                ui.add_space(theme.spacing_xs());
+                self.paint_bookmark_row(
+                    ui,
+                    theme,
+                    ctx,
+                    true,
+                    self.local_cwd.clone(),
+                    &mut jump_local,
+                );
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(ctx, "Filter", "筛选"))
+                            .small()
+                            .color(theme.text_tertiary()),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.local_filter)
+                            .hint_text(crate::i18n::tr(ctx, "Name…", "文件名…"))
+                            .desired_width(ui.available_width().max(80.0)),
+                    );
+                });
+            }
+            if let Some(p) = jump_local.take() {
+                if p.is_dir() {
+                    self.local_cwd = p;
+                    self.sync_local_path_from_cwd();
+                    self.local_selected.clear();
+                    self.refresh_local_list();
+                } else {
+                    self.pending_status_err = Some(
+                        crate::i18n::tr(ctx, "Path is not a folder", "路径不是文件夹").to_string(),
+                    );
+                }
+            }
+            if self.tree_busy {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            ctx,
+                            "Scanning files…",
+                            "正在统计文件…",
+                        ))
+                        .small()
+                        .color(theme.amber_color()),
+                    );
+                    if ui
+                        .small_button(crate::i18n::tr(ctx, "Cancel", "取消"))
+                        .clicked()
+                    {
+                        self.cancel_tree_collect();
+                    }
                 });
             }
             if let Some(err) = &self.local_list_err {
@@ -1335,9 +3010,17 @@ impl SftpPanel {
                         ui.visuals_mut().extreme_bg_color = theme.color_file_list_bg();
                         ui.set_min_width(table_cols.total);
                         ui.set_max_width(table_cols.total);
-                        let local_rows = self.local_entries.clone();
+                        let local_rows: Vec<LocalEntry> = self
+                            .filtered_local_entries()
+                            .into_iter()
+                            .cloned()
+                            .collect();
+                        let ordered = local_rows.iter().map(|e| e.path.clone()).collect::<Vec<_>>();
+                        let (ctrl, shift) = ui.ctx().input(|i| {
+                            (i.modifiers.ctrl || i.modifiers.command, i.modifiers.shift)
+                        });
                         for e in &local_rows {
-                            let sel = self.local_selected.as_ref() == Some(&e.path);
+                            let sel = self.local_selected.contains(&e.path);
                             let size_lbl =
                                 if e.is_dir { "—".to_string() } else { e.size_human() };
                             let time_lbl = format_file_mtime(e.modified);
@@ -1353,11 +3036,15 @@ impl SftpPanel {
                                 sel,
                                 &e.path.display().to_string(),
                             );
-                            if resp.clicked() || resp.secondary_clicked() {
-                                self.local_selected = Some(e.path.clone());
-                            }
                             if resp.double_clicked() && e.is_dir {
                                 enter_local = Some(e.path.clone());
+                            } else if resp.clicked() {
+                                self.local_selected.apply_click(
+                                    e.path.clone(),
+                                    &ordered,
+                                    ctrl,
+                                    shift,
+                                );
                             }
                             resp.context_menu(|ui| {
                                 self.local_entry_context_menu(ui, theme, ctx, &handle, e);
@@ -1372,11 +3059,67 @@ impl SftpPanel {
             if let Some(d) = enter_local {
                 self.local_cwd = d;
                 self.sync_local_path_from_cwd();
+                self.local_selected.clear();
                 self.refresh_local_list();
             }
         });
 
         ui.add_space(theme.spacing_sm());
+
+        if self.edit_dirty {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Local copy changed — upload to server?",
+                        "本地文件已修改，是否上传？",
+                    ))
+                    .small()
+                    .color(theme.amber_color()),
+                );
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Upload", "上传"))
+                    .clicked()
+                {
+                    self.request_edit_upload(&handle, ctx);
+                }
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Discard", "放弃"))
+                    .clicked()
+                {
+                    self.edit_dirty = false;
+                    if let Some(session) = self.remote_edit.as_ref() {
+                        if let Some(m) = std::fs::metadata(&session.local)
+                            .ok()
+                            .and_then(|x| x.modified().ok())
+                        {
+                            if let Some(s) = self.remote_edit.as_mut() {
+                                s.local_mtime_at_open = Some(m);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+        if let Some((remote, local)) = self.pending_edit_conflict.take() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Remote file changed on server — overwrite anyway?",
+                        "服务器上文件已变更，仍要覆盖？",
+                    ))
+                    .small()
+                    .color(theme.red_color()),
+                );
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Upload anyway", "仍上传"))
+                    .clicked()
+                {
+                    self.deferred_upload_files.push((local, remote));
+                }
+            });
+        }
 
         Self::paint_browser_section_frame(theme).show(ui, |ui| {
             layout_util::set_width_to_available(ui);
@@ -1391,6 +3134,16 @@ impl SftpPanel {
             let refresh_lbl = crate::i18n::tr(ui.ctx(), "Refresh", "刷新");
             let new_short = crate::i18n::tr(ui.ctx(), "New", "新建");
             let new_tip = crate::i18n::tr(ui.ctx(), "New folder", "新建目录");
+            let download_lbl = crate::i18n::tr(ui.ctx(), "Download", "下载");
+            let download_tip = crate::i18n::tr(
+                ui.ctx(),
+                "Download selected remote item(s)",
+                "下载所选远端项",
+            );
+            let rename_lbl = crate::i18n::tr(ui.ctx(), "Rename", "重命名");
+            let can_download = self.has_remote_download_selection();
+            let can_rename = !self.busy && self.remote_selected.len() == 1;
+            let mut jump_remote: Option<PathBuf> = None;
             let busy = !self.busy;
             let remote_nav = [
                 crate::ui::chrome::ButtonGroupAction {
@@ -1416,6 +3169,18 @@ impl SftpPanel {
                     label: new_short,
                     enabled: busy,
                     tooltip: new_tip,
+                },
+                crate::ui::chrome::ButtonGroupAction {
+                    icon: crate::ui::icons::IconId::Download,
+                    label: download_lbl,
+                    enabled: can_download,
+                    tooltip: download_tip,
+                },
+                crate::ui::chrome::ButtonGroupAction {
+                    icon: crate::ui::icons::IconId::SortName,
+                    label: rename_lbl,
+                    enabled: can_rename,
+                    tooltip: rename_lbl,
                 },
             ];
             if theme.uses_modern_palette() {
@@ -1446,9 +3211,33 @@ impl SftpPanel {
                         }
                         2 => self.spawn_list(&handle, self.cwd.clone(), ctx),
                         3 => self.show_mkdir_dialog = true,
+                        4 => self.download_selected_remote(&handle, ctx),
+                        5 => self.begin_rename_selected(),
                         _ => {}
                     }
                 }
+                ui.add_space(theme.spacing_xs());
+                self.paint_bookmark_row(
+                    ui,
+                    theme,
+                    ctx,
+                    false,
+                    self.cwd.clone(),
+                    &mut jump_remote,
+                );
+                ui.add_space(theme.spacing_xs());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(ctx, "Filter", "筛选"))
+                            .small()
+                            .color(theme.text_tertiary()),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.remote_filter)
+                            .hint_text(crate::i18n::tr(ctx, "Name…", "文件名…"))
+                            .desired_width(ui.available_width().max(80.0)),
+                    );
+                });
             } else {
                 let remote_path_w = Self::dock_field_width(ui);
                 crate::ui::chrome::form_singleline_field(
@@ -1512,19 +3301,90 @@ impl SftpPanel {
                     {
                         self.show_mkdir_dialog = true;
                     }
+                    if crate::ui::chrome::panel_action_button_with_icon_ex(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Download,
+                        download_lbl,
+                        can_download,
+                    )
+                    .clicked()
+                    {
+                        self.download_selected_remote(&handle, ctx);
+                    }
+                    if crate::ui::chrome::panel_action_button_with_icon_ex(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::SortName,
+                        rename_lbl,
+                        can_rename,
+                    )
+                    .clicked()
+                    {
+                        self.begin_rename_selected();
+                    }
+                });
+                ui.add_space(theme.spacing_xs());
+                self.paint_bookmark_row(
+                    ui,
+                    theme,
+                    ctx,
+                    false,
+                    self.cwd.clone(),
+                    &mut jump_remote,
+                );
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(ctx, "Filter", "筛选"))
+                            .small()
+                            .color(theme.text_tertiary()),
+                    );
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.remote_filter)
+                            .hint_text(crate::i18n::tr(ctx, "Name…", "文件名…"))
+                            .desired_width(ui.available_width().max(80.0)),
+                    );
+                });
+            }
+            if let Some(p) = jump_remote.take() {
+                self.spawn_list(&handle, p, ctx);
+            }
+            if self.tree_busy {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            ctx,
+                            "Scanning files…",
+                            "正在统计文件…",
+                        ))
+                        .small()
+                        .color(theme.amber_color()),
+                    );
+                    if ui
+                        .small_button(crate::i18n::tr(ctx, "Cancel", "取消"))
+                        .clicked()
+                    {
+                        self.cancel_tree_collect();
+                    }
                 });
             }
 
-            if let Some(p) = self.pending_delete.clone() {
+            if let Some(prompt) = self.pending_delete.clone() {
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!(
+                    let label = match &prompt {
+                        PendingDeletePrompt::One(p) => format!(
                             "{} {}",
-                            crate::i18n::tr(ui.ctx(), "Delete?", "删除?"),
+                            crate::i18n::tr(ui.ctx(), "Delete?", "删除？"),
                             p.to_string_lossy()
-                        ))
-                        .small(),
-                    );
+                        ),
+                        PendingDeletePrompt::Many(v) => format!(
+                            "{} {} {}",
+                            crate::i18n::tr(ui.ctx(), "Delete", "删除"),
+                            v.len(),
+                            crate::i18n::tr(ui.ctx(), "remote items?", "个远端项？")
+                        ),
+                    };
+                    ui.label(egui::RichText::new(label).small());
                     if crate::ui::chrome::panel_action_primary_icon_button(
                         ui,
                         theme,
@@ -1533,8 +3393,14 @@ impl SftpPanel {
                     )
                     .clicked()
                     {
-                        let path = self.pending_delete.take().unwrap();
-                        self.spawn_remove(&handle, path, ctx);
+                        match self.pending_delete.take().unwrap() {
+                            PendingDeletePrompt::One(path) => {
+                                self.spawn_remove(&handle, path, ctx);
+                            }
+                            PendingDeletePrompt::Many(paths) => {
+                                self.spawn_remove_many(&handle, paths, ctx);
+                            }
+                        }
                     }
                     if crate::ui::chrome::panel_action_icon_button(
                         ui,
@@ -1546,6 +3412,155 @@ impl SftpPanel {
                     {
                         self.pending_delete = None;
                     }
+                });
+            }
+            if let Some(ow) = self.pending_overwrite.as_ref() {
+                let (preview, source_size, dest_size, can_resume) = match ow {
+                    PendingOverwrite::Upload {
+                        remote,
+                        source_size,
+                        dest_size,
+                        ..
+                    } => (
+                        remote.to_string_lossy().into_owned(),
+                        *source_size,
+                        *dest_size,
+                        *dest_size > 0 && *dest_size < *source_size,
+                    ),
+                    PendingOverwrite::Download {
+                        local,
+                        source_size,
+                        dest_size,
+                        ..
+                    } => (
+                        local.to_string_lossy().into_owned(),
+                        *source_size,
+                        *dest_size,
+                        *dest_size > 0 && *dest_size < *source_size,
+                    ),
+                    PendingOverwrite::UploadMany { conflict_names, .. } => {
+                        let n = conflict_names.len();
+                        let sample = conflict_names
+                            .iter()
+                            .take(3)
+                            .cloned()
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let preview = if n > 3 {
+                            format!("{sample}… (+{})", n - 3)
+                        } else {
+                            sample
+                        };
+                        (preview, 0, 0, false)
+                    }
+                };
+                ui.vertical(|ui| {
+                    let label = if source_size > 0 || dest_size > 0 {
+                        format!(
+                            "{} {}  ({} → {})",
+                            crate::i18n::tr(ui.ctx(), "Target exists:", "目标已存在:"),
+                            preview,
+                            format_bytes(dest_size),
+                            format_bytes(source_size),
+                        )
+                    } else {
+                        format!(
+                            "{} {}",
+                            crate::i18n::tr(ui.ctx(), "Target exists:", "目标已存在:"),
+                            preview
+                        )
+                    };
+                    ui.label(
+                        egui::RichText::new(label)
+                            .small()
+                            .color(theme.amber_color()),
+                    );
+                    ui.horizontal_wrapped(|ui| {
+                        if can_resume
+                            && ui
+                                .small_button(crate::i18n::tr(ui.ctx(), "Resume", "续传"))
+                                .clicked()
+                        {
+                            self.confirm_overwrite_with_mode(
+                                &handle,
+                                ctx,
+                                WriteMode::Resume,
+                                None,
+                            );
+                        }
+                        if can_resume
+                            && ui
+                                .small_button(crate::i18n::tr(ui.ctx(), "Resume all", "全部续传"))
+                                .clicked()
+                        {
+                            self.confirm_overwrite_with_mode(
+                                &handle,
+                                ctx,
+                                WriteMode::Resume,
+                                Some(OverwritePolicy::ResumeAll),
+                            );
+                        }
+                        if ui
+                            .small_button(crate::i18n::tr(ui.ctx(), "Overwrite", "覆盖"))
+                            .clicked()
+                        {
+                            self.confirm_overwrite_with_mode(
+                                &handle,
+                                ctx,
+                                WriteMode::Overwrite,
+                                None,
+                            );
+                        }
+                        if ui
+                            .small_button(crate::i18n::tr(ui.ctx(), "Overwrite all", "全部覆盖"))
+                            .clicked()
+                        {
+                            self.confirm_overwrite_with_mode(
+                                &handle,
+                                ctx,
+                                WriteMode::Overwrite,
+                                Some(OverwritePolicy::OverwriteAll),
+                            );
+                        }
+                        if ui
+                            .small_button(crate::i18n::tr(
+                                ui.ctx(),
+                                "Overwrite if newer",
+                                "仅当更新时覆盖",
+                            ))
+                            .clicked()
+                        {
+                            // 单次先覆盖；并把后续冲突策略设为「源更新才覆盖」。
+                            self.confirm_overwrite_with_mode(
+                                &handle,
+                                ctx,
+                                WriteMode::Overwrite,
+                                Some(OverwritePolicy::IfNewerAll),
+                            );
+                        }
+                        if ui
+                            .small_button(crate::i18n::tr(ui.ctx(), "Skip", "跳过"))
+                            .clicked()
+                        {
+                            self.skip_pending_overwrite(&handle, ctx, None);
+                        }
+                        if ui
+                            .small_button(crate::i18n::tr(ui.ctx(), "Skip all", "全部跳过"))
+                            .clicked()
+                        {
+                            self.skip_pending_overwrite(
+                                &handle,
+                                ctx,
+                                Some(OverwritePolicy::SkipAll),
+                            );
+                        }
+                        if ui
+                            .small_button(crate::i18n::tr(ui.ctx(), "Cancel", "取消"))
+                            .clicked()
+                        {
+                            self.pending_overwrite = None;
+                        }
+                    });
                 });
             }
             let mut enter_remote: Option<PathBuf> = None;
@@ -1584,7 +3599,7 @@ impl SftpPanel {
                                     .collect()
                             });
                             if !files.is_empty() {
-                                self.spawn_upload_many(&handle, self.cwd.clone(), files, ctx);
+                                self.request_upload_many(&handle, self.cwd.clone(), files, ctx);
                             }
                         } else if ui.ctx().input(|i| {
                             i.raw.dropped_files.is_empty() && !i.raw.hovered_files.is_empty()
@@ -1603,13 +3618,23 @@ impl SftpPanel {
                                 theme.text_primary(),
                             );
                         }
-                        let remote_rows = self.entries.clone();
+                        let remote_rows: Vec<SftpEntry> = self
+                            .filtered_remote_entries()
+                            .into_iter()
+                            .cloned()
+                            .collect();
+                        let ordered =
+                            remote_rows.iter().map(|e| e.path.clone()).collect::<Vec<_>>();
+                        let (ctrl, shift) = ui.ctx().input(|i| {
+                            (i.modifiers.ctrl || i.modifiers.command, i.modifiers.shift)
+                        });
                         for e in &remote_rows {
-                            let sel = self.remote_selected.as_ref() == Some(&e.path);
+                            let sel = self.remote_selected.contains(&e.path);
                             let size_lbl =
                                 if e.is_dir { "—".to_string() } else { e.size_human() };
                             let time_lbl = format_file_mtime(e.modified);
                             let kind = classify_file_kind(&e.name, e.is_dir);
+                            let tip = format!("{}  {}", e.path.to_string_lossy(), e.permissions);
                             let resp = paint_file_table_row(
                                 ui,
                                 theme,
@@ -1619,13 +3644,21 @@ impl SftpPanel {
                                 &time_lbl,
                                 kind,
                                 sel,
-                                &e.path.to_string_lossy(),
+                                &tip,
                             );
-                            if resp.clicked() || resp.secondary_clicked() {
-                                self.remote_selected = Some(e.path.clone());
-                            }
-                            if resp.double_clicked() && e.is_dir {
-                                enter_remote = Some(e.path.clone());
+                            if resp.double_clicked() {
+                                if e.is_dir {
+                                    enter_remote = Some(e.path.clone());
+                                } else if looks_like_editable_text(&e.name, e.size) {
+                                    self.start_remote_edit(&handle, e, ctx);
+                                }
+                            } else if resp.clicked() {
+                                self.remote_selected.apply_click(
+                                    e.path.clone(),
+                                    &ordered,
+                                    ctrl,
+                                    shift,
+                                );
                             }
                             resp.context_menu(|ui| {
                                 self.xfer_context_menu(ui, theme, ctx, &handle);
@@ -1643,10 +3676,27 @@ impl SftpPanel {
         });
 
         self.show_mkdir_dialog_ui(ctx, theme, &handle);
+        self.show_rename_dialog_ui(ctx, theme, &handle);
+        self.show_chmod_dialog_ui(ctx, theme, &handle);
 
-        if self.busy {
+        if !self.busy && self.rx.is_none() {
+            self.kick_xfer_queue(&handle, ctx);
+        }
+
+        let strip_action = paint_xfer_strip(ui, theme, ctx, &mut self.xfer);
+        self.handle_xfer_strip_action(strip_action, &handle, ctx);
+
+        if self.busy && self.xfer.active_id().is_none() {
             ui.add_space(theme.spacing_panel_gap());
-            ui.label(egui::RichText::new(crate::i18n::tr(ui.ctx(), "SFTP busy…", "SFTP 处理中…")).small().color(theme.text_tertiary()));
+            ui.label(
+                egui::RichText::new(crate::i18n::tr(
+                    ui.ctx(),
+                    "SFTP busy…",
+                    "SFTP 处理中…",
+                ))
+                .small()
+                .color(theme.text_tertiary()),
+            );
         }
     }
 
