@@ -11,6 +11,7 @@
 | [SPECIFICATION_DETAILED.md](../product/SPECIFICATION_DETAILED.md) | 视觉规格 |
 | [UI-GUIDELINES.md](../product/UI-GUIDELINES.md) | 界面规范 |
 | [fragments-analytics.md](../product/fragments-analytics.md) | 命令片段与分析 |
+| [SFTP-UPGRADE.md](../product/SFTP-UPGRADE.md) | SFTP 面板能力升级（进度/续传/队列/批量/编辑等） |
 | [oauth-desktop-callback.html](../product/oauth-desktop-callback.html) | OAuth 桥接页 |
 | [操作手册](../manual/MistTerm_操作手册.html) | 用户手册（含界面截图） |
 
