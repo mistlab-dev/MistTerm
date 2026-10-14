@@ -11,6 +11,10 @@ type TISInputSourceRef = *const c_void;
 #[link(name = "Carbon", kind = "framework")]
 extern "C" {
     static kTISPropertyInputSourceID: CFStringRef;
+    static kTISPropertyInputSourceType: CFStringRef;
+    static kTISTypeKeyboardLayout: CFStringRef;
+    fn TISCopyCurrentKeyboardInputSource() -> TISInputSourceRef;
+    fn TISGetInputSourceProperty(input_source: TISInputSourceRef, key: CFStringRef) -> *const c_void;
     fn TISCreateInputSourceList(properties: CFDictionaryRef, include_all_installed: u8) -> CFArrayRef;
     fn TISSelectInputSource(input_source: TISInputSourceRef) -> i32;
 }
@@ -38,5 +42,21 @@ pub fn select_abc_keyboard_layout() {
         log::debug!("TISSelectInputSource(ABC) returned {}", status);
     } else {
         log::info!("Switched input source to com.apple.keylayout.ABC (English)");
+    }
+}
+
+/// 当前输入源是不是普通键盘布局（ABC/US 等，不是拼音这类输入法）。
+/// 普通布局下不存在真正的「组字」，winit 报来的 Preedit 应该当成已上屏的字直接发出去。
+pub fn current_source_is_keyboard_layout() -> bool {
+    unsafe {
+        let src = TISCopyCurrentKeyboardInputSource();
+        if src.is_null() {
+            return false;
+        }
+        let ty = TISGetInputSourceProperty(src, kTISPropertyInputSourceType) as CFStringRef;
+        let is_layout = !ty.is_null()
+            && CFString::wrap_under_get_rule(ty) == CFString::wrap_under_get_rule(kTISTypeKeyboardLayout);
+        core_foundation::base::CFRelease(src);
+        is_layout
     }
 }
