@@ -240,15 +240,20 @@ jobs:
 
           if [ "${{ matrix.target }}" = "universal-apple-darwin" ]; then
             mkdir -p "target/${{ matrix.target }}/release"
-            for BIN in "$BIN_NAME" mist; do
+            # macOS 文件系统不区分大小写：Mist 和 mist 是同一个路径。先编 CLI 并改名 mist-cli，
+            # 最后编 GUI，否则 CLI 会覆盖 GUI（v1.2.14 的 Mist.app 里装的其实是 CLI）。
+            U="target/${{ matrix.target }}/release"
+            for BIN in mist "$BIN_NAME"; do
               cargo build --locked --release --bin "$BIN" --target aarch64-apple-darwin "${features_arg[@]}"
               cargo build --locked --release --bin "$BIN" --target x86_64-apple-darwin "${features_arg[@]}"
-              lipo -create -output \
-                "target/${{ matrix.target }}/release/$BIN" \
+              lipo -create -output "$U/$BIN.lipo" \
                 "target/aarch64-apple-darwin/release/$BIN" \
                 "target/x86_64-apple-darwin/release/$BIN"
+              if [ "$BIN" = mist ]; then mv "$U/$BIN.lipo" "$U/mist-cli"; else rm -f "$U/$BIN"; mv "$U/$BIN.lipo" "$U/$BIN"; fi
             done
-            file "target/${{ matrix.target }}/release/$BIN_NAME" "target/${{ matrix.target }}/release/mist"
+            file "$U/$BIN_NAME" "$U/mist-cli"
+            # GUI 二进制必须带诊断开关代码（只在 GUI 入口里）
+            grep -a -q -F mist-debug-log "$U/$BIN_NAME" || { echo "::error::$U/$BIN_NAME is not the GUI binary"; exit 1; }
           else
             cargo build --locked --release --bin "$BIN_NAME" --target "${{ matrix.target }}" "${features_arg[@]}"
             cargo build --locked --release --bin mist --target "${{ matrix.target }}" "${features_arg[@]}"
@@ -401,8 +406,9 @@ jobs:
               echo "MACOS_DMG_NAME=${NAME}.dmg" >> "$GITHUB_ENV"
 
               # 附带裸二进制，供 CLI / install.sh 使用；GUI 请用已公证的 Mist.app
+              # 不区分大小写：CLI 以 mist-cli 名字附带，避免覆盖 GUI 的 Mist
               cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
-              cp "target/${{ matrix.target }}/release/mist" "$STAGE/"
+              cp "target/${{ matrix.target }}/release/mist-cli" "$STAGE/"
               printf '%s\n' \
                 'MistTerm for macOS' \
                 '==================' \
