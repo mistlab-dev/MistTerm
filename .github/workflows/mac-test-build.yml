@@ -1,0 +1,20 @@
+name: macOS unsigned test build
+on:
+  push: { branches: [fix/term-edge-clip] }
+  workflow_dispatch: {}
+jobs:
+  mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - run: |
+          cargo build --release --bin Mist --features vendored-openssl --target aarch64-apple-darwin
+          cargo build --release --bin Mist --features vendored-openssl --target x86_64-apple-darwin
+          mkdir -p target/universal-apple-darwin/release
+          lipo -create -output target/universal-apple-darwin/release/Mist target/aarch64-apple-darwin/release/Mist target/x86_64-apple-darwin/release/Mist
+          grep -a -q -F mist-debug-log target/universal-apple-darwin/release/Mist
+          MIST_BINARY=target/universal-apple-darwin/release/Mist MIST_APP_OUT=out/Mist.app bash scripts/bundle-macos.sh
+          ditto -c -k --keepParent out/Mist.app out/Mist-macos-unsigned.zip
+      - uses: actions/upload-artifact@v7
+        with: { name: Mist-macos-unsigned, path: out/Mist-macos-unsigned.zip, retention-days: 7 }
