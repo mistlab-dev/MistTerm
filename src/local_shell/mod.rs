@@ -98,6 +98,15 @@ fn build_command(program: &str) -> CommandBuilder {
     if let Some(home) = dirs::home_dir() {
         let _ = cmd.cwd(home);
     }
+    // 从 Finder / Dock 启动时环境里没有 TERM：zsh 会按「哑终端」处理，退格只回显一个空格
+    // （看起来像删除变成了插入空格）。本终端兼容 xterm，固定告诉 shell。
+    cmd.env("TERM", "xterm-256color");
+    cmd.env("COLORTERM", "truecolor");
+    #[cfg(target_os = "macos")]
+    if std::env::var_os("LANG").is_none() && std::env::var_os("LC_ALL").is_none() {
+        // 同理 Finder 启动没有 LANG，中文会被当成乱码字节；Terminal.app 默认也会设
+        cmd.env("LANG", "en_US.UTF-8");
+    }
     cmd
 }
 

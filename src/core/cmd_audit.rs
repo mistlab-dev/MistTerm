@@ -673,10 +673,24 @@ fn looks_like_mist_audit_prefix(bytes: &[u8]) -> bool {
     // 跳过行首空白 / CR / 常见 CSI，再判断是否为前缀残片
     let rest = strip_leading_pty_noise(bytes);
     if rest.is_empty() {
-        // 整段都是噪声，可能后面还有 MIST_AUDIT
-        return bytes.iter().any(|&b| b == 0x1b || b == b'\r');
+        // 整段都是空白 / 完整的控制序列：直接显示（行中插空格的回显就是 `ESC[1@ ` 这样）。
+        // 只有结尾停在半截 ESC 序列上才扣住，等下一块拼完整再判断。
+        return ends_with_incomplete_escape(bytes);
     }
     MIST_AUDIT_PREFIX.starts_with(rest) || rest.starts_with(MIST_AUDIT_PREFIX)
+}
+
+/// 结尾是否停在没写完的 ESC / CSI 序列里。
+fn ends_with_incomplete_escape(bytes: &[u8]) -> bool {
+    let Some(esc) = bytes.iter().rposition(|&b| b == 0x1b) else {
+        return false;
+    };
+    let tail = &bytes[esc + 1..];
+    match tail.first() {
+        None => true,
+        Some(b'[') => !tail[1..].iter().any(|b| (0x40..=0x7e).contains(b)),
+        Some(_) => false,
+    }
 }
 
 fn find_mist_audit_offset(line: &[u8]) -> Option<usize> {
@@ -698,7 +712,10 @@ fn strip_leading_pty_noise(mut line: &[u8]) -> &[u8] {
                     line = &line[1..];
                     while let Some((&b, rest)) = line.split_first() {
                         line = rest;
-                        if b.is_ascii_alphabetic() {
+                        // CSI 结束字节是 0x40..=0x7E（含 `@` = ICH 插入字符、`~` 等），不只是字母。
+                        // 以前只认字母：行中插字时 shell 回显 `ESC[1@X` 会把 `X` 当成 CSI 的一部分，
+                        // 整段被当成「可能是 MIST_AUDIT 前缀」扣住，直到回车才显示。
+                        if (0x40..=0x7e).contains(&b) {
                             break;
                         }
                     }
@@ -757,6 +774,27 @@ fn parse_mist_audit_line(line: &[u8]) -> Option<ServerAuditEvent> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn ich_insert_echo_is_not_held() {
+        // 行中插字：bash/readline 回显 ICH + 字符
+        let mut p = super::ServerAuditProbe::new();
+        let (out, ev) = p.feed(b"\x1b[1@X");
+        assert!(ev.is_empty());
+        assert_eq!(out, b"\x1b[1@X");
+        let (out, _) = p.feed(b"\x1b[@Y");
+        assert_eq!(out, b"\x1b[@Y");
+        // 行中插空格：回显只有 ICH + 空格
+        let (out, _) = p.feed(b"\x1b[1@ ");
+        assert_eq!(out, b"\x1b[1@ ");
+        let (out, _) = p.feed(b" ");
+        assert_eq!(out, b" ");
+        // 半截 CSI 仍然扣住，拼上下一块后整体放出
+        let (out, _) = p.feed(b"\x1b[");
+        assert!(out.is_empty());
+        let (out, _) = p.feed(b"1@Z");
+        assert_eq!(out, b"\x1b[1@Z");
+    }
+
 
     #[test]
     fn cached_rules_apply_but_still_need_sync() {
