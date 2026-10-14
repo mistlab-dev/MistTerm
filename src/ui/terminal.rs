@@ -294,6 +294,10 @@ pub struct TerminalView {
     ui_lang_last: UiLanguage,
     /// 透明 IME 捕获框(须持有文本光标，winit 才会 `set_ime_allowed`)
     ime_capture: String,
+    /// 普通键盘布局下已经按 Preedit 直接发进 PTY 的部分（Commit 时只补发剩下的）。
+    ime_preedit_sent: String,
+    /// 真正组字（拼音等）时在光标处显示的候选拼写。
+    ime_preedit_show: String,
     /// 最近一帧终端 IME 框的 egui Id；UI 输入(含中文全角)抢焦点时须 surrender，否则 Composition 仍进终端。
     last_ime_id: Option<egui::Id>,
 }
@@ -438,6 +442,23 @@ impl TerminalView {
         cell_h: f32,
     ) {
         self.last_ime_id = Some(ime_id);
+        if !self.ime_preedit_show.is_empty() {
+            // 组字中的拼写画在光标处，让人看得见（输入框本身是透明的）
+            let painter = ui.painter();
+            let font = egui::FontId::monospace((cell_h * 0.8).max(8.0));
+            let galley = painter.layout_no_wrap(
+                self.ime_preedit_show.clone(),
+                font,
+                ui.visuals().strong_text_color(),
+            );
+            let r = egui::Rect::from_min_size(ime_rect.left_top(), galley.size());
+            painter.rect_filled(r.expand(1.0), 2.0, ui.visuals().extreme_bg_color);
+            painter.galley(r.min, galley);
+            painter.line_segment(
+                [r.left_bottom(), r.right_bottom()],
+                egui::Stroke::new(1.0, ui.visuals().strong_text_color()),
+            );
+        }
         ui.allocate_ui_at_rect(ime_rect, |ui| {
             ui.set_min_size(egui::vec2(ime_rect.width().max(8.0), ime_rect.height().max(cell_h)));
             ui.visuals_mut().override_text_color = Some(egui::Color32::TRANSPARENT);
@@ -679,6 +700,8 @@ impl TerminalView {
             search_highlight: None,
             ui_lang_last: UiLanguage::default(),
             ime_capture: String::new(),
+            ime_preedit_sent: String::new(),
+            ime_preedit_show: String::new(),
             last_ime_id: None,
         }
     }
@@ -2628,10 +2651,42 @@ impl TerminalView {
                     _ => {}
                 }
             }
+            let mut plain_layout: Option<bool> = None;
             for event in &i.events {
                 match event {
+                    egui::Event::CompositionStart => {
+                        self.ime_preedit_sent.clear();
+                        self.ime_preedit_show.clear();
+                    }
+                    egui::Event::CompositionUpdate(t) => {
+                        let plain = *plain_layout
+                            .get_or_insert_with(crate::platform::input_source_is_plain_layout);
+                        if plain && !i.modifiers.command && !i.modifiers.ctrl {
+                            // ABC 等普通布局没有真正的组字：Preedit 里的字直接发，不等 Enter/Commit。
+                            let new_part = t.strip_prefix(self.ime_preedit_sent.as_str()).unwrap_or("");
+                            log::debug!(target: "repaint_lag", "ime preedit passthrough len={} new={}", t.chars().count(), new_part.chars().count());
+                            if !new_part.is_empty() {
+                                self.track_typed_text(new_part);
+                                if let Err(e) = self.send_pty_input(new_part.as_bytes()) {
+                                    log::error!("PTY write (preedit): {}", e);
+                                }
+                            }
+                            self.ime_preedit_sent = t.clone();
+                            self.ime_preedit_show.clear();
+                        } else {
+                            self.ime_preedit_show = t.clone();
+                        }
+                    }
                     egui::Event::CompositionEnd(text) => {
-                        if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
+                        let sent = std::mem::take(&mut self.ime_preedit_sent);
+                        self.ime_preedit_show.clear();
+                        let rest = if sent.is_empty() {
+                            text.as_str()
+                        } else {
+                            text.strip_prefix(sent.as_str()).unwrap_or("")
+                        };
+                        log::debug!(target: "repaint_lag", "ime commit rest len={} already_sent={}", rest.chars().count(), sent.chars().count());
+                        if let Some(text) = Self::ime_committed_text(rest, i.modifiers) {
                             self.track_typed_text(text);
                             if let Err(e) = self.send_pty_input(text.as_bytes()) {
                                 log::error!("PTY write (ime): {}", e);
