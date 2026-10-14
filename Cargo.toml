@@ -1,6 +1,6 @@
 [package]
 name = "mistterm"
-version = "1.2.16"
+version = "1.2.17"
 edition = "2021"
 autobins = false
 default-run = "Mist"
@@ -12,13 +12,13 @@ license = "AGPL-3.0-or-later"
 
 [features]
 default = ["file-dialogs"]
-# 桌面版的系统文件选择框（rfd，Linux 上依赖 GTK3）。只编命令行 `mist` 的静态版本（musl）时关掉，
-# 见 docs/release/CLI_STATIC.md。
+# 桌面版的系统文件选择框（rfd，Linux 上依�?GTK3）。只编命令行 `mist` 的静态版本（musl）时关掉�?
+# �?docs/release/CLI_STATIC.md�?
 file-dialogs = ["dep:rfd"]
-# 让 ssh2 / openssl-sys 自带源码编译 OpenSSL，便于 CI 跨平台构建（macOS universal 等）。
+# �?ssh2 / openssl-sys 自带源码编译 OpenSSL，便�?CI 跨平台构建（macOS universal 等）�?
 vendored-openssl = ["ssh2/vendored-openssl"]
-# 仅用于自动更新的端到端测试：信任编译时传入的临时测试公钥、允许 http://127.0.0.1 假服务器、
-# 允许用 MIST_BUILD_VERSION 覆盖版本号。正式发布构建禁止开启（build.rs 会报错）。
+# 仅用于自动更新的端到端测试：信任编译时传入的临时测试公钥、允�?http://127.0.0.1 假服务器�?
+# 允许�?MIST_BUILD_VERSION 覆盖版本号。正式发布构建禁止开启（build.rs 会报错）�?
 update-test = []
 
 [lib]
@@ -44,7 +44,7 @@ path = "src/bin/rz_upload_smoke.rs"
 [[bin]]
 name = "Mist"
 path = "src/main.rs"
-# 桌面版必须带文件选择框；`--no-default-features` 的静态 CLI 构建不会编它。
+# 桌面版必须带文件选择框；`--no-default-features` 的静�?CLI 构建不会编它�?
 required-features = ["file-dialogs"]
 
 [[bin]]
@@ -101,12 +101,12 @@ rand = "0.8"
 base64 = "0.21"
 hkdf = "0.12"
 sha2 = "0.10"
-# 导入 FinalShell 会话时解开它保存的密码（DES）
+# 导入 FinalShell 会话时解开它保存的密码（DES�?
 des = "0.8"
-# 读 Xshell 会话文件（UTF-16 / GBK）
+# �?Xshell 会话文件（UTF-16 / GBK�?
 encoding_rs = "0.8"
 
-# HTTP（Vault API、审计远程 sink）
+# HTTP（Vault API、审计远�?sink�?
 reqwest = { version = "0.11", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 
 # Logging
@@ -125,22 +125,22 @@ clap = { version = "4", features = ["derive"] }
 dirs = "5.0"
 chrono = "0.4"
 crossterm = "0.27"
-# 片段命令中 {{ ... }} 表达式（md5/base64 等），默认沙箱、无 IO
+# 片段命令�?{{ ... }} 表达式（md5/base64 等），默认沙箱、无 IO
 rhai = "1.19"
 
 # Font support
 ab_glyph = "0.2"
 image = "0.24"
 alacritty_terminal = "0.26.0"
-# 本机终端（Win ConPTY / Unix PTY）
+# 本机终端（Win ConPTY / Unix PTY�?
 portable-pty = "0.8"
-# ZMODEM 协议（lrzsz 路径专用；与 SFTP / cat 直传无关）
+# ZMODEM 协议（lrzsz 路径专用；与 SFTP / cat 直传无关�?
 zmodem2 = { path = "vendor/zmodem2" }
 egui_plot = "0.23"
 pulldown-cmark = "0.11"
 genpdf = "0.2"
 
-# 自动更新：minisign 验签（零依赖）、版本比较、解压 Linux tar.gz / Windows 便携版 zip
+# 自动更新：minisign 验签（零依赖）、版本比较、解�?Linux tar.gz / Windows 便携�?zip
 minisign-verify = "0.3"
 semver = "1"
 tar = { version = "0.4", default-features = false }
@@ -153,7 +153,7 @@ mockall = "0.12"
 ssh2 = "0.9"
 dirs = "5.0"
 serde_json = "1.0"
-# 测试中生成临时 minisign 密钥并签名（只用于测试，不进入发布程序）
+# 测试中生成临�?minisign 密钥并签名（只用于测试，不进入发布程序）
 minisign = "0.10"
 
 [target.'cfg(windows)'.dependencies]
@@ -172,8 +172,8 @@ libc = "0.2"
 
 [profile.release]
 opt-level = 3
-# 用 thin LTO：链接时间显著降低（CI ~2-3x），二进制体积比 fat LTO 大 ~10-20%，
-# 运行性能差异基本无感。GUI / IO 类应用切 thin 性价比最高。
+# �?thin LTO：链接时间显著降低（CI ~2-3x），二进制体积比 fat LTO �?~10-20%�?
+# 运行性能差异基本无感。GUI / IO 类应用切 thin 性价比最高�?
 lto = "thin"
-# 只剥调试信息、保留符号表：hang 报告里的线程栈（hang_reporter 调 `sample`）才有函数名。
+# 只剥调试信息、保留符号表：hang 报告里的线程栈（hang_reporter �?`sample`）才有函数名�?
 strip = "debuginfo"
