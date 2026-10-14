@@ -330,7 +330,7 @@ impl TerminalView {
             let font_id = egui::FontId::monospace(font_size);
             let width_galley = fonts.layout_no_wrap("M".to_string(), font_id, color);
             let line_height = Self::measure_terminal_line_height(fonts, font_size, color);
-            (width_galley.size().x.max(6.0), line_height)
+            ((width_galley.size().x / 64.0).max(6.0), line_height)
         })
     }
 
@@ -1813,10 +1813,11 @@ impl TerminalView {
         // 用真实字体测量单字符网格尺寸，避免 80x24 误差
         let (cell_w, cell_h) = ui.ctx().fonts(|fonts| {
             let font_id = egui::FontId::monospace(self.font_size);
-            let width_galley = fonts.layout_no_wrap("M".to_string(), font_id, theme.text_primary());
+            // 用长串测平均字宽：单个 "M" 的 galley 宽度可能小于实际渲染步进（逐字形像素对齐），导致多算一列、最右列被裁掉
+            let width_galley = fonts.layout_no_wrap("M".repeat(64), font_id, theme.text_primary());
             let line_height =
                 Self::measure_terminal_line_height(fonts, self.font_size, theme.text_primary());
-            (width_galley.size().x.max(6.0), line_height.max(12.0))
+            ((width_galley.size().x / 64.0).max(6.0), line_height.max(12.0))
         });
 
         let cols = (usable_width / cell_w).floor().clamp(20.0, 512.0) as u32;
