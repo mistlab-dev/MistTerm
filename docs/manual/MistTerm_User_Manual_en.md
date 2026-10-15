@@ -378,6 +378,8 @@ MistTerm has two layers of command safety checks: local checks provide fast feed
 | Confirm | A dialog asks "Are you sure?" |
 | Alert | Execution allowed but a warning is logged |
 
+Local checks cover snippet runs, batch runs, commands inserted by AI, `mist exec`, and **commands you type directly in the terminal**: while a local policy is active, pressing Enter first checks the current line (including text placed by “Apply to terminal” and single-line pastes). A blocked line is not sent and stays on the prompt; a line that needs confirmation runs only after you click **Confirm send**. Typed commands are not checked locally (Enter is sent as usual) inside full-screen programs such as vim/less/top, on password or passphrase prompts, and during rz/sz transfers. Lines edited with arrow keys, Tab completion or shell history recall are checked only by the characters you actually typed; rely on the server-side policy for those.
+
 View or adjust local rules in **Preferences**. When joining a team, admin-pushed policies sync to your machine. Server-side decisions are returned through the terminal connection and use the **“Server policy”** prefix.
 
 ### 12.1 Server-side blocks and compliant alternatives
