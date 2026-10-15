@@ -397,7 +397,10 @@ impl Terminal {
                 let c0 = c0.min(self.width);
                 let c1 = c1.min(self.width);
                 for x in c0..c1 {
-                    rows[y][x].1 = sel_fg;
+                    // 透明 sel_fg = 保留原字色（macOS Terminal 风格）
+                    if sel_fg != Color32::TRANSPARENT {
+                        rows[y][x].1 = sel_fg;
+                    }
                     rows[y][x].2 = sel_bg;
                 }
             }
