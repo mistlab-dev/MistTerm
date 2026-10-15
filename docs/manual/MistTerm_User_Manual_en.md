@@ -169,6 +169,7 @@ Passwords and session info are **encrypted locally**. When switching computers, 
 
 - After connecting, type commands in the terminal area and press **Enter** to execute
 - **Select text with the mouse** to copy; **Ctrl+V** to paste (Mac: **⌘V**)
+- **Select across several screens**: click the start, scroll with the wheel to the end, then **Shift+click** to extend the selection. While drag-selecting, move the pointer past the top/bottom edge of the terminal to auto-scroll (faster the farther you go). Then right-click → Copy selection or **Ctrl+Shift+C** (Mac: **⌘C**) copies all of it
 - Supports colored output, vim, htop, and other common TUI programs
 - Tabs: **Ctrl+T** for new tab; **Ctrl+W** to close current tab; **Ctrl+Tab** to switch tabs
 

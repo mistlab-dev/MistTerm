@@ -145,6 +145,39 @@ impl Selection {
         self.end_col = ep.column.0;
         self.active = true;
     }
+
+    /// Shift+单击扩展选区：保留原锚点，只移动终点；无选区时以 `fallback_anchor`
+    /// (绝对坐标，通常为终端光标)或点击处为锚点。坐标为绝对网格，故滚轮翻屏后仍正确。
+    fn extend_from_viewport(
+        &mut self,
+        display_offset: usize,
+        row: usize,
+        col: usize,
+        fallback_anchor: Option<(i32, usize)>,
+    ) {
+        let ep = viewport_to_point(display_offset, Point::new(row, Column(col)));
+        if !self.active {
+            let (al, ac) = fallback_anchor.unwrap_or((ep.line.0, ep.column.0));
+            self.start_line = al;
+            self.start_col = ac;
+        }
+        self.end_line = ep.line.0;
+        self.end_col = ep.column.0;
+        self.active = true;
+    }
+}
+
+/// 拖选越过文本区上/下边缘时的自动滚动行数(每秒)，与越界距离成正比。
+/// 返回值 >0 表示向上翻历史(alacritty `Scroll::Delta` 正方向)。
+fn drag_autoscroll_lines_per_sec(pointer_y: f32, top: f32, bottom: f32, cell_h: f32) -> f32 {
+    let cell_h = cell_h.max(1.0);
+    if pointer_y < top {
+        ((top - pointer_y) / cell_h + 1.0).min(40.0) * 6.0
+    } else if pointer_y > bottom {
+        -((pointer_y - bottom) / cell_h + 1.0).min(40.0) * 6.0
+    } else {
+        0.0
+    }
 }
 
 /// 右 dock 依赖 SSH 时的连接门闩(避免已断开仍显示「连接中」)。
@@ -271,6 +304,8 @@ pub struct TerminalView {
     zmodem_upload_after_rz_path: Option<PathBuf>,
     /// 终端文本选择状态
     selection: Selection,
+    /// 拖选自动滚动的小数行累加(帧率无关)
+    select_autoscroll_acc: f32,
     /// 右键「发送到 AI」后置位，由 `app` 读取选区并打开 AI 面板。
     pending_send_to_ai: bool,
     pending_send_tail_to_ai: bool,
@@ -672,6 +707,7 @@ impl TerminalView {
             pending_drop_upload_paths: Vec::new(),
             zmodem_upload_after_rz_path: None,
             selection: Selection::default(),
+            select_autoscroll_acc: 0.0,
             pending_send_to_ai: false,
             pending_send_tail_to_ai: false,
             pending_send_to_ai_text: None,
@@ -1475,6 +1511,9 @@ impl TerminalView {
                                 select_resp.drag_started_by(egui::PointerButton::Primary);
                             let primary_dragged =
                                 select_resp.dragged_by(egui::PointerButton::Primary);
+                            let primary_clicked =
+                                select_resp.clicked_by(egui::PointerButton::Primary);
+                            let shift_held = ui.input(|i| i.modifiers.shift);
                             ui.visuals_mut().selection.bg_fill = prev_sel_bg;
                             ui.visuals_mut().selection.stroke.color = prev_sel_fg;
                             {
@@ -1633,7 +1672,33 @@ impl TerminalView {
                                 }
                             }
 
-                            if primary_double_clicked {
+                            if !primary_dragged {
+                                self.select_autoscroll_acc = 0.0;
+                            }
+                            if (primary_clicked || primary_drag_started)
+                                && shift_held
+                                && !primary_double_clicked
+                            {
+                                // Shift+单击/Shift+拖：扩展已有选区终点，不新建选区、不发 PTY。
+                                if let Some(pos) = select_resp.interact_pointer_pos() {
+                                    let (row_i, col) = Self::terminal_pointer_row_col(
+                                        text_draw_pos,
+                                        pos,
+                                        &galley,
+                                        &display_lines,
+                                    );
+                                    let offset = self.terminal.display_offset();
+                                    let anchor = self.terminal.viewport_cursor().map(|c| {
+                                        let p = viewport_to_point(
+                                            offset,
+                                            Point::new(c.row, Column(c.col)),
+                                        );
+                                        (p.line.0, p.column.0)
+                                    });
+                                    self.selection.extend_from_viewport(offset, row_i, col, anchor);
+                                    ui.ctx().request_repaint();
+                                }
+                            } else if primary_double_clicked {
                                 if let Some(pos) = select_resp.interact_pointer_pos() {
                                     let (row_i, col) = Self::terminal_pointer_row_col(
                                         text_draw_pos,
@@ -1682,6 +1747,29 @@ impl TerminalView {
                                         .unwrap_or(0.0)
                                 });
                                 if drag_distance >= 3.0 {
+                                    // 越过上/下边缘：按距离自动滚动 scrollback，终点随之延伸
+                                    if let Some(pos) = select_resp.interact_pointer_pos() {
+                                        let lps = drag_autoscroll_lines_per_sec(
+                                            pos.y,
+                                            text_rect.top(),
+                                            text_rect.bottom(),
+                                            cell_h,
+                                        );
+                                        if lps != 0.0 {
+                                            let dt = ui.input(|i| i.stable_dt).min(0.1);
+                                            self.select_autoscroll_acc += lps * dt;
+                                            let whole = self.select_autoscroll_acc.trunc();
+                                            if whole != 0.0 {
+                                                self.select_autoscroll_acc -= whole;
+                                                self.terminal
+                                                    .scroll_display(Scroll::Delta(whole as i32));
+                                                self.visual_layout_cache = None;
+                                            }
+                                            ui.ctx().request_repaint();
+                                        } else {
+                                            self.select_autoscroll_acc = 0.0;
+                                        }
+                                    }
                                     if let Some(pos) = select_resp.interact_pointer_pos() {
                                         let (row_i, col) = Self::terminal_pointer_row_col(
                                             text_draw_pos,
@@ -3794,5 +3882,58 @@ mod typed_enter_gate_tests {
         assert_eq!(v.typed_line_buffer, "");
         v.track_typed_text("uptime");
         assert_eq!(v.typed_enter_gate_line().as_deref(), Some("uptime"));
+    }
+}
+
+#[cfg(test)]
+mod selection_extend_tests {
+    use super::*;
+
+    #[test]
+    fn extend_keeps_anchor_across_scroll() {
+        let mut sel = Selection::default();
+        // 在 display_offset=0 第 2 行第 3 列点下锚点
+        sel.set_from_viewport(0, 2, 3, 2, 3);
+        // 向上翻 50 行后 Shift+单击第 0 行第 1 列
+        sel.extend_from_viewport(50, 0, 1, None);
+        assert_eq!((sel.start_line, sel.start_col), (2, 3));
+        assert_eq!((sel.end_line, sel.end_col), (-50, 1));
+        assert_eq!(sel.normalize(), (-50, 1, 2, 3));
+        assert!(!sel.is_empty());
+    }
+
+    #[test]
+    fn extend_without_selection_uses_fallback_anchor() {
+        let mut sel = Selection::default();
+        sel.extend_from_viewport(10, 5, 0, Some((20, 4)));
+        assert_eq!((sel.start_line, sel.start_col), (20, 4));
+        assert_eq!((sel.end_line, sel.end_col), (-5, 0));
+        assert_eq!(sel.normalize(), (-5, 0, 20, 4));
+    }
+
+    #[test]
+    fn extend_without_anchor_is_empty_at_click() {
+        let mut sel = Selection::default();
+        sel.extend_from_viewport(0, 3, 7, None);
+        assert!(sel.is_empty());
+        assert!(sel.active);
+    }
+
+    #[test]
+    fn drag_end_tracks_offset_change() {
+        let mut sel = Selection::default();
+        sel.set_from_viewport(0, 10, 0, 10, 0);
+        sel.set_end_from_viewport(30, 0, 0);
+        assert_eq!(sel.normalize(), (-30, 0, 10, 0));
+    }
+
+    #[test]
+    fn autoscroll_speed_proportional() {
+        assert_eq!(drag_autoscroll_lines_per_sec(50.0, 0.0, 100.0, 10.0), 0.0);
+        let up1 = drag_autoscroll_lines_per_sec(-5.0, 0.0, 100.0, 10.0);
+        let up2 = drag_autoscroll_lines_per_sec(-50.0, 0.0, 100.0, 10.0);
+        assert!(up1 > 0.0 && up2 > up1);
+        let dn = drag_autoscroll_lines_per_sec(150.0, 0.0, 100.0, 10.0);
+        assert!(dn < 0.0);
     }
 }
