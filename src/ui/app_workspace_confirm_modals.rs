@@ -216,6 +216,7 @@ impl MistTermApp {
             let command = confirm.command.clone();
             let audit = confirm.audit.clone();
             let from_server = matches!(confirm.source, crate::core::CmdAuditSource::Server);
+            let from_team = !from_server && crate::core::cmd_audit::is_team_policy(&audit);
             let modal_sz = layout_util::modal_confirm_size(ctx);
             crate::ui::chrome::modal_window("cmd_audit_confirm", theme, ctx)
                 .open(&mut open)
@@ -234,6 +235,8 @@ impl MistTermApp {
                                     "Server policy: confirm to run",
                                     "服务器策略：确认执行",
                                 )
+                            } else if from_team {
+                                crate::i18n::tr(ctx, "Team policy: confirm to run", "团队策略：确认执行")
                             } else {
                                 crate::i18n::tr(
                                     ctx,
@@ -249,6 +252,12 @@ impl MistTermApp {
                                     ctx,
                                     "The remote server requires confirmation before running:",
                                     "远程服务器要求确认后才能执行：",
+                                )
+                            } else if from_team {
+                                crate::i18n::tr(
+                                    ctx,
+                                    "Your team's command policy requires confirmation:",
+                                    "团队的命令策略要求确认后才能执行：",
                                 )
                             } else {
                                 crate::i18n::tr(

@@ -432,6 +432,11 @@ pub fn looks_like_internal_id(s: &str) -> bool {
     hex_dash && t.len() >= 8 && t.chars().any(|c| c.is_ascii_digit())
 }
 
+/// 命中的是团队下发的规则(而非内置快捷检查)：弹窗据此显示「团队策略」措辞。
+pub fn is_team_policy(result: &CmdAuditResult) -> bool {
+    result.matches.iter().any(|m| m.source == "custom" && m.action == result.action)
+}
+
 /// 确认/拦截弹窗里给人看的规则说明：有名字用名字，没有就说是哪一类规则，不显示内部 ID。
 pub fn match_display_name(m: &CmdAuditMatch, zh: bool) -> String {
     let kind = match (m.source.as_str(), zh) {
@@ -813,6 +818,29 @@ mod tests {
         assert!(!engine.needs_sync());
     }
     use super::*;
+
+    #[test]
+    fn team_policy_detected_only_for_custom_rule_driving_action() {
+        let m = |source: &str, action| CmdAuditMatch {
+            rule_id: "r".into(),
+            name: "n".into(),
+            source: source.into(),
+            level: "custom".into(),
+            message: String::new(),
+            action,
+        };
+        let r = |matches: Vec<CmdAuditMatch>| CmdAuditResult {
+            allowed: false,
+            action: CmdAuditAction::Confirm,
+            matches,
+        };
+        assert!(is_team_policy(&r(vec![m("custom", CmdAuditAction::Confirm)])));
+        assert!(!is_team_policy(&r(vec![m("builtin", CmdAuditAction::Confirm)])));
+        assert!(!is_team_policy(&r(vec![
+            m("builtin", CmdAuditAction::Confirm),
+            m("custom", CmdAuditAction::Alert),
+        ])));
+    }
 
     #[test]
     fn display_name_never_shows_internal_ids() {
