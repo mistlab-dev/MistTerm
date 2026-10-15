@@ -99,6 +99,8 @@ struct Selection {
     end_line: i32,
     end_col: usize,
     active: bool,
+    /// 普通单击记下的锚点(绝对网格坐标)，供随后 Shift+单击扩展；滚轮翻屏不影响。
+    click_anchor: Option<(i32, usize)>,
 }
 
 impl Selection {
@@ -120,6 +122,14 @@ impl Selection {
         self.start_col = 0;
         self.end_line = 0;
         self.end_col = 0;
+        self.click_anchor = None;
+    }
+
+    /// 普通单击：清掉旧选区，只记锚点(不显示选区)。
+    fn set_anchor_from_viewport(&mut self, display_offset: usize, row: usize, col: usize) {
+        let p = viewport_to_point(display_offset, Point::new(row, Column(col)));
+        self.clear();
+        self.click_anchor = Some((p.line.0, p.column.0));
     }
 
     fn set_from_viewport(
@@ -157,7 +167,10 @@ impl Selection {
     ) {
         let ep = viewport_to_point(display_offset, Point::new(row, Column(col)));
         if !self.active {
-            let (al, ac) = fallback_anchor.unwrap_or((ep.line.0, ep.column.0));
+            let (al, ac) = self
+                .click_anchor
+                .or(fallback_anchor)
+                .unwrap_or((ep.line.0, ep.column.0));
             self.start_line = al;
             self.start_col = ac;
         }
@@ -1675,9 +1688,8 @@ impl TerminalView {
                             if !primary_dragged {
                                 self.select_autoscroll_acc = 0.0;
                             }
-                            if (primary_clicked || primary_drag_started)
+                            if (primary_clicked || primary_drag_started || primary_double_clicked)
                                 && shift_held
-                                && !primary_double_clicked
                             {
                                 // Shift+单击/Shift+拖：扩展已有选区终点，不新建选区、不发 PTY。
                                 if let Some(pos) = select_resp.interact_pointer_pos() {
@@ -1721,8 +1733,29 @@ impl TerminalView {
                                         }
                                     }
                                 }
-                            } else if primary_drag_started {
+                            } else if primary_clicked {
+                                // 普通单击(未拖动)：记锚点，供翻屏后 Shift+单击扩展。
                                 if let Some(pos) = select_resp.interact_pointer_pos() {
+                                    let (row_i, col) = Self::terminal_pointer_row_col(
+                                        text_draw_pos,
+                                        pos,
+                                        &galley,
+                                        &display_lines,
+                                    );
+                                    self.selection.set_anchor_from_viewport(
+                                        self.terminal.display_offset(),
+                                        row_i,
+                                        col,
+                                    );
+                                    self.visual_layout_cache = None;
+                                    ui.ctx().request_repaint();
+                                }
+                            } else if primary_drag_started {
+                                // 以按下点(而非越过拖动阈值后的位置)为起点
+                                let origin = ui
+                                    .input(|i| i.pointer.press_origin())
+                                    .or_else(|| select_resp.interact_pointer_pos());
+                                if let Some(pos) = origin {
                                     let (row_i, col) = Self::terminal_pointer_row_col(
                                         text_draw_pos,
                                         pos,
@@ -3925,6 +3958,31 @@ mod selection_extend_tests {
         sel.set_from_viewport(0, 10, 0, 10, 0);
         sel.set_end_from_viewport(30, 0, 0);
         assert_eq!(sel.normalize(), (-30, 0, 10, 0));
+    }
+
+    #[test]
+    fn click_scroll_shift_click_keeps_anchor() {
+        // seq 1 400 场景：翻到上方(offset=350)单击第 5 行第 0 列
+        let mut sel = Selection::default();
+        sel.set_anchor_from_viewport(350, 5, 0);
+        assert!(sel.is_empty(), "plain click shows no selection");
+        // 滚轮回到底部后 Shift+单击第 20 行第 3 列；光标在底部，不应被当锚点
+        sel.extend_from_viewport(0, 20, 3, Some((39, 0)));
+        assert_eq!((sel.start_line, sel.start_col), (-345, 0));
+        assert_eq!(sel.normalize(), (-345, 0, 20, 3));
+        // 再次 Shift+单击只移动终点
+        sel.extend_from_viewport(100, 0, 2, Some((39, 0)));
+        assert_eq!(sel.normalize(), (-345, 0, -100, 2));
+    }
+
+    #[test]
+    fn plain_click_clears_old_selection() {
+        let mut sel = Selection::default();
+        sel.set_from_viewport(0, 1, 0, 3, 4);
+        sel.set_anchor_from_viewport(0, 10, 2);
+        assert!(sel.is_empty());
+        sel.extend_from_viewport(0, 12, 0, None);
+        assert_eq!(sel.normalize(), (10, 2, 12, 0));
     }
 
     #[test]
