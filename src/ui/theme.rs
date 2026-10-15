@@ -1169,20 +1169,17 @@ impl Theme {
     #[inline]
     pub fn color_terminal_selection(&self) -> Color32 {
         if self.is_light_theme() {
-            self.accent_alpha(140)
+            Color32::from_rgb(0xc8, 0xc8, 0xc8)
         } else {
-            Color32::from_rgb(196, 204, 220)
+            Color32::from_rgb(0x5a, 0x5a, 0x5a)
         }
     }
 
     /// 终端选区内的字色（与 [`Self::color_terminal_selection`] 成对，保证对比度）。
     #[inline]
     pub fn color_terminal_selection_fg(&self) -> Color32 {
-        if self.is_light_theme() {
-            Color32::WHITE
-        } else {
-            Color32::from_rgb(18, 20, 28)
-        }
+        // 透明 = 保留单元格原字色，仿 macOS 原生终端的中性灰选区
+        Color32::TRANSPARENT
     }
 
     /// 终端块状光标(闪烁时绘制整格实心块)
