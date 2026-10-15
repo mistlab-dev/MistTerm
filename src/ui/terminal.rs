@@ -839,6 +839,35 @@ impl TerminalView {
         }
     }
 
+    /// 本行缓冲跟踪控制键：Ctrl+U / Ctrl+C 清空整行，Ctrl+W 删前一个词(与 readline 一致)。
+    fn track_ctrl_byte(&mut self, b: u8) {
+        match b {
+            0x15 | 0x03 => {
+                self.typed_line_buffer.clear();
+                self.pty_outbound_line_buffer.clear();
+            }
+            0x17 => {
+                let t = self.typed_line_buffer.trim_end_matches(' ').len();
+                self.typed_line_buffer.truncate(t);
+                let cut = self.typed_line_buffer.rfind(' ').map(|i| i + 1).unwrap_or(0);
+                self.typed_line_buffer.truncate(cut);
+            }
+            0x08 => self.track_backspace(),
+            _ => {}
+        }
+    }
+
+    /// 被拦截/取消的手敲行：字符早已逐键发到远端，向该窗格发 Ctrl+U 清掉远端输入行，并清空本地缓冲，
+    /// 否则下一次回车会把旧内容和新输入拼在一起发出去。
+    pub fn discard_typed_line(&mut self) {
+        self.typed_enter_request = None;
+        self.typed_line_buffer.clear();
+        self.pty_outbound_line_buffer.clear();
+        if let Err(e) = self.send_pty_input(&[0x15]) {
+            log::error!("PTY write (kill-line): {}", e);
+        }
+    }
+
     fn track_backspace(&mut self) {
         if !self.typed_line_buffer.is_empty() {
             self.typed_line_buffer.pop();
@@ -2746,6 +2775,7 @@ impl TerminalView {
                             }
                             #[cfg(not(target_os = "macos"))]
                             {
+                                self.track_backspace();
                                 if let Err(e) = self.send_pty_input(&[0x7f]) {
                                     log::error!("PTY write (del): {}", e);
                                 }
@@ -2811,7 +2841,10 @@ impl TerminalView {
             for b in ctrl_to_send {
                 if b == 0x03 && self.lrzsz.is_active() {
                     let _ = self.cancel_zmodem_transfer();
-                } else if let Err(e) = self.send_pty_input(&[b]) {
+                    continue;
+                }
+                self.track_ctrl_byte(b);
+                if let Err(e) = self.send_pty_input(&[b]) {
                     log::error!("PTY write (ctrl): {}", e);
                 }
             }
@@ -3736,5 +3769,30 @@ mod typed_enter_gate_tests {
             v.typed_enter_gate_line().as_deref(),
             Some("sudo shutdown -h now")
         );
+    }
+
+    #[test]
+    fn ctrl_keys_and_backspace_update_line_buffer() {
+        let mut v = gated_view("systemctl restart nginx");
+        v.track_backspace();
+        assert_eq!(v.typed_line_buffer, "systemctl restart ngin");
+        v.track_ctrl_byte(0x17);
+        assert_eq!(v.typed_line_buffer, "systemctl restart ");
+        v.track_ctrl_byte(0x15);
+        assert_eq!(v.typed_line_buffer, "");
+        v.track_typed_text("ls");
+        v.track_ctrl_byte(0x03);
+        assert_eq!(v.typed_enter_gate_line(), None);
+    }
+
+    #[test]
+    fn discard_clears_held_line_so_next_enter_is_clean() {
+        let mut v = gated_view("systemctl restart nginx");
+        v.submit_enter_key();
+        assert!(v.take_typed_enter_request().is_some());
+        v.discard_typed_line();
+        assert_eq!(v.typed_line_buffer, "");
+        v.track_typed_text("uptime");
+        assert_eq!(v.typed_enter_gate_line().as_deref(), Some("uptime"));
     }
 }

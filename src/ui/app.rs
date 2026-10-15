@@ -1745,6 +1745,16 @@ impl MistTermApp {
                 }
             }
         } else if matches!(state.source, CmdAuditSource::Local) {
+            if let Some(pane_idx) = state.typed_enter_pane {
+                // 取消手敲行：清掉远端输入行里已逐键发出的字符。
+                if let Some(pane) = self
+                    .tabs
+                    .get_mut(state.tab_idx)
+                    .and_then(|t| t.panes.get_mut(pane_idx))
+                {
+                    pane.terminal.discard_typed_line();
+                }
+            }
             self.record_cmd_audit_event(
                 "command.cancelled",
                 &state.command,
@@ -1808,7 +1818,14 @@ impl MistTermApp {
                     self.notify_block_with_compliant_suggestion(
                         ctx, tab_idx, &command, title, body,
                     );
-                    // 不发回车：命令留在输入行里，用户可自行修改或 Ctrl+C 清掉。
+                    // 不发回车，并清掉远端输入行(字符已逐键发出)，避免与下一次输入拼接。
+                    if let Some(pane) = self
+                        .tabs
+                        .get_mut(tab_idx)
+                        .and_then(|t| t.panes.get_mut(pane_idx))
+                    {
+                        pane.terminal.discard_typed_line();
+                    }
                     continue;
                 }
                 CmdAuditAction::Confirm => {
