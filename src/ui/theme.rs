@@ -1171,7 +1171,7 @@ impl Theme {
         if self.is_light_theme() {
             Color32::from_rgb(0xc8, 0xc8, 0xc8)
         } else {
-            Color32::from_rgb(0x5a, 0x5a, 0x5a)
+            Color32::from_rgb(0x48, 0x48, 0x48)
         }
     }
 
