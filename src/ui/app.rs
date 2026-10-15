@@ -513,6 +513,8 @@ struct CmdAuditConfirmState {
     started: Instant,
     /// 确认后只把命令放进输入行、不执行(「用到终端」)。
     insert_only: bool,
+    /// 手敲行回车被扣住时所在窗格：确认后只对该窗格补发 `\r`(而不是重发整条命令)。
+    typed_enter_pane: Option<usize>,
 }
 
 fn server_audit_detail(ev: &ServerAuditEvent) -> String {
@@ -1625,6 +1627,7 @@ impl MistTermApp {
                     approve_token: String::new(),
                     started: Instant::now(),
                     insert_only,
+                    typed_enter_pane: None,
                 });
                 return CommandSendResult::NeedsConfirm {
                     command: command.to_string(),
@@ -1710,6 +1713,17 @@ impl MistTermApp {
                     "server policy",
                 );
             }
+            if let Some(pane_idx) = state.typed_enter_pane {
+                // 手敲行已在远端输入行里，只补发被扣住的回车。
+                if let Some(pane) = self
+                    .tabs
+                    .get_mut(state.tab_idx)
+                    .and_then(|t| t.panes.get_mut(pane_idx))
+                {
+                    pane.terminal.release_typed_enter();
+                }
+                return;
+            }
             if let Some(pane) = self
                 .tabs
                 .get_mut(state.tab_idx)
@@ -1738,6 +1752,107 @@ impl MistTermApp {
                 AuditOutcome::Denied,
             );
             self.push_timeline_entry(state.tab_idx, &state.command, &state.audit, TimelineOutcome::Blocked, "command.cancelled");
+        }
+    }
+
+    /// 手敲命令回车前的本地命令审计：终端扣住回车并交出整行，这里按策略放行 / 拦截 / 弹确认。
+    /// 同时为下一帧设置各窗格是否需要扣住回车(策略未生效时完全不影响原回车行为)。
+    fn process_typed_enter_audit(&mut self, ctx: &egui::Context) {
+        let gate = self.cmd_audit_engine.is_active();
+        let mut pending: Vec<(usize, usize, String)> = Vec::new();
+        for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
+            for (pane_idx, pane) in tab.panes.iter_mut().enumerate() {
+                pane.terminal.set_typed_enter_gate(gate);
+                if let Some(line) = pane.terminal.take_typed_enter_request() {
+                    pending.push((tab_idx, pane_idx, line));
+                }
+            }
+        }
+        for (tab_idx, pane_idx, command) in pending {
+            let audit = self.cmd_audit_engine.check(&command);
+            match audit.action {
+                CmdAuditAction::Block => {
+                    self.record_cmd_audit_event(
+                        "command.blocked",
+                        &command,
+                        &audit,
+                        AuditOutcome::Denied,
+                    );
+                    self.push_timeline_entry(
+                        tab_idx,
+                        &command,
+                        &audit,
+                        TimelineOutcome::Blocked,
+                        "local policy",
+                    );
+                    let hint = audit
+                        .matches
+                        .first()
+                        .map(|m| m.message.as_str())
+                        .unwrap_or("");
+                    let title = crate::i18n::tr(
+                        ctx,
+                        "Local check: command blocked",
+                        "本地检查：该命令被禁止",
+                    )
+                    .to_string();
+                    let body = format!(
+                        "{}{}",
+                        command_preview(&command, 80),
+                        if hint.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" — {hint}")
+                        },
+                    );
+                    self.notify_block_with_compliant_suggestion(
+                        ctx, tab_idx, &command, title, body,
+                    );
+                    // 不发回车：命令留在输入行里，用户可自行修改或 Ctrl+C 清掉。
+                    continue;
+                }
+                CmdAuditAction::Confirm => {
+                    if self.cmd_audit_confirm.is_some() {
+                        // 已有确认框在等，不叠加；本次回车作废，用户可稍后再按。
+                        continue;
+                    }
+                    self.cmd_audit_confirm = Some(CmdAuditConfirmState {
+                        tab_idx,
+                        command,
+                        audit,
+                        source: CmdAuditSource::Local,
+                        approve_token: String::new(),
+                        started: Instant::now(),
+                        insert_only: false,
+                        typed_enter_pane: Some(pane_idx),
+                    });
+                    ctx.request_repaint();
+                    continue;
+                }
+                CmdAuditAction::Alert => {
+                    self.record_cmd_audit_event(
+                        "command.alert",
+                        &command,
+                        &audit,
+                        AuditOutcome::Success,
+                    );
+                    self.push_timeline_entry(
+                        tab_idx,
+                        &command,
+                        &audit,
+                        TimelineOutcome::Allowed,
+                        "local alert",
+                    );
+                }
+                CmdAuditAction::Allow => {}
+            }
+            if let Some(pane) = self
+                .tabs
+                .get_mut(tab_idx)
+                .and_then(|t| t.panes.get_mut(pane_idx))
+            {
+                pane.terminal.release_typed_enter();
+            }
         }
     }
 
@@ -1850,6 +1965,7 @@ impl MistTermApp {
                     approve_token: ev.token,
                     started: Instant::now(),
                     insert_only: false,
+                    typed_enter_pane: None,
                 });
             }
             CmdAuditAction::Allow => {
@@ -8386,6 +8502,7 @@ impl eframe::App for MistTermApp {
         }
 
         self.render_workspace_shell(ctx, frame, &theme);
+        self.process_typed_enter_audit(ctx);
         // 须在终端/非活动窗格泵完 SSH 之后再取 MIST_AUDIT，否则本帧事件会空转。
         self.poll_server_audit_from_tabs(ctx);
         self.process_ai_bridge(ctx);

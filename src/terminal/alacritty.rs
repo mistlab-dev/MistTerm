@@ -83,6 +83,20 @@ impl Terminal {
         }
     }
 
+    /// 是否处于 DEC 备用屏幕（vim / less / top 等全屏程序）。
+    pub fn is_alt_screen(&self) -> bool {
+        self.term
+            .mode()
+            .contains(alacritty_terminal::term::TermMode::ALT_SCREEN)
+    }
+
+    /// 光标所在行的纯文本（用于判断当前是否在密码提示等非命令输入行）。
+    pub fn cursor_line_text(&self) -> String {
+        let line = self.term.grid().cursor.point.line;
+        let s: String = self.row_chars(line).into_iter().collect();
+        s.trim_end().to_string()
+    }
+
     #[inline]
     pub fn content_epoch(&self) -> u64 {
         self.content_epoch

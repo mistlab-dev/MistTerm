@@ -284,6 +284,10 @@ pub struct TerminalView {
     pty_outbound_line_buffer: String,
     /// Enter 提交后待取走的整行命令(供命令历史 / 会话日志)
     submitted_line: Option<String>,
+    /// 宿主是否要求手敲命令在回车前先过本地命令审计(策略生效时由 app 每帧设置)。
+    typed_enter_gate: bool,
+    /// 手敲行按了回车但尚未发 `\r`，等宿主审计(`take_typed_enter_request` 取走)。
+    typed_enter_request: Option<String>,
     /// 待写入会话日志的命令(片段执行、Enter 提交等)
     pending_log_commands: Vec<String>,
     /// 待写入会话日志的 PTY 输出块
@@ -521,8 +525,9 @@ impl TerminalView {
     }
 
     /// 本机状态行：truecolor ANSI(随主题)，避免被 §2.3.2 输出压暗后在黑底上几乎看不见。
-    fn feed_user_error_line(&mut self, theme: &Theme, message: &str) {
-        let line = format_user_error_line(theme, message);
+    fn feed_user_error_line(&mut self, theme: &Theme, ctx: &egui::Context, message: &str) {
+        let prefix = crate::i18n::tr(ctx, "Error: ", "错误：");
+        let line = format_user_error_line(theme, prefix, message);
         self.terminal.feed(line.as_bytes());
     }
 
@@ -674,6 +679,8 @@ impl TerminalView {
             zmodem_pty_detect_tail: Vec::new(),
             pty_outbound_line_buffer: String::new(),
             submitted_line: None,
+            typed_enter_gate: false,
+            typed_enter_request: None,
             pending_log_commands: Vec::new(),
             pending_log_output: Vec::new(),
             search_highlight: None,
@@ -706,6 +713,64 @@ impl TerminalView {
         } else {
             Some(self.pending_log_commands.remove(0))
         }
+    }
+
+    /// 宿主设置：本地命令审计策略是否生效。关闭时回车行为与以往完全一致。
+    pub fn set_typed_enter_gate(&mut self, on: bool) {
+        self.typed_enter_gate = on;
+    }
+
+    /// 取走等待审计的手敲行。宿主须随后调用 [`Self::release_typed_enter`](放行)或丢弃(拦截/取消)。
+    pub fn take_typed_enter_request(&mut self) -> Option<String> {
+        self.typed_enter_request.take()
+    }
+
+    /// 审计放行后真正提交本行：记历史并向 PTY 发 `\r`。
+    pub fn release_typed_enter(&mut self) {
+        self.commit_typed_line_on_enter();
+        if let Err(e) = self.send_pty_input(b"\r") {
+            log::error!("PTY write (enter): {}", e);
+        }
+    }
+
+    /// 键盘回车：策略生效且本行可信时先交宿主审计，否则照旧直接发 `\r`。
+    fn submit_enter_key(&mut self) {
+        if self.typed_enter_request.is_some() {
+            // 上一次回车仍在等审计，不重复提交。
+            return;
+        }
+        if let Some(line) = self.typed_enter_gate_line() {
+            self.typed_enter_request = Some(line);
+            return;
+        }
+        self.release_typed_enter();
+    }
+
+    /// 需要审计的手敲行；本地行缓冲不可信或不是 shell 命令行时返回 `None`(保持原行为)。
+    fn typed_enter_gate_line(&self) -> Option<String> {
+        if !self.typed_enter_gate || !self.connected {
+            return None;
+        }
+        if self.terminal.is_alt_screen()
+            || self.lrzsz.is_active()
+            || self.transfer_progress.is_some()
+        {
+            return None;
+        }
+        let line = self.typed_line_buffer.trim();
+        if line.is_empty() {
+            return None;
+        }
+        if Self::looks_like_secret_prompt(&self.terminal.cursor_line_text()) {
+            return None;
+        }
+        Some(line.to_string())
+    }
+
+    /// 光标所在行像密码 / 口令提示(sudo、ssh、su 等)时不审计，避免把密码当命令处理。
+    fn looks_like_secret_prompt(line: &str) -> bool {
+        let l = line.to_lowercase();
+        l.contains("password") || l.contains("passphrase") || l.contains("密码")
     }
 
     /// 记录本行提交(历史/rz·sz 探测)；**不**决定是否向 PTY 发回车。
@@ -2213,7 +2278,7 @@ impl TerminalView {
                     self.transfer_outgoing = false;
                     self.clear_expect_rz_upload();
                     self.clear_expect_sz_download();
-                    self.feed_user_error_line(theme, &format!(
+                    self.feed_user_error_line(theme, ctx, &format!(
                         "{} {}: {}",
                         crate::i18n::tr(ctx, "Transfer failed", "传输失败"),
                         filename,
@@ -2643,10 +2708,7 @@ impl TerminalView {
                         // Enter：部分自动化(如 pywinauto)只发 Text(\r) 不发 Key::Enter。
                         if text == "\n" || text == "\r" {
                             if !enter_sent {
-                                self.commit_typed_line_on_enter();
-                                if let Err(e) = self.send_pty_input(b"\r") {
-                                    log::error!("PTY write (enter text): {}", e);
-                                }
+                                self.submit_enter_key();
                                 enter_sent = true;
                             }
                             continue;
@@ -2714,10 +2776,7 @@ impl TerminalView {
                         match key {
                             egui::Key::Enter => {
                                 if !enter_sent {
-                                    self.commit_typed_line_on_enter();
-                                    if let Err(e) = self.send_pty_input(b"\r") {
-                                        log::error!("PTY write (enter): {}", e);
-                                    }
+                                    self.submit_enter_key();
                                     enter_sent = true;
                                 }
                             }
@@ -2807,6 +2866,10 @@ impl TerminalView {
             return;
         }
         const LONG_PASTE: usize = 10 * 1024;
+        // 单行粘贴计入本行缓冲，回车时与手敲内容一起审计；多行粘贴自带换行，不在此跟踪。
+        if !normalized.contains('\n') {
+            self.track_typed_text(&normalized);
+        }
         if normalized.len() <= LONG_PASTE {
             if let Err(e) = self.send_pty_input(normalized.as_bytes()) {
                 log::error!("PTY write (paste): {}", e);
@@ -3426,7 +3489,10 @@ impl TerminalView {
         }
         let line = command.trim_matches(|c| c == '\r' || c == '\n').trim_end();
         self.send_pty_input(line.as_bytes())
-            .map_err(|e| format!("{}: {}", loc.tr("Send failed", "发送失败"), e))
+            .map_err(|e| format!("{}: {}", loc.tr("Send failed", "发送失败"), e))?;
+        // 「用到终端」放进输入行的文本也计入本行，回车时与后续手敲内容作为整行审计。
+        self.track_typed_text(line);
+        Ok(())
     }
 
     /// 插入命令片段(自动添加回车)
@@ -3597,5 +3663,78 @@ mod insert_only_tests {
         assert!(!TerminalView::is_multiline_command("\n  df -h  \r\n\n"));
         assert!(TerminalView::is_multiline_command("cd /tmp\nls"));
         assert!(TerminalView::is_multiline_command("cd /tmp\r\nls"));
+    }
+}
+
+#[cfg(test)]
+mod typed_enter_gate_tests {
+    use super::*;
+
+    fn gated_view(line: &str) -> TerminalView {
+        let mut v = TerminalView::new();
+        v.connected = true;
+        v.set_typed_enter_gate(true);
+        v.track_typed_text(line);
+        v
+    }
+
+    #[test]
+    fn gate_off_or_disconnected_keeps_old_behavior() {
+        let mut v = gated_view("rm -rf /tmp/x");
+        v.set_typed_enter_gate(false);
+        assert_eq!(v.typed_enter_gate_line(), None);
+        let mut v = gated_view("rm -rf /tmp/x");
+        v.connected = false;
+        assert_eq!(v.typed_enter_gate_line(), None);
+    }
+
+    #[test]
+    fn gate_returns_trimmed_line() {
+        let v = gated_view("  systemctl restart nginx  ");
+        assert_eq!(
+            v.typed_enter_gate_line().as_deref(),
+            Some("systemctl restart nginx")
+        );
+        assert_eq!(gated_view("   ").typed_enter_gate_line(), None);
+    }
+
+    #[test]
+    fn gate_skips_alt_screen_and_secret_prompts() {
+        let mut v = gated_view(":wq");
+        v.terminal.feed(b"\x1b[?1049h");
+        assert_eq!(v.typed_enter_gate_line(), None);
+
+        let mut v = gated_view("hunter2");
+        v.terminal.feed(b"[sudo] password for tian: ");
+        assert_eq!(v.typed_enter_gate_line(), None);
+        assert!(TerminalView::looks_like_secret_prompt(
+            "Enter passphrase for key"
+        ));
+        assert!(TerminalView::looks_like_secret_prompt("请输入密码："));
+        assert!(!TerminalView::looks_like_secret_prompt("tian@demo:~$ "));
+    }
+
+    #[test]
+    fn gated_enter_is_held_until_released() {
+        let mut v = gated_view("systemctl restart nginx");
+        v.submit_enter_key();
+        // 回车被扣住：未记历史，行缓冲保留，等宿主审计。
+        assert_eq!(v.take_submitted_line(), None);
+        assert_eq!(
+            v.take_typed_enter_request().as_deref(),
+            Some("systemctl restart nginx")
+        );
+        assert_eq!(v.typed_line_buffer, "systemctl restart nginx");
+        assert_eq!(v.take_typed_enter_request(), None);
+    }
+
+    #[test]
+    fn single_line_paste_is_part_of_the_audited_line() {
+        let mut v = gated_view("sudo ");
+        v.track_typed_text("shutdown -h now");
+        assert_eq!(
+            v.typed_enter_gate_line().as_deref(),
+            Some("sudo shutdown -h now")
+        );
     }
 }

@@ -80,11 +80,12 @@ fn feed_ansi_line(sgr: &str, body: &str) -> String {
     format!("\r\n\x1b[{sgr}m{body}\x1b[0m\r\n")
 }
 
-pub fn format_user_error_line(theme: &Theme, message: &str) -> String {
+/// `prefix` 由调用方按界面语言传入（如 `Error: ` / `错误：`）。
+pub fn format_user_error_line(theme: &Theme, prefix: &str, message: &str) -> String {
     let s = TerminalShellStyle::from_theme(theme);
     feed_ansi_line(
         &truecolor_sgr_bold(s.user_error),
-        &format!("错误：{message}"),
+        &format!("{prefix}{message}"),
     )
 }
 
