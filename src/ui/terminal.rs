@@ -1516,8 +1516,12 @@ impl TerminalView {
                             let text_top = text_draw_pos.y;
                             let text_rect = response.rect;
                             let select_id = response.id.with("terminal_select");
+                            // 命中区向左含文本区外的内边距：用户常在首字符左侧点起点(如「50」左边)，
+                            // 否则这一下落在 text_rect 外、不记锚点，随后 Shift+单击只能从光标起选。
+                            let mut select_rect = text_rect;
+                            select_rect.min.x -= 8.0;
                             let select_resp =
-                                ui.interact(text_rect, select_id, egui::Sense::click_and_drag());
+                                ui.interact(select_rect, select_id, egui::Sense::click_and_drag());
                             let primary_double_clicked =
                                 select_resp.double_clicked_by(egui::PointerButton::Primary);
                             let primary_drag_started =
