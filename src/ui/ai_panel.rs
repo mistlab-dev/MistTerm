@@ -2696,7 +2696,7 @@ impl AiPanel {
                     ui.add_space(6.0);
 
                     let out = if host.output.trim().is_empty() {
-                        host.error.as_deref().unwrap_or("(无标准输出)")
+                        host.error.as_deref().unwrap_or(i18n::tr(ctx, "(no output)", "(无标准输出)"))
                     } else {
                         &host.output
                     };
@@ -2735,7 +2735,11 @@ impl AiPanel {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
             if let Some(fh) = failed_hosts.first() {
-                let prompt = format!("查看 {} 的系统与报错日志", fh.name);
+                let prompt = if i18n::language(ctx) == i18n::UiLanguage::Zh {
+                    format!("查看 {} 的系统与报错日志", fh.name)
+                } else {
+                    format!("Check system and error logs on {}", fh.name)
+                };
                 let scope = format!("{}: {}", i18n::tr(ctx, "host", "单机"), fh.endpoint);
                 if ops_suggestion_chip(
                     ui,
@@ -2749,7 +2753,12 @@ impl AiPanel {
                 }
             }
 
-            let prompt_swap = "检查所有主机的 Swap 分区与可用内存 (free -h)".to_string();
+            let prompt_swap = i18n::tr(
+                ctx,
+                "Check swap and available memory on all hosts (free -h)",
+                "检查所有主机的 Swap 分区与可用内存 (free -h)",
+            )
+            .to_string();
             if ops_suggestion_chip(
                 ui,
                 theme,
@@ -2761,7 +2770,12 @@ impl AiPanel {
                 chip_clicked_text = Some(prompt_swap);
             }
 
-            let prompt_proc = "排查各主机 CPU 占用最高的进程详情".to_string();
+            let prompt_proc = i18n::tr(
+                ctx,
+                "Find the top CPU processes on each host",
+                "排查各主机 CPU 占用最高的进程详情",
+            )
+            .to_string();
             if ops_suggestion_chip(
                 ui,
                 theme,
@@ -3666,7 +3680,10 @@ impl AiPanel {
                     self.background = None;
                     self.busy = false;
                     self.input_status = None;
-                    self.last_error = Some(format!("AI 规划降级: {e}"));
+                    self.last_error = Some(format!(
+                        "{}{e}",
+                        i18n::tr(ctx, "AI planning fell back to built-in planner: ", "AI 规划降级: ")
+                    ));
                     self.begin_agent_plan(intent, fallback_proposal);
                     self.chat_dirty = true;
                     ctx.request_repaint();
