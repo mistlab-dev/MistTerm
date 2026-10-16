@@ -3441,7 +3441,10 @@ impl AiPanel {
         };
 
         let settings = app_settings.ai.clone();
-        let system_prompt = crate::core::build_planner_system_prompt();
+        let mut system_prompt = crate::core::build_planner_system_prompt();
+        system_prompt.push_str(crate::core::ai_client::reply_language_instruction(
+            i18n::language(ctx) == i18n::UiLanguage::Zh,
+        ));
         let mut user_prompt = format!("用户运维意图：{intent}\n");
         if let Some(lb) = last_batch {
             user_prompt.push_str(&format!("\n上一轮批量执行的命令：{}\n各主机执行结果：\n", lb.command));
@@ -3512,6 +3515,9 @@ impl AiPanel {
         let system_prompt = {
             let mut p =
                 EnhancedPromptBuilder::new(&base_prompt, self.session_context.clone()).build();
+            p.push_str(crate::core::ai_client::reply_language_instruction(
+                i18n::language(ctx) == i18n::UiLanguage::Zh,
+            ));
             if self.pending_model_fallback_label {
                 p.push_str(
                     "\n\n[IMPORTANT] No team knowledge matched for this question. Clearly state that your answer is model-generated and is not from team documentation.",

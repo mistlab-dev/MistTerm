@@ -230,6 +230,19 @@ pub fn redact_for_ai(text: &str) -> String {
     out
 }
 
+/// Language switch appended to system prompts when the UI is not Chinese.
+/// Chinese UI gets nothing appended, so its prompts are unchanged.
+pub const ENGLISH_REPLY_INSTRUCTION: &str = "\n\n[Language] The user's interface is English. Write every reply in English, including prose, section headings and any JSON text fields such as \"rationale\". This overrides any earlier instruction to answer in Chinese. Keep shell commands as they are.";
+
+/// Returns the language instruction to append to a system prompt for the given UI language.
+pub fn reply_language_instruction(ui_is_chinese: bool) -> &'static str {
+    if ui_is_chinese {
+        ""
+    } else {
+        ENGLISH_REPLY_INSTRUCTION
+    }
+}
+
 /// 使用 [`DEFAULT_SYSTEM_PROMPT`]，除非 [`AiSettings::system_prompt`] 已有非空白自定义值。
 pub fn resolve_system_prompt(settings: &AiSettings) -> String {
     let custom = settings.system_prompt.trim();
@@ -373,6 +386,11 @@ fn prompt_line_to_command(t: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reply_language_instruction_only_for_non_chinese_ui() {
+        assert_eq!(super::reply_language_instruction(true), "");
+        assert!(super::reply_language_instruction(false).contains("English"));
+    }
     use super::*;
 
     #[test]
