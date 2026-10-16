@@ -428,6 +428,36 @@ fn localize_plan_text(ctx: &egui::Context, text: &str) -> String {
     text.to_string()
 }
 
+/// Built-in planner rationales are Chinese (core/agent/planner.rs); show English under non-Chinese UI.
+fn localize_plan_rationale(ctx: &egui::Context, text: &str) -> String {
+    if i18n::language(ctx) == i18n::UiLanguage::Zh {
+        return text.to_string();
+    }
+    const T: &[(&str, &str)] = &[
+        ("检查各主机占用空间最大的日志文件以准备清理(只读排查)", "Find the largest log files on each host before cleanup (read-only)"),
+        ("查看各主机内存/CPU占用最高的具体进程", "Show the processes using the most memory / CPU on each host"),
+        ("按你输入的命令在目标主机上执行", "Runs the command you typed on the target hosts"),
+        ("查各主机磁盘用量(可改命令)", "Check disk usage on each host (command is editable)"),
+        ("查各主机内存(可改命令)", "Check memory on each host (command is editable)"),
+        ("查各主机负载与运行时间(可改命令)", "Check load and uptime on each host (command is editable)"),
+        ("统计各主机进程数量(可改命令)", "Count processes on each host (command is editable)"),
+        ("列出各主机占用 CPU 较高的进程(可改命令)", "List high-CPU processes on each host (command is editable)"),
+        ("查监听端口(可改命令)", "Check listening ports (command is editable)"),
+        ("未识别具体指标，先用通用探活命令；请改成你要跑的命令", "No specific metric recognized; using a generic health check — edit it to the command you want"),
+        ("AI 规划的执行命令", "Command planned by AI"),
+    ];
+    if let Some((_, en)) = T.iter().find(|(zh, _)| *zh == text) {
+        return (*en).to_string();
+    }
+    if let Some(hosts) = text
+        .strip_prefix("针对上一轮报错主机 ")
+        .and_then(|r| r.strip_suffix(" 查看系统日志"))
+    {
+        return format!("Check system logs on the hosts that failed last round: {hosts}");
+    }
+    text.to_string()
+}
+
 /// 指标标签显示用本地化(Mem/Load/Disk/Top → 内存/负载/磁盘/最高)。
 fn localize_metric_label(ctx: &egui::Context, label: &str) -> String {
     if i18n::language(ctx) != i18n::UiLanguage::Zh {
@@ -2032,7 +2062,7 @@ impl AiPanel {
 
                 ui.add_space(theme.spacing_xs());
                 ui.label(
-                    egui::RichText::new(&plan.rationale)
+                    egui::RichText::new(localize_plan_rationale(ctx, &plan.rationale))
                         .size(theme.font_size_small())
                         .color(theme.color_form_hint()),
                 );
@@ -2696,7 +2726,7 @@ impl AiPanel {
                     ui.add_space(6.0);
 
                     let out = if host.output.trim().is_empty() {
-                        host.error.as_deref().unwrap_or("(无标准输出)")
+                        host.error.as_deref().unwrap_or(i18n::tr(ctx, "(no output)", "(无标准输出)"))
                     } else {
                         &host.output
                     };
@@ -2735,7 +2765,11 @@ impl AiPanel {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
             if let Some(fh) = failed_hosts.first() {
-                let prompt = format!("查看 {} 的系统与报错日志", fh.name);
+                let prompt = if i18n::language(ctx) == i18n::UiLanguage::Zh {
+                    format!("查看 {} 的系统与报错日志", fh.name)
+                } else {
+                    format!("Check system and error logs on {}", fh.name)
+                };
                 let scope = format!("{}: {}", i18n::tr(ctx, "host", "单机"), fh.endpoint);
                 if ops_suggestion_chip(
                     ui,
@@ -2749,7 +2783,12 @@ impl AiPanel {
                 }
             }
 
-            let prompt_swap = "检查所有主机的 Swap 分区与可用内存 (free -h)".to_string();
+            let prompt_swap = i18n::tr(
+                ctx,
+                "Check swap and available memory on all hosts (free -h)",
+                "检查所有主机的 Swap 分区与可用内存 (free -h)",
+            )
+            .to_string();
             if ops_suggestion_chip(
                 ui,
                 theme,
@@ -2761,7 +2800,12 @@ impl AiPanel {
                 chip_clicked_text = Some(prompt_swap);
             }
 
-            let prompt_proc = "排查各主机 CPU 占用最高的进程详情".to_string();
+            let prompt_proc = i18n::tr(
+                ctx,
+                "Find the top CPU processes on each host",
+                "排查各主机 CPU 占用最高的进程详情",
+            )
+            .to_string();
             if ops_suggestion_chip(
                 ui,
                 theme,
@@ -3666,7 +3710,15 @@ impl AiPanel {
                     self.background = None;
                     self.busy = false;
                     self.input_status = None;
-                    self.last_error = Some(format!("AI 规划降级: {e}"));
+                    self.last_error = Some(format!(
+                        "{}{}",
+                        i18n::tr(ctx, "AI planning fell back to built-in planner: ", "AI 规划降级: "),
+                        if i18n::language(ctx) == i18n::UiLanguage::Zh {
+                            e.to_string()
+                        } else {
+                            e.replacen("网络错误：", "Network error: ", 1)
+                        }
+                    ));
                     self.begin_agent_plan(intent, fallback_proposal);
                     self.chat_dirty = true;
                     ctx.request_repaint();
