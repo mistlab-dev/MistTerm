@@ -2140,6 +2140,11 @@ impl AiPanel {
                     &audit_mock,
                     is_mutate,
                 );
+                let explanation = if i18n::language(ctx) == i18n::UiLanguage::Zh {
+                    explanation
+                } else {
+                    explanation.to_english()
+                };
 
                 if is_mutate || plan.l2_armed {
                     ui.add_space(theme.spacing_xs());
