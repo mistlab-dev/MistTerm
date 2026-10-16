@@ -385,6 +385,49 @@ fn localize_gate_hint<'a>(ctx: &egui::Context, hint: &'a str) -> &'a str {
     hint
 }
 
+const PLAN_AUTO_RUN_PREFIX_ZH: &str = "这次排查已允许「";
+const PLAN_AUTO_RUN_SUFFIX_ZH: &str = "」这类只读命令，直接执行";
+
+/// AI plan status / source labels are stored in Chinese (set where no egui ctx is
+/// available); translate the known ones at render time for non-Chinese UI.
+fn localize_plan_text(ctx: &egui::Context, text: &str) -> String {
+    if i18n::language(ctx) == i18n::UiLanguage::Zh {
+        return text.to_string();
+    }
+    let en = match text {
+        "执行中…" => Some("Running…"),
+        "完成" => Some("Done"),
+        "已提交执行…" => Some("Submitted…"),
+        "需要二次确认" => Some("Second confirmation required"),
+        "多机执行 · 已取消" => Some("Multi-host run · cancelled"),
+        _ => None,
+    };
+    if let Some(en) = en {
+        return en.to_string();
+    }
+    if let Some(inner) = text
+        .strip_prefix(PLAN_AUTO_RUN_PREFIX_ZH)
+        .and_then(|r| r.strip_suffix(PLAN_AUTO_RUN_SUFFIX_ZH))
+    {
+        use crate::core::agent::ReadOnlyKind as K;
+        let all = [K::Logs, K::Processes, K::Disk, K::Network, K::System, K::Basic];
+        let kinds = inner
+            .split('、')
+            .map(|z| {
+                all.iter()
+                    .find(|k| k.label_zh() == z)
+                    .map(|k| k.label_en())
+                    .unwrap_or(z)
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        return format!(
+            "Read-only commands like this ({kinds}) are allowed for this troubleshooting session — running directly"
+        );
+    }
+    text.to_string()
+}
+
 /// 指标标签显示用本地化(Mem/Load/Disk/Top → 内存/负载/磁盘/最高)。
 fn localize_metric_label(ctx: &egui::Context, label: &str) -> String {
     if i18n::language(ctx) != i18n::UiLanguage::Zh {
@@ -2122,7 +2165,7 @@ impl AiPanel {
                                     px,
                                 );
                                 ui.label(
-                                    egui::RichText::new(format!("风险根因：{}", explanation.title))
+                                    egui::RichText::new(format!("{}{}", i18n::tr(ctx, "Risk cause: ", "风险根因："), explanation.title))
                                         .size(theme.font_size_caption())
                                         .strong()
                                         .color(warn_title),
@@ -2150,7 +2193,7 @@ impl AiPanel {
                                         px,
                                     );
                                     ui.label(
-                                        egui::RichText::new(format!("建议替代：{sug}"))
+                                        egui::RichText::new(format!("{}{sug}", i18n::tr(ctx, "Suggested alternative: ", "建议替代：")))
                                             .size(px)
                                             .color(theme.accent_color()),
                                     );
@@ -2170,7 +2213,8 @@ impl AiPanel {
                                 );
                                 ui.label(
                                     egui::RichText::new(format!(
-                                        "执行条件：{}",
+                                        "{}{}",
+                                        i18n::tr(ctx, "Run condition: ", "执行条件："),
                                         explanation.pass_condition
                                     ))
                                     .size(px)
@@ -2235,7 +2279,7 @@ impl AiPanel {
                 if let Some(st) = &plan.status {
                     ui.add_space(theme.spacing_xs());
                     ui.label(
-                        egui::RichText::new(st)
+                        egui::RichText::new(localize_plan_text(ctx, st))
                             .size(theme.font_size_small())
                             .color(theme.color_status_online_muted()),
                     );
@@ -2807,7 +2851,7 @@ impl AiPanel {
             }
             if let Some(label) = &msg.source_label {
                 ui.label(
-                    egui::RichText::new(label)
+                    egui::RichText::new(localize_plan_text(ctx, label))
                         .size(theme.font_size_small())
                         .strong()
                         .color(theme.accent_color()),
@@ -3323,7 +3367,7 @@ impl AiPanel {
             if crate::core::agent::readonly_auto_run_allowed(&class, &self.readonly_trust) {
                 // 只读且类别已放行：直接交给 App；App 仍会过命令审计（需要确认/拦截照常生效）。
                 p.status = Some(format!(
-                    "这次排查已允许「{}」这类只读命令，直接执行",
+                    "{PLAN_AUTO_RUN_PREFIX_ZH}{}{PLAN_AUTO_RUN_SUFFIX_ZH}",
                     kinds_label_zh(class.kinds().into_iter().flatten())
                 ));
                 self.pending_agent_exec = Some(p.command_edit.trim().to_string());
