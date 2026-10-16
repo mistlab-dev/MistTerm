@@ -284,6 +284,9 @@ fn is_protected_token(token: &str) -> bool {
 
 fn is_assistant_section_heading(line: &str) -> bool {
     let s = line.trim().trim_end_matches([':', '：']).trim();
+    // Models often title-case English headings ("Suggested Commands").
+    let lower = s.to_ascii_lowercase();
+    let s = if s.is_ascii() { lower.as_str() } else { s };
     matches!(
         s,
         "结论"
@@ -292,12 +295,12 @@ fn is_assistant_section_heading(line: &str) -> bool {
             | "下一步"
             | "建议命令"
             | "可执行命令"
-            | "Conclusion"
-            | "Key points"
-            | "Risks"
-            | "Next steps"
-            | "Suggested commands"
-            | "Runnable commands"
+            | "conclusion"
+            | "key points"
+            | "risks"
+            | "next steps"
+            | "suggested commands"
+            | "runnable commands"
     )
 }
 
