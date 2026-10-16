@@ -3445,18 +3445,7 @@ impl AiPanel {
         system_prompt.push_str(crate::core::ai_client::reply_language_instruction(
             i18n::language(ctx) == i18n::UiLanguage::Zh,
         ));
-        let mut user_prompt = format!("用户运维意图：{intent}\n");
-        if let Some(lb) = last_batch {
-            user_prompt.push_str(&format!("\n上一轮批量执行的命令：{}\n各主机执行结果：\n", lb.command));
-            for h in lb.hosts {
-                user_prompt.push_str(&format!(
-                    "- [{}] {}: {}\n",
-                    if h.ok { "成功" } else { "失败" },
-                    h.label,
-                    h.summary
-                ));
-            }
-        }
+        let user_prompt = planner_user_prompt(&intent, last_batch);
 
         let api_messages = vec![
             ChatMessage {
@@ -3514,7 +3503,11 @@ impl AiPanel {
         let base_prompt = resolve_system_prompt(&settings);
         let system_prompt = {
             let mut p =
-                EnhancedPromptBuilder::new(&base_prompt, self.session_context.clone()).build();
+                EnhancedPromptBuilder::new(
+                    &base_prompt,
+                    chat_session_context(&self.session_context, settings.attach_session_meta),
+                )
+                .build();
             p.push_str(crate::core::ai_client::reply_language_instruction(
                 i18n::language(ctx) == i18n::UiLanguage::Zh,
             ));
@@ -4172,4 +4165,80 @@ mod tests {
 /// 只读类别的中文名，用「、」连接。
 fn kinds_label_zh<'a>(kinds: impl IntoIterator<Item = &'a crate::core::agent::ReadOnlyKind>) -> String {
     kinds.into_iter().map(|k| k.label_zh()).collect::<Vec<_>>().join("、")
+}
+
+/// 规划请求的 user 消息；上一轮命令与每主机摘要按终端文本同规则脱敏（摘要来自命令输出，可能带密钥）。
+fn planner_user_prompt(intent: &str, last_batch: Option<crate::core::LastBatchContext>) -> String {
+    use crate::core::ai_client::redact_for_ai;
+    let mut user_prompt = format!("用户运维意图：{intent}\n");
+    if let Some(lb) = last_batch {
+        user_prompt.push_str(&format!(
+            "\n上一轮批量执行的命令：{}\n各主机执行结果：\n",
+            redact_for_ai(&lb.command)
+        ));
+        for h in lb.hosts {
+            user_prompt.push_str(&format!(
+                "- [{}] {}: {}\n",
+                if h.ok { "成功" } else { "失败" },
+                h.label,
+                redact_for_ai(&h.summary)
+            ));
+        }
+    }
+    user_prompt
+}
+
+/// 「附带当前连接信息」关闭时，不发送任何会话上下文块（最近命令、终端尾部、主机/用户）。
+fn chat_session_context(context: &AiContext, attach_session_meta: bool) -> AiContext {
+    if attach_session_meta {
+        context.clone()
+    } else {
+        AiContext::default()
+    }
+}
+
+#[cfg(test)]
+mod session_context_privacy_tests {
+    use super::*;
+
+    #[test]
+    fn toggle_off_drops_context_block() {
+        let c = AiContext {
+            recent_commands: vec!["ls /srv".into()],
+            last_output: Some("deploy@web01:~$ ls".into()),
+            hostname: Some("web01".into()),
+            ..Default::default()
+        };
+        let on = EnhancedPromptBuilder::new("base", chat_session_context(&c, true)).build();
+        assert!(on.contains("ls /srv") && on.contains("web01"));
+        let off = EnhancedPromptBuilder::new("base", chat_session_context(&c, false)).build();
+        assert!(
+            !off.contains("ls /srv") && !off.contains("web01") && !off.contains("当前环境上下文"),
+            "{off}"
+        );
+    }
+
+    #[test]
+    fn context_and_planner_are_redacted() {
+        let c = AiContext {
+            recent_commands: vec![
+                "export API_KEY=sk-live-abc123".into(),
+                "curl -H 'Authorization: Bearer tok-999xyz' x".into(),
+            ],
+            ..Default::default()
+        };
+        let p = EnhancedPromptBuilder::new("base", c).build();
+        assert!(!p.contains("sk-live-abc123") && !p.contains("tok-999xyz"), "{p}");
+        let lb = crate::core::LastBatchContext {
+            command: "env | grep TOKEN".into(),
+            hosts: vec![crate::core::HostExecutionSummary {
+                label: "web".into(),
+                ok: true,
+                exit_code: Some(0),
+                summary: "TOKEN=ghp_secret777".into(),
+            }],
+        };
+        let u = planner_user_prompt("check", Some(lb));
+        assert!(!u.contains("ghp_secret777") && u.contains("web"), "{u}");
+    }
 }
