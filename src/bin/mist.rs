@@ -1,6 +1,6 @@
 //! `mist` — MistTerm 命令行入口（P1：ls / exec / get / put / rls）。
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use mistterm::cli::{exec, ls, sftp_cmds, CliContext};
 
 #[derive(Parser)]
@@ -234,6 +234,113 @@ enum FragCmd {
     },
 }
 
+/// Chinese help only when LC_ALL / LC_MESSAGES / LANG (first non-empty) starts with "zh".
+fn cli_locale_is_chinese() -> bool {
+    for k in ["LC_ALL", "LC_MESSAGES", "LANG"] {
+        if let Ok(v) = std::env::var(k) {
+            if !v.is_empty() {
+                return v.to_ascii_lowercase().starts_with("zh");
+            }
+        }
+    }
+    false
+}
+
+/// English help text, keyed by subcommand path ("" = root) and arg id. Chinese stays in the doc comments.
+const EN_ABOUT: &[(&str, &str)] = &[
+    ("", "MistTerm CLI — command-line SSH that reuses your GUI session settings"),
+    ("ls", "List saved sessions"),
+    ("ssh", "Connect and open an interactive shell: mist ssh <target>"),
+    ("exec", "Run a command on a target"),
+    ("rls", "List a remote directory: mist rls <target>:<path>"),
+    ("get", "Download a file: mist get <target>:<remote> <local>"),
+    ("put", "Upload a file: mist put <local> <target>:<remote>"),
+    ("fwd", "Port forwarding: start the given rules or the session's saved rules (foreground, Ctrl+C to stop)"),
+    ("frag", "Manage and run command fragments"),
+    ("frag list", "List all saved command fragments"),
+    ("frag run", "Run a fragment"),
+    ("import-ssh-config", "Import sessions from OpenSSH ~/.ssh/config"),
+    ("import", "Import sessions from Xshell or FinalShell (host, group, port, user; passwords too when readable)"),
+    ("update", "Check for and install a new MistTerm version (also `mist self-update`)"),
+    ("sop", "View and extract troubleshooting SOPs (session structured logs)"),
+    ("sop extract", "Export recent runs as a Markdown troubleshooting SOP draft"),
+];
+
+const EN_LONG_ABOUT: &[(&str, &str)] = &[
+    ("import", "Import sessions from Xshell or FinalShell (host, group, port, user; passwords too when readable)\n\nXshell: pick the Sessions folder, a single .xsh, or an .xts from Xshell File → Export.\nFinalShell: pick the data folder (the one containing conn).\nIf Xshell has a master password, provide it via MIST_XSHELL_MASTER_PASSWORD."),
+    ("update", "Check for and install a new MistTerm version (also `mist self-update`)\n\nExit codes: 0 up to date or updated; 10 update available but not installed; 1 error."),
+];
+
+const EN_ARG: &[(&str, &str, &str)] = &[
+    ("", "json", "Output JSON (supported by ls/exec/rls/update)"),
+    ("", "verbose", "More log detail (-v info, -vv debug)"),
+    ("ls", "group", "Filter by group"),
+    ("ssh", "target", "Target: session name/id/host, or user@host[:port]"),
+    ("exec", "target", "Target: session name/id/host, or user@host[:port]"),
+    ("exec", "command", "Command to run"),
+    ("exec", "group", "Run on every session in a group"),
+    ("exec", "all_targets", "Run on all saved sessions"),
+    ("exec", "serial", "Run one at a time and stop at the first failure (default: parallel)"),
+    ("exec", "parallel", "Parallelism (1-16, default 8)"),
+    ("exec", "yes", "Confirmed by a human: also run commands that change the server or aren't clearly read-only (team-policy blocks still apply). Put it before the target: mist exec --yes web-01 -- systemctl restart nginx"),
+    ("rls", "spec", "<target>:<remote-path>"),
+    ("get", "spec", "<target>:<remote-path>"),
+    ("get", "local", "Local path (may be a directory)"),
+    ("put", "local", "Local file"),
+    ("put", "spec", "<target>:<remote-path> (ending with / keeps the file name)"),
+    ("fwd", "target", "Target: session name/id/host, or user@host[:port]"),
+    ("fwd", "locals", "Local forward: [bind_addr:]local_port:remote_host:remote_port (repeatable)"),
+    ("fwd", "remotes", "Remote forward: [bind_addr:]remote_port:target_host:target_port (repeatable)"),
+    ("fwd", "dynamics", "Dynamic SOCKS5 forward: [bind_addr:]local_port (repeatable)"),
+    ("import-ssh-config", "file", "Custom ssh config path (default ~/.ssh/config)"),
+    ("import-ssh-config", "dry_run", "Only print the sessions that would be imported; don't save"),
+    ("import-ssh-config", "overwrite", "Overwrite existing sessions with the same name (default: skip)"),
+    ("import", "source", "Source: xshell, finalshell; auto-detect if omitted"),
+    ("import", "path", "File or folder path"),
+    ("import", "dry_run", "Preview only; don't save"),
+    ("import", "windows_user", "Windows account name on the original PC (for Xshell 5.1+ passwords; run `whoami /user` there)"),
+    ("import", "windows_sid", "SID of that Windows account (like S-1-5-21-…)"),
+    ("update", "check", "Only check, don't install (0 up to date, 10 update available, 1 error)"),
+    ("update", "yes", "Install without asking (for scripts)"),
+    ("update", "rollback", "Roll back to the previous version (a backup is kept on update)"),
+    ("sop extract", "last", "Read the last N records (default 10)"),
+    ("sop extract", "title", "SOP title"),
+    ("frag run", "name", "Fragment title or ID"),
+    ("frag run", "target", "Target session (single-host mode)"),
+    ("frag run", "group", "Run on every session in a group"),
+    ("frag run", "all_targets", "Run on all saved sessions"),
+    ("frag run", "serial", "Run one at a time and stop at the first failure (default: parallel)"),
+    ("frag run", "parallel", "Parallelism (1-16, default 8)"),
+    ("frag run", "vars", "Template variable: key=value (repeatable)"),
+    ("frag run", "yes", "Confirmed by a human: also run commands that change the server or aren't clearly read-only (team-policy blocks still apply). Put it before the target: mist frag run --yes restart-nginx web-01"),
+];
+
+fn localize_help_en(cmd: clap::Command) -> clap::Command {
+    fn walk(mut c: clap::Command, path: &str) -> clap::Command {
+        if let Some((_, a)) = EN_ABOUT.iter().find(|(p, _)| *p == path) {
+            c = c.about(*a);
+        }
+        if let Some((_, a)) = EN_LONG_ABOUT.iter().find(|(p, _)| *p == path) {
+            c = c.long_about(*a);
+        } else {
+            c = c.long_about(None::<&str>);
+        }
+        for (p, id, h) in EN_ARG {
+            if *p == path {
+                let (id, h) = (*id, *h);
+                c = c.mut_arg(id, |a| a.help(h).long_help(None::<&str>));
+            }
+        }
+        let names: Vec<String> = c.get_subcommands().map(|s| s.get_name().to_string()).collect();
+        for n in names {
+            let sub_path = if path.is_empty() { n.clone() } else { format!("{path} {n}") };
+            c = c.mut_subcommand(n, |s| walk(s, &sub_path));
+        }
+        c
+    }
+    walk(cmd, "")
+}
+
 fn init_logging(verbose: u8) {
     let level = match verbose {
         0 => tracing::Level::WARN,
@@ -284,7 +391,11 @@ fn require_yes_position(yes: bool, sub: &[&str], usage: &str) {
 }
 
 fn main() {
-    let cli = Cli::parse();
+    let mut cmd = Cli::command();
+    if !cli_locale_is_chinese() {
+        cmd = localize_help_en(cmd);
+    }
+    let cli = Cli::from_arg_matches(&cmd.get_matches()).unwrap_or_else(|e| e.exit());
     init_logging(cli.verbose);
 
     // 更新命令不需要会话和设置，在加载它们之前处理。
@@ -463,4 +574,39 @@ fn main() {
         }
     };
     std::process::exit(exit);
+}
+
+#[cfg(test)]
+mod help_i18n_tests {
+    use super::*;
+
+    fn has_han(s: &str) -> bool {
+        s.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c))
+    }
+
+    #[test]
+    fn english_help_has_no_chinese() {
+        fn check(c: &mut clap::Command, path: String) {
+            let help = c.render_long_help().to_string();
+            assert!(!has_han(&help), "Chinese left in `mist {path} --help`:\n{help}");
+            let names: Vec<String> = c.get_subcommands().map(|s| s.get_name().to_string()).collect();
+            for n in names {
+                let mut sub = c.find_subcommand_mut(&n).unwrap().clone();
+                check(&mut sub, format!("{path} {n}"));
+            }
+        }
+        // Pre-existing: global -v (verbose) and `frag run -v` (var) clash, which only debug asserts catch.
+        // Drop the short flag here so the help text itself can be checked.
+        let mut c = localize_help_en(Cli::command()).mut_subcommand("frag", |f| {
+            f.mut_subcommand("run", |r| r.mut_arg("vars", |a| a.short(None)))
+        });
+        c.build();
+        check(&mut c, String::new());
+    }
+
+    #[test]
+    fn chinese_help_unchanged() {
+        let help = Cli::command().render_help().to_string();
+        assert!(help.contains("列出已保存会话"));
+    }
 }
