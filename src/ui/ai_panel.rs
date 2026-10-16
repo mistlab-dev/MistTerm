@@ -373,6 +373,18 @@ fn ops_scope_pill(ui: &mut egui::Ui, theme: &Theme, text: &str, color: egui::Col
         });
 }
 
+/// Default confirm-gate hint for a new agent plan (stored in Chinese, localized at render).
+const DEFAULT_GATE_HINT_ZH: &str = "确认后将在所选主机上短连接执行(不占用终端 Tab)";
+const DEFAULT_GATE_HINT_EN: &str = "After you confirm, this runs over a short-lived connection on the selected hosts (no terminal tab is used).";
+
+/// Show the default gate hint in English when the UI language is not Chinese.
+fn localize_gate_hint<'a>(ctx: &egui::Context, hint: &'a str) -> &'a str {
+    if hint == DEFAULT_GATE_HINT_ZH && i18n::language(ctx) != i18n::UiLanguage::Zh {
+        return DEFAULT_GATE_HINT_EN;
+    }
+    hint
+}
+
 /// 指标标签显示用本地化(Mem/Load/Disk/Top → 内存/负载/磁盘/最高)。
 fn localize_metric_label(ctx: &egui::Context, label: &str) -> String {
     if i18n::language(ctx) != i18n::UiLanguage::Zh {
@@ -2063,7 +2075,7 @@ impl AiPanel {
                 if !plan.gate_hint.is_empty() {
                     ui.add_space(theme.spacing_xs());
                     ui.label(
-                        egui::RichText::new(&plan.gate_hint)
+                        egui::RichText::new(localize_gate_hint(ctx, &plan.gate_hint))
                             .size(theme.font_size_small())
                             .color(theme.amber_color()),
                     );
@@ -3300,7 +3312,7 @@ impl AiPanel {
             phase: AgentPhase::AwaitingL1,
             target_count: 0,
             target_filter: proposal.target_filter,
-            gate_hint: "确认后将在所选主机上短连接执行(不占用终端 Tab)".into(),
+            gate_hint: DEFAULT_GATE_HINT_ZH.into(),
             l2_armed: false,
             status: None,
             trust_same_kind: false,
