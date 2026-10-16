@@ -201,10 +201,15 @@ pub fn redact_for_ai(text: &str) -> String {
         let mut changed = false;
         for n in NEEDLES {
             while let Some(i) = out.find(n) {
-                let end = out[i..]
+                // Search for the end after the needle itself: "Bearer " ends in a space, so
+                // searching from `i` used to stop there and leave the token in clear text.
+                let from = i + n.len();
+                let end = out[from..]
                     .find(|c: char| c.is_whitespace() || c == '\n' || c == '"' || c == '\'')
-                    .map(|o| i + o)
-                    .unwrap_or(out.len().min(i + 64));
+                    .map(|o| from + o)
+                    .unwrap_or_else(|| {
+                        out[from..].char_indices().nth(64).map(|(o, _)| from + o).unwrap_or(out.len())
+                    });
                 out.replace_range(i..end, "[REDACTED]");
                 changed = true;
             }
@@ -473,6 +478,13 @@ chmod +x check_domain.sh
         assert_eq!(cmds.len(), 2);
         assert!(cmds.iter().any(|c| c.starts_with("chmod")));
         assert!(cmds.iter().any(|c| c.starts_with("./")));
+    }
+
+    #[test]
+    fn redact_bearer_token_value() {
+        let out = redact_for_ai("curl -H 'Authorization: Bearer tok-999xyz' https://x");
+        assert!(!out.contains("tok-999xyz"), "{out}");
+        assert!(out.contains("https://x"));
     }
 
     #[test]

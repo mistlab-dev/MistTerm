@@ -1,6 +1,6 @@
 //! AI 助手增强：上下文感知、智能补全、快捷操作。
 
-use crate::core::ai_client::prepare_terminal_context;
+use crate::core::ai_client::{prepare_terminal_context, redact_for_ai};
 use crate::core::command_history::CommandHistory;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -82,7 +82,7 @@ impl AiContext {
         if !self.recent_commands.is_empty() {
             parts.push("## 最近执行的命令".to_string());
             for (i, cmd) in self.recent_commands.iter().enumerate() {
-                parts.push(format!("{}. {}", i + 1, cmd));
+                parts.push(format!("{}. {}", i + 1, redact_for_ai(cmd)));
             }
         }
 
@@ -204,7 +204,7 @@ impl AiContext {
                 if !self.recent_commands.is_empty() {
                     prompt.push_str("最近命令历史：\n");
                     for cmd in &self.recent_commands {
-                        prompt.push_str(&format!("- {}\n", cmd));
+                        prompt.push_str(&format!("- {}\n", redact_for_ai(cmd)));
                     }
                 }
                 prompt
