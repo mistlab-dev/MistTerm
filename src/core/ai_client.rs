@@ -320,7 +320,14 @@ fn is_whole_script_block(lines: &[String]) -> bool {
     if lines.iter().any(|l| l.contains("<<") && l.contains("EOF")) {
         return true;
     }
-    if lines.len() >= 6 {
+    // A long block is a script unless every line is a standalone runnable command
+    // (models often list 6+ one-liners under "Suggested commands").
+    if lines.len() >= 6
+        && !lines.iter().all(|l| {
+            let t = l.trim();
+            t.is_empty() || t.starts_with('#') || looks_like_runnable_line(t)
+        })
+    {
         return true;
     }
     if lines.len() >= 3 {
@@ -363,6 +370,11 @@ fn looks_like_runnable_line(line: &str) -> bool {
         "python3", "node", "npm", "yarn", "pip", "pip3", "apt", "apt-get", "yum", "dnf", "brew",
         "systemctl", "docker", "podman", "kubectl", "ssh", "scp", "rsync", "tar", "grep", "awk",
         "sed", "tee", "sudo", "export",
+        // Common read-only diagnostics models suggest (df/du/lsof etc. were silently dropped).
+        "df", "du", "free", "uptime", "lsof", "ps", "top", "htop", "journalctl", "ss", "netstat",
+        "ip", "find", "head", "tail", "sort", "wc", "stat", "lsblk", "mount", "uname", "hostname",
+        "whoami", "id", "w", "who", "last", "dmesg", "vmstat", "iostat", "nproc", "env", "which",
+        "nginx", "logrotate", "crontab", "git",
     ];
     if first.starts_with("./") {
         return true;
@@ -386,6 +398,21 @@ fn prompt_line_to_command(t: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn extracts_common_diagnostic_commands() {
+        let reply = "**Suggested Commands**\n\n```bash\ndf -h\ndf -i\ndu -xh --max-depth=1 / 2>/dev/null | sort -h | tail -20\nlsof -nP | awk '/deleted/ {print $1}'\n```\n";
+        let cmds = extract_shell_commands(reply);
+        assert!(cmds.contains(&"df -h".to_string()));
+        assert!(cmds.contains(&"df -i".to_string()));
+        assert!(cmds.iter().any(|c| c.starts_with("du -xh")));
+        assert!(cmds.iter().any(|c| c.starts_with("lsof -nP")));
+    }
+
+    #[test]
+    fn six_one_liners_are_not_a_script() {
+        let reply = "```bash\ndf -h\nsudo du -xh / | sort -rh | head\nsudo lsof +L1 | head -20\nsudo journalctl --disk-usage\nfree -h\nuptime\n```";
+        assert_eq!(extract_shell_commands(reply).len(), 6);
+    }
     #[test]
     fn reply_language_instruction_only_for_non_chinese_ui() {
         assert_eq!(super::reply_language_instruction(true), "");
