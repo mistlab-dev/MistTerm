@@ -1515,7 +1515,7 @@ impl Theme {
         if self.is_light_theme() {
             Color32::from_rgb(236, 238, 244)
         } else if self.uses_modern_palette() {
-            self.surface_panel()
+            self.color_panel_surface()
         } else {
             self.surface_terminal()
         }
@@ -1538,6 +1538,35 @@ impl Theme {
             self.color_inset_section_fill()
         } else {
             self.color_subtle_inset_fill()
+        }
+    }
+
+    /// SFTP 栏头 / 工具条底。暗夜里用标签栏那档更深的实色，和文件列表底拉开。
+    #[inline]
+    pub fn color_sftp_bar_fill(&self) -> Color32 {
+        if self.uses_modern_palette() && !self.is_light_theme() {
+            self.bg_tab_bar_color()
+        } else if self.is_light_theme() {
+            Self::lerp_rgb(self.color_panel_surface(), Color32::BLACK, 0.06)
+        } else {
+            self.color_sftp_toolbar_fill()
+        }
+    }
+
+    /// 文件列表「名称 / 大小 / 修改时间」标题行底，比列表再亮一档。
+    #[inline]
+    pub fn color_sftp_column_header_fill(&self) -> Color32 {
+        if self.uses_modern_palette() && !self.is_light_theme() {
+            let w = self.bg_window_color();
+            Color32::from_rgb(
+                w.r().saturating_add(22),
+                w.g().saturating_add(22),
+                w.b().saturating_add(22),
+            )
+        } else if self.is_light_theme() {
+            Self::lerp_rgb(self.color_panel_surface(), Color32::BLACK, 0.08)
+        } else {
+            self.color_sftp_toolbar_fill()
         }
     }
 
@@ -1617,21 +1646,21 @@ impl Theme {
         }
     }
 
-    /// SFTP / 文件列表：名称列字号
+    /// SFTP / 文件列表：名称列字号。暗夜 13，界面正文字体。
     #[inline]
     pub fn font_size_file_list_name(&self) -> f32 {
         if self.uses_modern_palette() {
-            self.font_size_caption()
+            13.0
         } else {
             self.font_size_body()
         }
     }
 
-    /// SFTP / 文件列表：大小、时间列字号
+    /// SFTP / 文件列表：大小、时间列字号。暗夜 11。
     #[inline]
     pub fn font_size_file_list_meta(&self) -> f32 {
         if self.uses_modern_palette() {
-            self.font_size_tag()
+            11.0
         } else {
             self.font_size_caption()
         }
@@ -1641,7 +1670,7 @@ impl Theme {
     #[inline]
     pub fn size_file_list_row_h(&self) -> f32 {
         if self.uses_modern_palette() {
-            32.0
+            30.0
         } else {
             24.0
         }
@@ -1650,11 +1679,7 @@ impl Theme {
     /// SFTP / 文件列表行内图标边长
     #[inline]
     pub fn size_file_list_icon(&self) -> f32 {
-        if self.uses_modern_palette() {
-            14.0
-        } else {
-            16.0
-        }
+        16.0
     }
 
     /// 危险强调字(断开、删除提示等)。浅色压暗、非暗夜暗底提亮，勿固定暗夜浅粉。

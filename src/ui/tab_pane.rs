@@ -522,6 +522,7 @@ fn render_one_pane(
     };
     let title = pane.title.clone();
     let active = tab.active_pane == pane_idx;
+    ui.push_id(("split_pane", pane_idx), |ui| {
     ui.allocate_ui_with_layout(
         egui::vec2(w, h),
         egui::Layout::top_down(egui::Align::LEFT),
@@ -584,4 +585,5 @@ fn render_one_pane(
             }
         },
     );
+    });
 }

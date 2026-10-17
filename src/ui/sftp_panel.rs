@@ -31,7 +31,7 @@ use sftp_file_table::{
 };
 use sftp_bookmarks::SftpBookmarkStore;
 use sftp_select::SelectionSet;
-use sftp_tree::{collect_local_tree, looks_like_editable_text};
+use sftp_tree::{collect_local_tree, looks_like_text_name, preview_needs_confirm};
 use sftp_xfer::{
     format_bytes, paint_xfer_strip, resolve_write_mode_mtime, OverwritePolicy,
     XferKind, XferQueue, XferState, XferStripAction,
@@ -63,6 +63,7 @@ enum SftpJobResult {
     ChmodDone(Result<String, String>),
     EditPrepared {
         remote: PathBuf,
+        track_edits: bool,
         result: Result<(PathBuf, u64, u64), String>,
     },
     EditConflictCheck {
@@ -156,6 +157,8 @@ pub struct SftpPanel {
     mkdir_name: String,
     show_mkdir_dialog: bool,
     pending_delete: Option<PendingDeletePrompt>,
+    /// 大文件打开前的确认（先下载到临时文件再显示）。
+    pending_large_open: Option<SftpEntry>,
     pending_overwrite: Option<PendingOverwrite>,
     show_rename_dialog: bool,
     rename_from: Option<PathBuf>,
@@ -171,6 +174,10 @@ pub struct SftpPanel {
     last_panel_slot_rect: Option<egui::Rect>,
     local_sort: FileSortState,
     remote_sort: FileSortState,
+    local_path_editing: bool,
+    remote_path_editing: bool,
+    pending_terminal_cmd: Option<String>,
+    flux_details_open: bool,
 }
 
 impl Default for SftpPanel {
@@ -490,6 +497,23 @@ impl SftpPanel {
         }
     }
 
+    /// 双击或「打开」：小文件直接下到临时目录再打开；大文件先问。
+    fn request_open_remote_file(
+        &mut self,
+        handle: &SshSessionHandle,
+        entry: &SftpEntry,
+        ctx: &egui::Context,
+    ) {
+        if entry.is_dir {
+            return;
+        }
+        if preview_needs_confirm(entry.size) {
+            self.pending_large_open = Some(entry.clone());
+            return;
+        }
+        self.start_remote_edit(handle, entry, ctx);
+    }
+
     fn start_remote_edit(
         &mut self,
         handle: &SshSessionHandle,
@@ -502,19 +526,9 @@ impl SftpPanel {
         if entry.is_dir {
             return;
         }
-        if !looks_like_editable_text(&entry.name, entry.size) {
-            self.pending_status_err = Some(
-                crate::i18n::tr(
-                    ctx,
-                    "File too large or not text — use Download instead",
-                    "文件过大或非文本，请用「下载」",
-                )
-                .to_string(),
-            );
-            return;
-        }
         let remote = entry.path.clone();
         let local = Self::edit_temp_path(&remote, &entry.name);
+        let track_edits = looks_like_text_name(&entry.name);
         self.busy = true;
         self.enqueue(handle, ctx, move |session| {
             let result = (|| -> Result<(PathBuf, u64, u64), String> {
@@ -530,7 +544,11 @@ impl SftpPanel {
                 )?;
                 Ok((local, size, mtime))
             })();
-            SftpJobResult::EditPrepared { remote, result }
+            SftpJobResult::EditPrepared {
+                remote,
+                track_edits,
+                result,
+            }
         });
     }
 
@@ -639,95 +657,243 @@ impl SftpPanel {
         current_path: PathBuf,
         navigate: &mut Option<PathBuf>,
     ) {
-        ui.horizontal(|ui| {
-            let is_bookmarked = if side_local {
-                self.bookmarks
-                    .local
-                    .iter()
-                    .any(|p| PathBuf::from(p) == current_path)
+        let hit = theme.size_panel_header_control_h();
+        let is_bookmarked = if side_local {
+            self.bookmarks
+                .local
+                .iter()
+                .any(|p| PathBuf::from(p) == current_path)
+        } else {
+            self.bookmarks
+                .remote_bookmarks(&self.host_key)
+                .iter()
+                .any(|p| PathBuf::from(p) == current_path)
+        };
+        let star = if is_bookmarked { "★" } else { "☆" };
+        let tip = crate::i18n::tr(ctx, "Bookmark this path", "收藏此路径");
+        let star_label = crate::i18n::tr(ctx, "Save", "收藏");
+        let star_color = if is_bookmarked {
+            theme.accent_color()
+        } else {
+            theme.text_secondary()
+        };
+        let star_font = egui::FontId::proportional(theme.font_size_caption());
+        let star_galley = ui.fonts(|f| f.layout_no_wrap(star_label.to_string(), star_font, star_color));
+        let star_w = hit + 2.0 + star_galley.size().x + 4.0;
+        let (star_rect, star_resp) =
+            ui.allocate_exact_size(egui::vec2(star_w, hit), egui::Sense::click());
+        if star_resp.hovered() {
+            ui.painter().rect_filled(
+                star_rect,
+                theme.radius_list_item(),
+                theme.color_tab_bar_icon_btn_hover_fill(),
+            );
+        }
+        ui.painter().text(
+            egui::pos2(star_rect.left() + hit * 0.5, star_rect.center().y),
+            egui::Align2::CENTER_CENTER,
+            star,
+            egui::FontId::proportional(theme.font_size_body()),
+            star_color,
+        );
+        ui.painter().galley(
+            egui::pos2(
+                star_rect.left() + hit + 2.0,
+                star_rect.center().y - star_galley.size().y * 0.5,
+            ),
+            star_galley,
+        );
+        if star_resp.on_hover_text(tip).clicked() {
+            if side_local {
+                if is_bookmarked {
+                    self.bookmarks
+                        .remove_local_bookmark(&current_path.to_string_lossy());
+                } else {
+                    self.bookmarks.add_local_bookmark(&current_path);
+                }
+            } else if is_bookmarked {
+                self.bookmarks.remove_remote_bookmark(
+                    &self.host_key,
+                    &current_path.to_string_lossy(),
+                );
             } else {
                 self.bookmarks
-                    .remote_bookmarks(&self.host_key)
-                    .iter()
-                    .any(|p| PathBuf::from(p) == current_path)
-            };
-            let star = if is_bookmarked { "★" } else { "☆" };
-            let tip = crate::i18n::tr(ctx, "Bookmark this path", "收藏此路径");
-            if ui
-                .add(
-                    egui::Button::new(
-                        egui::RichText::new(star).size(theme.font_size_body()),
-                    )
-                    .min_size(egui::vec2(22.0, 22.0)),
-                )
-                .on_hover_text(tip)
-                .clicked()
-            {
-                if side_local {
-                    if is_bookmarked {
-                        self.bookmarks
-                            .remove_local_bookmark(&current_path.to_string_lossy());
-                    } else {
-                        self.bookmarks.add_local_bookmark(&current_path);
-                    }
-                } else if is_bookmarked {
-                    self.bookmarks.remove_remote_bookmark(
-                        &self.host_key,
-                        &current_path.to_string_lossy(),
-                    );
-                } else {
-                    self.bookmarks
-                        .add_remote_bookmark(&self.host_key, &current_path);
-                }
+                    .add_remote_bookmark(&self.host_key, &current_path);
             }
-            let jump_lbl = crate::i18n::tr(ctx, "Paths", "路径");
-            egui::ComboBox::from_id_source(if side_local {
-                "sftp_local_paths"
-            } else {
-                "sftp_remote_paths"
-            })
-            .selected_text(jump_lbl)
-            .width(ui.available_width().max(80.0))
-            .show_ui(ui, |ui| {
-                let section = |ui: &mut egui::Ui, title: &str| {
-                    ui.label(
-                        egui::RichText::new(title)
-                            .small()
-                            .color(theme.text_tertiary()),
-                    );
-                };
-                section(
-                    ui,
-                    crate::i18n::tr(ctx, "Bookmarks", "收藏"),
-                );
-                let bookmarks: Vec<String> = if side_local {
-                    self.bookmarks.local.clone()
-                } else {
-                    self.bookmarks
-                        .remote_bookmarks(&self.host_key)
-                        .to_vec()
-                };
-                for p in bookmarks {
-                    if ui.selectable_label(false, &p).clicked() {
-                        *navigate = Some(PathBuf::from(&p));
-                    }
-                }
-                section(
-                    ui,
-                    crate::i18n::tr(ctx, "Recent", "最近"),
-                );
-                let recent: Vec<String> = if side_local {
-                    self.bookmarks.recent_local.clone()
-                } else {
-                    self.bookmarks.recent_remote(&self.host_key).to_vec()
-                };
-                for p in recent {
-                    if ui.selectable_label(false, &p).clicked() {
-                        *navigate = Some(PathBuf::from(&p));
-                    }
-                }
-            });
+        }
+        let jump_lbl = crate::i18n::tr(ctx, "Go to", "前往");
+        let jump_tip = crate::i18n::tr(
+            ctx,
+            "Open a bookmarked or recent folder",
+            "打开收藏或最近去过的目录",
+        );
+        let path_font = egui::FontId::proportional(theme.font_size_caption());
+        let path_galley = ui.fonts(|f| {
+            f.layout_no_wrap(jump_lbl.to_string(), path_font, theme.text_secondary())
         });
+        let chevron = 8.0;
+        let path_w = path_galley.size().x + 6.0 + chevron + 8.0;
+        let (path_rect, path_resp) =
+            ui.allocate_exact_size(egui::vec2(path_w, hit), egui::Sense::click());
+        if path_resp.hovered() {
+            ui.painter().rect_filled(
+                path_rect,
+                theme.radius_list_item(),
+                theme.color_tab_bar_icon_btn_hover_fill(),
+            );
+        }
+        let text_x = path_rect.left() + 4.0;
+        ui.painter().galley(
+            egui::pos2(text_x, path_rect.center().y - path_galley.size().y * 0.5),
+            path_galley.clone(),
+        );
+        let tip = egui::pos2(text_x + path_galley.size().x + 6.0 + chevron * 0.5, path_rect.center().y + 1.0);
+        let stroke = egui::Stroke::new(1.4, theme.text_secondary());
+        ui.painter().line_segment(
+            [tip + egui::vec2(-chevron * 0.45, -2.0), tip],
+            stroke,
+        );
+        ui.painter().line_segment(
+            [tip + egui::vec2(chevron * 0.45, -2.0), tip],
+            stroke,
+        );
+        let popup_id = ui.make_persistent_id(if side_local {
+            "sftp_local_paths"
+        } else {
+            "sftp_remote_paths"
+        });
+        let just_toggled = path_resp.on_hover_text(jump_tip).clicked();
+        if just_toggled {
+            ui.memory_mut(|m| m.toggle_popup(popup_id));
+        }
+        if ui.memory(|m| m.is_popup_open(popup_id)) {
+            let tidy = |items: Vec<String>| -> Vec<String> {
+                let mut out = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+                for raw in items {
+                    let trimmed = raw.trim();
+                    if trimmed.is_empty() || trimmed == "." {
+                        continue;
+                    }
+                    let key = if side_local {
+                        trimmed.to_string()
+                    } else {
+                        Self::normalize_remote_path(PathBuf::from(trimmed))
+                            .to_string_lossy()
+                            .into_owned()
+                    };
+                    if key.is_empty() || key == "." || !seen.insert(key.clone()) {
+                        continue;
+                    }
+                    out.push(key);
+                }
+                out
+            };
+            let bookmarks: Vec<String> = tidy(if side_local {
+                self.bookmarks.local.clone()
+            } else {
+                self.bookmarks.remote_bookmarks(&self.host_key).to_vec()
+            });
+            let recent: Vec<String> = tidy(if side_local {
+                self.bookmarks.recent_local.clone()
+            } else {
+                self.bookmarks.recent_remote(&self.host_key).to_vec()
+            });
+            let fav = crate::i18n::tr(ctx, "Bookmarks", "收藏").to_string();
+            let recent_title = crate::i18n::tr(ctx, "Recent", "最近").to_string();
+            let empty_hint = crate::i18n::tr(
+                ctx,
+                "No saved folders yet. Use the star to bookmark this one.",
+                "还没有可前往的目录，点旁边的星可以记下当前目录",
+            )
+            .to_string();
+            let row_label = |p: &str| -> String {
+                let n = p.chars().count();
+                if n <= 36 {
+                    p.to_string()
+                } else {
+                    let head: String = p.chars().take(16).collect();
+                    let tail: String = p.chars().skip(n - 16).collect();
+                    format!("{head}…{tail}")
+                }
+            };
+            let widest = ui.fonts(|f| {
+                let measure = |text: &str, size: f32| {
+                    f.layout_no_wrap(
+                        text.to_string(),
+                        egui::FontId::proportional(size),
+                        egui::Color32::WHITE,
+                    )
+                    .size()
+                    .x
+                };
+                let mut w = if bookmarks.is_empty() && recent.is_empty() {
+                    measure(&empty_hint, theme.font_size_caption())
+                } else {
+                    0.0
+                };
+                if !bookmarks.is_empty() {
+                    w = w.max(measure(&fav, theme.font_size_small()));
+                }
+                if !recent.is_empty() {
+                    w = w.max(measure(&recent_title, theme.font_size_small()));
+                }
+                for p in bookmarks.iter().chain(recent.iter()) {
+                    w = w.max(measure(&row_label(p), theme.font_size_body()));
+                }
+                w
+            });
+            let popup_w = (widest + 36.0).clamp(path_rect.width(), 320.0);
+            let screen = ui.ctx().screen_rect();
+            let mut pos = egui::pos2(path_rect.left(), path_rect.bottom() + 2.0);
+            if pos.x + popup_w > screen.right() - 8.0 {
+                pos.x = (screen.right() - 8.0 - popup_w).max(screen.left() + 8.0);
+            }
+            let area = egui::Area::new(popup_id)
+                .order(egui::Order::Foreground)
+                .fixed_pos(pos)
+                .constrain(false)
+                .show(ui.ctx(), |ui| {
+                    ui.set_width(popup_w);
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        crate::ui::chrome::apply_context_menu_style(ui, theme);
+                        ui.set_max_width(popup_w - 16.0);
+                        ui.style_mut().wrap = Some(false);
+                        if bookmarks.is_empty() && recent.is_empty() {
+                            ui.label(
+                                egui::RichText::new(&empty_hint)
+                                    .size(theme.font_size_caption())
+                                    .color(theme.text_tertiary()),
+                            );
+                        }
+                        let mut paint_section = |ui: &mut egui::Ui, title: &str, items: &[String]| {
+                            if items.is_empty() {
+                                return;
+                            }
+                            ui.label(
+                                egui::RichText::new(title)
+                                    .size(theme.font_size_small())
+                                    .color(theme.text_tertiary()),
+                            );
+                            for p in items {
+                                let shown = row_label(p);
+                                if ui.selectable_label(false, shown).on_hover_text(p).clicked() {
+                                    *navigate = Some(PathBuf::from(p));
+                                    ui.memory_mut(|m| m.close_popup());
+                                }
+                            }
+                        };
+                        paint_section(ui, &fav, &bookmarks);
+                        if !bookmarks.is_empty() && !recent.is_empty() {
+                            ui.separator();
+                        }
+                        paint_section(ui, &recent_title, &recent);
+                    });
+                });
+            if !just_toggled && area.response.clicked_elsewhere() {
+                ui.memory_mut(|m| m.close_popup());
+            }
+        }
     }
 
     fn remote_basename_exists(&self, name: &str) -> bool {
@@ -1160,6 +1326,29 @@ impl SftpPanel {
         self.xfer_context_menu(ui, theme, ctx, handle);
     }
 
+    fn remote_row_context_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        ctx: &egui::Context,
+        handle: &SshSessionHandle,
+        entry: &crate::ssh::SftpEntry,
+    ) {
+        crate::ui::chrome::apply_context_menu_style(ui, theme);
+        if !self.remote_selected.contains(&entry.path) {
+            self.remote_selected.set_only(entry.path.clone());
+        }
+        if entry.is_dir {
+            let lbl = crate::i18n::tr(ctx, "Open in this terminal", "在当前终端打开");
+            if crate::ui::chrome::popup_menu_button(ui, theme, lbl).clicked() {
+                self.queue_terminal_cd(&entry.path);
+                ui.close_menu();
+                return;
+            }
+        }
+        self.xfer_context_menu(ui, theme, ctx, handle);
+    }
+
     /// 上传 / 下载 / 删除远端 — 文件列表右键菜单(点行或空白均可用)。
     fn xfer_context_menu(
         &mut self,
@@ -1172,14 +1361,12 @@ impl SftpPanel {
         let upload = self.local_upload_job();
         let download = self.remote_download_job();
         let delete_paths: Vec<PathBuf> = self.remote_selected.paths_vec();
-        let can_edit = self.remote_selected.len() == 1
-            && self.remote_selected.primary().and_then(|p| {
-                self.entries
-                    .iter()
-                    .find(|e| &e.path == p)
-                    .filter(|e| !e.is_dir && looks_like_editable_text(&e.name, e.size))
-            })
-            .is_some();
+        let open_entry = self.remote_selected.primary().and_then(|p| {
+            self.entries
+                .iter()
+                .find(|e| &e.path == p && !e.is_dir)
+                .cloned()
+        });
         let upload_lbl = crate::i18n::tr(ctx, "Upload", "上传");
         let download_lbl = crate::i18n::tr(ctx, "Download", "下载");
         let delete_lbl = crate::i18n::tr(ctx, "Delete remote", "删除远端");
@@ -1205,15 +1392,14 @@ impl SftpPanel {
                 ui.close_menu();
             }
         }
-        if can_edit {
-            let edit_lbl = crate::i18n::tr(ctx, "Edit", "编辑");
+        if let Some(entry) = open_entry {
+            let edit_lbl = if looks_like_text_name(&entry.name) {
+                crate::i18n::tr(ctx, "Quick edit", "快速编辑")
+            } else {
+                crate::i18n::tr(ctx, "Open", "打开")
+            };
             if crate::ui::chrome::popup_menu_button(ui, theme, edit_lbl).clicked() {
-                if let Some(p) = self.remote_selected.primary() {
-                    if let Some(entry) = self.entries.iter().find(|e| &e.path == p) {
-                        let entry = entry.clone();
-                        self.start_remote_edit(handle, &entry, ctx);
-                    }
-                }
+                self.request_open_remote_file(handle, &entry, ctx);
                 ui.close_menu();
             }
         }
@@ -1268,28 +1454,96 @@ impl SftpPanel {
         response.context_menu(add_menu);
     }
 
-    /// 本机分区 chrome(标题/路径/导航/表头，不含列表滚动区)。
+    /// 本机分区 chrome(标题/路径/操作/表头，不含列表滚动区)。
     fn estimate_local_section_chrome(theme: &Theme) -> f32 {
-        let band_h = theme.size_sftp_toolbar_row_h() + theme.spacing_xs() * 2.0;
+        let band_h = theme.size_sftp_toolbar_row_h();
         let caption = theme.font_size_caption() + theme.spacing_xs();
         theme.spacing_body_pad() * 2.0
             + caption
             + band_h
             + theme.spacing_xs()
-            + band_h
+            + theme.size_panel_header_control_h()
             + theme.size_file_list_row_h()
     }
 
-    /// 远端分区 chrome(标题/路径/导航/表头，不含列表滚动区；新建目录已改为弹窗)。
+    /// 远端分区 chrome。
     fn estimate_remote_section_chrome(theme: &Theme) -> f32 {
-        let band_h = theme.size_sftp_toolbar_row_h() + theme.spacing_xs() * 2.0;
-        let caption = theme.font_size_caption() + theme.spacing_xs();
-        theme.spacing_body_pad() * 2.0
-            + caption
-            + band_h
-            + theme.spacing_xs()
-            + band_h
-            + theme.size_file_list_row_h()
+        Self::estimate_local_section_chrome(theme)
+    }
+
+    fn quiet_icon(
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        icon: crate::ui::icons::IconId,
+        tip: &str,
+        enabled: bool,
+    ) -> bool {
+        let color = if enabled {
+            theme.text_primary()
+        } else {
+            theme.text_tertiary()
+        };
+        let resp = crate::ui::chrome::icon_button(ui, theme, icon, color).on_hover_text(tip);
+        enabled && resp.clicked()
+    }
+
+    /// 工具条动作：图标旁边直接写动作，不必悬停才知道用途。
+    fn flux_action(
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        icon: crate::ui::icons::IconId,
+        label: &str,
+        tip: &str,
+        enabled: bool,
+    ) -> bool {
+        let hit = theme.size_panel_header_control_h();
+        let color = if enabled {
+            theme.text_primary()
+        } else {
+            theme.text_tertiary()
+        };
+        let font = egui::FontId::proportional(theme.font_size_caption());
+        let galley = ui.fonts(|f| f.layout_no_wrap(label.to_string(), font, color));
+        let gap = 2.0;
+        let w = hit + gap + galley.size().x + 4.0;
+        let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, hit), egui::Sense::click());
+        if resp.hovered() && enabled {
+            ui.painter().rect_filled(
+                rect,
+                theme.radius_list_item(),
+                theme.color_tab_bar_icon_btn_hover_fill(),
+            );
+        }
+        let icon_rect = egui::Rect::from_min_size(rect.min, egui::vec2(hit, hit));
+        crate::ui::icons::paint_icon(
+            ui,
+            icon_rect,
+            icon,
+            color,
+            (hit - 2.0).min(theme.size_icon_glyph()),
+        );
+        ui.painter().galley(
+            egui::pos2(
+                icon_rect.right() + gap,
+                rect.center().y - galley.size().y * 0.5,
+            ),
+            galley,
+        );
+        enabled && resp.on_hover_text(tip).clicked()
+    }
+
+    fn paint_selection_chip(ui: &mut egui::Ui, theme: &Theme, ctx: &egui::Context, n: usize) {
+        if n == 0 {
+            return;
+        }
+        ui.label(
+            egui::RichText::new(format!(
+                "{} {n}",
+                crate::i18n::tr(ctx, "Selected", "已选")
+            ))
+            .size(theme.font_size_small())
+            .color(theme.accent_color()),
+        );
     }
 
     /// 在本机/远端分区绘制前，一次性拆分两侧文件列表可用高度(各约一半)。
@@ -1346,6 +1600,7 @@ impl SftpPanel {
             mkdir_name: String::new(),
             show_mkdir_dialog: false,
             pending_delete: None,
+            pending_large_open: None,
             pending_overwrite: None,
             show_rename_dialog: false,
             rename_from: None,
@@ -1357,6 +1612,10 @@ impl SftpPanel {
             last_panel_slot_rect: None,
             local_sort: FileSortState::default(),
             remote_sort: FileSortState::default(),
+            local_path_editing: false,
+            remote_path_editing: false,
+            pending_terminal_cmd: None,
+            flux_details_open: false,
         }
     }
 
@@ -1408,11 +1667,16 @@ impl SftpPanel {
         self.show_rename_dialog = false;
         self.rename_from = None;
         self.rename_name.clear();
+        self.pending_large_open = None;
         self.pending_refresh_after_op = false;
         self.pending_auto_list = false;
         self.pending_audit = None;
         self.deferred_gui_download = None;
         self.last_panel_slot_rect = None;
+        self.local_path_editing = false;
+        self.remote_path_editing = false;
+        self.pending_terminal_cmd = None;
+        self.flux_details_open = false;
     }
 
     /// 轮询 SFTP 后台任务；面板未显示时也需调用以便 GUI 自动化下载完成。
@@ -1649,7 +1913,11 @@ impl SftpPanel {
                 self.busy = false;
                 self.rx = None;
             }
-            Ok(SftpJobResult::EditPrepared { remote, result }) => {
+            Ok(SftpJobResult::EditPrepared {
+                remote,
+                track_edits,
+                result,
+            }) => {
                 self.busy = false;
                 self.rx = None;
                 match result {
@@ -1658,7 +1926,7 @@ impl SftpPanel {
                         if let Err(e) = crate::platform::open_file(&local) {
                             self.pending_status_err =
                                 Some(crate::i18n::localize_backend_error(lang, &e));
-                        } else {
+                        } else if track_edits {
                             self.remote_edit = Some(RemoteEditSession {
                                 remote,
                                 local,
@@ -1812,6 +2080,7 @@ impl SftpPanel {
                 self.local_entries = entries;
                 self.apply_local_sort();
                 self.local_list_err = None;
+                self.bookmarks.touch_recent_local(&self.local_cwd);
                 self.sync_local_selection_after_list();
             }
             Err(e) => {
@@ -1862,16 +2131,57 @@ impl SftpPanel {
         }
     }
 
+    /// OpenSSH 在 Windows 上会把盘符解析成 `/C:/Users/...`，界面上收成 `C:/Users/...`。
+    fn normalize_remote_path(path: PathBuf) -> PathBuf {
+        let s = path.to_string_lossy().replace('\\', "/");
+        let bytes = s.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0] == b'/'
+            && bytes[1].is_ascii_alphabetic()
+            && bytes[2] == b':'
+        {
+            return PathBuf::from(&s[1..]);
+        }
+        PathBuf::from(s)
+    }
+
+    /// `.` 和空路径的上一层是 `..`，不能用 `Path::parent()`（会变成空路径，列表被清空）。
+    fn remote_parent_dir(cwd: &Path) -> PathBuf {
+        let text = cwd.to_string_lossy();
+        let trimmed = text.trim();
+        if trimmed.is_empty() || trimmed == "." {
+            return PathBuf::from("..");
+        }
+        if trimmed == "/" || trimmed == "\\" {
+            return PathBuf::from("/");
+        }
+        match cwd.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+            _ => PathBuf::from("/"),
+        }
+    }
+
     fn spawn_list(&mut self, handle: &SshSessionHandle, dir: PathBuf, ctx: &egui::Context) {
         if self.busy {
             return;
         }
         self.busy = true;
         self.enqueue(handle, ctx, move |session| {
-            let result = (|| -> Result<Vec<SftpEntry>, String> {
-                let client = SftpClient::new(session)?;
-                client.list_dir(&dir)
-            })();
+            let client = match SftpClient::new(session) {
+                Ok(client) => client,
+                Err(e) => {
+                    return SftpJobResult::Listed {
+                        dir,
+                        result: Err(e),
+                    };
+                }
+            };
+            let result = client.list_dir(&dir);
+            let dir = if result.is_ok() {
+                Self::normalize_remote_path(client.realpath(&dir).unwrap_or(dir))
+            } else {
+                dir
+            };
             SftpJobResult::Listed { dir, result }
         });
     }
@@ -2540,6 +2850,20 @@ impl SftpPanel {
         )
     }
 
+    pub fn take_pending_terminal_cmd(&mut self) -> Option<String> {
+        self.pending_terminal_cmd.take()
+    }
+
+    fn shell_cd_command(path: &Path) -> String {
+        let raw = path.to_string_lossy().replace('\\', "/");
+        let quoted = raw.replace('\'', "'\\''");
+        format!("cd '{quoted}'")
+    }
+
+    fn queue_terminal_cd(&mut self, path: &Path) {
+        self.pending_terminal_cmd = Some(Self::shell_cd_command(path));
+    }
+
     pub fn show_side_panel(
         &mut self,
         ctx: &egui::Context,
@@ -2697,6 +3021,7 @@ impl SftpPanel {
             self.spawn_list(&handle, self.cwd.clone(), ctx);
         }
 
+        if !theme.uses_modern_palette() {
         if let Some(err) = &self.list_err {
             let msg = Self::localize_list_error(ctx, err);
             egui::Frame::none()
@@ -2724,17 +3049,30 @@ impl SftpPanel {
                     });
                 });
         }
+        }
 
         ui.add_space(theme.spacing_sm());
 
         let (local_list_h, remote_list_h) = Self::split_file_list_heights(ui, theme);
 
+        if theme.uses_modern_palette() {
+            self.paint_flux_workspace(ui, ctx, theme, &handle, content_w);
+        } else {
         Self::paint_browser_section_frame(theme).show(ui, |ui| {
             layout_util::set_width_to_available(ui);
-            ui.label(crate::ui::chrome::rich_caption(
-                theme,
-                crate::i18n::tr(ui.ctx(), "Local", "本机"),
-            ));
+            ui.horizontal(|ui| {
+                ui.label(crate::ui::chrome::rich_caption(
+                    theme,
+                    crate::i18n::tr(ui.ctx(), "Local", "本机"),
+                ))
+                .on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Click to select. Ctrl adds. Shift selects a range.",
+                    "单击选择，Ctrl 加选，Shift 选一段。",
+                ));
+                ui.add_space(theme.spacing_sm());
+                Self::paint_selection_chip(ui, theme, ctx, self.local_selected.len());
+            });
             let local_path_id = egui::Id::new("sftp_local_path");
             let home_hint = crate::platform::home_dir_display_hint();
             let go_lbl = crate::i18n::tr(ui.ctx(), "Go", "前往");
@@ -2784,69 +3122,85 @@ impl SftpPanel {
                 },
             ];
             if theme.uses_modern_palette() {
+                let _ = &local_nav;
                 layout_util::set_width_to_available(ui);
-                let _path_resp = crate::ui::chrome::sftp_path_toolbar_row(
-                    ui,
-                    theme,
-                    local_path_id,
-                    &mut self.local_path_edit,
-                    &home_hint,
-                );
+                ui.horizontal(|ui| {
+                    let path_w = (ui.available_width() - 96.0).max(80.0);
+                    let _path_resp = crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        local_path_id,
+                        &mut self.local_path_edit,
+                        &home_hint,
+                        path_w,
+                        false,
+                    );
+                    self.paint_bookmark_row(
+                        ui,
+                        theme,
+                        ctx,
+                        true,
+                        self.local_cwd.clone(),
+                        &mut jump_local,
+                    );
+                });
                 if ui.ctx().input(|i| i.key_pressed(egui::Key::Enter))
                     && ui.memory(|m| m.has_focus(local_path_id))
                 {
                     self.try_navigate_local_path(ctx);
                 }
-                ui.add_space(theme.spacing_xs());
-                if let Some(idx) = crate::ui::chrome::sftp_nav_toolbar_row(
-                    ui,
-                    theme,
-                    &local_nav,
-                    "sftp_local_nav",
-                ) {
-                    match idx {
-                        0 => self.try_navigate_local_path(ctx),
-                        1 => {
-                            if let Some(parent) = self.local_cwd.parent() {
-                                self.local_cwd = parent.to_path_buf();
-                                self.sync_local_path_from_cwd();
-                                self.local_selected.clear();
-                                self.refresh_local_list();
-                            }
-                        }
-                        2 => self.refresh_local_list(),
-                        3 => {
-                            if let Some(dir) = FileDialog::new().pick_folder() {
-                                self.local_cwd = dir;
-                                self.sync_local_path_from_cwd();
-                                self.local_selected.clear();
-                                self.refresh_local_list();
-                            }
-                        }
-                        4 => self.upload_selected_local(&handle, ctx),
-                        _ => {}
-                    }
-                }
-                ui.add_space(theme.spacing_xs());
-                self.paint_bookmark_row(
-                    ui,
-                    theme,
-                    ctx,
-                    true,
-                    self.local_cwd.clone(),
-                    &mut jump_local,
-                );
-                ui.add_space(theme.spacing_xs());
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(crate::i18n::tr(ctx, "Filter", "筛选"))
-                            .small()
-                            .color(theme.text_tertiary()),
-                    );
+                    if Self::quiet_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::ChevronUp,
+                        up_lbl,
+                        up_ok,
+                    ) {
+                        if let Some(parent) = self.local_cwd.parent() {
+                            self.local_cwd = parent.to_path_buf();
+                            self.sync_local_path_from_cwd();
+                            self.local_selected.clear();
+                            self.refresh_local_list();
+                        }
+                    }
+                    if Self::quiet_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Refresh,
+                        refresh_lbl,
+                        true,
+                    ) {
+                        self.refresh_local_list();
+                    }
+                    if Self::quiet_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Folder,
+                        browse_tip,
+                        true,
+                    ) {
+                        if let Some(dir) = FileDialog::new().pick_folder() {
+                            self.local_cwd = dir;
+                            self.sync_local_path_from_cwd();
+                            self.local_selected.clear();
+                            self.refresh_local_list();
+                        }
+                    }
+                    ui.separator();
+                    if Self::quiet_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Upload,
+                        upload_tip,
+                        can_upload,
+                    ) {
+                        self.upload_selected_local(&handle, ctx);
+                    }
                     ui.add(
                         egui::TextEdit::singleline(&mut self.local_filter)
-                            .hint_text(crate::i18n::tr(ctx, "Name…", "文件名…"))
-                            .desired_width(ui.available_width().max(80.0)),
+                            .hint_text(crate::i18n::tr(ctx, "Filter by name", "按名字找"))
+                            .desired_width(ui.available_width().max(48.0)),
                     );
                 });
             } else {
@@ -3008,7 +3362,6 @@ impl SftpPanel {
                     .max_height(local_list_h)
                     .show(ui, |ui| {
                         ui.visuals_mut().extreme_bg_color = theme.color_file_list_bg();
-                        ui.set_min_width(table_cols.total);
                         ui.set_max_width(table_cols.total);
                         let local_rows: Vec<LocalEntry> = self
                             .filtered_local_entries()
@@ -3123,10 +3476,19 @@ impl SftpPanel {
 
         Self::paint_browser_section_frame(theme).show(ui, |ui| {
             layout_util::set_width_to_available(ui);
-            ui.label(crate::ui::chrome::rich_caption(
-                theme,
-                crate::i18n::tr(ui.ctx(), "Remote", "远端"),
-            ));
+            ui.horizontal(|ui| {
+                ui.label(crate::ui::chrome::rich_caption(
+                    theme,
+                    crate::i18n::tr(ui.ctx(), "Remote", "远端"),
+                ))
+                .on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Double-click a text file to edit it here, then send it back.",
+                    "文本文件双击即可在本机改，改完再传回。",
+                ));
+                ui.add_space(theme.spacing_sm());
+                Self::paint_selection_chip(ui, theme, ctx, self.remote_selected.len());
+            });
             let remote_path_id = egui::Id::new("sftp_path_edit");
             let remote_path_hint = crate::i18n::tr(ui.ctx(), "/home/user", "/home/user");
             let go_lbl = crate::i18n::tr(ui.ctx(), "Go", "前往");
@@ -3184,58 +3546,124 @@ impl SftpPanel {
                 },
             ];
             if theme.uses_modern_palette() {
+                let _ = &remote_nav;
                 layout_util::set_width_to_available(ui);
-                crate::ui::chrome::sftp_path_toolbar_row(
-                    ui,
-                    theme,
-                    remote_path_id,
-                    &mut self.path_edit,
-                    remote_path_hint,
-                );
-                ui.add_space(theme.spacing_xs());
-                if let Some(idx) = crate::ui::chrome::sftp_nav_toolbar_row(
-                    ui,
-                    theme,
-                    &remote_nav,
-                    "sftp_remote_nav",
-                ) {
-                    match idx {
-                        0 => self.spawn_list(&handle, PathBuf::from(self.path_edit.trim()), ctx),
-                        1 => {
-                            let parent = self
-                                .cwd
-                                .parent()
-                                .map(PathBuf::from)
-                                .unwrap_or_else(|| PathBuf::from("/"));
-                            self.spawn_list(&handle, parent, ctx);
-                        }
-                        2 => self.spawn_list(&handle, self.cwd.clone(), ctx),
-                        3 => self.show_mkdir_dialog = true,
-                        4 => self.download_selected_remote(&handle, ctx),
-                        5 => self.begin_rename_selected(),
-                        _ => {}
-                    }
-                }
-                ui.add_space(theme.spacing_xs());
-                self.paint_bookmark_row(
-                    ui,
-                    theme,
-                    ctx,
-                    false,
-                    self.cwd.clone(),
-                    &mut jump_remote,
-                );
-                ui.add_space(theme.spacing_xs());
                 ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(crate::i18n::tr(ctx, "Filter", "筛选"))
-                            .small()
-                            .color(theme.text_tertiary()),
+                    let path_w = (ui.available_width() - 96.0).max(80.0);
+                    crate::ui::chrome::form_singleline_field(
+                        ui,
+                        theme,
+                        remote_path_id,
+                        &mut self.path_edit,
+                        remote_path_hint,
+                        path_w,
+                        false,
                     );
+                    self.paint_bookmark_row(
+                        ui,
+                        theme,
+                        ctx,
+                        false,
+                        self.cwd.clone(),
+                        &mut jump_remote,
+                    );
+                });
+                if ui.ctx().input(|i| i.key_pressed(egui::Key::Enter))
+                    && ui.memory(|m| m.has_focus(remote_path_id))
+                {
+                    self.spawn_list(&handle, PathBuf::from(self.path_edit.trim()), ctx);
+                }
+                let can_edit = self.remote_selected.len() == 1
+                    && self.remote_selected.primary().is_some_and(|p| {
+                        self.entries.iter().any(|e| &e.path == p && !e.is_dir)
+                    });
+                ui.horizontal(|ui| {
+                    if Self::quiet_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::ChevronUp,
+                        up_lbl,
+                        busy,
+                    ) {
+                        self.spawn_list(&handle, Self::remote_parent_dir(&self.cwd), ctx);
+                    }
+                    if Self::quiet_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Refresh,
+                        refresh_lbl,
+                        busy,
+                    ) {
+                        self.spawn_list(&handle, self.cwd.clone(), ctx);
+                    }
+                    if Self::quiet_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Plus,
+                        new_tip,
+                        busy,
+                    ) {
+                        self.show_mkdir_dialog = true;
+                    }
+                    ui.separator();
+                    if Self::quiet_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Download,
+                        download_tip,
+                        can_download,
+                    ) {
+                        self.download_selected_remote(&handle, ctx);
+                    }
+                    if Self::quiet_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::File,
+                        crate::i18n::tr(
+                            ctx,
+                            "Download to a temp file and open",
+                            "下载到临时文件并打开",
+                        ),
+                        can_edit && busy,
+                    ) {
+                        if let Some(p) = self.remote_selected.primary().cloned() {
+                            if let Some(entry) = self.entries.iter().find(|e| e.path == p).cloned() {
+                                self.request_open_remote_file(&handle, &entry, ctx);
+                            }
+                        }
+                    }
+                    if Self::quiet_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Key,
+                        crate::i18n::tr(ctx, "Change permissions", "改权限"),
+                        self.remote_selected.len() == 1 && busy,
+                    ) {
+                        if let Some(p) = self.remote_selected.primary() {
+                            if let Some(entry) = self.entries.iter().find(|e| &e.path == p) {
+                                self.chmod_octal = Self::permissions_display_to_octal(
+                                    &entry.permissions,
+                                )
+                                .unwrap_or_else(|| "644".into());
+                            }
+                        }
+                        self.chmod_recursive = false;
+                        self.pending_chmod_recursive_confirm = false;
+                        self.show_chmod_dialog = true;
+                    }
+                    if Self::quiet_icon(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::SortName,
+                        rename_lbl,
+                        can_rename,
+                    ) {
+                        self.begin_rename_selected();
+                    }
                     ui.add(
                         egui::TextEdit::singleline(&mut self.remote_filter)
-                            .hint_text(crate::i18n::tr(ctx, "Name…", "文件名…"))
-                            .desired_width(ui.available_width().max(80.0)),
+                            .hint_text(crate::i18n::tr(ctx, "Filter by name", "按名字找"))
+                            .desired_width(ui.available_width().max(48.0)),
                     );
                 });
             } else {
@@ -3272,12 +3700,7 @@ impl SftpPanel {
                     )
                     .clicked()
                     {
-                        let parent = self
-                            .cwd
-                            .parent()
-                            .map(PathBuf::from)
-                            .unwrap_or_else(|| PathBuf::from("/"));
-                        self.spawn_list(&handle, parent, ctx);
+                        self.spawn_list(&handle, Self::remote_parent_dir(&self.cwd), ctx);
                     }
                     if crate::ui::chrome::panel_action_icon_button_ex(
                         ui,
@@ -3581,7 +4004,6 @@ impl SftpPanel {
                     .max_height(remote_list_h)
                     .show(ui, |ui| {
                         ui.visuals_mut().extreme_bg_color = theme.color_file_list_bg();
-                        ui.set_min_width(table_cols.total);
                         ui.set_max_width(table_cols.total);
                         let has_dropped =
                             !ui.ctx().input(|i| i.raw.dropped_files.is_empty());
@@ -3649,8 +4071,8 @@ impl SftpPanel {
                             if resp.double_clicked() {
                                 if e.is_dir {
                                     enter_remote = Some(e.path.clone());
-                                } else if looks_like_editable_text(&e.name, e.size) {
-                                    self.start_remote_edit(&handle, e, ctx);
+                                } else {
+                                    self.request_open_remote_file(&handle, e, ctx);
                                 }
                             } else if resp.clicked() {
                                 self.remote_selected.apply_click(
@@ -3661,7 +4083,7 @@ impl SftpPanel {
                                 );
                             }
                             resp.context_menu(|ui| {
-                                self.xfer_context_menu(ui, theme, ctx, &handle);
+                                self.remote_row_context_menu(ui, theme, ctx, &handle, e);
                             });
                         }
                         Self::paint_list_blank_context(ui, table_cols.total, |ui| {
@@ -3674,6 +4096,9 @@ impl SftpPanel {
                 self.spawn_list(&handle, d, ctx);
             }
         });
+        }
+
+        self.paint_large_open_prompt(ui, ctx, theme, &handle);
 
         self.show_mkdir_dialog_ui(ctx, theme, &handle);
         self.show_rename_dialog_ui(ctx, theme, &handle);
@@ -3683,7 +4108,16 @@ impl SftpPanel {
             self.kick_xfer_queue(&handle, ctx);
         }
 
-        let strip_action = paint_xfer_strip(ui, theme, ctx, &mut self.xfer);
+        let strip_action = paint_xfer_strip(
+            ui,
+            theme,
+            ctx,
+            &mut self.xfer,
+            &self.host_key,
+            &self.cwd.display().to_string(),
+            &self.local_cwd.display().to_string(),
+            &mut self.flux_details_open,
+        );
         self.handle_xfer_strip_action(strip_action, &handle, ctx);
 
         if self.busy && self.xfer.active_id().is_none() {
@@ -3700,9 +4134,835 @@ impl SftpPanel {
         }
     }
 
+    fn paint_flux_workspace(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+        handle: &SshSessionHandle,
+        content_w: f32,
+    ) {
+        let avail_h = ui.available_height().max(160.0);
+        let reserve = if self.pending_overwrite.is_some()
+            || self.pending_delete.is_some()
+            || self.pending_large_open.is_some()
+            || self.edit_dirty
+            || self.pending_edit_conflict.is_some()
+        {
+            96.0
+        } else {
+            8.0
+        };
+        let panes_h = (avail_h - reserve - 52.0).max(140.0);
+        let gap = 1.0;
+        let pane_w = ((content_w - gap) * 0.5).max(96.0);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.allocate_ui_with_layout(
+                egui::vec2(pane_w, panes_h),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    ui.set_width(pane_w);
+                    ui.push_id("sftp_flux_local", |ui| {
+                        self.paint_flux_local_pane(ui, ctx, theme, handle, panes_h);
+                    });
+                },
+            );
+            let (div, _) = ui.allocate_exact_size(egui::vec2(gap, panes_h), egui::Sense::hover());
+            ui.painter()
+                .rect_filled(div, 0.0, theme.border_divider_color());
+            ui.allocate_ui_with_layout(
+                egui::vec2(pane_w, panes_h),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    ui.set_width(pane_w);
+                    ui.push_id("sftp_flux_remote", |ui| {
+                        self.paint_flux_remote_pane(ui, ctx, theme, handle, panes_h);
+                    });
+                },
+            );
+        });
+        self.paint_flux_prompts(ui, ctx, theme, handle);
+    }
+
+    fn clip_flux_pane(ui: &mut egui::Ui) -> f32 {
+        let mut w = ui.available_width().min(ui.max_rect().width());
+        if !w.is_finite() || w < 48.0 {
+            w = 320.0;
+        }
+        w = w.clamp(96.0, 2000.0);
+        let rect = egui::Rect::from_min_size(
+            ui.max_rect().min,
+            egui::vec2(w, ui.max_rect().height().max(1.0)),
+        );
+        ui.set_clip_rect(rect);
+        ui.set_max_width(w);
+        w
+    }
+
+    fn flux_tool_row(ui: &mut egui::Ui, theme: &Theme, add: impl FnOnce(&mut egui::Ui)) {
+        let w = ui.max_rect().width().clamp(48.0, 2000.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 36.0), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 0.0, theme.color_sftp_bar_fill());
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom() - 0.5,
+            egui::Stroke::new(1.0, theme.border.to_color32()),
+        );
+        let mut child = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center));
+        child.spacing_mut().item_spacing.x = 4.0;
+        add(&mut child);
+    }
+
+    fn paint_flux_head_bar(
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        ctx: &egui::Context,
+        title: &str,
+        selected_n: usize,
+        path: &Path,
+        scroll_id: &str,
+        editing: &mut bool,
+        path_edit: &mut String,
+        edit_id: egui::Id,
+        edit_hint: &str,
+    ) -> Option<PathBuf> {
+        let w = ui.max_rect().width().clamp(48.0, 2000.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 36.0), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 0.0, theme.color_sftp_bar_fill());
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom() - 0.5,
+            egui::Stroke::new(1.0, theme.border.to_color32()),
+        );
+        let title_font = egui::FontId::proportional(theme.font_size_caption());
+        let title_galley = ui.fonts(|f| {
+            f.layout_no_wrap(title.to_string(), title_font, theme.text_tertiary())
+        });
+        let title_y = rect.center().y - title_galley.size().y * 0.5;
+        ui.painter()
+            .galley(egui::pos2(rect.left() + 10.0, title_y), title_galley.clone());
+        let mut path_left = rect.left() + 10.0 + title_galley.size().x + 12.0;
+        if selected_n > 0 {
+            let sel = format!(
+                "{} {selected_n}",
+                crate::i18n::tr(ctx, "Selected", "已选")
+            );
+            let sel_galley = ui.fonts(|f| {
+                f.layout_no_wrap(sel, egui::FontId::proportional(theme.font_size_caption()), theme.accent_color())
+            });
+            let sel_y = rect.center().y - sel_galley.size().y * 0.5;
+            ui.painter()
+                .galley(egui::pos2(path_left, sel_y), sel_galley.clone());
+            path_left += sel_galley.size().x + 10.0;
+        }
+        let path_rect = egui::Rect::from_min_max(
+            egui::pos2(path_left, rect.top()),
+            egui::pos2(rect.right() - 8.0, rect.bottom()),
+        );
+        if path_rect.width() < 24.0 {
+            return None;
+        }
+        if *editing {
+            let mut child =
+                ui.child_ui(path_rect, egui::Layout::left_to_right(egui::Align::Center));
+            crate::ui::chrome::form_singleline_field(
+                &mut child,
+                theme,
+                edit_id,
+                path_edit,
+                edit_hint,
+                path_rect.width(),
+                false,
+            );
+            None
+        } else {
+            Self::paint_flux_crumbs(ui, theme, ctx, path, scroll_id, editing, path_rect)
+        }
+    }
+
+    fn paint_flux_filter_bar(
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        id: egui::Id,
+        text: &mut String,
+        hint: &str,
+        width: f32,
+    ) {
+        let w = width.clamp(48.0, 2000.0);
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(w, 36.0), egui::Sense::hover());
+        ui.painter()
+            .rect_filled(rect, 0.0, theme.color_sftp_bar_fill());
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom() - 0.5,
+            egui::Stroke::new(1.0, theme.border.to_color32()),
+        );
+        let inner = rect.shrink2(egui::vec2(8.0, 4.0));
+        let mut child = ui.child_ui(inner, egui::Layout::left_to_right(egui::Align::Center));
+        crate::ui::chrome::form_singleline_field(&mut child, theme, id, text, hint, inner.width(), false);
+    }
+
+    fn paint_flux_crumbs(
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        ctx: &egui::Context,
+        path: &Path,
+        scroll_id: &str,
+        editing: &mut bool,
+        rect: egui::Rect,
+    ) -> Option<PathBuf> {
+        let _ = ui.allocate_rect(rect, egui::Sense::hover());
+        if ui.interact(rect, ui.id().with(scroll_id), egui::Sense::click()).double_clicked() {
+            *editing = true;
+        }
+        let response = ui.interact(rect, ui.id().with((scroll_id, "path")), egui::Sense::click());
+        let crumbs = sftp_file_table::path_crumbs(path);
+        let mono = egui::FontId::monospace(theme.font_size_caption());
+        let color = theme.text_secondary();
+        let mut parts: Vec<(String, PathBuf, bool)> = Vec::new();
+        let n = crumbs.len();
+        for (i, (label, dest)) in crumbs.iter().enumerate() {
+            if i > 0 {
+                parts.push(("/".to_string(), dest.clone(), false));
+            }
+            parts.push((label.clone(), dest.clone(), i + 1 == n));
+        }
+        let mut start = 0usize;
+        let width_of = |ui: &egui::Ui, from: usize| -> f32 {
+            let text: String = parts.iter().skip(from).map(|(s, _, _)| s.as_str()).collect();
+            let prefix = if from > 0 { "…/" } else { "" };
+            ui.fonts(|f| {
+                f.layout_no_wrap(
+                    format!("{prefix}{text}"),
+                    mono.clone(),
+                    color,
+                )
+                .size()
+                .x
+            })
+        };
+        while start + 1 < parts.len() && width_of(ui, start) > rect.width() - 4.0 {
+            start += 1;
+        }
+        let mut hits: Vec<(egui::Rect, PathBuf, bool)> = Vec::new();
+        let mut x = rect.left() + 2.0;
+        if start > 0 {
+            let galley = ui.fonts(|f| {
+                f.layout_no_wrap("…/".to_string(), mono.clone(), theme.text_tertiary())
+            });
+            let w = galley.size().x;
+            ui.painter().galley(
+                egui::pos2(x, rect.center().y - galley.size().y * 0.5),
+                galley,
+            );
+            x += w;
+        }
+        for (label, dest, current) in parts.iter().skip(start) {
+            let text_color = if *current {
+                theme.text_primary()
+            } else if label == "/" {
+                theme.text_tertiary()
+            } else {
+                theme.text_secondary()
+            };
+            let galley = ui.fonts(|f| f.layout_no_wrap(label.clone(), mono.clone(), text_color));
+            let w = galley.size().x;
+            let top = rect.center().y - galley.size().y * 0.5;
+            ui.painter().galley(egui::pos2(x, top), galley);
+            if label != "/" {
+                hits.push((
+                    egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(w, rect.height())),
+                    dest.clone(),
+                    *current,
+                ));
+            }
+            x += w;
+        }
+        let response = response.on_hover_text(crate::i18n::tr(
+            ctx,
+            "Double-click to type a path",
+            "双击后输入路径",
+        ));
+        if response.clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                for (hit, dest, current) in &hits {
+                    if hit.contains(pos) && !current {
+                        let _ = scroll_id;
+                        return Some(dest.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn paint_flux_local_pane(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+        handle: &SshSessionHandle,
+        pane_h: f32,
+    ) {
+        let _ = pane_h;
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let pane_w = Self::clip_flux_pane(ui);
+        let local_cwd = self.local_cwd.clone();
+        let local_hint = crate::platform::home_dir_display_hint();
+        let local_edit_id = egui::Id::new("sftp_flux_local_path");
+        let mut jump_local = Self::paint_flux_head_bar(
+            ui,
+            theme,
+            ctx,
+            crate::i18n::tr(ctx, "Local", "本机"),
+            self.local_selected.len(),
+            &local_cwd,
+            "sftp_flux_local_crumbs",
+            &mut self.local_path_editing,
+            &mut self.local_path_edit,
+            local_edit_id,
+            &local_hint,
+        );
+        if self.local_path_editing {
+            if ui.ctx().input(|i| i.key_pressed(egui::Key::Enter))
+                && ui.memory(|m| m.has_focus(local_edit_id))
+            {
+                self.local_path_editing = false;
+                self.try_navigate_local_path(ctx);
+            }
+            if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.local_path_editing = false;
+                self.sync_local_path_from_cwd();
+            }
+        }
+        let up_ok = self.local_cwd.parent().is_some();
+        let can_upload = self.has_local_upload_selection();
+        Self::flux_tool_row(ui, theme, |ui| {
+            if Self::flux_action(
+                ui,
+                theme,
+                crate::ui::icons::IconId::ChevronUp,
+                crate::i18n::tr(ctx, "Up", "上级"),
+                crate::i18n::tr(ctx, "Up", "上级"),
+                up_ok,
+            ) {
+                if let Some(parent) = self.local_cwd.parent() {
+                    self.local_cwd = parent.to_path_buf();
+                    self.sync_local_path_from_cwd();
+                    self.local_selected.clear();
+                    self.refresh_local_list();
+                }
+            }
+            if Self::flux_action(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Refresh,
+                crate::i18n::tr(ctx, "Refresh", "刷新"),
+                crate::i18n::tr(ctx, "Refresh", "刷新"),
+                true,
+            ) {
+                self.refresh_local_list();
+            }
+            if Self::flux_action(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Folder,
+                crate::i18n::tr(ctx, "Browse", "浏览"),
+                crate::i18n::tr(ctx, "Browse…", "浏览…"),
+                true,
+            ) {
+                if let Some(dir) = FileDialog::new().pick_folder() {
+                    self.local_cwd = dir;
+                    self.sync_local_path_from_cwd();
+                    self.local_selected.clear();
+                    self.refresh_local_list();
+                }
+            }
+            if Self::flux_action(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Upload,
+                crate::i18n::tr(ctx, "Upload", "上传"),
+                crate::i18n::tr(ctx, "Upload selected item(s)", "上传所选"),
+                can_upload,
+            ) {
+                self.upload_selected_local(handle, ctx);
+            }
+            self.paint_bookmark_row(ui, theme, ctx, true, self.local_cwd.clone(), &mut jump_local);
+        });
+        Self::paint_flux_filter_bar(
+            ui,
+            theme,
+            egui::Id::new("sftp_flux_local_filter"),
+            &mut self.local_filter,
+            crate::i18n::tr(ctx, "Filter by name", "按名字找"),
+            pane_w,
+        );
+        if let Some(p) = jump_local.take() {
+            if p.is_dir() {
+                self.local_cwd = p;
+                self.sync_local_path_from_cwd();
+                self.local_selected.clear();
+                self.refresh_local_list();
+            }
+        }
+        let cols_w = ui.available_width().max(80.0);
+        let table_cols = FileTableCols::for_width(cols_w);
+        if paint_file_table_header(ui, theme, ctx, table_cols, &mut self.local_sort) {
+            self.apply_local_sort();
+        }
+        let list_h = ui.available_height().max(72.0);
+        let mut enter_local: Option<PathBuf> = None;
+        ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
+        egui::ScrollArea::vertical()
+            .id_source("sftp_flux_local_list")
+            .auto_shrink([false, false])
+            .max_height(list_h)
+            .show(ui, |ui| {
+                ui.set_max_width(table_cols.total);
+                let local_rows: Vec<LocalEntry> =
+                    self.filtered_local_entries().into_iter().cloned().collect();
+                let ordered = local_rows.iter().map(|e| e.path.clone()).collect::<Vec<_>>();
+                let (ctrl, shift) = ui.ctx().input(|i| {
+                    (i.modifiers.ctrl || i.modifiers.command, i.modifiers.shift)
+                });
+                for e in &local_rows {
+                    let sel = self.local_selected.contains(&e.path);
+                    let size_lbl = if e.is_dir {
+                        "—".to_string()
+                    } else {
+                        e.size_human()
+                    };
+                    let resp = paint_file_table_row(
+                        ui,
+                        theme,
+                        table_cols,
+                        &e.name,
+                        &size_lbl,
+                        &format_file_mtime(e.modified),
+                        classify_file_kind(&e.name, e.is_dir),
+                        sel,
+                        &e.path.display().to_string(),
+                    );
+                    if resp.double_clicked() && e.is_dir {
+                        enter_local = Some(e.path.clone());
+                    } else if resp.clicked() {
+                        self.local_selected
+                            .apply_click(e.path.clone(), &ordered, ctrl, shift);
+                    }
+                    resp.context_menu(|ui| {
+                        self.local_entry_context_menu(ui, theme, ctx, handle, e);
+                    });
+                }
+            });
+        if let Some(d) = enter_local {
+            self.local_cwd = d;
+            self.sync_local_path_from_cwd();
+            self.local_selected.clear();
+            self.refresh_local_list();
+        }
+        if let Some(err) = &self.local_list_err {
+            ui.label(
+                egui::RichText::new(Self::localize_local_list_error(ctx, err))
+                    .small()
+                    .color(theme.red_color()),
+            );
+        }
+    }
+
+    fn paint_flux_remote_pane(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+        handle: &SshSessionHandle,
+        pane_h: f32,
+    ) {
+        let _ = pane_h;
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let pane_w = Self::clip_flux_pane(ui);
+        let remote_cwd = self.cwd.clone();
+        let remote_edit_id = egui::Id::new("sftp_flux_remote_path");
+        let mut jump_remote = Self::paint_flux_head_bar(
+            ui,
+            theme,
+            ctx,
+            crate::i18n::tr(ctx, "Remote", "远端"),
+            self.remote_selected.len(),
+            &remote_cwd,
+            "sftp_flux_remote_crumbs",
+            &mut self.remote_path_editing,
+            &mut self.path_edit,
+            remote_edit_id,
+            "/",
+        );
+        if self.remote_path_editing {
+            if ui.ctx().input(|i| i.key_pressed(egui::Key::Enter))
+                && ui.memory(|m| m.has_focus(remote_edit_id))
+            {
+                self.remote_path_editing = false;
+                self.spawn_list(handle, PathBuf::from(self.path_edit.trim()), ctx);
+            }
+            if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+                self.remote_path_editing = false;
+                self.path_edit = self.cwd.display().to_string();
+            }
+        }
+        let busy = !self.busy;
+        let can_download = self.has_remote_download_selection();
+        Self::flux_tool_row(ui, theme, |ui| {
+            if Self::flux_action(
+                ui,
+                theme,
+                crate::ui::icons::IconId::ChevronUp,
+                crate::i18n::tr(ctx, "Up", "上级"),
+                crate::i18n::tr(ctx, "Up", "上级"),
+                busy,
+            ) {
+                self.spawn_list(handle, Self::remote_parent_dir(&self.cwd), ctx);
+            }
+            if Self::flux_action(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Refresh,
+                crate::i18n::tr(ctx, "Refresh", "刷新"),
+                crate::i18n::tr(ctx, "Refresh", "刷新"),
+                busy,
+            ) {
+                self.spawn_list(handle, self.cwd.clone(), ctx);
+            }
+            if Self::flux_action(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Plus,
+                crate::i18n::tr(ctx, "New", "新建"),
+                crate::i18n::tr(ctx, "New folder", "新建目录"),
+                busy,
+            ) {
+                self.show_mkdir_dialog = true;
+            }
+            if Self::flux_action(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Download,
+                crate::i18n::tr(ctx, "Download", "下载"),
+                crate::i18n::tr(ctx, "Download selected remote item(s)", "下载所选"),
+                can_download,
+            ) {
+                self.download_selected_remote(handle, ctx);
+            }
+            self.paint_bookmark_row(
+                ui,
+                theme,
+                ctx,
+                false,
+                self.cwd.clone(),
+                &mut jump_remote,
+            );
+        });
+        Self::paint_flux_filter_bar(
+            ui,
+            theme,
+            egui::Id::new("sftp_flux_remote_filter"),
+            &mut self.remote_filter,
+            crate::i18n::tr(ctx, "Filter by name", "按名字找"),
+            pane_w,
+        );
+        if let Some(p) = jump_remote.take() {
+            self.spawn_list(handle, p, ctx);
+        }
+        let cols_w = ui.available_width().max(80.0);
+        let table_cols = FileTableCols::for_width(cols_w);
+        if paint_file_table_header(ui, theme, ctx, table_cols, &mut self.remote_sort) {
+            self.apply_remote_sort();
+        }
+        let list_h = ui.available_height().max(72.0);
+        let mut enter_remote: Option<PathBuf> = None;
+        ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
+        egui::ScrollArea::vertical()
+            .id_source("sftp_flux_remote_list")
+            .auto_shrink([false, false])
+            .max_height(list_h)
+            .show(ui, |ui| {
+                let has_dropped = !ui.ctx().input(|i| i.raw.dropped_files.is_empty());
+                let is_hovering = ui.ctx().input(|i| {
+                    i.pointer
+                        .hover_pos()
+                        .map_or(false, |pos| ui.clip_rect().contains(pos))
+                });
+                if has_dropped && is_hovering {
+                    let files: Vec<PathBuf> = ui.ctx().input(|i| {
+                        i.raw
+                            .dropped_files
+                            .iter()
+                            .filter_map(|f| f.path.clone())
+                            .collect()
+                    });
+                    if !files.is_empty() {
+                        self.request_upload_many(handle, self.cwd.clone(), files, ctx);
+                    }
+                }
+                ui.set_max_width(table_cols.total);
+                let remote_rows: Vec<crate::ssh::SftpEntry> =
+                    self.filtered_remote_entries().into_iter().cloned().collect();
+                let ordered = remote_rows.iter().map(|e| e.path.clone()).collect::<Vec<_>>();
+                let (ctrl, shift) = ui.ctx().input(|i| {
+                    (i.modifiers.ctrl || i.modifiers.command, i.modifiers.shift)
+                });
+                for e in &remote_rows {
+                    let sel = self.remote_selected.contains(&e.path);
+                    let size_lbl = if e.is_dir {
+                        "—".to_string()
+                    } else {
+                        e.size_human()
+                    };
+                    let tip = format!("{}  {}", e.path.to_string_lossy(), e.permissions);
+                    let resp = paint_file_table_row(
+                        ui,
+                        theme,
+                        table_cols,
+                        &e.name,
+                        &size_lbl,
+                        &format_file_mtime(e.modified),
+                        classify_file_kind(&e.name, e.is_dir),
+                        sel,
+                        &tip,
+                    );
+                    if resp.double_clicked() {
+                        if e.is_dir {
+                            enter_remote = Some(e.path.clone());
+                        } else {
+                            self.request_open_remote_file(handle, e, ctx);
+                        }
+                    } else if resp.clicked() {
+                        self.remote_selected
+                            .apply_click(e.path.clone(), &ordered, ctrl, shift);
+                    }
+                    resp.context_menu(|ui| {
+                        self.remote_row_context_menu(ui, theme, ctx, handle, e);
+                    });
+                }
+            });
+        if let Some(d) = enter_remote {
+            self.spawn_list(handle, d, ctx);
+        }
+        if let Some(err) = self.list_err.clone() {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(Self::localize_list_error(ctx, &err))
+                        .small()
+                        .color(theme.red_color()),
+                );
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Retry", "重试"))
+                    .clicked()
+                {
+                    self.list_err = None;
+                    self.spawn_list(handle, self.cwd.clone(), ctx);
+                }
+            });
+        }
+        if self.tree_busy {
+            ui.label(
+                egui::RichText::new(crate::i18n::tr(ctx, "Scanning files…", "正在统计文件…"))
+                    .small()
+                    .color(theme.amber_color()),
+            );
+        }
+    }
+
+    fn paint_flux_prompts(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+        handle: &SshSessionHandle,
+    ) {
+        if self.edit_dirty {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Local copy changed — upload to server?",
+                        "本地改过了，要传回服务器吗？",
+                    ))
+                    .small()
+                    .color(theme.amber_color()),
+                );
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Upload", "上传"))
+                    .clicked()
+                {
+                    self.request_edit_upload(handle, ctx);
+                }
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Discard", "放弃"))
+                    .clicked()
+                {
+                    self.edit_dirty = false;
+                }
+            });
+        }
+        if let Some((remote, local)) = self.pending_edit_conflict.take() {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Remote file changed on server — overwrite anyway?",
+                        "服务器上的文件已变，仍要覆盖？",
+                    ))
+                    .small()
+                    .color(theme.red_color()),
+                );
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Upload anyway", "仍上传"))
+                    .clicked()
+                {
+                    self.deferred_upload_files.push((local, remote));
+                }
+            });
+        }
+        if let Some(prompt) = self.pending_delete.clone() {
+            ui.horizontal(|ui| {
+                let label = match &prompt {
+                    PendingDeletePrompt::One(p) => format!(
+                        "{} {}",
+                        crate::i18n::tr(ctx, "Delete?", "删除？"),
+                        p.to_string_lossy()
+                    ),
+                    PendingDeletePrompt::Many(v) => format!(
+                        "{} {} {}",
+                        crate::i18n::tr(ctx, "Delete", "删除"),
+                        v.len(),
+                        crate::i18n::tr(ctx, "remote items?", "个远端项？")
+                    ),
+                };
+                ui.label(egui::RichText::new(label).small());
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Confirm", "确认"))
+                    .clicked()
+                {
+                    match self.pending_delete.take().unwrap() {
+                        PendingDeletePrompt::One(path) => self.spawn_remove(handle, path, ctx),
+                        PendingDeletePrompt::Many(paths) => {
+                            self.spawn_remove_many(handle, paths, ctx)
+                        }
+                    }
+                }
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Cancel", "取消"))
+                    .clicked()
+                {
+                    self.pending_delete = None;
+                }
+            });
+        }
+        if self.pending_overwrite.is_some() {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "A file with this name already exists.",
+                        "已经有同名文件。",
+                    ))
+                    .small()
+                    .color(theme.amber_color()),
+                );
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Overwrite", "覆盖"))
+                    .clicked()
+                {
+                    self.confirm_overwrite_with_mode(handle, ctx, WriteMode::Overwrite, None);
+                }
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Overwrite all", "全部覆盖"))
+                    .clicked()
+                {
+                    self.confirm_overwrite_with_mode(
+                        handle,
+                        ctx,
+                        WriteMode::Overwrite,
+                        Some(OverwritePolicy::OverwriteAll),
+                    );
+                }
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Skip", "跳过"))
+                    .clicked()
+                {
+                    self.skip_pending_overwrite(handle, ctx, None);
+                }
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Skip all", "全部跳过"))
+                    .clicked()
+                {
+                    self.skip_pending_overwrite(handle, ctx, Some(OverwritePolicy::SkipAll));
+                }
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Resume", "续传"))
+                    .clicked()
+                {
+                    self.confirm_overwrite_with_mode(handle, ctx, WriteMode::Resume, None);
+                }
+                if ui
+                    .small_button(crate::i18n::tr(ctx, "Cancel", "取消"))
+                    .clicked()
+                {
+                    self.pending_overwrite = None;
+                }
+            });
+        }
+    }
+
+    fn paint_large_open_prompt(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+        handle: &SshSessionHandle,
+    ) {
+        let Some(entry) = self.pending_large_open.clone() else {
+            return;
+        };
+        ui.add_space(theme.spacing_xs());
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(format!(
+                    "{}（{}）。{}",
+                    entry.name,
+                    format_bytes(entry.size),
+                    crate::i18n::tr(
+                        ctx,
+                        "This file is large. Download it to a temp file and open?",
+                        "文件比较大，下载到临时文件后再打开？",
+                    )
+                ))
+                .small()
+                .color(theme.amber_color()),
+            );
+            if ui
+                .small_button(crate::i18n::tr(ctx, "Download and open", "下载并打开"))
+                .clicked()
+                && !self.busy
+                && self.rx.is_none()
+            {
+                self.pending_large_open = None;
+                self.start_remote_edit(handle, &entry, ctx);
+            }
+            if ui
+                .small_button(crate::i18n::tr(ctx, "Cancel", "取消"))
+                .clicked()
+            {
+                self.pending_large_open = None;
+            }
+        });
+    }
+
     fn paint_browser_section_frame(theme: &Theme) -> egui::Frame {
         if theme.uses_modern_palette() {
-            theme.frame_inset_section()
+            egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, theme.spacing_xs()))
         } else {
             egui::Frame::none()
                 .fill(theme.color_sftp_section_fill())
@@ -3718,8 +4978,12 @@ impl SftpPanel {
     fn paint_file_list_viewport_frame(theme: &Theme) -> egui::Frame {
         egui::Frame::none()
             .fill(theme.color_file_list_bg())
-            .stroke(theme.sftp_list_viewport_stroke())
-            .rounding(theme.radius_list_item())
+            .stroke(if theme.uses_modern_palette() {
+                egui::Stroke::NONE
+            } else {
+                theme.sftp_list_viewport_stroke()
+            })
+            .rounding(theme.radius_panel())
             .inner_margin(egui::Margin::symmetric(
                 theme.spacing_sm(),
                 theme.spacing_sm(),
@@ -3740,6 +5004,15 @@ mod tests {
             modified: Utc::now(),
             path: PathBuf::from(r"C:\temp").join(name),
         }
+    }
+
+    #[test]
+    fn shell_cd_command_quotes_spaces_and_quotes() {
+        let cmd = SftpPanel::shell_cd_command(Path::new("/tmp/my dir"));
+        assert_eq!(cmd, "cd '/tmp/my dir'");
+        let cmd = SftpPanel::shell_cd_command(Path::new("/tmp/a'b"));
+        assert!(cmd.starts_with("cd '"));
+        assert!(cmd.contains("'\\''"));
     }
 
     #[test]

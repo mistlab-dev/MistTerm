@@ -198,7 +198,9 @@ pub fn side_panel_slot_layout_width(max_rect_width: f32, layout_width: f32) -> f
         return layout.max(max_w);
     }
     const MAX_DOCK_W: f32 = 960.0;
-    if max_w <= MAX_DOCK_W && max_w <= layout * 3.0 {
+    // 拖到 960 以内都是合法侧栏宽。不要再用 default×3 把槽位打回窄列，
+    // 否则壳层/终端裁切仍按拖宽计算，中间会露出窗口黑底。
+    if max_w <= MAX_DOCK_W {
         return max_w;
     }
     layout
@@ -785,6 +787,7 @@ mod tests {
         assert!((side_panel_slot_layout_width(1200.0, 320.0) - 320.0).abs() < 0.01);
         assert!((side_panel_slot_layout_width(160.0, 320.0) - 320.0).abs() < 0.01);
         assert!((side_panel_slot_layout_width(400.0, 320.0) - 400.0).abs() < 0.01);
+        assert!((side_panel_slot_layout_width(900.0, 280.0) - 900.0).abs() < 0.01);
     }
 
     #[test]

@@ -316,13 +316,44 @@ pub(super) fn format_speed(bps: f64) -> String {
     format!("{}/s", format_bytes(bps as u64))
 }
 
+pub(super) fn format_eta(done: u64, total: u64, bps: f64) -> String {
+    if bps <= 1.0 || total <= done {
+        return "—".into();
+    }
+    let secs = ((total - done) as f64 / bps).round() as u64;
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {:02}m", secs / 3600, (secs % 3600) / 60)
+    }
+}
+
 /// 底部传输条：当前进度 + 可选队列列表。
 pub(super) fn paint_xfer_strip(
     ui: &mut egui::Ui,
     theme: &Theme,
     ctx: &egui::Context,
     queue: &mut XferQueue,
+    host_line: &str,
+    remote_cwd: &str,
+    local_cwd: &str,
+    details_open: &mut bool,
 ) -> XferStripAction {
+    if theme.uses_modern_palette() {
+        return paint_flux_xfer_strip(
+            ui,
+            theme,
+            ctx,
+            queue,
+            host_line,
+            remote_cwd,
+            local_cwd,
+            details_open,
+        );
+    }
+    let _ = (host_line, remote_cwd, local_cwd, details_open);
     let mut action = XferStripAction::None;
     let running = queue
         .items
@@ -335,25 +366,58 @@ pub(super) fn paint_xfer_strip(
         .iter()
         .filter(|i| i.state == XferState::Failed)
         .count();
-    if running.is_none() && queued == 0 && failed == 0 && queue.items.is_empty() {
-        return action;
-    }
-
-    ui.add_space(theme.spacing_panel_gap());
+    ui.add_space(theme.spacing_sm());
     ui.separator();
+    let policy_label = match queue.policy {
+        OverwritePolicy::Ask => crate::i18n::tr(ctx, "Ask", "同名先问"),
+        OverwritePolicy::OverwriteAll => crate::i18n::tr(ctx, "Overwrite all", "同名都覆盖"),
+        OverwritePolicy::SkipAll => crate::i18n::tr(ctx, "Skip all", "同名都跳过"),
+        OverwritePolicy::ResumeAll => crate::i18n::tr(ctx, "Resume all", "同名接着传"),
+        OverwritePolicy::IfNewerAll => crate::i18n::tr(ctx, "If newer", "只覆盖更新的"),
+    };
     ui.horizontal(|ui| {
-        let title = crate::i18n::tr(ctx, "Transfers", "传输");
+        let status = if running.is_some() {
+            crate::i18n::tr(ctx, "Transferring", "正在传输")
+        } else if queued > 0 {
+            crate::i18n::tr(ctx, "Queued", "排队中")
+        } else if failed > 0 {
+            crate::i18n::tr(ctx, "Needs attention", "有失败")
+        } else {
+            crate::i18n::tr(ctx, "Idle", "空闲")
+        };
         ui.label(
-            RichText::new(title)
+            RichText::new(crate::i18n::tr(ctx, "Transfers", "传输"))
                 .size(theme.font_size_small())
                 .color(theme.text_secondary()),
         );
+        ui.label(
+            RichText::new(format!("· {status}"))
+                .size(theme.font_size_small())
+                .color(theme.text_tertiary()),
+        );
         if queued > 0 || failed > 0 {
             ui.label(
-                RichText::new(format!("· {queued} queued · {failed} failed"))
+                RichText::new(format!("· {queued} · {failed}"))
                     .size(theme.font_size_small())
                     .color(theme.text_tertiary()),
             );
+        }
+        if ui
+            .small_button(policy_label)
+            .on_hover_text(crate::i18n::tr(
+                ctx,
+                "What to do when the other side already has this file. Click to change.",
+                "对方已有同名文件时怎么处理。点一下切换。",
+            ))
+            .clicked()
+        {
+            queue.policy = match queue.policy {
+                OverwritePolicy::Ask => OverwritePolicy::OverwriteAll,
+                OverwritePolicy::OverwriteAll => OverwritePolicy::SkipAll,
+                OverwritePolicy::SkipAll => OverwritePolicy::ResumeAll,
+                OverwritePolicy::ResumeAll => OverwritePolicy::IfNewerAll,
+                OverwritePolicy::IfNewerAll => OverwritePolicy::Ask,
+            };
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let expand = if queue.queue_expanded {
@@ -463,6 +527,293 @@ pub(super) fn paint_xfer_strip(
                 action = XferStripAction::PruneFinished;
             }
         });
+    }
+
+    action
+}
+
+fn paint_flux_xfer_strip(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    ctx: &egui::Context,
+    queue: &mut XferQueue,
+    host_line: &str,
+    remote_cwd: &str,
+    local_cwd: &str,
+    details_open: &mut bool,
+) -> XferStripAction {
+    let mut action = XferStripAction::None;
+    let running = queue
+        .items
+        .iter()
+        .find(|i| i.state == XferState::Running)
+        .cloned();
+    let queued: Vec<_> = queue
+        .items
+        .iter()
+        .filter(|i| i.state == XferState::Queued)
+        .take(5)
+        .cloned()
+        .collect();
+    let failed = queue
+        .items
+        .iter()
+        .filter(|i| i.state == XferState::Failed)
+        .count();
+
+    ui.add_space(4.0);
+    let bar_w = ui.available_width().max(1.0);
+    let (bar_hit, _) = ui.allocate_exact_size(egui::vec2(bar_w, 8.0), egui::Sense::hover());
+    let track = egui::Rect::from_center_size(bar_hit.center(), egui::vec2(bar_w, 2.0));
+    ui.painter().rect_filled(
+        track,
+        1.0,
+        theme.border_divider_color(),
+    );
+    let pct = running.as_ref().map(|item| {
+        if item.total > 0 {
+            (item.done as f64 / item.total as f64).clamp(0.0, 1.0) as f32
+        } else {
+            0.0
+        }
+    });
+    if let Some(p) = pct {
+        let mut fill = track;
+        fill.set_width((track.width() * p).max(0.0));
+        ui.painter().rect_filled(fill, 1.0, theme.accent_color());
+    }
+    let bar_resp = ui.interact(bar_hit, ui.id().with("flux_xfer_bar"), egui::Sense::hover());
+    bar_resp.on_hover_ui(|ui| {
+        ui.set_min_width(220.0);
+        ui.label(
+            RichText::new(crate::i18n::tr(ctx, "Up next", "接下来"))
+                .size(theme.font_size_caption())
+                .color(theme.text_tertiary()),
+        );
+        if queued.is_empty() && running.is_none() {
+            ui.label(
+                RichText::new(crate::i18n::tr(ctx, "Nothing queued", "没有排队的文件"))
+                    .size(theme.font_size_small())
+                    .color(theme.text_secondary()),
+            );
+        }
+        if let Some(item) = &running {
+            ui.label(
+                RichText::new(format!("● {}", item.display_name()))
+                    .font(egui::FontId::monospace(theme.font_size_small()))
+                    .color(theme.text_primary()),
+            );
+        }
+        for item in &queued {
+            ui.label(
+                RichText::new(item.display_name())
+                    .font(egui::FontId::monospace(theme.font_size_small()))
+                    .color(theme.text_secondary()),
+            );
+        }
+    });
+
+    let status = if let Some(item) = &running {
+        let p = if item.total > 0 {
+            format!("{:.0}%", (item.done as f64 / item.total as f64) * 100.0)
+        } else {
+            "…".into()
+        };
+        let arrow = match item.kind {
+            XferKind::Download => "↓",
+            XferKind::Upload => "↑",
+        };
+        format!(
+            "{arrow} {}   {p}   {}   {}",
+            item.display_name(),
+            format_speed(item.speed_bps),
+            format_eta(item.done, item.total, item.speed_bps)
+        )
+    } else if !queued.is_empty() {
+        crate::i18n::tr(ctx, "Waiting to start", "等待开始").to_string()
+    } else if failed > 0 {
+        crate::i18n::tr(ctx, "A transfer failed", "有传输失败").to_string()
+    } else {
+        crate::i18n::tr(ctx, "Idle", "空闲").to_string()
+    };
+
+    ui.horizontal(|ui| {
+        ui.set_min_height(22.0);
+        ui.label(
+            RichText::new(status)
+                .font(egui::FontId::monospace(theme.font_size_small()))
+                .color(theme.text_secondary()),
+        );
+        if running.is_some()
+            && crate::ui::chrome::icon_button(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Cross,
+                theme.text_secondary(),
+            )
+            .on_hover_text(crate::i18n::tr(ctx, "Cancel", "取消"))
+            .clicked()
+        {
+            action = XferStripAction::CancelActive;
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let gear = crate::ui::chrome::icon_button(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Settings,
+                theme.text_secondary(),
+            )
+            .on_hover_text(crate::i18n::tr(
+                ctx,
+                "When a file already exists",
+                "遇到同名文件时",
+            ));
+            let popup_id = ui.make_persistent_id("sftp_flux_policy");
+            let just_toggled = gear.clicked();
+            if just_toggled {
+                ui.memory_mut(|m| m.toggle_popup(popup_id));
+            }
+            if ui.memory(|m| m.is_popup_open(popup_id)) {
+                let popup_w = 196.0;
+                let screen = ui.ctx().screen_rect();
+                let mut pos = egui::pos2(
+                    gear.rect.right() - popup_w,
+                    gear.rect.top() - 176.0,
+                );
+                pos.x = pos.x.max(screen.left() + 8.0);
+                if pos.y < screen.top() + 8.0 {
+                    pos.y = gear.rect.bottom() + 4.0;
+                }
+                let area = egui::Area::new(popup_id)
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(pos)
+                    .constrain(false)
+                    .show(ui.ctx(), |ui| {
+                        ui.set_width(popup_w);
+                        egui::Frame::popup(ui.style()).show(ui, |ui| {
+                            crate::ui::chrome::apply_context_menu_style(ui, theme);
+                            ui.set_max_width(popup_w - 16.0);
+                            ui.label(
+                                RichText::new(crate::i18n::tr(ctx, "Same name", "同名文件"))
+                                    .size(theme.font_size_caption())
+                                    .color(theme.text_tertiary()),
+                            );
+                            let choices = [
+                                (OverwritePolicy::Ask, crate::i18n::tr(ctx, "Ask", "先问我")),
+                                (
+                                    OverwritePolicy::OverwriteAll,
+                                    crate::i18n::tr(ctx, "Overwrite", "直接覆盖"),
+                                ),
+                                (
+                                    OverwritePolicy::SkipAll,
+                                    crate::i18n::tr(ctx, "Skip", "跳过"),
+                                ),
+                                (
+                                    OverwritePolicy::IfNewerAll,
+                                    crate::i18n::tr(ctx, "Only if newer", "只覆盖较新的"),
+                                ),
+                                (
+                                    OverwritePolicy::ResumeAll,
+                                    crate::i18n::tr(ctx, "Resume", "接着传"),
+                                ),
+                            ];
+                            for (policy, label) in choices {
+                                let mark = if queue.policy == policy { "● " } else { "  " };
+                                if crate::ui::chrome::popup_menu_button(
+                                    ui,
+                                    theme,
+                                    &format!("{mark}{label}"),
+                                )
+                                .clicked()
+                                {
+                                    queue.policy = policy;
+                                    ui.memory_mut(|m| m.close_popup());
+                                }
+                            }
+                        });
+                    });
+                if !just_toggled && area.response.clicked_elsewhere() {
+                    ui.memory_mut(|m| m.close_popup());
+                }
+            }
+        });
+    });
+
+    ui.horizontal(|ui| {
+        let dot = if failed > 0 {
+            theme.red_color()
+        } else if running.is_some() || !queued.is_empty() {
+            theme.amber_color()
+        } else {
+            theme.green_color()
+        };
+        let (dot_rect, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+        ui.painter().circle_filled(dot_rect.center(), 3.5, dot);
+        let host = if host_line.is_empty() {
+            crate::i18n::tr(ctx, "SFTP", "SFTP").to_string()
+        } else {
+            format!("SFTP  ·  {host_line}")
+        };
+        if ui
+            .add(
+                egui::Label::new(
+                    RichText::new(host)
+                        .font(egui::FontId::monospace(theme.font_size_caption()))
+                        .color(theme.text_tertiary()),
+                )
+                .sense(egui::Sense::click()),
+            )
+            .on_hover_text(crate::i18n::tr(ctx, "Connection details", "连接详情"))
+            .clicked()
+        {
+            *details_open = !*details_open;
+        }
+    });
+
+    if *details_open {
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(format!(
+                "{}  {local_cwd}",
+                crate::i18n::tr(ctx, "Local", "本机")
+            ))
+            .font(egui::FontId::monospace(theme.font_size_caption()))
+            .color(theme.text_secondary()),
+        );
+        ui.label(
+            RichText::new(format!(
+                "{}  {remote_cwd}",
+                crate::i18n::tr(ctx, "Remote", "远端")
+            ))
+            .font(egui::FontId::monospace(theme.font_size_caption()))
+            .color(theme.text_secondary()),
+        );
+        let snapshot: Vec<_> = queue.items.iter().rev().take(6).cloned().collect();
+        for item in snapshot.into_iter().rev() {
+            let state = match item.state {
+                XferState::Queued => crate::i18n::tr(ctx, "queued", "排队"),
+                XferState::Running => crate::i18n::tr(ctx, "running", "进行中"),
+                XferState::Done => crate::i18n::tr(ctx, "done", "完成"),
+                XferState::Failed => crate::i18n::tr(ctx, "failed", "失败"),
+                XferState::Cancelled => crate::i18n::tr(ctx, "cancelled", "已取消"),
+                XferState::Skipped => crate::i18n::tr(ctx, "skipped", "已跳过"),
+            };
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new(format!("{state}  {}", item.display_name()))
+                        .font(egui::FontId::monospace(theme.font_size_caption()))
+                        .color(theme.text_secondary()),
+                );
+                if item.state == XferState::Failed || item.state == XferState::Cancelled {
+                    if ui
+                        .small_button(crate::i18n::tr(ctx, "Retry", "重试"))
+                        .clicked()
+                    {
+                        action = XferStripAction::Retry(item.id);
+                    }
+                }
+            });
+        }
     }
 
     action

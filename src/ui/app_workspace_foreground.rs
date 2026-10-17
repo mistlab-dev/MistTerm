@@ -92,6 +92,25 @@ impl MistTermApp {
             } else if let Some(m) = sftp_ok {
                 self.notify_auto(m);
             }
+            if let Some(cmd) = self.sftp_panel.take_pending_terminal_cmd() {
+                let sent = self.active_tab.and_then(|idx| {
+                    self.tabs.get_mut(idx).and_then(|tab| {
+                        tab.active_terminal_mut().map(|term| {
+                            term.send_command(&cmd);
+                        })
+                    })
+                });
+                if sent.is_none() {
+                    self.notify_error(
+                        crate::i18n::tr(
+                            ctx,
+                            "No terminal is ready for this command.",
+                            "当前没有可以接收命令的终端。",
+                        )
+                        .to_string(),
+                    );
+                }
+            }
             if close_sftp_panel {
                 self.show_sftp_panel = false;
             }

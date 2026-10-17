@@ -114,6 +114,13 @@ impl SftpClient {
 
 impl SftpClient {
 
+    /// 把 `.`、`..` 解析成服务器上的绝对路径。
+    pub fn realpath(&self, path: &Path) -> Result<PathBuf, String> {
+        self.sftp
+            .realpath(path)
+            .map_err(|e| format!("Failed to resolve {}: {e}", path.display()))
+    }
+
     /// 列出目录内容
     pub fn list_dir(&self, path: &Path) -> Result<Vec<SftpEntry>, String> {
         let entries = self
