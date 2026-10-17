@@ -74,12 +74,15 @@ fn collect_local_dir(
     Ok(())
 }
 
-/// 名字像文本文件（可走远程编辑）；过大或明显二进制则否。
-pub(super) fn looks_like_editable_text(name: &str, size: u64) -> bool {
-    const MAX: u64 = 2 * 1024 * 1024;
-    if size > MAX {
-        return false;
-    }
+/// 不超过这个大小时，双击直接下到临时文件并打开，不再询问。
+pub(super) const PREVIEW_SILENT_MAX: u64 = 2 * 1024 * 1024;
+
+pub(super) fn preview_needs_confirm(size: u64) -> bool {
+    size > PREVIEW_SILENT_MAX
+}
+
+/// 名字像文本（不含体积判断）。
+pub(super) fn looks_like_text_name(name: &str) -> bool {
     let ext = Path::new(name)
         .extension()
         .and_then(|e| e.to_str())
@@ -134,6 +137,11 @@ pub(super) fn looks_like_editable_text(name: &str, size: u64) -> bool {
     ) && !name.ends_with(".min.js")
 }
 
+/// 名字像文本文件（可走远程编辑）；过大或明显二进制则否。
+pub(super) fn looks_like_editable_text(name: &str, size: u64) -> bool {
+    !preview_needs_confirm(size) && looks_like_text_name(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,6 +152,9 @@ mod tests {
         assert!(looks_like_editable_text("README", 100));
         assert!(!looks_like_editable_text("app.bin", 100));
         assert!(!looks_like_editable_text("big.log", 3 * 1024 * 1024));
+        assert!(looks_like_text_name("big.log"));
+        assert!(!preview_needs_confirm(100));
+        assert!(preview_needs_confirm(3 * 1024 * 1024));
     }
 
     #[test]

@@ -897,15 +897,9 @@ pub fn show_right_dock_foreground_body<R>(
     add_body: impl FnOnce(&mut Ui, f32) -> R,
 ) -> egui::InnerResponse<R> {
     let screen = ctx.screen_rect();
-    // 防护：槽位异常过宽时钉在右侧，防止 Middle Area 盖住整窗。
-    let mut paint = geom.paint;
-    if paint.width() > screen.width() * 0.55 {
-        let w = paint.width().min(screen.width() * 0.42).max(48.0);
-        paint = egui::Rect::from_min_max(
-            egui::pos2(screen.max.x - w, paint.min.y),
-            egui::pos2(screen.max.x, paint.max.y),
-        );
-    }
+    // 正文与壳层用同一块槽位。以前槽位一超过屏宽 55% 就把可点区钉回右侧 42%，
+    // 壳层仍铺满拖宽后的区域，终端又被裁掉，中间就剩一块黑。
+    let paint = geom.paint.intersect(screen);
     let inner = egui::Rect::from_min_max(
         egui::pos2(
             (geom.inner.min.x - geom.paint.min.x) + paint.min.x,

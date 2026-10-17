@@ -71,16 +71,24 @@ impl SftpBookmarkStore {
     }
 
     pub fn touch_recent_local(&mut self, path: &Path) {
-        push_unique_front(&mut self.recent_local, path_str(path), MAX_RECENT);
+        let item = path_str(path);
+        if !is_menu_path(&item) {
+            return;
+        }
+        push_unique_front(&mut self.recent_local, item, MAX_RECENT);
         self.save();
     }
 
     pub fn touch_recent_remote(&mut self, host_key: &str, path: &Path) {
+        let item = path_str(path);
+        if !is_menu_path(&item) {
+            return;
+        }
         let list = self
             .recent_remote_by_host
             .entry(host_key.to_string())
             .or_default();
-        push_unique_front(list, path_str(path), MAX_RECENT);
+        push_unique_front(list, item, MAX_RECENT);
         self.save();
     }
 
@@ -101,6 +109,11 @@ impl SftpBookmarkStore {
 
 fn path_str(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+fn is_menu_path(path: &str) -> bool {
+    let trimmed = path.trim();
+    !trimmed.is_empty() && trimmed != "."
 }
 
 fn push_unique_front(list: &mut Vec<String>, item: String, max: usize) {

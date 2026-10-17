@@ -1442,6 +1442,7 @@ impl TerminalView {
                                 ui.set_min_height(scroll_h);
                                 ui.set_max_height(scroll_h);
                                 egui::ScrollArea::vertical()
+                        .id_source(ui.id().with("terminal_scroll"))
                         .auto_shrink([false, false])
                         .enable_scrolling(false)
                         .drag_to_scroll(false)
@@ -1493,7 +1494,7 @@ impl TerminalView {
                                         ui.set_min_height(te_h);
                                         ui.set_max_height(te_h);
                                         egui::TextEdit::multiline(&mut display_view)
-                                            .id_source("terminal_text_area")
+                                            .id_source(ui.id().with("terminal_text_area"))
                                             .margin(egui::vec2(0.0, 0.0))
                                             .horizontal_align(egui::Align::LEFT)
                                             .vertical_align(egui::Align::TOP)
@@ -1575,6 +1576,14 @@ impl TerminalView {
                             if needs_cell_bg {
                                 let painter =
                                     ui.painter().clone().with_layer_id(response.layer_id);
+                                // TextEdit 已经画过一层字。只补选区底再叠第二层时，
+                                // 没被底色盖住的字会叠成两层，看起来整屏变亮。先铺终端底再画一次。
+                                let galley_rect =
+                                    egui::Rect::from_min_size(text_draw_pos, galley.size());
+                                let cover = text_rect.union(galley_rect);
+                                if cover.width() > 0.0 && cover.height() > 0.0 {
+                                    painter.rect_filled(cover, 0.0, shell.terminal_bg);
+                                }
                                 Self::paint_terminal_cell_backgrounds(
                                     &painter,
                                     text_draw_pos,
