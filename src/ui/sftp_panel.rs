@@ -40,6 +40,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
+/// Bottom flux transfer strip height reserved under the dual panes (points).
+/// Layout: top pad 4 + track hit 8 + status row (~22) + host row (~16)
+/// + two `item_spacing.y` (theme default 8) ≈ 66; 72 leaves a small margin so
+/// the green-dot host line is not clipped under the file lists.
+const FLUX_XFER_STRIP_RESERVE: f32 = 72.0;
+
 enum SftpJobResult {
     Listed {
         dir: PathBuf,
@@ -4153,7 +4159,7 @@ impl SftpPanel {
         } else {
             8.0
         };
-        let panes_h = (avail_h - reserve - 52.0).max(140.0);
+        let panes_h = (avail_h - reserve - FLUX_XFER_STRIP_RESERVE).max(140.0);
         let gap = 1.0;
         let pane_w = ((content_w - gap) * 0.5).max(96.0);
         ui.horizontal(|ui| {
