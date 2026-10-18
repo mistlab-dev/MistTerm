@@ -540,7 +540,9 @@ impl MistTermApp {
             ToastAction::SaveSuggestedSnippet => {
                 let pending = self.pending_suggested_snippet.clone();
                 if let Some((_tab_idx, fragment)) = pending {
-                    let (is_new, title) = self.save_suggested_snippet_to_personal(&fragment);
+                    let (is_new, _stored_title) =
+                        self.save_suggested_snippet_to_personal(&fragment);
+                    let title = crate::i18n::fragment_display_title(ctx, &fragment);
                     if let Some(t) = &mut self.active_toast {
                         t.secondary_action = None;
                         t.secondary_action_label = None;

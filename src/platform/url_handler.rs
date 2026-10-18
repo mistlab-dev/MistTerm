@@ -1,4 +1,4 @@
-//! 把 Mist 登记为浏览器里 `ssh://` 链接的打开方式（Windows、Linux；macOS 暂不做）。
+//! 把 MistTerm 登记为浏览器里 `ssh://` 链接的打开方式（Windows、Linux；macOS 暂不做）。
 //!
 //! - Windows：写当前用户的注册表 `HKCU\Software\Classes\ssh`（安装版的安装程序也会写同样的键，便携版用设置里的按钮）。
 //! - Linux：在 `~/.local/share/applications` 放一个 `mistterm-ssh.desktop`，再用 `xdg-mime` 设为 `x-scheme-handler/ssh` 的默认程序。
@@ -26,7 +26,7 @@ pub fn supported() -> bool {
 }
 
 fn current_exe() -> Result<PathBuf, String> {
-    std::env::current_exe().map_err(|e| format!("找不到 Mist 程序位置：{e}"))
+    std::env::current_exe().map_err(|e| format!("找不到 MistTerm 程序位置：{e}"))
 }
 
 // ---------------------------------------------------------------- Linux
@@ -213,7 +213,7 @@ pub fn status() -> HandlerStatus {
     if ours {
         HandlerStatus::ThisApp
     } else {
-        HandlerStatus::Other(format!("{LINUX_DESKTOP_FILE}（指向另一个位置的 Mist）"))
+        HandlerStatus::Other(format!("{LINUX_DESKTOP_FILE}（指向另一个位置的 MistTerm）"))
     }
 }
 

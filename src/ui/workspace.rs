@@ -1541,17 +1541,20 @@ impl MistTermApp {
                                 let search_lower = self.quick_selector.search_query.to_lowercase();
 
                                 for (idx, fragment) in fragments.iter().enumerate() {
-                                    // 搜索过滤
-                                    if !search_lower.is_empty()
-                                        && !fragment.title.to_lowercase().contains(&search_lower)
-                                        && !fragment.command.to_lowercase().contains(&search_lower)
-                                    {
+                                    // 搜索过滤（含 starter 英/中标题）
+                                    if !crate::i18n::fragment_matches_search(
+                                        ui.ctx(),
+                                        fragment,
+                                        &search_lower,
+                                    ) {
                                         continue;
                                     }
 
                                     let is_selected = idx == self.quick_selector.selected_index;
+                                    let title =
+                                        crate::i18n::fragment_display_title(ui.ctx(), fragment);
 
-                                    if ui.selectable_label(is_selected, &fragment.title).clicked() {
+                                    if ui.selectable_label(is_selected, title).clicked() {
                                         // 点击执行
                                         self.execute_fragment(ctx, fragment);
                                         self.quick_selector.open = false;
@@ -1742,7 +1745,9 @@ impl MistTermApp {
                                                 } else {
                                                     self.pending_fragment_id = Some(fid.clone());
                                                     self.pending_fragment_name =
-                                                        fragment.title.clone();
+                                                        crate::i18n::fragment_display_title(
+                                                            ctx, &fragment,
+                                                        );
                                                     self.pending_fragment_command = cmd;
                                                     self.pending_fragment_vars = needs
                                                         .into_iter()

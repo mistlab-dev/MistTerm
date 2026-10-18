@@ -43,8 +43,10 @@ fn make_fragment(command: impl Into<String>, vars: &[&str]) -> FragmentStats {
     FragmentStats {
         id: "t".into(),
         title: "t".into(),
+        title_en: None,
         command,
         category: "c".into(),
+        category_en: None,
         variables: vars
             .iter()
             .map(|n| FragmentVariable::new(n, n))

@@ -88,7 +88,10 @@ impl MistTermApp {
             );
             let (sftp_ok, sftp_err) = self.sftp_panel.take_pending_status();
             if let Some(e) = sftp_err {
-                self.notify_error(e);
+                self.notify_error(crate::i18n::localize_backend_error(
+                    crate::i18n::language(ctx),
+                    &e,
+                ));
             } else if let Some(m) = sftp_ok {
                 self.notify_auto(m);
             }

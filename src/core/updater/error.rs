@@ -75,8 +75,8 @@ impl UpdateError {
                 "下载的文件已损坏或被改动，没有安装。",
             ),
             UpdateError::Locked => t(
-                "Another update is already running (in another Mist window or the mist command).",
-                "已有另一个更新在进行（可能在别的 Mist 窗口或 mist 命令里）。",
+                "Another update is already running (in another MistTerm window or the mist command).",
+                "已有另一个更新在进行（可能在别的 MistTerm 窗口或 mist 命令里）。",
             ),
             UpdateError::NotWritable(dir) => {
                 if zh {

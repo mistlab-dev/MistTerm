@@ -57,7 +57,7 @@ pub fn apply_preferred_english_input_source() {}
 
 /// 启动 MistTerm GUI 界面
 pub fn run_gui() {
-    log::info!("Mist GUI starting");
+    log::info!("MistTerm GUI starting");
 
     #[cfg(target_os = "macos")]
     {

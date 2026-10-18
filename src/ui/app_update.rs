@@ -240,10 +240,10 @@ impl MistTermApp {
             if let Some(info) = self.update_ui.info.clone() {
                 let zh = is_zh(ctx);
                 let text = if zh {
-                    format!("Mist {} 已发布，你现在用的是 {}。", info.manifest.version, info.current)
+                    format!("MistTerm {} 已发布，你现在用的是 {}。", info.manifest.version, info.current)
                 } else {
                     format!(
-                        "Mist {} is available. You're using {}.",
+                        "MistTerm {} is available. You're using {}.",
                         info.manifest.version, info.current
                     )
                 };
@@ -527,9 +527,9 @@ impl MistTermApp {
                 self.update_ui.phase = Phase::Installed(version.clone());
                 if !self.update_ui.show_dialog {
                     let text = if is_zh(ctx) {
-                        format!("Mist {version} 已经装好，重启 Mist 后生效。")
+                        format!("MistTerm {version} 已经装好，重启 MistTerm 后生效。")
                     } else {
-                        format!("Mist {version} is installed. Restart Mist to start using it.")
+                        format!("MistTerm {version} is installed. Restart MistTerm to start using it.")
                     };
                     self.push_action_toast_titled(
                         ToastKind::Success,
@@ -541,7 +541,7 @@ impl MistTermApp {
                 }
             }
             Ok(ApplyOutcome::InstallerStarted { .. }) => {
-                // 安装程序会关闭并重新打开 Mist；这里先自己退出。
+                // 安装程序会关闭并重新打开 MistTerm；这里先自己退出。
                 self.update_ui.close_requested = true;
                 ctx.request_repaint();
             }
@@ -567,8 +567,8 @@ impl MistTermApp {
         let Some(exe) = self.update_ui.startup_exe.clone() else {
             self.notify_error(crate::i18n::tr(
                 ctx,
-                "Couldn't restart Mist. Please close it and open it again.",
-                "无法自动重启，请手动关闭再打开 Mist。",
+                "Couldn't restart MistTerm. Please close it and open it again.",
+                "无法自动重启，请手动关闭再打开 MistTerm。",
             ));
             return;
         };
@@ -597,8 +597,8 @@ impl MistTermApp {
                 log::warn!("updater: restart failed: {e}");
                 self.notify_error(crate::i18n::tr(
                     ctx,
-                    "Couldn't restart Mist. Please close it and open it again.",
-                    "无法自动重启，请手动关闭再打开 Mist。",
+                    "Couldn't restart MistTerm. Please close it and open it again.",
+                    "无法自动重启，请手动关闭再打开 MistTerm。",
                 ));
             }
         }
@@ -701,8 +701,8 @@ impl MistTermApp {
                         let text = match c {
                             Confirm::Restart if zh => format!("当前有 {connected} 个已连接的 SSH 会话，重启会断开它们。确定现在重启吗？"),
                             Confirm::Restart => format!("{connected} SSH session(s) are connected. Restarting will disconnect them. Restart now?"),
-                            Confirm::Installer if zh => format!("当前有 {connected} 个已连接的 SSH 会话。安装程序会关闭 Mist，这些会话会断开。确定继续吗？"),
-                            Confirm::Installer => format!("{connected} SSH session(s) are connected. The installer will close Mist and disconnect them. Continue?"),
+                            Confirm::Installer if zh => format!("当前有 {connected} 个已连接的 SSH 会话。安装程序会关闭 MistTerm，这些会话会断开。确定继续吗？"),
+                            Confirm::Installer => format!("{connected} SSH session(s) are connected. The installer will close MistTerm and disconnect them. Continue?"),
                         };
                         body(ui, &text);
                         ui.add_space(theme.spacing_md());
@@ -732,7 +732,7 @@ impl MistTermApp {
                             let text = if zh {
                                 format!("已是最新版本（{v}）。")
                             } else {
-                                format!("You're up to date. Mist {v} is the latest version.")
+                                format!("You're up to date. MistTerm {v} is the latest version.")
                             };
                             body(ui, &text);
                             ui.add_space(theme.spacing_md());
@@ -762,9 +762,9 @@ impl MistTermApp {
                                 return;
                             };
                             let headline = if zh {
-                                format!("Mist {} 已发布，你现在用的是 {}。", info.manifest.version, info.current)
+                                format!("MistTerm {} 已发布，你现在用的是 {}。", info.manifest.version, info.current)
                             } else {
-                                format!("Mist {} is available. You're using {}.", info.manifest.version, info.current)
+                                format!("MistTerm {} is available. You're using {}.", info.manifest.version, info.current)
                             };
                             ui.label(
                                 egui::RichText::new(headline)
@@ -849,15 +849,15 @@ impl MistTermApp {
                                 InstallPlan::Auto { .. } if info.plan.uses_installer() => {
                                     hint(ui, crate::i18n::tr(
                                         ctx,
-                                        "The installer will close Mist (connected SSH sessions will be disconnected), update it, and open it again.",
-                                        "安装程序会先关闭 Mist（已连接的 SSH 会话会断开），装好后自动重新打开。",
+                                        "The installer will close MistTerm (connected SSH sessions will be disconnected), update it, and open it again.",
+                                        "安装程序会先关闭 MistTerm（已连接的 SSH 会话会断开），装好后自动重新打开。",
                                     ));
                                 }
                                 InstallPlan::Auto { .. } => {
                                     hint(ui, crate::i18n::tr(
                                         ctx,
-                                        "Mist downloads the new version, checks that the file is intact, then replaces the program. Sessions and settings are kept. The new version is used after you restart Mist.",
-                                        "Mist 会下载新版本，确认文件完好后再替换程序。会话和设置都会保留，重启 Mist 后生效。",
+                                        "MistTerm downloads the new version, checks that the file is intact, then replaces the program. Sessions and settings are kept. The new version is used after you restart MistTerm.",
+                                        "MistTerm 会下载新版本，确认文件完好后再替换程序。会话和设置都会保留，重启 MistTerm 后生效。",
                                     ));
                                 }
                                 InstallPlan::Manual { reason, .. } => {
@@ -942,15 +942,15 @@ impl MistTermApp {
                         }
                         Phase::Installed(v) => {
                             let text = if zh {
-                                format!("Mist {v} 已经装好，重启 Mist 后生效。")
+                                format!("MistTerm {v} 已经装好，重启 MistTerm 后生效。")
                             } else {
-                                format!("Mist {v} is installed. Restart Mist to start using it.")
+                                format!("MistTerm {v} is installed. Restart MistTerm to start using it.")
                             };
                             body(ui, &text);
                             hint(ui, crate::i18n::tr(
                                 ctx,
-                                "No rush: the new version opens the next time you start Mist.",
-                                "不急着重启也可以，下次打开 Mist 就是新版本。",
+                                "No rush: the new version opens the next time you start MistTerm.",
+                                "不急着重启也可以，下次打开 MistTerm 就是新版本。",
                             ));
                             ui.add_space(theme.spacing_md());
                             crate::ui::chrome::modal_footer_actions(ui, theme, |ui, theme| {
@@ -1123,13 +1123,13 @@ impl MistTermApp {
         }
         small(ui, crate::i18n::tr(
             ctx,
-            "Installing always waits for your click, and Mist never restarts on its own. Channel: stable.",
-            "安装前都会先问你，Mist 也不会自己重启。更新渠道：稳定版。",
+            "Installing always waits for your click, and MistTerm never restarts on its own. Channel: stable.",
+            "安装前都会先问你，MistTerm 也不会自己重启。更新渠道：稳定版。",
         ));
         small(ui, crate::i18n::tr(
             ctx,
-            "Checking sends one request to mistlab.dev and GitHub with only the Mist version and system type, no account or device information. Like any website, those servers can see your IP address.",
-            "检查更新只会向 mistlab.dev 和 GitHub 发一次请求，只带 Mist 版本号和系统类型，不带账号或设备信息。和访问任何网站一样，对方能看到你的 IP 地址。",
+            "Checking sends one request to mistlab.dev and GitHub with only the MistTerm version and system type, no account or device information. Like any website, those servers can see your IP address.",
+            "检查更新只会向 mistlab.dev 和 GitHub 发一次请求，只带 MistTerm 版本号和系统类型，不带账号或设备信息。和访问任何网站一样，对方能看到你的 IP 地址。",
         ));
         ui.add_space(theme.spacing_sm());
         self.update_about_row(ui, ctx, theme);

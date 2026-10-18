@@ -2050,7 +2050,16 @@ impl SftpPanel {
             )
             .to_string();
         }
-        msg.to_string()
+        if msg.contains("Failed to read local directory") || msg.contains("read_dir entry") {
+            return crate::i18n::tr(
+                ctx,
+                "Couldn't read this folder. Check the path and permissions.",
+                "无法读取该目录，请检查路径和权限。",
+            )
+            .to_string();
+        }
+        // Fall back to shared backend-error map (EN stays as-is).
+        crate::i18n::localize_backend_error(crate::i18n::language(ctx), msg)
     }
 
     fn try_navigate_local_path(&mut self, ctx: &egui::Context) {
@@ -2114,7 +2123,7 @@ impl SftpPanel {
             )
             .to_string();
         }
-        msg.to_string()
+        crate::i18n::localize_backend_error(crate::i18n::language(ctx), msg)
     }
 
     /// 通过 shell 泵命令队列下发 SFTP 任务，避免与 PTY 读循环并发占用 libssh2 session。

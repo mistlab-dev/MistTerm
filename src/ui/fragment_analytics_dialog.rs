@@ -250,7 +250,7 @@ pub fn show_fragment_analytics_modal(
                             ui.horizontal(|ui| {
                                 ui.label(format!(
                                     "· {} — {:.1}s ({}×)",
-                                    f.title,
+                                    crate::i18n::fragment_display_title(ctx, f),
                                     f.avg_time_ms() as f32 / 1000.0,
                                     f.usage_count
                                 ));
@@ -269,7 +269,9 @@ pub fn show_fragment_analytics_modal(
                             ui.horizontal(|ui| {
                                 ui.label(format!(
                                     "· {} — {:.0}% fail ({}×)",
-                                    f.title, err_pct, f.usage_count
+                                    crate::i18n::fragment_display_title(ctx, f),
+                                    err_pct,
+                                    f.usage_count
                                 ));
                             });
                             metric_bar(
@@ -399,7 +401,7 @@ fn top_list(
             ui.label(format!(
                 "{}. {} — {}× · {:.0}%",
                 i + 1,
-                f.title,
+                crate::i18n::fragment_display_title(ctx, f),
                 f.usage_count,
                 f.success_rate()
             ));
