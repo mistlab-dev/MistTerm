@@ -86,7 +86,7 @@ fn default_cwd() -> PathBuf {
     dirs::home_dir().unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn build_command(program: &str) -> CommandBuilder {
+fn build_command(program: &str, cwd: &Path) -> CommandBuilder {
     let mut cmd = CommandBuilder::new(program);
     #[cfg(windows)]
     {
@@ -95,9 +95,7 @@ fn build_command(program: &str) -> CommandBuilder {
             cmd.args(["-NoLogo"]);
         }
     }
-    if let Some(home) = dirs::home_dir() {
-        let _ = cmd.cwd(home);
-    }
+    let _ = cmd.cwd(cwd);
     // 从 Finder / Dock 启动时环境里没有 TERM：zsh 会按「哑终端」处理，退格只回显一个空格
     // （看起来像删除变成了插入空格）。本终端兼容 xterm，固定告诉 shell。
     cmd.env("TERM", "xterm-256color");
@@ -164,8 +162,21 @@ pub fn spawn_local_shell(
     cols: u32,
     rows: u32,
 ) -> Result<(Receiver<SshMessage>, LocalShellHandle), String> {
+    spawn_local_shell_in(cols, rows, &default_cwd())
+}
+
+/// 在指定目录启动本机 shell。目录不存在时退回用户主目录。
+pub fn spawn_local_shell_in(
+    cols: u32,
+    rows: u32,
+    cwd: &Path,
+) -> Result<(Receiver<SshMessage>, LocalShellHandle), String> {
     let program = default_shell_program();
-    let cwd = default_cwd();
+    let cwd = if cwd.is_dir() {
+        cwd.to_path_buf()
+    } else {
+        default_cwd()
+    };
     let session_id = NEXT_LOCAL_SESSION_ID.fetch_add(1, Ordering::Relaxed);
     let (msg_tx, msg_rx) = mpsc::channel::<SshMessage>();
     let (input_tx, input_rx) = sync_channel::<Vec<u8>>(256);
@@ -230,7 +241,7 @@ fn run_local_shell(
         })
         .map_err(|e| format!("openpty: {e}"))?;
 
-    let mut cmd = build_command(program);
+    let mut cmd = build_command(program, cwd);
     let _ = cmd.cwd(cwd);
     let mut child = pair
         .slave

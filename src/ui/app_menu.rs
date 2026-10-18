@@ -25,12 +25,69 @@ impl MistTermApp {
                 self.show_new_session_dialog = true;
                 ui.close_menu();
             }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.new_tab).clicked() {
+            let new_tab_accel = crate::platform::new_tab_accel();
+            if crate::ui::chrome::popup_menu_button_shortcut(
+                ui,
+                theme,
+                l.new_tab,
+                Some(&new_tab_accel),
+            )
+            .clicked()
+            {
                 self.open_new_tab_from_selection(ctx);
                 ui.close_menu();
             }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.local_shell).clicked() {
+            let local_shell_accel = crate::platform::local_shell_accel();
+            if crate::ui::chrome::popup_menu_button_shortcut(
+                ui,
+                theme,
+                l.local_shell,
+                Some(&local_shell_accel),
+            )
+            .clicked()
+            {
                 self.open_local_shell_tab(ctx);
+                ui.close_menu();
+            }
+            ui.separator();
+            if crate::ui::chrome::popup_menu_button_accel_shift(
+                ui,
+                theme,
+                l.split_horizontal,
+                "d",
+            )
+            .clicked()
+            {
+                if let Some(idx) = self.active_tab {
+                    self.split_tab_at(ctx, idx, crate::ui::tab_pane::TabLayout::SplitHorizontal);
+                }
+                ui.close_menu();
+            }
+            if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, l.split_vertical, "u")
+                .clicked()
+            {
+                if let Some(idx) = self.active_tab {
+                    self.split_tab_at(ctx, idx, crate::ui::tab_pane::TabLayout::SplitVertical);
+                }
+                ui.close_menu();
+            }
+            let broadcast_on = self
+                .active_tab
+                .and_then(|idx| self.tabs.get(idx))
+                .is_some_and(|t| t.broadcast_input);
+            let broadcast_label = if broadcast_on {
+                format!("✓ {}", l.broadcast_input)
+            } else {
+                l.broadcast_input.to_string()
+            };
+            if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, &broadcast_label, "b")
+                .clicked()
+            {
+                self.toggle_broadcast_input(ctx);
+                ui.close_menu();
+            }
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.merge_split).clicked() {
+                self.merge_active_split(ctx);
                 ui.close_menu();
             }
             if crate::ui::chrome::popup_menu_button_enabled(
@@ -49,7 +106,15 @@ impl MistTermApp {
                 ui.close_menu();
             }
             ui.separator();
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.close_tab).clicked() {
+            let close_tab_accel = crate::platform::close_tab_accel();
+            if crate::ui::chrome::popup_menu_button_shortcut(
+                ui,
+                theme,
+                l.close_tab,
+                Some(&close_tab_accel),
+            )
+            .clicked()
+            {
                 self.request_close_active_tab();
                 ui.close_menu();
             }
@@ -72,20 +137,28 @@ impl MistTermApp {
         });
         egui::menu::menu_button(ui, label(l.edit_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.copy).clicked() {
+            let copy_accel = crate::platform::terminal_copy_accel();
+            if crate::ui::chrome::popup_menu_button_shortcut(ui, theme, l.copy, Some(&copy_accel))
+                .clicked()
+            {
                 self.menu_copy_for_context(ctx);
                 ui.close_menu();
             }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.paste).clicked() {
+            let paste_accel = crate::platform::terminal_paste_accel();
+            if crate::ui::chrome::popup_menu_button_shortcut(ui, theme, l.paste, Some(&paste_accel))
+                .clicked()
+            {
                 self.menu_paste_for_context(ctx);
                 ui.close_menu();
             }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.select_all).clicked() {
+            if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, l.select_all, "a").clicked()
+            {
                 self.menu_select_all_for_context(ctx);
                 ui.close_menu();
             }
             ui.separator();
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.find_in_terminal).clicked() {
+            if crate::ui::chrome::popup_menu_button_accel(ui, theme, l.find_in_terminal, "f").clicked()
+            {
                 self.toggle_terminal_search();
                 ui.close_menu();
             }

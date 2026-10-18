@@ -3711,10 +3711,13 @@ pub fn activity_rail_button(
     id: IconId,
     selected: bool,
     tooltip: &str,
+    caption: &str,
 ) -> Response {
     let side = theme.size_activity_rail_btn();
-    let size = egui::vec2(side, side);
+    let label_h = if caption.is_empty() { 0.0 } else { 14.0 };
+    let size = egui::vec2(side, side + label_h);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let icon_rect = egui::Rect::from_min_size(rect.min, egui::vec2(side, side));
     let hovered = response.hovered();
     let pressed = response.is_pointer_button_down_on();
     if selected || hovered || pressed {
@@ -3725,8 +3728,11 @@ pub fn activity_rail_button(
         } else {
             28
         };
-        ui.painter()
-            .rect_filled(rect, theme.radius_list_item(), theme.accent_alpha(a));
+        ui.painter().rect_filled(
+            icon_rect,
+            theme.radius_list_item(),
+            theme.accent_alpha(a),
+        );
     }
     let color = if selected {
         theme.accent_color()
@@ -3735,9 +3741,23 @@ pub fn activity_rail_button(
     } else {
         theme.color_toolbar_glyph_idle()
     };
-    let icon_px = theme.size_icon_glyph().max(18.0);
-    let icon_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(icon_px, icon_px));
-    icons::paint_icon(ui, icon_rect, id, color, icon_px);
+    let icon_px = theme.size_activity_rail_icon().max(18.0);
+    let glyph = egui::Rect::from_center_size(icon_rect.center(), egui::vec2(icon_px, icon_px));
+    icons::paint_icon(ui, glyph, id, color, icon_px);
+    if !caption.is_empty() {
+        let label_color = if selected {
+            theme.accent_color()
+        } else {
+            theme.text_secondary()
+        };
+        ui.painter().text(
+            egui::pos2(icon_rect.center().x, rect.bottom() - 1.0),
+            egui::Align2::CENTER_BOTTOM,
+            caption,
+            egui::FontId::proportional(10.0),
+            label_color,
+        );
+    }
     if hovered {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }

@@ -37,8 +37,9 @@ pub use shell::{open_file, open_url, reveal_directory};
 pub use version::{print_version_line, APP_VERSION};
 pub use shortcuts::{
     accel, accel_enter, accel_literal, accel_shift, close_tab_accel, close_tab_help_line, help_line,
-    new_tab_accel, new_tab_help_line, primary_modifier_label, split_pane_focus_accel,
-    split_pane_focus_help_line, terminal_history_accel, terminal_interrupt_accel,
+    local_shell_accel, local_shell_help_line, new_tab_accel, new_tab_help_line,
+    primary_modifier_label, split_pane_focus_accel, split_pane_focus_help_line,
+    terminal_copy_accel, terminal_history_accel, terminal_interrupt_accel, terminal_paste_accel,
 };
 #[cfg(target_os = "macos")]
 pub use macos_launch::activate_gui_application;

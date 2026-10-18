@@ -449,6 +449,7 @@ impl MistTermApp {
                                         egui::Layout::top_down(egui::Align::LEFT),
                                         |ui| {
                                             ui.set_min_height(term_body_h + agent_banner_h);
+                                            ui.set_max_height(term_body_h + agent_banner_h);
                                             ui.set_max_width(term_col_w);
                                             if agent_banner_h > 0.0 {
                                                 Self::paint_agent_audit_degraded_banner(
@@ -456,7 +457,7 @@ impl MistTermApp {
                                                 );
                                             }
                                             if let Some(idx) = self.active_tab {
-                                                self.maybe_collapse_narrow_split(idx, term_col_w);
+                                                self.maybe_collapse_narrow_split(ctx, idx, term_col_w);
                                                 let kb_capture =
                                                     self.should_capture_pty_keyboard(ctx);
                                                 let active_pane =
@@ -466,6 +467,7 @@ impl MistTermApp {
                                                 };
                                                 let mut close_pane_req = None;
                                                 if let Some(tab) = self.tabs.get_mut(idx) {
+                                                    tab.sync_broadcast_targets();
                                                     if tab.panes.is_empty() {
                                                         self.show_welcome(ui);
                                                     } else {
@@ -1867,6 +1869,7 @@ impl MistTermApp {
             let mut reconnect_idx = None;
             let mut split_h_idx = None;
             let mut split_v_idx = None;
+            let mut broadcast_idx = None;
             let mut unsplit_idx = None;
             let mut close_pane_tab = None;
             for (idx, tab) in self.tabs.iter().enumerate() {
@@ -1950,7 +1953,7 @@ impl MistTermApp {
                     }
                     ui.separator();
                     if tab.can_split() {
-                        if crate::ui::chrome::popup_menu_button(
+                        if crate::ui::chrome::popup_menu_button_accel_shift(
                             ui,
                             theme,
                             crate::i18n::tr(
@@ -1958,13 +1961,14 @@ impl MistTermApp {
                                 "Split left / right",
                                 "左右分屏",
                             ),
+                            "d",
                         )
                         .clicked()
                         {
                             split_h_idx = Some(idx);
                             ui.close_menu();
                         }
-                        if crate::ui::chrome::popup_menu_button(
+                        if crate::ui::chrome::popup_menu_button_accel_shift(
                             ui,
                             theme,
                             crate::i18n::tr(
@@ -1972,6 +1976,7 @@ impl MistTermApp {
                                 "Split top / bottom",
                                 "上下分屏",
                             ),
+                            "u",
                         )
                         .clicked()
                         {
@@ -1980,6 +1985,22 @@ impl MistTermApp {
                         }
                     }
                     if tab.is_split() {
+                        let broadcast_label = if tab.broadcast_input {
+                            crate::i18n::tr(ctx, "✓ Broadcast input", "✓ 同时输入")
+                        } else {
+                            crate::i18n::tr(ctx, "Broadcast input", "同时输入")
+                        };
+                        if crate::ui::chrome::popup_menu_button_accel_shift(
+                            ui,
+                            theme,
+                            broadcast_label,
+                            "b",
+                        )
+                        .clicked()
+                        {
+                            broadcast_idx = Some(idx);
+                            ui.close_menu();
+                        }
                         if crate::ui::chrome::popup_menu_button(
                             ui,
                             theme,
@@ -2074,6 +2095,10 @@ impl MistTermApp {
                     idx,
                     crate::ui::tab_pane::TabLayout::SplitVertical,
                 );
+            }
+            if let Some(idx) = broadcast_idx {
+                self.active_tab = Some(idx);
+                self.toggle_broadcast_input(ctx);
             }
             if let Some(idx) = unsplit_idx {
                 self.active_tab = Some(idx);

@@ -6,7 +6,7 @@ use crate::i18n;
 use crate::ui::terminal::TerminalView;
 
 pub const MAX_PANES_PER_TAB: usize = 8;
-pub const NARROW_SPLIT_COLLAPSE_W: f32 = 480.0;
+pub const NARROW_SPLIT_COLLAPSE_W: f32 = 280.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TabLayout {
@@ -135,6 +135,8 @@ pub struct TerminalTab {
     pub panes: Vec<TerminalPane>,
     /// 窗格标题拖放换位源索引
     pub drag_source_pane: Option<usize>,
+    /// 开着时，当前窗格的键入会同时发到本标签的其它窗格。
+    pub broadcast_input: bool,
 }
 
 impl TerminalTab {
@@ -144,6 +146,7 @@ impl TerminalTab {
             active_pane: 0,
             panes: vec![pane],
             drag_source_pane: None,
+            broadcast_input: false,
         }
     }
 
@@ -263,6 +266,7 @@ impl TerminalTab {
         if self.panes.len() == 1 {
             self.split_root = SplitNode::Pane(0);
             self.active_pane = 0;
+            self.broadcast_input = false;
         }
         true
     }
@@ -280,6 +284,35 @@ impl TerminalTab {
         self.panes = vec![kept];
         self.split_root = SplitNode::Pane(0);
         self.active_pane = 0;
+        self.broadcast_input = false;
+    }
+
+    /// 只给当前焦点窗格挂上其它窗格的输入句柄。
+    pub fn sync_broadcast_targets(&mut self) {
+        if !self.broadcast_input || !self.is_split() {
+            for pane in &mut self.panes {
+                pane.terminal.clear_broadcast_targets();
+            }
+            if !self.is_split() {
+                self.broadcast_input = false;
+            }
+            return;
+        }
+        let active = self.active_pane.min(self.panes.len().saturating_sub(1));
+        let targets: Vec<_> = self
+            .panes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != active)
+            .filter_map(|(_, pane)| pane.terminal.clone_input_target())
+            .collect();
+        for (i, pane) in self.panes.iter_mut().enumerate() {
+            if i == active {
+                pane.terminal.set_broadcast_targets(targets.clone());
+            } else {
+                pane.terminal.clear_broadcast_targets();
+            }
+        }
     }
 
     pub fn add_pane_with_layout(&mut self, pane: TerminalPane, layout: TabLayout) {
@@ -416,8 +449,12 @@ fn render_node(
                 let w1 = main * *ratio;
                 let w2 = main - w1;
                 ui.horizontal(|ui| {
+                    // 默认间距会把第二个窗格挤到下一行，整列就被撑出窗口底边。
+                    ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
                     ui.set_max_width(w);
+                    ui.set_min_width(w);
                     ui.set_min_height(h);
+                    ui.set_max_height(h);
                     render_node(
                         ui,
                         tab,
@@ -460,7 +497,11 @@ fn render_node(
                 let h1 = main * *ratio;
                 let h2 = main - h1;
                 ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
                     ui.set_max_width(w);
+                    ui.set_min_width(w);
+                    ui.set_min_height(h);
+                    ui.set_max_height(h);
                     render_node(
                         ui,
                         tab,
@@ -522,11 +563,17 @@ fn render_one_pane(
     };
     let title = pane.title.clone();
     let active = tab.active_pane == pane_idx;
+    let broadcast = tab.broadcast_input;
     ui.push_id(("split_pane", pane_idx), |ui| {
-    ui.allocate_ui_with_layout(
-        egui::vec2(w, h),
-        egui::Layout::top_down(egui::Align::LEFT),
-        |ui| {
+    // 固定窗格矩形。用 allocate_ui_with_layout 时，终端内容一高过视口就会把父级撑出窗口。
+    let (pane_rect, _) = ui.allocate_exact_size(
+        egui::vec2(w.max(1.0), h.max(1.0)),
+        egui::Sense::hover(),
+    );
+    let mut pane_ui = ui.child_ui(pane_rect, egui::Layout::top_down(egui::Align::LEFT));
+    pane_ui.set_clip_rect(pane_rect.intersect(pane_ui.clip_rect()));
+    let ui = &mut pane_ui;
+    {
             if show_chrome {
                 let header_h = theme.font_size_caption() + 8.0;
                 let (header_rect, header_resp) =
@@ -543,6 +590,15 @@ fn render_one_pane(
                     egui::FontId::proportional(theme.font_size_caption()),
                     color,
                 );
+                if broadcast {
+                    ui.painter().text(
+                        header_rect.right_center() + egui::vec2(-26.0, 0.0),
+                        egui::Align2::RIGHT_CENTER,
+                        i18n::tr(ui.ctx(), "Broadcast", "同时输入"),
+                        egui::FontId::proportional(theme.font_size_caption()),
+                        theme.accent_color(),
+                    );
+                }
                 let close_rect = egui::Rect::from_min_size(
                     header_rect.right_top() + egui::vec2(-22.0, 2.0),
                     egui::vec2(20.0, header_h - 4.0),
@@ -583,7 +639,16 @@ fn render_one_pane(
                 show_pane(ui, &mut pane.terminal, w, terminal_search_open, cap);
                 pane.last_term_rect = ui.max_rect();
             }
-        },
-    );
+            let pane_rect = ui.max_rect();
+            let clicked_here = ui.input(|i| {
+                i.pointer.primary_released()
+                    && i.pointer
+                        .interact_pos()
+                        .is_some_and(|p| pane_rect.contains(p))
+            });
+            if clicked_here {
+                tab.focus_pane(pane_idx);
+            }
+    }
     });
 }

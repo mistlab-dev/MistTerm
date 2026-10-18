@@ -27,6 +27,7 @@ pub fn format_ssh_connect_error(lang: UiLanguage, message: &str) -> String {
     if lower.contains("connection timed out")
         || lower.contains("timed out")
         || lower.contains("operation timed out")
+        || lower.contains("did not properly respond")
     {
         return pick(
             "Connection timed out (~30s) — check network, firewall, and host reachability",
@@ -34,7 +35,7 @@ pub fn format_ssh_connect_error(lang: UiLanguage, message: &str) -> String {
         );
     }
 
-    if lower.contains("connection refused") {
+    if lower.contains("connection refused") || lower.contains("actively refused") {
         return pick(
             "Connection refused — port closed or SSH not listening",
             "连接被拒绝（端口未开放或目标未监听 SSH）",
@@ -56,6 +57,10 @@ pub fn format_ssh_connect_error(lang: UiLanguage, message: &str) -> String {
         || lower.contains("nodename nor servname")
         || lower.contains("could not resolve hostname")
         || lower.contains("failed to resolve host address")
+        || lower.contains("name or service not known")
+        || lower.contains("no such host")
+        || lower.contains("unknown host")
+        || lower.contains("no address associated")
     {
         return pick(
             "Could not resolve hostname — check DNS or the host name",
@@ -67,6 +72,13 @@ pub fn format_ssh_connect_error(lang: UiLanguage, message: &str) -> String {
         return pick(
             "Connection reset or closed by peer",
             "连接被对端重置或已断开",
+        );
+    }
+
+    if lower.contains("banner") || lower.contains("handshake") || lower.contains("kex") {
+        return pick(
+            "Could not talk to this SSH server. Check the address, port, and that SSH is running.",
+            "连不上这台服务器。请核对地址和端口，并确认对方开了 SSH。",
         );
     }
 
@@ -111,6 +123,35 @@ mod tests {
             "Authentication failed (password and SSH keys failed)",
         );
         assert!(s.to_lowercase().contains("authentication"));
+    }
+
+    #[test]
+    fn maps_handshake_banner_zh() {
+        let s = format_ssh_connect_error(
+            UiLanguage::Zh,
+            "SSH handshake failed: [Session(-13)] Failed getting banner",
+        );
+        assert!(s.contains("连不上"));
+        assert!(!s.contains("Session"));
+    }
+
+    #[test]
+    fn maps_linux_dns_and_macos_timeout() {
+        let dns = format_ssh_connect_error(
+            UiLanguage::Zh,
+            "failed to lookup address information: Name or service not known",
+        );
+        assert!(dns.contains("无法解析"));
+        let timeout = format_ssh_connect_error(
+            UiLanguage::Zh,
+            "TCP connection failed: Operation timed out (os error 60)",
+        );
+        assert!(timeout.contains("超时"));
+        let refused = format_ssh_connect_error(
+            UiLanguage::Zh,
+            "No connection could be made because the target machine actively refused it. (os error 10061)",
+        );
+        assert!(refused.contains("拒绝"));
     }
 
     #[test]
