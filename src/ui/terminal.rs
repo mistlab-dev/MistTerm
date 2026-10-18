@@ -3580,80 +3580,102 @@ impl TerminalView {
         }
 
         let mut action = ConnectionPlaceholderAction::None;
+        let max_w = (rect.width() - 64.0).clamp(200.0, 420.0);
+        // 勿用 centered_and_justified：Frame 会继承 main_justify，首个 label 被撑满整高，
+        // 按钮行可用高度被压成 0（dogfood：只见文案不见「取消/重试/编辑/关闭」）。
         ui.allocate_ui_at_rect(rect, |ui| {
-            ui.centered_and_justified(|ui| {
-                egui::Frame::none()
+            ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+            ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                let size_id = ui.id().with("connection_placeholder_block_h");
+                let prev_h = ui
+                    .ctx()
+                    .data(|d| d.get_temp::<f32>(size_id))
+                    .unwrap_or(96.0);
+                let top_pad = ((ui.available_height() - prev_h) * 0.5).max(0.0);
+                ui.add_space(top_pad);
+
+                let frame_resp = egui::Frame::none()
                     .fill(theme.bg_window_color())
                     .rounding(8.0)
                     .inner_margin(egui::Margin::symmetric(18.0, 14.0))
                     .show(ui, |ui| {
-                        ui.set_max_width((rect.width() - 64.0).clamp(200.0, 420.0));
-                        if let Some(err) = err.as_deref() {
-                            ui.label(
-                                egui::RichText::new(err)
-                                    .size(theme.font_size_body())
-                                    .color(theme.red_color()),
-                            );
-                            ui.add_space(theme.spacing_md());
-                            ui.horizontal_wrapped(|ui| {
-                                ui.spacing_mut().item_spacing.x = theme.spacing_sm();
-                                if crate::ui::chrome::modal_primary_button(
-                                    ui,
-                                    theme,
-                                    crate::i18n::tr(ui.ctx(), "Retry", "重试"),
-                                )
-                                .clicked()
-                                {
-                                    action = ConnectionPlaceholderAction::Retry;
-                                }
-                                if crate::ui::chrome::modal_secondary_button(
-                                    ui,
-                                    theme,
-                                    crate::i18n::tr(ui.ctx(), "Edit host", "编辑主机"),
-                                )
-                                .clicked()
-                                {
-                                    action = ConnectionPlaceholderAction::EditHost;
-                                }
-                                if crate::ui::chrome::modal_secondary_button(
-                                    ui,
-                                    theme,
-                                    crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
-                                )
-                                .clicked()
-                                {
-                                    action = ConnectionPlaceholderAction::DismissTab;
-                                }
-                            });
-                        } else if is_connecting {
-                            let host = self.connection_server_text();
-                            let text = if self.is_local_shell() {
-                                crate::i18n::tr(ui.ctx(), "Opening local terminal…", "正在打开本机终端…")
+                        // Frame 内再次钉死非 justify 的纵向布局，避免继承外层怪异 Layout。
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                            ui.set_min_width(max_w);
+                            ui.set_max_width(max_w);
+                            if let Some(err) = err.as_deref() {
+                                ui.label(
+                                    egui::RichText::new(err)
+                                        .size(theme.font_size_body())
+                                        .color(theme.red_color()),
+                                );
+                                ui.add_space(theme.spacing_md());
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.spacing_mut().item_spacing.x = theme.spacing_sm();
+                                    if crate::ui::chrome::modal_primary_button(
+                                        ui,
+                                        theme,
+                                        crate::i18n::tr(ui.ctx(), "Retry", "重试"),
+                                    )
+                                    .clicked()
+                                    {
+                                        action = ConnectionPlaceholderAction::Retry;
+                                    }
+                                    if crate::ui::chrome::modal_secondary_button(
+                                        ui,
+                                        theme,
+                                        crate::i18n::tr(ui.ctx(), "Edit host", "编辑主机"),
+                                    )
+                                    .clicked()
+                                    {
+                                        action = ConnectionPlaceholderAction::EditHost;
+                                    }
+                                    if crate::ui::chrome::modal_secondary_button(
+                                        ui,
+                                        theme,
+                                        crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
+                                    )
+                                    .clicked()
+                                    {
+                                        action = ConnectionPlaceholderAction::DismissTab;
+                                    }
+                                });
+                            } else if is_connecting {
+                                let host = self.connection_server_text();
+                                let text = if self.is_local_shell() {
+                                    crate::i18n::tr(
+                                        ui.ctx(),
+                                        "Opening local terminal…",
+                                        "正在打开本机终端…",
+                                    )
                                     .to_string()
-                            } else {
-                                format!(
-                                    "{} {}",
-                                    crate::i18n::tr(ui.ctx(), "Connecting", "正在连接"),
-                                    host
+                                } else {
+                                    format!(
+                                        "{} {}",
+                                        crate::i18n::tr(ui.ctx(), "Connecting", "正在连接"),
+                                        host
+                                    )
+                                };
+                                ui.label(
+                                    egui::RichText::new(text)
+                                        .size(theme.font_size_body())
+                                        .color(theme.text_secondary()),
+                                );
+                                ui.add_space(theme.spacing_md());
+                                if crate::ui::chrome::modal_secondary_button(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(ui.ctx(), "Cancel", "取消"),
                                 )
-                            };
-                            ui.label(
-                                egui::RichText::new(text)
-                                    .size(theme.font_size_body())
-                                    .color(theme.text_secondary()),
-                            );
-                            ui.add_space(theme.spacing_md());
-                            if crate::ui::chrome::modal_secondary_button(
-                                ui,
-                                theme,
-                                crate::i18n::tr(ui.ctx(), "Cancel", "取消"),
-                            )
-                            .clicked()
-                            {
-                                action = ConnectionPlaceholderAction::CancelConnect;
+                                .clicked()
+                                {
+                                    action = ConnectionPlaceholderAction::CancelConnect;
+                                }
                             }
-                        }
+                        });
                     });
+                ui.ctx()
+                    .data_mut(|d| d.insert_temp(size_id, frame_resp.response.rect.height()));
             });
         });
         if action != ConnectionPlaceholderAction::None {
