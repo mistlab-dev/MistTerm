@@ -120,6 +120,9 @@ struct MistTermUiPersist {
     /// 沉浸式模式(默认关)：藏活动栏与顶栏菜单，标签进顶栏。持久化字段名沿用旧键。
     #[serde(default)]
     activity_rail_collapsed: bool,
+    /// 连接列表改为默认展开后，只迁移一次，之后尊重用户自己收起。
+    #[serde(default)]
+    connection_list_opened_once: bool,
 }
 
 fn default_session_log_enabled() -> bool {
@@ -273,6 +276,8 @@ pub struct MistTermApp {
     sidebar_width: f32,
     /// 用户曾主动折叠左侧连接栏；宽屏时响应式不自动展开(FUNCTIONAL_SPEC §8 注意)
     sidebar_user_dismissed_responsive: bool,
+    /// 已做过「连接列表默认展开」的一次性迁移。
+    connection_list_opened_once: bool,
     /// 上一帧的响应式布局档位(窄 / 中 / 宽)，仅用于检测变化
     last_responsive_layout_band: Option<ResponsiveLayoutBand>,
 
@@ -1040,11 +1045,12 @@ impl MistTermApp {
             fragment_shortcut_store: FragmentShortcutStore::load(),
             pending_terminal_copy: None,
             selected_session_id,
-            sidebar_collapsed: true,
+            sidebar_collapsed: false,
             activity_rail_collapsed: false,
             window_decorated_applied: None,
             sidebar_width: layout_util::default_sidebar_width(&cc.egui_ctx),
-            sidebar_user_dismissed_responsive: true,
+            sidebar_user_dismissed_responsive: false,
+            connection_list_opened_once: false,
             last_responsive_layout_band: None,
             tabs: Vec::new(),
             active_tab: None,
@@ -1234,9 +1240,14 @@ impl MistTermApp {
                 eframe::get_value::<MistTermUiPersist>(storage, MISTTERM_UI_STORAGE_KEY)
             {
                 app.sidebar_width = layout_util::clamp_sidebar_width(p.sidebar_width);
-                // 新布局：连接列表默认收进 Activity Rail，不在启动时强制展开
-                app.sidebar_collapsed = true;
-                app.sidebar_user_dismissed_responsive = true;
+                if p.connection_list_opened_once {
+                    app.sidebar_collapsed = p.sidebar_collapsed;
+                    app.sidebar_user_dismissed_responsive = p.sidebar_user_dismissed_responsive;
+                } else {
+                    app.sidebar_collapsed = false;
+                    app.sidebar_user_dismissed_responsive = false;
+                }
+                app.connection_list_opened_once = true;
                 app.auto_reconnect_enabled = p.auto_reconnect_enabled;
                 app.terminal_font_preset = p.terminal_font_preset;
                 app.terminal_font_size =
@@ -1256,6 +1267,7 @@ impl MistTermApp {
                 app.activity_rail_collapsed = p.activity_rail_collapsed;
             }
         }
+        app.connection_list_opened_once = true;
         app.session_log_settings.enabled = app.session_log_enabled;
         {
             let base = app.session_log_settings.base_dir.clone();
@@ -4098,13 +4110,51 @@ impl MistTermApp {
         let active = self.tabs[idx]
             .active_pane
             .min(self.tabs[idx].panes.len().saturating_sub(1));
+        let inherit_cwd = self.tabs[idx].panes[active]
+            .terminal
+            .shell_cwd()
+            .map(|s| s.to_string());
+        if self.tabs[idx].panes[active].terminal.is_local_shell() {
+            crate::local_shell::set_repaint_context(ctx);
+            let mut terminal = self.new_terminal_view();
+            if let Err(e) = terminal.connect_local_shell_in(inherit_cwd.as_deref()) {
+                self.notify_error(match crate::i18n::language(ctx) {
+                    crate::i18n::UiLanguage::En => format!("Failed to split local shell: {e}"),
+                    crate::i18n::UiLanguage::Zh => format!("本机终端分屏失败：{e}"),
+                });
+                return;
+            }
+            let session_id = format!("local:{}", terminal.ssh_session_id().unwrap_or(0));
+            let n = self.tabs[idx].panes.len() + 1;
+            let title2 = format!(
+                "{} ({n})",
+                crate::i18n::tr(ctx, "Local Shell", "本机终端")
+            );
+            let pane2 = TerminalPane::new(session_id, title2, terminal);
+            let tab = &mut self.tabs[idx];
+            tab.add_pane_with_layout(pane2, layout);
+            self.ensure_tab_log_writer(idx);
+            self.notify_auto(crate::i18n::tr(ctx, "Split terminal pane", "已分屏").to_string());
+            return;
+        }
         let session_id = self.tabs[idx].panes[active].session_id.clone();
         let Some(session) = self.session_manager.get_session(&session_id).cloned() else {
+            self.notify_auto(
+                crate::i18n::tr(
+                    ctx,
+                    "This tab has no saved session, so it cannot split.",
+                    "这个标签没有对应的已保存会话，没法分屏。",
+                )
+                .to_string(),
+            );
             return;
         };
         let mut terminal = self.new_terminal_view();
         let mut temp_key = None;
         self.terminal_connect_session(ctx, &mut terminal, &session, &mut temp_key);
+        if let Some(cwd) = inherit_cwd.as_deref() {
+            terminal.arm_startup_directory(cwd);
+        }
         let n = self.tabs[idx].panes.len() + 1;
         let title2 = format!("{} ({n})", crate::core::session_tab_label(&session));
         let mut pane2 = TerminalPane::new(session.id.clone(), title2, terminal);
@@ -4113,6 +4163,55 @@ impl MistTermApp {
         tab.add_pane_with_layout(pane2, layout);
         self.ensure_tab_log_writer(idx);
         self.notify_auto(crate::i18n::tr(ctx, "Split terminal pane", "已分屏").to_string());
+    }
+
+    fn merge_active_split(&mut self, ctx: &egui::Context) {
+        let Some(idx) = self.active_tab else {
+            return;
+        };
+        let Some(tab) = self.tabs.get_mut(idx) else {
+            return;
+        };
+        if !tab.is_split() {
+            self.notify_auto(
+                crate::i18n::tr(ctx, "This tab is not split", "当前没有分屏").to_string(),
+            );
+            return;
+        }
+        tab.unsplit_keep_active();
+        self.notify_auto(crate::i18n::tr(ctx, "Merged split panes", "已合并分屏").to_string());
+    }
+
+    fn toggle_broadcast_input(&mut self, ctx: &egui::Context) {
+        let Some(idx) = self.active_tab else {
+            return;
+        };
+        let Some(tab) = self.tabs.get_mut(idx) else {
+            return;
+        };
+        if !tab.is_split() {
+            self.notify_auto(
+                crate::i18n::tr(
+                    ctx,
+                    "Split the tab before broadcasting input",
+                    "先分屏，再开同时输入",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        tab.broadcast_input = !tab.broadcast_input;
+        let on = tab.broadcast_input;
+        self.notify_auto(if on {
+            crate::i18n::tr(
+                ctx,
+                "Broadcast on — keystrokes go to every pane",
+                "同时输入已开，键入会发到每个窗格",
+            )
+            .to_string()
+        } else {
+            crate::i18n::tr(ctx, "Broadcast off", "同时输入已关").to_string()
+        });
     }
 
     fn close_pane_tab_at(&mut self, ctx: &egui::Context, tab_idx: usize, pane_idx: usize) {
@@ -4126,13 +4225,26 @@ impl MistTermApp {
         }
     }
 
-    fn maybe_collapse_narrow_split(&mut self, tab_idx: usize, column_w: f32) {
+    fn maybe_collapse_narrow_split(
+        &mut self,
+        ctx: &egui::Context,
+        tab_idx: usize,
+        column_w: f32,
+    ) {
         if column_w >= crate::ui::tab_pane::NARROW_SPLIT_COLLAPSE_W {
             return;
         }
         if let Some(tab) = self.tabs.get_mut(tab_idx) {
             if tab.is_split() {
                 tab.unsplit_keep_active();
+                self.notify_auto(
+                    crate::i18n::tr(
+                        ctx,
+                        "The window is too narrow, so the split was merged.",
+                        "窗口太窄，分屏已合并。",
+                    )
+                    .to_string(),
+                );
             }
         }
     }
@@ -7228,6 +7340,7 @@ impl MistTermApp {
                         crate::ui::icons::IconId::Server,
                         !self.sidebar_collapsed,
                         &tip(menu.connections, None),
+                        crate::i18n::tr(ctx, "Hosts", "连接"),
                     )
                     .clicked()
                     {
@@ -7241,6 +7354,7 @@ impl MistTermApp {
                         crate::ui::icons::IconId::Fragment,
                         self.show_fragment_panel,
                         &tip(menu.fragment_panel, Some(crate::platform::accel("K"))),
+                        crate::i18n::tr(ctx, "Snip", "片段"),
                     )
                     .clicked()
                     {
@@ -7255,6 +7369,7 @@ impl MistTermApp {
                             menu.sftp_panel,
                             Some(crate::platform::accel_shift("S")),
                         ),
+                        crate::i18n::tr(ctx, "Files", "文件"),
                     )
                     .clicked()
                     {
@@ -7266,6 +7381,7 @@ impl MistTermApp {
                         crate::ui::icons::IconId::Network,
                         self.show_port_forward_panel,
                         &tip(menu.port_forward_panel, None),
+                        crate::i18n::tr(ctx, "Fwd", "转发"),
                     )
                     .clicked()
                     {
@@ -7277,6 +7393,7 @@ impl MistTermApp {
                         crate::ui::icons::IconId::Monitor,
                         self.show_monitor_panel,
                         &tip(menu.monitor_panel, None),
+                        crate::i18n::tr(ctx, "Stats", "监控"),
                     )
                     .clicked()
                     {
@@ -7288,6 +7405,7 @@ impl MistTermApp {
                         crate::ui::icons::IconId::Api,
                         self.show_ai_panel,
                         &tip(menu.ai_panel, Some(crate::platform::accel_shift("A"))),
+                        crate::i18n::tr(ctx, "AI", "助手"),
                     )
                     .clicked()
                     {
@@ -7306,6 +7424,7 @@ impl MistTermApp {
                             menu.preferences,
                             Some(crate::platform::accel_literal(",")),
                         ),
+                        crate::i18n::tr(ctx, "Prefs", "设置"),
                     )
                     .clicked()
                     {
@@ -7616,6 +7735,18 @@ impl MistTermApp {
             MacMenuAction::NewSession => self.show_new_session_dialog = true,
             MacMenuAction::NewTab => self.open_new_tab_from_selection(ctx),
             MacMenuAction::LocalShell => self.open_local_shell_tab(ctx),
+            MacMenuAction::SplitHorizontal => {
+                if let Some(idx) = self.active_tab {
+                    self.split_tab_at(ctx, idx, crate::ui::tab_pane::TabLayout::SplitHorizontal);
+                }
+            }
+            MacMenuAction::SplitVertical => {
+                if let Some(idx) = self.active_tab {
+                    self.split_tab_at(ctx, idx, crate::ui::tab_pane::TabLayout::SplitVertical);
+                }
+            }
+            MacMenuAction::MergeSplit => self.merge_active_split(ctx),
+            MacMenuAction::ToggleBroadcast => self.toggle_broadcast_input(ctx),
             MacMenuAction::Preferences => self.show_preferences_dialog = true,
             MacMenuAction::CloseTab => self.request_close_active_tab(),
             MacMenuAction::DisconnectSsh => self.disconnect_ssh_keep_buffer_active(ctx),
@@ -7780,6 +7911,7 @@ impl eframe::App for MistTermApp {
             session_log_include_ansi: self.session_log_settings.include_ansi,
             ssh_import_banner_dismissed: self.ssh_import_banner_dismissed,
             activity_rail_collapsed: self.activity_rail_collapsed,
+            connection_list_opened_once: self.connection_list_opened_once,
         };
         eframe::set_value(storage, MISTTERM_UI_STORAGE_KEY, &p);
         let _ = self.command_history.save();
@@ -8384,6 +8516,11 @@ impl eframe::App for MistTermApp {
                     self.split_tab_at(ctx, idx, crate::ui::tab_pane::TabLayout::SplitVertical);
                 }
             }
+            if ctx.input_mut(|i| {
+                crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::B)
+            }) {
+                self.toggle_broadcast_input(ctx);
+            }
             if ctx.input(|i| {
                 self.app_shortcut_overrides_terminal(i)
                     && Self::input_primary_mod(i)
@@ -8655,77 +8792,68 @@ impl MistTermApp {
         self.show_fragment_vars_dialog = true;
     }
 
-    /// 显示欢迎界面
-    fn show_welcome(&self, ui: &mut egui::Ui) {
+    /// 空标签时的起点：两个能点的动作，不再用会被裁掉的居中说明。
+    fn show_welcome(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
-        let icon_px = self.theme_manager.current_theme().size_icon_glyph();
+        let theme = self.theme_manager.current_theme().clone();
         let s = ui.available_size();
-        if s.x.is_finite() && s.y.is_finite() && s.x > 0.0 && s.y > 0.0 {
-            ui.set_min_size(s);
-        }
-        ui.with_layout(
-            egui::Layout::centered_and_justified(egui::Direction::TopDown),
-            |ui| {
-                ui.heading(crate::i18n::tr(&ctx, "Welcome to Mist", "欢迎使用 Mist"));
-                ui.separator();
-                let accent = ui.style().visuals.selection.bg_fill;
-                crate::ui::icons::icon_label_row(
-                    ui,
-                    crate::ui::icons::IconId::Rocket,
-                    crate::i18n::tr(&ctx, "Quick start", "快速开始"),
-                    icon_px,
-                    8.0,
-                    move |t| t.color(accent),
-                );
-                ui.horizontal(|ui| {
-                    ui.label(crate::i18n::tr(
-                        &ctx,
-                        "1. Click on the sidebar",
-                        "1. 点击左侧",
-                    ));
-                    let px = icon_px;
-                    let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
-                    crate::ui::icons::paint_icon(
-                        ui,
-                        r,
-                        crate::ui::icons::IconId::Plus,
-                        ui.visuals().text_color(),
-                        px,
-                    );
-                    ui.label(crate::i18n::tr(&ctx, "to create a session", "创建新会话"));
-                });
-                ui.horizontal(|ui| {
-                    ui.label(crate::i18n::tr(&ctx, "2. Select a session", "2. 选择会话"));
-                    let px = icon_px;
-                    let (r, _) = ui.allocate_exact_size(egui::vec2(px, px), egui::Sense::hover());
-                    crate::ui::icons::paint_icon(
-                        ui,
-                        r,
-                        crate::ui::icons::IconId::Plug,
-                        ui.visuals().text_color(),
-                        px,
-                    );
-                    ui.label(crate::i18n::tr(&ctx, "and connect", "建立连接"));
-                });
-                ui.horizontal(|ui| {
-                    ui.label(crate::i18n::tr(&ctx, "3. Use", "3. 使用"));
-                    ui.label("rz/sz");
-                    ui.label(crate::i18n::tr(&ctx, "for file transfer", "进行文件传输"));
-                });
-                ui.horizontal(|ui| {
-                    ui.label(crate::i18n::tr(
-                        &ctx,
-                        "Custom snippets: Tools → Fragment Library, or New in the right sidebar",
-                        "自建命令片段：菜单「工具 → 命令片段库」或右侧栏「新建」",
-                    ));
-                });
-                ui.separator();
-                ui.small(crate::i18n::tr(
-                    &ctx,
-                    "Tip: double-click the sidebar to collapse or expand",
-                    "提示：双击侧边栏可以折叠/展开",
-                ));
-            },
+        let card_w = 420.0_f32.min((s.x - 32.0).max(220.0));
+        let card_h = 210.0_f32.min(s.y.max(1.0));
+        let origin = egui::pos2(
+            ui.cursor().min.x + ((s.x - card_w).max(0.0) * 0.5),
+            ui.cursor().min.y + ((s.y - card_h).max(0.0) * 0.32),
+        );
+        let rect = egui::Rect::from_min_size(origin, egui::vec2(card_w, card_h));
+        ui.allocate_rect(rect, egui::Sense::hover());
+        let mut card = ui.child_ui(rect, egui::Layout::top_down(egui::Align::Center));
+        card.add_space(8.0);
+        card.label(
+            egui::RichText::new("MistTerm")
+                .size(theme.font_size_panel_title() + 6.0)
+                .strong()
+                .color(theme.text_primary()),
+        );
+        card.add_space(8.0);
+        card.label(
+            egui::RichText::new(crate::i18n::tr(
+                &ctx,
+                "Open a local terminal, or add a server.",
+                "先开本机终端，或添加一台服务器。",
+            ))
+            .color(theme.text_secondary()),
+        );
+        card.add_space(18.0);
+        card.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 16.0;
+            if crate::ui::chrome::chrome_small_accent_button(
+                ui,
+                &theme,
+                crate::i18n::tr(&ctx, "Local terminal", "本机终端"),
+            )
+            .clicked()
+            {
+                self.open_local_shell_tab(&ctx);
+            }
+            if crate::ui::chrome::chrome_small_button(
+                ui,
+                &theme,
+                crate::i18n::tr(&ctx, "New connection", "新建连接"),
+            )
+            .clicked()
+            {
+                self.show_new_session_dialog = true;
+                self.sidebar_collapsed = false;
+            }
+        });
+        card.add_space(16.0);
+        card.label(
+            egui::RichText::new(crate::i18n::tr(
+                &ctx,
+                "After a split, turn on Broadcast so keystrokes go to every pane.",
+                "分屏之后，打开「同时输入」，按键会发到每个窗格。",
+            ))
+            .size(theme.font_size_caption())
+            .color(theme.text_tertiary()),
         );
     }
 }

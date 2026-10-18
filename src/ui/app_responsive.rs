@@ -82,6 +82,8 @@ impl MistTermApp {
         if w < Self::RESP_LAYOUT_NARROW_LT_PX {
             self.sidebar_collapsed = true;
             self.close_all_right_dock_panels();
+        } else if !self.sidebar_user_dismissed_responsive {
+            self.sidebar_collapsed = false;
         }
 
         self.last_responsive_layout_band = Some(band);

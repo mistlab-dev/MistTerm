@@ -160,9 +160,12 @@ strong { font-weight: 600; }
 <p class="caption"><em>图 6-3：命令历史窗口</em></p>
 <h3>6.3 分屏（同一标签多窗格）</h3>
 <ul>
-<li><strong>Ctrl+Shift+D</strong>：左右分屏</li>
-<li><strong>Ctrl+Shift+U</strong>：上下分屏</li>
-<li><strong>Alt+← / Alt+→</strong>：在分屏窗格间切换焦点</li>
+<li>Windows 与 Linux 用 <strong>Ctrl+Shift</strong>，macOS 用 <strong>⌘⇧</strong>。</li>
+<li><strong>Ctrl+Shift+D</strong>（macOS <strong>⌘⇧D</strong>）：左右分屏</li>
+<li><strong>Ctrl+Shift+U</strong>（macOS <strong>⌘⇧U</strong>）：上下分屏</li>
+<li><strong>Ctrl+Shift+← / Ctrl+Shift+→</strong>：在分屏窗格间切换焦点（macOS 为 ⌘⌥← / ⌘⌥→）</li>
+<li>新窗格从当前窗格所在目录启动（本机终端、以及 Linux / macOS 的 <code>cd</code>，Windows 远程的 PowerShell）</li>
+<li><strong>Ctrl+Shift+B</strong>（macOS <strong>⌘⇧B</strong>）：<strong>同时输入</strong>。打开后，键入会发到这个标签里的每个窗格</li>
 </ul>
 <hr>
 <h2>7. 传输文件</h2>
@@ -302,7 +305,7 @@ sz 文件名</code></pre>
 <hr>
 <h2>14. 快捷键一览</h2>
 <p>以下以 <strong>Windows</strong> 为例；macOS 将 <strong>Ctrl</strong> 换为 <strong>⌘</strong> 即可（如 Ctrl+N → ⌘N）。</p>
-<table><thead><tr><th>快捷键</th><th>功能</th></tr></thead><tbody><tr><td><strong>Ctrl+N</strong></td><td>新建会话</td></tr><tr><td><strong>Ctrl+E</strong></td><td>编辑所选会话</td></tr><tr><td><strong>Ctrl+Shift+T</strong></td><td>为所选会话新建终端标签（Mac：<strong>⌘T</strong>）</td></tr><tr><td><strong>Ctrl+Shift+W</strong></td><td>关闭当前标签（Mac：<strong>⌘W</strong>）</td></tr><tr><td><strong>Ctrl+Tab</strong> / <strong>Ctrl+Shift+Tab</strong></td><td>下一 / 上一标签</td></tr><tr><td><strong>Ctrl+1 … Ctrl+9</strong></td><td>切换到第 N 个标签</td></tr><tr><td><strong>Ctrl+B</strong></td><td>显示 / 隐藏活动栏</td></tr><tr><td><strong>Ctrl+J</strong></td><td>聚焦连接搜索（连接列表）</td></tr><tr><td><strong>Ctrl+K</strong></td><td>聚焦片段搜索</td></tr><tr><td><strong>Ctrl+Shift+J</strong></td><td>快速片段选择器</td></tr><tr><td><strong>Ctrl+F</strong> / <strong>F3</strong></td><td>终端内查找</td></tr><tr><td><strong>Ctrl+R</strong></td><td>留给 shell（Mist 不拦截）；命令历史面板在 <strong>工具 → 命令历史</strong></td></tr><tr><td><strong>Ctrl+Shift+A</strong></td><td>AI 助手面板</td></tr><tr><td><strong>Ctrl+Shift+L</strong></td><td>终端选区发送到 AI</td></tr><tr><td><strong>Ctrl+Shift+D</strong> / <strong>Ctrl+Shift+U</strong></td><td>终端左右 / 上下分屏</td></tr><tr><td><strong>Ctrl+,</strong></td><td>偏好设置</td></tr><tr><td><strong>Ctrl+H</strong></td><td>关于与快捷键说明</td></tr><tr><td><strong>Esc</strong></td><td>关闭当前弹窗、菜单</td></tr></tbody></table>
+<table><thead><tr><th>快捷键</th><th>功能</th></tr></thead><tbody><tr><td><strong>Ctrl+N</strong></td><td>新建会话</td></tr><tr><td><strong>Ctrl+E</strong></td><td>编辑所选会话</td></tr><tr><td><strong>Ctrl+Shift+T</strong></td><td>为所选会话新建终端标签（Mac：<strong>⌘T</strong>）</td></tr><tr><td><strong>Ctrl+Shift+W</strong></td><td>关闭当前标签（Mac：<strong>⌘W</strong>）</td></tr><tr><td><strong>Ctrl+Tab</strong> / <strong>Ctrl+Shift+Tab</strong></td><td>下一 / 上一标签</td></tr><tr><td><strong>Ctrl+1 … Ctrl+9</strong></td><td>切换到第 N 个标签</td></tr><tr><td><strong>Ctrl+B</strong></td><td>显示 / 隐藏活动栏</td></tr><tr><td><strong>Ctrl+J</strong></td><td>聚焦连接搜索（连接列表）</td></tr><tr><td><strong>Ctrl+K</strong></td><td>聚焦片段搜索</td></tr><tr><td><strong>Ctrl+Shift+J</strong></td><td>快速片段选择器</td></tr><tr><td><strong>Ctrl+F</strong> / <strong>F3</strong></td><td>终端内查找</td></tr><tr><td><strong>Ctrl+R</strong></td><td>留给 shell（Mist 不拦截）；命令历史面板在 <strong>工具 → 命令历史</strong></td></tr><tr><td><strong>Ctrl+Shift+A</strong></td><td>AI 助手面板</td></tr><tr><td><strong>Ctrl+Shift+L</strong></td><td>终端选区发送到 AI</td></tr><tr><td><strong>Ctrl+Shift+D</strong> / <strong>Ctrl+Shift+U</strong>（Mac：<strong>⌘⇧D</strong> / <strong>⌘⇧U</strong>）</td><td>终端左右 / 上下分屏</td></tr><tr><td><strong>Ctrl+,</strong></td><td>偏好设置</td></tr><tr><td><strong>Ctrl+H</strong></td><td>关于与快捷键说明</td></tr><tr><td><strong>Esc</strong></td><td>关闭当前弹窗、菜单</td></tr></tbody></table>
 <p>完整列表以应用内 <strong>帮助 → 键盘快捷键</strong> 为准。</p>
 <figure><img src="screenshots/19-help-quick-start.png" alt="快速入门帮助"><figcaption>快速入门帮助</figcaption></figure>
 <p class="caption"><em>图 14-1：应用内帮助 — 快速入门</em></p>

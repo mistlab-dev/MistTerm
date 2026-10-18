@@ -23,6 +23,10 @@ pub enum MacMenuAction {
     NewSession,
     NewTab,
     LocalShell,
+    SplitHorizontal,
+    SplitVertical,
+    MergeSplit,
+    ToggleBroadcast,
     Preferences,
     CloseTab,
     DisconnectSsh,
@@ -75,6 +79,10 @@ pub struct NativeAppMenu {
     new_session: MenuItem,
     new_tab: MenuItem,
     local_shell: MenuItem,
+    split_horizontal: MenuItem,
+    split_vertical: MenuItem,
+    merge_split: MenuItem,
+    broadcast_input: MenuItem,
     import_ssh: MenuItem,
     import_foreign: MenuItem,
     close_tab: MenuItem,
@@ -170,6 +178,39 @@ impl NativeAppMenu {
                 Code::KeyT,
             )),
         );
+        let split_horizontal = MenuItem::with_id(
+            "mistterm.terminal.split_horizontal",
+            l.split_horizontal,
+            true,
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::SHIFT),
+                Code::KeyD,
+            )),
+        );
+        let split_vertical = MenuItem::with_id(
+            "mistterm.terminal.split_vertical",
+            l.split_vertical,
+            true,
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::SHIFT),
+                Code::KeyU,
+            )),
+        );
+        let broadcast_input = MenuItem::with_id(
+            "mistterm.terminal.broadcast",
+            l.broadcast_input,
+            true,
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::SHIFT),
+                Code::KeyB,
+            )),
+        );
+        let merge_split = MenuItem::with_id(
+            "mistterm.terminal.merge_split",
+            l.merge_split,
+            true,
+            None,
+        );
         let import_ssh =
             MenuItem::with_id("mistterm.terminal.import_ssh", l.import_ssh, true, None);
         let import_foreign = MenuItem::with_id(
@@ -195,6 +236,11 @@ impl NativeAppMenu {
         terminal_menu.append(&new_session)?;
         terminal_menu.append(&new_tab)?;
         terminal_menu.append(&local_shell)?;
+        terminal_menu.append(&PredefinedMenuItem::separator())?;
+        terminal_menu.append(&split_horizontal)?;
+        terminal_menu.append(&split_vertical)?;
+        terminal_menu.append(&broadcast_input)?;
+        terminal_menu.append(&merge_split)?;
         terminal_menu.append(&import_ssh)?;
         terminal_menu.append(&import_foreign)?;
         terminal_menu.append(&PredefinedMenuItem::separator())?;
@@ -395,6 +441,10 @@ impl NativeAppMenu {
             new_session,
             new_tab,
             local_shell,
+            split_horizontal,
+            split_vertical,
+            merge_split,
+            broadcast_input,
             import_ssh,
             import_foreign,
             close_tab,
@@ -444,6 +494,10 @@ impl NativeAppMenu {
         let _ = self.new_session.set_text(l.new_session);
         let _ = self.new_tab.set_text(l.new_tab);
         let _ = self.local_shell.set_text(l.local_shell);
+        let _ = self.split_horizontal.set_text(l.split_horizontal);
+        let _ = self.split_vertical.set_text(l.split_vertical);
+        let _ = self.merge_split.set_text(l.merge_split);
+        let _ = self.broadcast_input.set_text(l.broadcast_input);
         let _ = self.import_ssh.set_text(l.import_ssh);
         let _ = self.import_foreign.set_text(format!("{}…", l.import_foreign));
         let _ = self.close_tab.set_text(l.close_tab);
@@ -568,6 +622,10 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.terminal.new_session" | "mistterm.file.new_session" => Some(MacMenuAction::NewSession),
         "mistterm.terminal.new_tab" => Some(MacMenuAction::NewTab),
         "mistterm.terminal.local_shell" => Some(MacMenuAction::LocalShell),
+        "mistterm.terminal.split_horizontal" => Some(MacMenuAction::SplitHorizontal),
+        "mistterm.terminal.split_vertical" => Some(MacMenuAction::SplitVertical),
+        "mistterm.terminal.merge_split" => Some(MacMenuAction::MergeSplit),
+        "mistterm.terminal.broadcast" => Some(MacMenuAction::ToggleBroadcast),
         "mistterm.terminal.close_tab" | "mistterm.file.close_tab" => Some(MacMenuAction::CloseTab),
         "mistterm.terminal.disconnect" | "mistterm.file.disconnect" => Some(MacMenuAction::DisconnectSsh),
         "mistterm.terminal.reconnect" | "mistterm.file.reconnect" => Some(MacMenuAction::ReconnectTab),

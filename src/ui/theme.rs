@@ -2764,7 +2764,7 @@ impl Theme {
     }
     /// 左侧 Activity Rail 宽度(全平台统一)。
     pub fn activity_rail_width(&self) -> f32 {
-        48.0
+        56.0
     }
     /// Rail 完全隐藏时的左缘恢复条宽度(可点开回)。
     pub fn activity_rail_collapsed_strip_width(&self) -> f32 {

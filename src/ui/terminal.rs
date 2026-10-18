@@ -27,6 +27,22 @@ use crate::i18n::UiLanguage;
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 
+/// 同时输入时，把当前窗格的按键再发给其它窗格。
+#[derive(Clone)]
+pub(crate) enum BroadcastTarget {
+    Local(LocalShellHandle),
+    Ssh(SshSessionHandle),
+}
+
+impl BroadcastTarget {
+    fn send(&self, data: &[u8]) -> Result<(), String> {
+        match self {
+            Self::Local(h) => h.send_input(data),
+            Self::Ssh(h) => h.send_input(data),
+        }
+    }
+}
+
 /// 与 [`VtTerminal::content_epoch`] 组合，避免 PTY 无输出帧重复构建整屏 [`egui::text::LayoutJob`]。
 struct TerminalVisualLayoutCache {
     vt_gen: u64,
@@ -328,6 +344,12 @@ pub struct TerminalView {
     zmodem_pty_detect_tail: Vec<u8>,
     /// 当前行已键入字节(用于 Ctrl+R 命令历史，近似 PTY 行缓冲)
     typed_line_buffer: String,
+    /// 提示符或 `cd` 记下的当前目录。分屏时新窗格从这里启动。
+    shell_cwd: Option<String>,
+    /// SSH 新窗格看到提示符后要执行的 `cd`（本机窗格直接以该目录启动，不走这里）。
+    pending_startup_cd: Option<String>,
+    broadcast_targets: Vec<BroadcastTarget>,
+    broadcast_suppress: bool,
     /// 最近写入 PTY 的当前行(自动化可能无 egui Text 事件，仍可从出站字节识别 `rz`)
     pty_outbound_line_buffer: String,
     /// Enter 提交后待取走的整行命令(供命令历史 / 会话日志)
@@ -540,11 +562,11 @@ impl TerminalView {
 
     #[inline]
     fn is_terminal_token_char(ch: char) -> bool {
-        ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '\\' | ':' | '@' | '+')
+        ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '\\' | '@' | '+')
     }
 
     /// 双击时按终端 token 规则选中一个词元。
-    /// 规则：字母数字与 `_-.\\/ :@+` 视作同一词；空白/分隔符不纳入。
+    /// 字母数字与 `_-.\/@+` 算同一个词。冒号是边界（`host:path`、提示符末尾的 `:` 不会被带上）。
     fn terminal_token_range_at(line: &str, col: usize) -> Option<(usize, usize)> {
         let chars: Vec<char> = line.chars().collect();
         if chars.is_empty() {
@@ -725,6 +747,10 @@ impl TerminalView {
             pending_send_tail_to_ai: false,
             pending_send_to_ai_text: None,
             typed_line_buffer: String::new(),
+            shell_cwd: None,
+            pending_startup_cd: None,
+            broadcast_targets: Vec::new(),
+            broadcast_suppress: false,
             zmodem_pty_detect_tail: Vec::new(),
             pty_outbound_line_buffer: String::new(),
             submitted_line: None,
@@ -830,6 +856,7 @@ impl TerminalView {
         if line.is_empty() {
             return;
         }
+        self.note_typed_cd(&line);
         if crate::ui::terminal_shell_command::is_rz_shell_command(&line) {
             self.note_rz_shell_command_submitted();
         }
@@ -996,7 +1023,7 @@ impl TerminalView {
                     data.len()
                 );
             }
-            return __res;
+            return self.finish_broadcast(data, __res);
         }
         self.note_pty_outbound_for_rz(data);
         let __t2 = std::time::Instant::now();
@@ -1018,7 +1045,94 @@ impl TerminalView {
                 (__t3 - __t2).as_micros(),
             );
         }
-        __res
+        self.finish_broadcast(data, __res)
+    }
+
+    fn finish_broadcast(&self, data: &[u8], res: Result<(), String>) -> Result<(), String> {
+        if res.is_ok() {
+            self.fanout_broadcast(data);
+        }
+        res
+    }
+
+    fn fanout_broadcast(&self, data: &[u8]) {
+        if self.broadcast_suppress || data.is_empty() || self.broadcast_targets.is_empty() {
+            return;
+        }
+        if self.lrzsz.is_active() || self.transfer_progress.is_some() {
+            return;
+        }
+        for target in &self.broadcast_targets {
+            if let Err(e) = target.send(data) {
+                log::debug!("broadcast input: {e}");
+            }
+        }
+    }
+
+    pub(crate) fn shell_cwd(&self) -> Option<&str> {
+        self.shell_cwd.as_deref()
+    }
+
+    pub(crate) fn clone_input_target(&self) -> Option<BroadcastTarget> {
+        if self.is_local_shell() {
+            self.local_handle.clone().map(BroadcastTarget::Local)
+        } else {
+            self.ssh_handle.clone().map(BroadcastTarget::Ssh)
+        }
+    }
+
+    pub(crate) fn set_broadcast_targets(&mut self, targets: Vec<BroadcastTarget>) {
+        self.broadcast_targets = targets;
+    }
+
+    pub(crate) fn clear_broadcast_targets(&mut self) {
+        self.broadcast_targets.clear();
+    }
+
+    /// SSH 分屏：等提示符出现后再 `cd` 到源窗格目录。
+    pub(crate) fn arm_startup_directory(&mut self, cwd: &str) {
+        let cwd = cwd.trim();
+        if cwd.is_empty() {
+            return;
+        }
+        self.shell_cwd = Some(cwd.to_string());
+        self.pending_startup_cd = Some(cwd.to_string());
+    }
+
+    fn maybe_send_startup_cd(&mut self) {
+        if self.pending_startup_cd.is_none() {
+            return;
+        }
+        let line = self.terminal.cursor_line_text();
+        if !prompt_ready_for_cd(&line) {
+            return;
+        }
+        let Some(path) = self.pending_startup_cd.take() else {
+            return;
+        };
+        let bytes = startup_cd_payload(&path);
+        self.broadcast_suppress = true;
+        if let Err(e) = self.send_pty_input(&bytes) {
+            log::debug!("startup cd: {e}");
+        }
+        self.broadcast_suppress = false;
+    }
+
+    fn note_cwd_from_screen(&mut self) {
+        if let Some(cwd) = parse_prompt_cwd(&self.terminal.cursor_line_text()) {
+            self.shell_cwd = Some(cwd);
+        }
+    }
+
+    fn note_typed_cd(&mut self, line: &str) {
+        let home = if self.is_local_shell() {
+            dirs::home_dir().map(|p| p.display().to_string())
+        } else {
+            None
+        };
+        if let Some(next) = apply_cd_line(self.shell_cwd.as_deref(), line, home.as_deref()) {
+            self.shell_cwd = Some(next);
+        }
     }
 
     fn push_zmodem_detect_tail(&mut self, data: &[u8]) {
@@ -1115,7 +1229,17 @@ impl TerminalView {
 
     /// 打开本机默认 shell（不写入侧栏会话列表）。
     pub fn connect_local_shell(&mut self) -> Result<(), String> {
-        let (rx, handle) = crate::local_shell::spawn_local_shell(self.cols, self.rows)?;
+        self.connect_local_shell_in(None)
+    }
+
+    /// 在给定目录打开本机 shell。`cwd` 为空或目录不存在时用用户主目录。
+    pub fn connect_local_shell_in(&mut self, cwd: Option<&str>) -> Result<(), String> {
+        let dir = resolve_local_cwd(cwd);
+        let cwd_text = dir.display().to_string();
+        let (rx, handle) =
+            crate::local_shell::spawn_local_shell_in(self.cols, self.rows, &dir)?;
+        self.shell_cwd = Some(cwd_text);
+        self.pending_startup_cd = None;
         self.buffer_input_while_disconnected = false;
         self.disconnected_input_buffer.clear();
         self.resend_offline_input_dialog_open = false;
@@ -1280,6 +1404,15 @@ impl TerminalView {
                         0.0
                     };
                     let scroll_h = (ui.available_height() - footer_h).max(80.0);
+                    // 最后一行贴着裁剪边时，字形会被窗口底边切掉，提示符就像掉下去了。
+                    let bottom_pad = ui.ctx().fonts(|fonts| {
+                        Self::measure_terminal_line_height(
+                            fonts,
+                            self.font_size,
+                            theme.text_primary(),
+                        )
+                    });
+                    let fit_h = (scroll_h - bottom_pad).max(48.0);
 
                     // 必须先按视口同步 PTY 行列，再构建 LayoutJob。
                     // 若先构图再 sync：galley 仍是旧行数，而容器已是新高度 + BOTTOM 对齐 → Tab 下出现大块空白。
@@ -1288,14 +1421,14 @@ impl TerminalView {
                         Self::terminal_cell_metrics(ui, self.font_size, theme.text_primary()).0;
                     self.sync_pty_size_with_ui(
                         ui,
-                        egui::vec2(col_w.max(1.0), scroll_h.max(1.0)),
+                        egui::vec2(col_w.max(1.0), fit_h.max(1.0)),
                         theme,
                     );
 
                     let font_bits = self.font_size.to_bits();
-                    // 行高精确铺满视口：floor(rows) 后的余量均摊进行高，避免底边「多一空行」。
+                    // 行高铺满 fit_h，底下留 bottom_pad，避免最后一行被裁。
                     let rows_n = self.rows.max(1) as f32;
-                    let line_height = scroll_h / rows_n;
+                    let line_height = fit_h / rows_n;
                     let line_height_bits = line_height.to_bits();
                     let selection_key = if self.selection.is_empty() {
                         None
@@ -1439,11 +1572,17 @@ impl TerminalView {
                             egui::vec2(col_w.max(1.0), scroll_h),
                             egui::Layout::top_down(egui::Align::LEFT),
                             |ui| {
+                                let viewport = ui.max_rect();
                                 ui.set_min_height(scroll_h);
                                 ui.set_max_height(scroll_h);
+                                // 钉在「视口减去一行留白」上，最后一行提示符和窗口底边隔开。
+                                let view_content_h = (scroll_h - bottom_pad).max(1.0);
+                                let overflow =
+                                    (painted_galley.size().y - view_content_h).max(0.0);
                                 egui::ScrollArea::vertical()
                         .id_source(ui.id().with("terminal_scroll"))
                         .auto_shrink([false, false])
+                        .vertical_scroll_offset(overflow)
                         .enable_scrolling(false)
                         .drag_to_scroll(false)
                         .scroll_bar_visibility(
@@ -1837,10 +1976,12 @@ impl TerminalView {
                             select_resp.context_menu(|ui| {
                                 crate::ui::chrome::apply_context_menu_style(ui, theme);
                                 if !self.selection.is_empty() {
-                                    if crate::ui::chrome::popup_menu_button(
+                                    let copy_accel = crate::platform::terminal_copy_accel();
+                                    if crate::ui::chrome::popup_menu_button_shortcut(
                                         ui,
                                         theme,
                                         crate::i18n::tr(ui.ctx(), "Copy selection", "复制选中"),
+                                        Some(&copy_accel),
                                     )
                                         .clicked()
                                     {
@@ -1891,10 +2032,12 @@ impl TerminalView {
                                     }
                                     ui.close_menu();
                                 }
-                                if crate::ui::chrome::popup_menu_button(
+                                let paste_accel = crate::platform::terminal_paste_accel();
+                                if crate::ui::chrome::popup_menu_button_shortcut(
                                     ui,
                                     theme,
                                     crate::i18n::tr(ui.ctx(), "Paste", "粘贴"),
+                                    Some(&paste_accel),
                                 )
                                 .clicked()
                                 {
@@ -1938,6 +2081,7 @@ impl TerminalView {
                                 }
                             });
                         });
+                                self.paint_connection_placeholder(ui, theme, viewport);
                             })
                         .inner;
 
@@ -2307,6 +2451,8 @@ impl TerminalView {
                             self.pending_log_output.push(display_data.clone());
                             self.terminal.feed(&display_data);
                             vte_dirty = true;
+                            self.note_cwd_from_screen();
+                            self.maybe_send_startup_cd();
                         }
                     }
                     SshMessage::Connected { .. } => {
@@ -3409,6 +3555,47 @@ impl TerminalView {
         }
     }
 
+    /// 还没连上时，黑屏中央写清正在连接或失败原因。
+    fn paint_connection_placeholder(&self, ui: &egui::Ui, theme: &Theme, rect: egui::Rect) {
+        if self.connected || rect.width() < 40.0 || rect.height() < 40.0 {
+            return;
+        }
+        let (text, color) = if let Some(err) = self.error_message.as_deref() {
+            (err.to_string(), theme.red_color())
+        } else if self.is_connecting() {
+            let text = if self.is_local_shell() {
+                crate::i18n::tr(ui.ctx(), "Opening local terminal…", "正在打开本机终端…").to_string()
+            } else {
+                let host = self.connection_server_text();
+                format!(
+                    "{} {}",
+                    crate::i18n::tr(ui.ctx(), "Connecting", "正在连接"),
+                    host
+                )
+            };
+            (text, theme.text_secondary())
+        } else {
+            return;
+        };
+        let mut job = egui::text::LayoutJob::default();
+        job.wrap.max_width = (rect.width() - 64.0).max(80.0);
+        job.append(
+            &text,
+            0.0,
+            egui::TextFormat {
+                font_id: egui::FontId::proportional(theme.font_size_body()),
+                color,
+                ..Default::default()
+            },
+        );
+        let galley = ui.ctx().fonts(|fonts| fonts.layout_job(job));
+        let card_size = galley.size() + egui::vec2(28.0, 18.0);
+        let card = egui::Rect::from_center_size(rect.center(), card_size);
+        ui.painter()
+            .rect_filled(card, 8.0, theme.bg_window_color());
+        ui.painter().galley(card.min + egui::vec2(14.0, 9.0), galley);
+    }
+
     /// 底栏连接状态(不写入终端 scrollback)。
     pub fn connection_status_for_bar(&self, theme: &Theme) -> Option<ConnectionBarStatus> {
         if self.ssh_manager.is_none() && self.connection_target.is_none() {
@@ -3770,6 +3957,190 @@ fn human_readable_size(size: u64) -> String {
     }
 }
 
+fn resolve_local_cwd(raw: Option<&str>) -> PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let Some(raw) = raw.map(str::trim).filter(|s| !s.is_empty()) else {
+        return home;
+    };
+    if raw == "~" {
+        return home;
+    }
+    if let Some(rest) = raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
+        return home.join(rest);
+    }
+    PathBuf::from(raw)
+}
+
+fn prompt_ready_for_cd(line: &str) -> bool {
+    let t = line.trim();
+    if t.is_empty() {
+        return false;
+    }
+    t.starts_with("PS ")
+        || t.ends_with('$')
+        || t.ends_with('#')
+        || t.ends_with('%')
+        || t.ends_with('>')
+}
+
+/// 从常见提示符里取出当前目录。认不出来就返回 `None`。
+fn parse_prompt_cwd(line: &str) -> Option<String> {
+    let t = line.trim();
+    if let Some(rest) = t.strip_prefix("PS ") {
+        let path = rest.trim().trim_end_matches('>').trim();
+        if looks_like_dir(path) {
+            return Some(path.to_string());
+        }
+    }
+    if t.ends_with('>') {
+        let path = t.trim_end_matches('>').trim();
+        if looks_like_dir(path) {
+            return Some(path.to_string());
+        }
+        if let Some(path) = last_path_token(path) {
+            return Some(path);
+        }
+    }
+    if t.ends_with('$') || t.ends_with('#') || t.ends_with('%') {
+        let body = t
+            .trim_end_matches(|c| c == '$' || c == '#' || c == '%' || c == ' ')
+            .trim();
+        if let Some(idx) = body.rfind(':') {
+            let path = body[idx + 1..].trim();
+            if path.starts_with('/') || path.starts_with('~') {
+                return Some(path.to_string());
+            }
+        }
+        // macOS zsh 常见 `user@host ~/src %`，Linux 自定义提示符也可能不带冒号。
+        if let Some(path) = last_path_token(body) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn last_path_token(body: &str) -> Option<String> {
+    body.split_whitespace()
+        .rev()
+        .find(|token| looks_like_dir(token))
+        .map(|token| token.to_string())
+}
+
+fn looks_like_dir(path: &str) -> bool {
+    looks_like_win_path(path) || path.starts_with('/') || path.starts_with('~')
+}
+
+fn looks_like_win_path(path: &str) -> bool {
+    let b = path.as_bytes();
+    b.len() >= 3 && b[1] == b':' && (b[2] == b'\\' || b[2] == b'/')
+}
+
+/// 根据刚提交的 `cd` / `Set-Location` 更新目录。认不出命令时返回 `None`。
+fn apply_cd_line(cwd: Option<&str>, line: &str, local_home: Option<&str>) -> Option<String> {
+    let rest = strip_cd_invocation(line)?;
+    let arg = normalize_cd_arg(rest);
+    if arg == "-" {
+        return None;
+    }
+    if arg.is_empty() || arg == "~" {
+        return local_home
+            .map(|s| s.to_string())
+            .or_else(|| Some("~".to_string()));
+    }
+    if let Some(rest) = arg.strip_prefix("~/").or_else(|| arg.strip_prefix("~\\")) {
+        if let Some(home) = local_home {
+            return Some(join_dir(home, rest));
+        }
+        return Some(format!("~/{rest}"));
+    }
+    if is_absolute_dir(&arg) {
+        return Some(arg);
+    }
+    let base = cwd.filter(|s| !s.is_empty())?;
+    Some(join_dir(base, &arg))
+}
+
+fn strip_cd_invocation(line: &str) -> Option<&str> {
+    let t = line.trim();
+    let lower = t.to_ascii_lowercase();
+    if lower == "cd" || lower.starts_with("cd ") || lower.starts_with("cd\t") {
+        return Some(t[2..].trim_start());
+    }
+    const SL: &str = "set-location";
+    if lower == SL {
+        return Some("");
+    }
+    if lower.starts_with("set-location ") || lower.starts_with("set-location\t") {
+        return Some(t[SL.len()..].trim_start());
+    }
+    None
+}
+
+fn normalize_cd_arg(rest: &str) -> String {
+    let mut parts = rest.split_whitespace();
+    let mut arg = String::new();
+    for part in parts.by_ref() {
+        let l = part.to_ascii_lowercase();
+        if l == "/d" || l == "--" || l == "-literalpath" || l == "-path" {
+            continue;
+        }
+        if l.starts_with('-') {
+            continue;
+        }
+        arg = part.to_string();
+        break;
+    }
+    arg.trim_matches(|c| c == '"' || c == '\'').to_string()
+}
+
+fn is_absolute_dir(path: &str) -> bool {
+    looks_like_win_path(path) || path.starts_with('/') || path.starts_with('\\')
+}
+
+fn join_dir(base: &str, rel: &str) -> String {
+    if is_absolute_dir(rel) {
+        return rel.to_string();
+    }
+    let win = base.contains('\\') || rel.contains('\\');
+    let sep = if win { '\\' } else { '/' };
+    let mut out = base.trim_end_matches(['/', '\\']).to_string();
+    for part in rel.split(['/', '\\']) {
+        if part.is_empty() || part == "." {
+            continue;
+        }
+        if part == ".." {
+            if let Some(i) = out.rfind(['/', '\\']) {
+                let head = &out[..i];
+                if i == 0 {
+                    out.truncate(1);
+                } else if head.len() == 2 && head.as_bytes()[1] == b':' {
+                    out.truncate(i + 1);
+                } else {
+                    out.truncate(i);
+                }
+            }
+            continue;
+        }
+        if out.is_empty() {
+            out.push_str(part);
+        } else {
+            out.push(sep);
+            out.push_str(part);
+        }
+    }
+    out
+}
+
+fn startup_cd_payload(path: &str) -> Vec<u8> {
+    if looks_like_win_path(path) || path.contains('\\') {
+        let esc = path.replace('\'', "''");
+        format!("Set-Location -LiteralPath '{esc}'\r").into_bytes()
+    } else {
+        let esc = path.replace('\'', "'\\''");
+        format!("cd -- '{esc}'\r").into_bytes()
+    }
+}
+
 impl Default for TerminalView {
     fn default() -> Self {
         Self::new()
@@ -3936,6 +4307,20 @@ mod selection_extend_tests {
     use super::*;
 
     #[test]
+    fn double_click_stops_at_colon() {
+        let line = "root@host:~/src";
+        let host_at = line.find("host").unwrap();
+        let (start, end) = TerminalView::terminal_token_range_at(line, host_at).unwrap();
+        assert_eq!(&line[start..end], "root@host");
+        let path_at = line.find("src").unwrap();
+        let (start, end) = TerminalView::terminal_token_range_at(line, path_at).unwrap();
+        assert_eq!(&line[start..end], "/src");
+        let colon = line.find(':').unwrap();
+        let (start, end) = TerminalView::terminal_token_range_at(line, colon).unwrap();
+        assert_eq!(&line[start..end], "root@host");
+    }
+
+    #[test]
     fn extend_keeps_anchor_across_scroll() {
         let mut sel = Selection::default();
         // 在 display_offset=0 第 2 行第 3 列点下锚点
@@ -4006,5 +4391,62 @@ mod selection_extend_tests {
         assert!(up1 > 0.0 && up2 > up1);
         let dn = drag_autoscroll_lines_per_sec(150.0, 0.0, 100.0, 10.0);
         assert!(dn < 0.0);
+    }
+}
+
+#[cfg(test)]
+mod cwd_tests {
+    use super::{apply_cd_line, join_dir, parse_prompt_cwd, startup_cd_payload};
+
+    #[test]
+    fn prompt_paths() {
+        assert_eq!(
+            parse_prompt_cwd("PS C:\\Users\\Admin>"),
+            Some("C:\\Users\\Admin".into())
+        );
+        assert_eq!(
+            parse_prompt_cwd("admin@host:~/src$"),
+            Some("~/src".into())
+        );
+        assert_eq!(
+            parse_prompt_cwd("admin@MacBook-Pro ~/src %"),
+            Some("~/src".into())
+        );
+        assert_eq!(
+            parse_prompt_cwd("root@debian:/var/log#"),
+            Some("/var/log".into())
+        );
+        assert_eq!(
+            parse_prompt_cwd("alice@host ~/work>"),
+            Some("~/work".into())
+        );
+        assert_eq!(parse_prompt_cwd("echo hello"), None);
+    }
+
+    #[test]
+    fn cd_joins_relative_and_parent() {
+        assert_eq!(
+            apply_cd_line(Some("C:\\Users\\Admin"), "cd Desktop", Some("C:\\Users\\Admin")),
+            Some("C:\\Users\\Admin\\Desktop".into())
+        );
+        assert_eq!(
+            apply_cd_line(Some("/var/log"), "cd ..", None),
+            Some("/var".into())
+        );
+        assert_eq!(
+            apply_cd_line(Some("/tmp"), "cd", Some("/home/a")),
+            Some("/home/a".into())
+        );
+        assert_eq!(apply_cd_line(Some("/tmp"), "ls", None), None);
+        assert_eq!(join_dir("/var/log", "nginx"), "/var/log/nginx");
+    }
+
+    #[test]
+    fn startup_cd_quotes() {
+        let win = String::from_utf8(startup_cd_payload("C:\\Users\\O'Brien")).unwrap();
+        assert!(win.contains("Set-Location"));
+        assert!(win.contains("O''Brien"));
+        let posix = String::from_utf8(startup_cd_payload("/tmp/a b")).unwrap();
+        assert!(posix.starts_with("cd -- "));
     }
 }

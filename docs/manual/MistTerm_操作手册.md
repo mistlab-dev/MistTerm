@@ -196,9 +196,15 @@ MistTerm 是一款 **SSH 终端客户端**，帮助您：
 
 ### 6.3 分屏（同一标签多窗格）
 
-- **Ctrl+Shift+D**：左右分屏  
-- **Ctrl+Shift+U**：上下分屏  
-- **Alt+← / Alt+→**：在分屏窗格间切换焦点  
+菜单 **终端** 里也有这几项。标签上右键同样可以分屏。
+
+Windows 与 Linux 用 **Ctrl+Shift**，macOS 用 **⌘⇧**。
+
+- **Ctrl+Shift+D**（macOS **⌘⇧D**）：左右分屏  
+- **Ctrl+Shift+U**（macOS **⌘⇧U**）：上下分屏  
+- **Ctrl+Shift+← / Ctrl+Shift+→**：在分屏窗格间切换焦点（macOS 为 ⌘⌥← / ⌘⌥→）  
+- 新窗格从当前窗格所在目录启动（本机终端、以及 Linux / macOS 的 `cd`，Windows 远程的 PowerShell）  
+- **Ctrl+Shift+B**（macOS **⌘⇧B**）：**同时输入**。打开后，键入会发到这个标签里的每个窗格。窗格标题右侧会显示「同时输入」 
 
 ---
 
@@ -457,7 +463,7 @@ MistTerm 有两层命令安全检查：本地检查用于快捷提示，服务�
 | **Ctrl+R** | 留给 shell（Mist 不拦截）；命令历史面板在 **工具 → 命令历史** |
 | **Ctrl+Shift+A** | AI 助手面板 |
 | **Ctrl+Shift+L** | 终端选区发送到 AI |
-| **Ctrl+Shift+D** / **Ctrl+Shift+U** | 终端左右 / 上下分屏 |
+| **Ctrl+Shift+D** / **Ctrl+Shift+U**（Mac：**⌘⇧D** / **⌘⇧U**） | 终端左右 / 上下分屏 |
 | **Ctrl+,** | 偏好设置 |
 | **Ctrl+H** | 关于与快捷键说明 |
 | **Esc** | 关闭当前弹窗、菜单 |

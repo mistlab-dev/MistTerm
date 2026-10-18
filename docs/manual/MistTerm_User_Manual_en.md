@@ -194,9 +194,15 @@ Passwords and session info are **encrypted locally**. When switching computers, 
 
 ### 6.3 Split Panes (Multiple Panes in One Tab)
 
-- **Ctrl+Shift+D**: split left/right
-- **Ctrl+Shift+U**: split top/bottom
-- **Alt+← / Alt+→**: switch focus between split panes
+The same commands are in the **Terminal** menu and the tab context menu.
+
+Windows and Linux use **Ctrl+Shift**. macOS uses **⌘⇧**.
+
+- **Ctrl+Shift+D** (macOS **⌘⇧D**): split left/right
+- **Ctrl+Shift+U** (macOS **⌘⇧U**): split top/bottom
+- **Ctrl+Shift+← / Ctrl+Shift+→**: move focus between panes (⌘⌥← / ⌘⌥→ on macOS)
+- A new pane starts in the source pane's current directory (local shell, `cd` on Linux and macOS, PowerShell on a Windows remote)
+- **Ctrl+Shift+B** (macOS **⌘⇧B**): **Broadcast input**. Keystrokes go to every pane in the tab. The pane header shows "Broadcast"
 
 ---
 
@@ -451,7 +457,7 @@ The following uses **Windows** keys; on macOS, replace **Ctrl** with **⌘** (e.
 | **Ctrl+R** | Left to the shell (Mist does not intercept it); command history panel: **Tools → Command History** |
 | **Ctrl+Shift+A** | AI assistant panel |
 | **Ctrl+Shift+L** | Send terminal selection to AI |
-| **Ctrl+Shift+D** / **Ctrl+Shift+U** | Split terminal left/right / top/bottom |
+| **Ctrl+Shift+D** / **Ctrl+Shift+U** (Mac: **⌘⇧D** / **⌘⇧U**) | Split terminal left/right / top/bottom |
 | **Ctrl+,** | Preferences |
 | **Ctrl+H** | About & shortcut guide |
 | **Esc** | Close current dialog or menu |
