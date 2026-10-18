@@ -58,7 +58,7 @@ pub enum ApplyStage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ApplyOutcome {
-    /// 文件已替换，重启 Mist 后生效。
+    /// 文件已替换，重启 MistTerm 后生效。
     Installed { version: String, exe: PathBuf },
     /// 已启动 Windows 安装程序；调用方应尽快退出。
     InstallerStarted { version: String },

@@ -19,7 +19,7 @@ fn main() -> eframe::Result<()> {
             Ok(()) => {
                 let st = mistterm::platform::url_handler::status();
                 if st == mistterm::platform::url_handler::HandlerStatus::ThisApp {
-                    println!("ssh:// links will open in Mist");
+                    println!("ssh:// links will open in MistTerm");
                     return Ok(());
                 }
                 eprintln!("registered, but the system still reports: {st:?}");
@@ -42,7 +42,7 @@ fn main() -> eframe::Result<()> {
         }
     }
 
-    // macOS：嵌入 Info.plist，使菜单栏/Dock 显示 Mist 而非可执行文件名 mistterm
+    // macOS：嵌入 Info.plist，使菜单栏/Dock 显示 MistTerm（CFBundleDisplayName），而非裸二进制名
     #[cfg(target_os = "macos")]
     embed_plist::embed_info_plist!("../Info.plist");
 

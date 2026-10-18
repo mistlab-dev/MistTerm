@@ -363,7 +363,11 @@ impl FragmentLibraryState {
                             .show(ui, |ui| {
                                 for f in results {
                                     let selected = self.editing_id.as_deref() == Some(f.id.as_str());
-                                    let label = format!("{} · {}", f.title, f.category);
+                                    let label = format!(
+                                        "{} · {}",
+                                        crate::i18n::fragment_display_title(ctx, f),
+                                        crate::i18n::fragment_display_category(ctx, f),
+                                    );
                                     if ui
                                         .selectable_label(selected, label)
                                         .on_hover_text(&f.command)

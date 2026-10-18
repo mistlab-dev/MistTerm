@@ -221,6 +221,27 @@ pub fn localize_backend_error(lang: UiLanguage, err: &str) -> String {
     if let Some(rest) = s.strip_prefix("Could not open:") {
         return format!("无法打开：{rest}");
     }
+    if s.starts_with("Failed to read local directory") || s.starts_with("read_dir entry:") {
+        return "无法读取该目录，请检查路径和权限。".to_string();
+    }
+    if s.starts_with("Permission denied") {
+        return "没有权限。".to_string();
+    }
+    if let Some(rest) = s.strip_prefix("Failed to create directory:") {
+        return format!("创建目录失败：{rest}");
+    }
+    if let Some(rest) = s.strip_prefix("Failed to delete:") {
+        return format!("删除失败：{rest}");
+    }
+    if let Some(rest) = s.strip_prefix("Failed to rename:") {
+        return format!("重命名失败：{rest}");
+    }
+    if let Some(rest) = s.strip_prefix("Failed to set permissions:") {
+        return format!("设置权限失败：{rest}");
+    }
+    if s == "SFTP background worker stopped unexpectedly" {
+        return "SFTP 后台任务异常中断".to_string();
+    }
     err.to_string()
 }
 
@@ -255,4 +276,113 @@ pub fn theme_display_name(ctx: &egui::Context, stored_name: &str) -> Cow<'static
         }
         other => Cow::Owned(other.to_string()),
     }
+}
+
+/// Built-in starter snippet titles (id → EN / ZH). Covers already-seeded personal libraries
+/// that only stored the Chinese `title` from an older starter catalog.
+fn starter_fragment_title_pair(id: &str, title: &str) -> Option<(&'static str, &'static str)> {
+    let by_id = match id {
+        "384781c1-2ae5-44b4-ba69-e0cfcea999e4" => Some(("Disk usage", "磁盘使用")),
+        "351fe9f9-41b1-4e01-a272-3566c41dccee" => Some(("Memory usage", "内存使用")),
+        "a1b2c3d4-e5f6-7890-abcd-ef1234567890" => Some(("System uptime", "系统运行时间")),
+        "b2c3d4e5-f6a7-8901-bcde-f12345678901" => Some(("Listening ports", "监听端口")),
+        "c3d4e5f6-a7b8-9012-cdef-123456789012" => Some(("Recent error logs", "最近错误日志")),
+        "bee657c6-b09f-4e9b-8869-7e2a04a6d9b6" => Some(("Top processes", "查看进程")),
+        "103494ee-6839-4755-8342-b80e391c8563" => Some(("Docker containers", "Docker 容器")),
+        "d4e5f6a7-b8c9-0123-def0-234567890123" => Some(("Disk usage top", "磁盘占用 Top")),
+        "e5f6a7b8-c9d0-1234-ef01-345678901234" => Some(("Failed systemd units", "失败 systemd 单元")),
+        "f6a7b8c9-d0e1-2345-f012-456789012345" => Some(("Load and CPU overview", "负载与 CPU 概览")),
+        _ => None,
+    };
+    if by_id.is_some() {
+        return by_id;
+    }
+    match title.trim() {
+        "磁盘使用" => Some(("Disk usage", "磁盘使用")),
+        "内存使用" => Some(("Memory usage", "内存使用")),
+        "系统运行时间" => Some(("System uptime", "系统运行时间")),
+        "监听端口" => Some(("Listening ports", "监听端口")),
+        "最近错误日志" => Some(("Recent error logs", "最近错误日志")),
+        "查看进程" => Some(("Top processes", "查看进程")),
+        "Docker 容器" => Some(("Docker containers", "Docker 容器")),
+        "磁盘占用 Top" => Some(("Disk usage top", "磁盘占用 Top")),
+        "失败 systemd 单元" => Some(("Failed systemd units", "失败 systemd 单元")),
+        "负载与 CPU 概览" => Some(("Load and CPU overview", "负载与 CPU 概览")),
+        _ => None,
+    }
+}
+
+/// Display title for a snippet: prefer `title_en` / starter map under English UI.
+pub fn fragment_display_title(ctx: &egui::Context, frag: &crate::core::fragment::FragmentStats) -> String {
+    match language(ctx) {
+        UiLanguage::Zh => frag.title.clone(),
+        UiLanguage::En => {
+            if let Some(en) = frag.title_en.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                return en.to_string();
+            }
+            if let Some((en, _)) = starter_fragment_title_pair(&frag.id, &frag.title) {
+                return en.to_string();
+            }
+            frag.title.clone()
+        }
+    }
+}
+
+/// Display category for a snippet (starter Chinese categories → English under EN UI).
+pub fn fragment_display_category(ctx: &egui::Context, frag: &crate::core::fragment::FragmentStats) -> String {
+    match language(ctx) {
+        UiLanguage::Zh => {
+            if frag.category.trim().is_empty() {
+                "—".to_string()
+            } else {
+                frag.category.clone()
+            }
+        }
+        UiLanguage::En => {
+            if let Some(en) = frag
+                .category_en
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                return en.to_string();
+            }
+            match frag.category.trim() {
+                "" => "—".to_string(),
+                "系统监控" | "System monitoring" => tr(ctx, "System monitoring", "系统监控").to_string(),
+                "网络" | "Network" => tr(ctx, "Network", "网络").to_string(),
+                "日志" | "Logs" => tr(ctx, "Logs", "日志").to_string(),
+                "进程管理" | "Processes" => tr(ctx, "Processes", "进程管理").to_string(),
+                "Docker" => "Docker".to_string(),
+                other => other.to_string(),
+            }
+        }
+    }
+}
+
+/// True if `query` (already lowercased) matches the snippet under the current UI language.
+pub fn fragment_matches_search(
+    ctx: &egui::Context,
+    frag: &crate::core::fragment::FragmentStats,
+    query_lower: &str,
+) -> bool {
+    if query_lower.is_empty() {
+        return true;
+    }
+    if frag.command.to_lowercase().contains(query_lower) {
+        return true;
+    }
+    if fragment_display_title(ctx, frag)
+        .to_lowercase()
+        .contains(query_lower)
+    {
+        return true;
+    }
+    // Also match the stored (often Chinese) title so EN users can still find by 磁盘使用.
+    frag.title.to_lowercase().contains(query_lower)
+        || frag
+            .title_en
+            .as_deref()
+            .map(|s| s.to_lowercase().contains(query_lower))
+            .unwrap_or(false)
 }

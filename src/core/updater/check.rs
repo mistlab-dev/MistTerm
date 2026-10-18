@@ -73,12 +73,12 @@ impl ManualReason {
                 }
             }
             ManualReason::MacOs { translocated: false } => t(
-                "Mist can't update itself on macOS yet. Download the new version and drag Mist.app into Applications to replace the old one.",
+                "MistTerm can't update itself on macOS yet. Download the new version and drag Mist.app into Applications to replace the old one.",
                 "macOS 上暂时不能自动更新。请下载新版本，把 Mist.app 拖进「应用程序」文件夹替换旧版。",
             ),
             ManualReason::MacOs { translocated: true } => t(
-                "Mist is running from a temporary location chosen by macOS. Move Mist.app into Applications first, then download the new version and replace it.",
-                "Mist 现在是在 macOS 临时指定的位置运行的。请先把 Mist.app 移到「应用程序」文件夹，再下载新版本替换。",
+                "MistTerm is running from a temporary location chosen by macOS. Move Mist.app into Applications first, then download the new version and replace it.",
+                "MistTerm 现在是在 macOS 临时指定的位置运行的。请先把 Mist.app 移到「应用程序」文件夹，再下载新版本替换。",
             ),
             ManualReason::NotWritable(dir) => UpdateError::NotWritable(dir.clone()).user_message(zh),
             ManualReason::GlibcTooOld { need, have } => {
@@ -103,8 +103,8 @@ impl ManualReason {
                 "这个平台暂时不提供自动安装，请到官网下载新版本。",
             ),
             ManualReason::Unrecognized => t(
-                "Mist couldn't tell how it was installed, so it won't replace itself. Download the new version from the website.",
-                "无法判断 Mist 的安装方式，不会自动替换。请到官网下载新版本。",
+                "MistTerm couldn't tell how it was installed, so it won't replace itself. Download the new version from the website.",
+                "无法判断 MistTerm 的安装方式，不会自动替换。请到官网下载新版本。",
             ),
         }
     }
@@ -145,7 +145,7 @@ impl InstallPlan {
         matches!(self, InstallPlan::Auto { .. })
     }
 
-    /// Windows 安装版：安装时会关闭并重新打开 Mist。
+    /// Windows 安装版：安装时会关闭并重新打开 MistTerm。
     pub fn uses_installer(&self) -> bool {
         matches!(
             self,

@@ -122,6 +122,9 @@ impl MistTermApp {
                     });
                 });
             });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            should_close = true;
+        }
         self.show_preferences_dialog = open && !should_close;
     }
 
