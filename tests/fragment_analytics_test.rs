@@ -7,8 +7,10 @@ fn make_fragment_stats(id: &str, command: &str, last_used: Option<i64>) -> Fragm
     FragmentStats {
         id: id.into(),
         title: command.into(),
+        title_en: None,
         command: command.into(),
         category: "test".into(),
+        category_en: None,
         tags: vec![],
         variables: vec![],
         usage_count: 1,

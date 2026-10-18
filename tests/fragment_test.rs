@@ -8,8 +8,10 @@ fn make_fragment_stats(id: &str, title: &str, command: &str, category: &str) -> 
     FragmentStats {
         id: id.into(),
         title: title.into(),
+        title_en: None,
         command: command.into(),
         category: category.into(),
+        category_en: None,
         tags: vec![],
         variables: vec![],
         usage_count: 1,
