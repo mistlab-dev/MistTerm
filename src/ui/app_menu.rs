@@ -373,53 +373,61 @@ impl MistTermApp {
                 ui.close_menu();
             }
             ui.separator();
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.audit_timeline).clicked() {
-                self.open_audit_timeline_dialog();
-                ui.close_menu();
-            }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.install_audit_agent).clicked() {
-                self.open_agent_install_dialog();
-                ui.close_menu();
-            }
-            ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.help_report_issue).clicked() {
                 self.open_report_issue(ctx);
                 ui.close_menu();
             }
             ui.menu_button(
-                crate::i18n::tr(ctx, "Freeze diagnostics", "卡顿诊断"),
+                crate::i18n::tr(ctx, "Advanced", "高级"),
                 |ui| {
                     crate::ui::chrome::apply_menu_popup_style(ui, theme);
-                    if crate::ui::chrome::popup_menu_button(
-                        ui,
-                        theme,
-                        crate::i18n::tr(ctx, "Open diagnostics folder", "打开诊断目录"),
-                    )
-                    .clicked()
-                    {
-                        self.open_hang_report_folder(ctx);
+                    if crate::ui::chrome::popup_menu_button(ui, theme, l.audit_timeline).clicked() {
+                        self.open_audit_timeline_dialog();
                         ui.close_menu();
                     }
-                    if crate::ui::chrome::popup_menu_button(
-                        ui,
-                        theme,
-                        crate::i18n::tr(ctx, "Copy recent summary", "复制最近摘要"),
-                    )
-                    .clicked()
+                    if crate::ui::chrome::popup_menu_button(ui, theme, l.install_audit_agent)
+                        .clicked()
                     {
-                        self.copy_recent_hang_report_summary(ctx);
+                        self.open_agent_install_dialog();
                         ui.close_menu();
                     }
-                    if crate::ui::chrome::popup_menu_button(
-                        ui,
-                        theme,
-                        crate::i18n::tr(ctx, "Report with summary", "带摘要提交 Issue"),
-                    )
-                    .clicked()
-                    {
-                        self.open_issue_with_recent_hang_summary(ctx);
-                        ui.close_menu();
-                    }
+                    ui.separator();
+                    ui.menu_button(
+                        crate::i18n::tr(ctx, "Freeze diagnostics", "卡顿诊断"),
+                        |ui| {
+                            crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                            if crate::ui::chrome::popup_menu_button(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Open diagnostics folder", "打开诊断目录"),
+                            )
+                            .clicked()
+                            {
+                                self.open_hang_report_folder(ctx);
+                                ui.close_menu();
+                            }
+                            if crate::ui::chrome::popup_menu_button(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Copy recent summary", "复制最近摘要"),
+                            )
+                            .clicked()
+                            {
+                                self.copy_recent_hang_report_summary(ctx);
+                                ui.close_menu();
+                            }
+                            if crate::ui::chrome::popup_menu_button(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Report with summary", "带摘要提交 Issue"),
+                            )
+                            .clicked()
+                            {
+                                self.open_issue_with_recent_hang_summary(ctx);
+                                ui.close_menu();
+                            }
+                        },
+                    );
                 },
             );
             ui.separator();

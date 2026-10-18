@@ -68,11 +68,11 @@ pub struct MacMenuLabels {
 pub fn labels(lang: UiLanguage) -> MacMenuLabels {
     let loc = Locale { lang };
     MacMenuLabels {
-        about: loc.tr("About Mist", "关于 Mist"),
+        about: loc.tr("About MistTerm", "关于 MistTerm"),
         preferences: loc.tr("Preferences", "偏好设置"),
-        quit: loc.tr("Quit Mist", "退出 Mist"),
+        quit: loc.tr("Quit MistTerm", "退出 MistTerm"),
         terminal_menu: loc.tr("Terminal", "终端"),
-        new_session: loc.tr("New Session", "新建会话"),
+        new_session: loc.tr("New Connection", "新建连接"),
         new_tab: loc.tr("New Tab", "新建标签"),
         local_shell: loc.tr("Local Shell", "本机终端"),
         split_horizontal: loc.tr("Split Left / Right", "左右分屏"),
@@ -100,7 +100,7 @@ pub fn labels(lang: UiLanguage) -> MacMenuLabels {
         restore_window: loc.tr("Restore Window Size", "还原窗口大小"),
         sftp_panel: loc.tr("SFTP Files", "SFTP 文件"),
         port_forward_panel: loc.tr("Port Forwarding", "端口转发"),
-        fragment_panel: loc.tr("Command Fragments", "命令片段"),
+        fragment_panel: loc.tr("Command Snippets", "命令片段"),
         monitor_panel: loc.tr("System Monitor", "系统监控"),
         ai_panel: loc.tr("AI Assistant", "AI 助手"),
         connections: loc.tr("Connections", "连接"),
@@ -110,8 +110,8 @@ pub fn labels(lang: UiLanguage) -> MacMenuLabels {
         team_sign_in: loc.tr("Sign In & Account", "登录与账户"),
         team_members: loc.tr("Team Members", "团队成员"),
         tools_menu: loc.tr("Tools", "工具"),
-        fragment_library: loc.tr("Fragment Library", "命令片段库"),
-        quick_fragments: loc.tr("Quick Fragment Picker", "快速片段选择器"),
+        fragment_library: loc.tr("Snippet Library", "命令片段库"),
+        quick_fragments: loc.tr("Quick Snippet Picker", "快速片段选择器"),
         command_history: loc.tr("Command History", "命令历史"),
         batch_exec: loc.tr("Batch Run on Servers", "批量多机执行"),
         credentials: loc.tr("Credentials", "凭证管理"),
@@ -126,7 +126,7 @@ pub fn labels(lang: UiLanguage) -> MacMenuLabels {
         audit_timeline: loc.tr("Audit Timeline", "审计时间线"),
         install_audit_agent: loc.tr("Install Audit Agent", "安装审计探针"),
         help_report_issue: loc.tr("Report an Issue", "问题反馈"),
-        help_about: loc.tr("About Mist", "关于 Mist"),
+        help_about: loc.tr("About MistTerm", "关于 MistTerm"),
         check_updates: loc.tr("Check for Updates…", "检查更新…"),
     }
 }

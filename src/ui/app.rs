@@ -154,7 +154,7 @@ fn truncate_status(s: &str, max_chars: usize) -> String {
 /// 设计文档 §5.4：`{次数}次 · {成功率}%成功 · {耗时}s`
 fn format_fragment_stats_line(ctx: &egui::Context, frag: &FragmentStats) -> String {
     if frag.usage_count == 0 {
-        return crate::i18n::tr(ctx, "Unused", "未使用").to_string();
+        return crate::i18n::tr(ctx, "Not used yet", "尚未使用").to_string();
     }
     let rate = (frag.success_count as f32 / frag.usage_count as f32) * 100.0;
     let avg_s = frag.total_time_ms as f64 / frag.usage_count as f64 / 1000.0;
@@ -336,6 +336,8 @@ pub struct MistTermApp {
     new_session_color_tag: String,
     new_session_private_key_path: String,
     new_session_use_ssh_agent: bool,
+    /// Show red required-field hint only after a failed Save/Enter attempt.
+    new_session_validation_attempted: bool,
     new_session_proxy_jump: String,
     new_session_proxy_command: String,
     new_session_local_forwards_text: String,
@@ -1141,6 +1143,7 @@ impl MistTermApp {
             new_session_color_tag: String::new(),
             new_session_private_key_path: String::new(),
             new_session_use_ssh_agent: true,
+            new_session_validation_attempted: false,
             new_session_proxy_jump: String::new(),
             new_session_proxy_command: String::new(),
             new_session_local_forwards_text: String::new(),
@@ -2393,6 +2396,80 @@ impl MistTermApp {
         }
         for (tab_idx, err) in toast_errors {
             self.notify_ssh_reconnect_error(ctx, tab_idx, err);
+        }
+        self.poll_connection_placeholder_actions(ctx);
+        self.dismiss_stale_reconnect_toast_if_needed();
+    }
+
+    /// Connect/fail placeholder: Cancel / Retry / Edit host / Close tab.
+    fn poll_connection_placeholder_actions(&mut self, ctx: &egui::Context) {
+        use crate::ui::terminal::ConnectionPlaceholderAction;
+        let mut actions: Vec<(usize, ConnectionPlaceholderAction)> = Vec::new();
+        for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
+            for pane in tab.panes.iter_mut() {
+                let a = pane.terminal.take_connection_placeholder_action();
+                if a != ConnectionPlaceholderAction::None {
+                    actions.push((tab_idx, a));
+                }
+            }
+        }
+        for (tab_idx, action) in actions {
+            match action {
+                ConnectionPlaceholderAction::None => {}
+                ConnectionPlaceholderAction::CancelConnect => {
+                    if let Some(pane) = self.tabs.get_mut(tab_idx).and_then(|t| t.active_pane_mut())
+                    {
+                        pane.terminal.cancel_in_flight_connect(ctx);
+                    }
+                    self.clear_toast();
+                    self.notify_info(crate::i18n::tr(
+                        ctx,
+                        "Connection cancelled",
+                        "已取消连接",
+                    ));
+                }
+                ConnectionPlaceholderAction::Retry => {
+                    self.clear_toast();
+                    self.reconnect_tab_at(ctx, tab_idx);
+                }
+                ConnectionPlaceholderAction::EditHost => {
+                    let sid = self
+                        .tabs
+                        .get(tab_idx)
+                        .map(|t| t.primary_session_id())
+                        .unwrap_or_default();
+                    if !sid.is_empty() && !sid.starts_with("local:") {
+                        self.open_edit_session_dialog(&sid);
+                    } else {
+                        self.notify_warn(crate::i18n::tr(
+                            ctx,
+                            "No saved connection profile to edit",
+                            "没有可编辑的连接配置",
+                        ));
+                    }
+                }
+                ConnectionPlaceholderAction::DismissTab => {
+                    self.clear_toast();
+                    self.request_close_tab_at(tab_idx);
+                }
+            }
+        }
+    }
+
+    /// Drop sticky "Connection failed / Reconnect" toast when user is on a healthy tab.
+    fn dismiss_stale_reconnect_toast_if_needed(&mut self) {
+        let Some(tab_idx) = self.reconnect_toast_tab_idx() else {
+            return;
+        };
+        let Some(active) = self.active_tab else {
+            return;
+        };
+        if active == tab_idx {
+            return;
+        }
+        let healthy = self.tabs.get(active).is_some_and(|t| t.any_connected());
+        if healthy {
+            self.clear_toast();
         }
     }
 
@@ -5915,6 +5992,7 @@ impl MistTermApp {
         self.new_session_color_tag.clear();
         self.new_session_private_key_path.clear();
         self.new_session_use_ssh_agent = true;
+        self.new_session_validation_attempted = false;
         self.new_session_proxy_jump.clear();
         self.new_session_proxy_command.clear();
         self.new_session_local_forwards_text.clear();
@@ -7354,7 +7432,7 @@ impl MistTermApp {
                         crate::ui::icons::IconId::Fragment,
                         self.show_fragment_panel,
                         &tip(menu.fragment_panel, Some(crate::platform::accel("K"))),
-                        crate::i18n::tr(ctx, "Snip", "片段"),
+                        crate::i18n::tr(ctx, "Snips", "片段"),
                     )
                     .clicked()
                     {
@@ -7381,7 +7459,7 @@ impl MistTermApp {
                         crate::ui::icons::IconId::Network,
                         self.show_port_forward_panel,
                         &tip(menu.port_forward_panel, None),
-                        crate::i18n::tr(ctx, "Fwd", "转发"),
+                        crate::i18n::tr(ctx, "Ports", "转发"),
                     )
                     .clicked()
                     {
@@ -7393,7 +7471,7 @@ impl MistTermApp {
                         crate::ui::icons::IconId::Monitor,
                         self.show_monitor_panel,
                         &tip(menu.monitor_panel, None),
-                        crate::i18n::tr(ctx, "Stats", "监控"),
+                        crate::i18n::tr(ctx, "Mon", "监控"),
                     )
                     .clicked()
                     {
@@ -7404,7 +7482,7 @@ impl MistTermApp {
                         theme,
                         crate::ui::icons::IconId::Api,
                         self.show_ai_panel,
-                        &tip(menu.ai_panel, Some(crate::platform::accel_shift("A"))),
+                        &tip(menu.ai_panel, Some(crate::platform::accel_shift("I"))),
                         crate::i18n::tr(ctx, "AI", "助手"),
                     )
                     .clicked()
@@ -8474,8 +8552,14 @@ impl eframe::App for MistTermApp {
             }) {
                 self.toggle_activity_rail();
             }
+            // Ctrl/⌘+Shift+A = Select All (menu accel). AI uses Ctrl/⌘+Shift+I.
             if ctx.input_mut(|i| {
                 crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::A)
+            }) {
+                self.menu_select_all_for_context(ctx);
+            }
+            if ctx.input_mut(|i| {
+                crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::I)
             }) {
                 self.toggle_ai_panel(ctx);
             }
@@ -8845,12 +8929,12 @@ impl MistTermApp {
                 self.sidebar_collapsed = false;
             }
         });
-        card.add_space(16.0);
+        card.add_space(12.0);
         card.label(
             egui::RichText::new(crate::i18n::tr(
                 &ctx,
-                "After a split, turn on Broadcast so keystrokes go to every pane.",
-                "分屏之后，打开「同时输入」，按键会发到每个窗格。",
+                "Tip: local SSH works without a mistlab.dev account.",
+                "提示：本地 SSH 无需 mistlab.dev 账号。",
             ))
             .size(theme.font_size_caption())
             .color(theme.text_tertiary()),

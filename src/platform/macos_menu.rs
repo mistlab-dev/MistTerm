@@ -272,7 +272,10 @@ impl NativeAppMenu {
             "mistterm.edit.select_all_terminal",
             l.select_all,
             true,
-            None,
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::SHIFT),
+                Code::KeyA,
+            )),
         );
         edit.append(&copy_terminal)?;
         edit.append(&paste_terminal)?;

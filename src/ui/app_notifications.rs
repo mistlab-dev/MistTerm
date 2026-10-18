@@ -338,6 +338,14 @@ impl MistTermApp {
         self.pending_suggested_snippet = None;
     }
 
+    /// Tab index of a sticky reconnect toast, if any.
+    pub(crate) fn reconnect_toast_tab_idx(&self) -> Option<usize> {
+        match self.active_toast.as_ref().and_then(|t| t.action) {
+            Some(ToastAction::ReconnectTab { tab_idx }) => Some(tab_idx),
+            _ => None,
+        }
+    }
+
     /// 有待导入且用户未关闭时，展示可操作 Toast(替代侧栏横幅 / 顶栏 chip)。
     pub(crate) fn sync_ssh_import_action_toast(&mut self, ctx: &egui::Context) {
         let pending = self.ssh_pending_import_count();

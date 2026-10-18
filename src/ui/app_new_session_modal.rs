@@ -28,7 +28,7 @@ impl MistTermApp {
                             Self::modal_header_title_only(
                                 ui,
                                 theme,
-                                crate::i18n::tr(ctx, "New session", "新建会话"),
+                                crate::i18n::tr(ctx, "New connection", "新建连接"),
                                 &mut should_close,
                             );
 
@@ -36,7 +36,7 @@ impl MistTermApp {
                             Self::ui_field_label(
                                 ui,
                                 theme,
-                                crate::i18n::tr(ctx, "Session name", "会话名称"),
+                                crate::i18n::tr(ctx, "Connection name *", "连接名称 *"),
                             );
                             Self::ui_form_singleline(
                                 ui,
@@ -57,7 +57,7 @@ impl MistTermApp {
                                     Self::ui_field_label(
                                         ui,
                                         theme,
-                                        crate::i18n::tr(ctx, "Host", "主机地址"),
+                                        crate::i18n::tr(ctx, "Host *", "主机地址 *"),
                                     );
                                     Self::ui_form_singleline(
                                         ui,
@@ -145,15 +145,37 @@ impl MistTermApp {
                                 form_w,
                                 false,
                             );
+                            ui.label(
+                                egui::RichText::new(crate::i18n::tr(
+                                    ctx,
+                                    "Auth: password optional if you use a key or SSH agent; empty key path uses password or default keys (~/.ssh/id_*).",
+                                    "认证：使用密钥或 SSH Agent 时可留空密码；私钥路径留空则用密码或系统默认密钥（~/.ssh/id_*）。",
+                                ))
+                                .size(theme.font_size_caption())
+                                .color(theme.color_form_hint()),
+                            );
                             crate::ui::chrome::form_checkbox(
                                 ui,
                                 theme,
                                 &mut self.new_session_use_ssh_agent,
-                                crate::i18n::tr(
-                                    ctx,
-                                    "Use SSH agent (ssh-agent / Pageant)",
-                                    "使用 SSH Agent(ssh-agent / Pageant)",
-                                ),
+                                {
+                                    #[cfg(target_os = "windows")]
+                                    {
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "Use SSH agent (Pageant / ssh-agent)",
+                                            "使用 SSH Agent（Pageant / ssh-agent）",
+                                        )
+                                    }
+                                    #[cfg(not(target_os = "windows"))]
+                                    {
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "Use SSH agent (ssh-agent)",
+                                            "使用 SSH Agent（ssh-agent）",
+                                        )
+                                    }
+                                },
                             );
 
                             Self::ui_field_label(
@@ -186,13 +208,13 @@ impl MistTermApp {
                                 },
                             );
 
-                            if required_missing {
+                            if required_missing && self.new_session_validation_attempted {
                                 ui.add_space(theme.spacing_sm());
                                 ui.label(
                                     egui::RichText::new(crate::i18n::tr(
                                         ctx,
-                                        "Enter session name and host first.",
-                                        "请先填写会话名称和主机地址",
+                                        "Enter connection name and host first.",
+                                        "请先填写连接名称和主机地址",
                                     ))
                                     .size(theme.font_size_panel_title())
                                     .color(theme.red_a128()),
@@ -221,13 +243,17 @@ impl MistTermApp {
                                         } else {
                                             crate::i18n::tr(
                                                 ctx,
-                                                "Enter session name and host first.",
-                                                "请先填写会话名称和主机地址",
+                                                "Enter connection name and host first.",
+                                                "请先填写连接名称和主机地址",
                                             )
                                         });
-                                    if save_connect.clicked() && can_save {
-                                        self.create_and_connect_session(ui.ctx());
-                                        should_close = true;
+                                    if save_connect.clicked() {
+                                        if can_save {
+                                            self.create_and_connect_session(ui.ctx());
+                                            should_close = true;
+                                        } else {
+                                            self.new_session_validation_attempted = true;
+                                        }
                                     }
                                     if crate::ui::chrome::modal_secondary_icon_button(
                                         ui,
@@ -244,8 +270,16 @@ impl MistTermApp {
                             });
                             });
                     });
-                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !required_missing {
-                        self.create_and_connect_session(ui.ctx());
+                    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        if !required_missing {
+                            self.create_and_connect_session(ui.ctx());
+                            should_close = true;
+                        } else {
+                            self.new_session_validation_attempted = true;
+                        }
+                    }
+                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        self.reset_new_session_form();
                         should_close = true;
                     }
                 });

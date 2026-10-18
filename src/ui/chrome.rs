@@ -4148,10 +4148,19 @@ pub fn show_right_dock_ssh_gate(
 }
 
 /// 只读信息标签(连接元信息、侧栏分组等)
-pub fn label_tag_chip(ui: &mut Ui, theme: &Theme, text: &str, font_size: f32, text_color: Color32) {
-    theme.frame_label_tag().show(ui, |ui| {
-        ui.label(RichText::new(text).size(font_size).color(text_color));
-    });
+pub fn label_tag_chip(
+    ui: &mut Ui,
+    theme: &Theme,
+    text: &str,
+    font_size: f32,
+    text_color: Color32,
+) -> Response {
+    theme
+        .frame_label_tag()
+        .show(ui, |ui| {
+            ui.label(RichText::new(text).size(font_size).color(text_color));
+        })
+        .response
 }
 
 /// 面板折叠后状态栏复原按钮(图标 + 名称 · N)

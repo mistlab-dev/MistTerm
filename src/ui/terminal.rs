@@ -221,6 +221,16 @@ pub enum RightDockSshGate {
     LocalShell,
 }
 
+/// Actions from the centered connect/fail placeholder (polled by App).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionPlaceholderAction {
+    None,
+    CancelConnect,
+    Retry,
+    EditHost,
+    DismissTab,
+}
+
 /// 终端连接类型：远端 SSH 或本机 PTY shell。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ConnectionKind {
@@ -327,6 +337,8 @@ pub struct TerminalView {
     agent_audit_banner_dismissed: bool,
     /// 连接失败待宿主 Toast(`take_pending_toast_error` 取走)
     pending_toast_error: Option<String>,
+    /// Connect placeholder button (`take_connection_placeholder_action`)
+    pending_connection_placeholder_action: ConnectionPlaceholderAction,
     /// 拖入终端区域、待宿主处理的上传路径(§4.3.2)。
     pending_drop_upload_paths: Vec<PathBuf>,
     /// 大文件上传：用户选 ZMODEM 后先发 `rz -y`，握手检测到后再用此路径 `start_rz_upload`。
@@ -739,6 +751,7 @@ impl TerminalView {
             agent_audit_degraded: false,
             agent_audit_banner_dismissed: false,
             pending_toast_error: None,
+            pending_connection_placeholder_action: ConnectionPlaceholderAction::None,
             pending_drop_upload_paths: Vec::new(),
             zmodem_upload_after_rz_path: None,
             selection: Selection::default(),
@@ -3555,45 +3568,97 @@ impl TerminalView {
         }
     }
 
-    /// 还没连上时，黑屏中央写清正在连接或失败原因。
-    fn paint_connection_placeholder(&self, ui: &egui::Ui, theme: &Theme, rect: egui::Rect) {
+    /// 还没连上时，黑屏中央写清正在连接或失败原因，并提供可操作按钮。
+    fn paint_connection_placeholder(&mut self, ui: &mut egui::Ui, theme: &Theme, rect: egui::Rect) {
         if self.connected || rect.width() < 40.0 || rect.height() < 40.0 {
             return;
         }
-        let (text, color) = if let Some(err) = self.error_message.as_deref() {
-            (err.to_string(), theme.red_color())
-        } else if self.is_connecting() {
-            let text = if self.is_local_shell() {
-                crate::i18n::tr(ui.ctx(), "Opening local terminal…", "正在打开本机终端…").to_string()
-            } else {
-                let host = self.connection_server_text();
-                format!(
-                    "{} {}",
-                    crate::i18n::tr(ui.ctx(), "Connecting", "正在连接"),
-                    host
-                )
-            };
-            (text, theme.text_secondary())
-        } else {
+        let is_connecting = self.is_connecting();
+        let err = self.error_message.clone();
+        if !is_connecting && err.is_none() {
             return;
-        };
-        let mut job = egui::text::LayoutJob::default();
-        job.wrap.max_width = (rect.width() - 64.0).max(80.0);
-        job.append(
-            &text,
-            0.0,
-            egui::TextFormat {
-                font_id: egui::FontId::proportional(theme.font_size_body()),
-                color,
-                ..Default::default()
-            },
-        );
-        let galley = ui.ctx().fonts(|fonts| fonts.layout_job(job));
-        let card_size = galley.size() + egui::vec2(28.0, 18.0);
-        let card = egui::Rect::from_center_size(rect.center(), card_size);
-        ui.painter()
-            .rect_filled(card, 8.0, theme.bg_window_color());
-        ui.painter().galley(card.min + egui::vec2(14.0, 9.0), galley);
+        }
+
+        let mut action = ConnectionPlaceholderAction::None;
+        ui.allocate_ui_at_rect(rect, |ui| {
+            ui.centered_and_justified(|ui| {
+                egui::Frame::none()
+                    .fill(theme.bg_window_color())
+                    .rounding(8.0)
+                    .inner_margin(egui::Margin::symmetric(18.0, 14.0))
+                    .show(ui, |ui| {
+                        ui.set_max_width((rect.width() - 64.0).clamp(200.0, 420.0));
+                        if let Some(err) = err.as_deref() {
+                            ui.label(
+                                egui::RichText::new(err)
+                                    .size(theme.font_size_body())
+                                    .color(theme.red_color()),
+                            );
+                            ui.add_space(theme.spacing_md());
+                            ui.horizontal_wrapped(|ui| {
+                                ui.spacing_mut().item_spacing.x = theme.spacing_sm();
+                                if crate::ui::chrome::modal_primary_button(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(ui.ctx(), "Retry", "重试"),
+                                )
+                                .clicked()
+                                {
+                                    action = ConnectionPlaceholderAction::Retry;
+                                }
+                                if crate::ui::chrome::modal_secondary_button(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(ui.ctx(), "Edit host", "编辑主机"),
+                                )
+                                .clicked()
+                                {
+                                    action = ConnectionPlaceholderAction::EditHost;
+                                }
+                                if crate::ui::chrome::modal_secondary_button(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
+                                )
+                                .clicked()
+                                {
+                                    action = ConnectionPlaceholderAction::DismissTab;
+                                }
+                            });
+                        } else if is_connecting {
+                            let host = self.connection_server_text();
+                            let text = if self.is_local_shell() {
+                                crate::i18n::tr(ui.ctx(), "Opening local terminal…", "正在打开本机终端…")
+                                    .to_string()
+                            } else {
+                                format!(
+                                    "{} {}",
+                                    crate::i18n::tr(ui.ctx(), "Connecting", "正在连接"),
+                                    host
+                                )
+                            };
+                            ui.label(
+                                egui::RichText::new(text)
+                                    .size(theme.font_size_body())
+                                    .color(theme.text_secondary()),
+                            );
+                            ui.add_space(theme.spacing_md());
+                            if crate::ui::chrome::modal_secondary_button(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ui.ctx(), "Cancel", "取消"),
+                            )
+                            .clicked()
+                            {
+                                action = ConnectionPlaceholderAction::CancelConnect;
+                            }
+                        }
+                    });
+            });
+        });
+        if action != ConnectionPlaceholderAction::None {
+            self.pending_connection_placeholder_action = action;
+        }
     }
 
     /// 底栏连接状态(不写入终端 scrollback)。
@@ -3728,6 +3793,14 @@ impl TerminalView {
                 log::error!("Failed to resize PTY: {}", e);
             }
         }
+    }
+
+    /// Abort an in-progress connect and show a cancelled message (placeholder stays actionable).
+    pub fn cancel_in_flight_connect(&mut self, ctx: &egui::Context) {
+        self.disconnect();
+        self.error_message = Some(
+            crate::i18n::tr(ctx, "Connection cancelled", "已取消连接").to_string(),
+        );
     }
 
     /// 断开连接(关闭 SSH 并清空本地终端网格，用于移除标签等场景)
@@ -3913,6 +3986,12 @@ impl TerminalView {
 
     pub fn take_pending_toast_error(&mut self) -> Option<String> {
         self.pending_toast_error.take()
+    }
+
+    pub fn take_connection_placeholder_action(&mut self) -> ConnectionPlaceholderAction {
+        let a = self.pending_connection_placeholder_action;
+        self.pending_connection_placeholder_action = ConnectionPlaceholderAction::None;
+        a
     }
 
     /// 大文件走 ZMODEM：向 PTY 发送 `rz -y` 并在握手就绪后用 `path` 启动上传(FUNCTIONAL_SPEC §4.3)。
