@@ -45,10 +45,11 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — Preferences\n\
              {} — About & this cheatsheet\n\
              {} — command history (in terminal)\n\
+             {} — Select all (terminal)\n\
              {} — AI assistant panel\n\
              {} — send terminal selection to AI{}",
             s::primary_modifier_label(),
-            s::help_line("N", "New session"),
+            s::help_line("N", "New connection"),
             s::help_line("E", "Edit selected session"),
             s::new_tab_help_line("New terminal tab"),
             s::local_shell_help_line("Local shell tab"),
@@ -64,6 +65,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::accel("H"),
             s::terminal_history_accel(),
             s::accel_shift("A"),
+            s::accel_shift("I"),
             s::accel_shift("L"),
             mac_extra_en(),
         )
@@ -87,10 +89,11 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — 偏好设置\n\
              {} — 关于与本说明\n\
              {} — 命令历史(终端内)\n\
+             {} — 全选(终端)\n\
              {} — AI 助手面板\n\
              {} — 终端选区发送到 AI{}",
             s::primary_modifier_label(),
-            s::help_line("N", "新建会话"),
+            s::help_line("N", "新建连接"),
             s::help_line("E", "编辑所选会话"),
             s::new_tab_help_line("新终端标签"),
             s::local_shell_help_line("本机终端标签"),
@@ -106,6 +109,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::accel("H"),
             s::terminal_history_accel(),
             s::accel_shift("A"),
+            s::accel_shift("I"),
             s::accel_shift("L"),
             mac_extra_zh(),
         )

@@ -321,7 +321,8 @@ impl Sidebar {
                         crate::platform::shortcuts::local_shell_accel()
                     );
                     let response = response.on_hover_text(tip);
-                    if response.clicked() {
+                    // Ignore the second click of a double-click so one gesture opens one tab.
+                    if response.clicked() && !response.double_clicked() {
                         local_shell_clicked = true;
                     }
                     ui.add_space(theme.spacing_list_item_gap());
@@ -507,19 +508,27 @@ impl Sidebar {
                             if session.group != current_group {
                                 current_group = session.group.clone();
                                 ui.add_space(theme.spacing_panel_gap());
-                                crate::ui::chrome::label_tag_chip(
+                                let group_label = crate::i18n::session_group_display_name(
+                                    ui.ctx(),
+                                    &current_group,
+                                );
+                                let group_resp = crate::ui::chrome::label_tag_chip(
                                     ui,
                                     theme,
-                                    &format!(
-                                        "[{}]",
-                                        crate::i18n::session_group_display_name(
-                                            ui.ctx(),
-                                            &current_group
-                                        )
-                                    ),
+                                    &format!("[{group_label}]"),
                                     theme.font_size_connection_meta(),
                                     theme.color_section_title(),
                                 );
+                                if current_group.trim().is_empty()
+                                    || current_group == "默认"
+                                    || current_group.eq_ignore_ascii_case("default")
+                                {
+                                    group_resp.on_hover_text(crate::i18n::tr(
+                                        ui.ctx(),
+                                        "Default group for new connections. Rename via Edit host.",
+                                        "新建连接的默认分组。可在「编辑主机」里改名。",
+                                    ));
+                                }
                                 ui.add_space(theme.spacing_dock_control_gap());
                             }
                             let is_selected = selected_id.as_ref() == Some(&session.id);

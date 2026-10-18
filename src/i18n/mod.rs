@@ -132,7 +132,7 @@ pub fn session_group_display_name(ctx: &egui::Context, stored_name: &str) -> Str
     let norm = stored_name.trim();
     // 兼容中文旧数据与英文 UI 创建的分组名
     match norm {
-        "默认" | "Default" | "" => tr(ctx, "Default", "默认").to_string(),
+        "默认" | "Default" | "" => tr(ctx, "Default (ungrouped)", "默认（未分组）").to_string(),
         "团队" | "Team" => tr(ctx, "Team", "团队").to_string(),
         other => other.to_string(),
     }

@@ -2003,9 +2003,9 @@ impl Theme {
         4.0
     }
 
-    /// 右 dock / 片段面板标题行：工具按钮与关闭 × 统一高度(与 Tab 栏 × 同尺寸)
+    /// 右 dock / 片段面板标题行：工具按钮与关闭 × 统一高度(略大于 Tab ×，便于点中)
     pub fn size_panel_header_control_h(&self) -> f32 {
-        self.size_tab_bar_icon_btn()
+        24.0
     }
 
     /// 面板 / dock 标题行总高(与终端 Tab 条 [`size_tab_bar_row_h`] 一致)

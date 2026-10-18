@@ -823,10 +823,18 @@ mod tests {
             Box<dyn FnOnce(&mut InputState) -> bool>,
         )> = vec![
             (
-                "Ctrl+Shift+A AI",
+                "Ctrl+Shift+A Select All",
                 winit_like(Key::A, cs(), None),
                 Box::new(|i| {
                     assert!(ks::consume_primary_shift_key(i, Key::A));
+                    true
+                }),
+            ),
+            (
+                "Ctrl+Shift+I AI",
+                winit_like(Key::I, cs(), None),
+                Box::new(|i| {
+                    assert!(ks::consume_primary_shift_key(i, Key::I));
                     true
                 }),
             ),
