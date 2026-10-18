@@ -601,7 +601,7 @@ impl MistTermApp {
             "team" => crate::i18n::tr(ctx, "Team snippet", "团队片段"),
             _ => crate::i18n::tr(ctx, "Personal snippet", "个人片段"),
         };
-        let frag_title = suggestion.fragment.title.clone();
+        let frag_title = crate::i18n::fragment_display_title(ctx, &suggestion.fragment);
         let anchor = format!("fragment:{}", suggestion.fragment.id);
         let text = if body.is_empty() {
             format!("{source_label}「{frag_title}」 · {anchor}")
@@ -6729,10 +6729,9 @@ impl MistTermApp {
         self.sync_market_catalog_query_fingerprint();
 
         let search_lower = self.fragment_search_query.to_lowercase();
+        let search_ctx = ui.ctx().clone();
         let search_match = |f: &FragmentStats| {
-            search_lower.is_empty()
-                || f.title.to_lowercase().contains(&search_lower)
-                || f.command.to_lowercase().contains(&search_lower)
+            crate::i18n::fragment_matches_search(&search_ctx, f, &search_lower)
         };
 
         let source: Vec<FragmentStats> = match self.fragment_list_scope {
@@ -6813,12 +6812,9 @@ impl MistTermApp {
                 }
                 for frag in &work {
                     let stats_line = format_fragment_stats_line(ui.ctx(), frag);
+                    let display_title = crate::i18n::fragment_display_title(ui.ctx(), frag);
                     let tag_label = frag.tags.first().cloned().unwrap_or_else(|| {
-                        if frag.category.is_empty() {
-                            "—".to_string()
-                        } else {
-                            frag.category.clone()
-                        }
+                        crate::i18n::fragment_display_category(ui.ctx(), frag)
                     });
                     let status_badge = if is_team_scope && frag.source_status != "published" {
                         Some(frag.source_status.as_str())
@@ -6829,7 +6825,7 @@ impl MistTermApp {
                         ui,
                         theme,
                         crate::ui::chrome::FragmentListRow {
-                            title: &frag.title,
+                            title: &display_title,
                             command: &frag.command,
                             stats_line: &stats_line,
                             tag_label: &tag_label,
@@ -6966,7 +6962,8 @@ impl MistTermApp {
         if fragment.has_variables() {
             self.variable_dialog.open = true;
             self.variable_dialog.fragment_id = Some(fragment.id.clone());
-            self.variable_dialog.fragment_title = fragment.title.clone();
+            self.variable_dialog.fragment_title =
+                crate::i18n::fragment_display_title(egui_ctx, fragment);
             self.variable_dialog.values = fragment.variable_defaults();
             self.variable_dialog.command_edit =
                 self.build_fragment_command_preview(fragment, &self.variable_dialog.values);
@@ -6999,7 +6996,8 @@ impl MistTermApp {
             self.insert_expanded_fragment_with_stats(egui_ctx, &fragment.id, &expanded);
         } else {
             self.pending_fragment_id = Some(fragment.id.clone());
-            self.pending_fragment_name = fragment.title.clone();
+            self.pending_fragment_name =
+                crate::i18n::fragment_display_title(egui_ctx, fragment);
             self.pending_fragment_command = expanded;
             self.pending_fragment_vars =
                 needs_user.into_iter().map(|k| (k, String::new())).collect();
@@ -8785,7 +8783,8 @@ impl MistTermApp {
         if fragment.has_variables() {
             self.variable_dialog.open = true;
             self.variable_dialog.fragment_id = Some(fragment.id.clone());
-            self.variable_dialog.fragment_title = fragment.title.clone();
+            self.variable_dialog.fragment_title =
+                crate::i18n::fragment_display_title(ctx, fragment);
             self.variable_dialog.values = fragment.variable_defaults();
             self.variable_dialog.command_edit =
                 self.build_fragment_command_preview(fragment, &self.variable_dialog.values);
@@ -8868,7 +8867,7 @@ impl MistTermApp {
         }
 
         self.pending_fragment_id = Some(fragment.id.clone());
-        self.pending_fragment_name = fragment.title.clone();
+        self.pending_fragment_name = crate::i18n::fragment_display_title(ctx, fragment);
         self.pending_fragment_command = expanded;
         self.pending_fragment_vars = needs.into_iter().map(|k| (k, String::new())).collect();
         self.sync_pending_fragment_command_edit();

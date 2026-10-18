@@ -45,12 +45,18 @@ impl FragmentVariable {
 pub struct FragmentStats {
     /// 唯一标识符
     pub id: String,
-    /// 显示标题
+    /// 显示标题（内置 starter 存中文；英文 UI 优先用 title_en / i18n 映射）
     pub title: String,
+    /// 英文标题（可选；starter 与市场条目可带）
+    #[serde(default)]
+    pub title_en: Option<String>,
     /// 命令内容
     pub command: String,
     /// 分类
     pub category: String,
+    /// 英文分类（可选）
+    #[serde(default)]
+    pub category_en: Option<String>,
     /// 标签（用于筛选与同步）
     #[serde(default)]
     pub tags: Vec<String>,
@@ -90,8 +96,10 @@ impl FragmentStats {
         Self {
             id,
             title,
+            title_en: None,
             command,
             category,
+            category_en: None,
             tags: Vec::new(),
             variables: Vec::new(),
             usage_count: 0,
@@ -743,6 +751,15 @@ mod tests {
             m.fragments.len()
         );
         assert!(m.fragments.iter().any(|f| f.command.contains("df")));
+        let df = m
+            .fragments
+            .iter()
+            .find(|f| f.command.trim() == "df -h")
+            .expect("disk usage starter");
+        assert_eq!(df.title, "磁盘使用");
+        assert_eq!(df.title_en.as_deref(), Some("Disk usage"));
+        assert_eq!(df.category, "系统监控");
+        assert_eq!(df.category_en.as_deref(), Some("System monitoring"));
     }
 
     #[test]
