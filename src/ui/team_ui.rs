@@ -225,12 +225,15 @@ pub fn paint_team_controls(
             }
 
             ui.add_space(theme.spacing_sm());
-            ui.label(
-                chrome::rich_caption(
-                    theme,
-                    i18n::tr(ctx, "Or sign in with password", "或使用密码登录"),
+            ui.add(
+                egui::Label::new(
+                    chrome::rich_caption(
+                        theme,
+                        i18n::tr(ctx, "Or sign in with password", "或使用密码登录"),
+                    )
+                    .color(theme.color_form_hint()),
                 )
-                .color(theme.color_form_hint()),
+                .wrap(true),
             );
             ui.add_space(theme.spacing_xs());
 

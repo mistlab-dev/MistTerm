@@ -28,13 +28,13 @@ fn quick_steps(ctx: &egui::Context) -> Vec<QuickStep> {
                 "Pick or create a connection on the left sidebar. Double-click or Enter opens a terminal tab.",
                 "左侧选择或新建连接；双击 / 回车打开终端标签。",
             ),
-            keys: vec![shortcuts::accel("N"), shortcuts::accel("T")],
+            keys: vec![shortcuts::accel("N"), shortcuts::new_tab_accel()],
         },
         QuickStep {
             title: crate::i18n::tr(ctx, "Command snippets", "命令片段"),
             detail: crate::i18n::tr(
                 ctx,
-                "Activity Rail → Fragments (or View menu) to open the fragment library. Browse market templates or create your own. Click to send to terminal.",
+                "Activity Rail → Command snippets (or View menu) to open the library. Browse market templates or create your own. Click to send to terminal.",
                 "活动栏 → 命令片段(或「视图」菜单)打开片段库。浏览市场模板或创建自定义片段，点击即发送到终端。",
             ),
             keys: vec![shortcuts::accel("K")],
@@ -52,8 +52,8 @@ fn quick_steps(ctx: &egui::Context) -> Vec<QuickStep> {
             title: crate::i18n::tr(ctx, "Team & sync", "团队与同步"),
             detail: crate::i18n::tr(
                 ctx,
-                "Tools → Team Login to connect to MistLab team server. Sync sessions, snippets, and credentials across devices.",
-                "菜单「工具」→ 团队登录，连接 MistLab 团队服务器。跨设备同步会话、片段和凭证。",
+                "Optional: Team → Sign In & Account for MistLab sync. Local SSH and the local terminal work without signing in.",
+                "可选：菜单「团队」→「登录与账户」连接 MistLab 同步。本地 SSH / 本机终端无需登录。",
             ),
             keys: vec![],
         },
@@ -144,8 +144,19 @@ impl HelpDocsDialog {
                     }
                     render_help_tabs(ui, theme, ctx, &mut self.page);
                     ui.add_space(theme.spacing_md());
+                    // Key scroll id by page so switching tabs resets to top (avoids footer covering last rows).
+                    let scroll_h = (ui.available_height() - 52.0).clamp(280.0, 420.0);
                     egui::ScrollArea::vertical()
-                        .max_height(360.0)
+                        .id_source((
+                            "help_docs_scroll",
+                            match self.page {
+                                HelpPage::QuickStart => 0u8,
+                                HelpPage::Onboarding => 1u8,
+                                HelpPage::Shortcuts => 2u8,
+                                HelpPage::Features => 3u8,
+                            },
+                        ))
+                        .max_height(scroll_h)
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
                             match self.page {
@@ -164,6 +175,9 @@ impl HelpDocsDialog {
                     render_bottom_links(ui, theme, ctx, &mut error);
                 });
             });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            should_close = true;
+        }
         self.open = open && !should_close;
         error
     }
@@ -266,8 +280,8 @@ fn render_onboarding(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status: On
             title: crate::i18n::tr(ctx, "Connect to your first server", "连接第一台服务器").to_string(),
             detail: crate::i18n::tr(
                 ctx,
-                "Left sidebar → pick or create a connection; double-click / Enter opens a terminal.",
-                "左侧栏选择或新建连接；双击 / 回车打开终端。",
+                "Left sidebar → Local Shell, or New connection; double-click / Enter opens a terminal. No mistlab.dev login needed for local SSH.",
+                "左侧栏 → 本机终端，或新建连接；双击 / 回车打开终端。本地 SSH 无需登录 mistlab.dev。",
             )
             .to_string(),
             done: status.connected,
@@ -277,7 +291,7 @@ fn render_onboarding(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status: On
             title: crate::i18n::tr(ctx, "Try command snippets", "试用命令片段").to_string(),
             detail: crate::i18n::tr(
                 ctx,
-                "Activity Rail → Fragments: browse the marketplace or save your own; click to send to the terminal.",
+                "Activity Rail → Command snippets: browse the marketplace or save your own; click to send to the terminal.",
                 "活动栏 → 命令片段：浏览市场或保存自己的片段，点击发送到终端。",
             )
             .to_string(),
@@ -285,15 +299,15 @@ fn render_onboarding(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status: On
             optional: true,
         },
         OnboardStep {
-            title: crate::i18n::tr(ctx, "Log in to your team", "登录团队（治理）").to_string(),
+            title: crate::i18n::tr(ctx, "Log in to your team (optional)", "登录团队（可选）").to_string(),
             detail: crate::i18n::tr(
                 ctx,
-                "Tools → Team Login: sync sessions and enable command audit / policy governance.",
-                "菜单「工具」→ 团队登录：同步会话并启用命令审计 / 策略治理。",
+                "Team → Sign In & Account: sync sessions and enable command audit / policy. Skip this for local-only use.",
+                "菜单「团队」→「登录与账户」：同步会话并启用命令审计 / 策略。仅本地使用可跳过。",
             )
             .to_string(),
             done: status.team_logged_in,
-            optional: false,
+            optional: true,
         },
         OnboardStep {
             title: crate::i18n::tr(ctx, "Understand command audit", "了解命令审计").to_string(),
@@ -310,8 +324,8 @@ fn render_onboarding(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status: On
             title: crate::i18n::tr(ctx, "Try multi-host ops (no API key)", "试用多机运维（无需 API Key）").to_string(),
             detail: crate::i18n::tr(
                 ctx,
-                "View → AI Ops Hub: ask in natural language (e.g. check disk on all servers). The built-in planner runs read-only ops without an API key; add a key only for chat / LLM planning.",
-                "「视图」→ AI 智控台：用自然语言提问（如「查所有服务器磁盘」）。内置规划器无需 API Key 即可执行只读运维；对话与 LLM 规划才需配置 Key。",
+                "View → AI Assistant: ask in natural language (e.g. check disk on all servers). The built-in planner runs read-only ops without an API key; add a key only for chat / LLM planning.",
+                "「视图」→ AI 助手：用自然语言提问（如「查所有服务器磁盘」）。内置规划器无需 API Key 即可执行只读运维；对话与 LLM 规划才需配置 Key。",
             )
             .to_string(),
             done: status.ai_configured,
@@ -336,7 +350,7 @@ fn render_onboarding(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status: On
         crate::i18n::tr(ctx, "Progress", "进度"),
         &format!(
             "{} {}/{}",
-            crate::i18n::tr(ctx, "Required steps done:", "必做步骤完成："),
+            crate::i18n::tr(ctx, "Getting-started checklist:", "上手清单："),
             required_done,
             required_total
         ),

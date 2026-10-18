@@ -702,7 +702,7 @@ impl MistTermApp {
         if self.show_about_dialog {
             let mut open = self.show_about_dialog;
             let mut should_close = false;
-            let about_title = crate::i18n::tr(ctx, "About", "关于");
+            let about_title = crate::i18n::tr(ctx, "About MistTerm", "关于 MistTerm");
             let subtitle = crate::i18n::tr(
                 ctx,
                 "A modern SSH terminal client.",
@@ -800,6 +800,9 @@ impl MistTermApp {
                         });
                     });
                 });
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                should_close = true;
+            }
             self.show_about_dialog = open && !should_close;
         }
         self.render_licenses_modal(ctx, theme);
@@ -963,11 +966,24 @@ impl MistTermApp {
                                 ui,
                                 theme,
                                 &mut self.edit_session_use_ssh_agent,
-                                crate::i18n::tr(
-                                    ctx,
-                                    "Use SSH agent (ssh-agent / Pageant)",
-                                    "使用 SSH Agent(ssh-agent / Pageant)",
-                                ),
+                                {
+                                    #[cfg(target_os = "windows")]
+                                    {
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "Use SSH agent (Pageant / ssh-agent)",
+                                            "使用 SSH Agent（Pageant / ssh-agent）",
+                                        )
+                                    }
+                                    #[cfg(not(target_os = "windows"))]
+                                    {
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "Use SSH agent (ssh-agent)",
+                                            "使用 SSH Agent（ssh-agent）",
+                                        )
+                                    }
+                                },
                             );
 
                             Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "ProxyJump", "跳板 ProxyJump"));
@@ -1173,19 +1189,6 @@ impl MistTermApp {
                                 "edit_session",
                             );
 
-                            if required_missing {
-                                ui.add_space(theme.spacing_sm());
-                                ui.label(
-                                    egui::RichText::new(crate::i18n::tr(
-                                        ctx,
-                                        "Enter session name and host first.",
-                                        "请先填写会话名称和主机地址",
-                                    ))
-                                        .size(theme.font_size_panel_title())
-                                        .color(theme.red_a128()),
-                                );
-                            }
-
                                 }); // end scrollable fields
 
                             ui.add_space(theme.spacing_list_item_x());
@@ -1226,6 +1229,9 @@ impl MistTermApp {
                     if ui.input(|i| i.key_pressed(egui::Key::Enter)) && !required_missing {
                         self.save_edit_session(ui.ctx());
                         should_close = !self.show_edit_session_dialog;
+                    }
+                    if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        should_close = true;
                     }
                 });
             self.show_edit_session_dialog = open && !should_close;
@@ -1286,6 +1292,9 @@ impl MistTermApp {
                                 });
                     });
                 });
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                should_close = true;
+            }
             self.show_fragments_dialog = open && !should_close;
         }
 
