@@ -2985,9 +2985,16 @@ impl Theme {
 
     /// 列表行选中底（侧栏、命令历史、菜单当前项、下拉）。
     /// 暗夜用实色，只比面板略亮。查找命中和文字拖选不走这里。
+    ///
+    /// 55 是选中行的灰阶，不是 `bg_window` 的 (37, 37, 37)。
     pub fn color_list_row_selected_fill(&self) -> Color32 {
+        const NIGHT_LIST_ROW_SELECTED: u8 = 55;
         if self.uses_modern_palette() {
-            Color32::from_rgb(0x37, 0x37, 0x37)
+            Color32::from_rgb(
+                NIGHT_LIST_ROW_SELECTED,
+                NIGHT_LIST_ROW_SELECTED,
+                NIGHT_LIST_ROW_SELECTED,
+            )
         } else {
             self.list_row_selected_bg()
         }
