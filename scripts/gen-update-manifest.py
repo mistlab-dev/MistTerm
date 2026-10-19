@@ -53,8 +53,10 @@ def platform_files(version: str) -> dict[str, dict]:
             "auto_update": True,
         },
         "windows-x86_64-portable": {"name": "Mist-windows-x86_64.zip", "kind": "zip", "auto_update": True},
-        # macOS: notify only for now (the client also refuses to self-replace on macOS).
-        "macos-universal": {"name": "Mist-macos-universal.tar.gz", "kind": "tar.gz", "auto_update": False},
+        # macOS: app-only update archive (signed Mist.app under Mist-macos-universal/, ~47 MB);
+        # the full Mist-macos-universal.tar.gz (+ bare Mist / mist-cli, ~141 MB) stays a manual download.
+        # auto_update is switched on by --macos-auto-update.
+        "macos-universal": {"name": "Mist-macos-universal-update.tar.gz", "kind": "tar.gz", "auto_update": False},
     }
 
 
@@ -198,7 +200,8 @@ def self_test() -> int:
                 info.size = len(data)
                 tf.addfile(info, io.BytesIO(data))
         (dist / "Mist-linux-x86_64.tar.gz").write_bytes(buf.getvalue())
-        (dist / "Mist-macos-universal.tar.gz").write_bytes(b"mac")
+        (dist / "Mist-macos-universal.tar.gz").write_bytes(b"mac full")
+        (dist / "Mist-macos-universal-update.tar.gz").write_bytes(b"mac")
         for arch in ("x86_64", "aarch64"):
             buf = io.BytesIO()
             with tarfile.open(fileobj=buf, mode="w:gz") as tf:
@@ -218,6 +221,8 @@ def self_test() -> int:
         assert linux["min_glibc"] == "2.39", linux
         assert linux["urls"][0].startswith("https://github.com/"), linux["urls"]
         assert linux["urls"][1].startswith("https://mistlab.dev/"), linux["urls"]
+        assert m["platforms"]["macos-universal"]["name"] == "Mist-macos-universal-update.tar.gz"
+        assert m["platforms"]["macos-universal"]["size"] == 3
         assert m["platforms"]["macos-universal"]["auto_update"] is False
         assert m["platforms"]["macos-universal"]["manual_url"] == DOWNLOAD_PAGE
         m_mac = build_manifest(version="1.2.0", dist=dist, require=["linux-x86_64"], macos_auto_update=True)

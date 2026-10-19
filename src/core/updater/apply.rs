@@ -180,7 +180,7 @@ pub fn apply_update(
     Ok(outcome)
 }
 
-/// macOS：把签名的 `Mist-macos-universal.tar.gz` 解到 .app 旁边的临时目录，
+/// macOS：把签名的 `Mist-macos-universal-update.tar.gz`（只含 Mist.app）解到 .app 旁边的临时目录，
 /// `codesign --verify` 通过后整包替换（旧包先改名 .bak，失败就改回来）。
 pub fn install_mac_app(archive: &Path, app: &Path) -> Result<(), UpdateError> {
     let parent = app
