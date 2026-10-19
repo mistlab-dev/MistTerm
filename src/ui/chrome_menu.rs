@@ -79,7 +79,7 @@ fn menu_selectable_row(
     let rounding = theme.radius_list_item();
     if selected {
         ui.painter()
-            .rect_filled(rect, rounding, theme.list_row_selected_bg());
+            .rect_filled(rect, rounding, theme.color_list_row_selected_fill());
     } else if response.hovered() || response.has_focus() {
         ui.painter()
             .rect_filled(rect, rounding, theme.list_row_hover_bg());

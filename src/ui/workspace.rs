@@ -742,9 +742,16 @@ impl MistTermApp {
                                 .color(theme.color_form_hint()),
                         );
                         ui.add_space(theme.spacing_md());
-                        egui::Frame::none()
-                            .fill(theme.color_subtle_inset_fill())
-                            .stroke(egui::Stroke::new(1.0, theme.color_overlay_fill_subtle()))
+                        let shortcut_frame = if theme.uses_modern_palette() {
+                            egui::Frame::none()
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(egui::Stroke::new(1.0, theme.border_color()))
+                        } else {
+                            egui::Frame::none()
+                                .fill(theme.color_subtle_inset_fill())
+                                .stroke(egui::Stroke::new(1.0, theme.color_overlay_fill_subtle()))
+                        };
+                        shortcut_frame
                             .rounding(theme.radius_list_item())
                             .inner_margin(egui::Margin::symmetric(
                                 theme.spacing_search_input_x(),
