@@ -86,6 +86,9 @@ impl MistTermApp {
                 &self.audit_logger,
                 &mut close_sftp_panel,
             );
+            if let Some(w) = self.sftp_panel.take_pending_warning() {
+                self.notify_warn(w);
+            }
             let (sftp_ok, sftp_err) = self.sftp_panel.take_pending_status();
             if let Some(e) = sftp_err {
                 self.notify_error(crate::i18n::localize_backend_error(

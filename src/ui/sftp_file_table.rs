@@ -57,6 +57,39 @@ pub(super) fn path_crumbs(path: &Path) -> Vec<(String, PathBuf)> {
     out
 }
 
+/// 面包屑显示片段 `(文本, 目标路径, 是否当前目录)`：各段之间插入 `/` 分隔符，
+/// 但根 `/`（或 Windows 盘符根）本身已带分隔，不再重复插入，避免显示成 `//root`。
+pub(super) fn crumb_display_parts(crumbs: &[(String, PathBuf)]) -> Vec<(String, PathBuf, bool)> {
+    let n = crumbs.len();
+    let mut parts: Vec<(String, PathBuf, bool)> = Vec::new();
+    for (i, (label, dest)) in crumbs.iter().enumerate() {
+        if i > 0 {
+            let prev = &crumbs[i - 1].0;
+            if !(prev.ends_with('/') || prev.ends_with('\\')) {
+                parts.push(("/".to_string(), dest.clone(), false));
+            }
+        }
+        parts.push((label.clone(), dest.clone(), i + 1 == n));
+    }
+    parts
+}
+
+/// 省略前缀 `…/` 之后不能再紧跟分隔符 `/`（否则显示 `…//9d/...`）：把起点挪过分隔符。
+pub(super) fn skip_leading_separator(parts: &[(String, PathBuf, bool)], start: usize) -> usize {
+    let mut s = start;
+    if s > 0 {
+        while s + 1 < parts.len() && is_crumb_separator(&parts[s]) {
+            s += 1;
+        }
+    }
+    s
+}
+
+/// 分隔符片段（不可点击）；根 `/` 片段的 `dest` 恰为 `/`，与分隔符区分开。
+pub(super) fn is_crumb_separator(part: &(String, PathBuf, bool)) -> bool {
+    part.0 == "/" && part.1.as_os_str() != "/"
+}
+
 pub(super) fn system_time_to_utc(t: SystemTime) -> Option<DateTime<Utc>> {
     let dur = t.duration_since(std::time::UNIX_EPOCH).ok()?;
     DateTime::from_timestamp(dur.as_secs() as i64, dur.subsec_nanos())
@@ -554,6 +587,7 @@ pub(super) fn paint_file_table_header(
     ctx: &egui::Context,
     cols: FileTableCols,
     sort: &mut FileSortState,
+    id_salt: &str,
 ) -> bool {
     let mut clicked_col: Option<FileSortColumn> = None;
     let cap_default = theme.color_table_header_inactive();
@@ -593,7 +627,8 @@ pub(super) fn paint_file_table_header(
                 paint_valign_text(cell, &text, cap_font.clone(), color, col >= 2);
                 let resp = cell.interact(
                     cell.max_rect(),
-                    cell.id().with(("sftp_col", col)),
+                    // 本机/远端两张表的表头 cell 在 egui 里会派生出相同 id，须按面板加盐区分。
+                    egui::Id::new(("sftp_col_header", id_salt, col)),
                     Sense::click(),
                 );
                 if resp.clicked() {
@@ -700,4 +735,46 @@ pub(super) fn paint_file_table_row(
         });
     });
     response.on_hover_text(tooltip)
+}
+
+#[cfg(test)]
+mod crumb_tests {
+    use super::*;
+
+    fn shown(path: &str, start: usize) -> String {
+        let parts = crumb_display_parts(&path_crumbs(Path::new(path)));
+        let s = skip_leading_separator(&parts, start);
+        let body: String = parts.iter().skip(s).map(|p| p.0.as_str()).collect();
+        if s > 0 {
+            format!("…/{body}")
+        } else {
+            body
+        }
+    }
+
+    #[test]
+    fn root_child_has_single_slash() {
+        assert_eq!(shown("/root", 0), "/root");
+        assert_eq!(shown("/", 0), "/");
+        assert_eq!(shown("/var/folders/9d/T", 0), "/var/folders/9d/T");
+    }
+
+    #[test]
+    fn elided_prefix_has_no_double_slash() {
+        // 从分隔符处截断时也只显示一个斜杠
+        for start in 1..8 {
+            let s = shown("/var/folders/9d/T/mistterm_downloads", start);
+            assert!(!s.contains("//"), "{start}: {s}");
+        }
+    }
+
+    #[test]
+    fn root_crumb_is_clickable_not_separator() {
+        let parts = crumb_display_parts(&path_crumbs(Path::new("/root")));
+        assert_eq!(parts.len(), 2);
+        assert!(!is_crumb_separator(&parts[0]));
+        assert_eq!(parts[0].1, PathBuf::from("/"));
+        let parts = crumb_display_parts(&path_crumbs(Path::new("/a/b")));
+        assert!(is_crumb_separator(&parts[2]));
+    }
 }

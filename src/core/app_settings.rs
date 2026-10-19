@@ -31,6 +31,9 @@ pub struct AppSettings {
     /// 团队多机「确认并执行」走服务端「自动执行」（Plan/Lease/Run），默认开启。
     #[serde(default = "default_true")]
     pub control_plane_plans: bool,
+    /// 默认本地目录：SFTP 本机侧初始目录与 ZMODEM `sz` 保存目录共用；空 = 系统「下载」目录。
+    #[serde(default)]
+    pub default_local_dir: String,
 }
 
 fn default_true() -> bool {
@@ -48,6 +51,7 @@ impl Default for AppSettings {
             update: crate::core::updater::UpdateSettings::default(),
             onboarding_help_shown: false,
             control_plane_plans: true,
+            default_local_dir: String::new(),
         }
     }
 }
@@ -74,5 +78,16 @@ impl AppSettings {
 
     pub fn save(&self) -> std::io::Result<()> {
         crate::security::encrypted_file::save_encrypted_json(&Self::default_path(), self)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_without_local_dir_default_to_system_downloads() {
+        let s: AppSettings = serde_json::from_str("{}").expect("parse");
+        assert!(s.default_local_dir.is_empty());
     }
 }

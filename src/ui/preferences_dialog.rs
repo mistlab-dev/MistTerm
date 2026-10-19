@@ -204,8 +204,122 @@ impl MistTermApp {
                     ctx.request_repaint();
                 }
                 ui.add_space(theme.spacing_panel_gap());
+                self.preferences_default_local_dir(ui, ctx, theme, text_low);
+                ui.add_space(theme.spacing_panel_gap());
                 self.update_preferences_section(ui, ctx, theme, text_low);
             },
+        );
+    }
+
+    /// 「默认本地目录」：SFTP 本机侧初始目录 + ZMODEM `sz` 接收目录（共用）。
+    fn preferences_default_local_dir(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+        text_low: egui::Color32,
+    ) {
+        crate::ui::chrome::form_field_label(
+            ui,
+            theme,
+            crate::i18n::tr(ctx, "Default local folder", "默认本地目录"),
+        );
+        let system_default = crate::core::local_dir::system_default();
+        let mut draft = self
+            .pref_local_dir_draft
+            .take()
+            .unwrap_or_else(|| self.app_settings.default_local_dir.clone());
+        let mut commit: Option<String> = None;
+        crate::ui::chrome::form_control_row(ui, theme, |ui| {
+            let btn_w = theme.size_control_btn_min_w() * 2.0 + theme.spacing_sm() * 2.0;
+            let field_w = (ui.available_width() - btn_w).max(120.0);
+            let resp = crate::ui::chrome::form_singleline_field(
+                ui,
+                theme,
+                egui::Id::new("pref_default_local_dir"),
+                &mut draft,
+                &system_default.to_string_lossy(),
+                field_w,
+                false,
+            );
+            if resp.lost_focus() && draft.trim() != self.app_settings.default_local_dir.trim() {
+                commit = Some(draft.clone());
+            }
+            if crate::ui::chrome::panel_action_button_ex(
+                ui,
+                theme,
+                crate::i18n::tr(ctx, "Browse…", "浏览…"),
+                true,
+            )
+            .clicked()
+            {
+                let start = crate::core::local_dir::current().dir;
+                if let Some(dir) = crate::ui::file_dialog::FileDialog::new()
+                    .set_title(crate::i18n::tr(
+                        ctx,
+                        "Choose default local folder",
+                        "选择默认本地目录",
+                    ))
+                    .set_directory(&start)
+                    .pick_folder()
+                {
+                    draft = dir.to_string_lossy().into_owned();
+                    commit = Some(draft.clone());
+                }
+            }
+            if crate::ui::chrome::panel_action_button_ex(
+                ui,
+                theme,
+                crate::i18n::tr(ctx, "Reset", "恢复默认"),
+                !self.app_settings.default_local_dir.trim().is_empty(),
+            )
+            .clicked()
+            {
+                draft.clear();
+                commit = Some(String::new());
+            }
+        });
+        if let Some(raw) = commit {
+            match crate::core::local_dir::parse_configured(&raw) {
+                Some(p) if !p.is_dir() => {
+                    self.notify_warn(match crate::i18n::language(ctx) {
+                        crate::i18n::UiLanguage::En => {
+                            format!("Folder not found: {}", p.display())
+                        }
+                        crate::i18n::UiLanguage::Zh => format!("目录不存在：{}", p.display()),
+                    });
+                    draft = self.app_settings.default_local_dir.clone();
+                }
+                parsed => {
+                    let stored = parsed
+                        .map(|p| p.components().collect::<std::path::PathBuf>())
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    self.app_settings.default_local_dir = stored.clone();
+                    let _ = self.app_settings.save();
+                    crate::core::local_dir::set_configured(&stored);
+                    draft = stored;
+                    let shown = crate::core::local_dir::current().dir;
+                    self.notify_success(match crate::i18n::language(ctx) {
+                        crate::i18n::UiLanguage::En => {
+                            format!("Default local folder: {}", shown.display())
+                        }
+                        crate::i18n::UiLanguage::Zh => {
+                            format!("默认本地目录已设为 {}", shown.display())
+                        }
+                    });
+                }
+            }
+        }
+        self.pref_local_dir_draft = Some(draft);
+        ui.label(
+            RichText::new(crate::i18n::tr(
+                ctx,
+                "Opened by the SFTP local pane and used for sz (ZMODEM) downloads. Leave empty for your Downloads folder.",
+                "SFTP 本机侧默认打开这里，sz（ZMODEM）下载也保存到这里。留空则用系统「下载」目录。",
+            ))
+            .size(theme.font_size_small())
+            .color(text_low),
         );
     }
 
