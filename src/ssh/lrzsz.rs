@@ -218,6 +218,11 @@ pub struct LrzszTransfer {
 }
 
 impl LrzszTransfer {
+    /// 更换 `sz` 接收保存目录（偏好「默认本地目录」改动后，下次接收生效）。
+    pub fn set_download_dir(&mut self, dir: PathBuf) {
+        self.download_dir = dir;
+    }
+
     /// 创建新的传输器
     pub fn new(download_dir: &str) -> Self {
         let (tx, rx) = channel();

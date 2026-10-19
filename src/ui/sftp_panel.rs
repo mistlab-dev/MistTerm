@@ -154,6 +154,11 @@ pub struct SftpPanel {
     list_err: Option<String>,
     /// 待写入底栏 `status_message` 的成功/失败提示(不在面板内渲染)。
     pending_status_ok: Option<String>,
+    /// 提醒类状态(如默认本地目录不存在已回落)，以警告 Toast 显示。
+    pending_status_warn: Option<String>,
+    /// 本次运行中每台主机最后浏览的本机目录（切标签/重开面板时恢复）；偏好修改后清空。
+    last_local_by_host: std::collections::HashMap<String, PathBuf>,
+    last_local_generation: u64,
     pending_status_err: Option<String>,
     busy: bool,
     rx: Option<Receiver<SftpJobResult>>,
@@ -1568,9 +1573,11 @@ impl SftpPanel {
     }
 
     pub fn new() -> Self {
-        let local_root = std::env::temp_dir().join("mistterm_downloads");
-        let _ = std::fs::create_dir_all(&local_root);
+        let local_root = crate::core::local_dir::current().dir;
         Self {
+            last_local_by_host: std::collections::HashMap::new(),
+            pending_status_warn: None,
+            last_local_generation: crate::core::local_dir::generation(),
             cwd: PathBuf::from("."),
             entries: Vec::new(),
             path_edit: ".".to_string(),
@@ -1639,8 +1646,7 @@ impl SftpPanel {
         self.entries.clear();
         self.path_edit = ".".to_string();
         self.remote_selected.clear();
-        let local_root = std::env::temp_dir().join("mistterm_downloads");
-        let _ = std::fs::create_dir_all(&local_root);
+        let local_root = crate::core::local_dir::current().dir;
         self.local_cwd = local_root.clone();
         self.local_entries.clear();
         self.local_path_edit = local_root.to_string_lossy().into_owned();
@@ -2070,7 +2076,8 @@ impl SftpPanel {
             );
             return;
         }
-        let p = Self::expand_local_path(raw);
+        // components() 重组可合并重复分隔符与末尾斜杠(`/a//b/` → `/a/b`)。
+        let p: PathBuf = Self::expand_local_path(raw).components().collect();
         if !p.exists() {
             self.local_list_err = Some(
                 Self::localize_local_list_error(ctx, "No such file or directory"),
@@ -2096,6 +2103,7 @@ impl SftpPanel {
                 self.apply_local_sort();
                 self.local_list_err = None;
                 self.bookmarks.touch_recent_local(&self.local_cwd);
+                self.remember_local_dir();
                 self.sync_local_selection_after_list();
             }
             Err(e) => {
@@ -2104,6 +2112,43 @@ impl SftpPanel {
                 self.local_list_err = Some(e);
             }
         }
+    }
+
+    fn remember_local_dir(&mut self) {
+        if !self.host_key.is_empty() {
+            self.last_local_by_host
+                .insert(self.host_key.clone(), self.local_cwd.clone());
+        }
+    }
+
+    /// 打开面板时的本机目录：本次运行里该主机上次浏览的目录 → 偏好「默认本地目录」→ 系统下载目录。
+    fn initial_local_dir(&mut self, ctx: &egui::Context, t: &TerminalView) -> PathBuf {
+        let generation = crate::core::local_dir::generation();
+        if generation != self.last_local_generation {
+            self.last_local_generation = generation;
+            self.last_local_by_host.clear();
+        }
+        if let Some(p) = self.last_local_by_host.get(&self.host_key) {
+            if p.is_dir() {
+                return p.clone();
+            }
+        }
+        let resolved = t.download_dir();
+        if let Some(missing) = &resolved.missing {
+            self.pending_status_warn = Some(match crate::i18n::language(ctx) {
+                crate::i18n::UiLanguage::En => format!(
+                    "Default local folder {} not found; showing {} instead.",
+                    missing.display(),
+                    resolved.dir.display()
+                ),
+                crate::i18n::UiLanguage::Zh => format!(
+                    "默认本地目录 {} 不存在，已改用 {}。",
+                    missing.display(),
+                    resolved.dir.display()
+                ),
+            });
+        }
+        resolved.dir
     }
 
     fn sync_local_path_from_cwd(&mut self) {
@@ -2147,8 +2192,10 @@ impl SftpPanel {
     }
 
     /// OpenSSH 在 Windows 上会把盘符解析成 `/C:/Users/...`，界面上收成 `C:/Users/...`。
+    /// 同时合并重复斜杠、去掉末尾斜杠(`//root/` → `/root`)，根目录保持 `/`。
     fn normalize_remote_path(path: PathBuf) -> PathBuf {
-        let s = path.to_string_lossy().replace('\\', "/");
+        let raw = path.to_string_lossy().replace('\\', "/");
+        let s = Self::collapse_slashes(&raw);
         let bytes = s.as_bytes();
         if bytes.len() >= 3
             && bytes[0] == b'/'
@@ -2158,6 +2205,35 @@ impl SftpPanel {
             return PathBuf::from(&s[1..]);
         }
         PathBuf::from(s)
+    }
+
+    fn collapse_slashes(raw: &str) -> String {
+        let mut out = String::with_capacity(raw.len());
+        let mut prev_slash = false;
+        for ch in raw.chars() {
+            if ch == '/' {
+                if prev_slash {
+                    continue;
+                }
+                prev_slash = true;
+            } else {
+                prev_slash = false;
+            }
+            out.push(ch);
+        }
+        if out.len() > 1 && out.ends_with('/') && !out.ends_with(":/") {
+            out.pop();
+        }
+        out
+    }
+
+    /// 地址栏输入的远端路径：去空白并规范化；空输入保持 `.`(登录目录)。
+    fn remote_path_from_input(raw: &str) -> PathBuf {
+        let t = raw.trim();
+        if t.is_empty() {
+            return PathBuf::from(".");
+        }
+        Self::normalize_remote_path(PathBuf::from(t))
     }
 
     /// `.` 和空路径的上一层是 `..`，不能用 `Path::parent()`（会变成空路径，列表被清空）。
@@ -2339,15 +2415,19 @@ impl SftpPanel {
         Self::gui_automation_e2e_local_path()
     }
 
-    /// GUI 自动化：本机 E2E 文件路径(`%TEMP%/mistterm_downloads/<MISTTERM_E2E_FILE>`)。
+    /// GUI 自动化：本机 E2E 文件路径(默认本地目录或 `%TEMP%/mistterm_downloads` 下的 `<MISTTERM_E2E_FILE>`)。
     pub fn gui_automation_e2e_local_path() -> Option<PathBuf> {
         if !Self::gui_automation_enabled() {
             return None;
         }
         let name = Self::env_e2e_filename()?;
-        let dir = std::env::temp_dir().join("mistterm_downloads");
-        let path = dir.join(&name);
-        path.exists().then_some(path)
+        [
+            crate::core::local_dir::current().dir,
+            std::env::temp_dir().join("mistterm_downloads"),
+        ]
+        .into_iter()
+        .map(|dir| dir.join(&name))
+        .find(|path| path.exists())
     }
 
     fn env_e2e_filename() -> Option<String> {
@@ -2865,6 +2945,11 @@ impl SftpPanel {
         )
     }
 
+    /// 取出待显示的警告(与成功/失败分开，不互相覆盖)。
+    pub fn take_pending_warning(&mut self) -> Option<String> {
+        self.pending_status_warn.take()
+    }
+
     pub fn take_pending_terminal_cmd(&mut self) -> Option<String> {
         self.pending_terminal_cmd.take()
     }
@@ -3021,7 +3106,6 @@ impl SftpPanel {
             self.flush_deferred_transfers(&handle, ctx);
         }
 
-        let download_dir_path = PathBuf::from(t.download_dir());
 
         // 可变操作成功后自动刷新；否则处理「打开面板时首次加载」
         if self.pending_refresh_after_op && !self.busy && self.rx.is_none() {
@@ -3030,7 +3114,7 @@ impl SftpPanel {
             self.spawn_list(&handle, self.cwd.clone(), ctx);
         } else if self.pending_auto_list && !self.busy && self.rx.is_none() {
             self.pending_auto_list = false;
-            self.local_cwd = download_dir_path.clone();
+            self.local_cwd = self.initial_local_dir(ctx, t);
             self.sync_local_path_from_cwd();
             self.refresh_local_list();
             self.spawn_list(&handle, self.cwd.clone(), ctx);
@@ -3368,7 +3452,7 @@ impl SftpPanel {
             Self::paint_file_list_viewport_frame(theme).show(ui, |ui| {
                 layout_util::set_width_to_available(ui);
                 let table_cols = FileTableCols::for_list_ui(ui, content_w);
-                if paint_file_table_header(ui, theme, ctx, table_cols, &mut self.local_sort) {
+                if paint_file_table_header(ui, theme, ctx, table_cols, &mut self.local_sort, "local") {
                     self.apply_local_sort();
                 }
                 egui::ScrollArea::vertical()
@@ -3586,7 +3670,7 @@ impl SftpPanel {
                 if ui.ctx().input(|i| i.key_pressed(egui::Key::Enter))
                     && ui.memory(|m| m.has_focus(remote_path_id))
                 {
-                    self.spawn_list(&handle, PathBuf::from(self.path_edit.trim()), ctx);
+                    self.spawn_list(&handle, Self::remote_path_from_input(&self.path_edit), ctx);
                 }
                 let can_edit = self.remote_selected.len() == 1
                     && self.remote_selected.primary().is_some_and(|p| {
@@ -3704,7 +3788,7 @@ impl SftpPanel {
                     )
                     .clicked()
                     {
-                        self.spawn_list(&handle, PathBuf::from(self.path_edit.trim()), ctx);
+                        self.spawn_list(&handle, Self::remote_path_from_input(&self.path_edit), ctx);
                     }
                     if crate::ui::chrome::panel_action_button_with_icon_ex(
                         ui,
@@ -4010,7 +4094,7 @@ impl SftpPanel {
             Self::paint_file_list_viewport_frame(theme).show(ui, |ui| {
                 layout_util::set_width_to_available(ui);
                 let table_cols = FileTableCols::for_list_ui(ui, content_w);
-                if paint_file_table_header(ui, theme, ctx, table_cols, &mut self.remote_sort) {
+                if paint_file_table_header(ui, theme, ctx, table_cols, &mut self.remote_sort, "remote") {
                     self.apply_remote_sort();
                 }
                 egui::ScrollArea::vertical()
@@ -4337,14 +4421,7 @@ impl SftpPanel {
         let crumbs = sftp_file_table::path_crumbs(path);
         let mono = egui::FontId::monospace(theme.font_size_caption());
         let color = theme.text_secondary();
-        let mut parts: Vec<(String, PathBuf, bool)> = Vec::new();
-        let n = crumbs.len();
-        for (i, (label, dest)) in crumbs.iter().enumerate() {
-            if i > 0 {
-                parts.push(("/".to_string(), dest.clone(), false));
-            }
-            parts.push((label.clone(), dest.clone(), i + 1 == n));
-        }
+        let parts = sftp_file_table::crumb_display_parts(&crumbs);
         let mut start = 0usize;
         let width_of = |ui: &egui::Ui, from: usize| -> f32 {
             let text: String = parts.iter().skip(from).map(|(s, _, _)| s.as_str()).collect();
@@ -4362,6 +4439,7 @@ impl SftpPanel {
         while start + 1 < parts.len() && width_of(ui, start) > rect.width() - 4.0 {
             start += 1;
         }
+        let start = sftp_file_table::skip_leading_separator(&parts, start);
         let mut hits: Vec<(egui::Rect, PathBuf, bool)> = Vec::new();
         let mut x = rect.left() + 2.0;
         if start > 0 {
@@ -4375,10 +4453,12 @@ impl SftpPanel {
             );
             x += w;
         }
-        for (label, dest, current) in parts.iter().skip(start) {
+        for part in parts.iter().skip(start) {
+            let (label, dest, current) = part;
+            let separator = sftp_file_table::is_crumb_separator(part);
             let text_color = if *current {
                 theme.text_primary()
-            } else if label == "/" {
+            } else if separator {
                 theme.text_tertiary()
             } else {
                 theme.text_secondary()
@@ -4387,7 +4467,7 @@ impl SftpPanel {
             let w = galley.size().x;
             let top = rect.center().y - galley.size().y * 0.5;
             ui.painter().galley(egui::pos2(x, top), galley);
-            if label != "/" {
+            if !separator {
                 hits.push((
                     egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(w, rect.height())),
                     dest.clone(),
@@ -4526,7 +4606,7 @@ impl SftpPanel {
         }
         let cols_w = ui.available_width().max(80.0);
         let table_cols = FileTableCols::for_width(cols_w);
-        if paint_file_table_header(ui, theme, ctx, table_cols, &mut self.local_sort) {
+        if paint_file_table_header(ui, theme, ctx, table_cols, &mut self.local_sort, "local") {
             self.apply_local_sort();
         }
         let list_h = ui.available_height().max(72.0);
@@ -4619,7 +4699,7 @@ impl SftpPanel {
                 && ui.memory(|m| m.has_focus(remote_edit_id))
             {
                 self.remote_path_editing = false;
-                self.spawn_list(handle, PathBuf::from(self.path_edit.trim()), ctx);
+                self.spawn_list(handle, Self::remote_path_from_input(&self.path_edit), ctx);
             }
             if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.remote_path_editing = false;
@@ -4691,7 +4771,7 @@ impl SftpPanel {
         }
         let cols_w = ui.available_width().max(80.0);
         let table_cols = FileTableCols::for_width(cols_w);
-        if paint_file_table_header(ui, theme, ctx, table_cols, &mut self.remote_sort) {
+        if paint_file_table_header(ui, theme, ctx, table_cols, &mut self.remote_sort, "remote") {
             self.apply_remote_sort();
         }
         let list_h = ui.available_height().max(72.0);
@@ -5019,6 +5099,30 @@ mod tests {
             modified: Utc::now(),
             path: PathBuf::from(r"C:\temp").join(name),
         }
+    }
+
+    #[test]
+    fn normalize_remote_path_collapses_double_slashes() {
+        let n = |s: &str| SftpPanel::normalize_remote_path(PathBuf::from(s));
+        assert_eq!(n("//root"), PathBuf::from("/root"));
+        assert_eq!(n("/root//demo/"), PathBuf::from("/root/demo"));
+        assert_eq!(n("/"), PathBuf::from("/"));
+        assert_eq!(n("//"), PathBuf::from("/"));
+        assert_eq!(n("."), PathBuf::from("."));
+        assert_eq!(n("/C:/Users"), PathBuf::from("C:/Users"));
+        assert_eq!(n("/C:/"), PathBuf::from("C:/"));
+    }
+
+    #[test]
+    fn remote_path_input_trims_and_normalizes() {
+        assert_eq!(SftpPanel::remote_path_from_input("  //root/ "), PathBuf::from("/root"));
+        assert_eq!(SftpPanel::remote_path_from_input("   "), PathBuf::from("."));
+    }
+
+    #[test]
+    fn remote_parent_reaches_root() {
+        assert_eq!(SftpPanel::remote_parent_dir(Path::new("/root")), PathBuf::from("/"));
+        assert_eq!(SftpPanel::remote_parent_dir(Path::new("/")), PathBuf::from("/"));
     }
 
     #[test]

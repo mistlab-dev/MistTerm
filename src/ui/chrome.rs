@@ -1272,11 +1272,8 @@ pub fn session_tab_chip(
     } else {
         theme.color_tab_inactive_fill()
     };
-    let rounding = if modern {
-        egui::Rounding::ZERO
-    } else {
-        egui::Rounding::same(theme.radius_category())
-    };
+    // 所有主题统一：上圆下方(与浅色主题同半径)，底边贴住指示线/内容区。
+    let rounding = theme.tab_rounding();
     let stroke = if modern || active {
         egui::Stroke::NONE
     } else {
@@ -1290,15 +1287,11 @@ pub fn session_tab_chip(
             rect.left_top(),
             egui::pos2(rect.left() + bar_w, rect.bottom()),
         );
-        let bar_rounding = if modern {
-            egui::Rounding::ZERO
-        } else {
-            egui::Rounding {
-                nw: rounding.nw,
-                ne: 0.0,
-                sw: rounding.sw,
-                se: 0.0,
-            }
+        let bar_rounding = egui::Rounding {
+            nw: rounding.nw,
+            ne: 0.0,
+            sw: rounding.sw,
+            se: 0.0,
         };
         let bar_color = if active {
             c.gamma_multiply(0.95)

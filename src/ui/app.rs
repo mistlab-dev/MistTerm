@@ -300,6 +300,8 @@ pub struct MistTermApp {
     show_preferences_dialog: bool,
     /// 偏好设置 → Vault Token 输入草稿(不落盘；保存时写入钥匙串)
     pref_vault_token_draft: String,
+    /// 偏好「默认本地目录」输入框草稿（失焦/回车时校验并保存）。
+    pref_local_dir_draft: Option<String>,
     show_fragments_dialog: bool,
     show_fragment_panel: bool, // 命令片段侧边栏
     /// 本帧命令片段 `SidePanel` 槽位矩形(`ui.max_rect()`)
@@ -1024,6 +1026,7 @@ impl MistTermApp {
     /// 创建新的应用实例
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let app_settings = AppSettings::load();
+        crate::core::local_dir::set_configured(&app_settings.default_local_dir);
         let show_onboarding_help = !app_settings.onboarding_help_shown;
         let team_service = TeamService::new(app_settings.team.clone());
         let boot_loc = crate::i18n::Locale::from(app_settings.ui_language);
@@ -1065,6 +1068,7 @@ impl MistTermApp {
             update_ui: update::UpdateUi::new(),
             show_preferences_dialog: false,
             pref_vault_token_draft: String::new(),
+            pref_local_dir_draft: None,
             show_fragments_dialog: false,
             show_fragment_panel: false,
             fragment_panel_slot_rect: None,
