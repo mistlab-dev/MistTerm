@@ -150,6 +150,52 @@ pub fn tick_keepalive(session: &Session) {
     let _ = session.keepalive_send();
 }
 
+/// 本机没设任何 locale 时(macOS 从 Finder/Dock 启动就是这样)发给远端的默认值，与本机终端 `local_shell` 一致。
+pub(crate) const DEFAULT_REMOTE_LANG: &str = "en_US.UTF-8";
+
+/// 计算打开 shell 前要通过 SSH `env` 请求发给远端的 locale 变量。
+///
+/// - 照搬 OpenSSH 默认 `SendEnv LANG LC_*`：本机设了哪些就原样发哪些(值为空的跳过)。
+/// - 本机 `LANG` / `LC_ALL` / `LC_CTYPE` 都没设时补 `LANG=en_US.UTF-8`，保证远端按 UTF-8 处理中文输入。
+/// - 只接受看起来像 locale 名的值(字母数字 `._-@`)，避免把奇怪内容塞进远端环境。
+pub(crate) fn remote_locale_env(get: impl Fn(&str) -> Option<String>) -> Vec<(String, String)> {
+    const NAMES: &[&str] = &[
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_COLLATE",
+        "LC_MESSAGES",
+        "LC_MONETARY",
+        "LC_NUMERIC",
+        "LC_TIME",
+    ];
+    fn plausible(v: &str) -> bool {
+        // macOS Terminal 常设 `LC_CTYPE=UTF-8`：这是 macOS 独有写法，Linux glibc 不认，
+        // 发过去反而让远端 setlocale 整体失败、退回 POSIX，所以当作没设。
+        let bare_codeset = v.eq_ignore_ascii_case("UTF-8") || v.eq_ignore_ascii_case("UTF8");
+        !bare_codeset
+            && !v.is_empty()
+            && v.len() <= 64
+            && v.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '@'))
+    }
+    let mut out: Vec<(String, String)> = NAMES
+        .iter()
+        .filter_map(|k| {
+            let v = get(k)?;
+            let v = v.trim();
+            plausible(v).then(|| (k.to_string(), v.to_string()))
+        })
+        .collect();
+    let has_ctype_source = out
+        .iter()
+        .any(|(k, _)| k == "LANG" || k == "LC_ALL" || k == "LC_CTYPE");
+    if !has_ctype_source {
+        out.insert(0, ("LANG".to_string(), DEFAULT_REMOTE_LANG.to_string()));
+    }
+    out
+}
+
 /// 在 `session` 上打开交互式 shell 通道（`cols`/`rows` 为字符网格，需与本地终端模拟器一致）。
 pub fn open_shell_channel(session: &Session, cols: u32, rows: u32) -> Result<ssh2::Channel, String> {
     // 打开 channel/shell 时使用阻塞模式，避免 Session(-37) Would block
@@ -172,6 +218,17 @@ pub fn open_shell_channel(session: &Session, cols: u32, rows: u32) -> Result<ssh
             Some((cols, rows, px_w, px_h)),
         )
         .map_err(|e| format!("Failed to request PTY: {}", e))?;
+
+    // 与 OpenSSH `SendEnv LANG LC_*` 一致：把本机 locale 带给远端。
+    // 不发的话很多服务器(sshd 不读 /etc/default/locale、容器、最小化安装)上 `$LANG` 为空 → POSIX，
+    // mysql(libedit)/bash(readline) 把中文的每个字节当成一个字符回显，输入行就成了乱码。
+    // 服务器未在 AcceptEnv 里放行时 setenv 会被拒绝，忽略即可(与 OpenSSH 相同，静默)。
+    for (name, value) in remote_locale_env(|k| std::env::var(k).ok()) {
+        match channel.setenv(&name, &value) {
+            Ok(()) => log::info!("SSH setenv {}={}", name, value),
+            Err(e) => log::info!("SSH setenv {} rejected by server: {}", name, e),
+        }
+    }
 
     // 启动 shell
     channel
@@ -336,6 +393,64 @@ mod tests {
         assert_eq!(config.host, "localhost");
         assert_eq!(config.port, 22);
         assert!(config.use_ssh_agent);
+    }
+
+    fn env_of(pairs: &'static [(&'static str, &'static str)]) -> impl Fn(&str) -> Option<String> {
+        move |k| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())
+    }
+
+    #[test]
+    fn remote_locale_defaults_to_utf8_when_local_has_none() {
+        // macOS 从 Finder 启动：没有任何 LANG/LC_*，远端必须拿到 UTF-8，否则 mysql/bash 输入中文成乱码。
+        let env = remote_locale_env(env_of(&[]));
+        assert_eq!(env, vec![("LANG".to_string(), DEFAULT_REMOTE_LANG.to_string())]);
+    }
+
+    #[test]
+    fn remote_locale_forwards_local_lang_and_lc_like_openssh() {
+        let env = remote_locale_env(env_of(&[
+            ("LANG", "zh_CN.UTF-8"),
+            ("LC_TIME", "en_GB.UTF-8"),
+            ("LC_TERMINAL", "iTerm2"),
+        ]));
+        assert_eq!(
+            env,
+            vec![
+                ("LANG".to_string(), "zh_CN.UTF-8".to_string()),
+                ("LC_TIME".to_string(), "en_GB.UTF-8".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn remote_locale_drops_macos_bare_codeset_ctype() {
+        // macOS Terminal 的 `LC_CTYPE=UTF-8` 在 Linux 上无效，不能发；还要补上默认 LANG。
+        let env = remote_locale_env(env_of(&[("LC_CTYPE", "UTF-8")]));
+        assert_eq!(env, vec![("LANG".to_string(), DEFAULT_REMOTE_LANG.to_string())]);
+        let env = remote_locale_env(env_of(&[("LANG", "en_US.UTF-8"), ("LC_CTYPE", "UTF-8")]));
+        assert_eq!(env, vec![("LANG".to_string(), "en_US.UTF-8".to_string())]);
+    }
+
+    #[test]
+    fn remote_locale_keeps_explicit_ctype_without_adding_lang() {
+        let env = remote_locale_env(env_of(&[("LC_ALL", "C.UTF-8")]));
+        assert_eq!(env, vec![("LC_ALL".to_string(), "C.UTF-8".to_string())]);
+    }
+
+    #[test]
+    fn remote_locale_rejects_empty_and_suspicious_values() {
+        let env = remote_locale_env(env_of(&[
+            ("LANG", "  "),
+            ("LC_MESSAGES", "x; rm -rf /"),
+            ("LC_NUMERIC", "de_DE.UTF-8@euro"),
+        ]));
+        assert_eq!(
+            env,
+            vec![
+                ("LANG".to_string(), DEFAULT_REMOTE_LANG.to_string()),
+                ("LC_NUMERIC".to_string(), "de_DE.UTF-8@euro".to_string()),
+            ]
+        );
     }
 
     #[test]
