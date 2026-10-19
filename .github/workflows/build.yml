@@ -405,6 +405,18 @@ jobs:
               echo "MACOS_DMG_PATH=$DMG_OUT" >> "$GITHUB_ENV"
               echo "MACOS_DMG_NAME=${NAME}.dmg" >> "$GITHUB_ENV"
 
+              # 自动更新专用的精简包：只放已签名的 Mist.app（不带裸 Mist / mist-cli，约 47 MB，完整 tar.gz 约 141 MB）。
+              # 目录结构保持 Mist-macos-universal/Mist.app，老客户端（install_mac_app）也能找到。
+              UPDATE_NAME="${NAME}-update.tar.gz"
+              tar -C dist -czf "$PWD/dist/$UPDATE_NAME" "$NAME/Mist.app"
+              tar -tzvf "dist/$UPDATE_NAME"
+              # 不用 grep -q：pipefail 下 grep 提前退出会让 tar 收到 SIGPIPE，整步失败
+              tar -tzf "dist/$UPDATE_NAME" | grep -x "$NAME/Mist.app/Contents/MacOS/$BIN_NAME" >/dev/null \
+                || { echo "::error::$UPDATE_NAME is missing $NAME/Mist.app/Contents/MacOS/$BIN_NAME"; exit 1; }
+              ls -l "dist/$UPDATE_NAME"
+              echo "MACOS_UPDATE_PATH=dist/$UPDATE_NAME" >> "$GITHUB_ENV"
+              echo "MACOS_UPDATE_NAME=$UPDATE_NAME" >> "$GITHUB_ENV"
+
               # 附带裸二进制，供 CLI / install.sh 使用；GUI 请用已公证的 Mist.app
               # 不区分大小写：CLI 以 mist-cli 名字附带，避免覆盖 GUI 的 Mist
               cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
@@ -456,6 +468,14 @@ jobs:
         with:
           name: ${{ env.MACOS_DMG_NAME }}
           path: ${{ env.MACOS_DMG_PATH }}
+          if-no-files-found: error
+
+      - name: Upload macOS update archive
+        if: runner.os == 'macOS' && env.MACOS_UPDATE_PATH != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.MACOS_UPDATE_NAME }}
+          path: ${{ env.MACOS_UPDATE_PATH }}
           if-no-files-found: error
 
       - name: Upload Windows installer
@@ -653,7 +673,7 @@ jobs:
           python3 scripts/gen-update-manifest.py --trusted-comment-of dist/latest.json > dist/latest.json.tc
           echo "Trusted comment: $(cat dist/latest.json.tc)"
           # 静态命令行包必须在 SHA256SUMS 和 latest.json 里。
-          for f in mist-cli-linux-x86_64.tar.gz mist-cli-linux-aarch64.tar.gz; do
+          for f in mist-cli-linux-x86_64.tar.gz mist-cli-linux-aarch64.tar.gz Mist-macos-universal-update.tar.gz; do
             grep -q "  $f\$" dist/SHA256SUMS || { echo "::error::$f missing from SHA256SUMS"; exit 1; }
           done
           python3 - <<'CHECK'
@@ -663,6 +683,9 @@ jobs:
               a = m["platforms"][key]
               assert a["kind"] == "tar.gz" and a["auto_update"] and "min_glibc" not in a, (key, a)
           print("latest.json CLI entries:", {k: m["platforms"][k]["name"] for k in ("linux-x86_64-cli", "linux-aarch64-cli")})
+          mac = m["platforms"]["macos-universal"]
+          assert mac["name"] == "Mist-macos-universal-update.tar.gz" and mac["kind"] == "tar.gz", mac
+          print("latest.json macos-universal:", mac["name"], mac["size"], "bytes")
           CHECK
 
       - name: Upload manifest
