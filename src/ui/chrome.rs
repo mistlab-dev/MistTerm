@@ -517,7 +517,7 @@ pub fn apply_popup_widget_visuals(visuals: &mut egui::Visuals, theme: &Theme) {
     let rounding = egui::Rounding::same(theme.radius_list_item());
     let menu_bg = theme.color_menu_popup_fill();
     let hover = theme.list_row_hover_bg();
-    let selected = theme.list_row_selected_bg();
+    let selected = theme.color_list_row_selected_fill();
     let active = theme.color_widget_active_fill();
 
     visuals.window_fill = menu_bg;
@@ -542,7 +542,7 @@ pub fn apply_popup_widget_visuals(visuals: &mut egui::Visuals, theme: &Theme) {
     open.fg_stroke.color = theme.text_primary();
     open.rounding = rounding;
 
-    // 菜单选中：弱灰底(与侧栏一致)，勿用文本拖选的高亮白底
+    // 菜单选中：与侧栏同一档实色灰，勿用文本拖选的高亮白底
     visuals.selection.bg_fill = selected;
     visuals.selection.stroke = egui::Stroke::NONE;
 }

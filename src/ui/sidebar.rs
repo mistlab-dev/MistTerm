@@ -545,7 +545,7 @@ impl Sidebar {
                                 egui::Sense::click(),
                             );
                             let bg = if is_selected {
-                                theme.list_row_selected_bg()
+                                theme.color_list_row_selected_fill()
                             } else if response.hovered() {
                                 theme.list_row_hover_bg()
                             } else {
