@@ -2713,6 +2713,16 @@ impl Theme {
     pub fn radius_category(&self) -> f32 {
         3.0
     } // 分类标签
+    /// 终端会话标签：上圆下方，与主题无关(暗色/浅色一致)。
+    pub fn tab_rounding(&self) -> egui::Rounding {
+        let r = self.radius_category();
+        egui::Rounding {
+            nw: r,
+            ne: r,
+            sw: 0.0,
+            se: 0.0,
+        }
+    }
     pub fn radius_restore_btn(&self) -> f32 {
         3.0
     } // 复原按钮

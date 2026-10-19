@@ -287,9 +287,7 @@ pub struct TerminalView {
     transfer_outgoing: bool,
     /// 连接成功后下一帧请求一次终端焦点(避免每帧 `request_focus` 与 PTY 光标叠成双光标)
     pending_focus_terminal: bool,
-    
-    /// 下载目录
-    download_dir: String,
+
     font_size: f32,
     connected_at: Option<Instant>,
     connection_target: Option<(String, String)>,
@@ -699,9 +697,8 @@ impl TerminalView {
 
     /// 创建新的终端视图
     pub fn new() -> Self {
-        let download_dir = std::env::temp_dir().join("mistterm_downloads");
-        let _ = std::fs::create_dir_all(&download_dir);
-        
+        let download_dir = crate::core::local_dir::current().dir;
+
         Self {
             session_id: None,
             ssh_manager: None,
@@ -720,7 +717,6 @@ impl TerminalView {
             transfer_progress: None,
             transfer_outgoing: false,
             pending_focus_terminal: false,
-            download_dir: download_dir.to_string_lossy().to_string(),
             font_size: crate::platform::DEFAULT_TERMINAL_FONT_SIZE,
             connected_at: None,
             connection_target: None,
@@ -2262,7 +2258,7 @@ impl TerminalView {
 
     /// 处理 SSH 消息；若终端缓冲有更新则返回 `true`。
     /// 每帧有消息条数/字节预算，避免海量输出一次喂进 VTE 导致主线程卡死数十秒。
-    fn process_ssh_messages(&mut self, _theme: &Theme) -> bool {
+    fn process_ssh_messages(&mut self, theme: &Theme) -> bool {
         const MAX_SSH_MSGS_PER_FRAME: usize = 96;
         const MAX_SSH_BYTES_PER_FRAME: usize = 256 * 1024;
 
@@ -2333,8 +2329,27 @@ impl TerminalView {
                                 && !is_rz_upload_handshake
                                 && self.expect_sz_download_active()
                             {
-                                if let Some(ref h) = self.ssh_handle {
-                                    match self.lrzsz.start_receive_pump(h.shell_pump_tx()) {
+                                if let Some(pump_tx) =
+                                    self.ssh_handle.as_ref().map(|h| h.shell_pump_tx())
+                                {
+                                    let resolved = crate::core::local_dir::current();
+                                    if let Some(missing) = &resolved.missing {
+                                        let warn = match self.ui_lang_last {
+                                            crate::i18n::UiLanguage::En => format!(
+                                                "Default local folder {} not found; saving to {} instead.",
+                                                missing.display(),
+                                                resolved.dir.display()
+                                            ),
+                                            crate::i18n::UiLanguage::Zh => format!(
+                                                "默认本地目录 {} 不存在，已改存到 {}。",
+                                                missing.display(),
+                                                resolved.dir.display()
+                                            ),
+                                        };
+                                        self.feed_user_warn_line(theme, &warn);
+                                    }
+                                    self.lrzsz.set_download_dir(resolved.dir);
+                                    match self.lrzsz.start_receive_pump(pump_tx) {
                                         Ok(()) => {
                                             if self.lrzsz.feed_receive_data(&data) {
                                                 continue;
@@ -3496,8 +3511,9 @@ impl TerminalView {
         self.ssh_handle.clone()
     }
 
-    pub fn download_dir(&self) -> &str {
-        &self.download_dir
+    /// 当前生效的本机目录（偏好「默认本地目录」，与 SFTP 本机侧共用）。
+    pub fn download_dir(&self) -> crate::core::local_dir::ResolvedLocalDir {
+        crate::core::local_dir::current()
     }
 
     pub fn set_font_size(&mut self, size: f32) {
