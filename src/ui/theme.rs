@@ -807,7 +807,12 @@ impl Theme {
 
     #[inline]
     pub fn color_modal_header_divider(&self) -> Color32 {
-        self.color_panel_header_divider()
+        if self.uses_modern_palette() {
+            // 暗夜标题下用比面板略亮的实色接缝，避免 12% 白线发灰发亮。
+            self.border_divider_color()
+        } else {
+            self.color_panel_header_divider()
+        }
     }
 
     /// 单行/多行输入框底色(相对面板略提亮，勿过亮以免描边显得粗)
@@ -2976,6 +2981,23 @@ impl Theme {
     /// 侧栏/会话列表等：行选中底色 rgba(102,126,234,0.05)
     pub fn list_row_selected_bg(&self) -> Color32 {
         self.bg_selected_color()
+    }
+
+    /// 列表行选中底（侧栏、命令历史、菜单当前项、下拉）。
+    /// 暗夜用实色，只比面板略亮。查找命中和文字拖选不走这里。
+    ///
+    /// 55 是选中行的灰阶，不是 `bg_window` 的 (37, 37, 37)。
+    pub fn color_list_row_selected_fill(&self) -> Color32 {
+        const NIGHT_LIST_ROW_SELECTED: u8 = 55;
+        if self.uses_modern_palette() {
+            Color32::from_rgb(
+                NIGHT_LIST_ROW_SELECTED,
+                NIGHT_LIST_ROW_SELECTED,
+                NIGHT_LIST_ROW_SELECTED,
+            )
+        } else {
+            self.list_row_selected_bg()
+        }
     }
 }
 

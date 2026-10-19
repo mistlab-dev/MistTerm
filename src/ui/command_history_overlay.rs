@@ -591,7 +591,7 @@ fn fuzzy_suggestion_row(
     let rounding = theme.radius_list_item();
     if selected {
         ui.painter()
-            .rect_filled(row_rect, rounding, theme.list_row_selected_bg());
+            .rect_filled(row_rect, rounding, theme.color_list_row_selected_fill());
     } else if response.hovered() {
         ui.painter()
             .rect_filled(row_rect, rounding, theme.list_row_hover_bg());
@@ -624,7 +624,7 @@ fn history_row(
     let rounding = theme.radius_list_item();
     if selected || *checked {
         ui.painter()
-            .rect_filled(row_rect, rounding, theme.list_row_selected_bg());
+            .rect_filled(row_rect, rounding, theme.color_list_row_selected_fill());
     } else if response.hovered() {
         ui.painter()
             .rect_filled(row_rect, rounding, theme.list_row_hover_bg());
