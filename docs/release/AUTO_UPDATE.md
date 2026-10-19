@@ -29,6 +29,7 @@
 | `latest.json.minisig` | 清单的 minisign 签名 |
 | `SHA256SUMS` / `SHA256SUMS.minisig` | 所有文件的校验和及其签名（给手动下载的用户核对用） |
 | `mist-cli-linux-x86_64.tar.gz` / `mist-cli-linux-aarch64.tar.gz` | 命令行静态版（不依赖 glibc），清单键名 `linux-x86_64-cli` / `linux-aarch64-cli` |
+| `Mist-macos-universal-update.tar.gz` | macOS 一键更新专用：只含已签名的 `Mist-macos-universal/Mist.app`（约 47 MB），清单键名 `macos-universal`；完整的 `Mist-macos-universal.tar.gz`（另带裸 `Mist` / `mist-cli`）只给手动下载 |
 
 客户端按顺序取清单（`src/core/updater/mod.rs` 的 `STABLE_MANIFEST_URLS`）：
 
