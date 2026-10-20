@@ -90,6 +90,13 @@ impl Terminal {
             .contains(alacritty_terminal::term::TermMode::ALT_SCREEN)
     }
 
+    /// 远端程序是否开启了 bracketed paste（DECSET 2004，bash/zsh/vim 等会开）。
+    pub fn is_bracketed_paste(&self) -> bool {
+        self.term
+            .mode()
+            .contains(alacritty_terminal::term::TermMode::BRACKETED_PASTE)
+    }
+
     /// 光标所在行的纯文本（用于判断当前是否在密码提示等非命令输入行）。
     pub fn cursor_line_text(&self) -> String {
         let line = self.term.grid().cursor.point.line;
@@ -864,5 +871,20 @@ mod tests {
         assert_eq!(t.text_in_point_range(start, end), "needle");
         // 反向端点仍应得到相同文本
         assert_eq!(t.text_in_point_range(end, start), "needle");
+    }
+}
+
+#[cfg(test)]
+mod bracketed_paste_tests {
+    use super::*;
+
+    #[test]
+    fn feed_2004h_sets_bracketed_paste_mode() {
+        let mut t = Terminal::new(80, 24);
+        assert!(!t.is_bracketed_paste());
+        t.feed(b"\x1b[?2004h");
+        assert!(t.is_bracketed_paste());
+        t.feed(b"\x1b[?2004l");
+        assert!(!t.is_bracketed_paste());
     }
 }
