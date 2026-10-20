@@ -1477,6 +1477,55 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    /// 端到端：按 UI 粘贴的分片方式经 `write_pty_with_drain` 写入远端 PTY 上的 `cat > file`，
+    /// 逐字节比对。需本地 sshd（`MISTTERM_TEST_SSH_*`），否则 skip。
+    /// 多行文本(每行 ≤4095 字节)在 2KB–1MB 都不应丢；单行 >4095 字节是 tty 行模式内核限制。
+    #[test]
+    fn paste_roundtrip_via_remote_pty_cat() {
+        use crate::ui::terminal_paste::{next_chunk_len, PASTE_CHUNK};
+        let Some(sess) = crate::test_support::ssh_local::skip_without_sshd() else {
+            return;
+        };
+        let (msg_tx, _msg_rx) = mpsc::channel::<SshMessage>();
+        let bypass: Arc<Mutex<Option<Arc<UploadPtyBypass>>>> = Arc::new(Mutex::new(None));
+        let mut rb = [0u8; 16384];
+        let ascii_line = format!("{}\n", "x".repeat(79));
+        let zh_line = "中文粘贴测试，混合 ASCII abc 123 😀\n";
+        for (label, unit) in [("ascii", ascii_line.as_str()), ("zh", zh_line)] {
+            for size in [2048usize, 4096, 5120, 8192, 102_400, 1_048_576] {
+                let mut body = unit.repeat(size / unit.len() + 1);
+                while body.len() > size || !body.is_char_boundary(body.len()) {
+                    body.pop();
+                }
+                if !body.ends_with('\n') {
+                    body.push('\n');
+                }
+                let remote = format!("/tmp/mistterm_paste_{}_{}", label, size);
+                let mut ch = sess.channel_session().expect("channel");
+                ch.request_pty("xterm", None, Some((120, 40, 0, 0))).expect("pty");
+                ch.exec(&format!("stty -echo; cat > {}", remote)).expect("exec");
+                std::thread::sleep(Duration::from_millis(300));
+                let mut rest = body.as_bytes();
+                while !rest.is_empty() {
+                    let n = next_chunk_len(rest, PASTE_CHUNK);
+                    SshManager::write_pty_with_drain(&mut ch, &rest[..n], &mut rb, &msg_tx, 1, &bypass)
+                        .expect("write");
+                    rest = &rest[n..];
+                }
+                SshManager::write_pty_with_drain(&mut ch, b"\x04", &mut rb, &msg_tx, 1, &bypass).unwrap();
+                ch.send_eof().ok();
+                let mut sink = Vec::new();
+                let _ = ch.read_to_end(&mut sink);
+                ch.wait_close().ok();
+                let got = crate::test_support::ssh_local::exec_remote(&sess, &format!("cat {0}; rm -f {0}", remote))
+                    .unwrap_or_default();
+                eprintln!("paste {} {}B -> {}B", label, body.len(), got.len());
+                assert_eq!(got.len(), body.len(), "{} {}B length mismatch", label, size);
+                assert!(got == body, "{} {}B content mismatch", label, size);
+            }
+        }
+    }
+
     #[test]
     fn manager_new_drops_cleanly() {
         let (mgr, _rx) = super::SshManager::new();
