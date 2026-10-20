@@ -16,6 +16,8 @@ pub struct SidebarOutput {
     pub selected_session_id: Option<String>,
     pub delete_session_id: Option<String>,
     pub edit_session_id: Option<String>,
+    /// 右键「打开 / 再开标签」：为该连接新开终端，不切换聚焦已有标签。
+    pub open_new_tab_session_id: Option<String>,
     pub create_session_clicked: bool,
     pub collapse_clicked: bool,
     pub view_log_session_id: Option<String>,
@@ -48,6 +50,7 @@ impl Sidebar {
         sort_by: &mut SessionSortBy,
         connected_sessions: &HashSet<String>,
         connecting_sessions: &HashSet<String>,
+        sessions_with_tabs: &HashSet<String>,
         team_servers: &[TeamServer],
         search_field_id: egui::Id,
         theme: &Theme,
@@ -85,6 +88,7 @@ impl Sidebar {
                 sort_by,
                 connected_sessions,
                 connecting_sessions,
+                sessions_with_tabs,
                 team_servers,
                 search_field_id,
                 theme,
@@ -108,6 +112,7 @@ impl Sidebar {
         sort_by: &mut SessionSortBy,
         connected_sessions: &HashSet<String>,
         connecting_sessions: &HashSet<String>,
+        sessions_with_tabs: &HashSet<String>,
         team_servers: &[TeamServer],
         search_field_id: egui::Id,
         theme: &Theme,
@@ -122,6 +127,7 @@ impl Sidebar {
         let mut selected_session_id = None;
         let mut delete_session_id = None;
         let mut edit_session_id = None;
+        let mut open_new_tab_session_id = None;
         let mut create_session_clicked = false;
         let mut collapse_clicked = false;
         let mut view_log_session_id = None;
@@ -691,6 +697,21 @@ impl Sidebar {
                             response.context_menu(|ui| {
                                 crate::ui::chrome::apply_context_menu_style(ui, theme);
                                 let ctx = ui.ctx().clone();
+                                let open_tab_label = if sessions_with_tabs.contains(&session.id) {
+                                    crate::i18n::tr(&ctx, "Open another tab", "再开一个标签")
+                                } else {
+                                    crate::i18n::tr(&ctx, "Open tab", "打开标签")
+                                };
+                                if crate::ui::chrome::popup_menu_button(
+                                    ui,
+                                    theme,
+                                    open_tab_label,
+                                )
+                                .clicked()
+                                {
+                                    open_new_tab_session_id = Some(session.id.clone());
+                                    ui.close_menu();
+                                }
                                 if crate::ui::chrome::popup_menu_button(
                                     ui,
                                     theme,
@@ -735,6 +756,7 @@ impl Sidebar {
             selected_session_id,
             delete_session_id,
             edit_session_id,
+            open_new_tab_session_id,
             create_session_clicked,
             collapse_clicked,
             view_log_session_id,

@@ -268,6 +268,11 @@ impl MistTermApp {
                                 .filter(|t| t.any_connected_or_connecting() && !t.any_connected())
                                 .map(|t| t.primary_session_id())
                                 .collect();
+                            let sessions_with_tabs: HashSet<String> = self
+                                .tabs
+                                .iter()
+                                .map(|t| t.primary_session_id())
+                                .collect();
 
                             let sidebar_rect = egui::Rect::from_min_max(
                                 egui::pos2(col_left, work_top),
@@ -287,6 +292,7 @@ impl MistTermApp {
                                     &mut self.session_sort_by,
                                     &connected_sessions,
                                     &connecting_sessions,
+                                    &sessions_with_tabs,
                                     &self.team_service.current_team_servers(),
                                     Self::id_sidebar_connection_search(),
                                     theme,
@@ -298,16 +304,26 @@ impl MistTermApp {
                                 }
                                 if sidebar_output.local_shell_clicked {
                                     self.open_local_shell_tab(ctx);
+                                    self.collapse_connection_sidebar();
                                 }
                                 if sidebar_output.collapse_clicked {
-                                    self.sidebar_collapsed = true;
-                                    self.sidebar_user_dismissed_responsive = true;
+                                    self.collapse_connection_sidebar();
                                 }
                                 if let Some(session_id) = sidebar_output.selected_session_id {
                                     self.select_session(ctx, &session_id);
+                                    self.collapse_connection_sidebar();
+                                }
+                                if let Some(session_id) = sidebar_output.open_new_tab_session_id {
+                                    if let Some(session) =
+                                        self.session_manager.get_session(&session_id).cloned()
+                                    {
+                                        self.open_new_tab_for_session(ctx, &session);
+                                        self.collapse_connection_sidebar();
+                                    }
                                 }
                                 if let Some(server_key) = sidebar_output.connect_team_server_key {
                                     self.connect_team_server(ctx, &server_key);
+                                    self.collapse_connection_sidebar();
                                 }
                                 if let Some(session_id) = sidebar_output.delete_session_id {
                                     if let Some(s) = self.session_manager.get_session(&session_id) {
@@ -334,8 +350,7 @@ impl MistTermApp {
                                     }
                                 }
                                 if sidebar_output.response.double_clicked() {
-                                    self.sidebar_collapsed = true;
-                                    self.sidebar_user_dismissed_responsive = true;
+                                    self.collapse_connection_sidebar();
                                 }
                             });
                             col_left = sidebar_rect.max.x;
@@ -1888,6 +1903,8 @@ impl MistTermApp {
             let mut close_right = None;
             let mut disconnect_ssh_idx = None;
             let mut reconnect_idx = None;
+            let mut open_another_sid: Option<String> = None;
+            let mut open_another_local = false;
             let mut split_h_idx = None;
             let mut split_v_idx = None;
             let mut broadcast_idx = None;
@@ -1943,6 +1960,29 @@ impl MistTermApp {
                     crate::ui::chrome::apply_context_menu_style(
                         ui, theme,
                     );
+                    let is_local = sid.starts_with("local:")
+                        || tab.panes.iter().any(|p| p.terminal.is_local_shell());
+                    let can_open_another = is_local
+                        || self.session_manager.get_session(&sid).is_some();
+                    if can_open_another
+                        && crate::ui::chrome::popup_menu_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(
+                                ctx,
+                                "Open another tab",
+                                "再开一个标签",
+                            ),
+                        )
+                        .clicked()
+                    {
+                        if is_local {
+                            open_another_local = true;
+                        } else {
+                            open_another_sid = Some(sid.clone());
+                        }
+                        ui.close_menu();
+                    }
                     if tab.any_connected_or_connecting()
                         && crate::ui::chrome::popup_menu_button(
                             ui,
@@ -2083,17 +2123,16 @@ impl MistTermApp {
                     }
                 });
             }
-            if crate::ui::chrome::tab_bar_new_tab_button(ui, theme)
-                .clicked()
-            {
-                if self.selected_session_id.is_some() {
-                    self.open_new_tab_from_selection(ctx);
-                } else {
-                    self.show_new_session_dialog = true;
-                }
-            }
+            self.show_tab_bar_new_tab_picker(ui, theme, ctx);
             if let Some(idx) = to_close {
                 self.request_close_tab_at(idx);
+            }
+            if open_another_local {
+                self.open_local_shell_tab(ctx);
+            } else if let Some(sid) = open_another_sid {
+                if let Some(session) = self.session_manager.get_session(&sid).cloned() {
+                    self.open_new_tab_for_session(ctx, &session);
+                }
             }
             if let Some(idx) = disconnect_ssh_idx {
                 self.disconnect_ssh_keep_buffer_at(ctx, idx);
@@ -2157,8 +2196,148 @@ impl MistTermApp {
                         .map(|t| t.primary_session_id());
                 }
             }
-                                        
+
         });
+    }
+
+    /// 标签栏「+」：弹出连接点选，写清会连哪台，避免多服务器时盲开标签。
+    fn show_tab_bar_new_tab_picker(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &crate::ui::theme::Theme,
+        ctx: &egui::Context,
+    ) {
+        let popup_id = ui.auto_id_with("tab_bar_new_tab_picker");
+        let btn = crate::ui::chrome::tab_bar_new_tab_button(ui, theme);
+        if btn.clicked() {
+            ui.memory_mut(|mem| mem.toggle_popup(popup_id));
+        }
+
+        let mut open_session_id: Option<String> = None;
+        let mut open_local = false;
+        let mut open_new_connection = false;
+
+        let selected_id = self.selected_session_id.clone();
+        let selected = selected_id
+            .as_ref()
+            .and_then(|id| self.session_manager.get_session(id).cloned());
+        let mut others: Vec<_> = self
+            .session_manager
+            .list_sessions()
+            .iter()
+            .filter(|s| selected_id.as_ref() != Some(&s.id))
+            .cloned()
+            .collect();
+        crate::core::session_sort::sort_sessions(
+            &mut others,
+            crate::core::session_sort::SessionSortBy::LastConnected,
+        );
+
+        egui::popup::popup_above_or_below_widget(
+            ui,
+            popup_id,
+            &btn,
+            egui::AboveOrBelow::Below,
+            |ui| {
+                crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                ui.set_min_width(220.0);
+                ui.set_max_width(320.0);
+
+                if let Some(ref session) = selected {
+                    crate::ui::chrome::popup_menu_section_label(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Current selection", "当前选中"),
+                    );
+                    let has_tab = self
+                        .tabs
+                        .iter()
+                        .any(|t| t.primary_session_id() == session.id);
+                    let again = match (crate::i18n::language(ctx), has_tab) {
+                        (crate::i18n::UiLanguage::En, true) => {
+                            format!("Another tab · {}", session.name)
+                        }
+                        (crate::i18n::UiLanguage::En, false) => {
+                            format!("Open · {}", session.name)
+                        }
+                        (crate::i18n::UiLanguage::Zh, true) => {
+                            format!("再开一个「{}」", session.name)
+                        }
+                        (crate::i18n::UiLanguage::Zh, false) => {
+                            format!("打开「{}」", session.name)
+                        }
+                    };
+                    if crate::ui::chrome::popup_menu_button(ui, theme, &again)
+                        .on_hover_text(format!(
+                            "{}@{}:{}",
+                            session.username, session.host, session.port
+                        ))
+                        .clicked()
+                    {
+                        open_session_id = Some(session.id.clone());
+                        ui.memory_mut(|mem| mem.close_popup());
+                    }
+                }
+
+                if !others.is_empty() {
+                    crate::ui::chrome::popup_menu_section_label(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Open connection", "打开连接"),
+                    );
+                    egui::ScrollArea::vertical()
+                        .max_height(220.0)
+                        .show(ui, |ui| {
+                            for session in &others {
+                                let host_line = if session.port != 22 {
+                                    format!("{}:{}", session.host, session.port)
+                                } else {
+                                    session.host.clone()
+                                };
+                                if crate::ui::chrome::popup_menu_button(ui, theme, &session.name)
+                                    .on_hover_text(format!("{}@{}", session.username, host_line))
+                                    .clicked()
+                                {
+                                    open_session_id = Some(session.id.clone());
+                                    ui.memory_mut(|mem| mem.close_popup());
+                                }
+                            }
+                        });
+                }
+
+                ui.separator();
+                if crate::ui::chrome::popup_menu_button(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "Local Shell", "本机终端"),
+                )
+                .clicked()
+                {
+                    open_local = true;
+                    ui.memory_mut(|mem| mem.close_popup());
+                }
+                if crate::ui::chrome::popup_menu_button(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "New connection…", "新建连接…"),
+                )
+                .clicked()
+                {
+                    open_new_connection = true;
+                    ui.memory_mut(|mem| mem.close_popup());
+                }
+            },
+        );
+
+        if let Some(sid) = open_session_id {
+            if let Some(session) = self.session_manager.get_session(&sid).cloned() {
+                self.open_new_tab_for_session(ctx, &session);
+            }
+        } else if open_local {
+            self.open_local_shell_tab(ctx);
+        } else if open_new_connection {
+            self.show_new_session_dialog = true;
+        }
     }
 
 }

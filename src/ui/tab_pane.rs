@@ -41,13 +41,14 @@ impl SplitNode {
                 second: Box::new(Self::Pane(new_idx)),
             },
             Self::Pane(i) => Self::Pane(i),
+            // 字段名勿与参数 `horizontal` 同名，否则嵌套分屏会沿用父分支方向。
             Self::Branch {
-                horizontal,
+                horizontal: branch_h,
                 ratio,
                 first,
                 second,
             } => Self::Branch {
-                horizontal,
+                horizontal: branch_h,
                 ratio,
                 first: Box::new(first.replace_leaf(target, horizontal, new_idx)),
                 second: Box::new(second.replace_leaf(target, horizontal, new_idx)),
@@ -316,7 +317,8 @@ impl TerminalTab {
     }
 
     pub fn add_pane_with_layout(&mut self, pane: TerminalPane, layout: TabLayout) {
-        let horizontal = layout == TabLayout::SplitHorizontal;
+        // Branch.horizontal=true → 左右并排；false → 上下堆叠。
+        let side_by_side = layout == TabLayout::SplitHorizontal;
         let new_idx = self.panes.len();
         if new_idx == 0 {
             self.panes.push(pane);
@@ -329,8 +331,88 @@ impl TerminalTab {
         self.split_root = self
             .split_root
             .clone()
-            .replace_leaf(active, horizontal, new_idx);
+            .replace_leaf(active, side_by_side, new_idx);
         self.active_pane = new_idx;
+    }
+}
+
+#[cfg(test)]
+mod split_layout_tests {
+    use super::*;
+
+    fn dummy_pane(id: &str) -> TerminalPane {
+        TerminalPane::new(id.into(), id.into(), crate::ui::terminal::TerminalView::new())
+    }
+
+    #[test]
+    fn left_right_split_sets_side_by_side_flag() {
+        let mut tab = TerminalTab::single(dummy_pane("a"));
+        tab.add_pane_with_layout(dummy_pane("b"), TabLayout::SplitHorizontal);
+        match &tab.split_root {
+            SplitNode::Branch { horizontal: true, .. } => {}
+            other => panic!("左右分屏应得到 side-by-side 分支, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn top_bottom_split_sets_stacked_flag() {
+        let mut tab = TerminalTab::single(dummy_pane("a"));
+        tab.add_pane_with_layout(dummy_pane("b"), TabLayout::SplitVertical);
+        match &tab.split_root {
+            SplitNode::Branch {
+                horizontal: false, ..
+            } => {}
+            other => panic!("上下分屏应得到 stacked 分支, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn nested_left_right_keeps_orientation() {
+        let mut tab = TerminalTab::single(dummy_pane("a"));
+        tab.add_pane_with_layout(dummy_pane("b"), TabLayout::SplitHorizontal);
+        // 焦点在新窗格 b 上再左右分一次
+        tab.add_pane_with_layout(dummy_pane("c"), TabLayout::SplitHorizontal);
+        fn all_side_by_side(n: &SplitNode) -> bool {
+            match n {
+                SplitNode::Pane(_) => true,
+                SplitNode::Branch {
+                    horizontal,
+                    first,
+                    second,
+                    ..
+                } => *horizontal && all_side_by_side(first) && all_side_by_side(second),
+            }
+        }
+        assert!(
+            all_side_by_side(&tab.split_root),
+            "连续左右分屏不应混入上下分支: {:?}",
+            tab.split_root
+        );
+    }
+
+    #[test]
+    fn nested_vertical_after_horizontal_keeps_requested_direction() {
+        let mut tab = TerminalTab::single(dummy_pane("a"));
+        tab.add_pane_with_layout(dummy_pane("b"), TabLayout::SplitHorizontal);
+        // 焦点在 b，再上下分 → b 应被替换为 stacked 分支，根仍左右
+        tab.add_pane_with_layout(dummy_pane("c"), TabLayout::SplitVertical);
+        match &tab.split_root {
+            SplitNode::Branch {
+                horizontal: true,
+                first,
+                second,
+                ..
+            } => {
+                assert!(matches!(first.as_ref(), SplitNode::Pane(0)));
+                match second.as_ref() {
+                    SplitNode::Branch {
+                        horizontal: false, ..
+                    } => {}
+                    other => panic!("嵌套上下分屏应在右枝得到 stacked, got {other:?}"),
+                }
+            }
+            other => panic!("根应为左右分支, got {other:?}"),
+        }
     }
 }
 
@@ -427,16 +509,8 @@ fn render_node(
                 true,
                 swap_req,
             );
-            if let Some(pane) = tab.panes.get(*idx) {
-                let focus = ui.interact(
-                    pane.last_term_rect,
-                    ui.id().with(("pane_focus_tree", *idx)),
-                    egui::Sense::click(),
-                );
-                if focus.clicked() {
-                    *pane_focus = Some(*idx);
-                }
-            }
+            // 勿在整窗格上 Sense::click：会盖住失败卡片「重试/编辑/关闭」等子控件。
+            // 聚焦改由 render_one_pane 内对空白区的点击处理。
         }
         SplitNode::Branch {
             horizontal,
@@ -444,17 +518,27 @@ fn render_node(
             first,
             second,
         } => {
+            // 用绝对矩形摆窗格，避免 egui 流式布局把「左右」第二格挤到下一行。
+            // horizontal=true：左右并排（竖分割条）；false：上下堆叠（横分割条）。
+            let (area, _) =
+                ui.allocate_exact_size(egui::vec2(w.max(1.0), h.max(1.0)), egui::Sense::hover());
             if *horizontal {
-                let main = w - splitter;
-                let w1 = main * *ratio;
-                let w2 = main - w1;
-                ui.horizontal(|ui| {
-                    // 默认间距会把第二个窗格挤到下一行，整列就被撑出窗口底边。
-                    ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-                    ui.set_max_width(w);
-                    ui.set_min_width(w);
-                    ui.set_min_height(h);
-                    ui.set_max_height(h);
+                let main = (w - splitter).max(1.0);
+                let w1 = (main * *ratio).clamp(1.0, (main - 1.0).max(1.0));
+                let w2 = (main - w1).max(1.0);
+                let left = egui::Rect::from_min_size(area.min, egui::vec2(w1, h));
+                let sep_rect = egui::Rect::from_min_size(
+                    egui::pos2(area.min.x + w1, area.min.y),
+                    egui::vec2(splitter, h),
+                );
+                let right = egui::Rect::from_min_size(
+                    egui::pos2(area.min.x + w1 + splitter, area.min.y),
+                    egui::vec2(w2, h),
+                );
+                ui.allocate_ui_at_rect(left, |ui| {
+                    ui.set_clip_rect(left.intersect(ui.clip_rect()));
+                    ui.set_min_size(left.size());
+                    ui.set_max_size(left.size());
                     render_node(
                         ui,
                         tab,
@@ -470,12 +554,25 @@ fn render_node(
                         pane_focus,
                         swap_req,
                     );
-                    let (_id, sep) =
-                        ui.allocate_exact_size(egui::vec2(splitter, h), egui::Sense::drag());
-                    if sep.dragged() {
-                        *ratio = (*ratio + sep.drag_delta().x / w.max(1.0)).clamp(0.12, 0.88);
-                    }
-                    ui.painter().rect_filled(sep.rect, 0.0, theme.bg_body_color());
+                });
+                let sep = ui.interact(
+                    sep_rect,
+                    ui.id().with((
+                        "split_sep_h",
+                        area.min.x.to_bits(),
+                        area.min.y.to_bits(),
+                    )),
+                    egui::Sense::drag(),
+                );
+                if sep.dragged() {
+                    *ratio = (*ratio + sep.drag_delta().x / w.max(1.0)).clamp(0.12, 0.88);
+                }
+                ui.painter()
+                    .rect_filled(sep_rect, 0.0, theme.bg_body_color());
+                ui.allocate_ui_at_rect(right, |ui| {
+                    ui.set_clip_rect(right.intersect(ui.clip_rect()));
+                    ui.set_min_size(right.size());
+                    ui.set_max_size(right.size());
                     render_node(
                         ui,
                         tab,
@@ -493,15 +590,22 @@ fn render_node(
                     );
                 });
             } else {
-                let main = h - splitter;
-                let h1 = main * *ratio;
-                let h2 = main - h1;
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
-                    ui.set_max_width(w);
-                    ui.set_min_width(w);
-                    ui.set_min_height(h);
-                    ui.set_max_height(h);
+                let main = (h - splitter).max(1.0);
+                let h1 = (main * *ratio).clamp(1.0, (main - 1.0).max(1.0));
+                let h2 = (main - h1).max(1.0);
+                let top = egui::Rect::from_min_size(area.min, egui::vec2(w, h1));
+                let sep_rect = egui::Rect::from_min_size(
+                    egui::pos2(area.min.x, area.min.y + h1),
+                    egui::vec2(w, splitter),
+                );
+                let bottom = egui::Rect::from_min_size(
+                    egui::pos2(area.min.x, area.min.y + h1 + splitter),
+                    egui::vec2(w, h2),
+                );
+                ui.allocate_ui_at_rect(top, |ui| {
+                    ui.set_clip_rect(top.intersect(ui.clip_rect()));
+                    ui.set_min_size(top.size());
+                    ui.set_max_size(top.size());
                     render_node(
                         ui,
                         tab,
@@ -517,12 +621,25 @@ fn render_node(
                         pane_focus,
                         swap_req,
                     );
-                    let (_id, sep) =
-                        ui.allocate_exact_size(egui::vec2(w, splitter), egui::Sense::drag());
-                    if sep.dragged() {
-                        *ratio = (*ratio + sep.drag_delta().y / h.max(1.0)).clamp(0.12, 0.88);
-                    }
-                    ui.painter().rect_filled(sep.rect, 0.0, theme.bg_body_color());
+                });
+                let sep = ui.interact(
+                    sep_rect,
+                    ui.id().with((
+                        "split_sep_v",
+                        area.min.x.to_bits(),
+                        area.min.y.to_bits(),
+                    )),
+                    egui::Sense::drag(),
+                );
+                if sep.dragged() {
+                    *ratio = (*ratio + sep.drag_delta().y / h.max(1.0)).clamp(0.12, 0.88);
+                }
+                ui.painter()
+                    .rect_filled(sep_rect, 0.0, theme.bg_body_color());
+                ui.allocate_ui_at_rect(bottom, |ui| {
+                    ui.set_clip_rect(bottom.intersect(ui.clip_rect()));
+                    ui.set_min_size(bottom.size());
+                    ui.set_max_size(bottom.size());
                     render_node(
                         ui,
                         tab,
@@ -639,14 +756,15 @@ fn render_one_pane(
                 show_pane(ui, &mut pane.terminal, w, terminal_search_open, cap);
                 pane.last_term_rect = ui.max_rect();
             }
+            // 点空白聚焦；若本帧已有控件吃掉点击（失败卡片按钮等），不要抢。
             let pane_rect = ui.max_rect();
-            let clicked_here = ui.input(|i| {
+            let clicked_empty = ui.input(|i| {
                 i.pointer.primary_released()
                     && i.pointer
                         .interact_pos()
                         .is_some_and(|p| pane_rect.contains(p))
-            });
-            if clicked_here {
+            }) && !ui.ctx().wants_pointer_input();
+            if clicked_empty {
                 tab.focus_pane(pane_idx);
             }
     }
