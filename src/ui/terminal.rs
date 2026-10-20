@@ -305,6 +305,8 @@ pub struct TerminalView {
     /// FUNCTIONAL_SPEC §2.4：超长粘贴分片发送(>10KB 时每批 4096 字节、间隔 5ms)
     paste_pending: Vec<u8>,
     paste_next_chunk_at: Option<Instant>,
+    /// 粘贴分片因输入队列满连续重试的次数
+    paste_retries: u32,
     /// 「仅断开 SSH 保留画面」后为 true：键盘输入写入 [`Self::disconnected_input_buffer`] 而非 PTY(FUNCTIONAL_SPEC §2.4)。
     buffer_input_while_disconnected: bool,
     /// 断线期间缓存的待发送字节(上限 [`Self::OFFLINE_INPUT_CAP`])。
@@ -730,6 +732,7 @@ impl TerminalView {
             command_usage: HashMap::new(),
             paste_pending: Vec::new(),
             paste_next_chunk_at: None,
+            paste_retries: 0,
             buffer_input_while_disconnected: false,
             disconnected_input_buffer: Vec::new(),
             resend_offline_input_dialog_open: false,
@@ -2214,23 +2217,28 @@ impl TerminalView {
         self.process_ssh_messages(theme)
     }
 
-    /// FUNCTIONAL_SPEC §2.4：超长粘贴分片写入 PTY(每批 4096 字节，间隔 5ms)。
+    /// FUNCTIONAL_SPEC §2.4：粘贴分片写入 PTY(每批 ≤4096 字节、不切断 UTF-8，间隔 5ms)。
+    ///
+    /// 只有写入成功才从队列移除；输入队列满(远端/本地 shell 一时消化不过来)时保留本片、
+    /// 稍后重试，不再像旧实现那样先 drain 再发、失败即丢。
     fn flush_paste_queue(&mut self, ctx: &egui::Context) {
-        const CHUNK: usize = 4096;
+        use crate::ui::terminal_paste::{next_chunk_len, PASTE_CHUNK};
         const GAP: Duration = Duration::from_millis(5);
+        const RETRY_GAP: Duration = Duration::from_millis(20);
+        const MAX_RETRIES: u32 = 500; // ≈10 秒无进展才放弃
 
         if self.paste_pending.is_empty() {
             self.paste_next_chunk_at = None;
+            self.paste_retries = 0;
             return;
         }
-        if !self.connected {
+        if !self.connected || !self.has_pty_writer() {
+            if !self.paste_pending.is_empty() {
+                log::warn!("paste aborted: connection gone, {} bytes unsent", self.paste_pending.len());
+            }
             self.paste_pending.clear();
             self.paste_next_chunk_at = None;
-            return;
-        }
-        if !self.has_pty_writer() {
-            self.paste_pending.clear();
-            self.paste_next_chunk_at = None;
+            self.paste_retries = 0;
             return;
         }
 
@@ -2242,17 +2250,40 @@ impl TerminalView {
             }
         }
 
-        let n = CHUNK.min(self.paste_pending.len());
-        let chunk: Vec<u8> = self.paste_pending.drain(..n).collect();
-        if let Err(e) = self.send_pty_input(&chunk) {
-            log::error!("PTY write (paste chunk): {}", e);
-        }
-
-        if !self.paste_pending.is_empty() {
-            self.paste_next_chunk_at = Some(now + GAP);
-            ctx.request_repaint_after(GAP);
-        } else {
-            self.paste_next_chunk_at = None;
+        let n = next_chunk_len(&self.paste_pending, PASTE_CHUNK);
+        let chunk: Vec<u8> = self.paste_pending[..n].to_vec();
+        match self.send_pty_input(&chunk) {
+            Ok(()) => {
+                self.paste_pending.drain(..n);
+                self.paste_retries = 0;
+                if self.paste_pending.is_empty() {
+                    self.paste_next_chunk_at = None;
+                } else {
+                    self.paste_next_chunk_at = Some(now + GAP);
+                    ctx.request_repaint_after(GAP);
+                }
+            }
+            Err(e) if e.contains("queue full") && self.paste_retries < MAX_RETRIES => {
+                self.paste_retries += 1;
+                log::debug!("PTY write (paste chunk) busy, retry {}: {}", self.paste_retries, e);
+                self.paste_next_chunk_at = Some(now + RETRY_GAP);
+                ctx.request_repaint_after(RETRY_GAP);
+            }
+            Err(e) => {
+                log::error!(
+                    "PTY write (paste chunk): {} — {} bytes unsent",
+                    e,
+                    self.paste_pending.len()
+                );
+                self.pending_toast_error = Some(format!(
+                    "粘贴未完成：还有 {} 字节没能写入终端（{}）",
+                    self.paste_pending.len(),
+                    e
+                ));
+                self.paste_pending.clear();
+                self.paste_next_chunk_at = None;
+                self.paste_retries = 0;
+            }
         }
     }
 
@@ -3193,8 +3224,10 @@ impl TerminalView {
         }
     }
 
-    /// 粘贴文本到终端：原样发到 PTY，不自动补回车；超长内容分片发送(FUNCTIONAL_SPEC §2.4)。
+    /// 粘贴文本到终端：不自动补回车；远端开了 bracketed paste 时包上 200~/201~；
+    /// 一律进分片队列发送(FUNCTIONAL_SPEC §2.4)，写失败不丢片。
     fn paste_text(&mut self, text: &str, ctx: &egui::Context) {
+        use crate::ui::terminal_paste::{build_paste_payload, exceeds_canon_line_limit, TTY_CANON_LINE_MAX};
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
         if !self.connected {
             if self.buffer_input_while_disconnected {
@@ -3206,18 +3239,20 @@ impl TerminalView {
         if !self.has_pty_writer() {
             return;
         }
-        const LONG_PASTE: usize = 10 * 1024;
         // 单行粘贴计入本行缓冲，回车时与手敲内容一起审计；多行粘贴自带换行，不在此跟踪。
         if !normalized.contains('\n') {
             self.track_typed_text(&normalized);
         }
-        if normalized.len() <= LONG_PASTE {
-            if let Err(e) = self.send_pty_input(normalized.as_bytes()) {
-                log::error!("PTY write (paste): {}", e);
-            }
-            return;
+        let bracketed = self.terminal.is_bracketed_paste();
+        // 远端在行模式(cat/read 等)时，单行 >4095 字节会被 tty 内核截断，终端无法绕过，提示用户。
+        if !bracketed && exceeds_canon_line_limit(&normalized) {
+            self.pending_toast_error = Some(format!(
+                "粘贴内容有单行超过 {} 字节：若远端是 cat、read 等按行读取的程序，超出部分会被系统截断。建议改用 SFTP 上传或在 vim 中粘贴。",
+                TTY_CANON_LINE_MAX
+            ));
         }
-        self.paste_pending.extend_from_slice(normalized.as_bytes());
+        self.paste_pending
+            .extend_from_slice(&build_paste_payload(&normalized, bracketed));
         self.flush_paste_queue(ctx);
     }
 
