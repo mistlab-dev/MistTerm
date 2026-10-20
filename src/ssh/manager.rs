@@ -1526,7 +1526,185 @@ mod tests {
         }
     }
 
+
+    /// 真实场景：~50KB「一行一条 INSERT」的 SQL，经 MistTerm 粘贴路径写入远端 vim 并 :w。
     #[test]
+    fn paste_sql_into_remote_vim_with_bracketed_paste() {
+        use crate::ui::terminal_paste::{build_paste_payload, next_chunk_len, PASTE_CHUNK};
+        use std::io::Read;
+        let Some(sess) = crate::test_support::ssh_local::skip_without_sshd() else {
+            return;
+        };
+        let mut sql = String::new();
+        for i in 0..400 {
+            sql.push_str(&format!(
+                "INSERT INTO orders (id,user_id,amount,created_at,note) VALUES ({},'{}','{:.2}','2026-10-20 12:00:00','note-{}-abcdefghijklmnopqrstuvwxyz');\n",
+                i,
+                i % 97,
+                (i as f64) * 1.23,
+                i,
+            ));
+        }
+        assert!(sql.len() > 30_000 && sql.len() < 100_000);
+        assert!(sql.lines().all(|l| l.len() < 200));
+
+        let remote = format!("/tmp/mistterm_vim_sql_{}", std::process::id());
+        {
+            let s2 = crate::test_support::ssh_local::connect_local_sshd().expect("ssh2");
+            let _ = crate::test_support::ssh_local::exec_remote(&s2, &format!("rm -f {remote}"));
+        }
+
+        let (msg_tx, msg_rx) = mpsc::channel::<SshMessage>();
+        let bypass: Arc<Mutex<Option<Arc<UploadPtyBypass>>>> = Arc::new(Mutex::new(None));
+        let mut rb = [0u8; 16384];
+
+        let mut ch = sess.channel_session().expect("channel");
+        ch.request_pty("xterm-256color", None, Some((120, 40, 0, 0)))
+            .expect("pty");
+        ch.exec(&format!(
+            "export TERM=xterm-256color; vim -N -c 'set noswapfile fileformat=unix' {remote}"
+        ))
+        .expect("vim");
+        sess.set_blocking(false);
+
+        let mut saw_bp = false;
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        let mut collected = Vec::new();
+        while std::time::Instant::now() < deadline {
+            match ch.read(&mut rb) {
+                Ok(0) => break,
+                Ok(n) => {
+                    collected.extend_from_slice(&rb[..n]);
+                    if collected.windows(5).any(|w| w == b"2004h") {
+                        saw_bp = true;
+                        break;
+                    }
+                }
+                Err(e) if SshManager::is_retryable_read_error(&e) => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+        assert!(saw_bp, "vim should request bracketed paste with xterm-256color");
+        while msg_rx.try_recv().is_ok() {}
+
+        SshManager::write_pty_with_drain(&mut ch, b"i", &mut rb, &msg_tx, 1, &bypass)
+            .expect("enter insert");
+        std::thread::sleep(Duration::from_millis(200));
+
+        let payload = build_paste_payload(&sql, true);
+        let mut rest = payload.as_slice();
+        while !rest.is_empty() {
+            let n = next_chunk_len(rest, PASTE_CHUNK);
+            SshManager::write_pty_with_drain(&mut ch, &rest[..n], &mut rb, &msg_tx, 1, &bypass)
+                .expect("paste chunk");
+            rest = &rest[n..];
+            std::thread::sleep(Duration::from_millis(5));
+            while msg_rx.try_recv().is_ok() {}
+        }
+        std::thread::sleep(Duration::from_millis(800));
+        SshManager::write_pty_with_drain(&mut ch, b"\x1b", &mut rb, &msg_tx, 1, &bypass).unwrap();
+        std::thread::sleep(Duration::from_millis(300));
+        SshManager::write_pty_with_drain(&mut ch, b":w!\n", &mut rb, &msg_tx, 1, &bypass).unwrap();
+        std::thread::sleep(Duration::from_millis(1200));
+        SshManager::write_pty_with_drain(&mut ch, b":q!\n", &mut rb, &msg_tx, 1, &bypass).unwrap();
+        std::thread::sleep(Duration::from_millis(1000));
+        let _ = ch.close();
+
+        let s2 = crate::test_support::ssh_local::connect_local_sshd().expect("ssh2");
+        let got = crate::test_support::ssh_local::exec_remote(
+            &s2,
+            &format!("cat {remote}; rm -f {remote}"),
+        )
+        .unwrap_or_default();
+        let got_n = if got.ends_with("\n\n") {
+            got[..got.len() - 1].to_string()
+        } else {
+            got
+        };
+        eprintln!("vim sql paste: sql={}B got={}B", sql.len(), got_n.len());
+        assert_eq!(got_n, sql, "vim-saved SQL must match paste");
+    }
+
+    /// 对照：不包 bracketed paste、normal 模式粘贴 → 首字符被当成 vim 命令（main 行为）。
+    #[test]
+    fn paste_sql_vim_normal_mode_without_bp_loses_first_char() {
+        use crate::ui::terminal_paste::{next_chunk_len, PASTE_CHUNK};
+        use std::io::Read;
+        let Some(sess) = crate::test_support::ssh_local::skip_without_sshd() else {
+            return;
+        };
+        let mut sql = String::new();
+        for i in 0..80 {
+            sql.push_str(&format!("INSERT INTO t VALUES ({i},'x');\n"));
+        }
+        let remote = format!("/tmp/mistterm_vim_nobp_{}", std::process::id());
+        {
+            let s2 = crate::test_support::ssh_local::connect_local_sshd().expect("ssh2");
+            let _ = crate::test_support::ssh_local::exec_remote(&s2, &format!("rm -f {remote}"));
+        }
+        let (msg_tx, msg_rx) = mpsc::channel::<SshMessage>();
+        let bypass: Arc<Mutex<Option<Arc<UploadPtyBypass>>>> = Arc::new(Mutex::new(None));
+        let mut rb = [0u8; 16384];
+        let mut ch = sess.channel_session().unwrap();
+        ch.request_pty("xterm-256color", None, Some((120, 40, 0, 0))).unwrap();
+        ch.exec(&format!(
+            "export TERM=xterm-256color; vim -N -c 'set noswapfile fileformat=unix' {remote}"
+        ))
+        .unwrap();
+        sess.set_blocking(false);
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while std::time::Instant::now() < deadline {
+            match ch.read(&mut rb) {
+                Ok(n) if n > 0 && rb[..n].windows(5).any(|w| w == b"2004h") => break,
+                Err(e) if SshManager::is_retryable_read_error(&e) => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+        while msg_rx.try_recv().is_ok() {}
+        let mut rest = sql.as_bytes();
+        while !rest.is_empty() {
+            let n = next_chunk_len(rest, PASTE_CHUNK);
+            SshManager::write_pty_with_drain(&mut ch, &rest[..n], &mut rb, &msg_tx, 1, &bypass)
+                .unwrap();
+            rest = &rest[n..];
+            std::thread::sleep(Duration::from_millis(5));
+            while msg_rx.try_recv().is_ok() {}
+        }
+        std::thread::sleep(Duration::from_millis(500));
+        SshManager::write_pty_with_drain(&mut ch, b"\x1b:w!\n", &mut rb, &msg_tx, 1, &bypass)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(800));
+        SshManager::write_pty_with_drain(&mut ch, b":q!\n", &mut rb, &msg_tx, 1, &bypass)
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(800));
+        let _ = ch.close();
+        let s2 = crate::test_support::ssh_local::connect_local_sshd().expect("ssh2");
+        let got = crate::test_support::ssh_local::exec_remote(
+            &s2,
+            &format!("cat {remote}; rm -f {remote}"),
+        )
+        .unwrap_or_default();
+        let got_n = if got.ends_with("\n\n") {
+            got[..got.len() - 1].to_string()
+        } else {
+            got
+        };
+        eprintln!(
+            "no-bp normal got prefix: {:?}",
+            &got_n.chars().take(30).collect::<String>()
+        );
+        assert!(
+            got_n.starts_with("NSERT"),
+            "without bracketed paste in normal mode, leading I is eaten as a vim command; got {:?}",
+            got_n.chars().take(40).collect::<String>()
+        );
+    }
+
     fn manager_new_drops_cleanly() {
         let (mgr, _rx) = super::SshManager::new();
         drop(mgr);

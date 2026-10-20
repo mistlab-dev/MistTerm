@@ -873,3 +873,18 @@ mod tests {
         assert_eq!(t.text_in_point_range(end, start), "needle");
     }
 }
+
+#[cfg(test)]
+mod bracketed_paste_tests {
+    use super::*;
+
+    #[test]
+    fn feed_2004h_sets_bracketed_paste_mode() {
+        let mut t = Terminal::new(80, 24);
+        assert!(!t.is_bracketed_paste());
+        t.feed(b"\x1b[?2004h");
+        assert!(t.is_bracketed_paste());
+        t.feed(b"\x1b[?2004l");
+        assert!(!t.is_bracketed_paste());
+    }
+}
