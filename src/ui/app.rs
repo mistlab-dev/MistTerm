@@ -23,8 +23,7 @@ use crate::core::{
     ServerAuditEvent, SessionConfig, SessionLogSettings, SessionLogWriter, SessionManager,
     SessionSortBy, SortBy, SshConfigCandidate, SshConfigParseResult, SshInfo, TeamService, TempKeyFile,
     suggest_compliant_after_block_with_env, DEFAULT_RETENTION_DAYS,
-    candidate_from_failed_command, candidate_from_just_ran_success,
-    candidate_from_success_recommendation,
+    candidate_from_failed_command, candidate_from_success_recommendation,
     retrieve_team_knowledge, clean_ask_intent, DocSearchHit, KnowledgeHit,
     FragmentCandidate, SuggestionEnvContext,
 };
@@ -2399,6 +2398,10 @@ impl MistTermApp {
             }
         }
         for (tab_idx, err) in toast_errors {
+            // 正在看这个标签时，中央失败卡片已有重试/编辑/关闭，不再叠同文案 Toast。
+            if self.active_tab == Some(tab_idx) {
+                continue;
+            }
             self.notify_ssh_reconnect_error(ctx, tab_idx, err);
         }
         self.poll_connection_placeholder_actions(ctx);
@@ -2460,7 +2463,7 @@ impl MistTermApp {
         }
     }
 
-    /// Drop sticky "Connection failed / Reconnect" toast when user is on a healthy tab.
+    /// 清掉多余的「连接失败」Toast：正在看失败标签时中央卡片已够用；切到健康标签时也不再粘着。
     fn dismiss_stale_reconnect_toast_if_needed(&mut self) {
         let Some(tab_idx) = self.reconnect_toast_tab_idx() else {
             return;
@@ -2469,6 +2472,7 @@ impl MistTermApp {
             return;
         };
         if active == tab_idx {
+            self.clear_toast();
             return;
         }
         let healthy = self.tabs.get(active).is_some_and(|t| t.any_connected());
@@ -2661,52 +2665,11 @@ impl MistTermApp {
             );
             self.command_history
                 .record(&command, Some(&sid), sname.as_deref(), true);
-            // 成功路径：仅当「刚敲的这条」累计刚好达标时才弹(非每条命令弹最热门)
-            self.queue_success_path_candidate_if_due(&command);
-            // 失败路径：若终端尾部像错误，延后提示保存候选
-            self.queue_failed_path_candidate_if_due(&command);
+            // 不再在「敲命令」后自动弹「保存为片段」：
+            // - 成功路径「刚好第 5 次」对用户像随机打扰；
+            // - 失败路径曾用终端末尾是否像报错来猜，成功命令也会被旧报错误伤。
+            // 入库改为：命令拦截 Toast 上的「保存为片段」，或片段分析里主动添加。
         }
-    }
-
-    fn queue_success_path_candidate_if_due(&mut self, just_ran: &str) {
-        let personal = self.fragment_manager.list().to_vec();
-        let Some(cand) = candidate_from_just_ran_success(
-            &self.command_history,
-            &personal,
-            just_ran,
-            crate::core::SUCCESS_CANDIDATE_MIN_COUNT,
-        ) else {
-            return;
-        };
-        if cand.command == self.last_candidate_offer_command {
-            return;
-        }
-        self.deferred_candidate_toast = Some(cand);
-    }
-
-    fn queue_failed_path_candidate_if_due(&mut self, command: &str) {
-        let Some(idx) = self.active_tab else {
-            return;
-        };
-        let Some(tab) = self.tabs.get(idx) else {
-            return;
-        };
-        let Some(pane) = tab.active_pane() else {
-            return;
-        };
-        // 只看末尾几行，避免往上翻到更早失败输出把成功命令当成失败路径。
-        let tail = pane.terminal.tail_plain_text(10);
-        if !AiContext::looks_like_error_output(&tail) {
-            return;
-        }
-        let personal = self.fragment_manager.list().to_vec();
-        let Some(cand) = candidate_from_failed_command(command, &personal) else {
-            return;
-        };
-        if cand.command == self.last_candidate_offer_command {
-            return;
-        }
-        self.deferred_candidate_toast = Some(cand);
     }
 
     fn flush_deferred_candidate_toast(&mut self, ctx: &egui::Context) {
@@ -4380,12 +4343,12 @@ impl MistTermApp {
         let Some(ref sid) = self.selected_session_id else {
             let t = crate::platform::accel("T");
             let n = crate::platform::accel("N");
-            self.notify_auto( match crate::i18n::language(ctx) {
+            self.notify_auto(match crate::i18n::language(ctx) {
                 crate::i18n::UiLanguage::En => format!(
-                    "Select a connection on the left, then {t} for a new tab ({n} adds a new profile)",
+                    "Pick a connection first (sidebar or the + menu), then {t}. {n} adds a new profile.",
                 ),
                 crate::i18n::UiLanguage::Zh => format!(
-                    "请先在左侧选择一个连接，再按 {t} 新开标签；{n} 为新建会话配置",
+                    "先在左侧或标签栏「+」里选一台，再按 {t} 新开标签；{n} 是新建连接配置",
                 ),
             });
             return;
@@ -4396,8 +4359,17 @@ impl MistTermApp {
             );
             return;
         };
+        self.open_new_tab_for_session(ctx, &session);
+    }
+
+    /// 为指定连接再开一个终端标签（与侧栏点选聚焦已有标签不同）。
+    pub(crate) fn open_new_tab_for_session(
+        &mut self,
+        ctx: &egui::Context,
+        session: &crate::core::SessionConfig,
+    ) {
         self.selected_session_id = Some(session.id.clone());
-        self.push_tab_connecting(ctx, &session);
+        self.push_tab_connecting(ctx, session);
     }
 
     /// 终端列内查找条(非浮动 Window，避免标题栏占满宽)。返回 `true` 表示关闭。
@@ -5862,6 +5834,12 @@ impl MistTermApp {
         if let Some(session) = self.session_manager.get_session(session_id).cloned() {
             self.push_tab_connecting(ctx, &session);
         }
+    }
+
+    /// 打开主机 / 本机终端后收起连接栏，把画面留给终端。
+    pub(crate) fn collapse_connection_sidebar(&mut self) {
+        self.sidebar_collapsed = true;
+        self.sidebar_user_dismissed_responsive = true;
     }
 
     /// 创建并连接会话
@@ -8910,28 +8888,48 @@ impl MistTermApp {
             .color(theme.text_secondary()),
         );
         card.add_space(18.0);
-        card.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 16.0;
-            if crate::ui::chrome::chrome_small_accent_button(
-                ui,
-                &theme,
-                crate::i18n::tr(&ctx, "Local terminal", "本机终端"),
-            )
-            .clicked()
-            {
-                self.open_local_shell_tab(&ctx);
-            }
-            if crate::ui::chrome::chrome_small_button(
-                ui,
-                &theme,
-                crate::i18n::tr(&ctx, "New connection", "新建连接"),
-            )
-            .clicked()
-            {
-                self.show_new_session_dialog = true;
-                self.sidebar_collapsed = false;
-            }
-        });
+        // 与侧栏「新建」同族：主操作实心 Primary，次要描边 Secondary（勿用 chrome_small 幽灵字）。
+        // horizontal 会占满行宽，两列向中线靠拢，与标题同轴。
+        card.allocate_ui_with_layout(
+            egui::vec2(card_w, 40.0),
+            egui::Layout::left_to_right(egui::Align::Center),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 16.0;
+                ui.columns(2, |cols| {
+                    cols[0].with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            if crate::ui::chrome::panel_action_button(
+                                ui,
+                                &theme,
+                                crate::i18n::tr(&ctx, "Local terminal", "本机终端"),
+                            )
+                            .clicked()
+                            {
+                                self.open_local_shell_tab(&ctx);
+                                self.collapse_connection_sidebar();
+                            }
+                        },
+                    );
+                    cols[1].with_layout(
+                        egui::Layout::left_to_right(egui::Align::Center),
+                        |ui| {
+                            if crate::ui::chrome::panel_header_new_button_with_label(
+                                ui,
+                                &theme,
+                                crate::i18n::tr(&ctx, "New connection", "新建连接"),
+                            )
+                            .clicked()
+                            {
+                                self.show_new_session_dialog = true;
+                                self.sidebar_collapsed = false;
+                                self.sidebar_user_dismissed_responsive = false;
+                            }
+                        },
+                    );
+                });
+            },
+        );
         card.add_space(12.0);
         card.label(
             egui::RichText::new(crate::i18n::tr(

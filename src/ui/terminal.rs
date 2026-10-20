@@ -3661,16 +3661,23 @@ impl TerminalView {
                                         .color(theme.red_color()),
                                 );
                                 ui.add_space(theme.spacing_md());
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.spacing_mut().item_spacing.x = theme.spacing_sm();
-                                    if crate::ui::chrome::modal_primary_button(
+                                // 按钮组整体居中，与上方文案同轴（勿贴左/贴右）。
+                                let gap = theme.spacing_sm().max(8.0);
+                                let row_w = theme.size_modal_footer_btn_min_w_secondary() * 2.0
+                                    + theme.size_modal_footer_btn_min_w_primary()
+                                    + gap * 2.0;
+                                let pad = ((max_w - row_w) * 0.5).max(0.0);
+                                ui.horizontal(|ui| {
+                                    ui.add_space(pad);
+                                    ui.spacing_mut().item_spacing.x = gap;
+                                    if crate::ui::chrome::modal_secondary_button(
                                         ui,
                                         theme,
-                                        crate::i18n::tr(ui.ctx(), "Retry", "重试"),
+                                        crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
                                     )
                                     .clicked()
                                     {
-                                        action = ConnectionPlaceholderAction::Retry;
+                                        action = ConnectionPlaceholderAction::DismissTab;
                                     }
                                     if crate::ui::chrome::modal_secondary_button(
                                         ui,
@@ -3681,14 +3688,14 @@ impl TerminalView {
                                     {
                                         action = ConnectionPlaceholderAction::EditHost;
                                     }
-                                    if crate::ui::chrome::modal_secondary_button(
+                                    if crate::ui::chrome::modal_primary_button(
                                         ui,
                                         theme,
-                                        crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
+                                        crate::i18n::tr(ui.ctx(), "Retry", "重试"),
                                     )
                                     .clicked()
                                     {
-                                        action = ConnectionPlaceholderAction::DismissTab;
+                                        action = ConnectionPlaceholderAction::Retry;
                                     }
                                 });
                             } else if is_connecting {
@@ -3713,15 +3720,20 @@ impl TerminalView {
                                         .color(theme.text_secondary()),
                                 );
                                 ui.add_space(theme.spacing_md());
-                                if crate::ui::chrome::modal_secondary_button(
-                                    ui,
-                                    theme,
-                                    crate::i18n::tr(ui.ctx(), "Cancel", "取消"),
-                                )
-                                .clicked()
-                                {
-                                    action = ConnectionPlaceholderAction::CancelConnect;
-                                }
+                                let btn_w = theme.size_modal_footer_btn_min_w_secondary();
+                                let pad = ((max_w - btn_w) * 0.5).max(0.0);
+                                ui.horizontal(|ui| {
+                                    ui.add_space(pad);
+                                    if crate::ui::chrome::modal_secondary_button(
+                                        ui,
+                                        theme,
+                                        crate::i18n::tr(ui.ctx(), "Cancel", "取消"),
+                                    )
+                                    .clicked()
+                                    {
+                                        action = ConnectionPlaceholderAction::CancelConnect;
+                                    }
+                                });
                             }
                         });
                     });

@@ -25,8 +25,8 @@ fn quick_steps(ctx: &egui::Context) -> Vec<QuickStep> {
             title: crate::i18n::tr(ctx, "Connect to a server", "连接服务器"),
             detail: crate::i18n::tr(
                 ctx,
-                "Pick or create a connection on the left sidebar. Double-click or Enter opens a terminal tab.",
-                "左侧选择或新建连接；双击 / 回车打开终端标签。",
+                "Click a connection on the left to open it. Tab bar + lets you pick which host gets a new tab, or create a new profile.",
+                "左侧点连接即可打开。标签栏「+」会列出要新开哪台，也可新建连接。",
             ),
             keys: vec![shortcuts::accel("N"), shortcuts::new_tab_accel()],
         },

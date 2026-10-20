@@ -74,10 +74,10 @@ pub fn tab_bar_new_tab_button(ui: &mut Ui, theme: &Theme) -> Response {
     let accel = crate::platform::accel("T");
     let tooltip = match crate::i18n::language(ui.ctx()) {
         crate::i18n::UiLanguage::En => format!(
-            "New tab: select a session on the left, then click here or {accel}; opens new session dialog if none selected.",
+            "New tab — pick which connection to open ({accel} opens the current selection)",
         ),
         crate::i18n::UiLanguage::Zh => format!(
-            "新标签：左侧选中连接后点此或 {accel}；无选中时打开新建会话配置",
+            "新开标签 — 点此选择连哪台（{accel} 打开当前选中的连接）",
         ),
     };
     ui.allocate_ui_with_layout(
