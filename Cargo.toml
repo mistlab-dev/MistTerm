@@ -170,6 +170,12 @@ objc2-foundation = "0.3"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[patch.crates-io]
+# X11: deliver Control chords during IME preedit. See vendor/winit/MISTTERM_PATCH.md.
+winit = { path = "vendor/winit" }
+# X11 preedit end (`Preedit("", None)`) must clear the overlay. See vendor/egui-winit/MISTTERM_PATCH.md.
+egui-winit = { path = "vendor/egui-winit" }
+
 [profile.release]
 opt-level = 3
 # 用 thin LTO：链接时间显著降低（CI ~2-3x），二进制体积比 fat LTO 大 ~10-20%，

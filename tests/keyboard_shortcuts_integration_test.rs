@@ -161,6 +161,49 @@ fn integration_ctrl_c_forwards_interrupt_byte_to_pty() {
 }
 
 #[test]
+fn integration_focused_ctrl_j_and_k_reach_pty() {
+    egui::__run_test_ui(|ui| {
+        ui.input_mut(|i| {
+            feed_keys(i, ctrl_only(), [key_press(Key::J, ctrl_only())]);
+            let mut sent = Vec::new();
+            assert!(forward_ctrl_keys(i, |b| sent.push(b)));
+            assert_eq!(sent, vec![0x0a]);
+        });
+        ui.input_mut(|i| {
+            i.events.clear();
+            feed_keys(i, ctrl_only(), [key_press(Key::K, ctrl_only())]);
+            let mut sent = Vec::new();
+            assert!(forward_ctrl_keys(i, |b| sent.push(b)));
+            assert_eq!(sent, vec![0x0b]);
+        });
+    });
+}
+
+#[test]
+fn integration_unfocused_primary_j_is_search_not_pty() {
+    use mistterm::ui::keyboard_shortcuts::consume_primary_key;
+    use mistterm::ui::terminal_keys::app_jk_search_armed;
+    assert!(app_jk_search_armed(false));
+    assert!(!app_jk_search_armed(true));
+    egui::__run_test_ui(|ui| {
+        ui.input_mut(|i| {
+            #[cfg(target_os = "macos")]
+            let mods = Modifiers {
+                command: true,
+                ..Modifiers::NONE
+            };
+            #[cfg(not(target_os = "macos"))]
+            let mods = ctrl_only();
+            feed_keys(i, mods, [key_press(Key::J, mods)]);
+            assert!(consume_primary_key(i, Key::J));
+            let mut sent = Vec::new();
+            assert!(!forward_ctrl_keys(i, |b| sent.push(b)));
+            assert!(sent.is_empty());
+        });
+    });
+}
+
+#[test]
 fn integration_ctrl_w_forwards_kill_word_byte_to_pty() {
     egui::__run_test_ui(|ui| {
         ui.input_mut(|i| {
