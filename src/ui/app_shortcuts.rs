@@ -44,7 +44,10 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — search in terminal viewport\n\
              {} — Preferences\n\
              {} — About & this cheatsheet\n\
-             {} — command history (in terminal)\n\
+             {} — shell reverse-i-search when the terminal is focused; otherwise Mist command history\n\
+             {} — interrupt the foreground program (SIGINT), even if text is selected\n\
+             {} — copy the terminal selection\n\
+             {} — paste into the terminal\n\
              {} — Select all (terminal)\n\
              {} — AI assistant panel\n\
              {} — send terminal selection to AI{}",
@@ -56,14 +59,26 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::close_tab_help_line("Close current tab"),
             s::accel_literal("1–9"),
             s::accel_literal("Tab"),
-            s::help_line("J", "Focus connection search"),
-            s::help_line("K", "Focus snippet search"),
+            s::help_line(
+                "J",
+                "Focus connection search (terminal not focused; focused Ctrl+J goes to the shell)",
+            ),
+            s::help_line(
+                "K",
+                "Focus snippet search (terminal not focused; focused Ctrl+K goes to the shell)",
+            ),
             s::help_line("B", "Immersive mode (hide rail & menus, tabs in title bar)"),
-            format!("{} — Quick snippet picker", s::accel_shift("J")),
+            format!(
+                "{} — Quick snippet picker (terminal not focused)",
+                s::accel_shift("J")
+            ),
             s::accel("F"),
             s::accel_literal(","),
             s::accel("H"),
             s::terminal_history_accel(),
+            s::terminal_interrupt_accel(),
+            s::terminal_copy_accel(),
+            s::terminal_paste_accel(),
             s::accel_shift("A"),
             s::accel_shift("I"),
             s::accel_shift("L"),
@@ -88,7 +103,10 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — 终端内搜索\n\
              {} — 偏好设置\n\
              {} — 关于与本说明\n\
-             {} — 命令历史(终端内)\n\
+             {} — 终端聚焦时交给 shell 反向搜索; 失焦时打开 Mist 命令历史\n\
+             {} — 中断前台程序 (SIGINT), 有选区也一样\n\
+             {} — 复制终端选区\n\
+             {} — 粘贴到终端\n\
              {} — 全选(终端)\n\
              {} — AI 助手面板\n\
              {} — 终端选区发送到 AI{}",
@@ -100,14 +118,17 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::close_tab_help_line("关闭当前标签"),
             s::accel_literal("1–9"),
             s::accel_literal("Tab"),
-            s::help_line("J", "聚焦连接搜索"),
-            s::help_line("K", "聚焦片段搜索"),
-            s::help_line("B", "沉浸式模式（藏活动栏与菜单，标签进顶栏）"),
-            s::accel_shift("J").to_owned() + " — 快速片段选择器",
+            s::help_line("J", "聚焦连接搜索 (终端失焦时; 聚焦时 Ctrl+J 发给 shell)",),
+            s::help_line("K", "聚焦片段搜索 (终端失焦时; 聚焦时 Ctrl+K 发给 shell)",),
+            s::help_line("B", "沉浸式模式 (藏活动栏与菜单, 标签进顶栏)"),
+            s::accel_shift("J").to_owned() + " — 快速片段选择器 (终端失焦时)",
             s::accel("F"),
             s::accel_literal(","),
             s::accel("H"),
             s::terminal_history_accel(),
+            s::terminal_interrupt_accel(),
+            s::terminal_copy_accel(),
+            s::terminal_paste_accel(),
             s::accel_shift("A"),
             s::accel_shift("I"),
             s::accel_shift("L"),

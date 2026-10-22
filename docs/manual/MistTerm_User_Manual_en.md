@@ -108,7 +108,7 @@ Do not edit these files manually; use the in-app interface to make changes.
 | New/Edit connection | **Ctrl+N** / select in sidebar then **Ctrl+E** |
 | Open SFTP | **View → SFTP** or bottom bar **Files** |
 | View CPU/Memory | **View → Monitor** or bottom bar **Monitor** |
-| Command snippets | **Ctrl+K** or bottom bar **Snippets** |
+| Command snippets | **Ctrl+K** when the terminal is not focused, or bottom bar **Snippets** |
 | AI Assistant | **Ctrl+Shift+A** or bottom bar **AI** |
 | Preferences | **Ctrl+,** |
 | Help & shortcuts | **Help → Quick Start / Keyboard Shortcuts** or **Ctrl+H** |
@@ -153,7 +153,7 @@ Do not edit these files manually; use the in-app interface to make changes.
 ### 5.3 Connecting & Reconnecting
 
 - **Connect**: click a session in the sidebar → **Ctrl+T** for a new tab, or **double-click** the session
-- **Search sessions**: **Ctrl+J** to focus the sidebar search box
+- **Search sessions**: **Ctrl+J** focuses the sidebar search box when the terminal is not focused (while it is focused, Ctrl+J goes to the shell)
 - **Auto-reconnect**: enable KeepAlive / auto-reconnect in session settings
 - The bottom bar shows `username@host · Connected` when successful
 
@@ -168,8 +168,9 @@ Passwords and session info are **encrypted locally**. When switching computers, 
 ### 6.1 Basic Operations
 
 - After connecting, type commands in the terminal area and press **Enter** to execute
-- **Select text with the mouse** to copy; **Ctrl+V** to paste (Mac: **⌘V**)
+- **Ctrl+C** always interrupts the foreground program (SIGINT), including when text is selected. Copy the selection with **Ctrl+Shift+C** on Windows/Linux, or **⌘C** on Mac. Paste with **Ctrl+Shift+V** (Mac: **⌘V**)
 - **Select across several screens**: click the start, scroll with the wheel to the end, then **Shift+click** to extend the selection. While drag-selecting, move the pointer past the top/bottom edge of the terminal to auto-scroll (faster the farther you go). Then right-click → Copy selection or **Ctrl+Shift+C** (Mac: **⌘C**) copies all of it
+- **Chinese IME**: while composing, the preedit string is drawn at the cursor. The candidate list stays on the system IME panel. Ctrl chords such as Ctrl+C and Ctrl+R are still sent to the terminal during composition
 - Supports colored output, vim, htop, and other common TUI programs
 - Tabs: **Ctrl+T** for new tab; **Ctrl+W** to close current tab; **Ctrl+Tab** to switch tabs
 
@@ -260,8 +261,8 @@ Save frequently used commands as **snippets** for one-click insertion. Supports 
 
 | Method | Description |
 |--------|-------------|
-| **Ctrl+K** | Focus snippet search |
-| **Ctrl+Shift+J** | Quick snippet selector |
+| **Ctrl+K** | Focus snippet search (only when the terminal is not focused; when it is, the key goes to the shell) |
+| **Ctrl+Shift+J** | Quick snippet selector (only when the terminal is not focused) |
 | Bottom bar **Snippets** | Open the snippet side panel |
 | **Tools → Snippet Library** | Manage, create, and edit snippets |
 
@@ -450,11 +451,13 @@ The following uses **Windows** keys; on macOS, replace **Ctrl** with **⌘** (e.
 | **Ctrl+Shift+W** | Close current tab (Mac: **⌘W**) |
 | **Ctrl+Tab** / **Ctrl+Shift+Tab** | Next / previous tab |
 | **Ctrl+1 … Ctrl+9** | Switch to tab N |
-| **Ctrl+J** | Focus connection search (sidebar) |
-| **Ctrl+K** | Focus snippet search |
-| **Ctrl+Shift+J** | Quick snippet selector |
+| **Ctrl+J** | Focus connection search (only when the terminal is not focused; when it is, the key goes to the shell) |
+| **Ctrl+K** | Focus snippet search (only when the terminal is not focused; when it is, the key goes to the shell) |
+| **Ctrl+Shift+J** | Quick snippet selector (only when the terminal is not focused) |
 | **Ctrl+F** / **F3** | Find in terminal |
-| **Ctrl+R** | Left to the shell (Mist does not intercept it); command history panel: **Tools → Command History** |
+| **Ctrl+C** | Interrupt the foreground program (SIGINT), even with a selection. Copy with **Ctrl+Shift+C** (Mac: **⌘C**) |
+| **Ctrl+Shift+V** (Mac: **⌘V**) | Paste into the terminal |
+| **Ctrl+R** | When the terminal is focused, goes to the shell (reverse-i-search). When it is not, opens Mist command history. The panel is also under **Tools → Command History** |
 | **Ctrl+Shift+A** | AI assistant panel |
 | **Ctrl+Shift+L** | Send terminal selection to AI |
 | **Ctrl+Shift+D** / **Ctrl+Shift+U** (Mac: **⌘⇧D** / **⌘⇧U**) | Split terminal left/right / top/bottom |

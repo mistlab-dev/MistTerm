@@ -380,6 +380,8 @@ pub struct TerminalView {
     ui_lang_last: UiLanguage,
     /// 透明 IME 捕获框(须持有文本光标，winit 才会 `set_ime_allowed`)
     ime_capture: String,
+    /// 未上屏的预编辑。叠在光标处绘制；候选列表仍由系统输入法面板显示。
+    ime_preedit: crate::ui::terminal_keys::ImePreedit,
     /// 最近一帧终端 IME 框的 egui Id；UI 输入(含中文全角)抢焦点时须 surrender，否则 Composition 仍进终端。
     last_ime_id: Option<egui::Id>,
 }
@@ -554,6 +556,35 @@ impl TerminalView {
         }
     }
 
+    /// 在光标处画出未上屏的预编辑（下划线 + 浅底）。候选窗由系统 IME 面板负责。
+    fn paint_ime_preedit(
+        &self,
+        ui: &egui::Ui,
+        theme: &Theme,
+        origin: egui::Pos2,
+        clip: egui::Rect,
+    ) {
+        let text = self.ime_preedit.text();
+        if text.is_empty() {
+            return;
+        }
+        let color = theme.text_primary();
+        let font_id = egui::FontId::monospace(self.font_size);
+        let galley = ui.fonts(|fonts| fonts.layout_no_wrap(text.to_owned(), font_id, color));
+        let mut rect = egui::Rect::from_min_size(origin, galley.size());
+        // 下划线落在行盒内，避免压到下一行。
+        let underline_y = (origin.y + rect.height() - 1.0).min(clip.bottom() - 1.0);
+        rect.max.y = underline_y.max(rect.min.y + 1.0);
+        let painter = ui.painter().with_clip_rect(clip);
+        painter.rect_filled(rect, 0.0, theme.accent_alpha(48));
+        painter.galley(origin, galley);
+        painter.hline(
+            origin.x..=origin.x + rect.width().max(8.0),
+            underline_y,
+            egui::Stroke::new(1.0, theme.accent_color()),
+        );
+    }
+
     /// 把键盘/IME 让给 UI TextEdit(AI 草稿、偏好等)。
     /// 半角 ASCII 的 `Event::Text` 可被多个监听者看到；全角标点走 IME Composition，只进「当前 IME 目标」。
     /// 若不 surrender 终端 IME 框，全角 `，。` 会进已隐藏的 ime_capture 并被清空，AI 框像「打不出来」。
@@ -565,6 +596,7 @@ impl TerminalView {
             ctx.memory_mut(|m| m.surrender_focus(id));
         }
         self.ime_capture.clear();
+        self.ime_preedit.clear();
         // 打开 AI/表单时清掉拖选灰底，避免盖住终端内容。
         if !self.selection.is_empty() {
             self.selection.clear();
@@ -773,6 +805,7 @@ impl TerminalView {
             search_highlight: None,
             ui_lang_last: UiLanguage::default(),
             ime_capture: String::new(),
+            ime_preedit: crate::ui::terminal_keys::ImePreedit::default(),
             last_ime_id: None,
         }
     }
@@ -1774,15 +1807,20 @@ impl TerminalView {
                             self.terminal_focused = self.terminal_wants_keyboard
                                 && !terminal_search_open
                                 && capture_pty_keyboard;
+                            if !self.terminal_focused {
+                                self.ime_preedit.clear();
+                            }
 
                             if self.terminal_focused {
                                 ui.memory_mut(|m| m.request_focus(ime_id));
                             }
 
-                            // 块状闪烁光标(UI 层绘制，勿再用 │ 字符占位)
+                            // 块状闪烁光标(UI 层绘制，勿再用 │ 字符占位)。
+                            // 预编辑叠在同一格上，实心块会盖住第一个字形。
                             if self.terminal_focused
                                 && !terminal_search_open
                                 && self.selection.is_empty()
+                                && self.ime_preedit.is_empty()
                             {
                                 if let Some(cur) = self.terminal.viewport_cursor() {
                                     let t = ui.input(|i| i.time);
@@ -1832,6 +1870,17 @@ impl TerminalView {
                                     )
                                 };
                                 self.show_terminal_ime_capture(ui, ime_id, ime_rect, cell_h);
+                            }
+                            if self.terminal_focused && !self.ime_preedit.is_empty() {
+                                if let Some(cur) = self.terminal.viewport_cursor() {
+                                    let cursor_rect = Self::terminal_block_cursor_rect(
+                                        text_draw_pos,
+                                        &galley,
+                                        cur,
+                                        cell_w,
+                                    );
+                                    self.paint_ime_preedit(ui, theme, cursor_rect.min, text_rect);
+                                }
                             }
 
                             // === 文本选择(独立 interact 层，避免 TextEdit 抢鼠标) ===
@@ -2753,6 +2802,9 @@ impl TerminalView {
             }
 
             for event in &i.events {
+                self.ime_preedit.apply_event(event);
+            }
+            for event in &i.events {
                 match event {
                     egui::Event::CompositionEnd(text) => {
                         if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
@@ -3046,6 +3098,7 @@ impl TerminalView {
             }
 
             for event in &i.events {
+                self.ime_preedit.apply_event(event);
                 match event {
                     egui::Event::CompositionStart => {
                         log::debug!(target: "repaint_lag", "ime composition start");
