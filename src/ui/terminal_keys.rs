@@ -236,6 +236,9 @@ pub fn consume_terminal_paste_shortcut(i: &mut InputState) -> bool {
 /// **不转发 Ctrl+Shift+字母**：MistTerm / Windows Terminal 把 Ctrl+Shift 留给应用快捷键
 /// (AI、分屏、复制等)；若再写成 C0 字节，会出现 `^A` 进 shell、会话名被当命令执行。
 /// Copy/Paste 仍由 [`consume_terminal_copy_shortcut`] / paste 单独处理。
+///
+/// Ctrl+J / Ctrl+K 在终端聚焦时必须进 PTY（换行 / 删到行尾）。连接搜索与片段搜索只在
+/// 终端失焦时由应用消费，见 [`app_jk_search_armed`]。
 pub fn forward_ctrl_keys(i: &mut egui::InputState, mut send: impl FnMut(u8)) -> bool {
     let mods = Modifiers {
         ctrl: true,
@@ -243,10 +246,6 @@ pub fn forward_ctrl_keys(i: &mut egui::InputState, mut send: impl FnMut(u8)) -> 
     };
     let mut any = false;
     for key in CTRL_KEYS {
-        // 应用快捷键：Ctrl+J 连接搜索、Ctrl+K 片段搜索——绝不能变成 PTY 的 LF/VT。
-        if matches!(key, Key::J | Key::K) {
-            continue;
-        }
         if i.consume_key(mods, key) {
             if let Some(byte) = ctrl_byte_for_key(key) {
                 send(byte);
@@ -255,6 +254,57 @@ pub fn forward_ctrl_keys(i: &mut egui::InputState, mut send: impl FnMut(u8)) -> 
         }
     }
     any
+}
+
+/// 连接搜索（Ctrl/⌘+J）和片段搜索（Ctrl/⌘+K）只在终端未持有键盘时生效。
+/// 终端聚焦时这两个和弦交给 PTY（shell / readline / vim）。
+#[inline]
+pub fn app_jk_search_armed(terminal_focused: bool) -> bool {
+    !terminal_focused
+}
+
+/// 未提交的 IME 预编辑文本。只用于终端上的叠加绘制，不写入 PTY。
+/// 候选窗仍由系统输入法面板负责（egui 0.23 / winit 0.28 的 preedit 事件不含候选列表）。
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ImePreedit {
+    text: String,
+}
+
+impl ImePreedit {
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.text.clear();
+    }
+
+    /// `CompositionStart` 清空，`CompositionUpdate` 替换，`CompositionEnd` 清空。
+    /// 上屏字符串由调用方从 `CompositionEnd` 另发给 PTY。
+    pub fn apply_event(&mut self, event: &Event) {
+        match event {
+            Event::CompositionStart => self.text.clear(),
+            Event::CompositionUpdate(text) => self.text.clone_from(text),
+            Event::CompositionEnd(_) => self.text.clear(),
+            _ => {}
+        }
+    }
+}
+
+/// 与 `vendor/winit` 里 X11 补丁同一条策略：Control 已按下、键不是修饰键本身、
+/// 也不是 XIM 的 keycode 0 提交事件时，不把该键交给输入法。
+/// 字母、空格、退格、方向键仍走 IME。
+#[inline]
+pub fn control_chord_bypasses_ime(
+    ctrl_held: bool,
+    keycode_nonzero: bool,
+    key_is_modifier: bool,
+) -> bool {
+    ctrl_held && keycode_nonzero && !key_is_modifier
 }
 
 /// Windows 等平台常以 `Event::Text` 送达 Ctrl 组合(如 `\x03`)；`sent` 去重避免与 Key 双发。
@@ -465,7 +515,7 @@ mod tests {
     }
 
     #[test]
-    fn forward_ctrl_keys_skips_ctrl_j_and_k() {
+    fn forward_ctrl_keys_forwards_ctrl_j_and_k_to_pty() {
         egui::__run_test_ui(|ui| {
             ui.input_mut(|i| {
                 i.events.push(key_press(
@@ -476,8 +526,8 @@ mod tests {
                     },
                 ));
                 let mut sent = Vec::new();
-                assert!(!forward_ctrl_keys(i, |b| sent.push(b)));
-                assert!(sent.is_empty(), "Ctrl+J must not become 0x0a for PTY");
+                assert!(forward_ctrl_keys(i, |b| sent.push(b)));
+                assert_eq!(sent, vec![0x0a], "focused Ctrl+J is linefeed for the PTY");
             });
             ui.input_mut(|i| {
                 i.events.clear();
@@ -489,8 +539,85 @@ mod tests {
                     },
                 ));
                 let mut sent = Vec::new();
-                assert!(!forward_ctrl_keys(i, |b| sent.push(b)));
-                assert!(sent.is_empty(), "Ctrl+K must not become 0x0b for PTY");
+                assert!(forward_ctrl_keys(i, |b| sent.push(b)));
+                assert_eq!(
+                    sent,
+                    vec![0x0b],
+                    "focused Ctrl+K is VT / kill-to-EOL for the PTY"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn app_search_shortcuts_only_when_terminal_unfocused() {
+        assert!(!app_jk_search_armed(true));
+        assert!(app_jk_search_armed(false));
+    }
+
+    #[test]
+    fn control_chords_bypass_ime_but_plain_keys_do_not() {
+        assert!(control_chord_bypasses_ime(true, true, false));
+        assert!(!control_chord_bypasses_ime(false, true, false));
+        assert!(!control_chord_bypasses_ime(true, false, false));
+        assert!(!control_chord_bypasses_ime(true, true, true));
+    }
+
+    #[test]
+    fn ime_preedit_tracks_updates_and_clears_on_commit() {
+        let mut preedit = ImePreedit::default();
+        preedit.apply_event(&Event::CompositionStart);
+        assert!(preedit.is_empty());
+        preedit.apply_event(&Event::CompositionUpdate("ni".into()));
+        assert_eq!(preedit.text(), "ni");
+        preedit.apply_event(&Event::CompositionUpdate("你好".into()));
+        assert_eq!(preedit.text(), "你好");
+        preedit.apply_event(&Event::CompositionEnd("你好".into()));
+        assert!(preedit.is_empty());
+        preedit.apply_event(&Event::CompositionUpdate("ni".into()));
+        preedit.apply_event(&Event::CompositionUpdate(String::new()));
+        assert!(
+            preedit.is_empty(),
+            "empty CompositionUpdate clears a cancelled preedit"
+        );
+    }
+
+    #[test]
+    fn composing_ctrl_c_and_ctrl_r_still_forward_to_pty() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                let ctrl = Modifiers {
+                    ctrl: true,
+                    ..Default::default()
+                };
+                i.events.push(Event::CompositionStart);
+                i.events.push(Event::CompositionUpdate("nihao".into()));
+                i.events.push(key_press(Key::C, ctrl));
+                let mut preedit = ImePreedit::default();
+                for event in &i.events {
+                    preedit.apply_event(event);
+                }
+                assert_eq!(preedit.text(), "nihao");
+                let mut sent = Vec::new();
+                assert!(forward_ctrl_keys(i, |b| sent.push(b)));
+                assert_eq!(sent, vec![0x03]);
+                assert_eq!(
+                    preedit.text(),
+                    "nihao",
+                    "forwarding Ctrl+C must not drop preedit"
+                );
+            });
+            ui.input_mut(|i| {
+                i.events.clear();
+                let ctrl = Modifiers {
+                    ctrl: true,
+                    ..Default::default()
+                };
+                i.events.push(Event::CompositionUpdate("ceshi".into()));
+                i.events.push(key_press(Key::R, ctrl));
+                let mut sent = Vec::new();
+                assert!(forward_ctrl_keys(i, |b| sent.push(b)));
+                assert_eq!(sent, vec![0x12]);
             });
         });
     }

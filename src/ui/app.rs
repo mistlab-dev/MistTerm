@@ -8530,14 +8530,16 @@ impl eframe::App for MistTermApp {
                 self.open_local_shell_tab(ctx);
             }
             if ctx.input_mut(|i| {
-                self.app_shortcut_overrides_terminal(i)
-                    && crate::ui::keyboard_shortcuts::consume_primary_key(i, egui::Key::J)
+                crate::ui::terminal_keys::app_jk_search_armed(
+                    self.active_terminal_has_keyboard_focus(),
+                ) && crate::ui::keyboard_shortcuts::consume_primary_key(i, egui::Key::J)
             }) {
                 self.focus_sidebar_connection_search(ctx);
             }
             if ctx.input_mut(|i| {
-                self.app_shortcut_overrides_terminal(i)
-                    && crate::ui::keyboard_shortcuts::consume_primary_key(i, egui::Key::K)
+                crate::ui::terminal_keys::app_jk_search_armed(
+                    self.active_terminal_has_keyboard_focus(),
+                ) && crate::ui::keyboard_shortcuts::consume_primary_key(i, egui::Key::K)
             }) {
                 self.focus_fragment_panel_search(ctx);
             }

@@ -197,7 +197,7 @@ SSH 输出字节 → vte::Parser (VT100 解析) → alacritty_terminal::Term (�
 - 用户在当前行末尾输入（contenteditable 模式）
 - 按 `Enter` → 发送输入字节到 SSH channel
 - 输入行不清空，追加到输出历史中
-- 支持复制/粘贴（选中内容后 `⌘C`/`Ctrl+C`）
+- 支持复制/粘贴。复制：macOS `⌘C`，Windows/Linux `Ctrl+Shift+C`。粘贴：`⌘V` / `Ctrl+Shift+V`。`Ctrl+C` 始终是 SIGINT，有选区也不复制
 
 #### 2.3.4 滚动
 
@@ -495,8 +495,8 @@ SSH 密码直接存储在配置文件中存在安全风险。MistTerm 管理着�
 | `⌘W` | `Ctrl+Shift+W` | 关闭当前 Tab |
 | `⌘{1-9}` | `Ctrl+{1-9}` | 切换到第 N 个 Tab |
 | `⌘Tab` | `Ctrl+Tab` | 下一个 Tab |
-| `⌘J` | `Ctrl+J` | 聚焦到搜索框 |
-| `⌘K` | `Ctrl+K` | 聚焦到片段搜索框 |
+| `⌘J` | `Ctrl+J` | 聚焦到搜索框（仅终端失焦；聚焦时 Ctrl+J 发给 PTY） |
+| `⌘K` | `Ctrl+K` | 聚焦到片段搜索框（仅终端失焦；聚焦时 Ctrl+K 发给 PTY） |
 | `⌘⌥←` / `⌘⌥→` | `Ctrl+Shift+←` / `Ctrl+Shift+→` | 分屏 Tab 内切换活动窗格焦点 |
 | `⌘⇧D` / `Ctrl+Shift+D` | 同左 | 当前 Tab **左右分屏** |
 | `⌘⇧U` / `Ctrl+Shift+U` | 同左 | 当前 Tab **上下分屏** |

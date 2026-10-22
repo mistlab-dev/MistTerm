@@ -16,7 +16,15 @@
 - `Enter` sends `\r`.
 - `Backspace` sends `0x7f`.
 - `Delete` sends `\x1b[3~` (xterm-compatible forward delete).
-- `Ctrl+C` sends `0x03`, `Ctrl+D` sends `0x04`.
+- `Ctrl+C` sends `0x03`, `Ctrl+D` sends `0x04`. A selection does not turn Ctrl+C into copy.
+- `Ctrl+J` (`0x0a`) and `Ctrl+K` (`0x0b`) go to the PTY while the terminal pane is focused. Connection search and snippet search use those chords only when the terminal is not focused. The snippet picker remains `Ctrl+Shift+J` / `⌘⇧J`, and only when the terminal is not focused.
+- `Ctrl+R` goes to the PTY while the terminal is focused (shell reverse-i-search). When the terminal is not focused it opens Mist command history.
+
+## IME
+
+- Committed text (`CompositionEnd`) is written to the PTY. The preedit string is drawn at the block cursor and is not sent until commit.
+- The candidate list is owned by the system IME panel. egui 0.23 / winit 0.28 preedit events do not include candidates.
+- On X11, Control chords during preedit bypass `XFilterEvent` and are still delivered as key events (see `vendor/winit/MISTTERM_PATCH.md`), so Ctrl+C / Ctrl+R reach the PTY while composing. Letters, Space, Backspace, and arrows stay with the IME. The preedit is not cancelled by those chords.
 
 ## Copy / Paste / Selection
 
