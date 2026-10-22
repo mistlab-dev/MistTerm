@@ -576,6 +576,10 @@ pub struct TeamDocSearchItem {
     pub slug: String,
     #[serde(default)]
     pub score: i64,
+    /// 可选。段落绝对地址（`url` / `href` / `anchor_url` / `paragraph_url`）。
+    /// 缺省时客户端用文档 id 打开 MistDocs，不据此发写入请求。
+    #[serde(default, alias = "href", alias = "anchor_url", alias = "paragraph_url")]
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

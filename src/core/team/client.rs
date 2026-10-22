@@ -39,12 +39,16 @@ pub struct TeamClient {
 
 impl TeamClient {
     pub fn new(api_base: &str) -> Result<Self, String> {
+        Self::with_timeout(api_base, Duration::from_secs(45))
+    }
+
+    pub fn with_timeout(api_base: &str, timeout: Duration) -> Result<Self, String> {
         let base_url = normalize_api_base(api_base);
         if base_url.is_empty() {
             return Err("team API base URL is empty".into());
         }
         let http = Client::builder()
-            .timeout(Duration::from_secs(45))
+            .timeout(timeout)
             .build()
             .map_err(|e| e.to_string())?;
         Ok(Self { base_url, http })
@@ -218,11 +222,7 @@ impl TeamClient {
         query: &str,
         limit: u32,
     ) -> Result<Option<super::models::TeamDocSearchResponse>, TeamApiError> {
-        let q = percent_encode_query(query);
-        let path = format!(
-            "/v1/teams/{team_id}/docs/search?q={q}&limit={}",
-            limit.max(1).min(20)
-        );
+        let path = team_docs_search_path(team_id, query, limit);
         let req = self.http.get(self.url(&path)).bearer_auth(access_token);
         let resp = req.send().map_err(|e| TeamApiError {
             status: 0,
@@ -672,6 +672,15 @@ pub(crate) fn decode_text_as_result<T: DeserializeOwned>(
     Err(decode_error_body(fallback, text))
 }
 
+/// `GET /v1/teams/{id}/docs/search` 的路径。只读段落检索，不含写入端点。
+pub(crate) fn team_docs_search_path(team_id: &str, query: &str, limit: u32) -> String {
+    let q = percent_encode_query(query);
+    format!(
+        "/v1/teams/{team_id}/docs/search?q={q}&limit={}",
+        limit.max(1).min(20)
+    )
+}
+
 /// Simple string-level URL combiner (matches `TeamClient::url` exactly).
 pub(crate) fn build_api_url(base: &str, path: &str) -> String {
     format!("{base}{path}")
@@ -682,6 +691,20 @@ mod pure_client_tests {
     use super::*;
 
     // ------------------------------------------------ normalize / TeamClient::new
+
+    #[test]
+    fn docs_search_path_is_read_only_get() {
+        let path = team_docs_search_path("team-1", "磁盘满", 5);
+        assert!(path.starts_with("/v1/teams/team-1/docs/search?"));
+        assert!(path.contains("q="));
+        assert!(path.contains("limit=5"));
+        assert!(!path.contains("update"));
+        assert_eq!(
+            team_docs_search_path("team-1", "x", 0),
+            team_docs_search_path("team-1", "x", 1)
+        );
+        assert!(team_docs_search_path("team-1", "x", 99).contains("limit=20"));
+    }
 
     #[test]
     fn normalize_preserves_https_and_strips_trailing_slash_and_ws() {

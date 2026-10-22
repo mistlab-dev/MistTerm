@@ -19,7 +19,8 @@ Authorization: Bearer <access_token>
       "title": "清理生产日志",
       "excerpt": "使用 find … -mtime +7 -delete，禁止 rm -rf /var/log。",
       "slug": "safe-cleanup",
-      "score": 12
+      "score": 12,
+      "url": "https://docs.mistlab.dev/docs/doc-uuid#safe-cleanup"
     }
   ]
 }
@@ -30,8 +31,11 @@ Authorization: Bearer <access_token>
 | `id` | 文档稳定 ID |
 | `title` | 文档或章节标题 |
 | `excerpt` | 可展示段落（客户端作 `KnowledgeHit.body`） |
-| `slug` | 段落锚点；客户端拼 `doc:{id}#{slug}` |
+| `slug` | 段落锚点；客户端拼 `doc:{id}#{slug}`。可空；空则锚点为 `doc:{id}` |
 | `score` | 服务端相关度（可选，默认 0） |
+| `url` | 可选。段落绝对 http(s) 地址，也接受 `href` / `anchor_url` / `paragraph_url`。缺省时客户端打开 `https://docs.mistlab.dev/docs/{id}`，`slug` 非空则追加 `#{slug}` |
+
+AI 排障面板只用这一只读 GET。未命中、404 / 501 或请求失败时不展示错误。读权限由服务端 `TeamDocParagraphSearch` 过滤，客户端不再次放大结果。
 
 ## 软失败
 
