@@ -12,7 +12,9 @@ use crate::core::{
     looks_like_host_ops_intent, prepare_terminal_context, resolve_system_prompt,
     save_chat, summarize_batch_rows, AiContext, AgentPhase, AppSettings, BatchExecRow, ChatEvent,
     ChatMessage, EnhancedPromptBuilder, PreparedTerminalContext, QuickAction, StepProposal,
-    StoredAiMessage, StoredContextRef, TerminalSessionMeta, run_chat_with_key,
+    StoredAiMessage, StoredContextRef, TerminalSessionMeta, format_runbook_prompt,
+    recall_team_runbooks, runbook_search_query, sanitize_runbook_url, RunbookRecall,
+    RunbookSearchContext, run_chat_with_key,
 };
 use crate::i18n::{self};
 use crate::ui::icons::IconId;
@@ -103,6 +105,8 @@ struct UiMessage {
     source_label: Option<String>,
     /// v2 多机结果卡(有则走结构化 UI，不用 markdown/HTML)。
     agent_batch: Option<AgentBatchCard>,
+    /// 本轮只读召回的 MistDocs Runbook。无命中时保持空，不占位。
+    runbooks: Vec<RunbookRecall>,
 }
 
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -667,6 +671,17 @@ pub struct AiPanel {
     pending_connect_host: Option<String>,
     /// 这次排查期间不再询问的只读命令类别（换对话 / 新对话时清空；改动命令从不放行）。
     readonly_trust: std::collections::BTreeSet<crate::core::agent::ReadOnlyKind>,
+    /// 已登录团队时由 App 每帧写入；没有则排障不请求文档。
+    runbook_search: Option<RunbookSearchContext>,
+    /// 换对话后丢弃仍在飞的召回结果。
+    recall_epoch: u64,
+    runbook_ui_rx: Vec<std::sync::mpsc::Receiver<RunbookDelivery>>,
+}
+
+struct RunbookDelivery {
+    epoch: u64,
+    message_index: usize,
+    cards: Vec<RunbookRecall>,
 }
 
 struct AgentPlanUi {
@@ -740,7 +755,15 @@ impl AiPanel {
             selected_host_idx: None,
             pending_connect_host: None,
             readonly_trust: std::collections::BTreeSet::new(),
+            runbook_search: None,
+            recall_epoch: 0,
+            runbook_ui_rx: Vec::new(),
         }
+    }
+
+    /// 登录团队后写入检索上下文。登出传 `None`，排障不再访问文档。
+    pub fn set_runbook_search(&mut self, ctx: Option<RunbookSearchContext>) {
+        self.runbook_search = ctx;
     }
 
     /// 供 App 取出待连接的主机（如点击了「开新 Tab 连入」）
@@ -861,6 +884,7 @@ impl AiPanel {
                 command: command.to_string(),
                 hosts,
             }),
+            runbooks: vec![],
         });
         self.chat_dirty = true;
         self.busy = false;
@@ -880,6 +904,7 @@ impl AiPanel {
             commands: vec![],
             agent_batch: None,
             source_label: Some("多机执行 · 已取消".into()),
+            runbooks: vec![],
         });
         self.chat_dirty = true;
         self.busy = false;
@@ -974,6 +999,8 @@ impl AiPanel {
         if persist && self.chat_dirty {
             self.flush_persisted_chat(false);
         }
+        self.recall_epoch = self.recall_epoch.wrapping_add(1);
+        self.runbook_ui_rx.clear();
         self.chat_session_key = key;
         self.messages.clear();
         self.last_error = None;
@@ -1964,6 +1991,9 @@ impl AiPanel {
                     }
                     let msg = self.messages[i].clone();
                     self.render_message(ui, ctx, theme, &msg, i, &mut picked, &mut msg_action);
+                    if !msg.runbooks.is_empty() {
+                        self.render_runbook_section(ui, ctx, theme, &msg.runbooks);
+                    }
                     if i + 1 < self.messages.len() {
                         ui.add_space(theme.spacing_xs());
                     }
@@ -1982,6 +2012,116 @@ impl AiPanel {
                     self.handle_message_action(ctx, app_settings, action);
                 }
             });
+    }
+
+    fn render_runbook_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+        cards: &[RunbookRecall],
+    ) {
+        if cards.is_empty() {
+            return;
+        }
+        ui.add_space(theme.spacing_xs());
+        let row_w = ai_content_width(ui);
+        let safe_pad = ai_message_side_padding(theme);
+        let bubble_w = (row_w - safe_pad * 2.0).max(96.0);
+        let mut open_url: Option<String> = None;
+        ui.horizontal(|ui| {
+            ui.add_space(safe_pad);
+            egui::Frame::none()
+                .fill(theme.color_ops_card_fill())
+                .stroke(theme.divider_stroke())
+                .rounding(egui::Rounding::same(theme.radius_list_item()))
+                .inner_margin(egui::vec2(12.0, 10.0))
+                .show(ui, |ui| {
+                    let inner_w = (bubble_w - 24.0).max(48.0);
+                    ui.set_min_width(inner_w);
+                    ui.set_width(inner_w);
+                    ui.label(
+                        egui::RichText::new(i18n::tr(ctx, "Related runbooks", "相关 Runbook"))
+                            .strong()
+                            .size(theme.font_size_body())
+                            .color(theme.accent_color()),
+                    );
+                    for card in cards {
+                        ui.add_space(theme.spacing_xs());
+                        if !card.title.is_empty() {
+                            ui.label(
+                                egui::RichText::new(&card.title)
+                                    .strong()
+                                    .size(theme.font_size_small()),
+                            );
+                        }
+                        if !card.excerpt.is_empty() {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&card.excerpt)
+                                        .size(theme.font_size_caption())
+                                        .color(theme.text_secondary()),
+                                )
+                                .wrap(true),
+                            );
+                        }
+                        let name = if card.title.is_empty() {
+                            i18n::tr(ctx, "Team doc", "团队文档")
+                        } else {
+                            card.title.as_str()
+                        };
+                        let source = format!(
+                            "{} {name} · {}",
+                            i18n::tr(ctx, "Source", "来源"),
+                            card.anchor
+                        );
+                        let link = ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(source)
+                                    .size(theme.font_size_small())
+                                    .color(theme.accent_color())
+                                    .underline(),
+                            )
+                            .sense(egui::Sense::click())
+                            .wrap(true),
+                        );
+                        let link = link.on_hover_text(i18n::tr(
+                            ctx,
+                            "Open this source in MistDocs",
+                            "在 MistDocs 中打开该来源",
+                        ));
+                        if link.clicked() {
+                            open_url = Some(card.open_url.clone());
+                        }
+                        if crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
+                            ui,
+                            theme,
+                            IconId::File,
+                            i18n::tr(ctx, "Open", "打开"),
+                            true,
+                        )
+                        .on_hover_text(&card.open_url)
+                        .clicked()
+                        {
+                            open_url = Some(card.open_url.clone());
+                        }
+                    }
+                });
+        });
+        if let Some(url) = open_url {
+            self.open_runbook(ctx, &url);
+        }
+    }
+
+    fn open_runbook(&mut self, ctx: &egui::Context, url: &str) {
+        let Some(url) = sanitize_runbook_url(url) else {
+            return;
+        };
+        if !crate::platform::open_url(&url) {
+            self.input_status = Some(
+                i18n::tr(ctx, "Could not open MistDocs", "无法打开 MistDocs").to_string(),
+            );
+        }
     }
 
     fn render_agent_plan_card(
@@ -2407,7 +2547,8 @@ impl AiPanel {
                 context_refs: vec![],
                 commands: vec![],
                 source_label: None,
-            agent_batch: None,
+                agent_batch: None,
+                runbooks: vec![],
             });
             self.chat_dirty = true;
         }
@@ -3330,6 +3471,10 @@ impl AiPanel {
             && (looks_like_host_ops_intent(&question) || last_batch.is_some());
         if is_ops {
             let context_refs = std::mem::take(&mut self.attached_contexts);
+            let attached = context_refs
+                .first()
+                .map(|c| c.text.clone())
+                .unwrap_or_default();
             self.messages.push(UiMessage {
                 role: "user",
                 content: question.clone(),
@@ -3338,13 +3483,17 @@ impl AiPanel {
                 commands: vec![],
                 source_label: None,
                 agent_batch: None,
+                runbooks: vec![],
             });
             self.draft_input.clear();
             self.chat_dirty = true;
+            let prompt_rx =
+                self.schedule_runbook_recall(self.messages.len() - 1, &question, &attached);
+            ctx.request_repaint();
 
             // 优先检查是否有可用的 LLM 配置
             if self.can_chat(app_settings) && app_settings.ai.enabled {
-                self.start_llm_plan_request(ctx, app_settings, question, last_batch);
+                self.start_llm_plan_request(ctx, app_settings, question, last_batch, prompt_rx);
             } else {
                 // 未配置 AI 时，走启发式本地兜底
                 let proposal = crate::core::propose_step_with_context(&question, last_batch.as_ref());
@@ -3376,6 +3525,10 @@ impl AiPanel {
         };
         self.draft_input.clear();
         let context_refs = std::mem::take(&mut self.attached_contexts);
+        let attached = context_refs
+            .first()
+            .map(|c| c.text.clone())
+            .unwrap_or_default();
         let user_body = build_user_api_body(
             ctx,
             &display_question,
@@ -3385,16 +3538,112 @@ impl AiPanel {
         );
         self.messages.push(UiMessage {
             role: "user",
-            content: display_question,
+            content: display_question.clone(),
             api_content: Some(user_body),
             context_refs,
             commands: vec![],
             source_label: None,
             agent_batch: None,
+            runbooks: vec![],
         });
         self.chat_dirty = true;
-        self.start_chat_request(ctx, app_settings);
+        let prompt_rx =
+            self.schedule_runbook_recall(self.messages.len() - 1, &display_question, &attached);
+        ctx.request_repaint();
+        self.start_chat_request(ctx, app_settings, prompt_rx);
         SendOutcome::Sent
+    }
+
+    /// 后台只读检索。返回的通道在模型请求前最多等 1.5 秒；界面结果另走 `runbook_ui_rx`。
+    fn schedule_runbook_recall(
+        &mut self,
+        message_index: usize,
+        question: &str,
+        attached: &str,
+    ) -> Option<Receiver<String>> {
+        let query = runbook_search_query(question, attached);
+        if query.is_empty() {
+            return None;
+        }
+        let Some(search) = self.runbook_search.clone() else {
+            return None;
+        };
+        let epoch = self.recall_epoch;
+        let (prompt_tx, prompt_rx) = std::sync::mpsc::channel();
+        let (ui_tx, ui_rx) = std::sync::mpsc::channel();
+        self.runbook_ui_rx.push(ui_rx);
+        thread::spawn(move || {
+            let cards = recall_team_runbooks(&search, &query);
+            let prompt = format_runbook_prompt(&cards);
+            let _ = prompt_tx.send(prompt);
+            let _ = ui_tx.send(RunbookDelivery {
+                epoch,
+                message_index,
+                cards,
+            });
+        });
+        Some(prompt_rx)
+    }
+
+    fn apply_runbook_delivery(&mut self, delivery: RunbookDelivery) -> bool {
+        if delivery.epoch != self.recall_epoch || delivery.cards.is_empty() {
+            return false;
+        }
+        let Some(msg) = self.messages.get_mut(delivery.message_index) else {
+            return false;
+        };
+        if msg.role != "user" {
+            return false;
+        }
+        msg.runbooks = delivery.cards;
+        let next = delivery.message_index + 1;
+        if let Some(assistant) = self.messages.get_mut(next) {
+            if assistant.role == "assistant" {
+                let drop_model_label = assistant.source_label.as_deref().is_some_and(|label| {
+                    label.contains("非团队知识") || label.contains("not team knowledge")
+                });
+                if drop_model_label {
+                    assistant.source_label = None;
+                }
+            }
+        }
+        self.chat_dirty = true;
+        true
+    }
+
+    fn poll_runbook_recall(&mut self, ctx: &egui::Context, app_settings: &AppSettings) {
+        let mut applied = false;
+        let mut i = 0;
+        while i < self.runbook_ui_rx.len() {
+            match self.runbook_ui_rx[i].try_recv() {
+                Ok(delivery) => {
+                    if self.apply_runbook_delivery(delivery) {
+                        applied = true;
+                    }
+                    self.runbook_ui_rx.remove(i);
+                }
+                Err(TryRecvError::Empty) => i += 1,
+                Err(TryRecvError::Disconnected) => {
+                    self.runbook_ui_rx.remove(i);
+                }
+            }
+        }
+        if applied {
+            if app_settings.ai.persist_chats && self.background.is_none() && !self.busy {
+                self.flush_persisted_chat(false);
+            }
+            ctx.request_repaint();
+        } else if !self.runbook_ui_rx.is_empty() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(80));
+        }
+    }
+
+    fn await_runbook_prompt(rx: Option<Receiver<String>>) -> String {
+        let Some(rx) = rx else {
+            return String::new();
+        };
+        rx.recv_timeout(std::time::Duration::from_millis(1500))
+            .unwrap_or_default()
     }
 
     fn begin_agent_plan(&mut self, intent: String, proposal: StepProposal) {
@@ -3430,6 +3679,7 @@ impl AiPanel {
         app_settings: &AppSettings,
         intent: String,
         last_batch: Option<crate::core::LastBatchContext>,
+        runbook_prompt_rx: Option<Receiver<String>>,
     ) {
         let api_key = match self.effective_api_key(app_settings) {
             Some(k) => k,
@@ -3447,7 +3697,7 @@ impl AiPanel {
         ));
         let user_prompt = planner_user_prompt(&intent, last_batch);
 
-        let api_messages = vec![
+        let mut api_messages = vec![
             ChatMessage {
                 role: "system".into(),
                 content: system_prompt,
@@ -3457,6 +3707,10 @@ impl AiPanel {
                 content: user_prompt,
             },
         ];
+        let known = self.latest_user_runbook_prompt();
+        if !known.is_empty() {
+            api_messages[0].content.push_str(&known);
+        }
 
         let (tx, rx) = std::sync::mpsc::channel();
         self.background = Some(BackgroundJob::Plan {
@@ -3467,6 +3721,10 @@ impl AiPanel {
         self.input_status = Some(i18n::tr(ctx, "AI Planning...", "AI 正在规划运维步骤...").to_string());
 
         thread::spawn(move || {
+            let extra = Self::await_runbook_prompt(runbook_prompt_rx);
+            if !extra.is_empty() {
+                api_messages[0].content.push_str(&extra);
+            }
             let res = crate::core::chat_completions_with_key(&settings, &api_key, &api_messages);
             let proposal_res = match res {
                 Ok(resp_text) => {
@@ -3482,7 +3740,12 @@ impl AiPanel {
         });
     }
 
-    fn start_chat_request(&mut self, ctx: &egui::Context, app_settings: &AppSettings) {
+    fn start_chat_request(
+        &mut self,
+        ctx: &egui::Context,
+        app_settings: &AppSettings,
+        runbook_prompt_rx: Option<Receiver<String>>,
+    ) {
         let api_messages: Vec<ChatMessage> = self
             .messages
             .iter()
@@ -3516,6 +3779,7 @@ impl AiPanel {
                     "\n\n[IMPORTANT] No team knowledge matched for this question. Clearly state that your answer is model-generated and is not from team documentation.",
                 );
             }
+            p.push_str(&self.latest_user_runbook_prompt());
             p
         };
         let api_key = match self.effective_api_key(app_settings) {
@@ -3556,8 +3820,19 @@ impl AiPanel {
             commands: vec![],
             source_label,
             agent_batch: None,
+            runbooks: vec![],
         });
         thread::spawn(move || {
+            let mut system_prompt = system_prompt;
+            let extra = Self::await_runbook_prompt(runbook_prompt_rx);
+            if !extra.is_empty() {
+                // 召回到 Runbook 时，不要再要求模型声明「非团队知识」。
+                system_prompt = system_prompt.replace(
+                    "\n\n[IMPORTANT] No team knowledge matched for this question. Clearly state that your answer is model-generated and is not from team documentation.",
+                    "",
+                );
+                system_prompt.push_str(&extra);
+            }
             run_chat_with_key(
                 &settings,
                 &api_key,
@@ -3568,6 +3843,15 @@ impl AiPanel {
                 Some(system_prompt),
             );
         });
+    }
+
+    fn latest_user_runbook_prompt(&self) -> String {
+        self.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "user")
+            .map(|m| format_runbook_prompt(&m.runbooks))
+            .unwrap_or_default()
     }
 
     fn handle_message_action(
@@ -3590,7 +3874,7 @@ impl AiPanel {
                 self.input_status = None;
                 if self.messages.last().is_some_and(|m| m.role == "user") {
                     self.chat_dirty = true;
-                    self.start_chat_request(ctx, app_settings);
+                    self.start_chat_request(ctx, app_settings, None);
                 }
             }
         }
@@ -3598,6 +3882,7 @@ impl AiPanel {
 
     fn poll_pending(&mut self, ctx: &egui::Context, app_settings: &mut AppSettings) {
         self.poll_models_fetch(ctx, app_settings);
+        self.poll_runbook_recall(ctx, app_settings);
         let Some(job) = &self.background else {
             return;
         };
@@ -3992,6 +4277,7 @@ fn ui_message_to_stored(m: &UiMessage) -> StoredAiMessage {
             .agent_batch
             .as_ref()
             .and_then(|b| serde_json::to_value(b).ok()),
+        runbooks: m.runbooks.clone(),
     }
 }
 
@@ -4012,6 +4298,7 @@ fn stored_to_ui_message(m: StoredAiMessage) -> UiMessage {
         commands: m.commands,
         source_label: None,
         agent_batch: m.batch.and_then(|v| serde_json::from_value(v).ok()),
+        runbooks: m.runbooks,
     }
 }
 
@@ -4155,10 +4442,67 @@ mod tests {
             commands: vec![],
             source_label: None,
             agent_batch: None,
+            runbooks: vec![],
         };
         let copied = message_copy_text(&msg);
         assert!(copied.contains("explain"));
         assert!(copied.contains("err: fail"));
+    }
+
+    #[test]
+    fn runbook_delivery_attaches_only_to_the_matching_user_turn() {
+        let mut panel = AiPanel::new();
+        panel.messages.push(UiMessage {
+            role: "user",
+            content: "磁盘满了".into(),
+            api_content: None,
+            context_refs: vec![],
+            commands: vec![],
+            source_label: None,
+            agent_batch: None,
+            runbooks: vec![],
+        });
+        panel.messages.push(UiMessage {
+            role: "assistant",
+            content: "先看 df".into(),
+            api_content: None,
+            context_refs: vec![],
+            commands: vec![],
+            source_label: Some("模型 · 非团队知识".into()),
+            agent_batch: None,
+            runbooks: vec![],
+        });
+        let card = RunbookRecall {
+            title: "磁盘 SOP".into(),
+            excerpt: "先看 df".into(),
+            anchor: "doc:abc-1#disk".into(),
+            open_url: "https://docs.mistlab.dev/docs/abc-1#disk".into(),
+        };
+        assert!(panel.apply_runbook_delivery(RunbookDelivery {
+            epoch: 0,
+            message_index: 0,
+            cards: vec![card.clone()],
+        }));
+        assert_eq!(panel.messages[0].runbooks.len(), 1);
+        assert!(panel.messages[1].runbooks.is_empty());
+        assert!(panel.messages[1].source_label.is_none());
+        assert!(!panel.apply_runbook_delivery(RunbookDelivery {
+            epoch: 0,
+            message_index: 0,
+            cards: vec![],
+        }));
+        assert!(!panel.apply_runbook_delivery(RunbookDelivery {
+            epoch: 0,
+            message_index: 1,
+            cards: vec![card.clone()],
+        }));
+        panel.recall_epoch = 1;
+        assert!(!panel.apply_runbook_delivery(RunbookDelivery {
+            epoch: 0,
+            message_index: 0,
+            cards: vec![card],
+        }));
+        assert_eq!(panel.messages[0].runbooks.len(), 1);
     }
 }
 

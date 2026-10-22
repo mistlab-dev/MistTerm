@@ -25,6 +25,7 @@ use crate::core::{
     suggest_compliant_after_block_with_env, DEFAULT_RETENTION_DAYS,
     candidate_from_failed_command, candidate_from_success_recommendation,
     retrieve_team_knowledge, clean_ask_intent, DocSearchHit, KnowledgeHit,
+    RunbookSearchContext,
     FragmentCandidate, SuggestionEnvContext,
 };
 use crate::ssh::{JumpHop, SshConfig};
@@ -800,6 +801,24 @@ impl MistTermApp {
             8,
         );
         self.ask_knowledge_searched = true;
+    }
+
+    /// 把当前登录团队交给 AI 面板，供排障时只读召回 MistDocs。未登录则关闭召回。
+    fn sync_ai_runbook_search(&mut self) {
+        let ctx = if self.team_service.is_logged_in() {
+            self.team_service
+                .state
+                .current_team_id
+                .clone()
+                .filter(|id| !id.trim().is_empty())
+                .map(|team_id| RunbookSearchContext {
+                    api_base: self.team_service.api_base(),
+                    team_id,
+                })
+        } else {
+            None
+        };
+        self.ai_panel.set_runbook_search(ctx);
     }
 
     fn fetch_team_doc_hits_soft(&self, query: &str) -> Vec<DocSearchHit> {

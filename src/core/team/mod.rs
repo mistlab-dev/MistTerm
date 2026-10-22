@@ -37,7 +37,8 @@ pub use service::{
 };
 pub use settings::{
     normalize_api_base, team_web_forgot_password_url, team_web_oauth_desktop_callback_url,
-    team_web_register_url, TeamSettings, DEFAULT_TEAM_API_BASE, DEFAULT_TEAM_WEB_ORIGIN,
+    team_web_register_url, TeamSettings, DEFAULT_MISTDOCS_WEB_ORIGIN, DEFAULT_TEAM_API_BASE,
+    DEFAULT_TEAM_WEB_ORIGIN,
     OAUTH_LOCAL_PORT,
 };
 pub use state::TeamState;

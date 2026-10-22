@@ -16,6 +16,7 @@ pub mod fragment_analytics;
 pub mod fragment_usage_log;
 pub mod fragment_recommendations;
 pub mod knowledge;
+pub mod runbook_recall;
 pub mod agent;
 pub mod batch_exec;
 pub mod controlplane;
@@ -91,6 +92,10 @@ pub use fragment_recommendations::{
 };
 pub use knowledge::{
     clean_ask_intent, retrieve_team_knowledge, DocSearchHit, KnowledgeHit, KnowledgeSource,
+};
+pub use runbook_recall::{
+    format_runbook_prompt, mistdocs_paragraph_url, recall_team_runbooks, runbook_search_query,
+    runbooks_from_items, sanitize_runbook_url, RunbookRecall, RunbookSearchContext,
 };
 pub use agent::{
     build_planner_system_prompt, first_useful_line, gate_decision, host_result_summary,
