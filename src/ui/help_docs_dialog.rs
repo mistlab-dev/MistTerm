@@ -61,13 +61,10 @@ fn quick_steps(ctx: &egui::Context) -> Vec<QuickStep> {
             title: crate::i18n::tr(ctx, "Search terminal output", "搜索终端输出"),
             detail: crate::i18n::tr(
                 ctx,
-                "Search visible output in the current terminal; use command history when connected.",
-                "搜索当前屏输出；已连接时可用命令历史。",
+                "Ctrl+F searches visible output. While the terminal is focused, Ctrl+R is the shell reverse-i-search, not Mist command history. Open history from Tools → Command History (Ctrl+R also opens it when the terminal is not focused).",
+                "Ctrl+F 搜索当前屏输出。终端聚焦时 Ctrl+R 是 shell 反向搜索，不是命令历史面板。历史在「工具 → 命令历史」；终端失焦时 Ctrl+R 也会打开该面板。",
             ),
-            keys: vec![
-                shortcuts::accel("F"),
-                shortcuts::terminal_history_accel().to_string(),
-            ],
+            keys: vec![shortcuts::accel("F")],
         },
     ]
 }

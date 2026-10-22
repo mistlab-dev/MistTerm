@@ -421,8 +421,8 @@ pub fn forward_non_text_keys(i: &mut egui::InputState, mut send: impl FnMut(&[u8
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eframe::egui::{Event, Key, Modifiers};
     use eframe::egui;
+    use eframe::egui::{Event, Key, Modifiers};
 
     fn key_press(key: Key, modifiers: Modifiers) -> Event {
         Event::Key {
@@ -435,12 +435,18 @@ mod tests {
 
     #[test]
     fn escape_key() {
-        assert_eq!(encode_other_special_key(Key::Escape, Modifiers::NONE).unwrap(), b"\x1b");
+        assert_eq!(
+            encode_other_special_key(Key::Escape, Modifiers::NONE).unwrap(),
+            b"\x1b"
+        );
     }
 
     #[test]
     fn f1_and_insert_sequences() {
-        assert_eq!(encode_other_special_key(Key::F1, Modifiers::NONE).unwrap(), b"\x1bOP");
+        assert_eq!(
+            encode_other_special_key(Key::F1, Modifiers::NONE).unwrap(),
+            b"\x1bOP"
+        );
         assert_eq!(
             encode_other_special_key(Key::Insert, Modifiers::NONE).unwrap(),
             b"\x1b[2~"
@@ -546,6 +552,41 @@ mod tests {
                     vec![0x0b],
                     "focused Ctrl+K is VT / kill-to-EOL for the PTY"
                 );
+            });
+        });
+    }
+
+    /// Win/Linux 上 egui-winit 把 `command` 设成与 Ctrl 相同。聚焦时搜索未武装，
+    /// 这个形状的 Ctrl+J/K 仍必须变成 PTY 的 LF/VT，不能被连接/片段搜索吃掉。
+    #[test]
+    fn focused_ctrl_j_and_k_reach_pty_when_command_tracks_ctrl() {
+        let mods = Modifiers {
+            ctrl: true,
+            command: true,
+            ..Modifiers::NONE
+        };
+        assert!(!app_jk_search_armed(true));
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.modifiers = mods;
+                i.events.push(key_press(Key::J, mods));
+                if app_jk_search_armed(true) {
+                    let _ = crate::ui::keyboard_shortcuts::consume_primary_key(i, Key::J);
+                }
+                let mut sent = Vec::new();
+                assert!(forward_ctrl_keys(i, |b| sent.push(b)));
+                assert_eq!(sent, vec![0x0a]);
+            });
+            ui.input_mut(|i| {
+                i.events.clear();
+                i.modifiers = mods;
+                i.events.push(key_press(Key::K, mods));
+                if app_jk_search_armed(true) {
+                    let _ = crate::ui::keyboard_shortcuts::consume_primary_key(i, Key::K);
+                }
+                let mut sent = Vec::new();
+                assert!(forward_ctrl_keys(i, |b| sent.push(b)));
+                assert_eq!(sent, vec![0x0b]);
             });
         });
     }
@@ -688,7 +729,8 @@ mod tests {
     fn consume_terminal_paste_shortcut_matches_platform_clipboard_mods() {
         egui::__run_test_ui(|ui| {
             ui.input_mut(|i| {
-                i.events.push(key_press(Key::V, terminal_clipboard_modifiers()));
+                i.events
+                    .push(key_press(Key::V, terminal_clipboard_modifiers()));
                 assert!(consume_terminal_paste_shortcut(i));
             });
         });
@@ -1003,17 +1045,22 @@ mod tests {
                 }),
             ),
             (
-                "Ctrl+J search",
+                "unfocused Ctrl+J connection search",
                 winit_like(Key::J, Modifiers::CTRL, None),
                 Box::new(|i| {
+                    assert!(
+                        app_jk_search_armed(false),
+                        "connection search is only armed when the terminal is not focused"
+                    );
                     assert!(ks::consume_primary_key(i, Key::J));
                     true
                 }),
             ),
             (
-                "Ctrl+K snippets",
+                "unfocused Ctrl+K snippet search",
                 winit_like(Key::K, Modifiers::CTRL, None),
                 Box::new(|i| {
+                    assert!(app_jk_search_armed(false));
                     assert!(ks::consume_primary_key(i, Key::K));
                     true
                 }),

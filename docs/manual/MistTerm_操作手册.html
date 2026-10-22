@@ -140,6 +140,7 @@ strong { font-weight: 600; }
 <ul>
 <li>连接成功后直接在终端区输入命令，<strong>Enter</strong> 执行</li>
 <li><strong>Ctrl+C</strong> 始终中断前台程序（SIGINT），有选区时也一样。复制选区：Windows / Linux <strong>Ctrl+Shift+C</strong>，Mac <strong>⌘C</strong>。粘贴：<strong>Ctrl+Shift+V</strong>（Mac：<strong>⌘V</strong>）</li>
+<li><strong>Ctrl+K</strong>（终端聚焦）：发给 shell，删到行尾。<strong>Ctrl+J</strong>（终端聚焦）：发给 shell（换行，与 readline 一致）。连接搜索（Ctrl+J）和片段搜索（Ctrl+K）只在终端失焦时生效。快速片段选择器是 <strong>Ctrl+Shift+J</strong>，同样只在失焦时打开</li>
 <li><strong>跨多屏选择</strong>：单击起点 → 滚轮翻到终点 → <strong>Shift+单击</strong>终点即可扩展选区；拖选时把鼠标移到终端上/下边缘外会自动滚动，越远越快。之后右键「复制选中」或 <strong>Ctrl+Shift+C</strong>（Mac：<strong>⌘C</strong>）复制全部内容</li>
 <li><strong>中文输入</strong>：合成过程中，预编辑文字显示在光标处；候选窗由系统输入法面板显示。合成中的 Ctrl+C、Ctrl+R 等 Ctrl 组合仍发给终端，不交给拼音编辑</li>
 <li>支持彩色输出、vim、htop 等常见 TUI 程序</li>
@@ -154,8 +155,8 @@ strong { font-weight: 600; }
 <figure><img src="screenshots/15-terminal-find.png" alt="终端内查找"><figcaption>终端内查找</figcaption></figure>
 <p class="caption"><em>图 6-2：终端内查找</em></p>
 <ul>
-<li><strong>Ctrl+R</strong>：留给 shell 自己用（比如 bash 的往回搜历史命令），Mist 不拦截</li>
-<li><strong>工具 → 命令历史</strong>：打开 Mist 的命令历史面板，搜索并重新执行最近的命令</li>
+<li><strong>Ctrl+R</strong>（终端聚焦）：发给 shell，进入反向搜索（reverse-i-search），不会打开 Mist 命令历史面板</li>
+<li><strong>工具 → 命令历史</strong>：打开 Mist 的命令历史面板，搜索并重新执行最近的命令。终端失焦时 <strong>Ctrl+R</strong> 也会打开该面板</li>
 </ul>
 <figure><img src="screenshots/17-command-history.png" alt="命令历史"><figcaption>命令历史</figcaption></figure>
 <p class="caption"><em>图 6-3：命令历史窗口</em></p>
@@ -333,7 +334,7 @@ sz 文件名</code></pre>
 <hr>
 <h2>14. 快捷键一览</h2>
 <p>以下以 <strong>Windows</strong> 为例；macOS 将 <strong>Ctrl</strong> 换为 <strong>⌘</strong> 即可（如 Ctrl+N → ⌘N）。</p>
-<table><thead><tr><th>快捷键</th><th>功能</th></tr></thead><tbody><tr><td><strong>Ctrl+N</strong></td><td>新建会话</td></tr><tr><td><strong>Ctrl+E</strong></td><td>编辑所选会话</td></tr><tr><td><strong>Ctrl+Shift+T</strong></td><td>为所选会话新建终端标签（Mac：<strong>⌘T</strong>）</td></tr><tr><td><strong>Ctrl+Shift+W</strong></td><td>关闭当前标签（Mac：<strong>⌘W</strong>）</td></tr><tr><td><strong>Ctrl+Tab</strong> / <strong>Ctrl+Shift+Tab</strong></td><td>下一 / 上一标签</td></tr><tr><td><strong>Ctrl+1 … Ctrl+9</strong></td><td>切换到第 N 个标签</td></tr><tr><td><strong>Ctrl+B</strong></td><td>显示 / 隐藏活动栏</td></tr><tr><td><strong>Ctrl+J</strong></td><td>聚焦连接搜索（仅终端失焦；聚焦时发给 shell）</td></tr><tr><td><strong>Ctrl+K</strong></td><td>聚焦片段搜索（仅终端失焦；聚焦时发给 shell）</td></tr><tr><td><strong>Ctrl+Shift+J</strong></td><td>快速片段选择器（仅终端失焦）</td></tr><tr><td><strong>Ctrl+F</strong> / <strong>F3</strong></td><td>终端内查找</td></tr><tr><td><strong>Ctrl+C</strong></td><td>中断前台程序（SIGINT），有选区也一样。复制用 <strong>Ctrl+Shift+C</strong>（Mac：<strong>⌘C</strong>）</td></tr><tr><td><strong>Ctrl+Shift+V</strong>（Mac：<strong>⌘V</strong>）</td><td>粘贴到终端</td></tr><tr><td><strong>Ctrl+R</strong></td><td>终端聚焦时发给 shell（反向搜索）。失焦时打开 Mist 命令历史；菜单在 <strong>工具 → 命令历史</strong></td></tr><tr><td><strong>Ctrl+Shift+A</strong></td><td>AI 助手面板</td></tr><tr><td><strong>Ctrl+Shift+L</strong></td><td>终端选区发送到 AI</td></tr><tr><td><strong>Ctrl+Shift+D</strong> / <strong>Ctrl+Shift+U</strong>（Mac：<strong>⌘⇧D</strong> / <strong>⌘⇧U</strong>）</td><td>终端左右 / 上下分屏</td></tr><tr><td><strong>Ctrl+,</strong></td><td>偏好设置</td></tr><tr><td><strong>Ctrl+H</strong></td><td>关于与快捷键说明</td></tr><tr><td><strong>Esc</strong></td><td>关闭当前弹窗、菜单</td></tr></tbody></table>
+<table><thead><tr><th>快捷键</th><th>功能</th></tr></thead><tbody><tr><td><strong>Ctrl+N</strong></td><td>新建会话</td></tr><tr><td><strong>Ctrl+E</strong></td><td>编辑所选会话</td></tr><tr><td><strong>Ctrl+Shift+T</strong></td><td>为所选会话新建终端标签（Mac：<strong>⌘T</strong>）</td></tr><tr><td><strong>Ctrl+Shift+W</strong></td><td>关闭当前标签（Mac：<strong>⌘W</strong>）</td></tr><tr><td><strong>Ctrl+Tab</strong> / <strong>Ctrl+Shift+Tab</strong></td><td>下一 / 上一标签</td></tr><tr><td><strong>Ctrl+1 … Ctrl+9</strong></td><td>切换到第 N 个标签</td></tr><tr><td><strong>Ctrl+B</strong></td><td>显示 / 隐藏活动栏</td></tr><tr><td><strong>Ctrl+J</strong></td><td>聚焦连接搜索（仅终端失焦；聚焦时发给 shell，换行）</td></tr><tr><td><strong>Ctrl+K</strong></td><td>聚焦片段搜索（仅终端失焦；聚焦时发给 shell，删到行尾）</td></tr><tr><td><strong>Ctrl+Shift+J</strong></td><td>快速片段选择器（仅终端失焦）</td></tr><tr><td><strong>Ctrl+F</strong> / <strong>F3</strong></td><td>终端内查找</td></tr><tr><td><strong>Ctrl+C</strong></td><td>中断前台程序（SIGINT），有选区也一样。复制用 <strong>Ctrl+Shift+C</strong>（Mac：<strong>⌘C</strong>）</td></tr><tr><td><strong>Ctrl+Shift+V</strong>（Mac：<strong>⌘V</strong>）</td><td>粘贴到终端</td></tr><tr><td><strong>Ctrl+R</strong></td><td>终端聚焦时发给 shell（反向搜索）。失焦时打开 Mist 命令历史；菜单在 <strong>工具 → 命令历史</strong></td></tr><tr><td><strong>Ctrl+Shift+A</strong></td><td>AI 助手面板</td></tr><tr><td><strong>Ctrl+Shift+L</strong></td><td>终端选区发送到 AI</td></tr><tr><td><strong>Ctrl+Shift+D</strong> / <strong>Ctrl+Shift+U</strong>（Mac：<strong>⌘⇧D</strong> / <strong>⌘⇧U</strong>）</td><td>终端左右 / 上下分屏</td></tr><tr><td><strong>Ctrl+,</strong></td><td>偏好设置</td></tr><tr><td><strong>Ctrl+H</strong></td><td>关于与快捷键说明</td></tr><tr><td><strong>Esc</strong></td><td>关闭当前弹窗、菜单</td></tr></tbody></table>
 <p>完整列表以应用内 <strong>帮助 → 键盘快捷键</strong> 为准。</p>
 <figure><img src="screenshots/19-help-quick-start.png" alt="快速入门帮助"><figcaption>快速入门帮助</figcaption></figure>
 <p class="caption"><em>图 14-1：应用内帮助 — 快速入门</em></p>
