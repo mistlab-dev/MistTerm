@@ -8,6 +8,9 @@ pub const DEFAULT_TEAM_API_BASE: &str = "https://api.mistlab.dev";
 /// 账户注册、找回密码等浏览器入口（无 `api` 子域；**不会**写入桌面端 token）。
 pub const DEFAULT_TEAM_WEB_ORIGIN: &str = "https://mistlab.dev";
 
+/// MistDocs 网页（段落链接；API 仍走团队 `GET /v1/teams/{id}/docs/search`）。
+pub const DEFAULT_MISTDOCS_WEB_ORIGIN: &str = "https://docs.mistlab.dev";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TeamSettings {
     /// 历史字段：仅用于兼容旧 `settings.json`，运行时始终使用 [`DEFAULT_TEAM_API_BASE`]。
@@ -84,6 +87,7 @@ mod tests {
     fn constants_have_expected_format() {
         assert!(DEFAULT_TEAM_API_BASE.starts_with("https://api."));
         assert!(DEFAULT_TEAM_WEB_ORIGIN.starts_with("https://mistlab"));
+        assert_eq!(DEFAULT_MISTDOCS_WEB_ORIGIN, "https://docs.mistlab.dev");
         assert_eq!(team_web_register_url(), "https://mistlab.dev/register");
         assert_eq!(
             team_web_forgot_password_url(),

@@ -28,6 +28,9 @@ pub struct StoredAiMessage {
     /// 多机执行结果卡片(结构化主机网格)，重新打开对话时仍按网格显示。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub batch: Option<serde_json::Value>,
+    /// 本轮只读召回的 MistDocs Runbook。旧会话文件没有该字段。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runbooks: Vec<crate::core::RunbookRecall>,
 }
 
 pub fn chat_store_dir() -> PathBuf {
@@ -96,6 +99,7 @@ mod tests {
             }],
             commands: vec![],
             batch: None,
+            runbooks: vec![],
         };
         let json = serde_json::to_string(&msg).unwrap();
         let back: StoredAiMessage = serde_json::from_str(&json).unwrap();

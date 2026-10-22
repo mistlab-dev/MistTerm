@@ -143,6 +143,7 @@ impl MistTermApp {
             self.sync_monitor_panel_to_active_tab();
         }
         if self.show_ai_panel || self.show_ai_settings_dialog {
+            self.sync_ai_runbook_search();
             self.ai_panel.poll_background(ctx, &mut self.app_settings);
             if let Some(err) = self.ai_panel.take_pending_toast_error() {
                 self.notify_error(err);
