@@ -83,6 +83,11 @@ pub(super) struct ViewState {
     /// True if the current key event should be forwarded
     /// to the application, even during IME
     forward_key_to_app: bool,
+
+    /// MistTerm: a Control chord skipped `interpretKeyEvents` and dropped
+    /// `ime_state` to Ground so `keyUp` is reported. Marked text was kept.
+    /// `key_up` sets this back to Preedit when the preedit is still there.
+    restore_preedit_after_key_up: bool,
 }
 
 fn get_characters(event: &NSEvent, ignore_modifiers: bool) -> String {
@@ -167,6 +172,7 @@ declare_class!(
                     input_source: String::new(),
                     ime_allowed: false,
                     forward_key_to_app: false,
+                    restore_preedit_after_key_up: false,
                 };
 
                 Ivar::write(
@@ -484,13 +490,35 @@ declare_class!(
             let old_ime_state = self.state.ime_state;
             self.state.forward_key_to_app = false;
 
+            let scancode = event.scancode() as u32;
+            let virtual_keycode = retrieve_keycode(event);
+            // MistTerm: SCIM (简体拼音) clears marked text on Ctrl+C/Ctrl+R
+            // inside `interpretKeyEvents` without `doCommandBySelector`. That
+            // sets `had_ime_input` and drops `KeyboardInput`, so SIGINT never
+            // reaches the PTY. Skip the interpreter for Control chords while
+            // preedit is showing. Do not clear marked text and do not emit an
+            // empty Preedit — the composition stays, matching the X11 patch.
+            // Letters, Space, Backspace, and arrows (no Control) still go
+            // through `interpretKeyEvents`. See MISTTERM_PATCH.md.
+            let composing =
+                self.state.ime_state == ImeState::Preedit || self.hasMarkedText();
+            let skip_ime = crate::platform_impl::ime_bypass::macos_skip_interpret_key_events(
+                self.state.ime_allowed,
+                composing,
+                ev_mods.ctrl(),
+                virtual_keycode,
+            );
+            if skip_ime {
+                self.state.forward_key_to_app = true;
+            }
+
             // The `interpretKeyEvents` function might call
             // `setMarkedText`, `insertText`, and `doCommandBySelector`.
             // It's important that we call this before queuing the KeyboardInput, because
             // we must send the `KeyboardInput` event during IME if it triggered
             // `doCommandBySelector`. (doCommandBySelector means that the keyboard input
             // is not handled by IME and should be handled by the application)
-            if self.state.ime_allowed {
+            if self.state.ime_allowed && !skip_ime {
                 let new_event = if ignore_alt_characters {
                     replace_event_chars(event, &characters)
                 } else {
@@ -506,9 +534,6 @@ declare_class!(
                     *self.marked_text = NSMutableAttributedString::new();
                 }
             }
-
-            let scancode = event.scancode() as u32;
-            let virtual_keycode = retrieve_keycode(event);
 
             self.update_potentially_stale_modifiers(event);
 
@@ -540,6 +565,15 @@ declare_class!(
                     self.queue_event(WindowEvent::ReceivedCharacter(character));
                 }
             }
+
+            // `keyUp` only emits while Ground/Disabled. Drop out of Preedit
+            // after the keyDown is queued, without clearing marked text.
+            if skip_ime && self.hasMarkedText() {
+                if self.state.ime_state == ImeState::Preedit {
+                    self.state.ime_state = ImeState::Ground;
+                }
+                self.state.restore_preedit_after_key_up = true;
+            }
         }
 
         #[sel(keyUp:)]
@@ -563,6 +597,13 @@ declare_class!(
                     },
                     is_synthetic: false,
                 });
+            }
+
+            if self.state.restore_preedit_after_key_up {
+                self.state.restore_preedit_after_key_up = false;
+                if self.hasMarkedText() && self.state.ime_state == ImeState::Ground {
+                    self.state.ime_state = ImeState::Preedit;
+                }
             }
         }
 

@@ -1,6 +1,10 @@
 use crate::monitor::{MonitorHandle as RootMonitorHandle, VideoMode as RootVideoMode};
 use crate::window::Fullscreen as RootFullscreen;
 
+/// MistTerm: shared Control-chord vs IME policy. macOS calls it from `view.rs`.
+/// X11 keeps its own XKeyEvent helper (keycode 0 / modifier map) with the same rule.
+mod ime_bypass;
+
 #[cfg(windows_platform)]
 #[path = "windows/mod.rs"]
 mod platform;

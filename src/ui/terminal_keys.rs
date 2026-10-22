@@ -295,9 +295,10 @@ impl ImePreedit {
     }
 }
 
-/// 与 `vendor/winit` 里 X11 补丁同一条策略：Control 已按下、键不是修饰键本身、
+/// 与 `vendor/winit` 里 X11 / macOS 补丁同一条策略：Control 已按下、键不是修饰键本身、
 /// 也不是 XIM 的 keycode 0 提交事件时，不把该键交给输入法。
-/// 字母、空格、退格、方向键仍走 IME。
+/// 字母、空格、退格、方向键仍走 IME。macOS 在 preedit 期间据此跳过
+/// `interpretKeyEvents`（见 `vendor/winit/MISTTERM_PATCH.md`）。
 #[inline]
 pub fn control_chord_bypasses_ime(
     ctrl_held: bool,
@@ -561,6 +562,18 @@ mod tests {
         assert!(!control_chord_bypasses_ime(false, true, false));
         assert!(!control_chord_bypasses_ime(true, false, false));
         assert!(!control_chord_bypasses_ime(true, true, true));
+
+        // macOS keyDown: skip interpretKeyEvents only while IME is allowed,
+        // a preedit is showing, and the chord itself would bypass.
+        // Must match vendor/winit/src/platform_impl/ime_bypass.rs.
+        let skip = |ime_allowed, composing, ctrl, key_is_modifier| {
+            ime_allowed && composing && control_chord_bypasses_ime(ctrl, true, key_is_modifier)
+        };
+        assert!(skip(true, true, true, false));
+        assert!(!skip(true, true, false, false));
+        assert!(!skip(true, false, true, false));
+        assert!(!skip(false, true, true, false));
+        assert!(!skip(true, true, true, true));
     }
 
     #[test]

@@ -25,6 +25,7 @@
 - Committed text (`CompositionEnd`) is written to the PTY. The preedit string is drawn at the block cursor and is not sent until commit.
 - The candidate list is owned by the system IME panel. egui 0.23 / winit 0.28 preedit events do not include candidates.
 - On X11, Control chords during preedit bypass `XFilterEvent` and are still delivered as key events (see `vendor/winit/MISTTERM_PATCH.md`), so Ctrl+C / Ctrl+R reach the PTY while composing. Letters, Space, Backspace, and arrows stay with the IME. The preedit is not cancelled by those chords.
+- On macOS the same policy skips `interpretKeyEvents` while marked text is showing, so SCIM does not clear the preedit and swallow Ctrl+C / Ctrl+R. `keyUp` is still delivered. The system candidate panel stays with the IME.
 
 ## Copy / Paste / Selection
 
