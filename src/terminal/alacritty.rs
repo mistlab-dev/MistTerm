@@ -52,6 +52,21 @@ pub struct ViewportCursor {
     pub row: usize,
 }
 
+/// UI 选区终点列是开区间；alacritty `bounds_to_string` 的终点列是闭区间。
+/// 终点落在某行第 0 列时，表示上一行整行都被选中、本行没有字符。
+fn inclusive_end_from_exclusive(start: Point, end: Point, columns: usize) -> Option<Point> {
+    if columns == 0 || (end.line == start.line && end.column.0 <= start.column.0) {
+        return None;
+    }
+    if end.column.0 == 0 {
+        if end.line.0 <= start.line.0 {
+            return None;
+        }
+        return Some(Point::new(Line(end.line.0 - 1), Column(columns - 1)));
+    }
+    Some(Point::new(end.line, Column(end.column.0 - 1)))
+}
+
 /// 终端模拟器（由 alacritty_terminal 驱动）
 pub struct Terminal {
     term: Term<VoidListener>,
@@ -177,37 +192,20 @@ impl Terminal {
         }
     }
 
-    /// 按绝对网格坐标提取选中文本（`start`/`end` 为 inclusive-exclusive 列范围惯例，与 UI 选区一致）。
+    /// 按绝对网格坐标提取选中文本。
+    ///
+    /// `end` 列是开区间（与 UI 选区一致）。提取走 alacritty `bounds_to_string`：
+    /// 去掉行尾补齐空格、跳过宽字符占位格、把制表符还原成 `\t`，软换行（`WRAPLINE`）不插入 `\n`。
     pub fn text_in_point_range(&self, start: Point, end: Point) -> String {
         let (start, end) = if (start.line.0, start.column.0) <= (end.line.0, end.column.0) {
             (start, end)
         } else {
             (end, start)
         };
-        let mut result = String::new();
-        for line_idx in start.line.0..=end.line.0 {
-            let row = self.row_chars(Line(line_idx));
-            let line_len = row.len();
-            let c_start = if line_idx == start.line.0 {
-                start.column.0
-            } else {
-                0
-            };
-            let c_end = if line_idx == end.line.0 {
-                end.column.0
-            } else {
-                line_len
-            };
-            let c_start = c_start.min(line_len);
-            let c_end = c_end.min(line_len);
-            if c_start < c_end {
-                result.push_str(&row[c_start..c_end].iter().collect::<String>());
-            }
-            if line_idx < end.line.0 {
-                result.push('\n');
-            }
-        }
-        result
+        let Some(inclusive_end) = inclusive_end_from_exclusive(start, end, self.width) else {
+            return String::new();
+        };
+        self.term.bounds_to_string(start, inclusive_end)
     }
 
     fn row_chars(&self, line: Line) -> Vec<char> {
@@ -871,6 +869,88 @@ mod tests {
         assert_eq!(t.text_in_point_range(start, end), "needle");
         // 反向端点仍应得到相同文本
         assert_eq!(t.text_in_point_range(end, start), "needle");
+    }
+
+    /// 拖选越过行尾空单元格时，复制不应带上网格补齐的空格。
+    #[test]
+    fn text_in_point_range_trims_padding_on_hard_line_breaks() {
+        use alacritty_terminal::index::{Column, Line, Point};
+        let mut t = Terminal::new(20, 6);
+        t.feed(b"hi\r\nworld\r\n");
+        let hi = t.search_all("hi", false)[0];
+        let world = t.search_all("world", false)[0];
+        let start = Point::new(hi.line, Column(0));
+        let end = Point::new(world.line, Column(t.width));
+        assert_eq!(t.text_in_point_range(start, end), "hi\nworld");
+        // 终点落在下一行行首（整行高亮、下一行无字符）同样不带行尾空格。
+        let end_next = Point::new(Line(world.line.0 + 1), Column(0));
+        assert_eq!(t.text_in_point_range(start, end_next), "hi\nworld");
+        assert_eq!(t.text_in_point_range(end_next, start), "hi\nworld");
+    }
+
+    /// 只拖进行尾空白、但未覆盖后续字符时，不复制那些空单元格。
+    #[test]
+    fn text_in_point_range_partial_overshoot_drops_trailing_spaces() {
+        use alacritty_terminal::index::{Column, Point};
+        let mut t = Terminal::new(20, 5);
+        t.feed(b"hi\r\n");
+        let hi = t.search_all("hi", false)[0];
+        let start = Point::new(hi.line, Column(0));
+        let end = Point::new(hi.line, Column(10));
+        assert_eq!(t.text_in_point_range(start, end), "hi");
+    }
+
+    /// 词内空格保留；硬换行之间的空行保留为一个换行。
+    #[test]
+    fn text_in_point_range_keeps_internal_spaces_and_blank_lines() {
+        use alacritty_terminal::index::{Column, Point};
+        let mut t = Terminal::new(20, 6);
+        t.feed(b"a  b\r\n\r\nc\r\n");
+        let top = t.search_all("a  b", false)[0];
+        let bottom = t.search_all("c", false)[0];
+        let start = Point::new(top.line, Column(0));
+        let end = Point::new(bottom.line, Column(t.width));
+        assert_eq!(t.text_in_point_range(start, end), "a  b\n\nc");
+        // 选区停在「b」之前时，词内空格仍在。
+        let mid = Point::new(top.line, Column(3));
+        assert_eq!(t.text_in_point_range(start, mid), "a  ");
+    }
+
+    /// 软换行（WRAPLINE）是同一逻辑行，复制时不应插入换行或行尾空格。
+    #[test]
+    fn text_in_point_range_joins_soft_wrapped_rows() {
+        use alacritty_terminal::index::{Column, Line, Point};
+        let mut t = Terminal::new(20, 5);
+        // 21 列，超过最小宽度 20，会在第 20 列折行。
+        t.feed(b"hello world hello xyz");
+        let top = t.search_all("hello world", false)[0];
+        let start = Point::new(top.line, Column(0));
+        let end = Point::new(Line(top.line.0 + 1), Column(t.width));
+        assert_eq!(t.text_in_point_range(start, end), "hello world hello xyz");
+    }
+
+    /// 宽字符占两格，间隔格不是空格，复制时应只有字符本身。
+    #[test]
+    fn text_in_point_range_skips_wide_char_spacers() {
+        use alacritty_terminal::index::{Column, Point};
+        let mut t = Terminal::new(20, 4);
+        t.feed("你好\r\n".as_bytes());
+        let hit = t.search_all("你", false)[0];
+        let start = Point::new(hit.line, Column(0));
+        let end = Point::new(hit.line, Column(t.width));
+        assert_eq!(t.text_in_point_range(start, end), "你好");
+    }
+
+    /// 制表符在网格里展开成空格，复制应还原成一个 `\t`。
+    #[test]
+    fn text_in_point_range_collapses_tab_stops() {
+        use alacritty_terminal::index::{Column, Point};
+        let mut t = Terminal::new(20, 4);
+        t.feed(b"a\tb\r\n");
+        let hit = t.search_all("a", false)[0];
+        let start = Point::new(hit.line, Column(0));
+        let end = Point::new(hit.line, Column(t.width));
+        assert_eq!(t.text_in_point_range(start, end), "a\tb");
     }
 }
 
