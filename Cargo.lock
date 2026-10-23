@@ -3540,6 +3540,7 @@ dependencies = [
  "uuid",
  "vte 0.11.1",
  "winapi",
+ "winit",
  "zip",
  "zmodem2",
 ]
