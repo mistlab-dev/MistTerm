@@ -20,6 +20,13 @@ pub struct PortForwardSaveRequest {
     pub kind: PortForwardKind,
 }
 
+/// 停止运行时转发后同步会话配置：从 profile 的转发文本里删掉该行，
+/// 否则重连时被停止的转发会复活（#91）。
+pub struct PortForwardRemoveRequest {
+    pub session_profile_id: String,
+    pub kind: PortForwardKind,
+}
+
 pub struct PortForwardAuditRequest {
     pub session_profile_id: Option<String>,
     pub host: Option<String>,
@@ -46,6 +53,7 @@ pub struct PortForwardPanel {
     save_to_session: bool,
     last_error: Option<String>,
     pending_save: Option<PortForwardSaveRequest>,
+    pending_remove: Option<PortForwardRemoveRequest>,
     pending_audits: Vec<PortForwardAuditRequest>,
     last_panel_slot_rect: Option<egui::Rect>,
 }
@@ -66,6 +74,7 @@ impl PortForwardPanel {
             save_to_session: true,
             last_error: None,
             pending_save: None,
+            pending_remove: None,
             pending_audits: Vec::new(),
             last_panel_slot_rect: None,
         }
@@ -73,6 +82,10 @@ impl PortForwardPanel {
 
     pub fn take_pending_save(&mut self) -> Option<PortForwardSaveRequest> {
         self.pending_save.take()
+    }
+
+    pub fn take_pending_remove(&mut self) -> Option<PortForwardRemoveRequest> {
+        self.pending_remove.take()
     }
 
     pub fn take_pending_audits(&mut self) -> Vec<PortForwardAuditRequest> {
@@ -299,7 +312,7 @@ impl PortForwardPanel {
         }
         self.prune_stopped(ssh_session_id);
 
-        self.show_active_list(ui, ctx, theme, ssh_session_id);
+        self.show_active_list(ui, ctx, theme, ssh_session_id, session_profile);
         ui.add_space(theme.spacing_dock_section_gap());
         self.show_add_form(
             ui,
@@ -322,6 +335,7 @@ impl PortForwardPanel {
         ctx: &egui::Context,
         theme: &Theme,
         ssh_session_id: SshSessionId,
+        session_profile: Option<&SessionConfig>,
     ) {
         section_title(
             ui,
@@ -386,6 +400,14 @@ impl PortForwardPanel {
             if let Some(list) = self.by_ssh_session.get_mut(&ssh_session_id) {
                 if let Some(ForwardEntry::Runtime { kind, control, .. }) = list.get(i) {
                     control.stop();
+                    if let Some(profile) = session_profile {
+                        // 同步会话配置：把该转发从 profile 文本里删掉，
+                        // 否则重连时（terminal_connect_session 重新解析文本）会复活。
+                        self.pending_remove = Some(PortForwardRemoveRequest {
+                            session_profile_id: profile.id.clone(),
+                            kind: kind.clone(),
+                        });
+                    }
                     self.pending_audits.push(PortForwardAuditRequest {
                         session_profile_id: None,
                         host: None,
