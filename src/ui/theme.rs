@@ -1778,6 +1778,22 @@ impl Theme {
         }
     }
 
+    /// 偏好设置 / 右 dock 等抬升信息卡底色：暗色明显亮于面板一层，浅色用 elevated(或 subtle inset)。
+    #[inline]
+    pub fn color_elevated_card_fill(&self) -> Color32 {
+        if self.is_light_theme() {
+            let elevated = self.surface_elevated();
+            if elevated == self.surface_panel() {
+                self.color_subtle_inset_fill()
+            } else {
+                elevated
+            }
+        } else {
+            // 比 ops 卡再亮一点，保证「一块一功能」在暗色弹窗/dock 里能一眼分清。
+            Self::nudge_rgb(self.surface_panel(), 16)
+        }
+    }
+
     /// 主机控制台井。浅色用终端白底；暗色比画布再沉一层。
     #[inline]
     pub fn color_ops_console_fill(&self) -> Color32 {
@@ -2052,6 +2068,12 @@ impl Theme {
     /// 标题行工具按钮水平内边距
     pub fn spacing_panel_header_btn_pad_x(&self) -> f32 {
         self.spacing_search_input_x()
+    }
+
+    /// 面板主/次按钮文字左右内边距(略宽于搜索框，避免字贴边)。
+    #[inline]
+    pub fn spacing_control_btn_pad_x(&self) -> f32 {
+        14.0
     }
 
     /// 标题行工具按钮最小宽度(短标签兜底)

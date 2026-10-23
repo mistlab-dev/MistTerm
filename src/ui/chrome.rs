@@ -1450,7 +1450,7 @@ fn control_button_size(
     min_w: f32,
 ) -> egui::Vec2 {
     let h = theme.size_control_btn_h();
-    let pad_x = theme.spacing_panel_header_btn_pad_x();
+    let pad_x = theme.spacing_control_btn_pad_x();
     let font = egui::FontId::proportional(theme.font_size_control_btn());
     let text_w = ui
         .painter()
@@ -1553,7 +1553,7 @@ fn paint_control_button(
     can_activate: bool,
 ) -> Response {
     let size = control_button_size(ui, theme, label, icon.is_some(), min_w);
-    let rounding = theme.radius_list_item();
+    let rounding = theme.radius_card();
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = response.hovered();
     let pressed = response.is_pointer_button_down_on();
@@ -1589,8 +1589,11 @@ fn paint_control_button(
     };
 
     ui.painter().rect(rect, rounding, fill, stroke);
+    let pad_x = theme.spacing_control_btn_pad_x();
     if let Some(id) = icon {
         let icon_px = theme.size_icon_glyph();
+        // 通栏按钮：内容居中；内容宽按钮：按 pad 左起，避免字贴描边。
+        let center = size.x > (control_button_size(ui, theme, label, true, 0.0).x + 8.0);
         paint_icon_caption_row_in_rect(
             ui,
             rect,
@@ -1601,11 +1604,12 @@ fn paint_control_button(
             theme.font_size_control_btn(),
             text_color,
             icon_color,
-            0.0,
-            true,
+            pad_x,
+            center,
         );
     } else {
-        paint_caption_in_rect_center(ui, rect, label, theme.font_size_control_btn(), text_color);
+        let inner = rect.shrink2(egui::vec2(pad_x, 0.0));
+        paint_caption_in_rect_center(ui, inner, label, theme.font_size_control_btn(), text_color);
     }
     if hovered {
         ui.ctx().set_cursor_icon(if can_activate {
@@ -1658,7 +1662,7 @@ fn paint_icon_only_button_at(
     size: egui::Vec2,
     can_activate: bool,
 ) -> Response {
-    let rounding = theme.radius_list_item();
+    let rounding = theme.radius_card();
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = response.hovered();
     let pressed = response.is_pointer_button_down_on();
@@ -1989,6 +1993,29 @@ pub fn rich_caption(theme: &Theme, text: &str) -> RichText {
 
 pub fn form_field_label(ui: &mut Ui, theme: &Theme, text: &str) {
     ui.label(rich_form_label(theme, text));
+}
+
+/// 曾用于卡内子项分隔线；线感始终偏重，已改为无操作，保留调用点以免大面积改布局。
+pub fn settings_row_divider(_ui: &mut Ui, _theme: &Theme) {}
+
+/// 设置页抬升底卡片：无描边、小圆角；子项靠自然间距排列。
+pub fn settings_elevated_card(ui: &mut Ui, theme: &Theme, body: impl FnOnce(&mut Ui)) {
+    let outer_w = crate::ui::layout_util::set_width_to_available(ui);
+    ui.set_min_width(outer_w);
+    let pad_x = theme.spacing_search_input_x().max(14.0);
+    let pad_y = theme.spacing_sm().max(10.0);
+    egui::Frame::none()
+        .fill(theme.color_elevated_card_fill())
+        .stroke(egui::Stroke::NONE)
+        .rounding(theme.radius_card())
+        .inner_margin(egui::Margin::symmetric(pad_x, pad_y))
+        .show(ui, |ui| {
+            let inner_w = crate::ui::layout_util::set_width_to_available(ui);
+            ui.set_min_width(inner_w);
+            ui.spacing_mut().item_spacing.y = theme.spacing_xs();
+            body(ui);
+        });
+    ui.add_space(theme.spacing_md().max(10.0));
 }
 
 /// 与步进器/数字框同一行时用：占位高度对齐控件，文字垂直居中。
@@ -4320,13 +4347,24 @@ pub fn panel_action_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response 
 
 /// 带启用态的面板次要按钮
 pub fn panel_action_button_ex(ui: &mut Ui, theme: &Theme, label: &str, enabled: bool) -> Response {
+    panel_action_button_ex_min_w(ui, theme, label, enabled, theme.size_control_btn_min_w())
+}
+
+/// 指定最小宽度的次要按钮(通栏 / 等分列用)。
+pub fn panel_action_button_ex_min_w(
+    ui: &mut Ui,
+    theme: &Theme,
+    label: &str,
+    enabled: bool,
+    min_w: f32,
+) -> Response {
     paint_control_button(
         ui,
         theme,
         label,
         None,
         ControlButtonVariant::Secondary,
-        theme.size_control_btn_min_w(),
+        min_w,
         enabled,
     )
 }
@@ -4361,13 +4399,31 @@ pub fn panel_action_button_with_icon_ex(
     label: &str,
     enabled: bool,
 ) -> Response {
+    panel_action_button_with_icon_ex_min_w(
+        ui,
+        theme,
+        icon,
+        label,
+        enabled,
+        theme.size_control_btn_min_w(),
+    )
+}
+
+pub fn panel_action_button_with_icon_ex_min_w(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+    enabled: bool,
+    min_w: f32,
+) -> Response {
     paint_control_button(
         ui,
         theme,
         label,
         Some(icon),
         ControlButtonVariant::Secondary,
-        theme.size_control_btn_min_w(),
+        min_w,
         enabled,
     )
 }
@@ -4380,13 +4436,31 @@ pub fn panel_action_primary_button_with_icon_ex(
     label: &str,
     enabled: bool,
 ) -> Response {
+    panel_action_primary_button_with_icon_ex_min_w(
+        ui,
+        theme,
+        icon,
+        label,
+        enabled,
+        theme.size_control_btn_min_w(),
+    )
+}
+
+pub fn panel_action_primary_button_with_icon_ex_min_w(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    label: &str,
+    enabled: bool,
+    min_w: f32,
+) -> Response {
     paint_control_button(
         ui,
         theme,
         label,
         Some(icon),
         ControlButtonVariant::Primary,
-        theme.size_control_btn_min_w(),
+        min_w,
         enabled,
     )
 }

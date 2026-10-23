@@ -169,32 +169,38 @@ pub fn paint_team_controls(
                     theme,
                     i18n::tr(
                         ctx,
-                        "Sign in with Google or GitHub: complete authorization in the browser tab opened by MistTerm until you see a success page—not the mistlab.dev dashboard alone. Or use email/password below.",
-                        "使用 Google 或 GitHub：请在 MistTerm 打开的浏览器标签里完成授权，直到出现「登录成功」页(仅登录网站控制台不算完成)。也可在下方用邮箱/密码登录。",
+                        "Sign in with Google / GitHub in the browser tab MistTerm opens (wait for the success page), or use email/password below.",
+                        "用 Google / GitHub 时请在 MistTerm 打开的浏览器页完成授权(直到「登录成功」)；或下方用邮箱/密码。",
                     ),
                 )
                 .color(theme.color_form_hint()),
             );
-            ui.add_space(theme.spacing_sm());
+            ui.add_space(theme.spacing_xs());
 
             let oauth_busy = service.is_busy();
+            // 两枚 OAuth 按钮通栏等分。
+            let gap = theme.spacing_sm();
+            let half = ((pref_w.min(ui.available_width()) - gap) * 0.5).max(72.0);
             ui.horizontal(|ui| {
-                if chrome::panel_action_button_ex(
+                ui.spacing_mut().item_spacing.x = gap;
+                if chrome::panel_action_button_ex_min_w(
                     ui,
                     theme,
                     i18n::tr(ctx, "Google", "Google"),
                     !oauth_busy,
+                    half,
                 )
                 .clicked()
                 {
                     service.spawn_oauth_login(OAuthProvider::Google);
                     action = TeamUiAction::LoginRequested;
                 }
-                if chrome::panel_action_button_ex(
+                if chrome::panel_action_button_ex_min_w(
                     ui,
                     theme,
                     i18n::tr(ctx, "GitHub", "GitHub"),
                     !oauth_busy,
+                    half,
                 )
                 .clicked()
                 {
@@ -224,7 +230,7 @@ pub fn paint_team_controls(
                 });
             }
 
-            ui.add_space(theme.spacing_sm());
+            chrome::settings_row_divider(ui, theme);
             ui.add(
                 egui::Label::new(
                     chrome::rich_caption(
@@ -273,24 +279,24 @@ pub fn paint_team_controls(
                 true,
             );
 
-            ui.horizontal(|ui| {
-                if chrome::panel_action_primary_icon_button_ex(
-                    ui,
-                    theme,
-                    crate::ui::icons::IconId::Check,
-                    i18n::tr(ctx, "Sign in", "登录"),
-                    !oauth_busy,
-                )
-                .clicked()
-                {
-                    service.spawn_login(
-                        form.identifier.clone(),
-                        form.password.clone(),
-                        form.use_email,
-                    );
-                    action = TeamUiAction::LoginRequested;
-                }
-            });
+            let login_w = pref_w.min(ui.available_width()).max(theme.size_control_btn_min_w());
+            if chrome::panel_action_primary_button_with_icon_ex_min_w(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Check,
+                i18n::tr(ctx, "Sign in", "登录"),
+                !oauth_busy,
+                login_w,
+            )
+            .clicked()
+            {
+                service.spawn_login(
+                    form.identifier.clone(),
+                    form.password.clone(),
+                    form.use_email,
+                );
+                action = TeamUiAction::LoginRequested;
+            }
 
             if !service.state.last_error.is_empty() {
                 ui.label(
@@ -302,11 +308,10 @@ pub fn paint_team_controls(
                 ui.label(chrome::rich_caption(theme, &service.status_line));
             }
 
-            ui.add_space(theme.spacing_xs());
-            // 固定行高 + 底对齐布局；文案避免中英硬混在同一链上(域名放悬停)。
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::BOTTOM), |ui| {
+            ui.add_space(theme.spacing_sm());
+            // 勿用 with_layout(Align::BOTTOM)：会吃掉滚动区剩余高度，登录钮下方出现大块空白。
+            ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = theme.spacing_md();
-                ui.set_height(theme.size_panel_filter_chip_h());
                 if chrome::panel_caption_link_with_hover(
                     ui,
                     theme,

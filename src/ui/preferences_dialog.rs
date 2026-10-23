@@ -60,7 +60,8 @@ impl MistTermApp {
                                 .auto_shrink([false; 2])
                                 .max_height(inner_h)
                                 .show(ui, |ui| {
-                                    layout_util::set_width_to_available(ui);
+                                    let content_w = layout_util::set_width_to_available(ui);
+                                    ui.set_min_width(content_w);
                                     ui.spacing_mut().item_spacing.y = theme.spacing_md();
                                     self.preferences_section_general(
                                         ui,
@@ -70,6 +71,12 @@ impl MistTermApp {
                                         text_low,
                                     );
                                     self.preferences_section_appearance(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        label_color,
+                                    );
+                                    self.preferences_section_terminal(
                                         ui,
                                         ctx,
                                         theme,
@@ -128,6 +135,11 @@ impl MistTermApp {
         self.show_preferences_dialog = open && !should_close;
     }
 
+    fn preferences_row_divider(ui: &mut egui::Ui, theme: &crate::ui::theme::Theme) {
+        crate::ui::chrome::settings_row_divider(ui, theme);
+    }
+
+    /// 分组标题在卡外；卡内抬升底、无描边；子项靠自然间距排列。
     fn preferences_collapsing(
         ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
@@ -137,20 +149,19 @@ impl MistTermApp {
         default_open: bool,
         body: impl FnOnce(&mut egui::Ui),
     ) {
-        egui::CollapsingHeader::new(
-            RichText::new(title)
-                .size(theme.font_size_panel_title())
-                .strong()
-                .color(label_color),
-        )
-        .id_source(egui::Id::new(("pref_section", section_id)))
-        .default_open(default_open)
-        .show(ui, |ui| {
-            layout_util::set_width_to_available(ui);
-            ui.spacing_mut().item_spacing.y = theme.spacing_panel_gap();
-            body(ui);
+        ui.push_id(egui::Id::new(("pref_section", section_id)), |ui| {
+            egui::CollapsingHeader::new(
+                RichText::new(title)
+                    .size(theme.font_size_panel_title())
+                    .strong()
+                    .color(label_color),
+            )
+            .id_source(egui::Id::new(("pref_section", section_id)))
+            .default_open(default_open)
+            .show_unindented(ui, |ui| {
+                crate::ui::chrome::settings_elevated_card(ui, theme, body);
+            });
         });
-        ui.add_space(theme.spacing_sm());
     }
 
     fn preferences_section_general(
@@ -178,7 +189,7 @@ impl MistTermApp {
                     .size(theme.font_size_small())
                     .color(text_low),
                 );
-                ui.add_space(theme.spacing_panel_gap());
+                Self::preferences_row_divider(ui, theme);
                 crate::ui::chrome::form_field_label(
                     ui,
                     theme,
@@ -203,9 +214,9 @@ impl MistTermApp {
                     crate::i18n::set_language(ctx, lang);
                     ctx.request_repaint();
                 }
-                ui.add_space(theme.spacing_panel_gap());
+                Self::preferences_row_divider(ui, theme);
                 self.preferences_default_local_dir(ui, ctx, theme, text_low);
-                ui.add_space(theme.spacing_panel_gap());
+                Self::preferences_row_divider(ui, theme);
                 self.update_preferences_section(ui, ctx, theme, text_low);
             },
         );
@@ -336,7 +347,7 @@ impl MistTermApp {
             "appearance",
             crate::i18n::tr(ctx, "Appearance", "外观"),
             label_color,
-            false,
+            true,
             |ui| {
                 let theme_stored: Vec<String> = self
                     .theme_manager
@@ -360,8 +371,25 @@ impl MistTermApp {
                         ctx.request_repaint();
                     }
                 }
+            },
+        );
+    }
 
-                ui.add_space(theme.spacing_md());
+    fn preferences_section_terminal(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+        label_color: egui::Color32,
+    ) {
+        Self::preferences_collapsing(
+            ui,
+            theme,
+            "terminal",
+            crate::i18n::tr(ctx, "Terminal", "终端"),
+            label_color,
+            true,
+            |ui| {
                 ui.label(
                     RichText::new(crate::i18n::tr(ctx, "Terminal font", "终端字体"))
                         .size(theme.font_size_small())
@@ -396,7 +424,7 @@ impl MistTermApp {
                     self.apply_terminal_font_preferences(ctx);
                 }
 
-                // 固定行高，避免控件被拉高、标签与输入基线错位
+                Self::preferences_row_divider(ui, theme);
                 crate::ui::chrome::form_control_row(ui, theme, |ui| {
                     crate::ui::chrome::form_inline_label(
                         ui,
@@ -422,7 +450,7 @@ impl MistTermApp {
                         ctx.request_repaint();
                     }
                 });
-                ui.add_space(theme.spacing_panel_gap());
+                ui.add_space(theme.spacing_xs());
                 ui.label(
                     RichText::new(format!(
                         "{}  Ag gjpqy  终端 ABC 123  #!/bin/bash",
@@ -480,7 +508,7 @@ impl MistTermApp {
                 {
                     self.auto_reconnect_enabled = ar;
                 }
-                ui.add_space(theme.spacing_panel_gap());
+                Self::preferences_row_divider(ui, theme);
                 let mut ka = self.default_keepalive_enabled;
                 if crate::ui::chrome::form_checkbox(
                     ui,
@@ -535,7 +563,7 @@ impl MistTermApp {
                     .color(text_low),
                 );
                 if crate::platform::url_handler::supported() {
-                    ui.add_space(theme.spacing_panel_gap());
+                    Self::preferences_row_divider(ui, theme);
                     self.preferences_ssh_url_row(ui, ctx, theme, text_low);
                 }
             },
@@ -648,6 +676,7 @@ impl MistTermApp {
                     self.session_log_enabled = log_on;
                     self.session_log_settings.enabled = log_on;
                 }
+                Self::preferences_row_divider(ui, theme);
                 crate::ui::chrome::form_control_row(ui, theme, |ui| {
                     crate::ui::chrome::form_inline_label(
                         ui,
@@ -663,6 +692,7 @@ impl MistTermApp {
                         1,
                     );
                 });
+                Self::preferences_row_divider(ui, theme);
                 let mut ansi = self.session_log_settings.include_ansi;
                 if crate::ui::chrome::form_checkbox(
                     ui,
@@ -740,6 +770,7 @@ impl MistTermApp {
                             .color(text_low),
                     );
                 }
+                Self::preferences_row_divider(ui, theme);
                 crate::ui::chrome::form_field_label(
                     ui,
                     theme,
@@ -776,6 +807,7 @@ impl MistTermApp {
                 if vault_ns.lost_focus() {
                     let _ = self.app_settings.save();
                 }
+                Self::preferences_row_divider(ui, theme);
                 crate::ui::chrome::form_field_label(
                     ui,
                     theme,
@@ -836,6 +868,7 @@ impl MistTermApp {
                     self.app_settings.vault.managed_by_team_id = None;
                     let _ = self.app_settings.save();
                 }
+                Self::preferences_row_divider(ui, theme);
                 crate::ui::chrome::form_field_label(
                     ui,
                     theme,
@@ -957,6 +990,7 @@ impl MistTermApp {
                         .update_settings(self.app_settings.audit.clone());
                     let _ = self.app_settings.save();
                 }
+                Self::preferences_row_divider(ui, theme);
                 crate::ui::chrome::form_control_row(ui, theme, |ui| {
                     crate::ui::chrome::form_inline_label(
                         ui,
@@ -975,6 +1009,7 @@ impl MistTermApp {
                         let _ = self.app_settings.save();
                     }
                 });
+                Self::preferences_row_divider(ui, theme);
                 crate::ui::chrome::form_checkbox(
                     ui,
                     theme,
@@ -987,6 +1022,7 @@ impl MistTermApp {
                 );
                 // 团队 HTTP 上报由登录后的 configure_team_audit_sink 自动配置
                 // (URL / Bearer / team_id)，用户无需在偏好里手动维护。
+                Self::preferences_row_divider(ui, theme);
                 crate::ui::chrome::form_checkbox(
                     ui,
                     theme,
@@ -1094,7 +1130,7 @@ impl MistTermApp {
             "team",
             crate::i18n::tr(ctx, "Team platform", "团队平台"),
             label_color,
-            true,
+            false,
             |ui| {
                 let pref_w = layout_util::finite_content_width(ui);
                 ui.label(
@@ -1165,7 +1201,7 @@ impl MistTermApp {
                         self.notify_warn(Self::narrow_window_right_dock_hint(ctx, w));
                     }
                 }
-                ui.add_space(theme.spacing_panel_gap());
+                Self::preferences_row_divider(ui, theme);
                 ui.label(
                     RichText::new(crate::i18n::tr(
                         ctx,
