@@ -20,6 +20,11 @@ mod macos_ime;
 #[cfg(target_os = "macos")]
 pub mod macos_menu;
 
+// eframe 0.23 不重新导出该 trait。编译器对 `with_option_as_alt` 的建议导入是这一条；
+// `winit` 必须是 macOS 的直接依赖，否则 E0433，trait 也不在作用域（E0599）。
+#[cfg(target_os = "macos")]
+use winit::platform::macos::{OptionAsAlt, WindowBuilderExtMacOS};
+
 pub use app_name::APP_DISPLAY_NAME;
 pub use docs::{
     github_feature_request_url, github_new_issue_url, github_new_issue_url_with_body, DOCS_INDEX_URL,
@@ -83,7 +88,6 @@ pub fn run_gui() {
     #[cfg(target_os = "macos")]
     {
         options.fullsize_content = true;
-        use winit::platform::macos::{OptionAsAlt, WindowBuilderExtMacOS};
         options.window_builder = Some(Box::new(|builder| {
             builder.with_option_as_alt(OptionAsAlt::Both)
         }));

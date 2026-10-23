@@ -166,6 +166,9 @@ muda = "0.19"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
+# Option-as-Alt 需要 WindowBuilderExtMacOS。eframe 0.23 不重新导出 winit，
+# 只放在 [patch.crates-io] 时 `use winit::...` 会 E0433。版本与 eframe 的 winit 0.28.7 对齐。
+winit = { version = "0.28.7", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
