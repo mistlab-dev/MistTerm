@@ -9,6 +9,7 @@ use crate::core::batch_exec::{
 };
 use crate::core::{
     append_dynamic_forward_line, append_local_forward_line, append_remote_forward_line,
+    remove_dynamic_forward_line, remove_local_forward_line, remove_remote_forward_line,
     apply_vault_for_team, candidate_to_session, command_preview, default_ssh_config_path,
     expand_command_template, expand_fragment_command_stages, expand_rhai_blocks, gate_decision,
     is_already_imported, list_placeholder_keys, merge_rhai_context, parse_dynamic_forwards_text,
@@ -4621,6 +4622,9 @@ impl MistTermApp {
         if let Some(save) = self.port_forward_panel.take_pending_save() {
             self.apply_port_forward_save(save);
         }
+        if let Some(remove) = self.port_forward_panel.take_pending_remove() {
+            self.apply_port_forward_remove(remove);
+        }
         for audit in self.port_forward_panel.take_pending_audits() {
             self.record_port_forward_audit(audit);
         }
@@ -4687,6 +4691,29 @@ impl MistTermApp {
                 }
                 PortForwardKind::Dynamic(f) => {
                     append_dynamic_forward_line(&mut session.dynamic_forwards_text, &f);
+                }
+            });
+    }
+
+    /// 停止运行时转发后，把该转发从会话配置文本中删除（#91）：
+    /// 否则重连时 `terminal_connect_session` 重新解析 profile 文本，
+    /// 被用户停止的转发会静默复活。
+    fn apply_port_forward_remove(
+        &mut self,
+        remove: crate::ui::port_forward_panel::PortForwardRemoveRequest,
+    ) {
+        let kind = remove.kind;
+        let id = remove.session_profile_id;
+        self.session_manager
+            .patch_session(&id, |session| match kind {
+                PortForwardKind::Local(f) => {
+                    remove_local_forward_line(&mut session.local_forwards_text, &f);
+                }
+                PortForwardKind::Remote(f) => {
+                    remove_remote_forward_line(&mut session.remote_forwards_text, &f);
+                }
+                PortForwardKind::Dynamic(f) => {
+                    remove_dynamic_forward_line(&mut session.dynamic_forwards_text, &f);
                 }
             });
     }
