@@ -263,6 +263,195 @@ pub fn app_jk_search_armed(terminal_focused: bool) -> bool {
     !terminal_focused
 }
 
+/// Alt/Option（可带 Shift）、且没有 Ctrl / ⌘ 时，编码成 readline Meta（ESC 前缀）。
+///
+/// Ctrl+Alt（Windows 上的 AltGr、本机终端 Ctrl+Alt+T）和 ⌘⌥ 不走这里。
+/// 字母、数字、退格来自 `Key`。egui 0.23 没有句号等标点键，那些由 [`encode_alt_meta_text`] 处理。
+pub fn encode_alt_meta_key(key: Key, mods: Modifiers) -> Option<Vec<u8>> {
+    if !mods.alt || mods.ctrl || mods.command || mods.mac_cmd {
+        return None;
+    }
+    if key == Key::Backspace {
+        if mods.shift {
+            return None;
+        }
+        // 与普通 Backspace（0x7f）一致：M-DEL，readline 的 backward-kill-word。
+        return Some(vec![0x1b, 0x7f]);
+    }
+    let base = alt_meta_base_byte(key)?;
+    if base.is_ascii_digit() && mods.shift {
+        return None;
+    }
+    let byte = if mods.shift && base.is_ascii_alphabetic() {
+        base.to_ascii_uppercase()
+    } else {
+        base
+    };
+    Some(vec![0x1b, byte])
+}
+
+fn alt_meta_base_byte(key: Key) -> Option<u8> {
+    Some(match key {
+        Key::A => b'a',
+        Key::B => b'b',
+        Key::C => b'c',
+        Key::D => b'd',
+        Key::E => b'e',
+        Key::F => b'f',
+        Key::G => b'g',
+        Key::H => b'h',
+        Key::I => b'i',
+        Key::J => b'j',
+        Key::K => b'k',
+        Key::L => b'l',
+        Key::M => b'm',
+        Key::N => b'n',
+        Key::O => b'o',
+        Key::P => b'p',
+        Key::Q => b'q',
+        Key::R => b'r',
+        Key::S => b's',
+        Key::T => b't',
+        Key::U => b'u',
+        Key::V => b'v',
+        Key::W => b'w',
+        Key::X => b'x',
+        Key::Y => b'y',
+        Key::Z => b'z',
+        Key::Num0 => b'0',
+        Key::Num1 => b'1',
+        Key::Num2 => b'2',
+        Key::Num3 => b'3',
+        Key::Num4 => b'4',
+        Key::Num5 => b'5',
+        Key::Num6 => b'6',
+        Key::Num7 => b'7',
+        Key::Num8 => b'8',
+        Key::Num9 => b'9',
+        _ => return None,
+    })
+}
+
+/// Alt 按下时的单个 ASCII 可见字符（含空格）。`"."` 是 yank-last-arg。
+pub fn encode_alt_meta_text(text: &str) -> Option<Vec<u8>> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() {
+        return None;
+    }
+    if ch.is_ascii() && !ch.is_control() {
+        return Some(vec![0x1b, ch as u8]);
+    }
+    None
+}
+
+#[derive(Default)]
+struct AltMetaSent {
+    /// 已从 Key 发出的字母/数字（小写），用来丢掉同帧附带的 Text。
+    bases: Vec<u8>,
+    backspaces: usize,
+}
+
+/// 终端聚焦时把 Alt/Option 行编辑键编成 Meta 序列发给 PTY。
+///
+/// 按事件顺序发送，避免同一帧里先按句号再按退格时字节颠倒。
+/// 只应由终端键盘路径调用。失焦时这些键仍留给输入框，不在这里消费。
+pub fn forward_alt_meta_keys(i: &mut egui::InputState, mut send: impl FnMut(&[u8])) -> bool {
+    let state_mods = i.modifiers;
+    let rewrite_text =
+        state_mods.alt && !state_mods.ctrl && !state_mods.command && !state_mods.mac_cmd;
+    let mut sent = AltMetaSent::default();
+    let mut any = false;
+    let events = std::mem::take(&mut i.events);
+    let mut kept = Vec::with_capacity(events.len());
+    for event in events {
+        let keep = match event {
+            Event::Key {
+                key,
+                pressed: true,
+                repeat,
+                modifiers,
+            } => {
+                // 事件上有时不带修饰键（winit/Windows），这时以 InputState 为准。
+                let mods = if modifiers.alt
+                    || modifiers.ctrl
+                    || modifiers.command
+                    || modifiers.shift
+                    || modifiers.mac_cmd
+                {
+                    modifiers
+                } else if rewrite_text {
+                    state_mods
+                } else {
+                    kept.push(Event::Key {
+                        key,
+                        pressed: true,
+                        repeat,
+                        modifiers,
+                    });
+                    continue;
+                };
+                if let Some(bytes) = encode_alt_meta_key(key, mods) {
+                    if key == Key::Backspace {
+                        sent.backspaces += 1;
+                    } else if let Some(base) = bytes.get(1).copied() {
+                        sent.bases.push(base.to_ascii_lowercase());
+                    }
+                    send(&bytes);
+                    any = true;
+                    continue;
+                }
+                Some(Event::Key {
+                    key,
+                    pressed: true,
+                    repeat,
+                    modifiers,
+                })
+            }
+            Event::Text(text) => {
+                if sent.backspaces > 0 && (text == "\u{7f}" || text == "\u{8}") {
+                    sent.backspaces -= 1;
+                    continue;
+                }
+                if let Some(base) = single_ascii_base(&text) {
+                    if let Some(idx) = sent.bases.iter().position(|b| *b == base) {
+                        sent.bases.remove(idx);
+                        continue;
+                    }
+                }
+                if rewrite_text {
+                    // macOS 未把 Option 当 Alt 时，Option+字母会附带布局字符（如 ∫）。
+                    if text.chars().count() == 1 && !text.is_ascii() && !sent.bases.is_empty() {
+                        sent.bases.remove(0);
+                        continue;
+                    }
+                    if let Some(bytes) = encode_alt_meta_text(&text) {
+                        send(&bytes);
+                        any = true;
+                        continue;
+                    }
+                }
+                Some(Event::Text(text))
+            }
+            other => Some(other),
+        };
+        if let Some(event) = keep {
+            kept.push(event);
+        }
+    }
+    i.events = kept;
+    any
+}
+
+fn single_ascii_base(text: &str) -> Option<u8> {
+    let mut chars = text.chars();
+    let ch = chars.next()?;
+    if chars.next().is_some() || !ch.is_ascii() || ch.is_control() {
+        return None;
+    }
+    Some((ch as u8).to_ascii_lowercase())
+}
+
 /// 未提交的 IME 预编辑文本。只用于终端上的叠加绘制，不写入 PTY。
 /// 候选窗仍由系统输入法面板负责（egui 0.23 / winit 0.28 的 preedit 事件不含候选列表）。
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -595,6 +784,174 @@ mod tests {
     fn app_search_shortcuts_only_when_terminal_unfocused() {
         assert!(!app_jk_search_armed(true));
         assert!(app_jk_search_armed(false));
+    }
+
+    fn alt_only() -> Modifiers {
+        Modifiers {
+            alt: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn encode_alt_meta_readline_chords() {
+        assert_eq!(encode_alt_meta_key(Key::B, alt_only()).unwrap(), b"\x1bb");
+        assert_eq!(encode_alt_meta_key(Key::F, alt_only()).unwrap(), b"\x1bf");
+        assert_eq!(encode_alt_meta_key(Key::D, alt_only()).unwrap(), b"\x1bd");
+        assert_eq!(
+            encode_alt_meta_key(Key::Backspace, alt_only()).unwrap(),
+            b"\x1b\x7f"
+        );
+        assert_eq!(encode_alt_meta_text(".").unwrap(), b"\x1b.");
+        assert_eq!(
+            encode_alt_meta_key(
+                Key::B,
+                Modifiers {
+                    alt: true,
+                    shift: true,
+                    ..Default::default()
+                }
+            )
+            .unwrap(),
+            b"\x1bB"
+        );
+    }
+
+    #[test]
+    fn encode_alt_meta_skips_ctrl_and_command() {
+        let ctrl_alt = Modifiers {
+            ctrl: true,
+            alt: true,
+            command: true,
+            ..Default::default()
+        };
+        assert!(encode_alt_meta_key(Key::B, ctrl_alt).is_none());
+        assert!(encode_alt_meta_key(Key::T, ctrl_alt).is_none());
+        assert!(encode_alt_meta_key(
+            Key::B,
+            Modifiers {
+                command: true,
+                alt: true,
+                ..Default::default()
+            }
+        )
+        .is_none());
+        assert!(encode_alt_meta_key(Key::B, Modifiers::NONE).is_none());
+        assert!(encode_alt_meta_text("ab").is_none());
+        assert!(encode_alt_meta_text("∫").is_none());
+    }
+
+    #[test]
+    fn forward_alt_meta_sends_word_motion_and_drops_option_glyph() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.modifiers = alt_only();
+                i.events.push(key_press(Key::B, alt_only()));
+                i.events.push(Event::Text("∫".into()));
+                let mut sent = Vec::new();
+                assert!(forward_alt_meta_keys(i, |b| sent.extend_from_slice(b)));
+                assert_eq!(sent, b"\x1bb");
+                assert!(
+                    !i.events.iter().any(|e| matches!(e, Event::Text(_))),
+                    "Option glyph must not also be written to the PTY"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn forward_alt_meta_period_yank_and_backspace_kill_word() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.modifiers = alt_only();
+                i.events.push(Event::Text(".".into()));
+                i.events.push(Event::Text(".".into()));
+                i.events.push(key_press(Key::Backspace, alt_only()));
+                let mut sent = Vec::new();
+                assert!(forward_alt_meta_keys(i, |b| sent.extend_from_slice(b)));
+                assert_eq!(sent, b"\x1b.\x1b.\x1b\x7f");
+            });
+        });
+    }
+
+    #[test]
+    fn forward_alt_meta_letter_text_is_not_sent_twice() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.modifiers = alt_only();
+                i.events.push(key_press(Key::F, alt_only()));
+                i.events.push(Event::Text("f".into()));
+                let mut sent = Vec::new();
+                assert!(forward_alt_meta_keys(i, |b| sent.extend_from_slice(b)));
+                assert_eq!(sent, b"\x1bf");
+            });
+        });
+    }
+
+    #[test]
+    fn forward_alt_meta_uses_input_state_when_key_event_omits_modifiers() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.modifiers = alt_only();
+                i.events.push(key_press(Key::D, Modifiers::NONE));
+                let mut sent = Vec::new();
+                assert!(forward_alt_meta_keys(i, |b| sent.extend_from_slice(b)));
+                assert_eq!(sent, b"\x1bd");
+                assert!(!i.key_pressed(Key::D));
+            });
+        });
+    }
+
+    #[test]
+    fn forward_alt_meta_does_not_take_ctrl_or_plain_keys() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                let ctrl = Modifiers {
+                    ctrl: true,
+                    command: true,
+                    ..Default::default()
+                };
+                i.modifiers = ctrl;
+                i.events.push(key_press(Key::J, ctrl));
+                i.events.push(key_press(Key::K, ctrl));
+                let mut sent = Vec::new();
+                assert!(!forward_alt_meta_keys(i, |b| sent.extend_from_slice(b)));
+                assert!(sent.is_empty());
+                assert!(i.key_pressed(Key::J));
+                assert!(i.key_pressed(Key::K));
+            });
+            ui.input_mut(|i| {
+                i.events.clear();
+                let ctrl_alt = Modifiers {
+                    ctrl: true,
+                    alt: true,
+                    command: true,
+                    ..Default::default()
+                };
+                i.modifiers = ctrl_alt;
+                i.events.push(key_press(Key::B, ctrl_alt));
+                let mut sent = Vec::new();
+                assert!(!forward_alt_meta_keys(i, |b| sent.extend_from_slice(b)));
+                assert!(
+                    i.key_pressed(Key::B),
+                    "Ctrl+Alt+B stays available (AltGr / app)"
+                );
+            });
+            ui.input_mut(|i| {
+                i.events.clear();
+                i.modifiers = Modifiers::NONE;
+                i.events.push(key_press(Key::B, Modifiers::NONE));
+                i.events.push(Event::Text("b".into()));
+                let mut sent = Vec::new();
+                assert!(!forward_alt_meta_keys(i, |b| sent.extend_from_slice(b)));
+                assert!(
+                    i.events
+                        .iter()
+                        .any(|e| matches!(e, Event::Text(t) if t == "b")),
+                    "plain b is not a meta sequence"
+                );
+            });
+        });
     }
 
     #[test]
