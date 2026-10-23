@@ -153,7 +153,9 @@ impl MistTermApp {
         .id_source(egui::Id::new(("pref_section", section_id)))
         .default_open(default_open)
         .show(ui, |ui| {
-            layout_util::set_width_to_available(ui);
+            // 卡片必须拉满折叠区可用宽，避免跟着内容长短左右不齐。
+            let outer_w = layout_util::set_width_to_available(ui);
+            ui.set_min_width(outer_w);
             egui::Frame::none()
                 .fill(egui::Color32::TRANSPARENT)
                 // 发丝线：细宽 + 半透明描边（HiDPI 上仍可读但不抢）
@@ -167,7 +169,10 @@ impl MistTermApp {
                     theme.spacing_search_input_y(),
                 ))
                 .show(ui, |ui| {
-                    layout_util::set_width_to_available(ui);
+                    let inner_w = layout_util::set_width_to_available(ui);
+                    ui.set_min_width(inner_w);
+                    // 占住整行宽，否则 Frame 会按子控件收缩。
+                    ui.allocate_exact_size(egui::vec2(inner_w, 0.0), egui::Sense::hover());
                     ui.spacing_mut().item_spacing.y = theme.spacing_panel_gap();
                     body(ui);
                 });
