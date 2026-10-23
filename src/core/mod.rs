@@ -17,6 +17,7 @@ pub mod fragment_usage_log;
 pub mod fragment_recommendations;
 pub mod knowledge;
 pub mod runbook_recall;
+pub mod display_link;
 pub mod agent;
 pub mod batch_exec;
 pub mod controlplane;
