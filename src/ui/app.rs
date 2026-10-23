@@ -3032,6 +3032,8 @@ impl MistTermApp {
         if idx < self.tabs.len() {
             self.active_tab = Some(idx);
             self.selected_session_id = Some(self.tabs[idx].primary_session_id());
+            // #93：聚焦即清除标签注意提示。
+            self.tabs[idx].clear_attention();
         }
     }
 
@@ -8383,10 +8385,32 @@ impl eframe::App for MistTermApp {
         let active_tab = self.active_tab;
         let mut inactive_tab_vte_dirty = false;
         for (ti, tab) in self.tabs.iter_mut().enumerate() {
+            let tab_focused = active_tab == Some(ti);
             for (pi, pane) in tab.panes.iter_mut().enumerate() {
-                let focused = active_tab == Some(ti) && tab.active_pane == pi;
+                let focused = tab_focused && tab.active_pane == pi;
                 if !focused && pane.terminal.pump_ssh_only(&theme) {
                     inactive_tab_vte_dirty = true;
+                }
+            }
+            // #93：任一 pane 的 BEL / SessionEnded → 未聚焦 tab 置 needs_attention。
+            // 活动标签响铃/结束不持久角标（用户已在看）。
+            if !tab_focused {
+                let mut attention = false;
+                for pane in tab.panes.iter_mut() {
+                    if pane.terminal.take_pending_bell()
+                        || pane.terminal.take_pending_attention_ended()
+                    {
+                        attention = true;
+                    }
+                }
+                if attention {
+                    tab.needs_attention = true;
+                }
+            } else {
+                // 活动标签：吞掉 pending，避免切走后再冒出来。
+                for pane in tab.panes.iter_mut() {
+                    let _ = pane.terminal.take_pending_bell();
+                    let _ = pane.terminal.take_pending_attention_ended();
                 }
             }
         }

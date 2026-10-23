@@ -5,12 +5,28 @@ use crate::terminal::style::{
     is_user_warn_line,
 };
 use egui::{Color32, FontId, TextFormat, text::LayoutJob};
-use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::{point_to_viewport, Config, Term};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{CursorShape, Processor};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+/// VTE `Event::Bell` → sticky；`send_event` 仅 `&self`，故用共享原子。
+#[derive(Clone)]
+struct BellListener {
+    pending: Arc<AtomicBool>,
+}
+
+impl EventListener for BellListener {
+    fn send_event(&self, event: Event) {
+        if matches!(event, Event::Bell) {
+            self.pending.store(true, Ordering::Relaxed);
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 struct TermSize {
@@ -69,12 +85,14 @@ fn inclusive_end_from_exclusive(start: Point, end: Point, columns: usize) -> Opt
 
 /// 终端模拟器（由 alacritty_terminal 驱动）
 pub struct Terminal {
-    term: Term<VoidListener>,
+    term: Term<BellListener>,
     parser: Processor,
     width: usize,
     height: usize,
     /// PTY 有字节写入 VTE 时递增；用于 UI 跳过未变更帧的整屏 `LayoutJob` 重建（FUNCTIONAL_SPEC §2.3.1）。
     content_epoch: u64,
+    /// 与 `BellListener` 共享；`feed` 解析到 BEL 后置位，宿主 `take`。
+    bell_pending: Arc<AtomicBool>,
 }
 
 impl Default for Terminal {
@@ -88,14 +106,28 @@ impl Terminal {
         let width = width.clamp(20, 512);
         let height = height.clamp(5, 256);
         let size = TermSize::new(width, height);
+        let bell_pending = Arc::new(AtomicBool::new(false));
         // FUNCTIONAL_SPEC §2.4：`alacritty_terminal` 默认 `scrolling_history` 已为 10000，与「保留最后 10000 行」一致。
         Self {
-            term: Term::new(Config::default(), &size, VoidListener),
+            term: Term::new(
+                Config::default(),
+                &size,
+                BellListener {
+                    pending: Arc::clone(&bell_pending),
+                },
+            ),
             parser: Processor::default(),
             width,
             height,
             content_epoch: 0,
+            bell_pending,
         }
+    }
+
+    /// 取走并清除一次 BEL（#93 未聚焦标签提示）。
+    #[inline]
+    pub fn take_pending_bell(&self) -> bool {
+        self.bell_pending.swap(false, Ordering::Relaxed)
     }
 
     /// 是否处于 DEC 备用屏幕（vim / less / top 等全屏程序）。
@@ -951,6 +983,15 @@ mod tests {
         let start = Point::new(hit.line, Column(0));
         let end = Point::new(hit.line, Column(t.width));
         assert_eq!(t.text_in_point_range(start, end), "a\tb");
+    }
+
+    #[test]
+    fn feed_bel_sets_pending_bell() {
+        let mut t = Terminal::new(40, 10);
+        assert!(!t.take_pending_bell());
+        t.feed(b"hello\x07");
+        assert!(t.take_pending_bell());
+        assert!(!t.take_pending_bell());
     }
 }
 
