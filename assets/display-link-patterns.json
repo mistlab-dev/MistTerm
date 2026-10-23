@@ -1,0 +1,39 @@
+{
+  "version": "1.0.0",
+  "scope": "display-link",
+  "match_mode": "search",
+  "patterns": [
+    {
+      "id": "DL-PATH-001",
+      "pattern": "(?:^|[\\s(\\[\"'««<{])(/?(?:~|\\./|\\.\\./|/etc|/var|/opt|/usr|/home|/root|/tmp)(?:/[A-Za-z0-9._-]+)+)",
+      "category": "path",
+      "action": "sftp-open",
+      "added": "1.2.29",
+      "priority": 40
+    },
+    {
+      "id": "DL-ERR-001",
+      "pattern": "\\b(ECONNREFUSED|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|EACCES|EPERM|ENOSPC|ENOENT)\\b",
+      "category": "errno",
+      "action": "runbook-recall",
+      "added": "1.2.29",
+      "priority": 20
+    },
+    {
+      "id": "DL-IPV4-001",
+      "pattern": "\\b(?:(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\.){3}(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)\\b",
+      "category": "ip",
+      "action": "copy-or-connect",
+      "added": "1.2.29",
+      "priority": 30
+    },
+    {
+      "id": "DL-URL-001",
+      "pattern": "https?://[^\\s\\)\\]>\\\"']{4,}",
+      "category": "url",
+      "action": "browser-open",
+      "added": "1.2.29",
+      "priority": 10
+    }
+  ]
+}
