@@ -2375,10 +2375,15 @@ impl MistTermApp {
 
     fn poll_connect_audit_from_tabs(&mut self, ctx: &egui::Context) {
         let mut toast_errors: Vec<(usize, String)> = Vec::new();
+        let mut display_link_sftp: Option<String> = None;
         for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
             for pane in tab.panes.iter_mut() {
                 if let Some(err) = pane.terminal.take_pending_toast_error() {
                     toast_errors.push((tab_idx, err));
+                }
+                // display-link 点击跳转 SFTP（#90）：收集后在循环外开面板并定位到路径。
+                if display_link_sftp.is_none() {
+                    display_link_sftp = pane.terminal.take_pending_display_link_sftp();
                 }
                 if let Some((ok, host)) = pane.terminal.take_connect_audit() {
                     let is_local = pane.terminal.is_local_shell() || host == "local";
@@ -2423,6 +2428,9 @@ impl MistTermApp {
                 continue;
             }
             self.notify_ssh_reconnect_error(ctx, tab_idx, err);
+        }
+        if let Some(path) = display_link_sftp {
+            self.open_display_link_sftp(ctx, &path);
         }
         self.poll_connection_placeholder_actions(ctx);
         self.dismiss_stale_reconnect_toast_if_needed();
@@ -4548,6 +4556,33 @@ impl MistTermApp {
             self.sftp_last_tab = None;
             self.sftp_panel.request_list_on_open();
         }
+    }
+
+    /// display-link 点击跳转 SFTP（#90）：预置目标目录后开面板。
+    /// 借用 `request_list_on_open` 的首次加载路径：先设 cwd，打开时 spawn_list 直达。
+    fn open_display_link_sftp(&mut self, ctx: &egui::Context, path: &str) {
+        if self.current_terminal().is_some_and(|t| t.is_local_shell()) {
+            self.notify_warn(crate::i18n::tr(
+                ctx,
+                "SFTP needs an SSH session — local shell tabs are unsupported.",
+                "SFTP 需要 SSH 会话，本机终端标签不支持。",
+            ));
+            return;
+        }
+        if !self.ensure_right_dock_allowed_or_warn(ctx) {
+            return;
+        }
+        // 目录归一化：去掉末尾斜杠；把「含文件名」的路径缩到父目录（识别规则仅匹配目录样式路径，这里只防御）。
+        let mut dir = path.trim().trim_end_matches('/').to_string();
+        if dir.is_empty() {
+            dir = "/".into();
+        }
+        if !self.show_sftp_panel {
+            self.open_right_dock_panel(ActiveRightDock::Sftp);
+            self.sftp_last_tab = None;
+        }
+        self.sftp_panel.jump_to_remote_dir(std::path::PathBuf::from(dir));
+        self.sftp_panel.request_list_on_open();
     }
 
     /// 切换右侧命令片段侧栏。
