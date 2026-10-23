@@ -1204,12 +1204,14 @@ fn pointer_hovers_tab_close_slot(ctx: &egui::Context, inner: egui::Rect, close_s
         .is_some_and(|p| close_rect.contains(p))
 }
 
+/// `needs_attention`：#93 未聚焦标签有 BEL / SessionEnded 时画 accent 圆点。
 pub fn session_tab_chip(
     ui: &mut Ui,
     theme: &Theme,
     label: &str,
     active: bool,
     online: bool,
+    needs_attention: bool,
     show_close: bool,
     env_color: Option<egui::Color32>,
 ) -> SessionTabChipResult {
@@ -1310,13 +1312,16 @@ pub fn session_tab_chip(
     // 圆点/标题/× 都按 tab 矩形的垂直中线绝对定位(标题按字形墨迹居中)，
     // 不靠嵌套 horizontal 的行高推算，避免 macOS 标题栏里内容偏下。
     let cy = rect.center().y;
-    let status_color = if online {
-        theme.green_color()
+    // 未聚焦且需注意：accent 圆点盖过在线色；聚焦标签不显示（状态已清）。
+    let (status_color, status_r) = if needs_attention && !active {
+        (theme.accent_color(), 3.0)
+    } else if online {
+        (theme.green_color(), 2.5)
     } else {
-        theme.color_tab_offline_dot()
+        (theme.color_tab_offline_dot(), 2.5)
     };
     let dot_center = egui::pos2(inner.min.x + 2.5, cy);
-    ui.painter().circle_filled(dot_center, 2.5, status_color);
+    ui.painter().circle_filled(dot_center, status_r, status_color);
     let ink = label_galley
         .rows
         .first()

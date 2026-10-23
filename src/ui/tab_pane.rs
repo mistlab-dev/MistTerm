@@ -138,6 +138,8 @@ pub struct TerminalTab {
     pub drag_source_pane: Option<usize>,
     /// 开着时，当前窗格的键入会同时发到本标签的其它窗格。
     pub broadcast_input: bool,
+    /// #93：未聚焦时 BEL / SessionEnded 聚合提示；聚焦该标签时清除。
+    pub needs_attention: bool,
 }
 
 impl TerminalTab {
@@ -148,7 +150,12 @@ impl TerminalTab {
             panes: vec![pane],
             drag_source_pane: None,
             broadcast_input: false,
+            needs_attention: false,
         }
+    }
+
+    pub fn clear_attention(&mut self) {
+        self.needs_attention = false;
     }
 
     pub fn display_title(&self) -> String {
