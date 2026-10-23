@@ -82,48 +82,36 @@ impl CloudSyncPanel {
 
     fn paint_capability_banner(ui: &mut egui::Ui, theme: &Theme, lang: UiLanguage) {
         let loc = i18n::Locale::from(lang);
-        egui::Frame::none()
-            .fill(theme.color_subtle_inset_fill())
-            .rounding(theme.radius_list_item())
-            .inner_margin(egui::Margin::symmetric(10.0, 8.0))
-            .show(ui, |ui| {
-                ui.label(
-                    chrome::rich_caption(
-                        theme,
-                        loc.tr(
-                            "Ready",
-                            "当前可用",
-                        ),
-                    )
-                        .strong()
-                        .color(theme.green_color()),
-                );
-                ui.label(
-                    chrome::rich_caption(
-                        theme,
-                        loc.tr(
-                            "Export / import a folder pack: sessions, fragments, themes, encrypted credentials.",
-                            "手动导出 / 导入文件夹包：会话、片段、主题、凭证加密文件。",
-                        ),
-                    ),
-                );
-                ui.add_space(4.0);
-                ui.label(
-                    chrome::rich_caption(
-                        theme,
-                        loc.tr("Not connected yet", "尚未接入"),
-                    )
-                        .strong()
-                        .color(theme.text_tertiary()),
-                );
-                ui.label(chrome::rich_caption(
+        chrome::form_field_label(ui, theme, loc.tr("Local pack", "本地同步包"));
+        chrome::settings_elevated_card(ui, theme, |ui| {
+            ui.label(
+                chrome::rich_caption(theme, loc.tr("Ready", "当前可用"))
+                    .strong()
+                    .color(theme.green_color()),
+            );
+            ui.label(chrome::rich_caption(
+                theme,
+                loc.tr(
+                    "Export / import a folder pack: sessions, fragments, themes, encrypted credentials.",
+                    "手动导出 / 导入文件夹包：会话、片段、主题、凭证加密文件。",
+                ),
+            ));
+            chrome::settings_row_divider(ui, theme);
+            ui.label(
+                chrome::rich_caption(theme, loc.tr("Not connected yet", "尚未接入"))
+                    .color(theme.text_tertiary()),
+            );
+            ui.label(
+                chrome::rich_caption(
                     theme,
                     loc.tr(
                         "Team account sign-in below; pack export does not include team tokens.",
                         "下方可登录团队账户；同步包不含 team_tokens(安全)。",
                     ),
-                ));
-            });
+                )
+                .color(theme.color_form_hint()),
+            );
+        });
     }
 
     fn paint_sync_status(ui: &mut egui::Ui, theme: &Theme, settings: &CloudSyncSettings, lang: UiLanguage) {
@@ -655,248 +643,281 @@ impl CloudSyncPanel {
                     *close_panel = true;
                 }
                 chrome::right_dock_header_divider(ui, theme);
-                ui.label(chrome::rich_caption(
-                    theme,
-                    i18n::tr(
-                        ctx,
-                        "Local sync pack: back up / restore config between folders (not online cloud storage)",
-                        "本地同步包：在文件夹间备份/恢复配置(非在线云盘)",
-                    ),
-                ));
-                ui.add_space(theme.spacing_sm());
 
-                let cloud_scroll_h = layout_util::scroll_area_fill_height(ui, 140.0);
+                let cloud_scroll_h = layout_util::scroll_area_fill_height(ui, 8.0);
                 egui::ScrollArea::vertical()
+                    .id_source("cloud_sync_panel_scroll")
+                    .auto_shrink([false, true])
                     .max_height(cloud_scroll_h)
                     .show(ui, |ui| {
-                        ui.set_width(ui.max_rect().width());
+                        let content_w = layout_util::set_width_to_available(ui);
+                        ui.set_min_width(content_w);
+                        ui.spacing_mut().item_spacing.y = 0.0;
+
                         Self::paint_capability_banner(ui, theme, lang);
 
-                        ui.add_space(theme.spacing_panel_gap());
                         if let Some(service) = team_service.as_mut() {
-                          if let Some(form) = team_form.as_mut() {
-                            if let Some(settings) = app_settings.as_mut() {
-                            chrome::form_field_label(
-                                ui,
-                                theme,
-                                i18n::tr(ctx, "Team account", "团队账户"),
-                            );
-                            let pref_w = ui.available_width();
-                            let action = paint_team_controls(
-                                ui,
-                                ctx,
-                                theme,
-                                service,
-                                form,
-                                deps.audit,
-                                pref_w,
-                                "cloud_sync_team",
-                            );
-                            if action != TeamUiAction::None {
-                                team_action = action;
+                            if let Some(form) = team_form.as_mut() {
+                                if let Some(settings) = app_settings.as_mut() {
+                                    chrome::form_field_label(
+                                        ui,
+                                        theme,
+                                        i18n::tr(ctx, "Team account", "团队账户"),
+                                    );
+                                    chrome::settings_elevated_card(ui, theme, |ui| {
+                                        let action = paint_team_controls(
+                                            ui,
+                                            ctx,
+                                            theme,
+                                            service,
+                                            form,
+                                            deps.audit,
+                                            content_w
+                                                - theme.spacing_search_input_x().max(14.0) * 2.0,
+                                            "cloud_sync_team",
+                                        );
+                                        if action != TeamUiAction::None {
+                                            team_action = action;
+                                        }
+                                        if matches!(action, TeamUiAction::LoggedOut) {
+                                            let _ = settings.save();
+                                        }
+                                    });
+                                }
                             }
-                            if matches!(action, TeamUiAction::LoggedOut) {
-                                let _ = settings.save();
-                            }
-                            ui.add_space(theme.spacing_panel_gap());
-                            }
-                          }
                         }
 
-                        ui.add_space(theme.spacing_panel_gap());
-                        chrome::form_field_label(ui, theme, i18n::tr(ctx, "Pack contents", "包内包含项"));
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
-                            if chrome::panel_action_icon_button(
-                                ui,
-                                theme,
-                                crate::ui::icons::IconId::Check,
-                                i18n::tr(ctx, "Select all", "全选"),
-                            )
-                                .clicked()
-                            {
-                                self.settings.sync_sessions = true;
-                                self.settings.sync_fragments = true;
-                                self.settings.sync_themes = true;
-                                self.settings.sync_credentials = true;
-                                self.settings.sync_shortcuts = true;
-                                self.settings.sync_team_config = true;
-                            }
-                            if chrome::panel_action_icon_button(
-                                ui,
-                                theme,
-                                crate::ui::icons::IconId::Server,
-                                i18n::tr(ctx, "Core only", "仅核心"),
-                            )
-                                .clicked()
-                            {
-                                self.settings.sync_sessions = true;
-                                self.settings.sync_fragments = true;
-                                self.settings.sync_themes = true;
-                                self.settings.sync_credentials = false;
-                                self.settings.sync_shortcuts = false;
-                                self.settings.sync_team_config = false;
-                            }
-                            if chrome::panel_action_icon_button(
-                                ui,
-                                theme,
-                                crate::ui::icons::IconId::Trash,
-                                i18n::tr(ctx, "Clear", "清空"),
-                            )
-                                .clicked()
-                            {
-                                self.settings.sync_sessions = false;
-                                self.settings.sync_fragments = false;
-                                self.settings.sync_themes = false;
-                                self.settings.sync_credentials = false;
-                                self.settings.sync_shortcuts = false;
-                                self.settings.sync_team_config = false;
-                            }
-                        });
-                        ui.add_space(4.0);
-                        ui.columns(2, |cols| {
-                            chrome::form_checkbox(
-                                &mut cols[0],
-                                theme,
-                                &mut self.settings.sync_sessions,
-                                loc.tr("Sessions", "会话"),
-                            );
-                            chrome::form_checkbox(
-                                &mut cols[1],
-                                theme,
-                                &mut self.settings.sync_fragments,
-                                loc.tr("Fragments", "命令片段"),
-                            );
-                            chrome::form_checkbox(
-                                &mut cols[0],
-                                theme,
-                                &mut self.settings.sync_themes,
-                                loc.tr("Themes", "主题"),
-                            );
-                            chrome::form_checkbox(
-                                &mut cols[1],
-                                theme,
-                                &mut self.settings.sync_credentials,
-                                loc.tr("Credentials", "凭证库"),
-                            );
-                            chrome::form_checkbox(
-                                &mut cols[0],
-                                theme,
-                                &mut self.settings.sync_shortcuts,
-                                loc.tr("Preferences (settings.json)", "偏好设置 (settings.json)"),
-                            );
-                            chrome::form_checkbox(
-                                &mut cols[1],
-                                theme,
-                                &mut self.settings.sync_team_config,
-                                loc.tr("Team config (no tokens)", "团队配置(不含令牌)"),
-                            );
-                        });
-                        ui.label(chrome::rich_caption(
-                            theme,
-                            loc.tr(
-                                "Credentials are encrypted copies; same device key required on another machine.",
-                                "凭证为加密文件副本，换机需相同设备密钥。",
-                            ),
-                        )
-                        .weak());
-                        ui.label(chrome::rich_caption(
-                            theme,
-                            loc.tr(
-                                "Sessions in the pack are encrypted; passwords stay in the envelope. Team tokens are never exported.",
-                                "包内 sessions 为加密信封；team_tokens 永不导出。换机需相同设备密钥。",
-                            ),
-                        )
-                        .weak());
-
-                        ui.add_space(theme.spacing_panel_gap());
-                        chrome::form_control_row(ui, theme, |ui| {
-                            chrome::form_inline_label(
-                                ui,
-                                theme,
-                                loc.tr("Every (min)", "每隔(分钟)"),
-                            );
-                            chrome::form_u32_stepper(
-                                ui,
-                                theme,
-                                egui::Id::new("cloud_sync_freq_min"),
-                                &mut self.settings.frequency_minutes,
-                                0..=24 * 60,
-                                5,
-                            );
-                            ui.label(chrome::rich_caption(
-                                theme,
-                                loc.tr("0 = manual only", "填 0 表示仅手动同步"),
-                            ));
-                        });
-                        ui.label(chrome::rich_caption(
-                            theme,
-                            loc.tr(
-                                "Interval applies to team fragment sync when signed in; local pack export is manual only.",
-                                "间隔仅用于已登录时的团队片段同步；本地同步包请用手动导出/导入。",
-                            ),
-                        )
-                        .weak());
-
-                        ui.add_space(theme.spacing_panel_gap());
                         chrome::form_field_label(
                             ui,
                             theme,
-                            loc.tr("Fragment import", "导入片段"),
+                            i18n::tr(ctx, "Pack contents", "包内包含项"),
                         );
-                        chrome::form_checkbox(
+                        chrome::settings_elevated_card(ui, theme, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 6.0;
+                                if chrome::panel_action_icon_button(
+                                    ui,
+                                    theme,
+                                    crate::ui::icons::IconId::Check,
+                                    i18n::tr(ctx, "Select all", "全选"),
+                                )
+                                .clicked()
+                                {
+                                    self.settings.sync_sessions = true;
+                                    self.settings.sync_fragments = true;
+                                    self.settings.sync_themes = true;
+                                    self.settings.sync_credentials = true;
+                                    self.settings.sync_shortcuts = true;
+                                    self.settings.sync_team_config = true;
+                                }
+                                if chrome::panel_action_icon_button(
+                                    ui,
+                                    theme,
+                                    crate::ui::icons::IconId::Server,
+                                    i18n::tr(ctx, "Core only", "仅核心"),
+                                )
+                                .clicked()
+                                {
+                                    self.settings.sync_sessions = true;
+                                    self.settings.sync_fragments = true;
+                                    self.settings.sync_themes = true;
+                                    self.settings.sync_credentials = false;
+                                    self.settings.sync_shortcuts = false;
+                                    self.settings.sync_team_config = false;
+                                }
+                                if chrome::panel_action_icon_button(
+                                    ui,
+                                    theme,
+                                    crate::ui::icons::IconId::Trash,
+                                    i18n::tr(ctx, "Clear", "清空"),
+                                )
+                                .clicked()
+                                {
+                                    self.settings.sync_sessions = false;
+                                    self.settings.sync_fragments = false;
+                                    self.settings.sync_themes = false;
+                                    self.settings.sync_credentials = false;
+                                    self.settings.sync_shortcuts = false;
+                                    self.settings.sync_team_config = false;
+                                }
+                            });
+                            ui.add_space(theme.spacing_xs());
+                            ui.columns(2, |cols| {
+                                chrome::form_checkbox(
+                                    &mut cols[0],
+                                    theme,
+                                    &mut self.settings.sync_sessions,
+                                    loc.tr("Sessions", "会话"),
+                                );
+                                chrome::form_checkbox(
+                                    &mut cols[1],
+                                    theme,
+                                    &mut self.settings.sync_fragments,
+                                    loc.tr("Fragments", "命令片段"),
+                                );
+                                chrome::form_checkbox(
+                                    &mut cols[0],
+                                    theme,
+                                    &mut self.settings.sync_themes,
+                                    loc.tr("Themes", "主题"),
+                                );
+                                chrome::form_checkbox(
+                                    &mut cols[1],
+                                    theme,
+                                    &mut self.settings.sync_credentials,
+                                    loc.tr("Credentials", "凭证库"),
+                                );
+                                chrome::form_checkbox(
+                                    &mut cols[0],
+                                    theme,
+                                    &mut self.settings.sync_shortcuts,
+                                    loc.tr(
+                                        "Preferences (settings.json)",
+                                        "偏好设置 (settings.json)",
+                                    ),
+                                );
+                                chrome::form_checkbox(
+                                    &mut cols[1],
+                                    theme,
+                                    &mut self.settings.sync_team_config,
+                                    loc.tr("Team config (no tokens)", "团队配置(不含令牌)"),
+                                );
+                            });
+                            chrome::settings_row_divider(ui, theme);
+                            ui.label(
+                                chrome::rich_caption(
+                                    theme,
+                                    loc.tr(
+                                        "Credentials are encrypted copies; same device key required on another machine.",
+                                        "凭证为加密文件副本，换机需相同设备密钥。",
+                                    ),
+                                )
+                                .color(theme.color_form_hint()),
+                            );
+                            ui.label(
+                                chrome::rich_caption(
+                                    theme,
+                                    loc.tr(
+                                        "Sessions in the pack are encrypted; passwords stay in the envelope. Team tokens are never exported.",
+                                        "包内 sessions 为加密信封；team_tokens 永不导出。换机需相同设备密钥。",
+                                    ),
+                                )
+                                .color(theme.color_form_hint()),
+                            );
+                        });
+
+                        chrome::form_field_label(
                             ui,
                             theme,
-                            &mut self.merge_fragments_on_package_import,
-                            loc.tr("Merge with existing library (skip duplicate ids)", "与现有库合并(按 id 跳过重复)"),
+                            loc.tr("Schedule & import", "间隔与导入"),
                         );
-                        ui.label(chrome::rich_caption(
+                        chrome::settings_elevated_card(ui, theme, |ui| {
+                            chrome::form_control_row(ui, theme, |ui| {
+                                chrome::form_inline_label(
+                                    ui,
+                                    theme,
+                                    loc.tr("Every (min)", "每隔(分钟)"),
+                                );
+                                chrome::form_u32_stepper(
+                                    ui,
+                                    theme,
+                                    egui::Id::new("cloud_sync_freq_min"),
+                                    &mut self.settings.frequency_minutes,
+                                    0..=24 * 60,
+                                    5,
+                                );
+                                ui.label(chrome::rich_caption(
+                                    theme,
+                                    loc.tr("0 = manual only", "填 0 表示仅手动同步"),
+                                ));
+                            });
+                            ui.label(
+                                chrome::rich_caption(
+                                    theme,
+                                    loc.tr(
+                                        "Interval applies to team fragment sync when signed in; local pack export is manual only.",
+                                        "间隔仅用于已登录时的团队片段同步；本地同步包请用手动导出/导入。",
+                                    ),
+                                )
+                                .color(theme.color_form_hint()),
+                            );
+                            chrome::settings_row_divider(ui, theme);
+                            chrome::form_checkbox(
+                                ui,
+                                theme,
+                                &mut self.merge_fragments_on_package_import,
+                                loc.tr(
+                                    "Merge with existing library (skip duplicate ids)",
+                                    "与现有库合并(按 id 跳过重复)",
+                                ),
+                            );
+                            ui.label(
+                                chrome::rich_caption(
+                                    theme,
+                                    loc.tr(
+                                        "When off, the whole library is replaced. Session/credential import may overwrite local files.",
+                                        "关闭上项则整库替换。会话/凭证导入可能覆盖本机文件。",
+                                    ),
+                                )
+                                .color(theme.color_form_hint()),
+                            );
+                        });
+
+                        chrome::form_field_label(
+                            ui,
                             theme,
-                            loc.tr(
-                                "When off, the whole library is replaced. Session/credential import may overwrite local files.",
-                                "关闭上项则整库替换。会话/凭证导入可能覆盖本机文件。",
-                            ),
-                        )
-                        .weak());
-
-                        ui.add_space(theme.spacing_panel_gap());
-                        Self::paint_sync_status(ui, theme, &self.settings, lang);
-
-                        ui.add_space(theme.spacing_panel_gap());
-                        ui.vertical(|ui| {
-                            ui.spacing_mut().item_spacing.y = 6.0;
-                            if chrome::panel_action_icon_button(
-                                ui,
-                                theme,
-                                crate::ui::icons::IconId::Check,
-                                loc.tr("Save selection & interval", "保存勾选与间隔"),
-                            )
-                            .clicked() {
-                                self.save_settings(lang);
-                            }
-                            if chrome::panel_action_primary_icon_button(
-                                ui,
-                                theme,
-                                crate::ui::icons::IconId::Upload,
-                                loc.tr("Export sync pack…", "导出同步包…"),
-                            )
-                            .on_hover_text(loc.tr(
-                                "Create mistterm-sync-timestamp folder and copy selected files",
-                                "新建 mistterm-sync-时间戳 目录并复制勾选文件",
-                            ))
-                            .clicked()
-                            {
-                                self.run_export(deps, lang);
-                            }
-                            if chrome::panel_action_icon_button(
-                                ui,
-                                theme,
-                                crate::ui::icons::IconId::Package,
-                                loc.tr("Import from sync pack…", "从同步包导入…"),
-                            )
-                            .clicked() {
-                                self.pick_import_folder(deps, lang, &mut team_service);
-                            }
+                            loc.tr("Actions", "操作"),
+                        );
+                        chrome::settings_elevated_card(ui, theme, |ui| {
+                            Self::paint_sync_status(ui, theme, &self.settings, lang);
+                            chrome::settings_row_divider(ui, theme);
+                            // 三枚操作按钮通栏等分同一行。
+                            let gap = theme.spacing_sm();
+                            let third = ((ui.available_width() - gap * 2.0) / 3.0)
+                                .max(theme.size_control_btn_min_w());
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = gap;
+                                if chrome::panel_action_button_with_icon_ex_min_w(
+                                    ui,
+                                    theme,
+                                    crate::ui::icons::IconId::Check,
+                                    loc.tr("Save selection & interval", "保存勾选与间隔"),
+                                    true,
+                                    third,
+                                )
+                                .clicked()
+                                {
+                                    self.save_settings(lang);
+                                }
+                                if chrome::panel_action_primary_button_with_icon_ex_min_w(
+                                    ui,
+                                    theme,
+                                    crate::ui::icons::IconId::Upload,
+                                    loc.tr("Export sync pack…", "导出同步包…"),
+                                    true,
+                                    third,
+                                )
+                                .on_hover_text(loc.tr(
+                                    "Create mistterm-sync-timestamp folder and copy selected files",
+                                    "新建 mistterm-sync-时间戳 目录并复制勾选文件",
+                                ))
+                                .clicked()
+                                {
+                                    self.run_export(deps, lang);
+                                }
+                                if chrome::panel_action_button_with_icon_ex_min_w(
+                                    ui,
+                                    theme,
+                                    crate::ui::icons::IconId::Package,
+                                    loc.tr("Import from sync pack…", "从同步包导入…"),
+                                    true,
+                                    third,
+                                )
+                                .clicked()
+                                {
+                                    self.pick_import_folder(deps, lang, &mut team_service);
+                                }
+                            });
                         });
                     });
 
