@@ -126,6 +126,35 @@ impl DisplayLinkEngine {
         self.patterns.is_empty()
     }
 
+    /// SFTP 列表目标目录：去掉末尾斜杠；若末段像文件名（含 `.`）则缩到父目录。
+    /// 例：`/var/log/nginx/error.log` → `/var/log/nginx`；`/var/log` → `/var/log`。
+    pub fn sftp_list_dir(path: &str) -> String {
+        let trimmed = path
+            .trim()
+            .trim_end_matches(['/', '\\']);
+        if trimmed.is_empty() || trimmed == "." {
+            return "/".into();
+        }
+        let p = std::path::Path::new(trimmed);
+        let file_like = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.contains('.') && n != "." && n != "..");
+        let dir = if file_like {
+            match p.parent() {
+                Some(parent) if !parent.as_os_str().is_empty() => parent,
+                _ => std::path::Path::new("/"),
+            }
+        } else {
+            p
+        };
+        let mut out = dir.to_string_lossy().replace('\\', "/");
+        if out.is_empty() {
+            out = "/".into();
+        }
+        out
+    }
+
     /// 对一行输出做匹配，返回互不重叠、按出现位置排序的链接。
     ///
     /// 区间裁决：同一区间被多条规则命中时，取 priority 最小（最优先）的；
@@ -217,6 +246,21 @@ mod tests {
         let hits = e.scan("failed to open /var/log/nginx/error.log");
         let p = hits.iter().find(|h| h.action == DisplayLinkAction::SftpOpen);
         assert!(p.is_some(), "path hit expected, got {:?}", hits);
+    }
+
+    #[test]
+    fn sftp_list_dir_shrinks_file_to_parent() {
+        assert_eq!(
+            DisplayLinkEngine::sftp_list_dir("/var/log/nginx/error.log"),
+            "/var/log/nginx"
+        );
+        assert_eq!(
+            DisplayLinkEngine::sftp_list_dir("/var/log/nginx/"),
+            "/var/log/nginx"
+        );
+        assert_eq!(DisplayLinkEngine::sftp_list_dir("/var/log"), "/var/log");
+        assert_eq!(DisplayLinkEngine::sftp_list_dir("/"), "/");
+        assert_eq!(DisplayLinkEngine::sftp_list_dir(""), "/");
     }
 
     #[test]

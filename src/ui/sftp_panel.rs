@@ -1636,6 +1636,12 @@ impl SftpPanel {
         self.pending_auto_list = true;
     }
 
+    /// display-link 跳转（#90）：预置远端目录，配合 `request_list_on_open` 首次加载直达。
+    pub fn jump_to_remote_dir(&mut self, dir: PathBuf) {
+        self.cwd = Self::normalize_remote_path(dir);
+        self.path_edit = self.cwd.to_string_lossy().into_owned();
+    }
+
     #[inline]
     pub fn is_busy(&self) -> bool {
         self.busy

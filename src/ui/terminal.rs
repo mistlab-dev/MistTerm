@@ -61,6 +61,8 @@ struct TerminalVisualLayoutCache {
     formatted: String,
     /// 已排版的 galley；避免 TextEdit layouter 每帧 `layout_job` 打满 CPU。
     galley: Option<std::sync::Arc<egui::Galley>>,
+    /// display-link 命中：`(行号, 链接)`，与 layout 同键缓存（#90）。
+    display_links: Vec<(usize, crate::core::display_link::DisplayLink)>,
 }
 
 impl TerminalVisualLayoutCache {
@@ -384,6 +386,10 @@ pub struct TerminalView {
     ime_preedit: crate::ui::terminal_keys::ImePreedit,
     /// 最近一帧终端 IME 框的 egui Id；UI 输入(含中文全角)抢焦点时须 surrender，否则 Composition 仍进终端。
     last_ime_id: Option<egui::Id>,
+    /// display-link 规则引擎（#90）：加载一次，输出行匹配复用。
+    display_link_engine: crate::core::display_link::DisplayLinkEngine,
+    /// 点击 display-link 后待宿主处理的动作（SFTP 跳转需要宿主开面板）。
+    pending_display_link_sftp: Option<String>,
 }
 
 impl TerminalView {
@@ -425,6 +431,54 @@ impl TerminalView {
     #[inline]
     fn line_char_len(lines: &[&str], line: usize) -> Option<usize> {
         lines.get(line).map(|s| s.chars().count())
+    }
+
+    /// display-link 命中扫描（#90）：对整屏可见文本逐行匹配，返回 `(行号, 链接)`。
+    /// 仅在 layout 缓存重建时跑一次，随 galley 复用，不影响逐帧开销。
+    fn scan_display_links(
+        engine: &crate::core::display_link::DisplayLinkEngine,
+        formatted: &str,
+    ) -> Vec<(usize, crate::core::display_link::DisplayLink)> {
+        if engine.is_empty() {
+            return Vec::new();
+        }
+        formatted
+            .lines()
+            .enumerate()
+            .flat_map(|(row, line)| {
+                engine
+                    .scan(line)
+                    .into_iter()
+                    .map(move |link| (row, link))
+            })
+            .collect()
+    }
+
+    /// 链接字节区间 → 字符列区间（egui 光标/绘制都是列粒度）。
+    /// 字节偏移落在字符边界外时返回 `None`（防御性，扫描层不会产生这种偏移）。
+    fn display_link_char_range(line: &str, link: &crate::core::display_link::DisplayLink) -> Option<(usize, usize)> {
+        let start = line.get(..link.start)?.chars().count();
+        let end = line.get(..link.end)?.chars().count();
+        Some((start, end))
+    }
+
+    /// 指针位置命中的 display-link（行号 + 克隆链接）。
+    fn display_link_at(
+        display_links: &[(usize, crate::core::display_link::DisplayLink)],
+        galley: &egui::Galley,
+        text_draw_pos: egui::Pos2,
+        pos: egui::Pos2,
+        lines: &[&str],
+    ) -> Option<(usize, crate::core::display_link::DisplayLink)> {
+        let (row_i, col) = Self::terminal_pointer_row_col(text_draw_pos, pos, galley, lines);
+        let line = lines.get(row_i)?;
+        display_links.iter().find_map(|(r, link)| {
+            if *r != row_i {
+                return None;
+            }
+            let (s, e) = Self::display_link_char_range(line, link)?;
+            (col >= s && col < e).then(|| (*r, link.clone()))
+        })
     }
 
     /// 点选/拖选命中：必须跟 galley 行盒一致。
@@ -807,6 +861,8 @@ impl TerminalView {
             ime_capture: String::new(),
             ime_preedit: crate::ui::terminal_keys::ImePreedit::default(),
             last_ime_id: None,
+            display_link_engine: crate::core::display_link::DisplayLinkEngine::new(),
+            pending_display_link_sftp: None,
         }
     }
 
@@ -1532,6 +1588,8 @@ impl TerminalView {
                                     selection_arg,
                                 );
                                 let formatted = self.terminal.get_formatted_output();
+                                let display_links =
+                                    Self::scan_display_links(&self.display_link_engine, &formatted);
                                 self.visual_layout_cache = Some(TerminalVisualLayoutCache {
                                     vt_gen: cache_key.0,
                                     content_epoch: cache_key.1,
@@ -1546,6 +1604,7 @@ impl TerminalView {
                                     cell_bgs: cell_bgs.clone(),
                                     formatted: formatted.clone(),
                                     galley: None,
+                                    display_links,
                                 });
                                 (layout_job, cell_bgs, formatted)
                             }
@@ -1559,6 +1618,8 @@ impl TerminalView {
                                 selection_arg,
                             );
                             let formatted = self.terminal.get_formatted_output();
+                            let display_links =
+                                Self::scan_display_links(&self.display_link_engine, &formatted);
                             self.visual_layout_cache = Some(TerminalVisualLayoutCache {
                                 vt_gen: cache_key.0,
                                 content_epoch: cache_key.1,
@@ -1573,6 +1634,7 @@ impl TerminalView {
                                 cell_bgs: cell_bgs.clone(),
                                 formatted: formatted.clone(),
                                 galley: None,
+                                display_links,
                             });
                             (layout_job, cell_bgs, formatted)
                         };
@@ -1786,6 +1848,60 @@ impl TerminalView {
                                     }
                                 }
                             }
+                            // display-link（#90）：命中区间画下划线，悬停变手型。
+                            // 与格子底色无关，任何帧都画（下划线在字形上方一层）。
+                            let display_links = self
+                                .visual_layout_cache
+                                .as_ref()
+                                .map(|c| c.display_links.clone())
+                                .unwrap_or_default();
+                            let hover_link = if display_links.is_empty() {
+                                None
+                            } else {
+                                let pointer = ui.input(|i| i.pointer.interact_pos());
+                                pointer
+                                    .filter(|p| text_rect.contains(*p))
+                                    .and_then(|p| {
+                                        Self::display_link_at(
+                                            &display_links,
+                                            &galley,
+                                            text_draw_pos,
+                                            p,
+                                            &display_lines,
+                                        )
+                                    })
+                            };
+                            if !display_links.is_empty() {
+                                let painter =
+                                    ui.painter().clone().with_layer_id(response.layer_id);
+                                let stroke_color = theme.accent_color();
+                                for (row_i, link) in &display_links {
+                                    let Some(grow) = galley.rows.get(*row_i) else {
+                                        continue;
+                                    };
+                                    let Some(line) = display_lines.get(*row_i) else {
+                                        continue;
+                                    };
+                                    let Some((s, e)) = Self::display_link_char_range(line, link)
+                                    else {
+                                        continue;
+                                    };
+                                    let hovered = hover_link
+                                        .as_ref()
+                                        .is_some_and(|(hr, hl)| hr == row_i && hl.text == link.text);
+                                    let y = text_draw_pos.y + grow.rect.min.y + grow.height();
+                                    let left = text_draw_pos.x + grow.x_offset(s);
+                                    let right = (text_draw_pos.x + grow.x_offset(e)).max(left + 1.0);
+                                    painter.line_segment(
+                                        [egui::pos2(left, y), egui::pos2(right, y)],
+                                        egui::Stroke::new(if hovered { 1.5 } else { 1.0 }, stroke_color),
+                                    );
+                                }
+                                if hover_link.is_some() {
+                                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    ui.ctx().request_repaint();
+                                }
+                            }
                             let ime_id = response.id.with("terminal_ime");
                             if !terminal_search_open {
                                 if ui.input(|i| i.pointer.any_click()) {
@@ -1947,21 +2063,31 @@ impl TerminalView {
                                     }
                                 }
                             } else if primary_clicked {
-                                // 普通单击(未拖动)：记锚点，供翻屏后 Shift+单击扩展。
+                                // display-link（#90）：单击命中链接时优先于选区锚点。
                                 if let Some(pos) = select_resp.interact_pointer_pos() {
-                                    let (row_i, col) = Self::terminal_pointer_row_col(
+                                    if let Some((_, link)) = Self::display_link_at(
+                                        &display_links,
+                                        &galley,
                                         text_draw_pos,
                                         pos,
-                                        &galley,
                                         &display_lines,
-                                    );
-                                    self.selection.set_anchor_from_viewport(
-                                        self.terminal.display_offset(),
-                                        row_i,
-                                        col,
-                                    );
-                                    self.visual_layout_cache = None;
-                                    ui.ctx().request_repaint();
+                                    ) {
+                                        self.handle_display_link_click(ui.ctx(), &link);
+                                    } else {
+                                        let (row_i, col) = Self::terminal_pointer_row_col(
+                                            text_draw_pos,
+                                            pos,
+                                            &galley,
+                                            &display_lines,
+                                        );
+                                        self.selection.set_anchor_from_viewport(
+                                            self.terminal.display_offset(),
+                                            row_i,
+                                            col,
+                                        );
+                                        self.visual_layout_cache = None;
+                                        ui.ctx().request_repaint();
+                                    }
                                 }
                             } else if primary_drag_started {
                                 // 以按下点(而非越过拖动阈值后的位置)为起点
@@ -3378,6 +3504,40 @@ impl TerminalView {
         let rows = self.rows.max(1) as usize;
         let cols = self.cols.max(1) as usize;
         self.selection.set_from_viewport(offset, 0, 0, rows.saturating_sub(1), cols.saturating_sub(1));
+    }
+
+    /// display-link 点击分发（#90）：
+    /// - Copy：直接复制
+    /// - BrowserOpen：系统浏览器（http/https 才放行）
+    /// - RunbookRecall：把错误码作为上下文发到 AI 面板（团队 Runbook 召回链路）
+    /// - SftpOpen：置 pending，由宿主开 SFTP 面板并跳转
+    fn handle_display_link_click(
+        &mut self,
+        ctx: &egui::Context,
+        link: &crate::core::display_link::DisplayLink,
+    ) {
+        match link.action {
+            crate::core::display_link::DisplayLinkAction::Copy => {
+                ctx.copy_text(link.text.clone());
+            }
+            crate::core::display_link::DisplayLinkAction::BrowserOpen => {
+                if link.text.starts_with("http://") || link.text.starts_with("https://") {
+                    let _ = crate::platform::open_url(&link.text);
+                }
+            }
+            crate::core::display_link::DisplayLinkAction::RunbookRecall => {
+                self.pending_send_to_ai = true;
+                self.pending_send_to_ai_text = Some(link.text.clone());
+            }
+            crate::core::display_link::DisplayLinkAction::SftpOpen => {
+                self.pending_display_link_sftp = Some(link.text.clone());
+            }
+        }
+    }
+
+    /// 宿主取走待跳转的 SFTP 路径（display-link 点击产生，#90）。
+    pub fn take_pending_display_link_sftp(&mut self) -> Option<String> {
+        self.pending_display_link_sftp.take()
     }
 
     pub fn take_pending_send_to_ai(&mut self) -> bool {
