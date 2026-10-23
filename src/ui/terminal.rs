@@ -517,6 +517,38 @@ impl TerminalView {
         }
     }
 
+    /// #92：在块状光标矩形上，按 preedit 文本加宽 IME 上报区（系统选字窗贴着预编辑宽度）。
+    fn ime_rect_for_preedit(
+        ui: &egui::Ui,
+        cursor_rect: egui::Rect,
+        preedit: &str,
+        font_size: f32,
+        cell_w: f32,
+        clip: egui::Rect,
+    ) -> egui::Rect {
+        let mut rect = cursor_rect;
+        if !preedit.is_empty() {
+            let preedit_w = ui
+                .fonts(|fonts| {
+                    fonts
+                        .layout_no_wrap(
+                            preedit.to_owned(),
+                            egui::FontId::monospace(font_size),
+                            egui::Color32::WHITE,
+                        )
+                        .size()
+                        .x
+                })
+                .max(cell_w);
+            rect = egui::Rect::from_min_size(
+                rect.min,
+                egui::vec2(preedit_w.max(rect.width()), rect.height()),
+            );
+        }
+        // 不超出终端可视区，避免候选窗锚到屏外。
+        rect.intersect(clip)
+    }
+
     /// 在 PTY 光标处放置透明单行框，供系统 IME 定位并启用 `set_ime_allowed`。
     fn show_terminal_ime_capture(
         &mut self,
@@ -1849,12 +1881,13 @@ impl TerminalView {
                                 );
                             }
 
-                            // 中文/日文 IME：须有 TextEdit 文本光标，winit 才会启用输入法
+                            // 中文/日文 IME：须有 TextEdit 文本光标，winit 才会启用输入法。
+                            // #92：锚点 = viewport_cursor 块状矩形；preedit 非空时加宽到预编辑宽再上报。
                             if capture_pty_keyboard
                                 && self.terminal_wants_keyboard
                                 && !terminal_search_open
                             {
-                                let ime_rect = if let Some(cur) =
+                                let cursor_rect = if let Some(cur) =
                                     self.terminal.viewport_cursor()
                                 {
                                     Self::terminal_block_cursor_rect(
@@ -1869,6 +1902,14 @@ impl TerminalView {
                                         egui::vec2(cell_w.max(8.0), cell_h.max(12.0)),
                                     )
                                 };
+                                let ime_rect = Self::ime_rect_for_preedit(
+                                    ui,
+                                    cursor_rect,
+                                    self.ime_preedit.text(),
+                                    self.font_size,
+                                    cell_w,
+                                    text_rect,
+                                );
                                 self.show_terminal_ime_capture(ui, ime_id, ime_rect, cell_h);
                             }
                             if self.terminal_focused && !self.ime_preedit.is_empty() {
