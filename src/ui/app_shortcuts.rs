@@ -50,7 +50,10 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — paste into the terminal\n\
              {} — Select all (terminal)\n\
              {} — AI assistant panel\n\
-             {} — send terminal selection to AI{}",
+             {} — send terminal selection to AI\n\
+             Alt+B / Alt+F — shell word motion when the terminal is focused (macOS: Option)\n\
+             Alt+D / Alt+Backspace — shell delete-word when the terminal is focused (macOS: Option)\n\
+             Alt+. — insert the previous command's last argument when the terminal is focused (macOS: Option){}",
             s::primary_modifier_label(),
             s::help_line("N", "New connection"),
             s::help_line("E", "Edit selected session"),
@@ -109,7 +112,10 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — 粘贴到终端\n\
              {} — 全选(终端)\n\
              {} — AI 助手面板\n\
-             {} — 终端选区发送到 AI{}",
+             {} — 终端选区发送到 AI\n\
+             Alt+B / Alt+F — 终端聚焦时按词跳转 (macOS 为 Option)\n\
+             Alt+D / Alt+Backspace — 终端聚焦时按词删除 (macOS 为 Option)\n\
+             Alt+. — 终端聚焦时插入上一条命令的最后参数 (macOS 为 Option){}",
             s::primary_modifier_label(),
             s::help_line("N", "新建连接"),
             s::help_line("E", "编辑所选会话"),

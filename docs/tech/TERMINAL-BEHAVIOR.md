@@ -19,6 +19,8 @@
 - `Ctrl+C` sends `0x03`, `Ctrl+D` sends `0x04`. A selection does not turn Ctrl+C into copy.
 - `Ctrl+J` (`0x0a`) and `Ctrl+K` (`0x0b`) go to the PTY while the terminal pane is focused. Connection search and snippet search use those chords only when the terminal is not focused. The snippet picker remains `Ctrl+Shift+J` / `⌘⇧J`, and only when the terminal is not focused.
 - `Ctrl+R` goes to the PTY while the terminal is focused (shell reverse-i-search). When the terminal is not focused it opens Mist command history.
+- While the terminal pane is focused, Alt (macOS: Option) plus a letter, digit, or ASCII punctuation is a Meta sequence: ESC then that character. `Alt+B` / `Alt+F` move by word, `Alt+D` deletes the next word, `Alt+.` inserts the previous command's last argument. `Alt+Backspace` is ESC DEL (`0x1b 0x7f`), readline backward-kill-word. Ctrl+Alt and ⌘⌥ are not Meta (AltGr, local shell, pane focus).
+- On macOS the window uses winit `OptionAsAlt::Both`, so Option delivers the base character with Alt set. The terminal prefixes ESC. There is no key-rebinding UI.
 
 ## IME
 
@@ -30,6 +32,7 @@
 ## Copy / Paste / Selection
 
 - Terminal viewport supports mouse selection.
+- **Known limitation:** Alt+click does not move the cursor. MistTerm does not send xterm mouse-tracking reports to the PTY, so tmux mouse mode (and click-to-position inside the shell) is unavailable. Mouse input is selection and scrolling only.
 - Copy uses the selection plus macOS `⌘C` or Windows/Linux `Ctrl+Shift+C`, or the context menu. A selection does not turn `Ctrl+C` into copy.
 - Paste is macOS `⌘V` or Windows/Linux `Ctrl+Shift+V`, or the context menu. Raw text goes to the PTY.
 - Paste does **not** auto-append newline; pasted content is not auto-executed.
