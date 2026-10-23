@@ -161,6 +161,30 @@ fn integration_ctrl_c_forwards_interrupt_byte_to_pty() {
 }
 
 #[test]
+fn integration_focused_ctrl_k_reaches_pty_with_winit_command_bit() {
+    use mistterm::ui::keyboard_shortcuts::consume_primary_key;
+    use mistterm::ui::terminal_keys::app_jk_search_armed;
+    // egui-winit on Windows/Linux sets `command` whenever Ctrl is held.
+    let mods = Modifiers {
+        ctrl: true,
+        command: true,
+        ..Modifiers::NONE
+    };
+    assert!(!app_jk_search_armed(true));
+    egui::__run_test_ui(|ui| {
+        ui.input_mut(|i| {
+            feed_keys(i, mods, [key_press(Key::K, mods)]);
+            if app_jk_search_armed(true) {
+                let _ = consume_primary_key(i, Key::K);
+            }
+            let mut sent = Vec::new();
+            assert!(forward_ctrl_keys(i, |b| sent.push(b)));
+            assert_eq!(sent, vec![0x0b]);
+        });
+    });
+}
+
+#[test]
 fn integration_focused_ctrl_j_and_k_reach_pty() {
     egui::__run_test_ui(|ui| {
         ui.input_mut(|i| {
