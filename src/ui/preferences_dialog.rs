@@ -143,7 +143,7 @@ impl MistTermApp {
         default_open: bool,
         body: impl FnOnce(&mut egui::Ui),
     ) {
-        // 版式 A（#95）：小节标题 + 折叠；展开区用细描边分组，底色与弹窗同色（勿套 inset 灰底）。
+        // 版式 A + Win11 设置卡：靠轻微抬升底色分层，不要描边「框套框」。
         egui::CollapsingHeader::new(
             RichText::new(title)
                 .size(theme.font_size_panel_title())
@@ -153,31 +153,37 @@ impl MistTermApp {
         .id_source(egui::Id::new(("pref_section", section_id)))
         .default_open(default_open)
         .show(ui, |ui| {
-            // 卡片必须拉满折叠区可用宽，避免跟着内容长短左右不齐。
             let outer_w = layout_util::set_width_to_available(ui);
             ui.set_min_width(outer_w);
+            // 暗色：比弹窗底略亮；浅色：用 elevated，仍无描边。
+            let card_fill = if theme.is_light_theme() {
+                let elevated = theme.surface_elevated();
+                if elevated == theme.surface_panel() {
+                    theme.color_subtle_inset_fill()
+                } else {
+                    elevated
+                }
+            } else {
+                theme.color_ops_card_fill()
+            };
             egui::Frame::none()
-                .fill(egui::Color32::TRANSPARENT)
-                // 发丝线：细宽 + 半透明描边（HiDPI 上仍可读但不抢）
-                .stroke(egui::Stroke::new(
-                    0.5,
-                    theme.color_modal_stroke().linear_multiply(0.45),
-                ))
-                .rounding(theme.radius_card())
+                .fill(card_fill)
+                .stroke(egui::Stroke::NONE)
+                .rounding(theme.radius_card().max(8.0))
                 .inner_margin(egui::Margin::symmetric(
-                    theme.spacing_search_input_x(),
-                    theme.spacing_search_input_y(),
+                    theme.spacing_search_input_x().max(12.0),
+                    theme.spacing_search_input_y().max(10.0),
                 ))
                 .show(ui, |ui| {
                     let inner_w = layout_util::set_width_to_available(ui);
                     ui.set_min_width(inner_w);
-                    // 占住整行宽，否则 Frame 会按子控件收缩。
                     ui.allocate_exact_size(egui::vec2(inner_w, 0.0), egui::Sense::hover());
                     ui.spacing_mut().item_spacing.y = theme.spacing_panel_gap();
                     body(ui);
                 });
         });
-        ui.add_space(theme.spacing_sm());
+        // 卡与卡之间留白，靠间距而不是线分隔（Win11 Settings）。
+        ui.add_space(theme.spacing_md());
     }
 
     fn preferences_section_general(
