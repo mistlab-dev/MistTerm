@@ -2782,6 +2782,11 @@ impl TerminalView {
             }) && !ctrl_to_send.is_empty() {
                 // pending_focus set after input_mut
             }
+            if crate::ui::terminal_keys::forward_alt_meta_keys(i, |bytes| {
+                self.append_offline_bytes(bytes);
+            }) {
+                self.pending_focus_terminal = true;
+            }
 
             let mut backspace_key = false;
             let mut delete_key = false;
@@ -3075,6 +3080,11 @@ impl TerminalView {
                 ctrl_to_send.push(b);
             }) {
                 // pending_focus set after input_mut
+            }
+            if crate::ui::terminal_keys::forward_alt_meta_keys(i, |bytes| {
+                let _ = self.send_pty_input(bytes);
+            }) {
+                self.pending_focus_terminal = true;
             }
             // 同一帧内可能既有 Key 又有 Text(如 Delete / 退格)，避免重复或错发
             let mut backspace_key = false;

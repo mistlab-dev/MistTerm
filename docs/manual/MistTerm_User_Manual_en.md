@@ -170,6 +170,7 @@ Passwords and session info are **encrypted locally**. When switching computers, 
 - After connecting, type commands in the terminal area and press **Enter** to execute
 - **Ctrl+C** always interrupts the foreground program (SIGINT), including when text is selected. Copy the selection with **Ctrl+Shift+C** on Windows/Linux, or **⌘C** on Mac. Paste with **Ctrl+Shift+V** (Mac: **⌘V**)
 - **Ctrl+K** (terminal focused): sent to the shell; deletes to the end of the line. **Ctrl+J** (terminal focused): sent to the shell (line feed, same as readline). Connection search (Ctrl+J) and snippet search (Ctrl+K) run only when the terminal is not focused. The quick snippet picker is **Ctrl+Shift+J**, and it also opens only when the terminal is not focused
+- **Alt** (macOS: **Option**) is Meta while the terminal is focused: **Alt+B** / **Alt+F** move by word, **Alt+D** / **Alt+Backspace** delete a word, and **Alt+.** inserts the last argument of the previous command (repeat to cycle earlier arguments). MistTerm UI shortcuts do not swallow these keys
 - **Select across several screens**: click the start, scroll with the wheel to the end, then **Shift+click** to extend the selection. While drag-selecting, move the pointer past the top/bottom edge of the terminal to auto-scroll (faster the farther you go). Then right-click → Copy selection or **Ctrl+Shift+C** (Mac: **⌘C**) copies all of it
 - **Chinese IME**: while composing, the preedit string is drawn at the cursor. The candidate list stays on the system IME panel. Ctrl chords such as Ctrl+C and Ctrl+R are still sent to the terminal during composition
 - Supports colored output, vim, htop, and other common TUI programs
@@ -205,6 +206,13 @@ Windows and Linux use **Ctrl+Shift**. macOS uses **⌘⇧**.
 - **Ctrl+Shift+← / Ctrl+Shift+→**: move focus between panes (⌘⌥← / ⌘⌥→ on macOS)
 - A new pane starts in the source pane's current directory (local shell, `cd` on Linux and macOS, PowerShell on a Windows remote)
 - **Ctrl+Shift+B** (macOS **⌘⇧B**): **Broadcast input**. Keystrokes go to every pane in the tab. The pane header shows "Broadcast"
+
+### 6.4 Known limitation: mouse and Alt+click
+
+The mouse in the terminal is for **selecting text** and **scrolling**. The following are not implemented. They are limits of the product, not intermittent bugs:
+
+- **Alt+click does not move the cursor** to the clicked cell (the shell line does not jump there)
+- **MistTerm does not send the xterm mouse protocol to the PTY.** tmux and vim mouse modes therefore do not work: clicks and drags are not reported to the remote program
 
 ---
 
@@ -464,6 +472,9 @@ The following uses **Windows** keys; on macOS, replace **Ctrl** with **⌘** (e.
 | **Ctrl+Shift+D** / **Ctrl+Shift+U** (Mac: **⌘⇧D** / **⌘⇧U**) | Split terminal left/right / top/bottom |
 | **Ctrl+,** | Preferences |
 | **Ctrl+H** | About & shortcut guide |
+| **Alt+B** / **Alt+F** | While the terminal is focused, sent to the shell to move by word (Mac: **Option+B** / **Option+F**) |
+| **Alt+D** / **Alt+Backspace** | While the terminal is focused, sent to the shell to delete a word forward / backward (Mac: **Option**) |
+| **Alt+.** | While the terminal is focused, sent to the shell to insert the previous command's last argument (Mac: **Option+.**) |
 | **Esc** | Close current dialog or menu |
 
 For the complete list, refer to the in-app **Help → Keyboard Shortcuts**.

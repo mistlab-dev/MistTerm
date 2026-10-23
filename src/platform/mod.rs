@@ -78,9 +78,15 @@ pub fn run_gui() {
     };
 
     // macOS：内容延伸到标题栏，标签和红绿灯同一行(透明标题栏)。
+    // Option 当作 Alt：键位字符进事件队列并带上 Alt，终端再编成 Meta（ESC 前缀）。
+    // 不改成可配置的键位表。
     #[cfg(target_os = "macos")]
     {
         options.fullsize_content = true;
+        use winit::platform::macos::{OptionAsAlt, WindowBuilderExtMacOS};
+        options.window_builder = Some(Box::new(|builder| {
+            builder.with_option_as_alt(OptionAsAlt::Both)
+        }));
     }
 
     if let Err(e) = eframe::run_native(
