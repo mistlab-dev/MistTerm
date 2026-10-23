@@ -1899,6 +1899,7 @@ impl MistTermApp {
     ) {
         ui.horizontal(|ui| {
             let mut to_close = None;
+            let mut to_activate = None;
             let mut close_others = None;
             let mut close_right = None;
             let mut disconnect_ssh_idx = None;
@@ -1944,17 +1945,29 @@ impl MistTermApp {
                     &tab_label,
                     active,
                     tab.any_connected(),
+                    tab.needs_attention,
                     false,
                     env_color,
                 );
+                let tab_hover = if tab.needs_attention && !active {
+                    format!(
+                        "{}\n{}",
+                        tab_hover,
+                        crate::i18n::tr(
+                            ctx,
+                            "Needs attention (bell or session ended)",
+                            "需要注意（响铃或会话已结束）",
+                        )
+                    )
+                } else {
+                    tab_hover
+                };
                 let tab_resp =
                     tab_chip.response.on_hover_text(tab_hover);
                 if tab_chip.close_clicked {
                     to_close = Some(idx);
                 } else if tab_resp.clicked() {
-                    self.active_tab = Some(idx);
-                    self.selected_session_id =
-                        Some(tab.primary_session_id());
+                    to_activate = Some(idx);
                 }
                 tab_resp.context_menu(|ui| {
                     crate::ui::chrome::apply_context_menu_style(
@@ -2124,6 +2137,9 @@ impl MistTermApp {
                 });
             }
             self.show_tab_bar_new_tab_picker(ui, theme, ctx);
+            if let Some(idx) = to_activate {
+                self.switch_tab_to_index(idx);
+            }
             if let Some(idx) = to_close {
                 self.request_close_tab_at(idx);
             }

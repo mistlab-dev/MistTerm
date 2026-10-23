@@ -325,6 +325,8 @@ pub struct TerminalView {
     local_disconnect_intent: bool,
     /// 本轮 `process_ssh_messages` 后若曾为「非主动」断开则置位；由宿主 `take()` 后清除。
     unexpected_disconnect_notified: bool,
+    /// #93：意外断开会话 → 未聚焦标签提示（与重连用的 `unexpected_disconnect_notified` 分通道）。
+    pending_attention_ended: bool,
     /// 连接成功/失败待宿主写入审计(`take_connect_audit` 取走)
     pending_connect_audit: Option<(bool, String)>,
     /// 服务器侧命令审计标记行解析(`MIST_AUDIT`)
@@ -776,6 +778,7 @@ impl TerminalView {
             repaint_probe_epoch: 0,
             local_disconnect_intent: false,
             unexpected_disconnect_notified: false,
+            pending_attention_ended: false,
             pending_connect_audit: None,
             server_audit_probe: ServerAuditProbe::new(),
             pending_server_audit: Vec::new(),
@@ -2613,6 +2616,8 @@ impl TerminalView {
                             self.local_disconnect_intent = false;
                         } else {
                             self.unexpected_disconnect_notified = true;
+                            // #93 SessionEnded：非主动断开才提示未聚焦标签。
+                            self.pending_attention_ended = true;
                         }
                         self.connected = false;
                         self.terminal_wants_keyboard = false;
@@ -4099,6 +4104,16 @@ impl TerminalView {
     /// 非用户主动断开时为 `true` 一次(供自动重连等)；读取后清除。
     pub fn take_unexpected_disconnect_notified(&mut self) -> bool {
         std::mem::take(&mut self.unexpected_disconnect_notified)
+    }
+
+    /// #93：VTE BEL（响铃），宿主聚合到未聚焦标签。
+    pub fn take_pending_bell(&mut self) -> bool {
+        self.terminal.take_pending_bell()
+    }
+
+    /// #93：会话意外结束（与重连通知分通道）。
+    pub fn take_pending_attention_ended(&mut self) -> bool {
+        std::mem::take(&mut self.pending_attention_ended)
     }
 
     /// 取走待上报的连接结果(`success`, `host`)。
