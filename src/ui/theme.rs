@@ -914,10 +914,26 @@ impl Theme {
         }
     }
 
-    /// 弹窗描边
+    /// 弹窗描边色。
+    ///
+    /// 暗夜的面板线宽是 0，侧栏和 dock 保持无硬边框。居中弹窗会叠在同色窗口上
+    /// (「关于」上的「软件更新」)，只靠填充分不出层次，所以用和次要按钮同一档的
+    /// 浅色细线，不是粗黑框。
     #[inline]
     pub fn color_modal_stroke(&self) -> Color32 {
-        self.panel_stroke_color()
+        if self.uses_modern_palette() {
+            self.color_control_secondary_stroke(true).color
+        } else {
+            self.panel_stroke_color()
+        }
+    }
+
+    /// 居中弹窗外框描边。至少 1px；非暗夜主题与 [`panel_stroke`] 相同。
+    pub fn modal_stroke(&self) -> egui::Stroke {
+        egui::Stroke::new(
+            self.stroke_width_panel().max(1.0),
+            self.color_modal_stroke(),
+        )
     }
 
     /// 弹窗主按钮底
@@ -2175,13 +2191,22 @@ impl Theme {
         egui::Margin::symmetric(10.0, 7.0)
     }
 
-    /// 居中弹窗外框
+    /// 居中弹窗外框。
+    ///
+    /// 描边画在矩形边上，标题带会盖住内侧半像素。暗夜原来没有这条线，
+    /// 留出线宽，让整条描边落在内容外侧，叠在「关于」等窗口上能看见一圈边。
     pub fn frame_modal_window(&self) -> egui::Frame {
+        let stroke = self.modal_stroke();
+        let inset = if self.stroke_width_panel() > 0.0 {
+            0.0
+        } else {
+            stroke.width
+        };
         egui::Frame::none()
             .fill(self.color_panel_surface())
-            .stroke(self.panel_stroke())
+            .stroke(stroke)
             .rounding(self.radius_window())
-            .inner_margin(egui::Margin::ZERO)
+            .inner_margin(egui::Margin::same(inset))
     }
 
     /// 弹窗内容区内边距
@@ -3161,6 +3186,62 @@ mod theme_semantic_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn modal_stroke_separates_stacked_dialogs() {
+        fn composite_over(fg: egui::Color32, bg: egui::Color32) -> egui::Color32 {
+            // `Color32` 存的是预乘 alpha，不能再乘一次。
+            let a = f32::from(fg.a()) / 255.0;
+            let mix = |f: u8, b: u8| (f32::from(f) + f32::from(b) * (1.0 - a)).round() as u8;
+            egui::Color32::from_rgb(
+                mix(fg.r(), bg.r()),
+                mix(fg.g(), bg.g()),
+                mix(fg.b(), bg.b()),
+            )
+        }
+
+        for theme in all_builtin_themes() {
+            let stroke = theme.modal_stroke();
+            let frame = theme.frame_modal_window();
+            assert!(
+                stroke.width >= 1.0 && frame.stroke.width >= 1.0,
+                "{}: modal stroke width {}",
+                theme.name,
+                stroke.width
+            );
+            assert_eq!(frame.stroke, stroke);
+            assert_eq!(frame.fill, theme.color_panel_surface());
+            let bg = theme.color_panel_surface();
+            let painted = composite_over(stroke.color, bg);
+            let ratio = contrast_ratio(painted, bg);
+            assert!(
+                ratio >= 1.25,
+                "{}: modal stroke vs panel {:.2}",
+                theme.name,
+                ratio
+            );
+            if theme.stroke_width_panel() > 0.0 {
+                assert_eq!(stroke, theme.panel_stroke());
+                assert_eq!(frame.inner_margin, egui::Margin::ZERO);
+            } else {
+                assert_eq!(frame.inner_margin, egui::Margin::same(stroke.width));
+                assert_eq!(theme.frame_region_panel().stroke.width, 0.0);
+            }
+        }
+
+        let dark = Theme::dark();
+        assert!(dark.uses_modern_palette());
+        assert_eq!(dark.stroke_width_panel(), 0.0);
+        assert_eq!(
+            dark.color_modal_stroke(),
+            dark.color_control_secondary_stroke(true).color
+        );
+        let painted = composite_over(dark.color_modal_stroke(), dark.color_panel_surface());
+        assert!(
+            contrast_ratio(painted, dark.color_panel_surface()) >= 1.6,
+            "暗夜 modal stroke should read on the same panel fill"
+        );
     }
 
     #[test]

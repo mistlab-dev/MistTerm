@@ -658,7 +658,8 @@ pub fn right_dock_header_divider(ui: &mut Ui, theme: &Theme) {
     );
 }
 
-/// 标准弹窗 `Window`：无系统标题栏、不可折叠、统一外框(须再 `.open()` / `.show()` / 尺寸)
+/// 标准弹窗 `Window`：无系统标题栏、不可折叠、统一外框(须再 `.open()` / `.show()` / 尺寸)。
+/// 外框描边来自 [`Theme::modal_stroke`]：暗夜面板线宽为 0，弹窗仍保留 1px，避免叠在同色窗口上没有边。
 /// 统一弹窗入口：去掉默认 title_bar / collapse，应用 [`modal_window_frame`]，
 /// 并把约束放宽到整屏(`ctx.screen_rect()`)，否则默认 `constrain(true)` 会把弹窗夹在
 /// `ctx.available_rect()` 内，右 dock 打开后无法把弹窗拖到 dock 上方。
