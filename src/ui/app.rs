@@ -4572,11 +4572,8 @@ impl MistTermApp {
         if !self.ensure_right_dock_allowed_or_warn(ctx) {
             return;
         }
-        // 目录归一化：去掉末尾斜杠；把「含文件名」的路径缩到父目录（识别规则仅匹配目录样式路径，这里只防御）。
-        let mut dir = path.trim().trim_end_matches('/').to_string();
-        if dir.is_empty() {
-            dir = "/".into();
-        }
+        // 含文件名的路径缩到父目录，避免把文件当 cwd 去 list。
+        let dir = crate::core::display_link::DisplayLinkEngine::sftp_list_dir(path);
         if !self.show_sftp_panel {
             self.open_right_dock_panel(ActiveRightDock::Sftp);
             self.sftp_last_tab = None;
