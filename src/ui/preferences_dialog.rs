@@ -156,8 +156,11 @@ impl MistTermApp {
             layout_util::set_width_to_available(ui);
             egui::Frame::none()
                 .fill(egui::Color32::TRANSPARENT)
-                // 比弹窗外框更细、更淡，只做分组提示
-                .stroke(egui::Stroke::new(0.5, theme.color_modal_stroke()))
+                // 发丝线：细宽 + 半透明描边（HiDPI 上仍可读但不抢）
+                .stroke(egui::Stroke::new(
+                    0.5,
+                    theme.color_modal_stroke().linear_multiply(0.45),
+                ))
                 .rounding(theme.radius_card())
                 .inner_margin(egui::Margin::symmetric(
                     theme.spacing_search_input_x(),
