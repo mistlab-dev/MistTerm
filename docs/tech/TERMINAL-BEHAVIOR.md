@@ -30,8 +30,8 @@
 ## Copy / Paste / Selection
 
 - Terminal viewport supports mouse selection.
-- Copy uses system selection + `⌘C` / context menu.
-- Paste (`⌘V` / context menu) sends raw text to PTY.
+- Copy uses the selection plus macOS `⌘C` or Windows/Linux `Ctrl+Shift+C`, or the context menu. A selection does not turn `Ctrl+C` into copy.
+- Paste is macOS `⌘V` or Windows/Linux `Ctrl+Shift+V`, or the context menu. Raw text goes to the PTY.
 - Paste does **not** auto-append newline; pasted content is not auto-executed.
 - Command fragments use explicit `send_command` path and may execute with newline by design.
 

@@ -169,6 +169,7 @@ Passwords and session info are **encrypted locally**. When switching computers, 
 
 - After connecting, type commands in the terminal area and press **Enter** to execute
 - **Ctrl+C** always interrupts the foreground program (SIGINT), including when text is selected. Copy the selection with **Ctrl+Shift+C** on Windows/Linux, or **⌘C** on Mac. Paste with **Ctrl+Shift+V** (Mac: **⌘V**)
+- **Ctrl+K** (terminal focused): sent to the shell; deletes to the end of the line. **Ctrl+J** (terminal focused): sent to the shell (line feed, same as readline). Connection search (Ctrl+J) and snippet search (Ctrl+K) run only when the terminal is not focused. The quick snippet picker is **Ctrl+Shift+J**, and it also opens only when the terminal is not focused
 - **Select across several screens**: click the start, scroll with the wheel to the end, then **Shift+click** to extend the selection. While drag-selecting, move the pointer past the top/bottom edge of the terminal to auto-scroll (faster the farther you go). Then right-click → Copy selection or **Ctrl+Shift+C** (Mac: **⌘C**) copies all of it
 - **Chinese IME**: while composing, the preedit string is drawn at the cursor. The candidate list stays on the system IME panel. Ctrl chords such as Ctrl+C and Ctrl+R are still sent to the terminal during composition
 - Supports colored output, vim, htop, and other common TUI programs
@@ -186,8 +187,8 @@ Passwords and session info are **encrypted locally**. When switching computers, 
 
 *Fig 6-2: Find in terminal*
 
-- **Ctrl+R**: left to the shell (for example bash reverse history search); Mist does not intercept it
-- **Tools → Command History**: open Mist's command history panel to search and re-run recent commands
+- **Ctrl+R** (terminal focused): sent to the shell as reverse-i-search. Mist does not open the command history panel
+- **Tools → Command History**: open Mist's command history panel to search and re-run recent commands. When the terminal is not focused, **Ctrl+R** also opens that panel
 
 ![Command history](screenshots/17-command-history.png)
 
@@ -261,7 +262,7 @@ Save frequently used commands as **snippets** for one-click insertion. Supports 
 
 | Method | Description |
 |--------|-------------|
-| **Ctrl+K** | Focus snippet search (only when the terminal is not focused; when it is, the key goes to the shell) |
+| **Ctrl+K** | Focus snippet search (only when the terminal is not focused; when it is, the key goes to the shell and deletes to the end of the line) |
 | **Ctrl+Shift+J** | Quick snippet selector (only when the terminal is not focused) |
 | Bottom bar **Snippets** | Open the snippet side panel |
 | **Tools → Snippet Library** | Manage, create, and edit snippets |
@@ -451,8 +452,8 @@ The following uses **Windows** keys; on macOS, replace **Ctrl** with **⌘** (e.
 | **Ctrl+Shift+W** | Close current tab (Mac: **⌘W**) |
 | **Ctrl+Tab** / **Ctrl+Shift+Tab** | Next / previous tab |
 | **Ctrl+1 … Ctrl+9** | Switch to tab N |
-| **Ctrl+J** | Focus connection search (only when the terminal is not focused; when it is, the key goes to the shell) |
-| **Ctrl+K** | Focus snippet search (only when the terminal is not focused; when it is, the key goes to the shell) |
+| **Ctrl+J** | Focus connection search (only when the terminal is not focused; when it is, the key goes to the shell as a line feed) |
+| **Ctrl+K** | Focus snippet search (only when the terminal is not focused; when it is, the key goes to the shell and deletes to the end of the line) |
 | **Ctrl+Shift+J** | Quick snippet selector (only when the terminal is not focused) |
 | **Ctrl+F** / **F3** | Find in terminal |
 | **Ctrl+C** | Interrupt the foreground program (SIGINT), even with a selection. Copy with **Ctrl+Shift+C** (Mac: **⌘C**) |

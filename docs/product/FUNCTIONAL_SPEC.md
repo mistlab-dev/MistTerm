@@ -495,8 +495,13 @@ SSH 密码直接存储在配置文件中存在安全风险。MistTerm 管理着�
 | `⌘W` | `Ctrl+Shift+W` | 关闭当前 Tab |
 | `⌘{1-9}` | `Ctrl+{1-9}` | 切换到第 N 个 Tab |
 | `⌘Tab` | `Ctrl+Tab` | 下一个 Tab |
-| `⌘J` | `Ctrl+J` | 聚焦到搜索框（仅终端失焦；聚焦时 Ctrl+J 发给 PTY） |
-| `⌘K` | `Ctrl+K` | 聚焦到片段搜索框（仅终端失焦；聚焦时 Ctrl+K 发给 PTY） |
+| `⌘J` | `Ctrl+J` | 聚焦到搜索框（仅终端失焦；聚焦时 Ctrl+J 发给 PTY，换行） |
+| `⌘K` | `Ctrl+K` | 聚焦到片段搜索框（仅终端失焦；聚焦时 Ctrl+K 发给 PTY，删到行尾） |
+| `⌘⇧J` | `Ctrl+Shift+J` | 快速片段选择器（仅终端失焦） |
+| `⌘C` | `Ctrl+Shift+C` | 复制终端选区 |
+| `⌘V` | `Ctrl+Shift+V` | 粘贴到终端 |
+| `Ctrl+C` | `Ctrl+C` | 中断前台程序（SIGINT），有选区也一样 |
+| `Ctrl+R` | `Ctrl+R` | 终端聚焦时发给 shell 反向搜索（不是命令历史面板）；失焦时打开命令历史。面板也在「工具 → 命令历史」 |
 | `⌘⌥←` / `⌘⌥→` | `Ctrl+Shift+←` / `Ctrl+Shift+→` | 分屏 Tab 内切换活动窗格焦点 |
 | `⌘⇧D` / `Ctrl+Shift+D` | 同左 | 当前 Tab **左右分屏** |
 | `⌘⇧U` / `Ctrl+Shift+U` | 同左 | 当前 Tab **上下分屏** |

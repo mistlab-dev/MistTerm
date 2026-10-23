@@ -44,7 +44,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — search in terminal viewport\n\
              {} — Preferences\n\
              {} — About & this cheatsheet\n\
-             {} — shell reverse-i-search when the terminal is focused; otherwise Mist command history\n\
+             {} — shell reverse-i-search when the terminal is focused (not the command history panel); when unfocused, Mist command history. Also Tools → Command History\n\
              {} — interrupt the foreground program (SIGINT), even if text is selected\n\
              {} — copy the terminal selection\n\
              {} — paste into the terminal\n\
@@ -103,7 +103,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — 终端内搜索\n\
              {} — 偏好设置\n\
              {} — 关于与本说明\n\
-             {} — 终端聚焦时交给 shell 反向搜索; 失焦时打开 Mist 命令历史\n\
+             {} — 终端聚焦时交给 shell 反向搜索 (不是命令历史面板); 失焦时打开 Mist 命令历史。面板也在「工具 → 命令历史」\n\
              {} — 中断前台程序 (SIGINT), 有选区也一样\n\
              {} — 复制终端选区\n\
              {} — 粘贴到终端\n\
