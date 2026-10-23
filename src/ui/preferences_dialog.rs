@@ -143,7 +143,7 @@ impl MistTermApp {
         default_open: bool,
         body: impl FnOnce(&mut egui::Ui),
     ) {
-        // 版式 A（#95）：小节标题 + 折叠；展开后内容进浅描边卡片。
+        // 版式 A（#95）：小节标题 + 折叠；展开区用细描边分组，底色与弹窗同色（勿套 inset 灰底）。
         egui::CollapsingHeader::new(
             RichText::new(title)
                 .size(theme.font_size_panel_title())
@@ -155,8 +155,8 @@ impl MistTermApp {
         .show(ui, |ui| {
             layout_util::set_width_to_available(ui);
             egui::Frame::none()
-                .fill(theme.color_subtle_inset_fill())
-                .stroke(egui::Stroke::new(1.0, theme.border_divider_color()))
+                .fill(egui::Color32::TRANSPARENT)
+                .stroke(theme.modal_stroke())
                 .rounding(theme.radius_card())
                 .inner_margin(egui::Margin::symmetric(
                     theme.spacing_search_input_x(),
