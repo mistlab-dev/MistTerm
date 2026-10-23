@@ -75,6 +75,12 @@ impl MistTermApp {
                                         theme,
                                         label_color,
                                     );
+                                    self.preferences_section_terminal(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        label_color,
+                                    );
                                     self.preferences_section_connection(
                                         ui,
                                         ctx,
@@ -137,6 +143,7 @@ impl MistTermApp {
         default_open: bool,
         body: impl FnOnce(&mut egui::Ui),
     ) {
+        // 版式 A（#95）：小节标题 + 折叠；展开后内容进浅描边卡片。
         egui::CollapsingHeader::new(
             RichText::new(title)
                 .size(theme.font_size_panel_title())
@@ -147,8 +154,19 @@ impl MistTermApp {
         .default_open(default_open)
         .show(ui, |ui| {
             layout_util::set_width_to_available(ui);
-            ui.spacing_mut().item_spacing.y = theme.spacing_panel_gap();
-            body(ui);
+            egui::Frame::none()
+                .fill(theme.color_subtle_inset_fill())
+                .stroke(egui::Stroke::new(1.0, theme.border_divider_color()))
+                .rounding(theme.radius_card())
+                .inner_margin(egui::Margin::symmetric(
+                    theme.spacing_search_input_x(),
+                    theme.spacing_search_input_y(),
+                ))
+                .show(ui, |ui| {
+                    layout_util::set_width_to_available(ui);
+                    ui.spacing_mut().item_spacing.y = theme.spacing_panel_gap();
+                    body(ui);
+                });
         });
         ui.add_space(theme.spacing_sm());
     }
@@ -336,7 +354,7 @@ impl MistTermApp {
             "appearance",
             crate::i18n::tr(ctx, "Appearance", "外观"),
             label_color,
-            false,
+            true,
             |ui| {
                 let theme_stored: Vec<String> = self
                     .theme_manager
@@ -360,8 +378,25 @@ impl MistTermApp {
                         ctx.request_repaint();
                     }
                 }
+            },
+        );
+    }
 
-                ui.add_space(theme.spacing_md());
+    fn preferences_section_terminal(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+        label_color: egui::Color32,
+    ) {
+        Self::preferences_collapsing(
+            ui,
+            theme,
+            "terminal",
+            crate::i18n::tr(ctx, "Terminal", "终端"),
+            label_color,
+            true,
+            |ui| {
                 ui.label(
                     RichText::new(crate::i18n::tr(ctx, "Terminal font", "终端字体"))
                         .size(theme.font_size_small())
@@ -396,7 +431,6 @@ impl MistTermApp {
                     self.apply_terminal_font_preferences(ctx);
                 }
 
-                // 固定行高，避免控件被拉高、标签与输入基线错位
                 crate::ui::chrome::form_control_row(ui, theme, |ui| {
                     crate::ui::chrome::form_inline_label(
                         ui,
@@ -1094,7 +1128,7 @@ impl MistTermApp {
             "team",
             crate::i18n::tr(ctx, "Team platform", "团队平台"),
             label_color,
-            true,
+            false,
             |ui| {
                 let pref_w = layout_util::finite_content_width(ui);
                 ui.label(
