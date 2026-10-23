@@ -292,6 +292,47 @@ pub fn append_dynamic_forward_line(text: &mut String, fwd: &crate::ssh::DynamicP
     text.push('\n');
 }
 
+/// 从转发文本中删除与 `line` 匹配的一行（用于停止运行时转发后同步会话配置，
+/// 避免重连时被停止的转发复活）。没有匹配行时原样返回 `false`。
+fn remove_forward_line_by(text: &mut String, line: &str) -> bool {
+    let target = line.trim();
+    let mut found = false;
+    let kept: Vec<&str> = text
+        .lines()
+        .filter(|l| {
+            if !found && l.trim() == target {
+                found = true; // 只删第一处，重复行由后续停止再删
+                false
+            } else {
+                true
+            }
+        })
+        .collect();
+    if !found {
+        return false;
+    }
+    *text = if kept.is_empty() {
+        String::new()
+    } else {
+        let mut out = kept.join("\n");
+        out.push('\n');
+        out
+    };
+    true
+}
+
+pub fn remove_local_forward_line(text: &mut String, fwd: &crate::ssh::LocalPortForward) -> bool {
+    remove_forward_line_by(text, &format_local_forward_line(fwd))
+}
+
+pub fn remove_remote_forward_line(text: &mut String, fwd: &crate::ssh::RemotePortForward) -> bool {
+    remove_forward_line_by(text, &format_remote_forward_line(fwd))
+}
+
+pub fn remove_dynamic_forward_line(text: &mut String, fwd: &crate::ssh::DynamicPortForward) -> bool {
+    remove_forward_line_by(text, &format_dynamic_forward_line(fwd))
+}
+
 /// 解析 `dynamic_forwards_text`(每行 `port` 或 `bind_address:port`)。
 pub fn parse_dynamic_forwards_text(text: &str) -> Vec<crate::ssh::DynamicPortForward> {
     text.lines()
@@ -863,6 +904,65 @@ mod tests {
         let manager = SessionManager::with_sessions_path(path);
         // 应该能正常创建，即使没有 sessions.json 文件
         assert_eq!(manager.count(), 0);
+    }
+
+    #[test]
+    fn remove_local_forward_line_deletes_matching_line() {
+        let mut text = String::from("8080:127.0.0.1:80\n9090:127.0.0.1:90\n");
+        let fwd = crate::ssh::LocalPortForward {
+            bind_address: String::new(),
+            local_port: 8080,
+            remote_host: "127.0.0.1".into(),
+            remote_port: 80,
+        };
+        assert!(remove_local_forward_line(&mut text, &fwd));
+        assert_eq!(text, "9090:127.0.0.1:90\n");
+        // 再删一次：已不存在，返回 false 且内容不变
+        assert!(!remove_local_forward_line(&mut text, &fwd));
+        assert_eq!(text, "9090:127.0.0.1:90\n");
+    }
+
+    #[test]
+    fn remove_local_forward_line_clears_to_empty() {
+        let mut text = String::from("8080:example.com:80\n");
+        let fwd = crate::ssh::LocalPortForward {
+            bind_address: String::new(),
+            local_port: 8080,
+            remote_host: "example.com".into(),
+            remote_port: 80,
+        };
+        assert!(remove_local_forward_line(&mut text, &fwd));
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn remove_dynamic_forward_line_matches_bare_port() {
+        // profile 里存的裸端口 `1080`（bind 为默认 127.0.0.1 时格式化为裸端口）
+        let mut text = String::from("1080\n");
+        let fwd = crate::ssh::DynamicPortForward {
+            bind_address: String::new(),
+            local_port: 1080,
+        };
+        assert!(remove_dynamic_forward_line(&mut text, &fwd));
+        assert_eq!(text, "");
+    }
+
+    #[test]
+    fn remove_forward_line_keeps_other_lines() {
+        let mut text = String::from("8080:127.0.0.1:80\n1081\n9090:10.0.0.5:90\n");
+        let dyn_fwd = crate::ssh::DynamicPortForward {
+            bind_address: String::new(),
+            local_port: 1081,
+        };
+        assert!(remove_dynamic_forward_line(&mut text, &dyn_fwd));
+        let rem_fwd = crate::ssh::RemotePortForward {
+            remote_port: 9090,
+            target_host: "10.0.0.5".into(),
+            target_port: 90,
+            remote_bind_address: None,
+        };
+        assert!(remove_remote_forward_line(&mut text, &rem_fwd));
+        assert_eq!(text, "8080:127.0.0.1:80\n");
     }
 
     #[test]
