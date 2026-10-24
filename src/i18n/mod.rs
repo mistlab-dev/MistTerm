@@ -227,6 +227,12 @@ pub fn localize_backend_error(lang: UiLanguage, err: &str) -> String {
     if s.starts_with("Permission denied") {
         return "没有权限。".to_string();
     }
+    if let Some(rest) = s.strip_prefix("Failed to create SFTP channel:") {
+        // #94 P1：子系统不可用（sshd 未启用 sftp / 配置错误）时说人话，不静默。
+        return format!(
+            "无法建立 SFTP 通道：服务器可能未启用 SFTP 子系统。原始错误：{rest}"
+        );
+    }
     if let Some(rest) = s.strip_prefix("Failed to create directory:") {
         return format!("创建目录失败：{rest}");
     }

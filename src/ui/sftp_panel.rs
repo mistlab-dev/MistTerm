@@ -1776,6 +1776,11 @@ impl SftpPanel {
                         }
                     }
                     Err(e) => {
+                        // P2（#94）：列目录失败时清空旧列表，避免残留上一目录内容误导。
+                        self.entries.clear();
+                        self.remote_selected.clear();
+                        self.cwd = dir.clone();
+                        self.sync_remote_path_from_cwd();
                         self.list_err = Some(e);
                     }
                 }
@@ -1867,19 +1872,20 @@ impl SftpPanel {
             }
             Err(mpsc::TryRecvError::Empty) => {}
             Err(mpsc::TryRecvError::Disconnected) => {
+                // P0（#94）：worker 断开时在途传输全部标失败，进度条不假死、队列可继续操作。
+                let worker_lost = crate::i18n::Locale::from(lang)
+                    .tr(
+                        "SFTP background worker stopped unexpectedly",
+                        "SFTP 后台任务异常中断",
+                    )
+                    .to_string();
+                self.xfer.fail_all_in_flight(worker_lost.clone());
                 self.busy = false;
                 self.rx = None;
                 self.xfer_progress_rx = None;
                 self.tree_busy = false;
                 self.tree_cancel = None;
-                self.pending_status_err = Some(
-                    crate::i18n::Locale::from(lang)
-                        .tr(
-                            "SFTP background worker stopped unexpectedly",
-                            "SFTP 后台任务异常中断",
-                        )
-                        .to_string(),
-                );
+                self.pending_status_err = Some(worker_lost);
             }
             Ok(SftpJobResult::UploadTreeReady { files }) => {
                 self.busy = false;

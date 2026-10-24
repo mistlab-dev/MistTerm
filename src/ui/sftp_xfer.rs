@@ -214,6 +214,23 @@ impl XferQueue {
         }
     }
 
+    /// 后台 worker 断开（Disconnected）时的清理（#94 P0）：
+    /// 把所有在途（Queued/Running）条目标 Failed，释放 cancel 标志；
+    /// 避免队列永远停在 Running 让进度条假死。
+    pub fn fail_all_in_flight(&mut self, error: String) {
+        if let Some(c) = &self.cancel {
+            c.store(true, Ordering::Relaxed);
+        }
+        for item in self.items.iter_mut() {
+            if matches!(item.state, XferState::Queued | XferState::Running) {
+                item.state = XferState::Failed;
+                item.error = Some(error.clone());
+                item.speed_bps = 0.0;
+            }
+        }
+        self.cancel = None;
+    }
+
     pub fn retry_failed(&mut self, id: u64) {
         if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
             if item.state == XferState::Failed || item.state == XferState::Cancelled {
