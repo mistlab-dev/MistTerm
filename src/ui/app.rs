@@ -250,6 +250,8 @@ enum ActiveRightDock {
     Monitor,
     PortForward,
     Ai,
+    /// 排障复盘草稿预览（#67）：右抽屉内嵌编辑，非独立弹窗。
+    Postmortem,
 }
 
 /// 主应用程序
@@ -471,6 +473,16 @@ pub struct MistTermApp {
     native_menu: Option<crate::platform::macos_menu::NativeAppMenu>,
     session_log_settings: SessionLogSettings,
     session_log_dialog: SessionLogDialog,
+    postmortem_dialog: crate::ui::postmortem_dialog::PostmortemDialog,
+    /// 在飞的复盘生成任务（#67）：通道 + 取消位 + 标题素材 + 引用锚点 + **跨帧累加正文**。
+    pending_postmortem_rx: Option<(
+        std::sync::mpsc::Receiver<crate::core::ai_client::ChatEvent>,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+        String,
+        String,
+        Vec<String>,
+        String, // acc：Empty 时必须连同已收 Delta 一起放回，否则下一帧丢缓冲
+    )>,
     team_members_dialog: TeamMembersDialog,
     help_docs_dialog: HelpDocsDialog,
     session_log_enabled: bool,
@@ -1260,6 +1272,8 @@ impl MistTermApp {
             native_menu: None,
             session_log_settings: SessionLogSettings::default(),
             session_log_dialog: SessionLogDialog::default(),
+            postmortem_dialog: crate::ui::postmortem_dialog::PostmortemDialog::default(),
+            pending_postmortem_rx: None,
             team_members_dialog: TeamMembersDialog::default(),
             help_docs_dialog: HelpDocsDialog::default(),
             session_log_enabled: true,
@@ -2395,6 +2409,166 @@ impl MistTermApp {
         });
     }
 
+    /// 「生成复盘」（#67）：取当前终端尾部 + AI 面板引用过的 Runbook 锚点，
+    /// 后台线程跑 AI 生成 Markdown 草稿；完成后打开预览对话框。
+    /// 生成失败/为空时打开预览并显示错误，不产生半截文档。
+    fn start_postmortem_generation(&mut self, ctx: &egui::Context) {
+        use crate::core::ai_client::{run_chat_with_key, ChatEvent, ChatMessage};
+        // 终端尾部快照（当前活动 pane；无终端时报错，不开空预览）
+        let Some(terminal_text) = self
+            .current_terminal()
+            .map(|t| t.tail_plain_text(400))
+            .filter(|t| !t.trim().is_empty())
+        else {
+            self.notify_warn(crate::i18n::tr(
+                ctx,
+                "No terminal output yet — nothing to summarize.",
+                "终端还没有输出，无可汇总内容。",
+            ));
+            return;
+        };
+        let Some(ai_settings) = Some(self.app_settings.ai.clone()).filter(|s| s.enabled) else {
+            self.notify_warn(crate::i18n::tr(
+                ctx,
+                "Enable AI first to generate a postmortem draft.",
+                "请先启用 AI 才能生成复盘草稿。",
+            ));
+            return;
+        };
+        let Some(api_key) = self.ai_panel.api_key_for_host(&self.app_settings) else {
+            self.notify_warn(crate::i18n::tr(
+                ctx,
+                "Configure an AI key first.",
+                "请先配置 AI Key。",
+            ));
+            return;
+        };
+        let references = self.ai_panel.referenced_runbook_anchors();
+        let host = self
+            .current_terminal()
+            .and_then(|t| t.connection_target_text())
+            .unwrap_or_default();
+        let date = chrono::Local::now().format("%Y-%m-%d %H:%M").to_string();
+        self.postmortem_dialog.set_generating(true);
+        let system_prompt = crate::core::postmortem::postmortem_system_prompt();
+        let messages = vec![
+            ChatMessage {
+                role: "system".into(),
+                content: system_prompt,
+            },
+            ChatMessage {
+                role: "user".into(),
+                content: format!(
+                    "以下是本次排障会话的终端输出记录，请生成复盘草稿：\n\n```\n{}\n```",
+                    terminal_text
+                ),
+            },
+        ];
+        let (tx, rx) = std::sync::mpsc::channel::<ChatEvent>();
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel_thread = cancel.clone();
+        std::thread::spawn(move || {
+            run_chat_with_key(&ai_settings, &api_key, &messages, &cancel_thread, &tx, true, None);
+        });
+        self.pending_postmortem_rx = Some((rx, cancel, host, date, references, String::new()));
+        // 生成中也打开右抽屉，显示「正在生成…」占位（#67：抽屉内嵌，非 modal）。
+        if self.ensure_right_dock_allowed_or_warn(ctx) {
+            self.open_right_dock_panel(ActiveRightDock::Postmortem);
+        }
+        ctx.request_repaint();
+    }
+
+    /// 每帧泵复盘草稿生成结果（#67）；完成后打开右抽屉预览。
+    /// 累加缓冲放在 pending 元组里：Empty 时连同已收正文一起放回，跨帧不丢 Delta。
+    fn poll_postmortem_generation(&mut self, ctx: &egui::Context) {
+        use crate::core::ai_client::ChatEvent;
+        let Some((mut rx, cancel, host, date, references, mut acc)) =
+            self.pending_postmortem_rx.take()
+        else {
+            return;
+        };
+        let mut failed: Option<String> = None;
+        let mut done = false;
+        loop {
+            match rx.try_recv() {
+                Ok(ChatEvent::Delta(chunk)) => acc.push_str(&chunk),
+                Ok(ChatEvent::Finished) => {
+                    done = true;
+                    break;
+                }
+                Ok(ChatEvent::Failed(e)) => {
+                    failed = Some(e);
+                    done = true;
+                    break;
+                }
+                Ok(ChatEvent::Cancelled) => {
+                    failed = Some("cancelled".into());
+                    done = true;
+                    break;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.pending_postmortem_rx =
+                        Some((rx, cancel, host, date, references, acc));
+                    ctx.request_repaint();
+                    return;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    failed = failed.or_else(|| Some("generation worker lost".into()));
+                    done = true;
+                    break;
+                }
+            }
+        }
+        let _ = done;
+        self.postmortem_dialog.set_generating(false);
+        if self.ensure_right_dock_allowed_or_warn(ctx) {
+            self.open_right_dock_panel(ActiveRightDock::Postmortem);
+        }
+        if let Some(err) = failed {
+            // 失败：预览打开但正文为空 + 错误条，不产生半截文档。
+            self.postmortem_dialog
+                .open_with_draft(&host, &date, String::new(), Vec::new());
+            self.postmortem_dialog.show_error(&err);
+            let _ = cancel;
+            return;
+        }
+        let markdown = acc.trim().to_string();
+        if markdown.is_empty() {
+            self.postmortem_dialog
+                .open_with_draft(&host, &date, String::new(), Vec::new());
+            self.postmortem_dialog
+                .show_error("AI returned an empty draft");
+            return;
+        }
+        self.postmortem_dialog
+            .open_with_draft(&host, &date, markdown, references);
+    }
+
+    /// 宿主侧保存流程（#67）：取 UI 保存请求 → 拿登录态 → 后台建文档。
+    fn poll_postmortem_save(&mut self) {
+        if !self.postmortem_dialog.take_pending_save() {
+            return;
+        }
+        if !self.team_service.is_logged_in()
+            || self.team_service.state.current_team_id.is_none()
+        {
+            self.postmortem_dialog
+                .show_error("Not logged in to a team");
+            return;
+        }
+        let Some(token) = self.team_service.current_access_token() else {
+            self.postmortem_dialog
+                .show_error("Session expired — sign in again");
+            return;
+        };
+        let api_base = self.team_service.api_base();
+        let Some(team_id) = self.team_service.state.current_team_id.clone() else {
+            return;
+        };
+        self.postmortem_dialog.begin_save_with_creds(&api_base, &token, &team_id);
+    }
+
+    /// 宿主侧保存流程辅助：无。
     fn poll_connect_audit_from_tabs(&mut self, ctx: &egui::Context) {
         let mut toast_errors: Vec<(usize, String)> = Vec::new();
         let mut display_link_sftp: Option<String> = None;
@@ -4948,6 +5122,11 @@ impl MistTermApp {
                     if pane.terminal.take_pending_send_tail_to_ai() {
                         self.action_bus
                             .dispatch(AppAction::AttachTerminalTailToAi(50));
+                    }
+                    // 「生成复盘」（#67）：取终端尾部 + 本次会话引用的 Runbook，
+                    // 后台跑 AI 生成 Markdown 草稿；完成后打开预览，人确认后才入库。
+                    if self.ai_panel.take_postmortem_request() {
+                        self.start_postmortem_generation(ctx);
                     }
                 }
             }
@@ -8871,6 +9050,10 @@ impl eframe::App for MistTermApp {
         // 须在终端/非活动窗格泵完 SSH 之后再取 MIST_AUDIT，否则本帧事件会空转。
         self.poll_server_audit_from_tabs(ctx);
         self.process_ai_bridge(ctx);
+        // 复盘草稿（#67）：泵生成结果 → 消费保存请求；预览在右 dock Foreground。
+        self.poll_postmortem_generation(ctx);
+        self.poll_postmortem_save();
+        self.postmortem_dialog.team_logged_in = self.team_service.is_logged_in();
         // 须在 bridge / agent 把意图写入总线之后再 drain，保证同帧生效。
         self.process_actions(ctx);
         // 须在所有 UI(含终端 IME 框)画完之后。
