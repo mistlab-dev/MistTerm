@@ -1,10 +1,10 @@
 //! 排障复盘草稿预览（#67）：AI 生成的 Markdown 草稿可编辑预览，
 //! 人确认后「保存到 MistDocs」（用户 JWT + create_doc）。无自动保存路径。
+//! 预览落在右侧 dock（非独立 modal），与其它辅助栏互斥。
 
 use crate::core::postmortem::{
     create_document_blocking, postmortem_title, CreateDocumentRequest, PostmortemDraft,
 };
-use crate::core::TeamService;
 use crate::ui::chrome;
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
@@ -40,6 +40,8 @@ pub struct PostmortemDialog {
     generating: bool,
     /// 宿主每帧同步的登录态：未登录时隐藏保存主按钮（已批方案：只保留复制，#67 review）。
     pub team_logged_in: bool,
+    /// 本帧 SidePanel 槽位（Central 之后 Foreground 重绘用）。
+    last_panel_slot_rect: Option<egui::Rect>,
 }
 
 impl Default for PostmortemDialog {
@@ -59,13 +61,20 @@ impl Default for PostmortemDialog {
             error: None,
             generating: false,
             team_logged_in: false,
+            last_panel_slot_rect: None,
         }
     }
 }
 
 impl PostmortemDialog {
-    /// 打开预览：由 AI 面板生成完成后调用（草稿已在本地，未经确认不落库）。
-    pub fn open_with_draft(&mut self, host: &str, date: &str, markdown: String, references: Vec<String>) {
+    /// 打开预览：由 AI 生成完成后调用（草稿已在本地，未经确认不落库）。
+    pub fn open_with_draft(
+        &mut self,
+        host: &str,
+        date: &str,
+        markdown: String,
+        references: Vec<String>,
+    ) {
         let markdown = crate::core::postmortem::with_references(&markdown, &references);
         self.draft = PostmortemDraft {
             title: postmortem_title(host, date),
@@ -92,6 +101,10 @@ impl PostmortemDialog {
 
     pub fn is_saving(&self) -> bool {
         self.phase == SavePhase::Saving
+    }
+
+    pub fn last_panel_slot_rect(&self) -> Option<egui::Rect> {
+        self.last_panel_slot_rect
     }
 
     /// 发起后台保存。由宿主在 take_pending_save 后调用（登录态由宿主提供）。
@@ -158,143 +171,201 @@ impl PostmortemDialog {
         }
     }
 
-    pub fn show(&mut self, ctx: &egui::Context, theme: &Theme) {
+    /// 仅占右栏布局槽（正文在 Central 之后 [`show_foreground_panel`] 绘制）。
+    pub fn show_side_panel(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        right_dock_outer_left: &mut Option<f32>,
+        dock_col_w: f32,
+    ) {
+        if !self.open {
+            self.last_panel_slot_rect = None;
+            return;
+        }
+        let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
+        let panel = egui::SidePanel::right("postmortem_draft_panel")
+            .default_width(def_w)
+            .min_width(min_w)
+            .max_width(max_w)
+            .resizable(true)
+            .frame(chrome::right_dock_placeholder_frame(theme))
+            .show(ctx, |ui| {
+                let h = ui.available_height().max(1.0);
+                let w = ui.available_width().max(1.0);
+                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+            });
+        let dock_inset = theme.spacing_right_dock_screen_inset();
+        let slot = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
+        chrome::paint_right_dock_slot_gap(ctx, theme, slot);
+        self.last_panel_slot_rect = Some(slot);
+        if let Some(slot) = self.last_panel_slot_rect {
+            layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
+        } else {
+            layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
+        }
+    }
+
+    /// Central 之后绘制复盘草稿正文（右抽屉内嵌编辑）。
+    pub fn show_foreground_panel(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        close_panel: &mut bool,
+    ) {
         if !self.open {
             return;
         }
         self.poll_save();
-        let mut should_close = false;
+
+        let screen = ctx.screen_rect();
+        let dock_inset = theme.spacing_right_dock_screen_inset();
+        let Some(slot) = layout_util::right_dock_foreground_slot(
+            self.last_panel_slot_rect,
+            ctx,
+            "postmortem_draft_panel",
+            layout_util::SidePanelProfile::Standard,
+            None,
+            dock_inset,
+        ) else {
+            return;
+        };
+        let geom = chrome::prepare_right_dock_foreground_geom(slot, screen, theme);
+        let layer_id = chrome::right_dock_foreground_layer_id("mistterm_postmortem_fg");
+        chrome::paint_right_dock_foreground_shell(ctx, layer_id, geom.paint, theme);
+
         let mut do_copy = false;
         let mut do_save = false;
-        let r = ctx.screen_rect();
-        let sw = r.width().max(360.0);
-        let sh = r.height().max(280.0);
-        let modal_size = egui::vec2(
-            (sw * 0.56).clamp(560.0, 900.0),
-            (sh * 0.64).clamp(440.0, 720.0),
-        );
-        let default_pos = egui::pos2(
-            r.min.x + (sw - modal_size.x) * 0.5,
-            r.min.y + (sh - modal_size.y) * 0.5,
-        );
-        let title = crate::i18n::tr(ctx, "Postmortem draft", "复盘草稿").to_string();
-        chrome::modal_window("postmortem_draft", theme, ctx)
-            .id(egui::Id::new("postmortem_draft_window"))
-            .open(&mut self.open)
-            .default_pos(default_pos)
-            .movable(true)
-            .resizable(false)
-            .fixed_size(modal_size)
-            .show(ctx, |ui| {
-                chrome::modal_content_frame(theme).show(ui, |ui| {
-                    let content_w = layout_util::textedit_width_in_parent(ui, 24.0);
-                    ui.set_width(content_w);
-                    if chrome::modal_header(ui, theme, &title, chrome::modal_title_font_size(theme)) {
-                        should_close = true;
-                    }
-                    if self.generating {
-                        ui.add_space(12.0);
-                        ui.label(
-                            egui::RichText::new(crate::i18n::tr(
-                                ctx,
-                                "Generating draft from this session…",
-                                "正在根据本会话生成草稿…",
-                            ))
-                            .color(theme.text_secondary()),
-                        );
-                        return;
-                    }
-                    // 标题编辑
-                    ui.add_space(4.0);
-                    let title_w = content_w;
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(crate::i18n::tr(ctx, "Title", "标题"))
-                                .color(theme.text_secondary()),
+        chrome::show_right_dock_foreground_body(
+            "mistterm_postmortem_fg",
+            ctx,
+            theme,
+            &geom,
+            layout_util::SidePanelProfile::Standard,
+            |ui, body_w| {
+                let panel_w = body_w.max(1.0);
+                ui.set_max_width(panel_w);
+                let mut header_closed = false;
+                theme.frame_right_dock_header_band().show(ui, |ui| {
+                    header_closed = chrome::dock_panel_title_close_only(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::File,
+                        crate::i18n::tr(ctx, "Postmortem draft", "复盘草稿"),
+                        crate::i18n::tr(ctx, "Close postmortem draft", "关闭复盘草稿"),
+                    );
+                });
+                if header_closed && self.phase != SavePhase::Saving {
+                    *close_panel = true;
+                }
+                chrome::right_dock_header_divider(ui, theme);
+
+                if self.generating {
+                    ui.add_space(12.0);
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            ctx,
+                            "Generating draft from this session…",
+                            "正在根据本会话生成草稿…",
+                        ))
+                        .color(theme.text_secondary()),
+                    );
+                    return;
+                }
+
+                let content_w = (panel_w - 8.0).max(120.0);
+                ui.add_space(4.0);
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(ctx, "Title", "标题"))
+                        .color(theme.text_secondary()),
+                );
+                let title_id = ui.make_persistent_id("postmortem_title_edit");
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.draft.title)
+                        .id(title_id)
+                        .desired_width(content_w)
+                        .font(egui::TextStyle::Body),
+                );
+
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(ctx, "Body (Markdown)", "正文（Markdown）"))
+                        .color(theme.text_secondary()),
+                );
+                let body_id = ui.make_persistent_id("postmortem_body_edit");
+                let scroll_h = layout_util::scroll_area_fill_height(ui, 96.0);
+                egui::ScrollArea::vertical()
+                    .id_source("postmortem_body_scroll")
+                    .max_height(scroll_h.max(160.0))
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::multiline(&mut self.draft.markdown)
+                                .id(body_id)
+                                .desired_width(content_w)
+                                .desired_rows(18)
+                                .code_editor()
+                                .font(egui::TextStyle::Monospace),
                         );
                     });
-                    let title_id = ui.make_persistent_id("postmortem_title_edit");
-                    let title_edit = egui::TextEdit::singleline(&mut self.draft.title)
-                        .id(title_id)
-                        .desired_width(title_w)
-                        .font(egui::TextStyle::Body);
-                    ui.add(title_edit);
-                    // 正文编辑（Markdown，等宽）
-                    ui.add_space(8.0);
-                    let body_h = modal_size.y * 0.52;
-                    let body_id = ui.make_persistent_id("postmortem_body_edit");
-                    let body_edit = egui::TextEdit::multiline(&mut self.draft.markdown)
-                        .id(body_id)
-                        .desired_width(content_w)
-                        .desired_rows(12)
-                        .code_editor()
-                        .font(egui::TextStyle::Monospace);
-                    ui.add_sized([content_w, body_h], body_edit);
-                    // 错误条
-                    if let Some(err) = &self.error {
-                        ui.add_space(6.0);
-                        ui.label(egui::RichText::new(err).color(theme.red_color()));
-                    }
-                    if let Some(doc_id) = &self.saved_doc_id {
-                        ui.add_space(6.0);
-                        let saved_msg = if doc_id.is_empty() {
+
+                if let Some(err) = &self.error {
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(err).color(theme.red_color()));
+                }
+                if let Some(doc_id) = &self.saved_doc_id {
+                    ui.add_space(6.0);
+                    let saved_msg = if doc_id.is_empty() {
+                        crate::i18n::tr(ctx, "Saved to MistDocs", "已保存到 MistDocs").to_string()
+                    } else {
+                        format!(
+                            "{}{doc_id}",
                             crate::i18n::tr(
                                 ctx,
-                                "Saved to MistDocs",
-                                "已保存到 MistDocs",
+                                "Saved to MistDocs (doc ",
+                                "已保存到 MistDocs（文档 "
                             )
-                            .to_string()
-                        } else {
-                            format!(
-                                "{}{doc_id}",
-                                crate::i18n::tr(
-                                    ctx,
-                                    "Saved to MistDocs (doc ",
-                                    "已保存到 MistDocs（文档 "
-                                )
-                            )
-                        };
-                        ui.label(egui::RichText::new(saved_msg).color(theme.green_color()));
+                        )
+                    };
+                    ui.label(egui::RichText::new(saved_msg).color(theme.green_color()));
+                }
+
+                ui.add_space(10.0);
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .button(crate::i18n::tr(ctx, "Copy Markdown", "仅复制 Markdown"))
+                        .clicked()
+                    {
+                        do_copy = true;
                     }
-                    ui.add_space(10.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // 主按钮：保存到 MistDocs（必须经预览；无自动保存路径）。
-                        // 未登录/纯本地时隐藏（已批方案：只保留复制），而非点击后才报错。
-                        if self.team_logged_in {
-                            let can_save = self.phase == SavePhase::Idle
-                                && self.saved_doc_id.is_none()
-                                && self.draft.validation_error().is_none();
-                            let save_label = if self.phase == SavePhase::Saving {
-                                crate::i18n::tr(ctx, "Saving…", "保存中…").to_string()
-                            } else {
-                                crate::i18n::tr(ctx, "Save to MistDocs", "保存到 MistDocs").to_string()
-                            };
-                            if ui
-                                .add_enabled(
-                                    can_save,
-                                    egui::Button::new(
-                                        egui::RichText::new(save_label)
-                                            .color(theme.text_primary())
-                                            .strong(),
-                                    )
-                                    .fill(theme.accent_color())
-                                    .min_size(egui::vec2(150.0, 30.0)),
-                                )
-                                .clicked()
-                            {
-                                do_save = true;
-                            }
-                        }
-                        // 次按钮：仅复制 Markdown
+                    if self.team_logged_in {
+                        let can_save = self.phase == SavePhase::Idle
+                            && self.saved_doc_id.is_none()
+                            && self.draft.validation_error().is_none();
+                        let save_label = if self.phase == SavePhase::Saving {
+                            crate::i18n::tr(ctx, "Saving…", "保存中…").to_string()
+                        } else {
+                            crate::i18n::tr(ctx, "Save to MistDocs", "保存到 MistDocs").to_string()
+                        };
                         if ui
-                            .button(crate::i18n::tr(ctx, "Copy Markdown", "仅复制 Markdown"))
+                            .add_enabled(
+                                can_save,
+                                egui::Button::new(
+                                    egui::RichText::new(save_label)
+                                        .color(theme.text_primary())
+                                        .strong(),
+                                )
+                                .fill(theme.accent_color())
+                                .min_size(egui::vec2(140.0, 28.0)),
+                            )
                             .clicked()
                         {
-                            do_copy = true;
+                            do_save = true;
                         }
-                    });
+                    }
                 });
-            });
+            },
+        );
+
         if do_copy {
             if let Ok(mut cb) = Clipboard::new() {
                 let _ = cb.set_text(self.draft.markdown.clone());
@@ -303,7 +374,7 @@ impl PostmortemDialog {
         if do_save {
             self.pending_save = true;
         }
-        if should_close && self.phase != SavePhase::Saving {
+        if *close_panel && self.phase != SavePhase::Saving {
             self.open = false;
         }
     }
