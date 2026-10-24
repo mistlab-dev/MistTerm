@@ -483,6 +483,16 @@ impl TerminalView {
         })
     }
 
+    /// display-link 下划线：idle / hover 都不超过 1 物理像素，accent 带透明度。
+    fn display_link_underline_stroke(
+        theme: &Theme,
+        ctx: &egui::Context,
+        hovered: bool,
+    ) -> egui::Stroke {
+        let alpha = if hovered { 180 } else { 150 };
+        egui::Stroke::new(theme.hairline_width(ctx), theme.accent_alpha(alpha))
+    }
+
     /// 点选/拖选命中：必须跟 galley 行盒一致。
     /// 均匀 `cell_h = scroll_h/rows` 会与 epaint 每行 `round_to_pixel` 累积漂移，
     /// HiDPI 下常偏到上一行（选区高亮对、指针下的行不对）。
@@ -1909,7 +1919,6 @@ impl TerminalView {
                             if !display_links.is_empty() {
                                 let painter =
                                     ui.painter().clone().with_layer_id(response.layer_id);
-                                let stroke_color = theme.accent_color();
                                 for (row_i, link) in &display_links {
                                     let Some(grow) = galley.rows.get(*row_i) else {
                                         continue;
@@ -1924,12 +1933,15 @@ impl TerminalView {
                                     let hovered = hover_link
                                         .as_ref()
                                         .is_some_and(|(hr, hl)| hr == row_i && hl.text == link.text);
-                                    let y = text_draw_pos.y + grow.rect.min.y + grow.height();
+                                    let y = theme.snap_y_to_pixel(
+                                        ui.ctx(),
+                                        text_draw_pos.y + grow.rect.min.y + grow.height(),
+                                    );
                                     let left = text_draw_pos.x + grow.x_offset(s);
                                     let right = (text_draw_pos.x + grow.x_offset(e)).max(left + 1.0);
                                     painter.line_segment(
                                         [egui::pos2(left, y), egui::pos2(right, y)],
-                                        egui::Stroke::new(if hovered { 1.5 } else { 1.0 }, stroke_color),
+                                        Self::display_link_underline_stroke(theme, ui.ctx(), hovered),
                                     );
                                 }
                                 if hover_link.is_some() {
@@ -4587,6 +4599,34 @@ fn startup_cd_payload(path: &str) -> Vec<u8> {
 impl Default for TerminalView {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod display_link_stroke_tests {
+    use super::*;
+
+    #[test]
+    fn display_link_underline_is_one_physical_pixel() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run(
+            egui::RawInput {
+                pixels_per_point: Some(2.0),
+                ..Default::default()
+            },
+            |_| {},
+        );
+        let theme = Theme::dark();
+        let idle = TerminalView::display_link_underline_stroke(&theme, &ctx, false);
+        let hover = TerminalView::display_link_underline_stroke(&theme, &ctx, true);
+        let ppp = ctx.pixels_per_point();
+        assert!((idle.width * ppp - 1.0).abs() < 0.01, "idle {}", idle.width);
+        assert!((hover.width * ppp - 1.0).abs() < 0.01, "hover {}", hover.width);
+        assert!(hover.width <= theme.hairline_width(&ctx) + f32::EPSILON);
+        assert!(idle.color.a() >= 140 && idle.color.a() <= 180);
+        assert!(hover.color.a() >= 140 && hover.color.a() <= 180);
+        assert!(hover.color.a() >= idle.color.a());
+        assert_ne!(idle.color.a(), 255);
     }
 }
 

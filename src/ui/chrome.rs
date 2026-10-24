@@ -554,8 +554,8 @@ fn apply_sidebar_menu_popup_style(ui: &mut Ui, theme: &Theme) {
     ui.style_mut().spacing.indent = 0.0;
 }
 
-pub fn modal_window_frame(theme: &Theme) -> egui::Frame {
-    theme.frame_modal_window()
+pub fn modal_window_frame(theme: &Theme, ctx: &egui::Context) -> egui::Frame {
+    theme.frame_modal_window(ctx)
 }
 
 pub fn modal_content_frame(theme: &Theme) -> egui::Frame {
@@ -659,7 +659,7 @@ pub fn right_dock_header_divider(ui: &mut Ui, theme: &Theme) {
 }
 
 /// 标准弹窗 `Window`：无系统标题栏、不可折叠、统一外框(须再 `.open()` / `.show()` / 尺寸)。
-/// 外框描边来自 [`Theme::modal_stroke`]：暗夜面板线宽为 0，弹窗仍保留 1px，避免叠在同色窗口上没有边。
+/// 外框描边来自 [`Theme::modal_stroke`]：暗夜面板线宽为 0，弹窗用 1 物理像素发丝线，避免叠在同色窗口上没有边。
 /// 统一弹窗入口：去掉默认 title_bar / collapse，应用 [`modal_window_frame`]，
 /// 并把约束放宽到整屏(`ctx.screen_rect()`)，否则默认 `constrain(true)` 会把弹窗夹在
 /// `ctx.available_rect()` 内，右 dock 打开后无法把弹窗拖到 dock 上方。
@@ -673,7 +673,7 @@ pub fn modal_window<'a>(
     egui::Window::new(window_id)
         .title_bar(false)
         .collapsible(false)
-        .frame(modal_window_frame(theme))
+        .frame(modal_window_frame(theme, ctx))
         // egui 0.27 系列方法名是 `constraint_to`(拼写问题，但 API 就是这样)。
         .constraint_to(ctx.screen_rect())
 }
@@ -2003,7 +2003,7 @@ pub fn form_field_label(ui: &mut Ui, theme: &Theme, text: &str) {
 /// 曾用于卡内子项分隔线；线感始终偏重，已改为无操作，保留调用点以免大面积改布局。
 pub fn settings_row_divider(_ui: &mut Ui, _theme: &Theme) {}
 
-/// 设置页抬升底卡片：无描边、小圆角；子项靠自然间距排列。
+/// 设置页抬升底卡片：无描边、圆角对齐面板；子项靠自然间距排列。
 pub fn settings_elevated_card(ui: &mut Ui, theme: &Theme, body: impl FnOnce(&mut Ui)) {
     let outer_w = crate::ui::layout_util::set_width_to_available(ui);
     ui.set_min_width(outer_w);
@@ -2012,7 +2012,7 @@ pub fn settings_elevated_card(ui: &mut Ui, theme: &Theme, body: impl FnOnce(&mut
     egui::Frame::none()
         .fill(theme.color_elevated_card_fill())
         .stroke(egui::Stroke::NONE)
-        .rounding(theme.radius_card())
+        .rounding(theme.radius_panel())
         .inner_margin(egui::Margin::symmetric(pad_x, pad_y))
         .show(ui, |ui| {
             let inner_w = crate::ui::layout_util::set_width_to_available(ui);
@@ -4257,11 +4257,12 @@ pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> b
 }
 
 fn paint_modal_header_bottom_divider(ui: &mut Ui, theme: &Theme, band: egui::Rect) {
-    let y = band.bottom() - 0.5;
+    let hairline = theme.hairline_width(ui.ctx());
+    let y = theme.snap_y_to_pixel(ui.ctx(), band.bottom() - hairline * 0.5);
     ui.painter().hline(
         band.x_range(),
         y,
-        egui::Stroke::new(1.0, theme.color_modal_header_divider()),
+        egui::Stroke::new(hairline, theme.color_modal_header_divider()),
     );
 }
 
@@ -4528,7 +4529,7 @@ pub fn panel_quick_prompt_chip(ui: &mut Ui, theme: &Theme, label: &str) -> Respo
         theme.color_subtle_inset_fill()
     };
     let stroke = egui::Stroke::new(
-        theme.hairline_width(ui.ctx()).max(1.0),
+        theme.hairline_width(ui.ctx()),
         if hovered || pressed {
             theme.accent_alpha(160)
         } else {

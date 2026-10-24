@@ -112,10 +112,11 @@ impl MistTermApp {
                         }
                         ui.spacing_mut().button_padding = prev_padding;
                         ui.spacing_mut().item_spacing = prev_item_spacing;
+                        let hairline = theme.hairline_width(ctx);
                         ui.painter().hline(
                             bar_bg.x_range(),
-                            bar_bg.max.y - 0.5,
-                            egui::Stroke::new(1.0, theme.color_tab_bar_divider()),
+                            theme.snap_y_to_pixel(ctx, bar_bg.max.y - hairline * 0.5),
+                            egui::Stroke::new(hairline, theme.color_tab_bar_divider()),
                         );
                     } else {
                         let _title_actions = crate::ui::chrome::render_top_chrome_panel(
@@ -440,8 +441,9 @@ impl MistTermApp {
                                         });
                                         // 只记 stroke，等终端正文之后再画一次，避免双线叠亮；
                                         // 也不用 Foreground，以免盖住顶栏菜单。
+                                        let hairline = theme.hairline_width(ctx);
                                         tab_sep_stroke = egui::Stroke::new(
-                                            1.0,
+                                            hairline,
                                             theme.color_tab_bar_divider(),
                                         );
                                     }
@@ -529,9 +531,13 @@ impl MistTermApp {
                                     // 终端正文之后重画分隔线，盖住清屏后的顶边；
                                     // 必须留在 Middle，勿用 Foreground（否则会盖住顶栏下拉菜单）。
                                     if !tabs_in_top && tab_row_rect != egui::Rect::NOTHING {
+                                        let y = theme.snap_y_to_pixel(
+                                            ui.ctx(),
+                                            tab_row_rect.max.y - tab_sep_stroke.width * 0.5,
+                                        );
                                         ui.painter().hline(
                                             tab_row_rect.x_range(),
-                                            tab_row_rect.max.y - 0.5,
+                                            y,
                                             tab_sep_stroke,
                                         );
                                     }

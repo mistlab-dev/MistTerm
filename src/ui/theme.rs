@@ -805,14 +805,10 @@ impl Theme {
         }
     }
 
+    /// 弹窗标题下分隔线。与右 dock 标题发丝线同档(前景淡 alpha)，暗夜不用实色 `#2d2d2d`。
     #[inline]
     pub fn color_modal_header_divider(&self) -> Color32 {
-        if self.uses_modern_palette() {
-            // 暗夜标题下用比面板略亮的实色接缝，避免 12% 白线发灰发亮。
-            self.border_divider_color()
-        } else {
-            self.color_panel_header_divider()
-        }
+        self.color_panel_header_divider()
     }
 
     /// 单行/多行输入框底色(相对面板略提亮，勿过亮以免描边显得粗)
@@ -917,23 +913,20 @@ impl Theme {
     /// 弹窗描边色。
     ///
     /// 暗夜的面板线宽是 0，侧栏和 dock 保持无硬边框。居中弹窗会叠在同色窗口上
-    /// (「关于」上的「软件更新」)，只靠填充分不出层次，所以用和次要按钮同一档的
-    /// 浅色细线，不是粗黑框。
+    /// (「关于」上的「软件更新」)，只靠填充分不出层次。线宽已是 1 物理像素，
+    /// 暗夜用比次要按钮描边(α52)更淡的前景 alpha，避免 Retina 上仍像一道白框。
     #[inline]
     pub fn color_modal_stroke(&self) -> Color32 {
         if self.uses_modern_palette() {
-            self.color_control_secondary_stroke(true).color
+            self.fg_high_alpha(40)
         } else {
             self.panel_stroke_color()
         }
     }
 
-    /// 居中弹窗外框描边。至少 1px；非暗夜主题与 [`panel_stroke`] 相同。
-    pub fn modal_stroke(&self) -> egui::Stroke {
-        egui::Stroke::new(
-            self.stroke_width_panel().max(1.0),
-            self.color_modal_stroke(),
-        )
+    /// 居中弹窗外框描边：1 物理像素。不要再用逻辑 `1.0`(2× 上是 2 物理像素)。
+    pub fn modal_stroke(&self, ctx: &egui::Context) -> egui::Stroke {
+        egui::Stroke::new(self.hairline_width(ctx), self.color_modal_stroke())
     }
 
     /// 弹窗主按钮底
@@ -1789,8 +1782,8 @@ impl Theme {
                 elevated
             }
         } else {
-            // 比 ops 卡再亮一点，保证「一块一功能」在暗色弹窗/dock 里能一眼分清。
-            Self::nudge_rgb(self.surface_panel(), 16)
+            // 比面板略抬一层；比原先 +16 更收，避免卡片边看起来发硬。
+            Self::nudge_rgb(self.surface_panel(), 10)
         }
     }
 
@@ -2216,9 +2209,9 @@ impl Theme {
     /// 居中弹窗外框。
     ///
     /// 描边画在矩形边上，标题带会盖住内侧半像素。暗夜原来没有这条线，
-    /// 留出线宽，让整条描边落在内容外侧，叠在「关于」等窗口上能看见一圈边。
-    pub fn frame_modal_window(&self) -> egui::Frame {
-        let stroke = self.modal_stroke();
+    /// 留出线宽，让整条发丝描边落在内容外侧，叠在「关于」等窗口上能看见一圈边。
+    pub fn frame_modal_window(&self, ctx: &egui::Context) -> egui::Frame {
+        let stroke = self.modal_stroke(ctx);
         let inset = if self.stroke_width_panel() > 0.0 {
             0.0
         } else {
@@ -3223,12 +3216,27 @@ mod theme_semantic_tests {
             )
         }
 
+        let ctx = egui::Context::default();
+        // `set_pixels_per_point` 要下一帧才生效；用一帧输入把缩放钉在 2×。
+        let _ = ctx.run(
+            egui::RawInput {
+                pixels_per_point: Some(2.0),
+                ..Default::default()
+            },
+            |_| {},
+        );
+        assert!(
+            (ctx.pixels_per_point() - 2.0).abs() < 0.01,
+            "test context ppp {}",
+            ctx.pixels_per_point()
+        );
         for theme in all_builtin_themes() {
-            let stroke = theme.modal_stroke();
-            let frame = theme.frame_modal_window();
+            let stroke = theme.modal_stroke(&ctx);
+            let frame = theme.frame_modal_window(&ctx);
+            let hairline = theme.hairline_width(&ctx);
             assert!(
-                stroke.width >= 1.0 && frame.stroke.width >= 1.0,
-                "{}: modal stroke width {}",
+                (stroke.width - hairline).abs() < 0.01 && stroke.width < 1.0,
+                "{}: modal stroke width {} should be one physical pixel at 2×, not a logical 1px",
                 theme.name,
                 stroke.width
             );
@@ -3244,7 +3252,7 @@ mod theme_semantic_tests {
                 ratio
             );
             if theme.stroke_width_panel() > 0.0 {
-                assert_eq!(stroke, theme.panel_stroke());
+                assert_eq!(stroke.color, theme.panel_stroke().color);
                 assert_eq!(frame.inner_margin, egui::Margin::ZERO);
             } else {
                 assert_eq!(frame.inner_margin, egui::Margin::same(stroke.width));
@@ -3255,14 +3263,21 @@ mod theme_semantic_tests {
         let dark = Theme::dark();
         assert!(dark.uses_modern_palette());
         assert_eq!(dark.stroke_width_panel(), 0.0);
-        assert_eq!(
-            dark.color_modal_stroke(),
-            dark.color_control_secondary_stroke(true).color
-        );
+        assert_eq!(dark.color_modal_stroke(), dark.fg_high_alpha(40));
+        assert!(dark.color_modal_stroke().a() <= 40);
         let painted = composite_over(dark.color_modal_stroke(), dark.color_panel_surface());
         assert!(
             contrast_ratio(painted, dark.color_panel_surface()) >= 1.6,
             "暗夜 modal stroke should read on the same panel fill"
+        );
+        assert_ne!(
+            dark.color_modal_header_divider(),
+            dark.border_divider_color(),
+            "modal header divider should be a soft fg hairline, not solid #2d2d2d"
+        );
+        assert_eq!(
+            dark.color_modal_header_divider(),
+            dark.color_panel_header_divider()
         );
     }
 
