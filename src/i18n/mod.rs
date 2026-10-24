@@ -227,6 +227,15 @@ pub fn localize_backend_error(lang: UiLanguage, err: &str) -> String {
     if s.starts_with("Permission denied") {
         return "没有权限。".to_string();
     }
+    if s.contains("Failed to create SFTP channel") {
+        return "SFTP 子系统不可用。请检查远端 sshd 的 Subsystem sftp 后重试。".to_string();
+    }
+    if s.starts_with("Failed to create remote file") {
+        return "无法在远端创建文件（目录可能只读或无权限）。".to_string();
+    }
+    if s.contains("Failed to write remote file") || s.contains("Failed to write to remote") {
+        return "写入远端文件失败（可能无写权限）。".to_string();
+    }
     if let Some(rest) = s.strip_prefix("Failed to create directory:") {
         return format!("创建目录失败：{rest}");
     }
@@ -357,6 +366,27 @@ pub fn fragment_display_category(ctx: &egui::Context, frag: &crate::core::fragme
                 other => other.to_string(),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn localize_sftp_channel_and_readonly_zh() {
+        let ch = localize_backend_error(
+            UiLanguage::Zh,
+            "Failed to create SFTP channel: blah",
+        );
+        assert!(ch.contains("SFTP 子系统"), "{ch}");
+        let ro = localize_backend_error(
+            UiLanguage::Zh,
+            "Failed to create remote file /tmp/x: Permission denied",
+        );
+        assert!(ro.contains("只读") || ro.contains("无权限"), "{ro}");
+        let wr = localize_backend_error(UiLanguage::Zh, "Failed to write remote file: EACCES");
+        assert!(wr.contains("写"), "{wr}");
     }
 }
 
