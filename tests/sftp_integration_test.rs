@@ -330,3 +330,62 @@ fn test_sftp_chmod_and_collect_tree() {
     let _ = client.remove(&root);
     let _ = std::fs::remove_file(&local);
 }
+
+/// #94 矩阵 #3：不存在的远端路径 → list 应 Err（可见失败，非静默）。
+#[test]
+fn test_sftp_list_missing_path_errors() {
+    let Some(session) = skip_without_sshd() else {
+        return;
+    };
+    let client = SftpClient::new(&session).expect("SftpClient");
+    let missing = sftp_root_path().join("mistterm_no_such_dir_94");
+    let _ = client.remove(&missing);
+    let err = client
+        .list_dir(&missing)
+        .expect_err("missing path must error");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("No such file")
+            || msg.contains("not found")
+            || msg.contains("No such")
+            || msg.to_lowercase().contains("fail"),
+        "unexpected err: {msg}"
+    );
+}
+
+/// #94 矩阵 #4：只读目录上传应失败（Linux：chmod a-w；Windows OpenSSH 可能跳过）。
+#[test]
+fn test_sftp_upload_to_readonly_dir_fails() {
+    let Some(session) = skip_without_sshd() else {
+        return;
+    };
+    let client = SftpClient::new(&session).expect("SftpClient");
+    let dir = sftp_root_path().join("mistterm_readonly_94");
+    let _ = client.remove(&dir);
+    client.mkdir_p(&dir).expect("mkdir");
+    // 尽量去掉写权限；若远端忽略权限位则本用例 skip 语义（仍不 panic）。
+    let _ = client.chmod(&dir, 0o555);
+    let local = std::env::temp_dir().join("mistterm_readonly_up.txt");
+    std::fs::write(&local, b"readonly-probe").unwrap();
+    let remote = dir.join("should_fail.txt");
+    let result = client.upload_ex(&local, &remote, WriteMode::Overwrite, None, &mut |_| {});
+    let _ = client.chmod(&dir, 0o755);
+    let _ = client.remove(&dir);
+    let _ = std::fs::remove_file(&local);
+    match result {
+        Ok(TransferResult::Completed { .. }) => {
+            eprintln!("skip: remote ignored chmod (upload succeeded on 'readonly' dir)");
+        }
+        Ok(other) => panic!("unexpected transfer result: {other:?}"),
+        Err(e) => {
+            let msg = e.to_string();
+            assert!(
+                msg.contains("Failed to create remote file")
+                    || msg.contains("Permission")
+                    || msg.contains("denied")
+                    || msg.contains("Failed to write"),
+                "unexpected err: {msg}"
+            );
+        }
+    }
+}

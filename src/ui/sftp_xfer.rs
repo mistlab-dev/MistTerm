@@ -137,11 +137,27 @@ impl XferQueue {
             .count()
     }
 
-    #[allow(dead_code)] // 供后续关面板/断连清理与测试使用
     pub fn has_work(&self) -> bool {
         self.items
             .iter()
             .any(|i| matches!(i.state, XferState::Queued | XferState::Running))
+    }
+
+    /// 断连 / worker 挂掉：取消进行中，并把 Queued/Running 标为 Failed（#94 P0）。
+    pub fn fail_all_in_flight(&mut self, error: String) -> bool {
+        let had = self.has_work();
+        if let Some(c) = &self.cancel {
+            c.store(true, Ordering::Relaxed);
+        }
+        for item in self.items.iter_mut() {
+            if matches!(item.state, XferState::Queued | XferState::Running) {
+                item.state = XferState::Failed;
+                item.error = Some(error.clone());
+                item.speed_bps = 0.0;
+            }
+        }
+        self.cancel = None;
+        had
     }
 
     pub fn push(
@@ -877,6 +893,34 @@ mod tests {
         q.finish(id, XferState::Done, 10, None);
         assert!(q.active_id().is_none());
         assert!(!q.has_work());
+    }
+
+    #[test]
+    fn fail_all_in_flight_marks_running_and_queued() {
+        let mut q = XferQueue::new();
+        let a = q.push(
+            XferKind::Upload,
+            PathBuf::from("a.bin"),
+            PathBuf::from("/tmp/a.bin"),
+            WriteMode::Overwrite,
+            10,
+        );
+        let _b = q.push(
+            XferKind::Download,
+            PathBuf::from("b.bin"),
+            PathBuf::from("/tmp/b.bin"),
+            WriteMode::Overwrite,
+            20,
+        );
+        let _ = q.take_next_queued();
+        assert!(q.has_work());
+        assert!(q.fail_all_in_flight("gone".into()));
+        assert!(!q.has_work());
+        assert_eq!(
+            q.items.iter().find(|i| i.id == a).map(|i| i.state),
+            Some(XferState::Failed)
+        );
+        assert!(q.items.iter().all(|i| i.state == XferState::Failed));
     }
 
     #[test]
