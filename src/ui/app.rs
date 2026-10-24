@@ -2472,46 +2472,49 @@ impl MistTermApp {
     }
 
     /// 每帧泵复盘草稿生成结果（#67）；完成后打开预览。
+    /// 单次消费：take 任务后逐个 try_recv，Empty 时原样放回——绝不双次探针（会丢首包 Delta）。
     fn poll_postmortem_generation(&mut self, ctx: &egui::Context) {
         use crate::core::ai_client::ChatEvent;
-        // 先探针：无任务或还没结果时不动原值，避免借用冲突。
-        {
-            let Some((rx, _, _, _, _)) = &self.pending_postmortem_rx else {
-                return;
-            };
-            if rx.try_recv().is_err() {
-                // Empty 或已断开但无数据——Empty 直接返回；断开留给下面的 take 分支处理。
-                if matches!(
-                    rx.try_recv(),
-                    Err(std::sync::mpsc::TryRecvError::Empty)
-                ) {
-                    return;
-                }
-            }
-        }
         let Some((mut rx, cancel, host, date, references)) = self.pending_postmortem_rx.take()
         else {
             return;
         };
         let mut markdown = String::new();
         let mut failed: Option<String> = None;
+        let mut done = false;
         loop {
             match rx.try_recv() {
                 Ok(ChatEvent::Delta(chunk)) => markdown.push_str(&chunk),
-                Ok(ChatEvent::Finished) => break,
-                Ok(ChatEvent::Failed(e)) => failed = Some(e),
-                Ok(ChatEvent::Cancelled) => failed = Some("cancelled".into()),
+                Ok(ChatEvent::Finished) => {
+                    done = true;
+                    break;
+                }
+                Ok(ChatEvent::Failed(e)) => {
+                    failed = Some(e);
+                    done = true;
+                    break;
+                }
+                Ok(ChatEvent::Cancelled) => {
+                    failed = Some("cancelled".into());
+                    done = true;
+                    break;
+                }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    // 还在生成：放回任务，下一帧继续。
+                    // 还在生成：任务原样放回，下一帧继续（已收到的 Delta 保留在 markdown）。
                     self.pending_postmortem_rx = Some((rx, cancel, host, date, references));
+                    if !markdown.is_empty() {
+                        ctx.request_repaint();
+                    }
                     return;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     failed = failed.or_else(|| Some("generation worker lost".into()));
+                    done = true;
                     break;
                 }
             }
         }
+        let _ = done;
         self.postmortem_dialog.set_generating(false);
         if let Some(err) = failed {
             // 失败：预览打开但正文为空 + 错误条，不产生半截文档。
@@ -9040,6 +9043,7 @@ impl eframe::App for MistTermApp {
         // 复盘草稿（#67）：泵生成结果 → 消费保存请求 → 渲染预览对话框。
         self.poll_postmortem_generation(ctx);
         self.poll_postmortem_save();
+        self.postmortem_dialog.team_logged_in = self.team_service.is_logged_in();
         self.postmortem_dialog.show(ctx, &theme);
         // 须在 bridge / agent 把意图写入总线之后再 drain，保证同帧生效。
         self.process_actions(ctx);

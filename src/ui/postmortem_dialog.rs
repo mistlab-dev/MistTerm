@@ -38,6 +38,8 @@ pub struct PostmortemDialog {
     error: Option<String>,
     /// 生成中的状态占位（生成走 AI 面板链路，这里只显示状态）。
     generating: bool,
+    /// 宿主每帧同步的登录态：未登录时隐藏保存主按钮（已批方案：只保留复制，#67 review）。
+    pub team_logged_in: bool,
 }
 
 impl Default for PostmortemDialog {
@@ -56,6 +58,7 @@ impl Default for PostmortemDialog {
             saved_doc_id: None,
             error: None,
             generating: false,
+            team_logged_in: false,
         }
     }
 }
@@ -255,29 +258,32 @@ impl PostmortemDialog {
                     }
                     ui.add_space(10.0);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        // 主按钮：保存到 MistDocs（必须经预览；无自动保存路径）
-                        let can_save = self.phase == SavePhase::Idle
-                            && self.saved_doc_id.is_none()
-                            && self.draft.validation_error().is_none();
-                        let save_label = if self.phase == SavePhase::Saving {
-                            crate::i18n::tr(ctx, "Saving…", "保存中…").to_string()
-                        } else {
-                            crate::i18n::tr(ctx, "Save to MistDocs", "保存到 MistDocs").to_string()
-                        };
-                        if ui
-                            .add_enabled(
-                                can_save,
-                                egui::Button::new(
-                                    egui::RichText::new(save_label)
-                                        .color(theme.text_primary())
-                                        .strong(),
+                        // 主按钮：保存到 MistDocs（必须经预览；无自动保存路径）。
+                        // 未登录/纯本地时隐藏（已批方案：只保留复制），而非点击后才报错。
+                        if self.team_logged_in {
+                            let can_save = self.phase == SavePhase::Idle
+                                && self.saved_doc_id.is_none()
+                                && self.draft.validation_error().is_none();
+                            let save_label = if self.phase == SavePhase::Saving {
+                                crate::i18n::tr(ctx, "Saving…", "保存中…").to_string()
+                            } else {
+                                crate::i18n::tr(ctx, "Save to MistDocs", "保存到 MistDocs").to_string()
+                            };
+                            if ui
+                                .add_enabled(
+                                    can_save,
+                                    egui::Button::new(
+                                        egui::RichText::new(save_label)
+                                            .color(theme.text_primary())
+                                            .strong(),
+                                    )
+                                    .fill(theme.accent_color())
+                                    .min_size(egui::vec2(150.0, 30.0)),
                                 )
-                                .fill(theme.accent_color())
-                                .min_size(egui::vec2(150.0, 30.0)),
-                            )
-                            .clicked()
-                        {
-                            do_save = true;
+                                .clicked()
+                            {
+                                do_save = true;
+                            }
                         }
                         // 次按钮：仅复制 Markdown
                         if ui
