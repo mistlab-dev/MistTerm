@@ -369,6 +369,27 @@ pub fn fragment_display_category(ctx: &egui::Context, frag: &crate::core::fragme
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn localize_sftp_channel_and_readonly_zh() {
+        let ch = localize_backend_error(
+            UiLanguage::Zh,
+            "Failed to create SFTP channel: blah",
+        );
+        assert!(ch.contains("SFTP 子系统"), "{ch}");
+        let ro = localize_backend_error(
+            UiLanguage::Zh,
+            "Failed to create remote file /tmp/x: Permission denied",
+        );
+        assert!(ro.contains("只读") || ro.contains("无权限"), "{ro}");
+        let wr = localize_backend_error(UiLanguage::Zh, "Failed to write remote file: EACCES");
+        assert!(wr.contains("写"), "{wr}");
+    }
+}
+
 /// True if `query` (already lowercased) matches the snippet under the current UI language.
 pub fn fragment_matches_search(
     ctx: &egui::Context,
