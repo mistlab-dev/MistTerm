@@ -160,6 +160,15 @@ impl MistTermApp {
             );
         }
 
+        if self.postmortem_dialog.open {
+            self.postmortem_dialog.show_side_panel(
+                ctx,
+                theme,
+                &mut self.right_dock_outer_left_x,
+                dock_col_w,
+            );
+        }
+
         // SFTP(右侧面板；切换终端标签时重置远端路径并重新拉列表)
         if self.show_sftp_panel {
             if self.sftp_last_tab != self.active_tab {

@@ -160,6 +160,14 @@ impl MistTermApp {
                 self.notify_error(err);
             }
         }
+        if paint_right_dock_fg && self.postmortem_dialog.open {
+            let mut close_postmortem = false;
+            self.postmortem_dialog
+                .show_foreground_panel(ctx, theme, &mut close_postmortem);
+            if close_postmortem {
+                self.postmortem_dialog.open = false;
+            }
+        }
         // 改宽手柄：全部 dock 正文之后、屏上左→右绘制，避免右邻 dock 正文挡住左缝(如监控+片段并排)。
         if paint_right_dock_fg {
             if self.show_ai_panel {
@@ -209,6 +217,16 @@ impl MistTermApp {
                     "mistterm_cloud_sync_fg",
                     self.cloud_sync_panel.last_panel_slot_rect(),
                     "cloud_sync_panel",
+                    layout_util::SidePanelProfile::Standard,
+                );
+            }
+            if self.postmortem_dialog.open {
+                crate::ui::chrome::show_right_dock_resize_grip_for_slot(
+                    ctx,
+                    theme,
+                    "mistterm_postmortem_fg",
+                    self.postmortem_dialog.last_panel_slot_rect(),
+                    "postmortem_draft_panel",
                     layout_util::SidePanelProfile::Standard,
                 );
             }

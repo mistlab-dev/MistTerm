@@ -53,6 +53,7 @@ pub mod ssh_config_import_dialog;
 pub mod foreign_import_dialog;
 pub mod command_history_overlay;
 pub mod session_log_dialog;
+pub mod postmortem_dialog;
 pub mod vault_form;
 pub mod help_docs_dialog;
 

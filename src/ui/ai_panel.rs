@@ -676,6 +676,8 @@ pub struct AiPanel {
     /// 换对话后丢弃仍在飞的召回结果。
     recall_epoch: u64,
     runbook_ui_rx: Vec<std::sync::mpsc::Receiver<RunbookDelivery>>,
+    /// 「生成复盘」按钮：由 App 取走并汇总当前会话产出草稿（#67）。
+    postmortem_requested: bool,
 }
 
 struct RunbookDelivery {
@@ -758,6 +760,7 @@ impl AiPanel {
             runbook_search: None,
             recall_epoch: 0,
             runbook_ui_rx: Vec::new(),
+            postmortem_requested: false,
         }
     }
 
@@ -1036,6 +1039,34 @@ impl AiPanel {
     /// 输入栏请求附带当前终端最近输出(由 App 每帧消费)。
     pub fn take_attach_terminal_tail_request(&mut self) -> bool {
         std::mem::replace(&mut self.attach_terminal_tail_requested, false)
+    }
+
+    /// 「生成复盘」请求（#67）：UI 按钮置位，App 取走后走草稿生成。
+    pub fn take_postmortem_request(&mut self) -> bool {
+        std::mem::replace(&mut self.postmortem_requested, false)
+    }
+
+    /// 宿主生成复盘草稿用的 API key（#67）；未配置返回 None。
+    pub fn api_key_for_host(&self, app_settings: &AppSettings) -> Option<String> {
+        self.effective_api_key(app_settings)
+    }
+
+    /// 本次会话引用过的 Runbook 锚点快照（#67 复盘草稿「参考」小节用）。
+    pub fn referenced_runbook_anchors(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for msg in &self.messages {
+            for card in &msg.runbooks {
+                let anchor = if card.anchor.is_empty() {
+                    continue;
+                } else {
+                    card.anchor.clone()
+                };
+                if !out.contains(&anchor) {
+                    out.push(anchor);
+                }
+            }
+        }
+        out
     }
 
     pub fn take_attach_selection_request(&mut self) -> bool {
@@ -3354,6 +3385,24 @@ impl AiPanel {
             }
             if attach_failure_clicked {
                 self.attach_recent_failure_requested = true;
+            }
+            let mut postmortem_clicked = false;
+            if ui
+                .add_enabled_ui(can_type, |ui| {
+                    crate::ui::chrome::panel_toolbar_icon_button(
+                        ui,
+                        theme,
+                        IconId::File,
+                        i18n::tr(ctx, "Generate postmortem draft", "生成复盘草稿"),
+                    )
+                    .clicked()
+                })
+                .inner
+            {
+                postmortem_clicked = true;
+            }
+            if postmortem_clicked {
+                self.postmortem_requested = true;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if generating {

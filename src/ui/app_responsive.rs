@@ -44,6 +44,7 @@ impl MistTermApp {
         self.show_port_forward_panel = false;
         self.credential_panel.open = false;
         self.cloud_sync_panel.open = false;
+        self.postmortem_dialog.open = false;
         self.monitor_last_tab = None;
         self.sftp_last_tab = None;
         self.port_forward_last_tab = None;
@@ -69,6 +70,9 @@ impl MistTermApp {
             }
             ActiveRightDock::Ai => {
                 self.show_ai_panel = true;
+            }
+            ActiveRightDock::Postmortem => {
+                self.postmortem_dialog.open = true;
             }
         }
     }

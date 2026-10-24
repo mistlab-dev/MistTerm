@@ -3879,6 +3879,14 @@ impl TerminalView {
         self.ssh_handle.clone()
     }
 
+    /// 连接目标主机名（复盘草稿标题用，#67）；本机会话返回空。
+    pub fn connection_target_text(&self) -> Option<String> {
+        match &self.connection_target {
+            Some((_, host)) if host != "local" => Some(host.clone()),
+            _ => None,
+        }
+    }
+
     /// 当前生效的本机目录（偏好「默认本地目录」，与 SFTP 本机侧共用）。
     pub fn download_dir(&self) -> crate::core::local_dir::ResolvedLocalDir {
         crate::core::local_dir::current()
