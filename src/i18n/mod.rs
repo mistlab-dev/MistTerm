@@ -227,6 +227,15 @@ pub fn localize_backend_error(lang: UiLanguage, err: &str) -> String {
     if s.starts_with("Permission denied") {
         return "没有权限。".to_string();
     }
+    if s.contains("Failed to create SFTP channel") {
+        return "SFTP 子系统不可用。请检查远端 sshd 的 Subsystem sftp 后重试。".to_string();
+    }
+    if s.starts_with("Failed to create remote file") {
+        return "无法在远端创建文件（目录可能只读或无权限）。".to_string();
+    }
+    if s.contains("Failed to write remote file") || s.contains("Failed to write to remote") {
+        return "写入远端文件失败（可能无写权限）。".to_string();
+    }
     if let Some(rest) = s.strip_prefix("Failed to create directory:") {
         return format!("创建目录失败：{rest}");
     }

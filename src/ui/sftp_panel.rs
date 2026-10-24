@@ -1776,6 +1776,9 @@ impl SftpPanel {
                         }
                     }
                     Err(e) => {
+                        // #94 P2：列目录失败时清空旧列表，避免地址栏与内容不一致。
+                        self.entries.clear();
+                        self.remote_selected.clear();
                         self.list_err = Some(e);
                     }
                 }
@@ -1872,14 +1875,19 @@ impl SftpPanel {
                 self.xfer_progress_rx = None;
                 self.tree_busy = false;
                 self.tree_cancel = None;
-                self.pending_status_err = Some(
-                    crate::i18n::Locale::from(lang)
-                        .tr(
-                            "SFTP background worker stopped unexpectedly",
-                            "SFTP 后台任务异常中断",
-                        )
-                        .to_string(),
-                );
+                // #94 P0：worker 断开时收尾进行中的传输，避免卡在 Running。
+                if self.abort_in_flight_transfers(lang) {
+                    // toast 已由 abort 写入 pending_status_err
+                } else {
+                    self.pending_status_err = Some(
+                        crate::i18n::Locale::from(lang)
+                            .tr(
+                                "SFTP background worker stopped unexpectedly",
+                                "SFTP 后台任务异常中断",
+                            )
+                            .to_string(),
+                    );
+                }
             }
             Ok(SftpJobResult::UploadTreeReady { files }) => {
                 self.busy = false;
@@ -2174,7 +2182,77 @@ impl SftpPanel {
             )
             .to_string();
         }
+        // #94 P1：与本机列目录同口径的人话，再落到共享 backend 映射。
+        if msg.contains("Failed to create SFTP channel") {
+            return crate::i18n::tr(
+                ctx,
+                "SFTP subsystem unavailable. Check sshd Subsystem sftp and try again.",
+                "SFTP 子系统不可用。请检查远端 sshd 的 Subsystem sftp 后重试。",
+            )
+            .to_string();
+        }
+        if msg.contains("Permission denied") {
+            return crate::i18n::tr(
+                ctx,
+                "No permission to read this folder. Pick another path or tap ↑ Parent.",
+                "没有权限读取该目录，请换路径或点「上级」返回。",
+            )
+            .to_string();
+        }
+        if msg.contains("No such file") || msg.contains("not found") {
+            return crate::i18n::tr(
+                ctx,
+                "Folder does not exist. Check the path and try again.",
+                "目录不存在，请检查路径后重试。",
+            )
+            .to_string();
+        }
         crate::i18n::localize_backend_error(crate::i18n::language(ctx), msg)
+    }
+
+    /// #94 P0：断连或 worker 挂掉时收尾 Queued/Running；有工作则返回 true 并写入 toast。
+    fn abort_in_flight_transfers(&mut self, lang: UiLanguage) -> bool {
+        let msg = crate::i18n::Locale::from(lang)
+            .tr(
+                "Connection lost — transfer aborted",
+                "连接已断开，传输已中止",
+            )
+            .to_string();
+        if self.xfer.fail_all_in_flight(msg.clone()) {
+            self.pending_status_err = Some(msg);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 会话不可用（门闩 Disconnected / 无 handle）时收尾传输与 busy 态。
+    fn on_session_unavailable(&mut self, lang: UiLanguage) {
+        if !(self.xfer.has_work() || self.busy || self.rx.is_some() || self.tree_busy) {
+            return;
+        }
+        self.rx = None;
+        self.xfer_progress_rx = None;
+        self.busy = false;
+        self.tree_busy = false;
+        self.tree_cancel = None;
+        let _ = self.abort_in_flight_transfers(lang);
+    }
+
+    /// 地址栏 Enter / Go：busy 时提示，不静默吞掉（#94 P2）。
+    fn try_spawn_list_from_path_edit(&mut self, handle: &SshSessionHandle, ctx: &egui::Context) {
+        if self.busy {
+            self.pending_status_warn = Some(
+                crate::i18n::tr(
+                    ctx,
+                    "Please wait for the current SFTP operation to finish.",
+                    "请等待当前 SFTP 操作完成后再试。",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        self.spawn_list(handle, Self::remote_path_from_input(&self.path_edit), ctx);
     }
 
     /// 通过 shell 泵命令队列下发 SFTP 任务，避免与 PTY 读循环并发占用 libssh2 session。
@@ -3096,13 +3174,16 @@ impl SftpPanel {
             "Connect a session before using SFTP.",
             "请打开会话并连接后可使用 SFTP。",
         ) {
+            self.on_session_unavailable(crate::i18n::language(ctx));
             return;
         }
         let Some(t) = terminal else {
+            self.on_session_unavailable(crate::i18n::language(ctx));
             return;
         };
 
         let Some(handle) = t.sftp_session_for_ops() else {
+            self.on_session_unavailable(crate::i18n::language(ctx));
             ui.label(egui::RichText::new(crate::i18n::tr(ctx, "Session unavailable", "会话不可用")).color(theme.red_color()));
             return;
         };
@@ -3676,7 +3757,7 @@ impl SftpPanel {
                 if ui.ctx().input(|i| i.key_pressed(egui::Key::Enter))
                     && ui.memory(|m| m.has_focus(remote_path_id))
                 {
-                    self.spawn_list(&handle, Self::remote_path_from_input(&self.path_edit), ctx);
+                    self.try_spawn_list_from_path_edit(&handle, ctx);
                 }
                 let can_edit = self.remote_selected.len() == 1
                     && self.remote_selected.primary().is_some_and(|p| {
@@ -3794,7 +3875,7 @@ impl SftpPanel {
                     )
                     .clicked()
                     {
-                        self.spawn_list(&handle, Self::remote_path_from_input(&self.path_edit), ctx);
+                        self.try_spawn_list_from_path_edit(&handle, ctx);
                     }
                     if crate::ui::chrome::panel_action_button_with_icon_ex(
                         ui,
@@ -4705,7 +4786,7 @@ impl SftpPanel {
                 && ui.memory(|m| m.has_focus(remote_edit_id))
             {
                 self.remote_path_editing = false;
-                self.spawn_list(handle, Self::remote_path_from_input(&self.path_edit), ctx);
+                self.try_spawn_list_from_path_edit(handle, ctx);
             }
             if ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.remote_path_editing = false;
