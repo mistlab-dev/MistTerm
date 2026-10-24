@@ -392,6 +392,10 @@ pub struct TerminalView {
     display_link_engine: crate::core::display_link::DisplayLinkEngine,
     /// 点击 display-link 后待宿主处理的动作（SFTP 跳转需要宿主开面板）。
     pending_display_link_sftp: Option<String>,
+    /// 点击错误码链接后待宿主处理的自动召回请求（#90 后续：attach + 自动发送触发 #66 召回）。
+    pending_display_link_runbook: Option<String>,
+    /// 右键 IP 链接后待宿主处理的「新开连接」请求（#90 后续）。
+    pending_display_link_connect: Option<String>,
 }
 
 impl TerminalView {
@@ -908,6 +912,8 @@ impl TerminalView {
             last_ime_id: None,
             display_link_engine: crate::core::display_link::DisplayLinkEngine::new(),
             pending_display_link_sftp: None,
+            pending_display_link_runbook: None,
+            pending_display_link_connect: None,
         }
     }
 
@@ -2216,8 +2222,42 @@ impl TerminalView {
                             }
 
                             // 选区已写入 LayoutJob 的 TextFormat.background(字形之下)，勿再后画矩形。
+                            // display-link 右键命中在闭包外先算好（闭包内不能再用 select_resp，#90 后续）。
+                            let context_menu_link = select_resp
+                                .interact_pointer_pos()
+                                .and_then(|pos| {
+                                    Self::display_link_at(
+                                        &display_links,
+                                        &galley,
+                                        text_draw_pos,
+                                        pos,
+                                        &display_lines,
+                                    )
+                                });
                             select_resp.context_menu(|ui| {
                                 crate::ui::chrome::apply_context_menu_style(ui, theme);
+                                // display-link 右键（#90 后续）：IP 可「新开连接」，预填到新建连接弹窗。
+                                if let Some((_, link)) = &context_menu_link {
+                                    if matches!(
+                                        link.action,
+                                        crate::core::display_link::DisplayLinkAction::Copy
+                                    ) {
+                                        if crate::ui::chrome::popup_menu_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(
+                                                ui.ctx(),
+                                                "New connection to this IP",
+                                                "新开连接到此 IP",
+                                            ),
+                                        )
+                                        .clicked()
+                                        {
+                                            self.pending_display_link_connect = Some(link.text.clone());
+                                            ui.close_menu();
+                                        }
+                                    }
+                                }
                                 if !self.selection.is_empty() {
                                     let copy_accel = crate::platform::terminal_copy_accel();
                                     if crate::ui::chrome::popup_menu_button_shortcut(
@@ -3584,8 +3624,10 @@ impl TerminalView {
                 }
             }
             crate::core::display_link::DisplayLinkAction::RunbookRecall => {
-                self.pending_send_to_ai = true;
-                self.pending_send_to_ai_text = Some(link.text.clone());
+                // #90 review 后续：不再走「发送到 AI」的 attach 路径（用户还得手发），
+                // 改走自动召回：宿主取走后 attach 错误码 + 预填问题自动发送，
+                // send_message 内部 schedule_runbook_recall 直接出卡片。
+                self.pending_display_link_runbook = Some(link.text.clone());
             }
             crate::core::display_link::DisplayLinkAction::SftpOpen => {
                 self.pending_display_link_sftp = Some(link.text.clone());
@@ -3596,6 +3638,16 @@ impl TerminalView {
     /// 宿主取走待跳转的 SFTP 路径（display-link 点击产生，#90）。
     pub fn take_pending_display_link_sftp(&mut self) -> Option<String> {
         self.pending_display_link_sftp.take()
+    }
+
+    /// 宿主取走待自动召回的错误码（display-link 点击产生，#90 后续）。
+    pub fn take_pending_display_link_runbook(&mut self) -> Option<String> {
+        self.pending_display_link_runbook.take()
+    }
+
+    /// 宿主取走待新开连接的 IP（右键 display-link 产生，#90 后续）。
+    pub fn take_pending_display_link_connect(&mut self) -> Option<String> {
+        self.pending_display_link_connect.take()
     }
 
     pub fn take_pending_send_to_ai(&mut self) -> bool {

@@ -852,6 +852,28 @@ impl MistTermApp {
         }
     }
 
+    /// display-link 点击错误码的自动召回（#90 后续）：
+    /// attach 错误码为上下文 + 预填排查问题并自动发送；
+    /// `send_message` 内部的 `schedule_runbook_recall` 会以附件为 query 触发 #66 召回，
+    /// 卡片直接出现在消息上。未登录团队时召回返回空（现有行为，不额外报错）。
+    pub(crate) fn runbook_recall_for_errno(&mut self, errno: &str, ctx: &egui::Context) {
+        let errno = errno.trim();
+        if errno.is_empty() {
+            return;
+        }
+        self.ai_panel
+            .attach_context(format!("命中错误码：{errno}（来自终端输出点击）"));
+        let lang = crate::i18n::language(ctx);
+        let question = match lang {
+            crate::i18n::UiLanguage::Zh => format!("这个错误码 {errno} 怎么排查？"),
+            crate::i18n::UiLanguage::En => format!("How do I troubleshoot error {errno}?"),
+        };
+        self.ai_panel.queue_model_fallback_question_and_send(&question);
+        if self.ensure_right_dock_allowed_or_warn(ctx) {
+            self.open_right_dock_panel(ActiveRightDock::Ai);
+        }
+    }
+
     pub(crate) fn open_ai_with_model_fallback(&mut self, ctx: &egui::Context, question: &str) {
         let q = question.trim();
         if q.is_empty() {
@@ -2376,6 +2398,8 @@ impl MistTermApp {
     fn poll_connect_audit_from_tabs(&mut self, ctx: &egui::Context) {
         let mut toast_errors: Vec<(usize, String)> = Vec::new();
         let mut display_link_sftp: Option<String> = None;
+        let mut display_link_runbook: Option<String> = None;
+        let mut display_link_connect: Option<String> = None;
         for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
             for pane in tab.panes.iter_mut() {
                 if let Some(err) = pane.terminal.take_pending_toast_error() {
@@ -2384,6 +2408,14 @@ impl MistTermApp {
                 // display-link 点击跳转 SFTP（#90）：收集后在循环外开面板并定位到路径。
                 if display_link_sftp.is_none() {
                     display_link_sftp = pane.terminal.take_pending_display_link_sftp();
+                }
+                // display-link 点击错误码（#90 后续）：收集后在循环外自动召回。
+                if display_link_runbook.is_none() {
+                    display_link_runbook = pane.terminal.take_pending_display_link_runbook();
+                }
+                // display-link 右键 IP（#90 后续）：收集后在循环外预填新建连接。
+                if display_link_connect.is_none() {
+                    display_link_connect = pane.terminal.take_pending_display_link_connect();
                 }
                 if let Some((ok, host)) = pane.terminal.take_connect_audit() {
                     let is_local = pane.terminal.is_local_shell() || host == "local";
@@ -2431,6 +2463,17 @@ impl MistTermApp {
         }
         if let Some(path) = display_link_sftp {
             self.open_display_link_sftp(ctx, &path);
+        }
+        // display-link 点击错误码（#90 后续）：attach 错误码 + 预填问题自动发送，
+        // send_message 内部 schedule_runbook_recall 直接出卡片（未登录团队时召回自然为空）。
+        if let Some(errno) = display_link_runbook {
+            self.runbook_recall_for_errno(&errno, ctx);
+        }
+        if let Some(ip) = display_link_connect {
+            // 新开连接（#90 后续）：预填 IP 到新建连接弹窗，名称留空由用户填。
+            self.new_session_host = ip;
+            self.new_session_name.clear();
+            self.show_new_session_dialog = true;
         }
         self.poll_connection_placeholder_actions(ctx);
         self.dismiss_stale_reconnect_toast_if_needed();
