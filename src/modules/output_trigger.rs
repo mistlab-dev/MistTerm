@@ -1,15 +1,20 @@
-//! 终端输出 Trigger：正则命中 → 通知（后台标签注意点 / Toast）。
+//! 终端输出 Trigger：正则命中 → `ModuleAction::Notify`（后台标签注意点 / Toast）。
 //!
-//! 与 `cmd_audit`、`display_link` 结构性解耦：独立 JSON
-//! （`assets/output-trigger-patterns.json`）、独立加载与匹配入口。
-//! 解析失败或文件缺失 = 功能关闭，输出渲染零影响。
+//! 规则仍用 `assets/output-trigger-patterns.json`。模块 id：`output-trigger`。
+//! 解析失败或文件缺失 = 引擎为空，`on_output_line` 不产出动作，输出渲染零影响。
 //!
-//! 范围（#89 P2 / 需求 7）：异步等待场景「完成/出错主动告诉我」。
+//! 范围（#89 P2 / #112，经 #119 迁入 MistModule）：异步等待场景「完成/出错主动告诉我」。
 //! 不做：用户自定义 UI、插件市场、高亮整行改色（通知优先）。
+//! 关闭模块后不再收到行事件（registry 不调用本模块）；不擦 scrollback / 历史 Toast。
+
+use crate::capability::{ModuleAction, ModuleId, OutputLineCtx, Severity};
 
 use serde::Deserialize;
 
-/// 命中严重级别（决定 Toast 样式）
+/// 模块清单里的稳定 id。设置项与 `MISTTERM_DISABLE_MODULES` 都用它。
+pub const MODULE_ID: ModuleId = "output-trigger";
+
+/// 命中严重级别（决定 Toast 样式）。与 #112 的四档一致。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TriggerSeverity {
     Error,
@@ -26,6 +31,15 @@ impl TriggerSeverity {
             "success" | "ok" => Some(Self::Success),
             "info" => Some(Self::Info),
             _ => None,
+        }
+    }
+
+    fn to_module_severity(self) -> Severity {
+        match self {
+            Self::Error => Severity::Error,
+            Self::Warn => Severity::Warn,
+            Self::Success => Severity::Success,
+            Self::Info => Severity::Info,
         }
     }
 }
@@ -140,8 +154,55 @@ impl OutputTriggerEngine {
     }
 }
 
+/// output-trigger 内置模块。行缓冲在 Host；这里只对完整行做匹配。
+pub struct OutputTriggerModule {
+    engine: OutputTriggerEngine,
+}
+
+impl OutputTriggerModule {
+    pub fn new() -> Self {
+        Self {
+            engine: OutputTriggerEngine::new(),
+        }
+    }
+}
+
+impl Default for OutputTriggerModule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl crate::capability::MistModule for OutputTriggerModule {
+    fn id(&self) -> ModuleId {
+        MODULE_ID
+    }
+
+    fn name_zh(&self) -> &str {
+        "输出触发"
+    }
+
+    fn name_en(&self) -> &str {
+        "Output Trigger"
+    }
+
+    fn on_output_line(&self, ctx: &OutputLineCtx<'_>) -> Vec<ModuleAction> {
+        let Some(hit) = self.engine.scan_line(ctx.line) else {
+            return Vec::new();
+        };
+        vec![ModuleAction::Notify {
+            severity: hit.severity.to_module_severity(),
+            text: hit.text,
+            attention: true,
+            dedupe_key: hit.rule_id,
+        }]
+    }
+}
+
 /// 把字节流拆成完整行再扫描；残余半行放回 `acc`。
-pub fn feed_and_scan(
+/// 引擎为空时不消费字节（与 #112 一致）。Host 生产路径走 registry，不调用本函数。
+#[cfg(test)]
+fn feed_and_scan(
     engine: &OutputTriggerEngine,
     acc: &mut String,
     chunk: &[u8],
@@ -150,28 +211,17 @@ pub fn feed_and_scan(
     if engine.is_empty() || chunk.is_empty() {
         return;
     }
-    let text = String::from_utf8_lossy(chunk);
-    acc.push_str(&text);
-    while let Some(idx) = acc.find('\n') {
-        let mut line = acc[..idx].to_string();
-        *acc = acc[idx + 1..].to_string();
-        if line.ends_with('\r') {
-            line.pop();
-        }
+    for line in crate::capability::split_pty_output_lines(acc, chunk) {
         if let Some(hit) = engine.scan_line(&line) {
             out.push(hit);
         }
-    }
-    // 防止半行无限膨胀（无换行的二进制/进度条）
-    const ACC_CAP: usize = 2048;
-    if acc.len() > ACC_CAP {
-        acc.clear();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::capability::{MistModule, ModuleRegistry};
 
     fn engine() -> OutputTriggerEngine {
         OutputTriggerEngine::new()
@@ -236,5 +286,70 @@ mod tests {
         let e = engine();
         let line = format!("{}ECONNREFUSED", "x".repeat(5000));
         assert!(e.scan_line(&line).is_none());
+    }
+
+    #[test]
+    fn lower_priority_number_wins_when_two_rules_match() {
+        let e = engine();
+        let hit = e
+            .scan_line("ECONNREFUSED build succeeded")
+            .expect("error outranks success");
+        assert_eq!(hit.rule_id, "TR-ERR-001");
+        assert_eq!(hit.severity, TriggerSeverity::Error);
+    }
+
+    #[test]
+    fn module_notify_matches_engine_hit() {
+        let engine = engine();
+        let module = OutputTriggerModule::new();
+        let samples = [
+            "curl: Failed to connect: ECONNREFUSED 127.0.0.1",
+            "Build succeeded in 12.3s",
+            "WARNING: disk almost full",
+            "hello world",
+        ];
+        for line in samples {
+            let actions = module.on_output_line(&OutputLineCtx { line });
+            match engine.scan_line(line) {
+                None => assert!(actions.is_empty(), "plain line must not notify"),
+                Some(hit) => {
+                    assert_eq!(actions.len(), 1);
+                    match &actions[0] {
+                        ModuleAction::Notify {
+                            severity,
+                            text,
+                            attention,
+                            dedupe_key,
+                        } => {
+                            assert_eq!(dedupe_key, &hit.rule_id);
+                            assert_eq!(text, &hit.text);
+                            assert!(*attention);
+                            assert_eq!(*severity, hit.severity.to_module_severity());
+                        }
+                        other => panic!("expected notify, got {other:?}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn disabled_via_settings_emits_nothing_until_reenabled() {
+        let reg = ModuleRegistry::with_modules(vec![Box::new(OutputTriggerModule::new())]);
+        let ctx = OutputLineCtx {
+            line: "ECONNREFUSED",
+        };
+        assert!(reg.is_enabled(MODULE_ID));
+        assert_eq!(reg.on_output_line(&ctx).len(), 1);
+
+        // UI 关闭：disabled_modules 含本 id。关 = 之后不再收行事件。
+        reg.sync_effective_disabled(&[MODULE_ID.to_string()]);
+        assert!(!reg.is_enabled(MODULE_ID));
+        assert!(reg.on_output_line(&ctx).is_empty());
+
+        // 从设置里拿掉后恢复（默认开启）。
+        reg.sync_effective_disabled(&[]);
+        assert!(reg.is_enabled(MODULE_ID));
+        assert_eq!(reg.on_output_line(&ctx).len(), 1);
     }
 }
