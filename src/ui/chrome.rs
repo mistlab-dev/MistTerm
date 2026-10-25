@@ -2017,13 +2017,21 @@ pub fn settings_elevated_card(ui: &mut Ui, theme: &Theme, body: impl FnOnce(&mut
         .show(ui, |ui| {
             let inner_w = crate::ui::layout_util::set_width_to_available(ui);
             ui.set_min_width(inner_w);
-            ui.spacing_mut().item_spacing.y = theme.spacing_xs();
+            // 分隔线已拿掉。行距从 2px 收到 4px，卡内节奏均匀一点（#130）。
+            ui.spacing_mut().item_spacing.y = 4.0;
             body(ui);
         });
     ui.add_space(theme.spacing_md().max(10.0));
 }
 
-/// 与步进器/数字框同一行时用：占位高度对齐控件，文字垂直居中。
+/// 表单标签的占位宽度，用来把两行步进器的数字框对齐。
+pub fn form_label_advance(ui: &Ui, theme: &Theme, text: &str) -> f32 {
+    let font = egui::FontId::proportional(theme.font_size_form_label());
+    let galley = ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font, theme.color_form_label()));
+    galley.size().x.ceil() + 4.0
+}
+
+/// 与步进器/数字框同一行时用：占位高度对齐行盒，文字垂直居中。
 pub fn form_inline_label(ui: &mut Ui, theme: &Theme, text: &str) {
     let h = form_stepper_row_h(theme);
     let font = egui::FontId::proportional(theme.font_size_form_label());
@@ -2075,20 +2083,26 @@ pub fn form_labeled_control_row<R>(
     })
 }
 
-/// 步进器统一行高(偏好表单与标签对齐用)。
+/// 步进器方钮 / 数字框边长（比通用控件矮一档，#130）。
 pub fn form_stepper_row_h_for_layout(theme: &Theme) -> f32 {
-    form_stepper_row_h(theme)
+    form_stepper_control_h(theme)
 }
 
+/// 表单行盒仍与通用按钮同高，避免把 26px 按钮裁进更矮的行。
 fn form_stepper_row_h(theme: &Theme) -> f32 {
     24.0_f32.max(theme.size_control_btn_h().min(26.0))
 }
 
-fn form_stepper_btn_side(theme: &Theme) -> f32 {
-    form_stepper_row_h(theme)
+/// ± 与数字框：现代主题按钮 26 → 22，经典 28 也收到 22。
+fn form_stepper_control_h(theme: &Theme) -> f32 {
+    stepper_control_h_from_btn(theme.size_control_btn_h())
 }
 
-/// 控件行内的单行输入：高度与步进器一致，文字垂直居中。
+fn form_stepper_btn_side(theme: &Theme) -> f32 {
+    form_stepper_control_h(theme)
+}
+
+/// 控件行内的单行输入：高度与表单行盒一致，文字垂直居中。
 pub fn form_inline_singleline(
     ui: &mut Ui,
     theme: &Theme,
@@ -4638,7 +4652,7 @@ fn form_stepper_value_field(
     add_field: impl FnOnce(&mut Ui) -> Response,
 ) -> Response {
     let focused = ui.memory(|m| m.has_focus(id));
-    let row_h = form_stepper_row_h(theme);
+    let row_h = form_stepper_control_h(theme);
     let stroke = if focused {
         egui::Stroke::new(theme.stroke_width_panel().max(1.0), theme.accent_color())
     } else {
@@ -4696,7 +4710,7 @@ fn form_stepper_btn(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
     );
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
-        egui::FontId::proportional(theme.font_size_body()),
+        egui::FontId::proportional(theme.font_size_ui_control()),
         text_c,
     );
     ui.painter().galley(
@@ -4718,7 +4732,7 @@ fn form_stepper_row<R>(
     field_w: f32,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
-    let row_h = form_stepper_row_h(theme);
+    let row_h = form_stepper_control_h(theme);
     let btn = form_stepper_btn_side(theme);
     let gap = theme.spacing_xs();
     let total_w = btn + gap + field_w + gap + btn;
@@ -4953,6 +4967,10 @@ pub fn form_f32_stepper(
     response
 }
 
+pub(crate) fn stepper_control_h_from_btn(control_btn_h: f32) -> f32 {
+    (control_btn_h - 4.0).clamp(20.0, 22.0)
+}
+
 fn format_stepper_f32(v: f32, suffix: &str) -> String {
     let num = if (v - v.round()).abs() < 0.05 {
         format!("{}", v.round() as i32)
@@ -4963,5 +4981,18 @@ fn format_stepper_f32(v: f32, suffix: &str) -> String {
         num
     } else {
         format!("{num}{suffix}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stepper_control_h_from_btn;
+
+    #[test]
+    fn stepper_is_one_step_shorter_than_the_control_button() {
+        assert_eq!(stepper_control_h_from_btn(26.0), 22.0);
+        assert_eq!(stepper_control_h_from_btn(28.0), 22.0);
+        assert_eq!(stepper_control_h_from_btn(24.0), 20.0);
+        assert!(stepper_control_h_from_btn(26.0) < 26.0);
     }
 }

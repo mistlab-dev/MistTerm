@@ -3,6 +3,12 @@
 use super::*;
 use eframe::egui::RichText;
 
+#[derive(Clone, PartialEq, Eq)]
+enum FontPick {
+    Preset(crate::platform::TerminalFontPreset),
+    Family(String),
+}
+
 impl MistTermApp {
     fn workspace_top_chrome_height(&self, theme: &crate::ui::theme::Theme) -> f32 {
         #[cfg(target_os = "macos")]
@@ -404,7 +410,6 @@ impl MistTermApp {
                 );
                 ui.add_space(theme.spacing_panel_gap());
 
-                let mut preset = self.terminal_font_preset;
                 let preset_label =
                     |ctx: &egui::Context, p: crate::platform::TerminalFontPreset| match p {
                         crate::platform::TerminalFontPreset::Default => {
@@ -414,22 +419,132 @@ impl MistTermApp {
                         crate::platform::TerminalFontPreset::CascadiaMono => "Cascadia Mono",
                         crate::platform::TerminalFontPreset::JetBrainsMono => "JetBrains Mono",
                     };
+                let system_fonts = crate::platform::list_system_mono_fonts();
+                let mut pick = if self.terminal_font_family.trim().is_empty() {
+                    FontPick::Preset(self.terminal_font_preset)
+                } else {
+                    FontPick::Family(self.terminal_font_family.clone())
+                };
+                let selected_text = match &pick {
+                    FontPick::Preset(p) => preset_label(ctx, *p).to_string(),
+                    FontPick::Family(name) => name.clone(),
+                };
+                let prev_combo_h = ui.spacing().combo_height;
+                ui.spacing_mut().combo_height = 320.0;
                 crate::ui::chrome::form_combo(
                     ui,
                     theme,
                     "preferences_terminal_font_preset",
-                    preset_label(ctx, preset),
+                    selected_text,
                     layout_util::finite_content_width(ui),
                     |ui| {
-                        for p in crate::platform::TerminalFontPreset::ALL {
-                            ui.selectable_value(&mut preset, p, preset_label(ctx, p));
+                        let default_selected = matches!(
+                            pick,
+                            FontPick::Preset(crate::platform::TerminalFontPreset::Default)
+                        );
+                        if ui
+                            .selectable_label(
+                                default_selected,
+                                preset_label(ctx, crate::platform::TerminalFontPreset::Default),
+                            )
+                            .clicked()
+                        {
+                            pick = FontPick::Preset(crate::platform::TerminalFontPreset::Default);
+                        }
+                        let named_presets = [
+                            crate::platform::TerminalFontPreset::Consolas,
+                            crate::platform::TerminalFontPreset::CascadiaMono,
+                            crate::platform::TerminalFontPreset::JetBrainsMono,
+                        ];
+                        for p in named_presets {
+                            let family = crate::platform::terminal_preset_family_name(p);
+                            let selected_now = match &pick {
+                                FontPick::Preset(cur) => *cur == p,
+                                FontPick::Family(name) => family.is_some_and(|preset_name| {
+                                    crate::platform::font_family_eq(name, preset_name)
+                                }),
+                            };
+                            if !crate::platform::terminal_preset_installed(p) && !selected_now {
+                                continue;
+                            }
+                            if ui
+                                .selectable_label(selected_now, preset_label(ctx, p))
+                                .clicked()
+                            {
+                                pick = FontPick::Preset(p);
+                            }
+                        }
+                        let extras: Vec<_> = system_fonts
+                            .iter()
+                            .filter(|font| {
+                                !named_presets.iter().any(|p| {
+                                    crate::platform::terminal_preset_family_name(*p).is_some_and(
+                                        |name| crate::platform::font_family_eq(&font.family, name),
+                                    )
+                                })
+                            })
+                            .collect();
+                        if !extras.is_empty() {
+                            ui.separator();
+                        }
+                        for font in extras {
+                            let selected = matches!(
+                                &pick,
+                                FontPick::Family(name)
+                                    if crate::platform::font_family_eq(name, &font.family)
+                            );
+                            if ui
+                                .selectable_label(selected, font.family.as_str())
+                                .clicked()
+                            {
+                                pick = FontPick::Family(font.family.clone());
+                            }
+                        }
+                        if let FontPick::Family(name) = &pick {
+                            let listed = system_fonts
+                                .iter()
+                                .any(|font| crate::platform::font_family_eq(&font.family, name))
+                                || named_presets.iter().any(|p| {
+                                    crate::platform::terminal_preset_family_name(*p).is_some_and(
+                                        |preset_name| {
+                                            crate::platform::font_family_eq(name, preset_name)
+                                        },
+                                    )
+                                });
+                            if !listed {
+                                ui.separator();
+                                let missing = format!(
+                                    "{name} ({})",
+                                    crate::i18n::tr(ctx, "not installed", "未安装")
+                                );
+                                let _ = ui.selectable_label(true, missing);
+                            }
                         }
                     },
                 );
-                if preset != self.terminal_font_preset {
-                    self.terminal_font_preset = preset;
+                ui.spacing_mut().combo_height = prev_combo_h;
+                let (next_preset, next_family) = match &pick {
+                    FontPick::Preset(p) => (*p, String::new()),
+                    FontPick::Family(name) => {
+                        (crate::platform::TerminalFontPreset::Default, name.clone())
+                    }
+                };
+                if next_preset != self.terminal_font_preset
+                    || next_family != self.terminal_font_family
+                {
+                    self.terminal_font_preset = next_preset;
+                    self.terminal_font_family = next_family;
                     self.apply_terminal_font_preferences(ctx);
                 }
+                ui.label(
+                    RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Lists monospace fonts installed on this computer. Presets that are not installed are hidden.",
+                        "列出本机已安装的等宽字体；没安装的预设不显示。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(theme.color_form_hint()),
+                );
 
                 Self::preferences_row_divider(ui, theme);
                 crate::ui::chrome::form_control_row(ui, theme, |ui| {
@@ -531,12 +646,11 @@ impl MistTermApp {
                 {
                     self.default_keepalive_enabled = ka;
                 }
-                crate::ui::chrome::form_control_row(ui, theme, |ui| {
-                    crate::ui::chrome::form_inline_label(
-                        ui,
-                        theme,
-                        crate::i18n::tr(ctx, "Ping every (s)", "每隔(秒)"),
-                    );
+                let every = crate::i18n::tr(ctx, "Ping every (s)", "每隔(秒)");
+                let give_up = crate::i18n::tr(ctx, "Give up after", "连续无应答");
+                let label_w = crate::ui::chrome::form_label_advance(ui, theme, every)
+                    .max(crate::ui::chrome::form_label_advance(ui, theme, give_up));
+                crate::ui::chrome::form_labeled_control_row(ui, theme, every, label_w, |ui| {
                     crate::ui::chrome::form_u32_stepper(
                         ui,
                         theme,
@@ -544,13 +658,9 @@ impl MistTermApp {
                         &mut self.default_keepalive_interval_secs,
                         5..=300,
                         5,
-                    );
-                    ui.add_space(theme.spacing_md());
-                    crate::ui::chrome::form_inline_label(
-                        ui,
-                        theme,
-                        crate::i18n::tr(ctx, "Give up after", "连续无应答"),
-                    );
+                    )
+                });
+                crate::ui::chrome::form_labeled_control_row(ui, theme, give_up, label_w, |ui| {
                     crate::ui::chrome::form_u8_stepper(
                         ui,
                         theme,
@@ -558,7 +668,7 @@ impl MistTermApp {
                         &mut self.default_keepalive_count_max,
                         1..=20,
                         1,
-                    );
+                    )
                 });
                 ui.label(
                     RichText::new(crate::i18n::tr(
@@ -712,17 +822,24 @@ impl MistTermApp {
                     self.session_log_settings.include_ansi = ansi;
                 }
                 let mb = self.session_log_settings.max_file_bytes / (1024 * 1024);
-                let path = self.session_log_settings.base_dir.display();
-                let log_dir_hint = match crate::i18n::language(ctx) {
-                    crate::i18n::UiLanguage::En => {
-                        format!("Directory: {path} (max {mb} MB per file)")
-                    }
-                    crate::i18n::UiLanguage::Zh => {
-                        format!("目录：{path}(单文件上限 {mb} MB)")
-                    }
+                let full_path = self.session_log_settings.base_dir.display().to_string();
+                let shown_path = ellipsize_middle(&full_path, 42);
+                let dir_line = match crate::i18n::language(ctx) {
+                    crate::i18n::UiLanguage::En => format!("Directory: {shown_path}"),
+                    crate::i18n::UiLanguage::Zh => format!("目录：{shown_path}"),
+                };
+                let cap_line = match crate::i18n::language(ctx) {
+                    crate::i18n::UiLanguage::En => format!("Max {mb} MB per file"),
+                    crate::i18n::UiLanguage::Zh => format!("单文件上限 {mb} MB"),
                 };
                 ui.label(
-                    RichText::new(log_dir_hint)
+                    RichText::new(dir_line)
+                        .size(theme.font_size_small())
+                        .color(text_low),
+                )
+                .on_hover_text(full_path);
+                ui.label(
+                    RichText::new(cap_line)
                         .size(theme.font_size_small())
                         .color(text_low),
                 );
@@ -984,7 +1101,6 @@ impl MistTermApp {
             label_color,
             false,
             |ui| {
-                let pref_w = layout_util::finite_content_width(ui);
                 if crate::ui::chrome::form_checkbox(
                     ui,
                     theme,
@@ -1036,27 +1152,27 @@ impl MistTermApp {
                     &mut self.app_settings.audit.syslog.enabled,
                     crate::i18n::tr(ctx, "Also send to a Syslog server", "同时发送到 Syslog 服务器"),
                 );
+                crate::ui::chrome::form_labeled_control_row(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "Host", "主机"),
+                    0.0,
+                    |ui| {
+                        let host_w = (ui.available_width() - 4.0).max(120.0);
+                        crate::ui::chrome::form_inline_singleline(
+                            ui,
+                            theme,
+                            egui::Id::new("pref_audit_syslog_host"),
+                            &mut self.app_settings.audit.syslog.host,
+                            "127.0.0.1",
+                            host_w,
+                            false,
+                        )
+                    },
+                );
+                let port_label = crate::i18n::tr(ctx, "Port", "端口");
                 crate::ui::chrome::form_control_row(ui, theme, |ui| {
-                    crate::ui::chrome::form_inline_label(
-                        ui,
-                        theme,
-                        crate::i18n::tr(ctx, "Host", "主机"),
-                    );
-                    let host_w = (pref_w * 0.45).max(120.0);
-                    crate::ui::chrome::form_inline_singleline(
-                        ui,
-                        theme,
-                        egui::Id::new("pref_audit_syslog_host"),
-                        &mut self.app_settings.audit.syslog.host,
-                        "127.0.0.1",
-                        host_w,
-                        false,
-                    );
-                    crate::ui::chrome::form_inline_label(
-                        ui,
-                        theme,
-                        crate::i18n::tr(ctx, "Port", "端口"),
-                    );
+                    crate::ui::chrome::form_inline_label(ui, theme, port_label);
                     crate::ui::chrome::form_u16_stepper(
                         ui,
                         theme,
@@ -1315,5 +1431,43 @@ impl MistTermApp {
             },
         );
     }
+}
 
+/// 路径中间省略，悬停仍给出全文。`max_chars` 含省略号。
+fn ellipsize_middle(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if max_chars == 0 || count <= max_chars {
+        return text.to_string();
+    }
+    if max_chars == 1 {
+        return "…".to_string();
+    }
+    let keep = max_chars - 1;
+    let head = keep / 2;
+    let tail = keep - head;
+    let h: String = text.chars().take(head).collect();
+    let t: String = text
+        .chars()
+        .rev()
+        .take(tail)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{h}…{t}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ellipsize_middle;
+
+    #[test]
+    fn ellipsize_middle_keeps_both_ends() {
+        assert_eq!(ellipsize_middle("short", 10), "short");
+        let out = ellipsize_middle("/home/user/.local/share/mistterm/logs", 16);
+        assert!(out.starts_with("/home"));
+        assert!(out.ends_with("logs") || out.ends_with("/logs") || out.contains('…'));
+        assert!(out.chars().count() <= 16);
+        assert!(out.contains('…'));
+    }
 }
