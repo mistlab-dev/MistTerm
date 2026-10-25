@@ -1,4 +1,4 @@
-//! egui 中文字体：内置 Noto 优先，各平台系统字体回退；终端等宽字体预设。
+//! egui 中文字体：内置 Noto 优先，各平台系统字体回退；终端等宽字体预设与本机枚举。
 
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -34,6 +34,76 @@ impl TerminalFontPreset {
     ];
 }
 
+/// 偏好里选中的终端字体。`family` 非空时覆盖预设，身份是家族名（跨机器可移植）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalFontSelection {
+    pub preset: TerminalFontPreset,
+    family: String,
+}
+
+impl Default for TerminalFontSelection {
+    fn default() -> Self {
+        Self::preset(TerminalFontPreset::Default)
+    }
+}
+
+impl TerminalFontSelection {
+    pub fn preset(preset: TerminalFontPreset) -> Self {
+        Self {
+            preset,
+            family: String::new(),
+        }
+    }
+
+    pub fn family(family: impl Into<String>) -> Self {
+        Self {
+            preset: TerminalFontPreset::Default,
+            family: family.into(),
+        }
+    }
+
+    /// 用户选中的本机家族名。空表示走 [`TerminalFontPreset`]。
+    pub fn family_name(&self) -> Option<&str> {
+        let name = self.family.trim();
+        if name.is_empty() {
+            None
+        } else {
+            Some(name)
+        }
+    }
+}
+
+/// 预设在下拉里的家族名。`Default` 没有固定家族。
+pub fn terminal_preset_family_name(preset: TerminalFontPreset) -> Option<&'static str> {
+    match preset {
+        TerminalFontPreset::Default => None,
+        TerminalFontPreset::Consolas => Some("Consolas"),
+        TerminalFontPreset::CascadiaMono => Some("Cascadia Mono"),
+        TerminalFontPreset::JetBrainsMono => Some("JetBrains Mono"),
+    }
+}
+
+/// 预设是否能在本机点到。系统默认始终可选；其余看枚举到的家族名，
+/// 再用严格文件名兜底（不含 DejaVu / Menlo 这类回退）。
+pub fn terminal_preset_installed(preset: TerminalFontPreset) -> bool {
+    match terminal_preset_family_name(preset) {
+        None => true,
+        Some(name) => {
+            super::font_enum::list_system_mono_fonts()
+                .iter()
+                .any(|f| super::font_enum::family_eq(&f.family, name))
+                || preset_strict_paths(preset).iter().any(|p| p.is_file())
+        }
+    }
+}
+
+/// 本机等宽家族（已去重、已排序）。
+pub fn list_system_mono_fonts() -> &'static [super::font_enum::SystemMonoFont] {
+    super::font_enum::list_system_mono_fonts()
+}
+
+pub use super::font_enum::{family_eq as font_family_eq, SystemMonoFont};
+
 static CJK_FONT_LOADED: AtomicBool = AtomicBool::new(false);
 
 /// 嵌入/系统 CJK 字体在 egui 中的注册名（可作 `FontFamily::Name`）。
@@ -61,14 +131,21 @@ pub fn ui_caption_font_id(size: f32) -> egui::FontId {
 
 /// 为 egui 注册字体：界面比例字体统一为 CJK（含拉丁）；终端等宽仍用预设 + CJK 回退。
 pub fn configure_egui_fonts(ctx: &egui::Context, terminal_preset: TerminalFontPreset) -> bool {
+    configure_terminal_font(ctx, &TerminalFontSelection::preset(terminal_preset))
+}
+
+/// 同 [`configure_egui_fonts`]，但可以选本机枚举到的家族名。
+pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSelection) -> bool {
     let ppp = ctx.pixels_per_point();
     log::info!("egui pixels_per_point = {ppp:.2} (HiDPI reference)");
 
     let mut fonts = egui::FontDefinitions::default();
-    if let Some(bytes) = load_terminal_preset_font(terminal_preset) {
+    if let Some((bytes, index)) = load_selected_terminal_font(selection) {
         let mono_name = "mistterm-terminal-mono".to_string();
         // 行高已用 FACTOR 收紧，勿再大幅 y_offset，否则字下移而块光标仍贴格顶，看起来光标偏低。
-        let mono_data = egui::FontData::from_owned(bytes).tweak(egui::FontTweak {
+        let mut mono_data = egui::FontData::from_owned(bytes);
+        mono_data.index = index;
+        let mono_data = mono_data.tweak(egui::FontTweak {
             y_offset_factor: 0.02,
             baseline_offset_factor: -0.02,
             ..Default::default()
@@ -134,6 +211,33 @@ pub fn configure_egui_fonts(ctx: &egui::Context, terminal_preset: TerminalFontPr
         });
     }
     loaded
+}
+
+fn load_selected_terminal_font(selection: &TerminalFontSelection) -> Option<(Vec<u8>, u32)> {
+    if let Some(family) = selection.family_name() {
+        if let Some(face) = super::font_enum::resolve_mono_family(family) {
+            match std::fs::read(&face.path) {
+                Ok(bytes) => {
+                    log::info!(
+                        "Loaded terminal font family {family:?}: {} (face {})",
+                        face.path.display(),
+                        face.index
+                    );
+                    return Some((bytes, face.index));
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Terminal font family {family:?} at {} unreadable: {e}",
+                        face.path.display()
+                    );
+                }
+            }
+        } else {
+            log::warn!("Terminal font family {family:?} is not installed; using system default");
+        }
+        return load_terminal_preset_font(TerminalFontPreset::Default).map(|bytes| (bytes, 0));
+    }
+    load_terminal_preset_font(selection.preset).map(|bytes| (bytes, 0))
 }
 
 fn load_terminal_preset_font(preset: TerminalFontPreset) -> Option<Vec<u8>> {
@@ -325,6 +429,64 @@ fn jetbrains_mono_font_candidates() -> Vec<std::path::PathBuf> {
     paths
 }
 
+/// 预设「真的装了」才算，不含 Default 那条 DejaVu / Menlo 回退链。
+fn preset_strict_paths(preset: TerminalFontPreset) -> Vec<std::path::PathBuf> {
+    match preset {
+        TerminalFontPreset::Default => Vec::new(),
+        TerminalFontPreset::Consolas => consolas_strict_paths(),
+        TerminalFontPreset::CascadiaMono => cascadia_mono_font_candidates()
+            .into_iter()
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| {
+                        n.eq_ignore_ascii_case("CascadiaMono.ttf")
+                            || n.eq_ignore_ascii_case("CascadiaMono.otf")
+                    })
+            })
+            .collect(),
+        TerminalFontPreset::JetBrainsMono => jetbrains_mono_font_candidates(),
+    }
+}
+
+fn consolas_strict_paths() -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        paths.extend(consolas_font_candidates());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        paths.push(std::path::PathBuf::from("/Library/Fonts/Consolas.ttf"));
+        paths.push(std::path::PathBuf::from("/Library/Fonts/consola.ttf"));
+        if let Ok(home) = std::env::var("HOME") {
+            let home = std::path::PathBuf::from(home);
+            paths.push(home.join("Library/Fonts/Consolas.ttf"));
+            paths.push(home.join("Library/Fonts/consola.ttf"));
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for dir in [
+            "/usr/share/fonts/truetype/consolas",
+            "/usr/local/share/fonts",
+            "/usr/share/fonts",
+        ] {
+            let dir = std::path::PathBuf::from(dir);
+            paths.push(dir.join("consola.ttf"));
+            paths.push(dir.join("Consolas.ttf"));
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let home = std::path::PathBuf::from(home);
+            for rel in [".local/share/fonts", ".fonts"] {
+                paths.push(home.join(rel).join("consola.ttf"));
+                paths.push(home.join(rel).join("Consolas.ttf"));
+            }
+        }
+    }
+    paths
+}
+
 #[cfg(target_os = "windows")]
 fn system_fonts_dir() -> Option<std::path::PathBuf> {
     std::env::var("WINDIR")
@@ -438,5 +600,25 @@ mod tests {
         let json = serde_json::to_string(&TerminalFontPreset::CascadiaMono).unwrap();
         let parsed: TerminalFontPreset = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, TerminalFontPreset::CascadiaMono);
+    }
+
+    #[test]
+    fn family_selection_overrides_preset_identity() {
+        let preset = TerminalFontSelection::preset(TerminalFontPreset::CascadiaMono);
+        assert!(preset.family_name().is_none());
+        assert_eq!(preset.preset, TerminalFontPreset::CascadiaMono);
+
+        let family = TerminalFontSelection::family("  DejaVu Sans Mono  ");
+        assert_eq!(family.family_name(), Some("DejaVu Sans Mono"));
+        assert_eq!(family.preset, TerminalFontPreset::Default);
+    }
+
+    #[test]
+    fn preset_family_names_are_exact() {
+        assert_eq!(
+            terminal_preset_family_name(TerminalFontPreset::JetBrainsMono),
+            Some("JetBrains Mono")
+        );
+        assert_eq!(terminal_preset_family_name(TerminalFontPreset::Default), None);
     }
 }
