@@ -168,7 +168,7 @@ fn builtin_modules() -> Vec<&'static dyn MistModule> { ... }
 
 ### 4.3 目录演进
 
-`src/modules/cmd_audit_local.rs` 已落地（#121）。display-link / output-trigger / session-import 仍按后续票迁入。Host 用 `modules::builtin_modules` 注册，不在 `capability` 里反向依赖具体模块。
+`src/modules/cmd_audit_local.rs`（#121）、`src/modules/output_trigger.rs`（#119）与 `src/modules/display_link.rs`（#120）已落地。session-import 仍按后续票迁入。Host 用 `modules::builtin_modules` 注册，不在 `capability` 里反向依赖具体模块。
 
 ```
 src/
@@ -272,5 +272,5 @@ src/
 
 - 现状分层：[`ARCHITECTURE.md`](./ARCHITECTURE.md)  
 - 产品红线：[`CONVERSATIONAL-TERMINAL.md`](../product/CONVERSATIONAL-TERMINAL.md)  
-- 已解耦样例：`core/display_link.rs`、`core/output_trigger.rs`、`core/cmd_audit.rs`  
+- 已解耦样例：`modules/display_link.rs`、`modules/output_trigger.rs`（均已迁入 MistModule）、`core/cmd_audit.rs`  
 - 规划票：MistTerm #113  

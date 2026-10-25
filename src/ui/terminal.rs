@@ -61,8 +61,10 @@ struct TerminalVisualLayoutCache {
     formatted: String,
     /// 已排版的 galley；避免 TextEdit layouter 每帧 `layout_job` 打满 CPU。
     galley: Option<std::sync::Arc<egui::Galley>>,
-    /// display-link 命中：`(行号, 链接)`，与 layout 同键缓存（#90）。
-    display_links: Vec<(usize, crate::core::display_link::DisplayLink)>,
+    /// display-link 是否启用。关掉后下一帧重扫，不再出新装饰（已画下划线随缓存失效）。
+    display_link_on: bool,
+    /// display-link 命中：`(行号, 可点区间)`，与 layout 同键缓存（#90 / #120）。
+    display_links: Vec<(usize, DisplaySpan)>,
 }
 
 impl TerminalVisualLayoutCache {
@@ -77,6 +79,7 @@ impl TerminalVisualLayoutCache {
         fg: egui::Color32,
         bg: egui::Color32,
         selection: Option<(i32, usize, i32, usize)>,
+        display_link_on: bool,
     ) -> bool {
         self.vt_gen == vt_gen
             && self.content_epoch == content_epoch
@@ -87,6 +90,62 @@ impl TerminalVisualLayoutCache {
             && self.fg == fg
             && self.bg == bg
             && self.selection == selection
+            && self.display_link_on == display_link_on
+    }
+}
+
+/// Host 侧可点区间，来自 `ModuleAction::DecorateLink`。渲染与点击都认它，模块不碰 egui。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DisplaySpan {
+    start: usize,
+    end: usize,
+    action: String,
+    text: String,
+}
+
+impl DisplaySpan {
+    fn from_action(act: crate::capability::ModuleAction) -> Option<Self> {
+        match act {
+            crate::capability::ModuleAction::DecorateLink {
+                start,
+                end,
+                action,
+                text,
+            } => Some(Self {
+                start,
+                end,
+                action,
+                text,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// 左键点击分发。非 http(s) 的 browser-open 忽略，与迁入前一致。
+enum DisplayLinkClick {
+    Copy,
+    Browser,
+    Runbook,
+    Sftp,
+}
+
+fn classify_display_link_click(action: &str, text: &str) -> Option<DisplayLinkClick> {
+    use crate::modules::display_link::{
+        ACTION_BROWSER_OPEN, ACTION_COPY_OR_CONNECT, ACTION_RUNBOOK_RECALL, ACTION_SFTP_OPEN,
+    };
+    match action {
+        ACTION_COPY_OR_CONNECT => Some(DisplayLinkClick::Copy),
+        ACTION_BROWSER_OPEN => {
+            if text.starts_with("http://") || text.starts_with("https://") {
+                Some(DisplayLinkClick::Browser)
+            } else {
+                None
+            }
+        }
+        ACTION_RUNBOOK_RECALL => Some(DisplayLinkClick::Runbook),
+        ACTION_SFTP_OPEN => Some(DisplayLinkClick::Sftp),
+        _ => None,
     }
 }
 
@@ -388,17 +447,15 @@ pub struct TerminalView {
     ime_preedit: crate::ui::terminal_keys::ImePreedit,
     /// 最近一帧终端 IME 框的 egui Id；UI 输入(含中文全角)抢焦点时须 surrender，否则 Composition 仍进终端。
     last_ime_id: Option<egui::Id>,
-    /// display-link 规则引擎（#90）：加载一次，输出行匹配复用。
-    display_link_engine: crate::core::display_link::DisplayLinkEngine,
     /// 点击 display-link 后待宿主处理的动作（SFTP 跳转需要宿主开面板）。
     pending_display_link_sftp: Option<String>,
     /// 点击错误码链接后待宿主处理的自动召回请求（#90 后续：attach + 自动发送触发 #66 召回）。
     pending_display_link_runbook: Option<String>,
     /// 右键 IP 链接后待宿主处理的「新开连接」请求（#90 后续）。
     pending_display_link_connect: Option<String>,
-    /// 右键打开菜单时缓存的 display-link（菜单跨帧时 `interact_pointer_pos` 会丢，需自持）。
-    context_menu_display_link: Option<crate::core::display_link::DisplayLink>,
-    /// 扩展模块注册表（#117 / #119）：Host 接线，PTY 完整行分发与右键菜单贡献。
+    /// 右键按下帧缓存的可点区间（菜单跨帧时 `interact_pointer_pos` 会丢，需自持，#111）。
+    context_menu_display_link: Option<DisplaySpan>,
+    /// 扩展模块注册表（#117 / #119 / #120）：Host 接线，PTY 完整行分发与右键菜单贡献。
     /// output-trigger 经此注册表的 `on_output_line` 产出 Notify，不再自带引擎。
     module_registry: std::sync::Arc<crate::capability::ModuleRegistry>,
     /// 未完成行缓冲（供 module on_output_line 跨 chunk 拼行，#117）。
@@ -450,30 +507,34 @@ impl TerminalView {
         lines.get(line).map(|s| s.chars().count())
     }
 
-    /// display-link 命中扫描（#90）：对整屏可见文本逐行匹配，返回 `(行号, 链接)`。
-    /// 仅在 layout 缓存重建时跑一次，随 galley 复用，不影响逐帧开销。
+    /// display-link 命中扫描（#90 / #120）：视口每一行走 `on_output_line` → `DecorateLink`。
+    /// 只问 display-link 这一个模块，避免把重扫发给 trigger。禁用时返回空（≈ 模块不存在）。
+    /// 仅在 layout 缓存重建时跑一次，随 galley 复用。
     fn scan_display_links(
-        engine: &crate::core::display_link::DisplayLinkEngine,
+        registry: &crate::capability::ModuleRegistry,
         formatted: &str,
-    ) -> Vec<(usize, crate::core::display_link::DisplayLink)> {
-        if engine.is_empty() {
+    ) -> Vec<(usize, DisplaySpan)> {
+        if !registry.is_enabled(crate::modules::display_link::MODULE_ID) {
             return Vec::new();
         }
         formatted
             .lines()
             .enumerate()
             .flat_map(|(row, line)| {
-                engine
-                    .scan(line)
+                registry
+                    .on_output_line_for(
+                        crate::modules::display_link::MODULE_ID,
+                        &crate::capability::OutputLineCtx::viewport(line),
+                    )
                     .into_iter()
-                    .map(move |link| (row, link))
+                    .filter_map(move |act| DisplaySpan::from_action(act).map(|span| (row, span)))
             })
             .collect()
     }
 
     /// 链接字节区间 → 字符列区间（egui 光标/绘制都是列粒度）。
     /// 字节偏移落在字符边界外时返回 `None`（防御性，扫描层不会产生这种偏移）。
-    fn display_link_char_range(line: &str, link: &crate::core::display_link::DisplayLink) -> Option<(usize, usize)> {
+    fn display_link_char_range(line: &str, link: &DisplaySpan) -> Option<(usize, usize)> {
         let start = line.get(..link.start)?.chars().count();
         let end = line.get(..link.end)?.chars().count();
         Some((start, end))
@@ -481,12 +542,12 @@ impl TerminalView {
 
     /// 指针位置命中的 display-link（行号 + 克隆链接）。
     fn display_link_at(
-        display_links: &[(usize, crate::core::display_link::DisplayLink)],
+        display_links: &[(usize, DisplaySpan)],
         galley: &egui::Galley,
         text_draw_pos: egui::Pos2,
         pos: egui::Pos2,
         lines: &[&str],
-    ) -> Option<(usize, crate::core::display_link::DisplayLink)> {
+    ) -> Option<(usize, DisplaySpan)> {
         let (row_i, col) = Self::terminal_pointer_row_col(text_draw_pos, pos, galley, lines);
         let line = lines.get(row_i)?;
         display_links.iter().find_map(|(r, link)| {
@@ -921,7 +982,6 @@ impl TerminalView {
             ime_capture: String::new(),
             ime_preedit: crate::ui::terminal_keys::ImePreedit::default(),
             last_ime_id: None,
-            display_link_engine: crate::core::display_link::DisplayLinkEngine::new(),
             pending_display_link_sftp: None,
             pending_display_link_runbook: None,
             pending_display_link_connect: None,
@@ -1614,6 +1674,9 @@ impl TerminalView {
                             theme.color_terminal_selection_fg(),
                         )
                     });
+                    let display_link_on = self
+                        .module_registry
+                        .is_enabled(crate::modules::display_link::MODULE_ID);
                     let cache_key = (
                         self.vt_visual_generation,
                         self.terminal.content_epoch(),
@@ -1624,6 +1687,7 @@ impl TerminalView {
                         shell.default_fg,
                         shell.terminal_bg,
                         selection_key,
+                        display_link_on,
                     );
                     self.repaint_probe_cache_hit = false;
                     let (layout_job, cell_bgs, display_owned) =
@@ -1638,6 +1702,7 @@ impl TerminalView {
                                 cache_key.6,
                                 cache_key.7,
                                 cache_key.8,
+                                cache_key.9,
                             ) {
                                 self.repaint_probe_cache_hit = true;
                                 (
@@ -1656,7 +1721,7 @@ impl TerminalView {
                                 );
                                 let formatted = self.terminal.get_formatted_output();
                                 let display_links =
-                                    Self::scan_display_links(&self.display_link_engine, &formatted);
+                                    Self::scan_display_links(&self.module_registry, &formatted);
                                 self.visual_layout_cache = Some(TerminalVisualLayoutCache {
                                     vt_gen: cache_key.0,
                                     content_epoch: cache_key.1,
@@ -1667,6 +1732,7 @@ impl TerminalView {
                                     fg: cache_key.6,
                                     bg: cache_key.7,
                                     selection: cache_key.8,
+                                    display_link_on: cache_key.9,
                                     layout_job: layout_job.clone(),
                                     cell_bgs: cell_bgs.clone(),
                                     formatted: formatted.clone(),
@@ -1686,7 +1752,7 @@ impl TerminalView {
                             );
                             let formatted = self.terminal.get_formatted_output();
                             let display_links =
-                                Self::scan_display_links(&self.display_link_engine, &formatted);
+                                Self::scan_display_links(&self.module_registry, &formatted);
                             self.visual_layout_cache = Some(TerminalVisualLayoutCache {
                                 vt_gen: cache_key.0,
                                 content_epoch: cache_key.1,
@@ -1697,6 +1763,7 @@ impl TerminalView {
                                 fg: cache_key.6,
                                 bg: cache_key.7,
                                 selection: cache_key.8,
+                                display_link_on: cache_key.9,
                                 layout_job: layout_job.clone(),
                                 cell_bgs: cell_bgs.clone(),
                                 formatted: formatted.clone(),
@@ -1718,6 +1785,7 @@ impl TerminalView {
                                 cache_key.6,
                                 cache_key.7,
                                 cache_key.8,
+                                cache_key.9,
                             ) {
                                 c.galley.clone()
                             } else {
@@ -2259,32 +2327,15 @@ impl TerminalView {
                             }
                             select_resp.context_menu(|ui| {
                                 crate::ui::chrome::apply_context_menu_style(ui, theme);
-                                // display-link 右键（#90 后续）：IP 可「新开连接」，预填到新建连接弹窗。
-                                if let Some(link) = &self.context_menu_display_link {
-                                    if matches!(
-                                        link.action,
-                                        crate::core::display_link::DisplayLinkAction::Copy
-                                    ) {
-                                        if crate::ui::chrome::popup_menu_button(
-                                            ui,
-                                            theme,
-                                            crate::i18n::tr(
-                                                ui.ctx(),
-                                                "New connection to this IP",
-                                                "新开连接到此 IP",
-                                            ),
-                                        )
-                                        .clicked()
-                                        {
-                                            self.pending_display_link_connect =
-                                                Some(link.text.clone());
-                                            self.context_menu_display_link = None;
-                                            ui.close_menu();
-                                        }
-                                    }
-                                }
-                                // 扩展模块右键条目贡献（#117）：只贡献条目，不拥有菜单生命周期
-                                let mod_items = self.module_registry.context_menu_items();
+                                // 模块只贡献条目（#117 / #120）。「新开连接」由 display-link 在
+                                // 按下帧缓存到 IP 时贡献；菜单跨帧仍读这份缓存，不读已经丢掉的指针（#111）。
+                                // 选区项仍在下面，不跟链接命中绑在一起。
+                                let cached_link = self.context_menu_display_link.clone();
+                                let menu_ctx = crate::capability::MenuCtx {
+                                    link_action: cached_link.as_ref().map(|l| l.action.as_str()),
+                                    link_text: cached_link.as_ref().map(|l| l.text.as_str()),
+                                };
+                                let mod_items = self.module_registry.context_menu_items(&menu_ctx);
                                 if !mod_items.is_empty() {
                                     let lang = crate::i18n::language(ui.ctx());
                                     for item in mod_items {
@@ -2294,7 +2345,20 @@ impl TerminalView {
                                             &item.label_en
                                         };
                                         if crate::ui::chrome::popup_menu_button(ui, theme, label).clicked() {
-                                            self.pending_module_menu_action = Some(item.action);
+                                            if item.action
+                                                == crate::modules::display_link::ACTION_NEW_CONNECTION
+                                            {
+                                                if cached_link.as_ref().is_some_and(|l| {
+                                                    l.action
+                                                        == crate::modules::display_link::ACTION_COPY_OR_CONNECT
+                                                }) {
+                                                    self.pending_display_link_connect =
+                                                        cached_link.as_ref().map(|l| l.text.clone());
+                                                }
+                                                self.context_menu_display_link = None;
+                                            } else {
+                                                self.pending_module_menu_action = Some(item.action);
+                                            }
                                             ui.close_menu();
                                         }
                                     }
@@ -3651,33 +3715,28 @@ impl TerminalView {
     }
 
     /// display-link 点击分发（#90）：
-    /// - Copy：直接复制
-    /// - BrowserOpen：系统浏览器（http/https 才放行）
-    /// - RunbookRecall：把错误码作为上下文发到 AI 面板（团队 Runbook 召回链路）
-    /// - SftpOpen：置 pending，由宿主开 SFTP 面板并跳转
-    fn handle_display_link_click(
-        &mut self,
-        ctx: &egui::Context,
-        link: &crate::core::display_link::DisplayLink,
-    ) {
-        match link.action {
-            crate::core::display_link::DisplayLinkAction::Copy => {
+    /// - copy-or-connect：直接复制
+    /// - browser-open：系统浏览器（http/https 才放行）
+    /// - runbook-recall：把错误码交给宿主自动召回
+    /// - sftp-open：置 pending，由宿主开 SFTP 面板并跳转
+    fn handle_display_link_click(&mut self, ctx: &egui::Context, link: &DisplaySpan) {
+        match classify_display_link_click(&link.action, &link.text) {
+            Some(DisplayLinkClick::Copy) => {
                 ctx.copy_text(link.text.clone());
             }
-            crate::core::display_link::DisplayLinkAction::BrowserOpen => {
-                if link.text.starts_with("http://") || link.text.starts_with("https://") {
-                    let _ = crate::platform::open_url(&link.text);
-                }
+            Some(DisplayLinkClick::Browser) => {
+                let _ = crate::platform::open_url(&link.text);
             }
-            crate::core::display_link::DisplayLinkAction::RunbookRecall => {
+            Some(DisplayLinkClick::Runbook) => {
                 // #90 review 后续：不再走「发送到 AI」的 attach 路径（用户还得手发），
                 // 改走自动召回：宿主取走后 attach 错误码 + 预填问题自动发送，
                 // send_message 内部 schedule_runbook_recall 直接出卡片。
                 self.pending_display_link_runbook = Some(link.text.clone());
             }
-            crate::core::display_link::DisplayLinkAction::SftpOpen => {
+            Some(DisplayLinkClick::Sftp) => {
                 self.pending_display_link_sftp = Some(link.text.clone());
             }
+            None => {}
         }
     }
 
@@ -3696,9 +3755,10 @@ impl TerminalView {
         self.pending_display_link_connect.take()
     }
 
-    /// 设置或共享 ModuleRegistry（#117）。
+    /// 设置或共享 ModuleRegistry（#117）。换表后丢掉布局缓存，避免沿用另一份模块状态下的装饰。
     pub fn set_module_registry(&mut self, reg: std::sync::Arc<crate::capability::ModuleRegistry>) {
         self.module_registry = reg;
+        self.visual_layout_cache = None;
     }
 
     /// 获取当前持有的 ModuleRegistry 引用。
@@ -3725,9 +3785,11 @@ impl TerminalView {
         let lines =
             crate::capability::split_pty_output_lines(&mut self.module_output_line_acc, chunk);
         for line in lines {
-            let ctx = crate::capability::OutputLineCtx { line: &line };
+            let ctx = crate::capability::OutputLineCtx::pty(&line);
             let actions = self.module_registry.on_output_line(&ctx);
-            // DecorateLink / Notify 入队，供宿主消费。
+            // Notify 入队给宿主。DecorateLink 不从这条 PTY 流画到格子上：
+            // 原始行的字节区间对不齐视口，display-link 只在 Viewport 重扫时产出装饰（#120）。
+            // 流式 DecorateLink 若入队，会把 Notify 挤出下面的上限。
             for act in actions {
                 if let crate::capability::ModuleAction::Notify {
                     severity,
@@ -3744,7 +3806,9 @@ impl TerminalView {
                         text
                     );
                 }
-                self.pending_module_actions.push(act);
+                if !matches!(act, crate::capability::ModuleAction::DecorateLink { .. }) {
+                    self.pending_module_actions.push(act);
+                }
             }
             const CAP: usize = 32;
             if self.pending_module_actions.len() > CAP {
@@ -3776,7 +3840,7 @@ impl TerminalView {
         });
     }
 
-    /// 取走 Notify，留下其它动作（DecorateLink 等仍待 #120）。
+    /// 取走 Notify。其它动作留在队列里（PTY 路径不入队 DecorateLink，见 #120）。
     pub fn take_pending_notifies(&mut self) -> Vec<crate::capability::ModuleAction> {
         let pending = std::mem::take(&mut self.pending_module_actions);
         let mut notifies = Vec::new();
@@ -5137,7 +5201,7 @@ mod cwd_tests {
 mod host_wiring_tests {
     use super::*;
     use crate::capability::{
-        BeforeSendCtx, DockContribution, MenuItem, MistModule, ModuleAction, ModuleId,
+        BeforeSendCtx, DockContribution, MenuCtx, MenuItem, MistModule, ModuleAction, ModuleId,
         ModuleRegistry, OutputLineCtx, SendVerdict, Severity,
     };
     use std::sync::{Arc, Mutex};
@@ -5165,7 +5229,7 @@ mod host_wiring_tests {
                 dedupe_key: String::new(),
             }]
         }
-        fn contribute_context_menu(&self) -> Vec<MenuItem> {
+        fn contribute_context_menu(&self, _ctx: &MenuCtx<'_>) -> Vec<MenuItem> {
             vec![MenuItem {
                 action: "test.action".into(),
                 label_zh: "测试菜单项".into(),
@@ -5300,5 +5364,92 @@ mod host_wiring_tests {
         }
         view.dispatch_output_to_modules(&buf);
         assert_eq!(view.take_pending_notifies().len(), 8);
+    }
+}
+
+#[cfg(test)]
+mod display_link_host_tests {
+    use super::*;
+    use crate::capability::{MenuCtx, ModuleRegistry};
+    use std::sync::Arc;
+    use crate::modules::display_link::{
+        ACTION_BROWSER_OPEN, ACTION_COPY_OR_CONNECT, ACTION_NEW_CONNECTION, ACTION_RUNBOOK_RECALL,
+        ACTION_SFTP_OPEN, MODULE_ID,
+    };
+
+    fn official_registry() -> ModuleRegistry {
+        ModuleRegistry::with_modules(crate::modules::builtin_modules(std::sync::Arc::new(
+            std::sync::Mutex::new(crate::core::CmdAuditEngine::new()),
+        )))
+    }
+
+    #[test]
+    fn pty_dispatch_does_not_enqueue_display_link_decorations() {
+        let mut view = TerminalView::new();
+        view.set_module_registry(Arc::new(official_registry()));
+        view.dispatch_output_to_modules(b"ECONNREFUSED 10.1.2.3\n");
+        let _notifies = view.take_pending_notifies();
+        assert!(
+            view.take_pending_module_actions().is_empty(),
+            "PTY 行不应把装饰留在动作队列"
+        );
+    }
+
+    #[test]
+    fn viewport_scan_respects_enabled_flag() {
+        let reg = official_registry();
+        let formatted = "failed to open /var/log/nginx/error.log\nECONNREFUSED 10.0.0.8\n";
+        let hits = TerminalView::scan_display_links(&reg, formatted);
+        assert!(hits.iter().any(|(_, s)| s.action == ACTION_SFTP_OPEN));
+        assert!(hits
+            .iter()
+            .any(|(_, s)| s.text == "ECONNREFUSED" && s.action == ACTION_RUNBOOK_RECALL));
+        assert!(hits
+            .iter()
+            .any(|(_, s)| s.text == "10.0.0.8" && s.action == ACTION_COPY_OR_CONNECT));
+
+        let items = reg.context_menu_items(&MenuCtx {
+            link_action: Some(ACTION_COPY_OR_CONNECT),
+            link_text: Some("10.0.0.8"),
+        });
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].action, ACTION_NEW_CONNECTION);
+        assert!(reg
+            .context_menu_items(&MenuCtx {
+                link_action: None,
+                link_text: None,
+            })
+            .is_empty());
+
+        reg.set_enabled(MODULE_ID, false);
+        assert!(TerminalView::scan_display_links(&reg, formatted).is_empty());
+        assert!(reg
+            .context_menu_items(&MenuCtx {
+                link_action: Some(ACTION_COPY_OR_CONNECT),
+                link_text: Some("10.0.0.8"),
+            })
+            .is_empty());
+    }
+
+    #[test]
+    fn classify_click_keeps_http_guard() {
+        assert!(matches!(
+            classify_display_link_click(ACTION_COPY_OR_CONNECT, "1.2.3.4"),
+            Some(DisplayLinkClick::Copy)
+        ));
+        assert!(matches!(
+            classify_display_link_click(ACTION_BROWSER_OPEN, "https://a.example"),
+            Some(DisplayLinkClick::Browser)
+        ));
+        assert!(classify_display_link_click(ACTION_BROWSER_OPEN, "ftp://a.example").is_none());
+        assert!(matches!(
+            classify_display_link_click(ACTION_RUNBOOK_RECALL, "EACCES"),
+            Some(DisplayLinkClick::Runbook)
+        ));
+        assert!(matches!(
+            classify_display_link_click(ACTION_SFTP_OPEN, "/var/log"),
+            Some(DisplayLinkClick::Sftp)
+        ));
+        assert!(classify_display_link_click("nope", "x").is_none());
     }
 }

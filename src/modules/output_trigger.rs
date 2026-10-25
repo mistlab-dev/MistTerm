@@ -7,7 +7,7 @@
 //! 不做：用户自定义 UI、插件市场、高亮整行改色（通知优先）。
 //! 关闭模块后不再收到行事件（registry 不调用本模块）；不擦 scrollback / 历史 Toast。
 
-use crate::capability::{ModuleAction, ModuleId, OutputLineCtx, Severity};
+use crate::capability::{LineOrigin, ModuleAction, ModuleId, OutputLineCtx, Severity};
 
 use serde::Deserialize;
 
@@ -187,6 +187,10 @@ impl crate::capability::MistModule for OutputTriggerModule {
     }
 
     fn on_output_line(&self, ctx: &OutputLineCtx<'_>) -> Vec<ModuleAction> {
+        // 视口重扫会反复经过同一行。通知只认 PTY 完整行（#119 / #120）。
+        if ctx.origin != LineOrigin::Pty {
+            return Vec::new();
+        }
         let Some(hit) = self.engine.scan_line(ctx.line) else {
             return Vec::new();
         };
@@ -309,7 +313,7 @@ mod tests {
             "hello world",
         ];
         for line in samples {
-            let actions = module.on_output_line(&OutputLineCtx { line });
+            let actions = module.on_output_line(&OutputLineCtx::pty(line));
             match engine.scan_line(line) {
                 None => assert!(actions.is_empty(), "plain line must not notify"),
                 Some(hit) => {
@@ -331,14 +335,15 @@ mod tests {
                 }
             }
         }
+        assert!(module
+            .on_output_line(&OutputLineCtx::viewport("ECONNREFUSED"))
+            .is_empty());
     }
 
     #[test]
     fn disabled_via_settings_emits_nothing_until_reenabled() {
         let reg = ModuleRegistry::with_modules(vec![Box::new(OutputTriggerModule::new())]);
-        let ctx = OutputLineCtx {
-            line: "ECONNREFUSED",
-        };
+        let ctx = OutputLineCtx::pty("ECONNREFUSED");
         assert!(reg.is_enabled(MODULE_ID));
         assert_eq!(reg.on_output_line(&ctx).len(), 1);
 
