@@ -1,0 +1,31 @@
+{
+  "version": "1.0.0",
+  "scope": "output-trigger",
+  "match_mode": "search",
+  "patterns": [
+    {
+      "id": "TR-ERR-001",
+      "pattern": "\\b(ECONNREFUSED|ETIMEDOUT|ECONNRESET|EHOSTUNREACH|EACCES|EPERM|ENOSPC|ENOENT|FATAL|Traceback|panic!)\\b",
+      "severity": "error",
+      "action": "notify",
+      "added": "1.2.32",
+      "priority": 10
+    },
+    {
+      "id": "TR-WARN-001",
+      "pattern": "(?i)\\b(WARNING|WARN:|deprecated)\\b",
+      "severity": "warn",
+      "action": "notify",
+      "added": "1.2.32",
+      "priority": 20
+    },
+    {
+      "id": "TR-OK-001",
+      "pattern": "(?i)\\b(build succeeded|tests? passed|PASS|job completed|deployed successfully|deployment successful)\\b",
+      "severity": "success",
+      "action": "notify",
+      "added": "1.2.32",
+      "priority": 30
+    }
+  ]
+}

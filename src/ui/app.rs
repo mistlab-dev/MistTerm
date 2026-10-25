@@ -515,6 +515,8 @@ pub struct MistTermApp {
     hang_reporter: HangReporter,
     /// 统一 Toast(所有用户可见通知走这里)
     active_toast: Option<ActiveToast>,
+    /// 输出 Trigger 冷却：`rule_id → 上次触发`（防高速输出刷屏）。
+    output_trigger_cooldown: std::collections::HashMap<String, Instant>,
     /// GUI 自动化：首帧按会话名自动连接(`MISTTERM_AUTO_CONNECT`)
     pending_auto_connect_session: Option<String>,
     /// 启动参数里的 `ssh://` 链接（浏览器点链接打开 Mist 时），首帧处理。
@@ -1253,6 +1255,7 @@ impl MistTermApp {
             agent_batch_rx: None,
             hang_reporter: HangReporter::start_default(),
             active_toast: None,
+            output_trigger_cooldown: std::collections::HashMap::new(),
             pending_auto_connect_session: None,
             pending_ssh_url: None,
             ssh_url_handler_status: None,
@@ -2723,6 +2726,47 @@ impl MistTermApp {
         let healthy = self.tabs.get(active).is_some_and(|t| t.any_connected());
         if healthy {
             self.clear_toast();
+        }
+    }
+
+    /// 输出 Trigger → Toast（#89 P2）。同规则 5s 冷却，避免 `yes`/循环日志刷屏。
+    fn fire_output_trigger_toast(
+        &mut self,
+        ctx: &egui::Context,
+        session_label: &str,
+        hit: &crate::core::output_trigger::OutputTriggerHit,
+    ) {
+        const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
+        let now = Instant::now();
+        if let Some(prev) = self.output_trigger_cooldown.get(&hit.rule_id) {
+            if now.duration_since(*prev) < COOLDOWN {
+                return;
+            }
+        }
+        self.output_trigger_cooldown
+            .insert(hit.rule_id.clone(), now);
+
+        use crate::core::output_trigger::TriggerSeverity;
+        let title = match hit.severity {
+            TriggerSeverity::Error => {
+                crate::i18n::tr(ctx, "Output alert", "输出告警")
+            }
+            TriggerSeverity::Warn => {
+                crate::i18n::tr(ctx, "Output warning", "输出警告")
+            }
+            TriggerSeverity::Success => {
+                crate::i18n::tr(ctx, "Task finished", "任务完成")
+            }
+            TriggerSeverity::Info => crate::i18n::tr(ctx, "Output notice", "输出提示"),
+        };
+        let body = format!("{session_label}: {}", hit.text);
+        match hit.severity {
+            TriggerSeverity::Error => self.notify_error_titled(title, body),
+            TriggerSeverity::Warn => self.notify_warn_titled(title, body),
+            TriggerSeverity::Success => {
+                self.push_toast_titled(ToastKind::Success, title, body);
+            }
+            TriggerSeverity::Info => self.notify_info_titled(title, body),
         }
     }
 
@@ -8606,6 +8650,10 @@ impl eframe::App for MistTermApp {
         // FUNCTIONAL_SPEC §2.4：非当前标签/窗格仍消费 SSH 输出。
         let active_tab = self.active_tab;
         let mut inactive_tab_vte_dirty = false;
+        let mut pending_trigger_toasts: Vec<(
+            String,
+            crate::core::output_trigger::OutputTriggerHit,
+        )> = Vec::new();
         for (ti, tab) in self.tabs.iter_mut().enumerate() {
             let tab_focused = active_tab == Some(ti);
             for (pi, pane) in tab.panes.iter_mut().enumerate() {
@@ -8616,6 +8664,7 @@ impl eframe::App for MistTermApp {
             }
             // #93：任一 pane 的 BEL / SessionEnded → 未聚焦 tab 置 needs_attention。
             // 活动标签响铃/结束不持久角标（用户已在看）。
+            // #89 P2 输出 Trigger：后台标签命中 → 注意点；Toast 在循环外发，避免借 self。
             if !tab_focused {
                 let mut attention = false;
                 for pane in tab.panes.iter_mut() {
@@ -8623,6 +8672,11 @@ impl eframe::App for MistTermApp {
                         || pane.terminal.take_pending_attention_ended()
                     {
                         attention = true;
+                    }
+                    let title = pane.title.clone();
+                    for hit in pane.terminal.take_pending_output_triggers() {
+                        attention = true;
+                        pending_trigger_toasts.push((title.clone(), hit));
                     }
                 }
                 if attention {
@@ -8633,8 +8687,12 @@ impl eframe::App for MistTermApp {
                 for pane in tab.panes.iter_mut() {
                     let _ = pane.terminal.take_pending_bell();
                     let _ = pane.terminal.take_pending_attention_ended();
+                    let _ = pane.terminal.take_pending_output_triggers();
                 }
             }
+        }
+        for (label, hit) in pending_trigger_toasts {
+            self.fire_output_trigger_toast(ctx, &label, &hit);
         }
         if inactive_tab_vte_dirty {
             ctx.request_repaint_after(Duration::from_millis(120));
