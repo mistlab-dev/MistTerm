@@ -404,6 +404,14 @@ pub struct TerminalView {
     output_trigger_line_acc: String,
     /// 待宿主取走的 Trigger 命中。
     pending_output_triggers: Vec<crate::core::output_trigger::OutputTriggerHit>,
+    /// 扩展模块注册表（#117）：Host 接线，PTY 完整行分发与右键菜单贡献。
+    module_registry: std::sync::Arc<crate::capability::ModuleRegistry>,
+    /// 未完成行缓冲（供 module on_output_line 跨 chunk 拼行，#117）。
+    module_output_line_acc: String,
+    /// 模块产出的动作缓存（#117 分发骨架）。
+    pending_module_actions: Vec<crate::capability::ModuleAction>,
+    /// 模块右键菜单点击产生的 action key，待宿主或外界取走。
+    pending_module_menu_action: Option<String>,
 }
 
 impl TerminalView {
@@ -926,6 +934,10 @@ impl TerminalView {
             output_trigger_engine: crate::core::output_trigger::OutputTriggerEngine::new(),
             output_trigger_line_acc: String::new(),
             pending_output_triggers: Vec::new(),
+            module_registry: std::sync::Arc::new(crate::capability::ModuleRegistry::builtin()),
+            module_output_line_acc: String::new(),
+            pending_module_actions: Vec::new(),
+            pending_module_menu_action: None,
         }
     }
 
@@ -2279,6 +2291,24 @@ impl TerminalView {
                                         }
                                     }
                                 }
+                                // 扩展模块右键条目贡献（#117）：只贡献条目，不拥有菜单生命周期
+                                let mod_items = self.module_registry.context_menu_items();
+                                if !mod_items.is_empty() {
+                                    let lang = crate::i18n::language(ui.ctx());
+                                    for item in mod_items {
+                                        let label = if lang == crate::i18n::UiLanguage::Zh {
+                                            &item.label_zh
+                                        } else {
+                                            &item.label_en
+                                        };
+                                        if crate::ui::chrome::popup_menu_button(ui, theme, label).clicked() {
+                                            self.pending_module_menu_action = Some(item.action);
+                                            ui.close_menu();
+                                        }
+                                    }
+                                    ui.separator();
+                                }
+
                                 if !self.selection.is_empty() {
                                     let copy_accel = crate::platform::terminal_copy_accel();
                                     if crate::ui::chrome::popup_menu_button_shortcut(
@@ -2622,6 +2652,7 @@ impl TerminalView {
                             if !data.is_empty() {
                                 self.pending_log_output.push(data.clone());
                                 self.note_output_for_triggers(&data);
+                                self.dispatch_output_to_modules(&data);
                                 self.terminal.feed(&data);
                                 vte_dirty = true;
                             }
@@ -2802,6 +2833,7 @@ impl TerminalView {
                         if !display_data.is_empty() {
                             self.pending_log_output.push(display_data.clone());
                             self.note_output_for_triggers(&display_data);
+                            self.dispatch_output_to_modules(&display_data);
                             self.terminal.feed(&display_data);
                             vte_dirty = true;
                             self.note_cwd_from_screen();
@@ -3671,6 +3703,69 @@ impl TerminalView {
     /// 宿主取走待新开连接的 IP（右键 display-link 产生，#90 后续）。
     pub fn take_pending_display_link_connect(&mut self) -> Option<String> {
         self.pending_display_link_connect.take()
+    }
+
+    /// 设置或共享 ModuleRegistry（#117）。
+    pub fn set_module_registry(&mut self, reg: std::sync::Arc<crate::capability::ModuleRegistry>) {
+        self.module_registry = reg;
+    }
+
+    /// 获取当前持有的 ModuleRegistry 引用。
+    pub fn module_registry(&self) -> &std::sync::Arc<crate::capability::ModuleRegistry> {
+        &self.module_registry
+    }
+
+    /// 取走模块产生的未消费动作（#117 分发骨架）。
+    pub fn take_pending_module_actions(&mut self) -> Vec<crate::capability::ModuleAction> {
+        std::mem::take(&mut self.pending_module_actions)
+    }
+
+    /// 取走模块右键菜单点击项（#117）。
+    pub fn take_pending_module_menu_action(&mut self) -> Option<String> {
+        self.pending_module_menu_action.take()
+    }
+
+    /// 扫描 PTY 输出中的完整行，在 UI/编排线程分发给各 enabled 模块的 on_output_line（#117）。
+    /// 注意：仅在 UI 线程处理收到的 SshMessage::Output 时调用，绝不在 SSH 泵线程运行。
+    fn dispatch_output_to_modules(&mut self, chunk: &[u8]) {
+        if chunk.is_empty() {
+            return;
+        }
+        let text = String::from_utf8_lossy(chunk);
+        self.module_output_line_acc.push_str(&text);
+        while let Some(idx) = self.module_output_line_acc.find('\n') {
+            let mut line = self.module_output_line_acc[..idx].to_string();
+            self.module_output_line_acc = self.module_output_line_acc[idx + 1..].to_string();
+            if line.ends_with('\r') {
+                line.pop();
+            }
+            let ctx = crate::capability::OutputLineCtx { line: &line };
+            let actions = self.module_registry.on_output_line(&ctx);
+            // 分发骨架（#117 验收：Notify / DecorateLink 最小分发）：
+            // DecorateLink / Notify 存入 pending 队列，供宿主消费或后续模块迁入时接满
+            for act in actions {
+                match &act {
+                    crate::capability::ModuleAction::Notify { severity, text, attention } => {
+                        log::debug!(
+                            target: "capability",
+                            "module notify: sev={:?} att={} text={}",
+                            severity,
+                            attention,
+                            text
+                        );
+                    }
+                    crate::capability::ModuleAction::DecorateLink { .. } => {
+                        // 预留骨架，待 #120 迁 display-link 时对接到渲染层
+                    }
+                }
+                self.pending_module_actions.push(act);
+            }
+            const CAP: usize = 32;
+            if self.pending_module_actions.len() > CAP {
+                let drain = self.pending_module_actions.len() - CAP;
+                self.pending_module_actions.drain(0..drain);
+            }
+        }
     }
 
     /// 扫描 PTY 输出中的完整行，命中 Trigger 规则则入队（#89 P2）。
@@ -5037,5 +5132,87 @@ mod cwd_tests {
         assert!(win.contains("O''Brien"));
         let posix = String::from_utf8(startup_cd_payload("/tmp/a b")).unwrap();
         assert!(posix.starts_with("cd -- "));
+    }
+}
+
+#[cfg(test)]
+mod host_wiring_tests {
+    use super::*;
+    use crate::capability::{
+        BeforeSendCtx, DockContribution, MenuItem, MistModule, ModuleAction, ModuleId,
+        ModuleRegistry, OutputLineCtx, SendVerdict, Severity,
+    };
+    use std::sync::{Arc, Mutex};
+
+    struct TestOutputModule {
+        lines: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl MistModule for TestOutputModule {
+        fn id(&self) -> ModuleId {
+            "test-output"
+        }
+        fn name_zh(&self) -> &str {
+            "测试输出模块"
+        }
+        fn name_en(&self) -> &str {
+            "Test Output Module"
+        }
+        fn on_output_line(&self, ctx: &OutputLineCtx<'_>) -> Vec<ModuleAction> {
+            self.lines.lock().unwrap().push(ctx.line.to_string());
+            vec![ModuleAction::Notify {
+                severity: Severity::Info,
+                text: format!("got: {}", ctx.line),
+                attention: true,
+            }]
+        }
+        fn contribute_context_menu(&self) -> Vec<MenuItem> {
+            vec![MenuItem {
+                action: "test.action".into(),
+                label_zh: "测试菜单项".into(),
+                label_en: "Test Menu Item".into(),
+            }]
+        }
+    }
+
+    #[test]
+    fn test_dispatch_output_to_modules_complete_lines() {
+        let mut view = TerminalView::new();
+        let lines_received = Arc::new(Mutex::new(Vec::new()));
+        let reg = ModuleRegistry::with_modules(vec![Box::new(TestOutputModule {
+            lines: lines_received.clone(),
+        })]);
+        view.set_module_registry(Arc::new(reg));
+
+        // 写入不完整行
+        view.dispatch_output_to_modules(b"hello ");
+        assert!(lines_received.lock().unwrap().is_empty());
+        assert!(view.take_pending_module_actions().is_empty());
+
+        // 补全换行符（CRLF）
+        view.dispatch_output_to_modules(b"world\r\n");
+        assert_eq!(*lines_received.lock().unwrap(), vec!["hello world".to_string()]);
+        
+        let actions = view.take_pending_module_actions();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            ModuleAction::Notify { text, .. } => assert_eq!(text, "got: hello world"),
+            _ => panic!("unexpected action"),
+        }
+    }
+
+    #[test]
+    fn test_disabled_module_in_host_gets_no_events() {
+        let mut view = TerminalView::new();
+        let lines_received = Arc::new(Mutex::new(Vec::new()));
+        let reg = ModuleRegistry::with_modules(vec![Box::new(TestOutputModule {
+            lines: lines_received.clone(),
+        })]);
+        reg.set_enabled("test-output", false);
+        view.set_module_registry(Arc::new(reg));
+
+        view.dispatch_output_to_modules(b"line 1\n");
+        assert!(lines_received.lock().unwrap().is_empty());
+        assert!(view.take_pending_module_actions().is_empty());
     }
 }

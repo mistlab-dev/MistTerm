@@ -120,10 +120,11 @@ pub trait MistModule: Send + Sync {
 }
 
 /// compile-time registry：官方模块手写列表（P0 不引入 inventory/发现协议）。
+/// `disabled` 用 `RefCell` 内部可变：钩子分发（`&self`）中 panic 时可即时禁用该模块（#117）。
 pub struct ModuleRegistry {
     modules: Vec<Box<dyn MistModule>>,
     /// 运行时禁用集合（按 id）。禁用后该模块所有钩子不再被调用。
-    disabled: HashSet<String>,
+    disabled: std::cell::RefCell<HashSet<String>>,
     /// 启停变化标志（Host 据此做缓存失效等联动）。
     state_changed: Arc<AtomicBool>,
 }
@@ -137,7 +138,7 @@ impl ModuleRegistry {
     pub fn with_modules(modules: Vec<Box<dyn MistModule>>) -> Self {
         let mut reg = Self {
             modules,
-            disabled: HashSet::new(),
+            disabled: std::cell::RefCell::new(HashSet::new()),
             state_changed: Arc::new(AtomicBool::new(false)),
         };
         reg.apply_env_disable();
@@ -149,7 +150,7 @@ impl ModuleRegistry {
             .map(|m| m.id().to_string())
             .collect();
         for id in off {
-            reg.disabled.insert(id);
+            reg.disabled.borrow_mut().insert(id);
         }
         reg
     }
@@ -163,21 +164,21 @@ impl ModuleRegistry {
         for id in raw.split(',') {
             let id = id.trim();
             if !id.is_empty() {
-                self.disabled.insert(id.to_string());
+                self.disabled.borrow_mut().insert(id.to_string());
             }
         }
     }
 
     pub fn is_enabled(&self, id: &str) -> bool {
-        !self.disabled.contains(id)
+        !self.disabled.borrow().contains(id)
     }
 
     /// 按 id 启用/禁用。禁用后钩子不再被调用（不要求擦 scrollback）。
-    pub fn set_enabled(&mut self, id: &str, enabled: bool) {
+    pub fn set_enabled(&self, id: &str, enabled: bool) {
         if enabled {
-            self.disabled.remove(id);
+            self.disabled.borrow_mut().remove(id);
         } else {
-            self.disabled.insert(id.to_string());
+            self.disabled.borrow_mut().insert(id.to_string());
         }
         self.state_changed.store(true, Ordering::Relaxed);
     }
@@ -201,27 +202,52 @@ impl ModuleRegistry {
             .collect()
     }
 
-    /// 分发 `on_output_line`：仅对启用模块调用。
+    /// 分发 `on_output_line`：仅对启用模块调用；panic 隔离（#117）。
     pub fn on_output_line(&self, ctx: &OutputLineCtx<'_>) -> Vec<ModuleAction> {
         let mut out = Vec::new();
         for m in &self.modules {
-            if !self.is_enabled(m.id()) {
+            let id = m.id();
+            if !self.is_enabled(id) {
                 continue;
             }
-            out.extend(m.on_output_line(ctx));
+            match self.dispatch(id, |m| m.on_output_line(ctx)) {
+                Ok(actions) => out.extend(actions),
+                Err(_) => {}
+            }
         }
         out
     }
 
+    /// panic 防护（#117 验收）：单模块 panic → 记日志并**本会话禁用**该模块，不影响 Kernel。
+    /// 超时防护暂以约定为主（同步钩子要求限时），真超时检测待后续票。
+    fn dispatch<T>(
+        &self,
+        id: ModuleId,
+        f: impl FnOnce(&Box<dyn MistModule>) -> T,
+    ) -> Result<T, ()> {
+        let Some(m) = self.modules.iter().find(|m| m.id() == id) else {
+            return Err(());
+        };
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(m))).map_err(|_| {
+            log::error!(
+                target: "capability",
+                "module '{}' panicked in a hook; disabled for this session",
+                id
+            );
+            self.set_enabled(id, false);
+        })
+    }
     /// 分发 `on_before_send`：任一模块 Block 即整体 Block（短路）；
-    /// 其次取第一个 Confirm；全 Allow 才 Allow。
+    /// 其次取第一个 Confirm；全 Allow 才 Allow。panic 隔离同上。
     pub fn on_before_send(&self, ctx: &BeforeSendCtx<'_>) -> SendVerdict {
         let mut confirm: Option<SendVerdict> = None;
         for m in &self.modules {
-            if !self.is_enabled(m.id()) {
+            let id = m.id();
+            if !self.is_enabled(id) {
                 continue;
             }
-            match m.on_before_send(ctx) {
+            let verdict = self.dispatch(id, |m| m.on_before_send(ctx)).unwrap_or(SendVerdict::Allow);
+            match verdict {
                 SendVerdict::Block { reason } => return SendVerdict::Block { reason },
                 v @ SendVerdict::Confirm { .. } => {
                     if confirm.is_none() {
@@ -234,12 +260,16 @@ impl ModuleRegistry {
         confirm.unwrap_or(SendVerdict::Allow)
     }
 
-    /// 汇总启用模块的右键菜单贡献。
+    /// 汇总启用模块的右键菜单贡献。panic 隔离同上。
     pub fn context_menu_items(&self) -> Vec<MenuItem> {
         let mut out = Vec::new();
         for m in &self.modules {
-            if self.is_enabled(m.id()) {
-                out.extend(m.contribute_context_menu());
+            let id = m.id();
+            if !self.is_enabled(id) {
+                continue;
+            }
+            if let Ok(items) = self.dispatch(id, |m| m.contribute_context_menu()) {
+                out.extend(items);
             }
         }
         out
@@ -512,10 +542,44 @@ mod tests {
     }
 
     #[test]
+    fn panic_in_hook_disables_module_for_session() {
+        struct PanickingModule;
+        impl MistModule for PanickingModule {
+            fn id(&self) -> ModuleId {
+                "panic-mod"
+            }
+            fn name_zh(&self) -> &str {
+                "崩了"
+            }
+            fn name_en(&self) -> &str {
+                "panic"
+            }
+            fn on_output_line(&self, _ctx: &OutputLineCtx<'_>) -> Vec<ModuleAction> {
+                panic!("boom from on_output_line");
+            }
+            fn contribute_context_menu(&self) -> Vec<MenuItem> {
+                panic!("boom from contribute_context_menu");
+            }
+        }
+
+        let reg = ModuleRegistry::with_modules(vec![Box::new(PanickingModule)]);
+        assert!(reg.is_enabled("panic-mod"));
+
+        // 第一次调用触发 panic，但不会展开打崩调用方，返回空且本会话自动禁用
+        let actions = reg.on_output_line(&OutputLineCtx { line: "hello" });
+        assert!(actions.is_empty());
+        assert!(!reg.is_enabled("panic-mod"));
+
+        // 禁用后再次调用根本不进 hook
+        let items = reg.context_menu_items();
+        assert!(items.is_empty());
+    }
+
+    #[test]
     fn env_disable_respects_ids() {
         // 直接测解析逻辑：构造后手动写入 disabled（避免环境变量跨测试污染）。
         let mut reg = ModuleRegistry::with_modules(vec![Box::new(FakeModule::new("env-mod", true))]);
-        reg.disabled.insert("env-mod".to_string());
+        reg.disabled.borrow_mut().insert("env-mod".to_string());
         assert!(!reg.is_enabled("env-mod"));
     }
 }

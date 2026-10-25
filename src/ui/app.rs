@@ -290,6 +290,8 @@ pub struct MistTermApp {
 
     /// 状态栏信息
     status_message: String,
+    /// 扩展模块注册表（#117）：Host 统筹持有并共享给各 TerminalView。
+    module_registry: std::sync::Arc<crate::capability::ModuleRegistry>,
 
     /// 是否显示新建会话对话框
     show_new_session_dialog: bool,
@@ -1116,6 +1118,7 @@ impl MistTermApp {
             active_tab: None,
             action_bus: crate::ui::action::ActionBus::new(),
             status_message: String::new(),
+            module_registry: std::sync::Arc::new(crate::capability::ModuleRegistry::builtin()),
             show_new_session_dialog: false,
             show_edit_session_dialog: false,
             show_about_dialog: false,
