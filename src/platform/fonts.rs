@@ -9,6 +9,9 @@ pub const DEFAULT_TERMINAL_FONT_SIZE: f32 = 13.0;
 pub const TERMINAL_FONT_SIZE_MIN: f32 = 10.0;
 pub const TERMINAL_FONT_SIZE_MAX: f32 = 24.0;
 
+/// 选中的字体文件超过这个大小就不再 `read` 进内存。
+const MAX_SELECTED_FONT_BYTES: u64 = 32 * 1024 * 1024;
+
 /// 限制终端字号在可渲染范围内。
 pub fn clamp_terminal_font_size(size: f32) -> f32 {
     size.clamp(TERMINAL_FONT_SIZE_MIN, TERMINAL_FONT_SIZE_MAX)
@@ -89,18 +92,48 @@ pub fn terminal_preset_installed(preset: TerminalFontPreset) -> bool {
     match terminal_preset_family_name(preset) {
         None => true,
         Some(name) => {
-            super::font_enum::list_system_mono_fonts()
-                .iter()
-                .any(|f| super::font_enum::family_eq(&f.family, name))
-                || preset_strict_paths(preset).iter().any(|p| p.is_file())
+            let from_scan = super::font_enum::system_mono_fonts_if_ready().is_some_and(|fonts| {
+                fonts
+                    .iter()
+                    .any(|f| super::font_enum::family_eq(&f.family, name))
+            });
+            from_scan || preset_strict_paths(preset).iter().any(|p| p.is_file())
         }
     }
 }
 
 /// 本机等宽家族（已去重、已排序）。
+///
+/// 阻塞到扫描结束。偏好下拉用 [`system_mono_fonts_if_ready`]。
 pub fn list_system_mono_fonts() -> &'static [super::font_enum::SystemMonoFont] {
     super::font_enum::list_system_mono_fonts()
 }
+
+/// 在后台开始枚举。已经在扫、或已经扫完，则直接返回。
+pub fn start_system_mono_font_scan() {
+    super::font_enum::start_system_mono_font_scan();
+}
+
+/// 枚举完成则返回缓存；否则 `None`，并确保后台扫描已启动。
+pub fn system_mono_fonts_if_ready() -> Option<&'static [SystemMonoFont]> {
+    super::font_enum::system_mono_fonts_if_ready()
+}
+
+/// 已保存的家族名还在等后台枚举，启动时先用了系统默认。
+pub fn terminal_font_apply_deferred() -> bool {
+    DEFERRED_FAMILY_APPLY.load(Ordering::Acquire)
+}
+
+/// 后台枚举完成后返回 `true` 一次。调用方应再跑 [`configure_terminal_font`]。
+pub fn take_deferred_terminal_font_apply() -> bool {
+    if !terminal_font_apply_deferred() || !super::font_enum::system_mono_fonts_ready() {
+        return false;
+    }
+    DEFERRED_FAMILY_APPLY.swap(false, Ordering::AcqRel)
+}
+
+/// 家族名已选定，但枚举还没结束，先画系统默认，扫完再换。
+static DEFERRED_FAMILY_APPLY: AtomicBool = AtomicBool::new(false);
 
 pub use super::font_enum::{family_eq as font_family_eq, SystemMonoFont};
 
@@ -215,9 +248,18 @@ pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSele
 
 fn load_selected_terminal_font(selection: &TerminalFontSelection) -> Option<(Vec<u8>, u32)> {
     if let Some(family) = selection.family_name() {
+        if !super::font_enum::system_mono_fonts_ready() {
+            super::font_enum::start_system_mono_font_scan();
+            DEFERRED_FAMILY_APPLY.store(true, Ordering::Release);
+            log::info!(
+                "terminal font family {family:?} waiting for monospace scan; using system default until then"
+            );
+            return load_terminal_preset_font(TerminalFontPreset::Default).map(|bytes| (bytes, 0));
+        }
+        DEFERRED_FAMILY_APPLY.store(false, Ordering::Release);
         if let Some(face) = super::font_enum::resolve_mono_family(family) {
-            match std::fs::read(&face.path) {
-                Ok(bytes) => {
+            match read_font_file_capped(&face.path) {
+                FontRead::Ok(bytes) => {
                     log::info!(
                         "Loaded terminal font family {family:?}: {} (face {})",
                         face.path.display(),
@@ -225,7 +267,13 @@ fn load_selected_terminal_font(selection: &TerminalFontSelection) -> Option<(Vec
                     );
                     return Some((bytes, face.index));
                 }
-                Err(e) => {
+                FontRead::TooLarge(len) => {
+                    log::warn!(
+                        "terminal font family {family:?} at {} is {len} bytes, over the {MAX_SELECTED_FONT_BYTES} byte limit; using system default",
+                        face.path.display()
+                    );
+                }
+                FontRead::Failed(e) => {
                     log::warn!(
                         "Terminal font family {family:?} at {} unreadable: {e}",
                         face.path.display()
@@ -237,7 +285,34 @@ fn load_selected_terminal_font(selection: &TerminalFontSelection) -> Option<(Vec
         }
         return load_terminal_preset_font(TerminalFontPreset::Default).map(|bytes| (bytes, 0));
     }
+    DEFERRED_FAMILY_APPLY.store(false, Ordering::Release);
     load_terminal_preset_font(selection.preset).map(|bytes| (bytes, 0))
+}
+
+#[derive(Debug)]
+enum FontRead {
+    Ok(Vec<u8>),
+    TooLarge(u64),
+    Failed(std::io::Error),
+}
+
+fn read_font_file_capped(path: &std::path::Path) -> FontRead {
+    match std::fs::metadata(path) {
+        Ok(meta) => {
+            let len = meta.len();
+            if len > MAX_SELECTED_FONT_BYTES {
+                return FontRead::TooLarge(len);
+            }
+        }
+        Err(e) => return FontRead::Failed(e),
+    }
+    match std::fs::read(path) {
+        Ok(bytes) if bytes.len() as u64 > MAX_SELECTED_FONT_BYTES => {
+            FontRead::TooLarge(bytes.len() as u64)
+        }
+        Ok(bytes) => FontRead::Ok(bytes),
+        Err(e) => FontRead::Failed(e),
+    }
 }
 
 fn load_terminal_preset_font(preset: TerminalFontPreset) -> Option<Vec<u8>> {
@@ -396,12 +471,10 @@ fn jetbrains_mono_font_candidates() -> Vec<std::path::PathBuf> {
     {
         if let Ok(home) = std::env::var("HOME") {
             paths.push(
-                std::path::PathBuf::from(&home)
-                    .join("Library/Fonts/JetBrainsMono-Regular.ttf"),
+                std::path::PathBuf::from(&home).join("Library/Fonts/JetBrainsMono-Regular.ttf"),
             );
             paths.push(
-                std::path::PathBuf::from(&home)
-                    .join("Library/Fonts/JetBrains Mono Regular.ttf"),
+                std::path::PathBuf::from(&home).join("Library/Fonts/JetBrains Mono Regular.ttf"),
             );
         }
         paths.push(std::path::PathBuf::from(
@@ -421,8 +494,7 @@ fn jetbrains_mono_font_candidates() -> Vec<std::path::PathBuf> {
         );
         if let Ok(home) = std::env::var("HOME") {
             paths.push(
-                std::path::PathBuf::from(home)
-                    .join(".local/share/fonts/JetBrainsMono-Regular.ttf"),
+                std::path::PathBuf::from(home).join(".local/share/fonts/JetBrainsMono-Regular.ttf"),
             );
         }
     }
@@ -437,12 +509,10 @@ fn preset_strict_paths(preset: TerminalFontPreset) -> Vec<std::path::PathBuf> {
         TerminalFontPreset::CascadiaMono => cascadia_mono_font_candidates()
             .into_iter()
             .filter(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| {
-                        n.eq_ignore_ascii_case("CascadiaMono.ttf")
-                            || n.eq_ignore_ascii_case("CascadiaMono.otf")
-                    })
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    n.eq_ignore_ascii_case("CascadiaMono.ttf")
+                        || n.eq_ignore_ascii_case("CascadiaMono.otf")
+                })
             })
             .collect(),
         TerminalFontPreset::JetBrainsMono => jetbrains_mono_font_candidates(),
@@ -516,7 +586,10 @@ fn load_embedded_cjk_font() -> Option<egui::FontData> {
     if BYTES.is_empty() {
         return None;
     }
-    log::info!("Loaded embedded CJK font NotoSansSC-Regular.otf ({} bytes)", BYTES.len());
+    log::info!(
+        "Loaded embedded CJK font NotoSansSC-Regular.otf ({} bytes)",
+        BYTES.len()
+    );
     Some(egui::FontData::from_static(BYTES))
 }
 
@@ -582,10 +655,7 @@ mod tests {
 
     #[test]
     fn terminal_font_preset_defaults_to_default() {
-        assert_eq!(
-            TerminalFontPreset::default(),
-            TerminalFontPreset::Default
-        );
+        assert_eq!(TerminalFontPreset::default(), TerminalFontPreset::Default);
     }
 
     #[test]
@@ -619,6 +689,23 @@ mod tests {
             terminal_preset_family_name(TerminalFontPreset::JetBrainsMono),
             Some("JetBrains Mono")
         );
-        assert_eq!(terminal_preset_family_name(TerminalFontPreset::Default), None);
+        assert_eq!(
+            terminal_preset_family_name(TerminalFontPreset::Default),
+            None
+        );
+    }
+
+    #[test]
+    fn oversized_font_file_is_rejected_before_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("huge.ttf");
+        let len = MAX_SELECTED_FONT_BYTES + 1;
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(len).unwrap();
+        drop(file);
+        match read_font_file_capped(&path) {
+            FontRead::TooLarge(n) => assert_eq!(n, len),
+            other => panic!("expected size rejection, got {other:?}"),
+        }
     }
 }

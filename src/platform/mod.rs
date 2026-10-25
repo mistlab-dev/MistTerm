@@ -33,9 +33,11 @@ pub use docs::{
 };
 pub use fonts::{
     cjk_font_loaded, clamp_terminal_font_size, configure_egui_fonts, configure_terminal_font,
-    font_family_eq, list_system_mono_fonts, terminal_preset_family_name, terminal_preset_installed,
-    ui_caption_font_id, ui_font_id, SystemMonoFont, TerminalFontPreset, TerminalFontSelection,
-    CJK_UI_FONT_NAME, DEFAULT_TERMINAL_FONT_SIZE, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_MIN,
+    font_family_eq, list_system_mono_fonts, start_system_mono_font_scan,
+    system_mono_fonts_if_ready, take_deferred_terminal_font_apply, terminal_font_apply_deferred,
+    terminal_preset_family_name, terminal_preset_installed, ui_caption_font_id, ui_font_id,
+    SystemMonoFont, TerminalFontPreset, TerminalFontSelection, CJK_UI_FONT_NAME,
+    DEFAULT_TERMINAL_FONT_SIZE, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_MIN,
 };
 pub use logging::init_runtime_logging;
 pub use paths::{default_ssh_config_path, home_dir, home_dir_display_hint};

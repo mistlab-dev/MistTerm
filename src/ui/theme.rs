@@ -2718,6 +2718,10 @@ impl Theme {
     pub fn spacing_card_y(&self) -> f32 {
         7.0
     } // 卡片上下 padding
+    /// 设置卡片内相邻行的间距。现代 / 经典共用，避免各自写死像素后对不齐。
+    pub fn spacing_card_row(&self) -> f32 {
+        4.0
+    }
     pub fn spacing_status_bar_x(&self) -> f32 {
         14.0
     } // 状态栏左右 padding

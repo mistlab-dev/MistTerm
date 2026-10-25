@@ -994,6 +994,14 @@ impl MistTermApp {
         }
     }
 
+    fn poll_deferred_terminal_font(&mut self, ctx: &egui::Context) {
+        if crate::platform::take_deferred_terminal_font_apply() {
+            self.apply_terminal_font_preferences(ctx);
+        } else if crate::platform::terminal_font_apply_deferred() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+    }
+
     fn apply_terminal_font_preferences(&mut self, ctx: &egui::Context) {
         crate::platform::configure_terminal_font(ctx, &self.terminal_font_selection());
         // 字体族变更后重刷 TextStyle，确保界面比例字体仍指向统一 CJK 族。
@@ -1098,6 +1106,8 @@ impl MistTermApp {
 
     /// 创建新的应用实例
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // fc-list / 扫盘可能要几秒。先丢到后台，首帧和偏好下拉都不要等它。
+        crate::platform::start_system_mono_font_scan();
         let app_settings = AppSettings::load();
         crate::core::local_dir::set_configured(&app_settings.default_local_dir);
         let show_onboarding_help = !app_settings.onboarding_help_shown;
@@ -8457,6 +8467,7 @@ impl eframe::App for MistTermApp {
         crate::i18n::set_language(ctx, self.app_settings.ui_language);
         crate::ui::icons::UiIcons::reload_if_ppp_changed(ctx);
         self.apply_current_theme(ctx);
+        self.poll_deferred_terminal_font(ctx);
         self.apply_responsive_layout(ctx);
         // 须在 Central 画终端之前：把 IME 从终端框让给 AI/表单(全角标点依赖此路径)。
         self.release_terminal_keyboard_if_ui_typing(ctx);
