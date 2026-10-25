@@ -992,7 +992,7 @@ impl MistTermApp {
     fn new_terminal_view(&self) -> TerminalView {
         let mut terminal = TerminalView::new();
         terminal.set_font_size(self.terminal_font_size);
-        // 与偏好开关、发送门闩、输出触发共用同一 registry（#117 / #121 / #119）。
+        // 与偏好开关、发送门闩、输出触发、display-link 共用同一 registry（#117 / #119 / #120 / #121）。
         // 关模块 = 之后各窗格都不再收到对应钩子。
         terminal.set_module_registry(std::sync::Arc::clone(&self.module_registry));
         terminal
@@ -4879,7 +4879,7 @@ impl MistTermApp {
             return;
         }
         // 含文件名的路径缩到父目录，避免把文件当 cwd 去 list。
-        let dir = crate::core::display_link::DisplayLinkEngine::sftp_list_dir(path);
+        let dir = crate::modules::display_link::sftp_list_dir(path);
         if !self.show_sftp_panel {
             self.open_right_dock_panel(ActiveRightDock::Sftp);
             self.sftp_last_tab = None;

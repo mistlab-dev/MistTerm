@@ -3,7 +3,8 @@
 //! 分层（见 `docs/tech/EXTENSION-POINTS.md`）：
 //! - **Kernel**（SSH/PTY/渲染/会话）永不插件——本模块不持有任何 SSH handle。
 //! - **MistModule**：同进程、compile-time 注册的可开关业务能力。
-//!   具体模块在 `crate::modules`（`cmd-audit-local`、`output-trigger` 已迁入）；本模块不反向依赖它们。
+//!   具体模块在 `crate::modules`（`cmd-audit-local`、`output-trigger`、`display-link` 已迁入），
+//!   由 Host 用 `builtin_modules` 组装；本模块不反向依赖它们。
 //! - Host 责任：泵线程不跑模块、失败隔离、菜单/面板由 Host 绘制。
 //!
 //! 边界（#116 Non-goals）：不做插件发现协议、热加载、WASM、Skill 目录；
@@ -16,10 +17,56 @@ use std::sync::Arc;
 /// 模块清单里的稳定 id（如 "display-link" / "output-trigger"）。
 pub type ModuleId = &'static str;
 
-/// `on_output_line` 的只读上下文：PTY 完整行（UTF-8 已解码）。
-/// Host 约束：仅在编排线程对完整行调用，禁止阻塞 SSH 泵。
+/// 一行文本从哪来。
+///
+/// - [`LineOrigin::Pty`]：泵里收齐的完整行，只在 UI 线程分发一次。
+///   通知类副作用（Toast / 注意点）只认这个来源。
+/// - [`LineOrigin::Viewport`]：当前视口已解码文本的重扫，用来对齐可点装饰。
+///   同一行会在布局缓存重建时再次出现，禁止在此来源上发通知。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineOrigin {
+    Pty,
+    Viewport,
+}
+
+/// `on_output_line` 的只读上下文（UTF-8 已解码的一整行）。
+/// Host 约束：仅在编排线程调用，禁止阻塞 SSH 泵。
 pub struct OutputLineCtx<'a> {
     pub line: &'a str,
+    pub origin: LineOrigin,
+}
+
+impl<'a> OutputLineCtx<'a> {
+    pub fn pty(line: &'a str) -> Self {
+        Self {
+            line,
+            origin: LineOrigin::Pty,
+        }
+    }
+
+    pub fn viewport(line: &'a str) -> Self {
+        Self {
+            line,
+            origin: LineOrigin::Viewport,
+        }
+    }
+}
+
+/// 右键菜单构建时的只读上下文。模块据此决定贡献哪些条目，不持有菜单生命周期。
+pub struct MenuCtx<'a> {
+    /// 按下帧缓存的可点链接动作（如 `copy-or-connect`）。空白处为 `None`。
+    pub link_action: Option<&'a str>,
+    /// 命中链接的原文。
+    pub link_text: Option<&'a str>,
+}
+
+impl<'a> MenuCtx<'a> {
+    pub fn plain() -> Self {
+        Self {
+            link_action: None,
+            link_text: None,
+        }
+    }
 }
 
 /// `on_before_send` 的只读上下文：用户回车 / 片段插入即将写入 PTY 的文本。
@@ -139,7 +186,8 @@ pub trait MistModule: Send + Sync {
     }
 
     /// 终端右键菜单贡献。只贡献条目，不拥有菜单生命周期。
-    fn contribute_context_menu(&self) -> Vec<MenuItem> {
+    /// `ctx` 携带按下帧缓存的链接（跨帧指针会丢，见 #111），不要在模块里读 egui。
+    fn contribute_context_menu(&self, _ctx: &MenuCtx<'_>) -> Vec<MenuItem> {
         Vec::new()
     }
 
@@ -164,7 +212,7 @@ pub struct ModuleRegistry {
 
 impl ModuleRegistry {
     /// 空 registry。官方模块由 `crate::modules::builtin_modules` 组装，
-    /// 避免 capability 与具体模块互相依赖（#116 脚手架 / #121 / #119）。
+    /// 避免 capability 与具体模块互相依赖（#116 / #119 / #120 / #121）。
     pub fn builtin() -> Self {
         Self::with_modules(Vec::new())
     }
@@ -293,13 +341,21 @@ impl ModuleRegistry {
         out
     }
 
+    /// 只调用一个模块的 `on_output_line`。
+    ///
+    /// 视口装饰重扫用它，避免把同一屏文本再发给其它模块（output-trigger 会把重扫当成新行）。
+    /// 禁用或未知 id → 空，不调用钩子。
+    pub fn on_output_line_for(&self, id: &str, ctx: &OutputLineCtx<'_>) -> Vec<ModuleAction> {
+        if !self.is_enabled(id) {
+            return Vec::new();
+        }
+        self.dispatch(id, |m| m.on_output_line(ctx))
+            .unwrap_or_default()
+    }
+
     /// panic 防护（#117 验收）：单模块 panic → 记日志并**本会话禁用**该模块，不影响 Kernel。
     /// 超时防护暂以约定为主（同步钩子要求限时），真超时检测待后续票。
-    fn dispatch<T>(
-        &self,
-        id: ModuleId,
-        f: impl FnOnce(&Box<dyn MistModule>) -> T,
-    ) -> Result<T, ()> {
+    fn dispatch<T>(&self, id: &str, f: impl FnOnce(&Box<dyn MistModule>) -> T) -> Result<T, ()> {
         let Some(m) = self.modules.iter().find(|m| m.id() == id) else {
             return Err(());
         };
@@ -321,7 +377,9 @@ impl ModuleRegistry {
             if !self.is_enabled(id) {
                 continue;
             }
-            let verdict = self.dispatch(id, |m| m.on_before_send(ctx)).unwrap_or(SendVerdict::Allow);
+            let verdict = self
+                .dispatch(id, |m| m.on_before_send(ctx))
+                .unwrap_or(SendVerdict::Allow);
             match verdict {
                 SendVerdict::Block { reason } => return SendVerdict::Block { reason },
                 v @ SendVerdict::Confirm { .. } => {
@@ -336,14 +394,14 @@ impl ModuleRegistry {
     }
 
     /// 汇总启用模块的右键菜单贡献。panic 隔离同上。
-    pub fn context_menu_items(&self) -> Vec<MenuItem> {
+    pub fn context_menu_items(&self, ctx: &MenuCtx<'_>) -> Vec<MenuItem> {
         let mut out = Vec::new();
         for m in &self.modules {
             let id = m.id();
             if !self.is_enabled(id) {
                 continue;
             }
-            if let Ok(items) = self.dispatch(id, |m| m.contribute_context_menu()) {
+            if let Ok(items) = self.dispatch(id, |m| m.contribute_context_menu(ctx)) {
                 out.extend(items);
             }
         }
@@ -467,7 +525,7 @@ mod tests {
     fn empty_registry_registers_nothing() {
         let reg = ModuleRegistry::builtin();
         assert!(reg.snapshot().is_empty());
-        let ctx = OutputLineCtx { line: "hello" };
+        let ctx = OutputLineCtx::pty("hello");
         assert!(reg.on_output_line(&ctx).is_empty());
         assert_eq!(
             reg.on_before_send(&BeforeSendCtx { text: "ls" }),
@@ -510,7 +568,7 @@ mod tests {
         assert_eq!(info[0].id, "fake-a");
         assert!(info[0].enabled);
 
-        let ctx = OutputLineCtx { line: "x" };
+        let ctx = OutputLineCtx::pty("x");
         reg.on_output_line(&ctx);
         reg.on_before_send(&BeforeSendCtx { text: "ls" });
         reg.on_session_event(SessionEvent::Connected);
@@ -558,7 +616,7 @@ mod tests {
         })]);
         assert!(reg.is_enabled("shared"));
 
-        let ctx = OutputLineCtx { line: "x" };
+        let ctx = OutputLineCtx::pty("x");
         reg.on_output_line(&ctx);
         reg.on_before_send(&BeforeSendCtx { text: "ls" });
         reg.on_session_event(SessionEvent::Disconnected);
@@ -623,7 +681,7 @@ mod tests {
             fn name_en(&self) -> &str {
                 "menu"
             }
-            fn contribute_context_menu(&self) -> Vec<MenuItem> {
+            fn contribute_context_menu(&self, _ctx: &MenuCtx<'_>) -> Vec<MenuItem> {
                 vec![MenuItem {
                     action: "mod.act".into(),
                     label_zh: "动作".into(),
@@ -638,11 +696,11 @@ mod tests {
                 }]
             }
         }
-        let mut reg = ModuleRegistry::with_modules(vec![Box::new(MenuModule)]);
-        assert_eq!(reg.context_menu_items().len(), 1);
+        let reg = ModuleRegistry::with_modules(vec![Box::new(MenuModule)]);
+        assert_eq!(reg.context_menu_items(&MenuCtx::plain()).len(), 1);
         assert_eq!(reg.right_dock_contributions().len(), 1);
         reg.set_enabled("menu-mod", false);
-        assert!(reg.context_menu_items().is_empty());
+        assert!(reg.context_menu_items(&MenuCtx::plain()).is_empty());
         assert!(reg.right_dock_contributions().is_empty());
     }
 
@@ -662,7 +720,7 @@ mod tests {
             fn on_output_line(&self, _ctx: &OutputLineCtx<'_>) -> Vec<ModuleAction> {
                 panic!("boom from on_output_line");
             }
-            fn contribute_context_menu(&self) -> Vec<MenuItem> {
+            fn contribute_context_menu(&self, _ctx: &MenuCtx<'_>) -> Vec<MenuItem> {
                 panic!("boom from contribute_context_menu");
             }
         }
@@ -671,15 +729,14 @@ mod tests {
         assert!(reg.is_enabled("panic-mod"));
 
         // 第一次调用触发 panic，但不会展开打崩调用方，返回空且本会话自动禁用
-        let actions = reg.on_output_line(&OutputLineCtx { line: "hello" });
+        let actions = reg.on_output_line(&OutputLineCtx::pty("hello"));
         assert!(actions.is_empty());
         assert!(!reg.is_enabled("panic-mod"));
 
         // 禁用后再次调用根本不进 hook
-        let items = reg.context_menu_items();
+        let items = reg.context_menu_items(&MenuCtx::plain());
         assert!(items.is_empty());
     }
-
 
     #[test]
     fn test_sync_effective_disabled_precedence() {
@@ -708,7 +765,8 @@ mod tests {
     #[test]
     fn env_disable_respects_ids() {
         // 直接测解析逻辑：构造后手动写入 disabled（避免环境变量跨测试污染）。
-        let mut reg = ModuleRegistry::with_modules(vec![Box::new(FakeModule::new("env-mod", true))]);
+        let mut reg =
+            ModuleRegistry::with_modules(vec![Box::new(FakeModule::new("env-mod", true))]);
         reg.disabled.borrow_mut().insert("env-mod".to_string());
         assert!(!reg.is_enabled("env-mod"));
     }

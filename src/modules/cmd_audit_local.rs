@@ -366,9 +366,7 @@ mod tests {
         // 本地审计不占用 on_output_line，避免和服务器标记行抢输出。
         let module = CmdAuditLocalModule::new(Arc::new(Mutex::new(CmdAuditEngine::new())));
         assert!(module
-            .on_output_line(&OutputLineCtx {
-                line: "MIST_AUDIT\t{}",
-            })
+            .on_output_line(&OutputLineCtx::pty("MIST_AUDIT\t{}"))
             .is_empty());
     }
 }
