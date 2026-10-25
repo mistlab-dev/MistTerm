@@ -398,13 +398,8 @@ pub struct TerminalView {
     pending_display_link_connect: Option<String>,
     /// 右键打开菜单时缓存的 display-link（菜单跨帧时 `interact_pointer_pos` 会丢，需自持）。
     context_menu_display_link: Option<crate::core::display_link::DisplayLink>,
-    /// 输出 Trigger 引擎（#89 P2）：完成/出错 → 后台通知。
-    output_trigger_engine: crate::core::output_trigger::OutputTriggerEngine,
-    /// 未完成行缓冲（跨 chunk 拼行）。
-    output_trigger_line_acc: String,
-    /// 待宿主取走的 Trigger 命中。
-    pending_output_triggers: Vec<crate::core::output_trigger::OutputTriggerHit>,
-    /// 扩展模块注册表（#117）：Host 接线，PTY 完整行分发与右键菜单贡献。
+    /// 扩展模块注册表（#117 / #119）：Host 接线，PTY 完整行分发与右键菜单贡献。
+    /// output-trigger 经此注册表的 `on_output_line` 产出 Notify，不再自带引擎。
     module_registry: std::sync::Arc<crate::capability::ModuleRegistry>,
     /// 未完成行缓冲（供 module on_output_line 跨 chunk 拼行，#117）。
     module_output_line_acc: String,
@@ -931,9 +926,6 @@ impl TerminalView {
             pending_display_link_runbook: None,
             pending_display_link_connect: None,
             context_menu_display_link: None,
-            output_trigger_engine: crate::core::output_trigger::OutputTriggerEngine::new(),
-            output_trigger_line_acc: String::new(),
-            pending_output_triggers: Vec::new(),
             module_registry: std::sync::Arc::new(crate::capability::ModuleRegistry::builtin()),
             module_output_line_acc: String::new(),
             pending_module_actions: Vec::new(),
@@ -2652,7 +2644,6 @@ impl TerminalView {
                         if self.is_local_shell() {
                             if !data.is_empty() {
                                 self.pending_log_output.push(data.clone());
-                                self.note_output_for_triggers(&data);
                                 self.dispatch_output_to_modules(&data);
                                 self.terminal.feed(&data);
                                 vte_dirty = true;
@@ -2833,7 +2824,6 @@ impl TerminalView {
                         }
                         if !display_data.is_empty() {
                             self.pending_log_output.push(display_data.clone());
-                            self.note_output_for_triggers(&display_data);
                             self.dispatch_output_to_modules(&display_data);
                             self.terminal.feed(&display_data);
                             vte_dirty = true;
@@ -3732,32 +3722,27 @@ impl TerminalView {
         if chunk.is_empty() {
             return;
         }
-        let text = String::from_utf8_lossy(chunk);
-        self.module_output_line_acc.push_str(&text);
-        while let Some(idx) = self.module_output_line_acc.find('\n') {
-            let mut line = self.module_output_line_acc[..idx].to_string();
-            self.module_output_line_acc = self.module_output_line_acc[idx + 1..].to_string();
-            if line.ends_with('\r') {
-                line.pop();
-            }
+        let lines =
+            crate::capability::split_pty_output_lines(&mut self.module_output_line_acc, chunk);
+        for line in lines {
             let ctx = crate::capability::OutputLineCtx { line: &line };
             let actions = self.module_registry.on_output_line(&ctx);
-            // 分发骨架（#117 验收：Notify / DecorateLink 最小分发）：
-            // DecorateLink / Notify 存入 pending 队列，供宿主消费或后续模块迁入时接满
+            // DecorateLink / Notify 入队，供宿主消费。
             for act in actions {
-                match &act {
-                    crate::capability::ModuleAction::Notify { severity, text, attention } => {
-                        log::debug!(
-                            target: "capability",
-                            "module notify: sev={:?} att={} text={}",
-                            severity,
-                            attention,
-                            text
-                        );
-                    }
-                    crate::capability::ModuleAction::DecorateLink { .. } => {
-                        // 预留骨架，待 #120 迁 display-link 时对接到渲染层
-                    }
+                if let crate::capability::ModuleAction::Notify {
+                    severity,
+                    text,
+                    attention,
+                    ..
+                } = &act
+                {
+                    log::debug!(
+                        target: "capability",
+                        "module notify: sev={:?} att={} text={}",
+                        severity,
+                        attention,
+                        text
+                    );
                 }
                 self.pending_module_actions.push(act);
             }
@@ -3767,29 +3752,41 @@ impl TerminalView {
                 self.pending_module_actions.drain(0..drain);
             }
         }
+        // 与 #112 pending trigger 队列一致：Notify 最多留 8 条，丢掉最早的，避免 Toast 风暴。
+        self.cap_pending_notifies(8);
     }
 
-    /// 扫描 PTY 输出中的完整行，命中 Trigger 规则则入队（#89 P2）。
-    fn note_output_for_triggers(&mut self, chunk: &[u8]) {
-        crate::core::output_trigger::feed_and_scan(
-            &self.output_trigger_engine,
-            &mut self.output_trigger_line_acc,
-            chunk,
-            &mut self.pending_output_triggers,
-        );
-        // 上限保护：一帧堆积过多时丢弃最早的，避免 Toast 风暴。
-        const CAP: usize = 8;
-        if self.pending_output_triggers.len() > CAP {
-            let drain = self.pending_output_triggers.len() - CAP;
-            self.pending_output_triggers.drain(0..drain);
+    fn cap_pending_notifies(&mut self, cap: usize) {
+        let notify_count = self
+            .pending_module_actions
+            .iter()
+            .filter(|a| matches!(a, crate::capability::ModuleAction::Notify { .. }))
+            .count();
+        if notify_count <= cap {
+            return;
         }
+        let mut drop_n = notify_count - cap;
+        self.pending_module_actions.retain(|a| {
+            if drop_n > 0 && matches!(a, crate::capability::ModuleAction::Notify { .. }) {
+                drop_n -= 1;
+                false
+            } else {
+                true
+            }
+        });
     }
 
-    /// 宿主取走输出 Trigger 命中（后台标签 Toast / 注意点）。
-    pub fn take_pending_output_triggers(
-        &mut self,
-    ) -> Vec<crate::core::output_trigger::OutputTriggerHit> {
-        std::mem::take(&mut self.pending_output_triggers)
+    /// 取走 Notify，留下其它动作（DecorateLink 等仍待 #120）。
+    pub fn take_pending_notifies(&mut self) -> Vec<crate::capability::ModuleAction> {
+        let pending = std::mem::take(&mut self.pending_module_actions);
+        let mut notifies = Vec::new();
+        for act in pending {
+            match act {
+                n @ crate::capability::ModuleAction::Notify { .. } => notifies.push(n),
+                other => self.pending_module_actions.push(other),
+            }
+        }
+        notifies
     }
 
     pub fn take_pending_send_to_ai(&mut self) -> bool {
@@ -5165,6 +5162,7 @@ mod host_wiring_tests {
                 severity: Severity::Info,
                 text: format!("got: {}", ctx.line),
                 attention: true,
+                dedupe_key: String::new(),
             }]
         }
         fn contribute_context_menu(&self) -> Vec<MenuItem> {
@@ -5215,5 +5213,92 @@ mod host_wiring_tests {
         view.dispatch_output_to_modules(b"line 1\n");
         assert!(lines_received.lock().unwrap().is_empty());
         assert!(view.take_pending_module_actions().is_empty());
+    }
+
+    fn view_with_builtin_modules() -> TerminalView {
+        let mut view = TerminalView::new();
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::core::CmdAuditEngine::new(),
+        ));
+        view.set_module_registry(Arc::new(ModuleRegistry::with_modules(
+            crate::modules::builtin_modules(engine),
+        )));
+        view
+    }
+
+    #[test]
+    fn output_trigger_module_notifies_on_complete_line() {
+        let mut view = view_with_builtin_modules();
+        view.dispatch_output_to_modules(b"noise\nECONNREFUSED here\r\npartial");
+        let actions = view.take_pending_notifies();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            ModuleAction::Notify {
+                severity,
+                text,
+                attention,
+                dedupe_key,
+            } => {
+                assert_eq!(*severity, Severity::Error);
+                assert!(text.contains("ECONNREFUSED"));
+                assert!(*attention);
+                assert_eq!(dedupe_key, "TR-ERR-001");
+            }
+            other => panic!("expected notify, got {other:?}"),
+        }
+        // 半行还没换行，不应再产出。
+        assert!(view.take_pending_notifies().is_empty());
+        view.dispatch_output_to_modules(b" WARNING: disk almost full\n");
+        let actions = view.take_pending_notifies();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            ModuleAction::Notify {
+                severity,
+                dedupe_key,
+                ..
+            } => {
+                assert_eq!(*severity, Severity::Warn);
+                assert_eq!(dedupe_key, "TR-WARN-001");
+            }
+            other => panic!("expected warn notify, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn output_trigger_disabled_yields_no_notify() {
+        let mut view = view_with_builtin_modules();
+        view.module_registry
+            .sync_effective_disabled(&["output-trigger".to_string()]);
+        view.dispatch_output_to_modules(b"ECONNREFUSED\nBuild succeeded\nWARNING: x\n");
+        assert!(view.take_pending_notifies().is_empty());
+
+        view.module_registry.sync_effective_disabled(&[]);
+        view.dispatch_output_to_modules(b"Build succeeded in 1s\n");
+        let actions = view.take_pending_notifies();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            ModuleAction::Notify {
+                severity,
+                dedupe_key,
+                attention,
+                ..
+            } => {
+                assert_eq!(*severity, Severity::Success);
+                assert_eq!(dedupe_key, "TR-OK-001");
+                assert!(*attention);
+            }
+            other => panic!("expected success notify, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn output_trigger_notify_queue_keeps_newest_eight() {
+        let mut view = view_with_builtin_modules();
+        let mut buf = Vec::new();
+        for _ in 0..10 {
+            buf.extend_from_slice(b"ECONNREFUSED\n");
+        }
+        view.dispatch_output_to_modules(&buf);
+        assert_eq!(view.take_pending_notifies().len(), 8);
     }
 }
