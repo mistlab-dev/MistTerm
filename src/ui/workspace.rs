@@ -1179,35 +1179,46 @@ impl MistTermApp {
                                 crate::i18n::tr(ctx, "Enable keepalive pings", "空闲时发送心跳，防止被断开"),
                             );
                             if self.edit_session_keepalive_enabled {
-                                crate::ui::chrome::form_control_row(ui, theme, |ui| {
-                                    crate::ui::chrome::form_inline_label(
+                                let every = crate::i18n::tr(ctx, "Interval (s)", "每隔(秒)");
+                                let give_up = crate::i18n::tr(ctx, "Max timeouts", "连续无应答");
+                                let label_w = crate::ui::chrome::form_label_advance(ui, theme, every)
+                                    .max(crate::ui::chrome::form_label_advance(
                                         ui,
                                         theme,
-                                        crate::i18n::tr(ctx, "Interval (s)", "每隔(秒)"),
-                                    );
-                                    crate::ui::chrome::form_u32_stepper(
-                                        ui,
-                                        theme,
-                                        egui::Id::new("edit_sess_ka_interval"),
-                                        &mut self.edit_session_keepalive_interval_secs,
-                                        5..=300,
-                                        5,
-                                    );
-                                    ui.add_space(theme.spacing_md());
-                                    crate::ui::chrome::form_inline_label(
-                                        ui,
-                                        theme,
-                                        crate::i18n::tr(ctx, "Max timeouts", "连续无应答"),
-                                    );
-                                    crate::ui::chrome::form_u8_stepper(
-                                        ui,
-                                        theme,
-                                        egui::Id::new("edit_sess_ka_count"),
-                                        &mut self.edit_session_keepalive_count_max,
-                                        1..=20,
-                                        1,
-                                    );
-                                });
+                                        give_up,
+                                    ));
+                                crate::ui::chrome::form_labeled_control_row(
+                                    ui,
+                                    theme,
+                                    every,
+                                    label_w,
+                                    |ui| {
+                                        crate::ui::chrome::form_u32_stepper(
+                                            ui,
+                                            theme,
+                                            egui::Id::new("edit_sess_ka_interval"),
+                                            &mut self.edit_session_keepalive_interval_secs,
+                                            5..=300,
+                                            5,
+                                        )
+                                    },
+                                );
+                                crate::ui::chrome::form_labeled_control_row(
+                                    ui,
+                                    theme,
+                                    give_up,
+                                    label_w,
+                                    |ui| {
+                                        crate::ui::chrome::form_u8_stepper(
+                                            ui,
+                                            theme,
+                                            egui::Id::new("edit_sess_ka_count"),
+                                            &mut self.edit_session_keepalive_count_max,
+                                            1..=20,
+                                            1,
+                                        )
+                                    },
+                                );
                             }
                             crate::ui::chrome::form_checkbox_with_id(
                                 ui,

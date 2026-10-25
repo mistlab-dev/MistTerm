@@ -100,6 +100,9 @@ struct MistTermUiPersist {
     auto_reconnect_enabled: bool,
     #[serde(default)]
     terminal_font_preset: crate::platform::TerminalFontPreset,
+    /// 本机等宽家族名。空则用 [`terminal_font_preset`]。
+    #[serde(default)]
+    terminal_font_family: String,
     #[serde(default = "default_terminal_font_size_persist")]
     terminal_font_size: f32,
     #[serde(default)]
@@ -455,8 +458,10 @@ pub struct MistTermApp {
 
     /// 网络断开后是否自动重连(偏好设置，§1.4)
     auto_reconnect_enabled: bool,
-    /// 终端等宽字体预设(偏好设置 → 外观)
+    /// 终端等宽字体预设(偏好设置 → 终端)。`terminal_font_family` 非空时被覆盖。
     terminal_font_preset: crate::platform::TerminalFontPreset,
+    /// 本机等宽家族名。空字符串表示用预设。
+    terminal_font_family: String,
     /// 终端字号 px(偏好设置 → 外观；Ctrl+滚轮 仍可临时缩放单窗格)
     terminal_font_size: f32,
     /// ≥10MB 上传：待用户选择 SCP 或 ZMODEM 的本地路径
@@ -981,8 +986,16 @@ impl MistTermApp {
         }
     }
 
+    fn terminal_font_selection(&self) -> crate::platform::TerminalFontSelection {
+        if self.terminal_font_family.trim().is_empty() {
+            crate::platform::TerminalFontSelection::preset(self.terminal_font_preset)
+        } else {
+            crate::platform::TerminalFontSelection::family(self.terminal_font_family.trim())
+        }
+    }
+
     fn apply_terminal_font_preferences(&mut self, ctx: &egui::Context) {
-        crate::platform::configure_egui_fonts(ctx, self.terminal_font_preset);
+        crate::platform::configure_terminal_font(ctx, &self.terminal_font_selection());
         // 字体族变更后重刷 TextStyle，确保界面比例字体仍指向统一 CJK 族。
         self.theme_manager.invalidate_and_apply(ctx);
         self.apply_terminal_font_size_to_all_terminals();
@@ -1277,6 +1290,7 @@ impl MistTermApp {
             ssh_url_handler_status: None,
             auto_reconnect_enabled: false,
             terminal_font_preset: crate::platform::TerminalFontPreset::default(),
+            terminal_font_family: String::new(),
             terminal_font_size: crate::platform::DEFAULT_TERMINAL_FONT_SIZE,
             large_upload_pending_path: None,
             command_history: CommandHistory::new(),
@@ -1331,6 +1345,7 @@ impl MistTermApp {
                 app.connection_list_opened_once = true;
                 app.auto_reconnect_enabled = p.auto_reconnect_enabled;
                 app.terminal_font_preset = p.terminal_font_preset;
+                app.terminal_font_family = p.terminal_font_family.trim().to_string();
                 app.terminal_font_size =
                     crate::platform::clamp_terminal_font_size(p.terminal_font_size);
                 app.session_sort_by = p.session_sort_by;
@@ -1369,7 +1384,7 @@ impl MistTermApp {
             }
         }
 
-        crate::platform::configure_egui_fonts(&cc.egui_ctx, app.terminal_font_preset);
+        crate::platform::configure_terminal_font(&cc.egui_ctx, &app.terminal_font_selection());
         app.apply_terminal_font_size_to_all_terminals();
 
         // GUI 自动化：启动后首帧自动连接已保存会话(仅 MISTTERM_GUI_AUTOMATION=1 时生效)
@@ -8348,6 +8363,7 @@ impl eframe::App for MistTermApp {
             sidebar_user_dismissed_responsive: self.sidebar_user_dismissed_responsive,
             auto_reconnect_enabled: self.auto_reconnect_enabled,
             terminal_font_preset: self.terminal_font_preset,
+            terminal_font_family: self.terminal_font_family.clone(),
             terminal_font_size: self.terminal_font_size,
             session_sort_by: self.session_sort_by,
             session_log_enabled: self.session_log_enabled,
