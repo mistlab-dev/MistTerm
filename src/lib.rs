@@ -5,6 +5,7 @@
 pub mod cli;
 pub mod capability;
 pub mod core;
+pub mod modules;
 pub mod i18n;
 pub mod local_shell;
 pub mod platform;

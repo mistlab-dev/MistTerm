@@ -166,7 +166,9 @@ fn builtin_modules() -> Vec<&'static dyn MistModule> { ... }
 - `assets/output-trigger-patterns.json` → 模块 `output-trigger`  
 - `assets/cmd-audit-patterns/*` → 模块 `cmd-audit-local`（**不**吞服务器 `MIST_AUDIT` 通道）
 
-### 4.3 目录演进（建议，分 PR）
+### 4.3 目录演进
+
+`src/modules/cmd_audit_local.rs` 已落地（#121）。display-link / output-trigger / session-import 仍按后续票迁入。Host 用 `modules::builtin_modules` 注册，不在 `capability` 里反向依赖具体模块。
 
 ```
 src/
@@ -235,7 +237,7 @@ src/
 | **R1 脚手架** | `capability` crate 区 + registry + 偏好开关 UI（可先隐藏） | 空模块可注册；开关测通 |
 | **R2 迁 trigger** | output-trigger 只经 `on_output_line` | 行为与 #112 一致；关闭模块无 Toast |
 | **R3 迁 display-link** | 装饰 + 右键贡献走 API | #74 验收项不回退 |
-| **R4 迁本地审计** | `on_before_send` | 与服务器审计双通道用例仍过 |
+| **R4 迁本地审计** | `on_before_send` | **已落地（#121）**：模块 `cmd-audit-local`；关闭后本地规则不再拦截/确认/告警；`MIST_AUDIT` 服务器通道仍走原解析 |
 | **R5 文档** | 更新 `ARCHITECTURE.md` 引用本文 | 新人按图能找到该加代码的位置 |
 
 **并行约束**：R1–R4 期间不接「插件市场」需求；有人提第三方脚本，一律指向 P2 安全票。
