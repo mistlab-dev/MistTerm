@@ -3,6 +3,7 @@
 //! GUI（`src/main.rs`）与 CLI（`src/bin/mist.rs`）仅作入口，模块树只维护于此。
 
 pub mod cli;
+pub mod capability;
 pub mod core;
 pub mod i18n;
 pub mod local_shell;
