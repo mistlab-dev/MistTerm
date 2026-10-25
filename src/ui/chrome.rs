@@ -3293,6 +3293,50 @@ pub fn form_combo<R>(
         })
 }
 
+/// 主题进度条，条内显示百分比。
+///
+/// 裸 `egui::ProgressBar` 不设 `fill` 时用 `selection.bg_fill`（文本拖选底）。
+/// 暗夜那是半透明白，百分比又走 `override_text_color`（白字），于是「32%」落在浅灰填充上。
+/// 这里强制填充、轨道和标签色，不改 `selection.bg_fill`。
+pub fn progress_bar(ui: &mut Ui, theme: &Theme, fraction: f32) -> Response {
+    let fraction = fraction.clamp(0.0, 1.0);
+    let pct = (fraction * 100.0) as usize;
+    progress_bar_labeled(ui, theme, fraction, &format!("{pct}%"), None)
+}
+
+/// 主题进度条，条内使用调用方文案（SFTP 传输、rz/sz）。
+///
+/// `desired_width` 为 `None` 时占满当前行。高度取 [`Theme::progress_bar_height`] 与正文行高的较大值：
+/// egui 把标签裁在条内，8px 的监控细条会把百分比切掉。
+pub fn progress_bar_labeled(
+    ui: &mut Ui,
+    theme: &Theme,
+    fraction: f32,
+    label: &str,
+    desired_width: Option<f32>,
+) -> Response {
+    let fraction = fraction.clamp(0.0, 1.0);
+    let prev_extreme = ui.visuals().extreme_bg_color;
+    // 轨道没有单独的 setter，egui 用 extreme_bg_color 画未填充部分。只改这一笔，画完还原。
+    ui.visuals_mut().extreme_bg_color = theme.color_progress_track();
+    let height = theme
+        .progress_bar_height()
+        .max(theme.font_size_body() + 6.0);
+    let text = egui::RichText::new(label)
+        .color(theme.color_progress_label())
+        .size(theme.font_size_body());
+    let mut bar = egui::ProgressBar::new(fraction)
+        .desired_height(height)
+        .fill(theme.color_progress_fill())
+        .text(text);
+    if let Some(width) = desired_width {
+        bar = bar.desired_width(width);
+    }
+    let response = ui.add(bar);
+    ui.visuals_mut().extreme_bg_color = prev_extreme;
+    response
+}
+
 /// 只读多行文本：支持鼠标拖选与 Ctrl/Cmd+C(`&str` 缓冲不可编辑)。
 /// 带可见滑轨的水平滑块(全局 `inactive.bg_fill` 为透明时仍绘制轨道)。
 pub fn labeled_slider_f32(

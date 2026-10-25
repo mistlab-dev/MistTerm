@@ -925,7 +925,7 @@ impl MistTermApp {
                             ui.add_space(theme.spacing_sm());
                             match fraction {
                                 Some(f) => {
-                                    ui.add(egui::ProgressBar::new(f.clamp(0.0, 1.0)).show_percentage());
+                                    crate::ui::chrome::progress_bar(ui, theme, f);
                                 }
                                 None => {
                                     ui.spinner();

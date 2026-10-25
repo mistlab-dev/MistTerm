@@ -187,7 +187,9 @@ impl ThemeManager {
         style.visuals.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, theme.text_primary());
         style.visuals.widgets.active.fg_stroke = egui::Stroke::new(1.0, theme.text_primary());
 
-        // 文本拖选(仅 TextEdit；菜单/列表选中用 list_row_*，见 apply_popup_widget_visuals)
+        // 文本拖选(仅 TextEdit；菜单/列表选中用 list_row_*，见 apply_popup_widget_visuals)。
+        // 不要改成进度条颜色：裸 egui ProgressBar 会拿 selection.bg_fill 当填充。
+        // 进度条走 chrome::progress_bar 和 color_progress_*。
         style.visuals.selection.bg_fill = theme.color_text_selection_bg();
         style.visuals.selection.stroke.color = theme.color_text_selection_fg();
         style.visuals.hyperlink_color = theme.accent_color();

@@ -467,10 +467,12 @@ pub(super) fn paint_xfer_strip(
             },
             format_speed(item.speed_bps),
         );
-        ui.add(
-            egui::ProgressBar::new(pct)
-                .text(label)
-                .desired_width(ui.available_width()),
+        crate::ui::chrome::progress_bar_labeled(
+            ui,
+            theme,
+            pct,
+            &label,
+            Some(ui.available_width()),
         );
         ui.horizontal(|ui| {
             if crate::ui::chrome::panel_action_icon_button(
