@@ -1118,7 +1118,11 @@ impl MistTermApp {
             active_tab: None,
             action_bus: crate::ui::action::ActionBus::new(),
             status_message: String::new(),
-            module_registry: std::sync::Arc::new(crate::capability::ModuleRegistry::builtin()),
+            module_registry: {
+                let reg = std::sync::Arc::new(crate::capability::ModuleRegistry::builtin());
+                reg.sync_effective_disabled(&app_settings.disabled_modules);
+                reg
+            },
             show_new_session_dialog: false,
             show_edit_session_dialog: false,
             show_about_dialog: false,

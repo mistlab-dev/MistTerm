@@ -136,12 +136,11 @@ impl ModuleRegistry {
     }
 
     pub fn with_modules(modules: Vec<Box<dyn MistModule>>) -> Self {
-        let mut reg = Self {
+        let reg = Self {
             modules,
             disabled: std::cell::RefCell::new(HashSet::new()),
             state_changed: Arc::new(AtomicBool::new(false)),
         };
-        reg.apply_env_disable();
         // 默认禁用 enabled_by_default == false 的模块。
         let off: Vec<String> = reg
             .modules
@@ -152,20 +151,62 @@ impl ModuleRegistry {
         for id in off {
             reg.disabled.borrow_mut().insert(id);
         }
+        reg.sync_effective_disabled(&[]);
         reg
     }
 
-    /// `MISTTERM_DISABLE_MODULES=`（逗号分隔 id）预留解析（#116 Notes）。
-    /// 正式与设置合并的优先级在 #118 落地；本票先只解析环境变量。
-    fn apply_env_disable(&mut self) {
-        let Ok(raw) = std::env::var("MISTTERM_DISABLE_MODULES") else {
-            return;
-        };
-        for id in raw.split(',') {
-            let id = id.trim();
-            if !id.is_empty() {
-                self.disabled.borrow_mut().insert(id.to_string());
+    /// 解析 `MISTTERM_DISABLE_MODULES` 环境变量中的禁用列表。
+    pub fn parse_env_disabled() -> HashSet<String> {
+        let mut set = HashSet::new();
+        if let Ok(raw) = std::env::var("MISTTERM_DISABLE_MODULES") {
+            for id in raw.split(',') {
+                let id = id.trim();
+                if !id.is_empty() {
+                    set.insert(id.to_string());
+                }
             }
+        }
+        set
+    }
+
+    /// 检查指定模块是否受环境变量强制禁用（#118 优先级：env > UI 设置）。
+    pub fn is_env_disabled(&self, id: &str) -> bool {
+        Self::parse_env_disabled().contains(id)
+    }
+
+    /// 合并本机配置与环境变量，更新当前生效的禁用集合（#118）。
+    /// 优先级规则：
+    /// 1. `MISTTERM_DISABLE_MODULES` 中的模块强制禁用；
+    /// 2. 用户在偏好设置中显式配置的 `configured_disabled` 生效；
+    /// 3. 若均未配置，则遵循模块本身的 `enabled_by_default()`。
+    pub fn sync_effective_disabled(&self, configured_disabled: &[String]) {
+        let mut new_disabled = HashSet::new();
+        // 1. 默认关闭项
+        for m in &self.modules {
+            if !m.enabled_by_default() {
+                new_disabled.insert(m.id().to_string());
+            }
+        }
+        // 2. 本机设置项
+        for id in configured_disabled {
+            new_disabled.insert(id.clone());
+        }
+        // 3. 环境变量强制禁用（覆盖开启）
+        for id in Self::parse_env_disabled() {
+            new_disabled.insert(id);
+        }
+
+        let changed = {
+            let mut cur = self.disabled.borrow_mut();
+            if *cur != new_disabled {
+                *cur = new_disabled;
+                true
+            } else {
+                false
+            }
+        };
+        if changed {
+            self.state_changed.store(true, Ordering::Relaxed);
         }
     }
 
@@ -573,6 +614,31 @@ mod tests {
         // 禁用后再次调用根本不进 hook
         let items = reg.context_menu_items();
         assert!(items.is_empty());
+    }
+
+
+    #[test]
+    fn test_sync_effective_disabled_precedence() {
+        // 构造两个假模块：一个默认开，一个默认关
+        let reg = ModuleRegistry::with_modules(vec![
+            Box::new(FakeModule::new("mod-on", true)),
+            Box::new(FakeModule::new("mod-off", false)),
+            Box::new(FakeModule::new("mod-user-disabled", true)),
+        ]);
+
+        // 默认状态：mod-on 开，mod-off 关
+        assert!(reg.is_enabled("mod-on"));
+        assert!(!reg.is_enabled("mod-off"));
+
+        // 用户配置禁用 mod-user-disabled
+        reg.sync_effective_disabled(&["mod-user-disabled".to_string()]);
+        assert!(reg.is_enabled("mod-on"));
+        assert!(!reg.is_enabled("mod-off"));
+        assert!(!reg.is_enabled("mod-user-disabled"));
+
+        // 用户配置解禁 mod-off（传入不包含 mod-off）但由于默认 off，依然保持 off，
+        // 除非以后有用户显式 enabled 列表。当前规则：默认 off 项未显式启用则关
+        assert!(!reg.is_enabled("mod-off"));
     }
 
     #[test]
