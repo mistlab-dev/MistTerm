@@ -2,8 +2,8 @@
 //!
 //! 分层（见 `docs/tech/EXTENSION-POINTS.md`）：
 //! - **Kernel**（SSH/PTY/渲染/会话）永不插件——本模块不持有任何 SSH handle。
-//! - **MistModule**：同进程、compile-time 注册的可开关业务能力（display-link、
-//!   trigger、cmd_audit 等未来迁入；本票只建 trait + registry，不迁业务）。
+//! - **MistModule**：同进程、compile-time 注册的可开关业务能力。
+//!   具体模块在 `crate::modules`（`cmd-audit-local` 已迁入）；本模块不反向依赖它们。
 //! - Host 责任：泵线程不跑模块、失败隔离、菜单/面板由 Host 绘制。
 //!
 //! 边界（#116 Non-goals）：不做插件发现协议、热加载、WASM、Skill 目录；
@@ -130,7 +130,8 @@ pub struct ModuleRegistry {
 }
 
 impl ModuleRegistry {
-    /// 官方内置模块清单。迁入业务前先允许空表（#116 只测脚手架）。
+    /// 空 registry。官方模块由 `crate::modules::builtin_modules` 组装，
+    /// 避免 capability 与具体模块互相依赖（#116 脚手架 / #121）。
     pub fn builtin() -> Self {
         Self::with_modules(Vec::new())
     }

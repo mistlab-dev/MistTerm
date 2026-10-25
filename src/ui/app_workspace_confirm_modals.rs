@@ -207,7 +207,7 @@ impl MistTermApp {
             let mut open = true;
             let mut should_close = false;
             let mut proceed = false;
-            let timeout_secs = self.cmd_audit_engine.confirm_timeout_secs();
+            let timeout_secs = self.with_cmd_audit(|engine| engine.confirm_timeout_secs());
             let timed_out =
                 confirm.started.elapsed() >= std::time::Duration::from_secs(timeout_secs.max(30));
             if timed_out {

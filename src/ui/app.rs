@@ -496,8 +496,8 @@ pub struct MistTermApp {
     delete_session_confirm: Option<(String, String)>,
     /// §2.3.5：关闭仍连接/握手中的标签前确认
     close_tab_confirm_idx: Option<usize>,
-    /// 本地快捷提示引擎(非服务器强制边界)
-    cmd_audit_engine: CmdAuditEngine,
+    /// 本地快捷提示引擎(非服务器强制边界)。与 `cmd-audit-local` 模块共享同一份（#121）。
+    cmd_audit_engine: std::sync::Arc<std::sync::Mutex<CmdAuditEngine>>,
     /// 敏感命令二次确认(标签索引、命令、匹配详情)
     cmd_audit_confirm: Option<CmdAuditConfirmState>,
     /// 审计拦截后待插入的合规片段(配合 `ToastAction::InsertSuggestedSnippet`)
@@ -992,6 +992,8 @@ impl MistTermApp {
     fn new_terminal_view(&self) -> TerminalView {
         let mut terminal = TerminalView::new();
         terminal.set_font_size(self.terminal_font_size);
+        // 与偏好开关、发送门闩共用同一 registry（#117 / #121）。
+        terminal.set_module_registry(std::sync::Arc::clone(&self.module_registry));
         terminal
     }
 
@@ -1098,6 +1100,16 @@ impl MistTermApp {
         // Load market cache first, then init fragments from market or fallback to defaults
         let _market_cache = crate::core::market::MarketFragmentCache::load();
 
+        let cmd_audit_engine =
+            std::sync::Arc::new(std::sync::Mutex::new(CmdAuditEngine::new()));
+        let module_registry = {
+            let reg = std::sync::Arc::new(crate::capability::ModuleRegistry::with_modules(
+                crate::modules::builtin_modules(std::sync::Arc::clone(&cmd_audit_engine)),
+            ));
+            reg.sync_effective_disabled(&app_settings.disabled_modules);
+            reg
+        };
+
         let mut app = Self {
             session_manager,
             fragment_manager: FragmentManager::load(&FragmentManager::default_config_path())
@@ -1118,11 +1130,7 @@ impl MistTermApp {
             active_tab: None,
             action_bus: crate::ui::action::ActionBus::new(),
             status_message: String::new(),
-            module_registry: {
-                let reg = std::sync::Arc::new(crate::capability::ModuleRegistry::builtin());
-                reg.sync_effective_disabled(&app_settings.disabled_modules);
-                reg
-            },
+            module_registry,
             show_new_session_dialog: false,
             show_edit_session_dialog: false,
             show_about_dialog: false,
@@ -1250,7 +1258,7 @@ impl MistTermApp {
             audit_logger,
             delete_session_confirm: None,
             close_tab_confirm_idx: None,
-            cmd_audit_engine: CmdAuditEngine::new(),
+            cmd_audit_engine,
             cmd_audit_confirm: None,
             pending_suggested_snippet: None,
             cmd_audit_agents: Vec::new(),
@@ -1439,13 +1447,49 @@ impl MistTermApp {
         app
     }
 
+    fn with_cmd_audit<R>(&self, f: impl FnOnce(&CmdAuditEngine) -> R) -> R {
+        let engine = self
+            .cmd_audit_engine
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        f(&engine)
+    }
+
+    fn with_cmd_audit_mut<R>(&self, f: impl FnOnce(&mut CmdAuditEngine) -> R) -> R {
+        let mut engine = self
+            .cmd_audit_engine
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        f(&mut engine)
+    }
+
+    /// 用户回车 / 片段即将写入 PTY 前的本地裁决（#121）。
+    ///
+    /// 先问 enabled 模块的 `on_before_send`。`cmd-audit-local` 关闭时不再用本地规则
+    /// 拦截、确认或告警；服务器 `MIST_AUDIT` 不经过这里。
+    /// 调用时不能持有 `cmd_audit_engine` 的锁：钩子内部会再锁同一把。
+    fn local_audit_for_send(&self, command: &str) -> CmdAuditResult {
+        let verdict = self
+            .module_registry
+            .on_before_send(&crate::capability::BeforeSendCtx { text: command });
+        let enabled = self
+            .module_registry
+            .is_enabled(crate::modules::cmd_audit_local::MODULE_ID);
+        let engine_audit = if enabled {
+            self.with_cmd_audit(|engine| engine.check(command))
+        } else {
+            crate::modules::cmd_audit_local::allow_audit()
+        };
+        crate::modules::cmd_audit_local::decide_local_send(verdict, enabled, engine_audit)
+    }
+
     fn apply_cmd_audit_cache_for_current_team(&mut self) {
         let Some(tid) = self.team_service.state.current_team_id.as_deref() else {
             return;
         };
         if let Some(payload) = CmdAuditCacheStore::load().payload_for_team(tid) {
             // 启动时的同步常因团队服务正忙被跳过；用 apply_cached 让下一帧空闲时立刻补拉。
-            self.cmd_audit_engine.apply_cached(payload);
+            self.with_cmd_audit_mut(|engine| engine.apply_cached(payload));
         }
     }
 
@@ -1661,7 +1705,7 @@ impl MistTermApp {
         if !pane.terminal.is_connected() {
             return CommandSendResult::NotConnected;
         }
-        let audit = self.cmd_audit_engine.check(command);
+        let audit = self.local_audit_for_send(command);
         match audit.action {
             CmdAuditAction::Block => {
                 self.record_cmd_audit_event(
@@ -1852,7 +1896,11 @@ impl MistTermApp {
     /// 手敲命令回车前的本地命令审计：终端扣住回车并交出整行，这里按策略放行 / 拦截 / 弹确认。
     /// 同时为下一帧设置各窗格是否需要扣住回车(策略未生效时完全不影响原回车行为)。
     fn process_typed_enter_audit(&mut self, ctx: &egui::Context) {
-        let gate = self.cmd_audit_engine.is_active();
+        let gate = crate::modules::cmd_audit_local::typed_enter_should_gate(
+            self.module_registry
+                .is_enabled(crate::modules::cmd_audit_local::MODULE_ID),
+            self.with_cmd_audit(|engine| engine.is_active()),
+        );
         let mut pending: Vec<(usize, usize, String)> = Vec::new();
         for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
             for (pane_idx, pane) in tab.panes.iter_mut().enumerate() {
@@ -1863,7 +1911,7 @@ impl MistTermApp {
             }
         }
         for (tab_idx, pane_idx, command) in pending {
-            let audit = self.cmd_audit_engine.check(&command);
+            let audit = self.local_audit_for_send(&command);
             match audit.action {
                 CmdAuditAction::Block => {
                     self.record_cmd_audit_event(
@@ -2105,11 +2153,11 @@ impl MistTermApp {
                 if let Some(tid) = self.team_service.state.current_team_id.clone() {
                     self.persist_cmd_audit_cache(&tid, &payload);
                 }
-                self.cmd_audit_engine.apply_sync(payload);
+                self.with_cmd_audit_mut(|engine| engine.apply_sync(payload));
             }
             if self.team_service.is_logged_in()
                 && !self.team_service.is_busy()
-                && self.cmd_audit_engine.needs_sync()
+                && self.with_cmd_audit(|engine| engine.needs_sync())
             {
                 self.team_service.spawn_cmd_audit_sync();
             }
@@ -3973,7 +4021,7 @@ impl MistTermApp {
     }
 
     fn batch_exec_allowed(&mut self, ctx: &egui::Context, command: &str) -> bool {
-        let audit = self.cmd_audit_engine.check(command);
+        let audit = self.local_audit_for_send(command);
         match audit.action {
             CmdAuditAction::Block => {
                 self.record_cmd_audit_event(
@@ -5290,7 +5338,7 @@ impl MistTermApp {
                 AppAction::AiExecTerminalCommand(cmd) => {
                     if let Some(idx) = self.active_tab {
                         if self.tabs.get_mut(idx).is_some() {
-                            let audit = self.cmd_audit_engine.check(&cmd);
+                            let audit = self.local_audit_for_send(&cmd);
                             if TerminalView::is_multiline_command(&cmd) {
                                 self.notify_multiline_not_inserted(ctx, &cmd);
                                 ctx.request_repaint();
@@ -5434,7 +5482,7 @@ impl MistTermApp {
             return;
         }
 
-        let audit = self.cmd_audit_engine.check(&command);
+        let audit = self.local_audit_for_send(&command);
         let decision = gate_decision(audit, &command, false);
         match decision.level {
             crate::core::GateLevel::L0Block => {
