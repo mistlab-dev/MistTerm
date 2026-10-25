@@ -75,6 +75,7 @@ pub enum Severity {
     Info,
     Warn,
     Error,
+    Success,
 }
 
 /// `on_before_send` 的裁决（cmd_audit-local 迁入后使用）。
@@ -132,7 +133,9 @@ pub struct ModuleRegistry {
 impl ModuleRegistry {
     /// 官方内置模块清单。迁入业务前先允许空表（#116 只测脚手架）。
     pub fn builtin() -> Self {
-        Self::with_modules(Vec::new())
+        Self::with_modules(vec![
+            Box::new(crate::core::output_trigger::OutputTriggerModule::new()),
+        ])
     }
 
     pub fn with_modules(modules: Vec<Box<dyn MistModule>>) -> Self {
@@ -430,8 +433,18 @@ mod tests {
     }
 
     #[test]
-    fn empty_registry_registers_nothing() {
+    fn builtin_registry_has_output_trigger_module() {
+        // builtin() 现注册官方 output-trigger 模块（#119）。
         let reg = ModuleRegistry::builtin();
+        let snap = reg.snapshot();
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].id, "output-trigger");
+        assert!(snap[0].enabled);
+    }
+
+    #[test]
+    fn empty_with_modules_registers_nothing() {
+        let reg = ModuleRegistry::with_modules(Vec::new());
         assert!(reg.snapshot().is_empty());
         let ctx = OutputLineCtx { line: "hello" };
         assert!(reg.on_output_line(&ctx).is_empty());

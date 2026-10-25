@@ -169,8 +169,100 @@ pub fn feed_and_scan(
     }
 }
 
+
+// --- Capability Module Integration (#119) ---
+
+pub struct OutputTriggerModule {
+    engine: OutputTriggerEngine,
+}
+
+impl Default for OutputTriggerModule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OutputTriggerModule {
+    pub fn new() -> Self {
+        Self {
+            engine: OutputTriggerEngine::new(),
+        }
+    }
+
+    pub fn from_json(json: &str) -> Self {
+        Self {
+            engine: OutputTriggerEngine::from_json(json),
+        }
+    }
+}
+
+impl crate::capability::MistModule for OutputTriggerModule {
+    fn id(&self) -> crate::capability::ModuleId {
+        "output-trigger"
+    }
+
+    fn name_zh(&self) -> &str {
+        "输出触发器"
+    }
+
+    fn name_en(&self) -> &str {
+        "Output Trigger"
+    }
+
+    fn enabled_by_default(&self) -> bool {
+        true
+    }
+
+    fn on_output_line(&self, ctx: &crate::capability::OutputLineCtx<'_>) -> Vec<crate::capability::ModuleAction> {
+        if let Some(hit) = self.engine.scan_line(ctx.line) {
+            let sev = match hit.severity {
+                TriggerSeverity::Error => crate::capability::Severity::Error,
+                TriggerSeverity::Warn => crate::capability::Severity::Warn,
+                TriggerSeverity::Success => crate::capability::Severity::Success,
+                TriggerSeverity::Info => crate::capability::Severity::Info,
+            };
+            vec![crate::capability::ModuleAction::Notify {
+                severity: sev,
+                text: hit.text,
+                attention: true,
+            }]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn module_on_output_line_matches_and_disables() {
+        use crate::capability::MistModule;
+        let module = OutputTriggerModule::new();
+        assert_eq!(module.id(), "output-trigger");
+
+        let ctx = crate::capability::OutputLineCtx {
+            line: "curl: Failed to connect: ECONNREFUSED 127.0.0.1",
+        };
+        let actions = module.on_output_line(&ctx);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            crate::capability::ModuleAction::Notify { severity, text, attention } => {
+                assert_eq!(*severity, crate::capability::Severity::Error);
+                assert!(*attention);
+                assert!(text.contains("ECONNREFUSED"));
+            }
+            _ => panic!("expected notify action"),
+        }
+
+        // 经 Registry 禁用后无动作
+        let reg = crate::capability::ModuleRegistry::with_modules(vec![Box::new(module)]);
+        assert_eq!(reg.on_output_line(&ctx).len(), 1);
+
+        reg.set_enabled("output-trigger", false);
+        assert!(reg.on_output_line(&ctx).is_empty());
+    }
+
     use super::*;
 
     fn engine() -> OutputTriggerEngine {

@@ -398,12 +398,7 @@ pub struct TerminalView {
     pending_display_link_connect: Option<String>,
     /// 右键打开菜单时缓存的 display-link（菜单跨帧时 `interact_pointer_pos` 会丢，需自持）。
     context_menu_display_link: Option<crate::core::display_link::DisplayLink>,
-    /// 输出 Trigger 引擎（#89 P2）：完成/出错 → 后台通知。
-    output_trigger_engine: crate::core::output_trigger::OutputTriggerEngine,
-    /// 未完成行缓冲（跨 chunk 拼行）。
-    output_trigger_line_acc: String,
-    /// 待宿主取走的 Trigger 命中。
-    pending_output_triggers: Vec<crate::core::output_trigger::OutputTriggerHit>,
+// output-trigger has been migrated to MistModule (#119)
     /// 扩展模块注册表（#117）：Host 接线，PTY 完整行分发与右键菜单贡献。
     module_registry: std::sync::Arc<crate::capability::ModuleRegistry>,
     /// 未完成行缓冲（供 module on_output_line 跨 chunk 拼行，#117）。
@@ -931,9 +926,7 @@ impl TerminalView {
             pending_display_link_runbook: None,
             pending_display_link_connect: None,
             context_menu_display_link: None,
-            output_trigger_engine: crate::core::output_trigger::OutputTriggerEngine::new(),
-            output_trigger_line_acc: String::new(),
-            pending_output_triggers: Vec::new(),
+// output-trigger initialized via module_registry (#119)
             module_registry: std::sync::Arc::new(crate::capability::ModuleRegistry::builtin()),
             module_output_line_acc: String::new(),
             pending_module_actions: Vec::new(),
@@ -2651,7 +2644,7 @@ impl TerminalView {
                         if self.is_local_shell() {
                             if !data.is_empty() {
                                 self.pending_log_output.push(data.clone());
-                                self.note_output_for_triggers(&data);
+                                // migrated to dispatch_output_to_modules (#119)
                                 self.dispatch_output_to_modules(&data);
                                 self.terminal.feed(&data);
                                 vte_dirty = true;
@@ -2832,7 +2825,7 @@ impl TerminalView {
                         }
                         if !display_data.is_empty() {
                             self.pending_log_output.push(display_data.clone());
-                            self.note_output_for_triggers(&display_data);
+                            // migrated to dispatch_output_to_modules (#119)
                             self.dispatch_output_to_modules(&display_data);
                             self.terminal.feed(&display_data);
                             vte_dirty = true;
@@ -3768,27 +3761,32 @@ impl TerminalView {
         }
     }
 
-    /// 扫描 PTY 输出中的完整行，命中 Trigger 规则则入队（#89 P2）。
-    fn note_output_for_triggers(&mut self, chunk: &[u8]) {
-        crate::core::output_trigger::feed_and_scan(
-            &self.output_trigger_engine,
-            &mut self.output_trigger_line_acc,
-            chunk,
-            &mut self.pending_output_triggers,
-        );
-        // 上限保护：一帧堆积过多时丢弃最早的，避免 Toast 风暴。
-        const CAP: usize = 8;
-        if self.pending_output_triggers.len() > CAP {
-            let drain = self.pending_output_triggers.len() - CAP;
-            self.pending_output_triggers.drain(0..drain);
-        }
-    }
 
-    /// 宿主取走输出 Trigger 命中（后台标签 Toast / 注意点）。
+
+    /// 宿主取走输出 Trigger / Module Notify 命中（后台标签 Toast / 注意点，#119 兼容转换）。
     pub fn take_pending_output_triggers(
         &mut self,
     ) -> Vec<crate::core::output_trigger::OutputTriggerHit> {
-        std::mem::take(&mut self.pending_output_triggers)
+        let mut hits = Vec::new();
+        self.pending_module_actions.retain(|action| {
+            if let crate::capability::ModuleAction::Notify { severity, text, .. } = action {
+                let sev = match severity {
+                    crate::capability::Severity::Error => crate::core::output_trigger::TriggerSeverity::Error,
+                    crate::capability::Severity::Warn => crate::core::output_trigger::TriggerSeverity::Warn,
+                    crate::capability::Severity::Success => crate::core::output_trigger::TriggerSeverity::Success,
+                    crate::capability::Severity::Info => crate::core::output_trigger::TriggerSeverity::Info,
+                };
+                hits.push(crate::core::output_trigger::OutputTriggerHit {
+                    rule_id: "output-trigger".to_string(),
+                    severity: sev,
+                    text: text.clone(),
+                });
+                false
+            } else {
+                true
+            }
+        });
+        hits
     }
 
     pub fn take_pending_send_to_ai(&mut self) -> bool {
