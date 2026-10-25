@@ -396,6 +396,8 @@ pub struct TerminalView {
     pending_display_link_runbook: Option<String>,
     /// 右键 IP 链接后待宿主处理的「新开连接」请求（#90 后续）。
     pending_display_link_connect: Option<String>,
+    /// 右键打开菜单时缓存的 display-link（菜单跨帧时 `interact_pointer_pos` 会丢，需自持）。
+    context_menu_display_link: Option<crate::core::display_link::DisplayLink>,
 }
 
 impl TerminalView {
@@ -914,6 +916,7 @@ impl TerminalView {
             pending_display_link_sftp: None,
             pending_display_link_runbook: None,
             pending_display_link_connect: None,
+            context_menu_display_link: None,
         }
     }
 
@@ -2222,10 +2225,15 @@ impl TerminalView {
                             }
 
                             // 选区已写入 LayoutJob 的 TextFormat.background(字形之下)，勿再后画矩形。
-                            // display-link 右键命中在闭包外先算好（闭包内不能再用 select_resp，#90 后续）。
-                            let context_menu_link = select_resp
-                                .interact_pointer_pos()
-                                .and_then(|pos| {
+                            // display-link 右键：egui 在 secondary_down（按下帧）就创建菜单，须同帧缓存命中；
+                            // 仅等 secondary_clicked（抬起）会晚一帧，且 interact_pointer_pos 常为空。
+                            if select_resp.hovered()
+                                && ui.input(|i| i.pointer.secondary_pressed())
+                            {
+                                let pos = ui
+                                    .input(|i| i.pointer.interact_pos())
+                                    .or_else(|| ui.input(|i| i.pointer.hover_pos()));
+                                self.context_menu_display_link = pos.and_then(|pos| {
                                     Self::display_link_at(
                                         &display_links,
                                         &galley,
@@ -2233,11 +2241,13 @@ impl TerminalView {
                                         pos,
                                         &display_lines,
                                     )
+                                    .map(|(_, link)| link)
                                 });
+                            }
                             select_resp.context_menu(|ui| {
                                 crate::ui::chrome::apply_context_menu_style(ui, theme);
                                 // display-link 右键（#90 后续）：IP 可「新开连接」，预填到新建连接弹窗。
-                                if let Some((_, link)) = &context_menu_link {
+                                if let Some(link) = &self.context_menu_display_link {
                                     if matches!(
                                         link.action,
                                         crate::core::display_link::DisplayLinkAction::Copy
@@ -2253,7 +2263,9 @@ impl TerminalView {
                                         )
                                         .clicked()
                                         {
-                                            self.pending_display_link_connect = Some(link.text.clone());
+                                            self.pending_display_link_connect =
+                                                Some(link.text.clone());
+                                            self.context_menu_display_link = None;
                                             ui.close_menu();
                                         }
                                     }
