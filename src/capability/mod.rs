@@ -3,7 +3,7 @@
 //! 分层（见 `docs/tech/EXTENSION-POINTS.md`）：
 //! - **Kernel**（SSH/PTY/渲染/会话）永不插件——本模块不持有任何 SSH handle。
 //! - **MistModule**：同进程、compile-time 注册的可开关业务能力。
-//!   具体模块在 `crate::modules`（`cmd-audit-local` 已迁入）；本模块不反向依赖它们。
+//!   具体模块在 `crate::modules`（`cmd-audit-local`、`output-trigger` 已迁入）；本模块不反向依赖它们。
 //! - Host 责任：泵线程不跑模块、失败隔离、菜单/面板由 Host 绘制。
 //!
 //! 边界（#116 Non-goals）：不做插件发现协议、热加载、WASM、Skill 目录；
@@ -62,11 +62,15 @@ pub enum ModuleAction {
         action: String,
         text: String,
     },
-    /// 宿主通知：后台标签注意点 + 可选 Toast（trigger 迁入后使用）。
+    /// 宿主通知：后台标签注意点 + 可选 Toast。
+    /// output-trigger（#119）命中后走这条；Toast 文案与 5s 冷却仍由 Host 决定。
     Notify {
         severity: Severity,
         text: String,
+        /// 为真时，未聚焦标签点亮注意点（不擦已有角标 / scrollback）。
         attention: bool,
+        /// 非空时 Host 按此键做短冷却。output-trigger 填规则 id（与 #112 同规则 5s 冷却一致）。
+        dedupe_key: String,
     },
 }
 
@@ -75,6 +79,35 @@ pub enum Severity {
     Info,
     Warn,
     Error,
+    /// 任务完成。Toast 用成功样式，标题「任务完成」（#112 success）。
+    Success,
+}
+
+/// 把 PTY 字节拆成完整行（UTF-8 lossy）。残余半行留在 `acc`。
+///
+/// 与 #112 output-trigger 行缓冲一致：按 `\n` 切分并去掉行尾 `\r`；
+/// 无换行的残余超过 2048 字节则丢弃，避免进度条/二进制把缓冲撑爆。
+/// Host 在编排线程调用，再把完整行交给 [`ModuleRegistry::on_output_line`]。
+pub(crate) fn split_pty_output_lines(acc: &mut String, chunk: &[u8]) -> Vec<String> {
+    if chunk.is_empty() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(chunk);
+    acc.push_str(&text);
+    let mut lines = Vec::new();
+    while let Some(idx) = acc.find('\n') {
+        let mut line = acc[..idx].to_string();
+        *acc = acc[idx + 1..].to_string();
+        if line.ends_with('\r') {
+            line.pop();
+        }
+        lines.push(line);
+    }
+    const ACC_CAP: usize = 2048;
+    if acc.len() > ACC_CAP {
+        acc.clear();
+    }
+    lines
 }
 
 /// `on_before_send` 的裁决（cmd_audit-local 迁入后使用）。
@@ -131,7 +164,7 @@ pub struct ModuleRegistry {
 
 impl ModuleRegistry {
     /// 空 registry。官方模块由 `crate::modules::builtin_modules` 组装，
-    /// 避免 capability 与具体模块互相依赖（#116 脚手架 / #121）。
+    /// 避免 capability 与具体模块互相依赖（#116 脚手架 / #121 / #119）。
     pub fn builtin() -> Self {
         Self::with_modules(Vec::new())
     }
@@ -436,7 +469,37 @@ mod tests {
         assert!(reg.snapshot().is_empty());
         let ctx = OutputLineCtx { line: "hello" };
         assert!(reg.on_output_line(&ctx).is_empty());
-        assert_eq!(reg.on_before_send(&BeforeSendCtx { text: "ls" }), SendVerdict::Allow);
+        assert_eq!(
+            reg.on_before_send(&BeforeSendCtx { text: "ls" }),
+            SendVerdict::Allow
+        );
+    }
+
+    #[test]
+    fn split_pty_output_lines_crlf_partial_and_acc_cap() {
+        let mut acc = String::new();
+        assert!(split_pty_output_lines(&mut acc, b"").is_empty());
+        assert!(acc.is_empty());
+
+        let lines = split_pty_output_lines(&mut acc, b"noise\r\nECONNREFUSED here\npartial");
+        assert_eq!(
+            lines,
+            vec!["noise".to_string(), "ECONNREFUSED here".to_string()]
+        );
+        assert_eq!(acc, "partial");
+
+        // 恰好 2048 保留；再多 1 字节且仍无换行则丢弃残余（#112）。
+        acc.clear();
+        let at_cap = vec![b'x'; 2048];
+        assert!(split_pty_output_lines(&mut acc, &at_cap).is_empty());
+        assert_eq!(acc.len(), 2048);
+        assert!(split_pty_output_lines(&mut acc, b"y").is_empty());
+        assert!(acc.is_empty());
+
+        // 丢弃后的下一完整行仍可独立匹配，不会粘上被丢弃的半行。
+        let lines = split_pty_output_lines(&mut acc, b"ECONNREFUSED\n");
+        assert_eq!(lines, vec!["ECONNREFUSED".to_string()]);
+        assert!(acc.is_empty());
     }
 
     #[test]

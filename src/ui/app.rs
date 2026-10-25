@@ -992,7 +992,8 @@ impl MistTermApp {
     fn new_terminal_view(&self) -> TerminalView {
         let mut terminal = TerminalView::new();
         terminal.set_font_size(self.terminal_font_size);
-        // 与偏好开关、发送门闩共用同一 registry（#117 / #121）。
+        // 与偏好开关、发送门闩、输出触发共用同一 registry（#117 / #121 / #119）。
+        // 关模块 = 之后各窗格都不再收到对应钩子。
         terminal.set_module_registry(std::sync::Arc::clone(&self.module_registry));
         terminal
     }
@@ -2784,45 +2785,32 @@ impl MistTermApp {
         }
     }
 
-    /// 输出 Trigger → Toast（#89 P2）。同规则 5s 冷却，避免 `yes`/循环日志刷屏。
+    /// 输出 Trigger → Toast（#89 P2 / #119）。同规则 5s 冷却，避免 `yes`/循环日志刷屏。
+    /// `dedupe_key` 为空则不冷却（output-trigger 始终带规则 id）。
     fn fire_output_trigger_toast(
         &mut self,
         ctx: &egui::Context,
         session_label: &str,
-        hit: &crate::core::output_trigger::OutputTriggerHit,
+        severity: crate::capability::Severity,
+        text: &str,
+        dedupe_key: &str,
     ) {
         const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(5);
-        let now = Instant::now();
-        if let Some(prev) = self.output_trigger_cooldown.get(&hit.rule_id) {
-            if now.duration_since(*prev) < COOLDOWN {
-                return;
+        if !dedupe_key.is_empty() {
+            let now = Instant::now();
+            if let Some(prev) = self.output_trigger_cooldown.get(dedupe_key) {
+                if now.duration_since(*prev) < COOLDOWN {
+                    return;
+                }
             }
+            self.output_trigger_cooldown
+                .insert(dedupe_key.to_string(), now);
         }
-        self.output_trigger_cooldown
-            .insert(hit.rule_id.clone(), now);
 
-        use crate::core::output_trigger::TriggerSeverity;
-        let title = match hit.severity {
-            TriggerSeverity::Error => {
-                crate::i18n::tr(ctx, "Output alert", "输出告警")
-            }
-            TriggerSeverity::Warn => {
-                crate::i18n::tr(ctx, "Output warning", "输出警告")
-            }
-            TriggerSeverity::Success => {
-                crate::i18n::tr(ctx, "Task finished", "任务完成")
-            }
-            TriggerSeverity::Info => crate::i18n::tr(ctx, "Output notice", "输出提示"),
-        };
-        let body = format!("{session_label}: {}", hit.text);
-        match hit.severity {
-            TriggerSeverity::Error => self.notify_error_titled(title, body),
-            TriggerSeverity::Warn => self.notify_warn_titled(title, body),
-            TriggerSeverity::Success => {
-                self.push_toast_titled(ToastKind::Success, title, body);
-            }
-            TriggerSeverity::Info => self.notify_info_titled(title, body),
-        }
+        let spec = notifications::module_notify_toast(severity);
+        let title = crate::i18n::tr(ctx, spec.title_en, spec.title_zh);
+        let body = format!("{session_label}: {text}");
+        self.push_toast_titled(spec.kind, title, body);
     }
 
     fn terminal_connect_session(
@@ -8707,7 +8695,9 @@ impl eframe::App for MistTermApp {
         let mut inactive_tab_vte_dirty = false;
         let mut pending_trigger_toasts: Vec<(
             String,
-            crate::core::output_trigger::OutputTriggerHit,
+            crate::capability::Severity,
+            String,
+            String,
         )> = Vec::new();
         for (ti, tab) in self.tabs.iter_mut().enumerate() {
             let tab_focused = active_tab == Some(ti);
@@ -8719,7 +8709,8 @@ impl eframe::App for MistTermApp {
             }
             // #93：任一 pane 的 BEL / SessionEnded → 未聚焦 tab 置 needs_attention。
             // 活动标签响铃/结束不持久角标（用户已在看）。
-            // #89 P2 输出 Trigger：后台标签命中 → 注意点；Toast 在循环外发，避免借 self。
+            // #119：后台标签的 Notify → 注意点；Toast 在循环外发，避免借 self。
+            // 活动标签吞掉 Notify，避免切走后再冒出来。不碰 DecorateLink，也不清历史角标。
             if !tab_focused {
                 let mut attention = false;
                 for pane in tab.panes.iter_mut() {
@@ -8729,25 +8720,35 @@ impl eframe::App for MistTermApp {
                         attention = true;
                     }
                     let title = pane.title.clone();
-                    for hit in pane.terminal.take_pending_output_triggers() {
-                        attention = true;
-                        pending_trigger_toasts.push((title.clone(), hit));
+                    for act in pane.terminal.take_pending_notifies() {
+                        let crate::capability::ModuleAction::Notify {
+                            severity,
+                            text,
+                            attention: mark_attention,
+                            dedupe_key,
+                        } = act
+                        else {
+                            continue;
+                        };
+                        if mark_attention {
+                            attention = true;
+                        }
+                        pending_trigger_toasts.push((title.clone(), severity, text, dedupe_key));
                     }
                 }
                 if attention {
                     tab.needs_attention = true;
                 }
             } else {
-                // 活动标签：吞掉 pending，避免切走后再冒出来。
                 for pane in tab.panes.iter_mut() {
                     let _ = pane.terminal.take_pending_bell();
                     let _ = pane.terminal.take_pending_attention_ended();
-                    let _ = pane.terminal.take_pending_output_triggers();
+                    let _ = pane.terminal.take_pending_notifies();
                 }
             }
         }
-        for (label, hit) in pending_trigger_toasts {
-            self.fire_output_trigger_toast(ctx, &label, &hit);
+        for (label, severity, text, dedupe_key) in pending_trigger_toasts {
+            self.fire_output_trigger_toast(ctx, &label, severity, &text, &dedupe_key);
         }
         if inactive_tab_vte_dirty {
             ctx.request_repaint_after(Duration::from_millis(120));

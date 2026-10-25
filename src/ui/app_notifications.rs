@@ -599,3 +599,65 @@ impl MistTermApp {
         );
     }
 }
+
+/// output-trigger Notify 的 Toast 样式。文案与 #112 保持一致。
+pub(crate) struct ModuleNotifyToast {
+    pub kind: ToastKind,
+    pub title_en: &'static str,
+    pub title_zh: &'static str,
+}
+
+pub(crate) fn module_notify_toast(severity: crate::capability::Severity) -> ModuleNotifyToast {
+    use crate::capability::Severity;
+    match severity {
+        Severity::Error => ModuleNotifyToast {
+            kind: ToastKind::Error,
+            title_en: "Output alert",
+            title_zh: "输出告警",
+        },
+        Severity::Warn => ModuleNotifyToast {
+            kind: ToastKind::Warn,
+            title_en: "Output warning",
+            title_zh: "输出警告",
+        },
+        Severity::Success => ModuleNotifyToast {
+            kind: ToastKind::Success,
+            title_en: "Task finished",
+            title_zh: "任务完成",
+        },
+        Severity::Info => ModuleNotifyToast {
+            kind: ToastKind::Info,
+            title_en: "Output notice",
+            title_zh: "输出提示",
+        },
+    }
+}
+
+#[cfg(test)]
+mod module_notify_toast_tests {
+    use super::module_notify_toast;
+    use crate::capability::Severity;
+
+    #[test]
+    fn toast_copy_matches_pre_migration_trigger() {
+        let error = module_notify_toast(Severity::Error);
+        assert_eq!(error.kind, super::ToastKind::Error);
+        assert_eq!(error.title_en, "Output alert");
+        assert_eq!(error.title_zh, "输出告警");
+
+        let warn = module_notify_toast(Severity::Warn);
+        assert_eq!(warn.kind, super::ToastKind::Warn);
+        assert_eq!(warn.title_en, "Output warning");
+        assert_eq!(warn.title_zh, "输出警告");
+
+        let ok = module_notify_toast(Severity::Success);
+        assert_eq!(ok.kind, super::ToastKind::Success);
+        assert_eq!(ok.title_en, "Task finished");
+        assert_eq!(ok.title_zh, "任务完成");
+
+        let info = module_notify_toast(Severity::Info);
+        assert_eq!(info.kind, super::ToastKind::Info);
+        assert_eq!(info.title_en, "Output notice");
+        assert_eq!(info.title_zh, "输出提示");
+    }
+}
