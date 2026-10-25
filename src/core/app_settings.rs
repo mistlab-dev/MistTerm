@@ -34,6 +34,10 @@ pub struct AppSettings {
     /// 默认本地目录：SFTP 本机侧初始目录与 ZMODEM `sz` 保存目录共用；空 = 系统「下载」目录。
     #[serde(default)]
     pub default_local_dir: String,
+    /// 用户显式禁用的内置模块列表（#118）。
+    /// 注意：若环境变量 `MISTTERM_DISABLE_MODULES` 同时存在，env 中的模块强制禁用（优先级更高）。
+    #[serde(default)]
+    pub disabled_modules: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -52,6 +56,7 @@ impl Default for AppSettings {
             onboarding_help_shown: false,
             control_plane_plans: true,
             default_local_dir: String::new(),
+            disabled_modules: Vec::new(),
         }
     }
 }
