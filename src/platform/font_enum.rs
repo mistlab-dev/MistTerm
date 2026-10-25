@@ -1,8 +1,11 @@
 //! 本机等宽字体枚举（macOS / Windows / Linux，尽力而为）。
 //!
-//! Linux / macOS 优先问 fontconfig（`fc-list :spacing=100`）。没有 fontconfig
-//! 时扫常见字体目录，读 name / OS/2 / post 表判断等宽。结果按家族名去重，
-//! 优先 Regular、非斜体、独立的 .ttf/.otf。
+//! Linux / macOS 优先问 fontconfig（`fc-list :spacing=100`）。`fc-list` 最多等
+//! [`FC_LIST_TIMEOUT`]；超时、失败或没有 fontconfig 时扫常见字体目录，读 name /
+//! OS/2 / post 表判断等宽。结果按家族名去重，优先 Regular、非斜体、独立的 .ttf/.otf。
+//!
+//! 扫描在后台线程跑。界面用 [`system_mono_fonts_if_ready`]，不要在 UI 线程调用
+//! [`list_system_mono_fonts`]（那条会等到扫完）。进程内只扫一次，新装字体要重启才出现。
 //!
 //! 序列化身份是家族名（见偏好里的 `terminal_font_family`），路径只在加载时解析。
 
@@ -10,6 +13,14 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
+use std::time::Duration;
+
+/// `fc-list` 卡住时放弃并改扫目录。界面不走这条阻塞路径。
+const FC_LIST_TIMEOUT: Duration = Duration::from_secs(3);
+/// name 表记录数上限，和 num_tables / TTC / name 字节上限同一思路。
+const MAX_NAME_RECORDS: usize = 512;
 
 /// 已安装的一款等宽字体。`index` 是字体集里的面索引（给 egui `FontData::index`）。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -24,9 +35,42 @@ pub fn family_eq(a: &str, b: &str) -> bool {
     a.trim().eq_ignore_ascii_case(b.trim())
 }
 
+static CACHE: OnceLock<Vec<SystemMonoFont>> = OnceLock::new();
+static SCAN_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// 在后台开始枚举。已经在扫、或已经扫完，则直接返回。
+pub fn start_system_mono_font_scan() {
+    if CACHE.get().is_some() {
+        return;
+    }
+    if SCAN_STARTED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let spawned = std::thread::Builder::new()
+        .name("mono-font-scan".into())
+        .spawn(|| {
+            let _ = list_system_mono_fonts();
+        })
+        .is_ok();
+    if !spawned {
+        SCAN_STARTED.store(false, Ordering::Release);
+    }
+}
+
+/// 枚举完成则返回缓存（可以是空列表）。否则 `None`，并确保后台扫描已启动。
+pub fn system_mono_fonts_if_ready() -> Option<&'static [SystemMonoFont]> {
+    start_system_mono_font_scan();
+    CACHE.get().map(Vec::as_slice)
+}
+
+pub fn system_mono_fonts_ready() -> bool {
+    CACHE.get().is_some()
+}
+
 /// 本机等宽家族，按显示名排序。进程内只扫一次。
+///
+/// 会阻塞到扫描结束（包括正在进行的后台扫描）。界面用 [`system_mono_fonts_if_ready`]。
 pub fn list_system_mono_fonts() -> &'static [SystemMonoFont] {
-    static CACHE: std::sync::OnceLock<Vec<SystemMonoFont>> = std::sync::OnceLock::new();
     CACHE.get_or_init(scan_system_mono_fonts)
 }
 
@@ -53,14 +97,23 @@ fn scan_system_mono_fonts() -> Vec<SystemMonoFont> {
 }
 
 fn try_fontconfig() -> Option<Vec<SystemMonoFont>> {
-    let output = std::process::Command::new("fc-list")
-        .args([
-            ":spacing=100",
-            "-f",
-            "%{file}\t%{family}\t%{style}\t%{weight}\t%{index}\n",
-        ])
-        .output()
-        .ok()?;
+    let mut cmd = std::process::Command::new("fc-list");
+    cmd.args([
+        ":spacing=100",
+        "-f",
+        "%{file}\t%{family}\t%{style}\t%{weight}\t%{index}\n",
+    ]);
+    let output = match command_output_with_timeout(&mut cmd, FC_LIST_TIMEOUT) {
+        Ok(output) => output,
+        Err(CmdOutputError::TimedOut) => {
+            log::warn!(
+                "fc-list exceeded {:?}; scanning font directories",
+                FC_LIST_TIMEOUT
+            );
+            return None;
+        }
+        Err(CmdOutputError::Unavailable) => return None,
+    };
     if !output.status.success() {
         return None;
     }
@@ -77,6 +130,90 @@ fn try_fontconfig() -> Option<Vec<SystemMonoFont>> {
     } else {
         Some(fonts)
     }
+}
+
+#[derive(Debug)]
+enum CmdOutputError {
+    TimedOut,
+    Unavailable,
+}
+
+/// 跑完一条命令并读 stdout。超过 `timeout` 就杀掉进程，避免 `Command::output` 一直等。
+fn command_output_with_timeout(
+    cmd: &mut std::process::Command,
+    timeout: Duration,
+) -> Result<std::process::Output, CmdOutputError> {
+    use std::process::{Output, Stdio};
+    use std::sync::mpsc;
+    use std::time::Instant;
+
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| CmdOutputError::Unavailable)?;
+    let mut stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
+            stop_child(&mut child);
+            return Err(CmdOutputError::Unavailable);
+        }
+    };
+    let (tx, rx) = mpsc::channel();
+    if std::thread::Builder::new()
+        .name("cmd-stdout".into())
+        .spawn(move || {
+            let mut buf = Vec::new();
+            let _ = stdout.read_to_end(&mut buf);
+            let _ = tx.send(buf);
+        })
+        .is_err()
+    {
+        stop_child(&mut child);
+        return Err(CmdOutputError::Unavailable);
+    }
+    let started = Instant::now();
+    let stdout_buf = loop {
+        match rx.recv_timeout(Duration::from_millis(50)) {
+            Ok(buf) => break buf,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if started.elapsed() >= timeout {
+                    stop_child(&mut child);
+                    return Err(CmdOutputError::TimedOut);
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                stop_child(&mut child);
+                return Err(CmdOutputError::Unavailable);
+            }
+        }
+    };
+    // stdout 已读完但进程还活着时，也不能无限等 wait。
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if started.elapsed() >= timeout => {
+                stop_child(&mut child);
+                return Err(CmdOutputError::TimedOut);
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(_) => {
+                stop_child(&mut child);
+                return Err(CmdOutputError::Unavailable);
+            }
+        }
+    };
+    Ok(Output {
+        status,
+        stdout: stdout_buf,
+        stderr: Vec::new(),
+    })
+}
+
+fn stop_child(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 struct Candidate {
@@ -525,11 +662,16 @@ struct NamePick {
     subfamily: Option<String>,
 }
 
+fn name_record_count(data: &[u8]) -> usize {
+    let count = u16::from_be_bytes([data[2], data[3]]) as usize;
+    count.min(MAX_NAME_RECORDS)
+}
+
 fn parse_name_table(data: &[u8]) -> Option<NamePick> {
     if data.len() < 6 {
         return None;
     }
-    let count = u16::from_be_bytes([data[2], data[3]]) as usize;
+    let count = name_record_count(data);
     let string_offset = u16::from_be_bytes([data[4], data[5]]) as usize;
     if data.len() < 6 + count * 12 {
         return None;
@@ -763,6 +905,120 @@ mod tests {
             name.contains("dejavusansmono") && !name.contains("bold") && !name.contains("oblique"),
             "{name}"
         );
+    }
+
+    #[test]
+    fn system_mono_fonts_if_ready_does_not_block() {
+        let started = std::time::Instant::now();
+        let _ = system_mono_fonts_if_ready();
+        assert!(
+            started.elapsed() < Duration::from_millis(800),
+            "enumeration blocked the caller for {:?}",
+            started.elapsed()
+        );
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !system_mono_fonts_ready() && std::time::Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(system_mono_fonts_ready());
+    }
+
+    #[test]
+    fn command_output_returns_stdout_before_the_timeout() {
+        let mut cmd = echo_command("mistterm-fc");
+        let output = command_output_with_timeout(&mut cmd, Duration::from_secs(3)).unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains("mistterm-fc"), "{text}");
+    }
+
+    #[test]
+    fn command_output_kills_a_hung_process() {
+        let mut cmd = hung_command();
+        let started = std::time::Instant::now();
+        let err = command_output_with_timeout(&mut cmd, Duration::from_millis(400)).unwrap_err();
+        assert!(matches!(err, CmdOutputError::TimedOut));
+        assert!(
+            started.elapsed() < Duration::from_secs(8),
+            "hung command was not killed: {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn name_table_count_is_capped_at_512() {
+        assert_eq!(name_record_count(&count_header(0)), 0);
+        assert_eq!(name_record_count(&count_header(3)), 3);
+        assert_eq!(name_record_count(&count_header(512)), 512);
+        assert_eq!(name_record_count(&count_header(4000)), 512);
+        assert_eq!(name_record_count(&count_header(u16::MAX)), 512);
+
+        let early = name_table_with_family_at(0, 3, "Early Mono");
+        assert_eq!(
+            parse_name_table(&early).unwrap().family.as_deref(),
+            Some("Early Mono")
+        );
+        let late = name_table_with_family_at(512, 513, "Late Mono");
+        assert!(parse_name_table(&late).unwrap().family.is_none());
+    }
+
+    fn count_header(count: u16) -> [u8; 6] {
+        let mut data = [0u8; 6];
+        data[2..4].copy_from_slice(&count.to_be_bytes());
+        data
+    }
+
+    fn name_table_with_family_at(index: usize, total: usize, family: &str) -> Vec<u8> {
+        let fam = utf16_be(family);
+        let string_offset = 6 + total * 12;
+        let mut out = Vec::new();
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&(total as u16).to_be_bytes());
+        out.extend_from_slice(&(string_offset as u16).to_be_bytes());
+        let mut pool = Vec::new();
+        for i in 0..total {
+            let (name_id, bytes): (u16, &[u8]) = if i == index { (1, &fam) } else { (0, &[]) };
+            let offset = pool.len() as u16;
+            out.extend_from_slice(&3u16.to_be_bytes());
+            out.extend_from_slice(&1u16.to_be_bytes());
+            out.extend_from_slice(&0x0409u16.to_be_bytes());
+            out.extend_from_slice(&name_id.to_be_bytes());
+            out.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+            out.extend_from_slice(&offset.to_be_bytes());
+            pool.extend_from_slice(bytes);
+        }
+        out.extend_from_slice(&pool);
+        out
+    }
+
+    fn echo_command(text: &str) -> std::process::Command {
+        #[cfg(unix)]
+        {
+            let mut cmd = std::process::Command::new("echo");
+            cmd.arg(text);
+            cmd
+        }
+        #[cfg(windows)]
+        {
+            let mut cmd = std::process::Command::new("cmd");
+            cmd.args(["/C", "echo", text]);
+            cmd
+        }
+    }
+
+    fn hung_command() -> std::process::Command {
+        #[cfg(unix)]
+        {
+            let mut cmd = std::process::Command::new("sleep");
+            cmd.arg("30");
+            cmd
+        }
+        #[cfg(windows)]
+        {
+            let mut cmd = std::process::Command::new("ping");
+            cmd.args(["-n", "30", "127.0.0.1"]);
+            cmd
+        }
     }
 
     fn build_sfnt(family: &str, subfamily: &str, mono: bool, weight: u16) -> Vec<u8> {
