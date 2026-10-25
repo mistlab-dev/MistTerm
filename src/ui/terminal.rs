@@ -2466,11 +2466,12 @@ impl TerminalView {
                             percent
                         );
                         let bar_w = Self::text_width_in_scroll_viewport(ui.available_width().max(1.0));
-                        ui.add(
-                            egui::ProgressBar::new(percent / 100.0)
-                                .fill(theme.accent_color())
-                                .desired_width(bar_w)
-                                .text(egui::RichText::new(detail).color(theme.text_primary())),
+                        crate::ui::chrome::progress_bar_labeled(
+                            ui,
+                            theme,
+                            percent / 100.0,
+                            &detail,
+                            Some(bar_w),
                         );
                         ui.horizontal(|ui| {
                             if crate::ui::chrome::modal_danger_button(

@@ -9,8 +9,11 @@ use serde::{Deserialize, Serialize};
 mod theme_manager;
 #[path = "theme_presets.rs"]
 mod theme_presets;
+#[path = "theme_sftp.rs"]
+mod theme_sftp;
 
 pub use theme_manager::{is_deprecated_dark_theme_storage_name, ThemeManager};
+pub use theme_sftp::SftpFileTone;
 
 /// 主题颜色配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -452,6 +455,48 @@ impl Theme {
         } else {
             self.border_color()
         }
+    }
+
+    /// 进度条填充。实色，和文本拖选底 [`color_text_selection_bg`] 分开。
+    ///
+    /// egui 裸 `ProgressBar` 在未调用 `.fill()` 时复用 `selection.bg_fill`。
+    /// 暗夜里那是半透明白，百分比又是白字，叠在一起读不清。这里给四套预设各一档
+    /// 饱和填充，白字对比至少 4.5:1。
+    #[inline]
+    pub fn color_progress_fill(&self) -> Color32 {
+        if self.is_light_theme() {
+            self.accent_color()
+        } else if self.name == "海洋" {
+            // accent (70,130,180) 上白字只有约 4.1:1，压深一档。
+            Color32::from_rgb(62, 120, 170)
+        } else if self.name == "森林" {
+            // accent (90,170,100) 上白字约 2.9:1，用更深的绿。
+            Color32::from_rgb(52, 128, 70)
+        } else {
+            // 暗夜 accent_dim #0078D4。亮青 accent 上白字不够。
+            self.accent_dim_color()
+        }
+    }
+
+    /// 进度条轨道（未填充部分）。不透明，叠在面板上仍能看出槽。
+    #[inline]
+    pub fn color_progress_track(&self) -> Color32 {
+        if self.is_light_theme() {
+            Color32::from_rgb(168, 172, 180)
+        } else if self.name == "海洋" {
+            Color32::from_rgb(48, 70, 92)
+        } else if self.name == "森林" {
+            Color32::from_rgb(52, 78, 62)
+        } else {
+            Color32::from_rgb(74, 74, 74)
+        }
+    }
+
+    /// 进度条条内标签（百分比、传输说明）。按填充色取对比，四套预设都是白字。
+    #[inline]
+    pub fn color_progress_label(&self) -> Color32 {
+        let _ = self;
+        Color32::WHITE
     }
 
     /// CPU 使用率进度条 / 图例色
@@ -3440,5 +3485,137 @@ mod theme_semantic_tests {
                 warn_cr
             );
         }
+    }
+
+    #[test]
+    fn progress_tokens_readable_without_reusing_text_selection() {
+        for theme in all_builtin_themes() {
+            let fill = theme.color_progress_fill();
+            let track = theme.color_progress_track();
+            let label = theme.color_progress_label();
+            let selection = theme.color_text_selection_bg();
+            assert_ne!(
+                fill, selection,
+                "{}: progress fill must not be the text-selection color",
+                theme.name
+            );
+            assert!(
+                selection.a() < 250,
+                "{}: text selection stays translucent (alpha {})",
+                theme.name,
+                selection.a()
+            );
+            assert_eq!(fill.a(), 255, "{}: progress fill is opaque", theme.name);
+            assert_eq!(track.a(), 255, "{}: progress track is opaque", theme.name);
+            let label_cr = contrast_ratio(label, fill);
+            assert!(
+                label_cr >= 4.5,
+                "{}: progress label vs fill {:.2}",
+                theme.name,
+                label_cr
+            );
+            let fill_cr = contrast_ratio(fill, track);
+            assert!(
+                fill_cr >= 1.5,
+                "{}: progress fill vs track {:.2}",
+                theme.name,
+                fill_cr
+            );
+            let track_cr = contrast_ratio(track, theme.color_panel_surface());
+            assert!(
+                track_cr >= 1.25,
+                "{}: progress track vs panel {:.2}",
+                theme.name,
+                track_cr
+            );
+        }
+        assert_eq!(
+            Theme::dark().color_text_selection_bg(),
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 72)
+        );
+    }
+
+    #[test]
+    fn sftp_file_tones_contrast_and_differ_by_preset() {
+        use super::SftpFileTone;
+
+        let tones = [
+            SftpFileTone::Dir,
+            SftpFileTone::Hidden,
+            SftpFileTone::Code,
+            SftpFileTone::Shell,
+            SftpFileTone::Data,
+            SftpFileTone::Config,
+            SftpFileTone::Doc,
+            SftpFileTone::Plain,
+        ];
+        for theme in all_builtin_themes() {
+            let bg = theme.color_panel_surface();
+            for tone in tones {
+                let fg = theme.color_sftp_file_name(tone);
+                let min = if tone == SftpFileTone::Hidden {
+                    3.0
+                } else {
+                    4.5
+                };
+                let name_cr = contrast_ratio(fg, bg);
+                assert!(
+                    name_cr >= min,
+                    "{} {:?}: file name contrast {:.2} < {min}",
+                    theme.name,
+                    tone,
+                    name_cr
+                );
+                let (badge_fill, ink) = theme.color_sftp_badge(tone);
+                let badge_cr = contrast_ratio(ink, badge_fill);
+                // 暗夜普通文件色块沿用 flux 的 slate，实测约 4.1:1，不低于 4.0。
+                assert!(
+                    badge_cr >= 4.0,
+                    "{} {:?}: badge ink contrast {:.2}",
+                    theme.name,
+                    tone,
+                    badge_cr
+                );
+            }
+            let meta_cr = contrast_ratio(theme.color_sftp_meta_text(), bg);
+            assert!(meta_cr >= 3.0, "{}: sftp meta {:.2}", theme.name, meta_cr);
+        }
+
+        let code = SftpFileTone::Code;
+        let dark = Theme::dark().color_sftp_file_name(code);
+        let light = Theme::light().color_sftp_file_name(code);
+        let ocean = Theme::ocean().color_sftp_file_name(code);
+        let forest = Theme::forest().color_sftp_file_name(code);
+        assert_ne!(dark, light);
+        assert_ne!(dark, ocean);
+        assert_ne!(dark, forest);
+        assert_ne!(ocean, forest);
+        assert_ne!(light, ocean);
+
+        // 暗夜文件名色保持原 flux 色板，避免折进主题时改观感。
+        assert_eq!(dark, egui::Color32::from_rgb(0xbf, 0xdb, 0xfe));
+        assert_eq!(
+            Theme::dark().color_sftp_file_name(SftpFileTone::Shell),
+            egui::Color32::from_rgb(0xa7, 0xf3, 0xd0)
+        );
+        assert_eq!(
+            Theme::dark().color_sftp_file_name(SftpFileTone::Data),
+            egui::Color32::from_rgb(0xfd, 0xe6, 0x8a)
+        );
+        assert_eq!(
+            Theme::dark().color_sftp_file_name(SftpFileTone::Config),
+            egui::Color32::from_rgb(0xdd, 0xd6, 0xfe)
+        );
+        assert_eq!(
+            Theme::dark().color_sftp_badge(SftpFileTone::Code),
+            (
+                egui::Color32::from_rgb(0x60, 0xa5, 0xfa),
+                egui::Color32::from_rgb(0x0b, 0x12, 0x20),
+            )
+        );
+        assert_eq!(
+            Theme::light().color_sftp_file_name(SftpFileTone::Code),
+            egui::Color32::from_rgb(30, 64, 175)
+        );
     }
 }

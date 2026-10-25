@@ -1,6 +1,6 @@
 use crate::ssh::SftpEntry;
 use crate::ui::layout_util;
-use crate::ui::theme::Theme;
+use crate::ui::theme::{SftpFileTone, Theme};
 use chrono::{DateTime, Utc};
 use eframe::egui::{self, Color32, RichText, Sense};
 use std::path::{Path, PathBuf};
@@ -209,90 +209,48 @@ fn file_ext_lower(name: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn flux_name_color(theme: &Theme, name: &str, kind: SftpFileKind) -> Color32 {
-    const TEXT: Color32 = Color32::from_rgb(0xf3, 0xf4, 0xf6);
-    const TEXT_3: Color32 = Color32::from_rgb(0x71, 0x71, 0x7a);
+fn sftp_file_tone(name: &str, kind: SftpFileKind) -> SftpFileTone {
     if kind == SftpFileKind::Dir {
-        return if theme.is_light_theme() {
-            theme.text_primary()
-        } else {
-            TEXT
-        };
+        return SftpFileTone::Dir;
     }
     if kind == SftpFileKind::Hidden {
-        return if theme.is_light_theme() {
-            theme.text_tertiary()
-        } else {
-            TEXT_3
-        };
-    }
-    if theme.is_light_theme() {
-        return match file_ext_lower(name).as_str() {
-            "py" | "rs" | "js" | "ts" | "jsx" | "tsx" | "go" | "java" | "c" | "cc" | "cpp" | "h"
-            | "cs" | "rb" | "php" | "lua" | "vue" | "svelte" => Color32::from_rgb(30, 64, 175),
-            "sh" | "bash" | "zsh" | "fish" => Color32::from_rgb(6, 95, 70),
-            "json" | "yaml" | "yml" | "toml" => Color32::from_rgb(146, 64, 14),
-            "conf" | "cfg" | "ini" | "env" | "xml" | "properties" => Color32::from_rgb(91, 33, 182),
-            _ => theme.text_primary(),
-        };
+        return SftpFileTone::Hidden;
     }
     match file_ext_lower(name).as_str() {
         "py" | "rs" | "js" | "ts" | "jsx" | "tsx" | "go" | "java" | "c" | "cc" | "cpp" | "h"
-        | "cs" | "rb" | "php" | "lua" | "vue" | "svelte" => Color32::from_rgb(0xbf, 0xdb, 0xfe),
-        "sh" | "bash" | "zsh" | "fish" => Color32::from_rgb(0xa7, 0xf3, 0xd0),
-        "json" | "yaml" | "yml" | "toml" => Color32::from_rgb(0xfd, 0xe6, 0x8a),
-        "conf" | "cfg" | "ini" | "env" | "xml" | "properties" => Color32::from_rgb(0xdd, 0xd6, 0xfe),
-        "md" => Color32::from_rgb(0xcb, 0xd5, 0xe1),
-        _ => TEXT,
+        | "cs" | "rb" | "php" | "lua" | "vue" | "svelte" => SftpFileTone::Code,
+        "sh" | "bash" | "zsh" | "fish" => SftpFileTone::Shell,
+        "json" | "yaml" | "yml" | "toml" => SftpFileTone::Data,
+        "conf" | "cfg" | "ini" | "env" | "xml" | "properties" => SftpFileTone::Config,
+        "md" | "rst" => SftpFileTone::Doc,
+        _ => SftpFileTone::Plain,
     }
 }
 
-/// 设计稿色块：实心底 + 深色字，而不是淡洗的文件名色。
-fn flux_badge_fill_ink(name: &str, kind: SftpFileKind) -> (Color32, Color32) {
-    if kind == SftpFileKind::Dir {
-        return (
-            Color32::from_rgb(0xea, 0xb3, 0x08),
-            Color32::from_rgb(0x1c, 0x14, 0x03),
-        );
+fn flux_name_color(theme: &Theme, name: &str, kind: SftpFileKind) -> Color32 {
+    // 图片 / 压缩包 / 可执行文件在非暗夜列表里仍走状态色；暗夜 flux 把它们当普通文件。
+    if !theme.uses_modern_palette()
+        && matches!(
+            kind,
+            SftpFileKind::Image | SftpFileKind::Archive | SftpFileKind::Executable
+        )
+    {
+        return file_kind_name_color(theme, kind, false);
     }
-    match file_ext_lower(name).as_str() {
-        "py" | "rs" | "js" | "ts" | "jsx" | "tsx" | "go" | "java" | "c" | "cc" | "cpp" | "h"
-        | "cs" | "rb" | "php" | "lua" | "vue" | "svelte" => (
-            Color32::from_rgb(0x60, 0xa5, 0xfa),
-            Color32::from_rgb(0x0b, 0x12, 0x20),
-        ),
-        "sh" | "bash" | "zsh" | "fish" => (
-            Color32::from_rgb(0x34, 0xd3, 0x99),
-            Color32::from_rgb(0x05, 0x2e, 0x1a),
-        ),
-        "json" | "yaml" | "yml" | "toml" => (
-            Color32::from_rgb(0xfb, 0xbf, 0x24),
-            Color32::from_rgb(0x1c, 0x14, 0x03),
-        ),
-        "conf" | "cfg" | "ini" | "env" | "xml" | "properties" => (
-            Color32::from_rgb(0xc4, 0xb5, 0xfd),
-            Color32::from_rgb(0x1a, 0x10, 0x30),
-        ),
-        "md" | "rst" => (
-            Color32::from_rgb(0x94, 0xa3, 0xb8),
-            Color32::from_rgb(0x0f, 0x17, 0x2a),
-        ),
-        _ => (
-            Color32::from_rgb(0x64, 0x74, 0x8b),
-            Color32::from_rgb(0x0b, 0x0c, 0x0f),
-        ),
-    }
+    theme.color_sftp_file_name(sftp_file_tone(name, kind))
+}
+
+/// 扩展名色块：实心底 + 对比字色，色值在主题里按预设分档。
+fn flux_badge_fill_ink(theme: &Theme, name: &str, kind: SftpFileKind) -> (Color32, Color32) {
+    theme.color_sftp_badge(sftp_file_tone(name, kind))
 }
 
 fn flux_badge_color(theme: &Theme, name: &str, kind: SftpFileKind) -> Color32 {
     if kind == SftpFileKind::Dir {
-        return if theme.is_light_theme() {
-            theme.amber_color()
-        } else {
-            Color32::from_rgb(0xea, 0xb3, 0x08)
-        };
+        theme.color_sftp_dir_icon()
+    } else {
+        flux_badge_fill_ink(theme, name, kind).0
     }
-    flux_badge_fill_ink(name, kind).0
 }
 
 fn paint_ext_badge(ui: &egui::Ui, icon_rect: egui::Rect, name: &str, fill: Color32, ink: Color32) {
@@ -605,38 +563,37 @@ pub(super) fn paint_file_table_header(
     }
     ui.allocate_ui_at_rect(header_rect, |ui| {
         paint_file_table_row_strip(ui, cols, h, |cell, col| {
-                let (base_label, col_enum) = match col {
-                    0 => return,
-                    1 => (crate::i18n::tr(ctx, "Name", "名称"), FileSortColumn::Name),
-                    2 => (crate::i18n::tr(ctx, "Size", "大小"), FileSortColumn::Size),
-                    _ => (
-                        crate::i18n::tr(ctx, "Modified", "修改时间"),
-                        FileSortColumn::Time,
-                    ),
-                };
-                let text = format!("{}{}", base_label, sort_header_suffix(*sort, col_enum));
-                let color = if sort.column == col_enum {
-                    if theme.uses_modern_palette() {
-                        theme.text_primary()
-                    } else {
-                        theme.accent_color()
-                    }
+            let (base_label, col_enum) = match col {
+                0 => return,
+                1 => (crate::i18n::tr(ctx, "Name", "名称"), FileSortColumn::Name),
+                2 => (crate::i18n::tr(ctx, "Size", "大小"), FileSortColumn::Size),
+                _ => (
+                    crate::i18n::tr(ctx, "Modified", "修改时间"),
+                    FileSortColumn::Time,
+                ),
+            };
+            let text = format!("{}{}", base_label, sort_header_suffix(*sort, col_enum));
+            let color = if sort.column == col_enum {
+                if theme.uses_modern_palette() {
+                    theme.text_primary()
                 } else {
-                    cap_default
-                };
-                paint_valign_text(cell, &text, cap_font.clone(), color, col >= 2);
-                let resp = cell.interact(
-                    cell.max_rect(),
-                    // 本机/远端两张表的表头 cell 在 egui 里会派生出相同 id，须按面板加盐区分。
-                    egui::Id::new(("sftp_col_header", id_salt, col)),
-                    Sense::click(),
-                );
-                if resp.clicked() {
-                    clicked_col = Some(col_enum);
+                    theme.accent_color()
                 }
-            });
-        },
-    );
+            } else {
+                cap_default
+            };
+            paint_valign_text(cell, &text, cap_font.clone(), color, col >= 2);
+            let resp = cell.interact(
+                cell.max_rect(),
+                // 本机/远端两张表的表头 cell 在 egui 里会派生出相同 id，须按面板加盐区分。
+                egui::Id::new(("sftp_col_header", id_salt, col)),
+                Sense::click(),
+            );
+            if resp.clicked() {
+                clicked_col = Some(col_enum);
+            }
+        });
+    });
     if !theme.uses_modern_palette() {
         ui.separator();
     }
@@ -663,36 +620,32 @@ pub(super) fn paint_file_table_row(
     let h = theme.size_file_list_row_h();
     let (row_rect, response) = ui.allocate_exact_size(egui::vec2(cols.total, h), Sense::click());
     let modern = theme.uses_modern_palette();
-    let rounding = if modern { 0.0 } else { theme.radius_list_item() };
+    let rounding = if modern {
+        0.0
+    } else {
+        theme.radius_list_item()
+    };
     if selected {
-        let selected_bg = if modern {
-            Color32::from_rgba_unmultiplied(96, 165, 250, 31)
-        } else {
-            theme.list_row_selected_bg()
-        };
-        ui.painter().rect_filled(row_rect, rounding, selected_bg);
+        ui.painter()
+            .rect_filled(row_rect, rounding, theme.color_sftp_row_selected_fill());
         if modern {
             let bar = egui::Rect::from_min_max(
                 row_rect.left_top(),
                 egui::pos2(row_rect.left() + 2.0, row_rect.bottom()),
             );
             ui.painter()
-                .rect_filled(bar, 0.0, Color32::from_rgb(0x60, 0xa5, 0xfa));
+                .rect_filled(bar, 0.0, theme.color_sftp_row_selected_accent());
         }
     } else if response.hovered() {
-        let hover_bg = if modern {
-            Color32::from_rgba_unmultiplied(255, 255, 255, 11)
-        } else {
-            theme.color_file_list_row_hover_bg()
-        };
-        ui.painter().rect_filled(row_rect, rounding, hover_bg);
+        ui.painter()
+            .rect_filled(row_rect, rounding, theme.color_sftp_row_hover_fill());
     }
     let icon = file_kind_icon(file_kind);
     let icon_px = theme.size_file_list_icon();
-    let name_color = if modern {
-        flux_name_color(theme, name, file_kind)
+    let name_color = if selected && !modern {
+        theme.text_primary()
     } else {
-        file_kind_name_color(theme, file_kind, selected)
+        flux_name_color(theme, name, file_kind)
     };
     let icon_color = if modern {
         flux_badge_color(theme, name, file_kind)
@@ -700,7 +653,7 @@ pub(super) fn paint_file_table_row(
         file_kind_icon_color(theme, file_kind, selected)
     };
     let meta_color = if modern {
-        Color32::from_rgb(0x71, 0x71, 0x7a)
+        theme.color_sftp_meta_text()
     } else {
         file_kind_meta_color(theme, file_kind, selected)
     };
@@ -723,7 +676,7 @@ pub(super) fn paint_file_table_row(
                 let (icon_r, _) =
                     cell.allocate_exact_size(egui::vec2(cols.icon, h), Sense::hover());
                 if modern && file_kind != SftpFileKind::Dir {
-                    let (fill, ink) = flux_badge_fill_ink(name, file_kind);
+                    let (fill, ink) = flux_badge_fill_ink(theme, name, file_kind);
                     paint_ext_badge(cell, icon_r, name, fill, ink);
                 } else {
                     crate::ui::icons::paint_icon(cell, icon_r, icon, icon_color, icon_px);

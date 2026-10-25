@@ -710,6 +710,22 @@ egion_panel_frame | 侧栏、面板区域 |
 - [ ] 输入框文字上下有余量，不顶满
 - [ ] 同排 chip/按钮同高，文字在一条横线上
 - [ ] 新面板复用 chrome 助手，不复制幽灵样式
+- [ ] 进度条走 `chrome::progress_bar`，百分比在填充色上可读
+
+### 10.8 进度条
+
+软件更新、SFTP 传输、终端 rz/sz 用 `chrome::progress_bar` / `progress_bar_labeled`，不要裸 `egui::ProgressBar`。
+
+裸进度条不设填充时会拿文本拖选的 `selection.bg_fill` 当槽内颜色，百分比再走白字。暗夜下就是浅灰底上的白「32%」。修进度条不要去改 `color_text_selection_bg`，那会破坏文字拖选。
+
+| 角色 | 令牌 |
+|------|------|
+| 填充 | `color_progress_fill()` |
+| 轨道 | `color_progress_track()` |
+| 条内标签 | `color_progress_label()` |
+| 高度 | `progress_bar_height()`（带标签时助手会抬到能放下正文，避免百分比被裁切） |
+
+SFTP 文件类型色用 `color_sftp_file_name` / `color_sftp_badge`（`theme_sftp`）。暗夜、晨曦、海洋、森林各有一档，不要在面板里写死 flux RGB。
 
 ---
 
