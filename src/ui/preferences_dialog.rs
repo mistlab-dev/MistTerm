@@ -419,7 +419,9 @@ impl MistTermApp {
                         crate::platform::TerminalFontPreset::CascadiaMono => "Cascadia Mono",
                         crate::platform::TerminalFontPreset::JetBrainsMono => "JetBrains Mono",
                     };
-                let system_fonts = crate::platform::list_system_mono_fonts();
+                let scanned = crate::platform::system_mono_fonts_if_ready();
+                let fonts_ready = scanned.is_some();
+                let system_fonts = scanned.unwrap_or(&[]);
                 let mut pick = if self.terminal_font_family.trim().is_empty() {
                     FontPick::Preset(self.terminal_font_preset)
                 } else {
@@ -511,7 +513,10 @@ impl MistTermApp {
                                         },
                                     )
                                 });
-                            if !listed {
+                            if !fonts_ready {
+                                ui.separator();
+                                let _ = ui.selectable_label(true, name.as_str());
+                            } else if !listed {
                                 ui.separator();
                                 let missing = format!(
                                     "{name} ({})",
@@ -539,12 +544,24 @@ impl MistTermApp {
                 ui.label(
                     RichText::new(crate::i18n::tr(
                         ctx,
-                        "Lists monospace fonts installed on this computer. Presets that are not installed are hidden.",
-                        "列出本机已安装的等宽字体；没安装的预设不显示。",
+                        "Lists monospace fonts installed on this computer. Presets that are not installed are hidden. Newly installed fonts appear after a restart.",
+                        "列出本机已安装的等宽字体；没安装的预设不显示。新安装的字体需重启后出现。",
                     ))
                     .size(theme.font_size_small())
                     .color(theme.color_form_hint()),
                 );
+                if !fonts_ready {
+                    ui.label(
+                        RichText::new(crate::i18n::tr(
+                            ctx,
+                            "Reading installed fonts…",
+                            "正在读取本机字体…",
+                        ))
+                        .size(theme.font_size_small())
+                        .color(theme.color_form_hint()),
+                    );
+                    ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                }
 
                 Self::preferences_row_divider(ui, theme);
                 crate::ui::chrome::form_control_row(ui, theme, |ui| {
@@ -1152,11 +1169,19 @@ impl MistTermApp {
                     &mut self.app_settings.audit.syslog.enabled,
                     crate::i18n::tr(ctx, "Also send to a Syslog server", "同时发送到 Syslog 服务器"),
                 );
+                let host_label = crate::i18n::tr(ctx, "Host", "主机");
+                let port_label = crate::i18n::tr(ctx, "Port", "端口");
+                let syslog_label_w = crate::ui::chrome::form_label_advance(ui, theme, host_label)
+                    .max(crate::ui::chrome::form_label_advance(
+                        ui,
+                        theme,
+                        port_label,
+                    ));
                 crate::ui::chrome::form_labeled_control_row(
                     ui,
                     theme,
-                    crate::i18n::tr(ctx, "Host", "主机"),
-                    0.0,
+                    host_label,
+                    syslog_label_w,
                     |ui| {
                         let host_w = (ui.available_width() - 4.0).max(120.0);
                         crate::ui::chrome::form_inline_singleline(
@@ -1170,25 +1195,29 @@ impl MistTermApp {
                         )
                     },
                 );
-                let port_label = crate::i18n::tr(ctx, "Port", "端口");
-                crate::ui::chrome::form_control_row(ui, theme, |ui| {
-                    crate::ui::chrome::form_inline_label(ui, theme, port_label);
-                    crate::ui::chrome::form_u16_stepper(
-                        ui,
-                        theme,
-                        egui::Id::new("pref_audit_syslog_port"),
-                        &mut self.app_settings.audit.syslog.port,
-                        1..=65535,
-                        1,
-                    );
-                    crate::ui::chrome::form_inline_checkbox(
-                        ui,
-                        theme,
-                        "pref_audit_syslog_tcp",
-                        &mut self.app_settings.audit.syslog.use_tcp,
-                        "TCP",
-                    );
-                });
+                crate::ui::chrome::form_labeled_control_row(
+                    ui,
+                    theme,
+                    port_label,
+                    syslog_label_w,
+                    |ui| {
+                        crate::ui::chrome::form_u16_stepper(
+                            ui,
+                            theme,
+                            egui::Id::new("pref_audit_syslog_port"),
+                            &mut self.app_settings.audit.syslog.port,
+                            1..=65535,
+                            1,
+                        );
+                        crate::ui::chrome::form_inline_checkbox(
+                            ui,
+                            theme,
+                            "pref_audit_syslog_tcp",
+                            &mut self.app_settings.audit.syslog.use_tcp,
+                            "TCP",
+                        );
+                    },
+                );
                 ui.horizontal(|ui| {
                     if crate::ui::chrome::panel_action_primary_icon_button(
                         ui,

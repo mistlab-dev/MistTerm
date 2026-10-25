@@ -2017,8 +2017,8 @@ pub fn settings_elevated_card(ui: &mut Ui, theme: &Theme, body: impl FnOnce(&mut
         .show(ui, |ui| {
             let inner_w = crate::ui::layout_util::set_width_to_available(ui);
             ui.set_min_width(inner_w);
-            // 分隔线已拿掉。行距从 2px 收到 4px，卡内节奏均匀一点（#130）。
-            ui.spacing_mut().item_spacing.y = 4.0;
+            // 分隔线已拿掉。行距走主题 token，现代 / 经典同一节奏（#130）。
+            ui.spacing_mut().item_spacing.y = theme.spacing_card_row();
             body(ui);
         });
     ui.add_space(theme.spacing_md().max(10.0));
@@ -2083,19 +2083,20 @@ pub fn form_labeled_control_row<R>(
     })
 }
 
-/// 步进器方钮 / 数字框边长（比通用控件矮一档，#130）。
-pub fn form_stepper_row_h_for_layout(theme: &Theme) -> f32 {
-    form_stepper_control_h(theme)
+/// 步进器方钮 / 数字框的边长（约 22px）。
+///
+/// 不是表单行高。行盒仍约 26px（与通用按钮同高），方钮在行内垂直居中。
+/// 按「行高」拿这个值做布局，会把同行的 26px 按钮裁进更矮的盒子。
+/// ± 与数字框：现代主题按钮 26 → 22，经典 28 也收到 22。
+pub fn form_stepper_control_h(theme: &Theme) -> f32 {
+    stepper_control_h_from_btn(theme.size_control_btn_h())
 }
 
-/// 表单行盒仍与通用按钮同高，避免把 26px 按钮裁进更矮的行。
+/// 表单行盒高度（约 26px），与通用按钮同高。
+///
+/// 步进器方钮用 [`form_stepper_control_h`]（约 22px），在这个行盒里垂直居中。
 fn form_stepper_row_h(theme: &Theme) -> f32 {
     24.0_f32.max(theme.size_control_btn_h().min(26.0))
-}
-
-/// ± 与数字框：现代主题按钮 26 → 22，经典 28 也收到 22。
-fn form_stepper_control_h(theme: &Theme) -> f32 {
-    stepper_control_h_from_btn(theme.size_control_btn_h())
 }
 
 fn form_stepper_btn_side(theme: &Theme) -> f32 {
@@ -4994,5 +4995,23 @@ mod tests {
         assert_eq!(stepper_control_h_from_btn(28.0), 22.0);
         assert_eq!(stepper_control_h_from_btn(24.0), 20.0);
         assert!(stepper_control_h_from_btn(26.0) < 26.0);
+    }
+
+    #[test]
+    fn settings_card_row_spacing_matches_across_palettes() {
+        let modern = crate::ui::theme::Theme::dark();
+        let classic = crate::ui::theme::Theme::light();
+        assert!(modern.uses_modern_palette());
+        assert!(!classic.uses_modern_palette());
+        assert_eq!(modern.spacing_card_row(), 4.0);
+        assert_eq!(classic.spacing_card_row(), modern.spacing_card_row());
+        assert_eq!(
+            crate::ui::theme::Theme::ocean().spacing_card_row(),
+            modern.spacing_card_row()
+        );
+        assert_eq!(
+            crate::ui::theme::Theme::forest().spacing_card_row(),
+            modern.spacing_card_row()
+        );
     }
 }
