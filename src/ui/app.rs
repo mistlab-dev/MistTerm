@@ -8201,7 +8201,7 @@ impl MistTermApp {
                 self.app_settings.ui_language,
                 self.ssh_config_path.exists()
                     && crate::modules::session_import::SessionImportModule::import_enabled(&self.module_registry),
-                self.sidebar_collapsed,
+                crate::modules::session_import::SessionImportModule::import_enabled(&self.module_registry),
                 self.sidebar_collapsed,
                 self.activity_rail_collapsed,
                 frame.info().window_info.maximized,
