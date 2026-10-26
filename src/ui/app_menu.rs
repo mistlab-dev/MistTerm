@@ -90,18 +90,27 @@ impl MistTermApp {
                 self.merge_active_split(ctx);
                 ui.close_menu();
             }
+            // session-import 模块 gating（#122）：关闭后导入入口不可用；已导入会话数据不受影响。
+            let session_import_enabled = crate::modules::session_import::SessionImportModule::import_enabled(&self.module_registry);
             if crate::ui::chrome::popup_menu_button_enabled(
                 ui,
                 theme,
                 l.import_ssh,
-                ssh_import_enabled,
+                ssh_import_enabled && session_import_enabled,
             )
             .clicked()
             {
                 self.open_ssh_import_dialog(ctx);
                 ui.close_menu();
             }
-            if crate::ui::chrome::popup_menu_button(ui, theme, &format!("{}…", l.import_foreign)).clicked() {
+            if crate::ui::chrome::popup_menu_button_enabled(
+                ui,
+                theme,
+                &format!("{}…", l.import_foreign),
+                session_import_enabled,
+            )
+            .clicked()
+            {
                 self.open_foreign_import_dialog();
                 ui.close_menu();
             }
