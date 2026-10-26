@@ -12,7 +12,18 @@ Mist 是本仓库构建的 SSH 终端 GUI（`cargo` 二进制名：**Mist**）�
 
 Release 里的 Linux 预编译包在 Ubuntu 24.04 上构建，需要 glibc 2.39 或更新（例如 Ubuntu 24.04+、Debian 13+、Fedora 40+）。可以用 `ldd --version` 查看本机版本；更老的系统请按下文从源码编译。
 
-只要命令行 `mist`（服务器上常见）：1.2.1 起另外提供静态版 `mist-cli-linux-x86_64.tar.gz` 和 `mist-cli-linux-aarch64.tar.gz`，不依赖 glibc，CentOS 7、Rocky 8/9、Ubuntu 20.04/22.04、Debian 12 和 ARM 服务器都能直接用；`curl -fsSL https://mistlab.dev/install | bash` 会自动选对。详见 [docs/release/CLI_STATIC.md](../release/CLI_STATIC.md)。
+预编译包（[GitHub Releases](https://github.com/mistlab-dev/MistTerm/releases/latest)）：
+
+| 要什么 | 下载 |
+| --- | --- |
+| Mac（Apple Silicon，主下载） | `Mist-macos-aarch64.dmg` |
+| Mac（Intel，可选） | `Mist-macos-x86_64.dmg` |
+| Linux 桌面 | `Mist-linux-x86_64.tar.gz`（只有 `Mist`，需要 glibc 2.39+） |
+| 只要命令行 `mist` | `mist-cli-linux-x86_64.tar.gz` 或 `mist-cli-linux-aarch64.tar.gz` |
+
+不再提供 `Mist-macos-universal`。Linux 桌面包也不再附带 `mist`；桌面和命令行各下一个包。体积说明见 [docs/release/PACKAGE_SIZE.md](../release/PACKAGE_SIZE.md)。
+
+只要命令行 `mist`（服务器上常见）：1.2.1 起的静态版不依赖 glibc，CentOS 7、Rocky 8/9、Ubuntu 20.04/22.04、Debian 12 和 ARM 服务器都能直接用；`curl -fsSL https://mistlab.dev/install | bash` 会自动选对。详见 [docs/release/CLI_STATIC.md](../release/CLI_STATIC.md)。
 
 界面默认 **英文**，可在 **偏好设置 → 语言** 切换为简体中文（Unix 下写入 `~/.config/mistterm/settings.json`）。
 
@@ -58,7 +69,7 @@ chmod +x scripts/run-macos-gui.sh
 
 等价于 `scripts/bundle-macos.sh` 后执行 `open target/release/Mist.app`。
 
-从 GitHub Releases 下载的 macOS 包内含 **`Mist.app`**：解压后执行 `open Mist.app`，或拖到「应用程序」。同目录的裸二进制 `Mist` 仅供命令行调试。
+从 GitHub Releases 下载的 macOS 包内含 **`Mist.app`**（Apple Silicon 下 `Mist-macos-aarch64`，Intel 下 `Mist-macos-x86_64`）：解压后执行 `open Mist.app`，或拖到「应用程序」。同目录的裸二进制 `Mist` 不要在 Finder 里双击；命令行工具是旁边的 `mist-cli`。
 
 安装脚本在 macOS 上也会把 `Mist.app` 复制到 `~/Applications`，可从 Spotlight 或 Dock 启动。
 

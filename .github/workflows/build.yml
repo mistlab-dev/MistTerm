@@ -49,8 +49,13 @@ jobs:
         shell: bash
         run: python3 scripts/gen-update-manifest.py --self-test
 
-  # 三平台并行。单元测试 + 集成测试仅在 Linux（mold + 系统 OpenSSL，最快）；
-  # Windows / macOS 只 release 构建 + 打包，依赖 rust-cache 复用增量编译。
+      - name: Self-test Linux GUI archive check
+        shell: bash
+        run: python3 scripts/measure-linux-gui-archive.py --self-test
+
+  # Linux、Windows、macOS arm64、macOS x86_64 并行。单元测试 + 集成测试仅在 Linux
+  # （mold + 系统 OpenSSL，最快）；Windows / macOS 只 release 构建 + 打包，依赖 rust-cache。
+  # macOS 不再打 universal（#127）：arm64 是主下载，x86_64 是可选下载。
   platform:
     name: ${{ matrix.platform }}
     needs: preflight
@@ -80,10 +85,22 @@ jobs:
             run_integration_tests: false
             use_mold: false
 
-          - platform: macos-universal
+          # Apple Silicon：主下载（dmg / tar.gz / 一键更新包都是这一套单架构产物）。
+          - platform: macos-aarch64
             os: macos-latest
-            target: universal-apple-darwin
-            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            target: aarch64-apple-darwin
+            rust_targets: aarch64-apple-darwin
+            archive_ext: tar.gz
+            cargo_features: vendored-openssl
+            run_unit_tests: false
+            run_integration_tests: false
+            use_mold: false
+
+          # Intel Mac：可选下载，不挡主路径，也不再 lipo 进 universal。
+          - platform: macos-x86_64
+            os: macos-latest
+            target: x86_64-apple-darwin
+            rust_targets: x86_64-apple-darwin
             archive_ext: tar.gz
             cargo_features: vendored-openssl
             run_unit_tests: false
@@ -238,25 +255,33 @@ jobs:
             features_arg=(--features "$features")
           fi
 
-          if [ "${{ matrix.target }}" = "universal-apple-darwin" ]; then
+          if [[ "${{ matrix.target }}" == *-apple-darwin ]]; then
             mkdir -p "target/${{ matrix.target }}/release"
             # macOS 文件系统不区分大小写：Mist 和 mist 是同一个路径。先编 CLI 并改名 mist-cli，
-            # 最后编 GUI，否则 CLI 会覆盖 GUI（v1.2.14 的 Mist.app 里装的其实是 CLI）。
+            # 再编 GUI，否则 CLI 会覆盖 GUI（v1.2.14 的 Mist.app 里装的其实是 CLI）。
+            # 只编当前架构，不再 lipo universal（#127）。
             U="target/${{ matrix.target }}/release"
-            for BIN in mist "$BIN_NAME"; do
-              cargo build --locked --release --bin "$BIN" --target aarch64-apple-darwin "${features_arg[@]}"
-              cargo build --locked --release --bin "$BIN" --target x86_64-apple-darwin "${features_arg[@]}"
-              lipo -create -output "$U/$BIN.lipo" \
-                "target/aarch64-apple-darwin/release/$BIN" \
-                "target/x86_64-apple-darwin/release/$BIN"
-              if [ "$BIN" = mist ]; then mv "$U/$BIN.lipo" "$U/mist-cli"; else rm -f "$U/$BIN"; mv "$U/$BIN.lipo" "$U/$BIN"; fi
-            done
+            cargo build --locked --release --bin mist --target "${{ matrix.target }}" "${features_arg[@]}"
+            mv "$U/mist" "$U/mist-cli"
+            cargo build --locked --release --bin "$BIN_NAME" --target "${{ matrix.target }}" "${features_arg[@]}"
             file "$U/$BIN_NAME" "$U/mist-cli"
+            if [ "$U/$BIN_NAME" -ef "$U/mist-cli" ]; then
+              echo "::error::GUI and CLI are the same file (case-insensitive rename failed)"; exit 1
+            fi
+            info="$(file "$U/$BIN_NAME")"
+            echo "$info" | grep -q 'universal' && { echo "::error::$U/$BIN_NAME is still a universal binary"; exit 1; }
+            case "${{ matrix.target }}" in
+              aarch64-apple-darwin) echo "$info" | grep -q 'arm64' || { echo "::error::expected arm64: $info"; exit 1; } ;;
+              x86_64-apple-darwin) echo "$info" | grep -q 'x86_64' || { echo "::error::expected x86_64: $info"; exit 1; } ;;
+            esac
             # GUI 二进制必须带诊断开关代码（只在 GUI 入口里）
             grep -a -q -F mist-debug-log "$U/$BIN_NAME" || { echo "::error::$U/$BIN_NAME is not the GUI binary"; exit 1; }
+            if grep -a -q -F mist-debug-log "$U/mist-cli"; then
+              echo "::error::$U/mist-cli looks like the GUI binary"; exit 1
+            fi
           else
+            # Linux 桌面包只编 GUI。命令行 `mist` 由 cli-linux 的静态包单独发布（#127）。
             cargo build --locked --release --bin "$BIN_NAME" --target "${{ matrix.target }}" "${features_arg[@]}"
-            cargo build --locked --release --bin mist --target "${{ matrix.target }}" "${features_arg[@]}"
           fi
 
       - name: Build release binary (Windows)
@@ -366,10 +391,9 @@ jobs:
 
           if [ "${{ matrix.archive_ext }}" = "dmg" ]; then
             if [ "${{ runner.os }}" = "macOS" ]; then
-              # Universal binary is already lipo-merged; remove per-arch build leftovers
-              # to prevent hdiutil from failing with "No space left on device".
-              rm -rf target/aarch64-apple-darwin/release/{build,deps,examples,incremental} || true
-              rm -rf target/x86_64-apple-darwin/release/{build,deps,examples,incremental} || true
+              # 矩阵的 archive_ext 目前是 tar.gz；dmg 在下面的分支里生成。
+              # 这里只清当前架构的中间文件，避免 hdiutil 磁盘不够。
+              rm -rf "target/${{ matrix.target }}/release/"{build,deps,examples,incremental} || true
               df -h
             fi
             MIST_BINARY="target/${{ matrix.target }}/release/$BIN_NAME" \
@@ -391,9 +415,8 @@ jobs:
                 MIST_APP_OUT="$STAGE/Mist.app" \
                 bash scripts/bundle-macos.sh
 
-              # Developer ID 签名 + 公证（Mist.app 与 DMG）
-              rm -rf target/aarch64-apple-darwin/release/{build,deps,examples,incremental} || true
-              rm -rf target/x86_64-apple-darwin/release/{build,deps,examples,incremental} || true
+              # Developer ID 签名 + 公证（Mist.app 与 DMG）。只清当前架构的中间文件，留下 Mist / mist-cli。
+              rm -rf "target/${{ matrix.target }}/release/"{build,deps,examples,incremental} || true
               df -h . || true
               DMG_OUT="dist/${NAME}.dmg"
               echo "::notice title=macOS signing::bundle done; starting codesign + notary (poll heartbeats every 20s, timeout 20m)"
@@ -405,8 +428,9 @@ jobs:
               echo "MACOS_DMG_PATH=$DMG_OUT" >> "$GITHUB_ENV"
               echo "MACOS_DMG_NAME=${NAME}.dmg" >> "$GITHUB_ENV"
 
-              # 自动更新专用的精简包：只放已签名的 Mist.app（不带裸 Mist / mist-cli，约 47 MB，完整 tar.gz 约 141 MB）。
-              # 目录结构保持 Mist-macos-universal/Mist.app，老客户端（install_mac_app）也能找到。
+              # 自动更新专用的精简包：只放已签名的 Mist.app（不带裸 Mist / mist-cli）。
+              # 目录是 Mist-macos-<arch>/Mist.app。新客户端按架构找；也仍认识旧的 Mist-macos-universal/ 前缀。
+              # 已安装的 universal 客户端只认 macos-universal 清单键，需要手动换一次单架构包。
               UPDATE_NAME="${NAME}-update.tar.gz"
               tar -C dist -czf "$PWD/dist/$UPDATE_NAME" "$NAME/Mist.app"
               tar -tzvf "dist/$UPDATE_NAME"
@@ -424,6 +448,9 @@ jobs:
               printf '%s\n' \
                 'MistTerm for macOS' \
                 '==================' \
+                'Single-architecture build (${{ matrix.platform }}). Universal binaries are not published.' \
+                '  Apple Silicon (primary): Mist-macos-aarch64.dmg' \
+                '  Intel (optional):        Mist-macos-x86_64.dmg' \
                 'GUI (recommended, notarized Mist.app):' \
                 '  open Mist.app' \
                 '  or drag Mist.app to /Applications' \
@@ -433,8 +460,16 @@ jobs:
                 'or macOS will open Terminal.app first.' \
                 > "$STAGE/README-macOS.txt"
             else
+              # Linux 桌面包只有 GUI。glibc `mist` 与静态 mist-cli 是两份 CLI，不再重复打进这个包（#127）。
               cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
-              cp "target/${{ matrix.target }}/release/mist" "$STAGE/"
+              printf '%s\n' \
+                'MistTerm for Linux (desktop)' \
+                '============================' \
+                'GUI:  ./Mist' \
+                '      This archive does not include the `mist` command.' \
+                'CLI:  mist-cli-linux-x86_64.tar.gz or mist-cli-linux-aarch64.tar.gz' \
+                '      or: curl -fsSL https://mistlab.dev/install | bash' \
+                > "$STAGE/README-linux.txt"
             fi
             [ -f README.md ] && cp README.md "$STAGE/" || true
             [ -f docs/en/INSTALL.md ] && cp docs/en/INSTALL.md "$STAGE/INSTALL.md" || true
@@ -450,6 +485,9 @@ jobs:
               artifact="$NAME.tar.gz"
             fi
             cd ..
+            if [ "${{ runner.os }}" = "Linux" ]; then
+              python3 scripts/measure-linux-gui-archive.py "dist/$artifact"
+            fi
           fi
 
           echo "ARTIFACT_PATH=dist/$artifact" >> "$GITHUB_ENV"
@@ -489,7 +527,7 @@ jobs:
   # ---------------------------------------------------------------------------
   # 命令行 `mist` 的 Linux 静态版（musl）：x86_64 + aarch64。
   # 不依赖系统 glibc / GTK / OpenSSL，CentOS 7 这类老系统和 ARM 服务器也能直接用；官网 /install 装的就是它。
-  # 桌面版 Mist-linux-x86_64.tar.gz 不变。说明见 docs/release/CLI_STATIC.md。
+  # 桌面版 Mist-linux-x86_64.tar.gz 只含 GUI `Mist`，不再附带 glibc `mist`。说明见 docs/release/CLI_STATIC.md。
   # ---------------------------------------------------------------------------
   cli-linux:
     name: cli-linux-${{ matrix.arch }}
@@ -673,9 +711,18 @@ jobs:
           python3 scripts/gen-update-manifest.py --trusted-comment-of dist/latest.json > dist/latest.json.tc
           echo "Trusted comment: $(cat dist/latest.json.tc)"
           # 静态命令行包必须在 SHA256SUMS 和 latest.json 里。
-          for f in mist-cli-linux-x86_64.tar.gz mist-cli-linux-aarch64.tar.gz Mist-macos-universal-update.tar.gz; do
+          for f in \
+            mist-cli-linux-x86_64.tar.gz mist-cli-linux-aarch64.tar.gz \
+            Mist-macos-aarch64-update.tar.gz Mist-macos-x86_64-update.tar.gz \
+            Mist-macos-aarch64.dmg Mist-macos-x86_64.dmg \
+            Mist-macos-aarch64.tar.gz Mist-macos-x86_64.tar.gz
+          do
             grep -q "  $f\$" dist/SHA256SUMS || { echo "::error::$f missing from SHA256SUMS"; exit 1; }
           done
+          if grep -q 'Mist-macos-universal' dist/SHA256SUMS; then
+            echo "::error::universal macOS artifact is still in SHA256SUMS"; exit 1
+          fi
+          python3 scripts/measure-linux-gui-archive.py dist/Mist-linux-x86_64.tar.gz
           python3 - <<'CHECK'
           import json
           m = json.load(open("dist/latest.json"))
@@ -683,9 +730,17 @@ jobs:
               a = m["platforms"][key]
               assert a["kind"] == "tar.gz" and a["auto_update"] and "min_glibc" not in a, (key, a)
           print("latest.json CLI entries:", {k: m["platforms"][k]["name"] for k in ("linux-x86_64-cli", "linux-aarch64-cli")})
-          mac = m["platforms"]["macos-universal"]
-          assert mac["name"] == "Mist-macos-universal-update.tar.gz" and mac["kind"] == "tar.gz", mac
-          print("latest.json macos-universal:", mac["name"], mac["size"], "bytes")
+          assert "macos-universal" not in m["platforms"], m["platforms"].keys()
+          expected = {
+              "macos-aarch64": "Mist-macos-aarch64-update.tar.gz",
+              "macos-x86_64": "Mist-macos-x86_64-update.tar.gz",
+          }
+          for key, name in expected.items():
+              mac = m["platforms"][key]
+              assert mac["name"] == name and mac["kind"] == "tar.gz" and mac["auto_update"], mac
+              print(f"latest.json {key}:", mac["name"], mac["size"], "bytes")
+          gui = m["platforms"]["linux-x86_64"]
+          assert gui["name"] == "Mist-linux-x86_64.tar.gz" and gui["auto_update"], gui
           CHECK
 
       - name: Upload manifest
@@ -802,8 +857,9 @@ jobs:
 
             Pick the archive for your platform:
 
-            - **macOS**: `Mist-macos-universal.dmg` (signed + notarized, recommended) or `Mist-macos-universal.tar.gz`
-            - **Linux**: `Mist-linux-x86_64.tar.gz` (desktop app + `mist` CLI, needs a recent glibc)
+            - **macOS (Apple Silicon, primary)**: `Mist-macos-aarch64.dmg` (signed + notarized) or `Mist-macos-aarch64.tar.gz`
+            - **macOS (Intel, optional)**: `Mist-macos-x86_64.dmg` or `Mist-macos-x86_64.tar.gz`
+            - **Linux desktop**: `Mist-linux-x86_64.tar.gz` (GUI `Mist` only, needs a recent glibc; no bundled `mist`)
             - **Linux CLI only** (static, any distro incl. CentOS 7): `mist-cli-linux-x86_64.tar.gz`, `mist-cli-linux-aarch64.tar.gz` — or `curl -fsSL https://mistlab.dev/install | bash`
             - **Windows**: `MistTerm-*-windows-x86_64-setup.exe` (recommended) or `Mist-windows-x86_64.zip`
 
