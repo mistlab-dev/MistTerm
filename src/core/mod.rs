@@ -46,6 +46,7 @@ pub mod ai_session_meta;
 pub mod ai_enhanced;
 pub mod app_settings;
 pub mod local_dir;
+pub mod crash_reporter;
 pub mod hang_reporter;
 pub mod team;
 pub mod market;
