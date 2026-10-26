@@ -123,21 +123,11 @@ mod conformance_tests {
         let (m, counters) = CountingModule::new(MOD);
         let reg = ModuleRegistry::with_modules(vec![Box::new(m)]);
 
-        // 模拟 env 列入：把 id 塞进用户配置之外的最高优先级通道。
-        // 生产上 MISTTERM_DISABLE_MODULES 经 parse_env_disabled 进入 sync；
-        // 测试进程内不能可靠改 env（并行污染），用同构断言：env 集合合并后等价于
-        // 「无论 UI 配置如何，该 id 始终出现在 disabled 中」。
+        // 走真实 env 合并分支：生产上 MISTTERM_DISABLE_MODULES 的等价集合
+        // 经 sync_effective_disabled_with_env 并入 disabled（不污染进程 env）。
         let env_ids = env_set(&[MOD]);
-        let mut configured: Vec<String> = Vec::new(); // UI 开着（不列任何禁用）
-        // 生产合并：env ids 全量并入 disabled。
-        let mut merged: HashSet<String> = env_ids.iter().cloned().collect();
-        for id in &configured {
-            merged.insert(id.clone());
-        }
-        // 把合并结果作为 effective_disabled 反映回 registry：
-        // （真实现按 registry 内部 env 分支；测试走等价 UI 通道验证分发语义）
-        let ids: Vec<String> = merged.into_iter().collect();
-        reg.sync_effective_disabled(&ids);
+        let configured: Vec<String> = Vec::new(); // UI 开着（不列任何禁用）
+        reg.sync_effective_disabled_with_env(&configured, &env_ids);
         assert!(!reg.is_enabled(MOD));
 
         reg.on_output_line(&OutputLineCtx::pty("x"));
@@ -152,15 +142,10 @@ mod conformance_tests {
         let reg = ModuleRegistry::with_modules(vec![Box::new(m)]);
 
         // UI 配置为空（=模块开），但 env 集合含该 id：
-        // 生产合并规则（见 sync_effective_disabled / parse_env_disabled）：
-        // env 集合无条件并入 disabled，覆盖「UI 开」。
+        // 走真实合并分支——env 无条件并入 disabled，覆盖「UI 开」。
         let ui_says_enabled: Vec<String> = Vec::new();
         let env_ids = env_set(&[MOD]);
-        let mut effective: Vec<String> = ui_says_enabled;
-        for id in &env_ids {
-            effective.push(id.clone());
-        }
-        reg.sync_effective_disabled(&effective);
+        reg.sync_effective_disabled_with_env(&ui_says_enabled, &env_ids);
         assert!(!reg.is_enabled(MOD), "env 必须覆盖 UI 的开启状态");
 
         reg.on_output_line(&OutputLineCtx::pty("x"));
@@ -212,9 +197,12 @@ mod conformance_tests {
         let menu = reg.context_menu_items(&ip_menu);
         assert!(!menu.is_empty(), "启用时 IP 上下文必须贡献右键条目");
 
-        // 关：贡献清零。
+        // 关：贡献清零（仍用 IP 上下文断言——plain 上下文本就是空，会给出假通过）。
         reg.sync_effective_disabled(&[display_link::MODULE_ID.to_string()]);
-        assert!(reg.context_menu_items(&MenuCtx::plain()).is_empty());
+        assert!(
+            reg.context_menu_items(&ip_menu).is_empty(),
+            "禁用后 IP 上下文也不应贡献菜单"
+        );
     }
 
     /// 口径 3c：#121 cmd-audit-local 对照——关 → 本地无拦截；服务器审计通道不受影响。
