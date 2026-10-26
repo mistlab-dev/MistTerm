@@ -528,9 +528,10 @@ def main() -> int:
     if a.static_cli:
         if IS_WIN:
             raise SystemExit("--static-cli is Linux only")
-        global STATIC, PROGRAMS, PLATFORM_KEY, ASSET
+        global STATIC, PROGRAMS, PLATFORM_KEY, ASSET, CLI
         STATIC = True
         PROGRAMS = ["mist"]
+        CLI = "mist"
         PLATFORM_KEY = "linux-x86_64-cli"
         ASSET = "mist-cli-linux-x86_64.tar.gz"
         a.no_gui = True
