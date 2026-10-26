@@ -6,6 +6,10 @@
 //! 架构分层见 `mistterm` 库（`src/lib.rs`）；本文件仅为 GUI 入口。
 
 fn main() -> eframe::Result<()> {
+    // #150：panic hook 尽早安装——panic 信息 + 栈落到 logs/crash-reports/，
+    // 解决「Rust panic 不生成 .ips、会话日志无栈」的可观测性缺口。
+    mistterm::core::crash_reporter::install();
+
     // `Mist update`：桌面发行包不再附带命令行 `mist`（Linux #127）。无界面，和 `mist update` 同一套逻辑。
     dispatch_gui_update_command();
 
