@@ -2083,18 +2083,18 @@ pub fn form_labeled_control_row<R>(
     })
 }
 
-/// 步进器方钮 / 数字框的边长（约 22px）。
+/// 步进器方钮 / 数字框 / 步进器自身行高（20px）。
 ///
-/// 不是表单行高。行盒仍约 26px（与通用按钮同高），方钮在行内垂直居中。
-/// 按「行高」拿这个值做布局，会把同行的 26px 按钮裁进更矮的盒子。
-/// ± 与数字框：现代主题按钮 26 → 22，经典 28 也收到 22。
+/// 与 12px 表单标签对齐，取 #130 目标区间 20–22 的下沿，比标注截图里约 26px 的 ± 和数字框明显矮一档。
+/// 不是通用表单行高。表单行盒仍约 26px（与通用按钮同高），方钮在行内垂直居中。
+/// `form_control_row` 用 `set_height` 锁死行高；若把 26px 按钮塞进 20px 行盒会被裁切。
 pub fn form_stepper_control_h(theme: &Theme) -> f32 {
     stepper_control_h_from_btn(theme.size_control_btn_h())
 }
 
 /// 表单行盒高度（约 26px），与通用按钮同高。
 ///
-/// 步进器方钮用 [`form_stepper_control_h`]（约 22px），在这个行盒里垂直居中。
+/// 步进器方钮和数字框用 [`form_stepper_control_h`]（20px），在这个行盒里垂直居中。
 fn form_stepper_row_h(theme: &Theme) -> f32 {
     24.0_f32.max(theme.size_control_btn_h().min(26.0))
 }
@@ -4677,7 +4677,8 @@ fn form_stepper_value_field(
         .allocate_ui_at_rect(inner, |ui| {
             ui.set_min_size(inner.size());
             ui.set_max_size(inner.size());
-            let font = egui::FontId::proportional(theme.font_size_control_input());
+            // 数字与 ±、表单标签同一档（12px），不要用 13px 正文把矮框撑满。
+            let font = egui::FontId::proportional(theme.font_size_ui_control());
             ui.style_mut()
                 .text_styles
                 .insert(egui::TextStyle::Body, font.clone());
@@ -4791,6 +4792,7 @@ pub fn form_u32_stepper(
                     .horizontal_align(egui::Align::Center)
                     .vertical_align(egui::Align::Center)
                     .margin(egui::vec2(0.0, 0.0))
+                    .font(egui::FontId::proportional(theme.font_size_ui_control()))
                     .frame(false),
             )
         });
@@ -4922,6 +4924,7 @@ pub fn form_f32_stepper(
                     .horizontal_align(egui::Align::Center)
                     .vertical_align(egui::Align::Center)
                     .margin(egui::vec2(0.0, 0.0))
+                    .font(egui::FontId::proportional(theme.font_size_ui_control()))
                     .frame(false),
             )
         });
@@ -4968,9 +4971,13 @@ pub fn form_f32_stepper(
     response
 }
 
+/// 与 12px 标签齐的步进器边长。高于此的通用按钮收到 20px；更矮的按钮不再被步进器撑高。
 pub(crate) fn stepper_control_h_from_btn(control_btn_h: f32) -> f32 {
-    (control_btn_h - 4.0).clamp(20.0, 22.0)
+    FORM_STEPPER_CONTROL_H.min(control_btn_h)
 }
+
+/// #130：步进器方钮 / 数字框目标高度（规格 20–22px 的下沿）。
+const FORM_STEPPER_CONTROL_H: f32 = 20.0;
 
 fn format_stepper_f32(v: f32, suffix: &str) -> String {
     let num = if (v - v.round()).abs() < 0.05 {
@@ -4990,11 +4997,30 @@ mod tests {
     use super::stepper_control_h_from_btn;
 
     #[test]
-    fn stepper_is_one_step_shorter_than_the_control_button() {
-        assert_eq!(stepper_control_h_from_btn(26.0), 22.0);
-        assert_eq!(stepper_control_h_from_btn(28.0), 22.0);
+    fn stepper_control_is_20px_beside_12px_labels() {
+        assert_eq!(stepper_control_h_from_btn(26.0), 20.0);
+        assert_eq!(stepper_control_h_from_btn(28.0), 20.0);
         assert_eq!(stepper_control_h_from_btn(24.0), 20.0);
-        assert!(stepper_control_h_from_btn(26.0) < 26.0);
+        assert_eq!(stepper_control_h_from_btn(18.0), 18.0);
+        assert!(stepper_control_h_from_btn(26.0) < 22.0);
+        assert!((20.0..=22.0).contains(&stepper_control_h_from_btn(26.0)));
+    }
+
+    #[test]
+    fn stepper_control_matches_12px_labels_on_every_palette() {
+        for theme in [
+            crate::ui::theme::Theme::dark(),
+            crate::ui::theme::Theme::light(),
+            crate::ui::theme::Theme::ocean(),
+            crate::ui::theme::Theme::forest(),
+        ] {
+            let h = super::form_stepper_control_h(&theme);
+            assert_eq!(h, 20.0, "stepper side");
+            assert!(h + 4.0 <= theme.size_control_btn_h());
+            assert_eq!(theme.font_size_ui_control(), 12.0);
+            assert_eq!(theme.font_size_form_label(), theme.font_size_ui_control());
+            assert!(h < super::form_stepper_row_h(&theme));
+        }
     }
 
     #[test]

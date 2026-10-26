@@ -663,6 +663,7 @@ impl MistTermApp {
                 {
                     self.default_keepalive_enabled = ka;
                 }
+                // 窄弹窗里两个步进器挤在一行会折标签；间隔与连续无应答各占一行（#130）。
                 let every = crate::i18n::tr(ctx, "Ping every (s)", "每隔(秒)");
                 let give_up = crate::i18n::tr(ctx, "Give up after", "连续无应答");
                 let label_w = crate::ui::chrome::form_label_advance(ui, theme, every)

@@ -1179,6 +1179,7 @@ impl MistTermApp {
                                 crate::i18n::tr(ctx, "Enable keepalive pings", "空闲时发送心跳，防止被断开"),
                             );
                             if self.edit_session_keepalive_enabled {
+                                // 与偏好设置一致：两个步进器各占一行，窄表单不把标签折断（#130）。
                                 let every = crate::i18n::tr(ctx, "Interval (s)", "每隔(秒)");
                                 let give_up = crate::i18n::tr(ctx, "Max timeouts", "连续无应答");
                                 let label_w = crate::ui::chrome::form_label_advance(ui, theme, every)
