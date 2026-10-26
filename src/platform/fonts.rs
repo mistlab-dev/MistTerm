@@ -176,6 +176,8 @@ pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSele
     if let Some((bytes, index)) = load_selected_terminal_font(selection) {
         let mono_name = "mistterm-terminal-mono".to_string();
         // 行高已用 FACTOR 收紧，勿再大幅 y_offset，否则字下移而块光标仍贴格顶，看起来光标偏低。
+        // 字节已在 load_selected_terminal_font 里确认有轮廓且 ab_glyph 能解析。
+        // epaint 对解析失败的字体会在下一帧 Fonts::new 里 panic，set_fonts 本身只排队。
         let mut mono_data = egui::FontData::from_owned(bytes);
         mono_data.index = index;
         let mono_data = mono_data.tweak(egui::FontTweak {
@@ -248,6 +250,13 @@ pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSele
 
 fn load_selected_terminal_font(selection: &TerminalFontSelection) -> Option<(Vec<u8>, u32)> {
     if let Some(family) = selection.family_name() {
+        if super::font_enum::terminal_family_rejected(family) {
+            log::warn!(
+                "terminal font family {family:?} is unsupported (bitmap-only or non-outline); using system default"
+            );
+            DEFERRED_FAMILY_APPLY.store(false, Ordering::Release);
+            return load_terminal_preset_font(TerminalFontPreset::Default).map(|bytes| (bytes, 0));
+        }
         if !super::font_enum::system_mono_fonts_ready() {
             super::font_enum::start_system_mono_font_scan();
             DEFERRED_FAMILY_APPLY.store(true, Ordering::Release);
@@ -260,12 +269,18 @@ fn load_selected_terminal_font(selection: &TerminalFontSelection) -> Option<(Vec
         if let Some(face) = super::font_enum::resolve_mono_family(family) {
             match read_font_file_capped(&face.path) {
                 FontRead::Ok(bytes) => {
-                    log::info!(
-                        "Loaded terminal font family {family:?}: {} (face {})",
-                        face.path.display(),
-                        face.index
+                    if let Some(loaded) = accept_terminal_font(bytes, face.index) {
+                        log::info!(
+                            "Loaded terminal font family {family:?}: {} (face {})",
+                            face.path.display(),
+                            face.index
+                        );
+                        return Some(loaded);
+                    }
+                    log::warn!(
+                        "terminal font family {family:?} at {} cannot be rasterized by egui; using system default",
+                        face.path.display()
                     );
-                    return Some((bytes, face.index));
                 }
                 FontRead::TooLarge(len) => {
                     log::warn!(
@@ -296,6 +311,32 @@ enum FontRead {
     Failed(std::io::Error),
 }
 
+/// 有轮廓且 ab_glyph 能解析才采用。失败时调用方回退系统默认，避免 epaint panic。
+fn accept_terminal_font(bytes: Vec<u8>, index: u32) -> Option<(Vec<u8>, u32)> {
+    if terminal_font_bytes_usable(&bytes, index) {
+        Some((bytes, index))
+    } else {
+        None
+    }
+}
+
+fn terminal_font_bytes_usable(bytes: &[u8], index: u32) -> bool {
+    if !super::font_enum::font_bytes_have_outline(bytes, index) {
+        return false;
+    }
+    egui_can_parse_font(bytes, index)
+}
+
+/// 与 epaint `ab_glyph_font_from_font_data` 同一条解析路径。
+/// 解析失败时 epaint 会 `panic!("Error parsing {name:?} TTF/OTF font file")`。
+fn egui_can_parse_font(bytes: &[u8], index: u32) -> bool {
+    use ab_glyph::Font as _;
+    match ab_glyph::FontRef::try_from_slice_and_index(bytes, index) {
+        Ok(font) => font.units_per_em().is_some(),
+        Err(_) => false,
+    }
+}
+
 fn read_font_file_capped(path: &std::path::Path) -> FontRead {
     match std::fs::metadata(path) {
         Ok(meta) => {
@@ -324,7 +365,7 @@ fn load_terminal_preset_font(preset: TerminalFontPreset) -> Option<Vec<u8>> {
     };
     for path in candidates {
         match std::fs::read(&path) {
-            Ok(bytes) => {
+            Ok(bytes) if terminal_font_bytes_usable(&bytes, 0) => {
                 log::info!(
                     "Loaded terminal font preset {:?}: {}",
                     preset,
@@ -332,6 +373,10 @@ fn load_terminal_preset_font(preset: TerminalFontPreset) -> Option<Vec<u8>> {
                 );
                 return Some(bytes);
             }
+            Ok(_) => log::warn!(
+                "Skipped terminal font {} (no outline egui can rasterize)",
+                path.display()
+            ),
             Err(e) => log::debug!("Skipped terminal font {}: {e}", path.display()),
         }
     }
@@ -707,5 +752,52 @@ mod tests {
             FontRead::TooLarge(n) => assert_eq!(n, len),
             other => panic!("expected size rejection, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn bitmap_only_font_is_not_applied_and_real_outline_is() {
+        let bitmap = pack_sfnt(&[
+            (b"bdat", vec![1, 2, 3, 4]),
+            (b"bloc", vec![1, 2, 3, 4]),
+            (b"bhed", vec![1, 2, 3, 4]),
+        ]);
+        assert!(!terminal_font_bytes_usable(&bitmap, 0));
+        assert!(accept_terminal_font(bitmap, 0).is_none());
+
+        let geist = include_bytes!("../../assets/fonts/Geist-Regular.ttf");
+        assert!(terminal_font_bytes_usable(geist, 0));
+        assert!(accept_terminal_font(geist.to_vec(), 0).is_some());
+    }
+
+    #[test]
+    fn glyf_tag_without_a_parseable_face_falls_back() {
+        let bogus = pack_sfnt(&[(b"glyf", vec![0, 0, 0, 0])]);
+        assert!(super::super::font_enum::font_bytes_have_outline(&bogus, 0));
+        assert!(!terminal_font_bytes_usable(&bogus, 0));
+        assert!(accept_terminal_font(bogus, 0).is_none());
+    }
+
+    fn pack_sfnt(tables: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
+        let n = tables.len() as u16;
+        let mut out = Vec::new();
+        out.extend_from_slice(&0x00010000u32.to_be_bytes());
+        out.extend_from_slice(&n.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        let dir_at = out.len();
+        out.resize(dir_at + tables.len() * 16, 0);
+        for (i, (tag, data)) in tables.iter().enumerate() {
+            while out.len() % 4 != 0 {
+                out.push(0);
+            }
+            let offset = out.len() as u32;
+            let rec = dir_at + i * 16;
+            out[rec..rec + 4].copy_from_slice(tag.as_slice());
+            out[rec + 8..rec + 12].copy_from_slice(&offset.to_be_bytes());
+            out[rec + 12..rec + 16].copy_from_slice(&(data.len() as u32).to_be_bytes());
+            out.extend_from_slice(data);
+        }
+        out
     }
 }

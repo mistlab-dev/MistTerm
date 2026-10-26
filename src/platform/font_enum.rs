@@ -8,6 +8,11 @@
 //! [`list_system_mono_fonts`]（那条会等到扫完）。进程内只扫一次，新装字体要重启才出现。
 //!
 //! 序列化身份是家族名（见偏好里的 `terminal_font_family`），路径只在加载时解析。
+//!
+//! 没有 `glyf` / `CFF ` / `CFF2` 的脸不进列表。macOS 的 GB18030 Bitmap
+//! （`NISC18030.ttf`，表是 `bdat`/`bloc`/`bhed`）以及 `EBDT`/`EBLC`、`CBDT`/`CBLC`
+//! 都属于这类纯位图。家族名里带 "bitmap" 的同样丢掉。egui 用 ab_glyph 栅格化，
+//! 无轮廓字体放进 `set_fonts` 后会在下一帧 `Fonts::new` 里 panic。
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -237,9 +242,15 @@ fn fonts_from_fc_list(stdout: &str) -> Vec<SystemMonoFont> {
         };
         let style = parts.next().unwrap_or("");
         let weight = parts.next().unwrap_or("80");
-        let index = parts.next().unwrap_or("0");
+        let index = parse_fc_face_index(parts.next().unwrap_or("0"));
         let family = primary_family(family_field);
         if reject_family(&family) || !is_scalable_font_path(Path::new(file)) {
+            continue;
+        }
+        // `.ttf` 不代表有轮廓。读得到表目录且没有 glyf/CFF 时丢掉。
+        // 文件不存在则保留（单测假路径、以及 fontconfig 列了但还没落盘的项）。
+        if face_file_lacks_outline(Path::new(file), index) {
+            log::debug!("skipping non-outline font {file}");
             continue;
         }
         let css = fc_weight_to_css(parse_fc_weight(weight));
@@ -253,7 +264,7 @@ fn fonts_from_fc_list(stdout: &str) -> Vec<SystemMonoFont> {
         let cand = Candidate {
             family,
             path: PathBuf::from(file),
-            index: parse_fc_face_index(index),
+            index,
             rank,
         };
         consider_candidate(&mut best, cand);
@@ -361,6 +372,8 @@ fn is_static_file(path: &Path) -> bool {
     matches!(extension_lower(path).as_deref(), Some("ttf") | Some("otf"))
 }
 
+/// TrueType / OpenType 容器。扩展名过了还要看有没有轮廓表：macOS 的
+/// `NISC18030.ttf`（GB18030 Bitmap）就是没有 glyf/CFF 的纯位图。
 fn is_scalable_font_path(path: &Path) -> bool {
     matches!(
         extension_lower(path).as_deref(),
@@ -381,12 +394,18 @@ fn reject_family(name: &str) -> bool {
     }
     let lower = n.to_lowercase();
     lower.contains("emoji")
+        || lower.contains("bitmap")
         || lower.contains("lastresort")
         || lower.contains("last resort")
         || lower.contains("webdings")
         || lower.contains("wingdings")
         || lower.contains("zapf ding")
         || lower == "symbol"
+}
+
+/// 终端字体不能用的家族名。偏好里如果还存着 "GB18030 Bitmap"，应用时直接回退。
+pub(crate) fn terminal_family_rejected(name: &str) -> bool {
+    reject_family(name)
 }
 
 fn consider_candidate(best: &mut HashMap<String, Candidate>, cand: Candidate) {
@@ -548,6 +567,115 @@ struct ParsedFace {
     index: u32,
 }
 
+/// 有 `glyf` / `CFF ` / `CFF2` 才是 egui/ab_glyph 能栅格化的轮廓。
+/// 纯位图（Apple `bdat`/`bloc`/`bhed`、`EBDT`/`EBLC`、`CBDT`/`CBLC`）没有这些表。
+fn is_outline_table(tag: &[u8], len: u32) -> bool {
+    len > 0 && matches!(tag, b"glyf" | b"CFF " | b"CFF2")
+}
+
+fn outline_in_directory(dir: &[u8]) -> bool {
+    dir.chunks_exact(16).any(|rec| {
+        let len = u32::from_be_bytes([rec[12], rec[13], rec[14], rec[15]]);
+        is_outline_table(&rec[0..4], len)
+    })
+}
+
+/// 字节是 SFNT/TTC，且指定面有轮廓表。解析不了或没有轮廓都是 `false`
+/// （调用方不要把这份数据交给 egui）。
+pub(crate) fn font_bytes_have_outline(data: &[u8], index: u32) -> bool {
+    let Some(origin) = sfnt_face_origin(data, index) else {
+        return false;
+    };
+    let Some(dir) = sfnt_table_directory(data, origin) else {
+        return false;
+    };
+    outline_in_directory(dir)
+}
+
+fn sfnt_face_origin(data: &[u8], index: u32) -> Option<usize> {
+    if data.len() < 12 {
+        return None;
+    }
+    if &data[0..4] == b"ttcf" {
+        let n = u32::from_be_bytes(data.get(8..12)?.try_into().ok()?).min(32);
+        if index >= n {
+            return None;
+        }
+        let at = 12 + (index as usize) * 4;
+        let off = u32::from_be_bytes(data.get(at..at + 4)?.try_into().ok()?) as usize;
+        let header_end = off.checked_add(12)?;
+        let header = data.get(off..header_end)?;
+        if is_sfnt_version(&header[0..4]) {
+            Some(off)
+        } else {
+            None
+        }
+    } else if index == 0 && is_sfnt_version(&data[0..4]) {
+        Some(0)
+    } else {
+        None
+    }
+}
+
+fn sfnt_table_directory(data: &[u8], origin: usize) -> Option<&[u8]> {
+    let header_end = origin.checked_add(12)?;
+    let header = data.get(origin..header_end)?;
+    if !is_sfnt_version(&header[0..4]) {
+        return None;
+    }
+    let num_tables = u16::from_be_bytes(header.get(4..6)?.try_into().ok()?);
+    if num_tables == 0 || num_tables > 128 {
+        return None;
+    }
+    let dir_len = usize::from(num_tables) * 16;
+    let dir_end = header_end.checked_add(dir_len)?;
+    data.get(header_end..dir_end)
+}
+
+/// 文件能打开且表目录里没有轮廓时返回 `true`。打不开或不是 SFNT 时返回 `false`，
+/// 避免把 fontconfig 列出但本机读不到的路径（以及单测假路径）误删。
+fn face_file_lacks_outline(path: &Path, index: u32) -> bool {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    match file_face_has_outline(&mut file, index) {
+        Some(has_outline) => !has_outline,
+        None => false,
+    }
+}
+
+fn file_face_has_outline(file: &mut File, index: u32) -> Option<bool> {
+    let mut head = [0u8; 12];
+    file.seek(SeekFrom::Start(0)).ok()?;
+    file.read_exact(&mut head).ok()?;
+    let origin = if &head[0..4] == b"ttcf" {
+        let n = u32::from_be_bytes([head[8], head[9], head[10], head[11]]).min(32);
+        if index >= n {
+            return None;
+        }
+        u64::from(read_u32_at(file, 12 + u64::from(index) * 4)?)
+    } else if index == 0 && is_sfnt_version(&head[0..4]) {
+        0
+    } else {
+        return None;
+    };
+    if origin != 0 {
+        let mut ver = [0u8; 4];
+        read_exact_at(file, origin, &mut ver)?;
+        if !is_sfnt_version(&ver) {
+            return None;
+        }
+    }
+    let num_tables = read_u16_at(file, origin + 4)?;
+    if num_tables == 0 || num_tables > 128 {
+        return None;
+    }
+    let mut dir = vec![0u8; usize::from(num_tables) * 16];
+    read_exact_at(file, origin + 12, &mut dir)?;
+    Some(outline_in_directory(&dir))
+}
+
 fn inspect_font_file(path: &Path) -> Vec<ParsedFace> {
     let mut file = match File::open(path) {
         Ok(f) => f,
@@ -591,6 +719,10 @@ fn inspect_sfnt_at(file: &mut File, origin: u64, index: u32) -> Option<ParsedFac
     let mut name: Option<(u64, u32)> = None;
     let mut os2: Option<(u64, u32)> = None;
     let mut post: Option<(u64, u32)> = None;
+    // 纯位图没有轮廓，ab_glyph 解析失败时 epaint 会 panic。枚举阶段就丢掉。
+    if !outline_in_directory(&dir) {
+        return None;
+    }
     for rec in dir.chunks_exact(16) {
         let tag = &rec[0..4];
         let off = u32::from_be_bytes([rec[8], rec[9], rec[10], rec[11]]);
@@ -864,6 +996,165 @@ mod tests {
         let prop_faces = inspect_font_file(&prop_path);
         assert_eq!(prop_faces.len(), 1);
         assert!(!prop_faces[0].monospace);
+        assert!(font_bytes_have_outline(&mono, 0));
+    }
+
+    #[test]
+    fn bitmap_strike_sfnt_without_outline_is_rejected() {
+        let cases: &[(&str, &[&[u8; 4]])] = &[
+            ("NISC18030", &[b"bdat", b"bloc", b"bhed"]),
+            ("Embedded Bitmap", &[b"EBDT", b"EBLC"]),
+            ("Color Strike", &[b"CBDT", b"CBLC"]),
+        ];
+        let dir = tempfile::tempdir().unwrap();
+        for (i, (family, tags)) in cases.iter().enumerate() {
+            let bytes = build_bitmap_strike_sfnt(family, tags);
+            let path = dir.path().join(format!("bitmap-{i}.ttf"));
+            std::fs::write(&path, &bytes).unwrap();
+            assert!(
+                inspect_font_file(&path).is_empty(),
+                "{family} should not be enumerated"
+            );
+            assert!(!font_bytes_have_outline(&bytes, 0), "{family}");
+        }
+    }
+
+    #[test]
+    fn outline_plus_bitmap_tables_is_still_enumerated() {
+        let bytes = pack_sfnt(&[
+            (b"OS/2", os2_table(400, true)),
+            (b"bdat", vec![1, 2, 3, 4]),
+            (b"bloc", vec![1, 2, 3, 4]),
+            (b"glyf", vec![0, 0, 0, 0]),
+            (b"name", name_table("Strike Plus Outline", "Regular")),
+            (b"post", post_table(true)),
+        ]);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("StrikePlusOutline.ttf");
+        std::fs::write(&path, &bytes).unwrap();
+        let faces = inspect_font_file(&path);
+        assert_eq!(faces.len(), 1, "{faces:?}");
+        assert!(faces[0].monospace);
+        assert_eq!(faces[0].family, "Strike Plus Outline");
+        assert!(!terminal_family_rejected(&faces[0].family));
+        assert!(font_bytes_have_outline(&bytes, 0));
+    }
+
+    #[test]
+    fn cff_and_cff2_count_as_outline_without_glyf() {
+        for (version, tag, family) in [
+            (b"OTTO", b"CFF ", "Cff Mono"),
+            (b"\x00\x01\x00\x00", b"CFF2", "Cff2 Mono"),
+        ] {
+            let bytes = pack_sfnt_version(
+                version,
+                &[
+                    (b"OS/2", os2_table(400, true)),
+                    (tag, vec![1, 2, 3, 4]),
+                    (b"name", name_table(family, "Regular")),
+                    (b"post", post_table(true)),
+                ],
+            );
+            assert!(font_bytes_have_outline(&bytes, 0), "{family}");
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join(format!("{family}.otf"));
+            std::fs::write(&path, &bytes).unwrap();
+            let faces = inspect_font_file(&path);
+            assert_eq!(faces.len(), 1, "{family} {faces:?}");
+            assert_eq!(faces[0].family, family);
+        }
+    }
+
+    #[test]
+    fn empty_glyf_table_is_not_an_outline() {
+        let bytes = pack_sfnt(&[
+            (b"OS/2", os2_table(400, true)),
+            (b"glyf", Vec::new()),
+            (b"name", name_table("Empty Glyf", "Regular")),
+            (b"post", post_table(true)),
+        ]);
+        assert!(!font_bytes_have_outline(&bytes, 0));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("empty-glyf.ttf");
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(inspect_font_file(&path).is_empty());
+    }
+
+    #[test]
+    fn bitmap_family_name_is_rejected_even_with_outline() {
+        assert!(terminal_family_rejected("GB18030 Bitmap"));
+        assert!(terminal_family_rejected("  gb18030 bitmap  "));
+        assert!(!terminal_family_rejected("Bitstream Vera Sans Mono"));
+        assert!(!terminal_family_rejected("Menlo"));
+        assert!(!terminal_family_rejected("Andale Mono"));
+
+        let named = build_sfnt("GB18030 Bitmap", "Regular", true, 400);
+        assert!(font_bytes_have_outline(&named, 0));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("named-bitmap.ttf");
+        std::fs::write(&path, &named).unwrap();
+        let faces = inspect_font_file(&path);
+        assert!(
+            faces.iter().any(|f| f.monospace),
+            "outline face should still parse"
+        );
+        assert!(faces.iter().all(|f| terminal_family_rejected(&f.family)));
+
+        let sample = "\
+/usr/share/fonts/NISC18030.ttf\tGB18030 Bitmap\tRegular\t80\t0
+/usr/share/fonts/BitstreamVeraSansMono.ttf\tBitstream Vera Sans Mono\tRegular\t80\t0
+";
+        let fonts = fonts_from_fc_list(sample);
+        assert!(fonts.iter().all(|f| f.family != "GB18030 Bitmap"));
+        assert!(fonts.iter().any(|f| f.family == "Bitstream Vera Sans Mono"));
+    }
+
+    #[test]
+    fn fc_list_skips_bitmap_file_but_keeps_outline_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let bitmap = dir.path().join("NISC18030.ttf");
+        let outline = dir.path().join("TestMono.ttf");
+        std::fs::write(
+            &bitmap,
+            build_bitmap_strike_sfnt("NISC18030", &[b"bdat", b"bloc", b"bhed"]),
+        )
+        .unwrap();
+        std::fs::write(&outline, build_sfnt("Test Mono", "Regular", true, 400)).unwrap();
+        let sample = format!(
+            "{}\tNISC18030\tRegular\t80\t0\n{}\tTest Mono\tRegular\t80\t0\n",
+            bitmap.display(),
+            outline.display()
+        );
+        let fonts = fonts_from_fc_list(&sample);
+        assert!(fonts.iter().all(|f| f.family != "NISC18030"));
+        assert!(fonts.iter().any(|f| f.family == "Test Mono"));
+    }
+
+    #[test]
+    fn collection_keeps_only_the_outline_face() {
+        let bitmap = build_bitmap_strike_sfnt("Strike Face", &[b"bdat", b"bloc", b"bhed"]);
+        let outline = build_sfnt("Outline Face", "Regular", true, 400);
+        let ttc = build_ttc(&[bitmap, outline]);
+        assert!(!font_bytes_have_outline(&ttc, 0));
+        assert!(font_bytes_have_outline(&ttc, 1));
+        assert!(!font_bytes_have_outline(&ttc, 2));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("faces.ttc");
+        std::fs::write(&path, &ttc).unwrap();
+        let faces = inspect_font_file(&path);
+        assert_eq!(faces.len(), 1, "{faces:?}");
+        assert_eq!(faces[0].family, "Outline Face");
+        assert_eq!(faces[0].index, 1);
+
+        let sample = format!(
+            "{path}\tStrike Face\tRegular\t80\t0\n{path}\tOutline Face\tRegular\t80\t1\n",
+            path = path.display()
+        );
+        let fonts = fonts_from_fc_list(&sample);
+        assert!(fonts.iter().all(|f| f.family != "Strike Face"));
+        let kept = fonts.iter().find(|f| f.family == "Outline Face").unwrap();
+        assert_eq!(kept.index, 1);
     }
 
     #[test]
@@ -1025,13 +1316,69 @@ mod tests {
         let name = name_table(family, subfamily);
         let os2 = os2_table(weight, mono);
         let post = post_table(mono);
-        pack_sfnt(&[(b"OS/2", os2), (b"name", name), (b"post", post)])
+        // 占位 glyf：枚举只认「有轮廓表」。没有这张表会被当成纯位图丢掉。
+        pack_sfnt(&[
+            (b"OS/2", os2),
+            (b"glyf", vec![0, 0, 0, 0]),
+            (b"name", name),
+            (b"post", post),
+        ])
+    }
+
+    fn build_bitmap_strike_sfnt(family: &str, tags: &[&[u8; 4]]) -> Vec<u8> {
+        let mut tables = vec![
+            (b"OS/2", os2_table(400, true)),
+            (b"name", name_table(family, "Regular")),
+            (b"post", post_table(true)),
+        ];
+        for tag in tags {
+            tables.push((*tag, vec![1, 2, 3, 4]));
+        }
+        pack_sfnt(&tables)
+    }
+
+    /// 表偏移改成从 TTC 文件头算起，和真集合字体一样。
+    fn build_ttc(faces: &[Vec<u8>]) -> Vec<u8> {
+        let mut out = Vec::new();
+        out.extend_from_slice(b"ttcf");
+        out.extend_from_slice(&0x00010000u32.to_be_bytes());
+        out.extend_from_slice(&(faces.len() as u32).to_be_bytes());
+        let dir_at = out.len();
+        out.resize(dir_at + faces.len() * 4, 0);
+        for (i, face) in faces.iter().enumerate() {
+            let face_origin = out.len() as u32;
+            out[dir_at + i * 4..dir_at + i * 4 + 4].copy_from_slice(&face_origin.to_be_bytes());
+            let mut face = face.clone();
+            rebase_sfnt_offsets(&mut face, face_origin);
+            out.extend_from_slice(&face);
+        }
+        out
+    }
+
+    fn rebase_sfnt_offsets(face: &mut [u8], face_origin: u32) {
+        if face.len() < 12 || !is_sfnt_version(&face[0..4]) {
+            return;
+        }
+        let n = u16::from_be_bytes([face[4], face[5]]) as usize;
+        for i in 0..n {
+            let rec = 12 + i * 16;
+            if face.len() < rec + 16 {
+                return;
+            }
+            let off =
+                u32::from_be_bytes([face[rec + 8], face[rec + 9], face[rec + 10], face[rec + 11]]);
+            face[rec + 8..rec + 12].copy_from_slice(&face_origin.saturating_add(off).to_be_bytes());
+        }
     }
 
     fn pack_sfnt(tables: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
+        pack_sfnt_version(b"\x00\x01\x00\x00", tables)
+    }
+
+    fn pack_sfnt_version(version: &[u8; 4], tables: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
         let n = tables.len() as u16;
         let mut out = Vec::new();
-        out.extend_from_slice(&0x00010000u32.to_be_bytes());
+        out.extend_from_slice(version);
         out.extend_from_slice(&n.to_be_bytes());
         out.extend_from_slice(&0u16.to_be_bytes());
         out.extend_from_slice(&0u16.to_be_bytes());
