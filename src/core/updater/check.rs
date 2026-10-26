@@ -405,7 +405,9 @@ mod tests {
             InstallPlan::Manual { reason: ManualReason::DisabledByPublisher, .. }
         ));
         let mut m = manifest();
-        m.platforms.get_mut("macos-universal").unwrap().auto_update = true;
+        let key = super::super::install_kind::macos_asset_key(std::env::consts::ARCH)
+            .expect("this test host has a published macOS arch");
+        m.platforms.get_mut(key).unwrap().auto_update = true;
         assert!(matches!(plan_install(&m, &kind, None, |_| true), InstallPlan::Auto { .. }));
         // 目录不可写：给手动下载的提示。
         assert!(matches!(

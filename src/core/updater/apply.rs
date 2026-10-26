@@ -40,8 +40,15 @@ pub fn program_files() -> &'static [&'static str] {
     } else if cfg!(target_env = "musl") {
         // 静态命令行版：包里只有 `mist`，也只替换 `mist`（同目录即使有桌面版 `Mist` 也不碰）。
         &["mist"]
+    } else if cfg!(target_os = "linux") {
+        // 桌面版压缩包只含 GUI `Mist`（#127）。命令行用静态包 `mist-cli-linux-*`，
+        // 不再把一份 glibc `mist` 打进桌面包。同目录里留下的旧 `mist` 不会被这次更新替换，也不会因此失败。
+        &["Mist"]
+    } else if cfg!(target_os = "macos") {
+        // `.app` 一键更新走 `install_mac_app`，不走这份名单。完整 tar 里的裸文件是 `Mist` + `mist-cli`。
+        &["Mist", "mist-cli"]
     } else {
-        &["Mist", "mist"]
+        &["Mist"]
     }
 }
 
@@ -180,7 +187,7 @@ pub fn apply_update(
     Ok(outcome)
 }
 
-/// macOS：把签名的 `Mist-macos-universal-update.tar.gz`（只含 Mist.app）解到 .app 旁边的临时目录，
+/// macOS：把签名的 `Mist-macos-<arch>-update.tar.gz`（只含 Mist.app）解到 .app 旁边的临时目录，
 /// `codesign --verify` 通过后整包替换（旧包先改名 .bak，失败就改回来）。
 pub fn install_mac_app(archive: &Path, app: &Path) -> Result<(), UpdateError> {
     let parent = app
@@ -206,11 +213,9 @@ pub fn install_mac_app(archive: &Path, app: &Path) -> Result<(), UpdateError> {
         Ok(s) => return cleanup(Err(UpdateError::Install(format!("tar exited with {s}")))),
         Err(e) => return cleanup(Err(e)),
     }
-    let new_app = [staging.join("Mist.app"), staging.join("Mist-macos-universal").join("Mist.app")]
-        .into_iter()
-        .find(|p| p.join("Contents").is_dir());
-    let Some(new_app) = new_app else {
-        return cleanup(Err(UpdateError::Install("Mist.app missing from update package".into())));
+    let new_app = match find_staged_mac_app(&staging) {
+        Ok(p) => p,
+        Err(e) => return cleanup(Err(e)),
     };
     let verified = std::process::Command::new("/usr/bin/codesign")
         .args(["--verify", "--deep", "--strict"])
@@ -232,6 +237,43 @@ pub fn install_mac_app(archive: &Path, app: &Path) -> Result<(), UpdateError> {
     }
     let _ = std::fs::remove_dir_all(&backup);
     cleanup(Ok(()))
+}
+
+/// 更新包里的 `Mist.app`：顶层，或 `Mist-macos-<arch>/Mist.app`（含旧的 universal 前缀）。
+pub fn find_staged_mac_app(staging: &Path) -> Result<PathBuf, UpdateError> {
+    let top = staging.join("Mist.app");
+    if top.join("Contents").is_dir() {
+        return Ok(top);
+    }
+    let rd = std::fs::read_dir(staging).map_err(|e| UpdateError::Install(format!("staging: {e}")))?;
+    let mut found: Option<PathBuf> = None;
+    for ent in rd {
+        let ent = ent.map_err(|e| UpdateError::Install(format!("staging: {e}")))?;
+        let Some(name) = ent.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if !is_mac_update_dirname(&name) {
+            continue;
+        }
+        let app = ent.path().join("Mist.app");
+        if !app.join("Contents").is_dir() {
+            continue;
+        }
+        if found.is_some() {
+            return Err(UpdateError::Install(
+                "update package contains more than one Mist.app".into(),
+            ));
+        }
+        found = Some(app);
+    }
+    found.ok_or_else(|| UpdateError::Install("Mist.app missing from update package".into()))
+}
+
+fn is_mac_update_dirname(name: &str) -> bool {
+    matches!(
+        name,
+        "Mist-macos-aarch64" | "Mist-macos-x86_64" | "Mist-macos-universal"
+    )
 }
 
 /// 从压缩包更新 `dir` 中的程序文件（只更新目录里已有的程序，以及当前正在运行的这个）。
@@ -846,23 +888,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let install = dir.path().join("app");
         std::fs::create_dir_all(&install).unwrap();
-        fake_program(&install.join("Mist"), "Mist", "1.0.0");
-        fake_program(&install.join("mist"), "mist", "1.0.0");
+        let primary = program_files()[0];
+        fake_program(&install.join(primary), primary, "1.0.0");
 
-        let tgz = dir.path().join("Mist-linux-x86_64.tar.gz");
-        make_tar_gz(
-            &tgz,
-            &[
-                ("Mist-linux-x86_64/Mist", &script("Mist", "2.0.0")),
-                ("Mist-linux-x86_64/mist", &script("mist", "2.0.0")),
-            ],
-        );
-        install_from_archive(&tgz, KIND_TAR_GZ, &install, &install.join("mist"), "2.0.0").unwrap();
-        smoke_test(&install.join("Mist"), "2.0.0").unwrap();
-        smoke_test(&install.join("mist"), "2.0.0").unwrap();
+        let tgz = dir.path().join("pkg.tar.gz");
+        let member = format!("top/{primary}");
+        let body = script(primary, "2.0.0");
+        let files = [(member.as_str(), body.as_slice())];
+        make_tar_gz(&tgz, &files);
+        install_from_archive(&tgz, KIND_TAR_GZ, &install, &install.join(primary), "2.0.0").unwrap();
+        smoke_test(&install.join(primary), "2.0.0").unwrap();
         // install_from_archive 以当前程序版本作为备份版本号。
         assert_eq!(backup_version(&install).as_deref(), Some(crate::core::updater::APP_VERSION));
-        smoke_test(&install.join(BACKUP_DIR).join("mist"), "1.0.0").unwrap();
+        smoke_test(&install.join(BACKUP_DIR).join(primary), "1.0.0").unwrap();
         // 没有留下临时文件
         let leftovers: Vec<_> = std::fs::read_dir(&install)
             .unwrap()
@@ -876,14 +914,46 @@ mod tests {
         let bak = install.join(BACKUP_DIR);
         let work = dir.path().join("work");
         std::fs::create_dir_all(&work).unwrap();
-        let mut items = Vec::new();
-        for n in ["Mist", "mist"] {
-            std::fs::copy(bak.join(n), work.join(n)).unwrap();
-            items.push((n.to_string(), work.join(n)));
-        }
-        install_files(&install, &items, "2.0.0", "1.0.0").unwrap();
-        smoke_test(&install.join("mist"), "1.0.0").unwrap();
+        std::fs::copy(bak.join(primary), work.join(primary)).unwrap();
+        install_files(&install, &[(primary.to_string(), work.join(primary))], "2.0.0", "1.0.0").unwrap();
+        smoke_test(&install.join(primary), "1.0.0").unwrap();
         assert_eq!(backup_version(&install).as_deref(), Some("2.0.0"));
+    }
+
+    #[cfg(all(target_os = "linux", not(target_env = "musl")))]
+    #[test]
+    fn linux_gui_archive_leaves_sibling_mist_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let install = dir.path().join("app");
+        std::fs::create_dir_all(&install).unwrap();
+        fake_program(&install.join("Mist"), "Mist", "1.0.0");
+        fake_program(&install.join("mist"), "mist", "1.0.0");
+        let tgz = dir.path().join("Mist-linux-x86_64.tar.gz");
+        make_tar_gz(&tgz, &[("Mist-linux-x86_64/Mist", &script("Mist", "2.0.0"))]);
+        install_from_archive(&tgz, KIND_TAR_GZ, &install, &install.join("Mist"), "2.0.0").unwrap();
+        smoke_test(&install.join("Mist"), "2.0.0").unwrap();
+        smoke_test(&install.join("mist"), "1.0.0").unwrap();
+        assert!(!install.join(BACKUP_DIR).join("mist").exists());
+        let err = install_from_archive(&tgz, KIND_TAR_GZ, &install, &install.join("mist"), "2.0.0").unwrap_err();
+        assert!(matches!(err, UpdateError::NotAutoInstallable(_)), "{err:?}");
+    }
+
+    #[test]
+    fn staged_mac_app_accepts_single_arch_prefixes() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["Mist-macos-aarch64", "Mist-macos-x86_64", "Mist-macos-universal"] {
+            let staging = dir.path().join(format!("stage-{name}"));
+            std::fs::create_dir_all(staging.join(name).join("Mist.app").join("Contents")).unwrap();
+            let got = find_staged_mac_app(&staging).unwrap();
+            assert_eq!(got.file_name().unwrap(), "Mist.app");
+            assert!(got.starts_with(staging.join(name)), "{}", got.display());
+        }
+        let top = dir.path().join("top");
+        std::fs::create_dir_all(top.join("Mist.app").join("Contents")).unwrap();
+        assert_eq!(find_staged_mac_app(&top).unwrap().file_name().unwrap(), "Mist.app");
+        let bad = dir.path().join("bad");
+        std::fs::create_dir_all(bad.join("not-mist").join("Mist.app").join("Contents")).unwrap();
+        assert!(find_staged_mac_app(&bad).is_err());
     }
 
     #[test]
@@ -891,20 +961,24 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let install = dir.path().join("app");
         std::fs::create_dir_all(&install).unwrap();
-        fake_program(&install.join("mist"), "mist", "1.0.0");
+        let primary = program_files()[0];
+        fake_program(&install.join(primary), primary, "1.0.0");
         let tgz = dir.path().join("p.tar.gz");
         // 包里的版本号与清单不符 → 冒烟验证失败
-        make_tar_gz(&tgz, &[("x/mist", &script("mist", "1.5.0"))]);
-        let err = install_from_archive(&tgz, KIND_TAR_GZ, &install, &install.join("mist"), "2.0.0").unwrap_err();
+        let member = format!("x/{primary}");
+        let body = script(primary, "1.5.0");
+        let files = [(member.as_str(), body.as_slice())];
+        make_tar_gz(&tgz, &files);
+        let err = install_from_archive(&tgz, KIND_TAR_GZ, &install, &install.join(primary), "2.0.0").unwrap_err();
         assert!(matches!(err, UpdateError::SmokeTest(_)), "{err:?}");
-        smoke_test(&install.join("mist"), "1.0.0").unwrap();
+        smoke_test(&install.join(primary), "1.0.0").unwrap();
         assert!(!install.join(BACKUP_DIR).exists());
         let names: Vec<_> = std::fs::read_dir(&install)
             .unwrap()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().to_string())
             .collect();
-        assert_eq!(names, vec!["mist".to_string()]);
+        assert_eq!(names, vec![primary.to_string()]);
     }
 
     #[test]
@@ -912,13 +986,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let install = dir.path().join("app");
         std::fs::create_dir_all(&install).unwrap();
-        fake_program(&install.join("Mist"), "Mist", "1.0.0");
-        fake_program(&install.join("mist"), "mist", "1.0.0");
+        let primary = program_files()[0];
+        fake_program(&install.join(primary), primary, "1.0.0");
         let tgz = dir.path().join("p.tar.gz");
-        make_tar_gz(&tgz, &[("x/mist", &script("mist", "2.0.0"))]);
-        let err = install_from_archive(&tgz, KIND_TAR_GZ, &install, &install.join("mist"), "2.0.0").unwrap_err();
+        make_tar_gz(&tgz, &[("x/README.md", b"no program")]);
+        let err = install_from_archive(&tgz, KIND_TAR_GZ, &install, &install.join(primary), "2.0.0").unwrap_err();
         assert!(matches!(err, UpdateError::Install(_)));
-        smoke_test(&install.join("Mist"), "1.0.0").unwrap();
+        smoke_test(&install.join(primary), "1.0.0").unwrap();
     }
 
     #[test]

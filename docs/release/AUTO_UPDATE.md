@@ -6,11 +6,11 @@
 
 | 平台 / 安装方式 | 行为 |
 | --- | --- |
-| Linux 压缩包（`Mist` + `mist` 在同一个可写目录） | 提醒 + 一键更新（下载 → 校验 → 替换 → 提示重启） |
+| Linux 桌面压缩包（目录里的 `Mist`；不再附带 `mist`） | 提醒 + 一键更新，只替换 `Mist`。终端里也可以 `Mist update` |
 | Linux 命令行静态版（`mist-cli-linux-*.tar.gz` / 官网 `/install`） | `mist update` 一键更新，只换 `mist`（见 [CLI_STATIC.md](CLI_STATIC.md)） |
 | Windows 安装版（Inno Setup，目录里有 `unins000.exe`） | 提醒 + "安装并重启"：静默运行新安装程序，装完自动重新打开 |
-| Windows 便携版（zip） | 提醒 + 一键更新（同 Linux） |
-| macOS | **只提醒**，给出手动更新步骤和下载页（安装包已签名并公证；一键更新和改 Bundle ID 是 P5） |
+| Windows 便携版（zip） | 提醒 + 一键更新（替换 `Mist.exe`、`mist-cli.exe`、`mist.cmd`） |
+| macOS 单架构 `.app`（arm64 或 x86_64） | 一键更新对应架构的 `Mist-macos-<arch>-update.tar.gz`（已签名）。已安装的 universal 包要先手动换一次单架构 dmg |
 | 包管理器 / 源码构建 / 无写权限目录 / glibc 太旧 | 只提醒，并说明原因和该怎么做（例如 `sudo mist update`） |
 
 - 默认：**自动检查开、自动下载开、从不自动重启**。发现新版先在后台下好；安装仍需用户点按钮，装失败再引导打开下载页。偏好设置 → 通用 里可关。
@@ -29,7 +29,11 @@
 | `latest.json.minisig` | 清单的 minisign 签名 |
 | `SHA256SUMS` / `SHA256SUMS.minisig` | 所有文件的校验和及其签名（给手动下载的用户核对用） |
 | `mist-cli-linux-x86_64.tar.gz` / `mist-cli-linux-aarch64.tar.gz` | 命令行静态版（不依赖 glibc），清单键名 `linux-x86_64-cli` / `linux-aarch64-cli` |
-| `Mist-macos-universal-update.tar.gz` | macOS 一键更新专用：只含已签名的 `Mist-macos-universal/Mist.app`（约 47 MB），清单键名 `macos-universal`；完整的 `Mist-macos-universal.tar.gz`（另带裸 `Mist` / `mist-cli`）只给手动下载 |
+| `Mist-macos-aarch64-update.tar.gz` | Apple Silicon 一键更新：只含已签名的 `Mist-macos-aarch64/Mist.app`。清单键 `macos-aarch64`。主下载是同名 `.dmg`（不是这个更新包，也不是 universal） |
+| `Mist-macos-x86_64-update.tar.gz` | Intel Mac 一键更新，清单键 `macos-x86_64`。对应 `.dmg` 是可选下载 |
+| `Mist-linux-x86_64.tar.gz` | Linux 桌面，清单键 `linux-x86_64`。只含 `Mist`，不含 `mist` |
+
+不再发布 `Mist-macos-universal.dmg` / `.tar.gz` / `-update.tar.gz`，清单里也没有 `macos-universal`。文件名和清单键一一对应，`SHA256SUMS` 与 `latest.json.minisig` 的签法不变。体积和一次手动切换见 [PACKAGE_SIZE.md](PACKAGE_SIZE.md)。
 
 客户端按顺序取清单（`src/core/updater/mod.rs` 的 `STABLE_MANIFEST_URLS`）：
 
@@ -72,7 +76,7 @@
 
 ```
 preflight（版本号一致性 + 清单脚本自测）
-  → platform ×3（构建、打包；正式构建会检查公钥）
+  → platform ×4（Linux、Windows、macOS arm64、macOS x86_64；正式构建会检查公钥）
   + cli-linux ×2（命令行静态版 x86_64 / aarch64：确认是静态程序，六个发行版冒烟测试，打包）
   → manifest（生成 SHA256SUMS + latest.json，不需要任何密钥）
   → sign（environment: release；**无人工审批**；用 MINISIGN_SECRET_KEY 签名，再用仓库公钥验一遍）
@@ -126,6 +130,6 @@ python3 scripts/gen-update-manifest.py --self-test
 
 ## 8. 已知限制 / 后续
 
-- macOS 一键更新、改 Bundle ID（`com.mist.term` → 正式 ID）属于 P5，现在只提醒。
+- 改 Bundle ID（`com.mist.term` → 正式 ID）仍未做。macOS 一键更新按单架构更新包进行；universal 安装需要先手动换一次对应架构的 dmg。
 - Windows 安装包没有代码签名证书（未购买），SmartScreen 可能提示；静默安装路径未在真实 Windows 上跑过 CI 之外的测试。
 - 镜像上传未开通（见第 5 节第 7 条）。

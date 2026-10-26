@@ -59,7 +59,7 @@ impl InstallKind {
             InstallKind::WindowsInstaller { .. } => {
                 (std::env::consts::ARCH == "x86_64").then_some(platform_keys::WINDOWS_X86_64_SETUP)
             }
-            InstallKind::MacApp { .. } | InstallKind::MacBinary { .. } => Some(platform_keys::MACOS_UNIVERSAL),
+            InstallKind::MacApp { .. } | InstallKind::MacBinary { .. } => macos_asset_key(std::env::consts::ARCH),
             _ => None,
         }
     }
@@ -78,12 +78,21 @@ impl InstallKind {
 /// Linux 压缩包对应的清单条目。
 ///
 /// 静态（musl）构建只有命令行 `mist`，只从只含 CLI 的包更新，不会去拉桌面版的包；
-/// glibc 构建（桌面版压缩包里的 `Mist` / `mist`）照旧用 `linux-x86_64`。
+/// glibc 桌面版只有 `Mist`，用 `linux-x86_64`。
 pub fn linux_asset_key(static_cli: bool, arch: &str) -> Option<&'static str> {
     match (static_cli, arch) {
         (true, "x86_64") => Some(platform_keys::LINUX_X86_64_CLI),
         (true, "aarch64") => Some(platform_keys::LINUX_AARCH64_CLI),
         (false, "x86_64") => Some(platform_keys::LINUX_X86_64),
+        _ => None,
+    }
+}
+
+/// macOS 一键更新清单键：按**当前二进制**的架构选择，不再使用 universal。
+pub fn macos_asset_key(arch: &str) -> Option<&'static str> {
+    match arch {
+        "aarch64" => Some(platform_keys::MACOS_AARCH64),
+        "x86_64" => Some(platform_keys::MACOS_X86_64),
         _ => None,
     }
 }
@@ -210,6 +219,13 @@ mod tests {
         assert_eq!(linux_asset_key(true, "x86_64"), Some("linux-x86_64-cli"));
         assert_eq!(linux_asset_key(true, "aarch64"), Some("linux-aarch64-cli"));
         assert_eq!(linux_asset_key(true, "riscv64"), None);
+    }
+
+    #[test]
+    fn macos_asset_keys_are_single_arch() {
+        assert_eq!(macos_asset_key("aarch64"), Some("macos-aarch64"));
+        assert_eq!(macos_asset_key("x86_64"), Some("macos-x86_64"));
+        assert_eq!(macos_asset_key("universal"), None);
     }
 
     #[test]

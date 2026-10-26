@@ -69,7 +69,10 @@ pub mod platform_keys {
     pub const LINUX_AARCH64_CLI: &str = "linux-aarch64-cli";
     pub const WINDOWS_X86_64_SETUP: &str = "windows-x86_64-setup";
     pub const WINDOWS_X86_64_PORTABLE: &str = "windows-x86_64-portable";
-    pub const MACOS_UNIVERSAL: &str = "macos-universal";
+    /// Apple Silicon 主下载 / 一键更新。清单里的文件是 `Mist-macos-aarch64-update.tar.gz`。
+    pub const MACOS_AARCH64: &str = "macos-aarch64";
+    /// Intel Mac 可选下载 / 一键更新。
+    pub const MACOS_X86_64: &str = "macos-x86_64";
 }
 
 pub const KIND_TAR_GZ: &str = "tar.gz";
@@ -221,10 +224,16 @@ pub(crate) mod tests {
       "sha256": "{sha}", "min_glibc": "2.39", "auto_update": true,
       "urls": ["https://github.com/mistlab-dev/MistTerm/releases/download/v{version}/Mist-linux-x86_64.tar.gz"]
     }},
-    "macos-universal": {{
-      "kind": "tar.gz", "name": "Mist-macos-universal.tar.gz", "size": 456,
+    "macos-aarch64": {{
+      "kind": "tar.gz", "name": "Mist-macos-aarch64-update.tar.gz", "size": 456,
       "sha256": "{sha}", "auto_update": false,
-      "urls": ["https://github.com/mistlab-dev/MistTerm/releases/download/v{version}/Mist-macos-universal.tar.gz"],
+      "urls": ["https://github.com/mistlab-dev/MistTerm/releases/download/v{version}/Mist-macos-aarch64-update.tar.gz"],
+      "manual_url": "https://mistlab.dev/download.html"
+    }},
+    "macos-x86_64": {{
+      "kind": "tar.gz", "name": "Mist-macos-x86_64-update.tar.gz", "size": 456,
+      "sha256": "{sha}", "auto_update": false,
+      "urls": ["https://github.com/mistlab-dev/MistTerm/releases/download/v{version}/Mist-macos-x86_64-update.tar.gz"],
       "manual_url": "https://mistlab.dev/download.html"
     }}
   }}
@@ -242,7 +251,9 @@ pub(crate) mod tests {
         let linux = m.asset(platform_keys::LINUX_X86_64).unwrap();
         assert_eq!(linux.min_glibc.as_deref(), Some("2.39"));
         assert!(linux.auto_update);
-        assert!(!m.asset(platform_keys::MACOS_UNIVERSAL).unwrap().auto_update);
+        assert!(!m.asset(platform_keys::MACOS_AARCH64).unwrap().auto_update);
+        assert!(!m.asset(platform_keys::MACOS_X86_64).unwrap().auto_update);
+        assert!(m.asset("macos-universal").is_none());
         assert_eq!(
             m.expected_trusted_comment(),
             "mistterm stable 1.2.0 2026-10-05T12:00:00Z"

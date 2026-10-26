@@ -6,6 +6,9 @@
 //! 架构分层见 `mistterm` 库（`src/lib.rs`）；本文件仅为 GUI 入口。
 
 fn main() -> eframe::Result<()> {
+    // `Mist update`：桌面发行包不再附带命令行 `mist`（Linux #127）。无界面，和 `mist update` 同一套逻辑。
+    dispatch_gui_update_command();
+
     // `Mist --version`：不启动界面，只打印版本号（更新器用它做冒烟验证，安装脚本也可用）。
     if std::env::args().skip(1).any(|a| a == "--version" || a == "-V") {
         mistterm::platform::print_version_line("Mist");
@@ -50,4 +53,35 @@ fn main() -> eframe::Result<()> {
 
     mistterm::platform::run_gui();
     Ok(())
+}
+
+/// `Mist update` / `Mist self-update`。不是这条命令就直接返回，继续走 GUI。
+fn dispatch_gui_update_command() {
+    let mut args = std::env::args().skip(1);
+    let Some(head) = args.next() else {
+        return;
+    };
+    if head != "update" && head != "self-update" {
+        return;
+    }
+    let mut parsed = mistterm::cli::update::UpdateArgs::default();
+    for a in args {
+        match a.as_str() {
+            "--check" => parsed.check = true,
+            "--json" => parsed.json = true,
+            "--yes" | "-y" => parsed.yes = true,
+            "--rollback" => parsed.rollback = true,
+            "--allow-downgrade" => parsed.allow_downgrade = true,
+            "--help" | "-h" => {
+                eprintln!("Usage: Mist update [--check] [--json] [--yes] [--rollback]");
+                std::process::exit(0);
+            }
+            other => {
+                eprintln!("unknown argument for Mist update: {other}");
+                eprintln!("Usage: Mist update [--check] [--json] [--yes] [--rollback]");
+                std::process::exit(2);
+            }
+        }
+    }
+    std::process::exit(mistterm::cli::update::run(&parsed));
 }
