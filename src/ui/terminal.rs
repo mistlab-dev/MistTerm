@@ -780,11 +780,11 @@ impl TerminalView {
 
     #[inline]
     fn is_terminal_token_char(ch: char) -> bool {
-        ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '\\' | '@' | '+')
+        ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '\\' | '@' | '+' | '=')
     }
 
     /// 双击时按终端 token 规则选中一个词元。
-    /// 字母数字与 `_-.\/@+` 算同一个词。冒号是边界（`host:path`、提示符末尾的 `:` 不会被带上）。
+    /// 字母数字与 `_-.\/@+=` 算同一个词（含 base64 padding）。冒号是边界（`host:path`、提示符末尾的 `:` 不会被带上）。
     fn terminal_token_range_at(line: &str, col: usize) -> Option<(usize, usize)> {
         let chars: Vec<char> = line.chars().collect();
         if chars.is_empty() {
@@ -5064,6 +5064,28 @@ mod selection_extend_tests {
         let colon = line.find(':').unwrap();
         let (start, end) = TerminalView::terminal_token_range_at(line, colon).unwrap();
         assert_eq!(&line[start..end], "root@host");
+    }
+
+    #[test]
+    fn double_click_includes_base64_padding() {
+        let line = "echo YWJjZA== done";
+        let letter = line.find('Y').unwrap();
+        let (start, end) = TerminalView::terminal_token_range_at(line, letter).unwrap();
+        assert_eq!(&line[start..end], "YWJjZA==");
+
+        let pad = line.find('=').unwrap();
+        let (start, end) = TerminalView::terminal_token_range_at(line, pad).unwrap();
+        assert_eq!(&line[start..end], "YWJjZA==");
+        let (start, end) = TerminalView::terminal_token_range_at(line, pad + 1).unwrap();
+        assert_eq!(&line[start..end], "YWJjZA==");
+
+        let line_single = "tok YQ= end";
+        let letter = line_single.find('Y').unwrap();
+        let (start, end) = TerminalView::terminal_token_range_at(line_single, letter).unwrap();
+        assert_eq!(&line_single[start..end], "YQ=");
+        let pad = line_single.find('=').unwrap();
+        let (start, end) = TerminalView::terminal_token_range_at(line_single, pad).unwrap();
+        assert_eq!(&line_single[start..end], "YQ=");
     }
 
     #[test]
