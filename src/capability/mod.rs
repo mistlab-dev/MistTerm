@@ -262,6 +262,17 @@ impl ModuleRegistry {
     /// 2. 用户在偏好设置中显式配置的 `configured_disabled` 生效；
     /// 3. 若均未配置，则遵循模块本身的 `enabled_by_default()`。
     pub fn sync_effective_disabled(&self, configured_disabled: &[String]) {
+        self.sync_effective_disabled_with_env(configured_disabled, &Self::parse_env_disabled());
+    }
+
+    /// 合并的显式入口（#123 review：测试需在不污染进程 env 的前提下走真实 env 分支）。
+    /// `env_disabled` 为 `MISTTERM_DISABLE_MODULES` 的等价集合（生产由 parse_env_disabled 产生）。
+    /// 优先级：env_disabled > configured_disabled > enabled_by_default。
+    pub fn sync_effective_disabled_with_env(
+        &self,
+        configured_disabled: &[String],
+        env_disabled: &HashSet<String>,
+    ) {
         let mut new_disabled = HashSet::new();
         // 1. 默认关闭项
         for m in &self.modules {
@@ -274,8 +285,8 @@ impl ModuleRegistry {
             new_disabled.insert(id.clone());
         }
         // 3. 环境变量强制禁用（覆盖开启）
-        for id in Self::parse_env_disabled() {
-            new_disabled.insert(id);
+        for id in env_disabled {
+            new_disabled.insert(id.clone());
         }
 
         let changed = {
