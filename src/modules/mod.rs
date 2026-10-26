@@ -6,6 +6,8 @@
 pub mod cmd_audit_local;
 pub mod output_trigger;
 pub mod display_link;
+#[cfg(test)]
+pub mod conformance;
 
 use std::sync::{Arc, Mutex};
 
@@ -21,6 +23,16 @@ pub fn builtin_modules(cmd_audit_engine: Arc<Mutex<CmdAuditEngine>>) -> Vec<Box<
         Box::new(cmd_audit_local::CmdAuditLocalModule::new(cmd_audit_engine)),
         Box::new(output_trigger::OutputTriggerModule::new()),
         Box::new(display_link::DisplayLinkModule::new()),
+    ]
+}
+
+/// 测试辅助（#123）：当前已注册的官方模块 id 列表。
+#[cfg(test)]
+pub fn builtin_modules_names() -> Vec<&'static str> {
+    vec![
+        cmd_audit_local::MODULE_ID,
+        output_trigger::MODULE_ID,
+        display_link::MODULE_ID,
     ]
 }
 
