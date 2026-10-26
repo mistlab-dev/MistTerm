@@ -6,6 +6,7 @@
 pub mod cmd_audit_local;
 pub mod output_trigger;
 pub mod display_link;
+pub mod session_import;
 #[cfg(test)]
 pub mod conformance;
 
@@ -23,6 +24,7 @@ pub fn builtin_modules(cmd_audit_engine: Arc<Mutex<CmdAuditEngine>>) -> Vec<Box<
         Box::new(cmd_audit_local::CmdAuditLocalModule::new(cmd_audit_engine)),
         Box::new(output_trigger::OutputTriggerModule::new()),
         Box::new(display_link::DisplayLinkModule::new()),
+        Box::new(session_import::SessionImportModule::new()),
     ]
 }
 
@@ -33,6 +35,7 @@ pub fn builtin_modules_names() -> Vec<&'static str> {
         cmd_audit_local::MODULE_ID,
         output_trigger::MODULE_ID,
         display_link::MODULE_ID,
+        session_import::MODULE_ID,
     ]
 }
 
@@ -52,11 +55,13 @@ mod tests {
                 cmd_audit_local::MODULE_ID.to_string(),
                 output_trigger::MODULE_ID.to_string(),
                 display_link::MODULE_ID.to_string(),
+                session_import::MODULE_ID.to_string(),
             ]
         );
         assert!(reg.is_enabled(cmd_audit_local::MODULE_ID));
         assert!(reg.is_enabled(output_trigger::MODULE_ID));
         assert!(reg.is_enabled(display_link::MODULE_ID));
+        assert!(reg.is_enabled(session_import::MODULE_ID));
         assert!(ModuleRegistry::builtin().snapshot().is_empty());
 
         // PTY 行只出 Notify。display-link 不在这条来源上装饰。
