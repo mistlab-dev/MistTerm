@@ -1223,7 +1223,9 @@ pub fn session_tab_chip(
     let label_color = if active {
         theme.text_primary()
     } else if theme.uses_modern_palette() {
-        theme.text_secondary().gamma_multiply(0.55)
+        // #130 实机巡检：暗夜未选中 0.55 仅 ~3.07:1，小字偏暗；抬到 0.72
+        // （仍低于选中态 text_primary），晨曦/浅色路径不动。
+        theme.text_secondary().gamma_multiply(0.72)
     } else {
         theme.text_tertiary()
     };

@@ -472,30 +472,17 @@ impl Sidebar {
                                     .size(hint_font)
                                     .color(hint_color),
                                 );
-                                ui.horizontal(|ui| {
-                                    ui.spacing_mut().item_spacing.x = 4.0;
-                                    let px = hint_font;
-                                    let (r, _) = ui.allocate_exact_size(
-                                        egui::vec2(px, px),
-                                        egui::Sense::hover(),
-                                    );
-                                    crate::ui::icons::paint_icon(
-                                        ui,
-                                        r,
-                                        crate::ui::icons::IconId::Plus,
-                                        hint_color,
-                                        px,
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(crate::i18n::tr(
-                                            &ctx,
-                                            "Click to create one",
-                                            "点击 创建",
-                                        ))
-                                        .size(hint_font)
-                                        .color(hint_color),
-                                    );
-                                });
+                                ui.add_space(8.0);
+                                // #130 实机巡检：筛选「在线」空态只剩淡提示，+ 热区不可见；
+                                // 改为主按钮式「新建会话」，保证可发现、可点。
+                                let new_btn = crate::ui::chrome::panel_action_primary_button(
+                                    ui,
+                                    theme,
+                                    &crate::i18n::tr(&ctx, "New session", "新建会话",).to_string(),
+                                );
+                                if new_btn.clicked() {
+                                    create_session_clicked = true;
+                                }
                             } else {
                                 ui.label(
                                     egui::RichText::new(crate::i18n::tr(
