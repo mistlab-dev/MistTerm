@@ -17,6 +17,7 @@ pub mod keys;
 pub mod lock;
 pub mod manifest;
 pub mod paths;
+pub mod ping;
 pub mod state;
 pub mod verify;
 

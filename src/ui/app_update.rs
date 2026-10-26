@@ -315,6 +315,14 @@ impl MistTermApp {
             .name("mist-update-check".into())
             .spawn(move || {
                 let mut state = UpdateState::load();
+                // #149：匿名使用统计 ping，搭版本检查的车（同线程、失败静默）。
+                let cid_new = state.client_id.is_none();
+                let cid = updater::ping::ensure_client_id(&mut state);
+                updater::ping::send_startup_ping(&cid);
+                if cid_new {
+                    // 首次生成的 cid 立即落盘：即便本次检查失败，实例 ID 也保持稳定。
+                    let _ = state.save();
+                }
                 let opts = CheckOptions::for_current_build(channel);
                 let result = updater::check_for_update(&opts, &mut state);
                 if result.is_ok() {
