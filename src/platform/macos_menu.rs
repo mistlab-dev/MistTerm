@@ -542,6 +542,7 @@ impl NativeAppMenu {
         ctx: &eframe::egui::Context,
         lang: UiLanguage,
         ssh_import_enabled: bool,
+        foreign_import_enabled: bool,
         sidebar_collapsed: bool,
         activity_rail_collapsed: bool,
         window_maximized: bool,
@@ -562,6 +563,8 @@ impl NativeAppMenu {
         }
         let l = menu::labels(lang);
         let _ = self.import_ssh.set_enabled(ssh_import_enabled);
+        // foreign 只依赖 session-import 模块开关，与 ssh_config 文件是否存在解耦（#139 review 问题 2）。
+        let _ = self.import_foreign.set_enabled(foreign_import_enabled);
         let _ = self.sftp_panel.set_checked(show_sftp_panel);
         let _ = self.fragment_panel.set_checked(show_fragment_panel);
         let _ = self.monitor_panel.set_checked(show_monitor_panel);

@@ -255,14 +255,23 @@ mod conformance_tests {
         assert_eq!(reg.on_before_send(&dangerous), SendVerdict::Allow);
     }
 
-    /// 口径 3d（占位）：#122 session-import 尚未迁移（无钩子纯工具模块）。
-    /// 迁移 PR 合并时在此追加：关 → 导入入口不可用；开 → 导入成功。
+    /// 口径 3d：#122 session-import 对照——无钩子纯工具模块。
+    /// 关 → Host 导入入口不可用（import_enabled=false）；开 → 可用。导入逻辑本体在 core 不变。
     #[test]
-    fn migration_122_session_import_pending() {
-        // 迁移完成前此用例是显式的待办标记，避免清单被静默遗忘。
-        assert!(
-            !crate::modules::builtin_modules_names().contains(&"session-import"),
-            "session-import 已迁移？请补对照断言并删除本占位"
-        );
+    fn migration_122_session_import_conformance() {
+        use crate::capability::MenuCtx;
+        use crate::modules::session_import::{self, SessionImportModule};
+        let reg = ModuleRegistry::with_modules(vec![Box::new(SessionImportModule::new())]);
+
+        // 开：入口可用；无钩子模块对行事件/审计零产出（纯工具）。
+        assert!(SessionImportModule::import_enabled(&reg));
+        assert!(reg
+            .on_output_line(&OutputLineCtx::pty("anything"))
+            .is_empty());
+        assert!(reg.context_menu_items(&MenuCtx::plain()).is_empty());
+
+        // 关：入口 gating 关闭（已导入会话数据保留——数据在 session_manager，不经本模块）。
+        reg.sync_effective_disabled(&[session_import::MODULE_ID.to_string()]);
+        assert!(!SessionImportModule::import_enabled(&reg));
     }
 }
