@@ -562,6 +562,8 @@ impl NativeAppMenu {
         }
         let l = menu::labels(lang);
         let _ = self.import_ssh.set_enabled(ssh_import_enabled);
+        // import_foreign 的 enabled 随调用方传入（调用处已与 session-import 模块开关组合，#139 review）。
+        let _ = self.import_foreign.set_enabled(ssh_import_enabled);
         let _ = self.sftp_panel.set_checked(show_sftp_panel);
         let _ = self.fragment_panel.set_checked(show_fragment_panel);
         let _ = self.monitor_panel.set_checked(show_monitor_panel);

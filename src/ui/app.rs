@@ -2343,6 +2343,10 @@ impl MistTermApp {
     }
 
     fn open_ssh_import_dialog(&mut self, ctx: &egui::Context) {
+        // session-import 模块兜底（#122 review）：菜单/原生菜单/状态栏等任何入口统一挡住。
+        if !crate::modules::session_import::SessionImportModule::import_enabled(&self.module_registry) {
+            return;
+        }
         if !self.ssh_config_path.exists() {
             self.notify_auto(format!(
                 "{} {}",
@@ -2430,6 +2434,10 @@ impl MistTermApp {
     }
 
     pub(crate) fn open_foreign_import_dialog(&mut self) {
+        // session-import 模块兜底（#122 review）：统一入口挡住，避免新增 UI 绕过。
+        if !crate::modules::session_import::SessionImportModule::import_enabled(&self.module_registry) {
+            return;
+        }
         let existing = self.session_manager.list_sessions().to_vec();
         self.foreign_import_dialog.open_dialog(&existing);
     }
@@ -7978,14 +7986,30 @@ impl MistTermApp {
                         "{}…",
                         crate::i18n::menu::labels(crate::i18n::language(ui.ctx())).import_ssh
                     );
-                    if crate::ui::chrome::popup_menu_button(ui, &theme, &import_label).clicked() {
+                    // session-import 模块 gating（#122 review 问题 2）：状态栏右键与应用菜单同口径。
+                    let session_import_enabled = crate::modules::session_import::SessionImportModule::import_enabled(&self.module_registry);
+                    if crate::ui::chrome::popup_menu_button_enabled(
+                        ui,
+                        &theme,
+                        &import_label,
+                        session_import_enabled && self.ssh_config_path.exists(),
+                    )
+                    .clicked()
+                    {
                         self.open_ssh_import_dialog(ui.ctx());
                     }
                     let foreign_label = format!(
                         "{}…",
                         crate::i18n::menu::labels(crate::i18n::language(ui.ctx())).import_foreign
                     );
-                    if crate::ui::chrome::popup_menu_button(ui, &theme, &foreign_label).clicked() {
+                    if crate::ui::chrome::popup_menu_button_enabled(
+                        ui,
+                        &theme,
+                        &foreign_label,
+                        session_import_enabled,
+                    )
+                    .clicked()
+                    {
                         self.open_foreign_import_dialog();
                     }
                 });
@@ -8175,7 +8199,9 @@ impl MistTermApp {
             menu.sync(
                 ctx,
                 self.app_settings.ui_language,
-                self.ssh_config_path.exists(),
+                self.ssh_config_path.exists()
+                    && crate::modules::session_import::SessionImportModule::import_enabled(&self.module_registry),
+                self.sidebar_collapsed,
                 self.sidebar_collapsed,
                 self.activity_rail_collapsed,
                 frame.info().window_info.maximized,
