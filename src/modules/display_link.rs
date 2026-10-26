@@ -25,6 +25,32 @@ pub const ACTION_BROWSER_OPEN: &str = "browser-open";
 /// 右键「新开连接到此 IP」。只在命中 IP（`copy-or-connect`）时贡献。
 pub const ACTION_NEW_CONNECTION: &str = "display-link.new-connection";
 
+
+/// 系统二进制目录前缀（#140）：`ps`/CMD 列里的这些路径是「程序本身」，
+/// 不是用户可操作的文件/目录，画链接是噪声。
+/// 只拦「整个路径落在系统目录下」的绝对路径；`/etc` `/var` `/opt` 下的配置/数据不拦。
+const SYSTEM_BIN_PREFIXES: [&str; 8] = [
+    "/usr/bin/", "/usr/sbin/", "/usr/local/bin/", "/usr/local/sbin/",
+    "/bin/", "/sbin/", "/lib/", "/lib64/",
+];
+
+/// `text` 是否为系统二进制路径（或恰为目录名本身，如 `/usr/sbin`）。
+/// 仅作用于 path 类命中；相对路径（`./` `~/`）不受影响。
+fn is_system_binary_path(text: &str) -> bool {
+    if !text.starts_with('/') {
+        return false;
+    }
+    if SYSTEM_BIN_PREFIXES.iter().any(|p| text.starts_with(p)) {
+        return true;
+    }
+    // 目录名本身（无尾随段，如 `/usr/sbin`、`/bin`）也不链。
+    matches!(
+        text,
+        "/usr/bin" | "/usr/sbin" | "/usr/local/bin" | "/usr/local/sbin" | "/bin" | "/sbin"
+            | "/lib" | "/lib64"
+    )
+}
+
 /// 从输出行中识别出的可点击片段。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DisplayLink {
@@ -89,6 +115,8 @@ struct RawPattern {
 struct CompiledPattern {
     id: String,
     action: DisplayLinkAction,
+    /// path / errno / ip / url（#140：path 类命中做系统路径过滤）
+    category: String,
     priority: u8,
     regex: regex::Regex,
 }
@@ -126,6 +154,7 @@ impl DisplayLinkEngine {
                 Some(CompiledPattern {
                     id: p.id,
                     action,
+                    category: p.category,
                     priority: p.priority,
                     regex,
                 })
@@ -143,6 +172,7 @@ impl DisplayLinkEngine {
     ///
     /// 区间裁决：同一区间被多条规则命中时，取 priority 最小（最优先）的；
     /// 已占用区间不再接受新链接（先到先得，按 priority 顺序扫描）。
+    /// 系统二进制路径（`/usr/sbin/sshd` 等）不产链接（#140）。
     fn scan(&self, line: &str) -> Vec<DisplayLink> {
         if self.patterns.is_empty() || line.is_empty() || line.len() > 8192 {
             return Vec::new();
@@ -156,6 +186,9 @@ impl DisplayLinkEngine {
                     None => continue,
                 };
                 if end <= start {
+                    continue;
+                }
+                if p.category == "path" && is_system_binary_path(&text) {
                     continue;
                 }
                 if occupied.iter().any(|(s, e)| start < *e && end > *s) {
@@ -446,4 +479,52 @@ mod tests {
             })
             .is_empty());
     }
+
+    // --- #140 系统二进制路径不产链接 ---
+
+    #[test]
+    fn system_binary_paths_are_not_linked() {
+        let engine = DisplayLinkEngine::new();
+        // ps 输出典型行：CMD 列的系统二进制路径不画下划线（#140）。
+        let line = "/usr/sbin/sshd  /usr/sbin/crond  /usr/bin/python";
+        assert!(engine.scan(line).is_empty());
+
+        // 目录名本身也不链。
+        assert!(engine.scan("/usr/sbin /bin /lib64").is_empty());
+
+        // 系统目录下的配置/数据（/etc /var /opt）不受影响，仍可点。
+        let cfg = engine.scan("see /etc/nginx/nginx.conf and /var/log/app/error.log");
+        assert!(cfg.iter().any(|l| l.text == "/etc/nginx/nginx.conf"));
+        assert!(cfg.iter().any(|l| l.text == "/var/log/app/error.log"));
+
+        // 用户/项目路径不受影响。
+        let user = engine.scan("edit /home/tian/app/config.toml and /opt/svc/run.sh");
+        assert!(user.iter().any(|l| l.text == "/home/tian/app/config.toml"));
+        assert!(user.iter().any(|l| l.text == "/opt/svc/run.sh"));
+
+        // 相对路径与 ~ 路径不在过滤范围（deny-list 只拦绝对路径）。
+        let rel = engine.scan("run ~/bin/tool and /usr/local/bin/node");
+        assert!(rel.iter().any(|l| l.text == "~/bin/tool"));
+        assert!(!rel.iter().any(|l| l.text == "/usr/local/bin/node"));
+    }
+
+    #[test]
+    fn is_system_binary_path_unit() {
+        assert!(is_system_binary_path("/usr/sbin/sshd"));
+        assert!(is_system_binary_path("/usr/bin/python3.11"));
+        assert!(is_system_binary_path("/bin/bash"));
+        assert!(is_system_binary_path("/usr/local/bin/node"));
+        assert!(is_system_binary_path("/usr/sbin"));
+        assert!(!is_system_binary_path("/etc/nginx/nginx.conf"));
+        assert!(!is_system_binary_path("/var/log/app"));
+        assert!(!is_system_binary_path("/home/tian/app"));
+        assert!(!is_system_binary_path("./sbin/tool"));
+        assert!(!is_system_binary_path("./usr/local/tool"));
+        assert!(!is_system_binary_path("~/bin/tool"));
+        assert!(!is_system_binary_path("~/bin/tool"));
+        assert!(!is_system_binary_path("/usr/share/doc")); // /usr/ 前缀不拦，拦的是 /usr/bin|sbin
+    }
+
+
+
 }
