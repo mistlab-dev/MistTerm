@@ -21,6 +21,9 @@ pub struct UpdateState {
     /// 已经装好、等重启后生效的版本。
     #[serde(default)]
     pub installed_pending_restart: Option<String>,
+    /// 匿名统计用的随机实例 ID（#149）：首次生成后持久化，不含任何身份信息。
+    #[serde(default)]
+    pub client_id: Option<String>,
 }
 
 impl UpdateState {
