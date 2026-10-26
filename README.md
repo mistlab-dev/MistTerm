@@ -33,8 +33,9 @@
 | Platform | Package |
 |----------|---------|
 | **Windows** | `MistTerm-*-windows-x86_64-setup.exe` (installer) or `.zip` |
-| **macOS** | `Mist-macos-universal.tar.gz` / `.dmg` when published |
-| **Linux** | `Mist-linux-x86_64.tar.gz` |
+| **macOS (Apple Silicon, primary)** | `Mist-macos-aarch64.dmg` (or `.tar.gz`) |
+| **macOS (Intel, optional)** | `Mist-macos-x86_64.dmg` (or `.tar.gz`) |
+| **Linux desktop** | `Mist-linux-x86_64.tar.gz` (GUI `Mist` only) |
 | **Linux CLI only** (static, any distro, x86_64 / ARM64; 1.2.1+) | `mist-cli-linux-x86_64.tar.gz` / `mist-cli-linux-aarch64.tar.gz`, or `curl -fsSL https://mistlab.dev/install \| bash` |
 
 **From source** (developers):
@@ -77,7 +78,7 @@ Community: [Discussions](https://github.com/mistlab-dev/MistTerm/discussions) ·
 
 ### Updates & privacy
 
-Mist checks for a new version shortly after it starts and then once a day. It only tells you about it: installing waits for your click, and Mist never restarts on its own. On Linux and Windows you can update with one click; on macOS Mist shows you how to update by hand. From the terminal: `mist update --check`, `mist update` (same as `mist self-update`), and `mist update --rollback`.
+Mist checks for a new version shortly after it starts and then once a day. It only tells you about it: installing waits for your click, and Mist never restarts on its own. Linux, Windows, and current single-arch macOS builds can update with one click. An older universal Mac app needs one manual download of `Mist-macos-aarch64.dmg` or `Mist-macos-x86_64.dmg`. From the terminal: `mist update` (static CLI) or `Mist update` (desktop binary); also `--check` and `--rollback`.
 
 The check is a single request to mistlab.dev and GitHub that carries only the Mist version and system type, with no account or device information. As with any website, those servers can see your IP address. Updates are signed and checked before anything is installed. To turn checks off, clear **Preferences → General → Check for updates automatically**, or set `MIST_DISABLE_UPDATE_CHECK=1`, which also blocks manual checks. Details: [docs/release/AUTO_UPDATE.md](docs/release/AUTO_UPDATE.md).
 
@@ -117,8 +118,9 @@ Issues and PRs: [github.com/mistlab-dev/MistTerm](https://github.com/mistlab-dev
 | 平台 | 包名 |
 |------|------|
 | **Windows** | `MistTerm-*-windows-x86_64-setup.exe`（安装包）或 `.zip` 便携版 |
-| **macOS** | `Mist-macos-universal.tar.gz` / 发布页中的 `.dmg` |
-| **Linux** | `Mist-linux-x86_64.tar.gz` |
+| **macOS（Apple Silicon，主下载）** | `Mist-macos-aarch64.dmg`（或 `.tar.gz`） |
+| **macOS（Intel，可选）** | `Mist-macos-x86_64.dmg`（或 `.tar.gz`） |
+| **Linux 桌面** | `Mist-linux-x86_64.tar.gz`（只有 GUI `Mist`） |
 | **Linux 只要命令行**（静态版，任意发行版，x86_64 / ARM64；1.2.1 起） | `mist-cli-linux-x86_64.tar.gz` / `mist-cli-linux-aarch64.tar.gz`，或 `curl -fsSL https://mistlab.dev/install \| bash` |
 
 **从源码构建**（开发者）：
@@ -161,7 +163,7 @@ GUI 二进制 `Mist` **不带任何参数**运行即直接拉起桌面界面（v
 
 ### 更新与隐私
 
-Mist 启动后过一会儿检查一次有没有新版本，之后每天检查一次。有新版本只会提醒你，装不装由你点按钮决定，Mist 也不会自己重启。Linux 和 Windows 可以一键更新；macOS 上会告诉你怎么手动更新。命令行里可以用 `mist update --check`、`mist update`（也可以写 `mist self-update`）和 `mist update --rollback`（退回上一个版本）。
+Mist 启动后过一会儿检查一次有没有新版本，之后每天检查一次。有新版本只会提醒你，装不装由你点按钮决定，Mist 也不会自己重启。Linux、Windows 和现在的 macOS 单架构包可以一键更新。以前装的 universal 版需要先手动换一次 `Mist-macos-aarch64.dmg` 或 `Mist-macos-x86_64.dmg`。终端里静态命令行用 `mist update`，桌面程序用 `Mist update`；也可以加 `--check`，或用 `--rollback` 退回上一版。
 
 检查更新只会向 mistlab.dev 和 GitHub 发一次请求，只带 Mist 版本号和系统类型，不带账号或设备信息。和访问任何网站一样，对方能看到你的 IP 地址。新版本都有签名，安装前会先核对。不想检查的话，可以在 **偏好设置 → 常规** 里取消「自动检查更新」；或者设置环境变量 `MIST_DISABLE_UPDATE_CHECK=1`，这样连手动检查也会关掉。详见 [docs/release/AUTO_UPDATE.md](docs/release/AUTO_UPDATE.md)。
 

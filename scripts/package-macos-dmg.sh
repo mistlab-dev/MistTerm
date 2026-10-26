@@ -3,7 +3,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP_PATH="${1:-$ROOT/target/release/Mist.app}"
-DMG_PATH="${2:-$ROOT/dist/Mist-macos-universal.dmg}"
+DMG_PATH="${2:-$ROOT/dist/Mist-macos-aarch64.dmg}"
 
 [[ -d "$APP_PATH" ]] || { echo "missing app bundle: $APP_PATH" >&2; exit 1; }
 

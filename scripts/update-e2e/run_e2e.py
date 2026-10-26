@@ -5,8 +5,9 @@ Everything runs on this machine; nothing is published and no real server is
 contacted. The script:
 
 1. generates a throw-away TEST minisign key pair (never trusted by release builds);
-2. builds `Mist` + `mist` twice with `--features update-test`
+2. builds the release programs twice with `--features update-test`
    (MIST_BUILD_VERSION=1.91.0 = "new", 1.90.0 = "old"), embedding the test public key;
+   Linux desktop is GUI-only (`Mist`); Windows still builds `mist-cli.exe`;
 3. packages "new" exactly like the release workflow (tar.gz on Linux, portable zip on
    Windows), writes `latest.json` with scripts/gen-update-manifest.py and signs it;
 4. serves a fake release server on 127.0.0.1 (static files + an "SPA" route that
@@ -47,9 +48,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 IS_WIN = os.name == "nt"
 OLD, NEW, STALE = "1.90.0", "1.91.0", "1.80.0"
 EXE = ".exe" if IS_WIN else ""
-# Release layout: the CLI is `mist-cli.exe` + `mist.cmd` on Windows (Mist.exe/mist.exe collide on NTFS).
-PROGRAMS = ["Mist.exe", "mist-cli.exe", "mist.cmd"] if IS_WIN else ["Mist", "mist"]
-CLI = "mist-cli.exe" if IS_WIN else "mist"
+# Release layout: Windows is Mist.exe + mist-cli.exe + mist.cmd (NTFS is case-insensitive).
+# Linux desktop tarball is GUI-only (`Mist`); headless update is `Mist update` (#127).
+PROGRAMS = ["Mist.exe", "mist-cli.exe", "mist.cmd"] if IS_WIN else ["Mist"]
+CLI = "mist-cli.exe" if IS_WIN else "Mist"
 PLATFORM_KEY = "windows-x86_64-portable" if IS_WIN else "linux-x86_64"
 ASSET = "Mist-windows-x86_64.zip" if IS_WIN else "Mist-linux-x86_64.tar.gz"
 EXIT_AVAILABLE = 10
@@ -126,12 +128,12 @@ def build_variant(version: str, pubkey: str, out_dir: pathlib.Path, profile: str
     # Build the GUI first and copy it out: on Windows Mist.exe and mist.exe are the same path.
     run(cargo_cmd(profile, "--bin", "Mist"), env=env)
     shutil.copy2(target_dir / f"Mist{EXE}", out_dir / f"Mist{EXE}")
+    if not IS_WIN:
+        # Linux desktop archive does not ship a glibc `mist` (#127).
+        return
     run(cargo_cmd(profile, "--bin", "mist"), env=env)
-    if IS_WIN:
-        shutil.copy2(target_dir / "mist.exe", out_dir / "mist-cli.exe")
-        (out_dir / "mist.cmd").write_text('@echo off\r\n"%~dp0mist-cli.exe" %*\r\n', encoding="ascii")
-    else:
-        shutil.copy2(target_dir / "mist", out_dir / "mist")
+    shutil.copy2(target_dir / "mist.exe", out_dir / "mist-cli.exe")
+    (out_dir / "mist.cmd").write_text('@echo off\r\n"%~dp0mist-cli.exe" %*\r\n', encoding="ascii")
 
 
 def package_new(new_dir: pathlib.Path, dist: pathlib.Path) -> pathlib.Path:

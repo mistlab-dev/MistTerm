@@ -135,4 +135,4 @@ mist sop extract [-n <N>] [-t <title>]  从 exec-history.jsonl 提炼 Markdown �
 - `ssh2` 是同步阻塞模型:交互 shell 需要非阻塞轮询 + 单独 stdin 线程;批量执行已有 `run_batch_parallel` 的线程模型可套。
 - device_key 派生若依赖 GUI 运行环境(如 keyring 回退),无 GUI 的服务器上要确认 `security::device_key` 路径可独立工作 —— P1 开工前先验证。
 - Windows:`mist ssh` 的 raw mode 用 crossterm 跨平台没问题;`~.` escape 行为按 OpenSSH 惯例实现。
-- 命名冲突（已处理）: Windows 不区分 `Mist`/`mist` 大小写。发行包使用 `Mist.exe`（GUI）+ `mist-cli.exe`（CLI）+ `mist.cmd` 启动器；Unix 仍为 `Mist` + `mist`。
+- 命名冲突（已处理）: Windows 不区分 `Mist`/`mist` 大小写。发行包使用 `Mist.exe`（GUI）+ `mist-cli.exe`（CLI）+ `mist.cmd` 启动器。macOS 完整 tar 里是 `Mist` + `mist-cli`（大小写不敏感）。Linux 桌面包只有 `Mist`；命令行是单独的静态包 `mist-cli-linux-*` 里的 `mist`。

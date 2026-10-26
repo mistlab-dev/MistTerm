@@ -53,10 +53,22 @@ def platform_files(version: str) -> dict[str, dict]:
             "auto_update": True,
         },
         "windows-x86_64-portable": {"name": "Mist-windows-x86_64.zip", "kind": "zip", "auto_update": True},
-        # macOS: app-only update archive (signed Mist.app under Mist-macos-universal/, ~47 MB);
-        # the full Mist-macos-universal.tar.gz (+ bare Mist / mist-cli, ~141 MB) stays a manual download.
+        # macOS one-click archives are app-only and single-arch (#127).
+        # Primary download is Mist-macos-aarch64.dmg; x86_64 is optional.
+        # The full Mist-macos-<arch>.tar.gz (+ bare Mist / mist-cli) stays a manual download.
         # auto_update is switched on by --macos-auto-update.
-        "macos-universal": {"name": "Mist-macos-universal-update.tar.gz", "kind": "tar.gz", "auto_update": False},
+        "macos-aarch64": {
+            "name": "Mist-macos-aarch64-update.tar.gz",
+            "kind": "tar.gz",
+            "auto_update": False,
+            "macos": True,
+        },
+        "macos-x86_64": {
+            "name": "Mist-macos-x86_64-update.tar.gz",
+            "kind": "tar.gz",
+            "auto_update": False,
+            "macos": True,
+        },
     }
 
 
@@ -77,7 +89,7 @@ def read_sha256sums(path: pathlib.Path) -> dict[str, str]:
     return sums
 
 
-def max_glibc_in_tarball(path: pathlib.Path, members=("Mist", "mist")) -> str | None:
+def max_glibc_in_tarball(path: pathlib.Path, members=("Mist",)) -> str | None:
     """Highest GLIBC_x.y symbol version referenced by the Linux binaries."""
     best: tuple[int, int] | None = None
     with tarfile.open(path, "r:gz") as tf:
@@ -92,6 +104,18 @@ def max_glibc_in_tarball(path: pathlib.Path, members=("Mist", "mist")) -> str | 
                 if best is None or v > best:
                     best = v
     return f"{best[0]}.{best[1]}" if best else None
+
+
+def assert_gui_tarball_has_no_cli(path: pathlib.Path) -> None:
+    """The Linux desktop archive must not ship a second `mist` next to `Mist`."""
+    with tarfile.open(path, "r:gz") as tf:
+        for member in tf.getmembers():
+            if pathlib.PurePosixPath(member.name).name == "mist":
+                raise SystemExit(
+                    f"{path.name} contains `mist`. The Linux GUI package must not duplicate "
+                    "mist-cli; command-line users get mist-cli-linux-*.tar.gz "
+                    "(docs/release/PACKAGE_SIZE.md)."
+                )
 
 
 def utc_now() -> str:
@@ -152,10 +176,11 @@ def build_manifest(
             "name": spec["name"],
             "size": path.stat().st_size,
             "sha256": digest,
-            "auto_update": spec["auto_update"] if key != "macos-universal" else macos_auto_update,
+            "auto_update": macos_auto_update if spec.get("macos") else spec["auto_update"],
             "urls": [f"{bases[o]}/{spec['name']}" for o in order if o in bases],
         }
         if key == "linux-x86_64":
+            assert_gui_tarball_has_no_cli(path)
             glibc = min_glibc or max_glibc_in_tarball(path)
             if glibc:
                 entry["min_glibc"] = glibc
@@ -193,15 +218,14 @@ def self_test() -> int:
         with tarfile.open(fileobj=buf, mode="w:gz") as tf:
             for name, data in [
                 ("Mist-linux-x86_64/Mist", b"\x7fELF...GLIBC_2.34...GLIBC_2.39..."),
-                ("Mist-linux-x86_64/mist", b"\x7fELF...GLIBC_2.17..."),
                 ("Mist-linux-x86_64/README.md", b"GLIBC_9.99"),
             ]:
                 info = tarfile.TarInfo(name)
                 info.size = len(data)
                 tf.addfile(info, io.BytesIO(data))
         (dist / "Mist-linux-x86_64.tar.gz").write_bytes(buf.getvalue())
-        (dist / "Mist-macos-universal.tar.gz").write_bytes(b"mac full")
-        (dist / "Mist-macos-universal-update.tar.gz").write_bytes(b"mac")
+        (dist / "Mist-macos-aarch64-update.tar.gz").write_bytes(b"arm")
+        (dist / "Mist-macos-x86_64-update.tar.gz").write_bytes(b"x64")
         for arch in ("x86_64", "aarch64"):
             buf = io.BytesIO()
             with tarfile.open(fileobj=buf, mode="w:gz") as tf:
@@ -221,13 +245,33 @@ def self_test() -> int:
         assert linux["min_glibc"] == "2.39", linux
         assert linux["urls"][0].startswith("https://github.com/"), linux["urls"]
         assert linux["urls"][1].startswith("https://mistlab.dev/"), linux["urls"]
-        assert m["platforms"]["macos-universal"]["name"] == "Mist-macos-universal-update.tar.gz"
-        assert m["platforms"]["macos-universal"]["size"] == 3
-        assert m["platforms"]["macos-universal"]["auto_update"] is False
-        assert m["platforms"]["macos-universal"]["manual_url"] == DOWNLOAD_PAGE
+        assert "macos-universal" not in m["platforms"]
+        for key, name, size in (
+            ("macos-aarch64", "Mist-macos-aarch64-update.tar.gz", 3),
+            ("macos-x86_64", "Mist-macos-x86_64-update.tar.gz", 3),
+        ):
+            mac = m["platforms"][key]
+            assert mac["name"] == name and mac["size"] == size, mac
+            assert mac["auto_update"] is False and mac["manual_url"] == DOWNLOAD_PAGE
         m_mac = build_manifest(version="1.2.0", dist=dist, require=["linux-x86_64"], macos_auto_update=True)
-        assert m_mac["platforms"]["macos-universal"]["auto_update"] is True
-        assert "manual_url" not in m_mac["platforms"]["macos-universal"]
+        assert m_mac["platforms"]["macos-aarch64"]["auto_update"] is True
+        assert m_mac["platforms"]["macos-x86_64"]["auto_update"] is True
+        assert "manual_url" not in m_mac["platforms"]["macos-aarch64"]
+        # A GUI tarball that still embeds `mist` is rejected.
+        dup = io.BytesIO()
+        with tarfile.open(fileobj=dup, mode="w:gz") as tf:
+            data = b"\x7fELF...GLIBC_2.39..."
+            info = tarfile.TarInfo("Mist-linux-x86_64/mist")
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+        good_gui = (dist / "Mist-linux-x86_64.tar.gz").read_bytes()
+        (dist / "Mist-linux-x86_64.tar.gz").write_bytes(dup.getvalue())
+        try:
+            build_manifest(version="1.2.0", dist=dist, require=["linux-x86_64"])
+            raise AssertionError("GUI package containing mist was accepted")
+        except SystemExit:
+            pass
+        (dist / "Mist-linux-x86_64.tar.gz").write_bytes(good_gui)
         assert "windows-x86_64-setup" not in m["platforms"]
         for key in ("linux-x86_64-cli", "linux-aarch64-cli"):
             cli = m["platforms"][key]
