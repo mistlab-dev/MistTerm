@@ -49,6 +49,7 @@ pub use shortcuts::{
     local_shell_accel, local_shell_help_line, new_tab_accel, new_tab_help_line,
     primary_modifier_label, split_pane_focus_accel, split_pane_focus_help_line,
     terminal_copy_accel, terminal_history_accel, terminal_interrupt_accel, terminal_paste_accel,
+    paste_history_accel,
 };
 #[cfg(target_os = "macos")]
 pub use macos_launch::activate_gui_application;

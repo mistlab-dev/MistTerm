@@ -371,6 +371,12 @@ pub struct TerminalView {
     paste_next_chunk_at: Option<Instant>,
     /// 粘贴分片因输入队列满连续重试的次数
     paste_retries: u32,
+    /// 按 payload 字节记账；整段写进 PTY 后才进入 [`paste_history_ready`]。
+    paste_ledger: crate::core::paste_history::PasteDeliveryLedger,
+    /// 已完整送入 PTY、待宿主写入粘贴历史的正文（已截断，不含界面标注）。
+    paste_history_ready: Vec<crate::core::paste_history::PasteHistoryNote>,
+    /// 右键「粘贴历史」请求宿主打开面板。
+    pending_open_paste_history: bool,
     /// 「仅断开 SSH 保留画面」后为 true：键盘输入写入 [`Self::disconnected_input_buffer`] 而非 PTY(FUNCTIONAL_SPEC §2.4)。
     buffer_input_while_disconnected: bool,
     /// 断线期间缓存的待发送字节(上限 [`Self::OFFLINE_INPUT_CAP`])。
@@ -958,6 +964,9 @@ impl TerminalView {
             paste_pending: Vec::new(),
             paste_next_chunk_at: None,
             paste_retries: 0,
+            paste_ledger: crate::core::paste_history::PasteDeliveryLedger::default(),
+            paste_history_ready: Vec::new(),
+            pending_open_paste_history: false,
             buffer_input_while_disconnected: false,
             disconnected_input_buffer: Vec::new(),
             resend_offline_input_dialog_open: false,
@@ -1033,6 +1042,24 @@ impl TerminalView {
     /// Enter 提交后取走当前行命令(供命令历史记录)
     pub fn take_submitted_line(&mut self) -> Option<String> {
         self.submitted_line.take()
+    }
+
+    /// 取走本帧已经完整写入 PTY 的粘贴，供粘贴历史入库。
+    pub fn take_paste_history_notes(&mut self) -> Vec<crate::core::paste_history::PasteHistoryNote> {
+        std::mem::take(&mut self.paste_history_ready)
+    }
+
+    pub fn take_open_paste_history(&mut self) -> bool {
+        let open = self.pending_open_paste_history;
+        self.pending_open_paste_history = false;
+        open
+    }
+
+    /// 打开粘贴历史等浮层时让出终端键盘，避免方向键和回车继续进 PTY。
+    pub(crate) fn release_keyboard_for_overlay(&mut self) {
+        self.terminal_wants_keyboard = false;
+        self.terminal_focused = false;
+        self.pending_focus_terminal = false;
     }
 
     /// 取走待写入会话日志的命令
@@ -2634,6 +2661,18 @@ impl TerminalView {
                                     }
                                     ui.close_menu();
                                 }
+                                let paste_history_accel = crate::platform::paste_history_accel();
+                                if crate::ui::chrome::popup_menu_button_shortcut(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(ui.ctx(), "Paste History", "粘贴历史"),
+                                    Some(&paste_history_accel),
+                                )
+                                .clicked()
+                                {
+                                    self.pending_open_paste_history = true;
+                                    ui.close_menu();
+                                }
                                 ui.separator();
                                 if crate::ui::chrome::popup_menu_button(
                                     ui,
@@ -2811,9 +2850,7 @@ impl TerminalView {
             if !self.paste_pending.is_empty() {
                 log::warn!("paste aborted: connection gone, {} bytes unsent", self.paste_pending.len());
             }
-            self.paste_pending.clear();
-            self.paste_next_chunk_at = None;
-            self.paste_retries = 0;
+            self.clear_unsent_paste();
             return;
         }
 
@@ -2829,6 +2866,8 @@ impl TerminalView {
         let chunk: Vec<u8> = self.paste_pending[..n].to_vec();
         match self.send_pty_input(&chunk) {
             Ok(()) => {
+                let notes = self.paste_ledger.on_written(n);
+                self.paste_history_ready.extend(notes);
                 self.paste_pending.drain(..n);
                 self.paste_retries = 0;
                 if self.paste_pending.is_empty() {
@@ -2855,11 +2894,17 @@ impl TerminalView {
                     self.paste_pending.len(),
                     e
                 ));
-                self.paste_pending.clear();
-                self.paste_next_chunk_at = None;
-                self.paste_retries = 0;
+                self.clear_unsent_paste();
             }
         }
+    }
+
+    /// 丢掉还没写完的粘贴队列。已完整写入的历史笔记保留。
+    fn clear_unsent_paste(&mut self) {
+        self.paste_pending.clear();
+        self.paste_next_chunk_at = None;
+        self.paste_retries = 0;
+        self.paste_ledger.abandon();
     }
 
     /// 处理 SSH 消息；若终端缓冲有更新则返回 `true`。
@@ -3823,8 +3868,10 @@ impl TerminalView {
     /// 粘贴文本到终端：不自动补回车；远端开了 bracketed paste 时包上 200~/201~；
     /// 一律进分片队列发送(FUNCTIONAL_SPEC §2.4)，写失败不丢片。
     fn paste_text(&mut self, text: &str, ctx: &egui::Context) {
-        use crate::ui::terminal_paste::{build_paste_payload, exceeds_canon_line_limit, TTY_CANON_LINE_MAX};
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        use crate::ui::terminal_paste::{
+            build_paste_payload, exceeds_canon_line_limit, normalize_paste_newlines, TTY_CANON_LINE_MAX,
+        };
+        let normalized = normalize_paste_newlines(text);
         if !self.connected {
             if self.buffer_input_while_disconnected {
                 self.append_offline_bytes(normalized.as_bytes());
@@ -3847,9 +3894,28 @@ impl TerminalView {
                 TTY_CANON_LINE_MAX
             ));
         }
-        self.paste_pending
-            .extend_from_slice(&build_paste_payload(&normalized, bracketed));
+        let payload = build_paste_payload(&normalized, bracketed);
+        self.observe_paste_for_history(&normalized, payload.len());
+        self.paste_pending.extend_from_slice(&payload);
         self.flush_paste_queue(ctx);
+    }
+
+    /// 整段 payload 写完才入库。密钥、密码提示和空粘贴只占字节空洞，避免打乱后续记账。
+    fn observe_paste_for_history(&mut self, normalized: &str, payload_len: usize) {
+        if payload_len == 0 {
+            return;
+        }
+        let cursor = self.terminal.cursor_line_text();
+        if let Some(note) = crate::core::paste_history::note_for_payload(normalized, &cursor) {
+            self.paste_ledger.push_entry(note, payload_len);
+        } else {
+            self.paste_ledger.push_gap(payload_len);
+        }
+    }
+
+    /// 把粘贴历史里的正文再送进当前 PTY（与菜单粘贴同一条 `paste_text` 路径）。
+    pub(crate) fn paste_from_history(&mut self, text: &str, ctx: &egui::Context) {
+        self.paste_text(text, ctx);
     }
 
     pub fn clear_screen(&mut self) {
@@ -4744,8 +4810,7 @@ impl TerminalView {
         self.connected_at = None;
         self.terminal_wants_keyboard = false;
         self.terminal_focused = false;
-        self.paste_pending.clear();
-        self.paste_next_chunk_at = None;
+        self.clear_unsent_paste();
         self.buffer_input_while_disconnected = false;
         self.disconnected_input_buffer.clear();
         self.resend_offline_input_dialog_open = false;
@@ -4778,8 +4843,7 @@ impl TerminalView {
         self.connected_at = None;
         self.terminal_wants_keyboard = false;
         self.terminal_focused = false;
-        self.paste_pending.clear();
-        self.paste_next_chunk_at = None;
+        self.clear_unsent_paste();
         self.buffer_input_while_disconnected = true;
         self.resend_offline_input_dialog_open = false;
         let disconnected_banner = match self.ui_lang_last {

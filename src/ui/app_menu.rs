@@ -312,6 +312,12 @@ impl MistTermApp {
                 self.menu_open_command_history(ctx);
                 ui.close_menu();
             }
+            if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, l.paste_history, "P")
+                .clicked()
+            {
+                self.menu_open_paste_history(ctx);
+                ui.close_menu();
+            }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.batch_exec).clicked() {
                 self.menu_open_batch_exec(ctx);
                 ui.close_menu();

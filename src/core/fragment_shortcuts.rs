@@ -338,7 +338,7 @@ fn reserved_app_shortcuts(platform: KeyPlatform) -> Vec<FragmentShortcut> {
                 out.push(cmd(&format!("Num{n}")));
             }
             // ⌘⇧：片段选择器、AI、分屏等；⌘⇧3/4/5 是系统截图
-            for k in ["J", "A", "L", "D", "U", "N", "E", "H", "Z", "Tab", "Num3", "Num4", "Num5"] {
+            for k in ["J", "A", "L", "D", "U", "N", "E", "H", "P", "Z", "Tab", "Num3", "Num4", "Num5"] {
                 out.push(cmd_shift(k));
             }
             out.push(FragmentShortcut::new("ArrowLeft", false, false, true, true));
@@ -349,7 +349,7 @@ fn reserved_app_shortcuts(platform: KeyPlatform) -> Vec<FragmentShortcut> {
             let ctrl_shift = |k: &str| FragmentShortcut::new(k, true, true, false, false);
             // Ctrl+Shift：标签、片段选择器、AI、分屏、终端复制粘贴、SFTP 等
             for k in [
-                "T", "W", "J", "A", "L", "D", "U", "S", "C", "V", "N", "E", "H", "Tab",
+                "T", "W", "J", "A", "L", "D", "U", "S", "C", "V", "N", "E", "H", "P", "Tab",
                 "ArrowLeft", "ArrowRight", "F9", "F10", "Backspace", "Escape",
             ] {
                 out.push(ctrl_shift(k));

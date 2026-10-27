@@ -51,6 +51,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — previous command block (needs shell integration, OSC 133)\n\
              {} — next command block\n\
              {} — copy the current command block (command and output; long output is truncated)\n\
+             {} — paste history (pick a recent successful paste and send it again; one-shot paste is unchanged). Also Tools → Paste History\n\
              {} — Select all (terminal)\n\
              {} — AI assistant panel\n\
              {} — send terminal selection to AI\n\
@@ -85,6 +86,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::command_block_prev_accel(),
             s::command_block_next_accel(),
             s::command_block_copy_accel(),
+            s::paste_history_accel(),
             s::accel_shift("A"),
             s::accel_shift("I"),
             s::accel_shift("L"),
@@ -116,6 +118,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — 上一条命令块 (需要 shell integration, OSC 133)\n\
              {} — 下一条命令块\n\
              {} — 复制当前命令块 (命令和输出; 过长会截断)\n\
+             {} — 粘贴历史（从最近成功粘贴里再选一条贴上；一次粘贴的快捷键不变）。菜单在「工具 → 粘贴历史」\n\
              {} — 全选(终端)\n\
              {} — AI 助手面板\n\
              {} — 终端选区发送到 AI\n\
@@ -144,6 +147,7 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::command_block_prev_accel(),
             s::command_block_next_accel(),
             s::command_block_copy_accel(),
+            s::paste_history_accel(),
             s::accel_shift("A"),
             s::accel_shift("I"),
             s::accel_shift("L"),
