@@ -35,7 +35,9 @@ mist <command>
 
 连接与执行
   mist ls                          列出已保存会话(--group 过滤, --json)
-  mist ssh <target>                交互式 shell(target = 会话名/id,或 user@host[:port])
+  mist ssh <target> [--log-session[=PATH]]
+                                   交互式 shell(target = 会话名/id,或 user@host[:port])
+                                   --log-session 把回车提交的命令写成 JSONL；省略 PATH 时用默认路径
   mist exec <target> <cmd...>      在单台机器执行命令,输出 stdout,退出码透传
   mist exec --group <g> <cmd...>   按分组批量执行(--serial 串行, --json 结构化输出)
   mist exec --all <cmd...>
@@ -86,6 +88,13 @@ path = "src/bin/mist_cli.rs"
 - 监听 `SIGWINCH` → `channel.request_pty_size` 调整窗口。
 - 退出路径:channel EOF / `~.` 本地 escape / Ctrl+C 透传(0x03)而非杀进程。
 - 非 TTY 场景 stdin 是管道时自动退化:pipe stdin → channel,等价 `ssh host cmd`。
+- 可选 `--log-session[=PATH]`（#164）：按回车提交记一行 JSONL。不加该选项时不建文件、不扫命令输出。默认路径 `~/.mist/logs/ssh-<会话>-<UTC时间>.jsonl`（`<会话>` 是会话名；临时连接则是 `user@host[:port]`，文件名里不能用的字符会换成 `-`）。方向键改写、历史回呼、密码行不记。
+- 字段对照（#156 GUI `exec_history`）：同一 `ExecLogRecord`：`target`（主机，非 22 端口为 `host:port`）、`command`、`timestamp`、`exit_code`（仅 OSC 133 `D`）、`ok`、`duration_ms`、`output_summary`（有界）、`tags`（`interactive_pty` 与 `allowed`/`alert`/`confirmed`/`blocked`/`cancelled`）；CLI 另加 tag `cli_ssh`，并写入本次会话文件，而不是默认追加 `~/.mist/logs/exec-history.jsonl`。
+
+```bash
+mist ssh web-01 --log-session
+mist ssh web-01 --log-session=/tmp/web-01.jsonl
+```
 
 ### 3. 输出约定(脚本友好)
 
@@ -103,7 +112,9 @@ path = "src/bin/mist_cli.rs"
 
 ```text
 mist ls [--group <g>]                 列出已保存会话
-mist ssh <target>                     交互式 shell
+mist ssh <target> [--log-session[=PATH]]
+                                      交互式 shell；--log-session 记命令级 JSONL
+                                      默认 ~/.mist/logs/ssh-<会话>-<UTC时间>.jsonl
 mist exec <target> <cmd...>           单机执行（退出码透传）
 mist exec --group <g> <cmd...>        按分组批量（默认并行 8）
 mist exec --all <cmd...>              全量批量
@@ -121,7 +132,7 @@ mist sop extract [-n <N>] [-t <title>]  从 exec-history.jsonl 提炼 Markdown �
 全局：--json（结构化输出）、-v/-vv（日志级别，输出到 stderr）
 ```
 
-模块划分：`src/cli/{context,ls,exec,ssh_cmd,sftp_cmds,fwd,frag,import_ssh,session_log}.rs`。
+模块划分：`src/cli/{context,ls,exec,ssh_cmd,ssh_session_log,sftp_cmds,fwd,frag,import_ssh,session_log}.rs`。
 
 ## 分期（历史计划 → 实际状态）
 

@@ -7,14 +7,17 @@ use anyhow::{Context, Result};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, size};
 use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use super::ssh_session_log::{exec_target_label, resolve_ssh_session_log_path, CliSshSessionLog};
 use super::{exec_gate, CliContext};
 use crate::core::audit::AuditOutcome;
 use crate::core::cmd_audit::{CmdAuditAction, CmdAuditEngine};
 use crate::ssh::SshClient;
+
+type SessionLog = Arc<Mutex<CliSshSessionLog>>;
 
 /// Tracks the line typed in an interactive `mist ssh` session, like the GUI's typed-line buffer.
 /// Escape sequences (arrows, history recall) make the local copy unreliable, so the buffer is
@@ -90,7 +93,10 @@ fn cli_zh() -> bool {
 /// What to do with a typed line on Enter (team policy only, same as the GUI typed-Enter check).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum TypedGate {
-    Send,
+    /// 放行。`outcome` 与 #156 的 tag 相同：`allowed` 或 `alert`。
+    Send {
+        outcome: &'static str,
+    },
     Confirm(String),
     Block(String),
 }
@@ -136,12 +142,67 @@ pub(crate) fn typed_gate(engine: &CmdAuditEngine, line: &str, target: &str) -> T
                 &targets,
                 serde_json::json!({ "via": "mist ssh" }),
             );
-            TypedGate::Send
+            let outcome = if audit.action == CmdAuditAction::Alert {
+                "alert"
+            } else {
+                "allowed"
+            };
+            TypedGate::Send { outcome }
         }
     }
 }
 
-pub fn run_ssh(ctx: &mut CliContext, target: &str) -> Result<i32> {
+fn note_submitted(log: &Option<SessionLog>, command: &str, outcome: &str) {
+    let Some(log) = log else {
+        return;
+    };
+    if let Ok(mut guard) = log.lock() {
+        guard.submit(command, outcome);
+    }
+}
+
+fn feed_session_log(log: &Option<SessionLog>, data: &[u8]) {
+    let Some(log) = log else {
+        return;
+    };
+    if let Ok(mut guard) = log.lock() {
+        guard.feed_output(data);
+    }
+}
+
+fn flush_session_log(log: &Option<SessionLog>) {
+    let Some(log) = log else {
+        return;
+    };
+    if let Ok(mut guard) = log.lock() {
+        guard.finish();
+    }
+}
+
+/// `None`：与没加 `--log-session` 一样，不分配写入器。
+fn open_session_log(
+    session: &crate::core::session::SessionConfig,
+    flag: Option<&str>,
+) -> Option<SessionLog> {
+    let path = resolve_ssh_session_log_path(&session.name, flag)?;
+    let session_id = if session.id.is_empty() {
+        format!("cli-ssh-{}", chrono::Utc::now().timestamp_millis())
+    } else {
+        session.id.clone()
+    };
+    if cli_zh() {
+        eprintln!("[mist] 命令日志：{}", path.display());
+    } else {
+        eprintln!("[mist] command log: {}", path.display());
+    }
+    Some(Arc::new(Mutex::new(CliSshSessionLog::new(
+        path,
+        session_id,
+        exec_target_label(&session.host, session.port),
+    ))))
+}
+
+pub fn run_ssh(ctx: &mut CliContext, target: &str, log_session: Option<&str>) -> Result<i32> {
     let session_cfg = ctx.resolve_target(target)?;
     let config = ctx.ssh_config(&session_cfg)?;
     let mut client = SshClient::new(config);
@@ -161,6 +222,9 @@ pub fn run_ssh(ctx: &mut CliContext, target: &str) -> Result<i32> {
     let mut channel = client
         .open_shell(init_cols as u32, init_rows as u32)
         .map_err(|e| anyhow::anyhow!("打开交互 Shell 失败: {e}"))?;
+
+    // 在 raw mode 之前打印路径，避免提示和远端回显粘在一行。没加 flag 时这里是 None。
+    let logger = open_session_log(&session_cfg, log_session);
 
     // 仅在真实 TTY 下开启 raw mode
     if is_tty {
@@ -190,6 +254,7 @@ pub fn run_ssh(ctx: &mut CliContext, target: &str) -> Result<i32> {
     // Last line of remote output, to skip the check at password prompts (like the GUI).
     let out_line = Arc::new(std::sync::Mutex::new(String::new()));
     let out_line_in = out_line.clone();
+    let logger_in = logger.clone();
     let stdin_handle = thread::spawn(move || {
         let zh = cli_zh();
         let mut typed = TypedLine::default();
@@ -245,6 +310,7 @@ pub fn run_ssh(ctx: &mut CliContext, target: &str) -> Result<i32> {
                                     &targets,
                                     serde_json::json!({ "via": "mist ssh", "confirmed": true }),
                                 );
+                                note_submitted(&logger_in, &line, "confirmed");
                                 let _ = write_channel.write_all(b"\r");
                             } else {
                                 exec_gate::record(
@@ -255,6 +321,7 @@ pub fn run_ssh(ctx: &mut CliContext, target: &str) -> Result<i32> {
                                     &targets,
                                     serde_json::json!({ "via": "mist ssh" }),
                                 );
+                                note_submitted(&logger_in, &line, "cancelled");
                                 eprint!(
                                     "{}",
                                     if zh {
@@ -279,8 +346,11 @@ pub fn run_ssh(ctx: &mut CliContext, target: &str) -> Result<i32> {
                                 .unwrap_or(false);
                             if let Some(line) = typed.take().filter(|_| !secret) {
                                 match typed_gate(&engine, &line, &target_name) {
-                                    TypedGate::Send => {}
+                                    TypedGate::Send { outcome } => {
+                                        note_submitted(&logger_in, &line, outcome);
+                                    }
                                     TypedGate::Block(msg) => {
+                                        note_submitted(&logger_in, &line, "blocked");
                                         let head = if zh {
                                             "团队策略已拦截，没有执行"
                                         } else {
@@ -394,6 +464,7 @@ pub fn run_ssh(ctx: &mut CliContext, target: &str) -> Result<i32> {
                         *l = l[cut..].to_string();
                     }
                 }
+                feed_session_log(&logger, &out_buf[..n]);
                 let _ = stdout.write_all(&out_buf[..n]);
                 let _ = stdout.flush();
             }
@@ -418,8 +489,11 @@ pub fn run_ssh(ctx: &mut CliContext, target: &str) -> Result<i32> {
 
     drop(_guard); // 提前显式恢复 normal mode
 
+    // 远端关掉之后 stdin 线程可能还阻塞在 read；先把已提交的命令落盘。
+    flush_session_log(&logger);
     // 等待 stdin 线程退出（如果是远端退出，给 100ms 超时）
     let _ = stdin_handle.join();
+    flush_session_log(&logger);
     client.disconnect();
 
     Ok(exit_code)
@@ -464,9 +538,12 @@ mod tests {
         };
         assert_eq!(
             typed_gate(&CmdAuditEngine::new(), "ls -la", "t"),
-            TypedGate::Send
+            TypedGate::Send { outcome: "allowed" }
         );
-        assert_eq!(typed_gate(&team("block"), "ls -la", "t"), TypedGate::Send);
+        assert_eq!(
+            typed_gate(&team("block"), "ls -la", "t"),
+            TypedGate::Send { outcome: "allowed" }
+        );
         assert!(matches!(
             typed_gate(&team("block"), "df -h", "t"),
             TypedGate::Block(_)
@@ -475,7 +552,10 @@ mod tests {
             typed_gate(&team("confirm"), "df -h", "t"),
             TypedGate::Confirm(_)
         ));
-        assert_eq!(typed_gate(&team("alert"), "df -h", "t"), TypedGate::Send);
+        assert_eq!(
+            typed_gate(&team("alert"), "df -h", "t"),
+            TypedGate::Send { outcome: "alert" }
+        );
     }
 
     #[test]

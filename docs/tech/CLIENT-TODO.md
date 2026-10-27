@@ -129,14 +129,14 @@
 
 ## P3 — AI Ops 数据供给（会话结构化日志）
 
-### 9. 会话/执行过程结构化落盘 → AI 提炼（GUI 交互式回车已落盘；CLI `--log-session` 仍待做）
+### 9. 会话/执行过程结构化落盘 → AI 提炼（GUI 与 CLI 交互式回车均已落盘）
 
 **背景（2026-09-18，对标 Nexterm v1.4.8 结论）**：Nexterm 的广播输入/主机模板/会话回放等功能点评估后判定**不做 UI 对标**——这些场景都会被 AI 批量执行/对话式导入取代。唯一保留项：把会话与批量执行过程**结构化落盘**（命令、输出、时序、目标主机、退出码），作为 AI 提炼 SOP/团队知识的原材料，而非给人看的 cast 回放。
 
 **范围**：
 - `mist exec` / AI planner 执行路径：输出结构化执行日志（JSONL：目标主机/命令/退出码/stdout 摘要/时序）
 - GUI 交互式终端回车提交：与片段同一套本地审计，并追加 `exec_history` JSONL（#156，偏好可关；未登录团队不打断）
-- 交互式 `mist ssh`：可选 `--log-session` 记录命令级日志（非逐字节回放，仍待做）
+- 交互式 `mist ssh`：`--log-session[=PATH]` 记录命令级 JSONL（#164）。默认 `~/.mist/logs/ssh-<会话>-<UTC时间>.jsonl`。字段与 #156 `exec_history` 相同：`target` / `command` / `timestamp`；`exit_code` 仅在 OSC 133 `D` 时有；`output_summary` 有界。不加该选项不写文件。
 - 消费方：AI Ops「逆向飞轮」——排障过程一键提炼为团队知识片段
 
 **明确不做**：asciinema cast 回放器、GUI broadcast input、主机模板表单
