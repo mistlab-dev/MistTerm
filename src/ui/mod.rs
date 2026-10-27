@@ -52,6 +52,7 @@ mod team_members_dialog;
 pub mod ssh_config_import_dialog;
 pub mod foreign_import_dialog;
 pub mod command_history_overlay;
+pub mod command_palette;
 pub mod session_log_dialog;
 pub mod postmortem_dialog;
 pub mod vault_form;

@@ -34,8 +34,8 @@ fn quick_steps(ctx: &egui::Context) -> Vec<QuickStep> {
             title: crate::i18n::tr(ctx, "Command snippets", "命令片段"),
             detail: crate::i18n::tr(
                 ctx,
-                "Activity Rail → Command snippets (or View menu) to open the library. Ctrl+K focuses snippet search only when the terminal is not focused. Click to send to terminal.",
-                "活动栏 → 命令片段(或「视图」菜单)打开片段库。Ctrl+K 只在终端失焦时聚焦片段搜索。点击即发送到终端。",
+                "Activity Rail → Command snippets (or View menu) to open the library. When the terminal is not focused, Ctrl+K (macOS ⌘K) opens the command palette; pick a snippet there to run it the same way as the quick picker. Click a snippet in the library to send it.",
+                "活动栏 → 命令片段(或「视图」菜单)打开片段库。终端失焦时 Ctrl+K (macOS 为 ⌘K) 打开命令面板, 在里面选片段会按快速选择器同样的方式执行。在片段库里点击也会发送到终端。",
             ),
             keys: vec![shortcuts::accel("K")],
         },

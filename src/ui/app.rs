@@ -389,6 +389,8 @@ pub struct MistTermApp {
     fragment_vars_completion: FragmentVarsCompletion,
     /// 快速片段选择器
     quick_selector: FragmentQuickSelector,
+    /// 失焦 ⌘K / Ctrl+K 统一命令面板（#162）。聚焦时 Ctrl+K 仍进 PTY。
+    command_palette: crate::ui::command_palette::CommandPalette,
 
     monitor_panel: MonitorPanel,
     ai_panel: AiPanel,
@@ -1294,6 +1296,7 @@ impl MistTermApp {
             variable_dialog: FragmentVariableDialog::default(),
             fragment_vars_completion: FragmentVarsCompletion::default(),
             quick_selector: FragmentQuickSelector::default(),
+            command_palette: crate::ui::command_palette::CommandPalette::default(),
             theme_manager: ThemeManager::load(),
             app_settings,
             audit_logger,
@@ -3279,6 +3282,7 @@ impl MistTermApp {
             || self.cmd_audit_confirm.is_some()
             || self.batch_exec_dialog.open
             || self.quick_selector.open
+            || self.command_palette.open
             || self.large_upload_pending_path.is_some()
             || self.ssh_import_dialog.open
             || self.foreign_import_dialog.open
@@ -3485,24 +3489,397 @@ impl MistTermApp {
         });
     }
 
-    fn focus_fragment_panel_search(&mut self, ctx: &egui::Context) {
-        if !Self::right_dock_open_allowed(Self::layout_window_width(ctx)) {
-            let w = Self::layout_window_width(ctx);
-            self.notify_auto(Self::narrow_window_fragment_panel_hint(ctx, w));
-            return;
-        }
-        self.open_right_dock_panel(ActiveRightDock::Fragment);
+    fn open_command_palette(&mut self, ctx: &egui::Context) {
         for tab in &mut self.tabs {
             for pane in tab.panes_mut() {
                 pane.terminal.release_keyboard_for_ui_input(ctx);
             }
         }
-        ctx.memory_mut(|m| m.request_focus(Self::id_fragment_panel_search()));
-        let k = crate::platform::accel("K");
-        self.notify_auto(match crate::i18n::language(ctx) {
-            crate::i18n::UiLanguage::En => format!("Focused snippet search ({k})"),
-            crate::i18n::UiLanguage::Zh => format!("已聚焦片段搜索框({})", k),
+        self.command_palette.open_fresh();
+        ctx.memory_mut(|m| {
+            m.request_focus(crate::ui::command_palette::CommandPalette::search_id())
         });
+    }
+
+    fn focus_active_terminal(&mut self) {
+        if let Some(term) = self.current_terminal_mut() {
+            term.request_keyboard_focus();
+        }
+    }
+
+    /// 命令面板画在工作区最后，打开时 [`global_shortcuts_blocked`] 为真，终端不再收键。
+    fn show_command_palette(&mut self, ctx: &egui::Context, theme: &crate::ui::theme::Theme) {
+        if !self.command_palette.open {
+            return;
+        }
+        let items = self.command_palette_items(ctx);
+        match self.command_palette.show(ctx, theme, &items) {
+            crate::ui::command_palette::PaletteOutcome::Idle => {}
+            crate::ui::command_palette::PaletteOutcome::Close => {
+                self.command_palette.open = false;
+            }
+            crate::ui::command_palette::PaletteOutcome::Run(id) => {
+                self.command_palette.open = false;
+                self.run_command_palette(ctx, id);
+            }
+        }
+    }
+
+    fn command_palette_items(
+        &self,
+        ctx: &egui::Context,
+    ) -> Vec<crate::ui::command_palette::PaletteItem> {
+        use crate::ui::command_palette::{
+            session_launch, PaletteId, PaletteItem, PaletteKind, SessionLaunch,
+        };
+        let mut items = Vec::new();
+        let open_ids: std::collections::HashSet<String> = self
+            .tabs
+            .iter()
+            .map(|t| t.primary_session_id())
+            .collect();
+        for session in self.session_manager.list_sessions() {
+            let detail = match session_launch(open_ids.contains(&session.id)) {
+                SessionLaunch::FocusOpenTab => {
+                    crate::i18n::tr(ctx, "Focus open tab", "聚焦已打开的标签")
+                }
+                SessionLaunch::Connect => crate::i18n::tr(ctx, "Connect", "连接"),
+            };
+            let target = if session.username.is_empty() {
+                format!("{}:{}", session.host, session.port)
+            } else {
+                format!("{}@{}:{}", session.username, session.host, session.port)
+            };
+            items.push(PaletteItem {
+                id: PaletteId::Session(session.id.clone()),
+                kind: PaletteKind::Session,
+                title: session.name.clone(),
+                detail: detail.to_string(),
+                search: format!(
+                    "{} {} {} {} {}",
+                    session.name, session.host, session.username, session.group, target
+                ),
+            });
+        }
+        for fragment in self.fragment_manager.list() {
+            let title = crate::i18n::fragment_display_title(ctx, fragment);
+            let tags = fragment.tags.join(" ");
+            items.push(PaletteItem {
+                id: PaletteId::Snippet(fragment.id.clone()),
+                kind: PaletteKind::Snippet,
+                title: command_preview(&title, 64),
+                detail: crate::i18n::tr(ctx, "Run snippet", "执行片段").to_string(),
+                search: format!(
+                    "{} {} {} {} {} {} {}",
+                    title,
+                    fragment.title,
+                    fragment.title_en.as_deref().unwrap_or(""),
+                    fragment.command,
+                    fragment.category,
+                    fragment.category_en.as_deref().unwrap_or(""),
+                    tags
+                ),
+            });
+        }
+        let mut seen_cmd = std::collections::HashSet::new();
+        let mut kept = 0usize;
+        for entry in self.command_history.entries_newest_first() {
+            if kept >= 200 {
+                break;
+            }
+            if !seen_cmd.insert(entry.command.clone()) {
+                continue;
+            }
+            kept += 1;
+            let session_name = entry.session_name.clone().unwrap_or_default();
+            items.push(PaletteItem {
+                id: PaletteId::History(entry.command.clone()),
+                kind: PaletteKind::History,
+                title: command_preview(&entry.command, 72),
+                detail: crate::i18n::tr(ctx, "Fill terminal", "填入终端").to_string(),
+                search: format!("{} {session_name}", entry.command),
+            });
+        }
+        Self::push_palette_actions(ctx, &mut items);
+        items
+    }
+
+    fn push_palette_actions(
+        ctx: &egui::Context,
+        items: &mut Vec<crate::ui::command_palette::PaletteItem>,
+    ) {
+        use crate::ui::command_palette::{PaletteAction, PaletteId, PaletteItem, PaletteKind};
+        let mut add = |action: PaletteAction,
+                       title_en: &'static str,
+                       title_zh: &'static str,
+                       detail_en: &'static str,
+                       detail_zh: &'static str,
+                       keywords: &str| {
+            let title = crate::i18n::tr(ctx, title_en, title_zh);
+            let detail = crate::i18n::tr(ctx, detail_en, detail_zh);
+            items.push(PaletteItem {
+                id: PaletteId::Action(action),
+                kind: PaletteKind::Action,
+                title: title.to_string(),
+                detail: detail.to_string(),
+                search: format!("{title_en} {title_zh} {detail_en} {detail_zh} {keywords} {title}"),
+            });
+        };
+        add(
+            PaletteAction::NewSession,
+            "New session",
+            "新建会话",
+            "New connection",
+            "新建连接",
+            "profile",
+        );
+        add(
+            PaletteAction::NewTab,
+            "New terminal tab",
+            "新建终端标签",
+            "Open another tab",
+            "再开一个标签",
+            "tab",
+        );
+        add(
+            PaletteAction::LocalShell,
+            "Local shell",
+            "本机终端",
+            "This computer",
+            "本机",
+            "local",
+        );
+        add(
+            PaletteAction::Sftp,
+            "SFTP",
+            "SFTP",
+            "Open files",
+            "打开文件",
+            "files 文件",
+        );
+        add(
+            PaletteAction::Monitor,
+            "Monitor",
+            "监控",
+            "CPU and memory",
+            "CPU 与内存",
+            "cpu memory",
+        );
+        add(
+            PaletteAction::Ai,
+            "AI assistant",
+            "AI 助手",
+            "Open AI panel",
+            "打开 AI 面板",
+            "ai",
+        );
+        add(
+            PaletteAction::PortForward,
+            "Port forwarding",
+            "端口转发",
+            "Tunnels",
+            "隧道",
+            "forward socks tunnel",
+        );
+        add(
+            PaletteAction::Preferences,
+            "Preferences",
+            "偏好设置",
+            "Settings",
+            "设置",
+            "settings",
+        );
+        add(
+            PaletteAction::CommandHistory,
+            "Command history window",
+            "命令历史窗口",
+            "Open history",
+            "打开历史",
+            "history",
+        );
+        add(
+            PaletteAction::SnippetLibrary,
+            "Snippet library",
+            "命令片段库",
+            "Edit snippets",
+            "编辑片段",
+            "fragment library",
+        );
+        add(
+            PaletteAction::SnippetPanel,
+            "Snippets panel",
+            "片段面板",
+            "Open snippets",
+            "打开片段",
+            "fragment",
+        );
+        add(
+            PaletteAction::QuickSnippets,
+            "Quick snippet picker",
+            "快速片段选择器",
+            "Pick a snippet",
+            "选择片段",
+            "picker",
+        );
+        add(
+            PaletteAction::FindInTerminal,
+            "Find in terminal",
+            "终端内查找",
+            "Search output",
+            "搜索输出",
+            "find search",
+        );
+        add(
+            PaletteAction::About,
+            "About MistTerm",
+            "关于 MistTerm",
+            "Shortcuts",
+            "快捷键",
+            "about help",
+        );
+        add(
+            PaletteAction::Immersive,
+            "Immersive mode",
+            "沉浸式模式",
+            "Hide the activity rail",
+            "隐藏活动栏",
+            "rail",
+        );
+        add(
+            PaletteAction::Credentials,
+            "Credentials",
+            "凭证",
+            "Saved secrets",
+            "已存凭证",
+            "vault password",
+        );
+        add(
+            PaletteAction::CloudSync,
+            "Cloud sync",
+            "云同步",
+            "Sync this device",
+            "同步这台设备",
+            "sync",
+        );
+        add(
+            PaletteAction::Disconnect,
+            "Disconnect",
+            "断开连接",
+            "Keep the output",
+            "保留输出",
+            "disconnect",
+        );
+        add(
+            PaletteAction::Reconnect,
+            "Reconnect",
+            "重新连接",
+            "Connect again",
+            "再次连接",
+            "reconnect",
+        );
+        add(
+            PaletteAction::BatchExec,
+            "Batch execute",
+            "批量执行",
+            "Run on many hosts",
+            "在多台主机上执行",
+            "batch",
+        );
+    }
+
+    fn run_command_palette(
+        &mut self,
+        ctx: &egui::Context,
+        id: crate::ui::command_palette::PaletteId,
+    ) {
+        use crate::ui::command_palette::PaletteId;
+        match id {
+            PaletteId::Session(sid) => {
+                self.select_session(ctx, &sid);
+                self.focus_active_terminal();
+            }
+            PaletteId::Snippet(fid) => {
+                if let Some(frag) = self.fragment_manager.get(&fid).cloned() {
+                    // 与快速片段选择器相同：直接执行；有变量则先填写。
+                    self.execute_fragment(ctx, &frag);
+                } else {
+                    self.notify_auto(crate::i18n::tr(
+                        ctx,
+                        "Snippet no longer exists",
+                        "找不到该片段",
+                    ));
+                }
+            }
+            PaletteId::History(cmd) => self.palette_fill_history(ctx, &cmd),
+            PaletteId::Action(action) => self.run_palette_action(ctx, action),
+        }
+    }
+
+    /// 历史命令只填进输入行，不代按回车。
+    fn palette_fill_history(&mut self, ctx: &egui::Context, command: &str) {
+        let Some(idx) = self.active_tab else {
+            self.notify_auto(crate::i18n::tr(
+                ctx,
+                "Open a terminal tab first",
+                "请先打开终端标签",
+            ));
+            return;
+        };
+        let connected = self
+            .tabs
+            .get(idx)
+            .and_then(|t| t.active_terminal())
+            .is_some_and(|t| t.is_connected());
+        if !connected {
+            self.notify_auto(crate::i18n::tr(
+                ctx,
+                "Connect to a terminal first, then the command can be filled in",
+                "请先连接终端, 再把历史命令填进去",
+            ));
+            return;
+        }
+        if self.insert_audited_command_at(ctx, idx, command) == CommandSendResult::Sent {
+            self.notify_auto(inserted_command_status_message(ctx, command));
+            self.focus_active_terminal();
+        }
+    }
+
+    fn run_palette_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: crate::ui::command_palette::PaletteAction,
+    ) {
+        use crate::ui::command_palette::PaletteAction;
+        match action {
+            PaletteAction::NewSession => self.show_new_session_dialog = true,
+            PaletteAction::NewTab => self.open_new_tab_from_selection(ctx),
+            PaletteAction::LocalShell => self.open_local_shell_tab(ctx),
+            PaletteAction::Sftp => self.toggle_sftp_panel(ctx),
+            PaletteAction::Monitor => self.toggle_monitor_panel(ctx),
+            PaletteAction::Ai => self.toggle_ai_panel(ctx),
+            PaletteAction::PortForward => self.toggle_port_forward_panel(ctx),
+            PaletteAction::Preferences => self.show_preferences_dialog = true,
+            PaletteAction::CommandHistory => self.menu_open_command_history(ctx),
+            PaletteAction::SnippetLibrary => self.fragment_library.open = true,
+            PaletteAction::SnippetPanel => self.toggle_fragment_sidebar(ctx),
+            PaletteAction::QuickSnippets => self.quick_selector.open = true,
+            PaletteAction::FindInTerminal => self.toggle_terminal_search(),
+            PaletteAction::About => self.show_about_dialog = true,
+            PaletteAction::Immersive => self.toggle_activity_rail(),
+            PaletteAction::Credentials => {
+                if self.ensure_right_dock_allowed_or_warn(ctx) {
+                    self.open_right_dock_panel(ActiveRightDock::Credential);
+                }
+            }
+            PaletteAction::CloudSync => {
+                if self.ensure_right_dock_allowed_or_warn(ctx) {
+                    self.open_right_dock_panel(ActiveRightDock::CloudSync);
+                }
+            }
+            PaletteAction::Disconnect => self.disconnect_ssh_keep_buffer_active(ctx),
+            PaletteAction::Reconnect => self.reconnect_active_tab(ctx),
+            PaletteAction::BatchExec => self.menu_open_batch_exec(ctx),
+        }
     }
 
     fn switch_tab_to_index(&mut self, idx: usize) {
@@ -3827,6 +4204,7 @@ impl MistTermApp {
             || self.cmd_audit_confirm.is_some()
             || self.batch_exec_dialog.open
             || self.quick_selector.open
+            || self.command_palette.open
             || self.team_fragment_editor.open
             || self.team_fragment_conflict.is_some()
     }
@@ -9153,7 +9531,8 @@ impl eframe::App for MistTermApp {
                     self.active_terminal_has_keyboard_focus(),
                 ) && crate::ui::keyboard_shortcuts::consume_primary_key(i, egui::Key::K)
             }) {
-                self.focus_fragment_panel_search(ctx);
+                // 失焦主键：macOS ⌘K，Win/Linux Ctrl+K。聚焦时上面的 armed 为假，Ctrl+K 进 PTY。
+                self.open_command_palette(ctx);
             }
             // ⌘B / Ctrl+B：沉浸式模式（藏活动栏+菜单，标签进顶栏）
             if ctx.input(|i| {
