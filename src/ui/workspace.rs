@@ -1861,6 +1861,8 @@ impl MistTermApp {
                 egui::Id::new("mistterm_fragment_variable_dialog"),
             ));
         }
+
+        self.show_command_palette(ctx, theme);
     }
 
     pub(crate) fn paint_agent_audit_degraded_banner(

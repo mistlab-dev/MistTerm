@@ -17,7 +17,7 @@
 - `Backspace` sends `0x7f`.
 - `Delete` sends `\x1b[3~` (xterm-compatible forward delete).
 - `Ctrl+C` sends `0x03`, `Ctrl+D` sends `0x04`. A selection does not turn Ctrl+C into copy.
-- `Ctrl+J` (`0x0a`) and `Ctrl+K` (`0x0b`) go to the PTY while the terminal pane is focused. Connection search and snippet search use those chords only when the terminal is not focused. The snippet picker remains `Ctrl+Shift+J` / `⌘⇧J`, and only when the terminal is not focused.
+- `Ctrl+J` (`0x0a`) and `Ctrl+K` (`0x0b`) go to the PTY while the terminal pane is focused. Connection search (`Ctrl/⌘+J`) and the command palette (`Ctrl/⌘+K`) use those chords only when the terminal is not focused. Chord decision: unfocused Ctrl+K does not conflict with the OS, so Windows/Linux stay on Ctrl+K and macOS stays on ⌘K; Ctrl+Shift+K is not used. While the palette is open it is a blocking modal, so keys are not forwarded to the PTY. The quick snippet picker remains `Ctrl+Shift+J` / `⌘⇧J`, and only when the terminal is not focused.
 - `Ctrl+R` goes to the PTY while the terminal is focused (shell reverse-i-search). When the terminal is not focused it opens Mist command history.
 - While the terminal pane is focused, Alt (macOS: Option) plus a letter, digit, or ASCII punctuation is a Meta sequence: ESC then that character. `Alt+B` / `Alt+F` move by word, `Alt+D` deletes the next word, `Alt+.` inserts the previous command's last argument. `Alt+Backspace` is ESC DEL (`0x1b 0x7f`), readline backward-kill-word. Ctrl+Alt and ⌘⌥ are not Meta (AltGr, local shell, pane focus).
 - On macOS the window uses winit `OptionAsAlt::Both`, so Option delivers the base character with Alt set. The terminal prefixes ESC. There is no key-rebinding UI.

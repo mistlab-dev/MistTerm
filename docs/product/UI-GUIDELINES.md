@@ -233,7 +233,7 @@
 | ⌘T / Ctrl+Shift+T | 新建Tab | `open_new_tab_from_selection()` |
 | ⌘W / Ctrl+Shift+W | 关闭当前Tab | `request_close_active_tab()` |
 | ⌘J | 定位到左侧搜索框 | `focus_sidebar_connection_search(ctx)` |
-| ⌘K | 打开片段面板搜索 | `focus_fragment_panel_search(ctx)` |
+| ⌘K | 终端失焦时打开命令面板（Win/Linux 为 Ctrl+K；聚焦时 Ctrl+K 仍删到行尾） | `open_command_palette(ctx)` |
 | ⌘E | 编辑当前选中会话 | `open_edit_session_dialog(sid)` |
 | ⌘H | 打开关于 | `show_about_dialog = true` |
 | ⌘, | 偏好设置 | `show_preferences_dialog = true` |
@@ -558,7 +558,7 @@ pub struct MonitorPanel {
 |------|-----|
 | 开关 | `show_fragment_panel` |
 | 宽度 | `side_panel_widths(ctx, SidePanelProfile::Fragment)` |
-| 触发 | 底部「命令片段」按钮 / 快捷键 ⌘K |
+| 触发 | 活动栏「片段」/ 视图菜单。失焦 ⌘K / Ctrl+K 打开命令面板（面板里可以执行片段），不再直接聚焦本搜索框 |
 
 **标题栏**:
 - "命令片段" 标题
