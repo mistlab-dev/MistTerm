@@ -1,0 +1,155 @@
+name: Patch update manifest mirror
+
+# 一次性：给已发布的 latest.json 补上「镜像优先、GitHub 备用」的安装包地址并重新签名。
+# 不改版本号、pub_date 和其它字段，可信注释保持 mistterm stable <version> <pub_date>。
+# 只覆盖 GitHub Release 上的 latest.json / latest.json.minisig。
+# 客户端先读 mistlab 的 stable/latest.json，那份文件需要另行同步。见 docs/release/AUTO_UPDATE.md。
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version to patch (no leading v)"
+        required: true
+        default: "1.2.38"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: patch-update-manifest-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  patch:
+    name: Patch latest.json urls
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install minisign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends minisign
+
+      - name: Download current manifest
+        env:
+          VERSION_INPUT: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION_INPUT#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::bad version: ${VERSION}"
+            exit 1
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+          mkdir -p dist
+          gh release download "v${VERSION}" --repo "$GITHUB_REPOSITORY" --pattern latest.json --dir dist --clobber
+          if gh release download "v${VERSION}" --repo "$GITHUB_REPOSITORY" --pattern 'latest.json.minisig' --dir dist --clobber; then
+            echo "downloaded existing latest.json.minisig"
+          else
+            echo "::notice::latest.json.minisig is not on the release; a new signature will be uploaded"
+            rm -f dist/latest.json.minisig
+          fi
+
+      - name: Verify existing signature when present
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f dist/latest.json.minisig ]; then
+            minisign -V -p resources/update/minisign-primary.pub -m dist/latest.json
+          fi
+
+      - name: Rewrite package urls (mirror, then GitHub)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp dist/latest.json dist/latest.json.before
+          python3 -c 'import json; print(json.load(open("dist/latest.json.before"))["pub_date"], end="")' > dist/pub_date.before
+          python3 scripts/gen-update-manifest.py \
+            --patch-urls dist/latest.json \
+            --version "$VERSION" \
+            --mirror-base "https://mistlab.dev/downloads/mistterm/v${VERSION}" \
+            --url-order mirror,github
+          python3 -c 'import json; print(json.load(open("dist/latest.json"))["pub_date"], end="")' > dist/pub_date.after
+          cmp dist/pub_date.before dist/pub_date.after
+          python3 scripts/gen-update-manifest.py --trusted-comment-of dist/latest.json > dist/latest.json.tc
+          TC="$(cat dist/latest.json.tc)"
+          test "$TC" = "mistterm stable ${VERSION} $(cat dist/pub_date.before)"
+          echo "Trusted comment: ${TC}"
+          python3 - <<'PY'
+          import json
+          old = json.load(open("dist/latest.json.before"))
+          new = json.load(open("dist/latest.json"))
+          version = new["version"]
+
+          def without_urls(doc):
+              doc = json.loads(json.dumps(doc))
+              for entry in doc["platforms"].values():
+                  entry.pop("urls", None)
+              return doc
+
+          if without_urls(old) != without_urls(new):
+              raise SystemExit("non-url fields changed")
+          mirror = f"https://mistlab.dev/downloads/mistterm/v{version}"
+          github = f"https://github.com/mistlab-dev/MistTerm/releases/download/v{version}"
+          for key, entry in new["platforms"].items():
+              expect = [f"{mirror}/{entry['name']}", f"{github}/{entry['name']}"]
+              if entry["urls"] != expect:
+                  raise SystemExit(f"{key} urls {entry['urls']} != {expect}")
+          PY
+
+      - name: Print macos-aarch64 urls
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          urls = json.load(open("dist/latest.json"))["platforms"]["macos-aarch64"]["urls"]
+          if len(urls) != 2:
+              raise SystemExit(f"expected 2 urls, got {urls}")
+          print("macos-aarch64 urls:")
+          for url in urls:
+              print(url)
+          PY
+
+      - name: Sign latest.json
+        shell: bash
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${MINISIGN_SECRET_KEY}" ] || [ -z "${MINISIGN_PASSWORD}" ]; then
+            echo "::error::MINISIGN_SECRET_KEY / MINISIGN_PASSWORD are not set (release environment secrets). See docs/release/AUTO_UPDATE.md."
+            exit 1
+          fi
+          umask 077
+          KEY="$RUNNER_TEMP/minisign.key"
+          printf '%s\n' "$MINISIGN_SECRET_KEY" > "$KEY"
+          trap 'rm -f "$KEY"' EXIT
+          TC="$(cat dist/latest.json.tc)"
+          printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -s "$KEY" -m dist/latest.json -t "$TC" -c "mistterm update manifest"
+          rm -f "$KEY"
+          minisign -V -p resources/update/minisign-primary.pub -m dist/latest.json
+          grep -q "^trusted comment: $(cat dist/latest.json.tc)\$" dist/latest.json.minisig
+
+      - name: Upload latest.json to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "v${VERSION}" \
+            dist/latest.json \
+            dist/latest.json.minisig \
+            --clobber \
+            --repo "$GITHUB_REPOSITORY"
+          echo "::notice title=Mirror copy still required::Uploaded v${VERSION} latest.json to the GitHub Release only. Clients fetch https://mistlab.dev/downloads/mistterm/stable/latest.json first. Copy latest.json and latest.json.minisig to stable/ and v${VERSION}/ on mistlab or China clients keep the old github-only urls."

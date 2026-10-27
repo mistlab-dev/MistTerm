@@ -695,18 +695,15 @@ jobs:
             f="docs/release/notes/v${VERSION}.${lang}.md"
             if [ -f "$f" ]; then notes_args+=("--notes-${lang}" "$f"); fi
           done
-          # 镜像（mistlab.dev）上传还没开通：MIST_MIRROR_ENABLED 不是 'true' 时不写镜像地址。
-          mirror_args=()
-          if [ "${{ vars.MIST_MIRROR_ENABLED }}" = "true" ] && [ -n "${{ vars.MIST_MIRROR_BASE_URL }}" ]; then
-            mirror_args+=(--mirror-base "${{ vars.MIST_MIRROR_BASE_URL }}/v${VERSION}")
-          fi
+          # 安装包先走 mistlab.dev，失败再回退 GitHub。镜像目录已在服务器上，不依赖 MIST_MIRROR_ENABLED。
           python3 scripts/gen-update-manifest.py \
             --version "$VERSION" \
             --dist dist \
             --out dist/latest.json \
-            --url-order github,mirror \
+            --mirror-base "https://mistlab.dev/downloads/mistterm/v${VERSION}" \
+            --url-order mirror,github \
             --macos-auto-update \
-            "${notes_args[@]}" "${mirror_args[@]}"
+            "${notes_args[@]}"
           cat dist/latest.json
           python3 scripts/gen-update-manifest.py --trusted-comment-of dist/latest.json > dist/latest.json.tc
           echo "Trusted comment: $(cat dist/latest.json.tc)"
@@ -741,6 +738,12 @@ jobs:
               print(f"latest.json {key}:", mac["name"], mac["size"], "bytes")
           gui = m["platforms"]["linux-x86_64"]
           assert gui["name"] == "Mist-linux-x86_64.tar.gz" and gui["auto_update"], gui
+          mirror = f"https://mistlab.dev/downloads/mistterm/v{m['version']}"
+          github = f"https://github.com/mistlab-dev/MistTerm/releases/download/v{m['version']}"
+          for key, entry in m["platforms"].items():
+              expect = [f"{mirror}/{entry['name']}", f"{github}/{entry['name']}"]
+              assert entry["urls"] == expect, (key, entry["urls"])
+          print("latest.json url order: mirror, github")
           CHECK
 
       - name: Upload manifest
@@ -867,17 +870,17 @@ jobs:
             - Documentation: https://github.com/mistlab-dev/MistTerm/tree/main/docs
             - Issues: https://github.com/mistlab-dev/MistTerm/issues
 
-  # 镜像上传（mistlab.dev/downloads/mistterm/...）——尚未开通。
-  # TODO(Tian)：配置好 nginx 的 /downloads 目录和只能写该目录的部署密钥后，
-  # 把仓库变量 MIST_MIRROR_ENABLED 设为 'true'，并在这里实现 rsync 上传
-  # （先传安装包，再传 latest.json / .minisig，保证用户永远看不到"清单已更新、文件还没到"的状态）。
+  # 镜像文件的 rsync 还没做。清单里的下载地址已经指向 mistlab.dev（镜像优先）。
+  # MIST_MIRROR_ENABLED=true 时这个 job 会跑，但只打印 notice，不以失败结束，避免把 tag 发版标红。
+  # TODO(Tian)：配好只能写 /var/www/mistlab/downloads/mistterm/ 的部署密钥后，在这里实现 rsync
+  # （先传安装包，再传 latest.json / .minisig，保证用户永远看不到「清单已更新、文件还没到」）。
   mirror:
-    name: Mirror to mistlab.dev (disabled)
+    name: Mirror to mistlab.dev (notice only)
     needs: release
     if: startsWith(github.ref, 'refs/tags/v') && vars.MIST_MIRROR_ENABLED == 'true'
     runs-on: ubuntu-24.04
     steps:
-      - name: Not implemented yet
+      - name: Skip until rsync upload exists
         run: |
-          echo "::error::Mirror upload is not implemented yet (see docs/release/AUTO_UPDATE.md). Unset MIST_MIRROR_ENABLED."
-          exit 1
+          echo "::notice title=Mirror upload not implemented::rsync to mistlab.dev is not implemented yet. latest.json already lists https://mistlab.dev/downloads/mistterm/ before GitHub. This job does not fail the release. See docs/release/AUTO_UPDATE.md."
+          exit 0
