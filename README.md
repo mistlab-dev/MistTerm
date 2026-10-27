@@ -72,7 +72,7 @@ Running the GUI binary `Mist` with **no arguments** launches the desktop UI dire
 2. Launch **Mist** — onboarding opens once; starter commands are already in the library
 3. **⌘N / Ctrl+N** — new session; connect; run a starter snippet (disk / memory)
 4. Optional: sign in at mistlab.dev for team certs & audit; try AI “check disk on all servers” (no API key)
-5. **⌘K / Ctrl+K** — snippets; Activity Rail — SFTP / Monitor / AI / Forward
+5. **⌘K / Ctrl+K** — command palette when the terminal is not focused (sessions, snippets, history, SFTP / Monitor / AI). Focused Ctrl+K still deletes to the end of the line
 
 Community: [Discussions](https://github.com/mistlab-dev/MistTerm/discussions) · Stories: [mistlab.dev/stories](https://mistlab.dev/stories/)
 
@@ -157,7 +157,7 @@ GUI 二进制 `Mist` **不带任何参数**运行即直接拉起桌面界面（v
 2. 启动 **Mist**——首次弹出新手引导，命令库已有示例
 3. **⌘N / Ctrl+N** 新建会话并连接，跑一条示例命令（磁盘/内存）
 4. 可选：在 mistlab.dev 登录团队开证书与审计；AI 侧栏试「查所有服务器磁盘」（无需 Key）
-5. **⌘K / Ctrl+K** 片段；活动栏打开 SFTP / 监控 / AI / 转发
+5. **⌘K / Ctrl+K** 在终端失焦时打开命令面板（会话、片段、历史、SFTP / 监控 / AI）。终端聚焦时 Ctrl+K 仍是删到行尾
 
 社区：[Discussions](https://github.com/mistlab-dev/MistTerm/discussions) · 案例：[mistlab.dev/stories](https://mistlab.dev/stories/)
 

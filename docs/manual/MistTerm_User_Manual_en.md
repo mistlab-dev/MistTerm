@@ -108,7 +108,8 @@ Do not edit these files manually; use the in-app interface to make changes.
 | New/Edit connection | **Ctrl+N** / select in sidebar then **Ctrl+E** |
 | Open SFTP | **View → SFTP** or bottom bar **Files** |
 | View CPU/Memory | **View → Monitor** or bottom bar **Monitor** |
-| Command snippets | **Ctrl+K** when the terminal is not focused, or bottom bar **Snippets** |
+| Command palette | **Ctrl+K** when the terminal is not focused (Mac: **⌘K**). Fuzzy-search sessions, snippets, history, and app actions |
+| Command snippets | Bottom bar **Snippets**, or type a snippet name in the command palette |
 | AI Assistant | **Ctrl+Shift+A** or bottom bar **AI** |
 | Preferences | **Ctrl+,** |
 | Help & shortcuts | **Help → Quick Start / Keyboard Shortcuts** or **Ctrl+H** |
@@ -120,6 +121,21 @@ Do not edit these files manually; use the in-app interface to make changes.
 ![View menu](screenshots/12-menu-view.png)
 
 *Fig 4-2: View menu — toggle side panels*
+
+### 4.3 Command palette
+
+When the terminal is **not** focused, **Ctrl+K** (macOS: **⌘K**) opens the command palette. Type to fuzzy-search and run:
+
+- **Sessions**: focus an open tab, or connect if none is open
+- **Snippets**: same as the quick snippet picker — choosing one runs it (variables are filled in first)
+- **Command history**: fill the command into the terminal input without pressing Enter
+- **App actions**: open SFTP, Monitor, AI, port forwarding, Preferences, the command history window, a new session, and similar menu actions
+
+Keys: type to filter, Up/Down to move, Enter to run, Esc to close. While the panel is open, keystrokes are not sent to the terminal.
+
+**Why not Ctrl+Shift+K:** unfocused Ctrl+K / ⌘K does not conflict with the OS, so Windows and Linux keep Ctrl+K and macOS keeps ⌘K. When the terminal is focused, Ctrl+K is still sent to the shell and deletes to the end of the line (readline kill-to-EOL). The palette does not take that key.
+
+The quick snippet picker is still **Ctrl+Shift+J**, and it also opens only when the terminal is not focused.
 
 ---
 
@@ -169,7 +185,7 @@ Passwords and session info are **encrypted locally**. When switching computers, 
 
 - After connecting, type commands in the terminal area and press **Enter** to execute
 - **Ctrl+C** always interrupts the foreground program (SIGINT), including when text is selected. Copy the selection with **Ctrl+Shift+C** on Windows/Linux, or **⌘C** on Mac. Paste with **Ctrl+Shift+V** (Mac: **⌘V**)
-- **Ctrl+K** (terminal focused): sent to the shell; deletes to the end of the line. **Ctrl+J** (terminal focused): sent to the shell (line feed, same as readline). Connection search (Ctrl+J) and snippet search (Ctrl+K) run only when the terminal is not focused. The quick snippet picker is **Ctrl+Shift+J**, and it also opens only when the terminal is not focused
+- **Ctrl+K** (terminal focused): sent to the shell; deletes to the end of the line. **Ctrl+J** (terminal focused): sent to the shell (line feed, same as readline). Connection search (Ctrl+J) and the command palette (Ctrl+K, Mac: ⌘K) run only when the terminal is not focused. Unfocused Ctrl+K does not conflict with the OS, so Ctrl+Shift+K is not used. The quick snippet picker is **Ctrl+Shift+J**, and it also opens only when the terminal is not focused
 - **Alt** (macOS: **Option**) is Meta while the terminal is focused: **Alt+B** / **Alt+F** move by word, **Alt+D** / **Alt+Backspace** delete a word, and **Alt+.** inserts the last argument of the previous command (repeat to cycle earlier arguments). MistTerm UI shortcuts do not swallow these keys
 - **Select across several screens**: click the start, scroll with the wheel to the end, then **Shift+click** to extend the selection. While drag-selecting, move the pointer past the top/bottom edge of the terminal to auto-scroll (faster the farther you go). Then right-click → Copy selection or **Ctrl+Shift+C** (Mac: **⌘C**) copies all of it
 - **Chinese IME**: while composing, the preedit string is drawn at the cursor. The candidate list stays on the system IME panel. Ctrl chords such as Ctrl+C and Ctrl+R are still sent to the terminal during composition
@@ -270,7 +286,7 @@ Save frequently used commands as **snippets** for one-click insertion. Supports 
 
 | Method | Description |
 |--------|-------------|
-| **Ctrl+K** | Focus snippet search (only when the terminal is not focused; when it is, the key goes to the shell and deletes to the end of the line) |
+| **Ctrl+K** | Open the command palette and run a snippet (only when the terminal is not focused; when it is, the key goes to the shell and deletes to the end of the line. Mac: **⌘K**) |
 | **Ctrl+Shift+J** | Quick snippet selector (only when the terminal is not focused) |
 | Bottom bar **Snippets** | Open the snippet side panel |
 | **Tools → Snippet Library** | Manage, create, and edit snippets |
@@ -461,7 +477,7 @@ The following uses **Windows** keys; on macOS, replace **Ctrl** with **⌘** (e.
 | **Ctrl+Tab** / **Ctrl+Shift+Tab** | Next / previous tab |
 | **Ctrl+1 … Ctrl+9** | Switch to tab N |
 | **Ctrl+J** | Focus connection search (only when the terminal is not focused; when it is, the key goes to the shell as a line feed) |
-| **Ctrl+K** | Focus snippet search (only when the terminal is not focused; when it is, the key goes to the shell and deletes to the end of the line) |
+| **Ctrl+K** | Open the command palette (only when the terminal is not focused; search sessions, snippets, history, and actions. When focused, the key goes to the shell and deletes to the end of the line. Mac: **⌘K**. Ctrl+Shift+K is not used) |
 | **Ctrl+Shift+J** | Quick snippet selector (only when the terminal is not focused) |
 | **Ctrl+F** / **F3** | Find in terminal |
 | **Ctrl+C** | Interrupt the foreground program (SIGINT), even with a selection. Copy with **Ctrl+Shift+C** (Mac: **⌘C**) |

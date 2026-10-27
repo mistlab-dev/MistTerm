@@ -770,6 +770,12 @@ impl TerminalView {
         );
     }
 
+    /// 面板或命令填入之后，下一帧把键盘交回终端。
+    pub fn request_keyboard_focus(&mut self) {
+        self.terminal_wants_keyboard = true;
+        self.pending_focus_terminal = true;
+    }
+
     /// 把键盘/IME 让给 UI TextEdit(AI 草稿、偏好等)。
     /// 半角 ASCII 的 `Event::Text` 可被多个监听者看到；全角标点走 IME Composition，只进「当前 IME 目标」。
     /// 若不 surrender 终端 IME 框，全角 `，。` 会进已隐藏的 ime_capture 并被清空，AI 框像「打不出来」。

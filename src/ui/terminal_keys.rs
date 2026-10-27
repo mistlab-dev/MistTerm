@@ -237,8 +237,8 @@ pub fn consume_terminal_paste_shortcut(i: &mut InputState) -> bool {
 /// (AI、分屏、复制等)；若再写成 C0 字节，会出现 `^A` 进 shell、会话名被当命令执行。
 /// Copy/Paste 仍由 [`consume_terminal_copy_shortcut`] / paste 单独处理。
 ///
-/// Ctrl+J / Ctrl+K 在终端聚焦时必须进 PTY（换行 / 删到行尾）。连接搜索与片段搜索只在
-/// 终端失焦时由应用消费，见 [`app_jk_search_armed`]。
+/// Ctrl+J / Ctrl+K 在终端聚焦时必须进 PTY（换行 / 删到行尾）。连接搜索与命令面板只在
+/// 终端失焦时由应用消费，见 [`app_jk_search_armed`]。面板打开时不得再把按键送进 PTY。
 pub fn forward_ctrl_keys(i: &mut egui::InputState, mut send: impl FnMut(u8)) -> bool {
     let mods = Modifiers {
         ctrl: true,
@@ -256,8 +256,9 @@ pub fn forward_ctrl_keys(i: &mut egui::InputState, mut send: impl FnMut(u8)) -> 
     any
 }
 
-/// 连接搜索（Ctrl/⌘+J）和片段搜索（Ctrl/⌘+K）只在终端未持有键盘时生效。
+/// 连接搜索（Ctrl/⌘+J）和命令面板（Ctrl/⌘+K）只在终端未持有键盘时生效。
 /// 终端聚焦时这两个和弦交给 PTY（shell / readline / vim）。
+/// 命令面板不用 Ctrl+Shift+K：失焦 Ctrl+K / ⌘K 与系统快捷键不冲突。
 #[inline]
 pub fn app_jk_search_armed(terminal_focused: bool) -> bool {
     !terminal_focused
@@ -784,6 +785,46 @@ mod tests {
     fn app_search_shortcuts_only_when_terminal_unfocused() {
         assert!(!app_jk_search_armed(true));
         assert!(app_jk_search_armed(false));
+    }
+
+    /// 失焦主键打开命令面板，并且这个键不能再变成 PTY 的 VT（0x0b）。
+    #[test]
+    fn unfocused_primary_k_opens_palette_and_does_not_reach_pty() {
+        assert!(app_jk_search_armed(false));
+        assert!(!app_jk_search_armed(true));
+        let mods = {
+            #[cfg(target_os = "macos")]
+            {
+                Modifiers {
+                    command: true,
+                    ..Modifiers::NONE
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                Modifiers {
+                    ctrl: true,
+                    ..Modifiers::NONE
+                }
+            }
+        };
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.modifiers = mods;
+                i.events.push(key_press(Key::K, mods));
+                assert!(app_jk_search_armed(false));
+                assert!(crate::ui::keyboard_shortcuts::consume_primary_key(
+                    i,
+                    Key::K
+                ));
+                let mut sent = Vec::new();
+                assert!(!forward_ctrl_keys(i, |b| sent.push(b)));
+                assert!(
+                    sent.is_empty(),
+                    "unfocused primary K is the command palette, not kill-to-EOL"
+                );
+            });
+        });
     }
 
     fn alt_only() -> Modifiers {
@@ -1414,7 +1455,7 @@ mod tests {
                 }),
             ),
             (
-                "unfocused Ctrl+K snippet search",
+                "unfocused Ctrl+K command palette",
                 winit_like(Key::K, Modifiers::CTRL, None),
                 Box::new(|i| {
                     assert!(app_jk_search_armed(false));
