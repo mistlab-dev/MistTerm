@@ -214,6 +214,48 @@ The mouse in the terminal is for **selecting text** and **scrolling**. The follo
 - **Alt+click does not move the cursor** to the clicked cell (the shell line does not jump there)
 - **MistTerm does not send the xterm mouse protocol to the PTY.** tmux and vim mouse modes therefore do not work: clicks and drags are not reported to the remote program
 
+### 6.5 Command blocks
+
+One command and its output can be one block: jump to the previous or next block, or copy the command plus its output in one step. Boundaries come only from shell integration **OSC 133** (VS Code **OSC 633** is recognized the same way). Without those markers MistTerm does not guess from Enter or from the prompt, and a vim / less / htop fullscreen frame is not a block.
+
+**Shortest way to turn it on**
+
+- If **iTerm2** or **VS Code** shell integration is already enabled, leave it on.
+- bash, in `~/.bashrc`:
+
+```bash
+__mist_cmd_block() {
+  local ec=$?
+  printf '\e]133;D;%s\a' "$ec"
+  printf '\e]133;A\a'
+}
+PROMPT_COMMAND="__mist_cmd_block${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+PS1="${PS1}"'\[\e]133;B\a\]'
+```
+
+- zsh, in `~/.zshrc` (if `precmd` / `preexec` already exist, add the `printf` lines to those functions):
+
+```zsh
+precmd() {
+  local ec=$?
+  printf '\e]133;D;%s\a' "$ec"
+  printf '\e]133;A\a'
+}
+preexec() { printf '\e]133;C\a'; }
+PS1="${PS1}"'%{\e]133;B\a%}'
+```
+
+`C` (command submitted) is optional. `A` / `B` / `D` alone still form a block after the command finishes. Open a new terminal tab so the shell reloads.
+
+**Using it** (the terminal must be focused; Windows / Linux use Ctrl+Shift, macOS uses ⌘⇧)
+
+- **Ctrl+Shift+↑**: previous command block
+- **Ctrl+Shift+↓**: next command block. Past the last block, this returns to the latest output
+- **Ctrl+Shift+O**: copy the current command block (from the end of the prompt through the end of the command; a command that is still running is copied up to the cursor)
+- The terminal context menu has the same three items. Without shell integration they show a hint pointing at this section. The view does not scroll, and the shortcut is not sent to the shell
+
+A copy keeps at most the first **4000** lines and **200000** characters. Longer output is truncated and marked. The command that entered vim or less is still one block; the copy does not include the fullscreen frame.
+
 ---
 
 ## 7. Transferring Files
@@ -466,6 +508,8 @@ The following uses **Windows** keys; on macOS, replace **Ctrl** with **⌘** (e.
 | **Ctrl+F** / **F3** | Find in terminal |
 | **Ctrl+C** | Interrupt the foreground program (SIGINT), even with a selection. Copy with **Ctrl+Shift+C** (Mac: **⌘C**) |
 | **Ctrl+Shift+V** (Mac: **⌘V**) | Paste into the terminal |
+| **Ctrl+Shift+↑** / **Ctrl+Shift+↓** (Mac: **⌘⇧↑** / **⌘⇧↓**) | Previous / next command block (needs shell integration; see [6.5](#65-command-blocks)) |
+| **Ctrl+Shift+O** (Mac: **⌘⇧O**) | Copy the current command block (command and output; long output is truncated) |
 | **Ctrl+R** | When the terminal is focused, goes to the shell (reverse-i-search). When it is not, opens Mist command history. The panel is also under **Tools → Command History** |
 | **Ctrl+Shift+A** | AI assistant panel |
 | **Ctrl+Shift+L** | Send terminal selection to AI |
