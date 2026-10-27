@@ -1161,6 +1161,30 @@ impl MistTermApp {
                         "记录执行过的命令摘要",
                     ),
                 );
+                Self::preferences_row_divider(ui, theme);
+                if crate::ui::chrome::form_checkbox(
+                    ui,
+                    theme,
+                    &mut self.app_settings.audit.interactive_pty_capture,
+                    crate::i18n::tr(
+                        ctx,
+                        "Check and record commands typed in the terminal",
+                        "检查并记录终端里手输的命令",
+                    ),
+                )
+                .changed()
+                {
+                    let _ = self.app_settings.save();
+                }
+                ui.label(
+                    RichText::new(crate::i18n::tr(
+                        ctx,
+                        "When team audit is on, Enter uses the same local block/confirm/allow check as snippets and writes one JSONL line. Off: Enter is sent immediately. Without a team login, typing is unchanged.",
+                        "团队审计生效时, 回车与片段一样先做本地拦截/确认/放行, 并写一条 JSONL。关闭后回车立即发出。未登录团队时, 打字行为不变。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(text_low),
+                );
                 // 团队 HTTP 上报由登录后的 configure_team_audit_sink 自动配置
                 // (URL / Bearer / team_id)，用户无需在偏好里手动维护。
                 Self::preferences_row_divider(ui, theme);
