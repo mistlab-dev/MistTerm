@@ -56,7 +56,16 @@ mist ssh web-prod-01
 
 # 通过快速地址连接（user@host:port）
 mist ssh root@192.168.1.50:2202
+
+# 把本次交互里回车提交的命令写成 JSONL
+# 默认 ~/.mist/logs/ssh-<会话>-<UTC时间>.jsonl
+mist ssh web-prod-01 --log-session
+
+# 写到指定文件
+mist ssh web-prod-01 --log-session=/tmp/web-prod-01.jsonl
 ```
+
+不加 `--log-session` 时不写这个文件。字段与桌面终端的 `exec_history`（#156）相同：`target`、`command`、`timestamp`；`exit_code` 能取到才写；`output_summary` 有上界。
 
 ---
 
