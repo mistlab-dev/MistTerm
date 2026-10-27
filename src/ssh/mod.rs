@@ -76,7 +76,7 @@ pub use socks_proxy::{spawn_dynamic_forward_controllable, DynamicPortForward};
 pub use jump::{JumpHop, parse_jump_chain, parse_jump_endpoint};
 pub use user_facing::format_ssh_connect_error;
 pub use sftp::{
-    SftpClient, SftpEntry, TransferProgress, TransferResult, WriteMode,
+    RemoteNode, SftpClient, SftpEntry, TransferProgress, TransferResult, WriteMode,
 };
 pub use manager::{probe_now_us, set_repaint_context, take_oldest_pending_us, SshManager, SshMessage, SshSessionHandle, SshSessionId};
 pub use lrzsz::{LrzszTransfer, TransferEvent};
