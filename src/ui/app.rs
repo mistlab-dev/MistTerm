@@ -2806,6 +2806,7 @@ impl MistTermApp {
     /// 宿主侧保存流程辅助：无。
     fn poll_connect_audit_from_tabs(&mut self, ctx: &egui::Context) {
         let mut toast_errors: Vec<(usize, String)> = Vec::new();
+        let mut toast_infos: Vec<String> = Vec::new();
         let mut display_link_sftp: Option<String> = None;
         let mut display_link_runbook: Option<String> = None;
         let mut display_link_connect: Option<String> = None;
@@ -2813,6 +2814,9 @@ impl MistTermApp {
             for pane in tab.panes.iter_mut() {
                 if let Some(err) = pane.terminal.take_pending_toast_error() {
                     toast_errors.push((tab_idx, err));
+                }
+                if let Some(info) = pane.terminal.take_pending_toast_info() {
+                    toast_infos.push(info);
                 }
                 // display-link 点击跳转 SFTP（#90）：收集后在循环外开面板并定位到路径。
                 if display_link_sftp.is_none() {
@@ -2862,6 +2866,9 @@ impl MistTermApp {
                     }
                 }
             }
+        }
+        for info in toast_infos {
+            self.notify_info(info);
         }
         for (tab_idx, err) in toast_errors {
             // 正在看这个标签时，中央失败卡片已有重试/编辑/关闭，不再叠同文案 Toast。

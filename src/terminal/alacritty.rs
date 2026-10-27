@@ -11,6 +11,10 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::{point_to_viewport, Config, Term};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{CursorShape, Processor};
+use super::command_block::{
+    bound_copied_text, CommandBlockIndex, GridPoint, OscSplitter, SplitItem,
+};
+pub use super::command_block::{BlockNav, CopyBlock, NavDir};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -83,6 +87,12 @@ fn inclusive_end_from_exclusive(start: Point, end: Point, columns: usize) -> Opt
     Some(Point::new(end.line, Column(end.column.0 - 1)))
 }
 
+struct ScrollSnap {
+    history: usize,
+    anchor_line: Option<i32>,
+    anchor_sig: Option<u64>,
+}
+
 /// 终端模拟器（由 alacritty_terminal 驱动）
 pub struct Terminal {
     term: Term<BellListener>,
@@ -93,6 +103,11 @@ pub struct Terminal {
     content_epoch: u64,
     /// 与 `BellListener` 共享；`feed` 解析到 BEL 后置位，宿主 `take`。
     bell_pending: Arc<AtomicBool>,
+    /// OSC 133 / 633 命令块。坐标跟主屏幕网格走，备用屏幕不取样。
+    blocks: CommandBlockIndex,
+    osc: OscSplitter,
+    /// `Config::default().scrolling_history`，用来判断历史是否已经顶满。
+    scrollback_limit: usize,
 }
 
 impl Default for Terminal {
@@ -107,10 +122,12 @@ impl Terminal {
         let height = height.clamp(5, 256);
         let size = TermSize::new(width, height);
         let bell_pending = Arc::new(AtomicBool::new(false));
+        let config = Config::default();
         // FUNCTIONAL_SPEC §2.4：`alacritty_terminal` 默认 `scrolling_history` 已为 10000，与「保留最后 10000 行」一致。
+        let scrollback_limit = config.scrolling_history;
         Self {
             term: Term::new(
-                Config::default(),
+                config,
                 &size,
                 BellListener {
                     pending: Arc::clone(&bell_pending),
@@ -121,6 +138,9 @@ impl Terminal {
             height,
             content_epoch: 0,
             bell_pending,
+            blocks: CommandBlockIndex::default(),
+            osc: OscSplitter::default(),
+            scrollback_limit,
         }
     }
 
@@ -178,23 +198,243 @@ impl Terminal {
         let nh = height.clamp(5, 256);
         if nw != self.width || nh != self.height {
             self.content_epoch = self.content_epoch.wrapping_add(1);
+            let columns_changed = nw != self.width;
+            let snap = self.scroll_snap();
             self.width = nw;
             self.height = nh;
             self.term.resize(TermSize::new(self.width, self.height));
+            if columns_changed {
+                // 折行会改写每一行的边界，旧网格坐标不再指向同一段输出。
+                self.blocks.drop_coordinates();
+            } else {
+                self.rebase_blocks(snap);
+            }
         }
     }
 
     pub fn feed(&mut self, data: &[u8]) {
-        if !data.is_empty() {
-            self.content_epoch = self.content_epoch.wrapping_add(1);
+        if data.is_empty() {
+            return;
         }
-        self.parser.advance(&mut self.term, data);
+        self.content_epoch = self.content_epoch.wrapping_add(1);
+        let mut items = Vec::new();
+        self.osc.push(data, &mut items);
+        for item in items {
+            match item {
+                SplitItem::Bytes(bytes) => self.feed_bytes(&bytes),
+                SplitItem::Marker {
+                    raw,
+                    kind,
+                    exit_code,
+                } => {
+                    self.feed_bytes(&raw);
+                    self.apply_marker(kind, exit_code);
+                }
+            }
+        }
+    }
+
+    fn feed_bytes(&mut self, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        let was_alt = self.is_alt_screen();
+        let snap = if !was_alt && !self.blocks.is_empty() {
+            Some(self.scroll_snap())
+        } else {
+            None
+        };
+        self.parser.advance(&mut self.term, bytes);
+        let now_alt = self.is_alt_screen();
+        if !was_alt && now_alt {
+            self.blocks.mark_fullscreen();
+            return;
+        }
+        if was_alt {
+            return;
+        }
+        if let Some(snap) = snap {
+            self.rebase_blocks(snap);
+        }
+    }
+
+    fn apply_marker(&mut self, kind: u8, exit_code: Option<i32>) {
+        if self.is_alt_screen() {
+            self.blocks.on_marker_while_alt(kind, exit_code);
+            return;
+        }
+        let point = self.cursor_point();
+        self.blocks.on_marker(kind, point, exit_code);
+    }
+
+    fn cursor_point(&self) -> GridPoint {
+        let cursor = &self.term.grid().cursor;
+        let column = if cursor.input_needs_wrap {
+            self.width
+        } else {
+            cursor.point.column.0
+        };
+        GridPoint {
+            line: cursor.point.line.0,
+            column,
+        }
     }
 
     /// 清空滚动历史缓冲区，保留当前屏幕内容
     pub fn clear_history(&mut self) {
         self.content_epoch = self.content_epoch.wrapping_add(1);
         self.term.grid_mut().clear_history();
+        let top = self.term.grid().topmost_line().0;
+        self.blocks.prune(top);
+    }
+
+    /// 主屏幕上是否出现过 OSC 133 / 633 的 A/B/C/D。
+    pub fn shell_integration_seen(&self) -> bool {
+        self.blocks.shell_integration_seen()
+    }
+
+    /// 上一条 / 下一条命令块。没集成时返回 [`BlockNav::NoIntegration`]，不猜边界。
+    pub fn navigate_command_block(&mut self, dir: NavDir) -> BlockNav {
+        self.blocks.navigate(dir)
+    }
+
+    /// 滚轮翻页后不再停在某一块。
+    pub fn clear_command_block_parked(&mut self) {
+        self.blocks.clear_parked();
+    }
+
+    /// 复制导航停住的块；没停过则复制最新一条命令及其输出。超长按行数和字符数截断。
+    pub fn copy_command_block_text(&self) -> CopyBlock {
+        let block = match self.blocks.copy_target() {
+            Ok(block) => block,
+            Err(err) => return err,
+        };
+        let top = self.term.grid().topmost_line().0;
+        let (start, end, line_clipped) = block.copy_span(self.cursor_point(), top);
+        if (end.line, end.column) <= (start.line, start.column) {
+            return CopyBlock::Empty;
+        }
+        let mut text = self.text_in_point_range(
+            Point::new(Line(start.line), Column(start.column)),
+            Point::new(Line(end.line), Column(end.column)),
+        );
+        if line_clipped && !text.contains("[truncated") {
+            text.push_str("\n… [truncated]");
+        }
+        let text = bound_copied_text(&text);
+        if text.trim().is_empty() {
+            CopyBlock::Empty
+        } else {
+            CopyBlock::Text(text)
+        }
+    }
+
+    /// 让 `line` 成为视口第一行（仍在当前屏内的正行号则滚回底部，保证它可见）。
+    pub fn scroll_line_to_top(&mut self, line: Line) {
+        self.scroll_line_into_view(line);
+    }
+
+    fn scroll_snap(&self) -> ScrollSnap {
+        let history = self.term.grid().history_size();
+        if history == 0 {
+            return ScrollSnap {
+                history,
+                anchor_line: None,
+                anchor_sig: None,
+            };
+        }
+        ScrollSnap {
+            history,
+            anchor_line: Some(-1),
+            anchor_sig: Some(self.row_sig(Line(-1))),
+        }
+    }
+
+    /// 内容滚进历史后，块的行号要跟着减。对不齐（折行、历史被截掉）就丢掉坐标。
+    fn rebase_blocks(&mut self, before: ScrollSnap) {
+        if self.blocks.is_empty() {
+            return;
+        }
+        let history = self.term.grid().history_size();
+        let top = self.term.grid().topmost_line().0;
+        if history < before.history {
+            self.blocks.prune(top);
+            return;
+        }
+        if history > before.history {
+            let shift = -((history - before.history) as i32);
+            if history < self.scrollback_limit {
+                self.blocks.shift_lines(shift);
+                self.blocks.prune(top);
+                return;
+            }
+            if self.anchor_landed(&before, shift) {
+                self.blocks.shift_lines(shift);
+                self.blocks.prune(top);
+                return;
+            }
+            if let Some(shift) = self.anchor_shift(&before, top) {
+                self.blocks.shift_lines(shift);
+                self.blocks.prune(top);
+            } else {
+                self.blocks.drop_coordinates();
+            }
+            return;
+        }
+        if history < self.scrollback_limit {
+            return;
+        }
+        if self.anchor_landed(&before, 0) {
+            return;
+        }
+        if let Some(shift) = self.anchor_shift(&before, top) {
+            self.blocks.shift_lines(shift);
+            self.blocks.prune(top);
+        } else {
+            self.blocks.drop_coordinates();
+        }
+    }
+
+    fn anchor_landed(&self, before: &ScrollSnap, shift: i32) -> bool {
+        let (Some(line), Some(sig)) = (before.anchor_line, before.anchor_sig) else {
+            return true;
+        };
+        let expected = line.saturating_add(shift);
+        self.line_in_grid(expected) && self.row_sig(Line(expected)) == sig
+    }
+
+    fn anchor_shift(&self, before: &ScrollSnap, top: i32) -> Option<i32> {
+        let (line, sig) = (before.anchor_line?, before.anchor_sig?);
+        let found = self.find_row_sig(sig, top, line)?;
+        Some(found - line)
+    }
+
+    fn find_row_sig(&self, sig: u64, top: i32, from: i32) -> Option<i32> {
+        let mut line = from - 1;
+        while line >= top {
+            if self.row_sig(Line(line)) == sig {
+                return Some(line);
+            }
+            line -= 1;
+        }
+        None
+    }
+
+    fn line_in_grid(&self, line: i32) -> bool {
+        let grid = self.term.grid();
+        (grid.topmost_line().0..=grid.bottommost_line().0).contains(&line)
+    }
+
+    fn row_sig(&self, line: Line) -> u64 {
+        let grid = self.term.grid();
+        let mut hash = 0xcbf29ce484222325u64;
+        let cols = grid.columns();
+        for column in 0..cols {
+            let ch = grid[line][Column(column)].c as u64;
+            hash ^= ch;
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+        hash
     }
 
     /// 滚动视口查看 scrollback（`Scroll::Delta` 为正时向上翻历史）。
@@ -1007,5 +1247,181 @@ mod bracketed_paste_tests {
         assert!(t.is_bracketed_paste());
         t.feed(b"\x1b[?2004l");
         assert!(!t.is_bracketed_paste());
+    }
+}
+
+#[cfg(test)]
+mod command_block_tests {
+    use super::*;
+
+    fn feed_command(t: &mut Terminal, cmd: &str, output: &str, code: i32) {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(b"\x1b]133;A\x07$ ");
+        buf.extend_from_slice(b"\x1b]133;B\x07");
+        buf.extend_from_slice(cmd.as_bytes());
+        buf.extend_from_slice(b"\r\n\x1b]133;C\x07");
+        buf.extend_from_slice(output.as_bytes());
+        if !output.ends_with('\n') {
+            buf.extend_from_slice(b"\r\n");
+        }
+        buf.extend_from_slice(format!("\x1b]133;D;{code}\x07").as_bytes());
+        t.feed(&buf);
+    }
+
+    fn copied(t: &Terminal) -> String {
+        match t.copy_command_block_text() {
+            CopyBlock::Text(text) => text,
+            other => panic!("expected block text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn three_commands_prev_next_land_on_each_block() {
+        let mut t = Terminal::new(80, 24);
+        feed_command(&mut t, "echo one", "one", 0);
+        feed_command(&mut t, "echo two", "two", 0);
+        feed_command(&mut t, "echo three", "three", 0);
+        t.feed(b"\x1b]133;A\x07$ \x1b]133;B\x07");
+
+        assert!(t.shell_integration_seen());
+        assert_eq!(t.blocks.navigable_count(), 3);
+
+        assert!(matches!(
+            t.navigate_command_block(NavDir::Prev),
+            BlockNav::ScrollTo(_)
+        ));
+        let third = copied(&t);
+        assert!(third.contains("echo three\nthree"), "{third}");
+        assert!(!third.contains("echo two"), "{third}");
+
+        assert!(matches!(
+            t.navigate_command_block(NavDir::Prev),
+            BlockNav::ScrollTo(_)
+        ));
+        let second = copied(&t);
+        assert!(second.contains("echo two"), "{second}");
+        assert!(second.contains("two"), "{second}");
+        assert!(!second.contains("echo three"), "{second}");
+
+        assert!(matches!(
+            t.navigate_command_block(NavDir::Prev),
+            BlockNav::ScrollTo(_)
+        ));
+        let first = copied(&t);
+        assert!(
+            first.contains("echo one") && first.contains("one"),
+            "{first}"
+        );
+        assert_eq!(t.navigate_command_block(NavDir::Prev), BlockNav::AtEdge);
+
+        assert!(matches!(
+            t.navigate_command_block(NavDir::Next),
+            BlockNav::ScrollTo(_)
+        ));
+        assert!(copied(&t).contains("echo two"));
+        assert!(matches!(
+            t.navigate_command_block(NavDir::Next),
+            BlockNav::ScrollTo(_)
+        ));
+        assert!(copied(&t).contains("echo three"));
+        assert_eq!(t.navigate_command_block(NavDir::Next), BlockNav::Bottom);
+    }
+
+    #[test]
+    fn block_text_survives_scrollback_and_stays_bounded() {
+        let mut t = Terminal::new(40, 8);
+        feed_command(&mut t, "echo kept", "kept-output", 0);
+        for i in 0..30 {
+            t.feed(format!("pad-{i}\r\n").as_bytes());
+        }
+        feed_command(&mut t, "echo later", "later-output", 0);
+        t.navigate_command_block(NavDir::Prev);
+        t.navigate_command_block(NavDir::Prev);
+        let text = copied(&t);
+        assert!(text.contains("echo kept"), "{text}");
+        assert!(text.contains("kept-output"), "{text}");
+        assert!(!text.contains("pad-0"), "{text}");
+        assert!(!text.contains("echo later"), "{text}");
+    }
+
+    #[test]
+    fn long_output_is_truncated() {
+        let mut t = Terminal::new(40, 10);
+        let mut output = String::new();
+        for i in 0..(super::super::command_block::COPY_MAX_LINES + 5) {
+            output.push_str(&format!("row-{i}\r\n"));
+        }
+        feed_command(&mut t, "seq", &output, 0);
+        let text = copied(&t);
+        assert!(text.contains("seq"), "{text}");
+        assert!(text.contains("row-0"), "{text}");
+        assert!(text.contains("[truncated]"), "{text}");
+        assert!(!text.contains(&format!(
+            "row-{}",
+            super::super::command_block::COPY_MAX_LINES + 3
+        )));
+    }
+
+    #[test]
+    fn alt_screen_is_not_a_command_block() {
+        let mut t = Terminal::new(40, 12);
+        t.feed(b"\x1b]133;A\x07$ \x1b]133;B\x07vim file\r\n\x1b]133;C\x07");
+        t.feed(b"\x1b[?1049h\x1b[H\x1b[2J");
+        assert!(t.is_alt_screen());
+        t.feed(b"VIM FULLSCREEN BODY\r\n~\r\n~\r\n");
+        t.feed(b"\x1b[?1049l");
+        assert!(!t.is_alt_screen());
+        t.feed(b"\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07");
+        assert_eq!(t.blocks.navigable_count(), 1);
+        assert_eq!(t.blocks.fullscreen_flags(), vec![true]);
+        let text = copied(&t);
+        assert!(text.contains("vim file"), "{text}");
+        assert!(!text.contains("FULLSCREEN"), "{text}");
+        assert!(!text.contains('~'), "{text}");
+    }
+
+    #[test]
+    fn without_osc_133_there_are_no_blocks_even_around_fullscreen() {
+        let mut t = Terminal::new(40, 12);
+        t.feed(b"$ less notes\r\n");
+        t.feed(b"\x1b[?1049h\x1b[HLESS BODY\r\n~\r\n");
+        t.feed(b"\x1b[?1049l");
+        t.feed(b"$ htop\r\n\x1b[?1049hHTOP\x1b[?1049l$ ");
+        assert!(!t.shell_integration_seen());
+        assert_eq!(t.blocks.navigable_count(), 0);
+        assert_eq!(
+            t.navigate_command_block(NavDir::Prev),
+            BlockNav::NoIntegration
+        );
+        assert_eq!(
+            t.navigate_command_block(NavDir::Next),
+            BlockNav::NoIntegration
+        );
+        assert!(matches!(
+            t.copy_command_block_text(),
+            CopyBlock::NoIntegration
+        ));
+    }
+
+    #[test]
+    fn vscode_633_and_split_d_set_exit_code() {
+        let mut t = Terminal::new(40, 10);
+        t.feed(b"\x1b]633;A\x07$ \x1b]633;B\x07false\r\n\x1b]633;C\x07");
+        t.feed(b"\x1b]633;D;");
+        t.feed(b"4\x07");
+        assert_eq!(t.blocks.exit_codes(), vec![Some(4)]);
+        let text = copied(&t);
+        assert!(text.contains("false"), "{text}");
+    }
+
+    #[test]
+    fn iterm_1337_is_not_a_command_marker() {
+        let mut t = Terminal::new(40, 8);
+        t.feed(b"\x1b]1337;RemoteHost=a@b\x07hello\r\n");
+        t.feed(b"\x1b]0;title\x07world\r\n");
+        assert!(!t.shell_integration_seen());
+        let screen = t.get_formatted_output();
+        assert!(screen.contains("hello"), "{screen}");
+        assert!(screen.contains("world"), "{screen}");
     }
 }

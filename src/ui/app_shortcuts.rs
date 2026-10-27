@@ -48,6 +48,9 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — interrupt the foreground program (SIGINT), even if text is selected\n\
              {} — copy the terminal selection\n\
              {} — paste into the terminal\n\
+             {} — previous command block (needs shell integration, OSC 133)\n\
+             {} — next command block\n\
+             {} — copy the current command block (command and output; long output is truncated)\n\
              {} — Select all (terminal)\n\
              {} — AI assistant panel\n\
              {} — send terminal selection to AI\n\
@@ -79,6 +82,9 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::terminal_interrupt_accel(),
             s::terminal_copy_accel(),
             s::terminal_paste_accel(),
+            s::command_block_prev_accel(),
+            s::command_block_next_accel(),
+            s::command_block_copy_accel(),
             s::accel_shift("A"),
             s::accel_shift("I"),
             s::accel_shift("L"),
@@ -107,6 +113,9 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — 中断前台程序 (SIGINT), 有选区也一样\n\
              {} — 复制终端选区\n\
              {} — 粘贴到终端\n\
+             {} — 上一条命令块 (需要 shell integration, OSC 133)\n\
+             {} — 下一条命令块\n\
+             {} — 复制当前命令块 (命令和输出; 过长会截断)\n\
              {} — 全选(终端)\n\
              {} — AI 助手面板\n\
              {} — 终端选区发送到 AI\n\
@@ -132,6 +141,9 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::terminal_interrupt_accel(),
             s::terminal_copy_accel(),
             s::terminal_paste_accel(),
+            s::command_block_prev_accel(),
+            s::command_block_next_accel(),
+            s::command_block_copy_accel(),
             s::accel_shift("A"),
             s::accel_shift("I"),
             s::accel_shift("L"),

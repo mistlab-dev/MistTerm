@@ -403,6 +403,8 @@ pub struct TerminalView {
     agent_audit_banner_dismissed: bool,
     /// 连接失败待宿主 Toast(`take_pending_toast_error` 取走)
     pending_toast_error: Option<String>,
+    /// 命令块导航 / 复制的提示（未启用 OSC 133、已经到头）。宿主用 Info toast 显示。
+    pending_toast_info: Option<String>,
     /// Connect placeholder button (`take_connection_placeholder_action`)
     pending_connection_placeholder_action: ConnectionPlaceholderAction,
     /// 拖入终端区域、待宿主处理的上传路径(§4.3.2)。
@@ -974,6 +976,7 @@ impl TerminalView {
             agent_audit_degraded: false,
             agent_audit_banner_dismissed: false,
             pending_toast_error: None,
+            pending_toast_info: None,
             pending_connection_placeholder_action: ConnectionPlaceholderAction::None,
             pending_drop_upload_paths: Vec::new(),
             zmodem_upload_after_rz_path: None,
@@ -1699,6 +1702,7 @@ impl TerminalView {
         }
 
         if capture_pty_keyboard {
+            self.handle_command_block_shortcuts(ui);
             self.capture_inline_input(ui);
         }
         if self.connected {
@@ -2301,6 +2305,7 @@ impl TerminalView {
                                 let lines = (dy / cell_h).round().clamp(-64.0, 64.0) as i32;
                                 if lines != 0 {
                                     self.terminal.scroll_display(Scroll::Delta(lines));
+                                    self.terminal.clear_command_block_parked();
                                     self.visual_layout_cache = None;
                                 }
                             }
@@ -2426,6 +2431,7 @@ impl TerminalView {
                                                 self.select_autoscroll_acc -= whole;
                                                 self.terminal
                                                     .scroll_display(Scroll::Delta(whole as i32));
+                                                self.terminal.clear_command_block_parked();
                                                 self.visual_layout_cache = None;
                                             }
                                             ui.ctx().request_repaint();
@@ -2565,6 +2571,51 @@ impl TerminalView {
                                     if let Ok(mut clip) = Clipboard::new() {
                                         let _ = clip.set_text(self.terminal.get_formatted_output());
                                     }
+                                    ui.close_menu();
+                                }
+                                ui.separator();
+                                let block_prev = crate::platform::shortcuts::command_block_prev_accel();
+                                let block_next = crate::platform::shortcuts::command_block_next_accel();
+                                let block_copy = crate::platform::shortcuts::command_block_copy_accel();
+                                if crate::ui::chrome::popup_menu_button_shortcut(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(
+                                        ui.ctx(),
+                                        "Previous command block",
+                                        "上一条命令块",
+                                    ),
+                                    Some(&block_prev),
+                                )
+                                .clicked()
+                                {
+                                    self.jump_command_block(ui.ctx(), crate::terminal::NavDir::Prev);
+                                    ui.close_menu();
+                                }
+                                if crate::ui::chrome::popup_menu_button_shortcut(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(ui.ctx(), "Next command block", "下一条命令块"),
+                                    Some(&block_next),
+                                )
+                                .clicked()
+                                {
+                                    self.jump_command_block(ui.ctx(), crate::terminal::NavDir::Next);
+                                    ui.close_menu();
+                                }
+                                if crate::ui::chrome::popup_menu_button_shortcut(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(
+                                        ui.ctx(),
+                                        "Copy command block",
+                                        "复制本命令块",
+                                    ),
+                                    Some(&block_copy),
+                                )
+                                .clicked()
+                                {
+                                    self.copy_current_command_block(ui.ctx());
                                     ui.close_menu();
                                 }
                                 let paste_accel = crate::platform::terminal_paste_accel();
@@ -3834,6 +3885,89 @@ impl TerminalView {
         self.copy_to_clipboard(ctx, true).is_some()
     }
 
+    /// 终端聚焦时：上一条 / 下一条命令块，以及复制当前块。
+    /// 在方向键转发给 PTY 之前消费，避免 Ctrl+Shift+↑ 变成 xterm 修饰序列。
+    fn handle_command_block_shortcuts(&mut self, ui: &egui::Ui) {
+        let (prev, next, copy) = ui.input_mut(|i| {
+            let prev =
+                crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::ArrowUp);
+            let next =
+                crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::ArrowDown);
+            let copy = crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::O);
+            (prev, next, copy)
+        });
+        if prev {
+            self.jump_command_block(ui.ctx(), crate::terminal::NavDir::Prev);
+        }
+        if next {
+            self.jump_command_block(ui.ctx(), crate::terminal::NavDir::Next);
+        }
+        if copy {
+            self.copy_current_command_block(ui.ctx());
+        }
+    }
+
+    fn jump_command_block(&mut self, ctx: &egui::Context, dir: crate::terminal::NavDir) {
+        use crate::terminal::{BlockNav, NavDir};
+        match self.terminal.navigate_command_block(dir) {
+            BlockNav::ScrollTo(line) => {
+                self.terminal
+                    .scroll_line_to_top(alacritty_terminal::index::Line(line));
+                self.auto_follow_output = self.terminal.is_scrolled_to_bottom();
+                self.visual_layout_cache = None;
+                self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
+            }
+            BlockNav::Bottom => {
+                self.terminal.scroll_to_bottom();
+                self.auto_follow_output = true;
+                self.visual_layout_cache = None;
+                self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
+            }
+            BlockNav::NoIntegration => {
+                self.pending_toast_info = Some(
+                    crate::i18n::tr(
+                        ctx,
+                        "Command blocks need shell integration (OSC 133). See the manual: Terminal → Command blocks.",
+                        "命令块需要 shell integration (OSC 133). 见手册「使用终端 → 命令块」.",
+                    )
+                    .to_string(),
+                );
+            }
+            BlockNav::AtEdge => {
+                let (en, zh) = match dir {
+                    NavDir::Prev => ("Already at the first command block", "已经是第一条命令块"),
+                    NavDir::Next => ("Already at the latest output", "已经在最新输出"),
+                };
+                self.pending_toast_info = Some(crate::i18n::tr(ctx, en, zh).to_string());
+            }
+        }
+    }
+
+    fn copy_current_command_block(&mut self, ctx: &egui::Context) {
+        use crate::terminal::CopyBlock;
+        match self.terminal.copy_command_block_text() {
+            CopyBlock::Text(text) => {
+                ctx.copy_text(text);
+            }
+            CopyBlock::NoIntegration => {
+                self.pending_toast_info = Some(
+                    crate::i18n::tr(
+                        ctx,
+                        "Command blocks need shell integration (OSC 133). See the manual: Terminal → Command blocks.",
+                        "命令块需要 shell integration (OSC 133). 见手册「使用终端 → 命令块」.",
+                    )
+                    .to_string(),
+                );
+            }
+            CopyBlock::Empty => {
+                self.pending_toast_info = Some(
+                    crate::i18n::tr(ctx, "No command block to copy", "没有可复制的命令块")
+                        .to_string(),
+                );
+            }
+        }
+    }
+
     /// 快捷键 Ctrl+Shift+C：仅复制选区；无选区时不复制。
     /// 返回放进剪贴板的文字(无选区为 `None`)，供调用方在帧末核对是否被别的控件覆盖。
     pub(crate) fn shortcut_copy_to_clipboard(&self, ctx: &egui::Context) -> Option<String> {
@@ -4775,6 +4909,11 @@ impl TerminalView {
 
     pub fn take_pending_toast_error(&mut self) -> Option<String> {
         self.pending_toast_error.take()
+    }
+
+    /// 命令块提示（未集成、已经到头、没有可复制的块）。
+    pub fn take_pending_toast_info(&mut self) -> Option<String> {
+        self.pending_toast_info.take()
     }
 
     pub fn take_connection_placeholder_action(&mut self) -> ConnectionPlaceholderAction {
