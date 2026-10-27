@@ -14,13 +14,14 @@ mod sftp_select;
 mod sftp_diff_ui;
 
 use crate::core::sftp_diff::{
-    compare_snapshots, directory_rels, join_local, join_remote, plan_sync, walk_local_diff,
-    SyncDirection, WalkOutcome,
+    check_dest_rel, check_local_rel, compare_snapshots, directory_rels, join_local, join_remote,
+    mkdir_local_nofollow, plan_sync, walk_local_diff, DestCheck, FsNode, SyncDirection, WalkOutcome,
 };
 use crate::core::{AuditCategory, AuditEvent, AuditLogger, AuditOutcome};
 use crate::i18n::UiLanguage;
 use crate::ssh::{
-    SftpClient, SftpEntry, SshSessionHandle, TransferProgress, TransferResult, WriteMode,
+    RemoteNode, SftpClient, SftpEntry, SshSessionHandle, TransferProgress, TransferResult,
+    WriteMode,
 };
 use crate::ui::layout_util;
 use crate::ui::terminal::TerminalView;
@@ -37,8 +38,8 @@ use sftp_file_table::{
 };
 use sftp_bookmarks::SftpBookmarkStore;
 use sftp_diff_ui::{
-    collect_remote_diff, default_checks, format_skip_note, paint_dir_diff, DiffPhase,
-    DiffPrepOutcome, DiffScanOutcome, DiffUiAction, DirDiffUi,
+    collect_remote_diff, default_checks, format_existing_note, format_skip_note, paint_dir_diff,
+    DiffPhase, DiffPrepOutcome, DiffScanOutcome, DiffUiAction, DirDiffUi,
 };
 use sftp_select::SelectionSet;
 use sftp_tree::{collect_local_tree, looks_like_text_name, preview_needs_confirm};
@@ -736,7 +737,7 @@ impl SftpPanel {
                 ));
                 return;
             };
-            copies.push((local, PathBuf::from(remote), item.size));
+            copies.push((local, PathBuf::from(remote), item.size, item.rel.clone()));
         }
         let dirs = directory_rels(&plan);
         let upload = matches!(direction, SyncDirection::LocalToRemote);
@@ -750,13 +751,19 @@ impl SftpPanel {
         self.diff.error = None;
         self.busy = true;
         let local_root = self.diff.local_root.clone();
+        let remote_root_path = self.diff.remote_root.clone();
         self.enqueue(handle, ctx, move |session| {
             enum Prep {
-                Ok,
+                Ok {
+                    copies: Vec<(PathBuf, PathBuf, u64, String)>,
+                    skipped_existing: Vec<String>,
+                },
                 Cancelled,
                 Failed(String),
             }
             let prep = (|| -> Prep {
+                let mut skipped_existing = Vec::new();
+                let mut kept = Vec::new();
                 if upload {
                     let client = match SftpClient::new(session) {
                         Ok(client) => client,
@@ -769,8 +776,41 @@ impl SftpPanel {
                         let Some(remote) = join_remote(&remote_root, rel) else {
                             return Prep::Failed(format!("Invalid path: {rel}"));
                         };
-                        if let Err(e) = client.mkdir_p(Path::new(&remote)) {
+                        if let Err(e) =
+                            client.mkdir_p_nofollow(&remote_root_path, Path::new(&remote))
+                        {
                             return Prep::Failed(e);
+                        }
+                    }
+                    for (local, remote, size, rel) in copies {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Prep::Cancelled;
+                        }
+                        let check = match check_dest_rel(&rel, |prefix| {
+                            let path = join_remote(&remote_root, prefix)
+                                .ok_or_else(|| format!("Invalid path: {prefix}"))?;
+                            Ok(match client.lstat_node(Path::new(&path))? {
+                                RemoteNode::Missing => FsNode::Missing,
+                                RemoteNode::Dir => FsNode::Dir,
+                                RemoteNode::File => FsNode::File,
+                                RemoteNode::Symlink => FsNode::Symlink,
+                                RemoteNode::Other => FsNode::Other,
+                            })
+                        }) {
+                            Ok(check) => check,
+                            Err(e) => return Prep::Failed(e),
+                        };
+                        match check {
+                            DestCheck::Absent => kept.push((local, remote, size, rel)),
+                            DestCheck::PresentDir | DestCheck::PresentOther => {
+                                skipped_existing.push(rel);
+                            }
+                            DestCheck::Symlink { at } => {
+                                return Prep::Failed(format!("Refusing to follow symlink: {at}"));
+                            }
+                            DestCheck::Blocked { at } => {
+                                return Prep::Failed(format!("Parent is not a directory: {at}"));
+                            }
                         }
                     }
                 } else {
@@ -778,20 +818,48 @@ impl SftpPanel {
                         if cancel.load(Ordering::Relaxed) {
                             return Prep::Cancelled;
                         }
-                        let Some(local) = join_local(&local_root, rel) else {
-                            return Prep::Failed(format!("Invalid path: {rel}"));
+                        if let Err(e) = mkdir_local_nofollow(&local_root, rel) {
+                            return Prep::Failed(e);
+                        }
+                    }
+                    for (local, remote, size, rel) in copies {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Prep::Cancelled;
+                        }
+                        let check = match check_local_rel(&local_root, &rel) {
+                            Ok(check) => check,
+                            Err(e) => return Prep::Failed(e),
                         };
-                        if let Err(e) = std::fs::create_dir_all(&local) {
-                            return Prep::Failed(format!("mkdir {}: {e}", local.display()));
+                        match check {
+                            DestCheck::Absent => kept.push((local, remote, size, rel)),
+                            DestCheck::PresentDir | DestCheck::PresentOther => {
+                                skipped_existing.push(rel);
+                            }
+                            DestCheck::Symlink { at } => {
+                                return Prep::Failed(format!("Refusing to follow symlink: {at}"));
+                            }
+                            DestCheck::Blocked { at } => {
+                                return Prep::Failed(format!("Parent is not a directory: {at}"));
+                            }
                         }
                     }
                 }
-                Prep::Ok
+                Prep::Ok {
+                    copies: kept,
+                    skipped_existing,
+                }
             })();
             match prep {
-                Prep::Ok => SftpJobResult::DiffPrep {
+                Prep::Ok {
+                    copies,
+                    skipped_existing,
+                } => SftpJobResult::DiffPrep {
                     gen,
-                    outcome: DiffPrepOutcome::Ready { upload, copies },
+                    outcome: DiffPrepOutcome::Ready {
+                        upload,
+                        copies,
+                        skipped_existing,
+                    },
                 },
                 Prep::Cancelled => SftpJobResult::DiffPrep {
                     gen,
@@ -828,10 +896,14 @@ impl SftpPanel {
         }
     }
 
-    fn close_dir_diff(&mut self) {
+    fn close_dir_diff(&mut self, ctx: &egui::Context) {
+        let active = matches!(
+            self.diff.phase,
+            DiffPhase::Scanning | DiffPhase::Syncing
+        );
         self.diff.open = false;
-        if self.diff.phase == DiffPhase::Scanning {
-            self.diff.request_cancel();
+        if active {
+            self.cancel_dir_diff_activity(ctx);
         }
     }
 
@@ -874,7 +946,7 @@ impl SftpPanel {
         ctx: &egui::Context,
     ) {
         match action {
-            DiffUiAction::Close => self.close_dir_diff(),
+            DiffUiAction::Close => self.close_dir_diff(ctx),
             DiffUiAction::Rescan => self.start_dir_diff_scan(handle, ctx),
             DiffUiAction::Cancel => self.cancel_dir_diff_activity(ctx),
             DiffUiAction::Sync { direction, all } => {
@@ -927,6 +999,7 @@ impl SftpPanel {
                     WriteMode::Overwrite,
                     None,
                     &mut |_| {},
+                    None,
                 )?;
                 Ok((local, size, mtime))
             })();
@@ -2442,18 +2515,35 @@ impl SftpPanel {
                 self.diff.prep_inflight = false;
                 if gen == self.diff.prep_gen {
                     match outcome {
-                        DiffPrepOutcome::Ready { upload, copies } => {
+                        DiffPrepOutcome::Ready {
+                            upload,
+                            copies,
+                            skipped_existing,
+                        } => {
+                            if !skipped_existing.is_empty() {
+                                let note = format_existing_note(lang, &skipped_existing);
+                                match self.diff.skip_note.as_mut() {
+                                    Some(cur) => {
+                                        cur.push('\n');
+                                        cur.push_str(&note);
+                                    }
+                                    None => self.diff.skip_note = Some(note.clone()),
+                                }
+                                self.pending_status_warn = Some(note);
+                            }
                             if copies.is_empty() {
                                 self.diff.phase = if self.diff.open {
                                     DiffPhase::Ready
                                 } else {
                                     DiffPhase::Idle
                                 };
-                                self.pending_status_ok = Some(
-                                    crate::i18n::Locale::from(lang)
-                                        .tr("Folders created", "目录已创建")
-                                        .to_string(),
-                                );
+                                if skipped_existing.is_empty() {
+                                    self.pending_status_ok = Some(
+                                        crate::i18n::Locale::from(lang)
+                                            .tr("Folders created", "目录已创建")
+                                            .to_string(),
+                                    );
+                                }
                                 self.pending_refresh_after_op = true;
                             } else {
                                 let kind = if upload {
@@ -2461,14 +2551,17 @@ impl SftpPanel {
                                 } else {
                                     XferKind::Download
                                 };
+                                let local_root = self.diff.local_root.clone();
+                                let remote_root = self.diff.remote_root.clone();
                                 self.diff.batch_ids.clear();
-                                for (local, remote, size) in copies {
-                                    let id = self.xfer.push(
+                                for (local, remote, size, _rel) in copies {
+                                    let id = self.xfer.push_sync(
                                         kind,
                                         local,
                                         remote,
-                                        WriteMode::Overwrite,
                                         size,
+                                        local_root.clone(),
+                                        remote_root.clone(),
                                     );
                                     self.diff.batch_ids.push(id);
                                 }
@@ -2917,6 +3010,8 @@ impl SftpPanel {
         let local = item.local.clone();
         let remote = item.remote.clone();
         let mode = item.mode;
+        let guard_local = item.guard_local.clone();
+        let guard_remote = item.guard_remote.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         self.xfer.cancel = Some(cancel.clone());
         let (prog_tx, prog_rx) = mpsc::sync_channel::<XferProgressEvent>(16);
@@ -2947,12 +3042,22 @@ impl SftpPanel {
                     }
                 };
                 match kind {
-                    XferKind::Upload => {
-                        client.upload_ex(&local, &remote, mode, Some(&cancel), &mut on_progress)
-                    }
-                    XferKind::Download => {
-                        client.download_ex(&remote, &local, mode, Some(&cancel), &mut on_progress)
-                    }
+                    XferKind::Upload => client.upload_ex(
+                        &local,
+                        &remote,
+                        mode,
+                        Some(&cancel),
+                        &mut on_progress,
+                        guard_remote.as_deref(),
+                    ),
+                    XferKind::Download => client.download_ex(
+                        &remote,
+                        &local,
+                        mode,
+                        Some(&cancel),
+                        &mut on_progress,
+                        guard_local.as_deref(),
+                    ),
                 }
             })();
             let _ = tx.send(SftpJobResult::TransferDone {
@@ -5808,6 +5913,7 @@ mod tests {
         let entries = vec![SftpEntry {
             name: "gui_e2e_upload.txt".to_string(),
             is_dir: false,
+            is_file: true,
             size: 12,
             permissions: "-rw-r--r--".to_string(),
             modified: Utc::now(),

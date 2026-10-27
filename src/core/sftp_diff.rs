@@ -8,7 +8,9 @@
 //! 没有共同基线，无法区分「两边都改过」和「只有一边改过」，所以 MVP 一律不覆盖。
 //! 仅一侧存在的文件按用户选择的方向复制；仅目标侧多出的文件 **不删除**。
 //! 两边都有的目录只当作结构，不因为目录自身的 mtime 记成冲突。
-//! 符号链接不参与对比（由扫描方跳过）。空目录会列出，同步时在目标侧创建。
+//! 符号链接不参与对比（由扫描方跳过），同步时也不跟随：根下任一段是符号链接则失败。
+//! 目标路径已经存在则跳过并列出，不覆盖。空目录会列出，同步时在目标侧创建。
+//! 一边是文件、另一边在该路径下还有子项，算结构冲突，不写入。
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -148,14 +150,224 @@ fn trim_root_slashes(root: &str) -> String {
     }
 }
 
+/// 非跟随地看到的节点。`Missing` 表示这一段还不存在。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FsNode {
+    Missing,
+    Dir,
+    File,
+    Symlink,
+    Other,
+}
+
+/// 目标相对路径在非跟随检查后的结论。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DestCheck {
+    /// 可以新建。路径上已有的段都是真实目录。
+    Absent,
+    /// 最终段已是真实目录。
+    PresentDir,
+    /// 最终段已存在，且不是目录、也不是符号链接。
+    PresentOther,
+    /// 某一段是符号链接。`at` 是相对路径。
+    Symlink { at: String },
+    /// 祖先不是目录（文件或其它）。`at` 是挡住后面的那段相对路径。
+    Blocked { at: String },
+}
+
+/// 对 `rel` 的每一段调用 `lookup`（参数是累计相对路径）。不跟随符号链接。
+pub fn check_dest_rel(
+    rel: &str,
+    mut lookup: impl FnMut(&str) -> Result<FsNode, String>,
+) -> Result<DestCheck, String> {
+    let rel = normalize_rel_key(rel).ok_or_else(|| format!("Invalid path: {rel}"))?;
+    if rel.is_empty() {
+        return Ok(DestCheck::PresentDir);
+    }
+    let parts: Vec<&str> = rel.split('/').collect();
+    let mut cur = String::new();
+    for (i, part) in parts.iter().enumerate() {
+        if i > 0 {
+            cur.push('/');
+        }
+        cur.push_str(part);
+        let last = i + 1 == parts.len();
+        match lookup(&cur)? {
+            FsNode::Symlink => return Ok(DestCheck::Symlink { at: cur }),
+            FsNode::Missing => return Ok(DestCheck::Absent),
+            FsNode::Dir if last => return Ok(DestCheck::PresentDir),
+            FsNode::Dir => {}
+            FsNode::File | FsNode::Other if last => return Ok(DestCheck::PresentOther),
+            FsNode::File | FsNode::Other => return Ok(DestCheck::Blocked { at: cur }),
+        }
+    }
+    Ok(DestCheck::Absent)
+}
+
+/// `rel` 的父相对路径。文件在根下时是空字符串。
+pub fn parent_rel(rel: &str) -> Option<String> {
+    let rel = normalize_rel_key(rel)?;
+    if rel.is_empty() {
+        return None;
+    }
+    match rel.rfind('/') {
+        Some(idx) => Some(rel[..idx].to_string()),
+        None => Some(String::new()),
+    }
+}
+
+pub fn local_node(path: &Path) -> Result<FsNode, String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) => {
+            let ft = meta.file_type();
+            if ft.is_symlink() {
+                Ok(FsNode::Symlink)
+            } else if ft.is_dir() {
+                Ok(FsNode::Dir)
+            } else if ft.is_file() {
+                Ok(FsNode::File)
+            } else {
+                Ok(FsNode::Other)
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(FsNode::Missing),
+        Err(e) => Err(format!("Failed to lstat {}: {e}", path.display())),
+    }
+}
+
+pub fn check_local_rel(root: &Path, rel: &str) -> Result<DestCheck, String> {
+    check_dest_rel(rel, |prefix| {
+        let path = join_local(root, prefix).ok_or_else(|| format!("Invalid path: {prefix}"))?;
+        local_node(&path)
+    })
+}
+
+/// `path` 相对 `root` 的 key。不在根下时返回错误。
+pub fn rel_under_local(root: &Path, path: &Path) -> Result<String, String> {
+    let rel = path
+        .strip_prefix(root)
+        .map_err(|_| format!("Path {} is outside {}", path.display(), root.display()))?;
+    let text = rel.to_string_lossy().replace('\\', "/");
+    normalize_rel_key(&text).ok_or_else(|| format!("Invalid path: {text}"))
+}
+
+fn assert_under_root(root: &Path, path: &Path) -> Result<(), String> {
+    let root_c = std::fs::canonicalize(root)
+        .map_err(|e| format!("Failed to resolve {}: {e}", root.display()))?;
+    let path_c = std::fs::canonicalize(path)
+        .map_err(|e| format!("Failed to resolve {}: {e}", path.display()))?;
+    if path_c.starts_with(&root_c) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Refusing to write outside compare root: {}",
+            path_c.display()
+        ))
+    }
+}
+
+fn create_local_dirs(root: &Path, rel: &str) -> Result<(), String> {
+    let rel = normalize_rel_key(rel).ok_or_else(|| format!("Invalid path: {rel}"))?;
+    if rel.is_empty() {
+        return assert_under_root(root, root);
+    }
+    let mut cur = root.to_path_buf();
+    let mut acc = String::new();
+    for (i, part) in rel.split('/').enumerate() {
+        if i > 0 {
+            acc.push('/');
+        }
+        acc.push_str(part);
+        cur.push(part);
+        match local_node(&cur)? {
+            FsNode::Dir => {}
+            FsNode::Missing => {
+                std::fs::create_dir(&cur).map_err(|e| format!("mkdir {}: {e}", cur.display()))?;
+                match local_node(&cur)? {
+                    FsNode::Dir => {}
+                    FsNode::Symlink => {
+                        return Err(format!("Refusing to follow symlink: {acc}"));
+                    }
+                    _ => return Err(format!("Not a directory: {acc}")),
+                }
+            }
+            FsNode::Symlink => return Err(format!("Refusing to follow symlink: {acc}")),
+            _ => return Err(format!("Not a directory: {acc}")),
+        }
+    }
+    assert_under_root(root, &cur)
+}
+
+/// 在对比根下逐段创建目录。已有真实目录则跳过；遇符号链接或非目录则失败，不调用 `create_dir_all`。
+pub fn mkdir_local_nofollow(root: &Path, rel: &str) -> Result<(), String> {
+    let rel = normalize_rel_key(rel).ok_or_else(|| format!("Invalid path: {rel}"))?;
+    if rel.is_empty() {
+        return assert_under_root(root, root);
+    }
+    match check_local_rel(root, &rel)? {
+        DestCheck::PresentDir | DestCheck::Absent => create_local_dirs(root, &rel),
+        DestCheck::Symlink { at } => Err(format!("Refusing to follow symlink: {at}")),
+        DestCheck::Blocked { at } => Err(format!("Parent is not a directory: {at}")),
+        DestCheck::PresentOther => Err(format!("Not a directory: {rel}")),
+    }
+}
+
+/// 在对比根下新建文件。`create_new` 不会跟随已有符号链接，目标已存在则失败。
+pub fn create_local_file_nofollow(root: &Path, rel: &str) -> Result<std::fs::File, String> {
+    match check_local_rel(root, rel)? {
+        DestCheck::Absent => {}
+        DestCheck::Symlink { at } => return Err(format!("Refusing to follow symlink: {at}")),
+        DestCheck::Blocked { at } => return Err(format!("Parent is not a directory: {at}")),
+        DestCheck::PresentDir | DestCheck::PresentOther => {
+            return Err(format!("Refusing to overwrite existing path: {rel}"));
+        }
+    }
+    match parent_rel(rel) {
+        Some(parent) if !parent.is_empty() => mkdir_local_nofollow(root, &parent)?,
+        Some(_) => {}
+        None => return Err(format!("Invalid path: {rel}")),
+    }
+    let path = join_local(root, rel).ok_or_else(|| format!("Invalid path: {rel}"))?;
+    match local_node(&path)? {
+        FsNode::Missing => {}
+        FsNode::Symlink => return Err(format!("Refusing to follow symlink: {rel}")),
+        _ => return Err(format!("Refusing to overwrite existing path: {rel}")),
+    }
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map_err(|e| format!("Failed to create local file {}: {e}", path.display()))
+}
+
 /// 按相对路径合并两侧快照。相同 size 且相同 mtime（秒）的文件不出现在结果里。
+/// 一边是文件、另一边在该路径之下还有条目时，双方都记成冲突。
 pub fn compare_snapshots(left: &[DiffSideMeta], right: &[DiffSideMeta]) -> Vec<DiffRow> {
     let left = index_side(left);
     let right = index_side(right);
     let keys: BTreeSet<String> = left.keys().chain(right.keys()).cloned().collect();
     let mut rows = Vec::new();
     for key in keys {
-        match (left.get(&key), right.get(&key)) {
+        let l = left.get(&key);
+        let r = right.get(&key);
+        let clash = ancestor_non_dir(&left, &key)
+            || ancestor_non_dir(&right, &key)
+            || l.is_some_and(|meta| !meta.is_dir && has_descendant(&right, &key))
+            || r.is_some_and(|meta| !meta.is_dir && has_descendant(&left, &key));
+        if clash {
+            rows.push(DiffRow {
+                rel: key,
+                kind: DiffKind::BothDiffer,
+                left_size: l.map(|meta| meta.size),
+                right_size: r.map(|meta| meta.size),
+                left_mtime: l.map(|meta| meta.mtime_secs),
+                right_mtime: r.map(|meta| meta.mtime_secs),
+                left_is_dir: l.is_some_and(|meta| meta.is_dir),
+                right_is_dir: r.is_some_and(|meta| meta.is_dir),
+            });
+            continue;
+        }
+        match (l, r) {
             (Some(l), None) => rows.push(only_row(key, DiffKind::OnlyLeft, l, true)),
             (None, Some(r)) => rows.push(only_row(key, DiffKind::OnlyRight, r, false)),
             (Some(l), Some(r)) => {
@@ -182,6 +394,30 @@ pub fn compare_snapshots(left: &[DiffSideMeta], right: &[DiffSideMeta]) -> Vec<D
         }
     }
     rows
+}
+
+fn ancestor_non_dir(index: &BTreeMap<String, DiffSideMeta>, rel: &str) -> bool {
+    let parts: Vec<&str> = rel.split('/').filter(|part| !part.is_empty()).collect();
+    if parts.len() < 2 {
+        return false;
+    }
+    let mut cur = String::new();
+    for part in &parts[..parts.len() - 1] {
+        if !cur.is_empty() {
+            cur.push('/');
+        }
+        cur.push_str(part);
+        if index.get(&cur).is_some_and(|meta| !meta.is_dir) {
+            return true;
+        }
+    }
+    false
+}
+
+fn has_descendant(index: &BTreeMap<String, DiffSideMeta>, rel: &str) -> bool {
+    let mut prefix = String::from(rel);
+    prefix.push('/');
+    index.keys().any(|key| key.starts_with(&prefix))
 }
 
 fn index_side(entries: &[DiffSideMeta]) -> BTreeMap<String, DiffSideMeta> {
@@ -244,6 +480,10 @@ pub fn plan_sync(
             (_, DiffKind::BothDiffer) => skipped_conflicts.push(row.rel.clone()),
             (SyncDirection::LocalToRemote, DiffKind::OnlyLeft)
             | (SyncDirection::RemoteToLocal, DiffKind::OnlyRight) => {
+                if dest_prefix_blocks(rows, row, direction) {
+                    skipped_conflicts.push(row.rel.clone());
+                    continue;
+                }
                 let item = SyncItem {
                     rel: row.rel.clone(),
                     is_dir: source_dir,
@@ -275,6 +515,37 @@ pub fn directory_rels(plan: &SyncPlan) -> Vec<String> {
         push_dir_chain(&mut set, &item.rel, false);
     }
     set.into_iter().collect()
+}
+
+fn dest_prefix_blocks(rows: &[DiffRow], row: &DiffRow, direction: SyncDirection) -> bool {
+    let dest_file = |other: &DiffRow| match direction {
+        SyncDirection::LocalToRemote => other.right_size.is_some() && !other.right_is_dir,
+        SyncDirection::RemoteToLocal => other.left_size.is_some() && !other.left_is_dir,
+    };
+    let dest_present = |other: &DiffRow| match direction {
+        SyncDirection::LocalToRemote => other.right_size.is_some() || other.right_is_dir,
+        SyncDirection::RemoteToLocal => other.left_size.is_some() || other.left_is_dir,
+    };
+    let source_file = match direction {
+        SyncDirection::LocalToRemote => !row.left_is_dir,
+        SyncDirection::RemoteToLocal => !row.right_is_dir,
+    };
+    if rows
+        .iter()
+        .any(|other| is_strict_prefix(&other.rel, &row.rel) && dest_file(other))
+    {
+        return true;
+    }
+    source_file
+        && rows
+            .iter()
+            .any(|other| is_strict_prefix(&row.rel, &other.rel) && dest_present(other))
+}
+
+fn is_strict_prefix(prefix: &str, rel: &str) -> bool {
+    let mut with_slash = String::from(prefix);
+    with_slash.push('/');
+    rel.starts_with(&with_slash)
 }
 
 fn push_dir_chain(set: &mut BTreeSet<String>, rel: &str, include_self: bool) {
@@ -583,6 +854,166 @@ mod tests {
         .unwrap();
         assert!(matches!(outcome, WalkOutcome::Cancelled));
         assert!(scanned.load(Ordering::Relaxed) < 1000);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn ancestor_file_and_child_are_conflicts() {
+        let rows = compare_snapshots(&[file("a/b.txt", 1, 1)], &[file("a", 2, 1)]);
+        assert!(rows.iter().all(|row| row.kind == DiffKind::BothDiffer));
+        assert_eq!(rows.len(), 2);
+        let up = plan_sync(&rows, None, SyncDirection::LocalToRemote);
+        assert!(up.copy.is_empty());
+        assert!(up.mkdirs.is_empty());
+        assert!(up.skipped_conflicts.iter().any(|rel| rel == "a/b.txt"));
+        let down = plan_sync(&rows, None, SyncDirection::RemoteToLocal);
+        assert!(down.copy.is_empty());
+        assert!(down.skipped_conflicts.iter().any(|rel| rel == "a"));
+    }
+
+    #[test]
+    fn plan_blocks_file_prefix_even_if_rows_are_only_one_side() {
+        let rows = vec![
+            DiffRow {
+                rel: "a/b.txt".into(),
+                kind: DiffKind::OnlyLeft,
+                left_size: Some(1),
+                right_size: None,
+                left_mtime: Some(1),
+                right_mtime: None,
+                left_is_dir: false,
+                right_is_dir: false,
+            },
+            DiffRow {
+                rel: "a".into(),
+                kind: DiffKind::OnlyRight,
+                left_size: None,
+                right_size: Some(2),
+                left_mtime: None,
+                right_mtime: Some(1),
+                left_is_dir: false,
+                right_is_dir: false,
+            },
+        ];
+        let up = plan_sync(&rows, None, SyncDirection::LocalToRemote);
+        assert!(up.copy.is_empty());
+        assert_eq!(up.skipped_conflicts, vec!["a/b.txt".to_string()]);
+        let down = plan_sync(&rows, None, SyncDirection::RemoteToLocal);
+        assert!(down.copy.is_empty());
+        assert_eq!(down.skipped_conflicts, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn check_dest_rel_rejects_symlink_and_existing_file() {
+        let nodes = |rel: &str| match rel {
+            "link" => Ok(FsNode::Symlink),
+            "link/x" => Ok(FsNode::Missing),
+            "taken.txt" => Ok(FsNode::File),
+            "dir" => Ok(FsNode::Dir),
+            "dir/new.txt" => Ok(FsNode::Missing),
+            "file" => Ok(FsNode::File),
+            "file/child" => Ok(FsNode::Missing),
+            _ => Ok(FsNode::Missing),
+        };
+        assert!(matches!(
+            check_dest_rel("link/x", nodes).unwrap(),
+            DestCheck::Symlink { at } if at == "link"
+        ));
+        assert_eq!(
+            check_dest_rel("taken.txt", nodes).unwrap(),
+            DestCheck::PresentOther
+        );
+        assert_eq!(
+            check_dest_rel("dir/new.txt", nodes).unwrap(),
+            DestCheck::Absent
+        );
+        assert!(matches!(
+            check_dest_rel("file/child", nodes).unwrap(),
+            DestCheck::Blocked { at } if at == "file"
+        ));
+    }
+
+    #[test]
+    fn local_symlink_is_not_followed_and_existing_file_is_present() {
+        let root = std::env::temp_dir().join(format!(
+            "mistterm_sftp_diff_link_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let outside = std::env::temp_dir().join(format!(
+            "mistterm_sftp_diff_out_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(root.join("taken.txt"), b"keep").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+            let err = mkdir_local_nofollow(&root, "link/nested").unwrap_err();
+            assert!(err.contains("symlink"));
+            assert!(!outside.join("nested").exists());
+            let err = create_local_file_nofollow(&root, "link/evil.txt").unwrap_err();
+            assert!(err.contains("symlink"));
+            assert!(!outside.join("evil.txt").exists());
+        }
+        assert_eq!(
+            check_local_rel(&root, "taken.txt").unwrap(),
+            DestCheck::PresentOther
+        );
+        let err = create_local_file_nofollow(&root, "taken.txt").unwrap_err();
+        assert!(err.contains("overwrite"));
+        assert_eq!(std::fs::read(root.join("taken.txt")).unwrap(), b"keep");
+        mkdir_local_nofollow(&root, "real/child").unwrap();
+        assert!(root.join("real/child").is_dir());
+        let file = create_local_file_nofollow(&root, "real/child/new.txt").unwrap();
+        drop(file);
+        assert!(root.join("real/child/new.txt").is_file());
+        let canon_root = std::fs::canonicalize(&root).unwrap();
+        let canon_file = std::fs::canonicalize(root.join("real/child/new.txt")).unwrap();
+        assert!(canon_file.starts_with(&canon_root));
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn walk_local_skips_fifo_and_socket() {
+        use std::os::unix::net::UnixListener;
+        let root = std::env::temp_dir().join(format!(
+            "mistterm_sftp_diff_fifo_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("ok.txt"), b"a").unwrap();
+        let status = std::process::Command::new("mkfifo")
+            .arg(root.join("pipe"))
+            .status()
+            .expect("mkfifo");
+        assert!(status.success());
+        let _sock = UnixListener::bind(root.join("sock.sock")).unwrap();
+        let cancel = AtomicBool::new(false);
+        let scanned = AtomicU64::new(0);
+        let outcome = walk_local_diff(&root, &cancel, &scanned, || {}).unwrap();
+        let WalkOutcome::Done(entries) = outcome else {
+            panic!("expected done");
+        };
+        let rels: Vec<_> = entries.iter().map(|e| e.rel.as_str()).collect();
+        assert_eq!(rels, vec!["ok.txt"]);
         let _ = std::fs::remove_dir_all(&root);
     }
 }

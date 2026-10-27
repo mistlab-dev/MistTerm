@@ -49,7 +49,8 @@ pub(super) enum DiffScanOutcome {
 pub(super) enum DiffPrepOutcome {
     Ready {
         upload: bool,
-        copies: Vec<(PathBuf, PathBuf, u64)>,
+        copies: Vec<(PathBuf, PathBuf, u64, String)>,
+        skipped_existing: Vec<String>,
     },
     Cancelled,
     Failed(String),
@@ -127,6 +128,26 @@ pub(super) fn format_skip_note(lang: UiLanguage, rels: &[String]) -> String {
     }
 }
 
+pub(super) fn format_existing_note(lang: UiLanguage, rels: &[String]) -> String {
+    let shown = rels.iter().take(8).cloned().collect::<Vec<_>>().join(", ");
+    let extra = rels.len().saturating_sub(8);
+    let tail = if extra > 0 {
+        format!(" (+{extra})")
+    } else {
+        String::new()
+    };
+    match lang {
+        UiLanguage::En => format!(
+            "Skipped {} existing path(s); not overwritten: {shown}{tail}",
+            rels.len()
+        ),
+        UiLanguage::Zh => format!(
+            "已跳过 {} 个已存在的路径, 未覆盖: {shown}{tail}",
+            rels.len()
+        ),
+    }
+}
+
 /// 远端树扫描。`root` 应为已经 realpath + 规范化的目录。取消在每次列目录之后生效。
 pub(super) fn collect_remote_diff(
     client: &SftpClient,
@@ -164,7 +185,7 @@ pub(super) fn collect_remote_diff(
             if entry.is_dir {
                 kept += 1;
                 stack.push((entry.path, child_rel));
-            } else {
+            } else if entry.is_file {
                 kept += 1;
                 out.push(DiffSideMeta {
                     rel: child_rel,
