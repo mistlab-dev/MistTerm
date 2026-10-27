@@ -23,7 +23,8 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::viewport_to_point;
 use crate::terminal::{Terminal as VtTerminal, TerminalShellStyle};
 use crate::terminal::style::{
-    format_user_error_line, format_user_info_line, format_user_success_line, format_user_warn_line,
+    cursor_blink_phase, duration_until_next_cursor_blink_phase, format_user_error_line,
+    format_user_info_line, format_user_success_line, format_user_warn_line,
 };
 use crate::i18n::UiLanguage;
 use crate::ui::layout_util;
@@ -1699,7 +1700,9 @@ impl TerminalView {
             if self.lrzsz.is_upload_pty_capture() {
                 ui.ctx().request_repaint();
             } else if terminal_dirty || self.repaint_probe_received_us.is_some() {
-                // 仅有输出/队列未排空时拉高帧率(top/vim 等)；空闲靠光标闪烁或用户输入触发重绘，避免单核打满。
+                // 仅有输出、队列未排空、或本帧输出还没画出来时拉高帧率(top/vim/yes、ZMODEM 以外的脏屏)。
+                // 探针在画完这一帧后清掉（见下方），空闲不再停在 33ms。
+                // 空闲聚焦靠光标下一相位重绘；egui 取本帧最短的 request，故这里的 33ms 短于相位等待。
                 ui.ctx().request_repaint_after(Duration::from_millis(
                     crate::terminal::style::TERMINAL_LIVE_REPAINT_MS,
                 ));
@@ -2109,13 +2112,16 @@ impl TerminalView {
                                     cell_w,
                                 );
                                 painter.galley(text_draw_pos, galley.clone());
-                                if let Some(t) = self.repaint_probe_received_us.take() {
-                                    let ms = crate::ssh::probe_now_us().saturating_sub(t) as f64 / 1000.0;
-                                    if ms > 200.0 {
-                                        log::warn!(target: "repaint_lag", "SLOW output->frame {:.1} ms (>200ms)", ms);
-                                    } else {
-                                        log::debug!(target: "repaint_lag", "frame drawn after output {:.1} ms", ms);
-                                    }
+                            }
+                            // 普通提示符没有非默认格子底色，`needs_cell_bg` 为 false。
+                            // 探针若只在补绘底色时清掉，第一段输出之后会一直为 Some，
+                            // 空闲也被上面的 33ms 路径拉着走。这一帧已经把终端画出来，就清掉。
+                            if let Some(t) = self.repaint_probe_received_us.take() {
+                                let ms = crate::ssh::probe_now_us().saturating_sub(t) as f64 / 1000.0;
+                                if ms > 200.0 {
+                                    log::warn!(target: "repaint_lag", "SLOW output->frame {:.1} ms (>200ms)", ms);
+                                } else {
+                                    log::debug!(target: "repaint_lag", "frame drawn after output {:.1} ms", ms);
                                 }
                             }
                             // display-link（#90）：命中区间画下划线，悬停变手型。
@@ -2205,18 +2211,16 @@ impl TerminalView {
 
                             // 块状闪烁光标(UI 层绘制，勿再用 │ 字符占位)。
                             // 预编辑叠在同一格上，实心块会盖住第一个字形。
+                            // 空闲（无选区、无 IME）只等到下一相位，禁止固定 60ms。
+                            // VTE 脏数据 / ZMODEM 在本帧更早请求了更短的间隔，egui 取最短值。
                             if self.terminal_focused
                                 && !terminal_search_open
                                 && self.selection.is_empty()
                                 && self.ime_preedit.is_empty()
                             {
-                                if let Some(cur) = self.terminal.viewport_cursor() {
-                                    let t = ui.input(|i| i.time);
-                                    let phase = (t
-                                        / crate::terminal::style::TERMINAL_CURSOR_BLINK_PERIOD_SECS)
-                                        .floor() as i64
-                                        % 2;
-                                    if phase == 0 {
+                                let t = ui.input(|i| i.time);
+                                if cursor_blink_phase(t) == 0 {
+                                    if let Some(cur) = self.terminal.viewport_cursor() {
                                         let cursor_rect = Self::terminal_block_cursor_rect(
                                             text_draw_pos,
                                             &galley,
@@ -2233,7 +2237,7 @@ impl TerminalView {
                                     }
                                 }
                                 ui.ctx().request_repaint_after(
-                                    std::time::Duration::from_millis(60),
+                                    duration_until_next_cursor_blink_phase(t),
                                 );
                             }
 
@@ -5697,5 +5701,93 @@ mod display_link_host_tests {
             Some(DisplayLinkClick::Sftp)
         ));
         assert!(classify_display_link_click("nope", "x").is_none());
+    }
+}
+
+#[cfg(test)]
+mod idle_cursor_repaint_tests {
+    use super::*;
+
+    fn pump(ctx: &egui::Context, view: &mut TerminalView, time: f64) -> Duration {
+        let theme = Theme::dark();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 600.0),
+            )),
+            time: Some(time),
+            ..Default::default()
+        };
+        ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                view.show(ui, &theme, 860.0, false, true);
+            });
+        })
+        .repaint_after
+    }
+
+    fn focused_connected_view() -> TerminalView {
+        let mut view = TerminalView::new();
+        view.connected = true;
+        view.pending_focus_terminal = true;
+        view
+    }
+
+    #[test]
+    fn focused_idle_waits_for_blink_phase_and_plain_frame_clears_probe() {
+        let ctx = egui::Context::default();
+        let mut view = focused_connected_view();
+        // egui 启动时多画一帧，那一帧的等待是 0，不是光标定时器。
+        let _ = pump(&ctx, &mut view, 0.0);
+        assert!(view.terminal_focused, "pending focus should stick");
+
+        let idle = pump(&ctx, &mut view, 0.0);
+        let idle_s = idle.as_secs_f64();
+        assert!(
+            idle_s > 0.40 && idle_s < 0.60,
+            "idle focused cursor should wait for the next blink phase, got {idle_s}s ({idle:?})"
+        );
+        assert_ne!(idle, Duration::from_millis(60));
+        assert!(idle > Duration::from_millis(crate::terminal::style::TERMINAL_LIVE_REPAINT_MS));
+
+        view.repaint_probe_received_us = Some(1);
+        let live = pump(&ctx, &mut view, 0.0);
+        assert!(
+            view.repaint_probe_received_us.is_none(),
+            "a painted plain prompt must clear the output probe"
+        );
+        let live_ms = live.as_millis();
+        assert!(
+            (30u128..=40).contains(&live_ms),
+            "unpainted output stays on the live interval, got {live:?}"
+        );
+
+        let idle_again = pump(&ctx, &mut view, 0.0);
+        assert!(
+            idle_again.as_secs_f64() > 0.40,
+            "after the probe is cleared, idle returns to the blink phase, got {idle_again:?}"
+        );
+
+        view.selection.set_from_viewport(0, 0, 0, 0, 4);
+        assert!(!view.selection.is_empty());
+        let selected = pump(&ctx, &mut view, 0.0);
+        assert!(
+            selected > Duration::from_secs(1),
+            "a selection is not the idle blink timer, got {selected:?}"
+        );
+    }
+
+    #[test]
+    fn zmodem_upload_capture_still_repaints_immediately() {
+        let ctx = egui::Context::default();
+        let mut view = focused_connected_view();
+        let _ = pump(&ctx, &mut view, 0.0);
+        view.lrzsz.begin_rz_handshake_capture();
+        assert!(view.lrzsz.is_upload_pty_capture());
+        let dt = pump(&ctx, &mut view, 0.0);
+        assert!(
+            dt.is_zero(),
+            "ZMODEM upload capture must keep the immediate repaint path, got {dt:?}"
+        );
     }
 }
