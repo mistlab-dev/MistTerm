@@ -61,7 +61,7 @@ Details: [docs/en/INSTALL.md](docs/en/INSTALL.md).
 | **CLI** | `mist` headless CLI sharing the same session store — `ls` / `exec` (single + `--group` / `--all` batch) / `ssh` / `rls` / `get` / `put` / `fwd` / `frag` / `import-ssh-config` / `sop extract`. See [docs/tech/CLI-DESIGN.md](docs/tech/CLI-DESIGN.md) |
 | **Team** | Free hosted sync at [mistlab.dev](https://mistlab.dev); short-lived certs for small teams; command records |
 | **AI** | Multi-host disk/memory/log plans **without** an API key; optional BYO model for chat |
-| **Audit** | Records snippets / history / AI / batch (interactive PTY typing not covered yet) |
+| **Audit** | Records snippets / history / AI / batch, and commands submitted with Enter in the interactive terminal when team audit is on (Preferences → Activity audit can turn that off) |
 | **UX** | English / 简体中文; first-launch onboarding; themes; **Activity Rail** (hide with ⌘/Ctrl+B) |
 
 ### Quick start
@@ -146,7 +146,7 @@ cargo build --release --bin Mist
 | **命令行** | `mist` 无头 CLI，与 GUI 共享同一份会话库——`ls` / `exec`（单机 + `--group` / `--all` 批量）/ `ssh` / `rls` / `get` / `put` / `fwd` / `frag` / `import-ssh-config` / `sop extract`。详见 [docs/tech/CLI-DESIGN.md](docs/tech/CLI-DESIGN.md) |
 | **团队** | [mistlab.dev](https://mistlab.dev) 免费托管同步；小团队短时证书；命令记录 |
 | **AI** | 多机磁盘/内存/日志计划**无需** API Key；对话可自带模型 |
-| **审计** | 覆盖常用命令 / 历史 / AI / 批量（终端手输暂未覆盖） |
+| **审计** | 覆盖片段 / 历史 / AI / 批量，以及团队审计开启时在交互式终端回车提交的命令（可在偏好设置 → 操作审计里关掉） |
 | **体验** | 中/英界面；首次新手引导；主题；**活动栏**（⌘/Ctrl+B 可隐藏） |
 
 ### 快速上手

@@ -567,6 +567,23 @@ fn server_audit_body(cmd_preview: &str, detail: &str) -> String {
     }
 }
 
+/// `(匹配 Agent 用的主机名, JSONL 里的目标主机)`。本机 shell 记为 `local`。
+fn session_exec_endpoint(manager: &crate::core::SessionManager, session_id: &str) -> (String, String) {
+    if session_id.starts_with("local:") {
+        return ("local".to_string(), "local".to_string());
+    }
+    let Some(session) = manager.get_session(session_id) else {
+        return (String::new(), String::new());
+    };
+    let host = session.host.clone();
+    let target = if session.port == 22 {
+        host.clone()
+    } else {
+        format!("{}:{}", host, session.port)
+    };
+    (host, target)
+}
+
 impl MistTermApp {
     /// 拦截后尝试推一条合规片段：有命中则带「用到终端」+(团队来源时)「存到个人库」。
     /// 无命中：短提示「暂无团队替代」+ 可选「问 AI」。
@@ -1874,6 +1891,7 @@ impl MistTermApp {
                     .get_mut(state.tab_idx)
                     .and_then(|t| t.panes.get_mut(pane_idx))
                 {
+                    pane.terminal.set_pending_capture_outcome("confirmed");
                     pane.terminal.release_typed_enter();
                 }
                 return;
@@ -1916,25 +1934,72 @@ impl MistTermApp {
                 AuditOutcome::Denied,
             );
             self.push_timeline_entry(state.tab_idx, &state.command, &state.audit, TimelineOutcome::Blocked, "command.cancelled");
+            if let Some(pane_idx) = state.typed_enter_pane {
+                self.record_interactive_now(state.tab_idx, pane_idx, &state.command, "cancelled");
+            }
         }
     }
 
     /// 手敲命令回车前的本地命令审计：终端扣住回车并交出整行，这里按策略放行 / 拦截 / 弹确认。
-    /// 同时为下一帧设置各窗格是否需要扣住回车(策略未生效时完全不影响原回车行为)。
+    /// 同时为下一帧设置各窗格是否需要扣住回车(策略未生效或偏好关闭时完全不影响原回车行为)。
     fn process_typed_enter_audit(&mut self, ctx: &egui::Context) {
-        let gate = crate::modules::cmd_audit_local::typed_enter_should_gate(
-            self.module_registry
-                .is_enabled(crate::modules::cmd_audit_local::MODULE_ID),
-            self.with_cmd_audit(|engine| engine.is_active()),
+        let preference = self.app_settings.audit.interactive_pty_capture;
+        let module_on = self
+            .module_registry
+            .is_enabled(crate::modules::cmd_audit_local::MODULE_ID);
+        let engine_on = self.with_cmd_audit(|engine| engine.is_active());
+        let gate = crate::core::interactive_exec::interactive_typed_enter_gate(
+            preference,
+            module_on,
+            engine_on,
         );
+        let local_active =
+            crate::core::interactive_exec::local_policy_active(module_on, engine_on);
+        let server_known = preference
+            && self.team_service.is_logged_in()
+            && self.cmd_audit_agents_supported
+            && self.cmd_audit_agents_at.is_some()
+            && self.cmd_audit_agents_error.is_empty();
         let mut pending: Vec<(usize, usize, String)> = Vec::new();
         for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
             for (pane_idx, pane) in tab.panes.iter_mut().enumerate() {
                 pane.terminal.set_typed_enter_gate(gate);
+                // 未登录、策略未生效时不要为每个窗格克隆会话 id。
+                if preference && (local_active || server_known) {
+                    let sid = pane.session_id.clone();
+                    let (host, target) = session_exec_endpoint(&self.session_manager, &sid);
+                    let server = server_known
+                        && Self::cmd_audit_agent_available_for_host(&self.cmd_audit_agents, &host);
+                    if crate::core::interactive_exec::interactive_capture_active(
+                        preference,
+                        local_active,
+                        server,
+                    ) {
+                        pane.terminal
+                            .set_interactive_capture(true, &sid, &target);
+                    } else if pane.terminal.interactive_capture_is_on() {
+                        pane.terminal.set_interactive_capture(false, "", "");
+                    }
+                } else if pane.terminal.interactive_capture_is_on() {
+                    pane.terminal.set_interactive_capture(false, "", "");
+                }
                 if let Some(line) = pane.terminal.take_typed_enter_request() {
                     pending.push((tab_idx, pane_idx, line));
                 }
             }
+        }
+        if !preference {
+            // 开关关闭：已经扣住的回车也直接发出，不再查规则。
+            for (tab_idx, pane_idx, _) in pending {
+                if let Some(pane) = self
+                    .tabs
+                    .get_mut(tab_idx)
+                    .and_then(|t| t.panes.get_mut(pane_idx))
+                {
+                    pane.terminal.release_typed_enter();
+                }
+            }
+            return;
         }
         for (tab_idx, pane_idx, command) in pending {
             let audit = self.local_audit_for_send(&command);
@@ -1984,6 +2049,7 @@ impl MistTermApp {
                     {
                         pane.terminal.discard_typed_line();
                     }
+                    self.record_interactive_now(tab_idx, pane_idx, &command, "blocked");
                     continue;
                 }
                 CmdAuditAction::Confirm => {
@@ -2018,8 +2084,13 @@ impl MistTermApp {
                         TimelineOutcome::Allowed,
                         "local alert",
                     );
+                    self.arm_capture_outcome(tab_idx, pane_idx, "alert");
                 }
-                CmdAuditAction::Allow => {}
+                CmdAuditAction::Allow => {
+                    // 放行不进内存时间线（每条手输命令都会挤掉拦截记录）。
+                    // 结构化留痕在 exec_history JSONL，标签 allowed。
+                    self.arm_capture_outcome(tab_idx, pane_idx, "allowed");
+                }
             }
             if let Some(pane) = self
                 .tabs
@@ -2031,20 +2102,72 @@ impl MistTermApp {
         }
     }
 
-    fn poll_server_audit_from_tabs(&mut self, ctx: &egui::Context) {
-        let mut pending: Vec<(usize, ServerAuditEvent)> = Vec::new();
-        for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
+    fn arm_capture_outcome(&mut self, tab_idx: usize, pane_idx: usize, outcome: &str) {
+        if let Some(pane) = self
+            .tabs
+            .get_mut(tab_idx)
+            .and_then(|t| t.panes.get_mut(pane_idx))
+        {
+            pane.terminal.set_pending_capture_outcome(outcome);
+        }
+    }
+
+    /// 拦截 / 取消没有 PTY 输出，立刻写一条 JSONL。偏好关或审计未生效时不写。
+    fn record_interactive_now(
+        &mut self,
+        tab_idx: usize,
+        pane_idx: usize,
+        command: &str,
+        outcome: &str,
+    ) {
+        if !self.app_settings.audit.interactive_pty_capture {
+            return;
+        }
+        let sid = self
+            .tabs
+            .get(tab_idx)
+            .and_then(|t| t.panes.get(pane_idx))
+            .map(|pane| pane.session_id.clone());
+        let Some(sid) = sid else {
+            return;
+        };
+        let (_, target) = session_exec_endpoint(&self.session_manager, &sid);
+        let rec = crate::core::interactive_exec::interactive_exec_record(
+            &sid,
+            &target,
+            command,
+            outcome,
+            None,
+            "",
+            0,
+        );
+        crate::core::exec_history::append_record(&rec);
+    }
+
+    fn drain_interactive_exec_records(&mut self) {
+        for tab in &mut self.tabs {
             for pane in tab.panes.iter_mut() {
+                for rec in pane.terminal.take_interactive_exec_records() {
+                    crate::core::exec_history::append_record(&rec);
+                }
+            }
+        }
+    }
+
+    fn poll_server_audit_from_tabs(&mut self, ctx: &egui::Context) {
+        let mut pending: Vec<(usize, usize, ServerAuditEvent)> = Vec::new();
+        for (tab_idx, tab) in self.tabs.iter_mut().enumerate() {
+            for (pane_idx, pane) in tab.panes.iter_mut().enumerate() {
                 for ev in pane.terminal.take_server_audit_events() {
-                    pending.push((tab_idx, ev));
+                    pending.push((tab_idx, pane_idx, ev));
                 }
             }
         }
         if pending.is_empty() {
             return;
         }
-        for (tab_idx, ev) in pending {
-            self.handle_server_audit_event(ctx, tab_idx, ev);
+        for (tab_idx, pane_idx, ev) in pending {
+            self.handle_server_audit_event(ctx, tab_idx, pane_idx, ev);
         }
         // Toast 在本帧 workspace 里可能已画过；下一帧再绘出。
         ctx.request_repaint();
@@ -2054,6 +2177,7 @@ impl MistTermApp {
         &mut self,
         ctx: &egui::Context,
         tab_idx: usize,
+        pane_idx: usize,
         ev: ServerAuditEvent,
     ) {
         let cmd_preview = if ev.command.is_empty() {
@@ -2064,6 +2188,14 @@ impl MistTermApp {
         let detail = server_audit_detail(&ev);
         match ev.action {
             CmdAuditAction::Block => {
+                if let Some(pane) = self
+                    .tabs
+                    .get_mut(tab_idx)
+                    .and_then(|t| t.panes.get_mut(pane_idx))
+                {
+                    pane.terminal
+                        .note_server_audit_outcome(&ev.command, "blocked");
+                }
                 let audit = ev.to_cmd_audit_result();
                 self.push_timeline_entry(
                     tab_idx,
@@ -2088,6 +2220,14 @@ impl MistTermApp {
                 );
             }
             CmdAuditAction::Alert => {
+                if let Some(pane) = self
+                    .tabs
+                    .get_mut(tab_idx)
+                    .and_then(|t| t.panes.get_mut(pane_idx))
+                {
+                    pane.terminal
+                        .note_server_audit_outcome(&ev.command, "alert");
+                }
                 let audit = ev.to_cmd_audit_result();
                 self.push_timeline_entry(
                     tab_idx,
@@ -9216,6 +9356,7 @@ impl eframe::App for MistTermApp {
         self.process_typed_enter_audit(ctx);
         // 须在终端/非活动窗格泵完 SSH 之后再取 MIST_AUDIT，否则本帧事件会空转。
         self.poll_server_audit_from_tabs(ctx);
+        self.drain_interactive_exec_records();
         self.process_ai_bridge(ctx);
         // 复盘草稿（#67）：泵生成结果 → 消费保存请求；预览在右 dock Foreground。
         self.poll_postmortem_generation(ctx);

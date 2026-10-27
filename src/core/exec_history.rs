@@ -1,14 +1,15 @@
 //! 结构化命令执行历史（JSONL），供 CLI / GUI / AI 失败上下文共用。
+//! 交互式终端回车提交的命令在捕获开启时也追加到同一文件（标签 `interactive_pty`）。
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::fs::{create_dir_all, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::core::batch_exec::BatchExecRow;
 
-const OUTPUT_SUMMARY_MAX_CHARS: usize = 4096;
+pub const OUTPUT_SUMMARY_MAX_CHARS: usize = 4096;
 
 /// 单条结构化执行记录
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,7 +79,11 @@ pub fn get_log_file_path() -> PathBuf {
 
 /// 追加写入（静默降级，不阻断主流程）
 pub fn append_record(record: &ExecLogRecord) {
-    let path = get_log_file_path();
+    append_record_at(&get_log_file_path(), record);
+}
+
+/// 追加到指定 JSONL。测试用临时路径；正式路径走 [`append_record`]。
+pub fn append_record_at(path: &Path, record: &ExecLogRecord) {
     if let Some(parent) = path.parent() {
         let _ = create_dir_all(parent);
     }
@@ -88,6 +93,18 @@ pub fn append_record(record: &ExecLogRecord) {
             let _ = writeln!(file, "{}", json_line);
         }
     }
+}
+
+/// 读出文件中的全部记录（测试与校验用）。坏行跳过。
+pub fn read_records_at(path: &Path) -> Result<Vec<ExecLogRecord>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+    let content = std::fs::read_to_string(path)?;
+    Ok(content
+        .lines()
+        .filter_map(|line| serde_json::from_str::<ExecLogRecord>(line).ok())
+        .collect())
 }
 
 /// 将批量执行结果写入结构化日志

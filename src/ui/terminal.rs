@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
+use crate::core::exec_history::ExecLogRecord;
+use crate::core::interactive_exec::{apply_interactive_outcome, InteractiveExecDraft};
 use crate::core::{ServerAuditEvent, ServerAuditProbe};
 use crate::local_shell::LocalShellHandle;
 use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, LrzszTransfer, TransferEvent, format_ssh_connect_error};
@@ -433,6 +435,14 @@ pub struct TerminalView {
     typed_enter_gate: bool,
     /// 手敲行按了回车但尚未发 `\r`，等宿主审计(`take_typed_enter_request` 取走)。
     typed_enter_request: Option<String>,
+    /// 偏好与审计生效时，把回车提交的命令写成 exec_history JSONL。
+    interactive_capture_on: bool,
+    capture_session_id: String,
+    capture_target: String,
+    /// 下一次提交使用的结论（allowed / alert / confirmed）。空则按 allowed。
+    pending_capture_outcome: String,
+    open_capture: Option<InteractiveExecDraft>,
+    pending_exec_records: Vec<ExecLogRecord>,
     /// 待写入会话日志的命令(片段执行、Enter 提交等)
     pending_log_commands: Vec<String>,
     /// 待写入会话日志的 PTY 输出块
@@ -975,6 +985,12 @@ impl TerminalView {
             submitted_line: None,
             typed_enter_gate: false,
             typed_enter_request: None,
+            interactive_capture_on: false,
+            capture_session_id: String::new(),
+            capture_target: String::new(),
+            pending_capture_outcome: String::new(),
+            open_capture: None,
+            pending_exec_records: Vec::new(),
             pending_log_commands: Vec::new(),
             pending_log_output: Vec::new(),
             search_highlight: None,
@@ -1021,6 +1037,124 @@ impl TerminalView {
     /// 宿主设置：本地命令审计策略是否生效。关闭时回车行为与以往完全一致。
     pub fn set_typed_enter_gate(&mut self, on: bool) {
         self.typed_enter_gate = on;
+    }
+
+    pub fn interactive_capture_is_on(&self) -> bool {
+        self.interactive_capture_on
+    }
+
+    /// 本窗格是否把回车提交的命令写入 exec_history。关掉时不再攒输出。
+    pub fn set_interactive_capture(&mut self, on: bool, session_id: &str, target: &str) {
+        if self.capture_session_id != session_id {
+            self.capture_session_id = session_id.to_string();
+        }
+        if self.capture_target != target {
+            self.capture_target = target.to_string();
+        }
+        if self.interactive_capture_on && !on {
+            self.seal_open_capture();
+        }
+        self.interactive_capture_on = on;
+    }
+
+    /// 审计放行前标明这条记录的结论。须在 [`Self::release_typed_enter`] 之前调用。
+    pub fn set_pending_capture_outcome(&mut self, outcome: &str) {
+        self.pending_capture_outcome = outcome.to_string();
+    }
+
+    /// 服务器事后改结论。`blocked` / `cancelled` 立刻封口，避免再等提示符。
+    pub fn note_server_audit_outcome(&mut self, command: &str, outcome: &str) {
+        let matches_cmd = |cmd: &str| command.is_empty() || cmd == command;
+        let open_matches = self
+            .open_capture
+            .as_ref()
+            .map(|draft| matches_cmd(draft.command()))
+            .unwrap_or(false);
+        if open_matches {
+            if let Some(draft) = self.open_capture.as_mut() {
+                draft.set_outcome(outcome);
+            }
+            if matches!(outcome, "blocked" | "cancelled") {
+                if let Some(draft) = self.open_capture.take() {
+                    self.pending_exec_records.push(draft.into_record());
+                }
+            }
+            return;
+        }
+        if let Some(rec) = self
+            .pending_exec_records
+            .iter_mut()
+            .rev()
+            .find(|rec| matches_cmd(&rec.command))
+        {
+            apply_interactive_outcome(rec, outcome);
+        }
+    }
+
+    /// 取走已结束、尚未落盘的交互式记录。
+    pub fn take_interactive_exec_records(&mut self) -> Vec<ExecLogRecord> {
+        std::mem::take(&mut self.pending_exec_records)
+    }
+
+    fn seal_open_capture(&mut self) {
+        if let Some(draft) = self.open_capture.take() {
+            self.pending_exec_records.push(draft.into_record());
+        }
+    }
+
+    fn flush_interactive_to_disk(&mut self) {
+        self.seal_open_capture();
+        for rec in self.pending_exec_records.drain(..) {
+            crate::core::exec_history::append_record(&rec);
+        }
+    }
+
+    fn begin_interactive_capture(&mut self, command: &str) {
+        // 用掉这次提交的结论，避免口令行 / 捕获关闭时把标签留到下一条命令。
+        let outcome = if self.pending_capture_outcome.is_empty() {
+            "allowed".to_string()
+        } else {
+            std::mem::take(&mut self.pending_capture_outcome)
+        };
+        if !self.interactive_capture_on || !self.connected {
+            return;
+        }
+        let command = command.trim();
+        if command.is_empty() {
+            return;
+        }
+        if self.terminal.is_alt_screen()
+            || self.lrzsz.is_active()
+            || self.transfer_progress.is_some()
+        {
+            return;
+        }
+        if Self::looks_like_secret_prompt(&self.terminal.cursor_line_text()) {
+            return;
+        }
+        self.seal_open_capture();
+        self.open_capture = Some(InteractiveExecDraft::start(
+            &self.capture_session_id,
+            &self.capture_target,
+            command,
+            &outcome,
+        ));
+    }
+
+    fn observe_interactive_output(&mut self, data: &[u8]) {
+        if self.open_capture.is_none() || data.is_empty() {
+            return;
+        }
+        let finished = self
+            .open_capture
+            .as_mut()
+            .map(|draft| draft.feed(data))
+            .unwrap_or(false);
+        if finished {
+            if let Some(draft) = self.open_capture.take() {
+                self.pending_exec_records.push(draft.into_record());
+            }
+        }
     }
 
     /// 取走等待审计的手敲行。宿主须随后调用 [`Self::release_typed_enter`](放行)或丢弃(拦截/取消)。
@@ -1092,7 +1226,8 @@ impl TerminalView {
             self.note_sz_shell_command_submitted();
         }
         self.submitted_line = Some(line.clone());
-        self.pending_log_commands.push(line);
+        self.pending_log_commands.push(line.clone());
+        self.begin_interactive_capture(&line);
     }
 
     fn expect_rz_upload_active(&self) -> bool {
@@ -2708,6 +2843,7 @@ impl TerminalView {
                         if self.is_local_shell() {
                             if !data.is_empty() {
                                 self.pending_log_output.push(data.clone());
+                                self.observe_interactive_output(&data);
                                 self.dispatch_output_to_modules(&data);
                                 self.terminal.feed(&data);
                                 vte_dirty = true;
@@ -2888,6 +3024,7 @@ impl TerminalView {
                         }
                         if !display_data.is_empty() {
                             self.pending_log_output.push(display_data.clone());
+                            self.observe_interactive_output(&display_data);
                             self.dispatch_output_to_modules(&display_data);
                             self.terminal.feed(&display_data);
                             vte_dirty = true;
@@ -2954,6 +3091,7 @@ impl TerminalView {
                         self.connected_at = None;
                         self.auto_follow_output = true;
                         self.resend_offline_input_dialog_open = false;
+                        self.seal_open_capture();
                     }
                     SshMessage::UserCommand { command, .. } => {
                         *self.command_usage.entry(command).or_insert(0) += 1;
@@ -4434,6 +4572,7 @@ impl TerminalView {
 
     /// 断开连接(关闭 SSH 并清空本地终端网格，用于移除标签等场景)
     pub fn disconnect(&mut self) {
+        self.flush_interactive_to_disk();
         self.local_disconnect_intent = true;
         if let Some(ref h) = self.local_handle {
             h.request_stop();
@@ -4470,6 +4609,7 @@ impl TerminalView {
 
     /// 仅断开 SSH，保留当前屏幕与滚动缓冲(FUNCTIONAL_SPEC §1.3.5：Tab 保留、输出冻结、不可再输入)
     pub fn disconnect_ssh_keep_buffer(&mut self) {
+        self.flush_interactive_to_disk();
         self.local_disconnect_intent = true;
         if let Some(ref h) = self.local_handle {
             h.request_stop();
@@ -5045,6 +5185,90 @@ mod typed_enter_gate_tests {
         assert_eq!(v.typed_line_buffer, "");
         v.track_typed_text("uptime");
         assert_eq!(v.typed_enter_gate_line().as_deref(), Some("uptime"));
+    }
+}
+
+#[cfg(test)]
+mod interactive_exec_terminal_tests {
+    use super::*;
+
+    fn capturing_view(line: &str) -> TerminalView {
+        let mut v = TerminalView::new();
+        v.connected = true;
+        v.set_interactive_capture(true, "sess-9", "10.1.2.3");
+        v.track_typed_text(line);
+        v
+    }
+
+    #[test]
+    fn interactive_exec_capture_off_does_not_record() {
+        let mut v = capturing_view("echo hi");
+        v.set_interactive_capture(false, "sess-9", "10.1.2.3");
+        v.release_typed_enter();
+        v.observe_interactive_output(b"\r\nhi\r\nuser@host:~$ ");
+        assert!(v.take_interactive_exec_records().is_empty());
+    }
+
+    #[test]
+    fn interactive_exec_typed_command_becomes_one_record() {
+        let mut v = capturing_view("echo hi");
+        v.set_pending_capture_outcome("allowed");
+        v.release_typed_enter();
+        assert!(
+            v.take_interactive_exec_records().is_empty(),
+            "still waiting for the prompt"
+        );
+        v.observe_interactive_output(b"\r\nhi\r\nuser@host:~$ ");
+        let rows = v.take_interactive_exec_records();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].target, "10.1.2.3");
+        assert_eq!(rows[0].command, "echo hi");
+        assert!(rows[0].timestamp.contains('T'));
+        assert!(rows[0].output_summary.contains("hi"));
+        assert!(rows[0].tags.iter().any(|t| t == "allowed"));
+        v.observe_interactive_output(b"user@host:~$ ");
+        assert!(v.take_interactive_exec_records().is_empty());
+    }
+
+    #[test]
+    fn interactive_exec_skips_secret_prompt_and_alt_screen() {
+        let mut v = capturing_view("hunter2");
+        v.terminal.feed(b"[sudo] password for tian: ");
+        v.release_typed_enter();
+        v.observe_interactive_output(b"\r\nuser@host:~$ ");
+        assert!(v.take_interactive_exec_records().is_empty());
+
+        let mut v = capturing_view("dd");
+        v.terminal.feed(b"\x1b[?1049h");
+        v.release_typed_enter();
+        v.observe_interactive_output(b"\r\nuser@host:~$ ");
+        assert!(v.take_interactive_exec_records().is_empty());
+    }
+
+    #[test]
+    fn interactive_exec_server_block_closes_open_command() {
+        let mut v = capturing_view("rm -rf /");
+        v.release_typed_enter();
+        v.note_server_audit_outcome("rm -rf /", "blocked");
+        let rows = v.take_interactive_exec_records();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].command, "rm -rf /");
+        assert!(rows[0].tags.iter().any(|t| t == "blocked"));
+        assert!(!rows[0].ok);
+        assert!(rows[0].exit_code.is_none());
+    }
+
+    #[test]
+    fn interactive_exec_server_block_retags_record_already_closed_by_prompt() {
+        let mut v = capturing_view("rm -rf /");
+        v.release_typed_enter();
+        v.observe_interactive_output(b"\r\nuser@host:~$ ");
+        v.note_server_audit_outcome("rm -rf /", "blocked");
+        let rows = v.take_interactive_exec_records();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].tags.iter().any(|t| t == "blocked"));
+        assert!(!rows[0].tags.iter().any(|t| t == "allowed"));
+        assert!(!rows[0].ok);
     }
 }
 

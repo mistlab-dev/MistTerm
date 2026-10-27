@@ -305,6 +305,10 @@ pub struct AuditSettings {
     pub retention_days: u32,
     #[serde(default = "default_log_commands")]
     pub log_command_preview: bool,
+    /// 交互式终端里回车提交的命令：走本地审计，并追加一条 exec_history JSONL。
+    /// 默认开。未登录团队（本地策略与服务器 Agent 都未生效）时仍不拦截、不落盘。
+    #[serde(default = "default_interactive_pty_capture")]
+    pub interactive_pty_capture: bool,
     #[serde(default)]
     pub http: HttpSinkSettings,
     #[serde(default)]
@@ -320,6 +324,9 @@ fn default_retention_days() -> u32 {
 fn default_log_commands() -> bool {
     true
 }
+fn default_interactive_pty_capture() -> bool {
+    true
+}
 
 impl Default for AuditSettings {
     fn default() -> Self {
@@ -328,6 +335,7 @@ impl Default for AuditSettings {
             file_dir: default_audit_dir(),
             retention_days: default_retention_days(),
             log_command_preview: default_log_commands(),
+            interactive_pty_capture: default_interactive_pty_capture(),
             http: HttpSinkSettings::default(),
             syslog: SyslogSinkSettings::default(),
         }
@@ -640,6 +648,17 @@ mod tests {
         let s = serde_json::to_string(&ev).unwrap();
         assert!(s.contains("connect.start"));
         assert!(s.contains("10.0.0.1"));
+    }
+
+    #[test]
+    fn interactive_pty_capture_defaults_on_when_missing() {
+        let settings = AuditSettings::default();
+        assert!(settings.interactive_pty_capture);
+        let parsed: AuditSettings = serde_json::from_str(
+            r#"{"enabled":true,"file_dir":"","retention_days":90,"log_command_preview":true}"#,
+        )
+        .expect("old settings");
+        assert!(parsed.interactive_pty_capture);
     }
 
     #[test]

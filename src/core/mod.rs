@@ -22,6 +22,7 @@ pub mod agent;
 pub mod batch_exec;
 pub mod controlplane;
 pub mod exec_history;
+pub mod interactive_exec;
 pub mod ssh_build;
 pub mod ssh_keygen;
 pub mod fragment_expr;
@@ -112,8 +113,9 @@ pub use batch_exec::{
     TEAM_TARGET_PREFIX,
 };
 pub use exec_history::{
-    append_record, extract_sop_markdown, get_log_file_path, read_recent_records, record_batch_rows,
-    truncate_output_summary, ExecLogRecord,
+    append_record, append_record_at, extract_sop_markdown, get_log_file_path, read_recent_records,
+    read_records_at, record_batch_rows, truncate_output_summary, ExecLogRecord,
+    OUTPUT_SUMMARY_MAX_CHARS,
 };
 pub use ssh_build::{
     build_ssh_config, keepalive_from_session, resolve_proxy_jump_hops, session_to_ssh_config,
