@@ -621,8 +621,8 @@ impl MistTermApp {
                 )
                 .on_hover_text(crate::i18n::tr(
                     ctx,
-                    "Off: new pastes are not saved. Paste history can still show what was saved before. Private keys and password prompts are never saved.",
-                    "关闭后，新的粘贴不再写入。面板里仍能看到之前保存的内容。私钥和密码提示不会被记住。",
+                    "Off: new pastes are not saved. Paste history can still show what was saved before. Private keys, common tokens, and password prompts are skipped on a best-effort basis; the filter is not complete.",
+                    "关闭后，新的粘贴不再写入。面板里仍能看到之前保存的内容。私钥、常见令牌和密码/口令提示会尽量不记住，这是尽力过滤，并不完备。",
                 ))
                 .changed()
                 {

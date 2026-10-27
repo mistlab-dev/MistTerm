@@ -3,28 +3,33 @@
 //! 只保留最近 [`PASTE_HISTORY_CAP`] 条。单条超过 [`PASTE_ENTRY_MAX_BYTES`] 时按 UTF-8
 //! 边界截断；截断标注只出现在界面上，`text` 里没有这段说明，再次粘贴不会把它送进终端。
 //!
-//! ## 敏感内容（不入库）
+//! ## 敏感内容（不入库，尽力过滤、非完备）
 //!
-//! 命中下列情况时**整段跳过**，不写入内存、也不落盘。粘贴本身仍走原来的
-//! `build_paste_payload` / 分片路径：
+//! 命中下列情况时**整段跳过**，不写入内存、也不落盘。这是尽力过滤，不是完备扫描：
+//! 漏报和误报都可能发生。只检查即将入库的前缀（单条字节上限内），上限之后的内容不扫。
+//! 粘贴本身仍走原来的 `build_paste_payload` / 分片路径：
 //!
 //! - PEM 私钥头（`BEGIN` + `PRIVATE KEY` / `OPENSSH PRIVATE KEY` / `PGP PRIVATE KEY`）
-//! - AWS 访问密钥形态 `AKIA` + 16 位大写字母或数字
-//! - GitHub token 前缀 `ghp_` / `gho_` / `github_pat_`
-//! - Slack token 前缀 `xoxb-` / `xoxp-` / `xoxa-` / `xoxs-`
-//! - 当前光标行像密码或口令提示（`password` / `passphrase` / `密码`）
+//! - AWS 访问密钥形态 `AKIA` / STS `ASIA` + 16 位大写字母或数字
+//! - GitHub token 前缀 `ghp_` / `gho_` / `ghu_` / `ghs_` / `ghr_` / `github_pat_`
+//! - OpenAI 风格 `sk-` / `sk-proj-`
+//! - Slack token 前缀 `xoxb-` / `xoxp-` / `xoxa-` / `xoxs-` / `xoxc-`
+//! - 环境变量赋值：名字含 `_SECRET` 段，或以 `_API_KEY` 结尾，后面紧跟 `=`
+//! - 当前光标行像密码或口令提示（`password` / `passphrase` / `密码` / `口令`）
 //!
 //! 不做预览脱敏：这些内容根本不进历史。关闭「记住粘贴历史」后不再写入；已有条目仍可查看并再次粘贴。
 //!
-//! 落盘与命令历史相同，走 `device_key` 加密的 `paste_history.json`。磁盘写入在后台线程，
-//! 不占用 UI 线程；进程保存点会再同步刷一次，避免退出丢掉最后一条。
+//! 落盘与命令历史相同，走 `device_key` 加密的 `paste_history.json`。磁盘只有一条写线程。
+//! `flush` 会先收完后台 load 并与 `poll_background_load` 做同样的合并，再把快照交给这条写线程；
+//! 等待超时不会再并行 `write_now`，避免更旧的快照后写覆盖。
 
 use chrono::{DateTime, Local, TimeZone};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::io;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -164,6 +169,16 @@ impl PasteDeliveryLedger {
     }
 }
 
+struct SaveJob {
+    generation: u64,
+    /// 已提交的最新一代。写盘前若自己更旧，则跳过，避免后写覆盖。
+    latest: Arc<AtomicU64>,
+    snapshot: HistoryFile,
+    path: PathBuf,
+    stall: Duration,
+    ack: mpsc::Sender<io::Result<()>>,
+}
+
 pub struct PasteHistory {
     entries: VecDeque<PasteEntry>,
     persist_path: PathBuf,
@@ -171,55 +186,69 @@ pub struct PasteHistory {
     dirty: bool,
     load_rx: Option<mpsc::Receiver<VecDeque<PasteEntry>>>,
     save_rx: Option<mpsc::Receiver<io::Result<()>>>,
+    writer_tx: Option<mpsc::Sender<SaveJob>>,
+    /// 单写线程看到的最新一代。超时路径不会另起 `write_now`。
+    latest_generation: Arc<AtomicU64>,
+    save_generation: u64,
+    save_timeout: Duration,
+    load_timeout: Duration,
+    /// 测试用：写线程在落盘前等待，用来复现「旧快照后写」。
+    save_stall: Duration,
     next_id: u64,
 }
 
 impl PasteHistory {
     pub fn new() -> Self {
-        let path = Self::default_persist_path();
+        Self::open_background(Self::default_persist_path())
+    }
+
+    /// 测试用：不读盘、不写盘。
+    pub fn in_memory() -> Self {
+        Self::blank(PathBuf::new(), false, VecDeque::new(), None)
+    }
+
+    /// 测试或显式路径：同步读盘，写入仍走唯一的后台写线程。
+    pub fn open_at(path: PathBuf) -> Self {
+        let entries = Self::load_entries(&path);
+        Self::blank(path, true, entries, None)
+    }
+
+    /// 与 [`Self::new`] 相同的后台加载，但路径由调用方指定。测试用它复现
+    /// 「还没 poll load 就 flush」而不会碰到用户真实的配置目录。
+    pub fn open_background(path: PathBuf) -> Self {
         let (tx, rx) = mpsc::channel();
         let load_path = path.clone();
         thread::spawn(move || {
             let loaded = Self::load_entries(&load_path);
             let _ = tx.send(loaded);
         });
-        Self {
-            entries: VecDeque::new(),
-            persist_path: path,
-            persist: true,
-            dirty: false,
-            load_rx: Some(rx),
-            save_rx: None,
-            next_id: 1,
-        }
+        Self::blank(path, true, VecDeque::new(), Some(rx))
     }
 
-    /// 测试用：不读盘、不写盘。
-    pub fn in_memory() -> Self {
-        Self {
-            entries: VecDeque::new(),
-            persist_path: PathBuf::new(),
-            persist: false,
-            dirty: false,
-            load_rx: None,
-            save_rx: None,
-            next_id: 1,
-        }
-    }
-
-    /// 测试或显式路径：同步读盘，写入仍走后台线程。
-    pub fn open_at(path: PathBuf) -> Self {
-        let entries = Self::load_entries(&path);
+    fn blank(
+        path: PathBuf,
+        persist: bool,
+        entries: VecDeque<PasteEntry>,
+        load_rx: Option<mpsc::Receiver<VecDeque<PasteEntry>>>,
+    ) -> Self {
         let mut history = Self {
             entries,
             persist_path: path,
-            persist: true,
+            persist,
             dirty: false,
-            load_rx: None,
+            load_rx,
             save_rx: None,
+            writer_tx: None,
+            latest_generation: Arc::new(AtomicU64::new(0)),
+            save_generation: 0,
+            save_timeout: Duration::from_secs(3),
+            load_timeout: Duration::from_secs(3),
+            save_stall: Duration::ZERO,
             next_id: 1,
         };
-        history.recompute_next_id();
+        if history.load_rx.is_none() {
+            history.recompute_next_id();
+        }
         history
     }
 
@@ -236,21 +265,7 @@ impl PasteHistory {
         };
         match rx.try_recv() {
             Ok(loaded) => {
-                let pending = if self.dirty {
-                    std::mem::take(&mut self.entries)
-                } else {
-                    VecDeque::new()
-                };
-                self.entries = loaded;
-                self.recompute_next_id();
-                self.load_rx = None;
-                if !pending.is_empty() {
-                    for entry in pending {
-                        self.push_loaded_pending(entry);
-                    }
-                    self.dirty = true;
-                    self.kick_save();
-                }
+                self.apply_loaded(loaded);
                 true
             }
             Err(mpsc::TryRecvError::Empty) => false,
@@ -258,6 +273,47 @@ impl PasteHistory {
                 self.load_rx = None;
                 false
             }
+        }
+    }
+
+    /// 与 [`Self::poll_background_load`] 相同的合并：磁盘内容打底，本会话尚未落盘的条目接在后面。
+    fn apply_loaded(&mut self, loaded: VecDeque<PasteEntry>) {
+        let pending = if self.dirty {
+            std::mem::take(&mut self.entries)
+        } else {
+            VecDeque::new()
+        };
+        self.entries = loaded;
+        self.recompute_next_id();
+        self.load_rx = None;
+        if pending.is_empty() {
+            return;
+        }
+        for entry in pending {
+            self.push_loaded_pending(entry);
+        }
+        self.dirty = true;
+        self.kick_save();
+    }
+
+    /// 收完后台 load。超时则保留 `load_rx`，调用方不得写盘。
+    fn finish_load_blocking(&mut self) -> io::Result<()> {
+        let Some(rx) = self.load_rx.take() else {
+            return Ok(());
+        };
+        match rx.recv_timeout(self.load_timeout) {
+            Ok(loaded) => {
+                self.apply_loaded(loaded);
+                Ok(())
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.load_rx = Some(rx);
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "paste history load still in progress",
+                ))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => Ok(()),
         }
     }
 
@@ -288,27 +344,55 @@ impl PasteHistory {
         self.kick_save();
     }
 
-    /// 退出 / eframe `save`：等在飞的后台写结束，再把仍脏的快照同步落盘。
+    /// 退出 / eframe `save`：先完成 load 合并，再只通过唯一写线程落盘。
+    ///
+    /// 等待超时直接返回错误，不再调用并行的 `write_now`。在飞的那一代仍由写线程完成；
+    /// 更旧的快照若在写盘前发现已有更新的 generation，会跳过。
     pub fn flush_blocking(&mut self) -> io::Result<()> {
         if !self.persist {
             return Ok(());
         }
-        if let Some(rx) = self.save_rx.take() {
-            match rx.recv_timeout(Duration::from_secs(3)) {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    log::warn!("paste history save failed: {err}");
-                    self.dirty = true;
-                }
-                Err(_) => {
-                    self.dirty = true;
-                }
-            }
-        }
+        self.finish_load_blocking()?;
+        self.wait_for_inflight_save()?;
         if !self.dirty {
             return Ok(());
         }
-        self.write_now()
+        if self.save_rx.is_some() || !self.enqueue_save() {
+            return Err(io::Error::other("paste history save still in progress"));
+        }
+        self.wait_for_inflight_save()?;
+        if self.dirty {
+            return Err(io::Error::other("paste history remained dirty after save"));
+        }
+        Ok(())
+    }
+
+    fn wait_for_inflight_save(&mut self) -> io::Result<()> {
+        let Some(rx) = self.save_rx.take() else {
+            return Ok(());
+        };
+        match rx.recv_timeout(self.save_timeout) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(err)) => {
+                log::warn!("paste history save failed: {err}");
+                self.dirty = true;
+                Err(err)
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                // 写线程还拿着这一代快照。把接收端放回去，禁止再开一次写。
+                self.save_rx = Some(rx);
+                log::warn!("paste history save timed out; not starting a second write");
+                Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "paste history save still in progress",
+                ))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                self.dirty = true;
+                self.writer_tx = None;
+                Err(io::Error::other("paste history writer stopped"))
+            }
+        }
     }
 
     /// 后台写盘已结束，且没有新的脏数据。
@@ -431,29 +515,65 @@ impl PasteHistory {
     }
 
     fn kick_save(&mut self) {
-        if !self.persist || !self.dirty || self.load_rx.is_some() || self.save_rx.is_some() {
-            return;
-        }
-        let snapshot = HistoryFile {
-            entries: self.entries.iter().cloned().collect(),
-        };
-        let path = self.persist_path.clone();
-        let (tx, rx) = mpsc::channel();
-        self.dirty = false;
-        self.save_rx = Some(rx);
-        thread::spawn(move || {
-            let result = crate::security::encrypted_file::save_encrypted_json(&path, &snapshot);
-            let _ = tx.send(result);
-        });
+        let _ = self.enqueue_save();
     }
 
-    fn write_now(&mut self) -> io::Result<()> {
+    /// 把当前快照交给唯一写线程。load 未完成或已有一代在飞时不提交。
+    fn enqueue_save(&mut self) -> bool {
+        if !self.persist || !self.dirty || self.load_rx.is_some() || self.save_rx.is_some() {
+            return false;
+        }
+        self.save_generation = self.save_generation.saturating_add(1);
+        let generation = self.save_generation;
+        self.latest_generation.store(generation, Ordering::Release);
         let snapshot = HistoryFile {
             entries: self.entries.iter().cloned().collect(),
         };
-        crate::security::encrypted_file::save_encrypted_json(&self.persist_path, &snapshot)?;
+        let (tx, rx) = mpsc::channel();
+        let job = SaveJob {
+            generation,
+            latest: Arc::clone(&self.latest_generation),
+            snapshot,
+            path: self.persist_path.clone(),
+            stall: self.save_stall,
+            ack: tx,
+        };
+        let writer = self.ensure_writer();
+        if writer.send(job).is_err() {
+            self.writer_tx = None;
+            self.dirty = true;
+            return false;
+        }
         self.dirty = false;
-        Ok(())
+        self.save_rx = Some(rx);
+        true
+    }
+
+    fn ensure_writer(&mut self) -> mpsc::Sender<SaveJob> {
+        if let Some(tx) = &self.writer_tx {
+            return tx.clone();
+        }
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || save_writer_loop(rx));
+        self.writer_tx = Some(tx.clone());
+        tx
+    }
+}
+
+fn save_writer_loop(rx: mpsc::Receiver<SaveJob>) {
+    while let Ok(job) = rx.recv() {
+        if !job.stall.is_zero() {
+            thread::sleep(job.stall);
+        }
+        // 停顿期间可能已经提交了更新的一代。这一代还没写，直接跳过。
+        if job.generation < job.latest.load(Ordering::Acquire) {
+            let _ = job.ack.send(Err(io::Error::other(
+                "paste history save skipped; a newer snapshot is queued",
+            )));
+            continue;
+        }
+        let result = crate::security::encrypted_file::save_encrypted_json(&job.path, &job.snapshot);
+        let _ = job.ack.send(result);
     }
 }
 
@@ -512,10 +632,13 @@ pub fn format_byte_len(n: usize) -> String {
 /// 光标行像密码 / 口令提示时，这次粘贴不进历史。
 pub fn cursor_line_looks_like_secret_prompt(line: &str) -> bool {
     let lower = line.to_lowercase();
-    lower.contains("password") || lower.contains("passphrase") || lower.contains("密码")
+    lower.contains("password")
+        || lower.contains("passphrase")
+        || lower.contains("密码")
+        || line.contains("口令")
 }
 
-/// 正文像私钥或常见令牌时，整段不进历史。
+/// 正文像私钥或常见令牌时，整段不进历史。尽力过滤，并非完备。
 pub fn looks_like_secret(text: &str) -> bool {
     // 不分配整段大写副本，避免大粘贴在 UI 线程上再拷一份。
     if contains_ascii_ignore_case(text, "-----BEGIN ")
@@ -524,16 +647,31 @@ pub fn looks_like_secret(text: &str) -> bool {
     {
         return true;
     }
-    if contains_aws_access_key(text) {
+    if contains_aws_key(text, b"AKIA") || contains_aws_key(text, b"ASIA") {
         return true;
     }
-    if text.contains("ghp_") || text.contains("gho_") || text.contains("github_pat_") {
+    const TOKEN_PREFIXES: &[&[u8]] = &[
+        b"ghp_",
+        b"gho_",
+        b"ghu_",
+        b"ghs_",
+        b"ghr_",
+        b"github_pat_",
+        b"sk-proj-",
+        b"sk-",
+        b"xoxb-",
+        b"xoxp-",
+        b"xoxa-",
+        b"xoxs-",
+        b"xoxc-",
+    ];
+    if TOKEN_PREFIXES
+        .iter()
+        .any(|prefix| contains_token_prefix(text, prefix))
+    {
         return true;
     }
-    text.contains("xoxb-")
-        || text.contains("xoxp-")
-        || text.contains("xoxa-")
-        || text.contains("xoxs-")
+    contains_env_secret_assignment(text)
 }
 
 fn contains_ascii_ignore_case(haystack: &str, needle: &str) -> bool {
@@ -550,20 +688,19 @@ fn contains_ascii_ignore_case(haystack: &str, needle: &str) -> bool {
     })
 }
 
+/// 与 [`note_for_payload`] 一致：先按入库上限裁剪，再做密钥判断。
 pub fn should_record_paste(text: &str, cursor_line: &str) -> bool {
-    !text.is_empty()
-        && !cursor_line_looks_like_secret_prompt(cursor_line)
-        && !looks_like_secret(text)
+    note_for_payload(text, cursor_line).is_some()
 }
 
-fn contains_aws_access_key(text: &str) -> bool {
+fn contains_aws_key(text: &str, prefix: &[u8; 4]) -> bool {
     let bytes = text.as_bytes();
     if bytes.len() < 20 {
         return false;
     }
     let mut i = 0;
     while i + 20 <= bytes.len() {
-        if &bytes[i..i + 4] == b"AKIA"
+        if &bytes[i..i + 4] == prefix
             && bytes[i + 4..i + 20]
                 .iter()
                 .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
@@ -575,12 +712,97 @@ fn contains_aws_access_key(text: &str) -> bool {
     false
 }
 
+/// `sk-` / `ghp_` 这类前缀只在标识符边界上算命中，避免 `ask-me` 误伤。
+fn contains_token_prefix(text: &str, prefix: &[u8]) -> bool {
+    let bytes = text.as_bytes();
+    if prefix.is_empty() || bytes.len() < prefix.len() {
+        return false;
+    }
+    let last = bytes.len() - prefix.len();
+    let mut i = 0;
+    while i <= last {
+        if &bytes[i..i + prefix.len()] == prefix {
+            let boundary = i == 0 || !bytes[i - 1].is_ascii_alphanumeric();
+            if boundary {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+/// `*_SECRET*=` / `*_API_KEY=`。`SECRET` 按标识符段匹配，`SECRETARY=` 不算。
+fn contains_env_secret_assignment(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'=' {
+            i += 1;
+            continue;
+        }
+        let mut end = i;
+        while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+            end -= 1;
+        }
+        let mut start = end;
+        while start > 0 {
+            let c = bytes[start - 1];
+            if c.is_ascii_alphanumeric() || c == b'_' {
+                start -= 1;
+            } else {
+                break;
+            }
+        }
+        if start < end && env_name_is_secret(&bytes[start..end]) {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+fn env_name_is_secret(name: &[u8]) -> bool {
+    if name.len() >= b"_API_KEY".len() {
+        let tail = &name[name.len() - b"_API_KEY".len()..];
+        if tail
+            .iter()
+            .zip(b"_API_KEY".iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+        {
+            return true;
+        }
+    }
+    let mut i = 0;
+    while i + 6 <= name.len() {
+        let matched = name[i..i + 6]
+            .iter()
+            .zip(b"SECRET".iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b));
+        if matched {
+            let before_ok = i == 0 || name[i - 1] == b'_';
+            let after = i + 6;
+            let after_ok = after == name.len() || name[after] == b'_';
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 /// 终端侧：决定这条 payload 是记历史还是只占字节空洞。
+///
+/// 先裁到单条字节上限，再对前缀做密钥扫描，避免大粘贴在 UI 线程上整段扫描。
 pub fn note_for_payload(text: &str, cursor_line: &str) -> Option<PasteHistoryNote> {
-    if !should_record_paste(text, cursor_line) {
+    if text.is_empty() || cursor_line_looks_like_secret_prompt(cursor_line) {
         return None;
     }
     let (clipped, truncated, original_bytes) = clip_for_history(text);
+    if looks_like_secret(&clipped) {
+        return None;
+    }
     Some(PasteHistoryNote {
         text: clipped,
         truncated,
@@ -591,6 +813,10 @@ pub fn note_for_payload(text: &str, cursor_line: &str) -> Option<PasteHistoryNot
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
+    use std::path::PathBuf;
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn note(text: &str) -> PasteHistoryNote {
         let (clipped, truncated, original_bytes) = clip_for_history(text);
@@ -659,14 +885,42 @@ mod tests {
             "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----"
         ));
         assert!(looks_like_secret("token ghp_abcdefghijklmnopqrstuvwxyz"));
+        assert!(looks_like_secret("ghu_abcdefghijklmnopqrstuvwxyz"));
+        assert!(looks_like_secret("ghs_abcdefghijklmnopqrstuvwxyz"));
+        assert!(looks_like_secret("ghr_abcdefghijklmnopqrstuvwxyz"));
         assert!(looks_like_secret("AKIAIOSFODNN7EXAMPLE"));
+        assert!(looks_like_secret("ASIAIOSFODNN7EXAMPLE"));
+        assert!(looks_like_secret("sk-proj-abcDEF123456"));
+        assert!(looks_like_secret("sk-abcDEF123456"));
+        assert!(looks_like_secret("xoxc-1-token"));
+        assert!(looks_like_secret("export OPENAI_API_KEY=abc"));
+        assert!(looks_like_secret("AWS_SECRET_ACCESS_KEY=abc"));
+        assert!(looks_like_secret("MY_SECRET=abc"));
         assert!(!looks_like_secret("-----BEGIN PUBLIC KEY-----\nMIIB\n"));
         assert!(!looks_like_secret("echo hello"));
+        assert!(!looks_like_secret("ask-me later"));
+        assert!(!looks_like_secret("SECRETARY=pat"));
         assert!(!should_record_paste("hunter2", "[sudo] password for root:"));
+        assert!(!should_record_paste("hunter2", "请输入口令："));
         assert!(should_record_paste("10.1.1.1", "root@host:~# "));
         assert!(
             note_for_payload("-----BEGIN RSA PRIVATE KEY-----\nabc", "root@host:~# ").is_none()
         );
+    }
+
+    #[test]
+    fn note_scans_only_the_stored_prefix() {
+        let marker = "ghp_abcdefghijklmnopqrstuvwxyz";
+        let mut secret_after_cap = "a".repeat(PASTE_ENTRY_MAX_BYTES);
+        secret_after_cap.push_str(marker);
+        let note = note_for_payload(&secret_after_cap, "user@host:~$ ").expect("prefix only");
+        assert!(note.truncated);
+        assert!(!note.text.contains("ghp_"));
+        assert!(note.text.len() <= PASTE_ENTRY_MAX_BYTES);
+
+        let mut secret_in_prefix = String::from(marker);
+        secret_in_prefix.push_str(&"a".repeat(PASTE_ENTRY_MAX_BYTES));
+        assert!(note_for_payload(&secret_in_prefix, "user@host:~$ ").is_none());
     }
 
     #[test]
@@ -693,5 +947,80 @@ mod tests {
         ledger.abandon();
         assert!(ledger.on_written(4).is_empty());
         assert!(ledger.is_empty());
+    }
+
+    fn temp_history_path(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "mistterm-paste-history-{label}-{}-{}.json",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    fn texts(history: &PasteHistory) -> Vec<String> {
+        history
+            .entries
+            .iter()
+            .map(|entry| entry.text.clone())
+            .collect()
+    }
+
+    #[test]
+    fn flush_before_load_poll_keeps_entries_already_on_disk() {
+        let path = temp_history_path("flush-load");
+        let _ = std::fs::remove_file(&path);
+        let mut seeded = PasteHistory::open_at(path.clone());
+        seeded.record_note(note("old-entry"));
+        seeded.flush_blocking().expect("seed");
+        drop(seeded);
+
+        let mut history = PasteHistory::open_background(path.clone());
+        assert!(!history.is_loaded());
+        history.record_note(note("new-entry"));
+        history.flush_blocking().expect("flush merges load");
+
+        let loaded = PasteHistory::open_at(path.clone());
+        let stored = texts(&loaded);
+        assert!(
+            stored.iter().any(|text| text == "old-entry"),
+            "disk history was overwritten: {stored:?}"
+        );
+        assert!(stored.iter().any(|text| text == "new-entry"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn flush_timeout_does_not_write_a_newer_snapshot_in_parallel() {
+        let path = temp_history_path("flush-timeout");
+        let _ = std::fs::remove_file(&path);
+        let mut history = PasteHistory::open_at(path.clone());
+        history.save_stall = Duration::from_millis(800);
+        history.save_timeout = Duration::from_millis(150);
+        history.record_note(note("first"));
+        history.record_note(note("second"));
+        let err = history
+            .flush_blocking()
+            .expect_err("in-flight save should time out");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        let mid = texts(&PasteHistory::open_at(path.clone()));
+        assert!(
+            !mid.iter().any(|text| text == "second"),
+            "flush wrote the newer snapshot while the older save was still in flight: {mid:?}"
+        );
+
+        history.save_stall = Duration::ZERO;
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while !history.is_persist_idle() && std::time::Instant::now() < deadline {
+            history.poll_save();
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(history.is_persist_idle(), "follow-up save did not finish");
+        let stored = texts(&PasteHistory::open_at(path.clone()));
+        assert!(stored.iter().any(|text| text == "first"));
+        assert!(stored.iter().any(|text| text == "second"));
+        let _ = std::fs::remove_file(&path);
     }
 }
