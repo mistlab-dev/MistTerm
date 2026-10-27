@@ -121,6 +121,7 @@ fn test_sftp_upload_ex_progress_and_download() {
                 last = p.done;
                 ticks += 1;
             },
+            None,
         )
         .expect("upload_ex");
     assert!(matches!(up, TransferResult::Completed { bytes } if bytes == payload.len() as u64));
@@ -139,6 +140,7 @@ fn test_sftp_upload_ex_progress_and_download() {
                 last = p.done;
                 ticks += 1;
             },
+            None,
         )
         .expect("download_ex");
     assert!(matches!(down, TransferResult::Completed { bytes } if bytes == payload.len() as u64));
@@ -178,6 +180,7 @@ fn test_sftp_upload_cancel_then_resume() {
                     cancel_flag.store(true, Ordering::Relaxed);
                 }
             },
+            None,
         )
         .expect("upload cancel");
     match cancelled {
@@ -198,6 +201,7 @@ fn test_sftp_upload_cancel_then_resume() {
             WriteMode::Resume,
             None,
             &mut |_| {},
+            None,
         )
         .expect("upload resume");
     assert!(matches!(
@@ -216,6 +220,7 @@ fn test_sftp_upload_cancel_then_resume() {
             WriteMode::Resume,
             None,
             &mut |_| {},
+            None,
         )
         .expect("upload skip complete");
     assert_eq!(skipped, TransferResult::Skipped);
@@ -245,6 +250,7 @@ fn test_sftp_download_cancel_then_resume() {
             WriteMode::Overwrite,
             None,
             &mut |_| {},
+            None,
         )
         .expect("seed remote");
 
@@ -261,6 +267,7 @@ fn test_sftp_download_cancel_then_resume() {
                     cancel_flag.store(true, Ordering::Relaxed);
                 }
             },
+            None,
         )
         .expect("download cancel");
     assert!(matches!(cancelled, TransferResult::Cancelled { .. }));
@@ -274,6 +281,7 @@ fn test_sftp_download_cancel_then_resume() {
             WriteMode::Resume,
             None,
             &mut |_| {},
+            None,
         )
         .expect("download resume");
     assert!(matches!(
@@ -300,7 +308,7 @@ fn test_sftp_chmod_and_collect_tree() {
     let local = std::env::temp_dir().join("mistterm_chmod_seed.txt");
     std::fs::write(&local, b"chmod-tree").unwrap();
     client
-        .upload_ex(&local, &file, WriteMode::Overwrite, None, &mut |_| {})
+        .upload_ex(&local, &file, WriteMode::Overwrite, None, &mut |_| {}, None)
         .expect("seed");
     client.chmod(&file, 0o755).expect("chmod");
     let entry = client.stat(&file).expect("stat");
@@ -368,7 +376,14 @@ fn test_sftp_upload_to_readonly_dir_fails() {
     let local = std::env::temp_dir().join("mistterm_readonly_up.txt");
     std::fs::write(&local, b"readonly-probe").unwrap();
     let remote = dir.join("should_fail.txt");
-    let result = client.upload_ex(&local, &remote, WriteMode::Overwrite, None, &mut |_| {});
+    let result = client.upload_ex(
+        &local,
+        &remote,
+        WriteMode::Overwrite,
+        None,
+        &mut |_| {},
+        None,
+    );
     let _ = client.chmod(&dir, 0o755);
     let _ = client.remove(&dir);
     let _ = std::fs::remove_file(&local);
