@@ -8,13 +8,20 @@ the trusted comment, which must be exactly:
 
     mistterm <channel> <version> <pub_date>
 
-Download URL order is configurable (`--url-order`). Today GitHub comes first;
-mirror URLs are only added when `--mirror-base` is given (the mistlab.dev
-mirror upload is not enabled yet — see docs/release/AUTO_UPDATE.md).
+Download URL order is configurable (`--url-order`). Release CI passes
+`--url-order mirror,github` and
+`--mirror-base https://mistlab.dev/downloads/mistterm/v<version>` so clients
+try mistlab.dev first. This script's default remains `github,mirror`, and
+mirror URLs are omitted unless `--mirror-base` is set.
+`--patch-urls` rewrites `urls` in an existing manifest without changing
+`pub_date`, checksums, or the trusted comment
+(`mistterm <channel> <version> <pub_date>`).
 
 Usage:
     python3 scripts/gen-update-manifest.py --version 1.2.0 --dist dist --out dist/latest.json
     python3 scripts/gen-update-manifest.py --trusted-comment-of dist/latest.json
+    python3 scripts/gen-update-manifest.py --patch-urls dist/latest.json --version 1.2.38 \\
+        --mirror-base https://mistlab.dev/downloads/mistterm/v1.2.38 --url-order mirror,github
     python3 scripts/gen-update-manifest.py --self-test
 """
 
@@ -126,6 +133,66 @@ def trusted_comment(manifest: dict) -> str:
     return f"{manifest['product']} {manifest['channel']} {manifest['version']} {manifest['pub_date']}"
 
 
+def resolve_bases(github_base: str | None, mirror_base: str | None, version: str) -> dict[str, str]:
+    tag = f"v{version}"
+    github = (github_base or f"https://github.com/{REPO}/releases/download/{tag}").rstrip("/")
+    bases = {"github": github}
+    if mirror_base:
+        bases["mirror"] = mirror_base.rstrip("/")
+    for base in bases.values():
+        if not base.startswith("https://") and not base.startswith("http://127.0.0.1"):
+            raise SystemExit(f"download base must be https: {base}")
+    return bases
+
+
+def ordered_urls(name: str, bases: dict[str, str], url_order: str) -> list[str]:
+    """Download URLs for one file. Sources missing from `bases` are skipped."""
+    order = [part.strip() for part in url_order.split(",") if part.strip()]
+    for source in order:
+        if source not in ("github", "mirror"):
+            raise SystemExit(f"--url-order: unknown source {source!r}")
+    urls: list[str] = []
+    for source in order:
+        if source not in bases:
+            continue
+        url = f"{bases[source]}/{name}"
+        if url not in urls:
+            urls.append(url)
+    if not urls:
+        raise SystemExit("no download URLs (check --url-order / --mirror-base)")
+    return urls
+
+
+def patch_manifest_urls(
+    manifest: dict,
+    *,
+    version: str,
+    github_base: str | None = None,
+    mirror_base: str | None = None,
+    url_order: str = "github,mirror",
+) -> dict:
+    """Replace each platform's `urls`. Every other field stays as-is."""
+    if not SEMVER_RE.match(version):
+        raise SystemExit(f"bad version {version!r}")
+    if manifest.get("version") != version:
+        raise SystemExit(f"manifest version {manifest.get('version')!r} != {version!r}")
+    for field in ("product", "channel", "pub_date"):
+        if not manifest.get(field):
+            raise SystemExit(f"manifest missing {field}")
+    platforms = manifest.get("platforms")
+    if not isinstance(platforms, dict) or not platforms:
+        raise SystemExit("manifest has no platforms")
+    order = [part.strip() for part in url_order.split(",") if part.strip()]
+    if "mirror" in order and not mirror_base:
+        raise SystemExit("--mirror-base is required when --url-order includes mirror")
+    bases = resolve_bases(github_base, mirror_base, version)
+    for key, entry in platforms.items():
+        if not isinstance(entry, dict) or not entry.get("name"):
+            raise SystemExit(f"{key}: missing name")
+        entry["urls"] = ordered_urls(entry["name"], bases, url_order)
+    return manifest
+
+
 def build_manifest(
     *,
     version: str,
@@ -145,17 +212,7 @@ def build_manifest(
     if not SEMVER_RE.match(version):
         raise SystemExit(f"bad version {version!r}")
     tag = f"v{version}"
-    github_base = (github_base or f"https://github.com/{REPO}/releases/download/{tag}").rstrip("/")
-    bases = {"github": github_base}
-    if mirror_base:
-        bases["mirror"] = mirror_base.rstrip("/")
-    order = [o.strip() for o in url_order.split(",") if o.strip()]
-    for o in order:
-        if o not in ("github", "mirror"):
-            raise SystemExit(f"--url-order: unknown source {o!r}")
-    for b in bases.values():
-        if not b.startswith("https://") and not b.startswith("http://127.0.0.1"):
-            raise SystemExit(f"download base must be https: {b}")
+    bases = resolve_bases(github_base, mirror_base, version)
 
     sums_path = dist / "SHA256SUMS"
     sums = read_sha256sums(sums_path) if sums_path.is_file() else {}
@@ -177,7 +234,7 @@ def build_manifest(
             "size": path.stat().st_size,
             "sha256": digest,
             "auto_update": macos_auto_update if spec.get("macos") else spec["auto_update"],
-            "urls": [f"{bases[o]}/{spec['name']}" for o in order if o in bases],
+            "urls": ordered_urls(spec["name"], bases, url_order),
         }
         if key == "linux-x86_64":
             assert_gui_tarball_has_no_cli(path)
@@ -190,8 +247,6 @@ def build_manifest(
                 raise SystemExit(f"{spec['name']}: static CLI package must not need glibc (found GLIBC_{glibc})")
         if not entry["auto_update"]:
             entry["manual_url"] = DOWNLOAD_PAGE
-        if not entry["urls"]:
-            raise SystemExit("no download URLs (check --url-order / --mirror-base)")
         platforms[key] = entry
 
     return {
@@ -310,6 +365,53 @@ def self_test() -> int:
             raise AssertionError("missing required file not detected")
         except SystemExit:
             pass
+        # Patching an already published manifest only rewrites urls.
+        src = json.loads(json.dumps(m))
+        src["notes"] = {"zh": "保持不变", "en": "unchanged"}
+        mac_name = src["platforms"]["macos-aarch64"]["name"]
+        github_mac = f"https://github.com/{REPO}/releases/download/v1.2.0/{mac_name}"
+        src["platforms"]["macos-aarch64"]["urls"] = [github_mac, github_mac, "https://example.invalid/extra"]
+        frozen = json.loads(json.dumps(src))
+        patched = patch_manifest_urls(
+            src,
+            version="1.2.0",
+            mirror_base="https://mistlab.dev/downloads/mistterm/v1.2.0",
+            url_order="mirror,github",
+        )
+        def without_urls(doc: dict) -> dict:
+            doc = json.loads(json.dumps(doc))
+            for entry in doc["platforms"].values():
+                entry.pop("urls", None)
+            return doc
+        assert without_urls(patched) == without_urls(frozen)
+        expect = [
+            f"https://mistlab.dev/downloads/mistterm/v1.2.0/{mac_name}",
+            github_mac,
+        ]
+        assert patched["platforms"]["macos-aarch64"]["urls"] == expect, patched["platforms"]["macos-aarch64"]
+        assert trusted_comment(patched) == trusted_comment(frozen)
+        again = patch_manifest_urls(
+            json.loads(json.dumps(patched)),
+            version="1.2.0",
+            mirror_base="https://mistlab.dev/downloads/mistterm/v1.2.0",
+            url_order="mirror,github",
+        )
+        assert again["platforms"]["macos-aarch64"]["urls"] == expect
+        try:
+            patch_manifest_urls(
+                json.loads(json.dumps(patched)),
+                version="9.9.9",
+                mirror_base="https://mistlab.dev/downloads/mistterm/v9.9.9",
+                url_order="mirror,github",
+            )
+            raise AssertionError("version mismatch not detected")
+        except SystemExit:
+            pass
+        try:
+            patch_manifest_urls(json.loads(json.dumps(patched)), version="1.2.0", url_order="mirror,github")
+            raise AssertionError("patch without mirror base was accepted")
+        except SystemExit:
+            pass
     print("gen-update-manifest self-test: ok")
     return 0
 
@@ -323,8 +425,9 @@ def main() -> int:
     ap.add_argument("--channel", default="stable")
     ap.add_argument("--pub-date", help="RFC 3339 UTC, default now")
     ap.add_argument("--github-base", help="default https://github.com/<repo>/releases/download/v<version>")
-    ap.add_argument("--mirror-base", help="mirror base URL; omit while the mirror is disabled")
-    ap.add_argument("--url-order", default="github,mirror", help="download URL order, e.g. github,mirror")
+    ap.add_argument("--mirror-base", help="mirror base URL (release CI: https://mistlab.dev/downloads/mistterm/v<version>)")
+    ap.add_argument("--url-order", default="github,mirror", help="download URL order; release CI uses mirror,github")
+    ap.add_argument("--patch-urls", type=pathlib.Path, help="rewrite urls in an existing latest.json in place")
     ap.add_argument("--require", help="comma-separated platform keys that must exist (default: all)")
     ap.add_argument("--notes-zh", type=pathlib.Path, help="Markdown release notes (Chinese)")
     ap.add_argument("--notes-en", type=pathlib.Path, help="Markdown release notes (English)")
@@ -341,6 +444,27 @@ def main() -> int:
         print(trusted_comment(json.loads(a.trusted_comment_of.read_text(encoding="utf-8"))))
         return 0
     version = a.version or (a.tag[1:] if a.tag and a.tag.startswith("v") else None)
+    if a.patch_urls:
+        if not version:
+            ap.error("--version/--tag is required with --patch-urls")
+        manifest = json.loads(a.patch_urls.read_text(encoding="utf-8"))
+        patched = patch_manifest_urls(
+            manifest,
+            version=version,
+            github_base=a.github_base,
+            mirror_base=a.mirror_base,
+            url_order=a.url_order,
+        )
+        write_manifest(patched, a.patch_urls)
+        print(f"patched {a.patch_urls}")
+        print(f"trusted comment: {trusted_comment(patched)}")
+        mac = patched["platforms"].get("macos-aarch64")
+        if not mac:
+            raise SystemExit("macos-aarch64 missing from manifest")
+        print("macos-aarch64 urls:")
+        for url in mac["urls"]:
+            print(url)
+        return 0
     if not version or not a.dist:
         ap.error("--version/--tag and --dist are required")
     read = lambda p: p.read_text(encoding="utf-8") if p and p.is_file() else ""
