@@ -13,6 +13,7 @@ pub mod ls;
 pub mod session_log;
 pub mod sftp_cmds;
 pub mod ssh_cmd;
+pub mod ssh_session_log;
 pub mod update;
 
 use anyhow::{Context, Result};
