@@ -40,9 +40,13 @@
 
 ## Refresh Behavior
 
-- Connected terminal requests periodic repaint for live TUI/CLI (`top`, `vim`, …).
-- Live repaint interval: **~33ms (30 FPS)** (`TERMINAL_LIVE_REPAINT_MS`) — common for desktop terminals when content is dirty; not 60 FPS continuous (wastes CPU) and not ≤20 FPS (feels sluggish).
-- Cursor blink period: **~530ms** (xterm-like).
+- Connected terminal requests a fast repaint for live TUI/CLI (`top`, `vim`, `yes`, …) **only while the VTE is dirty or SSH output from this frame has not been painted yet**.
+- Live repaint interval: **~33ms (30 FPS)** (`TERMINAL_LIVE_REPAINT_MS`) — common for desktop terminals when content is dirty; not 60 FPS continuous (wastes CPU) and not ≤20 FPS (feels sluggish). A quiet prompt does not stay on this timer.
+- SSH output also calls `request_repaint()` from the shell pump as soon as bytes are queued, so new output is not waiting on the cursor timer. Ctrl+C during `top` / `yes` still wakes on that path.
+- ZMODEM upload PTY capture requests an immediate repaint each frame so the UI-side `mpsc` bypass does not stall waiting for ZACK. Transfer progress events also request a repaint when they arrive.
+- Idle + focused + connected, with no selection and no IME preedit: the block cursor schedules `request_repaint_after` for the **time until the next blink phase**, not a fixed 60ms (~16 FPS).
+- Each blink phase lasts `TERMINAL_CURSOR_BLINK_PERIOD_SECS` (**0.53s**, xterm-like). The cursor is drawn on even phases and hidden on odd phases. The idle wait is whatever remains in the current phase (about **0–530ms**). Halfway through a phase that is about **265ms**. Just after a flip it is about **530ms** plus a few milliseconds of slack so the timer lands in the new phase.
+- The output-to-frame probe is cleared once that frame has painted the terminal, including a plain prompt with no non-default cell background. Leaving the probe set used to keep the 33ms path running after the screen went quiet.
 - SSH shell pump poll: **~8ms** non-blocking timeout (latency-oriented; fine for interactive SSH).
 - UI hang watchdog: **~3s** stale heartbeat threshold (2–5s is typical for desktop diagnostics).
 - Toast auto-dismiss: Info/Success **5s**, Warn **7s**, Error **8s** (readable without lingering).

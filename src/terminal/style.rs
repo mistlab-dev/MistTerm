@@ -12,8 +12,12 @@ pub const TERMINAL_OUTPUT_DIM_FACTOR: f32 = 1.0;
 /// 业界常见：有输出时约 16–33ms（60–30 FPS）；过低会空转 CPU，过高则 `top`/vim 发钝。
 pub const TERMINAL_LIVE_REPAINT_MS: u64 = 33;
 
-/// 块状光标闪烁周期（秒），与 xterm 默认约 530ms 一致。
+/// 块状光标每一相的时长（秒）。亮、灭各持续这么久，量级与 xterm 约 530ms 一致。
+/// 完整亮灭一轮是两个相位。空闲重绘等到下一相边界，而不是固定 60ms。
 pub const TERMINAL_CURSOR_BLINK_PERIOD_SECS: f64 = 0.53;
+
+/// 相位边界上多等几毫秒，避免定时器略早醒来时仍停在旧相位、紧接着再刷一帧。
+const CURSOR_BLINK_REPAINT_SLACK: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// 终端 ScrollArea 纵向条（§2.3.4：宽 4px、轨道约 `rgba(255,255,255,0.06)`）。
 pub const TERMINAL_SCROLL_BAR_WIDTH: f32 = 4.0;
@@ -135,6 +139,39 @@ pub fn is_user_warn_line(line: &str) -> bool {
         || line.contains("已断开 SSH")
 }
 
+/// 块状光标相位：`floor(t / period) % 2`。`0` 为亮，`1` 为灭。
+pub fn cursor_blink_phase(time_secs: f64) -> i64 {
+    let period = TERMINAL_CURSOR_BLINK_PERIOD_SECS;
+    if !time_secs.is_finite() || !(period > 0.0) {
+        return 0;
+    }
+    let cycles = time_secs.max(0.0) / period;
+    if !cycles.is_finite() {
+        return 0;
+    }
+    (cycles.floor() as i64) % 2
+}
+
+/// 距下一次光标相位翻转的等待时间。
+///
+/// 已连接、聚焦、无选区、无 IME、且没有 VTE 脏数据时，用它调用
+/// `request_repaint_after`。不要再用固定 60ms：相位长 0.53s，固定 60ms
+/// 约等于 16 FPS 空转。相位中点附近的等待约 265ms；刚翻转之后接近整相（约 530ms）。
+/// 有输出或 ZMODEM 时更短的重绘请求会胜出，本函数不负责那两条路径。
+pub fn duration_until_next_cursor_blink_phase(time_secs: f64) -> std::time::Duration {
+    let period = TERMINAL_CURSOR_BLINK_PERIOD_SECS;
+    if !time_secs.is_finite() || !(period > 0.0) {
+        return std::time::Duration::from_secs_f64(0.53) + CURSOR_BLINK_REPAINT_SLACK;
+    }
+    let cycles = time_secs.max(0.0) / period;
+    if !cycles.is_finite() {
+        return std::time::Duration::from_secs_f64(period) + CURSOR_BLINK_REPAINT_SLACK;
+    }
+    let frac = cycles - cycles.floor();
+    let remaining = (1.0 - frac) * period;
+    std::time::Duration::from_secs_f64(remaining) + CURSOR_BLINK_REPAINT_SLACK
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -250,5 +287,60 @@ mod tests {
         assert!(!is_user_warn_line("Connected to host"));
         assert!(!is_user_warn_line("root@host:~$ exit"));
         assert!(!is_user_warn_line(""));
+    }
+
+    // ------------------------------------------------------- cursor blink repaint
+
+    #[test]
+    fn cursor_blink_phase_follows_floor_division() {
+        let p = TERMINAL_CURSOR_BLINK_PERIOD_SECS;
+        for i in 0..8 {
+            let edge = i as f64 * p;
+            let inside = edge + p * 0.25;
+            assert_eq!(cursor_blink_phase(edge), (i as i64) % 2, "edge {edge}");
+            assert_eq!(
+                cursor_blink_phase(inside),
+                (inside / p).floor() as i64 % 2,
+                "inside {inside}"
+            );
+        }
+        assert_eq!(cursor_blink_phase(0.0), 0);
+        assert_eq!(cursor_blink_phase(f64::NAN), 0);
+    }
+
+    #[test]
+    fn idle_blink_wait_is_time_to_next_phase_not_fixed_60ms() {
+        let p = TERMINAL_CURSOR_BLINK_PERIOD_SECS;
+        let start = duration_until_next_cursor_blink_phase(0.0);
+        let mid = duration_until_next_cursor_blink_phase(p * 0.5);
+        let start_s = start.as_secs_f64();
+        let mid_s = mid.as_secs_f64();
+        assert!(
+            start_s > 0.50 && start_s < 0.55,
+            "just after a flip, wait out the phase, got {start_s}"
+        );
+        assert!(
+            mid_s > 0.25 && mid_s < 0.29,
+            "halfway through a phase is ~265ms, got {mid_s}"
+        );
+        assert_ne!(start, std::time::Duration::from_millis(60));
+        assert_ne!(mid, std::time::Duration::from_millis(60));
+
+        let mut t = 0.0;
+        for step in 0..6 {
+            let phase = cursor_blink_phase(t);
+            let wait = duration_until_next_cursor_blink_phase(t);
+            assert!(
+                wait > std::time::Duration::from_millis(200),
+                "step {step} at t={t} waited {wait:?}; a fixed 60ms timer stays under 60ms"
+            );
+            let next = t + wait.as_secs_f64();
+            assert_ne!(
+                cursor_blink_phase(next),
+                phase,
+                "step {step}: wake at {next} must land in the next phase"
+            );
+            t = next;
+        }
     }
 }
