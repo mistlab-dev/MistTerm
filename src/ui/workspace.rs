@@ -729,6 +729,49 @@ impl MistTermApp {
 
         self.render_new_session_modal(ctx, theme);
 
+        let mut open_paste_history = false;
+        for tab in &mut self.tabs {
+            for pane in tab.panes.iter_mut() {
+                if pane.terminal.take_open_paste_history() {
+                    open_paste_history = true;
+                }
+            }
+        }
+        if open_paste_history {
+            self.menu_open_paste_history(ctx);
+        }
+        if self.paste_history_overlay.open {
+            let term_rect = self
+                .active_tab
+                .and_then(|i| self.tabs.get(i))
+                .and_then(|t| t.active_pane())
+                .map(|pane| pane.last_term_rect)
+                .unwrap_or(egui::Rect::NOTHING);
+            let remembering = self.app_settings.remember_paste_history;
+            match self.paste_history_overlay.show(
+                ctx,
+                theme,
+                &self.paste_history,
+                term_rect,
+                remembering,
+            ) {
+                PasteHistoryAction::Close => {
+                    self.paste_history_overlay.open = false;
+                }
+                PasteHistoryAction::Apply(text) => {
+                    self.paste_history_text_to_active(ctx, &text);
+                    self.paste_history_overlay.open = false;
+                }
+                PasteHistoryAction::Delete(id) => {
+                    self.paste_history.remove_id(id);
+                    if self.paste_history_overlay.selected > 0 {
+                        self.paste_history_overlay.selected -= 1;
+                    }
+                }
+                PasteHistoryAction::None => {}
+            }
+        }
+
         if self.show_about_dialog {
             let mut open = self.show_about_dialog;
             let mut should_close = false;

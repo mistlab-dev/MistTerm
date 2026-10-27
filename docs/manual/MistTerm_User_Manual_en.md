@@ -206,6 +206,7 @@ Passwords and session info are **encrypted locally**. When switching computers, 
 
 - **Ctrl+R** (terminal focused): sent to the shell as reverse-i-search. Mist does not open the command history panel
 - **Tools → Command History**: open Mist's command history panel to search and re-run recent commands. When the terminal is not focused, **Ctrl+R** also opens that panel
+- **Ctrl+Shift+P** (Mac: **⌘⇧P**) or **Tools → Paste History**: open paste history and send a recent successful paste again (the last 20 are kept). One-shot paste stays **Ctrl+Shift+V** (Mac: **⌘V**). Private keys, common tokens, and password prompts are skipped on a best-effort basis; the filter is not complete. Turn off "Remember recent pastes" in Preferences to stop saving new ones
 
 ![Command history](screenshots/17-command-history.png)
 
@@ -526,6 +527,7 @@ The following uses **Windows** keys; on macOS, replace **Ctrl** with **⌘** (e.
 | **Ctrl+Shift+V** (Mac: **⌘V**) | Paste into the terminal |
 | **Ctrl+Shift+↑** / **Ctrl+Shift+↓** (Mac: **⌘⇧↑** / **⌘⇧↓**) | Previous / next command block (needs shell integration; see [6.5](#65-command-blocks)) |
 | **Ctrl+Shift+O** (Mac: **⌘⇧O**) | Copy the current command block (command and output; long output is truncated) |
+| **Ctrl+Shift+P** (Mac: **⌘⇧P**) | Paste history. Also under **Tools → Paste History**. One-shot paste stays **Ctrl+Shift+V** (Mac: **⌘V**). Private-key and password filtering is best-effort, not complete |
 | **Ctrl+R** | When the terminal is focused, goes to the shell (reverse-i-search). When it is not, opens Mist command history. The panel is also under **Tools → Command History** |
 | **Ctrl+Shift+A** | AI assistant panel |
 | **Ctrl+Shift+L** | Send terminal selection to AI |

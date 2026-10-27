@@ -35,6 +35,7 @@ pub mod ssh_config_importer;
 pub mod ssh_url;
 pub mod foreign_import;
 pub mod command_history;
+pub mod paste_history;
 pub mod session_logger;
 pub mod session_sort;
 pub mod audit;
@@ -74,6 +75,7 @@ pub use ssh_config_importer::{
     parse_ssh_config_str, pending_imports, SshConfigCandidate, SshConfigParseResult,
 };
 pub use command_history::{CommandHistory, HistoryEntry};
+pub use paste_history::{PasteHistory, PasteHistoryNote};
 pub use session_logger::{
     cleanup_old_logs, default_log_base_dir, list_session_log_files, log_text_for_display,
     read_log_tail, spawn_cleanup_old_logs, SessionLogSettings, SessionLogWriter,

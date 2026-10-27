@@ -13,10 +13,15 @@ pub const PASTE_CHUNK: usize = 4096;
 const BP_START: &[u8] = b"\x1b[200~";
 const BP_END: &[u8] = b"\x1b[201~";
 
+/// 换行统一成 `\n`（粘贴历史与直接粘贴共用，避免再次粘贴和第一次组包不一致）。
+pub fn normalize_paste_newlines(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 /// 换行统一成 `\n`（保持既有行为），开启 bracketed paste 时包上 `ESC[200~ … ESC[201~`，
 /// 并剔除正文里伪造的起止标记（防止粘贴内容提前“结束粘贴”后被当命令执行）。
 pub fn build_paste_payload(text: &str, bracketed: bool) -> Vec<u8> {
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let normalized = normalize_paste_newlines(text);
     if !bracketed {
         return normalized.into_bytes();
     }
