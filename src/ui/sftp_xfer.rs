@@ -50,6 +50,10 @@ pub(super) struct XferItem {
     pub error: Option<String>,
     pub started_at: Option<Instant>,
     pub speed_bps: f64,
+    /// 同步下载时的本机对比根。用来拒绝跟随根下的符号链接。
+    pub guard_local: Option<PathBuf>,
+    /// 同步上传时的远端对比根。用来拒绝跟随根下的符号链接。
+    pub guard_remote: Option<PathBuf>,
     last_sample_at: Option<Instant>,
     last_sample_done: u64,
 }
@@ -184,7 +188,33 @@ impl XferQueue {
             speed_bps: 0.0,
             last_sample_at: None,
             last_sample_done: 0,
+            guard_local: None,
+            guard_remote: None,
         });
+        id
+    }
+
+    /// 目录同步入队。写模式是「目标必须不存在」，并带上对比根以便落盘时拒绝符号链接。
+    pub fn push_sync(
+        &mut self,
+        kind: XferKind,
+        local: PathBuf,
+        remote: PathBuf,
+        total_hint: u64,
+        local_root: PathBuf,
+        remote_root: PathBuf,
+    ) -> u64 {
+        let id = self.push(
+            kind,
+            local,
+            remote,
+            crate::ssh::WriteMode::Create,
+            total_hint,
+        );
+        if let Some(item) = self.items.iter_mut().find(|item| item.id == id) {
+            item.guard_local = Some(local_root);
+            item.guard_remote = Some(remote_root);
+        }
         id
     }
 
@@ -227,6 +257,23 @@ impl XferQueue {
     pub fn request_cancel_active(&mut self) {
         if let Some(c) = &self.cancel {
             c.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// 取消这一批里尚未开始的项，并请求取消其中正在跑的那一项。
+    pub fn cancel_ids(&mut self, ids: &[u64]) {
+        if ids.is_empty() {
+            return;
+        }
+        let active = self.active_id();
+        for item in &mut self.items {
+            if item.state == XferState::Queued && ids.contains(&item.id) {
+                item.state = XferState::Cancelled;
+                item.speed_bps = 0.0;
+            }
+        }
+        if active.is_some_and(|id| ids.contains(&id)) {
+            self.request_cancel_active();
         }
     }
 
