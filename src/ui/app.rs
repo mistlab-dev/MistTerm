@@ -19,6 +19,7 @@ use crate::core::{
     CmdAuditAlertRequest, CmdAuditCacheStore, CmdAuditEngine, CmdAuditResult, CmdAuditSource,
     AuditTimeline, TimelineEntry, TimelineOutcome,
     CommandHistory, CommandSendResult, Credential, CredentialAuthKind, FragmentManager,
+    PasteHistory,
     FragmentShortcutStore, FragmentStats, HangReporter, HangSnapshot, PortForwardKind,
     SecretBackend, SecretResolver,
     ServerAuditEvent, SessionConfig, SessionLogSettings, SessionLogWriter, SessionManager,
@@ -34,6 +35,7 @@ use crate::ui::ai_panel::AiPanel;
 use crate::ui::batch_exec_dialog::{BatchExecDialog, BatchExecUiAction};
 use crate::ui::cloud_sync_panel::{CloudSyncDeps, CloudSyncPanel};
 use crate::ui::command_history_overlay::{CommandHistoryAction, CommandHistoryOverlay};
+use crate::ui::paste_history_overlay::{PasteHistoryAction, PasteHistoryOverlay};
 use crate::ui::credential_panel::{CredentialPanel, CredentialPanelAction};
 use crate::ui::fragment_library::FragmentLibraryState;
 use crate::ui::help_docs_dialog::{HelpDocsDialog, HelpPage};
@@ -471,6 +473,8 @@ pub struct MistTermApp {
 
     command_history: CommandHistory,
     command_history_overlay: CommandHistoryOverlay,
+    paste_history: PasteHistory,
+    paste_history_overlay: PasteHistoryOverlay,
     ssh_import_dialog: SshConfigImportDialog,
     foreign_import_dialog: ForeignImportDialog,
     ssh_config_candidates: Vec<SshConfigCandidate>,
@@ -1325,6 +1329,8 @@ impl MistTermApp {
             large_upload_pending_path: None,
             command_history: CommandHistory::new(),
             command_history_overlay: CommandHistoryOverlay::default(),
+            paste_history: PasteHistory::new(),
+            paste_history_overlay: PasteHistoryOverlay::default(),
             ssh_import_dialog: SshConfigImportDialog::default(),
             foreign_import_dialog: ForeignImportDialog::default(),
             ssh_config_candidates: Vec::new(),
@@ -3294,6 +3300,7 @@ impl MistTermApp {
             || self.ssh_import_dialog.open
             || self.foreign_import_dialog.open
             || self.command_history_overlay.open
+            || self.paste_history_overlay.open
             || self.session_log_dialog.open
             || self.team_members_dialog.open
             || self.help_docs_dialog.open
@@ -6366,6 +6373,45 @@ impl MistTermApp {
         self.ai_panel.sync_tab_session_key(key, persist);
     }
 
+    pub(crate) fn menu_open_paste_history(&mut self, ctx: &egui::Context) {
+        self.paste_history_overlay.open_new();
+        if let Some(idx) = self.active_tab {
+            if let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) {
+                pane.terminal.release_keyboard_for_overlay();
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn paste_history_text_to_active(&mut self, ctx: &egui::Context, text: &str) {
+        let Some(idx) = self.active_tab else {
+            self.notify_auto(
+                crate::i18n::tr(ctx, "Open a terminal tab first", "请先打开终端标签").to_string(),
+            );
+            return;
+        };
+        if let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) {
+            pane.terminal.paste_from_history(text, ctx);
+        }
+    }
+
+    /// 各窗格里已经完整写入 PTY 的粘贴。偏好关闭时丢掉，不再写入。
+    fn poll_paste_history_notes(&mut self) {
+        let remember = self.app_settings.remember_paste_history;
+        let mut notes = Vec::new();
+        for tab in &mut self.tabs {
+            for pane in tab.panes.iter_mut() {
+                notes.extend(pane.terminal.take_paste_history_notes());
+            }
+        }
+        if !remember {
+            return;
+        }
+        for note in notes {
+            self.paste_history.record_note(note);
+        }
+    }
+
     pub(crate) fn menu_open_command_history(&mut self, ctx: &egui::Context) {
         if self
             .current_terminal()
@@ -8795,6 +8841,7 @@ impl MistTermApp {
             MacMenuAction::ToggleFragmentSidebar => self.toggle_fragment_sidebar(ctx),
             MacMenuAction::ToggleMonitorPanel => self.toggle_monitor_panel(ctx),
             MacMenuAction::CommandHistory => self.menu_open_command_history(ctx),
+            MacMenuAction::PasteHistory => self.menu_open_paste_history(ctx),
             MacMenuAction::BatchExec => self.menu_open_batch_exec(ctx),
             MacMenuAction::SessionLogBrowser => self.menu_open_session_log_browser(ctx),
             MacMenuAction::Theme(i) => {
@@ -8939,6 +8986,7 @@ impl eframe::App for MistTermApp {
         };
         eframe::set_value(storage, MISTTERM_UI_STORAGE_KEY, &p);
         let _ = self.command_history.save();
+        let _ = self.paste_history.flush_blocking();
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -9173,6 +9221,10 @@ impl eframe::App for MistTermApp {
         if self.command_history.poll_background_load() {
             ctx.request_repaint();
         }
+        if self.paste_history.poll_background_load() {
+            ctx.request_repaint();
+        }
+        self.paste_history.poll_save();
         self.poll_command_history_from_active_tab();
         self.flush_deferred_candidate_toast(ctx);
         self.poll_connect_audit_from_tabs(ctx);
@@ -9557,6 +9609,12 @@ impl eframe::App for MistTermApp {
             }) {
                 self.menu_select_all_for_context(ctx);
             }
+            // ⌘⇧P / Ctrl+Shift+P：粘贴历史。一次粘贴仍是 ⌘V / Ctrl+Shift+V。
+            if ctx.input_mut(|i| {
+                crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::P)
+            }) {
+                self.menu_open_paste_history(ctx);
+            }
             if ctx.input_mut(|i| {
                 crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::I)
             }) {
@@ -9739,6 +9797,7 @@ impl eframe::App for MistTermApp {
         }
 
         self.render_workspace_shell(ctx, frame, &theme);
+        self.poll_paste_history_notes();
         self.process_typed_enter_audit(ctx);
         // 须在终端/非活动窗格泵完 SSH 之后再取 MIST_AUDIT，否则本帧事件会空转。
         self.poll_server_audit_from_tabs(ctx);

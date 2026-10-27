@@ -500,6 +500,7 @@ SSH 密码直接存储在配置文件中存在安全风险。MistTerm 管理着�
 | `⌘⇧J` | `Ctrl+Shift+J` | 快速片段选择器（仅终端失焦） |
 | `⌘C` | `Ctrl+Shift+C` | 复制终端选区 |
 | `⌘V` | `Ctrl+Shift+V` | 粘贴到终端 |
+| `⌘⇧P` | `Ctrl+Shift+P` | 粘贴历史（再次粘贴最近成功送入 PTY 的文本；不改变一次粘贴） |
 | `Ctrl+C` | `Ctrl+C` | 中断前台程序（SIGINT），有选区也一样 |
 | `Ctrl+R` | `Ctrl+R` | 终端聚焦时发给 shell 反向搜索（不是命令历史面板）；失焦时打开命令历史。面板也在「工具 → 命令历史」 |
 | `⌘⌥←` / `⌘⌥→` | `Ctrl+Shift+←` / `Ctrl+Shift+→` | 分屏 Tab 内切换活动窗格焦点 |

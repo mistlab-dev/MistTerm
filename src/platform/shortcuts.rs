@@ -91,6 +91,12 @@ pub fn command_block_copy_accel() -> String {
     accel_shift("O")
 }
 
+/// 粘贴历史面板：macOS ⌘⇧P；Win/Linux Ctrl+Shift+P。
+/// 与一次粘贴（⌘V / Ctrl+Shift+V）不是同一组键。
+pub fn paste_history_accel() -> String {
+    accel_shift("p")
+}
+
 /// 终端粘贴：macOS ⌘V；Win/Linux Ctrl+Shift+V。
 pub fn terminal_paste_accel() -> String {
     #[cfg(target_os = "macos")]
@@ -183,5 +189,16 @@ mod tests {
     fn close_tab_accel_uses_shift_on_non_mac() {
         #[cfg(not(target_os = "macos"))]
         assert!(close_tab_accel().contains("Shift"));
+    }
+
+    #[test]
+    fn paste_history_accel_is_not_one_shot_paste() {
+        let history = paste_history_accel();
+        let paste = terminal_paste_accel();
+        assert_ne!(history, paste);
+        assert!(history.contains("Shift"));
+        assert!(history.to_ascii_lowercase().contains('p'));
+        assert!(paste.to_ascii_lowercase().contains('v'));
+        assert_eq!(terminal_interrupt_accel(), "Ctrl + C");
     }
 }

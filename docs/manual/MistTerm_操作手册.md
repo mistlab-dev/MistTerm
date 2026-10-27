@@ -208,6 +208,7 @@ MistTerm 是一款 **SSH 终端客户端**，帮助您：
 
 - **Ctrl+R**（终端聚焦）：发给 shell，进入反向搜索（reverse-i-search），不会打开 Mist 命令历史面板  
 - **工具 → 命令历史**：打开 Mist 的命令历史面板，搜索并重新执行最近的命令。终端失焦时 **Ctrl+R** 也会打开该面板  
+- **Ctrl+Shift+P**（Mac：**⌘⇧P**）或 **工具 → 粘贴历史**：打开粘贴历史，把最近成功送进终端的粘贴再贴一次（默认记住 20 条）。一次粘贴仍是 **Ctrl+Shift+V**（Mac：**⌘V**），不会改成打开这个面板。私钥和密码提示不会被记住。可在偏好设置里关闭「记住最近的粘贴」  
 
 ![命令历史](screenshots/17-command-history.png)
 
@@ -532,6 +533,7 @@ MistTerm 有两层命令安全检查：本地检查用于快捷提示，服务�
 | **Ctrl+Shift+V**（Mac：**⌘V**） | 粘贴到终端 |
 | **Ctrl+Shift+↑** / **Ctrl+Shift+↓**（Mac：**⌘⇧↑** / **⌘⇧↓**） | 上一条 / 下一条命令块（需要 shell integration，见 [6.5](#65-命令块)） |
 | **Ctrl+Shift+O**（Mac：**⌘⇧O**） | 复制当前命令块（命令和输出；过长会截断） |
+| **Ctrl+Shift+P**（Mac：**⌘⇧P**） | 粘贴历史。菜单在 **工具 → 粘贴历史**。一次粘贴仍是 **Ctrl+Shift+V**（Mac：**⌘V**） |
 | **Ctrl+R** | 终端聚焦时发给 shell（反向搜索）。失焦时打开 Mist 命令历史；菜单在 **工具 → 命令历史** |
 | **Ctrl+Shift+A** | AI 助手面板 |
 | **Ctrl+Shift+L** | 终端选区发送到 AI |

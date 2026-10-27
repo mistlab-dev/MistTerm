@@ -1094,6 +1094,26 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_shift_p_is_not_the_paste_shortcut() {
+        egui::__run_test_ui(|ui| {
+            ui.input_mut(|i| {
+                i.events.push(key_press(
+                    Key::P,
+                    Modifiers {
+                        ctrl: true,
+                        shift: true,
+                        ..Default::default()
+                    },
+                ));
+                assert!(
+                    !consume_terminal_paste_shortcut(i),
+                    "Ctrl+Shift+P must not paste; paste stays Ctrl+Shift+V / ⌘V"
+                );
+            });
+        });
+    }
+
+    #[test]
     fn forward_ctrl_keys_skips_copy_paste_shift_combos() {
         egui::__run_test_ui(|ui| {
             ui.input_mut(|i| {

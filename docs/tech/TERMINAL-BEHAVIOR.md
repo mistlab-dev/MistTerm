@@ -35,6 +35,7 @@
 - **Known limitation:** Alt+click does not move the cursor. MistTerm does not send xterm mouse-tracking reports to the PTY, so tmux mouse mode (and click-to-position inside the shell) is unavailable. Mouse input is selection and scrolling only.
 - Copy uses the selection plus macOS `⌘C` or Windows/Linux `Ctrl+Shift+C`, or the context menu. A selection does not turn `Ctrl+C` into copy.
 - Paste is macOS `⌘V` or Windows/Linux `Ctrl+Shift+V`, or the context menu. Raw text goes to the PTY.
+- Paste history is macOS `⌘⇧P` or Windows/Linux `Ctrl+Shift+P`, or **Tools → Paste History** (also the terminal context menu). It re-sends a stored paste through the same `build_paste_payload` / chunk path. It does not replace one-shot paste. Private-key blocks, well-known token prefixes, and pastes at a password prompt are not stored. Preferences can turn remembering off.
 - Paste does **not** auto-append newline; pasted content is not auto-executed.
 - Command fragments use explicit `send_command` path and may execute with newline by design.
 

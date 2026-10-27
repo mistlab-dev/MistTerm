@@ -607,6 +607,28 @@ impl MistTermApp {
                     .size(theme.font_size_small())
                     .color(theme.color_form_hint()),
                 );
+                Self::preferences_row_divider(ui, theme);
+                let mut remember_paste = self.app_settings.remember_paste_history;
+                if crate::ui::chrome::form_checkbox(
+                    ui,
+                    theme,
+                    &mut remember_paste,
+                    crate::i18n::tr(
+                        ctx,
+                        "Remember recent pastes (last 20, stored on this computer)",
+                        "记住最近的粘贴（最多 20 条，只存在这台电脑上）",
+                    ),
+                )
+                .on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Off: new pastes are not saved. Paste history can still show what was saved before. Private keys and password prompts are never saved.",
+                    "关闭后，新的粘贴不再写入。面板里仍能看到之前保存的内容。私钥和密码提示不会被记住。",
+                ))
+                .changed()
+                {
+                    self.app_settings.remember_paste_history = remember_paste;
+                    let _ = self.app_settings.save();
+                }
             },
         );
     }

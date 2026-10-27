@@ -8,6 +8,7 @@
 |------|------|------|
 | 应用设置 | `~/.config/mistterm/settings.json` | 主题、团队 API、AI 配置等 |
 | 命令历史 | `command_history.json` | 执行过的命令记录 |
+| 粘贴历史 | `paste_history.json` | 最近成功送入 PTY 的粘贴（私钥 / 常见令牌 / 密码提示不入库） |
 | 个人片段 | `fragments.json` | 片段库 |
 | 会话列表 | `sessions.json` | SSH 会话（密码在加密信封内明文 JSON，不再逐字段 AES） |
 | 凭证库 | `credentials.json` | 服务器账号等（同上） |
