@@ -10,7 +10,13 @@ mod sftp_bookmarks;
 mod sftp_tree;
 #[path = "sftp_select.rs"]
 mod sftp_select;
+#[path = "sftp_diff_ui.rs"]
+mod sftp_diff_ui;
 
+use crate::core::sftp_diff::{
+    compare_snapshots, directory_rels, join_local, join_remote, plan_sync, walk_local_diff,
+    SyncDirection, WalkOutcome,
+};
 use crate::core::{AuditCategory, AuditEvent, AuditLogger, AuditOutcome};
 use crate::i18n::UiLanguage;
 use crate::ssh::{
@@ -30,13 +36,17 @@ use sftp_file_table::{
     system_time_to_utc,
 };
 use sftp_bookmarks::SftpBookmarkStore;
+use sftp_diff_ui::{
+    collect_remote_diff, default_checks, format_skip_note, paint_dir_diff, DiffPhase,
+    DiffPrepOutcome, DiffScanOutcome, DiffUiAction, DirDiffUi,
+};
 use sftp_select::SelectionSet;
 use sftp_tree::{collect_local_tree, looks_like_text_name, preview_needs_confirm};
 use sftp_xfer::{
     format_bytes, paint_xfer_strip, resolve_write_mode_mtime, OverwritePolicy,
     XferKind, XferQueue, XferState, XferStripAction,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -65,6 +75,14 @@ enum SftpJobResult {
         files: Vec<(PathBuf, PathBuf)>,
     },
     TreeCollectErr(String),
+    DiffScan {
+        gen: u64,
+        outcome: DiffScanOutcome,
+    },
+    DiffPrep {
+        gen: u64,
+        outcome: DiffPrepOutcome,
+    },
     RemoveMany(Result<String, String>),
     ChmodDone(Result<String, String>),
     EditPrepared {
@@ -189,6 +207,7 @@ pub struct SftpPanel {
     remote_path_editing: bool,
     pending_terminal_cmd: Option<String>,
     flux_details_open: bool,
+    diff: DirDiffUi,
 }
 
 impl Default for SftpPanel {
@@ -505,6 +524,362 @@ impl SftpPanel {
     fn cancel_tree_collect(&mut self) {
         if let Some(c) = &self.tree_cancel {
             c.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn open_dir_diff(&mut self, handle: &SshSessionHandle, ctx: &egui::Context) {
+        if self.busy || self.rx.is_some() {
+            self.pending_status_warn = Some(
+                crate::i18n::tr(
+                    ctx,
+                    "Please wait for the current SFTP operation to finish.",
+                    "请等待当前 SFTP 操作完成后再试。",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        if !self.local_cwd.is_dir() {
+            self.pending_status_err = Some(
+                crate::i18n::tr(ctx, "Local path is not a folder.", "本机路径不是文件夹。")
+                    .to_string(),
+            );
+            return;
+        }
+        self.diff.open = true;
+        self.diff.local_root = self.local_cwd.clone();
+        self.diff.remote_root = self.cwd.clone();
+        self.diff.error = None;
+        self.diff.skip_note = None;
+        self.start_dir_diff_scan(handle, ctx);
+    }
+
+    fn start_dir_diff_scan(&mut self, handle: &SshSessionHandle, ctx: &egui::Context) {
+        if self.busy || self.rx.is_some() {
+            self.pending_status_warn = Some(
+                crate::i18n::tr(
+                    ctx,
+                    "Please wait for the current SFTP operation to finish.",
+                    "请等待当前 SFTP 操作完成后再试。",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        self.diff.scan_gen = self.diff.scan_gen.wrapping_add(1);
+        let gen = self.diff.scan_gen;
+        let local_root = self.diff.local_root.clone();
+        let remote_root = self.diff.remote_root.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let scanned = Arc::new(AtomicU64::new(0));
+        self.diff.cancel = Some(cancel.clone());
+        self.diff.scanned = scanned.clone();
+        self.diff.phase = DiffPhase::Scanning;
+        self.diff.rows.clear();
+        self.diff.checked.clear();
+        self.diff.error = None;
+        self.diff.skip_note = None;
+        self.diff.batch_ids.clear();
+        self.diff.prep_inflight = false;
+        self.busy = true;
+        let ctx2 = ctx.clone();
+        let ticks = Arc::new(AtomicU64::new(0));
+        self.enqueue(handle, ctx, move |session| {
+            let tick = {
+                let ticks = ticks.clone();
+                let ctx2 = ctx2.clone();
+                move || {
+                    let n = ticks.fetch_add(1, Ordering::Relaxed);
+                    if n % 32 == 0 {
+                        ctx2.request_repaint();
+                    }
+                }
+            };
+            let local = match walk_local_diff(&local_root, &cancel, &scanned, tick) {
+                Ok(WalkOutcome::Cancelled) => {
+                    return SftpJobResult::DiffScan {
+                        gen,
+                        outcome: DiffScanOutcome::Cancelled,
+                    };
+                }
+                Ok(WalkOutcome::Done(entries)) => entries,
+                Err(e) => {
+                    return SftpJobResult::DiffScan {
+                        gen,
+                        outcome: DiffScanOutcome::Failed(e),
+                    };
+                }
+            };
+            // tick was moved; rebuild for the remote walk.
+            let tick = {
+                let ticks = ticks.clone();
+                let ctx2 = ctx2.clone();
+                move || {
+                    let n = ticks.fetch_add(1, Ordering::Relaxed);
+                    if n % 32 == 0 {
+                        ctx2.request_repaint();
+                    }
+                }
+            };
+            let client = match SftpClient::new(session) {
+                Ok(client) => client,
+                Err(e) => {
+                    return SftpJobResult::DiffScan {
+                        gen,
+                        outcome: DiffScanOutcome::Failed(e),
+                    };
+                }
+            };
+            let remote_resolved = match client.realpath(&remote_root) {
+                Ok(path) => Self::normalize_remote_path(path),
+                Err(e) => {
+                    return SftpJobResult::DiffScan {
+                        gen,
+                        outcome: DiffScanOutcome::Failed(e),
+                    };
+                }
+            };
+            let remote =
+                match collect_remote_diff(&client, &remote_resolved, &cancel, &scanned, tick) {
+                    Ok(WalkOutcome::Cancelled) => {
+                        return SftpJobResult::DiffScan {
+                            gen,
+                            outcome: DiffScanOutcome::Cancelled,
+                        };
+                    }
+                    Ok(WalkOutcome::Done(entries)) => entries,
+                    Err(e) => {
+                        return SftpJobResult::DiffScan {
+                            gen,
+                            outcome: DiffScanOutcome::Failed(e),
+                        };
+                    }
+                };
+            let rows = compare_snapshots(&local, &remote);
+            SftpJobResult::DiffScan {
+                gen,
+                outcome: DiffScanOutcome::Done {
+                    rows,
+                    remote_root: remote_resolved,
+                },
+            }
+        });
+        if self.rx.is_none() {
+            self.diff.phase = DiffPhase::Ready;
+            self.diff.cancel = None;
+        }
+    }
+
+    fn start_dir_sync(
+        &mut self,
+        handle: &SshSessionHandle,
+        ctx: &egui::Context,
+        direction: SyncDirection,
+        all: bool,
+    ) {
+        if self.busy || self.rx.is_some() {
+            self.pending_status_warn = Some(
+                crate::i18n::tr(
+                    ctx,
+                    "Please wait for the current SFTP operation to finish.",
+                    "请等待当前 SFTP 操作完成后再试。",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        if self.diff.phase != DiffPhase::Ready {
+            return;
+        }
+        let plan = if all {
+            plan_sync(&self.diff.rows, None, direction)
+        } else {
+            plan_sync(&self.diff.rows, Some(&self.diff.checked), direction)
+        };
+        let lang = crate::i18n::language(ctx);
+        if !plan.skipped_conflicts.is_empty() {
+            let note = format_skip_note(lang, &plan.skipped_conflicts);
+            self.diff.skip_note = Some(note.clone());
+            self.pending_status_warn = Some(note);
+        } else {
+            self.diff.skip_note = None;
+        }
+        if plan.copy.is_empty() && plan.mkdirs.is_empty() {
+            if plan.skipped_conflicts.is_empty() {
+                self.pending_status_warn = Some(
+                    crate::i18n::tr(
+                        ctx,
+                        "Nothing to sync in this direction.",
+                        "这个方向没有需要同步的差异。",
+                    )
+                    .to_string(),
+                );
+            }
+            return;
+        }
+        let remote_root = self.diff.remote_root.to_string_lossy().replace('\\', "/");
+        let mut copies = Vec::with_capacity(plan.copy.len());
+        for item in &plan.copy {
+            let Some(local) = join_local(&self.diff.local_root, &item.rel) else {
+                self.pending_status_err = Some(format!(
+                    "{}: {}",
+                    crate::i18n::Locale::from(lang).tr("Sync failed", "同步失败"),
+                    item.rel
+                ));
+                return;
+            };
+            let Some(remote) = join_remote(&remote_root, &item.rel) else {
+                self.pending_status_err = Some(format!(
+                    "{}: {}",
+                    crate::i18n::Locale::from(lang).tr("Sync failed", "同步失败"),
+                    item.rel
+                ));
+                return;
+            };
+            copies.push((local, PathBuf::from(remote), item.size));
+        }
+        let dirs = directory_rels(&plan);
+        let upload = matches!(direction, SyncDirection::LocalToRemote);
+        self.diff.prep_gen = self.diff.prep_gen.wrapping_add(1);
+        let gen = self.diff.prep_gen;
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.diff.cancel = Some(cancel.clone());
+        self.diff.phase = DiffPhase::Syncing;
+        self.diff.prep_inflight = true;
+        self.diff.batch_ids.clear();
+        self.diff.error = None;
+        self.busy = true;
+        let local_root = self.diff.local_root.clone();
+        self.enqueue(handle, ctx, move |session| {
+            enum Prep {
+                Ok,
+                Cancelled,
+                Failed(String),
+            }
+            let prep = (|| -> Prep {
+                if upload {
+                    let client = match SftpClient::new(session) {
+                        Ok(client) => client,
+                        Err(e) => return Prep::Failed(e),
+                    };
+                    for rel in &dirs {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Prep::Cancelled;
+                        }
+                        let Some(remote) = join_remote(&remote_root, rel) else {
+                            return Prep::Failed(format!("Invalid path: {rel}"));
+                        };
+                        if let Err(e) = client.mkdir_p(Path::new(&remote)) {
+                            return Prep::Failed(e);
+                        }
+                    }
+                } else {
+                    for rel in &dirs {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Prep::Cancelled;
+                        }
+                        let Some(local) = join_local(&local_root, rel) else {
+                            return Prep::Failed(format!("Invalid path: {rel}"));
+                        };
+                        if let Err(e) = std::fs::create_dir_all(&local) {
+                            return Prep::Failed(format!("mkdir {}: {e}", local.display()));
+                        }
+                    }
+                }
+                Prep::Ok
+            })();
+            match prep {
+                Prep::Ok => SftpJobResult::DiffPrep {
+                    gen,
+                    outcome: DiffPrepOutcome::Ready { upload, copies },
+                },
+                Prep::Cancelled => SftpJobResult::DiffPrep {
+                    gen,
+                    outcome: DiffPrepOutcome::Cancelled,
+                },
+                Prep::Failed(e) => SftpJobResult::DiffPrep {
+                    gen,
+                    outcome: DiffPrepOutcome::Failed(e),
+                },
+            }
+        });
+        if self.rx.is_none() {
+            self.diff.phase = DiffPhase::Ready;
+            self.diff.prep_inflight = false;
+            self.diff.cancel = None;
+        }
+    }
+
+    fn cancel_dir_diff_activity(&mut self, ctx: &egui::Context) {
+        let phase = self.diff.phase;
+        let prep = self.diff.prep_inflight;
+        self.diff.request_cancel();
+        self.xfer.cancel_ids(&self.diff.batch_ids);
+        let running = self.diff.batch_ids.iter().any(|id| {
+            self.xfer
+                .items
+                .iter()
+                .any(|item| item.id == *id && item.state == XferState::Running)
+        });
+        if phase == DiffPhase::Syncing && !prep && !running {
+            self.pending_status_ok =
+                Some(crate::i18n::tr(ctx, "Sync cancelled", "同步已取消").to_string());
+            self.settle_dir_sync();
+        }
+    }
+
+    fn close_dir_diff(&mut self) {
+        self.diff.open = false;
+        if self.diff.phase == DiffPhase::Scanning {
+            self.diff.request_cancel();
+        }
+    }
+
+    fn present_diff_failure(
+        lang: UiLanguage,
+        head_en: &'static str,
+        head_zh: &'static str,
+        err: &str,
+    ) -> String {
+        format!(
+            "{}: {err}",
+            crate::i18n::Locale::from(lang).tr(head_en, head_zh)
+        )
+    }
+
+    fn settle_dir_sync(&mut self) {
+        if self.diff.phase != DiffPhase::Syncing || self.diff.prep_inflight {
+            return;
+        }
+        let alive = self.diff.batch_ids.iter().any(|id| {
+            self.xfer.items.iter().any(|item| {
+                item.id == *id && matches!(item.state, XferState::Queued | XferState::Running)
+            })
+        });
+        if !alive {
+            self.diff.phase = if self.diff.open {
+                DiffPhase::Ready
+            } else {
+                DiffPhase::Idle
+            };
+            self.diff.batch_ids.clear();
+            self.diff.cancel = None;
+        }
+    }
+
+    fn handle_diff_ui_action(
+        &mut self,
+        action: DiffUiAction,
+        handle: &SshSessionHandle,
+        ctx: &egui::Context,
+    ) {
+        match action {
+            DiffUiAction::Close => self.close_dir_diff(),
+            DiffUiAction::Rescan => self.start_dir_diff_scan(handle, ctx),
+            DiffUiAction::Cancel => self.cancel_dir_diff_activity(ctx),
+            DiffUiAction::Sync { direction, all } => {
+                self.start_dir_sync(handle, ctx, direction, all)
+            }
         }
     }
 
@@ -1629,6 +2004,7 @@ impl SftpPanel {
             remote_path_editing: false,
             pending_terminal_cmd: None,
             flux_details_open: false,
+            diff: DirDiffUi::default(),
         }
     }
 
@@ -1695,6 +2071,8 @@ impl SftpPanel {
         self.remote_path_editing = false;
         self.pending_terminal_cmd = None;
         self.flux_details_open = false;
+        self.diff.request_cancel();
+        self.diff = DirDiffUi::default();
     }
 
     /// 轮询 SFTP 后台任务；面板未显示时也需调用以便 GUI 自动化下载完成。
@@ -1862,7 +2240,10 @@ impl SftpPanel {
                         self.record_sftp_audit(audit, false, Some(&e));
                         self.xfer
                             .finish(id, XferState::Failed, 0, Some(e.clone()));
-                        self.pending_status_err = Some(e);
+                        self.pending_status_err = Some(e.clone());
+                        if self.diff.batch_ids.contains(&id) {
+                            self.diff.error = Some(e);
+                        }
                     }
                 }
                 self.busy = false;
@@ -1875,6 +2256,16 @@ impl SftpPanel {
                 self.xfer_progress_rx = None;
                 self.tree_busy = false;
                 self.tree_cancel = None;
+                self.diff.request_cancel();
+                self.diff.prep_inflight = false;
+                if matches!(self.diff.phase, DiffPhase::Scanning | DiffPhase::Syncing) {
+                    self.diff.phase = if self.diff.open {
+                        DiffPhase::Ready
+                    } else {
+                        DiffPhase::Idle
+                    };
+                }
+                self.diff.cancel = None;
                 // #94 P0：worker 断开时收尾进行中的传输，避免卡在 Running。
                 if self.abort_in_flight_transfers(lang) {
                     // toast 已由 abort 写入 pending_status_err
@@ -1993,7 +2384,125 @@ impl SftpPanel {
                     Err(e) => self.pending_status_err = Some(e),
                 }
             }
+            Ok(SftpJobResult::DiffScan { gen, outcome }) => {
+                self.busy = false;
+                self.rx = None;
+                self.diff.cancel = None;
+                if gen == self.diff.scan_gen {
+                    match outcome {
+                        DiffScanOutcome::Done { rows, remote_root } => {
+                            if self.diff.open {
+                                self.diff.remote_root = remote_root;
+                                self.diff.checked = default_checks(&rows);
+                                self.diff.rows = rows;
+                                self.diff.phase = DiffPhase::Ready;
+                                self.diff.error = None;
+                            } else {
+                                self.diff.phase = DiffPhase::Idle;
+                                self.diff.rows.clear();
+                                self.diff.checked.clear();
+                            }
+                        }
+                        DiffScanOutcome::Cancelled => {
+                            self.diff.rows.clear();
+                            self.diff.checked.clear();
+                            self.diff.phase = if self.diff.open {
+                                DiffPhase::Ready
+                            } else {
+                                DiffPhase::Idle
+                            };
+                            if self.diff.open {
+                                self.pending_status_ok = Some(
+                                    crate::i18n::Locale::from(lang)
+                                        .tr("Compare cancelled", "对比已取消")
+                                        .to_string(),
+                                );
+                            }
+                        }
+                        DiffScanOutcome::Failed(e) => {
+                            let msg =
+                                Self::present_diff_failure(lang, "Compare failed", "对比失败", &e);
+                            self.diff.rows.clear();
+                            self.diff.checked.clear();
+                            self.diff.error = Some(msg.clone());
+                            self.diff.phase = if self.diff.open {
+                                DiffPhase::Ready
+                            } else {
+                                DiffPhase::Idle
+                            };
+                            self.pending_status_err = Some(msg);
+                        }
+                    }
+                }
+            }
+            Ok(SftpJobResult::DiffPrep { gen, outcome }) => {
+                self.busy = false;
+                self.rx = None;
+                self.diff.cancel = None;
+                self.diff.prep_inflight = false;
+                if gen == self.diff.prep_gen {
+                    match outcome {
+                        DiffPrepOutcome::Ready { upload, copies } => {
+                            if copies.is_empty() {
+                                self.diff.phase = if self.diff.open {
+                                    DiffPhase::Ready
+                                } else {
+                                    DiffPhase::Idle
+                                };
+                                self.pending_status_ok = Some(
+                                    crate::i18n::Locale::from(lang)
+                                        .tr("Folders created", "目录已创建")
+                                        .to_string(),
+                                );
+                                self.pending_refresh_after_op = true;
+                            } else {
+                                let kind = if upload {
+                                    XferKind::Upload
+                                } else {
+                                    XferKind::Download
+                                };
+                                self.diff.batch_ids.clear();
+                                for (local, remote, size) in copies {
+                                    let id = self.xfer.push(
+                                        kind,
+                                        local,
+                                        remote,
+                                        WriteMode::Overwrite,
+                                        size,
+                                    );
+                                    self.diff.batch_ids.push(id);
+                                }
+                                self.diff.phase = DiffPhase::Syncing;
+                            }
+                        }
+                        DiffPrepOutcome::Cancelled => {
+                            self.diff.phase = if self.diff.open {
+                                DiffPhase::Ready
+                            } else {
+                                DiffPhase::Idle
+                            };
+                            self.pending_status_ok = Some(
+                                crate::i18n::Locale::from(lang)
+                                    .tr("Sync cancelled", "同步已取消")
+                                    .to_string(),
+                            );
+                        }
+                        DiffPrepOutcome::Failed(e) => {
+                            let msg =
+                                Self::present_diff_failure(lang, "Sync failed", "同步失败", &e);
+                            self.diff.error = Some(msg.clone());
+                            self.diff.phase = if self.diff.open {
+                                DiffPhase::Ready
+                            } else {
+                                DiffPhase::Idle
+                            };
+                            self.pending_status_err = Some(msg);
+                        }
+                    }
+                }
+            }
         }
+        self.settle_dir_sync();
     }
 
     fn list_local_dir(path: &Path) -> Result<Vec<LocalEntry>, String> {
@@ -2228,16 +2737,29 @@ impl SftpPanel {
 
     /// 会话不可用（门闩 Disconnected / 无 handle）时收尾传输与 busy 态。
     fn on_session_unavailable(&mut self, lang: UiLanguage) {
-        if !(self.xfer.has_work() || self.busy || self.rx.is_some() || self.tree_busy) {
+        let diff_busy = matches!(self.diff.phase, DiffPhase::Scanning | DiffPhase::Syncing);
+        if !(self.xfer.has_work() || self.busy || self.rx.is_some() || self.tree_busy || diff_busy)
+        {
             return;
         }
+        self.diff.request_cancel();
         self.rx = None;
         self.xfer_progress_rx = None;
         self.busy = false;
         self.tree_busy = false;
         self.tree_cancel = None;
+        self.diff.prep_inflight = false;
+        if diff_busy {
+            self.diff.phase = if self.diff.open {
+                DiffPhase::Ready
+            } else {
+                DiffPhase::Idle
+            };
+        }
+        self.diff.cancel = None;
         let _ = self.abort_in_flight_transfers(lang);
     }
+
 
     /// 地址栏 Enter / Go：busy 时提示，不静默吞掉（#94 P2）。
     fn try_spawn_list_from_path_edit(&mut self, handle: &SshSessionHandle, ctx: &egui::Context) {
@@ -3241,7 +3763,11 @@ impl SftpPanel {
 
         let (local_list_h, remote_list_h) = Self::split_file_list_heights(ui, theme);
 
-        if theme.uses_modern_palette() {
+        if self.diff.open {
+            if let Some(action) = paint_dir_diff(ui, ctx, theme, &mut self.diff, self.busy) {
+                self.handle_diff_ui_action(action, &handle, ctx);
+            }
+        } else if theme.uses_modern_palette() {
             self.paint_flux_workspace(ui, ctx, theme, &handle, content_w);
         } else {
         Self::paint_browser_section_frame(theme).show(ui, |ui| {
@@ -3924,6 +4450,22 @@ impl SftpPanel {
                     if crate::ui::chrome::panel_action_button_with_icon_ex(
                         ui,
                         theme,
+                        crate::ui::icons::IconId::Search,
+                        crate::i18n::tr(ctx, "Compare", "对比"),
+                        busy,
+                    )
+                    .on_hover_text(crate::i18n::tr(
+                        ctx,
+                        "Compare this local folder with the remote folder",
+                        "对比当前本机目录和远端目录",
+                    ))
+                    .clicked()
+                    {
+                        self.open_dir_diff(&handle, ctx);
+                    }
+                    if crate::ui::chrome::panel_action_button_with_icon_ex(
+                        ui,
+                        theme,
                         crate::ui::icons::IconId::SortName,
                         rename_lbl,
                         can_rename,
@@ -4328,6 +4870,27 @@ impl SftpPanel {
         handle: &SshSessionHandle,
         content_w: f32,
     ) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
+            let can_compare = !self.busy;
+            if crate::ui::chrome::panel_action_button_with_icon_ex(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Search,
+                crate::i18n::tr(ctx, "Compare", "对比"),
+                can_compare,
+            )
+            .on_hover_text(crate::i18n::tr(
+                ctx,
+                "Compare this local folder with the remote folder",
+                "对比当前本机目录和远端目录",
+            ))
+            .clicked()
+                && can_compare
+            {
+                self.open_dir_diff(handle, ctx);
+            }
+        });
         let avail_h = ui.available_height().max(160.0);
         let reserve = if self.pending_overwrite.is_some()
             || self.pending_delete.is_some()

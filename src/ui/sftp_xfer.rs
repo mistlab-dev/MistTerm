@@ -230,6 +230,23 @@ impl XferQueue {
         }
     }
 
+    /// 取消这一批里尚未开始的项，并请求取消其中正在跑的那一项。
+    pub fn cancel_ids(&mut self, ids: &[u64]) {
+        if ids.is_empty() {
+            return;
+        }
+        let active = self.active_id();
+        for item in &mut self.items {
+            if item.state == XferState::Queued && ids.contains(&item.id) {
+                item.state = XferState::Cancelled;
+                item.speed_bps = 0.0;
+            }
+        }
+        if active.is_some_and(|id| ids.contains(&id)) {
+            self.request_cancel_active();
+        }
+    }
+
     pub fn retry_failed(&mut self, id: u64) {
         if let Some(item) = self.items.iter_mut().find(|i| i.id == id) {
             if item.state == XferState::Failed || item.state == XferState::Cancelled {
