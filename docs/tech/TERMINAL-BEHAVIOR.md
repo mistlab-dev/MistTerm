@@ -38,6 +38,29 @@
 - Paste does **not** auto-append newline; pasted content is not auto-executed.
 - Command fragments use explicit `send_command` path and may execute with newline by design.
 
+## Command blocks (OSC 133)
+
+Shell integration markers divide scrollback into command blocks. The UI does not guess a block from Enter or from a prompt line. Without these markers, previous/next and “copy this command block” do nothing to the viewport and do not invent a range around vim, less, or htop.
+
+Parsed subset (BEL `0x07` or ST `ESC \`):
+
+| Marker | Sequence | Meaning |
+|--------|----------|---------|
+| A | `OSC 133 ; A` or `OSC 633 ; A` | Prompt start |
+| B | `OSC 133 ; B` or `OSC 633 ; B` | Prompt end, command input starts |
+| C | `OSC 133 ; C` or `OSC 633 ; C` | Command submitted, output starts (optional) |
+| D | `OSC 133 ; D [; exit]` or `OSC 633 ; D [; exit]` | Command finished. First decimal parameter is the exit code; extra parameters such as `aid=` are ignored |
+
+Not parsed: OSC 1337 (iTerm properties), `OSC 133 ; P`, title OSC 0/2. OSC 633 is included because VS Code shell integration uses the same A/B/C/D letters. The interactive-exec audit (#156) may still read a `D` exit code; that path is not a UI block boundary.
+
+A block is navigable only after `C` or `D`. A bare prompt (`A`, or `A`+`B` waiting for input) is not a command, so “previous” does not land on the empty prompt. Copy starts at `B` when present (so the prompt is left out) and ends at `D`, or at the cursor while the command is still running. The next `A` closes an open block without marking it finished.
+
+Coordinates live on the primary grid and shift when rows enter scrollback. The alternate screen is not sampled. A command that enters the alternate screen (`CSI ?1049 h`, vim/less/htop) is one block flagged fullscreen; its copy is the command on the primary grid, not the fullscreen frame. Column resize drops stored coordinates (integration stays “seen”). Clearing history drops blocks that end above the new top line.
+
+Copy is bounded: at most **4000** grid lines and **200000** characters, keeping the head. The suffixes are `\n… [truncated]` (line cap) and `\n… [truncated, N chars omitted]` (character cap).
+
+Keyboard (consumed before the key is forwarded to the PTY): previous **Ctrl+Shift+↑** (macOS **⌘⇧↑**), next **Ctrl+Shift+↓** (macOS **⌘⇧↓**), copy **Ctrl+Shift+O** (macOS **⌘⇧O**). The terminal context menu shows the same three actions even when integration is off, so the degrade is discoverable: a toast points at the manual and the shortcut is not sent to the shell. The shortest enable path is in the user manual, section “Command blocks”.
+
 ## Refresh Behavior
 
 - Connected terminal requests a fast repaint for live TUI/CLI (`top`, `vim`, `yes`, …) **only while the VTE is dirty or SSH output from this frame has not been painted yet**.

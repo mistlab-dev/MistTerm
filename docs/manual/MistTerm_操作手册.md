@@ -232,6 +232,48 @@ Windows 与 Linux 用 **Ctrl+Shift**，macOS 用 **⌘⇧**。
 - **不支持 Alt+点击**把光标移到点击的位置（shell 行内也不会因此跳动）
 - **不向 PTY 发送 xterm 鼠标协议**。tmux、vim 等的鼠标模式因此不可用：在画面上点击、拖动，远端收不到鼠标报告
 
+### 6.5 命令块
+
+一条命令和它的输出可以收成一块，用来上一条 / 下一条跳转，或一次复制「命令 + 输出」。分界只认 shell integration 发出的 **OSC 133**（VS Code 的 **OSC 633** 同样认）。没有这些标记时，不会根据回车或提示符去猜，vim / less / htop 的全屏画面也不会被收成一块。
+
+**最短启用**
+
+- 本机已经开了 **iTerm2** 或 **VS Code** 的 shell integration：保持启用即可。
+- bash，写入 `~/.bashrc`：
+
+```bash
+__mist_cmd_block() {
+  local ec=$?
+  printf '\e]133;D;%s\a' "$ec"
+  printf '\e]133;A\a'
+}
+PROMPT_COMMAND="__mist_cmd_block${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+PS1="${PS1}"'\[\e]133;B\a\]'
+```
+
+- zsh，写入 `~/.zshrc`（若已有 `precmd` / `preexec`，把下面两行 `printf` 加进现有函数）：
+
+```zsh
+precmd() {
+  local ec=$?
+  printf '\e]133;D;%s\a' "$ec"
+  printf '\e]133;A\a'
+}
+preexec() { printf '\e]133;C\a'; }
+PS1="${PS1}"'%{\e]133;B\a%}'
+```
+
+`C`（命令已提交）可以不发。只发 `A` / `B` / `D` 时，命令结束后仍是一块。新开一个终端标签后生效。
+
+**怎么用**（终端要处于焦点；Windows / Linux 为 Ctrl+Shift，macOS 为 ⌘⇧）
+
+- **Ctrl+Shift+↑**：上一条命令块
+- **Ctrl+Shift+↓**：下一条命令块。过了最后一条回到最新输出
+- **Ctrl+Shift+O**：复制当前命令块（从提示符结束到命令结束；还在跑的命令复制到光标）
+- 终端右键菜单里也有这三项。没启用时会提示来看本节，画面不滚动，快捷键也不会发给 shell
+
+复制最多保留开头 **4000** 行、**200000** 个字符，更长会截断并注明。进入 vim / less 的那条命令仍是一块，复制内容不含全屏画面。
+
 ---
 
 ## 7. 传输文件
@@ -488,6 +530,8 @@ MistTerm 有两层命令安全检查：本地检查用于快捷提示，服务�
 | **Ctrl+F** / **F3** | 终端内查找 |
 | **Ctrl+C** | 中断前台程序（SIGINT），有选区也一样。复制用 **Ctrl+Shift+C**（Mac：**⌘C**） |
 | **Ctrl+Shift+V**（Mac：**⌘V**） | 粘贴到终端 |
+| **Ctrl+Shift+↑** / **Ctrl+Shift+↓**（Mac：**⌘⇧↑** / **⌘⇧↓**） | 上一条 / 下一条命令块（需要 shell integration，见 [6.5](#65-命令块)） |
+| **Ctrl+Shift+O**（Mac：**⌘⇧O**） | 复制当前命令块（命令和输出；过长会截断） |
 | **Ctrl+R** | 终端聚焦时发给 shell（反向搜索）。失焦时打开 Mist 命令历史；菜单在 **工具 → 命令历史** |
 | **Ctrl+Shift+A** | AI 助手面板 |
 | **Ctrl+Shift+L** | 终端选区发送到 AI |

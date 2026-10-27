@@ -76,6 +76,21 @@ pub fn terminal_copy_accel() -> String {
     }
 }
 
+/// 上一条命令块：macOS ⌘⇧↑；Win/Linux Ctrl+Shift+↑。
+pub fn command_block_prev_accel() -> String {
+    format!("{} + Shift + ↑", primary_modifier_label())
+}
+
+/// 下一条命令块：macOS ⌘⇧↓；Win/Linux Ctrl+Shift+↓。
+pub fn command_block_next_accel() -> String {
+    format!("{} + Shift + ↓", primary_modifier_label())
+}
+
+/// 复制当前命令块：macOS ⌘⇧O；Win/Linux Ctrl+Shift+O。
+pub fn command_block_copy_accel() -> String {
+    accel_shift("O")
+}
+
 /// 终端粘贴：macOS ⌘V；Win/Linux Ctrl+Shift+V。
 pub fn terminal_paste_accel() -> String {
     #[cfg(target_os = "macos")]
