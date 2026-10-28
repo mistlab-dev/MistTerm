@@ -87,6 +87,26 @@ fn inclusive_end_from_exclusive(start: Point, end: Point, columns: usize) -> Opt
     Some(Point::new(end.line, Column(end.column.0 - 1)))
 }
 
+fn point_before(point: Point, columns: usize) -> Option<Point> {
+    if point.column.0 > 0 {
+        return Some(Point::new(point.line, Column(point.column.0 - 1)));
+    }
+    if columns == 0 || point.line.0 == i32::MIN {
+        return None;
+    }
+    Some(Point::new(Line(point.line.0 - 1), Column(columns - 1)))
+}
+
+fn point_after(point: Point, columns: usize) -> Option<Point> {
+    if columns == 0 || point.line.0 == i32::MAX {
+        return None;
+    }
+    if point.column.0 + 1 < columns {
+        return Some(Point::new(point.line, Column(point.column.0 + 1)));
+    }
+    Some(Point::new(Line(point.line.0 + 1), Column(0)))
+}
+
 struct ScrollSnap {
     history: usize,
     anchor_line: Option<i32>,
@@ -466,18 +486,59 @@ impl Terminal {
 
     /// 按绝对网格坐标提取选中文本。
     ///
-    /// `end` 列是开区间（与 UI 选区一致）。提取走 alacritty `bounds_to_string`：
-    /// 去掉行尾补齐空格、跳过宽字符占位格、把制表符还原成 `\t`，软换行（`WRAPLINE`）不插入 `\n`。
+    /// `end` 列是开区间（与 UI 选区、`get_layout_job` 的高亮一致）。提取走 alacritty
+    /// `bounds_to_string`：去掉行尾补齐空格、跳过宽字符占位格、把制表符还原成 `\t`，
+    /// 软换行（`WRAPLINE`）不插入 `\n`。
+    ///
+    /// 高亮只涂选区内的格子。宽字符画在 `WIDE_CHAR` 格上；`WIDE_CHAR_SPACER` 与
+    /// `LEADING_WIDE_CHAR_SPACER` 不画字形。复制必须和这些格子一致，因此在交给
+    /// alacritty 之前先把「会带进选区外字符」的端点挪开：
+    ///
+    /// - 闭区间终点是折行前的 `LEADING_WIDE_CHAR_SPACER` 时，下一行的宽字符不在选区内。
+    ///   `line_to_string` 在终点行仍会多 push 一格：`grid[line - 1][0]`（上一行行首，
+    ///   不是折下去的那个字形；该行上面没有格子时 debug 构建会断言失败）。占位格本身
+    ///   没有字符，把终点退回一格即可跳过这条分支。
+    /// - 选区从 `WIDE_CHAR_SPACER` 起笔时，它前面的 `WIDE_CHAR` 不在选区内。alacritty
+    ///   会把起点回退一格把那个字拷进来；这里把起点移到占位格之后。
     pub fn text_in_point_range(&self, start: Point, end: Point) -> String {
-        let (start, end) = if (start.line.0, start.column.0) <= (end.line.0, end.column.0) {
+        let (mut start, end) = if (start.line.0, start.column.0) <= (end.line.0, end.column.0) {
             (start, end)
         } else {
             (end, start)
         };
-        let Some(inclusive_end) = inclusive_end_from_exclusive(start, end, self.width) else {
+        let Some(mut inclusive_end) = inclusive_end_from_exclusive(start, end, self.width) else {
             return String::new();
         };
+        while self.cell_flags(inclusive_end).contains(Flags::LEADING_WIDE_CHAR_SPACER) {
+            let Some(prev) = point_before(inclusive_end, self.width) else {
+                return String::new();
+            };
+            inclusive_end = prev;
+            if (inclusive_end.line.0, inclusive_end.column.0) < (start.line.0, start.column.0) {
+                return String::new();
+            }
+        }
+        while self.cell_flags(start).contains(Flags::WIDE_CHAR_SPACER) {
+            let Some(next) = point_after(start, self.width) else {
+                return String::new();
+            };
+            start = next;
+            if (start.line.0, start.column.0) > (inclusive_end.line.0, inclusive_end.column.0) {
+                return String::new();
+            }
+        }
         self.term.bounds_to_string(start, inclusive_end)
+    }
+
+    fn cell_flags(&self, point: Point) -> Flags {
+        let grid = self.term.grid();
+        if point.line < grid.topmost_line() || point.line > grid.bottommost_line() {
+            return Flags::empty();
+        }
+        if point.column.0 >= grid.columns() {
+            return Flags::empty();
+        }
+        grid[point.line][point.column].flags
     }
 
     fn row_chars(&self, line: Line) -> Vec<char> {
@@ -1211,6 +1272,123 @@ mod tests {
         let start = Point::new(hit.line, Column(0));
         let end = Point::new(hit.line, Column(t.width));
         assert_eq!(t.text_in_point_range(start, end), "你好");
+    }
+
+    /// 选区停在折行宽字符的 leading spacer 上、但不包含下一行的字形格时，
+    /// 复制结果只能是高亮到的格子。不能带上那个宽字符，也不能带上
+    /// alacritty `line_to_string` 多 push 的上一行行首。
+    #[test]
+    fn text_in_point_range_leading_spacer_does_not_copy_unhighlighted_wide_glyph() {
+        use alacritty_terminal::index::{Column, Line, Point};
+        use alacritty_terminal::term::cell::Flags;
+
+        let mut t = Terminal::new(20, 6);
+        // 上一行行首用 Q，用来抓住 `grid[line - 1][0]` 那次多余追加。
+        t.feed(b"Q\r\n");
+        let prefix = "x".repeat(t.width - 1);
+        let mut bytes = prefix.clone().into_bytes();
+        bytes.extend("你".as_bytes());
+        t.feed(&bytes);
+
+        let spacer = leading_wide_spacer(&t);
+        let glyph_line = Line(spacer.line.0 + 1);
+        assert_eq!(t.term.grid()[glyph_line][Column(0)].c, '你');
+        assert!(
+            t.term.grid()[glyph_line][Column(0)]
+                .flags
+                .contains(Flags::WIDE_CHAR)
+        );
+
+        let start = Point::new(spacer.line, Column(0));
+        // 开区间终点落在字形格上：这一格不在选区内，闭区间终点是 leading spacer。
+        let end_on_glyph = Point::new(glyph_line, Column(0));
+        assert_eq!(t.text_in_point_range(start, end_on_glyph), prefix);
+        // 同一选区写成「spacer 的下一列」。
+        let end_past_spacer = Point::new(spacer.line, Column(t.width));
+        assert_eq!(t.text_in_point_range(start, end_past_spacer), prefix);
+
+        // 字形格本身在选区内时要保留它，并且仍然不能在末尾再塞一个 Q。
+        let end_including_glyph = Point::new(glyph_line, Column(1));
+        assert_eq!(
+            t.text_in_point_range(start, end_including_glyph),
+            format!("{prefix}你")
+        );
+
+        let q = t.search_all("Q", false)[0];
+        assert_eq!(
+            t.text_in_point_range(
+                Point::new(q.line, Column(0)),
+                Point::new(glyph_line, Column(0)),
+            ),
+            format!("Q\n{prefix}")
+        );
+    }
+
+    /// 折行发生在网格第一行（上面没有历史行）时，不能去读 `line - 1`。
+    #[test]
+    fn text_in_point_range_leading_spacer_on_first_line_does_not_copy_glyph() {
+        use alacritty_terminal::index::{Column, Line, Point};
+
+        let mut t = Terminal::new(20, 5);
+        let prefix = "x".repeat(t.width - 1);
+        let mut bytes = prefix.clone().into_bytes();
+        bytes.extend("宽".as_bytes());
+        t.feed(&bytes);
+
+        let spacer = leading_wide_spacer(&t);
+        assert_eq!(spacer.line.0, 0);
+        let glyph_line = Line(spacer.line.0 + 1);
+        let start = Point::new(spacer.line, Column(0));
+        assert_eq!(
+            t.text_in_point_range(start, Point::new(glyph_line, Column(0))),
+            prefix
+        );
+        assert_eq!(
+            t.text_in_point_range(start, Point::new(glyph_line, Column(1))),
+            format!("{prefix}宽")
+        );
+    }
+
+    /// 只框住宽字符后面的 spacer 时，字形格没有高亮，复制里也不能有这个字。
+    #[test]
+    fn text_in_point_range_trailing_spacer_does_not_copy_wide_glyph() {
+        use alacritty_terminal::index::{Column, Point};
+
+        let mut t = Terminal::new(20, 4);
+        t.feed("你好\r\n".as_bytes());
+        let line = t.search_all("你", false)[0].line;
+        // 你 | spacer | 好 | spacer
+        assert_eq!(
+            t.text_in_point_range(Point::new(line, Column(1)), Point::new(line, Column(2))),
+            ""
+        );
+        assert_eq!(
+            t.text_in_point_range(Point::new(line, Column(0)), Point::new(line, Column(2))),
+            "你"
+        );
+        assert_eq!(
+            t.text_in_point_range(Point::new(line, Column(1)), Point::new(line, Column(4))),
+            "好"
+        );
+    }
+
+    fn leading_wide_spacer(t: &Terminal) -> alacritty_terminal::index::Point {
+        use alacritty_terminal::grid::Dimensions;
+        use alacritty_terminal::index::{Column, Line, Point};
+        use alacritty_terminal::term::cell::Flags;
+
+        let grid = t.term.grid();
+        for line in grid.topmost_line().0..=grid.bottommost_line().0 {
+            for col in 0..t.width {
+                if grid[Line(line)][Column(col)]
+                    .flags
+                    .contains(Flags::LEADING_WIDE_CHAR_SPACER)
+                {
+                    return Point::new(Line(line), Column(col));
+                }
+            }
+        }
+        panic!("expected LEADING_WIDE_CHAR_SPACER from a wrapped wide glyph");
     }
 
     /// 制表符在网格里展开成空格，复制应还原成一个 `\t`。
