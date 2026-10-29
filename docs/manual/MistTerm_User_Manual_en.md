@@ -517,9 +517,9 @@ Enable **Session Logging** in Preferences to automatically save terminal interac
 
 ### 13.2.1 Crash and hang reports
 
-On panic, MistTerm writes a report under `logs/crash-reports/` in the config directory (next to `logs/hang-reports/`). The next launch shows a one-time summary (version, time, first panic line) when that report is newer than the last clean exit, or when the last exit was not clean and a report is already on disk. You can open the folder or copy the full report. No crash report means no prompt.
+On panic, MistTerm writes a report under `logs/crash-reports/` in the config directory (next to `logs/hang-reports/`). The next launch shows a one-time summary (version, time, first panic line) when that report is newer than the last clean exit, or when the last exit was not clean and a report is already on disk. You can open the folder or copy the full report. The first install does not prompt. After that, a forced quit or a native crash with no new report (for example SIGSEGV) still prompts once, saying no new crash report was written. A later clean exit does not prompt.
 
-**Help → Diagnostics** opens the crash-reports and hang-reports folders at any time. Rust panics are captured; a native SIGSEGV still has no local report.
+**Help → Diagnostics** opens the crash-reports and hang-reports folders at any time. Rust panics are captured; a native SIGSEGV still has no local report file.
 
 ### 13.3 Preferences & Themes
 

@@ -1218,7 +1218,7 @@ impl MistTermApp {
             show_edit_session_dialog: false,
             show_about_dialog: false,
             show_licenses_dialog: false,
-            crash_notice: crate::core::crash_reporter::detect_unreported_crash(),
+            crash_notice: crate::core::crash_reporter::take_startup_notice(),
             update_ui: update::UpdateUi::new(),
             show_preferences_dialog: false,
             pref_vault_token_draft: String::new(),
@@ -10611,6 +10611,10 @@ mod new_session_modal;
 /// 应用菜单(终端 / 编辑 / 视图 / 工具 / 帮助)— 子模块可访问 `MistTermApp` 私有字段
 #[path = "app_menu.rs"]
 mod menu;
+
+/// 唯一的启动崩溃提示窗（#190 的报告摘要 + 没有新 crash-*.log 的异常退出）。
+#[path = "app_crash_notice.rs"]
+mod crash_notice;
 
 /// 右 dock Foreground pass(gutter → 面板 → resize grip)
 #[path = "app_workspace_foreground.rs"]
