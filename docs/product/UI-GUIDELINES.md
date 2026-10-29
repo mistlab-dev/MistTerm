@@ -550,7 +550,10 @@ pub struct MonitorPanel {
 | 属性 | 值 |
 |------|-----|
 | 开关 | `cloud_sync_panel.open` |
-| 处理 | `cloud_sync_panel.show(ctx, theme)` |
+| 处理 | `cloud_sync_panel.show_side_panel` + `show_foreground_panel` |
+| 主入口 | 团队 → 云端同步 |
+
+**账号同步（面板内，不放进偏好正文）：** 主机列表开关、凭证同步开关（默认关）、同步口令、恢复码、立即同步、冲突提示。偏好「同步与数据」只跳转到这里。导出/导入仍在本面板：`hosts.json` 不含密码；勾选凭证时另写口令信封。
 
 ### 7.6 命令片段侧栏 (`fragment_panel`)
 

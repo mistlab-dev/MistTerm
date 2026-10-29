@@ -2653,6 +2653,7 @@ impl MistTermApp {
             }
             if self.team_service.take_pending_initial_sync() {
                 self.configure_team_audit_sink();
+                self.cloud_sync_panel.arm_login_sync();
                 self.team_service.spawn_config_sync();
                 self.team_service.spawn_cmd_audit_sync();
                 self.cmd_audit_agents_at = None;
@@ -2686,6 +2687,108 @@ impl MistTermApp {
             self.configure_team_audit_sink();
             ctx.request_repaint();
         }
+        self.drive_account_sync(ctx);
+    }
+
+    fn drive_account_sync(&mut self, ctx: &egui::Context) {
+        let zh = crate::i18n::language(ctx) == crate::i18n::UiLanguage::Zh;
+        if let Some(rx) = self.cloud_sync_panel.take_sync_receiver() {
+            match rx.try_recv() {
+                Ok(outcome) => {
+                    let is_error = outcome.is_error;
+                    let has_conflict = outcome.has_conflict;
+                    let message = outcome.message.clone();
+                    self.apply_account_sync(outcome);
+                    if is_error {
+                        self.notify_error(message);
+                    } else if has_conflict {
+                        self.notify_warn(message);
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    self.cloud_sync_panel.restore_sync_receiver(rx);
+                    ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    let msg = if zh {
+                        "同步线程已退出，本机数据未改写。"
+                    } else {
+                        "Sync thread exited. Local data was not changed."
+                    };
+                    self.cloud_sync_panel.note_sync_result(msg.to_string(), true);
+                    self.notify_error(msg.to_string());
+                }
+            }
+        }
+        if self
+            .cloud_sync_panel
+            .should_start_auto(self.team_service.is_logged_in())
+        {
+            self.cloud_sync_panel.mark_auto_started();
+            self.start_account_sync(zh);
+        }
+    }
+
+    fn start_account_sync(&mut self, zh: bool) {
+        if !self.team_service.is_logged_in() {
+            self.cloud_sync_panel.set_sync_message(if zh {
+                "未登录。本机 SSH 不受影响；登录团队账号后才能云同步。"
+            } else {
+                "Not signed in. Local SSH is unchanged; sign in to the team account to sync."
+            });
+            return;
+        }
+        let token = match self.team_service.access_token_for_api() {
+            Ok(token) => token,
+            Err(e) => {
+                self.cloud_sync_panel.note_sync_result(e.clone(), true);
+                self.notify_error(e);
+                return;
+            }
+        };
+        let user_id = self
+            .team_service
+            .state
+            .user
+            .as_ref()
+            .map(|u| u.id.clone())
+            .unwrap_or_default();
+        let api = self.team_service.api_base();
+        let sessions = self.session_manager.list_sessions().to_vec();
+        let vault = self.credential_panel.vault().list();
+        self.cloud_sync_panel
+            .spawn_account_sync(&sessions, &vault, &api, &token, &user_id, zh);
+    }
+
+    fn apply_account_sync(&mut self, outcome: crate::core::host_sync::SyncOutcome) {
+        let current = self.session_manager.list_sessions().to_vec();
+        let next = if let Some(doc) = outcome.apply_hosts.as_ref() {
+            crate::core::host_sync::sessions_after_sync(&current, doc, outcome.apply_creds.as_ref())
+        } else if let Some(creds) = outcome.apply_creds.as_ref() {
+            let doc = crate::core::host_sync::host_document_from_sessions(&current);
+            crate::core::host_sync::sessions_after_sync(&current, &doc, Some(creds))
+        } else {
+            current
+        };
+        if outcome.apply_hosts.is_some() || outcome.apply_creds.is_some() {
+            self.session_manager.replace_sessions(next);
+        }
+        if let Some(creds) = outcome.apply_creds.as_ref() {
+            if let Err(e) = self
+                .credential_panel
+                .vault_mut()
+                .replace_all(crate::core::host_sync::live_vault_credentials(creds))
+            {
+                let msg = format!("{}\n{e}", outcome.message);
+                outcome.state.save();
+                self.cloud_sync_panel.note_sync_result(msg.clone(), true);
+                self.notify_error(msg);
+                return;
+            }
+        }
+        outcome.state.save();
+        self.cloud_sync_panel
+            .note_sync_result(outcome.message, outcome.is_error);
     }
 
     fn cmd_audit_agent_available_for_host(

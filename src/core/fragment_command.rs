@@ -77,6 +77,7 @@ fn make_session(host: &str, user: &str, port: u16, name: &str) -> SessionConfig 
         auth_mode: crate::core::session::SessionAuthMode::Standard,
         last_connected_at: None,
         created_at: None,
+        updated_at: None,
         ssh_config_marker: None,
         proxy_jump: String::new(),
         proxy_command: String::new(),

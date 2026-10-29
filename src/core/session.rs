@@ -52,6 +52,9 @@ pub struct SessionConfig {
     /// 创建时间(排序用)
     #[serde(default)]
     pub created_at: Option<i64>,
+    /// 主机元数据最近修改时间（秒）。跨设备同步按它决定新旧；连接成功不更新。
+    #[serde(default)]
+    pub updated_at: Option<i64>,
     /// 已从 ~/.ssh/config 导入的标记 `Host|HostName|Port`
     #[serde(default)]
     pub ssh_config_marker: Option<String>,
@@ -172,6 +175,7 @@ impl Default for SessionConfig {
             auth_mode: SessionAuthMode::Standard,
             last_connected_at: None,
             created_at: None,
+            updated_at: None,
             ssh_config_marker: None,
             proxy_jump: String::new(),
             proxy_command: String::new(),
@@ -457,6 +461,8 @@ struct StoredSessionConfig {
     #[serde(default)]
     created_at: Option<i64>,
     #[serde(default)]
+    updated_at: Option<i64>,
+    #[serde(default)]
     ssh_config_marker: Option<String>,
     #[serde(default)]
     proxy_jump: String,
@@ -545,6 +551,7 @@ impl SessionManager {
                 auth_mode: cfg.auth_mode,
                 last_connected_at: cfg.last_connected_at,
                 created_at: cfg.created_at,
+                updated_at: cfg.updated_at,
                 ssh_config_marker: cfg.ssh_config_marker,
                 proxy_jump: cfg.proxy_jump,
                 proxy_command: cfg.proxy_command,
@@ -765,6 +772,7 @@ impl SessionManager {
                 auth_mode: cfg.auth_mode,
                 last_connected_at: cfg.last_connected_at,
                 created_at: cfg.created_at,
+                updated_at: cfg.updated_at,
                 ssh_config_marker: cfg.ssh_config_marker.clone(),
                 proxy_jump: cfg.proxy_jump.clone(),
                 proxy_command: cfg.proxy_command.clone(),
@@ -789,7 +797,10 @@ impl SessionManager {
     }
 
     /// 添加会话
-    pub fn add_session(&mut self, config: SessionConfig) {
+    pub fn add_session(&mut self, mut config: SessionConfig) {
+        if config.updated_at.is_none() {
+            config.updated_at = Some(chrono::Utc::now().timestamp());
+        }
         self.sessions.push(config);
         self.save();
     }
@@ -846,7 +857,9 @@ impl SessionManager {
         config.password = password.to_string();
         config.group = if group.trim().is_empty() { "默认".to_string() } else { group.trim().to_string() };
         config.private_key_path = private_key_path.to_string();
-        config.created_at = Some(chrono::Utc::now().timestamp());
+        let now = chrono::Utc::now().timestamp();
+        config.created_at = Some(now);
+        config.updated_at = Some(now);
         self.sessions.push(config.clone());
         self.save();
         config
@@ -880,6 +893,7 @@ impl SessionManager {
             session.password = password.to_string();
             session.group = if group.trim().is_empty() { "默认".to_string() } else { group.trim().to_string() };
             session.private_key_path = private_key_path.to_string();
+            session.updated_at = Some(chrono::Utc::now().timestamp());
             self.save();
             return true;
         }
@@ -897,10 +911,17 @@ impl SessionManager {
     pub fn patch_session(&mut self, id: &str, patch: impl FnOnce(&mut SessionConfig)) -> bool {
         if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
             patch(session);
+            session.updated_at = Some(chrono::Utc::now().timestamp());
             self.save();
             return true;
         }
         false
+    }
+
+    /// 用同步结果替换会话列表（密码等字段由调用方先合并好）。
+    pub fn replace_sessions(&mut self, sessions: Vec<SessionConfig>) {
+        self.sessions = sessions;
+        self.save();
     }
 
     /// 获取会话数量
