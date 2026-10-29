@@ -38,6 +38,7 @@
 - Paste history is macOS `⌘⇧P` or Windows/Linux `Ctrl+Shift+P`, or **Tools → Paste History** (also the terminal context menu). It re-sends a stored paste through the same `build_paste_payload` / chunk path. It does not replace one-shot paste. Private-key blocks, well-known token prefixes (including `ghp_`/`ghu_`/`ghs_`/`ghr_`, `sk-`/`sk-proj-`, Slack `xoxc-`, AWS `AKIA`/`ASIA`), env-style `*_SECRET*=` / `*_API_KEY=` assignments, and pastes at a password prompt are skipped on a best-effort basis. The filter is not exhaustive and only scans the stored prefix. Preferences can turn remembering off.
 - Paste does **not** auto-append newline; pasted content is not auto-executed.
 - Command fragments use explicit `send_command` path and may execute with newline by design.
+- Send sequences (**Tools → Send Sequences**, also a separate command-palette group from snippets) replay named lines into the **active pane only**. Each line is text plus CR via `send_line`. `send_line` sets `broadcast_suppress` for that write, so split-pane broadcast input does not fan the sequence out to other panes. There is no multi-session broadcast entry for sequences. An optional delay is a fixed wait between lines (`0`–`10000` ms). The client does not wait for a remote prompt and does not run an expect loop. A blank line is a bare CR. Non-empty lines use the same local command check as other audited sends. This is not the snippet library, not `mist exec`, and not AI batch.
 
 ## Command blocks (OSC 133)
 

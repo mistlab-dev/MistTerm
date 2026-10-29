@@ -35,6 +35,7 @@ MistTerm is an **SSH terminal client** that helps you:
 - Save multiple server connections and open terminals with one click
 - Upload and download files via a graphical interface (SFTP)
 - Save frequently used command templates (snippets) to avoid repetitive typing
+- Save the lines you always type after connecting as a send sequence and replay them in the current session
 - Monitor server CPU, memory, disk, and more
 - Optional: AI-assisted command explanation, team-shared snippets
 
@@ -352,6 +353,8 @@ MistTerm will automatically handle the transfer and show progress. If transfers 
 
 Save frequently used commands as **snippets** for one-click insertion. Supports `<variable>` placeholders.
 
+A snippet is one searchable command. To send several lines, in order, into the one session you already have open, use **Tools → Send Sequences** (see [13.5](#135-send-sequences)). Do not store that as a snippet.
+
 ### 8.1 Opening Snippets
 
 | Method | Description |
@@ -481,7 +484,7 @@ MistTerm has two layers of command safety checks: local checks provide fast feed
 | Confirm | A dialog asks "Are you sure?" |
 | Alert | Execution allowed but a warning is logged |
 
-Local checks cover snippet runs, batch runs, commands inserted by AI, `mist exec`, and **commands you type directly in the terminal**: while a local policy is active, pressing Enter first checks the current line (including text placed by “Apply to terminal” and single-line pastes). A blocked line is not sent and stays on the prompt; a line that needs confirmation runs only after you click **Confirm send**. Typed commands are not checked locally (Enter is sent as usual) inside full-screen programs such as vim/less/top, on password or passphrase prompts, and during rz/sz transfers. Lines edited with arrow keys, Tab completion or shell history recall are checked only by the characters you actually typed; rely on the server-side policy for those.
+Local checks cover snippet runs, batch runs, commands inserted by AI, `mist exec`, **each non-empty line of a send sequence**, and **commands you type directly in the terminal**: while a local policy is active, pressing Enter first checks the current line (including text placed by “Apply to terminal” and single-line pastes). A blocked line is not sent and stays on the prompt; a line that needs confirmation runs only after you click **Confirm send**. Typed commands are not checked locally (Enter is sent as usual) inside full-screen programs such as vim/less/top, on password or passphrase prompts, and during rz/sz transfers. Lines edited with arrow keys, Tab completion or shell history recall are checked only by the characters you actually typed; rely on the server-side policy for those.
 
 View or adjust local rules in **Preferences**. When joining a team, admin-pushed policies sync to your machine. Server-side decisions are returned through the terminal connection and use the **“Server policy”** prefix.
 
@@ -531,6 +534,26 @@ Enable **Session Logging** in Preferences to automatically save terminal interac
 ### 13.4 Batch Execution
 
 **Tools → Batch Execute**: select multiple saved hosts, enter a command, and execute it in parallel across all selected hosts. Useful for inspections (results are shown per host; overly long output is auto-truncated).
+
+### 13.5 Send sequences
+
+**Tools → Send Sequences** (a separate “Send sequences” group in the command palette, not “Snippets”) sends lines, in order, into the **one connected pane** you are using.
+
+1. Create one and name it
+2. Put one send per line. A blank line presses Enter
+3. Optional delay between lines, in milliseconds. `0` sends the next line immediately. The wait is fixed. MistTerm does **not** wait for a remote prompt
+4. Save
+5. Connect a session, then click **Send to this session**
+
+Even if broadcast input is on for the tab, a send sequence stays in the current pane. It is not sent to other panes or other tabs.
+
+While a local command policy is active, each non-empty line is checked the same way as pressing Enter. A blocked line is not sent, and the rest of the sequence stops. If a line needs confirmation, later lines wait until you confirm.
+
+| | Command snippets | `mist exec` | AI batch | Send sequences |
+|---|---|---|---|---|
+| When | One searchable command, often with `<placeholders>`, kept in the snippet library | Run from the CLI on one or many hosts, without a terminal tab | Describe a task, confirm, then run it on the hosts in the plan | The lines you always type, in order, after this session is connected |
+| Where it goes | The current terminal, after variables are filled in | A separate SSH connection; output comes back | The hosts in the plan | Only the one connected pane |
+| What it does not do | Does not replay several lines on a fixed delay | Does not type into an interactive session that is already open | Is not a fixed key sequence | Does not wait for a remote prompt, and does not broadcast |
 
 ---
 

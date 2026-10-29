@@ -27,6 +27,7 @@ pub mod ssh_build;
 pub mod ssh_keygen;
 pub mod fragment_expr;
 pub mod fragment_command;
+pub mod send_sequence;
 pub mod credential;
 pub mod cloud_sync;
 pub mod reconnect;
@@ -137,6 +138,10 @@ pub use fragment_shortcuts::{
 };
 pub use fragment_expr::{expand_rhai_blocks, merge_rhai_context};
 pub use fragment_command::{build_fragment_command_preview, finalize_fragment_command_text};
+pub use send_sequence::{
+    alloc_replay_mark, line_payload, replay_schedule, sequence_lines, SendSequence,
+    SendSequenceStore, SequenceError, MAX_DELAY_MS,
+};
 pub use credential::{
     Credential, CredentialAuthKind, CredentialCategory, CredentialVault, SecretBackend,
 };
