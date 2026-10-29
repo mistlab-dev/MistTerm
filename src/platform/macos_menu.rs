@@ -46,6 +46,7 @@ pub enum MacMenuAction {
     FragmentLibrary,
     QuickFragmentSelector,
     SendSequences,
+    RuleManager,
     CommandHistory,
     PasteHistory,
     BatchExec,
@@ -106,6 +107,7 @@ pub struct NativeAppMenu {
     fragments: MenuItem,
     quick_fragments: MenuItem,
     send_sequences: MenuItem,
+    rule_manager: MenuItem,
     command_history: MenuItem,
     paste_history: MenuItem,
     batch_exec: MenuItem,
@@ -360,6 +362,8 @@ impl NativeAppMenu {
 
         // ── 工具 ──
         let tools = Submenu::new(l.tools_menu, true);
+        let rule_manager =
+            MenuItem::with_id("mistterm.tools.rule_manager", l.rule_manager, true, None);
         let fragments =
             MenuItem::with_id("mistterm.tools.fragments", l.fragment_library, true, None);
         let quick_fragments = MenuItem::with_id(
@@ -395,6 +399,8 @@ impl NativeAppMenu {
             MenuItem::with_id("mistterm.tools.credentials", l.credentials, true, None);
         let session_logs =
             MenuItem::with_id("mistterm.tools.session_logs", l.session_logs, true, None);
+        tools.append(&rule_manager)?;
+        tools.append(&PredefinedMenuItem::separator())?;
         tools.append(&fragments)?;
         tools.append(&quick_fragments)?;
         tools.append(&PredefinedMenuItem::separator())?;
@@ -491,6 +497,7 @@ impl NativeAppMenu {
             fragments,
             quick_fragments,
             send_sequences,
+            rule_manager,
             command_history,
             paste_history,
             batch_exec,
@@ -541,6 +548,7 @@ impl NativeAppMenu {
         let _ = self.monitor_panel.set_text(l.monitor_panel);
         let _ = self.theme_submenu.set_text(l.theme_menu);
         let _ = self._tools_menu.set_text(l.tools_menu);
+        let _ = self.rule_manager.set_text(l.rule_manager);
         let _ = self.fragments.set_text(l.fragment_library);
         let _ = self.quick_fragments.set_text(l.quick_fragments);
         let _ = self.send_sequences.set_text(l.send_sequences);
@@ -671,6 +679,7 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.view.panel.sftp" | "mistterm.view.sftp" => Some(MacMenuAction::ToggleSftp),
         "mistterm.view.panel.fragments" => Some(MacMenuAction::ToggleFragmentSidebar),
         "mistterm.view.panel.monitor" => Some(MacMenuAction::ToggleMonitorPanel),
+        "mistterm.tools.rule_manager" => Some(MacMenuAction::RuleManager),
         "mistterm.tools.fragments" => Some(MacMenuAction::FragmentLibrary),
         "mistterm.tools.quick_fragments" => Some(MacMenuAction::QuickFragmentSelector),
         "mistterm.tools.send_sequences" => Some(MacMenuAction::SendSequences),

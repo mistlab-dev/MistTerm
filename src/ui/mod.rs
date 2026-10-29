@@ -49,6 +49,7 @@ pub mod agent_install_dialog;
 pub mod ask_knowledge_dialog;
 mod batch_exec_dialog;
 mod send_sequence_dialog;
+mod rule_manager_dialog;
 mod team_members_dialog;
 pub mod ssh_config_import_dialog;
 pub mod foreign_import_dialog;
