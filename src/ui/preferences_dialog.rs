@@ -145,6 +145,9 @@ impl MistTermApp {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             should_close = true;
         }
+        if self.rule_manager_dialog.take_close_preferences() {
+            open = false;
+        }
         self.show_preferences_dialog = open && !should_close;
     }
 
@@ -1496,6 +1499,17 @@ impl MistTermApp {
                                 }
                                 dirty = true;
                             }
+                        }
+                        if m.id == crate::modules::output_trigger::MODULE_ID
+                            && crate::ui::chrome::panel_action_button(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Manage rules…", "管理规则…"),
+                            )
+                            .clicked()
+                        {
+                            self.rule_manager_dialog
+                                .open_from_preferences(&self.output_trigger_rules);
                         }
                     });
                 }

@@ -158,7 +158,7 @@ fn builtin_modules() -> Vec<&'static dyn MistModule> { ... }
 | 资产 | 位置 | 变更方式 |
 |------|------|----------|
 | 模块代码 | `src/modules/<id>/`（迁入后） | 发版 |
-| 规则 JSON | `assets/<id>-patterns.json` | 发版；P1 可叠加用户/团队覆盖 |
+| 规则 JSON | `assets/<id>-patterns.json` 为内置默认。`output-trigger` 用户规则在配置目录 `mistterm/output-trigger-rules.json`（未自定义时不写文件） | 内置随发版；用户在「工具 → 规则管理」里改，下一行输出立即生效 |
 
 已有资产直接对上：
 

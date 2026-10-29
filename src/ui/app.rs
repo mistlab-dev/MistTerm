@@ -301,6 +301,9 @@ pub struct MistTermApp {
     status_message: String,
     /// 扩展模块注册表（#117）：Host 统筹持有并共享给各 TerminalView。
     module_registry: std::sync::Arc<crate::capability::ModuleRegistry>,
+    /// 输出触发规则。与 registry 里的模块共享，保存后下一行输出即生效。
+    output_trigger_rules: crate::modules::output_trigger::OutputTriggerStore,
+    rule_manager_dialog: crate::ui::rule_manager_dialog::RuleManagerDialog,
 
     /// 是否显示新建会话对话框
     show_new_session_dialog: bool,
@@ -1171,9 +1174,13 @@ impl MistTermApp {
 
         let cmd_audit_engine =
             std::sync::Arc::new(std::sync::Mutex::new(CmdAuditEngine::new()));
+        let output_trigger_rules = crate::modules::output_trigger::OutputTriggerStore::load();
         let module_registry = {
             let reg = std::sync::Arc::new(crate::capability::ModuleRegistry::with_modules(
-                crate::modules::builtin_modules(std::sync::Arc::clone(&cmd_audit_engine)),
+                crate::modules::builtin_modules_with_output_trigger(
+                    std::sync::Arc::clone(&cmd_audit_engine),
+                    output_trigger_rules.clone(),
+                ),
             ));
             reg.sync_effective_disabled(&app_settings.disabled_modules);
             reg
@@ -1203,6 +1210,8 @@ impl MistTermApp {
             action_bus: crate::ui::action::ActionBus::new(),
             status_message: String::new(),
             module_registry,
+            output_trigger_rules,
+            rule_manager_dialog: crate::ui::rule_manager_dialog::RuleManagerDialog::default(),
             show_new_session_dialog: false,
             show_edit_session_dialog: false,
             show_about_dialog: false,
@@ -3596,6 +3605,7 @@ impl MistTermApp {
             || self.variable_dialog.open
             || self.fragment_library.open
             || self.send_sequence_dialog.open
+            || self.rule_manager_dialog.open
             || self.show_terminal_search
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
@@ -4130,6 +4140,14 @@ impl MistTermApp {
             "当前会话的按行发送",
             "macro 宏 sequence",
         );
+        add(
+            PaletteAction::RuleManager,
+            "Rule manager",
+            "规则管理",
+            "Output trigger patterns",
+            "输出触发规则",
+            "trigger regex toast 正则",
+        );
     }
 
     fn run_command_palette(
@@ -4227,6 +4245,10 @@ impl MistTermApp {
             PaletteAction::BatchExec => self.menu_open_batch_exec(ctx),
             PaletteAction::SendSequences => {
                 self.send_sequence_dialog.open_manager(&self.send_sequences);
+            }
+            PaletteAction::RuleManager => {
+                self.rule_manager_dialog
+                    .open_output_trigger(&self.output_trigger_rules);
             }
         }
     }
@@ -4553,6 +4575,7 @@ impl MistTermApp {
             || self.cmd_audit_confirm.is_some()
             || self.batch_exec_dialog.open
             || self.send_sequence_dialog.open
+            || self.rule_manager_dialog.open
             || self.quick_selector.open
             || self.command_palette.open
             || self.team_fragment_editor.open
@@ -9203,6 +9226,10 @@ impl MistTermApp {
             MacMenuAction::SendSequences => {
                 self.send_sequence_dialog.open_manager(&self.send_sequences);
             }
+            MacMenuAction::RuleManager => {
+                self.rule_manager_dialog
+                    .open_output_trigger(&self.output_trigger_rules);
+            }
             MacMenuAction::QuickFragmentSelector => self.quick_selector.open = true,
             MacMenuAction::CredentialPanel => {
                 if self.ensure_right_dock_allowed_or_warn(ctx) {
@@ -10167,6 +10194,7 @@ impl eframe::App for MistTermApp {
         if self.app_global_shortcuts_enabled()
             && !self.fragment_library.open
             && !self.send_sequence_dialog.open
+            && !self.rule_manager_dialog.open
             && !self.team_fragment_editor.open
             && !self.team_fragment_editor.capturing_shortcut
         {
@@ -10181,6 +10209,15 @@ impl eframe::App for MistTermApp {
         }
 
         self.render_workspace_shell(ctx, frame, &theme);
+        let output_trigger_enabled = self
+            .module_registry
+            .is_enabled(crate::modules::output_trigger::MODULE_ID);
+        self.rule_manager_dialog.show(
+            ctx,
+            &theme,
+            &self.output_trigger_rules,
+            output_trigger_enabled,
+        );
         self.poll_paste_history_notes();
         self.process_typed_enter_audit(ctx);
         self.pump_send_sequence(ctx);

@@ -1,7 +1,7 @@
 //! 内置 MistModule 实现（#113）。
 //!
 //! `capability` 只放 trait 与 registry，不反向依赖具体模块，避免环。
-//! Host 用 [`builtin_modules`] 组装官方清单。新模块只往这个 Vec 追加。
+//! Host 用 [`builtin_modules`] 组装官方清单。新模块追加在 [`builtin_modules_with_output_trigger`]。
 
 pub mod cmd_audit_local;
 pub mod output_trigger;
@@ -15,14 +15,29 @@ use std::sync::{Arc, Mutex};
 use crate::capability::MistModule;
 use crate::core::CmdAuditEngine;
 
-/// 官方内置模块。迁入新模块时只改这里，Host 仍走同一 registry。
+/// 官方内置模块。测试用内置输出触发规则，不读本机配置目录。
 ///
 /// `cmd_audit_engine` 只交给 `cmd-audit-local`。output-trigger 与 display-link
 /// 不读这台引擎，参数仍要穿过工厂，避免再拆一个无参注册入口。
+/// 新模块追加在 [`builtin_modules_with_output_trigger`]。
 pub fn builtin_modules(cmd_audit_engine: Arc<Mutex<CmdAuditEngine>>) -> Vec<Box<dyn MistModule>> {
+    builtin_modules_with_output_trigger(
+        cmd_audit_engine,
+        output_trigger::OutputTriggerStore::builtin_ephemeral(),
+    )
+}
+
+/// 与 [`builtin_modules`] 同一份清单，但输出触发规则与 UI 共享。
+/// 测试仍走 [`builtin_modules`]，以免读到本机配置目录里的用户规则。
+pub fn builtin_modules_with_output_trigger(
+    cmd_audit_engine: Arc<Mutex<CmdAuditEngine>>,
+    output_trigger_rules: output_trigger::OutputTriggerStore,
+) -> Vec<Box<dyn MistModule>> {
     vec![
         Box::new(cmd_audit_local::CmdAuditLocalModule::new(cmd_audit_engine)),
-        Box::new(output_trigger::OutputTriggerModule::new()),
+        Box::new(output_trigger::OutputTriggerModule::with_store(
+            output_trigger_rules,
+        )),
         Box::new(display_link::DisplayLinkModule::new()),
         Box::new(session_import::SessionImportModule::new()),
     ]
