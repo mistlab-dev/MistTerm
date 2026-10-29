@@ -381,6 +381,12 @@ pub struct TerminalView {
     pending_open_paste_history: bool,
     /// 「仅断开 SSH 保留画面」后为 true：键盘输入写入 [`Self::disconnected_input_buffer`] 而非 PTY(FUNCTIONAL_SPEC §2.4)。
     buffer_input_while_disconnected: bool,
+    /// 意外断开时 `ssh_rx` 仍被本帧借用，排空后再丢掉。
+    release_ssh_rx_after_drain: bool,
+    /// 断开态键入提示的节流时刻（约 3 秒一次）。
+    disconnect_input_toast_at: Option<Instant>,
+    /// 本帧有键入写入了离线缓冲，待有 `Context` 时发节流 Toast。
+    disconnect_input_toast_armed: bool,
     /// 断线期间缓存的待发送字节(上限 [`Self::OFFLINE_INPUT_CAP`])。
     disconnected_input_buffer: Vec<u8>,
     /// 重连且 shell 就绪后，若缓存非空则弹出是否重发。
@@ -978,6 +984,9 @@ impl TerminalView {
             paste_history_ready: Vec::new(),
             pending_open_paste_history: false,
             buffer_input_while_disconnected: false,
+            release_ssh_rx_after_drain: false,
+            disconnect_input_toast_at: None,
+            disconnect_input_toast_armed: false,
             disconnected_input_buffer: Vec::new(),
             resend_offline_input_dialog_open: false,
             pending_post_connect_command: None,
@@ -1632,6 +1641,9 @@ impl TerminalView {
         match manager.create_session_async(config) {
             Ok(session_id) => {
                 self.buffer_input_while_disconnected = false;
+                self.release_ssh_rx_after_drain = false;
+                self.disconnect_input_toast_at = None;
+                self.disconnect_input_toast_armed = false;
                 self.disconnected_input_buffer.clear();
                 self.resend_offline_input_dialog_open = false;
                 self.connection_kind = ConnectionKind::Ssh;
@@ -1716,6 +1728,10 @@ impl TerminalView {
         // 先处理网络与键盘，再绘制，避免输入/输出滞后一帧
         crate::ssh::set_repaint_context(ui.ctx());
         let terminal_dirty = self.process_ssh_messages(theme);
+        if self.shows_persistent_disconnect_banner() {
+            // 横幅在本帧 show() 之前已排过版，再要一帧才能画出来。
+            ui.ctx().request_repaint();
+        }
         self.flush_paste_queue(ui.ctx());
         self.process_transfer_events(theme, ui.ctx());
 
@@ -3235,6 +3251,7 @@ impl TerminalView {
                         self.auto_follow_output = true;
                     }
                     SshMessage::Disconnected { .. } => {
+                        let unexpected = !self.local_disconnect_intent;
                         if self.local_disconnect_intent {
                             self.local_disconnect_intent = false;
                         } else {
@@ -3243,18 +3260,29 @@ impl TerminalView {
                             self.pending_attention_ended = true;
                         }
                         self.connected = false;
-                        self.terminal_wants_keyboard = false;
-                        self.terminal_focused = false;
                         self.connected_at = None;
                         self.auto_follow_output = true;
                         self.resend_offline_input_dialog_open = false;
                         self.seal_open_capture();
+                        // 意外 EOF 不能再留着 ssh_manager，否则 is_connecting() 仍为真，
+                        // 标签/侧栏绿点不灭，还会盖上一层「正在连接」。
+                        if unexpected && !self.is_local_shell() {
+                            self.hold_ssh_after_unexpected_disconnect();
+                            vte_dirty = true;
+                        } else {
+                            self.terminal_wants_keyboard = false;
+                            self.terminal_focused = false;
+                        }
                     }
                     SshMessage::UserCommand { command, .. } => {
                         *self.command_usage.entry(command).or_insert(0) += 1;
                     }
                 }
             }
+        }
+        if self.release_ssh_rx_after_drain {
+            self.release_ssh_rx_after_drain = false;
+            self.ssh_rx = None;
         }
         vte_dirty || more_pending
     }
@@ -3366,6 +3394,7 @@ impl TerminalView {
         if data.is_empty() {
             return;
         }
+        self.disconnect_input_toast_armed = true;
         self.scroll_to_bottom_on_user_input();
         let cap = Self::OFFLINE_INPUT_CAP;
         if self.disconnected_input_buffer.len() >= cap {
@@ -3535,6 +3564,7 @@ impl TerminalView {
             let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
             self.append_offline_bytes(normalized.as_bytes());
         }
+        self.flush_disconnect_input_toast(ui.ctx());
         ui.ctx().request_repaint_after(Duration::from_millis(50));
     }
 
@@ -3975,6 +4005,7 @@ impl TerminalView {
         if !self.connected {
             if self.buffer_input_while_disconnected {
                 self.append_offline_bytes(normalized.as_bytes());
+                self.flush_disconnect_input_toast(ctx);
                 ctx.request_repaint_after(Duration::from_millis(50));
             }
             return;
@@ -4929,6 +4960,9 @@ impl TerminalView {
         self.terminal_focused = false;
         self.clear_unsent_paste();
         self.buffer_input_while_disconnected = false;
+        self.release_ssh_rx_after_drain = false;
+        self.disconnect_input_toast_at = None;
+        self.disconnect_input_toast_armed = false;
         self.disconnected_input_buffer.clear();
         self.resend_offline_input_dialog_open = false;
         // #177：断线丢弃未执行的恢复命令，避免旧命令跨会话泄漏
@@ -4966,7 +5000,35 @@ impl TerminalView {
         self.terminal_focused = false;
         self.clear_unsent_paste();
         self.buffer_input_while_disconnected = true;
+        self.disconnect_input_toast_at = None;
+        self.disconnect_input_toast_armed = false;
         self.resend_offline_input_dialog_open = false;
+        self.feed_ssh_disconnected_notice();
+    }
+
+    /// 意外断开：保留画面与键盘，输入改走本地缓冲。清掉 SSH 句柄，避免仍被当成「正在连接」。
+    fn hold_ssh_after_unexpected_disconnect(&mut self) {
+        self.buffer_input_while_disconnected = true;
+        self.disconnect_input_toast_at = None;
+        self.disconnect_input_toast_armed = false;
+        self.terminal_wants_keyboard = true;
+        self.pending_focus_terminal = true;
+        if let Some(ref h) = self.ssh_handle {
+            self.lrzsz.unregister_shell_pump_upload_feed(h);
+        }
+        self.pending_rz_upload = false;
+        self.end_rz_handshake_capture();
+        self.clear_rz_control_mode();
+        self.ssh_handle = None;
+        self.ssh_manager = None;
+        self.release_ssh_rx_after_drain = true;
+        self.connecting_fido2 = false;
+        self.transfer_progress = None;
+        self.transfer_outgoing = false;
+        self.feed_ssh_disconnected_notice();
+    }
+
+    fn feed_ssh_disconnected_notice(&mut self) {
         let disconnected_banner = match self.ui_lang_last {
             UiLanguage::Zh => concat!(
                 "\r\n\x1b[33m[已断开 SSH；键盘输入将暂存，重连后可选择是否发送到远端]",
@@ -4978,6 +5040,43 @@ impl TerminalView {
             ),
         };
         self.terminal.feed(disconnected_banner.as_bytes());
+    }
+
+    /// 活动 SSH 标签应显示常驻断开条：已进入离线缓冲，且不是正在连接或连接失败占位。
+    pub fn shows_persistent_disconnect_banner(&self) -> bool {
+        !self.is_local_shell()
+            && self.buffer_input_while_disconnected
+            && !self.connected
+            && !self.is_connecting()
+            && self.error_message.is_none()
+    }
+
+    /// 断开态键入提示，约 3 秒一次，避免按住按键刷屏。
+    fn flush_disconnect_input_toast(&mut self, ctx: &egui::Context) {
+        if !self.disconnect_input_toast_armed {
+            return;
+        }
+        self.disconnect_input_toast_armed = false;
+        if !self.shows_persistent_disconnect_banner() {
+            return;
+        }
+        const GAP: Duration = Duration::from_secs(3);
+        let now = Instant::now();
+        if self
+            .disconnect_input_toast_at
+            .is_some_and(|t| now.saturating_duration_since(t) < GAP)
+        {
+            return;
+        }
+        self.disconnect_input_toast_at = Some(now);
+        self.pending_toast_info = Some(
+            crate::i18n::tr(
+                ctx,
+                "Disconnected. Keystrokes are buffered locally and can be resent after reconnect.",
+                "已断开，输入已暂存，重连后可确认重发",
+            )
+            .to_string(),
+        );
     }
 
     pub const ERR_FRAGMENT_NOT_CONNECTED: &'static str = "__mistterm_fragment_not_connected";
@@ -6119,5 +6218,82 @@ mod idle_cursor_repaint_tests {
             dt.is_zero(),
             "ZMODEM upload capture must keep the immediate repaint path, got {dt:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod disconnect_banner_tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::ssh::SshManager;
+
+    #[test]
+    fn banner_follows_ssh_hold_not_connecting_failure_or_local() {
+        let mut view = TerminalView::new();
+        assert!(!view.shows_persistent_disconnect_banner());
+
+        view.disconnect_ssh_keep_buffer();
+        assert!(view.shows_persistent_disconnect_banner());
+
+        view.error_message = Some("auth failed".into());
+        assert!(
+            !view.shows_persistent_disconnect_banner(),
+            "connect failure keeps its own placeholder"
+        );
+        view.error_message = None;
+        assert!(view.shows_persistent_disconnect_banner());
+
+        let (mgr, _rx) = SshManager::new();
+        view.ssh_manager = Some(mgr);
+        assert!(view.is_connecting());
+        assert!(!view.shows_persistent_disconnect_banner());
+        view.ssh_manager = None;
+        assert!(view.shows_persistent_disconnect_banner());
+
+        view.connection_kind = ConnectionKind::Local;
+        assert!(!view.shows_persistent_disconnect_banner());
+
+        view.connection_kind = ConnectionKind::Ssh;
+        view.disconnect();
+        assert!(!view.shows_persistent_disconnect_banner());
+    }
+
+    #[test]
+    fn unexpected_hold_drops_connecting_and_buffers_keys() {
+        let mut view = TerminalView::new();
+        let (mgr, rx) = SshManager::new();
+        view.ssh_manager = Some(mgr);
+        view.ssh_rx = Some(rx);
+        view.connected = true;
+        view.connection_target = Some(("root".into(), "host".into()));
+        view.hold_ssh_after_unexpected_disconnect();
+        view.connected = false;
+        assert!(view.buffer_input_while_disconnected);
+        assert!(view.terminal_wants_keyboard);
+        assert!(view.ssh_manager.is_none());
+        assert!(!view.is_connecting());
+        assert!(view.shows_persistent_disconnect_banner());
+        assert!(view.release_ssh_rx_after_drain);
+        assert!(view.connection_target.is_some());
+    }
+
+    #[test]
+    fn disconnect_keystroke_toast_is_throttled_to_about_three_seconds() {
+        let ctx = egui::Context::default();
+        let mut view = TerminalView::new();
+        view.disconnect_ssh_keep_buffer();
+        view.append_offline_bytes(b"ls");
+        view.flush_disconnect_input_toast(&ctx);
+        assert!(view.take_pending_toast_info().is_some());
+
+        view.append_offline_bytes(b"\r");
+        view.flush_disconnect_input_toast(&ctx);
+        assert!(view.take_pending_toast_info().is_none());
+
+        view.disconnect_input_toast_at = Some(Instant::now() - Duration::from_secs(4));
+        view.append_offline_bytes(b"x");
+        view.flush_disconnect_input_toast(&ctx);
+        assert!(view.take_pending_toast_info().is_some());
     }
 }

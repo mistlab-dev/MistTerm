@@ -182,8 +182,9 @@ pub use vault::{
 pub use secret_resolver::{ResolvedSshSecrets, ResolveError, SecretResolver, TempKeyFile};
 pub use cloud_sync::CloudSyncSettings;
 pub use reconnect::{
-    cleared_schedule, collect_tabs_due_for_reconnect, schedule_after_unexpected_disconnect,
-    TabReconnectSchedule, ReconnectStatus, DEFAULT_MAX_RECONNECT_ATTEMPTS,
+    cleared_schedule, collect_tabs_due_for_reconnect, disconnect_banner_kind,
+    schedule_after_unexpected_disconnect, DisconnectBannerKind, TabReconnectSchedule,
+    ReconnectStatus, DEFAULT_MAX_RECONNECT_ATTEMPTS,
 };
 pub use upload_policy::{
     decide_upload_dispatch, format_bytes_short, UploadDispatch, LARGE_UPLOAD_THRESHOLD_BYTES,
