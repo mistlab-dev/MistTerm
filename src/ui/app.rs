@@ -355,6 +355,7 @@ pub struct MistTermApp {
     new_session_local_forwards_text: String,
     new_session_remote_forwards_text: String,
     new_session_dynamic_forwards_text: String,
+    new_session_post_connect_command: String,
     new_session_vault: VaultSecretForm,
 
     edit_session_id: Option<String>,
@@ -377,6 +378,7 @@ pub struct MistTermApp {
     edit_session_local_forwards_text: String,
     edit_session_remote_forwards_text: String,
     edit_session_dynamic_forwards_text: String,
+    edit_session_post_connect_command: String,
     edit_session_vault: VaultSecretForm,
     sidebar_search_query: String,
     sidebar_filter: String,
@@ -1270,6 +1272,7 @@ impl MistTermApp {
             new_session_local_forwards_text: String::new(),
             new_session_remote_forwards_text: String::new(),
             new_session_dynamic_forwards_text: String::new(),
+            new_session_post_connect_command: String::new(),
             new_session_vault: VaultSecretForm::default(),
             edit_session_id: None,
             edit_session_name: String::new(),
@@ -1291,6 +1294,7 @@ impl MistTermApp {
             edit_session_local_forwards_text: String::new(),
             edit_session_remote_forwards_text: String::new(),
             edit_session_dynamic_forwards_text: String::new(),
+            edit_session_post_connect_command: String::new(),
             edit_session_vault: VaultSecretForm::default(),
             sidebar_search_query: String::new(),
             sidebar_filter: "all".to_string(),
@@ -3054,6 +3058,8 @@ impl MistTermApp {
                 return;
             }
         };
+        // #177：注入会话配置的连接后恢复命令（空 = 不执行）
+        terminal.set_post_connect_command(&session.post_connect_command);
         terminal.connect(
             theme,
             &session.host,
@@ -6922,6 +6928,7 @@ impl MistTermApp {
         let local_forwards_text = self.new_session_local_forwards_text.clone();
         let remote_forwards_text = self.new_session_remote_forwards_text.clone();
         let dynamic_forwards_text = self.new_session_dynamic_forwards_text.clone();
+        let post_connect_command = self.new_session_post_connect_command.trim().to_string();
         self.session_manager.patch_session(&sid, |s| {
             s.proxy_jump = proxy_jump.clone();
             s.proxy_command = proxy_command.clone();
@@ -6929,6 +6936,7 @@ impl MistTermApp {
             s.local_forwards_text = local_forwards_text;
             s.remote_forwards_text = remote_forwards_text;
             s.dynamic_forwards_text = dynamic_forwards_text;
+            s.post_connect_command = post_connect_command;
             s.color_tag = self.new_session_color_tag.clone();
             if !matches!(backend, SecretBackend::LocalEncrypted) {
                 s.secret_backend = backend.clone();
@@ -6973,6 +6981,7 @@ impl MistTermApp {
         self.new_session_local_forwards_text.clear();
         self.new_session_remote_forwards_text.clear();
         self.new_session_dynamic_forwards_text.clear();
+        self.new_session_post_connect_command.clear();
         self.new_session_vault = VaultSecretForm::default();
     }
 
@@ -7043,6 +7052,7 @@ impl MistTermApp {
             self.edit_session_local_forwards_text = session.local_forwards_text.clone();
             self.edit_session_remote_forwards_text = session.remote_forwards_text.clone();
             self.edit_session_dynamic_forwards_text = session.dynamic_forwards_text.clone();
+            self.edit_session_post_connect_command = session.post_connect_command.clone();
             self.edit_session_vault = VaultSecretForm::from_backend(
                 &session.secret_backend,
                 &self.app_settings.vault.default_mount,
@@ -7110,6 +7120,7 @@ impl MistTermApp {
                 s.local_forwards_text = self.edit_session_local_forwards_text.clone();
                 s.remote_forwards_text = self.edit_session_remote_forwards_text.clone();
                 s.dynamic_forwards_text = self.edit_session_dynamic_forwards_text.clone();
+                s.post_connect_command = self.edit_session_post_connect_command.trim().to_string();
                 s.secret_backend = backend.clone();
                 if backend.is_vault() {
                     s.password.clear();

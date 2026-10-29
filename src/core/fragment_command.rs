@@ -88,6 +88,7 @@ fn make_session(host: &str, user: &str, port: u16, name: &str) -> SessionConfig 
         local_forwards_text: String::new(),
         remote_forwards_text: String::new(),
         dynamic_forwards_text: String::new(),
+        post_connect_command: String::new(),
     }
 }
 
