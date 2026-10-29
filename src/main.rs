@@ -8,6 +8,8 @@
 fn main() -> eframe::Result<()> {
     // #150：panic hook 尽早安装——panic 信息 + 栈落到 logs/crash-reports/，
     // 解决「Rust panic 不生成 .ips、会话日志无栈」的可观测性缺口。
+    // #189 的下次启动提示在 GUI 里检测；这里只安装 hook，
+    // 避免 `--version`、`update` 等无界面路径写成正常退出。
     mistterm::core::crash_reporter::install();
 
     // `Mist update`：桌面发行包不再附带命令行 `mist`（Linux #127）。无界面，和 `mist update` 同一套逻辑。

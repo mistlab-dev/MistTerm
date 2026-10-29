@@ -9291,6 +9291,8 @@ impl MistTermApp {
             MacMenuAction::HelpReportIssue => {
                 self.open_report_issue(ctx);
             }
+            MacMenuAction::OpenCrashReports => self.open_crash_report_folder(ctx),
+            MacMenuAction::OpenHangReports => self.open_hang_report_folder(ctx),
             MacMenuAction::About => self.show_about_dialog = true,
             MacMenuAction::CheckForUpdates => self.update_check_now(ctx),
         }
