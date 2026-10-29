@@ -113,6 +113,9 @@ pub fn run_gui() {
         }),
     ) {
         eprintln!("Failed to launch GUI: {e}");
+        // GUI 启动失败也算「没走到正常退出」，不写 stamp（下次启动如果因此有新报告会提示）。
         std::process::exit(1);
     }
+    // 正常返回（含 on_exit 后拆卸完成）：stamp 兕底，覆盖所有正常退出路径。
+    crate::core::crash_reporter::mark_clean_exit();
 }

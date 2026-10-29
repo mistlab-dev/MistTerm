@@ -308,6 +308,8 @@ pub struct MistTermApp {
     show_about_dialog: bool,
     /// 关于 → 开源许可(第三方许可证全文)
     show_licenses_dialog: bool,
+    /// #189：启动检测到上次运行有未提示过的崩溃时弹一次的提示窗。
+    crash_notice: Option<crate::core::crash_reporter::CrashNotice>,
     /// 自动更新：后台检查状态与「软件更新」窗口。
     update_ui: update::UpdateUi,
     /// 原型 / 常见桌面习惯：⌘, 偏好设置(主题等)
@@ -1207,6 +1209,7 @@ impl MistTermApp {
             show_edit_session_dialog: false,
             show_about_dialog: false,
             show_licenses_dialog: false,
+            crash_notice: crate::core::crash_reporter::detect_unreported_crash(),
             update_ui: update::UpdateUi::new(),
             show_preferences_dialog: false,
             pref_vault_token_draft: String::new(),
@@ -3584,6 +3587,7 @@ impl MistTermApp {
         self.show_new_session_dialog
             || self.show_edit_session_dialog
             || self.show_about_dialog
+            || self.crash_notice.is_some()
             || self.show_licenses_dialog
             || self.update_ui.dialog_open()
             || self.show_preferences_dialog
@@ -9345,6 +9349,8 @@ impl eframe::App for MistTermApp {
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // save() 已落盘。若后续 wgpu 拆卸或某处 Drop 卡住，看门狗在宽限期后强制退出。
+        // #189：走到这里说明是正常退出，写 clean-exit stamp（下次启动据此区分异常退出）。
+        crate::core::crash_reporter::mark_clean_exit();
         crate::platform::arm_quit_watchdog();
     }
 

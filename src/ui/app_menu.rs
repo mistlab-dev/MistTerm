@@ -412,6 +412,17 @@ impl MistTermApp {
                         ui.close_menu();
                     }
                     ui.separator();
+                    ui.separator();
+                    if crate::ui::chrome::popup_menu_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Open crash reports folder", "打开崩溃报告目录"),
+                    )
+                    .clicked()
+                    {
+                        self.open_crash_report_folder(ctx);
+                        ui.close_menu();
+                    }
                     ui.menu_button(
                         crate::i18n::tr(ctx, "Freeze diagnostics", "卡顿诊断"),
                         |ui| {
