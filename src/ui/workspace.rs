@@ -467,16 +467,54 @@ impl MistTermApp {
                                     } else {
                                         0.0
                                     };
-                                    let term_body_h =
-                                        (ui.available_height() - search_h - agent_banner_h).max(1.0);
+                                    let disconnect_open = self
+                                        .active_ssh_disconnect_banner(std::time::Instant::now())
+                                        .is_some();
+                                    let disconnect_t = ctx.animate_bool_with_time(
+                                        egui::Id::new("ssh_disconnect_banner"),
+                                        disconnect_open,
+                                        0.18,
+                                    );
+                                    let disconnect_banner_h =
+                                        Self::ssh_disconnect_banner_full_h(theme) * disconnect_t;
+                                    let term_body_h = (ui.available_height()
+                                        - search_h
+                                        - agent_banner_h
+                                        - disconnect_banner_h)
+                                        .max(1.0);
                                     let terminal_search_open = self.show_terminal_search;
                                     ui.allocate_ui_with_layout(
-                                        egui::vec2(term_col_w, term_body_h + agent_banner_h),
+                                        egui::vec2(
+                                            term_col_w,
+                                            term_body_h + agent_banner_h + disconnect_banner_h,
+                                        ),
                                         egui::Layout::top_down(egui::Align::LEFT),
                                         |ui| {
-                                            ui.set_min_height(term_body_h + agent_banner_h);
-                                            ui.set_max_height(term_body_h + agent_banner_h);
+                                            ui.set_min_height(
+                                                term_body_h + agent_banner_h + disconnect_banner_h,
+                                            );
+                                            ui.set_max_height(
+                                                term_body_h + agent_banner_h + disconnect_banner_h,
+                                            );
                                             ui.set_max_width(term_col_w);
+                                            if disconnect_banner_h > 0.5 {
+                                                if disconnect_open {
+                                                    self.paint_ssh_disconnect_banner(
+                                                        ui,
+                                                        theme,
+                                                        ctx,
+                                                        disconnect_banner_h,
+                                                    );
+                                                } else {
+                                                    ui.allocate_exact_size(
+                                                        egui::vec2(
+                                                            ui.available_width(),
+                                                            disconnect_banner_h,
+                                                        ),
+                                                        egui::Sense::hover(),
+                                                    );
+                                                }
+                                            }
                                             if agent_banner_h > 0.0 {
                                                 Self::paint_agent_audit_degraded_banner(
                                                     ui, &theme, ctx, self,
@@ -1900,6 +1938,179 @@ impl MistTermApp {
         }
 
         self.show_command_palette(ctx, theme);
+    }
+
+    fn ssh_disconnect_banner_full_h(theme: &crate::ui::theme::Theme) -> f32 {
+        theme.size_control_btn_h() + theme.spacing_sm() * 2.0
+    }
+
+    /// 活动窗格的 SSH 断开条阶段。正在连接、连接失败占位、本机终端都不占用这条。
+    fn active_ssh_disconnect_banner(
+        &self,
+        now: std::time::Instant,
+    ) -> Option<crate::core::DisconnectBannerKind> {
+        let tab = self.tabs.get(self.active_tab?)?;
+        let pane = tab.active_pane()?;
+        if !pane.terminal.shows_persistent_disconnect_banner() {
+            return None;
+        }
+        let auto = self.tab_auto_reconnect_enabled(&tab.primary_session_id());
+        Some(crate::core::disconnect_banner_kind(
+            auto,
+            pane.ssh_auto_reconnect_attempts,
+            pane.ssh_auto_reconnect_next,
+            now,
+            crate::core::DEFAULT_MAX_RECONNECT_ATTEMPTS,
+        ))
+    }
+
+    fn disconnect_banner_text(
+        ctx: &egui::Context,
+        kind: crate::core::DisconnectBannerKind,
+    ) -> String {
+        use crate::core::DisconnectBannerKind;
+        use crate::i18n::{language, UiLanguage};
+        match (language(ctx), kind) {
+            (UiLanguage::En, DisconnectBannerKind::Held) => {
+                "Connection lost · input is buffered locally".to_string()
+            }
+            (UiLanguage::Zh, DisconnectBannerKind::Held) => "连接已断开 · 输入暂存本地".to_string(),
+            (
+                UiLanguage::En,
+                DisconnectBannerKind::Scheduled {
+                    attempt,
+                    max_attempts,
+                    delay_secs,
+                },
+            ) => {
+                if delay_secs == 0 {
+                    format!(
+                        "Auto-reconnect {attempt}/{max_attempts} · retrying now · input buffered locally"
+                    )
+                } else {
+                    format!(
+                        "Auto-reconnect {attempt}/{max_attempts} · retry in {delay_secs}s · input buffered locally"
+                    )
+                }
+            }
+            (
+                UiLanguage::Zh,
+                DisconnectBannerKind::Scheduled {
+                    attempt,
+                    max_attempts,
+                    delay_secs,
+                },
+            ) => {
+                if delay_secs == 0 {
+                    format!("正在自动重连 {attempt}/{max_attempts} · 即将重试 · 输入暂存本地")
+                } else {
+                    format!(
+                        "正在自动重连 {attempt}/{max_attempts} · {delay_secs} 秒后重试 · 输入暂存本地"
+                    )
+                }
+            }
+            (UiLanguage::En, DisconnectBannerKind::GaveUp { max_attempts }) => format!(
+                "Auto-reconnect stopped after {max_attempts} attempts · input buffered locally"
+            ),
+            (UiLanguage::Zh, DisconnectBannerKind::GaveUp { max_attempts }) => {
+                format!("自动重连已达 {max_attempts} 次上限 · 输入暂存本地")
+            }
+        }
+    }
+
+    /// 终端区顶部常驻断开条。消失与否只看连接状态，不另存一份「已提示」标记。
+    fn paint_ssh_disconnect_banner(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &crate::ui::theme::Theme,
+        ctx: &egui::Context,
+        banner_h: f32,
+    ) {
+        let now = std::time::Instant::now();
+        let Some(kind) = self.active_ssh_disconnect_banner(now) else {
+            ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), banner_h),
+                egui::Sense::hover(),
+            );
+            return;
+        };
+        let scheduled = matches!(kind, crate::core::DisconnectBannerKind::Scheduled { .. });
+        let text = Self::disconnect_banner_text(ctx, kind);
+        let w = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(w, banner_h), egui::Sense::hover());
+        let warn = theme.color_status_warning_text();
+        let fill = theme.color_status_selected_fill(theme.amber_color());
+        ui.painter().rect_filled(rect, 0.0, fill);
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom(),
+            egui::Stroke::new(1.0, warn.gamma_multiply(0.55)),
+        );
+        let pad = theme.spacing_sm();
+        let buttons_ok = banner_h + 1.0 >= theme.size_control_btn_h();
+        let mut reconnect = false;
+        let mut close_tab = false;
+        let mut text_right = rect.right() - pad;
+        if buttons_ok {
+            let mut row = ui.child_ui(rect, egui::Layout::right_to_left(egui::Align::Center));
+            row.set_clip_rect(rect);
+            row.spacing_mut().item_spacing.x = theme.spacing_sm();
+            row.add_space(pad);
+            let close_label = crate::i18n::tr(ctx, "Close tab", "关闭标签");
+            let reconnect_label = crate::i18n::tr(ctx, "Reconnect", "重连");
+            if crate::ui::chrome::panel_action_button(&mut row, theme, close_label).clicked() {
+                close_tab = true;
+            }
+            let reconnect_resp =
+                crate::ui::chrome::panel_action_primary_button(&mut row, theme, reconnect_label);
+            if reconnect_resp.clicked() {
+                reconnect = true;
+            }
+            text_right = reconnect_resp.rect.left() - theme.spacing_sm();
+        }
+        let icon_px = theme.size_icon_glyph();
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + pad + icon_px * 0.5, rect.center().y),
+            egui::vec2(icon_px, icon_px),
+        );
+        crate::ui::icons::paint_icon(
+            ui,
+            icon_rect,
+            crate::ui::icons::IconId::Warning,
+            warn,
+            icon_px,
+        );
+        let text_rect = egui::Rect::from_min_max(
+            egui::pos2(icon_rect.right() + theme.spacing_xs(), rect.top()),
+            egui::pos2(text_right, rect.bottom()),
+        );
+        if text_rect.width() > 8.0 {
+            let galley = ui.fonts(|f| {
+                f.layout_no_wrap(
+                    text,
+                    egui::FontId::proportional(theme.font_size_ui_control()),
+                    warn,
+                )
+            });
+            let painter = ui.painter().with_clip_rect(text_rect.intersect(rect));
+            painter.galley(
+                egui::pos2(
+                    text_rect.left(),
+                    rect.center().y - galley.size().y * 0.5,
+                ),
+                galley,
+            );
+        }
+        if scheduled {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+        if reconnect {
+            if let Some(idx) = self.active_tab {
+                self.reconnect_tab_at(ctx, idx);
+            }
+        } else if close_tab {
+            self.request_close_active_tab();
+        }
     }
 
     pub(crate) fn paint_agent_audit_degraded_banner(

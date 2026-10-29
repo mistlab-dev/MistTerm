@@ -4357,6 +4357,16 @@ impl MistTermApp {
     }
 
     fn reconnect_tab_at(&mut self, ctx: &egui::Context, idx: usize) {
+        self.reconnect_tab_at_inner(ctx, idx, true);
+    }
+
+    /// `reset_attempt_budget`：手动重连清掉自动重连次数。自动退避触发时保留次数，成功连上后再清。
+    fn reconnect_tab_at_inner(
+        &mut self,
+        ctx: &egui::Context,
+        idx: usize,
+        reset_attempt_budget: bool,
+    ) {
         if idx >= self.tabs.len() {
             return;
         }
@@ -4379,7 +4389,9 @@ impl MistTermApp {
                 return;
             };
             pane.ssh_auto_reconnect_next = None;
-            pane.ssh_auto_reconnect_attempts = 0;
+            if reset_attempt_budget {
+                pane.ssh_auto_reconnect_attempts = 0;
+            }
             pane.session_id = format!(
                 "local:{}",
                 terminal.ssh_session_id().unwrap_or(0)
@@ -4398,7 +4410,9 @@ impl MistTermApp {
                 return;
             };
             pane.ssh_auto_reconnect_next = None;
-            pane.ssh_auto_reconnect_attempts = 0;
+            if reset_attempt_budget {
+                pane.ssh_auto_reconnect_attempts = 0;
+            }
             let sid = pane.session_id.clone();
             let offline = pane.terminal.offline_input_snapshot();
             pane.terminal.disconnect();
@@ -9631,6 +9645,18 @@ impl eframe::App for MistTermApp {
             schedule_after_unexpected_disconnect, TabReconnectSchedule,
             DEFAULT_MAX_RECONNECT_ATTEMPTS,
         };
+        // 已经连上的标签不再占用自动重连预算，下一轮意外断开从 0 开始计。
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                if pane.terminal.is_connected()
+                    && (pane.ssh_auto_reconnect_attempts != 0
+                        || pane.ssh_auto_reconnect_next.is_some())
+                {
+                    pane.ssh_auto_reconnect_next = None;
+                    pane.ssh_auto_reconnect_attempts = 0;
+                }
+            }
+        }
         let schedules: Vec<TabReconnectSchedule> = self
             .tabs
             .iter()
@@ -9653,10 +9679,7 @@ impl eframe::App for MistTermApp {
             })
             .collect();
         for i in due {
-            if let Some(pane) = self.tabs.get_mut(i).and_then(|t| t.active_pane_mut()) {
-                pane.ssh_auto_reconnect_next = None;
-            }
-            self.reconnect_tab_at(ctx, i);
+            self.reconnect_tab_at_inner(ctx, i, false);
         }
         for i in 0..self.tabs.len() {
             let sid = self.tabs[i].primary_session_id();
