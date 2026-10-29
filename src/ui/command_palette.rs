@@ -52,6 +52,8 @@ pub enum PaletteAction {
     BatchExec,
     /// 打开发送序列管理，不执行片段。
     SendSequences,
+    /// 工具 → 规则管理（输出触发等）。
+    RuleManager,
 }
 
 /// 已有标签则聚焦，否则连接。与侧栏 `select_session` 一致。

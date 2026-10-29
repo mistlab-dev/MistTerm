@@ -295,6 +295,11 @@ impl MistTermApp {
                 self.show_preferences_dialog = true;
                 ui.close_menu();
             }
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.rule_manager).clicked() {
+                self.rule_manager_dialog
+                    .open_output_trigger(&self.output_trigger_rules);
+                ui.close_menu();
+            }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.ai_settings).clicked() {
                 self.show_ai_settings_dialog = true;
                 ui.close_menu();
