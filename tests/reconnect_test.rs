@@ -76,7 +76,46 @@ fn schedule_after_unexpected_disconnect_gives_up() {
     let (updated, status) = schedule_after_unexpected_disconnect(schedule, max_attempts, now);
 
     assert_eq!(updated.attempts, 5);
+    assert!(updated.next_fire.is_none());
     assert!(matches!(status, Some(ReconnectStatus::GaveUp { max_attempts: 5 })));
+}
+
+#[test]
+fn schedule_after_unexpected_disconnect_gave_up_clears_pending_fire() {
+    let schedule = make_schedule(Some(future_from_now(30)), 5);
+    let (updated, status) = schedule_after_unexpected_disconnect(schedule, 5, Instant::now());
+    assert!(updated.next_fire.is_none());
+    assert_eq!(updated.attempts, 5);
+    assert!(matches!(status, Some(ReconnectStatus::GaveUp { max_attempts: 5 })));
+}
+
+#[test]
+fn disconnect_banner_kind_tracks_schedule_and_gave_up() {
+    let now = Instant::now();
+    assert_eq!(
+        disconnect_banner_kind(false, 2, Some(future_from_now(4)), now, 5),
+        DisconnectBannerKind::Held
+    );
+    assert_eq!(
+        disconnect_banner_kind(true, 0, None, now, 5),
+        DisconnectBannerKind::Held
+    );
+    match disconnect_banner_kind(true, 2, Some(now + Duration::from_secs(4)), now, 5) {
+        DisconnectBannerKind::Scheduled {
+            attempt,
+            max_attempts,
+            delay_secs,
+        } => {
+            assert_eq!(attempt, 2);
+            assert_eq!(max_attempts, 5);
+            assert_eq!(delay_secs, 4);
+        }
+        other => panic!("expected Scheduled, got {other:?}"),
+    }
+    assert_eq!(
+        disconnect_banner_kind(true, 5, Some(future_from_now(9)), now, 5),
+        DisconnectBannerKind::GaveUp { max_attempts: 5 }
+    );
 }
 
 #[test]

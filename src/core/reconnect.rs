@@ -57,7 +57,10 @@ pub fn schedule_after_unexpected_disconnect(
 ) -> (TabReconnectSchedule, Option<ReconnectStatus>) {
     if schedule.attempts >= max_attempts {
         return (
-            schedule,
+            TabReconnectSchedule {
+                next_fire: None,
+                attempts: schedule.attempts,
+            },
             Some(ReconnectStatus::GaveUp {
                 max_attempts,
             }),
@@ -82,4 +85,46 @@ pub fn schedule_after_unexpected_disconnect(
 #[inline]
 pub fn cleared_schedule() -> TabReconnectSchedule {
     TabReconnectSchedule::default()
+}
+
+/// 终端区常驻断开条要展示的重连阶段。纯状态，文案在 UI 层本地化。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DisconnectBannerKind {
+    /// 未开启自动重连，或本轮还没排上下一次重试。
+    Held,
+    /// 自动重连退避中。`delay_secs` 是距离 `next_fire` 的剩余整秒。
+    Scheduled {
+        attempt: u8,
+        max_attempts: u8,
+        delay_secs: u64,
+    },
+    /// 已达次数上限，不再自动重试。
+    GaveUp {
+        max_attempts: u8,
+    },
+}
+
+/// 由标签上已有的重连字段派生横幅阶段。达到上限后不再显示倒计时。
+pub fn disconnect_banner_kind(
+    auto_reconnect_enabled: bool,
+    attempts: u8,
+    next_fire: Option<Instant>,
+    now: Instant,
+    max_attempts: u8,
+) -> DisconnectBannerKind {
+    if auto_reconnect_enabled && attempts > 0 && attempts >= max_attempts {
+        return DisconnectBannerKind::GaveUp { max_attempts };
+    }
+    if auto_reconnect_enabled {
+        if let Some(fire) = next_fire {
+            if attempts > 0 {
+                return DisconnectBannerKind::Scheduled {
+                    attempt: attempts,
+                    max_attempts,
+                    delay_secs: fire.saturating_duration_since(now).as_secs(),
+                };
+            }
+        }
+    }
+    DisconnectBannerKind::Held
 }
