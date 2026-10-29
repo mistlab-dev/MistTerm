@@ -45,6 +45,7 @@ pub enum MacMenuAction {
     Theme(usize),
     FragmentLibrary,
     QuickFragmentSelector,
+    SendSequences,
     CommandHistory,
     PasteHistory,
     BatchExec,
@@ -104,6 +105,7 @@ pub struct NativeAppMenu {
     theme_items: Vec<CheckMenuItem>,
     fragments: MenuItem,
     quick_fragments: MenuItem,
+    send_sequences: MenuItem,
     command_history: MenuItem,
     paste_history: MenuItem,
     batch_exec: MenuItem,
@@ -381,6 +383,12 @@ impl NativeAppMenu {
                 Code::KeyP,
             )),
         );
+        let send_sequences = MenuItem::with_id(
+            "mistterm.tools.send_sequences",
+            l.send_sequences,
+            true,
+            None,
+        );
         let batch_exec =
             MenuItem::with_id("mistterm.tools.batch_exec", l.batch_exec, true, None);
         let credentials =
@@ -389,6 +397,8 @@ impl NativeAppMenu {
             MenuItem::with_id("mistterm.tools.session_logs", l.session_logs, true, None);
         tools.append(&fragments)?;
         tools.append(&quick_fragments)?;
+        tools.append(&PredefinedMenuItem::separator())?;
+        tools.append(&send_sequences)?;
         tools.append(&command_history)?;
         tools.append(&paste_history)?;
         tools.append(&batch_exec)?;
@@ -480,6 +490,7 @@ impl NativeAppMenu {
             theme_items,
             fragments,
             quick_fragments,
+            send_sequences,
             command_history,
             paste_history,
             batch_exec,
@@ -532,6 +543,7 @@ impl NativeAppMenu {
         let _ = self._tools_menu.set_text(l.tools_menu);
         let _ = self.fragments.set_text(l.fragment_library);
         let _ = self.quick_fragments.set_text(l.quick_fragments);
+        let _ = self.send_sequences.set_text(l.send_sequences);
         let _ = self.command_history.set_text(l.command_history);
         let _ = self.paste_history.set_text(l.paste_history);
         let _ = self.batch_exec.set_text(l.batch_exec);
@@ -661,6 +673,7 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.view.panel.monitor" => Some(MacMenuAction::ToggleMonitorPanel),
         "mistterm.tools.fragments" => Some(MacMenuAction::FragmentLibrary),
         "mistterm.tools.quick_fragments" => Some(MacMenuAction::QuickFragmentSelector),
+        "mistterm.tools.send_sequences" => Some(MacMenuAction::SendSequences),
         "mistterm.tools.command_history" => Some(MacMenuAction::CommandHistory),
         "mistterm.tools.paste_history" => Some(MacMenuAction::PasteHistory),
         "mistterm.tools.batch_exec" => Some(MacMenuAction::BatchExec),

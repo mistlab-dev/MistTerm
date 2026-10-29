@@ -443,6 +443,8 @@ pub struct TerminalView {
     pending_startup_cd: Option<String>,
     broadcast_targets: Vec<BroadcastTarget>,
     broadcast_suppress: bool,
+    /// 进行中的发送序列标记。0 表示没有。用来在标签换位后仍只写这一个窗格。
+    replay_mark: u64,
     /// 最近写入 PTY 的当前行(自动化可能无 egui Text 事件，仍可从出站字节识别 `rz`)
     pty_outbound_line_buffer: String,
     /// Enter 提交后待取走的整行命令(供命令历史 / 会话日志)
@@ -1009,6 +1011,7 @@ impl TerminalView {
             pending_startup_cd: None,
             broadcast_targets: Vec::new(),
             broadcast_suppress: false,
+            replay_mark: 0,
             zmodem_pty_detect_tail: Vec::new(),
             pty_outbound_line_buffer: String::new(),
             submitted_line: None,
@@ -1497,6 +1500,14 @@ impl TerminalView {
 
     pub(crate) fn clear_broadcast_targets(&mut self) {
         self.broadcast_targets.clear();
+    }
+
+    pub(crate) fn replay_mark(&self) -> u64 {
+        self.replay_mark
+    }
+
+    pub(crate) fn set_replay_mark(&mut self, mark: u64) {
+        self.replay_mark = mark;
     }
 
     /// SSH 分屏：等提示符出现后再 `cd` 到源窗格目录。
@@ -3925,6 +3936,33 @@ impl TerminalView {
                 log::error!("PTY write (command): {}", e);
             }
         }
+    }
+
+    /// 发送序列的一行：正文加回车。空行就是单独的 Enter。
+    /// 发送期间关掉分屏「同时输入」，避免这一行被广播到其它窗格。
+    pub fn send_line(&mut self, line: &str) {
+        if !self.connected {
+            return;
+        }
+        self.typed_line_buffer.clear();
+        if !line.is_empty() {
+            self.enqueue_log_command(line);
+            if crate::ui::terminal_shell_command::is_rz_shell_command(line) {
+                self.note_rz_shell_command_submitted();
+            }
+            if crate::ui::terminal_shell_command::is_sz_shell_command(line) {
+                self.note_sz_shell_command_submitted();
+            }
+        }
+        if !self.has_pty_writer() {
+            return;
+        }
+        let payload = crate::core::line_payload(line);
+        self.broadcast_suppress = true;
+        if let Err(e) = self.send_pty_input(&payload) {
+            log::error!("PTY write (send sequence): {}", e);
+        }
+        self.broadcast_suppress = false;
     }
 
     /// 粘贴文本到终端：不自动补回车；远端开了 bracketed paste 时包上 200~/201~；

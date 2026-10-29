@@ -269,6 +269,10 @@ pub struct MistTermApp {
     fragment_manager: FragmentManager,
     /// 片段快捷键本地映射（含团队片段；不随团队同步）
     fragment_shortcut_store: FragmentShortcutStore,
+    /// 命名发送序列。和片段库分开存，重放只打当前窗格。
+    send_sequences: crate::core::SendSequenceStore,
+    send_sequence_dialog: crate::ui::send_sequence_dialog::SendSequenceDialog,
+    send_replay: Option<SequenceReplay>,
     /// 本帧键盘复制的选区文字，帧末核对后再提示「已复制」。
     pending_terminal_copy: Option<String>,
 
@@ -556,6 +560,20 @@ struct CmdAuditConfirmState {
     insert_only: bool,
     /// 手敲行回车被扣住时所在窗格：确认后只对该窗格补发 `\r`(而不是重发整条命令)。
     typed_enter_pane: Option<usize>,
+    /// 发送序列指定的窗格。`Some` 时确认后用 `send_line`，不走当前活动窗格，也不广播。
+    target_pane: Option<usize>,
+}
+
+/// 正在把一条发送序列按行写入某一个窗格。
+struct SequenceReplay {
+    sequence_id: String,
+    name: String,
+    mark: u64,
+    lines: Vec<String>,
+    next: usize,
+    delay: Duration,
+    not_before: Instant,
+    holding_confirm: bool,
 }
 
 fn server_audit_detail(ev: &ServerAuditEvent) -> String {
@@ -1168,6 +1186,9 @@ impl MistTermApp {
                     FragmentManager::init_from_market_or_defaults(Some(&_market_cache))
                 }),
             fragment_shortcut_store: FragmentShortcutStore::load(),
+            send_sequences: crate::core::SendSequenceStore::load(),
+            send_sequence_dialog: crate::ui::send_sequence_dialog::SendSequenceDialog::default(),
+            send_replay: None,
             pending_terminal_copy: None,
             selected_session_id,
             sidebar_collapsed: false,
@@ -1723,7 +1744,7 @@ impl MistTermApp {
         tab_idx: usize,
         command: &str,
     ) -> CommandSendResult {
-        self.audited_command_at(ctx, tab_idx, command, false)
+        self.audited_command_at(ctx, tab_idx, None, command, false)
     }
 
     /// 「用到终端」：同样先过命令审计(拦截/确认照旧)，通过后只把命令放进输入行，不执行。
@@ -1733,7 +1754,7 @@ impl MistTermApp {
         tab_idx: usize,
         command: &str,
     ) -> CommandSendResult {
-        self.audited_command_at(ctx, tab_idx, command, true)
+        self.audited_command_at(ctx, tab_idx, None, command, true)
     }
 
     /// 多行命令放进终端就会被逐行执行，所以不放：复制到剪贴板并说明。
@@ -1753,13 +1774,17 @@ impl MistTermApp {
         &mut self,
         ctx: &egui::Context,
         tab_idx: usize,
+        pane_idx: Option<usize>,
         command: &str,
         insert_only: bool,
     ) -> CommandSendResult {
         if tab_idx >= self.tabs.len() {
             return CommandSendResult::NotConnected;
         }
-        let Some(pane) = self.tabs.get(tab_idx).and_then(|t| t.active_pane()) else {
+        let Some(pane) = self.tabs.get(tab_idx).and_then(|t| match pane_idx {
+            Some(i) => t.panes.get(i),
+            None => t.active_pane(),
+        }) else {
             return CommandSendResult::NotConnected;
         };
         if !pane.terminal.is_connected() {
@@ -1816,6 +1841,7 @@ impl MistTermApp {
                     started: Instant::now(),
                     insert_only,
                     typed_enter_pane: None,
+                    target_pane: pane_idx,
                 });
                 return CommandSendResult::NeedsConfirm {
                     command: command.to_string(),
@@ -1847,7 +1873,11 @@ impl MistTermApp {
                 );
             }
         }
-        if let Some(pane) = self.tabs.get_mut(tab_idx).and_then(|t| t.active_pane_mut()) {
+        let pane = self.tabs.get_mut(tab_idx).and_then(|t| match pane_idx {
+            Some(i) => t.panes.get_mut(i),
+            None => t.active_pane_mut(),
+        });
+        if let Some(pane) = pane {
             if insert_only {
                 if let Err(e) = pane.terminal.insert_command_text(command) {
                     if e == TerminalView::ERR_INSERT_MULTILINE {
@@ -1861,6 +1891,8 @@ impl MistTermApp {
                     }
                     return CommandSendResult::NotConnected;
                 }
+            } else if pane_idx.is_some() {
+                pane.terminal.send_line(command);
             } else {
                 pane.terminal.send_command(command);
             }
@@ -1913,21 +1945,39 @@ impl MistTermApp {
                 }
                 return;
             }
-            if let Some(pane) = self
-                .tabs
-                .get_mut(state.tab_idx)
-                .and_then(|t| t.active_pane_mut())
-            {
+            let send_as_line = state.target_pane.is_some() && !state.insert_only;
+            // 序列确认按窗格上的标记找回去，避免确认框打开期间关掉前面的标签后写错会话。
+            let pane = if send_as_line {
+                let mark = self.send_replay.as_ref().map(|replay| replay.mark);
+                let located = mark.and_then(|mark| self.find_replay_pane(mark));
+                located.and_then(|(tab_idx, pane_idx)| {
+                    self.tabs
+                        .get_mut(tab_idx)
+                        .and_then(|tab| tab.panes.get_mut(pane_idx))
+                })
+            } else {
+                self.tabs
+                    .get_mut(state.tab_idx)
+                    .and_then(|tab| tab.active_pane_mut())
+            };
+            if let Some(pane) = pane {
                 // 服务器侧 confirm：可选先发放行令牌，再重发原命令(选项 A)。
                 if matches!(state.source, CmdAuditSource::Server) && !state.approve_token.is_empty()
                 {
                     let approve = format!("MIST_AUDIT_APPROVE\t{}", state.approve_token);
-                    pane.terminal.send_command(&approve);
+                    if send_as_line {
+                        pane.terminal.send_line(&approve);
+                    } else {
+                        pane.terminal.send_command(&approve);
+                    }
                 }
                 if state.insert_only {
                     if pane.terminal.insert_command_text(&state.command).is_ok() {
                         self.notify_auto(inserted_command_status_message(ctx, &state.command));
                     }
+                } else if send_as_line {
+                    pane.terminal.send_line(&state.command);
+                    self.notify_auto(terminal_command_status_message(ctx, &state.command));
                 } else {
                     pane.terminal.send_command(&state.command);
                     self.notify_auto(terminal_command_status_message(ctx, &state.command));
@@ -1955,6 +2005,249 @@ impl MistTermApp {
                 self.record_interactive_now(state.tab_idx, pane_idx, &state.command, "cancelled");
             }
         }
+        self.note_sequence_after_confirm(ctx, proceed);
+    }
+
+    fn note_sequence_after_confirm(&mut self, ctx: &egui::Context, proceeded: bool) {
+        let holding = self
+            .send_replay
+            .as_ref()
+            .is_some_and(|replay| replay.holding_confirm);
+        if !holding {
+            return;
+        }
+        if !proceeded {
+            self.stop_send_sequence(ctx, true);
+            return;
+        }
+        let delay = self
+            .send_replay
+            .as_ref()
+            .map(|replay| replay.delay)
+            .unwrap_or_default();
+        if let Some(replay) = self.send_replay.as_mut() {
+            replay.holding_confirm = false;
+            replay.next = replay.next.saturating_add(1);
+            replay.not_before = Instant::now() + delay;
+        }
+        self.pump_send_sequence(ctx);
+    }
+
+    fn active_connected_pane(&self) -> Option<(usize, usize)> {
+        let tab_idx = self.active_tab?;
+        let tab = self.tabs.get(tab_idx)?;
+        let pane_idx = tab.active_pane;
+        let connected = tab
+            .panes
+            .get(pane_idx)
+            .is_some_and(|pane| pane.terminal.is_connected());
+        if connected {
+            Some((tab_idx, pane_idx))
+        } else {
+            None
+        }
+    }
+
+    fn clear_replay_mark(&mut self, mark: u64) {
+        if mark == 0 {
+            return;
+        }
+        for tab in &mut self.tabs {
+            for pane in &mut tab.panes {
+                if pane.terminal.replay_mark() == mark {
+                    pane.terminal.set_replay_mark(0);
+                }
+            }
+        }
+    }
+
+    fn find_replay_pane(&self, mark: u64) -> Option<(usize, usize)> {
+        if mark == 0 {
+            return None;
+        }
+        for (tab_idx, tab) in self.tabs.iter().enumerate() {
+            for (pane_idx, pane) in tab.panes.iter().enumerate() {
+                if pane.terminal.replay_mark() == mark {
+                    return Some((tab_idx, pane_idx));
+                }
+            }
+        }
+        None
+    }
+
+    fn stop_send_sequence(&mut self, ctx: &egui::Context, notify: bool) {
+        let Some(replay) = self.send_replay.take() else {
+            return;
+        };
+        self.clear_replay_mark(replay.mark);
+        if notify {
+            self.notify_info(
+                crate::i18n::tr(ctx, "Send sequence stopped", "发送序列已停止").to_string(),
+            );
+        }
+    }
+
+    fn start_send_sequence(&mut self, ctx: &egui::Context, id: &str) {
+        let Some(seq) = self.send_sequences.get(id).cloned() else {
+            self.notify_info(
+                crate::i18n::tr(ctx, "Sequence was deleted", "这条发送序列已删除").to_string(),
+            );
+            return;
+        };
+        let lines = crate::core::sequence_lines(&seq.body);
+        if lines.is_empty() {
+            self.notify_info(
+                crate::i18n::tr(ctx, "Add at least one line", "至少写一行").to_string(),
+            );
+            return;
+        }
+        let Some((tab_idx, pane_idx)) = self.active_connected_pane() else {
+            self.notify_info(
+                crate::i18n::tr(
+                    ctx,
+                    "Connect a session first, then send the sequence to that pane",
+                    "请先连接会话, 再把发送序列发到这个窗格",
+                )
+                .to_string(),
+            );
+            return;
+        };
+        if let Some(prev) = self.send_replay.take() {
+            self.clear_replay_mark(prev.mark);
+        }
+        let mark = crate::core::alloc_replay_mark();
+        if let Some(pane) = self
+            .tabs
+            .get_mut(tab_idx)
+            .and_then(|tab| tab.panes.get_mut(pane_idx))
+        {
+            pane.terminal.set_replay_mark(mark);
+        }
+        let delay_ms = seq.delay_ms.min(crate::core::MAX_DELAY_MS);
+        self.send_replay = Some(SequenceReplay {
+            sequence_id: seq.id,
+            name: seq.name.clone(),
+            mark,
+            lines,
+            next: 0,
+            delay: Duration::from_millis(u64::from(delay_ms)),
+            not_before: Instant::now(),
+            holding_confirm: false,
+        });
+        self.notify_info(format!(
+            "{} \"{}\"",
+            crate::i18n::tr(ctx, "Sending sequence", "正在发送序列"),
+            seq.name
+        ));
+        self.pump_send_sequence(ctx);
+    }
+
+    fn pump_send_sequence(&mut self, ctx: &egui::Context) {
+        loop {
+            let snapshot = {
+                let Some(replay) = self.send_replay.as_ref() else {
+                    return;
+                };
+                if replay.holding_confirm {
+                    None
+                } else if replay.next >= replay.lines.len() {
+                    Some((
+                        true,
+                        replay.name.clone(),
+                        replay.mark,
+                        String::new(),
+                        Duration::ZERO,
+                        Instant::now(),
+                    ))
+                } else {
+                    Some((
+                        false,
+                        String::new(),
+                        replay.mark,
+                        replay.lines[replay.next].clone(),
+                        replay.delay,
+                        replay.not_before,
+                    ))
+                }
+            };
+            let Some((finished, name, mark, line, delay, not_before)) = snapshot else {
+                if self.cmd_audit_confirm.is_some() {
+                    ctx.request_repaint_after(Duration::from_millis(200));
+                } else {
+                    self.stop_send_sequence(ctx, true);
+                }
+                return;
+            };
+            if finished {
+                self.send_replay = None;
+                self.clear_replay_mark(mark);
+                self.notify_info(format!(
+                    "{} \"{name}\"",
+                    crate::i18n::tr(ctx, "Send sequence finished", "发送序列已发完")
+                ));
+                return;
+            }
+            let now = Instant::now();
+            if now < not_before {
+                ctx.request_repaint_after(not_before.saturating_duration_since(now));
+                return;
+            }
+            if self.cmd_audit_confirm.is_some() {
+                ctx.request_repaint_after(Duration::from_millis(200));
+                return;
+            }
+            let Some((tab_idx, pane_idx)) = self.find_replay_pane(mark) else {
+                self.stop_send_sequence(ctx, true);
+                return;
+            };
+            let result = if line.trim().is_empty() {
+                self.write_sequence_enter(tab_idx, pane_idx)
+            } else {
+                self.audited_command_at(ctx, tab_idx, Some(pane_idx), &line, false)
+            };
+            match result {
+                CommandSendResult::Sent => {
+                    if let Some(replay) = self.send_replay.as_mut() {
+                        replay.next = replay.next.saturating_add(1);
+                        replay.not_before = Instant::now() + delay;
+                    }
+                    if delay.is_zero() {
+                        continue;
+                    }
+                    ctx.request_repaint_after(delay);
+                    return;
+                }
+                CommandSendResult::NeedsConfirm { .. } => {
+                    if let Some(replay) = self.send_replay.as_mut() {
+                        replay.holding_confirm = true;
+                    }
+                    return;
+                }
+                CommandSendResult::Blocked(_) => {
+                    self.stop_send_sequence(ctx, true);
+                    return;
+                }
+                CommandSendResult::NotConnected => {
+                    self.stop_send_sequence(ctx, true);
+                    return;
+                }
+            }
+        }
+    }
+
+    fn write_sequence_enter(&mut self, tab_idx: usize, pane_idx: usize) -> CommandSendResult {
+        let Some(pane) = self
+            .tabs
+            .get_mut(tab_idx)
+            .and_then(|tab| tab.panes.get_mut(pane_idx))
+        else {
+            return CommandSendResult::NotConnected;
+        };
+        if !pane.terminal.is_connected() {
+            return CommandSendResult::NotConnected;
+        }
+        pane.terminal.send_line("");
+        CommandSendResult::Sent
     }
 
     /// 手敲命令回车前的本地命令审计：终端扣住回车并交出整行，这里按策略放行 / 拦截 / 弹确认。
@@ -2083,6 +2376,7 @@ impl MistTermApp {
                         started: Instant::now(),
                         insert_only: false,
                         typed_enter_pane: Some(pane_idx),
+                        target_pane: None,
                     });
                     ctx.request_repaint();
                     continue;
@@ -2298,6 +2592,7 @@ impl MistTermApp {
                     started: Instant::now(),
                     insert_only: false,
                     typed_enter_pane: None,
+                    target_pane: None,
                 });
             }
             CmdAuditAction::Allow => {
@@ -3300,6 +3595,7 @@ impl MistTermApp {
             || self.show_ask_knowledge_dialog
             || self.variable_dialog.open
             || self.fragment_library.open
+            || self.send_sequence_dialog.open
             || self.show_terminal_search
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
@@ -3606,6 +3902,22 @@ impl MistTermApp {
                 ),
             });
         }
+        for seq in self.send_sequences.list() {
+            let preview = crate::core::sequence_lines(&seq.body)
+                .into_iter()
+                .find(|line| !line.is_empty())
+                .unwrap_or_default();
+            items.push(PaletteItem {
+                id: PaletteId::Sequence(seq.id.clone()),
+                kind: PaletteKind::Sequence,
+                title: command_preview(&seq.name, 64),
+                detail: crate::i18n::tr(ctx, "Send in this session", "发到当前会话").to_string(),
+                search: format!(
+                    "{} {} 发送序列 send sequence macro 宏 {}",
+                    seq.name, preview, seq.body
+                ),
+            });
+        }
         let mut seen_cmd = std::collections::HashSet::new();
         let mut kept = 0usize;
         for entry in self.command_history.entries_newest_first() {
@@ -3810,6 +4122,14 @@ impl MistTermApp {
             "在多台主机上执行",
             "batch",
         );
+        add(
+            PaletteAction::SendSequences,
+            "Send sequences",
+            "发送序列",
+            "Named lines for this session",
+            "当前会话的按行发送",
+            "macro 宏 sequence",
+        );
     }
 
     fn run_command_palette(
@@ -3835,6 +4155,7 @@ impl MistTermApp {
                     ));
                 }
             }
+            PaletteId::Sequence(id) => self.start_send_sequence(ctx, &id),
             PaletteId::History(cmd) => self.palette_fill_history(ctx, &cmd),
             PaletteId::Action(action) => self.run_palette_action(ctx, action),
         }
@@ -3904,6 +4225,9 @@ impl MistTermApp {
             PaletteAction::Disconnect => self.disconnect_ssh_keep_buffer_active(ctx),
             PaletteAction::Reconnect => self.reconnect_active_tab(ctx),
             PaletteAction::BatchExec => self.menu_open_batch_exec(ctx),
+            PaletteAction::SendSequences => {
+                self.send_sequence_dialog.open_manager(&self.send_sequences);
+            }
         }
     }
 
@@ -4228,6 +4552,7 @@ impl MistTermApp {
             || self.close_tab_confirm_idx.is_some()
             || self.cmd_audit_confirm.is_some()
             || self.batch_exec_dialog.open
+            || self.send_sequence_dialog.open
             || self.quick_selector.open
             || self.command_palette.open
             || self.team_fragment_editor.open
@@ -8031,7 +8356,7 @@ impl MistTermApp {
                 self.notify_multiline_not_inserted(ctx, command);
                 return;
             }
-            match self.audited_command_at(ctx, tab_idx, command, insert_only) {
+            match self.audited_command_at(ctx, tab_idx, None, command, insert_only) {
                 CommandSendResult::Sent => {
                     // 只放进输入行时还没执行，不算一次成功执行。
                     if !insert_only {
@@ -8875,6 +9200,9 @@ impl MistTermApp {
                 }
             }
             MacMenuAction::FragmentLibrary => self.fragment_library.open = true,
+            MacMenuAction::SendSequences => {
+                self.send_sequence_dialog.open_manager(&self.send_sequences);
+            }
             MacMenuAction::QuickFragmentSelector => self.quick_selector.open = true,
             MacMenuAction::CredentialPanel => {
                 if self.ensure_right_dock_allowed_or_warn(ctx) {
@@ -9010,6 +9338,9 @@ impl eframe::App for MistTermApp {
         eframe::set_value(storage, MISTTERM_UI_STORAGE_KEY, &p);
         let _ = self.command_history.save();
         let _ = self.paste_history.flush_blocking();
+        if let Err(e) = self.send_sequences.save() {
+            log::warn!("send sequences save: {e}");
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
@@ -9237,6 +9568,35 @@ impl eframe::App for MistTermApp {
                 ctx.copy_text(text);
             }
             BatchExecUiAction::None => {}
+        }
+        let replaying_id = self
+            .send_replay
+            .as_ref()
+            .map(|replay| replay.sequence_id.clone());
+        let session_connected = self.active_connected_pane().is_some();
+        let seq_action = self.send_sequence_dialog.show(
+            ctx,
+            &theme,
+            &mut self.send_sequences,
+            session_connected,
+            replaying_id.as_deref(),
+        );
+        match seq_action {
+            crate::ui::send_sequence_dialog::SendSequenceUiAction::None => {}
+            crate::ui::send_sequence_dialog::SendSequenceUiAction::Replay(id) => {
+                self.start_send_sequence(ctx, &id);
+            }
+            crate::ui::send_sequence_dialog::SendSequenceUiAction::Stop => {
+                self.stop_send_sequence(ctx, true);
+            }
+        }
+        let replay_deleted = self
+            .send_replay
+            .as_ref()
+            .map(|replay| replay.sequence_id.clone())
+            .is_some_and(|id| self.send_sequences.get(&id).is_none());
+        if replay_deleted {
+            self.stop_send_sequence(ctx, false);
         }
         self.team_members_dialog
             .show_modal(ctx, &theme, &mut self.team_service);
@@ -9806,6 +10166,7 @@ impl eframe::App for MistTermApp {
         // 片段自定义快捷键：终端聚焦时也要生效，并吞掉按键避免进 PTY。
         if self.app_global_shortcuts_enabled()
             && !self.fragment_library.open
+            && !self.send_sequence_dialog.open
             && !self.team_fragment_editor.open
             && !self.team_fragment_editor.capturing_shortcut
         {
@@ -9822,6 +10183,7 @@ impl eframe::App for MistTermApp {
         self.render_workspace_shell(ctx, frame, &theme);
         self.poll_paste_history_notes();
         self.process_typed_enter_audit(ctx);
+        self.pump_send_sequence(ctx);
         // 须在终端/非活动窗格泵完 SSH 之后再取 MIST_AUDIT，否则本帧事件会空转。
         self.poll_server_audit_from_tabs(ctx);
         self.drain_interactive_exec_records();

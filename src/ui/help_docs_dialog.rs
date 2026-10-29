@@ -501,6 +501,12 @@ fn feature_sections() -> Vec<FeatureSection> {
             desc_zh: "个人片段库 + 市场，内置 60+ 运维模板(Linux、Docker、K8s、网络、数据库等)，点击即执行。",
         },
         FeatureSection {
+            icon: "⌨️",
+            title: "Send Sequences",
+            desc_en: "Tools → Send Sequences stores named lines and sends them, in order, to the current connected pane. Optional fixed delay. It does not wait for a prompt, does not broadcast, and is not a snippet.",
+            desc_zh: "工具 → 发送序列：把命名的几行按顺序发进当前已连接窗格。可选固定间隔。不等提示符，不广播，也不是命令片段。",
+        },
+        FeatureSection {
             icon: "📊",
             title: "System Monitor",
             desc_en: "Real-time CPU, memory, disk, and network monitoring for connected hosts. No agent required — uses standard SSH commands.",

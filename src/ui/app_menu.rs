@@ -308,6 +308,11 @@ impl MistTermApp {
                 self.quick_selector.open = true;
                 ui.close_menu();
             }
+            ui.separator();
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.send_sequences).clicked() {
+                self.send_sequence_dialog.open_manager(&self.send_sequences);
+                ui.close_menu();
+            }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.command_history).clicked() {
                 self.menu_open_command_history(ctx);
                 ui.close_menu();

@@ -22,6 +22,8 @@ const QUERY_CAP_PER_KIND: usize = 12;
 pub enum PaletteKind {
     Session,
     Snippet,
+    /// 命名发送序列。和片段分开列出，避免和「执行片段」混在一类里。
+    Sequence,
     History,
     Action,
 }
@@ -48,6 +50,8 @@ pub enum PaletteAction {
     Disconnect,
     Reconnect,
     BatchExec,
+    /// 打开发送序列管理，不执行片段。
+    SendSequences,
 }
 
 /// 已有标签则聚焦，否则连接。与侧栏 `select_session` 一致。
@@ -69,6 +73,8 @@ pub fn session_launch(already_open: bool) -> SessionLaunch {
 pub enum PaletteId {
     Session(String),
     Snippet(String),
+    /// 在当前已连接窗格按行重放。不填变量，也不当成片段执行。
+    Sequence(String),
     /// 完整命令。选中后填入终端输入行，不自动回车。
     History(String),
     Action(PaletteAction),
@@ -154,8 +160,8 @@ impl CommandPalette {
                         &mut self.query,
                         crate::i18n::tr(
                             ctx,
-                            "Sessions, snippets, history, actions…",
-                            "搜索会话, 片段, 历史, 动作…",
+                            "Sessions, snippets, send sequences, history, actions…",
+                            "搜索会话, 片段, 发送序列, 历史, 动作…",
                         ),
                         content_w,
                     );
@@ -318,23 +324,26 @@ pub fn kind_heading(ctx: &egui::Context, kind: PaletteKind) -> &'static str {
     match kind {
         PaletteKind::Session => crate::i18n::tr(ctx, "Sessions", "会话"),
         PaletteKind::Snippet => crate::i18n::tr(ctx, "Snippets", "片段"),
+        PaletteKind::Sequence => crate::i18n::tr(ctx, "Send sequences", "发送序列"),
         PaletteKind::History => crate::i18n::tr(ctx, "History", "历史"),
         PaletteKind::Action => crate::i18n::tr(ctx, "Actions", "动作"),
     }
 }
 
-fn kind_order(query_empty: bool) -> [PaletteKind; 4] {
+fn kind_order(query_empty: bool) -> [PaletteKind; 5] {
     if query_empty {
         [
             PaletteKind::Action,
             PaletteKind::Session,
             PaletteKind::Snippet,
+            PaletteKind::Sequence,
             PaletteKind::History,
         ]
     } else {
         [
             PaletteKind::Session,
             PaletteKind::Snippet,
+            PaletteKind::Sequence,
             PaletteKind::History,
             PaletteKind::Action,
         ]
@@ -587,6 +596,43 @@ mod tests {
         assert!(kinds.contains(&PaletteKind::Snippet));
         assert!(kinds.contains(&PaletteKind::History));
         assert!(kinds.contains(&PaletteKind::Action));
+    }
+
+    #[test]
+    fn sequences_stay_a_separate_kind_from_snippets() {
+        let items = vec![
+            item(
+                PaletteKind::Snippet,
+                "Disk usage",
+                "disk snippet df -h 片段",
+                PaletteId::Snippet("frag-disk".into()),
+            ),
+            item(
+                PaletteKind::Sequence,
+                "After login",
+                "after login 发送序列 send sequence macro 宏 echo ready",
+                PaletteId::Sequence("seq-login".into()),
+            ),
+        ];
+        let by_macro = filter_palette(&items, "宏");
+        assert_eq!(by_macro.len(), 1);
+        assert!(matches!(items[by_macro[0]].id, PaletteId::Sequence(_)));
+        assert_eq!(items[by_macro[0]].kind, PaletteKind::Sequence);
+
+        let empty = filter_palette(&items, "");
+        let snippet_at = empty
+            .iter()
+            .position(|&i| items[i].kind == PaletteKind::Snippet)
+            .expect("snippet");
+        let sequence_at = empty
+            .iter()
+            .position(|&i| items[i].kind == PaletteKind::Sequence)
+            .expect("sequence");
+        assert!(snippet_at < sequence_at);
+        assert_ne!(
+            items[empty[snippet_at]].kind,
+            items[empty[sequence_at]].kind
+        );
     }
 
     #[test]
