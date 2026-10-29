@@ -893,6 +893,7 @@ impl MistTermApp {
         }
 
         self.render_workspace_confirm_modals(ctx, theme);
+        self.render_startup_crash_notice(ctx, theme);
 
         if let Some(indices) = self.ssh_import_dialog.show(ctx, theme) {
             self.import_ssh_indices(ctx, &indices);

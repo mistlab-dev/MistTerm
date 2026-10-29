@@ -61,6 +61,8 @@ pub enum MacMenuAction {
     AuditTimeline,
     InstallAuditAgent,
     HelpReportIssue,
+    OpenCrashReports,
+    OpenHangReports,
     About,
     CheckForUpdates,
 }
@@ -121,6 +123,9 @@ pub struct NativeAppMenu {
     audit_timeline: MenuItem,
     install_audit_agent: MenuItem,
     help_report_issue: MenuItem,
+    diagnostics_menu: Submenu,
+    open_crash_reports: MenuItem,
+    open_hang_reports: MenuItem,
     help_about: MenuItem,
     last_lang: Option<UiLanguage>,
 }
@@ -425,6 +430,19 @@ impl NativeAppMenu {
         );
         let help_report_issue =
             MenuItem::with_id("mistterm.help.report_issue", l.help_report_issue, true, None);
+        let diagnostics_menu = Submenu::new(l.diagnostics, true);
+        let open_crash_reports = MenuItem::with_id(
+            "mistterm.help.crash_reports",
+            l.open_crash_reports,
+            true,
+            None,
+        );
+        let open_hang_reports = MenuItem::with_id(
+            "mistterm.help.hang_reports",
+            l.open_hang_reports,
+            true,
+            None,
+        );
         let help_about = MenuItem::with_id("mistterm.help.about", l.help_about, true, None);
         help.append(&help_guide)?;
         help.append(&help_keys)?;
@@ -436,6 +454,10 @@ impl NativeAppMenu {
         help.append(&install_audit_agent)?;
         help.append(&PredefinedMenuItem::separator())?;
         help.append(&help_report_issue)?;
+        help.append(&PredefinedMenuItem::separator())?;
+        diagnostics_menu.append(&open_crash_reports)?;
+        diagnostics_menu.append(&open_hang_reports)?;
+        help.append(&diagnostics_menu)?;
         help.append(&PredefinedMenuItem::separator())?;
         help.append(&help_about)?;
 
@@ -506,6 +528,9 @@ impl NativeAppMenu {
             audit_timeline,
             install_audit_agent,
             help_report_issue,
+            diagnostics_menu,
+            open_crash_reports,
+            open_hang_reports,
             help_about,
             last_lang: Some(lang),
         })
@@ -560,6 +585,9 @@ impl NativeAppMenu {
         let _ = self.audit_timeline.set_text(l.audit_timeline);
         let _ = self.install_audit_agent.set_text(l.install_audit_agent);
         let _ = self.help_report_issue.set_text(l.help_report_issue);
+        let _ = self.diagnostics_menu.set_text(l.diagnostics);
+        let _ = self.open_crash_reports.set_text(l.open_crash_reports);
+        let _ = self.open_hang_reports.set_text(l.open_hang_reports);
         let _ = self.help_about.set_text(l.help_about);
     }
 
@@ -689,6 +717,8 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.help.audit_timeline" => Some(MacMenuAction::AuditTimeline),
         "mistterm.help.install_audit_agent" => Some(MacMenuAction::InstallAuditAgent),
         "mistterm.help.report_issue" => Some(MacMenuAction::HelpReportIssue),
+        "mistterm.help.crash_reports" => Some(MacMenuAction::OpenCrashReports),
+        "mistterm.help.hang_reports" => Some(MacMenuAction::OpenHangReports),
         _ if id.starts_with("mistterm.view.theme.") => {
             id.strip_prefix("mistterm.view.theme.")
                 .and_then(|n| n.parse().ok())

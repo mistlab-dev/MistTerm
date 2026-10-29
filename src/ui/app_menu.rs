@@ -398,6 +398,32 @@ impl MistTermApp {
                 ui.close_menu();
             }
             ui.menu_button(
+                crate::i18n::tr(ctx, "Diagnostics", "诊断"),
+                |ui| {
+                    crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                    if crate::ui::chrome::popup_menu_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Open crash reports folder", "打开崩溃报告目录"),
+                    )
+                    .clicked()
+                    {
+                        self.open_crash_report_folder(ctx);
+                        ui.close_menu();
+                    }
+                    if crate::ui::chrome::popup_menu_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Open hang reports folder", "打开卡顿报告目录"),
+                    )
+                    .clicked()
+                    {
+                        self.open_hang_report_folder(ctx);
+                        ui.close_menu();
+                    }
+                },
+            );
+            ui.menu_button(
                 crate::i18n::tr(ctx, "Advanced", "高级"),
                 |ui| {
                     crate::ui::chrome::apply_menu_popup_style(ui, theme);
@@ -419,7 +445,17 @@ impl MistTermApp {
                             if crate::ui::chrome::popup_menu_button(
                                 ui,
                                 theme,
-                                crate::i18n::tr(ctx, "Open diagnostics folder", "打开诊断目录"),
+                                crate::i18n::tr(ctx, "Open crash reports folder", "打开崩溃报告目录"),
+                            )
+                            .clicked()
+                            {
+                                self.open_crash_report_folder(ctx);
+                                ui.close_menu();
+                            }
+                            if crate::ui::chrome::popup_menu_button(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Open hang reports folder", "打开卡顿报告目录"),
                             )
                             .clicked()
                             {

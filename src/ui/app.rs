@@ -534,6 +534,8 @@ pub struct MistTermApp {
     agent_batch_rx: Option<std::sync::mpsc::Receiver<(String, Vec<BatchExecRow>, String, String, String, bool, bool)>>,
     /// UI 卡顿 watchdog(本地报告)
     hang_reporter: HangReporter,
+    /// #189：上次异常退出或有新的 crash-*.log 时，启动后弹一次。
+    startup_crash_notice: Option<crate::core::crash_reporter::CrashNotice>,
     /// 统一 Toast(所有用户可见通知走这里)
     active_toast: Option<ActiveToast>,
     /// 输出 Trigger 冷却：`rule_id → 上次触发`（防高速输出刷屏）。
@@ -1151,6 +1153,9 @@ impl MistTermApp {
 
     /// 创建新的应用实例
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // #189：先判定上次是否异常退出，并清掉干净退出戳。放在可能 panic 的初始化之前，
+        // 这样启动过程中的 abort 也会在下次被看见。`--version` 等无界面路径不走这里。
+        let startup_crash_notice = crate::core::crash_reporter::begin_run();
         // fc-list / 扫盘可能要几秒。先丢到后台，首帧和偏好下拉都不要等它。
         crate::platform::start_system_mono_font_scan();
         let app_settings = AppSettings::load();
@@ -1346,6 +1351,7 @@ impl MistTermApp {
             batch_exec_rx: None,
             agent_batch_rx: None,
             hang_reporter: HangReporter::start_default(),
+            startup_crash_notice,
             active_toast: None,
             output_trigger_cooldown: std::collections::HashMap::new(),
             pending_auto_connect_session: None,
@@ -4557,6 +4563,7 @@ impl MistTermApp {
             || self.command_palette.open
             || self.team_fragment_editor.open
             || self.team_fragment_conflict.is_some()
+            || self.startup_crash_notice.is_some()
     }
 
     /// 合并 `<占位符>` 替换与 `{{ … }}` 得到「填写片段变量」弹窗中的初值。
@@ -9246,6 +9253,8 @@ impl MistTermApp {
             MacMenuAction::HelpReportIssue => {
                 self.open_report_issue(ctx);
             }
+            MacMenuAction::OpenCrashReports => self.open_crash_report_folder(ctx),
+            MacMenuAction::OpenHangReports => self.open_hang_report_folder(ctx),
             MacMenuAction::About => self.show_about_dialog = true,
             MacMenuAction::CheckForUpdates => self.update_check_now(ctx),
         }
@@ -9344,6 +9353,8 @@ impl eframe::App for MistTermApp {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        // #189：走到这里即视为正常退出（含随后看门狗强制结束拆卸）。崩溃不会调用 on_exit。
+        crate::core::crash_reporter::mark_clean_exit();
         // save() 已落盘。若后续 wgpu 拆卸或某处 Drop 卡住，看门狗在宽限期后强制退出。
         crate::platform::arm_quit_watchdog();
     }
@@ -10440,6 +10451,10 @@ mod new_session_modal;
 /// 应用菜单(终端 / 编辑 / 视图 / 工具 / 帮助)— 子模块可访问 `MistTermApp` 私有字段
 #[path = "app_menu.rs"]
 mod menu;
+
+/// #189：下次启动的崩溃提示，以及打开 crash-reports 目录。
+#[path = "app_crash_notice.rs"]
+mod crash_notice;
 
 /// 右 dock Foreground pass(gutter → 面板 → resize grip)
 #[path = "app_workspace_foreground.rs"]

@@ -515,6 +515,12 @@ MistTerm periodically checks the current host's Agent heartbeat. If the Agent is
 
 Enable **Session Logging** in Preferences to automatically save terminal interaction records for later auditing. View via **Tools → Browse Session Logs**.
 
+### 13.2.1 Crash and hang reports
+
+On panic, MistTerm writes a report under `logs/crash-reports/` in the config directory (next to `logs/hang-reports/`). The next launch shows a one-time summary (version, time, first panic line) when the previous session did not exit cleanly or a new crash report is on disk. You can open the folder or copy the full report. A clean exit with no new report does not prompt.
+
+**Help → Diagnostics** opens the crash-reports and hang-reports folders at any time. Rust panics are captured; a native SIGSEGV still has no local report.
+
 ### 13.3 Preferences & Themes
 
 - **Ctrl+,** opens Preferences: interface language, theme, font, audit, logging, etc.

@@ -63,6 +63,9 @@ pub struct MacMenuLabels {
     pub audit_timeline: &'static str,
     pub install_audit_agent: &'static str,
     pub help_report_issue: &'static str,
+    pub diagnostics: &'static str,
+    pub open_crash_reports: &'static str,
+    pub open_hang_reports: &'static str,
     pub help_about: &'static str,
     pub check_updates: &'static str,
 }
@@ -82,7 +85,10 @@ pub fn labels(lang: UiLanguage) -> MacMenuLabels {
         merge_split: loc.tr("Merge Split Panes", "合并分屏"),
         broadcast_input: loc.tr("Broadcast Input", "同时输入"),
         import_ssh: loc.tr("Import SSH Config", "导入 SSH 配置"),
-        import_foreign: loc.tr("Import from Xshell / FinalShell", "从 Xshell / FinalShell 导入"),
+        import_foreign: loc.tr(
+            "Import from Xshell / FinalShell",
+            "从 Xshell / FinalShell 导入",
+        ),
         close_tab: loc.tr("Close Tab", "关闭标签"),
         disconnect: loc.tr("Disconnect SSH (keep output)", "断开 SSH(保留输出)"),
         reconnect: loc.tr("Reconnect Tab", "重连当前标签"),
@@ -130,6 +136,9 @@ pub fn labels(lang: UiLanguage) -> MacMenuLabels {
         audit_timeline: loc.tr("Audit Timeline", "审计时间线"),
         install_audit_agent: loc.tr("Install Audit Agent", "安装审计探针"),
         help_report_issue: loc.tr("Report an Issue", "问题反馈"),
+        diagnostics: loc.tr("Diagnostics", "诊断"),
+        open_crash_reports: loc.tr("Open crash reports folder", "打开崩溃报告目录"),
+        open_hang_reports: loc.tr("Open hang reports folder", "打开卡顿报告目录"),
         help_about: loc.tr("About MistTerm", "关于 MistTerm"),
         check_updates: loc.tr("Check for Updates…", "检查更新…"),
     }
