@@ -12,7 +12,7 @@ mod sync_config;
 
 pub use auth::{jwt_exp_unix, token_needs_refresh, TeamTokenStore};
 pub use cache::TeamFragmentCache;
-pub use client::{TeamApiError, TeamClient};
+pub use client::{RawSyncResponse, TeamApiError, TeamClient};
 pub use oauth::OAuthProvider;
 pub use models::{
     parse_tags_json, parse_variables_json, CmdAuditAgent, CmdAuditAgentsResponse,
