@@ -1125,6 +1125,27 @@ impl MistTermApp {
                                 false,
                             );
 
+                            // #177：连接后恢复命令（可选，默认空 = 不执行）
+                            Self::ui_field_label(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Post-connect restore command (optional)", "连接后恢复命令（可选）"),
+                            );
+                            crate::ui::chrome::form_multiline_field_with_hint(
+                                ui,
+                                theme,
+                                egui::Id::new("edit_session_post_connect_command"),
+                                &mut self.edit_session_post_connect_command,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "e.g. tmux attach -t main | empty = off; runs once after connect/reconnect",
+                                    "如 tmux attach -t main | 留空不执行；连接/重连成功后执行一次",
+                                ),
+                                form_w,
+                                2,
+                                false,
+                            );
+
                             Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Group", "分组"));
                             Self::ui_form_singleline(
                                 ui,
