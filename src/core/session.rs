@@ -12,6 +12,24 @@ use crate::core::credential::SecretBackend;
 use crate::security::device_key;
 use crate::security::encrypted_file;
 
+/// 会话认证路径。旧会话没有该字段时按 [`SessionAuthMode::Standard`] 处理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionAuthMode {
+    /// 指定私钥、ssh-agent、密码、默认 `~/.ssh/id_*`，顺序与既有行为一致。
+    #[default]
+    Standard,
+    /// OpenSSH 安全密钥（`ecdsa-sk` / `ed25519-sk`），只经系统 ssh-agent 签名。
+    #[serde(alias = "fido2", alias = "security_key", alias = "sk")]
+    Fido2SecurityKey,
+}
+
+impl SessionAuthMode {
+    pub fn is_fido2(self) -> bool {
+        matches!(self, SessionAuthMode::Fido2SecurityKey)
+    }
+}
+
 /// 会话配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
@@ -27,6 +45,9 @@ pub struct SessionConfig {
     /// 尝试 ssh-agent / Pageant 认证(在指定密钥之后、密码之前)。
     #[serde(default = "default_use_ssh_agent")]
     pub use_ssh_agent: bool,
+    /// 显式认证类型。FIDO2 不回落到密码或非 sk 密钥。
+    #[serde(default)]
+    pub auth_mode: SessionAuthMode,
     pub last_connected_at: Option<i64>,
     /// 创建时间(排序用)
     #[serde(default)]
@@ -148,6 +169,7 @@ impl Default for SessionConfig {
             password: String::new(),
             private_key_path: String::new(),
             use_ssh_agent: default_use_ssh_agent(),
+            auth_mode: SessionAuthMode::Standard,
             last_connected_at: None,
             created_at: None,
             ssh_config_marker: None,
@@ -429,6 +451,8 @@ struct StoredSessionConfig {
     #[serde(default = "default_use_ssh_agent")]
     use_ssh_agent: bool,
     #[serde(default)]
+    auth_mode: SessionAuthMode,
+    #[serde(default)]
     last_connected_at: Option<i64>,
     #[serde(default)]
     created_at: Option<i64>,
@@ -518,6 +542,7 @@ impl SessionManager {
                 password,
                 private_key_path: cfg.private_key_path,
                 use_ssh_agent: cfg.use_ssh_agent,
+                auth_mode: cfg.auth_mode,
                 last_connected_at: cfg.last_connected_at,
                 created_at: cfg.created_at,
                 ssh_config_marker: cfg.ssh_config_marker,
@@ -737,6 +762,7 @@ impl SessionManager {
                 password_nonce: String::new(),
                 private_key_path: cfg.private_key_path.clone(),
                 use_ssh_agent: cfg.use_ssh_agent,
+                auth_mode: cfg.auth_mode,
                 last_connected_at: cfg.last_connected_at,
                 created_at: cfg.created_at,
                 ssh_config_marker: cfg.ssh_config_marker.clone(),

@@ -66,7 +66,7 @@ pub use session::{
     format_dynamic_forward_line, format_local_forward_line, format_remote_forward_line,
     parse_dynamic_forwards_text, parse_local_forwards_text, parse_remote_forwards_text,
     remove_dynamic_forward_line, remove_local_forward_line, remove_remote_forward_line,
-    SessionConfig, SessionManager,
+    SessionAuthMode, SessionConfig, SessionManager,
     SESSION_COLOR_TAGS,
     session_color_tag_accent_rgb, session_color_tag_rgb, session_tab_label,
 };

@@ -74,6 +74,7 @@ fn make_session(host: &str, user: &str, port: u16, name: &str) -> SessionConfig 
         password: String::new(),
         private_key_path: String::new(),
         use_ssh_agent: false,
+        auth_mode: crate::core::session::SessionAuthMode::Standard,
         last_connected_at: None,
         created_at: None,
         ssh_config_marker: None,
