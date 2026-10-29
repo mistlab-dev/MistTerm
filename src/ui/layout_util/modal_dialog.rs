@@ -97,7 +97,8 @@ pub fn centered_window_default_size(ctx: &egui::Context, w_frac: f32, h_frac: f3
 pub fn modal_new_session_size(ctx: &egui::Context) -> egui::Vec2 {
     let r = ctx.screen_rect();
     let sw = r.width().max(360.0);
-    egui::vec2((sw * 0.36).clamp(340.0, 480.0), 390.0)
+    let h = 560.0_f32.min((r.height().max(280.0) - 32.0).max(420.0));
+    egui::vec2((sw * 0.36).clamp(340.0, 520.0), h)
 }
 
 /// 新建 / 编辑会话弹窗尺寸(§8.4.1)。

@@ -348,6 +348,7 @@ pub struct MistTermApp {
     new_session_color_tag: String,
     new_session_private_key_path: String,
     new_session_use_ssh_agent: bool,
+    new_session_auth_mode: crate::core::session::SessionAuthMode,
     /// Show red required-field hint only after a failed Save/Enter attempt.
     new_session_validation_attempted: bool,
     new_session_proxy_jump: String,
@@ -368,6 +369,7 @@ pub struct MistTermApp {
     edit_session_group: String,
     edit_session_private_key_path: String,
     edit_session_use_ssh_agent: bool,
+    edit_session_auth_mode: crate::core::session::SessionAuthMode,
     edit_session_color_tag: String,
     edit_session_keepalive_enabled: bool,
     edit_session_keepalive_interval_secs: u32,
@@ -1266,6 +1268,7 @@ impl MistTermApp {
             new_session_color_tag: String::new(),
             new_session_private_key_path: String::new(),
             new_session_use_ssh_agent: true,
+            new_session_auth_mode: crate::core::session::SessionAuthMode::Standard,
             new_session_validation_attempted: false,
             new_session_proxy_jump: String::new(),
             new_session_proxy_command: String::new(),
@@ -1284,6 +1287,7 @@ impl MistTermApp {
             edit_session_group: boot_loc.tr("Default", "默认").to_string(),
             edit_session_private_key_path: String::new(),
             edit_session_use_ssh_agent: true,
+            edit_session_auth_mode: crate::core::session::SessionAuthMode::Standard,
             edit_session_color_tag: String::new(),
             edit_session_keepalive_enabled: true,
             edit_session_keepalive_interval_secs: 30,
@@ -3068,6 +3072,7 @@ impl MistTermApp {
             &resolved.password,
             &resolved.private_key_path,
             session.use_ssh_agent,
+            session.auth_mode,
             ka_on,
             ka_int,
             ka_max,
@@ -6932,7 +6937,8 @@ impl MistTermApp {
         self.session_manager.patch_session(&sid, |s| {
             s.proxy_jump = proxy_jump.clone();
             s.proxy_command = proxy_command.clone();
-            s.use_ssh_agent = self.new_session_use_ssh_agent;
+            s.use_ssh_agent = self.new_session_use_ssh_agent || self.new_session_auth_mode.is_fido2();
+            s.auth_mode = self.new_session_auth_mode;
             s.local_forwards_text = local_forwards_text;
             s.remote_forwards_text = remote_forwards_text;
             s.dynamic_forwards_text = dynamic_forwards_text;
@@ -6957,7 +6963,9 @@ impl MistTermApp {
 
         // 选择会话
         self.selected_session_id = Some(sid.clone());
-        self.push_tab_connecting(ctx, &session);
+        if let Some(updated) = self.session_manager.get_session(&sid).cloned() {
+            self.push_tab_connecting(ctx, &updated);
+        }
         self.reset_new_session_form();
     }
 
@@ -6975,6 +6983,7 @@ impl MistTermApp {
         self.new_session_color_tag.clear();
         self.new_session_private_key_path.clear();
         self.new_session_use_ssh_agent = true;
+        self.new_session_auth_mode = crate::core::session::SessionAuthMode::Standard;
         self.new_session_validation_attempted = false;
         self.new_session_proxy_jump.clear();
         self.new_session_proxy_command.clear();
@@ -7042,6 +7051,7 @@ impl MistTermApp {
             self.edit_session_group = session.group;
             self.edit_session_private_key_path = session.private_key_path;
             self.edit_session_use_ssh_agent = session.use_ssh_agent;
+            self.edit_session_auth_mode = session.auth_mode;
             self.edit_session_color_tag = session.color_tag.clone();
             self.edit_session_keepalive_enabled = session.keepalive_enabled;
             self.edit_session_keepalive_interval_secs = session.keepalive_interval_secs;
@@ -7116,7 +7126,9 @@ impl MistTermApp {
                 s.keepalive_auto_reconnect = ka_ar;
                 s.proxy_jump = self.edit_session_proxy_jump.trim().to_string();
                 s.proxy_command = self.edit_session_proxy_command.trim().to_string();
-                s.use_ssh_agent = self.edit_session_use_ssh_agent;
+                s.use_ssh_agent =
+                    self.edit_session_use_ssh_agent || self.edit_session_auth_mode.is_fido2();
+                s.auth_mode = self.edit_session_auth_mode;
                 s.local_forwards_text = self.edit_session_local_forwards_text.clone();
                 s.remote_forwards_text = self.edit_session_remote_forwards_text.clone();
                 s.dynamic_forwards_text = self.edit_session_dynamic_forwards_text.clone();
@@ -10054,6 +10066,10 @@ mod licenses_modal;
 
 #[path = "app_update.rs"]
 mod update;
+
+/// 新建 / 编辑会话共用的认证方式行
+#[path = "session_auth_form.rs"]
+mod session_auth_form;
 
 /// 新建会话模态窗
 #[path = "app_new_session_modal.rs"]

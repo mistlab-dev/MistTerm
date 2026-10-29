@@ -603,6 +603,7 @@ pub struct ConnectionManager {
 | 密码认证 | ✅ 已实现 | 依赖 SSH 传输层加密 |
 | 密钥认证 | ✅ 已实现 | 指定私钥路径 + `~/.ssh` 默认密钥 |
 | SSH Agent | ✅ 已实现 | ssh-agent / Pageant（会话可开关） |
+| FIDO2 / 安全密钥 | ✅ 已实现 | 会话认证类型。只经 OpenSSH agent 使用 `ecdsa-sk` / `ed25519-sk`，不自研 FIDO 栈；触摸 / PIN 为系统提示 |
 | 证书认证 | — | **Vault SSH CA 由服务端签发**；桌面端从 Vault KV 读凭证，不实现 CA 签名 |
 
 ### 7.2 数据存储

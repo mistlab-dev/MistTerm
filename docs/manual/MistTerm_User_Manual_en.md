@@ -150,7 +150,7 @@ The quick snippet picker is still **Ctrl+Shift+J**, and it also opens only when 
    - **Port**: usually 22
    - **Username**
    - **Password** or **private key file path**
-3. Optional: uncheck "Use SSH Agent" if using password-only login
+3. Optional: uncheck "Use SSH Agent" if using password-only login. For a hardware key, set authentication to **FIDO2 / security key (OpenSSH)** (see 5.2.1)
 4. Click **Save & Connect**
 
 ![Import SSH Config](screenshots/18-import-ssh-config.png)
@@ -164,7 +164,34 @@ The quick snippet picker is still **Ctrl+Shift+J**, and it also opens only when 
 | Password | Server allows password login |
 | Private key file | Local `.pem` / `id_ed25519`, etc. |
 | SSH Agent | ssh-agent / Pageant running with key loaded |
+| FIDO2 / security key (OpenSSH) | An `ecdsa-sk` or `ed25519-sk` key loaded with `ssh-add`. Touch and PIN use the system prompt |
 | Jump host | Configure ProxyJump in advanced options (same as OpenSSH) |
+
+### 5.2.1 FIDO2 / security key
+
+Choose **FIDO2 / security key (OpenSSH)** as the session authentication type. MistTerm does not ship a FIDO stack; the system OpenSSH agent signs with `ecdsa-sk` / `ed25519-sk`. While connecting, the window tells you to touch the key or enter the PIN in the system prompt. Cancelling the touch, a rejected PIN, an empty agent, or a missing key file is a visible failure — the session is not marked logged in. Password and non-sk keys are not used on this path.
+
+Shortest steps differ by OS. All three can complete a login. This covers security keys OpenSSH can drive (commonly a FIDO2 key with ed25519-sk / ecdsa-sk, such as some YubiKey 5 models). It is not a promise that every hardware model works.
+
+**Windows**
+
+1. Install the OpenSSH client and start the **OpenSSH Authentication Agent** service (`ssh-agent`), set to Automatic. Pageant cannot sign sk keys.
+2. In PowerShell: `ssh-keygen -t ed25519-sk -f $env:USERPROFILE\.ssh\id_ed25519_sk` (`-t ecdsa-sk` is fine too). Touch the key when asked; enter the PIN in the system prompt if the key requires one.
+3. `ssh-add $env:USERPROFILE\.ssh\id_ed25519_sk`. For a resident key, use `ssh-add -K`.
+4. In MistTerm select FIDO2 / security key. Leave the path empty to use any sk key in the agent, or point at the file above. Save and connect, then touch the key or enter the PIN in the Windows prompt.
+
+**macOS**
+
+1. ssh-agent is already provided by the system. In Terminal: `ssh-keygen -t ed25519-sk -f ~/.ssh/id_ed25519_sk`.
+2. `ssh-add --apple-use-keychain ~/.ssh/id_ed25519_sk` (or `ssh-add ~/.ssh/id_ed25519_sk`).
+3. In MistTerm select FIDO2 / security key and connect. Touch the key when it blinks; enter the PIN in the macOS prompt when one appears.
+
+**Linux**
+
+1. OpenSSH 8.2 or newer (`ssh -V`). Start OpenSSH's ssh-agent in the **same graphical session** that launches MistTerm so the process inherits `SSH_AUTH_SOCK`. The desktop keyring's SSH component may not sign sk keys; use OpenSSH's ssh-agent.
+2. `ssh-keygen -t ed25519-sk -f ~/.ssh/id_ed25519_sk`, then `ssh-add ~/.ssh/id_ed25519_sk`.
+3. If the key asks for a PIN on every use and the agent has no terminal, set `SSH_ASKPASS` (for example `ssh-askpass`) and `SSH_ASKPASS_REQUIRE=force` before starting the agent so the PIN dialog is graphical.
+4. In MistTerm select FIDO2 / security key and connect, then touch the key or enter the PIN in the system prompt.
 
 ### 5.3 Connecting & Reconnecting
 

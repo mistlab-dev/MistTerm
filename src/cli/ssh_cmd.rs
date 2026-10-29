@@ -79,6 +79,19 @@ fn looks_like_secret_prompt(line: &str) -> bool {
     l.contains("password") || l.contains("passphrase") || l.contains("密码")
 }
 
+fn present_cli_connect_error(raw: &str) -> String {
+    if raw.starts_with("FIDO2_") {
+        let lang = if cli_zh() {
+            crate::i18n::UiLanguage::Zh
+        } else {
+            crate::i18n::UiLanguage::En
+        };
+        crate::ssh::format_ssh_connect_error(lang, raw)
+    } else {
+        raw.to_string()
+    }
+}
+
 fn cli_zh() -> bool {
     for k in ["LC_ALL", "LC_MESSAGES", "LANG"] {
         if let Ok(v) = std::env::var(k) {
@@ -205,11 +218,22 @@ fn open_session_log(
 pub fn run_ssh(ctx: &mut CliContext, target: &str, log_session: Option<&str>) -> Result<i32> {
     let session_cfg = ctx.resolve_target(target)?;
     let config = ctx.ssh_config(&session_cfg)?;
+    if session_cfg.auth_mode.is_fido2() {
+        let lang = if cli_zh() {
+            crate::i18n::UiLanguage::Zh
+        } else {
+            crate::i18n::UiLanguage::En
+        };
+        eprintln!("{}", crate::ssh::fido2_connect_hint(lang));
+    }
     let mut client = SshClient::new(config);
 
     client
         .connect()
-        .map_err(|e| anyhow::anyhow!("连接失败 {}: {}", session_cfg.name, e))?;
+        .map_err(|e| {
+            let shown = present_cli_connect_error(&e);
+            anyhow::anyhow!("连接失败 {}: {}", session_cfg.name, shown)
+        })?;
     ctx.mark_connected(&session_cfg);
 
     let is_tty = crossterm::tty::IsTty::is_tty(&io::stdin());

@@ -23,6 +23,8 @@ pub struct JumpHop {
     pub password: String,
     pub private_key_path: String,
     pub use_ssh_agent: bool,
+    /// 该跳自己的认证方式。未保存的 `user@host` 跳保持标准路径。
+    pub auth_mode: crate::core::session::SessionAuthMode,
 }
 
 /// 解析后的跳板链端点（尚未解析凭据）。
@@ -136,6 +138,7 @@ pub fn connect_ssh_session(config: &SshConfig) -> Result<Session, String> {
                     password: config.password.clone(),
                     private_key_path: config.private_key_path.clone(),
                     use_ssh_agent: config.use_ssh_agent,
+                    auth_mode: config.auth_mode,
                     keepalive_interval_secs: config.keepalive_interval_secs,
                     keepalive_count_max: config.keepalive_count_max,
                     proxy_jump: String::new(),
@@ -186,6 +189,7 @@ fn hop_to_config(hop: &JumpHop) -> SshConfig {
         password: hop.password.clone(),
         private_key_path: hop.private_key_path.clone(),
         use_ssh_agent: hop.use_ssh_agent,
+        auth_mode: hop.auth_mode,
         ..SshConfig::default()
     }
 }
@@ -364,6 +368,7 @@ mod tests {
             password: String::new(),
             private_key_path: String::new(),
             use_ssh_agent: false,
+            auth_mode: crate::core::session::SessionAuthMode::Standard,
         };
         let cfg = hop_to_config(&hop);
         assert!(!cfg.use_ssh_agent);

@@ -3,7 +3,7 @@
 use crate::core::secret_resolver::SecretResolver;
 use crate::core::session::{
     parse_dynamic_forwards_text, parse_local_forwards_text, parse_remote_forwards_text,
-    SessionConfig, SessionManager,
+    SessionAuthMode, SessionConfig, SessionManager,
 };
 use crate::ssh::{parse_jump_chain, parse_jump_endpoint, JumpHop, SshConfig};
 
@@ -41,6 +41,7 @@ pub fn build_ssh_config(
         password,
         private_key_path,
         use_ssh_agent: session.use_ssh_agent,
+        auth_mode: session.auth_mode,
         keepalive_interval_secs: interval,
         keepalive_count_max: keepalive_count_max.max(1),
         proxy_jump: session.proxy_jump.clone(),
@@ -75,6 +76,7 @@ pub fn resolve_proxy_jump_hops(
                 password: resolved.password,
                 private_key_path: resolved.private_key_path,
                 use_ssh_agent: js.use_ssh_agent,
+                auth_mode: js.auth_mode,
             });
         } else {
             let ep = parse_jump_endpoint(token, &session.username)?;
@@ -85,6 +87,7 @@ pub fn resolve_proxy_jump_hops(
                 password: String::new(),
                 private_key_path: String::new(),
                 use_ssh_agent: session.use_ssh_agent,
+                auth_mode: SessionAuthMode::Standard,
             });
         }
     }

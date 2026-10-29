@@ -152,7 +152,7 @@ MistTerm 是一款 **SSH 终端客户端**，帮助您：
    - **端口**：一般为 22
    - **用户名**
    - **密码** 或 **私钥文件路径**
-3. 可选：取消勾选「使用 SSH Agent」若只用密码登录  
+3. 可选：取消勾选「使用 SSH Agent」若只用密码登录。要用硬件密钥时，认证方式选 **FIDO2 / 安全密钥 (OpenSSH)**（见 5.2.1）  
 4. 点击 **保存并连接**
 
 ![导入 SSH Config](screenshots/18-import-ssh-config.png)
@@ -166,7 +166,34 @@ MistTerm 是一款 **SSH 终端客户端**，帮助您：
 | 密码 | 服务器允许密码登录 |
 | 私钥文件 | 本机 `.pem` / `id_ed25519` 等 |
 | SSH Agent | 已启动 ssh-agent / Pageant，密钥已加载 |
+| FIDO2 / 安全密钥 (OpenSSH) | 已用 `ssh-add` 加载 `ecdsa-sk` 或 `ed25519-sk`。触摸和 PIN 由系统提示完成 |
 | 跳板机 | 在高级选项中填写 ProxyJump（与 OpenSSH 相同） |
+
+### 5.2.1 FIDO2 / 安全密钥
+
+会话认证方式选 **FIDO2 / 安全密钥 (OpenSSH)**。MistTerm 不自带 FIDO 协议栈，签名交给本机 OpenSSH agent（`ecdsa-sk` / `ed25519-sk`）。连接时窗口会提示触摸密钥或在系统提示里输入 PIN；取消触摸、PIN 错误、代理里没有密钥或密钥文件找不到，都会显示失败原因，不会当成已登录。密码和普通密钥在这条路径上不会被拿来顶替。
+
+下面是三端各自的最短步骤。只保证 OpenSSH 能驱动的安全密钥（常见是带 ed25519-sk / ecdsa-sk 的 FIDO2 密钥，例如部分 YubiKey 5），不表示每一款硬件都可用。三端都能完成登录。
+
+**Windows**
+
+1. 安装 OpenSSH 客户端，并把服务 **OpenSSH Authentication Agent**（`ssh-agent`）设为自动并启动。Pageant 不能为 sk 密钥签名。
+2. 在 PowerShell 中：`ssh-keygen -t ed25519-sk -f $env:USERPROFILE\.ssh\id_ed25519_sk`（也可用 `-t ecdsa-sk`）。按提示触摸密钥；若要 PIN，在系统提示里输入。
+3. `ssh-add $env:USERPROFILE\.ssh\id_ed25519_sk`。密钥只放在硬件里时，用 `ssh-add -K`。
+4. MistTerm 里把认证方式选成 FIDO2 / 安全密钥，路径可留空（用代理里的 sk 密钥）或填上面的文件。保存并连接，按窗口和 Windows 提示触摸或输入 PIN。
+
+**macOS**
+
+1. 系统自带 ssh-agent。终端执行：`ssh-keygen -t ed25519-sk -f ~/.ssh/id_ed25519_sk`。
+2. `ssh-add --apple-use-keychain ~/.ssh/id_ed25519_sk`（或 `ssh-add ~/.ssh/id_ed25519_sk`）。
+3. MistTerm 里选择 FIDO2 / 安全密钥并连接。密钥闪烁时触摸；需要 PIN 时在 macOS 提示里输入。
+
+**Linux**
+
+1. 需要 OpenSSH 8.2 或更新（`ssh -V`）。在**启动 MistTerm 的同一个图形会话**里运行 OpenSSH 的 ssh-agent，并让进程继承 `SSH_AUTH_SOCK`。桌面自带的 gnome-keyring SSH 组件不一定能签 sk 密钥，请用 OpenSSH 的 ssh-agent。
+2. `ssh-keygen -t ed25519-sk -f ~/.ssh/id_ed25519_sk`，然后 `ssh-add ~/.ssh/id_ed25519_sk`。
+3. 若密钥每次都要 PIN，而 agent 没有终端：启动 agent 之前设置 `SSH_ASKPASS`（例如 `ssh-askpass`）和 `SSH_ASKPASS_REQUIRE=force`，PIN 会出现在图形提示里。
+4. MistTerm 里选择 FIDO2 / 安全密钥并连接，按提示触摸或输入 PIN。
 
 ### 5.3 连接与重连
 

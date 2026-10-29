@@ -33,6 +33,13 @@ impl MistTermApp {
                             );
 
                             ui.spacing_mut().item_spacing = egui::vec2(10.0, 8.0);
+                            let footer_reserve = 72.0;
+                            let scroll_h = (ui.available_height() - footer_reserve).max(180.0);
+                            egui::ScrollArea::vertical()
+                                .auto_shrink([false, false])
+                                .max_height(scroll_h)
+                                .show(ui, |ui| {
+                            ui.set_width(form_w);
                             Self::ui_field_label(
                                 ui,
                                 theme,
@@ -127,55 +134,15 @@ impl MistTermApp {
                                 });
                             });
 
-                            Self::ui_field_label(
+                            super::session_auth_form::show_auth_fields(
                                 ui,
+                                ctx,
                                 theme,
-                                crate::i18n::tr(ctx, "SSH private key path", "SSH 私钥路径"),
-                            );
-                            Self::ui_form_singleline(
-                                ui,
-                                theme,
-                                "new_session_private_key_path",
-                                &mut self.new_session_private_key_path,
-                                crate::i18n::tr(
-                                    ctx,
-                                    "~/.ssh/id_rsa (empty = password or default keys)",
-                                    "~/.ssh/id_rsa(留空则用密码或系统默认密钥)",
-                                ),
+                                "new_session",
                                 form_w,
-                                false,
-                            );
-                            ui.label(
-                                egui::RichText::new(crate::i18n::tr(
-                                    ctx,
-                                    "Auth: password optional if you use a key or SSH agent; empty key path uses password or default keys (~/.ssh/id_*).",
-                                    "认证：使用密钥或 SSH Agent 时可留空密码；私钥路径留空则用密码或系统默认密钥（~/.ssh/id_*）。",
-                                ))
-                                .size(theme.font_size_caption())
-                                .color(theme.color_form_hint()),
-                            );
-                            crate::ui::chrome::form_checkbox(
-                                ui,
-                                theme,
+                                &mut self.new_session_auth_mode,
                                 &mut self.new_session_use_ssh_agent,
-                                {
-                                    #[cfg(target_os = "windows")]
-                                    {
-                                        crate::i18n::tr(
-                                            ctx,
-                                            "Use SSH agent (Pageant / ssh-agent)",
-                                            "使用 SSH Agent（Pageant / ssh-agent）",
-                                        )
-                                    }
-                                    #[cfg(not(target_os = "windows"))]
-                                    {
-                                        crate::i18n::tr(
-                                            ctx,
-                                            "Use SSH agent (ssh-agent)",
-                                            "使用 SSH Agent（ssh-agent）",
-                                        )
-                                    }
-                                },
+                                &mut self.new_session_private_key_path,
                             );
 
                             Self::ui_field_label(
@@ -220,6 +187,7 @@ impl MistTermApp {
                                     .color(theme.red_a128()),
                                 );
                             }
+                            });
 
                             ui.add_space(theme.spacing_list_item_x());
                             ui.horizontal(|ui| {

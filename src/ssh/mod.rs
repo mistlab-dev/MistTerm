@@ -49,6 +49,7 @@ impl Drop for SessionBlockingGuard {
 }
 
 mod client;
+mod fido2;
 mod jump;
 mod known_hosts;
 mod port_forward;
@@ -74,7 +75,7 @@ pub use port_forward::{
 };
 pub use socks_proxy::{spawn_dynamic_forward_controllable, DynamicPortForward};
 pub use jump::{JumpHop, parse_jump_chain, parse_jump_endpoint};
-pub use user_facing::format_ssh_connect_error;
+pub use user_facing::{fido2_connect_hint, format_ssh_connect_error};
 pub use sftp::{
     RemoteNode, SftpClient, SftpEntry, TransferProgress, TransferResult, WriteMode,
 };

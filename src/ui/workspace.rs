@@ -1028,42 +1028,15 @@ impl MistTermApp {
                                 });
                             });
 
-                            Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "SSH private key path", "SSH 私钥路径"));
-                            Self::ui_form_singleline(
+                            super::session_auth_form::show_auth_fields(
                                 ui,
+                                ctx,
                                 theme,
-                                "edit_session_private_key_path",
-                                &mut self.edit_session_private_key_path,
-                                crate::i18n::tr(
-                                    ctx,
-                                    "~/.ssh/id_rsa (empty = password or default keys)",
-                                    "~/.ssh/id_rsa(留空则用密码或系统默认密钥)",
-                                ),
+                                "edit_session",
                                 form_w,
-                                false,
-                            );
-                            crate::ui::chrome::form_checkbox(
-                                ui,
-                                theme,
+                                &mut self.edit_session_auth_mode,
                                 &mut self.edit_session_use_ssh_agent,
-                                {
-                                    #[cfg(target_os = "windows")]
-                                    {
-                                        crate::i18n::tr(
-                                            ctx,
-                                            "Use SSH agent (Pageant / ssh-agent)",
-                                            "使用 SSH Agent（Pageant / ssh-agent）",
-                                        )
-                                    }
-                                    #[cfg(not(target_os = "windows"))]
-                                    {
-                                        crate::i18n::tr(
-                                            ctx,
-                                            "Use SSH agent (ssh-agent)",
-                                            "使用 SSH Agent（ssh-agent）",
-                                        )
-                                    }
-                                },
+                                &mut self.edit_session_private_key_path,
                             );
 
                             Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "ProxyJump", "跳板 ProxyJump"));
