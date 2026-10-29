@@ -17,6 +17,8 @@ pub struct SshConfig {
     pub private_key_path: String,
     /// 在指定密钥之后尝试 ssh-agent / Pageant。
     pub use_ssh_agent: bool,
+    /// `Fido2SecurityKey` 只走 OpenSSH sk 密钥（agent），不回落到密码或普通密钥。
+    pub auth_mode: crate::core::session::SessionAuthMode,
     /// `ServerAliveInterval`（秒）；0 表示不启用
     pub keepalive_interval_secs: u32,
     pub keepalive_count_max: u8,
@@ -43,6 +45,7 @@ impl Default for SshConfig {
             password: String::new(),
             private_key_path: String::new(),
             use_ssh_agent: true,
+            auth_mode: crate::core::session::SessionAuthMode::Standard,
             keepalive_interval_secs: 0,
             keepalive_count_max: 3,
             proxy_jump: String::new(),
@@ -57,6 +60,10 @@ impl Default for SshConfig {
 
 /// 认证 SSH 会话（密码 / 指定密钥 / 默认 `~/.ssh` 密钥）。
 pub fn authenticate_session(session: &mut Session, config: &SshConfig) -> Result<(), String> {
+    if config.auth_mode == crate::core::session::SessionAuthMode::Fido2SecurityKey {
+        return super::fido2::authenticate_fido2(session, config);
+    }
+
     let mut authenticated = false;
 
     if !config.private_key_path.is_empty() {

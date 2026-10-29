@@ -331,6 +331,8 @@ pub struct TerminalView {
     
     /// 连接错误信息
     error_message: Option<String>,
+    /// 本次连接走 FIDO2 / sk：连接中显示触摸或系统 PIN 提示。
+    connecting_fido2: bool,
     
     /// 终端尺寸
     cols: u32,
@@ -942,6 +944,7 @@ impl TerminalView {
             terminal: VtTerminal::new(80, 24),
             connected: false,
             error_message: None,
+            connecting_fido2: false,
             cols: 80,
             rows: 24,
             lrzsz: LrzszTransfer::new(&download_dir.to_string_lossy()),
@@ -1561,6 +1564,7 @@ impl TerminalView {
         password: &str,
         private_key_path: &str,
         use_ssh_agent: bool,
+        auth_mode: crate::core::session::SessionAuthMode,
         keepalive_enabled: bool,
         keepalive_interval_secs: u32,
         keepalive_count_max: u8,
@@ -1582,7 +1586,8 @@ impl TerminalView {
             username: username.to_string(),
             password: password.to_string(),
             private_key_path: private_key_path.to_string(),
-            use_ssh_agent,
+            use_ssh_agent: use_ssh_agent || auth_mode.is_fido2(),
+            auth_mode,
             keepalive_interval_secs: interval,
             keepalive_count_max: keepalive_count_max.max(1),
             proxy_jump: proxy_jump.to_string(),
@@ -1607,6 +1612,7 @@ impl TerminalView {
                 self.ssh_rx = Some(rx);
                 self.connected = false;
                 self.error_message = None;
+                self.connecting_fido2 = auth_mode.is_fido2();
                 self.terminal = VtTerminal::new(self.cols as usize, self.rows as usize);
                 self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
                 self.visual_layout_cache = None;
@@ -1621,6 +1627,7 @@ impl TerminalView {
                     self.ui_lang_last,
                     &format!("Failed to create session: {}", e),
                 );
+                self.connecting_fido2 = false;
                 self.pending_toast_error = Some(msg.clone());
                 self.error_message = Some(msg);
             }
@@ -1651,6 +1658,7 @@ impl TerminalView {
         self.ssh_rx = Some(rx);
         self.connected = false;
         self.error_message = None;
+        self.connecting_fido2 = false;
         self.terminal = VtTerminal::new(self.cols as usize, self.rows as usize);
         self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
         self.visual_layout_cache = None;
@@ -3143,6 +3151,7 @@ impl TerminalView {
                             self.pending_connect_audit = Some((true, host.clone()));
                         }
                         self.connected = true;
+                        self.connecting_fido2 = false;
                         self.connected_at = Some(Instant::now());
                         self.terminal_wants_keyboard = true;
                         self.terminal_focused = true;
@@ -3174,6 +3183,7 @@ impl TerminalView {
                         }
                     }
                     SshMessage::Error { error, .. } => {
+                        self.connecting_fido2 = false;
                         let msg = format_ssh_connect_error(self.ui_lang_last, &error);
                         if let Some((_, host)) = &self.connection_target {
                             self.pending_connect_audit = Some((false, host.clone()));
@@ -4611,6 +4621,16 @@ impl TerminalView {
                                         .size(theme.font_size_body())
                                         .color(theme.text_secondary()),
                                 );
+                                if self.connecting_fido2 {
+                                    ui.add_space(theme.spacing_sm());
+                                    ui.label(
+                                        egui::RichText::new(crate::ssh::fido2_connect_hint(
+                                            crate::i18n::language(ui.ctx()),
+                                        ))
+                                        .size(theme.font_size_body())
+                                        .color(theme.text_primary()),
+                                    );
+                                }
                                 ui.add_space(theme.spacing_md());
                                 let btn_w = theme.size_modal_footer_btn_min_w_secondary();
                                 let pad = ((max_w - btn_w) * 0.5).max(0.0);
@@ -4656,9 +4676,15 @@ impl TerminalView {
             )
         } else if self.is_connecting() {
             (
-                self.locale_last()
-                    .tr("Connecting…", "正在连接…")
-                    .to_string(),
+                if self.connecting_fido2 {
+                    self.locale_last()
+                        .tr("Touch key or enter PIN…", "请触摸密钥或输入 PIN…")
+                        .to_string()
+                } else {
+                    self.locale_last()
+                        .tr("Connecting…", "正在连接…")
+                        .to_string()
+                },
                 theme.accent_color(),
             )
         } else {
@@ -4804,6 +4830,7 @@ impl TerminalView {
         self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
         self.visual_layout_cache = None;
         self.error_message = None;
+        self.connecting_fido2 = false;
         self.transfer_progress = None;
         self.transfer_outgoing = false;
         self.pending_focus_terminal = false;
@@ -4837,6 +4864,7 @@ impl TerminalView {
         self.ssh_rx = None;
         self.session_id = None;
         self.error_message = None;
+        self.connecting_fido2 = false;
         self.transfer_progress = None;
         self.transfer_outgoing = false;
         self.pending_focus_terminal = false;
