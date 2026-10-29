@@ -383,6 +383,11 @@ pub struct TerminalView {
     disconnected_input_buffer: Vec<u8>,
     /// 重连且 shell 就绪后，若缓存非空则弹出是否重发。
     resend_offline_input_dialog_open: bool,
+    /// 连接后恢复命令（#177）：由会话配置注入，shell 就绪后延迟执行一次。
+    /// None = 未配置；Some(空串) 视为未配置。执行后清空，断线时清空。
+    pending_post_connect_command: Option<String>,
+    /// 恢复命令的定时执行时刻（连接成功后短暂延迟，等 shell 提示符就绪）。
+    post_connect_fire_at: Option<Instant>,
     /// 整屏替换 VTE 或清屏时递增，与 [`VtTerminal::content_epoch`] 一并参与布局缓存键(FUNCTIONAL_SPEC §2.3.1)。
     vt_visual_generation: u64,
     visual_layout_cache: Option<TerminalVisualLayoutCache>,
@@ -970,6 +975,8 @@ impl TerminalView {
             buffer_input_while_disconnected: false,
             disconnected_input_buffer: Vec::new(),
             resend_offline_input_dialog_open: false,
+            pending_post_connect_command: None,
+            post_connect_fire_at: None,
             vt_visual_generation: 0,
             visual_layout_cache: None,
             repaint_probe_received_us: None,
@@ -1552,6 +1559,17 @@ impl TerminalView {
     }
 
     /// 连接到 SSH 服务器
+    /// #177：注入连接后恢复命令（来自会话配置；空串 = 不执行）。
+    /// 每次 connect 前调用一次，避免上个会话的命令残留。
+    pub fn set_post_connect_command(&mut self, cmd: &str) {
+        self.pending_post_connect_command = if cmd.trim().is_empty() {
+            None
+        } else {
+            Some(cmd.to_string())
+        };
+        self.post_connect_fire_at = None;
+    }
+
     pub fn connect(
         &mut self,
         _theme: &Theme,
@@ -2801,6 +2819,7 @@ impl TerminalView {
                 ui.visuals_mut().extreme_bg_color = prev_extreme;
             });
         self.render_resend_offline_dialog(ui.ctx(), theme);
+        self.fire_post_connect_command(ui.ctx());
     }
 
     /// `viewport`：ScrollArea **内容区**(inner)的宽 × 可视区高度(与 `max_height(scroll_h)` 一致)，已不含 Frame inner_margin 与纵向滚动条占位。
@@ -3160,6 +3179,17 @@ impl TerminalView {
                                         if !self.disconnected_input_buffer.is_empty() {
                                             self.resend_offline_input_dialog_open = true;
                                         }
+                                        // #177：连接/重连成功后排队恢复命令。
+                                        // 延迟 ~600ms 等 shell 提示符就绪，避免命令
+                                        // 被 shell 初始化输出吞掉；仅对显式配置生效。
+                                        if let Some(cmd) = self.pending_post_connect_command.take() {
+                                            if !cmd.trim().is_empty() {
+                                                self.post_connect_fire_at =
+                                                    Some(Instant::now() + Duration::from_millis(600));
+                                                // 暂存回 pending，到点再真正取走执行
+                                                self.pending_post_connect_command = Some(cmd);
+                                            }
+                                        }
                                     }
                                     Err(e) => {
                                         let msg = format_ssh_connect_error(
@@ -3485,6 +3515,28 @@ impl TerminalView {
             self.append_offline_bytes(normalized.as_bytes());
         }
         ui.ctx().request_repaint_after(Duration::from_millis(50));
+    }
+
+    /// #177：到点执行连接后恢复命令（会话显式配置，默认空不执行）。
+    /// 执行一次即清空；断线时由 disconnect 路径清空，避免旧命令跨会话泄漏。
+    fn fire_post_connect_command(&mut self, ctx: &egui::Context) {
+        let Some(fire_at) = self.post_connect_fire_at else {
+            return;
+        };
+        if Instant::now() < fire_at {
+            ctx.request_repaint_after(Duration::from_millis(100));
+            return;
+        }
+        self.post_connect_fire_at = None;
+        let Some(cmd) = self.pending_post_connect_command.take() else {
+            return;
+        };
+        if cmd.trim().is_empty() || !self.connected || !self.has_pty_writer() {
+            // shell 未就绪 / 已断开：丢弃，不跨连接执行
+            return;
+        }
+        log::info!("post-connect restore command firing ({} runes)", cmd.chars().count());
+        self.send_command(&cmd);
     }
 
     fn render_resend_offline_dialog(&mut self, ctx: &egui::Context, theme: &Theme) {
@@ -4814,6 +4866,9 @@ impl TerminalView {
         self.buffer_input_while_disconnected = false;
         self.disconnected_input_buffer.clear();
         self.resend_offline_input_dialog_open = false;
+        // #177：断线丢弃未执行的恢复命令，避免旧命令跨会话泄漏
+        self.pending_post_connect_command = None;
+        self.post_connect_fire_at = None;
     }
 
     /// 仅断开 SSH，保留当前屏幕与滚动缓冲(FUNCTIONAL_SPEC §1.3.5：Tab 保留、输出冻结、不可再输入)

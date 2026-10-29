@@ -63,6 +63,11 @@ pub struct SessionConfig {
     /// 动态 SOCKS 转发(每行 `port` 或 `bind:port`，例 `1080`)
     #[serde(default)]
     pub dynamic_forwards_text: String,
+    /// 连接后恢复命令（#177）：连接/自动重连成功后自动执行一次。
+    /// 用户显式配置；默认空 = 不执行任何命令（不自动猜 attach）。
+    /// 典型值：`tmux attach -t main` / `screen -r`。
+    #[serde(default)]
+    pub post_connect_command: String,
 }
 
 fn default_keepalive_enabled() -> bool {
@@ -153,6 +158,7 @@ impl Default for SessionConfig {
             keepalive_interval_secs: default_keepalive_interval(),
             keepalive_count_max: default_keepalive_count_max(),
             keepalive_auto_reconnect: default_keepalive_auto_reconnect(),
+            post_connect_command: String::new(),
             secret_backend: SecretBackend::default(),
             local_forwards_text: String::new(),
             remote_forwards_text: String::new(),
@@ -450,6 +456,8 @@ struct StoredSessionConfig {
     remote_forwards_text: String,
     #[serde(default)]
     dynamic_forwards_text: String,
+    #[serde(default)]
+    post_connect_command: String,
 }
 
 fn default_group() -> String {
@@ -520,6 +528,7 @@ impl SessionManager {
                 keepalive_interval_secs: cfg.keepalive_interval_secs,
                 keepalive_count_max: cfg.keepalive_count_max,
                 keepalive_auto_reconnect: cfg.keepalive_auto_reconnect,
+                post_connect_command: cfg.post_connect_command,
                 secret_backend: cfg.secret_backend,
                 local_forwards_text: cfg.local_forwards_text,
                 remote_forwards_text: cfg.remote_forwards_text,
@@ -742,6 +751,7 @@ impl SessionManager {
                 local_forwards_text: cfg.local_forwards_text.clone(),
                 remote_forwards_text: cfg.remote_forwards_text.clone(),
                 dynamic_forwards_text: cfg.dynamic_forwards_text.clone(),
+                post_connect_command: cfg.post_connect_command.clone(),
             });
         }
 
