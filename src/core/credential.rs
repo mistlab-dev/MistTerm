@@ -425,6 +425,16 @@ impl CredentialVault {
         self.entries.len()
     }
 
+    /// 用已决定 `updated_at` 的同步结果替换整个库，不再把时间戳改成现在。
+    pub fn replace_all(&mut self, entries: Vec<Credential>) -> io::Result<()> {
+        self.entries = entries
+            .into_iter()
+            .map(|c| StoredCredential::from_credential(&c))
+            .collect();
+        self.normalize_entries();
+        self.save()
+    }
+
     pub fn export_indexed(&self) -> HashMap<String, Credential> {
         self.list()
             .into_iter()

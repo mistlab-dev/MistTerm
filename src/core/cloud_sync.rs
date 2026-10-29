@@ -12,6 +12,9 @@ pub struct CloudSyncSettings {
     /// 展示用账号提示（未对接服务端时可为空）
     #[serde(default)]
     pub account_hint: String,
+    /// 登录后同步主机元数据（不含密码与私钥正文）。未登录时不会上传。
+    #[serde(default = "default_true")]
+    pub sync_host_metadata: bool,
     #[serde(default = "default_true")]
     pub sync_sessions: bool,
     #[serde(default = "default_true")]
@@ -45,6 +48,7 @@ impl Default for CloudSyncSettings {
     fn default() -> Self {
         Self {
             account_hint: String::new(),
+            sync_host_metadata: true,
             sync_sessions: true,
             sync_fragments: true,
             sync_themes: true,
@@ -114,6 +118,7 @@ mod tests {
     fn default_matches_expected_boolean_mask_and_frequency() {
         let d = CloudSyncSettings::default();
         assert_eq!(d.account_hint, "");
+        assert!(d.sync_host_metadata);
         assert!(d.sync_sessions);
         assert!(d.sync_fragments);
         assert!(d.sync_themes);
@@ -141,6 +146,7 @@ mod tests {
     fn serde_roundtrip_preserves_all_fields() {
         let s = CloudSyncSettings {
             account_hint: "u@corp".into(),
+            sync_host_metadata: true,
             sync_sessions: true,
             sync_fragments: false,
             sync_themes: true,
@@ -154,6 +160,7 @@ mod tests {
         let json = serde_json::to_string(&s).expect("serialize");
         let restored: CloudSyncSettings = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(restored.account_hint, "u@corp");
+        assert!(restored.sync_host_metadata);
         assert!(restored.sync_sessions);
         assert!(!restored.sync_fragments);
         assert!(restored.sync_themes);
@@ -173,10 +180,11 @@ mod tests {
         let json = r#"{"account_hint": "only"}"#;
         let s: CloudSyncSettings = serde_json::from_str(json).expect("deserialize");
         assert_eq!(s.account_hint, "only");
-        assert!(s.sync_sessions);   // default_true
-        assert!(s.sync_fragments);  // default_true
-        assert!(s.sync_themes);     // default_true
-        assert!(s.sync_shortcuts);  // default_true
+        assert!(s.sync_host_metadata);
+        assert!(s.sync_sessions); // default_true
+        assert!(s.sync_fragments); // default_true
+        assert!(s.sync_themes); // default_true
+        assert!(s.sync_shortcuts); // default_true
         assert!(!s.sync_team_config); // #[serde(default)] -> false
         assert!(!s.sync_credentials); // #[serde(default)] -> false
         assert_eq!(s.frequency_minutes, 5); // default_frequency
@@ -189,6 +197,7 @@ mod tests {
         let s: CloudSyncSettings = serde_json::from_str("{}").expect("deserialize");
         let d = CloudSyncSettings::default();
         assert_eq!(s.account_hint, d.account_hint);
+        assert_eq!(s.sync_host_metadata, d.sync_host_metadata);
         assert_eq!(s.sync_sessions, d.sync_sessions);
         assert_eq!(s.sync_fragments, d.sync_fragments);
         assert_eq!(s.sync_themes, d.sync_themes);

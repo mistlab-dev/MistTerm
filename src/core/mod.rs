@@ -30,6 +30,7 @@ pub mod fragment_command;
 pub mod send_sequence;
 pub mod credential;
 pub mod cloud_sync;
+pub mod host_sync;
 pub mod reconnect;
 pub mod upload_policy;
 pub mod ssh_config_importer;

@@ -77,6 +77,10 @@ impl CredentialPanel {
         &self.vault
     }
 
+    pub fn vault_mut(&mut self) -> &mut CredentialVault {
+        &mut self.vault
+    }
+
     pub fn reload_vault(&mut self) {
         self.vault = CredentialVault::new();
     }

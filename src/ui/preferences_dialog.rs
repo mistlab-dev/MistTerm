@@ -1407,8 +1407,8 @@ impl MistTermApp {
                 ui.label(
                     RichText::new(crate::i18n::tr(
                         ctx,
-                        "Use the menu bar for View / Tools / Help.",
-                        "其余项请用顶部菜单：视图、工具、帮助。",
+                        "Host list, credential sync, passphrase, conflicts, and export/import are in Cloud Sync. This page only opens that panel.",
+                        "主机列表、凭证同步、同步口令、冲突和导出/导入都在云端同步里。这里只负责打开那个面板。",
                     ))
                     .size(theme.font_size_small())
                     .color(theme.color_form_hint()),
