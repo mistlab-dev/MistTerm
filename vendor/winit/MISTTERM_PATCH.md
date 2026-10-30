@@ -7,6 +7,8 @@ Changed files:
 - `src/platform_impl/linux/x11/event_processor.rs` (X11)
 - `src/platform_impl/macos/view.rs` (macOS)
 - `src/platform_impl/ime_bypass.rs` (shared Control-chord policy, used by macOS; unit-tested on every OS)
+- `src/platform_impl/redraw_guard.rs` (shared illegal-size predicate for #188; unit-tested on every OS)
+- `src/platform/macos.rs` (`set_caught_draw_rect_panic_hook` for #188)
 
 ## Why
 
@@ -41,3 +43,24 @@ Fix, same policy as X11 (`ime_bypass::macos_skip_interpret_key_events`):
 Modifier keys themselves arrive as `flagsChanged`, not `keyDown`, and are not bypassed. Command-only chords (⌘C copy) are unchanged: the bypass requires Control.
 
 `retrieve_keycode` maps Ctrl+C through `charactersIgnoringModifiers` (`c`) after `characters()` (`\u{3}`) fails `char_to_keycode`. egui-winit drops `ReceivedCharacter` while Control is down on macOS, so the chord is not also inserted as text.
+
+## macOS drawRect panic_cannot_unwind (#188)
+
+Lock-screen / Spaces tile-resize can synchronously enter `WinitView::drawRect:` while
+glow/eframe still sees a 0 or absurd framebuffer size. A panic there crosses the ObjC
+FFI boundary (`extern "C"` / `#[sel(...)]`) and becomes `panic_cannot_unwind` → abort.
+
+MistTerm hotfix (scheme A; does **not** bump eframe/egui/winit):
+
+1. **Size gate** — before emitting `WindowEvent::Resized` (`frameDidChange:`) and before
+   `AppState::handle_redraw` (`drawRect:`), drop / skip frames whose physical size is
+   0 or above 16384 on either axis (`redraw_guard::is_sane_redraw_physical_size`). Log a
+   warn and `queue_redraw` so a later sane frame recovers.
+2. **`catch_unwind`** — wrap `AppState::handle_redraw` inside `drawRect:`. On panic: log
+   an error, invoke the optional `set_caught_draw_rect_panic_hook` (MistTerm writes a
+   caught-in-FFI crash note), and `queue_redraw`. The Rust panic hook still runs before
+   the catch completes, so the usual `crash-*.log` backtrace is preserved while the
+   process stays alive.
+3. **Out of scope for this patch** — upgrading eframe/egui/winit, switching the runtime
+   renderer to wgpu.
+

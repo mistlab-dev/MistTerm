@@ -369,3 +369,13 @@ impl Default for OptionAsAlt {
         OptionAsAlt::None
     }
 }
+
+/// MistTerm #188: register a hook after a panic inside `NSView drawRect:` was caught.
+///
+/// The process continues (frame skipped + redraw queued). The Rust panic hook has
+/// usually already written a `crash-*.log`; MistTerm uses this to add a
+/// caught-in-FFI note for observability.
+pub fn set_caught_draw_rect_panic_hook(hook: fn()) {
+    crate::platform_impl::platform::set_caught_draw_rect_panic_hook(hook);
+}
+
