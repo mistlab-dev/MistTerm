@@ -44,6 +44,9 @@ pub struct AppSettings {
     /// #201：窗口/标签回到前台时自动重连（默认关；仅意外断开，保留输出）。
     #[serde(default)]
     pub reconnect_on_foreground: bool,
+    /// #215：自动化规则对话框「一次性短提示」已勾选不再显示。
+    #[serde(default)]
+    pub rules_intro_dismissed: bool,
 }
 
 fn default_true() -> bool {
@@ -65,6 +68,7 @@ impl Default for AppSettings {
             remember_paste_history: true,
             disabled_modules: Vec::new(),
             reconnect_on_foreground: false,
+            rules_intro_dismissed: false,
         }
     }
 }

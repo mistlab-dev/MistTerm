@@ -729,7 +729,7 @@ impl MistModule for DisplayLinkModule {
     }
 
     fn name_en(&self) -> &str {
-        "Display links"
+        "Clickable output links"
     }
 
     fn on_output_line(&self, ctx: &OutputLineCtx<'_>) -> Vec<ModuleAction> {

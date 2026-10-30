@@ -10443,6 +10443,7 @@ impl eframe::App for MistTermApp {
                 .is_enabled(crate::modules::display_link::MODULE_ID),
             self.module_registry
                 .is_enabled(crate::modules::cmd_audit_local::MODULE_ID),
+            &mut self.app_settings,
         );
         self.poll_paste_history_notes();
         // #201：前台/标签激活自动重连（含标签切换待检项）。

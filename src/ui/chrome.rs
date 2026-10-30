@@ -4288,7 +4288,7 @@ pub fn modal_header_title_only(ui: &mut Ui, theme: &Theme, title: &str, title_px
     modal_header(ui, theme, title, title_px)
 }
 
-/// 弹窗标题行(标题 + 右侧 ×，用于仅通过标题栏关闭的弹窗)。
+/// 弹窗标题行(标题文字 + 右侧 ×)。#216：去掉左侧无语义「+」装饰，不换成其它凑数图标。
 pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> bool {
     let _ = title_px;
     let mx = theme.spacing_modal_content_x();
@@ -4304,7 +4304,8 @@ pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> b
         })
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                panel_header_title_leading(ui, theme, IconId::Plus, title);
+                // 标题文字可点选区域留给 egui Window 拖移；不要再放无语义图标。
+                ui.label(rich_modal_title(theme, title));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if close_icon_button(ui, theme).clicked() {
                         closed = true;

@@ -11,6 +11,7 @@ use crate::core::credential::{CredentialAuthKind, CredentialCategory};
 use crate::core::fragment::SortBy;
 use crate::core::session_sort::SessionSortBy;
 
+pub mod builtin_rules;
 pub mod menu;
 
 /// User-facing UI language (persisted in `settings.json`).
