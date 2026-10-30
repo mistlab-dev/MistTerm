@@ -1440,9 +1440,9 @@ impl MistTermApp {
         );
     }
 
-    /// 扩展模块 / 内置能力开关（#118）。
+    /// 扩展模块 / 内置能力开关（#118 / #215）。
     /// 为已编进主程序的官方内置模块提供按模块启用/禁用开关；
-    /// `MISTTERM_DISABLE_MODULES` 环境变量生效时提示强制禁用（优先级高于 UI）。
+    /// 主说明不暴露模块 id / 环境变量名；高级折叠里可提示 env 覆盖。
     fn preferences_section_modules(
         &mut self,
         ui: &mut egui::Ui,
@@ -1462,8 +1462,8 @@ impl MistTermApp {
                 ui.label(
                     egui::RichText::new(crate::i18n::tr(
                         ctx,
-                        "Enable or disable built-in capability modules. Environment variable MISTTERM_DISABLE_MODULES overrides UI settings.",
-                        "按需启停主程序内置的能力模块。环境变量 MISTTERM_DISABLE_MODULES 具有最高优先级（覆盖界面设置）。",
+                        "Turn built-in capabilities on or off. Rules stay editable when off, but they do not run until the module is on.",
+                        "按需开启或关闭内置能力。关闭后相关规则仍可编辑，但运行时不生效。",
                     ))
                     .size(theme.font_size_small())
                     .color(text_low),
@@ -1489,40 +1489,50 @@ impl MistTermApp {
                 for m in modules {
                     let is_env_locked = self.module_registry.is_env_disabled(&m.id);
                     let mut enabled = m.enabled;
+                    let display_name = if lang == crate::i18n::UiLanguage::Zh {
+                        m.name_zh.clone()
+                    } else {
+                        m.name_en.clone()
+                    };
+                    let subtitle = module_subtitle(ctx, &m.id);
 
                     ui.horizontal(|ui| {
-                        let display_name = if lang == crate::i18n::UiLanguage::Zh {
-                            &m.name_zh
-                        } else {
-                            &m.name_en
-                        };
-
                         if is_env_locked {
                             let mut dummy = false;
                             ui.add_enabled(false, egui::Checkbox::new(&mut dummy, ""));
+                        } else if ui.checkbox(&mut enabled, "").changed() {
+                            if enabled {
+                                self.app_settings.disabled_modules.retain(|id| id != &m.id);
+                            } else if !self.app_settings.disabled_modules.contains(&m.id) {
+                                self.app_settings.disabled_modules.push(m.id.clone());
+                            }
+                            dirty = true;
+                        }
+
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(display_name).color(if is_env_locked {
+                                text_low
+                            } else {
+                                label_color
+                            }));
                             ui.label(
-                                egui::RichText::new(format!("{} ({})", display_name, m.id))
+                                egui::RichText::new(subtitle)
+                                    .size(theme.font_size_small())
                                     .color(text_low),
                             );
-                            ui.label(
-                                egui::RichText::new(crate::i18n::tr(
-                                    ctx,
-                                    "[Disabled by env]",
-                                    "[已由环境变量强制禁用]",
-                                ))
-                                .size(theme.font_size_small())
-                                .color(theme.accent_color()),
-                            );
-                        } else {
-                            if ui.checkbox(&mut enabled, format!("{} ({})", display_name, m.id)).changed() {
-                                if enabled {
-                                    self.app_settings.disabled_modules.retain(|id| id != &m.id);
-                                } else if !self.app_settings.disabled_modules.contains(&m.id) {
-                                    self.app_settings.disabled_modules.push(m.id.clone());
-                                }
-                                dirty = true;
+                            if is_env_locked {
+                                ui.label(
+                                    egui::RichText::new(crate::i18n::tr(
+                                        ctx,
+                                        "[Disabled by advanced override]",
+                                        "[已由高级覆盖强制禁用]",
+                                    ))
+                                    .size(theme.font_size_small())
+                                    .color(theme.accent_color()),
+                                );
                             }
-                        }
+                        });
+
                         if m.id == crate::modules::output_trigger::MODULE_ID
                             && crate::ui::chrome::panel_action_button(
                                 ui,
@@ -1557,7 +1567,23 @@ impl MistTermApp {
                                 .open_command_checks_from_preferences(&self.cmd_audit_personal_rules);
                         }
                     });
+                    ui.add_space(theme.spacing_xs());
                 }
+
+                ui.add_space(theme.spacing_sm());
+                egui::CollapsingHeader::new(crate::i18n::tr(ctx, "Advanced", "高级"))
+                    .id_source("modules_advanced")
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr(
+                                ctx,
+                                "Advanced: an environment variable can also override the UI switches (see docs).",
+                                "高级：也可用环境变量覆盖界面开关（见文档）。",
+                            ))
+                            .size(theme.font_size_small())
+                            .color(text_low),
+                        );
+                    });
 
                 if dirty {
                     self.module_registry.sync_effective_disabled(&self.app_settings.disabled_modules);
@@ -1566,6 +1592,7 @@ impl MistTermApp {
             },
         );
     }
+
 }
 
 /// 路径中间省略，悬停仍给出全文。`max_chars` 含省略号。
@@ -1604,5 +1631,32 @@ mod tests {
         assert!(out.ends_with("logs") || out.ends_with("/logs") || out.contains('…'));
         assert!(out.chars().count() <= 16);
         assert!(out.contains('…'));
+    }
+}
+
+
+fn module_subtitle(ctx: &egui::Context, module_id: &str) -> &'static str {
+    match module_id {
+        crate::modules::cmd_audit_local::MODULE_ID => crate::i18n::tr(
+            ctx,
+            "Confirm or block risky commands before they run",
+            "执行危险命令前先确认或拦截",
+        ),
+        crate::modules::output_trigger::MODULE_ID => crate::i18n::tr(
+            ctx,
+            "Notify or act when terminal output matches",
+            "终端输出匹配时弹提示或执行动作",
+        ),
+        crate::modules::display_link::MODULE_ID => crate::i18n::tr(
+            ctx,
+            "Turn paths/URLs in output into links",
+            "把日志里的路径/URL 变成可点链接",
+        ),
+        crate::modules::session_import::MODULE_ID => crate::i18n::tr(
+            ctx,
+            "Import sessions/hosts from other terminals",
+            "从其它终端导入会话/主机",
+        ),
+        _ => "",
     }
 }

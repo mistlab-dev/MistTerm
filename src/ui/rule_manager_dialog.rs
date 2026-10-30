@@ -1,9 +1,9 @@
-//! 规则管理模态（#185）。
+//! 规则管理模态（#185 / #186 / #187 / #215）。
 //!
-//! 主入口：工具 → 自动化规则… →「输出触发」。
+//! 主入口：工具 → 自动化规则…
 //! 次入口：偏好 → 扩展模块 → 本行「管理规则…」。
-//! 同窗预留给 #186 / #187 的其它规则页；现在只有输出触发这一页。
-//! 规则增删改不放进偏好折叠正文。
+//! 同窗三页：输出触发 / 可点击链接 / 本地命令检查。
+//! #215：去中英混排、空状态可动手、首次一次性短提示。
 
 use eframe::egui;
 
@@ -59,6 +59,11 @@ pub struct RuleManagerDialog {
     cmd_priority: i32,
     cmd_enabled: bool,
     cmd_personal_enabled: bool,
+    /// #215 一次性短提示：是否正在展示；勾选「不再显示」写进 AppSettings。
+    intro_open: bool,
+    intro_dont_show_again: bool,
+    /// 本轮对话框打开期间是否已尝试弹出短提示（避免关闭后每帧重弹）。
+    intro_offered_this_open: bool,
 }
 
 impl Default for RuleManagerDialog {
@@ -94,6 +99,9 @@ impl Default for RuleManagerDialog {
             cmd_priority: 100,
             cmd_enabled: true,
             cmd_personal_enabled: false,
+            intro_open: false,
+            intro_dont_show_again: false,
+            intro_offered_this_open: false,
         }
     }
 }
@@ -161,9 +169,17 @@ impl RuleManagerDialog {
         module_enabled: bool,
         link_module_enabled: bool,
         cmd_module_enabled: bool,
+        app_settings: &mut crate::core::app_settings::AppSettings,
     ) {
         if !self.open {
+            self.intro_open = false;
+            self.intro_offered_this_open = false;
             return;
+        }
+        if !app_settings.rules_intro_dismissed && !self.intro_offered_this_open {
+            self.intro_open = true;
+            self.intro_dont_show_again = false;
+            self.intro_offered_this_open = true;
         }
         match self.tab {
             RuleManagerTab::OutputTrigger => self.ensure_selection(store),
@@ -189,11 +205,21 @@ impl RuleManagerDialog {
                     ) {
                         should_close = true;
                     }
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            ctx,
+                            "Match terminal output or commands about to run, then notify, block, or ask for confirmation.",
+                            "匹配终端输出或将执行的命令，按规则提示、拦截或要求确认。",
+                        ))
+                        .size(theme.font_size_caption())
+                        .color(theme.text_tertiary()),
+                    );
+                    ui.add_space(theme.spacing_xs());
                     ui.horizontal(|ui| {
                         if ui
                             .selectable_label(
                                 self.tab == RuleManagerTab::OutputTrigger,
-                                crate::i18n::tr(ctx, "Output Trigger", "输出触发"),
+                                crate::i18n::tr(ctx, "Output triggers", "输出触发"),
                             )
                             .clicked()
                         {
@@ -213,7 +239,7 @@ impl RuleManagerDialog {
                         if ui
                             .selectable_label(
                                 self.tab == RuleManagerTab::CommandChecks,
-                                crate::i18n::tr(ctx, "Command checks", "本地命令检查"),
+                                crate::i18n::tr(ctx, "Local command check", "本地命令检查"),
                             )
                             .clicked()
                         {
@@ -221,6 +247,28 @@ impl RuleManagerDialog {
                             self.ensure_cmd_selection(cmd_personal);
                         }
                     });
+                    let tab_blurb = match self.tab {
+                        RuleManagerTab::OutputTrigger => crate::i18n::tr(
+                            ctx,
+                            "When output matches a rule, notify or handle it.",
+                            "当终端输出命中规则时，按动作提示或处理。",
+                        ),
+                        RuleManagerTab::DisplayLink => crate::i18n::tr(
+                            ctx,
+                            "Turn paths, IPs, URLs in output into clickable links.",
+                            "把输出里的路径、IP、URL 等变成可点击链接。",
+                        ),
+                        RuleManagerTab::CommandChecks => crate::i18n::tr(
+                            ctx,
+                            "Check commands before they are sent; apply the action on match.",
+                            "命令真正发出前先检查；命中后按动作处理。",
+                        ),
+                    };
+                    ui.label(
+                        egui::RichText::new(tab_blurb)
+                            .size(theme.font_size_caption())
+                            .color(theme.text_tertiary()),
+                    );
                     ui.separator();
                     match self.tab {
                         RuleManagerTab::OutputTrigger => {
@@ -236,9 +284,74 @@ impl RuleManagerDialog {
                 });
             });
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            should_close = true;
+            if self.intro_open {
+                self.intro_open = false;
+            } else {
+                should_close = true;
+            }
+        }
+        if self.intro_open && self.open {
+            self.paint_rules_intro(ctx, theme, app_settings);
         }
         self.open = keep_open && !should_close;
+        if !self.open {
+            self.intro_open = false;
+            self.intro_offered_this_open = false;
+        }
+    }
+
+    fn paint_rules_intro(
+        &mut self,
+        ctx: &egui::Context,
+        theme: &Theme,
+        app_settings: &mut crate::core::app_settings::AppSettings,
+    ) {
+        let mut keep = self.intro_open;
+        crate::ui::chrome::modal_window("rules_intro_tip", theme, ctx)
+            .open(&mut keep)
+            .default_size(egui::vec2(520.0, 280.0))
+            .resizable(false)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
+                    let _ = crate::ui::chrome::modal_header(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "About automation rules", "关于自动化规则"),
+                        theme.font_size_modal_title(),
+                    );
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            ctx,
+                            "Automation rules notify, block, or ask for confirmation when a command is about to run or when output matches. Tabs: Output triggers, Clickable links, Local command check. Personal rules are editable; Built-in and Team rules are read-only. Edit rules anytime; turn the module on in Preferences for them to run.",
+                            "自动化规则用来在命令发出前或输出出现时自动提示、拦截或要求确认。三个标签页：输出触发、可点击链接、本地命令检查。上方「个人规则」可新建；「内置规则」「团队规则」只读。可先改规则，再在偏好里打开对应模块。",
+                        ))
+                        .size(theme.font_size_body()),
+                    );
+                    ui.add_space(theme.spacing_sm());
+                    ui.checkbox(
+                        &mut self.intro_dont_show_again,
+                        crate::i18n::tr(ctx, "Don't show again", "不再显示"),
+                    );
+                    ui.add_space(theme.spacing_sm());
+                    if crate::ui::chrome::panel_action_primary_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Got it", "知道了"),
+                    )
+                    .clicked()
+                    {
+                        if self.intro_dont_show_again {
+                            app_settings.rules_intro_dismissed = true;
+                            let _ = app_settings.save();
+                        }
+                        self.intro_open = false;
+                    }
+                });
+            });
+        if !keep {
+            self.intro_open = false;
+        }
     }
 
     fn ensure_selection(&mut self, store: &OutputTriggerStore) {
@@ -272,8 +385,8 @@ impl RuleManagerDialog {
             ui.label(
                 egui::RichText::new(crate::i18n::tr(
                     ctx,
-                    "Output Trigger is off (Preferences, or MISTTERM_DISABLE_MODULES). You can still edit rules. They will not fire until the module is on.",
-                    "输出触发模块已关闭 (偏好设置, 或环境变量 MISTTERM_DISABLE_MODULES). 规则仍可编辑, 模块打开后才会触发.",
+                    "This module is off (Preferences or an advanced override). You can still edit rules; they apply only after you turn the module on.",
+                    "此模块当前已关闭（偏好或高级覆盖）。规则仍可编辑；打开模块后才会生效。",
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.accent_color()),
@@ -366,12 +479,23 @@ impl RuleManagerDialog {
                         ui.label(
                             egui::RichText::new(crate::i18n::tr(
                                 ctx,
-                                "No rules. Built-in rules return when you restore defaults.",
-                                "没有规则. 点「恢复内置规则」可以回到默认.",
+                                "No personal rules yet. Create one to confirm, block, or notify when something matches.",
+                                "还没有个人规则。新建一条，在匹配到危险命令或目标输出时按你的动作处理。",
                             ))
                             .size(theme.font_size_caption())
                             .color(theme.text_tertiary()),
                         );
+                        ui.add_space(theme.spacing_xs());
+                        if crate::ui::chrome::panel_action_primary_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(ctx, "+ New rule", "+ 新建规则"),
+                        )
+                        .clicked()
+                        {
+                            self.clear_form();
+                            self.confirm_reset = false;
+                        }
                         return;
                     }
                     for rule in &rules {
@@ -562,8 +686,8 @@ impl RuleManagerDialog {
                     theme,
                     crate::i18n::tr(
                         ctx,
-                        "Priority (lower matches first)",
-                        "优先级 (越小越先匹配)",
+                        "Priority (lower number matches first)",
+                        "优先级（数字越小越优先）",
                     ),
                 );
                 crate::ui::chrome::form_u32_stepper(
@@ -913,8 +1037,8 @@ impl RuleManagerDialog {
             ui.label(
                 egui::RichText::new(crate::i18n::tr(
                     ctx,
-                    "Command checks is off (Preferences, or MISTTERM_DISABLE_MODULES). You can still edit rules. They will not apply until the module is on.",
-                    "本地命令检查模块已关闭 (偏好设置, 或环境变量 MISTTERM_DISABLE_MODULES). 规则仍可编辑, 模块打开后才会生效.",
+                    "This module is off (Preferences or an advanced override). You can still edit rules; they apply only after you turn the module on.",
+                    "此模块当前已关闭（偏好或高级覆盖）。规则仍可编辑；打开模块后才会生效。",
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.accent_color()),
@@ -1072,12 +1196,23 @@ impl RuleManagerDialog {
                         ui.label(
                             egui::RichText::new(crate::i18n::tr(
                                 ctx,
-                                "No personal rules yet.",
-                                "还没有个人规则.",
+                                "No personal rules yet. Create one to confirm, block, or notify when something matches.",
+                                "还没有个人规则。新建一条，在匹配到危险命令或目标输出时按你的动作处理。",
                             ))
                             .size(theme.font_size_caption())
                             .color(theme.text_tertiary()),
                         );
+                        ui.add_space(theme.spacing_xs());
+                        if crate::ui::chrome::panel_action_primary_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(ctx, "+ New rule", "+ 新建规则"),
+                        )
+                        .clicked()
+                        {
+                            self.clear_cmd_form();
+                            self.confirm_reset = false;
+                        }
                         return;
                     }
                     for rule in &rules {
@@ -1167,14 +1302,14 @@ impl RuleManagerDialog {
             crate::ui::chrome::form_field_label(
                 ui,
                 theme,
-                crate::i18n::tr(ctx, "Rule name (shown in prompts)", "规则名 (提示里显示)"),
+                crate::i18n::tr(ctx, "Rule name", "规则名称"),
             );
             crate::ui::chrome::form_singleline_field(
                 ui,
                 theme,
                 egui::Id::new("cmd_rule_name"),
                 &mut self.cmd_name,
-                crate::i18n::tr(ctx, "e.g. Guard prod db", "例如: 保护生产库"),
+                crate::i18n::tr(ctx, "e.g. Protect production DB", "例如：保护生产库"),
                 width,
                 false,
             );
@@ -1182,7 +1317,16 @@ impl RuleManagerDialog {
             crate::ui::chrome::form_field_label(
                 ui,
                 theme,
-                crate::i18n::tr(ctx, "Pattern", "匹配模式"),
+                crate::i18n::tr(ctx, "Match pattern", "匹配模式"),
+            );
+            ui.label(
+                egui::RichText::new(crate::i18n::tr(
+                    ctx,
+                    "What to match (regex allowed)",
+                    "要匹配的内容长什么样（可用正则）",
+                ))
+                .size(theme.font_size_caption())
+                .color(theme.text_tertiary()),
             );
             crate::ui::chrome::form_multiline_field_with_hint(
                 ui,
@@ -1208,7 +1352,7 @@ impl RuleManagerDialog {
                     crate::ui::chrome::form_field_label(
                         ui,
                         theme,
-                        crate::i18n::tr(ctx, "Match type", "匹配方式"),
+                        crate::i18n::tr(ctx, "Match mode", "匹配方式"),
                     );
                     let selected = cmd_match_type_label(ctx, &self.cmd_match_type);
                     crate::ui::chrome::form_combo(
@@ -1233,6 +1377,15 @@ impl RuleManagerDialog {
                         ui,
                         theme,
                         crate::i18n::tr(ctx, "Action", "动作"),
+                    );
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            ctx,
+                            "What to do on match",
+                            "命中后怎么做",
+                        ))
+                        .size(theme.font_size_caption())
+                        .color(theme.text_tertiary()),
                     );
                     let selected = cmd_action_label(ctx, &self.cmd_action);
                     crate::ui::chrome::form_combo(
@@ -1337,12 +1490,14 @@ impl RuleManagerDialog {
         ui.add_space(theme.spacing_xs());
         egui::ScrollArea::vertical()
             .id_source("cmd_builtin_list")
-            .max_height(180.0)
+            .max_height(220.0)
             .auto_shrink([false; 2])
             .show(ui, |ui| {
                 for b in &builtin {
+                    let disabled = disabled_ids.iter().any(|id| id == &b.id);
+                    let (title, hint) =
+                        crate::i18n::builtin_rules::builtin_copy(ctx, &b.id, &b.message);
                     ui.horizontal(|ui| {
-                        let disabled = disabled_ids.iter().any(|id| id == &b.id);
                         // #187 复审：勾选=启用（悬停文案同口径），避免极性反直觉。
                         let mut on = !disabled;
                         if ui
@@ -1361,16 +1516,35 @@ impl RuleManagerDialog {
                                 "已保存, 下一条命令即生效.",
                             ));
                         }
-                        let mut text = egui::RichText::new(format!(
-                            "{}  {}  {}",
-                            b.level,
-                            b.message,
-                            truncate_chars(&b.pattern, 60)
-                        ));
-                        if disabled {
-                            text = text.color(theme.text_tertiary());
-                        }
-                        ui.label(text);
+                        ui.vertical(|ui| {
+                            let mut title_rt = egui::RichText::new(title);
+                            if disabled {
+                                title_rt = title_rt.color(theme.text_tertiary());
+                            }
+                            ui.label(title_rt);
+                            if !hint.is_empty() {
+                                ui.label(
+                                    egui::RichText::new(hint)
+                                        .size(theme.font_size_caption())
+                                        .color(theme.text_tertiary()),
+                                );
+                            }
+                            egui::CollapsingHeader::new(crate::i18n::tr(
+                                ctx,
+                                "Pattern",
+                                "正则",
+                            ))
+                            .id_source(("cmd_builtin_pat", b.id.as_str()))
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(&b.pattern)
+                                        .size(theme.font_size_caption())
+                                        .color(theme.text_tertiary())
+                                        .monospace(),
+                                );
+                            });
+                        });
                     });
                 }
             });
@@ -1686,8 +1860,8 @@ impl RuleManagerDialog {
             ui.label(
                 egui::RichText::new(crate::i18n::tr(
                     ctx,
-                    "Clickable links is off (Preferences, or MISTTERM_DISABLE_MODULES). You can still edit rules. They will not apply until the module is on.",
-                    "可点击链接模块已关闭 (偏好设置, 或环境变量 MISTTERM_DISABLE_MODULES). 规则仍可编辑, 模块打开后才会生效.",
+                    "This module is off (Preferences or an advanced override). You can still edit rules; they apply only after you turn the module on.",
+                    "此模块当前已关闭（偏好或高级覆盖）。规则仍可编辑；打开模块后才会生效。",
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.accent_color()),
@@ -1780,12 +1954,23 @@ impl RuleManagerDialog {
                         ui.label(
                             egui::RichText::new(crate::i18n::tr(
                                 ctx,
-                                "No rules. Built-in rules return when you restore defaults.",
-                                "没有规则. 点「恢复内置规则」可以回到默认.",
+                                "No personal rules yet. Create one to confirm, block, or notify when something matches.",
+                                "还没有个人规则。新建一条，在匹配到危险命令或目标输出时按你的动作处理。",
                             ))
                             .size(theme.font_size_caption())
                             .color(theme.text_tertiary()),
                         );
+                        ui.add_space(theme.spacing_xs());
+                        if crate::ui::chrome::panel_action_primary_button(
+                            ui,
+                            theme,
+                            crate::i18n::tr(ctx, "+ New rule", "+ 新建规则"),
+                        )
+                        .clicked()
+                        {
+                            self.clear_link_form();
+                            self.confirm_reset = false;
+                        }
                         return;
                     }
                     for rule in &rules {
@@ -2236,12 +2421,17 @@ impl RuleManagerDialog {
 }
 
 fn rule_list_label(ctx: &egui::Context, rule: &OutputTriggerRule) -> String {
-    let pattern = truncate_chars(&rule.pattern, 42);
+    let (title, _) = crate::i18n::builtin_rules::builtin_copy(ctx, &rule.id, "");
+    let primary = if title != rule.id && !title.is_empty() {
+        truncate_chars(&title, 42)
+    } else {
+        truncate_chars(&rule.pattern, 42)
+    };
     format!(
         "{:>3}  {}  {}",
         rule.priority,
         severity_label(ctx, rule.severity),
-        pattern
+        primary
     )
 }
 
@@ -2263,9 +2453,9 @@ fn cmd_rule_list_label(ctx: &egui::Context, rule: &crate::core::cmd_audit::CmdAu
 
 fn cmd_match_type_label(ctx: &egui::Context, mt: &str) -> String {
     match mt {
-        "prefix" => crate::i18n::tr(ctx, "Prefix", "前缀").to_string(),
-        "contains" => crate::i18n::tr(ctx, "Contains", "包含").to_string(),
-        "exact" => crate::i18n::tr(ctx, "Exact", "完全匹配").to_string(),
+        "prefix" => crate::i18n::tr(ctx, "Plain text (prefix)", "普通文本（前缀）").to_string(),
+        "contains" => crate::i18n::tr(ctx, "Plain text (contains)", "普通文本（包含）").to_string(),
+        "exact" => crate::i18n::tr(ctx, "Plain text (exact)", "普通文本（完全匹配）").to_string(),
         _ => crate::i18n::tr(ctx, "Regex", "正则").to_string(),
     }
 }
@@ -2292,13 +2482,18 @@ fn live_cmd_pattern_error(ctx: &egui::Context, pattern: &str, match_type: &str) 
 }
 
 fn link_rule_list_label(ctx: &egui::Context, rule: &DisplayLinkRule) -> String {
-    let pattern = truncate_chars(&rule.pattern, 42);
+    let (title, _) = crate::i18n::builtin_rules::builtin_copy(ctx, &rule.id, "");
+    let primary = if title != rule.id && !title.is_empty() {
+        truncate_chars(&title, 36)
+    } else {
+        truncate_chars(&rule.pattern, 36)
+    };
     format!(
         "{:>3}  {} {}  {}",
         rule.priority,
         link_category_label(ctx, &rule.category),
         link_action_label(ctx, &rule.action),
-        pattern
+        primary
     )
 }
 

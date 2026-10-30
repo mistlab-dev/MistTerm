@@ -42,7 +42,7 @@ impl MistModule for SessionImportModule {
     }
 
     fn name_en(&self) -> &str {
-        "Session Import"
+        "Session import"
     }
 
     // 纯工具模块：5 钩子全部空默认实现（#122 明确不要求输出钩子）。
