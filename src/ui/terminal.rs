@@ -408,6 +408,9 @@ pub struct TerminalView {
     local_disconnect_intent: bool,
     /// 本轮 `process_ssh_messages` 后若曾为「非主动」断开则置位；由宿主 `take()` 后清除。
     unexpected_disconnect_notified: bool,
+    /// #201 复审：粘性「本断线为意外」标记。在 `hold_ssh_after_unexpected_disconnect`
+    /// 置位；重连成功或用户主动断开时清除。前台重连判定读这里，不抢退避用的一次性信号。
+    last_disconnect_unexpected: bool,
     /// #93：意外断开会话 → 未聚焦标签提示（与重连用的 `unexpected_disconnect_notified` 分通道）。
     pending_attention_ended: bool,
     /// 连接成功/失败待宿主写入审计(`take_connect_audit` 取走)
@@ -999,6 +1002,7 @@ impl TerminalView {
             repaint_probe_epoch: 0,
             local_disconnect_intent: false,
             unexpected_disconnect_notified: false,
+            last_disconnect_unexpected: false,
             pending_attention_ended: false,
             pending_connect_audit: None,
             server_audit_probe: ServerAuditProbe::new(),
@@ -3203,6 +3207,8 @@ impl TerminalView {
                         self.terminal_focused = true;
                         self.pending_focus_terminal = true;
                         self.auto_follow_output = true;
+                        // #201：重连成功，清除粘性「意外断线」标记。
+                        self.last_disconnect_unexpected = false;
 
                         if self.is_local_shell() {
                             // local_handle 已在 connect_local_shell 挂好
@@ -4931,6 +4937,8 @@ impl TerminalView {
     pub fn disconnect(&mut self) {
         self.flush_interactive_to_disk();
         self.local_disconnect_intent = true;
+        // #201 复审：用户主动断开 → 清粘性「意外断线」标记。
+        self.clear_last_disconnect_unexpected();
         if let Some(ref h) = self.local_handle {
             h.request_stop();
         }
@@ -4974,6 +4982,8 @@ impl TerminalView {
     pub fn disconnect_ssh_keep_buffer(&mut self) {
         self.flush_interactive_to_disk();
         self.local_disconnect_intent = true;
+        // #201 复审：用户主动断开 → 清粘性「意外断线」标记。
+        self.clear_last_disconnect_unexpected();
         if let Some(ref h) = self.local_handle {
             h.request_stop();
         }
@@ -5008,6 +5018,9 @@ impl TerminalView {
 
     /// 意外断开：保留画面与键盘，输入改走本地缓冲。清掉 SSH 句柄，避免仍被当成「正在连接」。
     fn hold_ssh_after_unexpected_disconnect(&mut self) {
+        // #201 复审：粘性标记——本断线为意外。前台重连判定读这里，
+        // 不抢退避用的一次性信号；重连成功/主动断开时清除。
+        self.last_disconnect_unexpected = true;
         self.buffer_input_while_disconnected = true;
         self.disconnect_input_toast_at = None;
         self.disconnect_input_toast_armed = false;
@@ -5148,6 +5161,16 @@ impl TerminalView {
     /// 非用户主动断开时为 `true` 一次(供自动重连等)；读取后清除。
     pub fn take_unexpected_disconnect_notified(&mut self) -> bool {
         std::mem::take(&mut self.unexpected_disconnect_notified)
+    }
+
+    /// #201：粘性「本断线为意外」标记（前台重连判定用；不清除，重连成功才消）。
+    pub fn last_disconnect_was_unexpected(&self) -> bool {
+        self.last_disconnect_unexpected
+    }
+
+    /// #201：清除粘性标记（用户主动断开路径调用）。
+    fn clear_last_disconnect_unexpected(&mut self) {
+        self.last_disconnect_unexpected = false;
     }
 
     /// #93：VTE BEL（响铃），宿主聚合到未聚焦标签。
