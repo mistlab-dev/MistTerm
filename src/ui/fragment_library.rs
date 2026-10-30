@@ -361,19 +361,41 @@ impl FragmentLibraryState {
                             .id_source("mistterm_fragment_lib_list_scroll")
                             .max_height(list_scroll_h)
                             .show(ui, |ui| {
-                                for f in results {
-                                    let selected = self.editing_id.as_deref() == Some(f.id.as_str());
-                                    let label = format!(
-                                        "{} · {}",
-                                        crate::i18n::fragment_display_title(ctx, f),
-                                        crate::i18n::fragment_display_category(ctx, f),
+                                if results.is_empty() {
+                                    let empty = if self.search_query.trim().is_empty() {
+                                        i18n::tr(
+                                            ui.ctx(),
+                                            "No snippets yet. Tap New, fill title, category, and command on the right, then Save.",
+                                            "还没有命令片段。点「新建」，在右侧填标题、分类和命令后保存。",
+                                        )
+                                    } else {
+                                        i18n::tr(
+                                            ui.ctx(),
+                                            "No matching snippets. Try another search or clear the box.",
+                                            "没有匹配的片段。试试别的关键词，或清空搜索。",
+                                        )
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(empty)
+                                            .size(theme.font_size_caption())
+                                            .color(theme.text_tertiary()),
                                     );
-                                    if ui
-                                        .selectable_label(selected, label)
-                                        .on_hover_text(&f.command)
-                                        .clicked()
-                                    {
-                                        self.load_from_fragment(f, shortcuts);
+                                } else {
+                                    for f in results {
+                                        let selected =
+                                            self.editing_id.as_deref() == Some(f.id.as_str());
+                                        let label = format!(
+                                            "{} · {}",
+                                            crate::i18n::fragment_display_title(ctx, f),
+                                            crate::i18n::fragment_display_category(ctx, f),
+                                        );
+                                        if ui
+                                            .selectable_label(selected, label)
+                                            .on_hover_text(&f.command)
+                                            .clicked()
+                                        {
+                                            self.load_from_fragment(f, shortcuts);
+                                        }
                                     }
                                 }
                             });
@@ -454,15 +476,23 @@ impl FragmentLibraryState {
                                     theme,
                                     egui::Id::new("fragment_library_form_tags"),
                                     &mut self.form_tags,
-                                    "prod, nginx",
+                                    i18n::tr(ui.ctx(), "e.g. prod, nginx", "例如：prod, nginx"),
                                     edit_w,
                                     false,
                                 );
                                 crate::ui::chrome::form_field_label(
                                     ui,
                                     theme,
-                                    i18n::tr(ui.ctx(),"Command (`<host>` placeholder; `{{ md5(a) }}` via Rhai)","命令(`<host>` 占位符；`{{ md5(a) }}` 见 Rhai)"),
+                                    i18n::tr(ui.ctx(), "Command", "命令"),
                                 );
+                                ui.label(crate::ui::chrome::rich_caption(
+                                    theme,
+                                    i18n::tr(
+                                        ui.ctx(),
+                                        "Placeholders like <host> are fine. Advanced expressions are optional.",
+                                        "可用 <host> 等占位符；高级表达式可选，不必填。",
+                                    ),
+                                ));
                                 crate::ui::chrome::form_multiline_field(
                                     ui,
                                     theme,

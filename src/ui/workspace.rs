@@ -1668,25 +1668,49 @@ impl MistTermApp {
                             .show(ui, |ui| {
                                 let fragments: Vec<_> = self.fragment_manager.list().to_vec();
                                 let search_lower = self.quick_selector.search_query.to_lowercase();
+                                let matched: Vec<_> = fragments
+                                    .iter()
+                                    .filter(|fragment| {
+                                        crate::i18n::fragment_matches_search(
+                                            ui.ctx(),
+                                            fragment,
+                                            &search_lower,
+                                        )
+                                    })
+                                    .collect();
 
-                                for (idx, fragment) in fragments.iter().enumerate() {
-                                    // 搜索过滤（含 starter 英/中标题）
-                                    if !crate::i18n::fragment_matches_search(
-                                        ui.ctx(),
-                                        fragment,
-                                        &search_lower,
-                                    ) {
-                                        continue;
-                                    }
+                                if matched.is_empty() {
+                                    let empty = if fragments.is_empty() {
+                                        crate::i18n::tr(
+                                            ui.ctx(),
+                                            "No snippets to pick. Add one in Snippet Library first.",
+                                            "还没有片段可选用。先去「命令片段库」新建一条。",
+                                        )
+                                    } else {
+                                        crate::i18n::tr(
+                                            ui.ctx(),
+                                            "No matching snippets. Try another search.",
+                                            "没有匹配的片段。换个关键词试试。",
+                                        )
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(empty)
+                                            .size(theme.font_size_caption())
+                                            .color(theme.text_tertiary()),
+                                    );
+                                } else {
+                                    for (idx, fragment) in matched.iter().enumerate() {
+                                        let is_selected =
+                                            idx == self.quick_selector.selected_index;
+                                        let title = crate::i18n::fragment_display_title(
+                                            ui.ctx(),
+                                            fragment,
+                                        );
 
-                                    let is_selected = idx == self.quick_selector.selected_index;
-                                    let title =
-                                        crate::i18n::fragment_display_title(ui.ctx(), fragment);
-
-                                    if ui.selectable_label(is_selected, title).clicked() {
-                                        // 点击执行
-                                        self.execute_fragment(ctx, fragment);
-                                        self.quick_selector.open = false;
+                                        if ui.selectable_label(is_selected, title).clicked() {
+                                            self.execute_fragment(ctx, fragment);
+                                            self.quick_selector.open = false;
+                                        }
                                     }
                                 }
                             });

@@ -147,12 +147,22 @@ impl PasteHistoryOverlay {
                                 ui.set_width(content_w);
                                 if results.is_empty() {
                                     let empty = if self.query.trim().is_empty() {
-                                        crate::i18n::tr(ctx, "No paste history yet", "还没有粘贴历史")
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "No paste history yet. Paste in the terminal and it will show up here to paste again.",
+                                            "还没有粘贴历史。在终端粘贴内容后会出现在这里，可再粘一次。",
+                                        )
                                     } else {
-                                        crate::i18n::tr(ctx, "No matches", "无匹配记录")
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "No matches. Try another search.",
+                                            "没有匹配的记录。换个关键词试试。",
+                                        )
                                     };
                                     ui.label(
-                                        egui::RichText::new(empty).color(theme.text_tertiary()),
+                                        egui::RichText::new(empty)
+                                            .size(theme.font_size_caption())
+                                            .color(theme.text_tertiary()),
                                     );
                                 } else {
                                     for (i, entry) in results.iter().enumerate() {

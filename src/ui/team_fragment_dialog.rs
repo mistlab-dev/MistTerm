@@ -182,12 +182,15 @@ pub fn show_team_fragment_editor_modal(
                         ui,
                         theme,
                         "team_frag_status",
-                        i18n::tr(ctx, status_display(&editor.status), status_display(&editor.status)),
+                        status_label(ctx, &editor.status),
                         form_w,
                         |ui| {
-                            for (val, label) in STATUS_OPTIONS {
-                                let text = i18n::tr(ctx, label, label);
-                                if ui.selectable_label(editor.status.as_str() == *val, text).clicked() {
+                            for (val, _) in STATUS_OPTIONS {
+                                let text = status_label(ctx, val);
+                                if ui
+                                    .selectable_label(editor.status.as_str() == *val, text)
+                                    .clicked()
+                                {
                                     editor.status = val.to_string();
                                 }
                             }
@@ -580,11 +583,11 @@ const STATUS_OPTIONS: &[(&str, &str)] = &[
     ("archived", "Archived"),
 ];
 
-fn status_display(status: &str) -> &'static str {
+fn status_label(ctx: &egui::Context, status: &str) -> &'static str {
     match status {
-        "draft" => "Draft",
-        "archived" => "Archived",
-        _ => "Published",
+        "draft" => i18n::tr(ctx, "Draft", "草稿"),
+        "archived" => i18n::tr(ctx, "Archived", "已归档"),
+        _ => i18n::tr(ctx, "Published", "已发布"),
     }
 }
 

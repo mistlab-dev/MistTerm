@@ -8352,14 +8352,23 @@ impl MistTermApp {
             .show(ui, |ui| {
                 ui.set_max_width(panel_w);
                 if work.is_empty() {
-                    ui.label(
-                        egui::RichText::new(crate::i18n::tr(
+                    let empty = if source.is_empty() {
+                        crate::i18n::tr(
                             ui.ctx(),
-                            "No snippets match your filters",
-                            "暂无片段",
-                        ))
-                        .size(theme.font_size_panel_title())
-                        .color(theme.text_tertiary()),
+                            "No snippets yet. Tap New above, or open Snippet Library to add one.",
+                            "还没有片段。点上方「新建」，或打开命令片段库添加。",
+                        )
+                    } else {
+                        crate::i18n::tr(
+                            ui.ctx(),
+                            "No snippets match these filters. Change filters/search, or tap New.",
+                            "没有符合当前筛选的片段。可换分类/搜索，或点「新建」。",
+                        )
+                    };
+                    ui.label(
+                        egui::RichText::new(empty)
+                            .size(theme.font_size_caption())
+                            .color(theme.text_tertiary()),
                     );
                 }
                 for frag in &work {

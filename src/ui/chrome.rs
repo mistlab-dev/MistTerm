@@ -2592,8 +2592,14 @@ pub fn fragment_list_row(
                                 "archived" => theme.text_tertiary(),
                                 _ => theme.accent_color(),
                             };
+                            let status_text = match status {
+                                "draft" => crate::i18n::tr(ui.ctx(), "Draft", "草稿"),
+                                "archived" => crate::i18n::tr(ui.ctx(), "Archived", "已归档"),
+                                "published" => crate::i18n::tr(ui.ctx(), "Published", "已发布"),
+                                other => other,
+                            };
                             ui.label(
-                                RichText::new(format!("[{}]", status))
+                                RichText::new(format!("[{}]", status_text))
                                     .size(tag_px * 0.85)
                                     .color(badge_color),
                             );
