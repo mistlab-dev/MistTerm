@@ -41,6 +41,8 @@ pub struct CredentialPanel {
     vault_list_busy: bool,
     search: String,
     status_msg: String,
+    /// 是否展开编辑区：新建或选中一条时为 true；空库默认 false，不摊空表单。
+    form_active: bool,
     /// 本帧 `SidePanel` 槽位(Central 之后 Foreground 重绘用)。
     last_panel_slot_rect: Option<egui::Rect>,
 }
@@ -69,6 +71,7 @@ impl CredentialPanel {
             vault_list_busy: false,
             search: String::new(),
             status_msg: String::new(),
+            form_active: false,
             last_panel_slot_rect: None,
         }
     }
@@ -90,6 +93,7 @@ impl CredentialPanel {
         self.reload_vault();
         self.selected_id = None;
         self.clear_form();
+        self.form_active = false;
         self.status_msg.clear();
     }
 
@@ -111,6 +115,7 @@ impl CredentialPanel {
     }
 
     fn load_cred(&mut self, c: &Credential) {
+        self.form_active = true;
         self.selected_id = Some(c.id.clone());
         self.form_name = c.name.clone();
         self.form_host = c.host.clone();
@@ -212,8 +217,20 @@ impl CredentialPanel {
             .collect()
     }
 
-    fn show_credential_list(ui: &mut egui::Ui, theme: &Theme, list: &[Credential], selected_id: &Option<String>, load: &mut impl FnMut(&Credential)) {
-        let list_h = layout_util::clamp_f32(ui.available_height() * 0.28, 72.0, 200.0);
+    fn show_credential_list(
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        list: &[Credential],
+        selected_id: &Option<String>,
+        form_active: bool,
+        load: &mut impl FnMut(&Credential),
+    ) {
+        // 编辑区收起时列表多占高度；展开时仍给列表固定上限，分区清楚。
+        let list_h = if form_active {
+            layout_util::clamp_f32(ui.available_height() * 0.28, 72.0, 200.0)
+        } else {
+            layout_util::clamp_f32(ui.available_height() * 0.55, 120.0, 360.0)
+        };
         let prev_extreme = ui.visuals().extreme_bg_color;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
         egui::ScrollArea::vertical()
@@ -229,13 +246,11 @@ impl CredentialPanel {
                     CredentialCategory::Api,
                     CredentialCategory::Other,
                 ];
-                let mut any = false;
                 for cat in categories {
                     let subs: Vec<&Credential> = list.iter().filter(|c| c.category == cat).collect();
                     if subs.is_empty() {
                         continue;
                     }
-                    any = true;
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 6.0;
                         let px = theme.font_size_section_title();
@@ -260,16 +275,6 @@ impl CredentialPanel {
                         });
                     });
                 }
-                if !any {
-                    ui.label(
-                        egui::RichText::new(i18n::tr(
-                            ui.ctx(),
-                            "No credentials yet — tap New",
-                            "暂无凭证，点「新建」添加",
-                        ))
-                            .color(theme.text_tertiary()),
-                    );
-                }
             });
         ui.visuals_mut().extreme_bg_color = prev_extreme;
     }
@@ -284,7 +289,7 @@ impl CredentialPanel {
         action_out: &mut Option<CredentialPanelAction>,
     ) {
         chrome::form_field_label(ui, theme, i18n::tr(ui.ctx(), "Name", "名称"));
-        chrome::form_singleline_field(
+        chrome::form_singleline_field_boxed(
             ui,
             theme,
             egui::Id::new("cred_form_name"),
@@ -344,7 +349,7 @@ impl CredentialPanel {
             );
         });
         chrome::form_field_label(ui, theme, i18n::tr(ui.ctx(), "Host", "主机"));
-        chrome::form_singleline_field(
+        chrome::form_singleline_field_boxed(
             ui,
             theme,
             egui::Id::new("cred_form_host"),
@@ -369,7 +374,7 @@ impl CredentialPanel {
             theme,
             i18n::tr(ui.ctx(), "Username (optional)", "用户名 (可选)"),
         );
-        chrome::form_singleline_field(
+        chrome::form_singleline_field_boxed(
             ui,
             theme,
             egui::Id::new("cred_form_username"),
@@ -402,7 +407,7 @@ impl CredentialPanel {
                 theme,
                 i18n::tr(ui.ctx(), "Mount", "挂载"),
             );
-            chrome::form_singleline_field(
+            chrome::form_singleline_field_boxed(
                 ui,
                 theme,
                 egui::Id::new("cred_vault_mount"),
@@ -416,7 +421,7 @@ impl CredentialPanel {
                 theme,
                 i18n::tr(ui.ctx(), "Path", "路径"),
             );
-            chrome::form_singleline_field(
+            chrome::form_singleline_field_boxed(
                 ui,
                 theme,
                 egui::Id::new("cred_vault_path"),
@@ -430,7 +435,7 @@ impl CredentialPanel {
                 theme,
                 i18n::tr(ui.ctx(), "Field", "字段"),
             );
-            chrome::form_singleline_field(
+            chrome::form_singleline_field_boxed(
                 ui,
                 theme,
                 egui::Id::new("cred_vault_field"),
@@ -648,22 +653,34 @@ impl CredentialPanel {
                     i18n::credential_auth_kind(ui.ctx(), panel.form_auth),
                 ),
             );
-            chrome::form_multiline_field(
-                ui,
-                theme,
-                egui::Id::new("cred_form_secret"),
-                &mut panel.form_secret,
-                field_w,
-                3,
-                !matches!(panel.form_auth, CredentialAuthKind::SshKey),
-            );
+            if matches!(panel.form_auth, CredentialAuthKind::SshKey) {
+                chrome::form_multiline_field(
+                    ui,
+                    theme,
+                    egui::Id::new("cred_form_secret"),
+                    &mut panel.form_secret,
+                    field_w,
+                    3,
+                    false,
+                );
+            } else {
+                chrome::form_singleline_field_boxed(
+                    ui,
+                    theme,
+                    egui::Id::new("cred_form_secret"),
+                    &mut panel.form_secret,
+                    i18n::tr(ui.ctx(), "Password or token", "密码或令牌"),
+                    field_w,
+                    true,
+                );
+            }
         }
         chrome::form_field_label(
             ui,
             theme,
             i18n::tr(ui.ctx(), "Tags (comma-separated)", "标签(逗号分隔)"),
         );
-        chrome::form_singleline_field(
+        chrome::form_singleline_field_boxed(
             ui,
             theme,
             egui::Id::new("cred_form_tags"),
@@ -756,6 +773,7 @@ impl CredentialPanel {
                             .with_resource(&id),
                         );
                         panel.clear_form();
+                        panel.form_active = false;
                         panel.status_msg = i18n::tr(ui.ctx(), "Deleted", "已删除").to_string();
                     }
                 }
@@ -772,6 +790,18 @@ impl CredentialPanel {
                         *action_out = Some(CredentialPanelAction::UseForQuickConnect(c));
                     }
                 }
+            }
+            if chrome::panel_action_icon_button(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Close,
+                i18n::tr(ui.ctx(), "Cancel", "取消"),
+            )
+            .clicked()
+            {
+                panel.clear_form();
+                panel.form_active = false;
+                panel.status_msg.clear();
             }
         });
         if !panel.status_msg.is_empty() {
@@ -876,14 +906,74 @@ impl CredentialPanel {
                     *close_panel = true;
                 }
                 chrome::right_dock_header_divider(ui, theme);
-                ui.small(
-                    egui::RichText::new(format!(
-                        "{}{}",
-                        i18n::tr(ctx, "Stored at: ", "存储："),
-                        self.vault.path().display()
-                    ))
-                        .color(theme.text_tertiary()),
-                );
+
+                // 路径收到「高级」次入口，不当副标题。
+                egui::CollapsingHeader::new(i18n::tr(ctx, "Advanced", "高级"))
+                    .id_source("credential_panel_advanced_path")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(i18n::tr(
+                                ctx,
+                                "Local encrypted store location (for backup).",
+                                "本地加密库位置（备份用）。",
+                            ))
+                            .size(theme.font_size_caption())
+                            .color(theme.color_form_hint()),
+                        );
+                        ui.horizontal_wrapped(|ui| {
+                            if chrome::panel_action_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Copy,
+                                i18n::tr(ui.ctx(), "Copy path", "复制路径"),
+                            )
+                            .clicked()
+                            {
+                                let path = self.vault.path().display().to_string();
+                                ui.ctx().copy_text(path);
+                                self.status_msg = i18n::tr(
+                                    ctx,
+                                    "Path copied",
+                                    "已复制路径",
+                                )
+                                .to_string();
+                            }
+                            if chrome::panel_action_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Folder,
+                                i18n::tr(
+                                    ui.ctx(),
+                                    "Show in file manager",
+                                    "在文件管理器中显示",
+                                ),
+                            )
+                            .clicked()
+                            {
+                                let path = self.vault.path();
+                                let reveal = path
+                                    .parent()
+                                    .filter(|p| p.is_dir())
+                                    .unwrap_or_else(|| path.as_path());
+                                if crate::platform::reveal_directory(reveal) {
+                                    self.status_msg = i18n::tr(
+                                        ctx,
+                                        "Opened in file manager",
+                                        "已在文件管理器中打开",
+                                    )
+                                    .to_string();
+                                } else {
+                                    self.status_msg = i18n::tr(
+                                        ctx,
+                                        "Could not open file manager",
+                                        "无法打开文件管理器",
+                                    )
+                                    .to_string();
+                                }
+                            }
+                        });
+                    });
 
                 ui.horizontal(|ui| {
                     if chrome::panel_toolbar_primary_icon_button(
@@ -895,11 +985,12 @@ impl CredentialPanel {
                     .clicked()
                     {
                         self.clear_form();
+                        self.form_active = true;
                         self.status_msg =
                             i18n::tr(ctx, "New credential", "新建凭证").to_string();
                     }
                     let search_w = (panel_w - 88.0).max(120.0);
-                    chrome::form_singleline_field(
+                    chrome::form_singleline_field_boxed(
                         ui,
                         theme,
                         egui::Id::new("credential_panel_search"),
@@ -911,6 +1002,7 @@ impl CredentialPanel {
                 });
                 ui.separator();
 
+                let vault_empty = self.vault.list().is_empty();
                 let mut list: Vec<Credential> = self.vault.list();
                 if !self.search.trim().is_empty() {
                     let q = self.search.to_lowercase();
@@ -923,123 +1015,207 @@ impl CredentialPanel {
                 }
                 list.sort_by(|a, b| a.name.cmp(&b.name));
 
-                ui.label(crate::ui::chrome::rich_section_title(
-                    theme,
-                    i18n::tr(ui.ctx(), "Credential list", "凭证列表"),
-                    theme.color_section_title(),
-                ));
-                let selected_id = self.selected_id.clone();
-                Self::show_credential_list(ui, theme, &list, &selected_id, &mut |c| {
-                    let prev = self.selected_id.as_deref();
-                    if prev != Some(c.id.as_str()) {
-                        audit.record(
-                            AuditEvent::new(
-                                AuditCategory::Credential,
-                                "credential.view",
-                                AuditOutcome::Success,
-                            )
-                            .with_resource(&c.id)
-                            .with_host(&c.host),
+                // —— 列表区 ——
+                if vault_empty && !self.form_active {
+                    ui.add_space(theme.spacing_panel_gap());
+                    ui.vertical_centered(|ui| {
+                        ui.add_space(12.0);
+                        ui.label(
+                            egui::RichText::new(i18n::tr(
+                                ui.ctx(),
+                                "No credentials yet",
+                                "暂无凭证",
+                            ))
+                            .size(theme.font_size_empty_state())
+                            .color(theme.text_secondary()),
+                        );
+                        ui.label(
+                            egui::RichText::new(i18n::tr(
+                                ui.ctx(),
+                                "Tap New to add a password, key, or token.",
+                                "点「新建」添加密码、密钥或令牌。",
+                            ))
+                            .size(theme.font_size_caption())
+                            .color(theme.text_tertiary()),
+                        );
+                    });
+                    if !self.status_msg.is_empty() {
+                        ui.add_space(8.0);
+                        ui.small(
+                            egui::RichText::new(&self.status_msg).color(theme.text_tertiary()),
                         );
                     }
-                    self.load_cred(c);
-                });
-
-                if vault_settings.enabled {
-                    ui.add_space(theme.spacing_panel_gap());
-                    ui.label(crate::ui::chrome::rich_section_title(
-                        theme,
-                        i18n::tr(ui.ctx(), "Browse Vault", "浏览 Vault"),
-                        theme.color_section_title(),
-                    ));
-                    ui.horizontal(|ui| {
-                        chrome::form_field_label(
+                } else {
+                    if !vault_empty {
+                        ui.label(crate::ui::chrome::rich_section_title(
+                            theme,
+                            i18n::tr(ui.ctx(), "Credential list", "凭证列表"),
+                            theme.color_section_title(),
+                        ));
+                        let selected_id = self.selected_id.clone();
+                        Self::show_credential_list(
                             ui,
                             theme,
-                            i18n::tr(ui.ctx(), "Prefix", "前缀"),
+                            &list,
+                            &selected_id,
+                            self.form_active,
+                            &mut |c| {
+                                let prev = self.selected_id.as_deref();
+                                if prev != Some(c.id.as_str()) {
+                                    audit.record(
+                                        AuditEvent::new(
+                                            AuditCategory::Credential,
+                                            "credential.view",
+                                            AuditOutcome::Success,
+                                        )
+                                        .with_resource(&c.id)
+                                        .with_host(&c.host),
+                                    );
+                                }
+                                self.load_cred(c);
+                            },
                         );
-                        let prefix_w = (panel_w - 120.0).max(100.0);
-                        chrome::form_singleline_field(
-                            ui,
-                            theme,
-                            egui::Id::new("cred_vault_prefix"),
-                            &mut self.vault_list_prefix,
-                            "secret/",
-                            prefix_w,
-                            false,
-                        );
-                        if chrome::panel_action_icon_button(
-                            ui,
-                            theme,
-                            crate::ui::icons::IconId::Refresh,
-                            i18n::tr(ui.ctx(), "Refresh list", "刷新列表"),
-                        )
-                        .clicked()
-                        {
-                            self.refresh_vault_list(vault_settings, lang);
+                        if list.is_empty() {
+                            ui.label(
+                                egui::RichText::new(i18n::tr(
+                                    ui.ctx(),
+                                    "No matches for this search",
+                                    "没有符合搜索的凭证",
+                                ))
+                                .color(theme.text_tertiary()),
+                            );
                         }
-                    });
-                    if self.vault_list_busy {
-                        chrome::busy_row(
-                            ui,
+                    }
+
+                    // HashiCorp 浏览：编辑时可用，避免空库主路径噪音
+                    if vault_settings.enabled && self.form_active {
+                        ui.add_space(theme.spacing_panel_gap());
+                        ui.label(crate::ui::chrome::rich_section_title(
                             theme,
-                            i18n::tr(ui.ctx(), "Fetching Vault list…", "正在拉取 Vault 列表…"),
-                        );
-                    } else if !self.vault_list_entries.is_empty() {
-                        let browse_h =
-                            layout_util::clamp_f32(ui.available_height() * 0.2, 48.0, 140.0);
-                        egui::ScrollArea::vertical()
-                            .id_source("credential_vault_browse")
-                            .max_height(browse_h)
-                            .show(ui, |ui| {
-                                for e in &self.vault_list_entries {
-                                    let label = if e.is_dir {
-                                        format!("{}/", e.path)
-                                    } else {
-                                        e.path.clone()
-                                    };
-                                    if ui.selectable_label(false, label).clicked() {
-                                        self.form_use_vault = true;
-                                        if e.is_dir {
-                                            self.vault_list_prefix = e.path.clone();
+                            i18n::tr(ui.ctx(), "Browse Vault", "浏览 Vault"),
+                            theme.color_section_title(),
+                        ));
+                        ui.horizontal(|ui| {
+                            chrome::form_field_label(
+                                ui,
+                                theme,
+                                i18n::tr(ui.ctx(), "Prefix", "前缀"),
+                            );
+                            let prefix_w = (panel_w - 120.0).max(100.0);
+                            chrome::form_singleline_field_boxed(
+                                ui,
+                                theme,
+                                egui::Id::new("cred_vault_prefix"),
+                                &mut self.vault_list_prefix,
+                                "secret/",
+                                prefix_w,
+                                false,
+                            );
+                            if chrome::panel_action_icon_button(
+                                ui,
+                                theme,
+                                crate::ui::icons::IconId::Refresh,
+                                i18n::tr(ui.ctx(), "Refresh list", "刷新列表"),
+                            )
+                            .clicked()
+                            {
+                                self.refresh_vault_list(vault_settings, lang);
+                            }
+                        });
+                        if self.vault_list_busy {
+                            chrome::busy_row(
+                                ui,
+                                theme,
+                                i18n::tr(
+                                    ui.ctx(),
+                                    "Fetching Vault list…",
+                                    "正在拉取 Vault 列表…",
+                                ),
+                            );
+                        } else if !self.vault_list_entries.is_empty() {
+                            let browse_h = layout_util::clamp_f32(
+                                ui.available_height() * 0.2,
+                                48.0,
+                                140.0,
+                            );
+                            egui::ScrollArea::vertical()
+                                .id_source("credential_vault_browse")
+                                .max_height(browse_h)
+                                .show(ui, |ui| {
+                                    for e in &self.vault_list_entries {
+                                        let label = if e.is_dir {
+                                            format!("{}/", e.path)
                                         } else {
-                                            self.form_vault_path = e.path.clone();
+                                            e.path.clone()
+                                        };
+                                        if ui.selectable_label(false, label).clicked() {
+                                            self.form_use_vault = true;
+                                            if e.is_dir {
+                                                self.vault_list_prefix = e.path.clone();
+                                            } else {
+                                                self.form_vault_path = e.path.clone();
+                                            }
                                         }
                                     }
-                                }
+                                });
+                        }
+                    }
+
+                    // —— 编辑区：仅新建或选中时出现 ——
+                    if self.form_active {
+                        ui.add_space(theme.spacing_panel_gap());
+                        ui.separator();
+                        let edit_title = if self.selected_id.is_some() {
+                            i18n::tr(ui.ctx(), "Edit", "编辑")
+                        } else {
+                            i18n::tr(ui.ctx(), "New credential", "新建凭证")
+                        };
+                        ui.label(crate::ui::chrome::rich_section_title(
+                            theme,
+                            edit_title,
+                            theme.color_section_title(),
+                        ));
+
+                        let field_w = (panel_w - 8.0).max(160.0);
+                        let form_scroll_h = layout_util::scroll_area_fill_height(ui, 120.0);
+                        let prev_extreme = ui.visuals().extreme_bg_color;
+                        ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
+                        egui::ScrollArea::vertical()
+                            .id_source("credential_panel_form")
+                            .max_height(form_scroll_h)
+                            .auto_shrink([false; 2])
+                            .show(ui, |ui| {
+                                ui.set_max_width(panel_w);
+                                Self::show_credential_form(
+                                    ui,
+                                    theme,
+                                    field_w,
+                                    vault_settings,
+                                    audit,
+                                    self,
+                                    action_out,
+                                );
                             });
+                        ui.visuals_mut().extreme_bg_color = prev_extreme;
+                    } else if !vault_empty {
+                        ui.add_space(theme.spacing_panel_gap());
+                        ui.label(
+                            egui::RichText::new(i18n::tr(
+                                ui.ctx(),
+                                "Select a credential to edit, or tap New.",
+                                "选中一条可编辑，或点「新建」。",
+                            ))
+                            .size(theme.font_size_caption())
+                            .color(theme.text_tertiary()),
+                        );
+                        if !self.status_msg.is_empty() {
+                            ui.small(
+                                egui::RichText::new(&self.status_msg)
+                                    .color(theme.text_tertiary()),
+                            );
+                        }
                     }
                 }
-
-                ui.add_space(theme.spacing_panel_gap());
-                ui.separator();
-                ui.label(crate::ui::chrome::rich_section_title(
-                    theme,
-                    i18n::tr(ui.ctx(), "Edit", "编辑"),
-                    theme.color_section_title(),
-                ));
-
-                let field_w = (panel_w - 8.0).max(160.0);
-                let form_scroll_h = layout_util::scroll_area_fill_height(ui, 120.0);
-                let prev_extreme = ui.visuals().extreme_bg_color;
-                ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
-                egui::ScrollArea::vertical()
-                    .id_source("credential_panel_form")
-                    .max_height(form_scroll_h)
-                    .auto_shrink([false; 2])
-                    .show(ui, |ui| {
-                        ui.set_max_width(panel_w);
-                        Self::show_credential_form(
-                            ui,
-                            theme,
-                            field_w,
-                            vault_settings,
-                            audit,
-                            self,
-                            action_out,
-                        );
-                    });
-                ui.visuals_mut().extreme_bg_color = prev_extreme;
             },
         );
     }

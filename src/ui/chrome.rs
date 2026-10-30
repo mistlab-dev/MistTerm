@@ -3232,6 +3232,44 @@ pub fn form_singleline_field(
     shown.inner
 }
 
+/// 始终有底+描边的单行输入（凭证库等需要一眼看出输入区的场景；不受 modern 下划线模式影响）。
+pub fn form_singleline_field_boxed(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    text: &mut String,
+    hint: &str,
+    desired_width: f32,
+    password: bool,
+) -> Response {
+    let focused = ui.memory(|m| m.has_focus(id));
+    let inner_w = (desired_width - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0);
+    theme
+        .frame_boxed_text_input(focused)
+        .show(ui, |ui| {
+            with_underline_field_visuals(ui, theme, |ui| {
+                let prev_override = ui.style_mut().visuals.override_text_color;
+                ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
+                let mut edit = egui::TextEdit::singleline(text)
+                    .id(id)
+                    .frame(false)
+                    .desired_width(inner_w)
+                    .text_color(theme.color_text_input_text())
+                    .font(egui::FontId::proportional(theme.font_size_control_input()));
+                if !hint.is_empty() {
+                    edit = edit.hint_text(hint_rich(theme, hint, theme.font_size_control_input()));
+                }
+                if password {
+                    edit = edit.password(true);
+                }
+                let response = ui.add(edit);
+                ui.style_mut().visuals.override_text_color = prev_override;
+                response
+            })
+        })
+        .inner
+}
+
 /// 多行输入框：始终用有底边框(不下划线)，避免「上面光标、下面一根线」的假高行。
 pub fn form_multiline_field(
     ui: &mut Ui,
