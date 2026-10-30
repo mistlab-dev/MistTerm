@@ -3335,7 +3335,7 @@ impl MistTermApp {
         self.dismiss_stale_reconnect_toast_if_needed();
     }
 
-    /// Connect/fail placeholder: Cancel / Retry / Edit host / Close tab.
+    /// Connect/fail placeholder: Cancel / Retry / Edit host / Close tab / Trust host key.
     fn poll_connection_placeholder_actions(&mut self, ctx: &egui::Context) {
         use crate::ui::terminal::ConnectionPlaceholderAction;
         let mut actions: Vec<(usize, ConnectionPlaceholderAction)> = Vec::new();
@@ -3385,6 +3385,34 @@ impl MistTermApp {
                 ConnectionPlaceholderAction::DismissTab => {
                     self.clear_toast();
                     self.request_close_tab_at(tab_idx);
+                }
+                ConnectionPlaceholderAction::TrustHostKey => {
+                    let result = self
+                        .tabs
+                        .get_mut(tab_idx)
+                        .and_then(|t| t.active_pane_mut())
+                        .map(|pane| pane.terminal.apply_pending_host_key_trust());
+                    match result {
+                        Some(Ok(())) => {
+                            self.clear_toast();
+                            self.notify_info(crate::i18n::tr(
+                                ctx,
+                                "Host key trusted — reconnecting…",
+                                "已信任新密钥，正在重新连接…",
+                            ));
+                            self.reconnect_tab_at(ctx, tab_idx);
+                        }
+                        Some(Err(e)) => {
+                            self.notify_error(e);
+                        }
+                        None => {
+                            self.notify_warn(crate::i18n::tr(
+                                ctx,
+                                "No host-key change to trust",
+                                "没有可信任的主机密钥变更",
+                            ));
+                        }
+                    }
                 }
             }
         }

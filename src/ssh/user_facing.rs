@@ -79,6 +79,35 @@ pub fn format_ssh_connect_error(lang: UiLanguage, message: &str) -> String {
         );
     }
 
+    if lower.contains("host_key_changed")
+        || lower.starts_with("host_key_changed|")
+        || lower.contains("host key changed")
+    {
+        // Prefer short beginner copy; do not dump English protocol text as the primary line.
+        let mut new_fp = String::new();
+        if let Some(changed) = super::known_hosts::parse_host_key_changed(s) {
+            new_fp = changed.got;
+        }
+        let en = if new_fp.is_empty() {
+            "This host's key changed (common after a reinstall). If you expected that, tap Trust and continue.".to_string()
+        } else {
+            format!(
+                "This host's key changed (common after a reinstall). New fingerprint: {new_fp}. If you expected that, tap Trust and continue."
+            )
+        };
+        let zh = if new_fp.is_empty() {
+            "这台主机的密钥变了（常见于重装系统）。确认是你本人改过之后，点「信任并继续」即可连上。".to_string()
+        } else {
+            format!(
+                "这台主机的密钥变了（常见于重装系统）。新指纹：{new_fp}。确认是你本人改过之后，点「信任并继续」即可连上。"
+            )
+        };
+        return match lang {
+            UiLanguage::En => en,
+            UiLanguage::Zh => zh,
+        };
+    }
+
     if lower.contains("banner") || lower.contains("handshake") || lower.contains("kex") {
         return pick(
             "Could not talk to this SSH server. Check the address, port, and that SSH is running.",
@@ -288,5 +317,21 @@ mod tests {
             "TCP connection failed: Connection refused (os error 61)",
         );
         assert!(s.contains("拒绝"));
+    }
+
+    #[test]
+    fn maps_host_key_changed_without_english_protocol_dump() {
+        let raw = "HOST_KEY_CHANGED|127.0.0.1|2222|SHA256:old|SHA256:newfp";
+        let zh = format_ssh_connect_error(UiLanguage::Zh, raw);
+        assert!(zh.contains("密钥变了"));
+        assert!(zh.contains("信任并继续"));
+        assert!(zh.contains("SHA256:newfp"));
+        assert!(!zh.contains("HOST_KEY_CHANGED"));
+        assert!(!zh.contains("Refusing to connect"));
+
+        let en = format_ssh_connect_error(UiLanguage::En, raw);
+        assert!(en.to_lowercase().contains("key changed"));
+        assert!(en.to_lowercase().contains("trust and continue"));
+        assert!(!en.contains("HOST_KEY_CHANGED"));
     }
 }

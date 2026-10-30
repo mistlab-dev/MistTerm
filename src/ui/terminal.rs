@@ -293,6 +293,8 @@ pub enum ConnectionPlaceholderAction {
     Retry,
     EditHost,
     DismissTab,
+    /// Write the new host key into known_hosts, then reconnect.
+    TrustHostKey,
 }
 
 /// 终端连接类型：远端 SSH 或本机 PTY shell。
@@ -429,6 +431,8 @@ pub struct TerminalView {
     pending_toast_info: Option<String>,
     /// Connect placeholder button (`take_connection_placeholder_action`)
     pending_connection_placeholder_action: ConnectionPlaceholderAction,
+    /// Host-key-changed offer: (host, port, new fingerprint) for 「信任并继续」.
+    pending_host_key_trust: Option<(String, u16, String)>,
     /// 拖入终端区域、待宿主处理的上传路径(§4.3.2)。
     pending_drop_upload_paths: Vec<PathBuf>,
     /// 大文件上传：用户选 ZMODEM 后先发 `rz -y`，握手检测到后再用此路径 `start_rz_upload`。
@@ -1012,6 +1016,7 @@ impl TerminalView {
             pending_toast_error: None,
             pending_toast_info: None,
             pending_connection_placeholder_action: ConnectionPlaceholderAction::None,
+            pending_host_key_trust: None,
             pending_drop_upload_paths: Vec::new(),
             zmodem_upload_after_rz_path: None,
             selection: Selection::default(),
@@ -1657,6 +1662,7 @@ impl TerminalView {
                 self.ssh_rx = Some(rx);
                 self.connected = false;
                 self.error_message = None;
+                self.pending_host_key_trust = None;
                 self.connecting_fido2 = auth_mode.is_fido2();
                 self.terminal = VtTerminal::new(self.cols as usize, self.rows as usize);
                 self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
@@ -3247,6 +3253,12 @@ impl TerminalView {
                     }
                     SshMessage::Error { error, .. } => {
                         self.connecting_fido2 = false;
+                        if let Some(changed) = crate::ssh::parse_host_key_changed(&error) {
+                            self.pending_host_key_trust =
+                                Some((changed.host, changed.port, changed.got));
+                        } else {
+                            self.pending_host_key_trust = None;
+                        }
                         let msg = format_ssh_connect_error(self.ui_lang_last, &error);
                         if let Some((_, host)) = &self.connection_target {
                             self.pending_connect_audit = Some((false, host.clone()));
@@ -4690,43 +4702,101 @@ impl TerminalView {
                                         .color(theme.red_color()),
                                 );
                                 ui.add_space(theme.spacing_md());
+                                let offer_trust = self.pending_host_key_trust.is_some();
                                 // 按钮组整体居中，与上方文案同轴（勿贴左/贴右）。
                                 let gap = theme.spacing_sm().max(8.0);
-                                let row_w = theme.size_modal_footer_btn_min_w_secondary() * 2.0
-                                    + theme.size_modal_footer_btn_min_w_primary()
-                                    + gap * 2.0;
-                                let pad = ((max_w - row_w) * 0.5).max(0.0);
-                                ui.horizontal(|ui| {
-                                    ui.add_space(pad);
-                                    ui.spacing_mut().item_spacing.x = gap;
-                                    if crate::ui::chrome::modal_secondary_button(
-                                        ui,
-                                        theme,
-                                        crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
-                                    )
-                                    .clicked()
-                                    {
-                                        action = ConnectionPlaceholderAction::DismissTab;
-                                    }
-                                    if crate::ui::chrome::modal_secondary_button(
-                                        ui,
-                                        theme,
-                                        crate::i18n::tr(ui.ctx(), "Edit host", "编辑主机"),
-                                    )
-                                    .clicked()
-                                    {
-                                        action = ConnectionPlaceholderAction::EditHost;
-                                    }
-                                    if crate::ui::chrome::modal_primary_button(
-                                        ui,
-                                        theme,
-                                        crate::i18n::tr(ui.ctx(), "Retry", "重试"),
-                                    )
-                                    .clicked()
-                                    {
-                                        action = ConnectionPlaceholderAction::Retry;
-                                    }
-                                });
+                                if offer_trust {
+                                    // Host-key change: keep Close/Edit/Retry, put Trust as the clear primary CTA.
+                                    let row_w = theme.size_modal_footer_btn_min_w_secondary() * 3.0
+                                        + gap * 2.0;
+                                    let pad = ((max_w - row_w) * 0.5).max(0.0);
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(pad);
+                                        ui.spacing_mut().item_spacing.x = gap;
+                                        if crate::ui::chrome::modal_secondary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::DismissTab;
+                                        }
+                                        if crate::ui::chrome::modal_secondary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(ui.ctx(), "Edit host", "编辑主机"),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::EditHost;
+                                        }
+                                        if crate::ui::chrome::modal_secondary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(ui.ctx(), "Retry", "重试"),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::Retry;
+                                        }
+                                    });
+                                    ui.add_space(theme.spacing_sm());
+                                    let trust_w = theme.size_modal_footer_btn_min_w_primary().max(160.0);
+                                    let pad_t = ((max_w - trust_w) * 0.5).max(0.0);
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(pad_t);
+                                        if crate::ui::chrome::modal_primary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(
+                                                ui.ctx(),
+                                                "Trust and continue",
+                                                "信任并继续",
+                                            ),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::TrustHostKey;
+                                        }
+                                    });
+                                } else {
+                                    let row_w = theme.size_modal_footer_btn_min_w_secondary() * 2.0
+                                        + theme.size_modal_footer_btn_min_w_primary()
+                                        + gap * 2.0;
+                                    let pad = ((max_w - row_w) * 0.5).max(0.0);
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(pad);
+                                        ui.spacing_mut().item_spacing.x = gap;
+                                        if crate::ui::chrome::modal_secondary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::DismissTab;
+                                        }
+                                        if crate::ui::chrome::modal_secondary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(ui.ctx(), "Edit host", "编辑主机"),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::EditHost;
+                                        }
+                                        if crate::ui::chrome::modal_primary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(ui.ctx(), "Retry", "重试"),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::Retry;
+                                        }
+                                    });
+                                }
                             } else if is_connecting {
                                 let host = self.connection_server_text();
                                 let text = if self.is_local_shell() {
@@ -4959,6 +5029,7 @@ impl TerminalView {
         self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
         self.visual_layout_cache = None;
         self.error_message = None;
+        self.pending_host_key_trust = None;
         self.connecting_fido2 = false;
         self.transfer_progress = None;
         self.transfer_outgoing = false;
@@ -5001,6 +5072,7 @@ impl TerminalView {
         self.ssh_rx = None;
         self.session_id = None;
         self.error_message = None;
+        self.pending_host_key_trust = None;
         self.connecting_fido2 = false;
         self.transfer_progress = None;
         self.transfer_outgoing = false;
@@ -5221,6 +5293,24 @@ impl TerminalView {
     /// 命令块提示（未集成、已经到头、没有可复制的块）。
     pub fn take_pending_toast_info(&mut self) -> Option<String> {
         self.pending_toast_info.take()
+    }
+
+    /// Persist the offered new host key into known_hosts after explicit user trust.
+    pub fn apply_pending_host_key_trust(&mut self) -> Result<(), String> {
+        let Some((host, port, fingerprint)) = self.pending_host_key_trust.take() else {
+            return Err(
+                self.locale_last()
+                    .tr(
+                        "No host-key change to trust",
+                        "没有可信任的主机密钥变更",
+                    )
+                    .to_string(),
+            );
+        };
+        crate::ssh::replace_host_key(&host, port, &fingerprint)?;
+        self.error_message = None;
+        self.pending_toast_error = None;
+        Ok(())
     }
 
     pub fn take_connection_placeholder_action(&mut self) -> ConnectionPlaceholderAction {
