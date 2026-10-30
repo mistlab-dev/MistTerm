@@ -3506,7 +3506,7 @@ dependencies = [
 
 [[package]]
 name = "mistterm"
-version = "1.3.1"
+version = "1.3.2"
 dependencies = [
  "ab_glyph",
  "aes-gcm",
