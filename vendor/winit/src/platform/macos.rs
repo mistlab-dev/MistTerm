@@ -376,6 +376,6 @@ impl Default for OptionAsAlt {
 /// usually already written a `crash-*.log`; MistTerm uses this to add a
 /// caught-in-FFI note for observability.
 pub fn set_caught_draw_rect_panic_hook(hook: fn()) {
-    crate::platform_impl::platform::set_caught_draw_rect_panic_hook(hook);
+    crate::platform_impl::set_caught_draw_rect_panic_hook(hook);
 }
 
