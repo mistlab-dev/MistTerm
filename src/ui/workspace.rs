@@ -1082,7 +1082,7 @@ impl MistTermApp {
                                 &mut self.edit_session_private_key_path,
                             );
 
-                            Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "ProxyJump", "跳板 ProxyJump"));
+                            Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Jump host", "跳板机"));
                             Self::ui_form_singleline(
                                 ui,
                                 theme,
@@ -1090,14 +1090,14 @@ impl MistTermApp {
                                 &mut self.edit_session_proxy_jump,
                                 crate::i18n::tr(
                                     ctx,
-                                    "bastion or user@bastion:22 (comma-separated hops)",
-                                    "bastion 或 user@bastion:22(多跳逗号分隔；匹配已保存会话名)",
+                                    "bastion or user@bastion:22 (comma-separated hops; OpenSSH ProxyJump)",
+                                    "跳板主机或 user@bastion:22（多跳逗号分隔；可填已保存会话名）",
                                 ),
                                 form_w,
                                 false,
                             );
 
-                            Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "ProxyCommand", "代理命令 ProxyCommand"));
+                            Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Proxy command", "代理命令"));
                             Self::ui_form_singleline(
                                 ui,
                                 theme,
@@ -1105,8 +1105,8 @@ impl MistTermApp {
                                 &mut self.edit_session_proxy_command,
                                 crate::i18n::tr(
                                     ctx,
-                                    "e.g. ssh -W %h:%p jump",
-                                    "例：ssh -W %h:%p jump",
+                                    "e.g. ssh -W %h:%p jump (OpenSSH ProxyCommand)",
+                                    "例：ssh -W %h:%p jump（自定义代理命令）",
                                 ),
                                 form_w,
                                 false,
@@ -1117,8 +1117,8 @@ impl MistTermApp {
                                 theme,
                                 crate::i18n::tr(
                                     ctx,
-                                    "Local forwards (-L)",
-                                    "本地端口转发 (-L)",
+                                    "Local port forwards",
+                                    "本机端口转发",
                                 ),
                             );
                             crate::ui::chrome::form_multiline_field_with_hint(
@@ -1141,8 +1141,8 @@ impl MistTermApp {
                                 theme,
                                 crate::i18n::tr(
                                     ctx,
-                                    "Remote forwards (-R)",
-                                    "远程端口转发 (-R)",
+                                    "Remote port forwards",
+                                    "远端端口转发",
                                 ),
                             );
                             crate::ui::chrome::form_multiline_field_with_hint(
@@ -1165,8 +1165,8 @@ impl MistTermApp {
                                 theme,
                                 crate::i18n::tr(
                                     ctx,
-                                    "Dynamic forwards (-D / SOCKS5)",
-                                    "动态转发 (-D / SOCKS5)",
+                                    "Dynamic forwards (SOCKS)",
+                                    "动态转发（SOCKS）",
                                 ),
                             );
                             crate::ui::chrome::form_multiline_field_with_hint(
