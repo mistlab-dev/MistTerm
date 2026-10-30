@@ -271,19 +271,30 @@ impl CommandHistoryOverlay {
                                         }
                                     }
                                 } else {
-                                    let empty_msg = if self.filter_active_tab
+                                    let empty_msg = if !self.query.trim().is_empty() {
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "No matches. Try another search.",
+                                            "没有匹配的记录。换个关键词试试。",
+                                        )
+                                    } else if self.filter_active_tab
                                         && active_session_id.is_some()
                                     {
                                         crate::i18n::tr(
                                             ctx,
-                                            "No history for this tab",
-                                            "当前标签暂无历史",
+                                            "No history for this tab yet. Run commands here and reopen, or turn off “Active tab only” to see all.",
+                                            "当前标签还没有命令历史。在此会话里执行命令后会出现在这里；也可取消「仅当前标签」查看全部。",
                                         )
                                     } else {
-                                        crate::i18n::tr(ctx, "No matches", "无匹配记录")
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "No command history yet. After you run commands in a session, search, rerun, or compose snippets here.",
+                                            "还没有命令历史。连接会话并执行命令后，可在这里搜索、重跑或勾选组成片段。",
+                                        )
                                     };
                                     ui.label(
                                         egui::RichText::new(empty_msg)
+                                            .size(theme.font_size_caption())
                                             .color(theme.text_tertiary()),
                                     );
                                 }
@@ -310,6 +321,7 @@ impl CommandHistoryOverlay {
                                             let n = self.checked.len();
                                             if n >= 2 {
                                                 self.compose_title = default_compose_title(
+                                                    ctx,
                                                     active_session_name,
                                                     n,
                                                 );
@@ -407,6 +419,7 @@ impl CommandHistoryOverlay {
                                         picked.into_iter().map(|e| e.command).collect();
                                     let title = if self.compose_title.trim().is_empty() {
                                         default_compose_title(
+                                            ctx,
                                             active_session_name,
                                             commands.len(),
                                         )
@@ -441,10 +454,17 @@ fn entry_key(e: &HistoryEntry) -> String {
     format!("{}|{}", e.executed_at, e.command)
 }
 
-fn default_compose_title(session_name: Option<&str>, n: usize) -> String {
-    match session_name.filter(|s| !s.is_empty()) {
-        Some(name) => format!("组合 · {name} · {n} 条"),
-        None => format!("组合 · {n} 条"),
+fn default_compose_title(
+    ctx: &egui::Context,
+    session_name: Option<&str>,
+    n: usize,
+) -> String {
+    let lang = crate::i18n::language(ctx);
+    match (lang, session_name.filter(|s| !s.is_empty())) {
+        (crate::i18n::UiLanguage::Zh, Some(name)) => format!("组合 · {name} · {n} 条"),
+        (crate::i18n::UiLanguage::Zh, None) => format!("组合 · {n} 条"),
+        (_, Some(name)) => format!("Composed · {name} · {n}"),
+        (_, None) => format!("Composed · {n}"),
     }
 }
 

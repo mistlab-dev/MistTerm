@@ -182,30 +182,52 @@ impl BatchExecDialog {
                     .max_height(140.0)
                     .show(ui, |ui| {
                         ui.spacing_mut().item_spacing.y = theme.spacing_sm();
-                        for t in filtered_targets(targets, &self.select_filter) {
-                            let mut checked = self.selected.contains(&t.id);
-                            ui.horizontal(|ui| {
-                                if crate::ui::chrome::form_checkbox_with_id(
-                                    ui,
-                                    theme,
-                                    &t.id,
-                                    &mut checked,
-                                    "",
+                        let visible = filtered_targets(targets, &self.select_filter);
+                        if visible.is_empty() {
+                            let empty = if self.select_filter.trim().is_empty() {
+                                crate::i18n::tr(
+                                    ctx,
+                                    "No hosts to pick yet. Add connections in the sidebar, then come back and select them.",
+                                    "还没有可选主机。先在左侧连接栏添加并保存连接，再回来勾选。",
                                 )
-                                .changed()
-                                {
-                                    if checked {
-                                        self.selected.insert(t.id.clone());
-                                    } else {
-                                        self.selected.remove(&t.id);
+                            } else {
+                                crate::i18n::tr(
+                                    ctx,
+                                    "No hosts match this filter. Try another search or clear the box.",
+                                    "没有符合筛选的主机。换个关键词，或清空筛选。",
+                                )
+                            };
+                            ui.label(
+                                egui::RichText::new(empty)
+                                    .size(theme.font_size_caption())
+                                    .color(theme.text_tertiary()),
+                            );
+                        } else {
+                            for t in visible {
+                                let mut checked = self.selected.contains(&t.id);
+                                ui.horizontal(|ui| {
+                                    if crate::ui::chrome::form_checkbox_with_id(
+                                        ui,
+                                        theme,
+                                        &t.id,
+                                        &mut checked,
+                                        "",
+                                    )
+                                    .changed()
+                                    {
+                                        if checked {
+                                            self.selected.insert(t.id.clone());
+                                        } else {
+                                            self.selected.remove(&t.id);
+                                        }
                                     }
-                                }
-                                ui.label(format!(
-                                    "{} · {}",
-                                    t.label,
-                                    crate::i18n::session_group_display_name(ctx, &t.group)
-                                ));
-                            });
+                                    ui.label(format!(
+                                        "{} · {}",
+                                        t.label,
+                                        crate::i18n::session_group_display_name(ctx, &t.group)
+                                    ));
+                                });
+                            }
                         }
                     });
 
@@ -265,8 +287,16 @@ impl BatchExecDialog {
                                     .exit_code
                                     .map(|c| c.to_string())
                                     .unwrap_or_else(|| "?".into());
-                                let header =
-                                    format!("{} — {} (exit {}, {}ms)", row.label, status, code, row.duration_ms);
+                                let header = match crate::i18n::language(ctx) {
+                                    crate::i18n::UiLanguage::Zh => format!(
+                                        "{} — {}（退出码 {}，{} 毫秒）",
+                                        row.label, status, code, row.duration_ms
+                                    ),
+                                    crate::i18n::UiLanguage::En => format!(
+                                        "{} — {} (exit {}, {}ms)",
+                                        row.label, status, code, row.duration_ms
+                                    ),
+                                };
                                 ui.collapsing(header, |ui| {
                                     if let Some(e) = &row.error {
                                         ui.colored_label(theme.red_color(), e);
