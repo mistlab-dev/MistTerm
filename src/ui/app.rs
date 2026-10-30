@@ -305,6 +305,10 @@ pub struct MistTermApp {
     output_trigger_rules: crate::modules::output_trigger::OutputTriggerStore,
     display_link_rules: crate::modules::display_link::DisplayLinkStore,
     cmd_audit_personal_rules: crate::core::cmd_audit_personal::CmdAuditPersonalStore,
+    /// #201：上一帧窗口焦点（viewport focused 边沿检测）。
+    prev_viewport_focused: bool,
+    /// #201：标签切换记录的前台重连待检项（下一帧统一处理）。
+    pending_foreground_reconnect: Option<usize>,
     rule_manager_dialog: crate::ui::rule_manager_dialog::RuleManagerDialog,
 
     /// 是否显示新建会话对话框
@@ -1224,6 +1228,8 @@ impl MistTermApp {
             rule_manager_dialog: crate::ui::rule_manager_dialog::RuleManagerDialog::default(),
             display_link_rules: display_link_rules.clone(),
             cmd_audit_personal_rules,
+            prev_viewport_focused: true,
+            pending_foreground_reconnect: None,
             show_new_session_dialog: false,
             show_edit_session_dialog: false,
             show_about_dialog: false,
@@ -3576,6 +3582,67 @@ impl MistTermApp {
             .unwrap_or(false)
     }
 
+    /// #201：对单个标签做前台激活重连判定（方案 §3）。
+    /// 命中则复用现有重连管线（不清屏、不丢缓冲）；静默，不弹 Toast。
+    fn try_foreground_reconnect_tab(&mut self, ctx: &egui::Context, idx: usize) {
+        if !self.app_settings.reconnect_on_foreground {
+            return;
+        }
+        if idx >= self.tabs.len() {
+            return;
+        }
+        // 先取标量（不可变借用），再进可变区，避免借用冲突。
+        let sid = self.tabs[idx].primary_session_id();
+        if !self.tab_auto_reconnect_enabled(&sid) {
+            return;
+        }
+        let (unexpected, banner_shown, backoff_pending, attempts) = {
+            let Some(pane) = self.tabs[idx].active_pane_mut() else {
+                return;
+            };
+            // 一次性信号：只有意外断开才置位；用户主动断开路径不会置位。
+            let unexpected = pane.terminal.take_unexpected_disconnect_notified();
+            (
+                unexpected,
+                pane.terminal.shows_persistent_disconnect_banner(),
+                pane.ssh_auto_reconnect_next.is_some(),
+                pane.ssh_auto_reconnect_attempts,
+            )
+        };
+        let should = crate::core::reconnect::should_reconnect_on_activation(
+            self.app_settings.reconnect_on_foreground,
+            unexpected,
+            banner_shown,
+            attempts,
+            crate::core::reconnect::DEFAULT_MAX_RECONNECT_ATTEMPTS,
+            backoff_pending,
+        );
+        if should {
+            log::info!("#201 foreground activation: auto-reconnecting tab {idx}");
+            // 复用现有管线；不清屏、不丢滚动缓冲（#177 已保证回同一现场）。
+            self.reconnect_tab_at_inner(ctx, idx, /*reset_attempt_budget=*/ false);
+        }
+    }
+
+    /// #201：窗口焦点回归（viewport focused false→true 边沿）时，
+    /// 对所有处于断线态的标签尝试前台重连。
+    fn poll_foreground_reconnect(&mut self, ctx: &egui::Context) {
+        if !self.app_settings.reconnect_on_foreground {
+            return;
+        }
+        // egui 0.23：窗口焦点经 egui-winit 直接落在 InputState::focused（vendor 补丁同步处）。
+        let focused = ctx.input(|i| i.focused);
+        let rose = focused && !self.prev_viewport_focused;
+        self.prev_viewport_focused = focused;
+        if !rose {
+            return;
+        }
+        let idxs: Vec<usize> = (0..self.tabs.len()).collect();
+        for idx in idxs {
+            self.try_foreground_reconnect_tab(ctx, idx);
+        }
+    }
+
     fn poll_command_history_from_active_tab(&mut self) {
         let Some(idx) = self.active_tab else {
             return;
@@ -4372,10 +4439,16 @@ impl MistTermApp {
 
     fn switch_tab_to_index(&mut self, idx: usize) {
         if idx < self.tabs.len() {
+            let switched_to_different = self.active_tab != Some(idx);
             self.active_tab = Some(idx);
             self.selected_session_id = Some(self.tabs[idx].primary_session_id());
             // #93：聚焦即清除标签注意提示。
             self.tabs[idx].clear_attention();
+            // #201 触发点 B：切到的标签若处于意外断线态，主循环里按偏好尝试前台重连
+            // （此处无 ctx，只记候选，poll_foreground_reconnect 统一处理）。
+            if switched_to_different {
+                self.pending_foreground_reconnect = Some(idx);
+            }
         }
     }
 
@@ -10370,6 +10443,8 @@ impl eframe::App for MistTermApp {
                 .is_enabled(crate::modules::cmd_audit_local::MODULE_ID),
         );
         self.poll_paste_history_notes();
+        // #201：前台/标签激活自动重连（含标签切换待检项）。
+        self.poll_foreground_reconnect(ctx);
         self.process_typed_enter_audit(ctx);
         self.pump_send_sequence(ctx);
         // 须在终端/非活动窗格泵完 SSH 之后再取 MIST_AUDIT，否则本帧事件会空转。

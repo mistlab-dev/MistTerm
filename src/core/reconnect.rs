@@ -128,3 +128,99 @@ pub fn disconnect_banner_kind(
     }
     DisconnectBannerKind::Held
 }
+
+// --- #201：窗口/标签回到前台时可选自动重连 ---
+
+/// 前台/标签激活时是否应自动重连（方案 §3）。
+///
+/// 纯判定，不依赖 egui；由 UI 在两个触发点（viewport focused 边沿、标签切换）收集
+/// 候选标签后统一调用。
+///
+/// - `unexpected_disconnect`：以 `unexpected_disconnect_notified` 信号为准；
+///   用户主动断开（`local_disconnect_intent`）路径不会置位该信号，直接排除。
+/// - `banner_shown`：断线条可见（离线缓冲 + 未连接 + 非连接中 + 无错误），
+///   避免对连接中/报错态误触发。
+/// - `attempts` / `max_attempts`：与现有退避共用预算，防止前台反复切换刷重连。
+/// - `backoff_pending`：已有退避排程在等时跳过，等退避到点即可。
+pub fn should_reconnect_on_activation(
+    preference_enabled: bool,
+    unexpected_disconnect: bool,
+    banner_shown: bool,
+    attempts: u8,
+    max_attempts: u8,
+    backoff_pending: bool,
+) -> bool {
+    if !preference_enabled {
+        return false;
+    }
+    if !unexpected_disconnect {
+        return false;
+    }
+    if !banner_shown {
+        return false;
+    }
+    if attempts >= max_attempts {
+        return false;
+    }
+    !backoff_pending
+}
+
+#[cfg(test)]
+mod foreground_tests {
+    use super::should_reconnect_on_activation;
+
+    const ON: bool = true;
+    const OFF: bool = false;
+
+    #[test]
+    fn requires_preference_on() {
+        // 验收点 1：默认关（偏好关）→ 行为与现状一致，永不触发。
+        assert!(!should_reconnect_on_activation(
+            OFF, true, true, 0, 5, false
+        ));
+    }
+
+    #[test]
+    fn excludes_user_initiated_disconnect() {
+        // 验收点 3：用户主动断开（unexpected 信号未置位）→ 不自动重连。
+        assert!(!should_reconnect_on_activation(
+            ON, false, true, 0, 5, false
+        ));
+    }
+
+    #[test]
+    fn requires_banner_state() {
+        // 非断线条展示态（连接中/报错）不触发。
+        assert!(!should_reconnect_on_activation(
+            ON, true, false, 0, 5, false
+        ));
+    }
+
+    #[test]
+    fn respects_attempt_budget() {
+        // 预算耗尽（GaveUp）→ 前台切换不刷新重连。
+        assert!(!should_reconnect_on_activation(
+            ON, true, true, 5, 5, false
+        ));
+        // 预算未耗尽 → 可触发。
+        assert!(should_reconnect_on_activation(
+            ON, true, true, 3, 5, false
+        ));
+    }
+
+    #[test]
+    fn skips_when_backoff_pending() {
+        // 已有退避排程在等 → 前台触发跳过（等退避到点）。
+        assert!(!should_reconnect_on_activation(
+            ON, true, true, 1, 5, true
+        ));
+    }
+
+    #[test]
+    fn happy_path() {
+        // 验收点 2：偏好开 + 意外断开 + 断线条可见 + 有预算 → 触发。
+        assert!(should_reconnect_on_activation(
+            ON, true, true, 0, 5, false
+        ));
+    }
+}
