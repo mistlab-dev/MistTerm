@@ -148,7 +148,6 @@ pub fn should_reconnect_on_activation(
     banner_shown: bool,
     attempts: u8,
     max_attempts: u8,
-    backoff_pending: bool,
 ) -> bool {
     if !preference_enabled {
         return false;
@@ -159,10 +158,9 @@ pub fn should_reconnect_on_activation(
     if !banner_shown {
         return false;
     }
-    if attempts >= max_attempts {
-        return false;
-    }
-    !backoff_pending
+    // #201 复审：预算未耗尽即可触发；有退避排程时命中则清排程立刻连
+    // （「回前台跳过剩余退避」），不再以 backoff_pending 拦截。
+    attempts < max_attempts
 }
 
 #[cfg(test)]
@@ -175,52 +173,39 @@ mod foreground_tests {
     #[test]
     fn requires_preference_on() {
         // 验收点 1：默认关（偏好关）→ 行为与现状一致，永不触发。
-        assert!(!should_reconnect_on_activation(
-            OFF, true, true, 0, 5, false
-        ));
+        assert!(!should_reconnect_on_activation(OFF, true, true, 0, 5));
     }
 
     #[test]
     fn excludes_user_initiated_disconnect() {
-        // 验收点 3：用户主动断开（unexpected 信号未置位）→ 不自动重连。
-        assert!(!should_reconnect_on_activation(
-            ON, false, true, 0, 5, false
-        ));
+        // 验收点 3：用户主动断开（粘性标记未置位）→ 不自动重连。
+        assert!(!should_reconnect_on_activation(ON, false, true, 0, 5));
     }
 
     #[test]
     fn requires_banner_state() {
         // 非断线条展示态（连接中/报错）不触发。
-        assert!(!should_reconnect_on_activation(
-            ON, true, false, 0, 5, false
-        ));
+        assert!(!should_reconnect_on_activation(ON, true, false, 0, 5));
     }
 
     #[test]
     fn respects_attempt_budget() {
         // 预算耗尽（GaveUp）→ 前台切换不刷新重连。
-        assert!(!should_reconnect_on_activation(
-            ON, true, true, 5, 5, false
-        ));
+        assert!(!should_reconnect_on_activation(ON, true, true, 5, 5));
         // 预算未耗尽 → 可触发。
-        assert!(should_reconnect_on_activation(
-            ON, true, true, 3, 5, false
-        ));
+        assert!(should_reconnect_on_activation(ON, true, true, 3, 5));
     }
 
     #[test]
-    fn skips_when_backoff_pending() {
-        // 已有退避排程在等 → 前台触发跳过（等退避到点）。
-        assert!(!should_reconnect_on_activation(
-            ON, true, true, 1, 5, true
-        ));
+    fn fires_even_when_backoff_pending() {
+        // #201 复审修正：有退避排程也触发（命中时由调用方清排程立刻连，
+        // 「回前台跳过剩余退避」），不再以 backoff_pending 拦截。
+        assert!(should_reconnect_on_activation(ON, true, true, 1, 5));
     }
 
     #[test]
     fn happy_path() {
         // 验收点 2：偏好开 + 意外断开 + 断线条可见 + 有预算 → 触发。
-        assert!(should_reconnect_on_activation(
-            ON, true, true, 0, 5, false
-        ));
+        assert!(should_reconnect_on_activation(ON, true, true, 0, 5));
     }
 }

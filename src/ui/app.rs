@@ -3592,20 +3592,15 @@ impl MistTermApp {
             return;
         }
         // 先取标量（不可变借用），再进可变区，避免借用冲突。
-        let sid = self.tabs[idx].primary_session_id();
-        if !self.tab_auto_reconnect_enabled(&sid) {
-            return;
-        }
-        let (unexpected, banner_shown, backoff_pending, attempts) = {
+        // #201 复审：读粘性「本断线为意外」标记，不抢退避用的一次性信号；
+        // 不再强依赖 tab_auto_reconnect_enabled（允许「仅回前台重连」场景）。
+        let (unexpected, banner_shown, attempts) = {
             let Some(pane) = self.tabs[idx].active_pane_mut() else {
                 return;
             };
-            // 一次性信号：只有意外断开才置位；用户主动断开路径不会置位。
-            let unexpected = pane.terminal.take_unexpected_disconnect_notified();
             (
-                unexpected,
+                pane.terminal.last_disconnect_was_unexpected(),
                 pane.terminal.shows_persistent_disconnect_banner(),
-                pane.ssh_auto_reconnect_next.is_some(),
                 pane.ssh_auto_reconnect_attempts,
             )
         };
@@ -3615,22 +3610,29 @@ impl MistTermApp {
             banner_shown,
             attempts,
             crate::core::reconnect::DEFAULT_MAX_RECONNECT_ATTEMPTS,
-            backoff_pending,
         );
         if should {
             log::info!("#201 foreground activation: auto-reconnecting tab {idx}");
+            // 回前台跳过剩余退避立刻连：先清排程再走现有管线（复审建议）。
+            if let Some(pane) = self.tabs[idx].active_pane_mut() {
+                pane.ssh_auto_reconnect_next = None;
+            }
             // 复用现有管线；不清屏、不丢滚动缓冲（#177 已保证回同一现场）。
             self.reconnect_tab_at_inner(ctx, idx, /*reset_attempt_budget=*/ false);
         }
     }
 
-    /// #201：窗口焦点回归（viewport focused false→true 边沿）时，
-    /// 对所有处于断线态的标签尝试前台重连。
+    /// #201：窗口焦点回归（focused false→true 边沿）扫全表 + 消费标签切换待检项。
     fn poll_foreground_reconnect(&mut self, ctx: &egui::Context) {
         if !self.app_settings.reconnect_on_foreground {
+            self.pending_foreground_reconnect = None;
             return;
         }
-        // egui 0.23：窗口焦点经 egui-winit 直接落在 InputState::focused（vendor 补丁同步处）。
+        // 触发点 B：标签切换记录的待检项（复审阻塞 1：必须消费）。
+        if let Some(idx) = self.pending_foreground_reconnect.take() {
+            self.try_foreground_reconnect_tab(ctx, idx);
+        }
+        // 触发点 A：focused false→true 边沿扫全表。
         let focused = ctx.input(|i| i.focused);
         let rose = focused && !self.prev_viewport_focused;
         self.prev_viewport_focused = focused;
