@@ -872,7 +872,7 @@ impl MistTermApp {
                         };
                         shortcut_frame
                             .corner_radius(theme.radius_list_item())
-                            .inner_margin(egui::Margin::symmetric((theme.spacing_search_input_x()) as i8, (theme.spacing_search_input_y(),) as i8))
+                            .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x() as i8, theme.spacing_search_input_y() as i8))
                             .show(ui, |ui| {
                                 ui.label(
                                     egui::RichText::new(&version_line)

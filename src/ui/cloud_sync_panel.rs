@@ -1447,7 +1447,7 @@ impl CloudSyncPanel {
                     egui::Frame::none()
                         .fill(theme.color_subtle_inset_fill())
                         .corner_radius(theme.radius_list_item())
-                        .inner_margin(egui::Margin::symmetric((8.0) as i8, (6.0) as i8))
+                        .inner_margin(egui::Margin::symmetric(8.0) as i8, (6.0) as i8)
                         .show(ui, |ui| {
                             ui.label(
                                 chrome::rich_caption(theme, &self.message)

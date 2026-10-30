@@ -2016,7 +2016,7 @@ pub fn settings_elevated_card(ui: &mut Ui, theme: &Theme, body: impl FnOnce(&mut
         .fill(theme.color_elevated_card_fill())
         .stroke(egui::Stroke::NONE)
         .corner_radius(theme.radius_panel())
-        .inner_margin(egui::Margin::symmetric((pad_x) as i8, (pad_y) as i8))
+        .inner_margin(egui::Margin::symmetric(pad_x) as i8, (pad_y) as i8)
         .show(ui, |ui| {
             let inner_w = crate::ui::layout_util::set_width_to_available(ui);
             ui.set_min_width(inner_w);
@@ -2880,7 +2880,7 @@ pub fn button_group_toolbar(
             if resp.hovered() && action.enabled {
                 ui.painter().rect(
                     item_rect.shrink(2.0),
-                    egui::CornerRadius::same(theme.radius_list_item() - 1.0),
+                    egui::CornerRadius::same((theme.radius_list_item() - 1.0) as u8),
                     theme.color_widget_hover_fill(),
                     Stroke::NONE,
                 );

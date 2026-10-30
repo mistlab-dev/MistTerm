@@ -74,10 +74,8 @@ pub fn run_gui() {
     {
         set_application_display_name();
         activate_gui_application();
-        // #188: after drawRect catch_unwind, annotate crash-reports as caught-in-FFI.
-        winit::platform::macos::set_caught_draw_rect_panic_hook(|| {
-            crate::core::crash_reporter::write_caught_ffi_note("drawRect");
-        });
+        // #188 caught-FFI hook：vendor/winit 已重铺为干净 0.30.13 基底（S1），
+        // set_caught_draw_rect_panic_hook 随 #205 补丁移除，S3（#208）移植 IME+#188 时一并恢复。
     }
 
     apply_preferred_english_input_source();

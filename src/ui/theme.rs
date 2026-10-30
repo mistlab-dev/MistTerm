@@ -935,7 +935,7 @@ impl Theme {
             .fill(self.color_text_input_fill())
             .stroke(stroke)
             .corner_radius(self.radius_search_input())
-            .inner_margin(egui::Margin::symmetric((self.spacing_search_input_x()) as i8, (self.spacing_search_input_y(),) as i8))
+            .inner_margin(egui::Margin::symmetric(self.spacing_search_input_x() as i8, self.spacing_search_input_y() as i8))
     }
 
     /// 面板标题行次要工具按钮底(≈ proto `.toolbar-btn.secondary`)
@@ -1165,7 +1165,7 @@ impl Theme {
             .fill(self.color_inset_section_fill())
             .stroke(egui::Stroke::NONE)
             .corner_radius(egui::CornerRadius::same(self.radius_panel()))
-            .inner_margin(egui::Margin::symmetric((self.spacing_body_pad()) as i8, (self.spacing_body_pad(),) as i8))
+            .inner_margin(egui::Margin::symmetric(self.spacing_body_pad() as i8, self.spacing_body_pad() as i8))
     }
 
     /// modern 主题是否使用下划线输入样式
@@ -1675,7 +1675,7 @@ impl Theme {
         egui::Frame::none()
             .fill(self.color_sftp_toolbar_fill())
             .corner_radius(egui::CornerRadius::same(self.radius_list_item()))
-            .inner_margin(egui::Margin::symmetric((self.spacing_sm()) as i8, (self.spacing_xs(),) as i8))
+            .inner_margin(egui::Margin::symmetric(self.spacing_sm() as i8, self.spacing_xs() as i8))
     }
 
     #[inline]
@@ -2197,11 +2197,11 @@ impl Theme {
     // ── 边距 / Frame 工厂(egui Frame，非业务布局) ──
 
     pub fn margin_sidebar_title(&self) -> egui::Margin {
-        egui::Margin::symmetric((self.spacing_panel_title_pad_x()) as i8, (self.spacing_panel_title_pad_y(),) as i8)
+        egui::Margin::symmetric(self.spacing_panel_title_pad_x() as i8, self.spacing_panel_title_pad_y() as i8)
     }
 
     pub fn margin_sidebar_search_field(&self) -> egui::Margin {
-        egui::Margin::symmetric((self.size_sidebar_search_inset_x()) as i8, (self.size_sidebar_search_inset_y(),) as i8)
+        egui::Margin::symmetric(self.size_sidebar_search_inset_x() as i8, self.size_sidebar_search_inset_y() as i8)
     }
 
     pub fn margin_tab_bar(&self) -> egui::Margin {
@@ -2209,7 +2209,7 @@ impl Theme {
     }
 
     pub fn margin_modal_content(&self) -> egui::Margin {
-        egui::Margin::symmetric((self.spacing_modal_content_x()) as i8, (self.spacing_modal_content_y(),) as i8)
+        egui::Margin::symmetric(self.spacing_modal_content_x() as i8, self.spacing_modal_content_y() as i8)
     }
 
     pub fn margin_monitor_alert_box(&self) -> egui::Margin {
@@ -2337,8 +2337,10 @@ impl Theme {
                 sw: 0,
                 se: 0,
             })
-            .inner_margin(egui::Margin::symmetric((self.spacing_panel_title_pad_x(),
-                6.0) as i8, () as i8))
+            .inner_margin(egui::Margin::symmetric(
+                self.spacing_panel_title_pad_x() as i8,
+                6,
+            ))
     }
 
     /// 右 dock Foreground 标题带：抵消 [`right_dock_content_margin`]，横向铺满 dock 壳层。
@@ -2677,7 +2679,7 @@ impl Theme {
     }
 
     pub fn right_dock_content_margin(&self) -> egui::Margin {
-        egui::Margin::symmetric((self.spacing_right_dock_pad_x()) as i8, (self.spacing_right_dock_pad_y(),) as i8)
+        egui::Margin::symmetric(self.spacing_right_dock_pad_x() as i8, self.spacing_right_dock_pad_y() as i8)
     }
 
     pub fn terminal_content_margin(&self) -> egui::Margin {

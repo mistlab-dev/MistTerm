@@ -3921,7 +3921,7 @@ impl SftpPanel {
                 .fill(theme.color_subtle_inset_fill())
                 .stroke(egui::Stroke::new(1.0, theme.red_a128()))
                 .corner_radius(theme.radius_list_item())
-                .inner_margin(egui::Margin::symmetric((theme.spacing_search_input_x()) as i8, (theme.spacing_search_input_y(),) as i8))
+                .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x() as i8, theme.spacing_search_input_y() as i8))
                 .show(ui, |ui| {
                     ui.label(egui::RichText::new(msg).color(theme.red_color()));
                     ui.horizontal(|ui| {
@@ -5984,7 +5984,7 @@ impl SftpPanel {
                 .fill(theme.color_sftp_section_fill())
                 .stroke(theme.sftp_section_stroke())
                 .corner_radius(theme.radius_panel())
-                .inner_margin(egui::Margin::symmetric((theme.spacing_body_pad()) as i8, (theme.spacing_body_pad(),) as i8))
+                .inner_margin(egui::Margin::symmetric(theme.spacing_body_pad() as i8, theme.spacing_body_pad() as i8))
         }
     }
 
@@ -5997,7 +5997,7 @@ impl SftpPanel {
                 theme.sftp_list_viewport_stroke()
             })
             .corner_radius(theme.radius_panel())
-            .inner_margin(egui::Margin::symmetric((theme.spacing_sm()) as i8, (theme.spacing_sm(),) as i8))
+            .inner_margin(egui::Margin::symmetric(theme.spacing_sm() as i8, theme.spacing_sm() as i8))
     }
 }
 

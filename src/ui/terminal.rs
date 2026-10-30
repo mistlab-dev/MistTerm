@@ -4676,7 +4676,7 @@ impl TerminalView {
                 let frame_resp = egui::Frame::none()
                     .fill(theme.bg_window_color())
                     .corner_radius(8.0)
-                    .inner_margin(egui::Margin::symmetric((18.0) as i8, (14.0) as i8))
+                    .inner_margin(egui::Margin::symmetric(18.0) as i8, (14.0) as i8)
                     .show(ui, |ui| {
                         // Frame 内再次钉死非 justify 的纵向布局，避免继承外层怪异 Layout。
                         ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {

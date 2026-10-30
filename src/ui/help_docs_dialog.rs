@@ -754,7 +754,7 @@ fn kbd_chip(ui: &mut Ui, theme: &Theme, text: &str) {
         .fill(theme.color_panel_toolbar_btn_fill())
         .stroke(egui::Stroke::new(1.0, theme.color_text_input_stroke()))
         .corner_radius(theme.radius_status_btn())
-        .inner_margin(egui::Margin::symmetric((7.0) as i8, (3.0) as i8))
+        .inner_margin(egui::Margin::symmetric(7.0) as i8, (3.0) as i8)
         .show(ui, |ui| {
             ui.label(
                 RichText::new(text)
@@ -769,7 +769,7 @@ fn render_tip_box(ui: &mut Ui, theme: &Theme, title: &str, body: &str) {
         .fill(theme.accent_a10())
         .stroke(egui::Stroke::new(1.0, theme.accent_alpha(48)))
         .corner_radius(theme.radius_list_item())
-        .inner_margin(egui::Margin::symmetric((theme.spacing_search_input_x()) as i8, (theme.spacing_search_input_y(),) as i8))
+        .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x() as i8, theme.spacing_search_input_y() as i8))
         .show(ui, |ui| {
             ui.label(
                 RichText::new(title)
