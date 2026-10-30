@@ -344,9 +344,14 @@ impl PortForwardPanel {
         );
         ui.add_space(4.0);
 
+        let empty_hint = crate::i18n::tr(
+            ctx,
+            "No active forwards yet. Pick a type below, fill in the ports, then Start forward.",
+            "还没有运行中的转发。在下方选类型并填写端口后点「启动转发」。",
+        );
         let Some(list) = self.by_ssh_session.get(&ssh_session_id) else {
             ui.label(
-                egui::RichText::new(crate::i18n::tr(ctx, "None yet", "暂无"))
+                egui::RichText::new(empty_hint)
                     .small()
                     .color(theme.text_tertiary()),
             );
@@ -354,7 +359,7 @@ impl PortForwardPanel {
         };
         if list.is_empty() {
             ui.label(
-                egui::RichText::new(crate::i18n::tr(ctx, "None yet", "暂无"))
+                egui::RichText::new(empty_hint)
                     .small()
                     .color(theme.text_tertiary()),
             );
@@ -440,15 +445,15 @@ impl PortForwardPanel {
         let tabs = [
             (
                 "local",
-                crate::i18n::tr(ctx, "Local (-L)", "本地 (-L)"),
+                crate::i18n::tr(ctx, "Local forward", "本机转发"),
             ),
             (
                 "remote",
-                crate::i18n::tr(ctx, "Remote (-R)", "远程 (-R)"),
+                crate::i18n::tr(ctx, "Remote forward", "远端转发"),
             ),
             (
                 "dynamic",
-                crate::i18n::tr(ctx, "SOCKS (-D)", "SOCKS (-D)"),
+                crate::i18n::tr(ctx, "SOCKS proxy", "SOCKS 代理"),
             ),
         ];
         let active = match self.form_kind {
@@ -469,6 +474,15 @@ impl PortForwardPanel {
                 _ => ForwardFormKind::Local,
             };
         }
+        ui.label(
+            egui::RichText::new(crate::i18n::tr(
+                ctx,
+                "Same as OpenSSH -L / -R / -D.",
+                "对应 OpenSSH 的 -L / -R / -D。",
+            ))
+            .small()
+            .color(theme.text_tertiary()),
+        );
         if self.form_kind != prev_kind {
             self.form.fill_defaults_for(self.form_kind);
         }
@@ -508,7 +522,7 @@ impl PortForwardPanel {
                     crate::ui::chrome::form_inline_label(
                         ui,
                         theme,
-                        crate::i18n::tr(ctx, "Bind", "绑定"),
+                        crate::i18n::tr(ctx, "Listen on", "本机监听"),
                     );
                     crate::ui::chrome::form_inline_singleline(
                         ui,
@@ -560,7 +574,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_label(
                     ui,
                     theme,
-                    crate::i18n::tr(ctx, "Target", "目标"),
+                    crate::i18n::tr(ctx, "Forward to", "转发到"),
                 );
                 crate::ui::chrome::form_inline_singleline(
                     ui,
@@ -587,7 +601,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_label(
                     ui,
                     theme,
-                    crate::i18n::tr(ctx, "Target", "目标"),
+                    crate::i18n::tr(ctx, "Forward to", "转发到"),
                 );
                 crate::ui::chrome::form_inline_singleline(
                     ui,

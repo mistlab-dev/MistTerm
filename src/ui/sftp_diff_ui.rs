@@ -226,8 +226,8 @@ pub(super) fn paint_dir_diff(
     ui.label(
         egui::RichText::new(crate::i18n::tr(
             ctx,
-            "Conflicts (same name, different size or time) are skipped and kept in this list. Sync does not overwrite, and does not delete extras on the target side.",
-            "冲突(同名且大小或时间不同)会跳过并留在列表中, 同步不会覆盖, 也不会删除只在目标侧的文件.",
+            "Compare these folders. Items only on one side can be synced across. Same-name items that differ stay as conflicts—sync skips them and never overwrites. Nothing extra on the other side is deleted.",
+            "对比两边文件夹。只在一边的可勾选同步过去；两边都有但内容不同的会标成冲突，同步时先跳过、不会覆盖。也不会删掉目标侧多出来的文件。",
         ))
         .size(theme.font_size_caption())
         .color(theme.text_tertiary()),
@@ -273,7 +273,11 @@ pub(super) fn paint_dir_diff(
             ui.label(
                 egui::RichText::new(format!(
                     "{} {n}",
-                    crate::i18n::tr(ctx, "Comparing… scanned", "正在对比… 已扫描")
+                    crate::i18n::tr(
+                        ctx,
+                        "Scanning… files checked",
+                        "正在扫描… 已检查"
+                    )
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.color_status_warning_text()),
@@ -284,7 +288,7 @@ pub(super) fn paint_dir_diff(
                 egui::RichText::new(crate::i18n::tr(
                     ctx,
                     "Syncing… progress is in the transfer strip below.",
-                    "正在同步… 进度在下方传输条.",
+                    "正在同步… 进度在下方传输条。",
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.color_status_warning_text()),
@@ -465,7 +469,11 @@ pub(super) fn paint_dir_diff(
         .collect();
     if state.phase == DiffPhase::Ready && state.rows.is_empty() && state.error.is_none() {
         ui.label(
-            egui::RichText::new(crate::i18n::tr(ctx, "No differences.", "没有差异."))
+            egui::RichText::new(crate::i18n::tr(
+                ctx,
+                "Folders match — nothing to sync. Compare again after changing folders, or go Back to the file list.",
+                "两边一样，没有可同步的差异。可改目录后点「重新对比」，或「返回」回文件列表。",
+            ))
                 .size(theme.font_size_caption())
                 .color(theme.text_secondary()),
         );
@@ -476,6 +484,37 @@ pub(super) fn paint_dir_diff(
         .max(ui.spacing().interact_size.y);
     let list_h = (ui.available_height() - super::FLUX_XFER_STRIP_RESERVE).max(80.0);
     let interactive = state.phase == DiffPhase::Ready && !busy;
+    // 扫描/同步且尚无行时：列表区放占位，避免长时间空白吓人（#218/#224）。
+    if filtered.is_empty()
+        && matches!(state.phase, DiffPhase::Scanning | DiffPhase::Syncing)
+        && state.error.is_none()
+    {
+        let placeholder = match state.phase {
+            DiffPhase::Scanning => crate::i18n::tr(
+                ctx,
+                "Scanning local and remote files… You can Cancel anytime.",
+                "正在扫描本机和远端文件… 请稍候。可点「取消」停下。",
+            ),
+            _ => crate::i18n::tr(
+                ctx,
+                "Sync in progress… See the transfer strip below. You can Cancel anytime.",
+                "正在同步… 进度在下方传输条。可点「取消」停下。",
+            ),
+        };
+        egui::ScrollArea::vertical()
+            .id_source("sftp_dir_diff_placeholder")
+            .auto_shrink([false, false])
+            .max_height(list_h)
+            .show(ui, |ui| {
+                ui.add_space(24.0);
+                ui.label(
+                    egui::RichText::new(placeholder)
+                        .size(theme.font_size_body())
+                        .color(theme.text_secondary()),
+                );
+            });
+        return action;
+    }
     egui::ScrollArea::vertical()
         .id_source("sftp_dir_diff_rows")
         .auto_shrink([false, false])
