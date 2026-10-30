@@ -1125,9 +1125,18 @@ impl MistTermApp {
         if disabled_by_env {
             small(ui, crate::i18n::tr(
                 ctx,
-                "Update checks are turned off on this computer (MIST_DISABLE_UPDATE_CHECK).",
-                "这台电脑关闭了检查更新（MIST_DISABLE_UPDATE_CHECK）。",
+                "Update checks are turned off on this computer with an advanced setting.",
+                "这台电脑用高级方式关闭了检查更新。",
             ));
+            egui::CollapsingHeader::new(crate::i18n::tr(ctx, "Advanced", "高级"))
+                .id_source("update_prefs_disabled_by_env_advanced")
+                .show(ui, |ui| {
+                    small(ui, crate::i18n::tr(
+                        ctx,
+                        "Environment variable: MIST_DISABLE_UPDATE_CHECK.",
+                        "环境变量：MIST_DISABLE_UPDATE_CHECK。",
+                    ));
+                });
         }
         small(ui, crate::i18n::tr(
             ctx,
