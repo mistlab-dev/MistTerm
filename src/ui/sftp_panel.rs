@@ -665,9 +665,12 @@ impl SftpPanel {
                 },
             }
         });
+        // #242：入队失败时 enqueue 会清空 rx；不可落到 Ready+空行+无 error（会假报「两边一样」）。
         if self.rx.is_none() {
-            self.diff.phase = DiffPhase::Ready;
-            self.diff.cancel = None;
+            let lang = crate::i18n::language(ctx);
+            let raw = self.pending_status_err.clone().unwrap_or_default();
+            let msg = Self::present_diff_channel_or_scan_failure(lang, &raw);
+            self.fail_dir_diff_open(msg);
         }
     }
 
@@ -871,10 +874,12 @@ impl SftpPanel {
                 },
             }
         });
+        // #242：同步预备入队失败同扫描 — 禁止无 error 的空 Ready。
         if self.rx.is_none() {
-            self.diff.phase = DiffPhase::Ready;
-            self.diff.prep_inflight = false;
-            self.diff.cancel = None;
+            let lang = crate::i18n::language(ctx);
+            let raw = self.pending_status_err.clone().unwrap_or_default();
+            let msg = Self::present_diff_channel_or_sync_failure(lang, &raw);
+            self.fail_dir_diff_open(msg);
         }
     }
 
@@ -917,6 +922,56 @@ impl SftpPanel {
             "{}: {err}",
             crate::i18n::Locale::from(lang).tr(head_en, head_zh)
         )
+    }
+
+    /// shell 泵队列满/断开等：技术串对小白无意义，换成人话（#242）。
+    fn is_pump_channel_err(err: &str) -> bool {
+        err.contains("shell pump queue") || err.contains("SessionJob")
+    }
+
+    fn plain_diff_channel_failure(lang: UiLanguage) -> String {
+        crate::i18n::Locale::from(lang)
+            .tr(
+                "Compare couldn't finish — the session or transfer channel dropped. Tap Compare again, or Back to the file list.",
+                "对比没做完：会话或传输通道断了。可点「重新对比」再试，或「返回」回文件列表。",
+            )
+            .to_string()
+    }
+
+    fn present_diff_channel_or_scan_failure(lang: UiLanguage, raw: &str) -> String {
+        if raw.is_empty() || Self::is_pump_channel_err(raw) {
+            Self::plain_diff_channel_failure(lang)
+        } else {
+            Self::present_diff_failure(lang, "Compare failed", "对比失败", raw)
+        }
+    }
+
+    fn present_diff_channel_or_sync_failure(lang: UiLanguage, raw: &str) -> String {
+        if raw.is_empty() || Self::is_pump_channel_err(raw) {
+            crate::i18n::Locale::from(lang)
+                .tr(
+                    "Sync couldn't start — the session or transfer channel dropped. Tap Compare again, or Back to the file list.",
+                    "同步没开始：会话或传输通道断了。可点「重新对比」再试，或「返回」回文件列表。",
+                )
+                .to_string()
+        } else {
+            Self::present_diff_failure(lang, "Sync failed", "同步失败", raw)
+        }
+    }
+
+    /// 对比视图仍打开时：清空结果、写入 error、回到 Ready，避免假报无差异（#242）。
+    fn fail_dir_diff_open(&mut self, msg: String) {
+        self.diff.rows.clear();
+        self.diff.checked.clear();
+        self.diff.error = Some(msg.clone());
+        self.diff.prep_inflight = false;
+        self.diff.cancel = None;
+        if self.diff.open {
+            self.diff.phase = DiffPhase::Ready;
+        } else {
+            self.diff.phase = DiffPhase::Idle;
+        }
+        self.pending_status_err = Some(msg);
     }
 
     fn settle_dir_sync(&mut self) {
@@ -2331,14 +2386,8 @@ impl SftpPanel {
                 self.tree_cancel = None;
                 self.diff.request_cancel();
                 self.diff.prep_inflight = false;
-                if matches!(self.diff.phase, DiffPhase::Scanning | DiffPhase::Syncing) {
-                    self.diff.phase = if self.diff.open {
-                        DiffPhase::Ready
-                    } else {
-                        DiffPhase::Idle
-                    };
-                }
-                self.diff.cancel = None;
+                let diff_busy =
+                    matches!(self.diff.phase, DiffPhase::Scanning | DiffPhase::Syncing);
                 // #94 P0：worker 断开时收尾进行中的传输，避免卡在 Running。
                 if self.abort_in_flight_transfers(lang) {
                     // toast 已由 abort 写入 pending_status_err
@@ -2351,6 +2400,13 @@ impl SftpPanel {
                             )
                             .to_string(),
                     );
+                }
+                // #242：扫描/同步中断开必须写入 diff.error，禁止假报「两边一样」。
+                if diff_busy {
+                    let msg = Self::plain_diff_channel_failure(lang);
+                    self.fail_dir_diff_open(msg);
+                } else {
+                    self.diff.cancel = None;
                 }
             }
             Ok(SftpJobResult::UploadTreeReady { files }) => {
@@ -2485,6 +2541,14 @@ impl SftpPanel {
                                 DiffPhase::Idle
                             };
                             if self.diff.open {
+                                // #242：取消后空列表不可走「两边一样」；写入可重试说明。
+                                let msg = crate::i18n::Locale::from(lang)
+                                    .tr(
+                                        "Compare cancelled. Tap Compare again to retry, or Back to the file list.",
+                                        "对比已取消。可点「重新对比」再试，或「返回」回文件列表。",
+                                    )
+                                    .to_string();
+                                self.diff.error = Some(msg.clone());
                                 self.pending_status_ok = Some(
                                     crate::i18n::Locale::from(lang)
                                         .tr("Compare cancelled", "对比已取消")
@@ -2842,15 +2906,19 @@ impl SftpPanel {
         self.tree_busy = false;
         self.tree_cancel = None;
         self.diff.prep_inflight = false;
-        if diff_busy {
-            self.diff.phase = if self.diff.open {
-                DiffPhase::Ready
-            } else {
-                DiffPhase::Idle
-            };
-        }
-        self.diff.cancel = None;
         let _ = self.abort_in_flight_transfers(lang);
+        // #242：会话不可用时扫描/同步中断 → error 态，禁止假报无差异。
+        if diff_busy {
+            let msg = crate::i18n::Locale::from(lang)
+                .tr(
+                    "Compare couldn't finish — the session is unavailable. Tap Compare again after reconnecting, or Back to the file list.",
+                    "对比没做完：当前会话不可用。重连后可点「重新对比」，或「返回」回文件列表。",
+                )
+                .to_string();
+            self.fail_dir_diff_open(msg);
+        } else {
+            self.diff.cancel = None;
+        }
     }
 
 
