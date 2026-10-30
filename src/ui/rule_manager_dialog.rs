@@ -7,6 +7,7 @@
 
 use eframe::egui;
 
+use crate::core::cmd_audit_personal::{CmdAuditPersonalStore, PersonalDraft, PersonalRuleError, MAX_PERSONAL_RULES};
 use crate::modules::display_link::{
     check_link_pattern, LinkImportReport, LinkRuleDraft, LinkRuleError, DisplayLinkRule,
     DisplayLinkStore, ACTION_WHITELIST, MAX_RULES,
@@ -22,6 +23,7 @@ use crate::ui::theme::Theme;
 enum RuleManagerTab {
     OutputTrigger,
     DisplayLink,
+    CommandChecks,
 }
 
 pub struct RuleManagerDialog {
@@ -46,6 +48,17 @@ pub struct RuleManagerDialog {
     link_action: String,
     link_priority: u32,
     link_enabled: bool,
+    // --- 本地命令检查（#187）独立表单态 ---
+    cmd_selected_id: Option<String>,
+    cmd_creating: bool,
+    cmd_name: String,
+    cmd_pattern: String,
+    cmd_match_type: String,
+    cmd_action: String,
+    cmd_description: String,
+    cmd_priority: i32,
+    cmd_enabled: bool,
+    cmd_personal_enabled: bool,
 }
 
 impl Default for RuleManagerDialog {
@@ -71,6 +84,16 @@ impl Default for RuleManagerDialog {
             link_action: "sftp-open".to_string(),
             link_priority: 100,
             link_enabled: true,
+            cmd_selected_id: None,
+            cmd_creating: false,
+            cmd_name: String::new(),
+            cmd_pattern: String::new(),
+            cmd_match_type: "regex".to_string(),
+            cmd_action: "confirm".to_string(),
+            cmd_description: String::new(),
+            cmd_priority: 100,
+            cmd_enabled: true,
+            cmd_personal_enabled: false,
         }
     }
 }
@@ -105,6 +128,22 @@ impl RuleManagerDialog {
         self.close_preferences = true;
     }
 
+    /// 主/次入口落到「本地命令检查」Tab（#187）。
+    pub fn open_command_checks(&mut self, personal: &CmdAuditPersonalStore) {
+        self.open = true;
+        self.tab = RuleManagerTab::CommandChecks;
+        self.error.clear();
+        self.confirm_reset = false;
+        self.cmd_personal_enabled = personal.personal_enabled();
+        self.ensure_cmd_selection(personal);
+    }
+
+    /// 偏好 → 扩展模块 → 本地命令检查行「管理规则…」。
+    pub fn open_command_checks_from_preferences(&mut self, personal: &CmdAuditPersonalStore) {
+        self.open_command_checks(personal);
+        self.close_preferences = true;
+    }
+
     pub fn take_close_preferences(&mut self) -> bool {
         let close = self.close_preferences;
         self.close_preferences = false;
@@ -117,8 +156,11 @@ impl RuleManagerDialog {
         theme: &Theme,
         store: &OutputTriggerStore,
         link_store: &DisplayLinkStore,
+        cmd_personal: &CmdAuditPersonalStore,
+        cmd_engine: &std::sync::Arc<std::sync::Mutex<crate::core::cmd_audit::CmdAuditEngine>>,
         module_enabled: bool,
         link_module_enabled: bool,
+        cmd_module_enabled: bool,
     ) {
         if !self.open {
             return;
@@ -126,6 +168,7 @@ impl RuleManagerDialog {
         match self.tab {
             RuleManagerTab::OutputTrigger => self.ensure_selection(store),
             RuleManagerTab::DisplayLink => self.ensure_link_selection(link_store),
+            RuleManagerTab::CommandChecks => self.ensure_cmd_selection(cmd_personal),
         }
         let mut keep_open = self.open;
         let mut should_close = false;
@@ -167,17 +210,16 @@ impl RuleManagerDialog {
                             self.tab = RuleManagerTab::DisplayLink;
                             self.ensure_link_selection(link_store);
                         }
-                        // #187 本地命令检查的 Tab 占位（方案 §8：壳一次加好，
-                        // 避免来回撕菜单；数据面由 #187 实现）。
-                        let _ = ui.selectable_label(
-                            false,
-                            egui::RichText::new(crate::i18n::tr(
-                                ctx,
-                                "Command checks (soon)",
-                                "本地命令检查 (即将)",
-                            ))
-                            .weak(),
-                        );
+                        if ui
+                            .selectable_label(
+                                self.tab == RuleManagerTab::CommandChecks,
+                                crate::i18n::tr(ctx, "Command checks", "本地命令检查"),
+                            )
+                            .clicked()
+                        {
+                            self.tab = RuleManagerTab::CommandChecks;
+                            self.ensure_cmd_selection(cmd_personal);
+                        }
                     });
                     ui.separator();
                     match self.tab {
@@ -186,6 +228,9 @@ impl RuleManagerDialog {
                         }
                         RuleManagerTab::DisplayLink => {
                             self.paint_display_link(ui, theme, ctx, link_store, link_module_enabled);
+                        }
+                        RuleManagerTab::CommandChecks => {
+                            self.paint_command_checks(ui, theme, ctx, cmd_personal, cmd_engine, cmd_module_enabled);
                         }
                     }
                 });
@@ -811,6 +856,781 @@ impl RuleManagerDialog {
 
     // --- 可点击链接（#186）：复制 #185 布局节奏，字段独立不串台 ---
 
+    fn ensure_cmd_selection(&mut self, personal: &CmdAuditPersonalStore) {
+        if self.cmd_creating {
+            return;
+        }
+        self.cmd_personal_enabled = personal.personal_enabled();
+        let rules = personal.rules();
+        let selected_ok = self
+            .cmd_selected_id
+            .as_ref()
+            .is_some_and(|id| rules.iter().any(|r| &r.id == id));
+        if selected_ok {
+            return;
+        }
+        if let Some(first) = rules.first() {
+            self.load_cmd_rule(first);
+        } else {
+            self.clear_cmd_form();
+        }
+    }
+
+    fn load_cmd_rule(&mut self, rule: &crate::core::cmd_audit::CmdAuditRule) {
+        self.cmd_creating = false;
+        self.cmd_selected_id = Some(rule.id.clone());
+        self.cmd_name = rule.name.clone();
+        self.cmd_pattern = rule.pattern.clone();
+        self.cmd_match_type = rule.match_type.clone();
+        self.cmd_action = rule.action.clone();
+        self.cmd_description = rule.description.clone();
+        self.cmd_priority = rule.priority;
+        self.cmd_enabled = rule.enabled;
+    }
+
+    fn clear_cmd_form(&mut self) {
+        self.cmd_creating = true;
+        self.cmd_selected_id = None;
+        self.cmd_name.clear();
+        self.cmd_pattern.clear();
+        self.cmd_match_type = "regex".to_string();
+        self.cmd_action = "confirm".to_string();
+        self.cmd_description.clear();
+        self.cmd_priority = 100;
+        self.cmd_enabled = true;
+    }
+
+    fn paint_command_checks(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        ctx: &egui::Context,
+        personal: &CmdAuditPersonalStore,
+        engine: &std::sync::Arc<std::sync::Mutex<crate::core::cmd_audit::CmdAuditEngine>>,
+        module_enabled: bool,
+    ) {
+        if !module_enabled {
+            ui.label(
+                egui::RichText::new(crate::i18n::tr(
+                    ctx,
+                    "Command checks is off (Preferences, or MISTTERM_DISABLE_MODULES). You can still edit rules. They will not apply until the module is on.",
+                    "本地命令检查模块已关闭 (偏好设置, 或环境变量 MISTTERM_DISABLE_MODULES). 规则仍可编辑, 模块打开后才会生效.",
+                ))
+                .size(theme.font_size_caption())
+                .color(theme.accent_color()),
+            );
+            ui.add_space(theme.spacing_xs());
+        }
+
+        // 方案 §7 三段式之一：个人规则（可 CRUD）——主交付。
+        ui.heading(egui::RichText::new(crate::i18n::tr(
+            ctx,
+            "Personal rules",
+            "个人规则",
+        ))
+        .size(theme.font_size_section_title()));
+        let enable_label = if self.cmd_personal_enabled {
+            crate::i18n::tr(
+                ctx,
+                "Personal checks are ON: they run even without a team policy.",
+                "个人检查已开启: 没有团队策略时也会生效.",
+            )
+        } else {
+            crate::i18n::tr(
+                ctx,
+                "Personal checks are OFF: they only run when a team policy is active.",
+                "个人检查已关闭: 仅在团队策略激活时生效.",
+            )
+        };
+        ui.label(
+            egui::RichText::new(enable_label)
+                .size(theme.font_size_caption())
+                .color(theme.text_tertiary()),
+        );
+        ui.add_space(theme.spacing_xs());
+        let content_w = crate::ui::layout_util::finite_content_width(ui);
+        ui.set_min_width(content_w);
+        ui.horizontal(|ui| {
+            self.paint_cmd_list(ui, theme, ctx, personal, engine, content_w * 0.34);
+            ui.separator();
+            self.paint_cmd_editor(ui, theme, ctx, personal, engine, content_w * 0.62);
+        });
+        if !self.error.is_empty() {
+            ui.add_space(theme.spacing_sm());
+            ui.label(
+                egui::RichText::new(&self.error)
+                    .size(theme.font_size_caption())
+                    .color(theme.color_danger_emphasis()),
+            );
+        } else if !self.status.is_empty() {
+            ui.add_space(theme.spacing_sm());
+            ui.label(
+                egui::RichText::new(&self.status)
+                    .size(theme.font_size_caption())
+                    .color(theme.text_secondary()),
+            );
+        }
+        ui.add_space(theme.spacing_sm());
+
+        // 方案 §7 三段式之二：内置规则（只读 + 本地启停）。
+        ui.separator();
+        ui.heading(egui::RichText::new(crate::i18n::tr(
+            ctx,
+            "Built-in rules (read-only)",
+            "内置规则 (只读)",
+        ))
+        .size(theme.font_size_section_title()));
+        self.paint_cmd_builtin(ui, theme, ctx, personal, engine);
+
+        // 方案 §7 三段式之三：团队规则（只读说明 + 生效条数）。
+        ui.separator();
+        ui.heading(egui::RichText::new(crate::i18n::tr(
+            ctx,
+            "Team rules (read-only)",
+            "团队规则 (只读)",
+        ))
+        .size(theme.font_size_section_title()));
+        let team = match engine.lock() {
+            Ok(e) => {
+                if e.team_policy_active() {
+                    let count = e.team_rule_count();
+                    let base = crate::i18n::tr(
+                        ctx,
+                        "Team policy is active. Team rules are managed on the server; the desktop cannot change them.",
+                        "团队策略已激活. 团队规则在服务端管理, 桌面端不能修改.",
+                    );
+                    // #187 复审：把生效条数贴进文案，避免 dead binding。
+                    format!("({count}) {base}")
+                } else {
+                    crate::i18n::tr(
+                        ctx,
+                        "No team policy. Team rules are managed on the server; the desktop cannot change them.",
+                        "没有团队策略. 团队规则在服务端管理, 桌面端不能修改.",
+                    )
+                    .to_string()
+                }
+            }
+            Err(_) => crate::i18n::tr(
+                ctx,
+                "Team rule status is unavailable.",
+                "团队规则状态不可用.",
+            )
+            .to_string(),
+        };
+        ui.label(
+            egui::RichText::new(team)
+                .size(theme.font_size_caption())
+                .color(theme.text_tertiary()),
+        );
+        ui.add_space(theme.spacing_sm());
+        self.paint_cmd_footer(ui, theme, ctx, personal, engine);
+    }
+
+    fn paint_cmd_list(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        ctx: &egui::Context,
+        personal: &CmdAuditPersonalStore,
+        engine: &std::sync::Arc<std::sync::Mutex<crate::core::cmd_audit::CmdAuditEngine>>,
+        width: f32,
+    ) {
+        ui.vertical(|ui| {
+            ui.set_width(width.max(200.0));
+            ui.horizontal(|ui| {
+                if crate::ui::chrome::panel_header_new_button_with_label(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "New rule", "新建规则"),
+                )
+                .clicked()
+                {
+                    self.clear_cmd_form();
+                    self.confirm_reset = false;
+                }
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{}/{}",
+                        personal.rules().len(),
+                        MAX_PERSONAL_RULES
+                    ))
+                    .size(theme.font_size_caption())
+                    .color(theme.text_tertiary()),
+                );
+            });
+            ui.add_space(theme.spacing_xs());
+            let mut rules = personal.rules();
+            rules.sort_by(|a, b| a.priority.cmp(&b.priority).then(a.id.cmp(&b.id)));
+            let mut toggles: Vec<(String, bool)> = Vec::new();
+            let mut pick: Option<String> = None;
+            egui::ScrollArea::vertical()
+                .id_source("cmd_personal_rule_list")
+                .max_height(300.0)
+                .auto_shrink([false; 2])
+                .show(ui, |ui| {
+                    if rules.is_empty() {
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr(
+                                ctx,
+                                "No personal rules yet.",
+                                "还没有个人规则.",
+                            ))
+                            .size(theme.font_size_caption())
+                            .color(theme.text_tertiary()),
+                        );
+                        return;
+                    }
+                    for rule in &rules {
+                        ui.horizontal(|ui| {
+                            let mut on = rule.enabled;
+                            if ui.checkbox(&mut on, "").changed() {
+                                toggles.push((rule.id.clone(), on));
+                            }
+                            let selected = self.cmd_selected_id.as_deref()
+                                == Some(rule.id.as_str())
+                                && !self.cmd_creating;
+                            let mut text =
+                                egui::RichText::new(cmd_rule_list_label(ctx, rule));
+                            if !rule.enabled || rule.pattern.is_empty() {
+                                text = text.color(theme.text_tertiary());
+                            }
+                            if ui.selectable_label(selected, text).clicked() {
+                                pick = Some(rule.id.clone());
+                            }
+                        });
+                    }
+                });
+            for (id, enabled) in toggles {
+                self.confirm_reset = false;
+                if let Some(mut rule) = personal.rules().into_iter().find(|r| r.id == id) {
+                    rule.enabled = enabled;
+                    let draft = PersonalDraft {
+                        id: Some(rule.id.clone()),
+                        name: rule.name.clone(),
+                        pattern: rule.pattern.clone(),
+                        match_type: rule.match_type.clone(),
+                        action: rule.action.clone(),
+                        scope: rule.scope.clone(),
+                        description: rule.description.clone(),
+                        priority: rule.priority,
+                        enabled: rule.enabled,
+                    };
+                    if let Err(err) = personal.upsert(draft, engine) {
+                        self.set_error(err.explain(crate::i18n::language(ctx)
+                            == crate::i18n::UiLanguage::Zh));
+                    } else if let Some(err) = personal.last_save_error() {
+                        self.set_error(save_failed(ctx, &err));
+                    }
+                }
+            }
+            if let Some(id) = pick {
+                if let Some(rule) = personal.rules().into_iter().find(|r| r.id == id) {
+                    self.load_cmd_rule(&rule);
+                    self.confirm_reset = false;
+                }
+            }
+        });
+    }
+
+    fn paint_cmd_editor(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        ctx: &egui::Context,
+        personal: &CmdAuditPersonalStore,
+        engine: &std::sync::Arc<std::sync::Mutex<crate::core::cmd_audit::CmdAuditEngine>>,
+        width: f32,
+    ) {
+        ui.vertical(|ui| {
+            let width = width.max(280.0);
+            ui.set_width(width);
+            let id_line = if self.cmd_creating || self.cmd_selected_id.is_none() {
+                crate::i18n::tr(
+                    ctx,
+                    "A new id is assigned when you save.",
+                    "保存时会生成规则 ID.",
+                )
+                .to_string()
+            } else {
+                format!(
+                    "{} {}",
+                    crate::i18n::tr(ctx, "Rule id", "规则 ID"),
+                    self.cmd_selected_id.as_deref().unwrap_or("")
+                )
+            };
+            ui.label(
+                egui::RichText::new(id_line)
+                    .size(theme.font_size_caption())
+                    .color(theme.text_tertiary()),
+            );
+            ui.add_space(theme.spacing_xs());
+            crate::ui::chrome::form_field_label(
+                ui,
+                theme,
+                crate::i18n::tr(ctx, "Rule name (shown in prompts)", "规则名 (提示里显示)"),
+            );
+            crate::ui::chrome::form_singleline_field(
+                ui,
+                theme,
+                egui::Id::new("cmd_rule_name"),
+                &mut self.cmd_name,
+                crate::i18n::tr(ctx, "e.g. Guard prod db", "例如: 保护生产库"),
+                width,
+                false,
+            );
+            ui.add_space(theme.spacing_sm());
+            crate::ui::chrome::form_field_label(
+                ui,
+                theme,
+                crate::i18n::tr(ctx, "Pattern", "匹配模式"),
+            );
+            crate::ui::chrome::form_multiline_field_with_hint(
+                ui,
+                theme,
+                egui::Id::new("cmd_rule_pattern"),
+                &mut self.cmd_pattern,
+                "rm\\s+-rf\\s+/",
+                width,
+                3,
+                false,
+            );
+            if let Some(message) = live_cmd_pattern_error(ctx, &self.cmd_pattern, &self.cmd_match_type) {
+                ui.label(
+                    egui::RichText::new(message)
+                        .size(theme.font_size_caption())
+                        .color(theme.color_danger_emphasis()),
+                );
+            }
+            ui.add_space(theme.spacing_sm());
+            let combo_w = (width * 0.3).clamp(110.0, 190.0);
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    crate::ui::chrome::form_field_label(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Match type", "匹配方式"),
+                    );
+                    let selected = cmd_match_type_label(ctx, &self.cmd_match_type);
+                    crate::ui::chrome::form_combo(
+                        ui,
+                        theme,
+                        "cmd_rule_match_type",
+                        selected,
+                        combo_w,
+                        |ui| {
+                            for mt in ["regex", "prefix", "contains", "exact"] {
+                                ui.selectable_value(
+                                    &mut self.cmd_match_type,
+                                    mt.to_string(),
+                                    cmd_match_type_label(ctx, mt),
+                                );
+                            }
+                        },
+                    );
+                });
+                ui.vertical(|ui| {
+                    crate::ui::chrome::form_field_label(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Action", "动作"),
+                    );
+                    let selected = cmd_action_label(ctx, &self.cmd_action);
+                    crate::ui::chrome::form_combo(
+                        ui,
+                        theme,
+                        "cmd_rule_action",
+                        selected,
+                        combo_w,
+                        |ui| {
+                            for action in ["block", "confirm", "alert", "allow"] {
+                                ui.selectable_value(
+                                    &mut self.cmd_action,
+                                    action.to_string(),
+                                    cmd_action_label(ctx, action),
+                                );
+                            }
+                        },
+                    );
+                });
+                ui.vertical(|ui| {
+                    let mut enabled = self.cmd_enabled;
+                    crate::ui::chrome::form_field_label(ui, theme, "");
+                    if ui
+                        .checkbox(&mut enabled, crate::i18n::tr(ctx, "Enabled", "启用"))
+                        .changed()
+                    {
+                        self.cmd_enabled = enabled;
+                        self.confirm_reset = false;
+                    }
+                });
+            });
+            ui.add_space(theme.spacing_sm());
+            crate::ui::chrome::form_control_row(ui, theme, |ui| {
+                crate::ui::chrome::form_inline_label(
+                    ui,
+                    theme,
+                    crate::i18n::tr(
+                        ctx,
+                        "Priority (lower matches first)",
+                        "优先级 (越小越先匹配)",
+                    ),
+                );
+                let mut prio = self.cmd_priority.max(0).min(255) as u32;
+                crate::ui::chrome::form_u32_stepper(
+                    ui,
+                    theme,
+                    egui::Id::new("cmd_rule_priority"),
+                    &mut prio,
+                    0..=255,
+                    1,
+                );
+                self.cmd_priority = prio as i32;
+            });
+            ui.add_space(theme.spacing_sm());
+            ui.horizontal(|ui| {
+                if crate::ui::chrome::panel_action_primary_button(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "Save", "保存"),
+                )
+                .clicked()
+                {
+                    self.save_cmd_editor(ctx, personal, engine);
+                }
+                if self.cmd_selected_id.is_some() && !self.cmd_creating {
+                    if crate::ui::chrome::panel_action_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Delete", "删除"),
+                    )
+                    .clicked()
+                    {
+                        self.delete_cmd_selected(ctx, personal, engine);
+                    }
+                }
+            });
+        });
+    }
+
+    fn paint_cmd_builtin(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        ctx: &egui::Context,
+        personal: &CmdAuditPersonalStore,
+        engine: &std::sync::Arc<std::sync::Mutex<crate::core::cmd_audit::CmdAuditEngine>>,
+    ) {
+        let disabled_ids = personal.disabled_builtin_ids();
+        let builtin = match engine.lock() {
+            Ok(e) => e.builtin_overview(),
+            Err(_) => return,
+        };
+        ui.label(
+            egui::RichText::new(crate::i18n::tr(
+                ctx,
+                "Bundled with the app. You can disable individual rules on this machine; the patterns themselves cannot be edited here.",
+                "随应用内置. 可以在本机停用某条规则; 规则正文不能在这里修改.",
+            ))
+            .size(theme.font_size_caption())
+            .color(theme.text_tertiary()),
+        );
+        ui.add_space(theme.spacing_xs());
+        egui::ScrollArea::vertical()
+            .id_source("cmd_builtin_list")
+            .max_height(180.0)
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                for b in &builtin {
+                    ui.horizontal(|ui| {
+                        let disabled = disabled_ids.iter().any(|id| id == &b.id);
+                        // #187 复审：勾选=启用（悬停文案同口径），避免极性反直觉。
+                        let mut on = !disabled;
+                        if ui
+                            .checkbox(&mut on, "")
+                            .on_hover_text(crate::i18n::tr(
+                                ctx,
+                                "Uncheck to disable this built-in rule locally",
+                                "取消勾选可在本机停用这条内置规则",
+                            ))
+                            .changed()
+                        {
+                            personal.set_builtin_disabled(&b.id, !on, engine);
+                            self.set_status(crate::i18n::tr(
+                                ctx,
+                                "Saved. Takes effect on the next command.",
+                                "已保存, 下一条命令即生效.",
+                            ));
+                        }
+                        let mut text = egui::RichText::new(format!(
+                            "{}  {}  {}",
+                            b.level,
+                            b.message,
+                            truncate_chars(&b.pattern, 60)
+                        ));
+                        if disabled {
+                            text = text.color(theme.text_tertiary());
+                        }
+                        ui.label(text);
+                    });
+                }
+            });
+    }
+
+    fn paint_cmd_footer(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        ctx: &egui::Context,
+        personal: &CmdAuditPersonalStore,
+        engine: &std::sync::Arc<std::sync::Mutex<crate::core::cmd_audit::CmdAuditEngine>>,
+    ) {
+        ui.horizontal(|ui| {
+            let mut on = self.cmd_personal_enabled;
+            if ui
+                .checkbox(
+                    &mut on,
+                    crate::i18n::tr(
+                        ctx,
+                        "Run personal checks even without a team policy",
+                        "没有团队策略时也运行个人检查",
+                    ),
+                )
+                .changed()
+            {
+                self.cmd_personal_enabled = on;
+                personal.set_personal_enabled(on, engine);
+                self.set_status(crate::i18n::tr(
+                    ctx,
+                    "Saved. Takes effect on the next command.",
+                    "已保存, 下一条命令即生效.",
+                ));
+            }
+        });
+        ui.add_space(theme.spacing_sm());
+        let reset_label = if self.confirm_reset {
+            crate::i18n::tr(
+                ctx,
+                "Click again to clear personal rules and re-enable all built-in rules",
+                "再点一次, 确认清空个人规则并恢复全部内置规则",
+            )
+        } else {
+            crate::i18n::tr(
+                ctx,
+                "Reset to built-in",
+                "恢复内置",
+            )
+        };
+        if crate::ui::chrome::panel_action_button(ui, theme, reset_label).clicked() {
+            if self.confirm_reset {
+                match personal.reset_to_builtin(engine) {
+                    Ok(()) => {
+                        self.cmd_creating = false;
+                        self.cmd_selected_id = None;
+                        self.cmd_personal_enabled = false;
+                        self.ensure_cmd_selection(personal);
+                        self.confirm_reset = false;
+                        self.set_status(crate::i18n::tr(
+                            ctx,
+                            "Personal rules cleared. Takes effect on the next command.",
+                            "已清空个人规则, 下一条命令即生效.",
+                        ));
+                    }
+                    Err(err) => self.set_error(save_failed(ctx, &err)),
+                }
+            } else {
+                self.confirm_reset = true;
+                self.status.clear();
+                self.error.clear();
+            }
+        }
+        egui::CollapsingHeader::new(crate::i18n::tr(
+            ctx,
+            "Advanced: import / export JSON",
+            "高级: 导入 / 导出 JSON",
+        ))
+        .id_source("cmd_personal_import_export")
+        .default_open(false)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(crate::i18n::tr(
+                    ctx,
+                    "Import replaces every current personal rule. A broken file leaves the current rules untouched.",
+                    "导入会替换当前全部个人规则. 文件损坏时不会改掉现有规则.",
+                ))
+                .size(theme.font_size_caption())
+                .color(theme.text_tertiary()),
+            );
+            ui.add_space(theme.spacing_xs());
+            ui.horizontal(|ui| {
+                if crate::ui::chrome::panel_action_button(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "Export JSON…", "导出 JSON…"),
+                )
+                .clicked()
+                {
+                    self.export_cmd_json(ctx, personal);
+                }
+                if crate::ui::chrome::panel_action_button(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "Import JSON…", "导入 JSON…"),
+                )
+                .clicked()
+                {
+                    self.import_cmd_json(ctx, personal, engine);
+                }
+            });
+        });
+    }
+
+    fn save_cmd_editor(
+        &mut self,
+        ctx: &egui::Context,
+        personal: &CmdAuditPersonalStore,
+        engine: &std::sync::Arc<std::sync::Mutex<crate::core::cmd_audit::CmdAuditEngine>>,
+    ) {
+        self.confirm_reset = false;
+        let draft = PersonalDraft {
+            id: if self.cmd_creating {
+                None
+            } else {
+                self.cmd_selected_id.clone()
+            },
+            name: self.cmd_name.clone(),
+            pattern: self.cmd_pattern.clone(),
+            match_type: self.cmd_match_type.clone(),
+            action: self.cmd_action.clone(),
+            scope: "command".to_string(),
+            description: self.cmd_description.clone(),
+            priority: self.cmd_priority,
+            enabled: self.cmd_enabled,
+        };
+        match personal.upsert(draft, engine) {
+            Ok(rule) => {
+                if let Some(err) = personal.last_save_error() {
+                    self.load_cmd_rule(&rule);
+                    self.set_error(save_failed(ctx, &err));
+                    return;
+                }
+                self.load_cmd_rule(&rule);
+                self.set_status(crate::i18n::tr(
+                    ctx,
+                    "Saved. Takes effect on the next command.",
+                    "已保存, 下一条命令即生效.",
+                ));
+            }
+            Err(err) => self.set_error(err.explain(
+                crate::i18n::language(ctx) == crate::i18n::UiLanguage::Zh,
+            )),
+        }
+    }
+
+    fn delete_cmd_selected(
+        &mut self,
+        ctx: &egui::Context,
+        personal: &CmdAuditPersonalStore,
+        engine: &std::sync::Arc<std::sync::Mutex<crate::core::cmd_audit::CmdAuditEngine>>,
+    ) {
+        self.confirm_reset = false;
+        let Some(id) = self.cmd_selected_id.clone() else {
+            return;
+        };
+        if !personal.delete(&id, engine) {
+            self.set_error(PersonalRuleError::NotFound.explain(
+                crate::i18n::language(ctx) == crate::i18n::UiLanguage::Zh,
+            ));
+            return;
+        }
+        if let Some(err) = personal.last_save_error() {
+            self.set_error(save_failed(ctx, &err));
+        } else {
+            self.set_status(crate::i18n::tr(
+                ctx,
+                "Deleted. Takes effect on the next command.",
+                "已删除, 下一条命令即生效.",
+            ));
+        }
+        self.cmd_creating = false;
+        self.cmd_selected_id = None;
+        self.ensure_cmd_selection(personal);
+    }
+
+    fn export_cmd_json(&mut self, ctx: &egui::Context, personal: &CmdAuditPersonalStore) {
+        self.confirm_reset = false;
+        let Some(dest) = crate::ui::file_dialog::FileDialog::new()
+            .set_title(crate::i18n::tr(
+                ctx,
+                "Export personal command check rules",
+                "导出个人命令检查规则",
+            ))
+            .add_filter("JSON", &["json"])
+            .set_file_name("mistterm-cmd-audit-personal-rules.json")
+            .save_file()
+        else {
+            return;
+        };
+        match std::fs::write(&dest, personal.export_json()) {
+            Ok(()) => self.set_status(match crate::i18n::language(ctx) {
+                crate::i18n::UiLanguage::Zh => format!("已导出 {}", dest.display()),
+                crate::i18n::UiLanguage::En => format!("Exported {}", dest.display()),
+            }),
+            Err(err) => self.set_error(format!(
+                "{}{err}",
+                crate::i18n::tr(ctx, "Export failed: ", "导出失败: ")
+            )),
+        }
+    }
+
+    fn import_cmd_json(
+        &mut self,
+        ctx: &egui::Context,
+        personal: &CmdAuditPersonalStore,
+        engine: &std::sync::Arc<std::sync::Mutex<crate::core::cmd_audit::CmdAuditEngine>>,
+    ) {
+        self.confirm_reset = false;
+        let Some(src) = crate::ui::file_dialog::FileDialog::new()
+            .set_title(crate::i18n::tr(
+                ctx,
+                "Import personal command check rules",
+                "导入个人命令检查规则",
+            ))
+            .add_filter("JSON", &["json"])
+            .pick_file()
+        else {
+            return;
+        };
+        let text = match std::fs::read_to_string(&src) {
+            Ok(text) => text,
+            Err(err) => {
+                self.set_error(format!(
+                    "{}{err}",
+                    crate::i18n::tr(ctx, "Could not read file: ", "无法读取文件: ")
+                ));
+                return;
+            }
+        };
+        match personal.import_json(&text, engine) {
+            Ok(count) => {
+                self.cmd_personal_enabled = personal.personal_enabled();
+                self.cmd_creating = false;
+                self.cmd_selected_id = None;
+                self.ensure_cmd_selection(personal);
+                self.set_status(match crate::i18n::language(ctx) {
+                    crate::i18n::UiLanguage::Zh => {
+                        format!("已导入 {count} 条, 下一条命令即生效.")
+                    }
+                    crate::i18n::UiLanguage::En => format!(
+                        "Imported {count} rules. Takes effect on the next command."
+                    ),
+                });
+            }
+            Err(err) => self.set_error(err.explain(
+                crate::i18n::language(ctx) == crate::i18n::UiLanguage::Zh,
+            )),
+        }
+    }
+
     fn ensure_link_selection(&mut self, store: &DisplayLinkStore) {
         if self.link_creating {
             return;
@@ -1423,6 +2243,52 @@ fn rule_list_label(ctx: &egui::Context, rule: &OutputTriggerRule) -> String {
         severity_label(ctx, rule.severity),
         pattern
     )
+}
+
+fn cmd_rule_list_label(ctx: &egui::Context, rule: &crate::core::cmd_audit::CmdAuditRule) -> String {
+    let pattern = truncate_chars(&rule.pattern, 36);
+    let name = if rule.name.trim().is_empty() {
+        String::new()
+    } else {
+        format!("{} · ", truncate_chars(rule.name.trim(), 20))
+    };
+    format!(
+        "{:>3}  {}{} {}",
+        rule.priority,
+        name,
+        cmd_action_label(ctx, &rule.action),
+        pattern
+    )
+}
+
+fn cmd_match_type_label(ctx: &egui::Context, mt: &str) -> String {
+    match mt {
+        "prefix" => crate::i18n::tr(ctx, "Prefix", "前缀").to_string(),
+        "contains" => crate::i18n::tr(ctx, "Contains", "包含").to_string(),
+        "exact" => crate::i18n::tr(ctx, "Exact", "完全匹配").to_string(),
+        _ => crate::i18n::tr(ctx, "Regex", "正则").to_string(),
+    }
+}
+
+fn cmd_action_label(ctx: &egui::Context, action: &str) -> String {
+    match action {
+        "block" => crate::i18n::tr(ctx, "Block", "拦截").to_string(),
+        "confirm" => crate::i18n::tr(ctx, "Confirm", "需确认").to_string(),
+        "alert" => crate::i18n::tr(ctx, "Alert", "告警放行").to_string(),
+        "allow" => crate::i18n::tr(ctx, "Allow", "直接放行").to_string(),
+        other => other.to_string(),
+    }
+}
+
+fn live_cmd_pattern_error(ctx: &egui::Context, pattern: &str, match_type: &str) -> Option<String> {
+    if pattern.trim().is_empty() {
+        return None;
+    }
+    let zh = crate::i18n::language(ctx) == crate::i18n::UiLanguage::Zh;
+    match crate::core::cmd_audit_personal::check_pattern_for_ui(pattern, match_type) {
+        Ok(()) => None,
+        Err(err) => Some(err.explain(zh)),
+    }
 }
 
 fn link_rule_list_label(ctx: &egui::Context, rule: &DisplayLinkRule) -> String {

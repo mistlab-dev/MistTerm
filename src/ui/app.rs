@@ -304,6 +304,7 @@ pub struct MistTermApp {
     /// 输出触发规则。与 registry 里的模块共享，保存后下一行输出即生效。
     output_trigger_rules: crate::modules::output_trigger::OutputTriggerStore,
     display_link_rules: crate::modules::display_link::DisplayLinkStore,
+    cmd_audit_personal_rules: crate::core::cmd_audit_personal::CmdAuditPersonalStore,
     rule_manager_dialog: crate::ui::rule_manager_dialog::RuleManagerDialog,
 
     /// 是否显示新建会话对话框
@@ -1179,6 +1180,10 @@ impl MistTermApp {
             std::sync::Arc::new(std::sync::Mutex::new(CmdAuditEngine::new()));
         let output_trigger_rules = crate::modules::output_trigger::OutputTriggerStore::load();
         let display_link_rules = crate::modules::display_link::DisplayLinkStore::load();
+        let cmd_audit_personal_rules =
+            crate::core::cmd_audit_personal::CmdAuditPersonalStore::load();
+        // 个人层启动即加载（方案 §6-1）：团队 sync 不覆盖，这里先把磁盘上的个人规则喂给引擎。
+        cmd_audit_personal_rules.sync_to_engine(&cmd_audit_engine);
         let module_registry = {
             let reg = std::sync::Arc::new(crate::capability::ModuleRegistry::with_modules(
                 crate::modules::builtin_modules_full(
@@ -1218,6 +1223,7 @@ impl MistTermApp {
             output_trigger_rules,
             rule_manager_dialog: crate::ui::rule_manager_dialog::RuleManagerDialog::default(),
             display_link_rules: display_link_rules.clone(),
+            cmd_audit_personal_rules,
             show_new_session_dialog: false,
             show_edit_session_dialog: false,
             show_about_dialog: false,
@@ -10355,9 +10361,13 @@ impl eframe::App for MistTermApp {
             &theme,
             &self.output_trigger_rules,
             &self.display_link_rules,
+            &self.cmd_audit_personal_rules,
+            &self.cmd_audit_engine,
             output_trigger_enabled,
             self.module_registry
                 .is_enabled(crate::modules::display_link::MODULE_ID),
+            self.module_registry
+                .is_enabled(crate::modules::cmd_audit_local::MODULE_ID),
         );
         self.poll_paste_history_notes();
         self.process_typed_enter_audit(ctx);
