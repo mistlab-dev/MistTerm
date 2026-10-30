@@ -263,7 +263,7 @@ impl SendSequenceDialog {
                 egui::RichText::new(crate::i18n::tr(
                     ctx,
                     "Sends only to the current pane, even if broadcast input is on.",
-                    "只发到当前这一个窗格. 即使开了同时输入, 也不会发到其它窗格.",
+                    "只发到当前这一个窗格. 即使开了广播输入, 也不会发到其它窗格.",
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.text_tertiary()),

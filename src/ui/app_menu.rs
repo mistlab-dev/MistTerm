@@ -137,6 +137,11 @@ impl MistTermApp {
                 ui.close_menu();
             }
             ui.separator();
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.batch_exec).clicked() {
+                self.menu_open_batch_exec(ctx);
+                ui.close_menu();
+            }
+            ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, crate::i18n::tr(ctx, "Quit", "退出"))
                 .clicked()
             {
@@ -169,6 +174,15 @@ impl MistTermApp {
             if crate::ui::chrome::popup_menu_button_accel(ui, theme, l.find_in_terminal, "f").clicked()
             {
                 self.toggle_terminal_search();
+                ui.close_menu();
+            }
+            ui.separator();
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.preferences).clicked() {
+                self.show_preferences_dialog = true;
+                ui.close_menu();
+            }
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.ai_settings).clicked() {
+                self.show_ai_settings_dialog = true;
                 ui.close_menu();
             }
         });
@@ -289,22 +303,10 @@ impl MistTermApp {
                 }
             });
         });
+        // 工具四段（#198）：片段与发送 / 历史 / 规则 / 账号与数据；偏好不进工具。
         egui::menu::menu_button(ui, label(l.tools_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.preferences).clicked() {
-                self.show_preferences_dialog = true;
-                ui.close_menu();
-            }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.rule_manager).clicked() {
-                self.rule_manager_dialog
-                    .open_output_trigger(&self.output_trigger_rules);
-                ui.close_menu();
-            }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.ai_settings).clicked() {
-                self.show_ai_settings_dialog = true;
-                ui.close_menu();
-            }
-            ui.separator();
+            // 1. 片段与发送
             if crate::ui::chrome::popup_menu_button(ui, theme, l.fragment_library).clicked() {
                 self.fragment_library.open = true;
                 ui.close_menu();
@@ -313,11 +315,12 @@ impl MistTermApp {
                 self.quick_selector.open = true;
                 ui.close_menu();
             }
-            ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.send_sequences).clicked() {
                 self.send_sequence_dialog.open_manager(&self.send_sequences);
                 ui.close_menu();
             }
+            ui.separator();
+            // 2. 历史
             if crate::ui::chrome::popup_menu_button(ui, theme, l.command_history).clicked() {
                 self.menu_open_command_history(ctx);
                 ui.close_menu();
@@ -328,18 +331,21 @@ impl MistTermApp {
                 self.menu_open_paste_history(ctx);
                 ui.close_menu();
             }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.batch_exec).clicked() {
-                self.menu_open_batch_exec(ctx);
+            ui.separator();
+            // 3. 规则与检查
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.rule_manager).clicked() {
+                self.rule_manager_dialog
+                    .open_output_trigger(&self.output_trigger_rules);
                 ui.close_menu();
             }
             ui.separator();
+            // 4. 账号与数据
             if crate::ui::chrome::popup_menu_button(ui, theme, l.credentials).clicked() {
                 if self.ensure_right_dock_allowed_or_warn(ctx) {
                     self.open_right_dock_panel(ActiveRightDock::Credential);
                 }
                 ui.close_menu();
             }
-            ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.session_logs).clicked() {
                 self.menu_open_session_log_browser(ctx);
                 ui.close_menu();

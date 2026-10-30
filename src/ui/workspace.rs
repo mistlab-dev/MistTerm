@@ -2265,8 +2265,8 @@ impl MistTermApp {
                             theme,
                             crate::i18n::tr(
                                 ctx,
-                                "Open another tab",
-                                "再开一个标签",
+                                "Duplicate Tab",
+                                "复制标签",
                             ),
                         )
                         .clicked()
@@ -2284,8 +2284,8 @@ impl MistTermApp {
                             theme,
                             crate::i18n::tr(
                                 ctx,
-                                "Disconnect SSH (keep output)",
-                                "断开 SSH(保留输出)",
+                                "Disconnect (Keep Output)",
+                                "断开连接（保留输出）",
                             ),
                         )
                         .clicked()
@@ -2298,8 +2298,8 @@ impl MistTermApp {
                         theme,
                         crate::i18n::tr(
                             ctx,
-                            "Reconnect this tab",
-                            "重连此标签",
+                            "Reconnect",
+                            "重新连接",
                         ),
                     )
                     .clicked()
@@ -2342,9 +2342,9 @@ impl MistTermApp {
                     }
                     if tab.is_split() {
                         let broadcast_label = if tab.broadcast_input {
-                            crate::i18n::tr(ctx, "✓ Broadcast input", "✓ 同时输入")
+                            crate::i18n::tr(ctx, "✓ Broadcast Input", "✓ 广播输入")
                         } else {
-                            crate::i18n::tr(ctx, "Broadcast input", "同时输入")
+                            crate::i18n::tr(ctx, "Broadcast Input", "广播输入")
                         };
                         if crate::ui::chrome::popup_menu_button_accel_shift(
                             ui,
@@ -2553,13 +2553,13 @@ impl MistTermApp {
                         .any(|t| t.primary_session_id() == session.id);
                     let again = match (crate::i18n::language(ctx), has_tab) {
                         (crate::i18n::UiLanguage::En, true) => {
-                            format!("Another tab · {}", session.name)
+                            format!("Duplicate Tab · {}", session.name)
                         }
                         (crate::i18n::UiLanguage::En, false) => {
                             format!("Open · {}", session.name)
                         }
                         (crate::i18n::UiLanguage::Zh, true) => {
-                            format!("再开一个「{}」", session.name)
+                            format!("复制「{}」标签", session.name)
                         }
                         (crate::i18n::UiLanguage::Zh, false) => {
                             format!("打开「{}」", session.name)

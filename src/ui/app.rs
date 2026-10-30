@@ -4091,8 +4091,8 @@ impl MistTermApp {
             PaletteAction::NewTab,
             "New terminal tab",
             "新建终端标签",
-            "Open another tab",
-            "再开一个标签",
+            "Duplicate Tab",
+            "复制标签",
             "tab",
         );
         add(
@@ -4169,8 +4169,8 @@ impl MistTermApp {
         );
         add(
             PaletteAction::QuickSnippets,
-            "Quick snippet picker",
-            "快速片段选择器",
+            "Quick Snippets",
+            "快速片段",
             "Pick a snippet",
             "选择片段",
             "picker",
@@ -4249,8 +4249,8 @@ impl MistTermApp {
         );
         add(
             PaletteAction::RuleManager,
-            "Rule manager",
-            "规则管理",
+            "Automation Rules",
+            "自动化规则",
             "Output trigger patterns",
             "输出触发规则",
             "trigger regex toast 正则",
@@ -4469,7 +4469,7 @@ impl MistTermApp {
             crate::i18n::tr(
                 ctx,
                 "SSH disconnected on this tab (output kept; reconnect or close)",
-                "已断开 SSH(本标签输出已保留，可重连或关闭标签)",
+                "已断开连接（本标签输出已保留，可重新连接或关闭标签）",
             )
             .to_string(),
         );
@@ -5617,7 +5617,7 @@ impl MistTermApp {
                 crate::i18n::tr(
                     ctx,
                     "Split the tab before broadcasting input",
-                    "先分屏，再开同时输入",
+                    "先分屏，再开广播输入",
                 )
                 .to_string(),
             );
@@ -5629,11 +5629,11 @@ impl MistTermApp {
             crate::i18n::tr(
                 ctx,
                 "Broadcast on — keystrokes go to every pane",
-                "同时输入已开，键入会发到每个窗格",
+                "广播输入已开，键入会发到每个窗格",
             )
             .to_string()
         } else {
-            crate::i18n::tr(ctx, "Broadcast off", "同时输入已关").to_string()
+            crate::i18n::tr(ctx, "Broadcast off", "广播输入已关").to_string()
         });
     }
 

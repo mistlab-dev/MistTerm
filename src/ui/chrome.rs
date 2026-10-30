@@ -4195,8 +4195,8 @@ pub fn show_right_dock_ssh_gate(
             ui.label(
                 RichText::new(crate::i18n::tr(
                     ctx,
-                    "SSH disconnected. Reconnect the tab to use this panel.",
-                    "SSH 已断开。请重连当前标签后再使用此面板。",
+                    "SSH disconnected. Reconnect to use this panel.",
+                    "SSH 已断开。请重新连接后再使用此面板。",
                 ))
                 .color(theme.amber_color()),
             );
