@@ -1413,8 +1413,8 @@ impl AiPanel {
             ui.label(
                 egui::RichText::new(i18n::tr(
                     ctx,
-                    "Multi-host ops work without an API Key — use natural language below (built-in planner). For chat, explain, and LLM planning, configure API URL, Key, and model in Tools → AI Settings.",
-                    "多机运维无需访问密钥 — 在下方用自然语言提问即可（内置规划器）。对话、解释与大模型规划请在「工具 → AI 设置」配置接口、密钥与模型。",
+                    "Multi-host ops work without an API Key — use natural language below (built-in planner). For chat, explain, and LLM planning, configure API URL, Key, and model in Edit → AI Settings.",
+                    "多机运维无需访问密钥 — 在下方用自然语言提问即可（内置规划器）。对话、解释与大模型规划请在「编辑 → AI 设置」配置接口、密钥与模型。",
                 ))
                 .size(theme.font_size_small())
                 .color(theme.color_form_hint()),
@@ -1425,8 +1425,8 @@ impl AiPanel {
                 theme.amber_color(),
                 i18n::tr(
                     ctx,
-                    "Turn on “Enable AI” in Tools → AI Settings.",
-                    "请在「工具 → AI 设置」中勾选「启用 AI」。",
+                    "Turn on “Enable AI” in Edit → AI Settings.",
+                    "请在「编辑 → AI 设置」中勾选「启用 AI」。",
                 ),
             );
             ui.add_space(theme.spacing_sm());

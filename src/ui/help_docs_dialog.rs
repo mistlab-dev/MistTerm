@@ -539,8 +539,8 @@ fn feature_sections() -> Vec<FeatureSection> {
         FeatureSection {
             icon: "🤖",
             title: "AI Assistant",
-            desc_en: "Multi-host read-only ops work without an API key (built-in planner). Add an OpenAI-compatible key in Tools → AI Settings for chat, explanations, and LLM-assisted planning.",
-            desc_zh: "多机只读运维无需 API Key（内置规划器）。对话、解释与 LLM 规划需在「工具 → AI 设置」配置 OpenAI 兼容 Key。",
+            desc_en: "Multi-host read-only ops work without an API key (built-in planner). Add an OpenAI-compatible key in Edit → AI Settings for chat, explanations, and LLM-assisted planning.",
+            desc_zh: "多机只读运维无需 API Key（内置规划器）。对话、解释与 LLM 规划需在「编辑 → AI 设置」配置 OpenAI 兼容 Key。",
         },
         FeatureSection {
             icon: "📤",

@@ -66,7 +66,7 @@ impl BatchExecDialog {
             }
         }
 
-        let title = crate::i18n::tr(ctx, "Batch run on servers", "批量多机执行");
+        let title = crate::i18n::tr(ctx, "Batch Run", "批量执行");
         let mut keep_open = self.open;
         let mut should_close = false;
         let modal_sz = egui::vec2(720.0, 520.0);

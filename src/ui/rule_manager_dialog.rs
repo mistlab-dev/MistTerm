@@ -1,6 +1,6 @@
 //! 规则管理模态（#185）。
 //!
-//! 主入口：工具 → 规则管理… →「输出触发」。
+//! 主入口：工具 → 自动化规则… →「输出触发」。
 //! 次入口：偏好 → 扩展模块 → 本行「管理规则…」。
 //! 同窗预留给 #186 / #187 的其它规则页；现在只有输出触发这一页。
 //! 规则增删改不放进偏好折叠正文。
@@ -101,7 +101,7 @@ impl RuleManagerDialog {
                     if crate::ui::chrome::modal_header(
                         ui,
                         theme,
-                        crate::i18n::tr(ctx, "Rule manager", "规则管理"),
+                        crate::i18n::tr(ctx, "Automation Rules", "自动化规则"),
                         theme.font_size_modal_title(),
                     ) {
                         should_close = true;

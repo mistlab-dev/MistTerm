@@ -52,7 +52,7 @@ pub enum PaletteAction {
     BatchExec,
     /// 打开发送序列管理，不执行片段。
     SendSequences,
-    /// 工具 → 规则管理（输出触发等）。
+    /// 工具 → 自动化规则（输出触发等）。
     RuleManager,
 }
 
