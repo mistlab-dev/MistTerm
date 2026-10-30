@@ -1038,15 +1038,16 @@ mod tests {
         let store = DisplayLinkStore::load_from(&path);
         assert!(!path.exists(), "未自定义不写用户文件");
 
+        // Pattern must not collide with builtin URL (priority 10); use a unique token.
         let rule = store
-            .upsert(link_draft("example-[a-z]+\\.com"))
+            .upsert(link_draft("mistterm-hot-[a-z]+"))
             .expect("upsert");
         assert!(store.customized());
         assert!(path.exists(), "首次编辑落盘 customized=true");
         assert_eq!(rule.id, "DL-USER-".to_string() + &rule.id[8..]);
 
         // 热更新：下一帧 scan 立即用新规则。
-        let hits = store.scan("open https://example.com/page now");
+        let hits = store.scan("open mistterm-hot-reload now");
         assert!(hits
             .iter()
             .any(|l| l.rule_id() == rule.id && l.action_str() == ACTION_BROWSER_OPEN));
