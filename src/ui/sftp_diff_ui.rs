@@ -467,6 +467,47 @@ pub(super) fn paint_dir_diff(
         .filter(|(_, row)| state.filter.matches(row.kind))
         .map(|(idx, _)| idx)
         .collect();
+    let row_h = theme
+        .size_file_list_row_h()
+        .max(ui.spacing().interact_size.y);
+    let list_h = (ui.available_height() - super::FLUX_XFER_STRIP_RESERVE).max(80.0);
+    let interactive = state.phase == DiffPhase::Ready && !busy;
+
+    // #242：Ready+空行+有 error → 列表区错误/重试空态（禁止「两边一样」）。
+    // 原因已在上方红字；此处强调下一步，避免与「两边一样」混淆。
+    if state.phase == DiffPhase::Ready && state.rows.is_empty() && state.error.is_some() {
+        let title = crate::i18n::tr(
+            ctx,
+            "Compare didn't finish.",
+            "对比没有完成。",
+        );
+        let hint = crate::i18n::tr(
+            ctx,
+            "Tap Compare again to retry, or Back to the file list.",
+            "可点「重新对比」再试，或「返回」回文件列表。",
+        );
+        egui::ScrollArea::vertical()
+            .id_source("sftp_dir_diff_error")
+            .auto_shrink([false, false])
+            .max_height(list_h)
+            .show(ui, |ui| {
+                ui.add_space(24.0);
+                ui.label(
+                    egui::RichText::new(title)
+                        .size(theme.font_size_body())
+                        .color(theme.red_color()),
+                );
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(hint)
+                        .size(theme.font_size_caption())
+                        .color(theme.text_secondary()),
+                );
+            });
+        return action;
+    }
+
+    // 真正扫完且无差异时才显示「两边一样」（#224/#242）。
     if state.phase == DiffPhase::Ready && state.rows.is_empty() && state.error.is_none() {
         ui.label(
             egui::RichText::new(crate::i18n::tr(
@@ -474,17 +515,12 @@ pub(super) fn paint_dir_diff(
                 "Folders match — nothing to sync. Compare again after changing folders, or go Back to the file list.",
                 "两边一样，没有可同步的差异。可改目录后点「重新对比」，或「返回」回文件列表。",
             ))
-                .size(theme.font_size_caption())
-                .color(theme.text_secondary()),
+            .size(theme.font_size_caption())
+            .color(theme.text_secondary()),
         );
     }
 
-    let row_h = theme
-        .size_file_list_row_h()
-        .max(ui.spacing().interact_size.y);
-    let list_h = (ui.available_height() - super::FLUX_XFER_STRIP_RESERVE).max(80.0);
-    let interactive = state.phase == DiffPhase::Ready && !busy;
-    // 扫描/同步且尚无行时：列表区放占位，避免长时间空白吓人（#218/#224）。
+    // 扫描/同步且尚无行时：列表区放占位，避免长时间空白吓人（#218/#224/#242）。
     if filtered.is_empty()
         && matches!(state.phase, DiffPhase::Scanning | DiffPhase::Syncing)
         && state.error.is_none()
