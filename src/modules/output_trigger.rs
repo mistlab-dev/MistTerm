@@ -658,7 +658,7 @@ impl crate::capability::MistModule for OutputTriggerModule {
     }
 
     fn name_en(&self) -> &str {
-        "Output Trigger"
+        "Output triggers"
     }
 
     fn on_output_line(&self, ctx: &OutputLineCtx<'_>) -> Vec<ModuleAction> {
