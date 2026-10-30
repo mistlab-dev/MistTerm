@@ -35,8 +35,8 @@ impl MistTermApp {
             theme.top_chrome_total_height()
         };
         if top_chrome_height > 0.0 {
-            egui::TopBottomPanel::top("top_chrome")
-                .exact_height(top_chrome_height)
+            egui::Panel::top("top_chrome")
+                .exact_size(top_chrome_height)
                 .frame(theme.frame_top_chrome())
                 .show_separator_line(false)
                 .show(ctx, |ui| {
@@ -61,7 +61,7 @@ impl MistTermApp {
                                 egui::pos2(bar_bg.max.x - caption_w, bar_bg.min.y),
                                 bar_bg.max,
                             );
-                            ui.allocate_ui_at_rect(tabs_rect, |ui| {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect, |ui| {
                                 ui.set_min_height(top_chrome_height);
                                 ui.horizontal(|ui| {
                                     ui.set_min_height(top_chrome_height);
@@ -69,14 +69,14 @@ impl MistTermApp {
                                     let drag_w = ui.available_width().max(8.0);
                                     crate::ui::chrome::title_bar_drag_region(
                                         ui,
-                                        frame,
+                                        ctx,
                                         egui::vec2(drag_w, top_chrome_height),
                                     );
                                 });
                             });
-                            ui.allocate_ui_at_rect(caption_rect, |ui| {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(caption_rect, |ui| {
                                 ui.set_min_height(top_chrome_height);
-                                let maximized = frame.info().window_info.maximized;
+                                let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
                                 let caps = crate::ui::chrome::window_caption_buttons(
                                     ui,
                                     theme,
@@ -84,13 +84,13 @@ impl MistTermApp {
                                     top_chrome_height,
                                 );
                                 if caps.minimize {
-                                    frame.set_minimized(true);
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
                                 }
                                 if caps.toggle_maximize {
-                                    frame.set_maximized(!maximized);
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
                                 }
                                 if caps.close {
-                                    frame.close();
+                                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                                 }
                             });
                         } else {
@@ -104,7 +104,7 @@ impl MistTermApp {
                                     let drag_w = ui.available_width().max(8.0);
                                     crate::ui::chrome::title_bar_drag_region(
                                         ui,
-                                        frame,
+                                        ctx,
                                         egui::vec2(drag_w, top_chrome_height),
                                     );
                                 }
@@ -258,7 +258,7 @@ impl MistTermApp {
                 if seam_y > work.min.y {
                     work_painter.hline(work.x_range(), seam_y, theme.divider_stroke());
                 }
-                ui.allocate_ui_at_rect(work_body, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(work_body, |ui| {
                     ui.set_clip_rect(work);
                     let layout_h = (work_bottom - work_top).max(1.0);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
@@ -291,7 +291,7 @@ impl MistTermApp {
                                 egui::pos2(col_left, work_top),
                                 egui::pos2(col_left + self.sidebar_width, work_bottom),
                             );
-                            ui.allocate_ui_at_rect(sidebar_rect, |ui| {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(sidebar_rect, |ui| {
                                 let (sidebar_output, col_actions) = Sidebar::show_column(
                                     ui,
                                     layout_h,
@@ -405,7 +405,7 @@ impl MistTermApp {
                             egui::pos2(col_left, work_top),
                             egui::pos2(col_left + term_col_w, work_bottom),
                         );
-                        // 须显式 top_down：父级是 horizontal，allocate_ui_at_rect 会继承横向布局，
+                        // 须显式 top_down：父级是 horizontal，allocate_new_ui 会继承横向布局，
                         // Tab 行与正文会并排而非上下堆叠，终端正文宽度被压成 0。
                         ui.allocate_ui_with_layout(
                             egui::vec2(term_col_w, term_h),
@@ -428,10 +428,10 @@ impl MistTermApp {
                                             ui.cursor().min,
                                             egui::vec2(tab_row_w, terminal_header_row_h),
                                         );
-                                        ui.allocate_ui_at_rect(tab_row_rect, |ui| {
+                                        ui.scope_builder(egui::UiBuilder::new().max_rect(tab_row_rect, |ui| {
                                             ui.painter().rect_filled(
                                                 tab_row_rect,
-                                                egui::Rounding::ZERO,
+                                                egui::CornerRadius::ZERO,
                                                 theme.color_panel_header_band_fill(),
                                             );
                                             ui.set_clip_rect(tab_row_rect);
@@ -871,11 +871,8 @@ impl MistTermApp {
                                 .stroke(egui::Stroke::new(1.0, theme.color_overlay_fill_subtle()))
                         };
                         shortcut_frame
-                            .rounding(theme.radius_list_item())
-                            .inner_margin(egui::Margin::symmetric(
-                                theme.spacing_search_input_x(),
-                                theme.spacing_search_input_y(),
-                            ))
+                            .corner_radius(theme.radius_list_item())
+                            .inner_margin(egui::Margin::symmetric((theme.spacing_search_input_x()) as i8, (theme.spacing_search_input_y(),) as i8))
                             .show(ui, |ui| {
                                 ui.label(
                                     egui::RichText::new(&version_line)
@@ -1403,8 +1400,8 @@ impl MistTermApp {
                                     1.0,
                                     theme.color_overlay_fill_subtle(),
                                 ))
-                                .rounding(theme.radius_list_item())
-                                .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), theme.spacing_search_input_y()))
+                                .corner_radius(theme.radius_list_item())
+                                .inner_margin(egui::Margin::symmetric((theme.spacing_search_input_x()) as i8, (theme.spacing_search_input_y()) as i8))
                                 .show(ui, |ui| {
                                     crate::ui::icons::icon_label_row(
                                         ui,
@@ -2084,7 +2081,7 @@ impl MistTermApp {
         let mut close_tab = false;
         let mut text_right = rect.right() - pad;
         if buttons_ok {
-            let mut row = ui.child_ui(rect, egui::Layout::right_to_left(egui::Align::Center));
+            let mut row = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
             row.set_clip_rect(rect);
             row.spacing_mut().item_spacing.x = theme.spacing_sm();
             row.add_space(pad);
@@ -2303,7 +2300,6 @@ impl MistTermApp {
                         } else {
                             open_another_sid = Some(sid.clone());
                         }
-                        ui.close_menu();
                     }
                     if tab.any_connected_or_connecting()
                         && crate::ui::chrome::popup_menu_button(
@@ -2318,7 +2314,6 @@ impl MistTermApp {
                         .clicked()
                     {
                         disconnect_ssh_idx = Some(idx);
-                        ui.close_menu();
                     }
                     if crate::ui::chrome::popup_menu_button(
                         ui,
@@ -2332,7 +2327,6 @@ impl MistTermApp {
                     .clicked()
                     {
                         reconnect_idx = Some(idx);
-                        ui.close_menu();
                     }
                     ui.separator();
                     if tab.can_split() {
@@ -2349,7 +2343,6 @@ impl MistTermApp {
                         .clicked()
                         {
                             split_h_idx = Some(idx);
-                            ui.close_menu();
                         }
                         if crate::ui::chrome::popup_menu_button_accel_shift(
                             ui,
@@ -2364,7 +2357,6 @@ impl MistTermApp {
                         .clicked()
                         {
                             split_v_idx = Some(idx);
-                            ui.close_menu();
                         }
                     }
                     if tab.is_split() {
@@ -2382,7 +2374,6 @@ impl MistTermApp {
                         .clicked()
                         {
                             broadcast_idx = Some(idx);
-                            ui.close_menu();
                         }
                         if crate::ui::chrome::popup_menu_button(
                             ui,
@@ -2397,7 +2388,6 @@ impl MistTermApp {
                         {
                             close_pane_tab =
                                 Some((idx, tab.active_pane));
-                            ui.close_menu();
                         }
                         if crate::ui::chrome::popup_menu_button(
                             ui,
@@ -2411,7 +2401,6 @@ impl MistTermApp {
                         .clicked()
                         {
                             unsplit_idx = Some(idx);
-                            ui.close_menu();
                         }
                     }
                     ui.separator();
@@ -2427,7 +2416,6 @@ impl MistTermApp {
                     .clicked()
                     {
                         close_others = Some(idx);
-                        ui.close_menu();
                     }
                     if crate::ui::chrome::popup_menu_button(
                         ui,
@@ -2441,7 +2429,6 @@ impl MistTermApp {
                     .clicked()
                     {
                         close_right = Some(idx);
-                        ui.close_menu();
                     }
                 });
             }
@@ -2534,9 +2521,10 @@ impl MistTermApp {
     ) {
         let popup_id = ui.auto_id_with("tab_bar_new_tab_picker");
         let btn = crate::ui::chrome::tab_bar_new_tab_button(ui, theme);
-        if btn.clicked() {
-            ui.memory_mut(|mem| mem.toggle_popup(popup_id));
-        }
+        // egui 0.37：Popup 自带点击开合；close 行为由 close_behavior 处理。
+        let _ = popup_id;
+        let popup = egui::Popup::from_toggle_button_response(&btn)
+            .align(egui::RectAlign::BOTTOM_START);
 
         let mut open_session_id: Option<String> = None;
         let mut open_local = false;
@@ -2558,13 +2546,8 @@ impl MistTermApp {
             crate::core::session_sort::SessionSortBy::LastConnected,
         );
 
-        egui::popup::popup_above_or_below_widget(
-            ui,
-            popup_id,
-            &btn,
-            egui::AboveOrBelow::Below,
-            |ui| {
-                crate::ui::chrome::apply_menu_popup_style(ui, theme);
+        popup.show(|ui| {
+            crate::ui::chrome::apply_menu_popup_style(ui, theme);
                 ui.set_min_width(220.0);
                 ui.set_max_width(320.0);
 
@@ -2600,7 +2583,6 @@ impl MistTermApp {
                         .clicked()
                     {
                         open_session_id = Some(session.id.clone());
-                        ui.memory_mut(|mem| mem.close_popup());
                     }
                 }
 
@@ -2624,7 +2606,6 @@ impl MistTermApp {
                                     .clicked()
                                 {
                                     open_session_id = Some(session.id.clone());
-                                    ui.memory_mut(|mem| mem.close_popup());
                                 }
                             }
                         });
@@ -2639,7 +2620,6 @@ impl MistTermApp {
                 .clicked()
                 {
                     open_local = true;
-                    ui.memory_mut(|mem| mem.close_popup());
                 }
                 if crate::ui::chrome::popup_menu_button(
                     ui,
@@ -2649,10 +2629,8 @@ impl MistTermApp {
                 .clicked()
                 {
                     open_new_connection = true;
-                    ui.memory_mut(|mem| mem.close_popup());
                 }
-            },
-        );
+        });
 
         if let Some(sid) = open_session_id {
             if let Some(session) = self.session_manager.get_session(&sid).cloned() {

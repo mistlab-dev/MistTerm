@@ -234,7 +234,7 @@ impl CredentialPanel {
         let prev_extreme = ui.visuals().extreme_bg_color;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
         egui::ScrollArea::vertical()
-            .id_source("credential_panel_list")
+            .id_salt("credential_panel_list")
             .max_height(list_h)
             .auto_shrink([false; 2])
             .show(ui, |ui| {
@@ -829,10 +829,10 @@ impl CredentialPanel {
 
         let (def_w, min_w, max_w) =
             crate::ui::layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::SidePanel::right("credential_panel")
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
+        let panel = egui::Panel::right("credential_panel")
+            .default_size(def_w)
+            .min_size(min_w)
+            .max_size(max_w)
             .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
@@ -866,7 +866,7 @@ impl CredentialPanel {
             return;
         }
 
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.last_panel_slot_rect,
@@ -909,7 +909,7 @@ impl CredentialPanel {
 
                 // 路径收到「高级」次入口，不当副标题。
                 egui::CollapsingHeader::new(i18n::tr(ctx, "Advanced", "高级"))
-                    .id_source("credential_panel_advanced_path")
+                    .id_salt("credential_panel_advanced_path")
                     .default_open(false)
                     .show(ui, |ui| {
                         ui.label(
@@ -1139,7 +1139,7 @@ impl CredentialPanel {
                                 140.0,
                             );
                             egui::ScrollArea::vertical()
-                                .id_source("credential_vault_browse")
+                                .id_salt("credential_vault_browse")
                                 .max_height(browse_h)
                                 .show(ui, |ui| {
                                     for e in &self.vault_list_entries {
@@ -1181,7 +1181,7 @@ impl CredentialPanel {
                         let prev_extreme = ui.visuals().extreme_bg_color;
                         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
                         egui::ScrollArea::vertical()
-                            .id_source("credential_panel_form")
+                            .id_salt("credential_panel_form")
                             .max_height(form_scroll_h)
                             .auto_shrink([false; 2])
                             .show(ui, |ui| {

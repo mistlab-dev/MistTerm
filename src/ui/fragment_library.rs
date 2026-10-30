@@ -159,7 +159,7 @@ impl FragmentLibraryState {
                 ) {
                     close_via_header = true;
                 }
-                let sw = ctx.screen_rect().width().max(360.0);
+                let sw = ctx.content_rect().width().max(360.0);
                 let fill_w = finite_content_width_inset(
                     ui,
                     16.0,
@@ -358,7 +358,7 @@ impl FragmentLibraryState {
                         };
 
                         egui::ScrollArea::vertical()
-                            .id_source("mistterm_fragment_lib_list_scroll")
+                            .id_salt("mistterm_fragment_lib_list_scroll")
                             .max_height(list_scroll_h)
                             .show(ui, |ui| {
                                 if results.is_empty() {
@@ -409,8 +409,8 @@ impl FragmentLibraryState {
                         if self.editing_id.is_none() {
                             egui::Frame::none()
                                 .fill(theme.color_fragment_tag_fill())
-                                .inner_margin(egui::Margin::same(theme.spacing_card_x()))
-                                .rounding(theme.radius_list_item())
+                                .inner_margin(egui::Margin::same((theme.spacing_card_x()) as i8))
+                                .corner_radius(theme.radius_list_item())
                                 .show(ui, |ui| {
                                     ui.label(
                                         egui::RichText::new(i18n::tr(
@@ -428,7 +428,7 @@ impl FragmentLibraryState {
                         // 表单在列内纵向滚动；高度用布局分配后的剩余空间(优于固定像素)。
                         let scroll_h = ui.available_height().max(120.0);
                         egui::ScrollArea::vertical()
-                            .id_source("mistterm_fragment_lib_form_scroll")
+                            .id_salt("mistterm_fragment_lib_form_scroll")
                             .max_height(scroll_h)
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
@@ -709,7 +709,7 @@ impl FragmentLibraryState {
                                     "Preview resolved (session context)",
                                     "预览替换后(当前会话上下文)",
                                 ))
-                                    .id_source("mistterm_fragment_lib_preview_expand")
+                                    .id_salt("mistterm_fragment_lib_preview_expand")
                                     .show(ui, |ui| {
                                     ui.add(
                                         egui::Label::new(
@@ -717,7 +717,7 @@ impl FragmentLibraryState {
                                                 .monospace()
                                                 .color(theme.green_color()),
                                         )
-                                        .wrap(true),
+                                        .wrap(),
                                     );
                                 });
 

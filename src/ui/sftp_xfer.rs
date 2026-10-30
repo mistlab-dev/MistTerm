@@ -740,7 +740,7 @@ fn paint_flux_xfer_strip(
             }
             if ui.memory(|m| m.is_popup_open(popup_id)) {
                 let popup_w = 196.0;
-                let screen = ui.ctx().screen_rect();
+                let screen = ui.ctx().content_rect();
                 let mut pos = egui::pos2(
                     gear.rect.right() - popup_w,
                     gear.rect.top() - 176.0,

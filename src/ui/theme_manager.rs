@@ -148,18 +148,18 @@ impl ThemeManager {
         style.visuals.widgets.noninteractive.bg_fill = theme.color_subtle_inset_fill();
         style.visuals.widgets.noninteractive.bg_stroke = theme.divider_stroke();
         if theme.uses_modern_palette() {
-            let rounding = egui::Rounding::same(theme.radius_list_item());
+            let rounding = egui::CornerRadius::same(theme.radius_list_item() as u8);
             style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
             style.visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
             style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
-            style.visuals.widgets.inactive.rounding = rounding;
+            style.visuals.widgets.inactive.corner_radius = rounding;
             style.visuals.widgets.hovered.bg_fill = theme.color_widget_hover_fill();
             style.visuals.widgets.hovered.weak_bg_fill = theme.color_widget_hover_fill();
             style.visuals.widgets.active.bg_fill = theme.color_widget_active_fill();
             style.visuals.widgets.open.bg_fill = Color32::TRANSPARENT;
             style.visuals.widgets.open.weak_bg_fill = Color32::TRANSPARENT;
             style.visuals.widgets.open.bg_stroke = egui::Stroke::NONE;
-            style.visuals.widgets.open.rounding = rounding;
+            style.visuals.widgets.open.corner_radius = rounding;
         } else {
             style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
             style.visuals.widgets.inactive.weak_bg_fill = theme.color_subtle_inset_fill();
@@ -193,7 +193,7 @@ impl ThemeManager {
         style.visuals.selection.bg_fill = theme.color_text_selection_bg();
         style.visuals.selection.stroke.color = theme.color_text_selection_fg();
         style.visuals.hyperlink_color = theme.accent_color();
-        style.visuals.menu_rounding = egui::Rounding::same(theme.radius_list_item());
+        style.visuals.menu_corner_radius = egui::CornerRadius::same(theme.radius_list_item() as u8);
 
         // 间距保持与设计一致
         style.spacing.item_spacing = egui::vec2(8.0, 8.0);

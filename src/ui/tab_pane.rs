@@ -542,7 +542,7 @@ fn render_node(
                     egui::pos2(area.min.x + w1 + splitter, area.min.y),
                     egui::vec2(w2, h),
                 );
-                ui.allocate_ui_at_rect(left, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(left, |ui| {
                     ui.set_clip_rect(left.intersect(ui.clip_rect()));
                     ui.set_min_size(left.size());
                     ui.set_max_size(left.size());
@@ -576,7 +576,7 @@ fn render_node(
                 }
                 ui.painter()
                     .rect_filled(sep_rect, 0.0, theme.bg_body_color());
-                ui.allocate_ui_at_rect(right, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(right, |ui| {
                     ui.set_clip_rect(right.intersect(ui.clip_rect()));
                     ui.set_min_size(right.size());
                     ui.set_max_size(right.size());
@@ -609,7 +609,7 @@ fn render_node(
                     egui::pos2(area.min.x, area.min.y + h1 + splitter),
                     egui::vec2(w, h2),
                 );
-                ui.allocate_ui_at_rect(top, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(top, |ui| {
                     ui.set_clip_rect(top.intersect(ui.clip_rect()));
                     ui.set_min_size(top.size());
                     ui.set_max_size(top.size());
@@ -643,7 +643,7 @@ fn render_node(
                 }
                 ui.painter()
                     .rect_filled(sep_rect, 0.0, theme.bg_body_color());
-                ui.allocate_ui_at_rect(bottom, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(bottom, |ui| {
                     ui.set_clip_rect(bottom.intersect(ui.clip_rect()));
                     ui.set_min_size(bottom.size());
                     ui.set_max_size(bottom.size());
@@ -694,7 +694,7 @@ fn render_one_pane(
         egui::vec2(w.max(1.0), h.max(1.0)),
         egui::Sense::hover(),
     );
-    let mut pane_ui = ui.child_ui(pane_rect, egui::Layout::top_down(egui::Align::LEFT));
+    let mut pane_ui = ui.new_child(egui::UiBuilder::new().max_rect(pane_rect).layout(egui::Layout::top_down(egui::Align::LEFT)));
     pane_ui.set_clip_rect(pane_rect.intersect(pane_ui.clip_rect()));
     let ui = &mut pane_ui;
     {
@@ -727,7 +727,7 @@ fn render_one_pane(
                     header_rect.right_top() + egui::vec2(-22.0, 2.0),
                     egui::vec2(20.0, header_h - 4.0),
                 );
-                ui.allocate_ui_at_rect(close_rect, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(close_rect, |ui| {
                     if crate::ui::chrome::chrome_small_icon_button(
                         ui,
                         theme,

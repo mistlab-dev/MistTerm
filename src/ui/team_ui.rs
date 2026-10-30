@@ -239,7 +239,7 @@ pub fn paint_team_controls(
                     )
                     .color(theme.color_form_hint()),
                 )
-                .wrap(true),
+                .wrap(),
             );
             ui.add_space(theme.spacing_xs());
 

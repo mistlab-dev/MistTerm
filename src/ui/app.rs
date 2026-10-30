@@ -4076,7 +4076,7 @@ impl MistTermApp {
         // 任何 UI TextEdit/IME 优先于「终端仍想要键盘」。
         // 半角 `,` 是广播式 Event::Text；全角 `，` 走 IME Composition，只进当前 IME 目标。
         // 若仍按 terminal_wants 抢键，全角标点会进终端 ime_capture 并被清空。
-        if ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
+        if ctx.egui_wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
             return false;
         }
         let terminal_focused = self
@@ -4100,7 +4100,7 @@ impl MistTermApp {
             && (self.ai_panel.is_draft_input_focused()
                 || ctx.memory(|m| m.has_focus(egui::Id::new("mistterm_ai_draft"))));
         let ui_typing =
-            ai_draft_focused || (ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus());
+            ai_draft_focused || (ctx.egui_wants_keyboard_input() && !self.active_terminal_has_keyboard_focus());
         if !ui_typing {
             return;
         }
@@ -4142,7 +4142,7 @@ impl MistTermApp {
         {
             return false;
         }
-        if ctx.wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() {
             return false;
         }
         self.active_tab
@@ -4163,7 +4163,7 @@ impl MistTermApp {
         if ai_draft_focused {
             return false;
         }
-        if ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
+        if ctx.egui_wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
             return false;
         }
         let terminal_focused = self
@@ -6124,7 +6124,7 @@ impl MistTermApp {
 
         let mut close = false;
         let inner = rect.shrink2(egui::vec2(theme.spacing_region_pad_x(), 0.0));
-        ui.allocate_ui_at_rect(inner, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner, |ui| {
             ui.set_height(bar_h);
             if ui.input(|i| i.key_pressed(Key::Escape)) {
                 close = true;
@@ -6287,7 +6287,7 @@ impl MistTermApp {
         if self.window_decorated_applied == Some(want_decorated) {
             return;
         }
-        frame.set_decorations(want_decorated);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(want_decorated));
         self.window_decorated_applied = Some(want_decorated);
     }
 
@@ -8002,10 +8002,10 @@ impl MistTermApp {
         dock_col_w: f32,
     ) {
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let fragment_panel = egui::SidePanel::right(layout_util::FRAGMENT_PANEL_ID)
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
+        let fragment_panel = egui::Panel::right(layout_util::FRAGMENT_PANEL_ID)
+            .default_size(def_w)
+            .min_size(min_w)
+            .max_size(max_w)
             .resizable(true)
             .show_separator_line(false)
             // 仅占布局宽；勿在此绘制内容(CentralPanel 后绘会盖住)。内容在 Foreground Area 重绘。
@@ -8044,7 +8044,7 @@ impl MistTermApp {
         if !self.show_fragment_panel {
             return;
         }
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.fragment_panel_slot_rect,
@@ -8642,7 +8642,7 @@ impl MistTermApp {
         let prev_extreme = ui.visuals().extreme_bg_color;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
         egui::ScrollArea::vertical()
-            .id_source("mistterm_fragment_list_scroll")
+            .id_salt("mistterm_fragment_list_scroll")
             .auto_shrink([false, false])
             .max_height(scroll_h)
             .scroll_bar_visibility(egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden)
@@ -8729,7 +8729,6 @@ impl MistTermApp {
                                 if let Some(item) = self.market_item_for_stats(&frag_clone) {
                                     self.install_market_fragment(ui.ctx(), &item);
                                 }
-                                ui.close_menu();
                             }
                         });
                     }
@@ -9256,8 +9255,8 @@ impl MistTermApp {
                 None => label.to_string(),
             }
         };
-        egui::SidePanel::left("activity_rail")
-            .exact_width(rail_w)
+        egui::Panel::left("activity_rail")
+            .exact_size(rail_w)
             .resizable(false)
             .frame(
                 egui::Frame::none()
@@ -9396,8 +9395,8 @@ impl MistTermApp {
             crate::i18n::menu::labels(crate::i18n::language(ctx)).show_activity_rail,
             crate::platform::accel("B"),
         );
-        egui::SidePanel::left("activity_rail_reveal")
-            .exact_width(strip_w)
+        egui::Panel::left("activity_rail_reveal")
+            .exact_size(strip_w)
             .resizable(false)
             .frame(
                 egui::Frame::none()
@@ -9424,11 +9423,11 @@ impl MistTermApp {
             .map(|f| f.usage_count)
             .sum();
 
-        egui::TopBottomPanel::bottom("bottom_chrome")
-            .exact_height(status_h)
+        egui::Panel::bottom("bottom_chrome")
+            .exact_size(status_h)
             .frame(theme.frame_chrome_bar())
             .show(ctx, |ui| {
-                let screen = ui.ctx().screen_rect();
+                let screen = ui.ctx().content_rect();
                 let inner = ui.max_rect();
                 let m = theme.margin_chrome_bar();
                 let panel_top = inner.min.y - m.top;
@@ -9674,7 +9673,7 @@ impl MistTermApp {
                 crate::modules::session_import::SessionImportModule::import_enabled(&self.module_registry),
                 self.sidebar_collapsed,
                 self.activity_rail_collapsed,
-                frame.info().window_info.maximized,
+                ctx.input(|i| i.viewport().maximized.unwrap_or(false)),
                 self.show_sftp_panel,
                 self.show_fragment_panel,
                 self.show_monitor_panel,
@@ -9719,7 +9718,7 @@ impl MistTermApp {
             MacMenuAction::CloseTab => self.request_close_active_tab(),
             MacMenuAction::DisconnectSsh => self.disconnect_ssh_keep_buffer_active(ctx),
             MacMenuAction::ReconnectTab => self.reconnect_active_tab(ctx),
-            MacMenuAction::Quit => frame.close(),
+            MacMenuAction::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             MacMenuAction::CopyTerminal => self.menu_copy_for_context(ctx),
             MacMenuAction::PasteToTerminal => self.menu_paste_for_context(ctx),
             MacMenuAction::SelectAllTerminal => self.menu_select_all_for_context(ctx),
@@ -9733,7 +9732,7 @@ impl MistTermApp {
             }
             MacMenuAction::ToggleActivityRail => self.toggle_activity_rail(),
             MacMenuAction::ToggleMaximize => {
-                frame.set_maximized(!frame.info().window_info.maximized);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!ctx.input(|i| i.viewport().maximized.unwrap_or(false))));
             }
             MacMenuAction::TerminalSearch => self.toggle_terminal_search(),
             MacMenuAction::ToggleSftp => self.toggle_sftp_panel(ctx),
@@ -10930,7 +10929,7 @@ impl MistTermApp {
         );
         let rect = egui::Rect::from_min_size(origin, egui::vec2(card_w, card_h));
         ui.allocate_rect(rect, egui::Sense::hover());
-        let mut card = ui.child_ui(rect, egui::Layout::top_down(egui::Align::Center));
+        let mut card = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Center)));
         card.add_space(8.0);
         card.label(
             egui::RichText::new("MistTerm")

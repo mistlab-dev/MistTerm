@@ -121,7 +121,7 @@ impl SendSequenceDialog {
                         "Snippets, mist exec, AI batch, or this",
                         "片段, mist exec, AI 批量, 还是发送序列",
                     ))
-                    .id_source("send_sequence_compare")
+                    .id_salt("send_sequence_compare")
                     .default_open(false)
                     .show(ui, |ui| {
                         paint_difference(ui, theme, ctx);
@@ -156,7 +156,7 @@ impl SendSequenceDialog {
             }
             ui.add_space(theme.spacing_xs());
             egui::ScrollArea::vertical()
-                .id_source("send_sequence_list")
+                .id_salt("send_sequence_list")
                 .max_height(360.0)
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {

@@ -184,7 +184,7 @@ fn consume_terminal_clipboard_key(i: &mut InputState, key: Key) -> bool {
         return true;
     }
     // winit/Windows 有时不在 Key 事件上附带 modifiers，以 InputState 为准。
-    if i.modifiers.matches(mods) && i.key_pressed(key) {
+    if i.modifiers.matches_logically(mods) && i.key_pressed(key) {
         i.events.retain(|e| {
             !matches!(
                 e,

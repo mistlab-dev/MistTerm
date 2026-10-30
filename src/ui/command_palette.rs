@@ -200,7 +200,7 @@ impl CommandPalette {
                     }
                     ui.add_space(theme.spacing_sm());
                     egui::ScrollArea::vertical()
-                        .id_source("mistterm_command_palette_scroll")
+                        .id_salt("mistterm_command_palette_scroll")
                         .max_height(scroll_h)
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {

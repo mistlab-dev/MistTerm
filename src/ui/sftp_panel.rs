@@ -1360,7 +1360,7 @@ impl SftpPanel {
                 w
             });
             let popup_w = (widest + 36.0).clamp(path_rect.width(), 320.0);
-            let screen = ui.ctx().screen_rect();
+            let screen = ui.ctx().content_rect();
             let mut pos = egui::pos2(path_rect.left(), path_rect.bottom() + 2.0);
             if pos.x + popup_w > screen.right() - 8.0 {
                 pos.x = (screen.right() - 8.0 - popup_w).max(screen.left() + 8.0);
@@ -1827,7 +1827,6 @@ impl SftpPanel {
                         .to_string(),
                     );
                 }
-                ui.close_menu();
             }
         } else {
             let lbl = crate::i18n::tr(ctx, "Open", "打开");
@@ -1836,7 +1835,6 @@ impl SftpPanel {
                     let lang = crate::i18n::language(ctx);
                     self.pending_status_err = Some(crate::i18n::localize_backend_error(lang, &e));
                 }
-                ui.close_menu();
             }
         }
         self.xfer_context_menu(ui, theme, ctx, handle);
@@ -1858,7 +1856,6 @@ impl SftpPanel {
             let lbl = crate::i18n::tr(ctx, "Open in this terminal", "在当前终端打开");
             if crate::ui::chrome::popup_menu_button(ui, theme, lbl).clicked() {
                 self.queue_terminal_cd(&entry.path);
-                ui.close_menu();
                 return;
             }
         }
@@ -1889,23 +1886,19 @@ impl SftpPanel {
         if !self.local_selected.is_empty() {
             if crate::ui::chrome::popup_menu_button(ui, theme, upload_lbl).clicked() {
                 self.upload_selected_local(handle, ctx);
-                ui.close_menu();
             }
         } else if let Some((remote, local)) = upload {
             if crate::ui::chrome::popup_menu_button(ui, theme, upload_lbl).clicked() {
                 self.request_upload(handle, remote, local, ctx);
-                ui.close_menu();
             }
         }
         if !self.remote_selected.is_empty() {
             if crate::ui::chrome::popup_menu_button(ui, theme, download_lbl).clicked() {
                 self.download_selected_remote(handle, ctx);
-                ui.close_menu();
             }
         } else if let Some((remote, local)) = download {
             if crate::ui::chrome::popup_menu_button(ui, theme, download_lbl).clicked() {
                 self.request_download(handle, remote, local, ctx);
-                ui.close_menu();
             }
         }
         if let Some(entry) = open_entry {
@@ -1916,7 +1909,6 @@ impl SftpPanel {
             };
             if crate::ui::chrome::popup_menu_button(ui, theme, edit_lbl).clicked() {
                 self.request_open_remote_file(handle, &entry, ctx);
-                ui.close_menu();
             }
         }
         let rename_lbl = crate::i18n::tr(ctx, "Rename", "重命名");
@@ -1924,7 +1916,6 @@ impl SftpPanel {
             && crate::ui::chrome::popup_menu_button(ui, theme, rename_lbl).clicked()
         {
             self.begin_rename_selected();
-            ui.close_menu();
         }
         let chmod_lbl = crate::i18n::tr(ctx, "Permissions…", "权限…");
         if !delete_paths.is_empty()
@@ -1939,7 +1930,6 @@ impl SftpPanel {
             self.chmod_recursive = false;
             self.pending_chmod_recursive_confirm = false;
             self.show_chmod_dialog = true;
-            ui.close_menu();
         }
         if !delete_paths.is_empty() {
             if crate::ui::chrome::popup_menu_button(ui, theme, delete_lbl).clicked() {
@@ -1948,7 +1938,6 @@ impl SftpPanel {
                 } else {
                     Some(PendingDeletePrompt::Many(delete_paths))
                 };
-                ui.close_menu();
             }
         }
     }
@@ -3774,10 +3763,10 @@ impl SftpPanel {
         dock_col_w: f32,
     ) {
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::SidePanel::right("sftp_browser_panel")
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
+        let panel = egui::Panel::right("sftp_browser_panel")
+            .default_size(def_w)
+            .min_size(min_w)
+            .max_size(max_w)
             .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
@@ -3806,7 +3795,7 @@ impl SftpPanel {
         audit: &AuditLogger,
         close_panel: &mut bool,
     ) {
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.last_panel_slot_rect,
@@ -3931,11 +3920,8 @@ impl SftpPanel {
             egui::Frame::none()
                 .fill(theme.color_subtle_inset_fill())
                 .stroke(egui::Stroke::new(1.0, theme.red_a128()))
-                .rounding(theme.radius_list_item())
-                .inner_margin(egui::Margin::symmetric(
-                    theme.spacing_search_input_x(),
-                    theme.spacing_search_input_y(),
-                ))
+                .corner_radius(theme.radius_list_item())
+                .inner_margin(egui::Margin::symmetric((theme.spacing_search_input_x()) as i8, (theme.spacing_search_input_y(),) as i8))
                 .show(ui, |ui| {
                     ui.label(egui::RichText::new(msg).color(theme.red_color()));
                     ui.horizontal(|ui| {
@@ -4265,7 +4251,7 @@ impl SftpPanel {
                     self.apply_local_sort();
                 }
                 egui::ScrollArea::vertical()
-                    .id_source("sftp_local_list")
+                    .id_salt("sftp_local_list")
                     .auto_shrink([false, false])
                     .max_height(local_list_h)
                     .show(ui, |ui| {
@@ -4923,7 +4909,7 @@ impl SftpPanel {
                     self.apply_remote_sort();
                 }
                 egui::ScrollArea::vertical()
-                    .id_source("sftp_remote_list")
+                    .id_salt("sftp_remote_list")
                     .auto_shrink([false, false])
                     .max_height(remote_list_h)
                     .show(ui, |ui| {
@@ -5244,7 +5230,7 @@ impl SftpPanel {
             rect.bottom() - 0.5,
             egui::Stroke::new(1.0, theme.border.to_color32()),
         );
-        let mut child = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
         child.spacing_mut().item_spacing.x = 4.0;
         add(&mut child);
     }
@@ -5301,7 +5287,7 @@ impl SftpPanel {
         }
         if *editing {
             let mut child =
-                ui.child_ui(path_rect, egui::Layout::left_to_right(egui::Align::Center));
+                ui.new_child(egui::UiBuilder::new().max_rect(path_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
             crate::ui::chrome::form_singleline_field(
                 &mut child,
                 theme,
@@ -5335,7 +5321,7 @@ impl SftpPanel {
             egui::Stroke::new(1.0, theme.border.to_color32()),
         );
         let inner = rect.shrink2(egui::vec2(8.0, 4.0));
-        let mut child = ui.child_ui(inner, egui::Layout::left_to_right(egui::Align::Center));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::left_to_right(egui::Align::Center)));
         crate::ui::chrome::form_singleline_field(&mut child, theme, id, text, hint, inner.width(), false);
     }
 
@@ -5548,7 +5534,7 @@ impl SftpPanel {
         let mut enter_local: Option<PathBuf> = None;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
         egui::ScrollArea::vertical()
-            .id_source("sftp_flux_local_list")
+            .id_salt("sftp_flux_local_list")
             .auto_shrink([false, false])
             .max_height(list_h)
             .show(ui, |ui| {
@@ -5713,7 +5699,7 @@ impl SftpPanel {
         let mut enter_remote: Option<PathBuf> = None;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
         egui::ScrollArea::vertical()
-            .id_source("sftp_flux_remote_list")
+            .id_salt("sftp_flux_remote_list")
             .auto_shrink([false, false])
             .max_height(list_h)
             .show(ui, |ui| {
@@ -5992,16 +5978,13 @@ impl SftpPanel {
 
     fn paint_browser_section_frame(theme: &Theme) -> egui::Frame {
         if theme.uses_modern_palette() {
-            egui::Frame::none().inner_margin(egui::Margin::symmetric(0.0, theme.spacing_xs()))
+            egui::Frame::none().inner_margin(egui::Margin::symmetric((0.0) as i8, (theme.spacing_xs()) as i8))
         } else {
             egui::Frame::none()
                 .fill(theme.color_sftp_section_fill())
                 .stroke(theme.sftp_section_stroke())
-                .rounding(theme.radius_panel())
-                .inner_margin(egui::Margin::symmetric(
-                    theme.spacing_body_pad(),
-                    theme.spacing_body_pad(),
-                ))
+                .corner_radius(theme.radius_panel())
+                .inner_margin(egui::Margin::symmetric((theme.spacing_body_pad()) as i8, (theme.spacing_body_pad(),) as i8))
         }
     }
 
@@ -6013,11 +5996,8 @@ impl SftpPanel {
             } else {
                 theme.sftp_list_viewport_stroke()
             })
-            .rounding(theme.radius_panel())
-            .inner_margin(egui::Margin::symmetric(
-                theme.spacing_sm(),
-                theme.spacing_sm(),
-            ))
+            .corner_radius(theme.radius_panel())
+            .inner_margin(egui::Margin::symmetric((theme.spacing_sm()) as i8, (theme.spacing_sm(),) as i8))
     }
 }
 

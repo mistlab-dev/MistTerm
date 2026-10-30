@@ -43,7 +43,7 @@ impl MistTermApp {
                                             .font(font.clone())
                                             .color(theme.color_body_text_muted()),
                                     )
-                                    .wrap(false),
+                                    .wrap(),
                                 );
                             }
                         });

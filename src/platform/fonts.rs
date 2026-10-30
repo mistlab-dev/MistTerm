@@ -185,7 +185,7 @@ pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSele
             baseline_offset_factor: -0.02,
             ..Default::default()
         });
-        fonts.font_data.insert(mono_name.clone(), mono_data);
+        fonts.font_data.insert(mono_name.clone(), std::sync::Arc::new(mono_data));
         fonts
             .families
             .entry(egui::FontFamily::Monospace)
@@ -195,7 +195,7 @@ pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSele
 
     let loaded = if let Some(cjk_font) = load_cjk_font() {
         let cjk_name = CJK_UI_FONT_NAME.to_string();
-        fonts.font_data.insert(cjk_name.clone(), cjk_font);
+        fonts.font_data.insert(cjk_name.clone(), std::sync::Arc::new(cjk_font));
 
         // 界面：CJK 置顶为唯一首选，中英混排同一字形/基线；egui 默认拉丁仅作缺字兜底。
         {
@@ -228,7 +228,7 @@ pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSele
         let name = "geist-ui".to_string();
         fonts
             .font_data
-            .insert(name.clone(), egui::FontData::from_static(GEIST_UI));
+            .insert(name.clone(), std::sync::Arc::new(egui::FontData::from_static(GEIST_UI)));
         let entry = fonts
             .families
             .entry(egui::FontFamily::Proportional)
@@ -610,7 +610,7 @@ fn system_fonts_dir() -> Option<std::path::PathBuf> {
         .or_else(|| Some(std::path::PathBuf::from(r"C:\Windows\Fonts")))
 }
 
-fn load_cjk_font() -> Option<egui::FontData> {
+fn load_cjk_font() -> Option<std::sync::Arc<egui::FontData>> {
     if let Some(data) = load_embedded_cjk_font() {
         return Some(data);
     }
@@ -618,7 +618,7 @@ fn load_cjk_font() -> Option<egui::FontData> {
         match std::fs::read(&path) {
             Ok(bytes) => {
                 log::info!("Loaded system CJK font: {}", path.display());
-                return Some(egui::FontData::from_owned(bytes));
+                return Some(std::sync::Arc::new(egui::FontData::from_owned(bytes)));
             }
             Err(e) => log::debug!("Skipped CJK font {}: {e}", path.display()),
         }
@@ -626,7 +626,7 @@ fn load_cjk_font() -> Option<egui::FontData> {
     None
 }
 
-fn load_embedded_cjk_font() -> Option<egui::FontData> {
+fn load_embedded_cjk_font() -> Option<std::sync::Arc<egui::FontData>> {
     const BYTES: &[u8] = include_bytes!("../../assets/fonts/NotoSansSC-Regular.otf");
     if BYTES.is_empty() {
         return None;
@@ -635,7 +635,7 @@ fn load_embedded_cjk_font() -> Option<egui::FontData> {
         "Loaded embedded CJK font NotoSansSC-Regular.otf ({} bytes)",
         BYTES.len()
     );
-    Some(egui::FontData::from_static(BYTES))
+    Some(std::sync::Arc::new(egui::FontData::from_static(BYTES)))
 }
 
 /// 各平台系统自带中文字体路径（按优先级，内置失败时使用）。

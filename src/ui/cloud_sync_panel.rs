@@ -340,7 +340,7 @@ impl CloudSyncPanel {
                 .color(theme.color_form_hint()),
             );
             egui::CollapsingHeader::new(loc.tr("Advanced", "高级"))
-                .id_source("cloud_sync_credentials_advanced")
+                .id_salt("cloud_sync_credentials_advanced")
                 .show(ui, |ui| {
                     ui.label(
                         chrome::rich_caption(
@@ -1024,10 +1024,10 @@ impl CloudSyncPanel {
 
         let (def_w, min_w, max_w) =
             crate::ui::layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::SidePanel::right("cloud_sync_panel")
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
+        let panel = egui::Panel::right("cloud_sync_panel")
+            .default_size(def_w)
+            .min_size(min_w)
+            .max_size(max_w)
             .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
@@ -1064,7 +1064,7 @@ impl CloudSyncPanel {
 
         let mut team_action = TeamUiAction::None;
 
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.last_panel_slot_rect,
@@ -1107,7 +1107,7 @@ impl CloudSyncPanel {
 
                 let cloud_scroll_h = layout_util::scroll_area_fill_height(ui, 8.0);
                 egui::ScrollArea::vertical()
-                    .id_source("cloud_sync_panel_scroll")
+                    .id_salt("cloud_sync_panel_scroll")
                     .auto_shrink([false, true])
                     .max_height(cloud_scroll_h)
                     .show(ui, |ui| {
@@ -1446,8 +1446,8 @@ impl CloudSyncPanel {
                     ui.add_space(theme.spacing_sm());
                     egui::Frame::none()
                         .fill(theme.color_subtle_inset_fill())
-                        .rounding(theme.radius_list_item())
-                        .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                        .corner_radius(theme.radius_list_item())
+                        .inner_margin(egui::Margin::symmetric((8.0) as i8, (6.0) as i8))
                         .show(ui, |ui| {
                             ui.label(
                                 chrome::rich_caption(theme, &self.message)

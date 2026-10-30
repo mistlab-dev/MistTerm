@@ -430,10 +430,10 @@ impl MonitorPanel {
         }
 
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::SidePanel::right(layout_util::MONITOR_PANEL_ID)
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
+        let panel = egui::Panel::right(layout_util::MONITOR_PANEL_ID)
+            .default_size(def_w)
+            .min_size(min_w)
+            .max_size(max_w)
             .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
@@ -463,7 +463,7 @@ impl MonitorPanel {
         if !*open {
             return;
         }
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.last_panel_slot_rect,
@@ -584,7 +584,7 @@ impl MonitorPanel {
                     let prev_extreme = ui.visuals().extreme_bg_color;
                     ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
                     egui::ScrollArea::vertical()
-                        .id_source("mistterm_monitor_scroll_v6")
+                        .id_salt("mistterm_monitor_scroll_v6")
                         .auto_shrink([true, false])
                         .max_height(scroll_h)
                         .show(ui, |ui| {
@@ -944,7 +944,7 @@ impl MonitorPanel {
 
         egui::Frame::none()
             .fill(theme.metric_bar_track_fill())
-            .rounding(4.0)
+            .corner_radius(4.0)
             .inner_margin(theme.margin_monitor_metric_row())
             .show(ui, |ui| {
                 ui.vertical(|ui| {

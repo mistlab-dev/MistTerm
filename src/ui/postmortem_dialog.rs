@@ -184,10 +184,10 @@ impl PostmortemDialog {
             return;
         }
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::SidePanel::right("postmortem_draft_panel")
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
+        let panel = egui::Panel::right("postmortem_draft_panel")
+            .default_size(def_w)
+            .min_size(min_w)
+            .max_size(max_w)
             .resizable(true)
             .frame(chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
@@ -218,7 +218,7 @@ impl PostmortemDialog {
         }
         self.poll_save();
 
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.last_panel_slot_rect,
@@ -295,7 +295,7 @@ impl PostmortemDialog {
                 let body_id = ui.make_persistent_id("postmortem_body_edit");
                 let scroll_h = layout_util::scroll_area_fill_height(ui, 96.0);
                 egui::ScrollArea::vertical()
-                    .id_source("postmortem_body_scroll")
+                    .id_salt("postmortem_body_scroll")
                     .max_height(scroll_h.max(160.0))
                     .show(ui, |ui| {
                         ui.add(

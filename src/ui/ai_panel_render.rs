@@ -370,7 +370,7 @@ pub(super) fn show_command_card(
             theme.hairline_width(ui.ctx()),
             theme.accent_alpha(90),
         ))
-        .rounding(theme.radius_list_item())
+        .corner_radius(theme.radius_list_item())
         .inner_margin(egui::vec2(10.0, 8.0))
         .show(ui, |ui| {
             let row_w = ui.available_width().max(48.0);

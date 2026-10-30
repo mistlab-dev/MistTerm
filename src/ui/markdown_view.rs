@@ -129,7 +129,7 @@ fn render_plain_markdown_text(ui: &mut egui::Ui, theme: &Theme, text: &str, widt
             }
             ui.add_sized(
                 egui::vec2(width, size * 1.35),
-                egui::Label::new(text).wrap(false),
+                egui::Label::new(text).wrap(),
             );
             ui.add_space(small_gap);
         }
@@ -507,7 +507,7 @@ impl<'a> MarkdownRenderer<'a> {
         if self.in_blockquote {
             egui::Frame::none()
                 .fill(self.theme.color_subtle_inset_fill())
-                .rounding(self.theme.radius_list_item())
+                .corner_radius(self.theme.radius_list_item())
                 .inner_margin(egui::vec2(8.0, 6.0))
                 .show(ui, |ui| {
                     let inner_w = layout_util::set_width_to_available(ui).max(24.0);
@@ -547,7 +547,7 @@ fn paint_code_block(
     egui::Frame::none()
         .fill(theme.color_markdown_code_block_fill())
         .stroke(theme.stroke_input())
-        .rounding(theme.radius_list_item())
+        .corner_radius(theme.radius_list_item())
         .inner_margin(egui::vec2(8.0, 6.0))
         .show(ui, |ui| {
             let _ = layout_util::set_width_to_available(ui);
@@ -650,7 +650,7 @@ fn show_selectable_layout_job(ui: &mut egui::Ui, mut job: LayoutJob, width: f32)
     job.wrap.max_width = w;
     job.wrap.break_anywhere = true;
     // 用 Label 展示高亮 galley，避免 TextEdit+code_editor 在窄宽下左缘裁切。
-    ui.add(egui::Label::new(job).wrap(true));
+    ui.add(egui::Label::new(job).wrap());
 }
 
 #[derive(Copy, Clone)]

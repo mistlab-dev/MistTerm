@@ -351,7 +351,7 @@ fn ops_badge(
 ) {
     egui::Frame::none()
         .fill(color.gamma_multiply(0.15))
-        .rounding(egui::Rounding::same(4.0))
+        .corner_radius(egui::CornerRadius::same(4))
         .inner_margin(egui::vec2(6.0, 2.0))
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
@@ -366,7 +366,7 @@ fn ops_scope_pill(ui: &mut egui::Ui, theme: &Theme, text: &str, color: egui::Col
     egui::Frame::none()
         .fill(theme.color_ops_card_fill())
         .stroke(egui::Stroke::new(1.0, theme.divider_stroke().color))
-        .rounding(egui::Rounding::same(4.0))
+        .corner_radius(egui::CornerRadius::same(4))
         .inner_margin(egui::vec2(6.0, 1.0))
         .show(ui, |ui| {
             ui.label(
@@ -503,12 +503,12 @@ fn ops_metric_value_row(
         let row_h = px + 2.0;
         let (left_rect, _) =
             ui.allocate_exact_size(egui::vec2(left_w, row_h), egui::Sense::hover());
-        let mut left = ui.child_ui(left_rect, egui::Layout::left_to_right(egui::Align::Center));
+        let mut left = ui.new_child(egui::UiBuilder::new().max_rect(left_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
         left.set_clip_rect(left_rect);
         left.add(
             egui::Label::new(egui::RichText::new(label).size(px).color(label_color))
-                .truncate(true)
-                .wrap(false),
+                .truncate()
+                .wrap(),
         );
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(
@@ -559,7 +559,7 @@ fn ops_suggestion_chip(
     let resp = egui::Frame::none()
         .fill(theme.color_ops_card_fill())
         .stroke(egui::Stroke::new(1.0, theme.divider_stroke().color))
-        .rounding(egui::Rounding::same(6.0))
+        .corner_radius(egui::CornerRadius::same(6))
         .inner_margin(egui::vec2(10.0, 7.0))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -1122,10 +1122,10 @@ impl AiPanel {
             return;
         }
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::SidePanel::right(layout_util::AI_PANEL_ID)
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
+        let panel = egui::Panel::right(layout_util::AI_PANEL_ID)
+            .default_size(def_w)
+            .min_size(min_w)
+            .max_size(max_w)
             .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
@@ -1207,7 +1207,7 @@ impl AiPanel {
         if !*open {
             return;
         }
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.last_panel_slot_rect,
@@ -1290,12 +1290,13 @@ impl AiPanel {
                                 crate::ui::icons::IconId::Timer,
                                 i18n::tr(ctx, "Session history", "会话历史"),
                             );
-                            let popup_id = ui.make_persistent_id("ai_history_popup");
+                            // egui 0.37：Popup::from_toggle_button_response 自带点击开合与关闭行为。
                             if hist.clicked() {
                                 history_invalidate = true;
-                                ui.memory_mut(|m| m.toggle_popup(popup_id));
                             }
-                            egui::popup_below_widget(ui, popup_id, &hist, |ui| {
+                            egui::Popup::from_toggle_button_response(&hist)
+                                .id(ui.make_persistent_id("ai_history_popup"))
+                                .show(|ui| {
                                 ui.set_min_width(200.0);
                                 ui.label(
                                     egui::RichText::new(i18n::tr(ctx, "Session history", "会话历史"))
@@ -1965,7 +1966,7 @@ impl AiPanel {
     ) {
         let scroll_h = ui.available_height().max(64.0);
         egui::ScrollArea::vertical()
-            .id_source("mistterm_ai_chat_scroll")
+            .id_salt("mistterm_ai_chat_scroll")
             .max_height(scroll_h)
             .auto_shrink([false; 2])
             .stick_to_bottom(true)
@@ -2065,7 +2066,7 @@ impl AiPanel {
             egui::Frame::none()
                 .fill(theme.color_ops_card_fill())
                 .stroke(theme.divider_stroke())
-                .rounding(egui::Rounding::same(theme.radius_list_item()))
+                .corner_radius(egui::CornerRadius::same(theme.radius_list_item() as u8))
                 .inner_margin(egui::vec2(12.0, 10.0))
                 .show(ui, |ui| {
                     let inner_w = (bubble_w - 24.0).max(48.0);
@@ -2093,7 +2094,7 @@ impl AiPanel {
                                         .size(theme.font_size_caption())
                                         .color(theme.text_secondary()),
                                 )
-                                .wrap(true),
+                                .wrap(),
                             );
                         }
                         let name = if card.title.is_empty() {
@@ -2114,7 +2115,7 @@ impl AiPanel {
                                     .underline(),
                             )
                             .sense(egui::Sense::click())
-                            .wrap(true),
+                            .wrap(),
                         );
                         let link = link.on_hover_text(i18n::tr(
                             ctx,
@@ -2174,7 +2175,7 @@ impl AiPanel {
         egui::Frame::none()
             .fill(theme.color_ops_card_fill())
             .stroke(theme.divider_stroke())
-            .rounding(egui::Rounding::same(8.0))
+            .corner_radius(egui::CornerRadius::same(8))
             .inner_margin(egui::vec2(12.0, 10.0))
             .show(ui, |ui| {
                 // 顶栏：剪贴板图标 + 标题 + 风险提示徽章
@@ -2353,7 +2354,7 @@ impl AiPanel {
                     egui::Frame::none()
                         .fill(theme.toast_fill(warn))
                         .stroke(egui::Stroke::new(1.0, theme.toast_stroke_color(warn)))
-                        .rounding(egui::Rounding::same(6.0))
+                        .corner_radius(egui::CornerRadius::same(6))
                         .inner_margin(egui::vec2(8.0, 6.0))
                         .show(ui, |ui| {
                             // 风险根因（Warning 图标，替代原 emoji，避免字体缺字渲染成方块）
@@ -2496,7 +2497,7 @@ impl AiPanel {
                 // Footer：安全提示 + 操作按钮
                 egui::Frame::none()
                     .fill(theme.color_ops_sub_fill())
-                    .rounding(egui::Rounding::same(5.0))
+                    .corner_radius(egui::CornerRadius::same(5))
                     .inner_margin(egui::vec2(10.0, 7.0))
                     .show(ui, |ui| {
                         ui.label(
@@ -2623,7 +2624,7 @@ impl AiPanel {
         egui::Frame::none()
             .fill(theme.color_ops_sub_fill())
             .stroke(theme.divider_stroke())
-            .rounding(egui::Rounding::same(theme.radius_list_item()))
+            .corner_radius(egui::CornerRadius::same(theme.radius_list_item() as u8))
             .inner_margin(egui::vec2(10.0, 8.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -2731,7 +2732,7 @@ impl AiPanel {
                                 theme.divider_stroke().color
                             },
                         ))
-                        .rounding(egui::Rounding::same(6.0))
+                        .corner_radius(egui::CornerRadius::same(6))
                         .inner_margin(egui::vec2(8.0, 6.0));
 
                     let resp = frame.show(ui, |ui| {
@@ -2756,8 +2757,8 @@ impl AiPanel {
                                             theme.text_secondary()
                                         }),
                                 )
-                                .truncate(true)
-                                .wrap(false),
+                                .truncate()
+                                .wrap(),
                             );
                         });
                         ui.add(
@@ -2771,8 +2772,8 @@ impl AiPanel {
                                         theme.color_form_hint()
                                     }),
                             )
-                            .truncate(true)
-                            .wrap(false),
+                            .truncate()
+                            .wrap(),
                         );
                         if let Some(val) = host.metric_value.clone() {
                             let label = localize_metric_label(
@@ -2821,8 +2822,8 @@ impl AiPanel {
                                                 theme.text_secondary()
                                             }),
                                     )
-                                    .truncate(true)
-                                    .wrap(false),
+                                    .truncate()
+                                    .wrap(),
                                 );
                             });
                         }
@@ -2851,7 +2852,7 @@ impl AiPanel {
             egui::Frame::none()
                 .fill(theme.color_ops_console_fill())
                 .stroke(theme.divider_stroke())
-                .rounding(egui::Rounding::same(6.0))
+                .corner_radius(egui::CornerRadius::same(6))
                 .inner_margin(egui::vec2(10.0, 8.0))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -2904,7 +2905,7 @@ impl AiPanel {
                     };
 
                     egui::ScrollArea::vertical()
-                        .id_source(format!("host_inspector_scroll_{msg_index}_{sel_idx}"))
+                        .id(format!("host_inspector_scroll_{msg_index}_{sel_idx}"))
                         .max_height(160.0)
                         .show(ui, |ui| {
                             ops_render_console_output(ui, theme, out);
@@ -3049,7 +3050,7 @@ impl AiPanel {
         } else {
             egui::vec2(12.0, 10.0)
         };
-        let rounding = egui::Rounding::same(theme.radius_list_item());
+        let rounding = egui::CornerRadius::same(theme.radius_list_item() as u8);
 
         let mut render_bubble_body = |ui: &mut egui::Ui, body_w: f32| {
             let prev_gap_y = ui.spacing().item_spacing.y;
@@ -3163,7 +3164,6 @@ impl AiPanel {
                 if let Ok(mut clip) = Clipboard::new() {
                     let _ = clip.set_text(copy_text);
                 }
-                ui.close_menu();
             }
         };
 
@@ -3181,7 +3181,7 @@ impl AiPanel {
                 egui::Frame::none()
                     .fill(bubble_fill)
                     .stroke(bubble_stroke)
-                    .rounding(rounding)
+                    .corner_radius(rounding)
                     .inner_margin(inner_pad)
                     .show(ui, |ui| {
                         let inner_w = (bubble_w - inner_pad.x * 2.0).max(24.0);
@@ -3205,7 +3205,7 @@ impl AiPanel {
                 egui::Frame::none()
                     .fill(bubble_fill)
                     .stroke(bubble_stroke)
-                    .rounding(rounding)
+                    .corner_radius(rounding)
                     .inner_margin(inner_pad)
                     .show(ui, |ui| {
                         let inner_w = (bubble_w - inner_pad.x * 2.0).max(24.0);
@@ -3233,7 +3233,7 @@ impl AiPanel {
             egui::Frame::none()
                 .fill(theme.color_ops_card_fill())
                 .stroke(theme.divider_stroke())
-                .rounding(theme.radius_list_item())
+                .corner_radius(theme.radius_list_item())
                 .inner_margin(egui::vec2(12.0, 10.0))
                 .show(ui, |ui| {
                     ui.set_width((bubble_w - 24.0).max(48.0));
@@ -4412,10 +4412,9 @@ fn show_terminal_context_chip(
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
-    if response.clicked() {
-        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
-    }
-    egui::popup::popup_below_widget(ui, popup_id, &response, |ui| {
+    // egui 0.37：Popup::from_toggle_button_response 自带点击开合。
+    let _ = popup_id;
+    egui::Popup::from_toggle_button_response(&response).show(|ui| {
         show_context_popup_body(ui, ctx, theme, context, index);
     });
     if removable {

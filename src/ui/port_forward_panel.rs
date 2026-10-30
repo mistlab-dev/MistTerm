@@ -191,10 +191,10 @@ impl PortForwardPanel {
         dock_col_w: f32,
     ) {
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::SidePanel::right("port_forward_panel")
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
+        let panel = egui::Panel::right("port_forward_panel")
+            .default_size(def_w)
+            .min_size(min_w)
+            .max_size(max_w)
             .resizable(true)
             .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
             .show(ctx, |ui| {
@@ -231,7 +231,7 @@ impl PortForwardPanel {
         ) else {
             return;
         };
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let geom = crate::ui::chrome::prepare_right_dock_foreground_geom(slot, screen, theme);
         let layer_id = crate::ui::chrome::right_dock_foreground_layer_id("mistterm_port_fwd_fg");
         crate::ui::chrome::paint_right_dock_foreground_shell(ctx, layer_id, geom.paint, theme);

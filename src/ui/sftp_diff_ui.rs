@@ -538,7 +538,7 @@ pub(super) fn paint_dir_diff(
             ),
         };
         egui::ScrollArea::vertical()
-            .id_source("sftp_dir_diff_placeholder")
+            .id_salt("sftp_dir_diff_placeholder")
             .auto_shrink([false, false])
             .max_height(list_h)
             .show(ui, |ui| {
@@ -552,7 +552,7 @@ pub(super) fn paint_dir_diff(
         return action;
     }
     egui::ScrollArea::vertical()
-        .id_source("sftp_dir_diff_rows")
+        .id_salt("sftp_dir_diff_rows")
         .auto_shrink([false, false])
         .max_height(list_h)
         .show_rows(ui, row_h, filtered.len(), |ui, range| {
@@ -620,7 +620,7 @@ pub(super) fn paint_dir_diff(
                                     .color(theme.text_primary()),
                             )
                             .sense(Sense::click())
-                            .truncate(true),
+                            .truncate(),
                         )
                         .on_hover_text(tip);
                     if interactive && !conflict && path_resp.clicked() {

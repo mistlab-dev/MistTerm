@@ -37,7 +37,7 @@ pub fn floating_bar_default_width(ctx: &egui::Context) -> f32 {
 /// 片段库主窗口：`(default [w,h], min [w,h])`，按屏幕尺寸比例。
 #[inline]
 pub fn fragment_library_window_bounds(ctx: &egui::Context) -> ([f32; 2], [f32; 2]) {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let sw = r.width().max(360.0);
     let sh = r.height().max(280.0);
     let default = [
@@ -67,7 +67,7 @@ pub fn modal_center_pos_clamped(
     top_inset: f32,
     bottom_inset: f32,
 ) -> egui::Pos2 {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let w = size.x.max(1.0);
     let h = size.y.max(1.0);
     let side = 8.0;
@@ -83,7 +83,7 @@ pub fn modal_center_pos_clamped(
 /// 快速选择器 / 变量对话框等居中窗口的默认尺寸。
 #[inline]
 pub fn centered_window_default_size(ctx: &egui::Context, w_frac: f32, h_frac: f32) -> [f32; 2] {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let sw = r.width().max(360.0);
     let sh = r.height().max(280.0);
     [
@@ -95,7 +95,7 @@ pub fn centered_window_default_size(ctx: &egui::Context, w_frac: f32, h_frac: f3
 /// 新建会话弹窗(名称 / 主机 / 端口 / 用户名 / 密码 / SSH 密钥)。
 #[inline]
 pub fn modal_new_session_size(ctx: &egui::Context) -> egui::Vec2 {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let sw = r.width().max(360.0);
     let h = 560.0_f32.min((r.height().max(280.0) - 32.0).max(420.0));
     egui::vec2((sw * 0.36).clamp(340.0, 520.0), h)
@@ -104,7 +104,7 @@ pub fn modal_new_session_size(ctx: &egui::Context) -> egui::Vec2 {
 /// 新建 / 编辑会话弹窗尺寸(§8.4.1)。
 #[inline]
 pub fn modal_edit_size(ctx: &egui::Context) -> egui::Vec2 {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let sw = r.width().max(360.0);
     let sh = r.height().max(280.0);
     egui::vec2(
@@ -120,7 +120,7 @@ pub fn modal_pref_size_in_viewport(
     top_inset: f32,
     bottom_inset: f32,
 ) -> egui::Vec2 {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let sw = r.width().max(360.0);
     let sh = r.height().max(280.0);
     let max_h = (sh - top_inset.max(0.0) - bottom_inset.max(0.0)).max(280.0);
@@ -137,7 +137,7 @@ pub fn modal_pref_size(ctx: &egui::Context) -> egui::Vec2 {
 /// 关于弹窗(§8.4.3)默认尺寸(无内容测量时的回退)。
 #[inline]
 pub fn modal_about_size(ctx: &egui::Context) -> egui::Vec2 {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let sw = r.width().max(360.0);
     let sh = r.height().max(280.0);
     egui::vec2(
@@ -155,7 +155,7 @@ pub fn modal_about_size_for_content(
     version_line: &str,
     shortcuts: &str,
 ) -> egui::Vec2 {
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     let sw = screen.width().max(360.0);
     let sh = screen.height().max(280.0);
 
@@ -237,7 +237,7 @@ pub fn modal_about_size_for_content(
 /// 快速片段选择器(§8.4.4)。
 #[inline]
 pub fn modal_quick_fragment_size(ctx: &egui::Context) -> egui::Vec2 {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let sw = r.width().max(360.0);
     let sh = r.height().max(280.0);
     egui::vec2(
@@ -249,7 +249,7 @@ pub fn modal_quick_fragment_size(ctx: &egui::Context) -> egui::Vec2 {
 /// Clone 仓库弹窗(§8.4.5)。
 #[inline]
 pub fn modal_clone_size(ctx: &egui::Context) -> egui::Vec2 {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let sw = r.width().max(360.0);
     let sh = r.height().max(280.0);
     egui::vec2(
@@ -261,7 +261,7 @@ pub fn modal_clone_size(ctx: &egui::Context) -> egui::Vec2 {
 /// 删除确认等小弹窗(§8.4.6)。
 #[inline]
 pub fn modal_confirm_size(ctx: &egui::Context) -> egui::Vec2 {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let sw = r.width().max(360.0);
     let sh = r.height().max(280.0);
     egui::vec2(
@@ -273,7 +273,7 @@ pub fn modal_confirm_size(ctx: &egui::Context) -> egui::Vec2 {
 /// 「填写片段变量」等表单弹窗：`fixed_size` 用屏幕比例夹在合理区间。
 #[inline]
 pub fn fragment_vars_modal_size(ctx: &egui::Context) -> egui::Vec2 {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let sw = r.width().max(340.0);
     let sh = r.height().max(260.0);
     egui::vec2(
@@ -285,7 +285,7 @@ pub fn fragment_vars_modal_size(ctx: &egui::Context) -> egui::Vec2 {
 /// 对话框内纵向滚动区最大高度：剩余屏高的一部分，避免写死 300/420。
 #[inline]
 pub fn dialog_scroll_max_height(ctx: &egui::Context, chrome_reserve: f32) -> f32 {
-    let h = ctx.screen_rect().height();
+    let h = ctx.content_rect().height();
     if !h.is_finite() {
         return 320.0;
     }

@@ -201,7 +201,7 @@ fn show_release_notes(ui: &mut egui::Ui, theme: &crate::ui::theme::Theme, notes:
                     .color(theme.text_secondary())
             }
         };
-        ui.add(egui::Label::new(text).wrap(true));
+        ui.add(egui::Label::new(text).wrap());
     }
 }
 
@@ -263,7 +263,7 @@ impl MistTermApp {
     pub(crate) fn update_handle_close(&mut self, frame: &mut eframe::Frame) {
         if self.update_ui.close_requested {
             self.update_ui.close_requested = false;
-            frame.close();
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 
@@ -691,7 +691,7 @@ impl MistTermApp {
                                     .size(theme.font_size_panel_title())
                                     .color(theme.text_secondary()),
                             )
-                            .wrap(true),
+                            .wrap(),
                         );
                     };
                     let hint = |ui: &mut egui::Ui, text: &str| {
@@ -701,7 +701,7 @@ impl MistTermApp {
                                     .size(theme.font_size_caption())
                                     .color(theme.text_tertiary()),
                             )
-                            .wrap(true),
+                            .wrap(),
                         );
                     };
 
@@ -815,8 +815,8 @@ impl MistTermApp {
                                 );
                                 egui::Frame::none()
                                     .stroke(egui::Stroke::new(1.0_f32, theme.color_overlay_fill_subtle()))
-                                    .rounding(theme.radius_list_item())
-                                    .inner_margin(egui::Margin::same(theme.spacing_sm()))
+                                    .corner_radius(theme.radius_list_item())
+                                    .inner_margin(egui::Margin::same((theme.spacing_sm()) as i8))
                                     .show(ui, |ui| {
                                         egui::ScrollArea::vertical()
                                             .max_height(180.0)
@@ -848,7 +848,7 @@ impl MistTermApp {
                                 };
                                 ui.add(
                                     egui::Label::new(egui::RichText::new(text).color(theme.red_color()))
-                                        .wrap(true),
+                                        .wrap(),
                                 );
                                 ui.add_space(theme.spacing_sm());
                             }
@@ -1119,7 +1119,7 @@ impl MistTermApp {
         let small = |ui: &mut egui::Ui, text: &str| {
             ui.add(
                 egui::Label::new(egui::RichText::new(text).size(theme.font_size_small()).color(text_low))
-                    .wrap(true),
+                    .wrap(),
             );
         };
         if disabled_by_env {
@@ -1129,7 +1129,7 @@ impl MistTermApp {
                 "这台电脑用高级方式关闭了检查更新。",
             ));
             egui::CollapsingHeader::new(crate::i18n::tr(ctx, "Advanced", "高级"))
-                .id_source("update_prefs_disabled_by_env_advanced")
+                .id_salt("update_prefs_disabled_by_env_advanced")
                 .show(ui, |ui| {
                     small(ui, crate::i18n::tr(
                         ctx,

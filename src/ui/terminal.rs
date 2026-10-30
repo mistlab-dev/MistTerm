@@ -741,7 +741,7 @@ impl TerminalView {
         cell_h: f32,
     ) {
         self.last_ime_id = Some(ime_id);
-        ui.allocate_ui_at_rect(ime_rect, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(ime_rect, |ui| {
             ui.set_min_size(egui::vec2(ime_rect.width().max(8.0), ime_rect.height().max(cell_h)));
             ui.visuals_mut().override_text_color = Some(egui::Color32::TRANSPARENT);
             // 勿绘制 TextEdit 竖线光标；终端仅用下方块状光标 + 本框仅向 winit 报告 IME 位置
@@ -2060,7 +2060,7 @@ impl TerminalView {
                                 let overflow =
                                     (painted_galley.size().y - view_content_h).max(0.0);
                                 egui::ScrollArea::vertical()
-                        .id_source(ui.id().with("terminal_scroll"))
+                        .id(ui.id().with("terminal_scroll"))
                         .auto_shrink([false, false])
                         .vertical_scroll_offset(overflow)
                         .enable_scrolling(false)
@@ -2113,7 +2113,7 @@ impl TerminalView {
                                         ui.set_min_height(te_h);
                                         ui.set_max_height(te_h);
                                         egui::TextEdit::multiline(&mut display_view)
-                                            .id_source(ui.id().with("terminal_text_area"))
+                                            .id(ui.id().with("terminal_text_area"))
                                             .margin(egui::vec2(0.0, 0.0))
                                             .horizontal_align(egui::Align::LEFT)
                                             .vertical_align(egui::Align::TOP)
@@ -2600,7 +2600,6 @@ impl TerminalView {
                                             } else {
                                                 self.pending_module_menu_action = Some(item.action);
                                             }
-                                            ui.close_menu();
                                         }
                                     }
                                     ui.separator();
@@ -2620,7 +2619,6 @@ impl TerminalView {
                                         if !text.is_empty() {
                                             ui.ctx().copy_text(text);
                                         }
-                                        ui.close_menu();
                                     }
                                     if crate::ui::chrome::popup_menu_button(
                                         ui,
@@ -2633,7 +2631,6 @@ impl TerminalView {
                                         self.pending_send_to_ai_text =
                                             if text.trim().is_empty() { None } else { Some(text) };
                                         self.pending_send_to_ai = true;
-                                        ui.close_menu();
                                     }
                                     ui.separator();
                                 }
@@ -2649,7 +2646,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.pending_send_tail_to_ai = true;
-                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button(
                                     ui,
@@ -2661,7 +2657,6 @@ impl TerminalView {
                                     if let Ok(mut clip) = Clipboard::new() {
                                         let _ = clip.set_text(self.terminal.get_formatted_output());
                                     }
-                                    ui.close_menu();
                                 }
                                 ui.separator();
                                 let block_prev = crate::platform::shortcuts::command_block_prev_accel();
@@ -2680,7 +2675,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.jump_command_block(ui.ctx(), crate::terminal::NavDir::Prev);
-                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button_shortcut(
                                     ui,
@@ -2691,7 +2685,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.jump_command_block(ui.ctx(), crate::terminal::NavDir::Next);
-                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button_shortcut(
                                     ui,
@@ -2706,7 +2699,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.copy_current_command_block(ui.ctx());
-                                    ui.close_menu();
                                 }
                                 let paste_accel = crate::platform::terminal_paste_accel();
                                 if crate::ui::chrome::popup_menu_button_shortcut(
@@ -2722,7 +2714,6 @@ impl TerminalView {
                                             self.paste_text(&text, ui.ctx());
                                         }
                                     }
-                                    ui.close_menu();
                                 }
                                 let paste_history_accel = crate::platform::paste_history_accel();
                                 if crate::ui::chrome::popup_menu_button_shortcut(
@@ -2734,7 +2725,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.pending_open_paste_history = true;
-                                    ui.close_menu();
                                 }
                                 ui.separator();
                                 if crate::ui::chrome::popup_menu_button(
@@ -2745,7 +2735,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.clear_screen();
-                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button(
                                     ui,
@@ -2755,7 +2744,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.set_font_size(self.font_size + 1.0);
-                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button(
                                     ui,
@@ -2765,7 +2753,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.set_font_size(self.font_size - 1.0);
-                                    ui.close_menu();
                                 }
                             });
                         });
@@ -4675,7 +4662,7 @@ impl TerminalView {
         let max_w = (rect.width() - 64.0).clamp(200.0, 420.0);
         // 勿用 centered_and_justified：Frame 会继承 main_justify，首个 label 被撑满整高，
         // 按钮行可用高度被压成 0（dogfood：只见文案不见「取消/重试/编辑/关闭」）。
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect, |ui| {
             ui.set_clip_rect(rect.intersect(ui.clip_rect()));
             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                 let size_id = ui.id().with("connection_placeholder_block_h");
@@ -4688,8 +4675,8 @@ impl TerminalView {
 
                 let frame_resp = egui::Frame::none()
                     .fill(theme.bg_window_color())
-                    .rounding(8.0)
-                    .inner_margin(egui::Margin::symmetric(18.0, 14.0))
+                    .corner_radius(8.0)
+                    .inner_margin(egui::Margin::symmetric((18.0) as i8, (14.0) as i8))
                     .show(ui, |ui| {
                         // Frame 内再次钉死非 justify 的纵向布局，避免继承外层怪异 Layout。
                         ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
