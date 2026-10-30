@@ -3917,7 +3917,7 @@ impl SftpPanel {
         if !theme.uses_modern_palette() {
         if let Some(err) = &self.list_err {
             let msg = Self::localize_list_error(ctx, err);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(theme.color_subtle_inset_fill())
                 .stroke(egui::Stroke::new(1.0, theme.red_a128()))
                 .corner_radius(theme.radius_list_item())
@@ -5978,9 +5978,9 @@ impl SftpPanel {
 
     fn paint_browser_section_frame(theme: &Theme) -> egui::Frame {
         if theme.uses_modern_palette() {
-            egui::Frame::none().inner_margin(egui::Margin::symmetric((0.0) as i8, (theme.spacing_xs()) as i8))
+            egui::Frame::NONE.inner_margin(egui::Margin::symmetric((0.0) as i8, (theme.spacing_xs()) as i8))
         } else {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(theme.color_sftp_section_fill())
                 .stroke(theme.sftp_section_stroke())
                 .corner_radius(theme.radius_panel())
@@ -5989,7 +5989,7 @@ impl SftpPanel {
     }
 
     fn paint_file_list_viewport_frame(theme: &Theme) -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(theme.color_file_list_bg())
             .stroke(if theme.uses_modern_palette() {
                 egui::Stroke::NONE

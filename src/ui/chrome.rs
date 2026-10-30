@@ -700,7 +700,7 @@ fn right_dock_outer_margin(theme: &Theme) -> egui::Margin {
 
 /// 右 `SidePanel` 占位槽(透明，屏右缘留 `bg_body` 缝)。
 pub fn right_dock_placeholder_frame(theme: &Theme) -> egui::Frame {
-    egui::Frame::none().outer_margin(right_dock_outer_margin(theme))
+    egui::Frame::NONE.outer_margin(right_dock_outer_margin(theme))
 }
 
 /// 右 `SidePanel` 可见外框(SFTP / 凭证等直绘 dock)。
@@ -2012,11 +2012,11 @@ pub fn settings_elevated_card(ui: &mut Ui, theme: &Theme, body: impl FnOnce(&mut
     ui.set_min_width(outer_w);
     let pad_x = theme.spacing_search_input_x().max(14.0);
     let pad_y = theme.spacing_sm().max(10.0);
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(theme.color_elevated_card_fill())
         .stroke(egui::Stroke::NONE)
         .corner_radius(theme.radius_panel())
-        .inner_margin(egui::Margin::symmetric(pad_x) as i8, (pad_y) as i8)
+        .inner_margin(egui::Margin::symmetric(pad_x as i8, pad_y as i8))
         .show(ui, |ui| {
             let inner_w = crate::ui::layout_util::set_width_to_available(ui);
             ui.set_min_width(inner_w);
@@ -2400,7 +2400,7 @@ pub fn filter_chip_row_with_sort(
     let chip_gap = theme.spacing_panel_gap();
     let sort_gap = theme.spacing_filter_sort_gap();
 
-    egui::Frame::none()
+    egui::Frame::NONE
         .outer_margin(egui::Margin {
             left: 0,
             right: 0,
@@ -3303,7 +3303,7 @@ pub fn form_multiline_field_with_hint(
     let rows = rows.max(1).min(8);
     let pad_y = 4.0;
     let inner_w = (desired_width - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0);
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(theme.color_text_input_fill())
         .stroke(if focused {
             egui::Stroke::new(theme.stroke_width_panel().max(1.0), theme.accent_color())
@@ -3314,7 +3314,7 @@ pub fn form_multiline_field_with_hint(
             )
         })
         .corner_radius(theme.radius_search_input())
-        .inner_margin(egui::Margin::symmetric((theme.spacing_search_input_x()) as i8, (pad_y) as i8))
+        .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x() as i8, pad_y as i8))
         .show(ui, |ui| {
             let mut edit = egui::TextEdit::multiline(text)
                 .id(id)
@@ -3547,7 +3547,7 @@ pub fn panel_search_row(
     let stroke_pad = theme.stroke_width_panel() * 2.0 + 1.0;
     let cap = content_w.unwrap_or_else(|| crate::ui::layout_util::set_width_to_available(ui));
     let search_w = (cap - inset_x - stroke_pad).max(72.0);
-    egui::Frame::none()
+    egui::Frame::NONE
         .outer_margin(margin)
         .show(ui, |ui| search_field(ui, theme, id, query, hint, search_w))
         .inner
@@ -4770,7 +4770,7 @@ fn form_stepper_value_field(
         egui::vec2((width - 8.0).max(8.0), row_h),
     );
     let mut edit = ui
-        .new_child(egui::UiBuilder::new().max_rect(inner), |ui| {
+        .scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_min_size(inner.size());
             ui.set_max_size(inner.size());
             // 数字与 ±、表单标签同一档（12px），不要用 13px 正文把矮框撑满。

@@ -364,7 +364,7 @@ pub(super) fn show_command_card(
     if display.is_empty() {
         return false;
     }
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(theme.color_markdown_code_block_fill())
         .stroke(egui::Stroke::new(
             theme.hairline_width(ui.ctx()),

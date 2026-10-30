@@ -505,7 +505,7 @@ impl<'a> MarkdownRenderer<'a> {
         let row_w = self.paragraph_wrap_width(ui);
         job.wrap.max_width = row_w;
         if self.in_blockquote {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(self.theme.color_subtle_inset_fill())
                 .corner_radius(self.theme.radius_list_item())
                 .inner_margin(egui::vec2(8.0, 6.0))
@@ -544,7 +544,7 @@ fn paint_code_block(
     let block_id = egui::Id::new(("mistterm_md_codeblock", *code_block_serial));
     *code_block_serial = code_block_serial.saturating_add(1);
 
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(theme.color_markdown_code_block_fill())
         .stroke(theme.stroke_input())
         .corner_radius(theme.radius_list_item())

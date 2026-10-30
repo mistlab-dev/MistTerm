@@ -114,7 +114,7 @@ impl Theme {
 
     /// 底栏等：保留少量垂直 margin，避免徽章/字被裁切。
     pub fn frame_chrome_bar(&self) -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.chrome_bar_fill())
             .inner_margin(self.margin_chrome_bar())
     }
@@ -123,14 +123,14 @@ impl Theme {
     /// `TopBottomPanel::exact_size(H)` + `set_min_height(H)` 时若再加上下 padding，
     /// egui Frame 会把面板撑到 H+pad，菜单与 Tab 之间会出现「多出来的空行」。
     pub fn frame_top_chrome(&self) -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.chrome_bar_fill())
             .inner_margin(egui::Margin::symmetric((self.spacing_status_bar_x()) as i8, (0.0) as i8))
     }
 
     /// 中央工作区 Panel：须不透明，勿用 TRANSPARENT(浅色主题会露出窗口黑底)
     pub fn frame_central_workspace(&self) -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.bg_body_color())
             .inner_margin(egui::Margin::ZERO)
             .outer_margin(egui::Margin::ZERO)
@@ -908,7 +908,7 @@ impl Theme {
     pub fn frame_form_text_input(&self, focused: bool) -> egui::Frame {
         if self.uses_underline_inputs() {
             let _ = focused;
-            return egui::Frame::none()
+            return egui::Frame::NONE
                 .fill(Color32::TRANSPARENT)
                 .stroke(egui::Stroke::NONE)
                 .inner_margin(egui::Margin {
@@ -931,7 +931,7 @@ impl Theme {
                 self.color_text_input_stroke(),
             )
         };
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.color_text_input_fill())
             .stroke(stroke)
             .corner_radius(self.radius_search_input())
@@ -1161,10 +1161,10 @@ impl Theme {
 
     /// 无边框 inset 分区卡片
     pub fn frame_inset_section(&self) -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.color_inset_section_fill())
             .stroke(egui::Stroke::NONE)
-            .corner_radius(egui::CornerRadius::same(self.radius_panel()))
+            .corner_radius(egui::CornerRadius::same(self.radius_panel() as u8))
             .inner_margin(egui::Margin::symmetric(self.spacing_body_pad() as i8, self.spacing_body_pad() as i8))
     }
 
@@ -1672,9 +1672,9 @@ impl Theme {
 
     /// SFTP 地址栏 + 操作条(无描边圆角盒)
     pub fn frame_sftp_toolbar_band(&self) -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.color_sftp_toolbar_fill())
-            .corner_radius(egui::CornerRadius::same(self.radius_list_item()))
+            .corner_radius(egui::CornerRadius::same(self.radius_list_item() as u8))
             .inner_margin(egui::Margin::symmetric(self.spacing_sm() as i8, self.spacing_xs() as i8))
     }
 
@@ -2213,15 +2213,15 @@ impl Theme {
     }
 
     pub fn margin_monitor_alert_box(&self) -> egui::Margin {
-        egui::Margin::symmetric((10.0) as i8, (8.0) as i8)
+        egui::Margin::symmetric((10.0 as i8, 8.0 as i8))
     }
 
     pub fn margin_monitor_metric_row(&self) -> egui::Margin {
-        egui::Margin::symmetric((8.0) as i8, (4.0) as i8)
+        egui::Margin::symmetric((8.0 as i8, 4.0 as i8))
     }
 
     pub fn margin_status_chip(&self) -> egui::Margin {
-        egui::Margin::symmetric((6.0) as i8, (2.0) as i8)
+        egui::Margin::symmetric((6.0 as i8, 2.0 as i8))
     }
 
     /// 顶栏 / 底栏 Panel 内边距(水平留白 + 垂直居中余量，避免字形被裁切)
@@ -2230,7 +2230,7 @@ impl Theme {
     }
 
     pub fn margin_title_bar_menu(&self) -> egui::Margin {
-        egui::Margin::symmetric((10.0) as i8, (7.0) as i8)
+        egui::Margin::symmetric((10.0 as i8, 7.0 as i8))
     }
 
     /// 居中弹窗外框。
@@ -2244,7 +2244,7 @@ impl Theme {
         } else {
             stroke.width
         };
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.color_panel_surface())
             .stroke(stroke)
             .corner_radius(self.radius_window())
@@ -2253,12 +2253,12 @@ impl Theme {
 
     /// 弹窗内容区内边距
     pub fn frame_modal_content(&self) -> egui::Frame {
-        egui::Frame::none().inner_margin(self.margin_modal_content())
+        egui::Frame::NONE.inner_margin(self.margin_modal_content())
     }
 
     /// 左连接栏 / 右 dock 外框(§7 圆角 6px + 半透明描边)
     pub fn frame_region_panel(&self) -> egui::Frame {
-        self.frame_region_panel_rounding(egui::CornerRadius::same(self.radius_panel()))
+        self.frame_region_panel_rounding(egui::CornerRadius::same(self.radius_panel() as u8))
     }
 
     /// 贴底栏的侧栏/面板：顶角与底角均不圆(与终端 Tab 条顶缘齐平)
@@ -2267,7 +2267,7 @@ impl Theme {
     }
 
     fn frame_region_panel_rounding(&self, rounding: egui::CornerRadius) -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.color_panel_surface())
             .stroke(self.panel_stroke())
             .corner_radius(rounding)
@@ -2276,7 +2276,7 @@ impl Theme {
 
     /// 终端列外框：顶部与 Tab 条平齐(无上圆角)，底部圆角；外框描边由 [`crate::ui::chrome::paint_rect_border_ltr`] 单独绘制。
     pub fn frame_terminal_column(&self) -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.bg_terminal_color())
             .corner_radius(egui::CornerRadius {
                 nw: 0,
@@ -2290,7 +2290,7 @@ impl Theme {
     /// 状态徽章(底栏连接、通知、片段统计等)
     pub fn frame_status_chip(&self) -> egui::Frame {
         let border = self.divider_stroke_color();
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.color_status_chip_fill())
             .stroke(egui::Stroke::new(
                 1.0,
@@ -2302,16 +2302,16 @@ impl Theme {
 
     /// 信息标签(连接元信息、分组名、弹窗标题条等，比 status_chip 略显眼)
     pub fn frame_label_tag(&self) -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.color_chip_fill())
             .stroke(egui::Stroke::new(1.0, self.color_tab_inactive_stroke()))
-            .corner_radius(egui::CornerRadius::same(self.radius_category()))
+            .corner_radius(egui::CornerRadius::same(self.radius_category() as u8))
             .inner_margin(self.margin_status_chip())
     }
 
     /// 面板标题行底带(侧栏 / 右 dock / 弹窗共用内边距与底色)
     pub fn frame_panel_header_band(&self) -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.color_panel_header_band_fill())
             // 标题带只负责底色；分隔线由 `panel_header_divider` 单独绘制，
             // 避免与外层 dock 圆角描边在左上角叠加出白色接缝。
@@ -2328,7 +2328,7 @@ impl Theme {
     /// 弹窗标题行底带(与正文同色；仅顶部圆角，底部分隔线由 [`crate::ui::chrome::modal_header`] 绘制)
     pub fn frame_modal_title_band(&self) -> egui::Frame {
         let r = self.radius_list_item();
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.color_modal_title_band_fill())
             .stroke(egui::Stroke::NONE)
             .corner_radius(egui::CornerRadius {
@@ -2361,7 +2361,7 @@ impl Theme {
 
     /// 监控告警汇总块
     pub fn frame_monitor_alert(&self) -> egui::Frame {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(self.color_alert_box_fill())
             .stroke(egui::Stroke::new(1.0, self.color_alert_box_stroke()))
             .corner_radius(self.radius_panel())

@@ -241,7 +241,7 @@ impl SessionLogDialog {
                     ui.add_space(theme.spacing_sm());
                     let log_h = 280.0_f32;
                     // #232：跟模态正文同色，去掉单独灰 inset；发丝描边标出滚动区。
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(theme.color_panel_surface())
                         .stroke(egui::Stroke::new(
                             theme.hairline_width(ui.ctx()),

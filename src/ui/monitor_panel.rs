@@ -942,7 +942,7 @@ impl MonitorPanel {
             theme.red_color()
         };
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(theme.metric_bar_track_fill())
             .corner_radius(4.0)
             .inner_margin(theme.margin_monitor_metric_row())

@@ -1839,7 +1839,7 @@ impl TerminalView {
             // 再给一个按字号的保底，任何字体/字号首行都不会被顶栏裁到。
             (natural - cell).max(self.font_size * 0.4).ceil()
         });
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(theme.bg_terminal_color())
             .inner_margin(content_margin)
             .show(ui, |ui| {
@@ -2060,7 +2060,7 @@ impl TerminalView {
                                 let overflow =
                                     (painted_galley.size().y - view_content_h).max(0.0);
                                 egui::ScrollArea::vertical()
-                        .id(ui.id().with("terminal_scroll"))
+                        .id_salt("terminal_scroll")
                         .auto_shrink([false, false])
                         .vertical_scroll_offset(overflow)
                         .enable_scrolling(false)
@@ -4673,10 +4673,10 @@ impl TerminalView {
                 let top_pad = ((ui.available_height() - prev_h) * 0.5).max(0.0);
                 ui.add_space(top_pad);
 
-                let frame_resp = egui::Frame::none()
+                let frame_resp = egui::Frame::NONE
                     .fill(theme.bg_window_color())
                     .corner_radius(8.0)
-                    .inner_margin(egui::Margin::symmetric(18.0) as i8, (14.0) as i8)
+                    .inner_margin(egui::Margin::symmetric(18.0 as i8, 14.0 as i8))
                     .show(ui, |ui| {
                         // Frame 内再次钉死非 justify 的纵向布局，避免继承外层怪异 Layout。
                         ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {

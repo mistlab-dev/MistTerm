@@ -813,7 +813,7 @@ impl MistTermApp {
                                         .strong()
                                         .color(theme.text_secondary()),
                                 );
-                                egui::Frame::none()
+                                egui::Frame::NONE
                                     .stroke(egui::Stroke::new(1.0_f32, theme.color_overlay_fill_subtle()))
                                     .corner_radius(theme.radius_list_item())
                                     .inner_margin(egui::Margin::same((theme.spacing_sm()) as i8))

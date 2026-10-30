@@ -349,7 +349,7 @@ fn ops_badge(
     color: egui::Color32,
     px: f32,
 ) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(color.gamma_multiply(0.15))
         .corner_radius(egui::CornerRadius::same(4))
         .inner_margin(egui::vec2(6.0, 2.0))
@@ -363,7 +363,7 @@ fn ops_badge(
 
 /// 描边药丸（目标范围 scope）。
 fn ops_scope_pill(ui: &mut egui::Ui, theme: &Theme, text: &str, color: egui::Color32) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(theme.color_ops_card_fill())
         .stroke(egui::Stroke::new(1.0, theme.divider_stroke().color))
         .corner_radius(egui::CornerRadius::same(4))
@@ -556,7 +556,7 @@ fn ops_suggestion_chip(
     scope: Option<&str>,
     accent: egui::Color32,
 ) -> bool {
-    let resp = egui::Frame::none()
+    let resp = egui::Frame::NONE
         .fill(theme.color_ops_card_fill())
         .stroke(egui::Stroke::new(1.0, theme.divider_stroke().color))
         .corner_radius(egui::CornerRadius::same(6))
@@ -2063,7 +2063,7 @@ impl AiPanel {
         let mut open_url: Option<String> = None;
         ui.horizontal(|ui| {
             ui.add_space(safe_pad);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(theme.color_ops_card_fill())
                 .stroke(theme.divider_stroke())
                 .corner_radius(egui::CornerRadius::same(theme.radius_list_item() as u8))
@@ -2172,7 +2172,7 @@ impl AiPanel {
         let trust_snapshot = self.readonly_trust.clone();
         let cmd_class = crate::core::agent::classify_command(&plan.command_edit);
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(theme.color_ops_card_fill())
             .stroke(theme.divider_stroke())
             .corner_radius(egui::CornerRadius::same(8))
@@ -2351,7 +2351,7 @@ impl AiPanel {
                 if is_mutate || plan.l2_armed {
                     ui.add_space(theme.spacing_xs());
                     let warn = theme.amber_color();
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(theme.toast_fill(warn))
                         .stroke(egui::Stroke::new(1.0, theme.toast_stroke_color(warn)))
                         .corner_radius(egui::CornerRadius::same(6))
@@ -2495,7 +2495,7 @@ impl AiPanel {
                 ui.add_space(theme.spacing_sm());
 
                 // Footer：安全提示 + 操作按钮
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(theme.color_ops_sub_fill())
                     .corner_radius(egui::CornerRadius::same(5))
                     .inner_margin(egui::vec2(10.0, 7.0))
@@ -2621,7 +2621,7 @@ impl AiPanel {
 
         // 顶层汇总条：状态点统计 + 并发耗时
         let elapsed_ms = batch.hosts.iter().map(|h| h.duration_ms).max().unwrap_or(0);
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(theme.color_ops_sub_fill())
             .stroke(theme.divider_stroke())
             .corner_radius(egui::CornerRadius::same(theme.radius_list_item() as u8))
@@ -2718,7 +2718,7 @@ impl AiPanel {
                     let danger_text = theme.color_status_negative_text();
                     let normal_val = theme.color_status_positive_text();
 
-                    let frame = egui::Frame::none()
+                    let frame = egui::Frame::NONE
                         .fill(if is_selected {
                             theme.color_status_selected_fill(accent_color)
                         } else {
@@ -2849,7 +2849,7 @@ impl AiPanel {
             let host = &batch.hosts[sel_idx];
             ui.add_space(theme.spacing_sm());
 
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(theme.color_ops_console_fill())
                 .stroke(theme.divider_stroke())
                 .corner_radius(egui::CornerRadius::same(6))
@@ -3178,7 +3178,7 @@ impl AiPanel {
                 if left_gap > 0.0 {
                     ui.add_space(left_gap);
                 }
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(bubble_fill)
                     .stroke(bubble_stroke)
                     .corner_radius(rounding)
@@ -3202,7 +3202,7 @@ impl AiPanel {
             let bubble_w = (row_w - safe_pad * 2.0).max(96.0);
             ui.horizontal(|ui| {
                 ui.add_space(safe_pad);
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(bubble_fill)
                     .stroke(bubble_stroke)
                     .corner_radius(rounding)
@@ -3230,7 +3230,7 @@ impl AiPanel {
         let bubble_w = (row_w - safe_pad * 2.0).max(96.0);
         ui.horizontal(|ui| {
             ui.add_space(safe_pad);
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(theme.color_ops_card_fill())
                 .stroke(theme.divider_stroke())
                 .corner_radius(theme.radius_list_item())

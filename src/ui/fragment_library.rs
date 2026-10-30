@@ -407,7 +407,7 @@ impl FragmentLibraryState {
                         ui.set_min_width((row_w - left_col - 12.0).max(200.0));
                         ui.label(egui::RichText::new(i18n::tr(ui.ctx(), "Edit", "编辑")).strong());
                         if self.editing_id.is_none() {
-                            egui::Frame::none()
+                            egui::Frame::NONE
                                 .fill(theme.color_fragment_tag_fill())
                                 .inner_margin(egui::Margin::same((theme.spacing_card_x()) as i8))
                                 .corner_radius(theme.radius_list_item())

@@ -9259,7 +9259,7 @@ impl MistTermApp {
             .exact_size(rail_w)
             .resizable(false)
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(theme.chrome_bar_fill())
                     .stroke(egui::Stroke::NONE),
             )
@@ -9399,7 +9399,7 @@ impl MistTermApp {
             .exact_size(strip_w)
             .resizable(false)
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(theme.chrome_bar_fill())
                     .stroke(egui::Stroke::NONE),
             )

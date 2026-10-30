@@ -227,7 +227,7 @@ impl MistTermApp {
         // 主内容区：侧边栏 + 终端
         egui::CentralPanel::default()
             // 不在 Frame 上铺底色(Central 后绘会盖住右栏)；工作区底色由侧栏/终端列各自 Frame 承担
-            .frame(egui::Frame::none())
+            .frame(egui::Frame::NONE)
             .show(ctx, |ui| {
                 layout_util::clip_ui_before_right_dock(ui, self.right_dock_outer_left_x);
                 // Central 后绘制；用 max_rect∩clip + 右栏左缘收紧，避免终端白底盖住命令片段等
@@ -862,11 +862,11 @@ impl MistTermApp {
                         );
                         ui.add_space(theme.spacing_md());
                         let shortcut_frame = if theme.uses_modern_palette() {
-                            egui::Frame::none()
+                            egui::Frame::NONE
                                 .fill(egui::Color32::TRANSPARENT)
                                 .stroke(egui::Stroke::new(1.0, theme.border_color()))
                         } else {
-                            egui::Frame::none()
+                            egui::Frame::NONE
                                 .fill(theme.color_subtle_inset_fill())
                                 .stroke(egui::Stroke::new(1.0, theme.color_overlay_fill_subtle()))
                         };
@@ -1394,7 +1394,7 @@ impl MistTermApp {
                                     .color(theme.color_caption_text()),
                             );
                             ui.add_space(theme.spacing_md());
-                            egui::Frame::none()
+                            egui::Frame::NONE
                                 .fill(theme.color_subtle_inset_fill())
                                 .stroke(egui::Stroke::new(
                                     1.0,
