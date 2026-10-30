@@ -112,8 +112,8 @@ pub fn show_audit_timeline_modal(
                             ui.label(
                                 egui::RichText::new(crate::i18n::tr(
                                     ctx,
-                                    "No audit events",
-                                    "暂无审计事件",
+                                    "No audit events yet. Connect a session and run commands that trigger audit — they will show up here.",
+                                    "还没有审计事件。连接会话并产生审计后会出现在这里。",
                                 ))
                                 .color(theme.text_tertiary()),
                             );
