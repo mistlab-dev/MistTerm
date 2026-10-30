@@ -7,7 +7,10 @@
 //!
 //! 规则解析失败或文件缺失 = 引擎为空，输出渲染零影响。
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 use crate::capability::{
     LineOrigin, MenuCtx, MenuItem, MistModule, ModuleAction, ModuleId, OutputLineCtx,
@@ -25,6 +28,190 @@ pub const ACTION_BROWSER_OPEN: &str = "browser-open";
 /// 右键「新开连接到此 IP」。只在命中 IP（`copy-or-connect`）时贡献。
 pub const ACTION_NEW_CONNECTION: &str = "display-link.new-connection";
 
+/// 与 #185（output-trigger）对齐的上限。
+pub const MAX_RULES: usize = 64;
+pub const MAX_PATTERN_BYTES: usize = 1024;
+const MAX_IMPORT_BYTES: usize = 256 * 1024;
+const MAX_ID_CHARS: usize = 64;
+
+const BUILTIN_JSON: &str = include_str!("../../assets/display-link-patterns.json");
+
+/// 点击动作白名单（方案 §5：保存时校验 action ∈ 白名单）。
+pub const ACTION_WHITELIST: [&str; 4] = [
+    ACTION_SFTP_OPEN,
+    ACTION_RUNBOOK_RECALL,
+    ACTION_COPY_OR_CONNECT,
+    ACTION_BROWSER_OPEN,
+];
+
+/// 一条链接识别规则。`pattern_error` 不落盘，加载时按正则重算。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DisplayLinkRule {
+    pub id: String,
+    pub pattern: String,
+    /// path / errno / ip / url（path 类命中保留 #140 系统路径过滤）
+    pub category: String,
+    /// 四类白名单 action 字符串，Host 按它分发点击
+    pub action: String,
+    pub enabled: bool,
+    /// 小者先占区间（URL > errno > ip > path）
+    pub priority: u8,
+    /// 正则编译失败时的说明。这种规则保留在列表里，但不会参与匹配。
+    pub pattern_error: Option<String>,
+}
+
+/// 编辑器提交的草稿。`id == None` 表示新建。
+#[derive(Debug, Clone)]
+pub struct LinkRuleDraft {
+    pub id: Option<String>,
+    pub pattern: String,
+    pub category: String,
+    pub action: String,
+    pub enabled: bool,
+    pub priority: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkRuleError {
+    EmptyPattern,
+    PatternTooLong,
+    InvalidRegex(String),
+    NotFound,
+    TooMany,
+    EmptyId,
+    IdTooLong,
+    BadAction,
+    EmptyFile,
+    InvalidFile(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkImportReport {
+    pub imported: usize,
+    /// 已写入、但正则无效所以不会命中的规则 id。
+    pub invalid_pattern_ids: Vec<String>,
+    /// 没写进去的规则（动作不在白名单、重复 id、超出条数）。
+    pub skipped: Vec<String>,
+}
+
+/// 编辑前检查正则。
+pub fn check_link_pattern(pattern: &str) -> Result<(), LinkRuleError> {
+    if pattern.trim().is_empty() {
+        return Err(LinkRuleError::EmptyPattern);
+    }
+    if pattern.len() > MAX_PATTERN_BYTES {
+        return Err(LinkRuleError::PatternTooLong);
+    }
+    regex::Regex::new(pattern)
+        .map(|_| ())
+        .map_err(|e| LinkRuleError::InvalidRegex(e.to_string()))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuleDocument {
+    #[serde(default)]
+    version: String,
+    #[serde(default)]
+    customized: bool,
+    #[serde(default)]
+    rules: Vec<RuleDto>,
+    /// 兼容内置 assets 的 `patterns` 别名（方案 §4）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    patterns: Vec<RuleDto>,
+}
+
+impl Default for RuleDocument {
+    fn default() -> Self {
+        Self {
+            version: String::new(),
+            customized: false,
+            rules: Vec::new(),
+            patterns: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RuleDto {
+    id: String,
+    pattern: String,
+    #[serde(default)]
+    category: String,
+    action: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    priority: u8,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn rule_from_dto(dto: RuleDto) -> Result<DisplayLinkRule, (String, LinkRuleError)> {
+    let id = dto.id.trim().to_string();
+    if id.is_empty() {
+        return Err((id, LinkRuleError::EmptyId));
+    }
+    if id.chars().count() > MAX_ID_CHARS {
+        return Err((id, LinkRuleError::IdTooLong));
+    }
+    // action 必须在四类白名单里；非法 action 拒绝（方案 §5 默认口径）。
+    if !ACTION_WHITELIST.contains(&dto.action.as_str()) {
+        return Err((id, LinkRuleError::BadAction));
+    }
+    let pattern_error = match check_link_pattern(&dto.pattern) {
+        Ok(()) => None,
+        Err(LinkRuleError::InvalidRegex(msg)) => Some(msg),
+        Err(LinkRuleError::PatternTooLong) => Some("pattern too long".to_string()),
+        Err(LinkRuleError::EmptyPattern) => Some("empty pattern".to_string()),
+        Err(_) => Some("invalid pattern".to_string()),
+    };
+    Ok(DisplayLinkRule {
+        id,
+        pattern: dto.pattern,
+        category: dto.category,
+        action: dto.action,
+        enabled: dto.enabled,
+        priority: dto.priority,
+        pattern_error,
+    })
+}
+
+fn rule_to_dto(rule: &DisplayLinkRule) -> RuleDto {
+    RuleDto {
+        id: rule.id.clone(),
+        pattern: rule.pattern.clone(),
+        category: rule.category.clone(),
+        action: rule.action.clone(),
+        enabled: rule.enabled,
+        priority: rule.priority,
+    }
+}
+
+fn document_rules(doc: RuleDocument) -> Vec<DisplayLinkRule> {
+    let dtos = if !doc.rules.is_empty() {
+        doc.rules
+    } else {
+        doc.patterns
+    };
+    dtos.into_iter()
+        .filter_map(|dto| rule_from_dto(dto).ok())
+        .collect()
+}
+
+fn parse_rules_lenient(json: &str) -> Vec<DisplayLinkRule> {
+    match serde_json::from_str::<RuleDocument>(json) {
+        Ok(doc) => document_rules(doc),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// 编译进二进制的内置规则。用户还没自定义时，引擎用这一份。
+pub fn builtin_link_rules() -> Vec<DisplayLinkRule> {
+    parse_rules_lenient(BUILTIN_JSON)
+}
+
 
 /// 系统二进制目录前缀（#140）：`ps`/CMD 列里的这些路径是「程序本身」，
 /// 不是用户可操作的文件/目录，画链接是噪声。
@@ -34,8 +221,6 @@ const SYSTEM_BIN_PREFIXES: [&str; 8] = [
     "/bin/", "/sbin/", "/lib/", "/lib64/",
 ];
 
-/// `text` 是否为系统二进制路径（或恰为目录名本身，如 `/usr/sbin`）。
-/// 仅作用于 path 类命中；相对路径（`./` `~/`）不受影响。
 fn is_system_binary_path(text: &str) -> bool {
     if !text.starts_with('/') {
         return false;
@@ -59,6 +244,24 @@ struct DisplayLink {
     rule_id: String,
     action: DisplayLinkAction,
     text: String,
+}
+
+impl DisplayLink {
+    pub fn rule_id(&self) -> &str {
+        &self.rule_id
+    }
+
+    pub fn action_str(&self) -> &'static str {
+        self.action.as_str()
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn range(&self) -> (usize, usize) {
+        (self.start, self.end)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,28 +293,6 @@ impl DisplayLinkAction {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct PatternFile {
-    #[serde(default)]
-    #[allow(dead_code)]
-    version: String,
-    patterns: Vec<RawPattern>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawPattern {
-    id: String,
-    pattern: String,
-    /// path / errno / ip / url
-    #[serde(default)]
-    #[allow(dead_code)]
-    category: String,
-    action: String,
-    /// 同一行内多个命中时的优先级：小者先占区间（URL > errno > ip > path）
-    #[serde(default)]
-    priority: u8,
-}
-
 struct CompiledPattern {
     id: String,
     action: DisplayLinkAction,
@@ -121,7 +302,7 @@ struct CompiledPattern {
     regex: regex::Regex,
 }
 
-/// 规则引擎：加载一次，之后只做匹配。
+/// 规则引擎：只含已启用且正则合法的规则。
 /// 上限保护：单行最多返回 16 个链接，防止病态输出拖垮渲染。
 struct DisplayLinkEngine {
     patterns: Vec<CompiledPattern>,
@@ -129,39 +310,36 @@ struct DisplayLinkEngine {
 }
 
 impl DisplayLinkEngine {
-    fn new() -> Self {
-        const JSON: &str = include_str!("../../assets/display-link-patterns.json");
-        Self::from_json(JSON)
-    }
-
     /// 解析失败返回空引擎（功能关闭）。
     fn from_json(json: &str) -> Self {
-        let (patterns, max_hits_per_line) = Self::parse(json).unwrap_or_else(|| (Vec::new(), 16));
-        Self {
-            patterns,
-            max_hits_per_line,
-        }
+        Self::from_rules(&parse_rules_lenient(json))
     }
 
-    fn parse(json: &str) -> Option<(Vec<CompiledPattern>, usize)> {
-        let file: PatternFile = serde_json::from_str(json).ok()?;
-        let mut patterns: Vec<CompiledPattern> = file
-            .patterns
-            .into_iter()
-            .filter_map(|p| {
-                let action = DisplayLinkAction::from_str(&p.action)?;
-                let regex = regex::Regex::new(&p.pattern).ok()?;
-                Some(CompiledPattern {
-                    id: p.id,
-                    action,
-                    category: p.category,
-                    priority: p.priority,
-                    regex,
-                })
-            })
-            .collect();
+    fn from_rules(rules: &[DisplayLinkRule]) -> Self {
+        let mut patterns = Vec::new();
+        for rule in rules {
+            if !rule.enabled || rule.pattern_error.is_some() {
+                continue;
+            }
+            let Some(action) = DisplayLinkAction::from_str(&rule.action) else {
+                continue;
+            };
+            let Ok(regex) = regex::Regex::new(&rule.pattern) else {
+                continue;
+            };
+            patterns.push(CompiledPattern {
+                id: rule.id.clone(),
+                action,
+                category: rule.category.clone(),
+                priority: rule.priority,
+                regex,
+            });
+        }
         patterns.sort_by_key(|p| p.priority);
-        Some((patterns, 16))
+        Self {
+            patterns,
+            max_hits_per_line: 16,
+        }
     }
 
     fn is_empty(&self) -> bool {
@@ -240,16 +418,298 @@ pub fn sftp_list_dir(path: &str) -> String {
     out
 }
 
-/// display-link 内置模块。规则在构造时编译一次；禁用后 registry 不再调用钩子。
-pub struct DisplayLinkModule {
+struct LinkInner {
+    path: PathBuf,
+    /// `false` 时编辑不落盘（测试用内置快照，避免写到开发者配置目录）。
+    persist: bool,
+    customized: bool,
+    rules: Vec<DisplayLinkRule>,
     engine: DisplayLinkEngine,
+    save_error: Option<String>,
+}
+
+/// 用户链接规则与编译后的引擎。UI 和 `DisplayLinkModule` 各持一份 `Clone`（内部是 `Arc`）。
+#[derive(Clone)]
+pub struct DisplayLinkStore {
+    inner: Arc<RwLock<LinkInner>>,
+}
+
+impl DisplayLinkStore {
+    /// 配置目录下的用户规则。文件不存在 = 还没自定义 = 内置规则，且不创建文件。
+    pub fn load() -> Self {
+        Self::load_from(&Self::default_path())
+    }
+
+    pub fn load_from(path: &Path) -> Self {
+        if !path.exists() {
+            return Self::from_parts(path, builtin_link_rules(), false, true);
+        }
+        let doc: RuleDocument = crate::security::encrypted_file::load_encrypted_json(path);
+        let customized_flag = doc.customized;
+        let has_rules = !doc.rules.is_empty() || !doc.patterns.is_empty();
+        if !customized_flag && !has_rules {
+            log::warn!(
+                "display-link rules file {} is empty or unreadable; using built-in rules",
+                path.display()
+            );
+            return Self::from_parts(path, builtin_link_rules(), false, true);
+        }
+        let rules = document_rules(doc);
+        Self::from_parts(path, rules, true, true)
+    }
+
+    /// 只含内置规则，不读也不写配置目录。`builtin_modules()` 与单测走这里。
+    pub fn builtin_ephemeral() -> Self {
+        Self::from_parts(&Self::default_path(), builtin_link_rules(), false, false)
+    }
+
+    pub fn default_path() -> PathBuf {
+        let mut p = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+        p.push("mistterm");
+        p.push("display-link-rules.json");
+        p
+    }
+
+    fn from_parts(
+        path: &Path,
+        rules: Vec<DisplayLinkRule>,
+        customized: bool,
+        persist: bool,
+    ) -> Self {
+        let engine = DisplayLinkEngine::from_rules(&rules);
+        Self {
+            inner: Arc::new(RwLock::new(LinkInner {
+                path: path.to_path_buf(),
+                persist,
+                customized,
+                rules,
+                engine,
+                save_error: None,
+            })),
+        }
+    }
+
+    fn write<R>(&self, f: impl FnOnce(&mut LinkInner) -> R) -> R {
+        let mut guard = self.inner.write().unwrap_or_else(|err| err.into_inner());
+        f(&mut guard)
+    }
+
+    fn read<R>(&self, f: impl FnOnce(&LinkInner) -> R) -> R {
+        let guard = self.inner.read().unwrap_or_else(|err| err.into_inner());
+        f(&guard)
+    }
+
+    pub fn customized(&self) -> bool {
+        self.read(|inner| inner.customized)
+    }
+
+    pub fn rules(&self) -> Vec<DisplayLinkRule> {
+        self.read(|inner| inner.rules.clone())
+    }
+
+    pub fn last_save_error(&self) -> Option<String> {
+        self.read(|inner| inner.save_error.clone())
+    }
+
+    /// 对一行视口文本做匹配。引擎为空或行长超限返回空（与现网一致）。
+    pub fn scan(&self, line: &str) -> Vec<DisplayLink> {
+        self.read(|inner| inner.engine.scan(line))
+    }
+
+    pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<(), LinkRuleError> {
+        self.write(|inner| {
+            let Some(rule) = inner.rules.iter_mut().find(|rule| rule.id == id) else {
+                return Err(LinkRuleError::NotFound);
+            };
+            rule.enabled = enabled;
+            inner.customized = true;
+            recompile(inner);
+            remember_save(inner);
+            Ok(())
+        })
+    }
+
+    pub fn upsert(&self, draft: LinkRuleDraft) -> Result<DisplayLinkRule, LinkRuleError> {
+        check_link_pattern(&draft.pattern)?;
+        if !ACTION_WHITELIST.contains(&draft.action.as_str()) {
+            return Err(LinkRuleError::BadAction);
+        }
+        self.write(|inner| {
+            let id = if let Some(id) = draft.id.as_deref() {
+                if !inner.rules.iter().any(|rule| rule.id == id) {
+                    return Err(LinkRuleError::NotFound);
+                }
+                id.to_string()
+            } else {
+                if inner.rules.len() >= MAX_RULES {
+                    return Err(LinkRuleError::TooMany);
+                }
+                fresh_link_id(&inner.rules)
+            };
+            let rule = DisplayLinkRule {
+                id,
+                pattern: draft.pattern,
+                category: draft.category,
+                action: draft.action,
+                enabled: draft.enabled,
+                priority: draft.priority,
+                pattern_error: None,
+            };
+            if let Some(slot) = inner.rules.iter_mut().find(|existing| existing.id == rule.id) {
+                *slot = rule.clone();
+            } else {
+                inner.rules.push(rule.clone());
+            }
+            inner.customized = true;
+            recompile(inner);
+            remember_save(inner);
+            Ok(rule)
+        })
+    }
+
+    pub fn delete(&self, id: &str) -> bool {
+        self.write(|inner| {
+            let before = inner.rules.len();
+            inner.rules.retain(|rule| rule.id != id);
+            if inner.rules.len() == before {
+                return false;
+            }
+            inner.customized = true;
+            recompile(inner);
+            remember_save(inner);
+            true
+        })
+    }
+
+    /// 删掉用户文件，内存回到当前二进制里的内置规则。
+    pub fn reset_to_builtin(&self) -> Result<(), String> {
+        self.write(|inner| {
+            if inner.persist && inner.path.exists() {
+                std::fs::remove_file(&inner.path).map_err(|err| err.to_string())?;
+            }
+            inner.rules = builtin_link_rules();
+            inner.customized = false;
+            inner.save_error = None;
+            recompile(inner);
+            Ok(())
+        })
+    }
+
+    pub fn export_json(&self) -> String {
+        self.read(|inner| {
+            let doc = RuleDocument {
+                version: "1".to_string(),
+                customized: true,
+                rules: inner.rules.iter().map(rule_to_dto).collect(),
+                patterns: Vec::new(),
+            };
+            serde_json::to_string_pretty(&doc).unwrap_or_else(|_| "{}".to_string())
+        })
+    }
+
+    /// 用 JSON 整表替换当前规则（支持 `rules`，也支持内置 assets 的 `patterns`）。
+    /// 正则无效的条目会留下但不会命中；action 不在白名单的条目跳过。
+    pub fn import_json(&self, json: &str) -> Result<LinkImportReport, LinkRuleError> {
+        if json.len() > MAX_IMPORT_BYTES {
+            return Err(LinkRuleError::InvalidFile("file is too large".into()));
+        }
+        let doc: RuleDocument =
+            serde_json::from_str(json).map_err(|err| LinkRuleError::InvalidFile(err.to_string()))?;
+        let dtos = if !doc.rules.is_empty() {
+            doc.rules
+        } else {
+            doc.patterns
+        };
+        if dtos.is_empty() {
+            return Err(LinkRuleError::EmptyFile);
+        }
+        let mut rules = Vec::new();
+        let mut invalid_pattern_ids = Vec::new();
+        let mut skipped = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for dto in dtos {
+            let label = dto.id.trim().to_string();
+            match rule_from_dto(dto) {
+                Ok(rule) => {
+                    if !seen.insert(rule.id.clone()) {
+                        skipped.push(format!("{}: duplicate id", rule.id));
+                        continue;
+                    }
+                    if rules.len() >= MAX_RULES {
+                        skipped.push(format!("{}: too many rules", rule.id));
+                        continue;
+                    }
+                    if rule.pattern_error.is_some() {
+                        invalid_pattern_ids.push(rule.id.clone());
+                    }
+                    rules.push(rule);
+                }
+                Err((id, err)) => {
+                    let id = if id.is_empty() { label } else { id };
+                    skipped.push(format!("{id}: {err:?}"));
+                }
+            }
+        }
+        if rules.is_empty() {
+            return Err(LinkRuleError::InvalidFile("no rules could be imported".into()));
+        }
+        self.write(|inner| {
+            inner.rules = rules;
+            inner.customized = true;
+            recompile(inner);
+            remember_save(inner);
+        });
+        Ok(LinkImportReport {
+            imported: self.rules().len(),
+            invalid_pattern_ids,
+            skipped,
+        })
+    }
+}
+
+fn recompile(inner: &mut LinkInner) {
+    inner.engine = DisplayLinkEngine::from_rules(&inner.rules);
+}
+
+fn remember_save(inner: &mut LinkInner) {
+    if !inner.persist {
+        inner.save_error = None;
+        return;
+    }
+    let doc = RuleDocument {
+        version: "1".to_string(),
+        customized: true,
+        rules: inner.rules.iter().map(rule_to_dto).collect(),
+        patterns: Vec::new(),
+    };
+    match crate::security::encrypted_file::save_encrypted_json(&inner.path, &doc) {
+        Ok(()) => inner.save_error = None,
+        Err(err) => inner.save_error = Some(err.to_string()),
+    }
+}
+
+fn fresh_link_id(existing: &[DisplayLinkRule]) -> String {
+    loop {
+        let compact = uuid::Uuid::new_v4().simple().to_string();
+        let id = format!("DL-USER-{}", &compact[..8]);
+        if !existing.iter().any(|rule| rule.id == id) {
+            return id;
+        }
+    }
+}
+
+/// display-link 内置模块。规则经 [`DisplayLinkStore`] 热更新；禁用后 registry 不再调用钩子。
+pub struct DisplayLinkModule {
+    store: DisplayLinkStore,
 }
 
 impl DisplayLinkModule {
     pub fn new() -> Self {
-        Self {
-            engine: DisplayLinkEngine::new(),
-        }
+        Self::with_store(DisplayLinkStore::builtin_ephemeral())
+    }
+
+    pub fn with_store(store: DisplayLinkStore) -> Self {
+        Self { store }
     }
 }
 
@@ -277,8 +737,7 @@ impl MistModule for DisplayLinkModule {
         if ctx.origin != LineOrigin::Viewport {
             return Vec::new();
         }
-        self.engine
-            .scan(ctx.line)
+        self.store.scan(ctx.line)
             .into_iter()
             .map(|hit| ModuleAction::DecorateLink {
                 start: hit.start,
@@ -308,7 +767,7 @@ mod tests {
     use crate::capability::ModuleRegistry;
 
     fn engine() -> DisplayLinkEngine {
-        DisplayLinkEngine::new()
+        DisplayLinkEngine::from_json(BUILTIN_JSON)
     }
 
     #[test]
@@ -484,7 +943,7 @@ mod tests {
 
     #[test]
     fn system_binary_paths_are_not_linked() {
-        let engine = DisplayLinkEngine::new();
+        let engine = DisplayLinkEngine::from_json(BUILTIN_JSON);
         // ps 输出典型行：CMD 列的系统二进制路径不画下划线（#140）。
         let line = "/usr/sbin/sshd  /usr/sbin/crond  /usr/bin/python";
         assert!(engine.scan(line).is_empty());
@@ -525,6 +984,153 @@ mod tests {
         assert!(!is_system_binary_path("/usr/share/doc")); // /usr/ 前缀不拦，拦的是 /usr/bin|sbin
     }
 
+    // --- #186 DisplayLinkStore ---
 
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
+    fn temp_rules_path() -> PathBuf {
+        static N: AtomicU64 = AtomicU64::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "mistterm-display-link-{}-{}-{}.json",
+            std::process::id(),
+            n,
+            uuid::Uuid::new_v4().simple()
+        ))
+    }
+
+    struct TempRules(PathBuf);
+    impl Drop for TempRules {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    fn link_draft(pattern: &str) -> LinkRuleDraft {
+        LinkRuleDraft {
+            id: None,
+            pattern: pattern.to_string(),
+            category: "url".to_string(),
+            action: ACTION_BROWSER_OPEN.to_string(),
+            enabled: true,
+            priority: 100,
+        }
+    }
+
+    #[test]
+    fn store_builtin_ephemeral_matches_builtin_engine() {
+        let store = DisplayLinkStore::builtin_ephemeral();
+        assert!(!store.customized());
+        let rules = store.rules();
+        assert!(rules.len() >= 4);
+        // 未自定义时行为与烤进包的内置一致（验收点：抽样 url/ip/errno）。
+        let hits = store.scan("see https://example.com/x and 10.1.2.3 ECONNREFUSED");
+        assert!(hits.iter().any(|l| l.rule_id() == "DL-URL-001"));
+        assert!(hits.iter().any(|l| l.rule_id() == "DL-IPV4-001"));
+        assert!(hits.iter().any(|l| l.rule_id() == "DL-ERR-001"));
+    }
+
+    #[test]
+    fn store_upsert_delete_and_persist_roundtrip() {
+        let path = temp_rules_path();
+        let _keep = TempRules(path.clone());
+        let store = DisplayLinkStore::load_from(&path);
+        assert!(!path.exists(), "未自定义不写用户文件");
+
+        let rule = store
+            .upsert(link_draft("example-[a-z]+\\.com"))
+            .expect("upsert");
+        assert!(store.customized());
+        assert!(path.exists(), "首次编辑落盘 customized=true");
+        assert_eq!(rule.id, "DL-USER-".to_string() + &rule.id[8..]);
+
+        // 热更新：下一帧 scan 立即用新规则。
+        let hits = store.scan("open https://example.com/page now");
+        assert!(hits
+            .iter()
+            .any(|l| l.rule_id() == rule.id && l.action_str() == ACTION_BROWSER_OPEN));
+
+        // 重启路径：从磁盘读回同一份规则。
+        let reloaded = DisplayLinkStore::load_from(&path);
+        assert!(reloaded.customized());
+        assert!(reloaded.rules().iter().any(|r| r.id == rule.id));
+
+        // 删除 + 恢复内置。
+        assert!(store.delete(&rule.id));
+        store.reset_to_builtin().expect("reset");
+        assert!(!store.customized());
+        assert!(!path.exists(), "重置删掉用户文件");
+    }
+
+    #[test]
+    fn store_rejects_bad_action_and_bad_regex() {
+        let store = DisplayLinkStore::builtin_ephemeral();
+        let mut bad_action = link_draft("x+");
+        bad_action.action = "rm-rf".to_string();
+        assert!(matches!(
+            store.upsert(bad_action),
+            Err(LinkRuleError::BadAction)
+        ));
+        assert!(matches!(
+            store.upsert(link_draft("(")),
+            Err(LinkRuleError::InvalidRegex(_))
+        ));
+    }
+
+    #[test]
+    fn store_import_and_disable() {
+        let store = DisplayLinkStore::builtin_ephemeral();
+        // 先停用一条内置规则再恢复。
+        let first = store.rules()[0].id.clone();
+        store.set_enabled(&first, false).expect("disable");
+        assert!(store
+            .rules()
+            .iter()
+            .find(|r| r.id == first)
+            .is_some_and(|r| !r.enabled));
+
+        // 导入：合法 + 非法正则 + 白名单外 action。
+        let json = r#"{"rules":[
+            {"id":"IMP-1","pattern":"imp-[0-9]+","category":"errno","action":"runbook-recall","priority":50},
+            {"id":"IMP-2","pattern":"(","category":"path","action":"sftp-open"},
+            {"id":"IMP-3","pattern":"y+","category":"url","action":"no-such"}
+        ]}"#;
+        let report = store.import_json(json).expect("import");
+        assert_eq!(report.imported, 2);
+        assert_eq!(report.invalid_pattern_ids, vec!["IMP-2".to_string()]);
+        assert!(report.skipped.iter().any(|s| s.contains("IMP-3")));
+        // 坏正则留在列表但不参与匹配。
+        assert!(store.rules().iter().any(|r| r.id == "IMP-2"));
+        let hits = store.scan("value imp-42 here");
+        assert!(hits.iter().any(|l| l.rule_id() == "IMP-1"));
+    }
+
+    #[test]
+    fn module_uses_store_hot_reload() {
+        let store = DisplayLinkStore::builtin_ephemeral();
+        let module = DisplayLinkModule::with_store(store.clone());
+        use crate::capability::{LineOrigin, OutputLineCtx};
+        let scan = |module: &DisplayLinkModule, line: &str| {
+            let ctx = OutputLineCtx {
+                line,
+                origin: LineOrigin::Viewport,
+            };
+            module.on_output_line(&ctx)
+        };
+        assert!(scan(&module, "plain text").is_empty());
+        let rule = store
+            .upsert(link_draft("MAGICLINK-[0-9]+"))
+            .expect("upsert");
+        let actions = scan(&module, "got MAGICLINK-7 here");
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            ModuleAction::DecorateLink { action, text, .. } => {
+                assert_eq!(action, ACTION_BROWSER_OPEN);
+                assert_eq!(text, "MAGICLINK-7");
+            }
+            other => panic!("expected DecorateLink, got {other:?}"),
+        }
+        assert!(store.delete(&rule.id));
+    }
 }

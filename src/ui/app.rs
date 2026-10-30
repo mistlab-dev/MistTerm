@@ -303,6 +303,7 @@ pub struct MistTermApp {
     module_registry: std::sync::Arc<crate::capability::ModuleRegistry>,
     /// 输出触发规则。与 registry 里的模块共享，保存后下一行输出即生效。
     output_trigger_rules: crate::modules::output_trigger::OutputTriggerStore,
+    display_link_rules: crate::modules::display_link::DisplayLinkStore,
     rule_manager_dialog: crate::ui::rule_manager_dialog::RuleManagerDialog,
 
     /// 是否显示新建会话对话框
@@ -1177,11 +1178,13 @@ impl MistTermApp {
         let cmd_audit_engine =
             std::sync::Arc::new(std::sync::Mutex::new(CmdAuditEngine::new()));
         let output_trigger_rules = crate::modules::output_trigger::OutputTriggerStore::load();
+        let display_link_rules = crate::modules::display_link::DisplayLinkStore::load();
         let module_registry = {
             let reg = std::sync::Arc::new(crate::capability::ModuleRegistry::with_modules(
-                crate::modules::builtin_modules_with_output_trigger(
+                crate::modules::builtin_modules_full(
                     std::sync::Arc::clone(&cmd_audit_engine),
                     output_trigger_rules.clone(),
+                    display_link_rules.clone(),
                 ),
             ));
             reg.sync_effective_disabled(&app_settings.disabled_modules);
@@ -1214,6 +1217,7 @@ impl MistTermApp {
             module_registry,
             output_trigger_rules,
             rule_manager_dialog: crate::ui::rule_manager_dialog::RuleManagerDialog::default(),
+            display_link_rules: display_link_rules.clone(),
             show_new_session_dialog: false,
             show_edit_session_dialog: false,
             show_about_dialog: false,
@@ -10350,7 +10354,10 @@ impl eframe::App for MistTermApp {
             ctx,
             &theme,
             &self.output_trigger_rules,
+            &self.display_link_rules,
             output_trigger_enabled,
+            self.module_registry
+                .is_enabled(crate::modules::display_link::MODULE_ID),
         );
         self.poll_paste_history_notes();
         self.process_typed_enter_audit(ctx);

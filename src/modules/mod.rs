@@ -33,12 +33,25 @@ pub fn builtin_modules_with_output_trigger(
     cmd_audit_engine: Arc<Mutex<CmdAuditEngine>>,
     output_trigger_rules: output_trigger::OutputTriggerStore,
 ) -> Vec<Box<dyn MistModule>> {
+    builtin_modules_full(
+        cmd_audit_engine,
+        output_trigger_rules,
+        display_link::DisplayLinkStore::builtin_ephemeral(),
+    )
+}
+
+/// UI 与 display-link 模块共享同一份规则 Store（#186）。
+pub fn builtin_modules_full(
+    cmd_audit_engine: Arc<Mutex<CmdAuditEngine>>,
+    output_trigger_rules: output_trigger::OutputTriggerStore,
+    display_link_rules: display_link::DisplayLinkStore,
+) -> Vec<Box<dyn MistModule>> {
     vec![
         Box::new(cmd_audit_local::CmdAuditLocalModule::new(cmd_audit_engine)),
         Box::new(output_trigger::OutputTriggerModule::with_store(
             output_trigger_rules,
         )),
-        Box::new(display_link::DisplayLinkModule::new()),
+        Box::new(display_link::DisplayLinkModule::with_store(display_link_rules)),
         Box::new(session_import::SessionImportModule::new()),
     ]
 }
