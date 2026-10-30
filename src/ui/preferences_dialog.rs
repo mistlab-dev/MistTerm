@@ -1522,6 +1522,17 @@ impl MistTermApp {
                             self.rule_manager_dialog
                                 .open_display_link_from_preferences(&self.display_link_rules);
                         }
+                        if m.id == crate::modules::cmd_audit_local::MODULE_ID
+                            && crate::ui::chrome::panel_action_button(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Manage rules…", "管理规则…"),
+                            )
+                            .clicked()
+                        {
+                            self.rule_manager_dialog
+                                .open_command_checks_from_preferences(&self.cmd_audit_personal_rules);
+                        }
                     });
                 }
 

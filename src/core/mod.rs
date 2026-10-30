@@ -43,6 +43,7 @@ pub mod session_sort;
 pub mod audit;
 pub mod audit_timeline;
 pub mod cmd_audit;
+pub mod cmd_audit_personal;
 pub mod ai_settings;
 pub mod ai_client;
 pub mod ai_chat_store;
