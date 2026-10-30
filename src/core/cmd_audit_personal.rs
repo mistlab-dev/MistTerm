@@ -369,6 +369,10 @@ impl CmdAuditPersonalStore {
         if doc.rules.is_empty() {
             return Err(PersonalRuleError::EmptyFile);
         }
+        // #187 复审：导入同样受 64 条上限约束，不让 CRUD 绕过。
+        if doc.rules.len() > MAX_PERSONAL_RULES {
+            return Err(PersonalRuleError::TooMany);
+        }
         for rule in &doc.rules {
             if rule.id.trim().is_empty() {
                 return Err(PersonalRuleError::EmptyId);

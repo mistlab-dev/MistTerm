@@ -175,6 +175,8 @@ struct BuiltinPatternEntry {
 struct CompiledBuiltin {
     id: String,
     regex: Regex,
+    /// 原始 pattern（#187 复审：内置只读展示要含全文）。
+    pattern: String,
     message: String,
     level: &'static str,
     full_line: bool,
@@ -314,13 +316,26 @@ impl CmdAuditEngine {
         }
     }
 
-    pub fn is_active(&self) -> bool {
+    /// 团队策略是否激活（只认团队层）。#187 复审：与个人层判定拆开，
+    /// 避免扩了个人层后团队区误报「已激活」。
+    pub fn team_policy_active(&self) -> bool {
         self.global_enabled
             && self
                 .policy
                 .as_ref()
                 .map(|p| p.enabled)
                 .unwrap_or(false)
+    }
+
+    /// 个人层是否可跑（§4-A）：有个人规则或有个人开关。
+    /// 模块开关（cmd-audit-local）仍是总闸，在 on_before_send 层控制。
+    fn personal_layer_active(&self) -> bool {
+        self.global_enabled && (self.personal_enabled || !self.personal_rules.is_empty())
+    }
+
+    /// 兼容旧调用方（Host 总闸判定）：团队策略激活**或**个人层可跑。
+    pub fn is_active(&self) -> bool {
+        self.team_policy_active() || self.personal_layer_active()
     }
 
     pub fn apply_sync(&mut self, payload: CmdAuditSyncPayload) {
@@ -366,31 +381,28 @@ impl CmdAuditEngine {
 
         // #187 方案 §4-A：存在个人规则或个人开关时，无团队 policy 也可跑「个人 + 内置」。
         // 模块开关（cmd-audit-local）仍是总闸，在 on_before_send 层控制。
-        let has_personal = self.personal_enabled || !self.personal_rules.is_empty();
-        let policy = match self.policy.as_ref() {
-            Some(p) if p.enabled => Some(p),
-            _ => {
-                if has_personal {
-                    None // 无团队 policy：只跑个人 + 内置，动作由个人规则决定
-                } else {
-                    return allow_result();
-                }
-            }
-        };
+        // （is_active 已包含个人层判定，这里不会再被短路。）
+        let has_personal = self.personal_layer_active();
+        let policy = self
+            .policy
+            .as_ref()
+            .filter(|p| p.enabled && self.global_enabled);
 
-        // 1. 团队规则（最高优先）。
-        for rule in &self.rules {
-            if rule_matches(rule, cmd) {
-                let action = rule.action;
-                if action == CmdAuditAction::Allow {
-                    // 团队 Allow：个人层只能收紧不能放宽（§4-2）。
-                    if let Some(personal) = self.personal_match(cmd) {
-                        return personal;
+        // 1. 团队规则（最高优先）。无团队 policy 时直接跳过。
+        if policy.is_some() {
+            for rule in &self.rules {
+                if rule_matches(rule, cmd) {
+                    let action = rule.action;
+                    if action == CmdAuditAction::Allow {
+                        // 团队 Allow：个人层只能收紧不能放宽（§4-2）。
+                        if let Some(personal) = self.personal_match(cmd) {
+                            return personal;
+                        }
+                        return allow_result();
                     }
-                    return allow_result();
+                    // 团队已 Block/Confirm：保持，不放宽。
+                    return audit_match_result(action, "custom", "custom", &rule.id, &rule.description, &rule.name);
                 }
-                // 团队已 Block/Confirm：保持，不放宽。
-                return audit_match_result(action, "custom", "custom", &rule.id, &rule.description, &rule.name);
             }
         }
 
@@ -402,14 +414,13 @@ impl CmdAuditEngine {
         }
 
         // 3. 内置分级（跳过被个人层停用的 id）。
+        // 无团队 policy 时能走到这里说明个人层已激活（is_active 保证），
+        // 内置命中沿用默认分级：dangerous=block、sensitive=confirm（§4-A）。
         let builtin_allowed = |id: &str| !self.disabled_builtin_ids.contains(id);
         if let Some(b) = self.read_dangerous_builtin.iter().find(|b| builtin_matches(b, cmd) && builtin_allowed(&b.id)) {
             let action = match policy {
                 Some(p) => p.dangerous_action,
-                // 无团队 policy：内置命中按个人层语义处理——personal_enabled 开启时
-                // 沿用默认策略（dangerous=block），否则保守不动（维持现网「不 active」）。
-                None if self.personal_enabled => CmdAuditAction::Block,
-                None => return allow_result(),
+                None => CmdAuditAction::Block,
             };
             return audit_match_result(
                 action,
@@ -423,8 +434,7 @@ impl CmdAuditEngine {
         if let Some(b) = self.read_sensitive_builtin.iter().find(|b| builtin_matches(b, cmd) && builtin_allowed(&b.id)) {
             let action = match policy {
                 Some(p) => p.sensitive_action,
-                None if self.personal_enabled => CmdAuditAction::Confirm,
-                None => return allow_result(),
+                None => CmdAuditAction::Confirm,
             };
             return audit_match_result(
                 action,
@@ -439,8 +449,7 @@ impl CmdAuditEngine {
         if let Some(b) = self.dangerous_builtin.iter().find(|b| builtin_matches(b, cmd) && builtin_allowed(&b.id)) {
             let action = match policy {
                 Some(p) => p.dangerous_action,
-                None if self.personal_enabled => CmdAuditAction::Block,
-                None => return allow_result(),
+                None => CmdAuditAction::Block,
             };
             return audit_match_result(
                 action,
@@ -514,6 +523,7 @@ impl CmdAuditEngine {
             for b in items {
                 out.push(CmdAuditBuiltinInfo {
                     id: b.id.clone(),
+                    pattern: b.pattern.clone(),
                     message: b.message.clone(),
                     level: b.level.to_string(),
                     full_line: b.full_line,
@@ -532,10 +542,6 @@ impl CmdAuditEngine {
     pub fn team_rule_count(&self) -> usize {
         self.rules.len()
     }
-
-    pub fn team_policy_active(&self) -> bool {
-        self.is_active()
-    }
 }
 
 fn allow_result() -> CmdAuditResult {
@@ -550,6 +556,7 @@ fn allow_result() -> CmdAuditResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CmdAuditBuiltinInfo {
     pub id: String,
+    pub pattern: String,
     pub message: String,
     pub level: String,
     pub full_line: bool,
@@ -672,6 +679,7 @@ fn load_builtin_file(json: &str, level: &'static str, full_line: bool) -> Vec<Co
             Some(CompiledBuiltin {
                 id: p.id,
                 regex,
+                pattern: p.pattern,
                 message: p.message,
                 level,
                 full_line,
@@ -1203,11 +1211,22 @@ mod personal_layer_tests {
 
     #[test]
     fn personal_disabled_and_no_policy_means_inactive() {
+        // #187 复审修正：完全无个人层（无规则且未开开关）且无团队 policy → 不 active。
+        let mut engine = CmdAuditEngine::new();
+        engine.apply_personal(&Vec::new(), HashSet::new(), false);
+        assert!(engine.check("rm -rf /data").allowed);
+    }
+
+    #[test]
+    fn personal_rules_fire_even_if_switch_off() {
+        // #187 复审：方案 §4-A 是 has_personal = 开关 || 有规则 ——
+        // 有个人规则时即使用户没开「无策略也运行」开关，个人层也应跑。
         let mut engine = CmdAuditEngine::new();
         let rules = vec![personal_rule("P1", "rm\\s+-rf\\s+/", "confirm")];
         engine.apply_personal(&rules, HashSet::new(), false);
-        // personal_enabled=false 且无团队 policy → 不 active（方案 B 兼容路径）。
-        assert!(engine.check("rm -rf /data").allowed);
+        let r = engine.check("rm -rf /data");
+        assert_eq!(r.action, CmdAuditAction::Confirm);
+        assert_eq!(r.matches[0].source, "personal");
     }
 
     #[test]

@@ -994,14 +994,13 @@ impl RuleManagerDialog {
             Ok(e) => {
                 if e.team_policy_active() {
                     let count = e.team_rule_count();
-                    format!(
-                        "{}", 
-                        crate::i18n::tr(
-                            ctx,
-                            "Team policy is active. Team rules are managed on the server; the desktop cannot change them.",
-                            "团队策略已激活. 团队规则在服务端管理, 桌面端不能修改.",
-                        )
-                    )
+                    let base = crate::i18n::tr(
+                        ctx,
+                        "Team policy is active. Team rules are managed on the server; the desktop cannot change them.",
+                        "团队策略已激活. 团队规则在服务端管理, 桌面端不能修改.",
+                    );
+                    // #187 复审：把生效条数贴进文案，避免 dead binding。
+                    format!("({count}) {base}")
                 } else {
                     crate::i18n::tr(
                         ctx,
@@ -1344,9 +1343,10 @@ impl RuleManagerDialog {
                 for b in &builtin {
                     ui.horizontal(|ui| {
                         let disabled = disabled_ids.iter().any(|id| id == &b.id);
-                        let mut off = disabled;
+                        // #187 复审：勾选=启用（悬停文案同口径），避免极性反直觉。
+                        let mut on = !disabled;
                         if ui
-                            .checkbox(&mut off, "")
+                            .checkbox(&mut on, "")
                             .on_hover_text(crate::i18n::tr(
                                 ctx,
                                 "Uncheck to disable this built-in rule locally",
@@ -1354,14 +1354,19 @@ impl RuleManagerDialog {
                             ))
                             .changed()
                         {
-                            personal.set_builtin_disabled(&b.id, off, engine);
+                            personal.set_builtin_disabled(&b.id, !on, engine);
                             self.set_status(crate::i18n::tr(
                                 ctx,
                                 "Saved. Takes effect on the next command.",
                                 "已保存, 下一条命令即生效.",
                             ));
                         }
-                        let mut text = egui::RichText::new(format!("{}  {}", b.level, b.message));
+                        let mut text = egui::RichText::new(format!(
+                            "{}  {}  {}",
+                            b.level,
+                            b.message,
+                            truncate_chars(&b.pattern, 60)
+                        ));
                         if disabled {
                             text = text.color(theme.text_tertiary());
                         }
