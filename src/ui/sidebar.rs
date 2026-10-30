@@ -685,7 +685,7 @@ impl Sidebar {
                                 crate::ui::chrome::apply_context_menu_style(ui, theme);
                                 let ctx = ui.ctx().clone();
                                 let open_tab_label = if sessions_with_tabs.contains(&session.id) {
-                                    crate::i18n::tr(&ctx, "Open another tab", "再开一个标签")
+                                    crate::i18n::tr(&ctx, "Duplicate Tab", "复制标签")
                                 } else {
                                     crate::i18n::tr(&ctx, "Open tab", "打开标签")
                                 };

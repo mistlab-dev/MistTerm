@@ -1,7 +1,7 @@
 //! 终端输出 Trigger：正则命中 → `ModuleAction::Notify`（后台标签注意点 / Toast）。
 //!
 //! 未自定义时规则来自 `assets/output-trigger-patterns.json`（编译进二进制）。
-//! 用户在「工具 → 规则管理」里改过之后，写到配置目录
+//! 用户在「工具 → 自动化规则」里改过之后，写到配置目录
 //! `mistterm/output-trigger-rules.json`。保存后的下一行输出立刻用新规则。
 //! 非法正则留在列表里供修改，但不进入匹配；`scan_line` 不 panic，输出路径不受影响。
 //!

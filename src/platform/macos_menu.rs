@@ -5,7 +5,7 @@
 //! - **编辑**：终端剪贴板 + 搜索（无系统预置复制/粘贴，避免重复项）
 //! - **视图**：布局、右侧面板、主题
 //! - **团队**：登录、成员、云端同步
-//! - **工具**：片段、历史、凭证与日志
+//! - **工具**：片段与发送、历史、自动化规则、账号与数据（四段）
 //! - **帮助**：内嵌文档与关于
 
 use super::macos_app_name::APP_DISPLAY_NAME;
@@ -244,6 +244,12 @@ impl NativeAppMenu {
         );
         let reconnect =
             MenuItem::with_id("mistterm.terminal.reconnect", l.reconnect, true, None);
+        let batch_exec = MenuItem::with_id(
+            "mistterm.terminal.batch_exec",
+            l.batch_exec,
+            true,
+            None,
+        );
         terminal_menu.append(&new_session)?;
         terminal_menu.append(&new_tab)?;
         terminal_menu.append(&local_shell)?;
@@ -259,6 +265,8 @@ impl NativeAppMenu {
         terminal_menu.append(&PredefinedMenuItem::separator())?;
         terminal_menu.append(&disconnect)?;
         terminal_menu.append(&reconnect)?;
+        terminal_menu.append(&PredefinedMenuItem::separator())?;
+        terminal_menu.append(&batch_exec)?;
 
         // ── 编辑 ──
         // 勿使用 PredefinedMenuItem::copy/paste/select_all：与下方终端项重复，
@@ -365,15 +373,19 @@ impl NativeAppMenu {
         team_menu.append(&PredefinedMenuItem::separator())?;
         team_menu.append(&cloud)?;
 
-        // ── 工具 ──
+        // ── 工具（四段：片段与发送 / 历史 / 规则 / 账号与数据）──
         let tools = Submenu::new(l.tools_menu, true);
-        let rule_manager =
-            MenuItem::with_id("mistterm.tools.rule_manager", l.rule_manager, true, None);
         let fragments =
             MenuItem::with_id("mistterm.tools.fragments", l.fragment_library, true, None);
         let quick_fragments = MenuItem::with_id(
             "mistterm.tools.quick_fragments",
             l.quick_fragments,
+            true,
+            None,
+        );
+        let send_sequences = MenuItem::with_id(
+            "mistterm.tools.send_sequences",
+            l.send_sequences,
             true,
             None,
         );
@@ -392,30 +404,26 @@ impl NativeAppMenu {
                 Code::KeyP,
             )),
         );
-        let send_sequences = MenuItem::with_id(
-            "mistterm.tools.send_sequences",
-            l.send_sequences,
-            true,
-            None,
-        );
-        let batch_exec =
-            MenuItem::with_id("mistterm.tools.batch_exec", l.batch_exec, true, None);
+        let rule_manager =
+            MenuItem::with_id("mistterm.tools.rule_manager", l.rule_manager, true, None);
         let credentials =
             MenuItem::with_id("mistterm.tools.credentials", l.credentials, true, None);
         let session_logs =
             MenuItem::with_id("mistterm.tools.session_logs", l.session_logs, true, None);
-        tools.append(&rule_manager)?;
-        tools.append(&PredefinedMenuItem::separator())?;
+        // 1. 片段与发送
         tools.append(&fragments)?;
         tools.append(&quick_fragments)?;
-        tools.append(&PredefinedMenuItem::separator())?;
         tools.append(&send_sequences)?;
+        tools.append(&PredefinedMenuItem::separator())?;
+        // 2. 历史
         tools.append(&command_history)?;
         tools.append(&paste_history)?;
-        tools.append(&batch_exec)?;
         tools.append(&PredefinedMenuItem::separator())?;
+        // 3. 规则与检查
+        tools.append(&rule_manager)?;
+        tools.append(&PredefinedMenuItem::separator())?;
+        // 4. 账号与数据
         tools.append(&credentials)?;
-        tools.append(&PredefinedMenuItem::separator())?;
         tools.append(&session_logs)?;
 
         // ── 帮助 ──
@@ -713,7 +721,7 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.tools.send_sequences" => Some(MacMenuAction::SendSequences),
         "mistterm.tools.command_history" => Some(MacMenuAction::CommandHistory),
         "mistterm.tools.paste_history" => Some(MacMenuAction::PasteHistory),
-        "mistterm.tools.batch_exec" => Some(MacMenuAction::BatchExec),
+        "mistterm.terminal.batch_exec" | "mistterm.tools.batch_exec" => Some(MacMenuAction::BatchExec),
         "mistterm.tools.credentials" => Some(MacMenuAction::CredentialPanel),
         "mistterm.team.sign_in" | "mistterm.tools.team_account" => Some(MacMenuAction::TeamAccount),
         "mistterm.team.members" => Some(MacMenuAction::TeamMembers),

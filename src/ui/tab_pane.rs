@@ -718,7 +718,7 @@ fn render_one_pane(
                     ui.painter().text(
                         header_rect.right_center() + egui::vec2(-26.0, 0.0),
                         egui::Align2::RIGHT_CENTER,
-                        i18n::tr(ui.ctx(), "Broadcast", "同时输入"),
+                        i18n::tr(ui.ctx(), "Broadcast Input", "广播输入"),
                         egui::FontId::proportional(theme.font_size_caption()),
                         theme.accent_color(),
                     );
