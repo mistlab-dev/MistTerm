@@ -1054,7 +1054,7 @@ impl MonitorPanel {
         show_chart_caption(
             ui,
             theme,
-            loc.tr("Load average", "负载 (load average)"),
+            loc.tr("Load average", "系统负载"),
         );
         show_chart_legend(
             ui,
