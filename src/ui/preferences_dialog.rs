@@ -673,6 +673,29 @@ impl MistTermApp {
                     self.auto_reconnect_enabled = ar;
                 }
                 Self::preferences_row_divider(ui, theme);
+                // #201：窗口/标签回到前台时自动重连（默认关）。
+                let mut fg = self.app_settings.reconnect_on_foreground;
+                if crate::ui::chrome::form_checkbox(
+                    ui,
+                    theme,
+                    &mut fg,
+                    crate::i18n::tr(
+                        ctx,
+                        "Reconnect when the window or tab becomes active again",
+                        "回到窗口/标签时自动重连",
+                    ),
+                )
+                .on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Off by default. Only for unexpected drops (timeout / network) — not when you click Disconnect. Output and scrollback are kept.",
+                    "默认关闭。仅对意外断线（超时/网络）生效；你手动点「断开」不会重连。终端输出与滚动缓冲保留。",
+                ))
+                .changed()
+                {
+                    self.app_settings.reconnect_on_foreground = fg;
+                    let _ = self.app_settings.save();
+                }
+                Self::preferences_row_divider(ui, theme);
                 let mut ka = self.default_keepalive_enabled;
                 if crate::ui::chrome::form_checkbox(
                     ui,

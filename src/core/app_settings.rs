@@ -41,6 +41,9 @@ pub struct AppSettings {
     /// 注意：若环境变量 `MISTTERM_DISABLE_MODULES` 同时存在，env 中的模块强制禁用（优先级更高）。
     #[serde(default)]
     pub disabled_modules: Vec<String>,
+    /// #201：窗口/标签回到前台时自动重连（默认关；仅意外断开，保留输出）。
+    #[serde(default)]
+    pub reconnect_on_foreground: bool,
 }
 
 fn default_true() -> bool {
@@ -61,6 +64,7 @@ impl Default for AppSettings {
             default_local_dir: String::new(),
             remember_paste_history: true,
             disabled_modules: Vec::new(),
+            reconnect_on_foreground: false,
         }
     }
 }
