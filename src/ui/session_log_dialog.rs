@@ -142,8 +142,14 @@ impl SessionLogDialog {
         let mut reload = false;
         let mut copy_all = false;
         let display = self.filtered_content();
-        let display_for_view = if display.is_empty() {
-            crate::i18n::tr(ctx, "(No matches)", "(无匹配内容)").to_string()
+        // #240：筛选无命中时给出下一步（换关键词 / 清空），对齐 #215 空态。
+        let display_for_view = if display.is_empty() && !self.search_query.trim().is_empty() {
+            crate::i18n::tr(
+                ctx,
+                "No matches. Try another keyword, or clear the filter.",
+                "没有匹配的内容。换个关键词，或清空筛选。",
+            )
+            .to_string()
         } else {
             display
         };
