@@ -76,6 +76,7 @@ pub use port_forward::{
 pub use socks_proxy::{spawn_dynamic_forward_controllable, DynamicPortForward};
 pub use jump::{JumpHop, parse_jump_chain, parse_jump_endpoint};
 pub use user_facing::{fido2_connect_hint, format_ssh_connect_error};
+pub use known_hosts::{parse_host_key_changed, replace_host_key, HostKeyChanged};
 pub use sftp::{
     RemoteNode, SftpClient, SftpEntry, TransferProgress, TransferResult, WriteMode,
 };
