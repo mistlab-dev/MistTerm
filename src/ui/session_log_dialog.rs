@@ -72,7 +72,7 @@ impl SessionLogDialog {
         self.open = true;
     }
 
-    fn reload_content(&mut self, ctx: &egui::Context, settings: &SessionLogSettings) {
+    fn reload_content(&mut self, ctx: &egui::Context, _settings: &SessionLogSettings) {
         self.content.clear();
         if let Some(path) = self.log_files.get(self.selected_file) {
             match read_log_tail(path, LOG_TAIL_READ_BYTES) {
@@ -98,25 +98,26 @@ impl SessionLogDialog {
                     };
                 }
                 Err(e) => {
+                    // #234：主文白话；不把绝对路径摊在第一行。
                     self.content = format!(
-                        "{}{}\n{}{}",
-                        crate::i18n::tr(ctx, "Failed to read log: ", "无法读取日志："),
-                        e,
-                        crate::i18n::tr(ctx, "Path: ", "路径："),
-                        path.display()
+                        "{}\n{}",
+                        crate::i18n::tr(
+                            ctx,
+                            "Couldn't open this log.",
+                            "打不开这份日志。",
+                        ),
+                        e
                     );
                 }
             }
         } else if self.log_files.is_empty() {
-            self.content = format!(
-                "{}\n{}{}",
-                crate::i18n::tr(ctx, "No session log files yet.", "暂无日志文件。"),
-                crate::i18n::tr(ctx, "Directory: ", "目录："),
-                settings
-                    .base_dir
-                    .join(sanitize_dir_hint(&self.session_id))
-                    .display()
-            );
+            // #232：为什么空 + 下一步；目录路径不进主文。
+            self.content = crate::i18n::tr(
+                ctx,
+                "No session logs yet. Turn on Session log in Preferences, then use the terminal so output can be recorded.",
+                "还没有会话日志。先在偏好里打开「终端日志」，再在会话里产生输出，录制后会出现在这里。",
+            )
+            .to_string();
         }
     }
 
@@ -233,8 +234,13 @@ impl SessionLogDialog {
                     }
                     ui.add_space(theme.spacing_sm());
                     let log_h = 280.0_f32;
+                    // #232：跟模态正文同色，去掉单独灰 inset；发丝描边标出滚动区。
                     egui::Frame::none()
-                        .fill(theme.color_subtle_inset_fill())
+                        .fill(theme.color_panel_surface())
+                        .stroke(egui::Stroke::new(
+                            theme.hairline_width(ui.ctx()),
+                            theme.color_panel_header_divider(),
+                        ))
                         .rounding(4.0)
                         .inner_margin(egui::Margin::symmetric(8.0, 6.0))
                         .show(ui, |ui| {
@@ -324,14 +330,3 @@ impl SessionLogDialog {
     }
 }
 
-fn sanitize_dir_hint(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
-}

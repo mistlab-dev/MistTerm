@@ -625,7 +625,7 @@ fn session_exec_endpoint(manager: &crate::core::SessionManager, session_id: &str
 
 impl MistTermApp {
     /// 拦截后尝试推一条合规片段：有命中则带「用到终端」+(团队来源时)「存到个人库」。
-    /// 无命中：短提示「暂无团队替代」+ 可选「问 AI」。
+    /// 无命中：短提示「团队库里没有匹配」+ 可选「问 AI」。
     fn notify_block_with_compliant_suggestion(
         &mut self,
         ctx: &egui::Context,
@@ -644,7 +644,7 @@ impl MistTermApp {
             Some(&env),
         );
         let Some(suggestion) = suggestion else {
-            let tip = crate::i18n::tr(ctx, "No team alternative yet", "暂无团队替代");
+            let tip = crate::i18n::tr(ctx, "Nothing matched in the team library", "团队库里没有匹配");
             let text = if body.is_empty() {
                 tip.to_string()
             } else {
