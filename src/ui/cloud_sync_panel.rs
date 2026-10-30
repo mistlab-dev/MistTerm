@@ -212,12 +212,12 @@ impl CloudSyncPanel {
         key.save();
         self.message = if zh {
             if rotated {
-                "同步口令已更新。恢复码未变；请保管下面的恢复码。云端解封不用本机 device_key。".into()
+                "同步口令已更新。恢复码未变；请保管下面的恢复码。云端解封不依赖本机密钥。".into()
             } else {
                 "已保存同步口令，并生成恢复码。请立即抄下恢复码。丢失口令和恢复码后，云端凭证无法解开，本机数据不会被删。".into()
             }
         } else if rotated {
-            "Sync passphrase updated. The recovery code is unchanged. Cloud unwrap does not use this machine's device_key.".into()
+            "Sync passphrase updated. The recovery code is unchanged. Cloud unwrap does not use this machine's local key.".into()
         } else {
             "Sync passphrase saved and a recovery code generated. Copy the recovery code now. If both are lost, cloud credentials cannot be unwrapped. Local data is not deleted.".into()
         };
@@ -235,9 +235,9 @@ impl CloudSyncPanel {
         }
         self.recovery_reveal = key.recovery_code;
         self.message = if zh {
-            "恢复码只存在本机（device_key 加密）和你抄下的副本里，服务器没有。".into()
+            "恢复码只存在本机加密存储和你抄下的副本里，服务器没有。".into()
         } else {
-            "The recovery code exists only in this machine's device_key file and in the copy you saved. The server does not have it.".into()
+            "The recovery code exists only in this machine's encrypted local store and in the copy you saved. The server does not have it.".into()
         };
     }
 
@@ -333,12 +333,26 @@ impl CloudSyncPanel {
                 chrome::rich_caption(
                     theme,
                     loc.tr(
-                        "Off by default. When on, session passwords and vault secrets are sealed with your sync passphrase (Argon2id + AES-256-GCM) before upload. The server stores ciphertext and a kdf hint only. This machine's device_key cannot unwrap another machine. You keep the passphrase and recovery code; if both are lost, cloud credentials cannot be opened and local data is not deleted. A wrong passphrase is reported and does not overwrite the cloud copy.",
-                        "默认关闭。开启后，会话密码和凭证库秘密先用同步口令（Argon2id + AES-256-GCM）封好再上传。服务器只存密文和 kdf_hint。本机 device_key 不能解开另一台机器的信封。口令和恢复码由你保管；两者都丢失时，云端凭证无法打开，本机数据不会被删。口令错误会提示，且不会覆盖云端副本。",
+                        "Off by default. When on, session passwords and vault secrets are sealed with your sync passphrase before upload. The server stores ciphertext only. You keep the passphrase and recovery code; if both are lost, cloud credentials cannot be opened and local data is not deleted. A wrong passphrase is reported and does not overwrite the cloud copy.",
+                        "默认关闭。开启后，会话密码和凭证库秘密先用同步口令加密再上传。服务器只存密文。口令和恢复码由你保管；两者都丢失时，云端凭证无法打开，本机数据不会被删。口令错误会提示，且不会覆盖云端副本。",
                     ),
                 )
                 .color(theme.color_form_hint()),
             );
+            egui::CollapsingHeader::new(loc.tr("Advanced", "高级"))
+                .id_source("cloud_sync_credentials_advanced")
+                .show(ui, |ui| {
+                    ui.label(
+                        chrome::rich_caption(
+                            theme,
+                            loc.tr(
+                                "Technical: sealed with Argon2id + AES-256-GCM; server stores ciphertext and a kdf hint. This machine's device key cannot unwrap another machine's envelope.",
+                                "技术细节：使用 Argon2id + AES-256-GCM 封存；服务器只存密文和密钥派生提示。本机密钥不能解开另一台机器的信封。",
+                            ),
+                        )
+                        .color(theme.color_form_hint()),
+                    );
+                });
             ui.add_space(theme.spacing_xs());
             chrome::form_field_label(ui, theme, loc.tr("Sync passphrase", "同步口令"));
             chrome::form_singleline_field(
@@ -493,8 +507,8 @@ impl CloudSyncPanel {
                 chrome::rich_caption(
                     theme,
                     loc.tr(
-                        "Local SSH does not require an account. Team tokens are never exported.",
-                        "未登录时本机 SSH 与原来一样。同步包不含 team_tokens。",
+                        "Local SSH does not require an account. Team sign-in tokens are never exported.",
+                        "未登录时本机 SSH 与原来一样。同步包不含团队登录令牌。",
                     ),
                 )
                 .color(theme.color_form_hint()),
@@ -829,8 +843,8 @@ impl CloudSyncPanel {
                     imported_portable_hosts = true;
                     let mut line = loc
                         .tr(
-                            "Hosts: merged from hosts.json (passwords unchanged unless the pack included credentials)",
-                            "主机：已按 hosts.json 合并（未含凭证时保留本机密码）",
+                            "Hosts: merged from the pack (passwords unchanged unless the pack included credentials)",
+                            "主机：已从同步包合并（未含凭证时保留本机密码）",
                         )
                         .to_string();
                     if !note.is_empty() {
@@ -1221,8 +1235,8 @@ impl CloudSyncPanel {
                                     theme,
                                     &mut self.settings.sync_shortcuts,
                                     loc.tr(
-                                        "Preferences (settings.json)",
-                                        "偏好设置 (settings.json)",
+                                        "Preferences",
+                                        "偏好设置",
                                     ),
                                 );
                                 chrome::form_checkbox(
@@ -1237,8 +1251,8 @@ impl CloudSyncPanel {
                                 chrome::rich_caption(
                                     theme,
                                     loc.tr(
-                                        "Hosts are written to hosts.json without passwords or private key files. Credentials, if checked, use the sync passphrase (not this machine's device_key).",
-                                        "主机会写入 hosts.json，不含密码和私钥文件。勾选凭证时用同步口令加密，不用本机 device_key。",
+                                        "Hosts are exported without passwords or private key files. Credentials, if checked, are sealed with the sync passphrase—not this machine's local key.",
+                                        "主机会导出，不含密码和私钥文件。勾选凭证时用同步口令加密，不用本机密钥。",
                                     ),
                                 )
                                 .color(theme.color_form_hint()),
@@ -1286,8 +1300,8 @@ impl CloudSyncPanel {
                                 theme,
                                 &mut self.merge_fragments_on_package_import,
                                 loc.tr(
-                                    "Merge with existing library (skip duplicate ids)",
-                                    "与现有库合并(按 id 跳过重复)",
+                                    "Merge with existing library (skip entries already present)",
+                                    "与现有库合并，跳过已有条目",
                                 ),
                             );
                             ui.label(

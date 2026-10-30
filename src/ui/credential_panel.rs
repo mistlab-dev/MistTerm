@@ -382,16 +382,25 @@ impl CredentialPanel {
             ui,
             theme,
             &mut panel.form_use_vault,
-            i18n::tr(ui.ctx(), "Secret stored in HashiCorp Vault (KV)", "机密存于 HashiCorp Vault(KV)"),
+            i18n::tr(ui.ctx(), "Secret stored in HashiCorp Vault", "机密存于 HashiCorp Vault"),
         );
         if panel.form_use_vault {
+            ui.label(
+                egui::RichText::new(i18n::tr(
+                    ui.ctx(),
+                    "Uses the Vault KV secrets engine.",
+                    "使用 Vault 的 KV 密钥引擎。",
+                ))
+                .size(theme.font_size_caption())
+                .color(theme.color_form_hint()),
+            );
             if panel.form_vault_mount.is_empty() {
                 panel.form_vault_mount = vault_settings.default_mount.clone();
             }
             chrome::form_field_label(
                 ui,
                 theme,
-                i18n::tr(ui.ctx(), "Vault mount", "Vault 挂载"),
+                i18n::tr(ui.ctx(), "Mount", "挂载"),
             );
             chrome::form_singleline_field(
                 ui,
@@ -405,7 +414,7 @@ impl CredentialPanel {
             chrome::form_field_label(
                 ui,
                 theme,
-                i18n::tr(ui.ctx(), "KV path", "路径 path"),
+                i18n::tr(ui.ctx(), "Path", "路径"),
             );
             chrome::form_singleline_field(
                 ui,
@@ -419,7 +428,7 @@ impl CredentialPanel {
             chrome::form_field_label(
                 ui,
                 theme,
-                i18n::tr(ui.ctx(), "KV field", "字段 field"),
+                i18n::tr(ui.ctx(), "Field", "字段"),
             );
             chrome::form_singleline_field(
                 ui,

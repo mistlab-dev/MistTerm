@@ -44,8 +44,8 @@ impl UpdateError {
         let t = |en: &str, cn: &str| if zh { cn.to_string() } else { en.to_string() };
         match self {
             UpdateError::DisabledByEnv => t(
-                "Update checks are turned off on this computer (MIST_DISABLE_UPDATE_CHECK).",
-                "这台电脑关闭了检查更新（MIST_DISABLE_UPDATE_CHECK）。",
+                "Update checks are turned off on this computer with an advanced setting.",
+                "这台电脑用高级方式关闭了检查更新。",
             ),
             UpdateError::NoTrustedKeys => t(
                 "This build can't verify updates, so it won't check for them. Download new versions from the website.",

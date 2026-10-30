@@ -86,13 +86,22 @@ impl VaultSecretForm {
             &mut self.use_vault,
             crate::i18n::tr(
                 &ctx_owned,
-                "Store password/key in HashiCorp Vault (KV)",
-                "密码/密钥存于 HashiCorp Vault(KV)",
+                "Store password/key in HashiCorp Vault",
+                "密码/密钥存于 HashiCorp Vault",
             ),
         );
         if !self.use_vault {
             return;
         }
+        ui.label(
+            egui::RichText::new(crate::i18n::tr(
+                ui.ctx(),
+                "Uses the Vault KV secrets engine.",
+                "使用 Vault 的 KV 密钥引擎。",
+            ))
+            .size(theme.font_size_caption())
+            .color(theme.color_form_hint()),
+        );
         if !vault_settings.enabled {
             ui.label(
                 egui::RichText::new(crate::i18n::tr(
@@ -107,7 +116,11 @@ impl VaultSecretForm {
         if self.mount.is_empty() {
             self.mount = vault_settings.default_mount.clone();
         }
-        chrome::form_field_label(ui, theme, "Vault mount");
+        chrome::form_field_label(
+            ui,
+            theme,
+            crate::i18n::tr(ui.ctx(), "Mount", "挂载"),
+        );
         chrome::form_singleline_field(
             ui,
             theme,
@@ -120,7 +133,7 @@ impl VaultSecretForm {
         chrome::form_field_label(
             ui,
             theme,
-            crate::i18n::tr(ui.ctx(), "path", "路径 path"),
+            crate::i18n::tr(ui.ctx(), "Path", "路径"),
         );
         chrome::form_singleline_field(
             ui,
@@ -134,7 +147,7 @@ impl VaultSecretForm {
         chrome::form_field_label(
             ui,
             theme,
-            crate::i18n::tr(ui.ctx(), "field", "字段 field"),
+            crate::i18n::tr(ui.ctx(), "Field", "字段"),
         );
         chrome::form_singleline_field(
             ui,

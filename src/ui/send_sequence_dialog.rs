@@ -164,8 +164,8 @@ impl SendSequenceDialog {
                         ui.label(
                             egui::RichText::new(crate::i18n::tr(
                                 ctx,
-                                "No sequences yet",
-                                "还没有发送序列",
+                                "No send sequences yet. Create one to send multiple lines, in order, to the current connected session.",
+                                "还没有发送序列。新建一条，把多行命令按顺序发到当前已连接的会话。",
                             ))
                             .size(theme.font_size_caption())
                             .color(theme.text_tertiary()),

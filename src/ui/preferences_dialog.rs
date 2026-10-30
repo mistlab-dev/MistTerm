@@ -1062,7 +1062,7 @@ impl MistTermApp {
                 crate::ui::chrome::form_field_label(
                     ui,
                     theme,
-                    crate::i18n::tr(ctx, "Token", "Token"),
+                    crate::i18n::tr(ctx, "Token", "令牌"),
                 );
                 crate::ui::chrome::form_singleline_field(
                     ui,
@@ -1072,7 +1072,7 @@ impl MistTermApp {
                     crate::i18n::tr(
                         ctx,
                         "Enter token, then click Save",
-                        "输入 Token 后点「保存」",
+                        "输入令牌后点「保存」",
                     ),
                     pref_w,
                     true,
@@ -1097,7 +1097,7 @@ impl MistTermApp {
                             crate::i18n::tr(
                                 ctx,
                                 "Vault token saved to keychain",
-                                "Token 已保存到钥匙串",
+                                "令牌已保存到钥匙串",
                             )
                             .to_string(),
                         );
@@ -1227,8 +1227,8 @@ impl MistTermApp {
                 ui.label(
                     RichText::new(crate::i18n::tr(
                         ctx,
-                        "When team audit is on, Enter uses the same local block/confirm/allow check as snippets and writes one JSONL line. Off: Enter is sent immediately. Without a team login, typing is unchanged.",
-                        "团队审计生效时, 回车与片段一样先做本地拦截/确认/放行, 并写一条 JSONL。关闭后回车立即发出。未登录团队时, 打字行为不变。",
+                        "When team audit is on, Enter uses the same local block/confirm/allow check as snippets and records one local audit entry. Off: Enter is sent immediately. Without a team login, typing is unchanged.",
+                        "团队审计生效时，回车与片段一样先做本地拦截/确认/放行，并记一条本地审计。关闭后回车立即发出。未登录团队时，打字行为不变。",
                     ))
                     .size(theme.font_size_small())
                     .color(text_low),
