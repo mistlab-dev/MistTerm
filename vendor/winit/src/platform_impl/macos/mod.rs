@@ -21,6 +21,7 @@ use std::{fmt, ops::Deref};
 
 use self::window::WinitWindow;
 use self::window_delegate::WinitWindowDelegate;
+pub(crate) use self::view::set_caught_draw_rect_panic_hook;
 pub(crate) use self::{
     event_loop::{
         EventLoop, EventLoopProxy, EventLoopWindowTarget, PlatformSpecificEventLoopAttributes,

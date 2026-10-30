@@ -13,6 +13,8 @@
 //! - 捕获边界（#189 P1）：Rust `panic!` hook 可落盘；`panic_cannot_unwind` /
 //!   ObjC 回调里 panic 进程 abort，hook 多数仍能写盘但无 UI（下次启动提示补上）；
 //!   纯原生 SIGSEGV/SIGBUS 当前无本机报告（crashpad 不在本票范围）。
+//! - #188：macOS `drawRect:` 外包 `catch_unwind` 后进程可继续；panic hook 仍会先写
+//!   `crash-*.log`，另由 [`write_caught_ffi_note`] 标注 caught-in-FFI。
 //!   这类「没有新的 crash-*.log」的异常退出靠 `launch_seen`：第一次安装不提示，
 //!   之后若本次启动晚于上次 `last_run.ok`，仍弹一次。确认只发生在用户关掉窗口之后
 //!   的正常退出（写 stamp），启动检测本身不写确认。
@@ -268,6 +270,36 @@ fn write_crash_report(info: &std::panic::PanicHookInfo<'_>) {
     eprintln!("\n{body}");
 }
 
+/// #188：FFI 边界 `catch_unwind` 之后补一条 caught-in-FFI 标注（进程已继续）。
+///
+/// panic hook 通常已写过带 backtrace 的 `crash-*.log`；本函数再写一份短注，
+/// 方便和「未捕获 abort」区分。失败静默。
+pub fn write_caught_ffi_note(context: &str) {
+    let body = format!(
+        "MistTerm crash report (caught-in-FFI, process continued)\n=====================\n\
+         version: {}\nos: {} {}\n\
+         time: {}\n\
+         thread: {}\n\
+         context: {}\n\
+         note: panic was caught at ObjC FFI boundary; sibling crash-*.log from the panic hook holds the backtrace.\n",
+        crate::platform::APP_VERSION,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        chrono::Local::now().to_rfc3339(),
+        std::thread::current().name().unwrap_or("<unnamed>"),
+        context,
+    );
+    if let Ok(dir) = ensure_crash_report_dir() {
+        let ts = chrono::Local::now().format("%Y%m%d-%H%M%S%.3f");
+        let path = dir.join(format!("crash-{ts}-caught-ffi.log"));
+        if let Ok(mut f) = std::fs::File::create(&path) {
+            let _ = f.write_all(body.as_bytes());
+        }
+        prune_old_reports(&dir);
+    }
+    eprintln!("\n{body}");
+}
+
 fn payload_string(info: &std::panic::PanicHookInfo<'_>) -> String {
     let payload = info.payload();
     if let Some(s) = payload.downcast_ref::<&str>() {
@@ -324,6 +356,12 @@ mod tests {
     fn install_is_idempotent() {
         install();
         install(); // 第二次不应 panic / 不重复设置
+    }
+
+    #[test]
+    fn write_caught_ffi_note_does_not_panic() {
+        // Writes under the real logs/crash-reports dir (best-effort); must not panic.
+        write_caught_ffi_note("drawRect:#188-test");
     }
 
     #[test]

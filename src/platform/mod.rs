@@ -73,6 +73,10 @@ pub fn run_gui() {
     {
         set_application_display_name();
         activate_gui_application();
+        // #188: after drawRect catch_unwind, annotate crash-reports as caught-in-FFI.
+        winit::platform::macos::set_caught_draw_rect_panic_hook(|| {
+            crate::core::crash_reporter::write_caught_ffi_note("drawRect");
+        });
     }
 
     apply_preferred_english_input_source();
