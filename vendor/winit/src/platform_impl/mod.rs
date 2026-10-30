@@ -5,6 +5,9 @@ use crate::window::Fullscreen as RootFullscreen;
 /// X11 keeps its own XKeyEvent helper (keycode 0 / modifier map) with the same rule.
 mod ime_bypass;
 
+/// MistTerm #188: illegal physical-size guard for macOS drawRect / Resized.
+mod redraw_guard;
+
 #[cfg(windows_platform)]
 #[path = "windows/mod.rs"]
 mod platform;

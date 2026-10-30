@@ -2,6 +2,7 @@
 
 use std::{boxed::Box, os::raw::*, ptr, str, sync::Mutex};
 
+use once_cell::sync::OnceCell;
 use objc2::declare::{Ivar, IvarDrop};
 use objc2::foundation::{
     NSArray, NSAttributedString, NSAttributedStringKey, NSCopying, NSMutableAttributedString,
@@ -34,6 +35,17 @@ use crate::{
     },
     window::WindowId,
 };
+
+/// MistTerm #188: optional app hook after a panic inside `drawRect:` was caught.
+static CAUGHT_DRAW_RECT_PANIC_HOOK: OnceCell<fn()> = OnceCell::new();
+
+/// Register a hook invoked after `drawRect:` catch_unwind observes a panic.
+///
+/// The Rust panic hook usually already wrote `crash-*.log`; MistTerm uses this
+/// to append a caught-in-FFI note so startup notice / logs show the path.
+pub(crate) fn set_caught_draw_rect_panic_hook(hook: fn()) {
+    let _ = CAUGHT_DRAW_RECT_PANIC_HOOK.set(hook);
+}
 
 #[derive(Debug)]
 pub struct CursorState {
@@ -236,14 +248,60 @@ declare_class!(
             // 2. Even when a window resize does occur on a new tabbed window, it contains the wrong size (includes tab height).
             let logical_size = LogicalSize::new(rect.size.width as f64, rect.size.height as f64);
             let size = logical_size.to_physical::<u32>(self.scale_factor());
-            self.queue_event(WindowEvent::Resized(size));
+            // MistTerm #188: drop illegal Resized during tile-resize / lock-screen wake.
+            if crate::platform_impl::redraw_guard::is_sane_redraw_physical_size(
+                size.width,
+                size.height,
+            ) {
+                self.queue_event(WindowEvent::Resized(size));
+            } else {
+                log::warn!(
+                    "MistTerm #188: dropping Resized with illegal physical size {}x{}",
+                    size.width,
+                    size.height
+                );
+            }
         }
 
         #[sel(drawRect:)]
         fn draw_rect(&mut self, rect: NSRect) {
             trace_scope!("drawRect:");
 
-            AppState::handle_redraw(self.window_id());
+            // MistTerm #188: size gate + catch_unwind so tile-resize / lock-screen
+            // wake panics inside glow/eframe do not cross the ObjC FFI boundary and
+            // abort via panic_cannot_unwind. See vendor/winit/MISTTERM_PATCH.md.
+            let window_id = self.window_id();
+            let physical = {
+                let frame = self.frame();
+                let logical =
+                    LogicalSize::new(frame.size.width as f64, frame.size.height as f64);
+                logical.to_physical::<u32>(self.scale_factor())
+            };
+
+            if !crate::platform_impl::redraw_guard::is_sane_redraw_physical_size(
+                physical.width,
+                physical.height,
+            ) {
+                log::warn!(
+                    "MistTerm #188: skipping RedrawRequested for illegal physical size {}x{} (tile-resize/lock-screen?)",
+                    physical.width,
+                    physical.height
+                );
+                AppState::queue_redraw(window_id);
+            } else {
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    AppState::handle_redraw(window_id);
+                }));
+                if result.is_err() {
+                    log::error!(
+                        "MistTerm #188: drawRect/handle_redraw panicked at ObjC FFI boundary (caught); frame skipped, requesting redraw"
+                    );
+                    if let Some(hook) = CAUGHT_DRAW_RECT_PANIC_HOOK.get() {
+                        hook();
+                    }
+                    AppState::queue_redraw(window_id);
+                }
+            }
 
             #[allow(clippy::let_unit_value)]
             unsafe {
