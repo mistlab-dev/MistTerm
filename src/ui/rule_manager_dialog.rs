@@ -314,12 +314,14 @@ impl RuleManagerDialog {
             .collapsible(false)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
-                    let _ = crate::ui::chrome::modal_header(
+                    if crate::ui::chrome::modal_header(
                         ui,
                         theme,
                         crate::i18n::tr(ctx, "About automation rules", "关于自动化规则"),
                         theme.font_size_modal_title(),
-                    );
+                    ) {
+                        self.intro_open = false;
+                    }
                     ui.label(
                         egui::RichText::new(crate::i18n::tr(
                             ctx,
