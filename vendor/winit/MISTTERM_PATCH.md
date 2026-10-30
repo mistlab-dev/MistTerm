@@ -61,6 +61,8 @@ MistTerm hotfix (scheme A; does **not** bump eframe/egui/winit):
    caught-in-FFI crash note), and `queue_redraw`. The Rust panic hook still runs before
    the catch completes, so the usual `crash-*.log` backtrace is preserved while the
    process stays alive.
+Public hook in `platform/macos.rs` calls `crate::platform_impl::set_caught_draw_rect_panic_hook` (re-exported via `pub use self::platform::*`); do not path through the private `platform` module name.
+
 3. **Out of scope for this patch** — upgrading eframe/egui/winit, switching the runtime
    renderer to wgpu.
 
