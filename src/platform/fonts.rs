@@ -181,8 +181,7 @@ pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSele
         let mut mono_data = egui::FontData::from_owned(bytes);
         mono_data.index = index;
         let mono_data = mono_data.tweak(egui::FontTweak {
-            y_offset_factor: 0.02,
-            baseline_offset_factor: -0.02,
+            y_offset_factor: 0.0,
             ..Default::default()
         });
         fonts.font_data.insert(mono_name.clone(), std::sync::Arc::new(mono_data));
@@ -195,7 +194,7 @@ pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSele
 
     let loaded = if let Some(cjk_font) = load_cjk_font() {
         let cjk_name = CJK_UI_FONT_NAME.to_string();
-        fonts.font_data.insert(cjk_name.clone(), std::sync::Arc::new(cjk_font));
+        fonts.font_data.insert(cjk_name.clone(), cjk_font);
 
         // 界面：CJK 置顶为唯一首选，中英混排同一字形/基线；egui 默认拉丁仅作缺字兜底。
         {

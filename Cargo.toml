@@ -147,7 +147,7 @@ alacritty_terminal = "0.26.0"
 portable-pty = "0.8"
 # ZMODEM 协议（lrzsz 路径专用；与 SFTP / cat 直传无关）
 zmodem2 = { path = "vendor/zmodem2" }
-egui_plot = "0.37"
+egui_plot = "0.38"
 pulldown-cmark = "0.11"
 genpdf = "0.2"
 

@@ -217,6 +217,7 @@ mod tests {
     fn key_press(key: Key, modifiers: Modifiers) -> Event {
         Event::Key {
             key,
+            physical_key: None,
             pressed: true,
             repeat: false,
             modifiers,
@@ -377,10 +378,12 @@ mod tests {
         std::thread::spawn(move || {
             let ctx = egui::Context::default();
             // 首帧窗口焦点状态变化时 egui 会清空修饰键，先空跑一帧。
-            let _ = ctx.run(egui::RawInput::default(), |_| {});
+            let _ = ctx.run_pass(egui::RawInput::default(), |_| {});
             let raw = egui::RawInput {
-                modifiers: primary_only(),
-                events: vec![Event::Text(",".to_string())],
+                events: vec![
+                    Event::ModifiersChanged(primary_only()),
+                    Event::Text(",".to_string()),
+                ],
                 ..Default::default()
             };
             let mut hit = false;

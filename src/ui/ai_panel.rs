@@ -489,7 +489,7 @@ fn ops_metric_value_row(
     let gap = theme.spacing_xs().max(4.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = gap;
-        let value_w = ui.fonts(|f| {
+        let value_w = ui.fonts_mut(|f| {
             f.layout_no_wrap(
                 value.to_owned(),
                 egui::FontId::monospace(px),
@@ -1122,25 +1122,29 @@ impl AiPanel {
             return;
         }
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::Panel::right(layout_util::AI_PANEL_ID)
-            .default_size(def_w)
-            .min_size(min_w)
-            .max_size(max_w)
-            .resizable(true)
-            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-            .show(ctx, |ui| {
-                let h = ui.available_height().max(1.0);
-                let w = ui.available_width().max(1.0);
-                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-            });
+        ctx.root_ui(|root| {
+            egui::Panel::right(layout_util::AI_PANEL_ID)
+                .default_size(def_w)
+                .min_size(min_w)
+                .max_size(max_w)
+                .resizable(true)
+                .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
+                .show(root, |ui| {
+                    let h = ui.available_height().max(1.0);
+                    let w = ui.available_width().max(1.0);
+                    ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                });
+        });
         let dock_inset = theme.spacing_right_dock_screen_inset();
-        let slot = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
-        crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
-        self.last_panel_slot_rect = Some(slot);
-        if let Some(slot) = self.last_panel_slot_rect {
+        // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
+        if let Some(state_rect) = layout_util::side_panel_state_rect(ctx, layout_util::AI_PANEL_ID) {
+            let screen = ctx.content_rect();
+            let mut slot = state_rect;
+            slot.min.x = screen.max.x - slot.width();
+            slot.max.x = screen.max.x - dock_inset;
+            crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
+            self.last_panel_slot_rect = Some(slot);
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
-        } else {
-            layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
         }
     }
 
@@ -1331,7 +1335,7 @@ impl AiPanel {
                                         .clicked()
                                         {
                                             switch_to = Some(key.clone());
-                                            ui.memory_mut(|m| m.close_popup());
+                                            egui::Popup::close_id(ui.ctx(), ui.make_persistent_id("ai_history_popup"));
                                         }
                                     } else if crate::ui::chrome::chrome_small_button(
                                         ui, theme, &text,
@@ -1339,7 +1343,7 @@ impl AiPanel {
                                     .clicked()
                                     {
                                         switch_to = Some(key.clone());
-                                        ui.memory_mut(|m| m.close_popup());
+                                        egui::Popup::close_id(ui.ctx(), ui.make_persistent_id("ai_history_popup"));
                                     }
                                 }
                             });
@@ -1970,8 +1974,7 @@ impl AiPanel {
             .max_height(scroll_h)
             .auto_shrink([false; 2])
             .stick_to_bottom(true)
-            .drag_to_scroll(false)
-            .show(ui, |ui| {
+                        .show(ui, |ui| {
                 bind_row_width(ui);
                 ui.add_space(theme.spacing_xs());
                 if self.messages.is_empty() && !self.busy {
@@ -2003,7 +2006,7 @@ impl AiPanel {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
                         ui.set_min_height(chip_h);
-                        ui.set_enabled(chips_enabled);
+                        if !chips_enabled { ui.disable(); }
                         for (label, action) in self.quick_action_chips(ctx) {
                             if crate::ui::chrome::panel_quick_prompt_chip(ui, theme, &label)
                                 .on_hover_text(i18n::tr(ctx, "Fill input", "填入输入框"))
@@ -2905,7 +2908,7 @@ impl AiPanel {
                     };
 
                     egui::ScrollArea::vertical()
-                        .id(format!("host_inspector_scroll_{msg_index}_{sel_idx}"))
+                        .id_salt(format!("host_inspector_scroll_{msg_index}_{sel_idx}"))
                         .max_height(160.0)
                         .show(ui, |ui| {
                             ops_render_console_output(ui, theme, out);
@@ -3013,7 +3016,7 @@ impl AiPanel {
             self.draft_input = text;
         }
         if let Some(ips) = copy_ips {
-            ui.output_mut(|o| o.copied_text = ips);
+            ui.output_mut(|o| o.commands.push(egui::OutputCommand::CopyText(ips)));
             self.input_status =
                 Some(i18n::tr(ctx, "Copied host IPs", "已复制异常节点 IP").to_string());
         }
@@ -4397,6 +4400,7 @@ fn show_terminal_context_chip(
         theme.radius_category(),
         fill,
         egui::Stroke::new(1.0, theme.accent_alpha(24)),
+        egui::StrokeKind::Inside,
     );
     let icon_rect = egui::Rect::from_min_size(
         egui::pos2(rect.min.x + pad_x, rect.center().y - icon_px * 0.5),
@@ -4408,6 +4412,7 @@ fn show_terminal_context_chip(
         egui::pos2(text_x, rect.center().y - theme.font_size_small() * 0.5),
         ui.painter()
             .layout_no_wrap(label, font, text_color),
+        text_color,
     );
     if response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);

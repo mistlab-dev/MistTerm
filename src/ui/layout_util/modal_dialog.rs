@@ -160,7 +160,7 @@ pub fn modal_about_size_for_content(
     let sh = screen.height().max(280.0);
 
     let measure = |text: &str, font: egui::FontId| -> egui::Vec2 {
-        ctx.fonts(|fonts| {
+        ctx.fonts_mut(|fonts| {
             fonts
                 .layout_no_wrap(text.to_owned(), font, egui::Color32::WHITE)
                 .size()
@@ -201,7 +201,7 @@ pub fn modal_about_size_for_content(
         .max(modal_about_size(ctx).x)
         .clamp(520.0, (sw - 48.0).min(680.0));
 
-    let item_spacing_y = ctx.style().spacing.item_spacing.y;
+    let item_spacing_y = ctx.global_style().spacing.item_spacing.y;
     let line_h = shortcuts_line_sizes
         .first()
         .map(|size| size.y)

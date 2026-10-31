@@ -542,7 +542,7 @@ fn render_node(
                     egui::pos2(area.min.x + w1 + splitter, area.min.y),
                     egui::vec2(w2, h),
                 );
-                ui.scope_builder(egui::UiBuilder::new().max_rect(left, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
                     ui.set_clip_rect(left.intersect(ui.clip_rect()));
                     ui.set_min_size(left.size());
                     ui.set_max_size(left.size());
@@ -576,7 +576,7 @@ fn render_node(
                 }
                 ui.painter()
                     .rect_filled(sep_rect, 0.0, theme.bg_body_color());
-                ui.scope_builder(egui::UiBuilder::new().max_rect(right, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
                     ui.set_clip_rect(right.intersect(ui.clip_rect()));
                     ui.set_min_size(right.size());
                     ui.set_max_size(right.size());
@@ -609,7 +609,7 @@ fn render_node(
                     egui::pos2(area.min.x, area.min.y + h1 + splitter),
                     egui::vec2(w, h2),
                 );
-                ui.scope_builder(egui::UiBuilder::new().max_rect(top, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(top), |ui| {
                     ui.set_clip_rect(top.intersect(ui.clip_rect()));
                     ui.set_min_size(top.size());
                     ui.set_max_size(top.size());
@@ -643,7 +643,7 @@ fn render_node(
                 }
                 ui.painter()
                     .rect_filled(sep_rect, 0.0, theme.bg_body_color());
-                ui.scope_builder(egui::UiBuilder::new().max_rect(bottom, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(bottom), |ui| {
                     ui.set_clip_rect(bottom.intersect(ui.clip_rect()));
                     ui.set_min_size(bottom.size());
                     ui.set_max_size(bottom.size());
@@ -727,7 +727,7 @@ fn render_one_pane(
                     header_rect.right_top() + egui::vec2(-22.0, 2.0),
                     egui::vec2(20.0, header_h - 4.0),
                 );
-                ui.scope_builder(egui::UiBuilder::new().max_rect(close_rect, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(close_rect), |ui| {
                     if crate::ui::chrome::chrome_small_icon_button(
                         ui,
                         theme,
@@ -770,7 +770,7 @@ fn render_one_pane(
                     && i.pointer
                         .interact_pos()
                         .is_some_and(|p| pane_rect.contains(p))
-            }) && !ui.ctx().wants_pointer_input();
+            }) && !ui.ctx().egui_wants_pointer_input();
             if clicked_empty {
                 tab.focus_pane(pane_idx);
             }

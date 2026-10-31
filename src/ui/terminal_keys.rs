@@ -369,6 +369,7 @@ pub fn forward_alt_meta_keys(i: &mut egui::InputState, mut send: impl FnMut(&[u8
         let keep = match event {
             Event::Key {
                 key,
+                physical_key: _,
                 pressed: true,
                 repeat,
                 modifiers,
@@ -386,6 +387,7 @@ pub fn forward_alt_meta_keys(i: &mut egui::InputState, mut send: impl FnMut(&[u8
                 } else {
                     kept.push(Event::Key {
                         key,
+                        physical_key: None,
                         pressed: true,
                         repeat,
                         modifiers,
@@ -404,6 +406,7 @@ pub fn forward_alt_meta_keys(i: &mut egui::InputState, mut send: impl FnMut(&[u8
                 }
                 Some(Event::Key {
                     key,
+                    physical_key: None,
                     pressed: true,
                     repeat,
                     modifiers,
@@ -477,9 +480,8 @@ impl ImePreedit {
     /// 上屏字符串由调用方从 `CompositionEnd` 另发给 PTY。
     pub fn apply_event(&mut self, event: &Event) {
         match event {
-            Event::CompositionStart => self.text.clear(),
-            Event::CompositionUpdate(text) => self.text.clone_from(text),
-            Event::CompositionEnd(_) => self.text.clear(),
+            Event::Ime(egui::ImeEvent::Preedit { text, .. }) => self.text.clone_from(text),
+            Event::Ime(egui::ImeEvent::Commit(_)) => self.text.clear(),
             _ => {}
         }
     }
@@ -570,7 +572,8 @@ const MOD_COMBOS: [Modifiers; 8] = [
 pub fn terminal_keyboard_event_filter() -> egui::EventFilter {
     egui::EventFilter {
         tab: true,
-        arrows: true,
+        horizontal_arrows: true,
+        vertical_arrows: true,
         escape: true,
     }
 }
@@ -617,6 +620,7 @@ mod tests {
     fn key_press(key: Key, modifiers: Modifiers) -> Event {
         Event::Key {
             key,
+            physical_key: None,
             pressed: true,
             repeat: false,
             modifiers,
@@ -1018,16 +1022,16 @@ mod tests {
     #[test]
     fn ime_preedit_tracks_updates_and_clears_on_commit() {
         let mut preedit = ImePreedit::default();
-        preedit.apply_event(&Event::CompositionStart);
+        preedit.apply_event(&Event::Ime(egui::ImeEvent::Disabled));
         assert!(preedit.is_empty());
-        preedit.apply_event(&Event::CompositionUpdate("ni".into()));
+        preedit.apply_event(&Event::Ime(egui::ImeEvent::Preedit { text: "ni".into(), active_range_chars: None }));
         assert_eq!(preedit.text(), "ni");
-        preedit.apply_event(&Event::CompositionUpdate("你好".into()));
+        preedit.apply_event(&Event::Ime(egui::ImeEvent::Preedit { text: "你好".into(), active_range_chars: None }));
         assert_eq!(preedit.text(), "你好");
-        preedit.apply_event(&Event::CompositionEnd("你好".into()));
+        preedit.apply_event(&Event::Ime(egui::ImeEvent::Commit("你好".into())));
         assert!(preedit.is_empty());
-        preedit.apply_event(&Event::CompositionUpdate("ni".into()));
-        preedit.apply_event(&Event::CompositionUpdate(String::new()));
+        preedit.apply_event(&Event::Ime(egui::ImeEvent::Preedit { text: "ni".into(), active_range_chars: None }));
+        preedit.apply_event(&Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None }));
         assert!(
             preedit.is_empty(),
             "empty CompositionUpdate clears a cancelled preedit"
@@ -1042,8 +1046,8 @@ mod tests {
                     ctrl: true,
                     ..Default::default()
                 };
-                i.events.push(Event::CompositionStart);
-                i.events.push(Event::CompositionUpdate("nihao".into()));
+                i.events.push(Event::Ime(egui::ImeEvent::Disabled));
+                i.events.push(Event::Ime(egui::ImeEvent::Preedit { text: "nihao".into(), active_range_chars: None }));
                 i.events.push(key_press(Key::C, ctrl));
                 let mut preedit = ImePreedit::default();
                 for event in &i.events {
@@ -1065,7 +1069,7 @@ mod tests {
                     ctrl: true,
                     ..Default::default()
                 };
-                i.events.push(Event::CompositionUpdate("ceshi".into()));
+                i.events.push(Event::Ime(egui::ImeEvent::Preedit { text: "ceshi".into(), active_range_chars: None }));
                 i.events.push(key_press(Key::R, ctrl));
                 let mut sent = Vec::new();
                 assert!(forward_ctrl_keys(i, |b| sent.push(b)));
@@ -1158,7 +1162,8 @@ mod tests {
     fn terminal_event_filter_blocks_focus_navigation_keys() {
         let filter = terminal_keyboard_event_filter();
         assert!(filter.tab);
-        assert!(filter.arrows);
+        assert!(filter.horizontal_arrows);
+        assert!(filter.vertical_arrows);
         assert!(filter.escape);
         assert!(filter.matches(&key_press(Key::Tab, Modifiers::NONE)));
         assert!(filter.matches(&key_press(
@@ -1225,18 +1230,19 @@ mod tests {
             let ctx = egui::Context::default();
             let ime_id = egui::Id::new("ime_capture_test");
             let mut input = egui::RawInput::default();
-            input.modifiers = terminal_clipboard_modifiers();
             input.events = vec![
+                Event::ModifiersChanged(terminal_clipboard_modifiers()),
                 Event::Copy,
                 Event::Key {
                     key: Key::C,
+                    physical_key: None,
                     pressed: true,
                     repeat: false,
                     modifiers: terminal_clipboard_modifiers(),
                 },
             ];
             ctx.memory_mut(|m| m.request_focus(ime_id));
-            let out = ctx.run(input, |ctx| {
+            let out = ctx.run_pass(input, |ctx| {
                 // 与 app.rs 的顺序一致：先处理复制快捷键，再画终端(含 IME 框)。
                 let hit = ctx.input_mut(|i| {
                     if consume {
@@ -1252,7 +1258,14 @@ mod tests {
                     ui.add(egui::TextEdit::singleline(&mut ime).id(ime_id));
                 });
             });
-            out.platform_output.copied_text
+                        out.platform_output
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default()
         }
         // 只吞 Key、不吞 Event::Copy(旧行为)：被 IME 框覆盖成空串。
         assert_eq!(run(false), "");
@@ -1264,17 +1277,18 @@ mod tests {
     fn paste_shortcut_drops_paste_event() {
         let ctx = egui::Context::default();
         let mut input = egui::RawInput::default();
-        input.modifiers = terminal_clipboard_modifiers();
         input.events = vec![
+            Event::ModifiersChanged(terminal_clipboard_modifiers()),
             Event::Paste("x".into()),
             Event::Key {
                 key: Key::V,
+                physical_key: None,
                 pressed: true,
                 repeat: false,
                 modifiers: terminal_clipboard_modifiers(),
             },
         ];
-        let _ = ctx.run(input, |ctx| {
+        let _ = ctx.run_pass(input, |ctx| {
             assert!(ctx.input_mut(consume_terminal_paste_shortcut));
             assert!(ctx.input(|i| !i.events.iter().any(|e| matches!(e, Event::Paste(_)))));
         });
@@ -1301,6 +1315,7 @@ mod tests {
         }
         events.push(Event::Key {
             key,
+            physical_key: None,
             pressed: true,
             repeat: false,
             modifiers: mods,
@@ -1310,9 +1325,10 @@ mod tests {
                 events.push(Event::Text(c.into()));
             }
         }
+        let mut all_events = vec![Event::ModifiersChanged(mods)];
+        all_events.extend(events);
         egui::RawInput {
-            modifiers: mods,
-            events,
+            events: all_events,
             ..Default::default()
         }
     }
@@ -1331,7 +1347,7 @@ mod tests {
         let ime_id = egui::Id::new("ime_capture_audit");
         // 先跑三帧让 IME 框存在、拿到焦点并锁住焦点(和真实终端一样，按键之前它就已经有焦点)。
         for frame in 0..3 {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
+            let _ = ctx.run_pass(egui::RawInput::default(), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let mut t = String::new();
                     ui.add(
@@ -1348,7 +1364,7 @@ mod tests {
         }
         let mut ime_text_seen = String::new();
         let mut text_left_for_pty = 0;
-        let out = ctx.run(input, |ctx| {
+        let out = ctx.run_pass(input, |ctx| {
             let app_copied = ctx.input_mut(handler);
             if app_copied {
                 ctx.copy_text("APP".into());
@@ -1370,7 +1386,14 @@ mod tests {
             });
         });
         Outcome {
-            copied: out.platform_output.copied_text,
+            copied:             out.platform_output
+                .commands
+                .iter()
+                .find_map(|c| match c {
+                    egui::OutputCommand::CopyText(text) => Some(text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default(),
             ime_focused: ctx.memory(|m| m.has_focus(ime_id)),
             ime_text_seen,
             text_left_for_pty,

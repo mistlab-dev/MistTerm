@@ -274,11 +274,13 @@ impl Sidebar {
                         egui::CornerRadius::ZERO,
                         accent.gamma_multiply(0.9),
                     );
-                    let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(
-                        row_rect.shrink2(egui::vec2(
-                            theme.spacing_list_item_x()).layout(theme.spacing_list_item_y()),
-                        )),
-                        egui::Layout::left_to_right(egui::Align::Center),
+                    let mut row_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(row_rect.shrink2(egui::vec2(
+                                theme.spacing_list_item_x(),
+                                theme.spacing_list_item_y(),
+                            )))
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
                     );
                     let icon_px = theme.font_size_connection_name() + 2.0;
                     let (icon_rect, _) = row_ui.allocate_exact_size(
@@ -364,11 +366,13 @@ impl Sidebar {
                             egui::Color32::TRANSPARENT
                         };
                         ui.painter().rect_filled(row_rect, theme.radius_list_item(), bg);
-                        let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(
-                            row_rect.shrink2(egui::vec2(
-                                theme.spacing_list_item_x()).layout(theme.spacing_list_item_y()),
-                            )),
-                            egui::Layout::left_to_right(egui::Align::Center),
+                        let mut row_ui = ui.new_child(
+                            egui::UiBuilder::new()
+                                .max_rect(row_rect.shrink2(egui::vec2(
+                                    theme.spacing_list_item_x(),
+                                    theme.spacing_list_item_y(),
+                                )))
+                                .layout(egui::Layout::left_to_right(egui::Align::Center)),
                         );
                         let endpoint =
                             format!("{}@{}:{}", server.username, server.host, server.port);

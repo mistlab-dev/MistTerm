@@ -179,7 +179,7 @@ impl MistTermApp {
                     .strong()
                     .color(label_color),
             )
-            .id(egui::Id::new(("pref_section", section_id)))
+            .id_salt(("pref_section", section_id))
             .default_open(default_open)
             .show_unindented(ui, |ui| {
                 crate::ui::chrome::settings_elevated_card(ui, theme, body);

@@ -6124,7 +6124,7 @@ impl MistTermApp {
 
         let mut close = false;
         let inner = rect.shrink2(egui::vec2(theme.spacing_region_pad_x(), 0.0));
-        ui.scope_builder(egui::UiBuilder::new().max_rect(inner, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_height(bar_h);
             if ui.input(|i| i.key_pressed(Key::Escape)) {
                 close = true;
@@ -6277,7 +6277,7 @@ impl MistTermApp {
     /// Win/Linux 沉浸式关掉系统标题栏，退出时恢复；macOS 保持系统边框。
     pub(crate) fn sync_window_decorations_for_immersive(
         &mut self,
-        frame: &mut eframe::Frame,
+        ctx: &egui::Context,
         immersive: bool,
     ) {
         if cfg!(target_os = "macos") {
@@ -7317,7 +7317,7 @@ impl MistTermApp {
         let Some(text) = self.pending_terminal_copy.take() else {
             return;
         };
-        if ctx.output(|o| o.copied_text != text) {
+        if ctx.output(|o| o.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if *t == text))) {
             log::warn!("terminal copy: clipboard text was overwritten in the same frame; re-applying");
             ctx.copy_text(text);
         }
@@ -8002,35 +8002,35 @@ impl MistTermApp {
         dock_col_w: f32,
     ) {
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let fragment_panel = egui::Panel::right(layout_util::FRAGMENT_PANEL_ID)
-            .default_size(def_w)
-            .min_size(min_w)
-            .max_size(max_w)
-            .resizable(true)
-            .show_separator_line(false)
-            // 仅占布局宽；勿在此绘制内容(CentralPanel 后绘会盖住)。内容在 Foreground Area 重绘。
-            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-            .show(ctx, |ui| {
-                let h = ui.available_height().max(1.0);
-                let w = ui.available_width().max(1.0);
-                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-            });
+        ctx.root_ui(|root| {
+            egui::Panel::right(layout_util::FRAGMENT_PANEL_ID)
+                .default_size(def_w)
+                .min_size(min_w)
+                .max_size(max_w)
+                .resizable(true)
+                .show_separator_line(false)
+                // 仅占布局宽；勿在此绘制内容(CentralPanel 后绘会盖住)。内容在 Foreground Area 重绘。
+                .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
+                .show(root, |ui| {
+                    let h = ui.available_height().max(1.0);
+                    let w = ui.available_width().max(1.0);
+                    ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                });
+        });
         let dock_inset = theme.spacing_right_dock_screen_inset();
-        let slot = layout_util::side_panel_place_slot(
-            ctx,
-            &fragment_panel.response,
-            dock_col_w,
-            dock_inset,
-        );
-        crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
-        self.fragment_panel_slot_rect = Some(slot);
-        if let Some(slot) = self.fragment_panel_slot_rect {
+        // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
+        let slot = layout_util::side_panel_state_rect(ctx, layout_util::FRAGMENT_PANEL_ID)
+            .map(|r| {
+                let screen = ctx.content_rect();
+                let mut s = r;
+                s.min.x = screen.max.x - s.width();
+                s.max.x = screen.max.x - dock_inset;
+                s
+            });
+        if let Some(slot) = slot {
+            crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
+            self.fragment_panel_slot_rect = Some(slot);
             layout_util::record_right_dock_panel_rect(&slot, &mut self.right_dock_outer_left_x);
-        } else {
-            layout_util::record_right_dock_panel(
-                &fragment_panel.response,
-                &mut self.right_dock_outer_left_x,
-            );
         }
         let _ = theme;
     }
@@ -8704,6 +8704,7 @@ impl MistTermApp {
                             row_resp.row.rect,
                             theme.radius_card(),
                             egui::Stroke::new(1.5, theme.accent_color()),
+                            egui::StrokeKind::Inside,
                         );
                     }
                     if row_resp.title.clicked() {
@@ -9255,6 +9256,7 @@ impl MistTermApp {
                 None => label.to_string(),
             }
         };
+        ctx.root_ui(|root| {
         egui::Panel::left("activity_rail")
             .exact_size(rail_w)
             .resizable(false)
@@ -9263,7 +9265,7 @@ impl MistTermApp {
                     .fill(theme.chrome_bar_fill())
                     .stroke(egui::Stroke::NONE),
             )
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 let full = ui.max_rect();
                 ui.painter().rect_filled(full, 0.0, theme.chrome_bar_fill());
                 ui.painter().vline(
@@ -9381,6 +9383,7 @@ impl MistTermApp {
                     }
                 });
             });
+        });
     }
 
     /// Rail 完全隐藏时的左缘窄条(跨平台可视恢复入口；与菜单 / ⌘·Ctrl+B 并存)。
@@ -9395,6 +9398,7 @@ impl MistTermApp {
             crate::i18n::menu::labels(crate::i18n::language(ctx)).show_activity_rail,
             crate::platform::accel("B"),
         );
+        ctx.root_ui(|root| {
         egui::Panel::left("activity_rail_reveal")
             .exact_size(strip_w)
             .resizable(false)
@@ -9403,11 +9407,12 @@ impl MistTermApp {
                     .fill(theme.chrome_bar_fill())
                     .stroke(egui::Stroke::NONE),
             )
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 if crate::ui::chrome::activity_rail_reveal_strip(ui, theme, &tip).clicked() {
                     self.activity_rail_collapsed = false;
                 }
             });
+        });
     }
 
     /// 遗留底栏(已由 Activity Rail + Toast 替代；保留实现供对照，默认不调用)。
@@ -9423,17 +9428,18 @@ impl MistTermApp {
             .map(|f| f.usage_count)
             .sum();
 
+        ctx.root_ui(|root| {
         egui::Panel::bottom("bottom_chrome")
             .exact_size(status_h)
             .frame(theme.frame_chrome_bar())
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 let screen = ui.ctx().content_rect();
                 let inner = ui.max_rect();
                 let m = theme.margin_chrome_bar();
-                let panel_top = inner.min.y - m.top;
+                let panel_top = inner.min.y - m.top as f32;
                 let panel_rect = egui::Rect::from_min_max(
                     egui::pos2(screen.min.x, panel_top),
-                    egui::pos2(screen.max.x, inner.max.y + m.bottom),
+                    egui::pos2(screen.max.x, inner.max.y + m.bottom as f32),
                 );
                 ui.painter()
                     .rect_filled(panel_rect, 0.0, theme.chrome_bar_fill());
@@ -9640,6 +9646,7 @@ impl MistTermApp {
                     },
                 );
             });
+        });
     }
 
     #[cfg(target_os = "macos")]
@@ -9906,7 +9913,13 @@ impl eframe::App for MistTermApp {
         crate::platform::arm_quit_watchdog();
     }
 
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    // #206 S1：eframe 0.34+ 把 App::update 拆成 logic（纯状态，无 UI）+ ui（绘制）。
+    // S1 策略：原 update 全身放进 ui（等价旧行为）；logic 空实现。
+    // S2（#207）按梳理 §10「先 logic 调原 update 全身、ui 空」反查脏帧/repaint 行为后再细化拆分。
+    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {}
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx();
         if let Some(url) = self.pending_ssh_url.take() {
             self.open_ssh_url(ctx, url);
         }
@@ -9988,7 +10001,7 @@ impl eframe::App for MistTermApp {
         self.poll_market_catalog_refresh(ctx);
         self.poll_market_catalog_debounce();
         self.update_tick(ctx);
-        self.update_handle_close(frame);
+        self.update_handle_close(ctx);
 
         #[cfg(target_os = "macos")]
         self.poll_native_menu_bar(ctx, frame);

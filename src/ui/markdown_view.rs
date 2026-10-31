@@ -524,10 +524,10 @@ impl<'a> MarkdownRenderer<'a> {
 fn paint_layout_job(ui: &mut egui::Ui, mut job: LayoutJob, width: f32) {
     let width = width.max(24.0);
     job.wrap.max_width = width;
-    let galley = ui.ctx().fonts(|f| f.layout_job(job));
+    let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
     let height = galley.size().y.max(1.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-    ui.painter().galley(rect.min, galley);
+    ui.painter().galley(rect.min, galley, egui::Color32::WHITE);
 }
 
 fn paint_code_block(

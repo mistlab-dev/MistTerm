@@ -1194,7 +1194,7 @@ impl SftpPanel {
             theme.text_secondary()
         };
         let star_font = egui::FontId::proportional(theme.font_size_caption());
-        let star_galley = ui.fonts(|f| f.layout_no_wrap(star_label.to_string(), star_font, star_color));
+        let star_galley = ui.ctx().fonts_mut(|f| f.layout_no_wrap(star_label.to_string(), star_font, star_color));
         let star_w = hit + 2.0 + star_galley.size().x + 4.0;
         let (star_rect, star_resp) =
             ui.allocate_exact_size(egui::vec2(star_w, hit), egui::Sense::click());
@@ -1218,6 +1218,7 @@ impl SftpPanel {
                 star_rect.center().y - star_galley.size().y * 0.5,
             ),
             star_galley,
+            star_color,
         );
         if star_resp.on_hover_text(tip).clicked() {
             if side_local {
@@ -1244,7 +1245,7 @@ impl SftpPanel {
             "打开收藏或最近去过的目录",
         );
         let path_font = egui::FontId::proportional(theme.font_size_caption());
-        let path_galley = ui.fonts(|f| {
+        let path_galley = ui.ctx().fonts_mut(|f| {
             f.layout_no_wrap(jump_lbl.to_string(), path_font, theme.text_secondary())
         });
         let chevron = 8.0;
@@ -1262,6 +1263,7 @@ impl SftpPanel {
         ui.painter().galley(
             egui::pos2(text_x, path_rect.center().y - path_galley.size().y * 0.5),
             path_galley.clone(),
+            theme.text_primary(),
         );
         let tip = egui::pos2(text_x + path_galley.size().x + 6.0 + chevron * 0.5, path_rect.center().y + 1.0);
         let stroke = egui::Stroke::new(1.4, theme.text_secondary());
@@ -1280,9 +1282,9 @@ impl SftpPanel {
         });
         let just_toggled = path_resp.on_hover_text(jump_tip).clicked();
         if just_toggled {
-            ui.memory_mut(|m| m.toggle_popup(popup_id));
+            egui::Popup::toggle_id(ui.ctx(), popup_id);
         }
-        if ui.memory(|m| m.is_popup_open(popup_id)) {
+        if egui::Popup::is_id_open(ui.ctx(), popup_id) {
             let tidy = |items: Vec<String>| -> Vec<String> {
                 let mut out = Vec::new();
                 let mut seen = std::collections::HashSet::new();
@@ -1333,8 +1335,8 @@ impl SftpPanel {
                     format!("{head}…{tail}")
                 }
             };
-            let widest = ui.fonts(|f| {
-                let measure = |text: &str, size: f32| {
+            let widest = ui.ctx().fonts_mut(|mut f| {
+                let mut measure = |f: &mut egui::epaint::text::FontsView<'_>, text: &str, size: f32| {
                     f.layout_no_wrap(
                         text.to_string(),
                         egui::FontId::proportional(size),
@@ -1344,18 +1346,18 @@ impl SftpPanel {
                     .x
                 };
                 let mut w = if bookmarks.is_empty() && recent.is_empty() {
-                    measure(&empty_hint, theme.font_size_caption())
+                    measure(&mut f, &empty_hint, theme.font_size_caption())
                 } else {
                     0.0
                 };
                 if !bookmarks.is_empty() {
-                    w = w.max(measure(&fav, theme.font_size_small()));
+                    w = w.max(measure(&mut f, &fav, theme.font_size_small()));
                 }
                 if !recent.is_empty() {
-                    w = w.max(measure(&recent_title, theme.font_size_small()));
+                    w = w.max(measure(&mut f, &recent_title, theme.font_size_small()));
                 }
                 for p in bookmarks.iter().chain(recent.iter()) {
-                    w = w.max(measure(&row_label(p), theme.font_size_body()));
+                    w = w.max(measure(&mut f, &row_label(p), theme.font_size_body()));
                 }
                 w
             });
@@ -1374,7 +1376,7 @@ impl SftpPanel {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         crate::ui::chrome::apply_context_menu_style(ui, theme);
                         ui.set_max_width(popup_w - 16.0);
-                        ui.style_mut().wrap = Some(false);
+                        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
                         if bookmarks.is_empty() && recent.is_empty() {
                             ui.label(
                                 egui::RichText::new(&empty_hint)
@@ -1395,7 +1397,7 @@ impl SftpPanel {
                                 let shown = row_label(p);
                                 if ui.selectable_label(false, shown).on_hover_text(p).clicked() {
                                     *navigate = Some(PathBuf::from(p));
-                                    ui.memory_mut(|m| m.close_popup());
+                                    egui::Popup::close_id(ui.ctx(), popup_id);
                                 }
                             }
                         };
@@ -1407,7 +1409,7 @@ impl SftpPanel {
                     });
                 });
             if !just_toggled && area.response.clicked_elsewhere() {
-                ui.memory_mut(|m| m.close_popup());
+                egui::Popup::close_id(ui.ctx(), popup_id);
             }
         }
     }
@@ -2008,7 +2010,7 @@ impl SftpPanel {
             theme.text_tertiary()
         };
         let font = egui::FontId::proportional(theme.font_size_caption());
-        let galley = ui.fonts(|f| f.layout_no_wrap(label.to_string(), font, color));
+        let galley = ui.ctx().fonts_mut(|f| f.layout_no_wrap(label.to_string(), font, color));
         let gap = 2.0;
         let w = hit + gap + galley.size().x + 4.0;
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, hit), egui::Sense::click());
@@ -2033,6 +2035,7 @@ impl SftpPanel {
                 rect.center().y - galley.size().y * 0.5,
             ),
             galley,
+            color,
         );
         enabled && resp.on_hover_text(tip).clicked()
     }
@@ -3763,25 +3766,34 @@ impl SftpPanel {
         dock_col_w: f32,
     ) {
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::Panel::right("sftp_browser_panel")
-            .default_size(def_w)
-            .min_size(min_w)
-            .max_size(max_w)
-            .resizable(true)
-            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-            .show(ctx, |ui| {
-                let h = ui.available_height().max(1.0);
-                let w = ui.available_width().max(1.0);
-                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-            });
+        ctx.root_ui(|root| {
+            egui::Panel::right("sftp_browser_panel")
+                .default_size(def_w)
+                .min_size(min_w)
+                .max_size(max_w)
+                .resizable(true)
+                .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
+                .show(root, |ui| {
+                    let h = ui.available_height().max(1.0);
+                    let w = ui.available_width().max(1.0);
+                    ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                });
+        });
         let dock_inset = theme.spacing_right_dock_screen_inset();
-        let slot = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
+        // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
+        let slot = layout_util::side_panel_state_rect(ctx, "sftp_browser_panel")
+            .map(|r| {
+                let screen = ctx.content_rect();
+                let mut s = r;
+                s.min.x = screen.max.x - s.width();
+                s.max.x = screen.max.x - dock_inset;
+                s
+            })
+            .unwrap_or(egui::Rect::NOTHING);
         crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
         self.last_panel_slot_rect = Some(slot);
         if let Some(slot) = self.last_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
-        } else {
-            layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
         }
         let _ = theme;
     }
@@ -4927,7 +4939,7 @@ impl SftpPanel {
                                 i.raw
                                     .dropped_files
                                     .iter()
-                                    .filter_map(|f| f.path.clone())
+                                    .map(|f| f.path().to_path_buf())
                                     .collect()
                             });
                             if !files.is_empty() {
@@ -5258,24 +5270,30 @@ impl SftpPanel {
             egui::Stroke::new(1.0, theme.border.to_color32()),
         );
         let title_font = egui::FontId::proportional(theme.font_size_caption());
-        let title_galley = ui.fonts(|f| {
+        let title_galley = ui.ctx().fonts_mut(|f| {
             f.layout_no_wrap(title.to_string(), title_font, theme.text_tertiary())
         });
         let title_y = rect.center().y - title_galley.size().y * 0.5;
-        ui.painter()
-            .galley(egui::pos2(rect.left() + 10.0, title_y), title_galley.clone());
+        ui.painter().galley(
+            egui::pos2(rect.left() + 10.0, title_y),
+            title_galley.clone(),
+            theme.text_primary(),
+        );
         let mut path_left = rect.left() + 10.0 + title_galley.size().x + 12.0;
         if selected_n > 0 {
             let sel = format!(
                 "{} {selected_n}",
                 crate::i18n::tr(ctx, "Selected", "已选")
             );
-            let sel_galley = ui.fonts(|f| {
+            let sel_galley = ui.ctx().fonts_mut(|f| {
                 f.layout_no_wrap(sel, egui::FontId::proportional(theme.font_size_caption()), theme.accent_color())
             });
             let sel_y = rect.center().y - sel_galley.size().y * 0.5;
-            ui.painter()
-                .galley(egui::pos2(path_left, sel_y), sel_galley.clone());
+            ui.painter().galley(
+                egui::pos2(path_left, sel_y),
+                sel_galley.clone(),
+                theme.accent_color(),
+            );
             path_left += sel_galley.size().x + 10.0;
         }
         let path_rect = egui::Rect::from_min_max(
@@ -5347,7 +5365,7 @@ impl SftpPanel {
         let width_of = |ui: &egui::Ui, from: usize| -> f32 {
             let text: String = parts.iter().skip(from).map(|(s, _, _)| s.as_str()).collect();
             let prefix = if from > 0 { "…/" } else { "" };
-            ui.fonts(|f| {
+            ui.ctx().fonts_mut(|f| {
                 f.layout_no_wrap(
                     format!("{prefix}{text}"),
                     mono.clone(),
@@ -5364,13 +5382,14 @@ impl SftpPanel {
         let mut hits: Vec<(egui::Rect, PathBuf, bool)> = Vec::new();
         let mut x = rect.left() + 2.0;
         if start > 0 {
-            let galley = ui.fonts(|f| {
+            let galley = ui.ctx().fonts_mut(|f| {
                 f.layout_no_wrap("…/".to_string(), mono.clone(), theme.text_tertiary())
             });
             let w = galley.size().x;
             ui.painter().galley(
                 egui::pos2(x, rect.center().y - galley.size().y * 0.5),
                 galley,
+                theme.text_tertiary(),
             );
             x += w;
         }
@@ -5384,10 +5403,10 @@ impl SftpPanel {
             } else {
                 theme.text_secondary()
             };
-            let galley = ui.fonts(|f| f.layout_no_wrap(label.clone(), mono.clone(), text_color));
+            let galley = ui.ctx().fonts_mut(|f| f.layout_no_wrap(label.clone(), mono.clone(), text_color));
             let w = galley.size().x;
             let top = rect.center().y - galley.size().y * 0.5;
-            ui.painter().galley(egui::pos2(x, top), galley);
+            ui.painter().galley(egui::pos2(x, top), galley, egui::Color32::WHITE);
             if !separator {
                 hits.push((
                     egui::Rect::from_min_size(egui::pos2(x, rect.top()), egui::vec2(w, rect.height())),
@@ -5714,7 +5733,7 @@ impl SftpPanel {
                         i.raw
                             .dropped_files
                             .iter()
-                            .filter_map(|f| f.path.clone())
+                            .map(|f| f.path().to_path_buf())
                             .collect()
                     });
                     if !files.is_empty() {

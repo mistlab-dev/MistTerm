@@ -19,7 +19,7 @@ impl MistTermApp {
         let pending = self.ssh_pending_import_count();
         let _ = pending; // SSH 待导入改走右下角需确认 Toast，顶栏不再显示 chip
         let immersive = self.activity_rail_collapsed;
-        self.sync_window_decorations_for_immersive(frame, immersive);
+        self.sync_window_decorations_for_immersive(ctx, immersive);
         let custom_caption = immersive && !cfg!(target_os = "macos");
         // macOS 用 fullsize content view：标签始终画在标题栏那一行(红绿灯右侧)。
         let tabs_in_top = immersive || cfg!(target_os = "macos");
@@ -35,11 +35,12 @@ impl MistTermApp {
             theme.top_chrome_total_height()
         };
         if top_chrome_height > 0.0 {
+            ctx.root_ui(|root| {
             egui::Panel::top("top_chrome")
                 .exact_size(top_chrome_height)
                 .frame(theme.frame_top_chrome())
                 .show_separator_line(false)
-                .show(ctx, |ui| {
+                .show(root, |ui| {
                     let bar_bg = ui.max_rect();
                     ui.painter()
                         .rect_filled(bar_bg, 0.0, theme.chrome_bar_fill());
@@ -61,7 +62,7 @@ impl MistTermApp {
                                 egui::pos2(bar_bg.max.x - caption_w, bar_bg.min.y),
                                 bar_bg.max,
                             );
-                            ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect, |ui| {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(tabs_rect), |ui| {
                                 ui.set_min_height(top_chrome_height);
                                 ui.horizontal(|ui| {
                                     ui.set_min_height(top_chrome_height);
@@ -74,7 +75,7 @@ impl MistTermApp {
                                     );
                                 });
                             });
-                            ui.scope_builder(egui::UiBuilder::new().max_rect(caption_rect, |ui| {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(caption_rect), |ui| {
                                 ui.set_min_height(top_chrome_height);
                                 let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
                                 let caps = crate::ui::chrome::window_caption_buttons(
@@ -129,6 +130,7 @@ impl MistTermApp {
                         );
                     }
                 });
+            });
         }
 
         // 左侧 Activity Rail(可完全隐藏；隐藏时仍保留左缘窄恢复条)。
@@ -225,10 +227,11 @@ impl MistTermApp {
         }
 
         // 主内容区：侧边栏 + 终端
+        ctx.root_ui(|root| {
         egui::CentralPanel::default()
             // 不在 Frame 上铺底色(Central 后绘会盖住右栏)；工作区底色由侧栏/终端列各自 Frame 承担
             .frame(egui::Frame::NONE)
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 layout_util::clip_ui_before_right_dock(ui, self.right_dock_outer_left_x);
                 // Central 后绘制；用 max_rect∩clip + 右栏左缘收紧，避免终端白底盖住命令片段等
                 let status_h = 0.0;
@@ -258,7 +261,7 @@ impl MistTermApp {
                 if seam_y > work.min.y {
                     work_painter.hline(work.x_range(), seam_y, theme.divider_stroke());
                 }
-                ui.scope_builder(egui::UiBuilder::new().max_rect(work_body, |ui| {
+                ui.scope_builder(egui::UiBuilder::new().max_rect(work_body), |ui| {
                     ui.set_clip_rect(work);
                     let layout_h = (work_bottom - work_top).max(1.0);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::TOP), |ui| {
@@ -291,7 +294,7 @@ impl MistTermApp {
                                 egui::pos2(col_left, work_top),
                                 egui::pos2(col_left + self.sidebar_width, work_bottom),
                             );
-                            ui.scope_builder(egui::UiBuilder::new().max_rect(sidebar_rect, |ui| {
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(sidebar_rect), |ui| {
                                 let (sidebar_output, col_actions) = Sidebar::show_column(
                                     ui,
                                     layout_h,
@@ -428,7 +431,7 @@ impl MistTermApp {
                                             ui.cursor().min,
                                             egui::vec2(tab_row_w, terminal_header_row_h),
                                         );
-                                        ui.scope_builder(egui::UiBuilder::new().max_rect(tab_row_rect, |ui| {
+                                        ui.scope_builder(egui::UiBuilder::new().max_rect(tab_row_rect), |ui| {
                                             ui.painter().rect_filled(
                                                 tab_row_rect,
                                                 egui::CornerRadius::ZERO,
@@ -678,6 +681,7 @@ impl MistTermApp {
                     });
                 });
             });
+        });
 
         self.render_workspace_right_dock_foreground(ctx, theme, top_chrome_height);
         self.sync_ssh_import_action_toast(ctx);
@@ -2114,7 +2118,7 @@ impl MistTermApp {
             egui::pos2(text_right, rect.bottom()),
         );
         if text_rect.width() > 8.0 {
-            let galley = ui.fonts(|f| {
+            let galley = ui.fonts_mut(|f| {
                 f.layout_no_wrap(
                     text,
                     egui::FontId::proportional(theme.font_size_ui_control()),
@@ -2128,6 +2132,7 @@ impl MistTermApp {
                     rect.center().y - galley.size().y * 0.5,
                 ),
                 galley,
+                egui::Color32::WHITE,
             );
         }
         if scheduled {
@@ -2159,6 +2164,7 @@ impl MistTermApp {
             rect,
             theme.radius_list_item(),
             egui::Stroke::new(1.0, theme.accent_dim_color()),
+            egui::StrokeKind::Inside,
         );
         let text = crate::i18n::tr(
             ctx,

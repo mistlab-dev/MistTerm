@@ -633,7 +633,7 @@ fn fuzzy_suggestion_row(
         ui.painter()
             .rect_filled(row_rect, rounding, theme.list_row_hover_bg());
     }
-    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect.shrink2(egui::vec2(8.0), 4.0), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect.shrink2(egui::vec2(8.0, 4.0))), |ui| {
         ui.label(
             egui::RichText::new(format!(
                 "{} {}",
@@ -687,7 +687,7 @@ fn history_row(
 
     let mut delete_clicked = false;
     let mut check_clicked = false;
-    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
         HistoryTableCols::paint_row_strip(ui, cols, row_h, |cell, col| match col {
             0 => {
                 let before = *checked;

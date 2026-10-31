@@ -19,7 +19,7 @@ impl MistTermApp {
         let ssh_import_enabled = self.ssh_config_path.exists();
         let l = crate::i18n::menu::labels(crate::i18n::language(ctx));
 
-        egui::menu::menu_button(ui, label(l.terminal_menu), |ui| {
+        ui.menu_button(label(l.terminal_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
             if crate::ui::chrome::popup_menu_button(ui, theme, l.new_session).clicked() {
                 self.show_new_session_dialog = true;
@@ -135,7 +135,7 @@ impl MistTermApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
         });
-        egui::menu::menu_button(ui, label(l.edit_menu), |ui| {
+        ui.menu_button(label(l.edit_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
             let copy_accel = crate::platform::terminal_copy_accel();
             if crate::ui::chrome::popup_menu_button_shortcut(ui, theme, l.copy, Some(&copy_accel))
@@ -166,7 +166,7 @@ impl MistTermApp {
                 self.show_ai_settings_dialog = true;
             }
         });
-        egui::menu::menu_button(ui, label(l.view_menu), |ui| {
+        ui.menu_button(label(l.view_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
             if crate::ui::chrome::popup_menu_button(
                 ui,
@@ -275,7 +275,7 @@ impl MistTermApp {
             });
         });
         // 工具四段（#198）：片段与发送 / 历史 / 规则 / 账号与数据；偏好不进工具。
-        egui::menu::menu_button(ui, label(l.tools_menu), |ui| {
+        ui.menu_button(label(l.tools_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
             // 1. 片段与发送
             if crate::ui::chrome::popup_menu_button(ui, theme, l.fragment_library).clicked() {
@@ -314,7 +314,7 @@ impl MistTermApp {
                 self.menu_open_session_log_browser(ctx);
             }
         });
-        egui::menu::menu_button(ui, label(l.team_menu), |ui| {
+        ui.menu_button(label(l.team_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
             if crate::ui::chrome::popup_menu_button(ui, theme, l.team_sign_in).clicked() {
                 self.show_preferences_dialog = true;
@@ -329,7 +329,7 @@ impl MistTermApp {
                 }
             }
         });
-        egui::menu::menu_button(ui, label(l.help_menu), |ui| {
+        ui.menu_button(label(l.help_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
             if crate::ui::chrome::popup_menu_button(
                 ui,

@@ -588,7 +588,7 @@ pub(super) fn paint_dir_diff(
                             theme.text_tertiary()
                         };
                         ui.painter()
-                            .rect_stroke(rect, 2.0, egui::Stroke::new(1.0_f32, stroke));
+                            .rect_stroke(rect, 2.0, egui::Stroke::new(1.0_f32, stroke), egui::StrokeKind::Inside);
                         if on {
                             ui.painter().rect_filled(
                                 rect.shrink(3.0),

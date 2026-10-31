@@ -12,7 +12,7 @@ pub(super) fn ai_message_side_padding(theme: &Theme) -> f32 {
 
 pub(super) fn ai_content_width(ui: &egui::Ui) -> f32 {
     let w = ui.available_width().max(120.0);
-    let bar = ui.spacing().scroll_bar_width;
+    let bar = ui.spacing().scroll.bar_width;
     (w - bar - 4.0).max(96.0)
 }
 
@@ -31,12 +31,12 @@ pub(super) fn show_wrapped_user_text(ui: &mut egui::Ui, theme: &Theme, text: &st
             ..Default::default()
         },
     );
-    let galley = ui.ctx().fonts(|f| f.layout_job(job));
+    let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
     // 短句按内容宽分配，避免「通栏蓝条」像按钮
     let content_w = galley.size().x.min(width).max(12.0);
     let size = egui::vec2(content_w, galley.size().y.max(font_size * 1.2));
     let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
-    ui.painter().galley(rect.min, galley);
+    ui.painter().galley(rect.min, galley, egui::Color32::WHITE);
 }
 
 /// 按文案估算用户气泡外宽(含内边距)，上限约可用宽的 85%。
@@ -62,7 +62,7 @@ pub(super) fn estimate_user_bubble_outer_width(
             ..Default::default()
         },
     );
-    let galley = ui.ctx().fonts(|f| f.layout_job(job));
+    let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
     let content = galley.size().x.max(12.0);
     (content + pad_x * 2.0 + 2.0).clamp(48.0, cap)
 }
@@ -170,13 +170,13 @@ fn paint_ai_text_line(
             ..Default::default()
         },
     );
-    let galley = ui.ctx().fonts(|f| f.layout_job(job));
+    let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
     let height = galley
         .size()
         .y
         .max(ui.text_style_height(&egui::TextStyle::Body));
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-    ui.painter().with_clip_rect(rect).galley(rect.min, galley);
+    ui.painter().with_clip_rect(rect).galley(rect.min, galley, egui::Color32::WHITE);
 }
 
 fn assistant_display_line(line: &str, in_code: bool) -> (String, bool, bool) {

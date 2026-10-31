@@ -272,7 +272,7 @@ fn paste_row(
         .unwrap_or_else(|| "—".to_string());
     let preview = entry.preview_oneline(72);
     let mut delete_clicked = false;
-    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect.shrink2(egui::vec2(8.0), 4.0), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect.shrink2(egui::vec2(8.0, 4.0))), |ui| {
         ui.horizontal(|ui| {
             ui.set_width(width - 16.0);
             ui.label(

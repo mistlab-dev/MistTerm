@@ -103,7 +103,7 @@ pub const AI_PANEL_ID: &str = "ai_panel";
 /// 读取上一帧 `SidePanel` 落盘的槽位矩形(用于 Central 之后 Foreground 重绘)。
 #[inline]
 pub fn side_panel_state_rect(ctx: &egui::Context, panel_id: &str) -> Option<egui::Rect> {
-    egui::containers::panel::PanelState::load(ctx, egui::Id::new(panel_id)).map(|s| s.rect)
+    egui::containers::panel::PanelState::load(ctx, egui::Id::new(panel_id)).map(|s| s.outer_rect)
 }
 
 /// 将侧栏槽位右缘钉在 `screen` 右缘(`PanelState` 仅为内层内容矩形，勿直接作 Area 外框)。
@@ -346,7 +346,7 @@ pub fn side_panel_foreground_rect(
 /// Foreground 内正文宽(扣 `region_panel_frame` 水平 inner margin，勿信 Area 内 clip≈整窗)。
 #[inline]
 pub fn side_panel_foreground_inner_width(slot: egui::Rect, margin: egui::Margin) -> f32 {
-    (slot.width() - margin.left - margin.right).max(48.0)
+    (slot.width() - margin.left as f32 - margin.right as f32).max(48.0)
 }
 
 /// Foreground 正文宽：来自 SidePanel 槽位 `inner`(随拖拽变化)，夹在 profile 的 min/max 内。
@@ -377,7 +377,7 @@ pub fn dock_scroll_content_width(ui: &egui::Ui, dock_w: f32) -> f32 {
 #[inline]
 pub fn dock_scroll_viewport_width(ui: &egui::Ui, dock_w: f32) -> f32 {
     let w = dock_scroll_content_width(ui, dock_w);
-    let bar = ui.spacing().scroll_bar_width;
+    let bar = ui.spacing().scroll.bar_width;
     if bar.is_finite() && bar > 0.5 {
         (w - bar).max(48.0)
     } else {
@@ -545,7 +545,7 @@ pub fn central_work_rect_in_ui(
 /// 兼容旧调用；优先 [`central_work_rect_in_ui`]
 #[inline]
 pub fn central_work_rect(ctx: &egui::Context, right_dock_outer_left_x: Option<f32>) -> egui::Rect {
-    let mut r = ctx.available_rect();
+    let mut r = ctx.content_rect();
     if let Some(dock_left) = right_dock_outer_left_x {
         if dock_left.is_finite() && dock_left > r.min.x {
             r.max.x = r.max.x.min(dock_left);
@@ -724,9 +724,9 @@ mod tests {
         let slot = egui::Rect::from_min_max(egui::pos2(100.0, 20.0), egui::pos2(400.0, 320.0));
         let inner = right_dock_slot_content_rect(slot, &theme);
         let m = theme.right_dock_content_margin();
-        assert!((inner.min.x - (slot.min.x + m.left)).abs() < 0.01);
-        assert!((inner.max.x - (slot.max.x - m.right)).abs() < 0.01);
-        assert!((inner.width() - (slot.width() - m.left - m.right)).abs() < 0.01);
+        assert!((inner.min.x - (slot.min.x + m.left as f32)).abs() < 0.01);
+        assert!((inner.max.x - (slot.max.x - m.right as f32)).abs() < 0.01);
+        assert!((inner.width() - (slot.width() - m.left as f32 - m.right as f32)).abs() < 0.01);
     }
 
     #[test]

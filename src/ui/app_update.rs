@@ -260,7 +260,7 @@ impl MistTermApp {
     }
 
     /// 需要退出（Windows 安装程序已启动 / 用户点了重启）时关闭窗口。
-    pub(crate) fn update_handle_close(&mut self, frame: &mut eframe::Frame) {
+    pub(crate) fn update_handle_close(&mut self, ctx: &egui::Context) {
         if self.update_ui.close_requested {
             self.update_ui.close_requested = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);

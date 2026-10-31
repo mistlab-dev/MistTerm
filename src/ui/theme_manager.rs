@@ -125,7 +125,7 @@ impl ThemeManager {
             return;
         }
         let theme = self.current_theme();
-        let mut style = (*ctx.style()).clone();
+        let mut style = (*ctx.global_style()).clone();
 
         // 根据主题背景亮度判断是否为深色模式
         let is_dark = theme.bg_body.r < 128;
@@ -246,7 +246,7 @@ impl ThemeManager {
             ui_font(theme.font_size_caption()),
         );
 
-        ctx.set_style(style);
+        ctx.set_style_of(egui::Theme::Dark, style);
         self.applied_ctx_index = Some(self.current);
         // 勿在此 request_repaint：每帧 apply 时再立即重绘会形成无限帧循环。
         // 切换主题时由偏好/菜单等调用方自行 request_repaint。
