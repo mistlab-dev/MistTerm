@@ -308,7 +308,7 @@ impl BatchExecDialog {
                                                     .monospace()
                                                     .size(theme.font_size_caption()),
                                             )
-                                            .wrap(true),
+                                            .wrap(),
                                         );
                                     }
                                 });

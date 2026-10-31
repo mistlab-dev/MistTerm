@@ -32,7 +32,7 @@ pub fn consume_primary_shift_key(i: &mut egui::InputState, key: Key) -> bool {
     if i.consume_key(mods, key) {
         return true;
     }
-    if i.modifiers.matches(mods) && i.key_pressed(key) {
+    if i.modifiers.matches_logically(mods) && i.key_pressed(key) {
         i.events.retain(|e| {
             !matches!(
                 e,
@@ -66,7 +66,7 @@ pub fn consume_primary_key(i: &mut egui::InputState, key: Key) -> bool {
     if i.consume_key(mods, key) {
         return true;
     }
-    if i.modifiers.matches(mods) && i.key_pressed(key) {
+    if i.modifiers.matches_logically(mods) && i.key_pressed(key) {
         i.events.retain(|e| {
             !matches!(
                 e,
@@ -146,7 +146,7 @@ pub fn consume_local_shell_shortcut(i: &mut egui::InputState) -> bool {
     if i.consume_key(mods, Key::T) {
         return true;
     }
-    if i.modifiers.matches(mods) && i.key_pressed(Key::T) {
+    if i.modifiers.matches_logically(mods) && i.key_pressed(Key::T) {
         i.events.retain(|e| {
             !matches!(
                 e,
@@ -188,7 +188,7 @@ pub fn split_pane_focus_shortcut_pressed(i: &egui::InputState) -> bool {
 /// `wants_keyboard_input` 必须在 `input_mut` 之外求值：egui 上下文锁不可重入，
 /// 在 `input_mut` 闭包里再读 `ctx` 会让 UI 线程永久自锁。
 pub fn consume_preferences_shortcut(ctx: &egui::Context, app_overrides_terminal: bool) -> bool {
-    if !app_overrides_terminal || ctx.wants_keyboard_input() {
+    if !app_overrides_terminal || ctx.egui_wants_keyboard_input() {
         return false;
     }
     ctx.input_mut(|i| {
@@ -217,6 +217,7 @@ mod tests {
     fn key_press(key: Key, modifiers: Modifiers) -> Event {
         Event::Key {
             key,
+            physical_key: None,
             pressed: true,
             repeat: false,
             modifiers,
@@ -377,15 +378,17 @@ mod tests {
         std::thread::spawn(move || {
             let ctx = egui::Context::default();
             // 首帧窗口焦点状态变化时 egui 会清空修饰键，先空跑一帧。
-            let _ = ctx.run(egui::RawInput::default(), |_| {});
+            let _ = ctx.run_pass(egui::RawInput::default(), |_| {});
             let raw = egui::RawInput {
-                modifiers: primary_only(),
-                events: vec![Event::Text(",".to_string())],
+                events: vec![
+                    Event::ModifiersChanged(primary_only()),
+                    Event::Text(",".to_string()),
+                ],
                 ..Default::default()
             };
             let mut hit = false;
             let mut comma_left = false;
-            let _ = ctx.run(raw, |ctx| {
+            let _ = ctx.run_pass(raw, |ctx| {
                 if focus_text_input {
                     ctx.memory_mut(|m| m.request_focus(egui::Id::new("some_text_edit")));
                 }
@@ -402,7 +405,7 @@ mod tests {
     }
 
     // 回归：多开 SSH 标签切换后终端失焦，此时按住 ⌘ 会进入偏好快捷键检测；
-    // 旧实现在 `ctx.input_mut` 闭包里调 `ctx.wants_keyboard_input()` → 主线程在 egui RwLock 上自锁，整界面冻死。
+    // 旧实现在 `ctx.input_mut` 闭包里调 `ctx.egui_wants_keyboard_input()` → 主线程在 egui RwLock 上自锁，整界面冻死。
     #[test]
     fn preferences_shortcut_does_not_deadlock_and_consumes_comma() {
         let (hit, comma_left) = run_prefs_shortcut_frame(false)

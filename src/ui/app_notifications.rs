@@ -466,7 +466,7 @@ impl MistTermApp {
             return;
         }
         let margin = theme.toast_screen_margin();
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let pos = egui::pos2(
             screen.max.x - size.x - margin,
             screen.max.y - size.y - margin,

@@ -144,7 +144,7 @@ impl HelpDocsDialog {
                     // Key scroll id by page so switching tabs resets to top (avoids footer covering last rows).
                     let scroll_h = (ui.available_height() - 52.0).clamp(280.0, 420.0);
                     egui::ScrollArea::vertical()
-                        .id_source((
+                        .id_salt((
                             "help_docs_scroll",
                             match self.page {
                                 HelpPage::QuickStart => 0u8,
@@ -750,11 +750,11 @@ fn render_step_row(ui: &mut Ui, theme: &Theme, index: usize, step: &QuickStep) {
 }
 
 fn kbd_chip(ui: &mut Ui, theme: &Theme, text: &str) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(theme.color_panel_toolbar_btn_fill())
         .stroke(egui::Stroke::new(1.0, theme.color_text_input_stroke()))
-        .rounding(theme.radius_status_btn())
-        .inner_margin(egui::Margin::symmetric(7.0, 3.0))
+        .corner_radius(theme.radius_status_btn())
+        .inner_margin(egui::Margin::symmetric(7.0 as i8, 3.0 as i8))
         .show(ui, |ui| {
             ui.label(
                 RichText::new(text)
@@ -765,14 +765,11 @@ fn kbd_chip(ui: &mut Ui, theme: &Theme, text: &str) {
 }
 
 fn render_tip_box(ui: &mut Ui, theme: &Theme, title: &str, body: &str) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(theme.accent_a10())
         .stroke(egui::Stroke::new(1.0, theme.accent_alpha(48)))
-        .rounding(theme.radius_list_item())
-        .inner_margin(egui::Margin::symmetric(
-            theme.spacing_search_input_x(),
-            theme.spacing_search_input_y(),
-        ))
+        .corner_radius(theme.radius_list_item())
+        .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x() as i8, theme.spacing_search_input_y() as i8))
         .show(ui, |ui| {
             ui.label(
                 RichText::new(title)

@@ -125,7 +125,7 @@ impl ThemeManager {
             return;
         }
         let theme = self.current_theme();
-        let mut style = (*ctx.style()).clone();
+        let mut style = (*ctx.global_style()).clone();
 
         // 根据主题背景亮度判断是否为深色模式
         let is_dark = theme.bg_body.r < 128;
@@ -148,18 +148,18 @@ impl ThemeManager {
         style.visuals.widgets.noninteractive.bg_fill = theme.color_subtle_inset_fill();
         style.visuals.widgets.noninteractive.bg_stroke = theme.divider_stroke();
         if theme.uses_modern_palette() {
-            let rounding = egui::Rounding::same(theme.radius_list_item());
+            let rounding = egui::CornerRadius::same(theme.radius_list_item() as u8);
             style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
             style.visuals.widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
             style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
-            style.visuals.widgets.inactive.rounding = rounding;
+            style.visuals.widgets.inactive.corner_radius = rounding;
             style.visuals.widgets.hovered.bg_fill = theme.color_widget_hover_fill();
             style.visuals.widgets.hovered.weak_bg_fill = theme.color_widget_hover_fill();
             style.visuals.widgets.active.bg_fill = theme.color_widget_active_fill();
             style.visuals.widgets.open.bg_fill = Color32::TRANSPARENT;
             style.visuals.widgets.open.weak_bg_fill = Color32::TRANSPARENT;
             style.visuals.widgets.open.bg_stroke = egui::Stroke::NONE;
-            style.visuals.widgets.open.rounding = rounding;
+            style.visuals.widgets.open.corner_radius = rounding;
         } else {
             style.visuals.widgets.inactive.bg_fill = Color32::TRANSPARENT;
             style.visuals.widgets.inactive.weak_bg_fill = theme.color_subtle_inset_fill();
@@ -193,7 +193,7 @@ impl ThemeManager {
         style.visuals.selection.bg_fill = theme.color_text_selection_bg();
         style.visuals.selection.stroke.color = theme.color_text_selection_fg();
         style.visuals.hyperlink_color = theme.accent_color();
-        style.visuals.menu_rounding = egui::Rounding::same(theme.radius_list_item());
+        style.visuals.menu_corner_radius = egui::CornerRadius::same(theme.radius_list_item() as u8);
 
         // 间距保持与设计一致
         style.spacing.item_spacing = egui::vec2(8.0, 8.0);
@@ -246,7 +246,7 @@ impl ThemeManager {
             ui_font(theme.font_size_caption()),
         );
 
-        ctx.set_style(style);
+        ctx.set_style_of(egui::Theme::Dark, style);
         self.applied_ctx_index = Some(self.current);
         // 勿在此 request_repaint：每帧 apply 时再立即重绘会形成无限帧循环。
         // 切换主题时由偏好/菜单等调用方自行 request_repaint。

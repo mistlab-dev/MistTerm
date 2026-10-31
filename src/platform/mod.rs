@@ -22,10 +22,10 @@ mod macos_ime;
 #[cfg(target_os = "macos")]
 pub mod macos_menu;
 
-// eframe 0.23 不重新导出该 trait。编译器对 `with_option_as_alt` 的建议导入是这一条；
-// `winit` 必须是 macOS 的直接依赖，否则 E0433，trait 也不在作用域（E0599）。
+// eframe 0.37 重新导出了 winit 的 macOS 扩展 trait（经 eframe::winit）。
+// `winit` 直接依赖仍保留：eframe 不重新导出 winit 全部 API，且 [patch] 必须版本对齐。
 #[cfg(target_os = "macos")]
-use winit::platform::macos::{OptionAsAlt, WindowBuilderExtMacOS};
+use eframe::winit::platform::macos::OptionAsAlt;
 
 pub use app_name::APP_DISPLAY_NAME;
 pub use docs::{
@@ -74,33 +74,34 @@ pub fn run_gui() {
     {
         set_application_display_name();
         activate_gui_application();
-        // #188: after drawRect catch_unwind, annotate crash-reports as caught-in-FFI.
-        winit::platform::macos::set_caught_draw_rect_panic_hook(|| {
-            crate::core::crash_reporter::write_caught_ffi_note("drawRect");
-        });
+        // #188 caught-FFI hook：vendor/winit 已重铺为干净 0.30.13 基底（S1），
+        // set_caught_draw_rect_panic_hook 随 #205 补丁移除，S3（#208）移植 IME+#188 时一并恢复。
     }
 
     apply_preferred_english_input_source();
 
     #[allow(unused_mut)]
     let mut options = eframe::NativeOptions {
-        maximized: false,
-        initial_window_size: Some(eframe::egui::vec2(1200.0, 820.0)),
-        max_window_size: None,
-        app_id: Some("mistterm".to_string()),
-        icon_data: Some(crate::ui::icons::app_window_icon_data()),
+        // #206 S1：显式 Glow，勿默默切 wgpu（0.34+ wgpu 成默认；切换另票拍板，见 #204）。
+        renderer: eframe::Renderer::Glow,
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size(egui::vec2(1200.0, 820.0))
+            .with_maximized(false)
+            .with_app_id("mistterm")
+            .with_icon(crate::ui::icons::app_window_icon_data()),
         ..Default::default()
     };
 
     // macOS：内容延伸到标题栏，标签和红绿灯同一行(透明标题栏)。
-    // Option 当作 Alt：键位字符进事件队列并带上 Alt，终端再编成 Meta（ESC 前缀）。
-    // 不改成可配置的键位表。
+    // Option 当作 Alt：winit 0.30 的 `window_builder` 钩子收的是 egui ViewportBuilder，
+    // 挂不上 winit WindowAttributes 扩展 → 改为首帧经 `winit_window()` 调
+    // `set_option_as_alt`（见 app.rs `apply_macos_option_as_alt_once`）。
     #[cfg(target_os = "macos")]
     {
-        options.fullsize_content = true;
-        options.window_builder = Some(Box::new(|builder| {
-            builder.with_option_as_alt(OptionAsAlt::Both)
-        }));
+        options.viewport = options
+            .viewport
+            .with_fullsize_content_view(true)
+            .with_title_shown(false);
     }
 
     if let Err(e) = eframe::run_native(
@@ -114,9 +115,12 @@ pub fn run_gui() {
                 log::warn!("CJK font not loaded; Chinese UI text may show as tofu");
             }
             crate::ui::icons::UiIcons::install(&cc.egui_ctx);
-            Box::new(crate::ui::MistTermApp::new(cc))
+            Ok(Box::new(crate::ui::MistTermApp::new(cc)))
         }),
     ) {
+        // run_native 失败时 stdout/stderr 可能被重定向丢弃（e2e、GUI 子系统），
+        // 必须同时进日志文件，否则 headless CI 只能看到「进程没了」而没有原因。
+        log::error!("Failed to launch GUI: {e}");
         eprintln!("Failed to launch GUI: {e}");
         // GUI 启动失败也算「没走到正常退出」，不写 stamp（下次启动如果因此有新报告会提示）。
         std::process::exit(1);

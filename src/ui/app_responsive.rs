@@ -12,7 +12,7 @@ pub(super) enum ResponsiveLayoutBand {
 impl MistTermApp {
     #[inline]
     pub(super) fn layout_window_width(ctx: &egui::Context) -> f32 {
-        ctx.screen_rect().width()
+        ctx.content_rect().width()
     }
 
     #[inline]

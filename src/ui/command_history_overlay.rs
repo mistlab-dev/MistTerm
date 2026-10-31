@@ -581,7 +581,7 @@ fn panel_anchor(term_rect: egui::Rect, ctx: &egui::Context) -> egui::Pos2 {
             term_rect.top() + ANCHOR_INSET,
         )
     } else {
-        ctx.screen_rect().shrink(ANCHOR_INSET).left_top()
+        ctx.content_rect().shrink(ANCHOR_INSET).left_top()
     }
 }
 
@@ -633,7 +633,7 @@ fn fuzzy_suggestion_row(
         ui.painter()
             .rect_filled(row_rect, rounding, theme.list_row_hover_bg());
     }
-    ui.allocate_ui_at_rect(row_rect.shrink2(egui::vec2(8.0, 4.0)), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect.shrink2(egui::vec2(8.0, 4.0))), |ui| {
         ui.label(
             egui::RichText::new(format!(
                 "{} {}",
@@ -687,7 +687,7 @@ fn history_row(
 
     let mut delete_clicked = false;
     let mut check_clicked = false;
-    ui.allocate_ui_at_rect(row_rect, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
         HistoryTableCols::paint_row_strip(ui, cols, row_h, |cell, col| match col {
             0 => {
                 let before = *checked;
@@ -708,7 +708,7 @@ fn history_row(
                             .font(egui::FontId::monospace(theme.font_size_normal()))
                             .color(cmd_color),
                     )
-                    .truncate(true),
+                    .truncate(),
                 );
             }
             2 => {
@@ -718,7 +718,7 @@ fn history_row(
                             .size(theme.font_size_small())
                             .color(theme.text_secondary()),
                     )
-                    .truncate(true),
+                    .truncate(),
                 );
             }
             3 => {

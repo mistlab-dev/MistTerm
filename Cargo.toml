@@ -61,10 +61,19 @@ path = "src/bin/export_app_icon.rs"
 
 [dependencies]
 md5 = "0.7"
-eframe = { version = "0.23", features = ["wgpu", "persistence"] }
-# GUI - eframe with wgpu for GPU acceleration
-egui = "0.23"
-egui_extras = { version = "0.24", features = ["all_loaders"] }
+# GUI - eframe 0.37（MSRV 1.95）。wgpu feature 编入但运行时显式 Renderer::Glow
+# （0.25+ 双开默认偏 wgpu、0.34+ wgpu 成默认；是否切 wgpu 另票拍板，见 #204）。
+# Linux：x11+wayland 自 0.30 起须显式开启。
+eframe = { version = "0.37", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "glow",
+    "persistence",
+    "wayland",
+    "x11",
+] }
+egui = "0.37"
+egui_extras = { version = "0.37", features = ["all_loaders"] }
 
 # Async runtime - tokio with full features
 tokio = { version = "1.35", features = ["full"] }
@@ -138,7 +147,7 @@ alacritty_terminal = "0.26.0"
 portable-pty = "0.8"
 # ZMODEM 协议（lrzsz 路径专用；与 SFTP / cat 直传无关）
 zmodem2 = { path = "vendor/zmodem2" }
-egui_plot = "0.23"
+egui_plot = "0.38"
 pulldown-cmark = "0.11"
 genpdf = "0.2"
 
@@ -168,9 +177,9 @@ muda = "0.19"
 objc2 = "0.6"
 objc2-app-kit = "0.3"
 objc2-foundation = "0.3"
-# Option-as-Alt 需要 WindowBuilderExtMacOS。eframe 0.23 不重新导出 winit，
-# 只放在 [patch.crates-io] 时 `use winit::...` 会 E0433。版本与 eframe 的 winit 0.28.7 对齐。
-winit = { version = "0.28.7", default-features = false }
+# Option-as-Alt 需要 WindowExtMacOS 等 macOS 扩展 trait。eframe 不重新导出 winit，
+# 只放在 [patch.crates-io] 时 `use winit::...` 会 E0433。版本与 eframe 0.37 的 winit 0.30.x 对齐。
+winit = { version = "0.30.13", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

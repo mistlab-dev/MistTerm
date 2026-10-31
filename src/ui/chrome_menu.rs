@@ -65,7 +65,7 @@ fn menu_selectable_row(
     } else {
         theme.text_secondary()
     };
-    let galley = ui.fonts(|f| {
+    let galley = ui.ctx().fonts_mut(|f| {
         f.layout_no_wrap(
             name.to_owned(),
             egui::FontId::proportional(px),
@@ -102,7 +102,7 @@ fn menu_selectable_row(
         x += check_w + check_gap;
     }
     let text_pos = egui::pos2(x, rect.center().y - galley.size().y * 0.5);
-    ui.painter().galley(text_pos, galley);
+    ui.painter().galley(text_pos, galley, egui::Color32::WHITE);
     if response.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
@@ -123,7 +123,7 @@ pub fn menu_item_label(theme: &Theme, title: &str, shortcut: Option<&str>) -> Ri
 
 fn layout_menu_line(ui: &Ui, text: &str, px: f32, color: Color32) -> std::sync::Arc<egui::Galley> {
     let font_id = egui::FontId::proportional(px);
-    ui.fonts(|fonts| fonts.layout_no_wrap(text.to_owned(), font_id, color))
+    ui.fonts_mut(|fonts| fonts.layout_no_wrap(text.to_owned(), font_id, color))
 }
 
 /// 测量下拉菜单行内容宽(标题 + 可选快捷键)
@@ -197,7 +197,7 @@ pub fn popup_menu_button_shortcut_enabled(
                 .rect_filled(rect, rounding, theme.list_row_hover_bg());
         }
         let title_pos = egui::pos2(rect.min.x + pad.x, rect.center().y - title_g.size().y * 0.5);
-        ui.painter().galley(title_pos, title_g);
+        ui.painter().galley(title_pos, title_g, egui::Color32::WHITE);
         if let Some(sc) = shortcut {
             let sc_color = if enabled {
                 theme.text_tertiary()
@@ -209,7 +209,7 @@ pub fn popup_menu_button_shortcut_enabled(
                 rect.max.x - pad.x - sg.size().x,
                 rect.center().y - sg.size().y * 0.5,
             );
-            ui.painter().galley(shortcut_pos, sg);
+            ui.painter().galley(shortcut_pos, sg, egui::Color32::WHITE);
         }
     }
 

@@ -4,7 +4,7 @@
 
 use eframe::egui;
 use egui_plot::{
-    AxisBools, AxisHints, GridMark, Line, LineStyle, Plot, PlotPoints, Points, VLine,
+    AxisHints, GridMark, Line, LineStyle, Plot, PlotPoints, Points, VLine,
 };
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::Duration;
@@ -430,25 +430,31 @@ impl MonitorPanel {
         }
 
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::SidePanel::right(layout_util::MONITOR_PANEL_ID)
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
-            .resizable(true)
-            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-            .show(ctx, |ui| {
-                let h = ui.available_height().max(1.0);
-                let w = ui.available_width().max(1.0);
-                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-            });
+        ctx.root_ui(|root| {
+            egui::Panel::right(layout_util::MONITOR_PANEL_ID)
+                .default_size(def_w)
+                .min_size(min_w)
+                .max_size(max_w)
+                .resizable(true)
+                .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
+                .show(root, |ui| {
+                    let h = ui.available_height().max(1.0);
+                    let w = ui.available_width().max(1.0);
+                    ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                });
+        });
         let dock_inset = theme.spacing_right_dock_screen_inset();
-        let slot = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
-        crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
-        self.last_panel_slot_rect = Some(slot);
-        if let Some(slot) = self.last_panel_slot_rect {
+        // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
+        if let Some(state_rect) =
+            layout_util::side_panel_state_rect(ctx, layout_util::MONITOR_PANEL_ID)
+        {
+            let screen = ctx.content_rect();
+            let mut slot = state_rect;
+            slot.min.x = screen.max.x - slot.width();
+            slot.max.x = screen.max.x - dock_inset;
+            crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
+            self.last_panel_slot_rect = Some(slot);
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
-        } else {
-            layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
         }
         let _ = theme;
     }
@@ -463,7 +469,7 @@ impl MonitorPanel {
         if !*open {
             return;
         }
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.last_panel_slot_rect,
@@ -584,7 +590,7 @@ impl MonitorPanel {
                     let prev_extreme = ui.visuals().extreme_bg_color;
                     ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
                     egui::ScrollArea::vertical()
-                        .id_source("mistterm_monitor_scroll_v6")
+                        .id_salt("mistterm_monitor_scroll_v6")
                         .auto_shrink([true, false])
                         .max_height(scroll_h)
                         .show(ui, |ui| {
@@ -643,7 +649,7 @@ impl MonitorPanel {
                 .size(theme.font_size_medium())
                 .color(theme.text_secondary()),
         )
-        .id_source("monitor_alert_thresholds_v257")
+        .id_salt("monitor_alert_thresholds_v257")
         .open(Some(self.alert_thresholds_open))
         .show(ui, |ui| {
             layout_util::set_width_to_available(ui);
@@ -942,10 +948,10 @@ impl MonitorPanel {
             theme.red_color()
         };
 
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(theme.metric_bar_track_fill())
-            .rounding(4.0)
-            .inner_margin(theme.margin_monitor_metric_row())
+            .corner_radius(4.0)
+            .inner_margin(theme.margin_monitor_alert_box())
             .show(ui, |ui| {
                 ui.vertical(|ui| {
                     ui.label(
@@ -991,6 +997,7 @@ impl MonitorPanel {
             rect,
             4.0,
             egui::Stroke::new(1.0, theme.border_divider_color()),
+            egui::StrokeKind::Inside,
         );
         // 简易网格示意空图
         let cols = 4;
@@ -1029,6 +1036,7 @@ impl MonitorPanel {
                 r2,
                 4.0,
                 egui::Stroke::new(1.0, theme.border_divider_color()),
+                egui::StrokeKind::Inside,
             );
             ui.add_space(6.0);
         }
@@ -1048,7 +1056,7 @@ impl MonitorPanel {
         let width = layout_util::dock_scroll_content_width(ui, content_w);
         ui.set_max_width(width);
         let plot_margin = egui::vec2(0.05, 0.0);
-        let y_axis = vec![AxisHints::default().max_digits(Y_AXIS_DIGITS)];
+        let y_axis = vec![AxisHints::new_y().max_digits(Y_AXIS_DIGITS)];
         let link_x_id = ui.id().with("monitor_hist_time_axis");
         let tip_id = ui.id().with("monitor_history_tooltip");
 
@@ -1094,15 +1102,15 @@ impl MonitorPanel {
             })
             .collect();
 
-        let cpu_line = Line::new(cpu_points)
+        let cpu_line = Line::new("", cpu_points)
             .name(name_cpu)
             .color(theme.chart_cpu_color())
             .width(1.6);
-        let mem_line = Line::new(mem_points)
+        let mem_line = Line::new("", mem_points)
             .name(name_mem)
             .color(theme.chart_mem_color())
             .width(1.6);
-        let disk_line = Line::new(disk_points)
+        let disk_line = Line::new("", disk_points)
             .name(name_disk)
             .color(theme.chart_disk_color())
             .width(1.6);
@@ -1142,7 +1150,7 @@ impl MonitorPanel {
             .include_y(0.0)
             .include_y(100.0)
             .y_grid_spacer(|_| pct_y_grid_marks())
-            .y_axis_formatter(|value, _digits, _range| format!("{:.0}%", value))
+            .y_axis_formatter(|mark, _range| format!("{:.0}%", mark.value))
             .show(ui, |plot_ui| {
                 plot_ui.line(cpu_line);
                 plot_ui.line(mem_line);
@@ -1156,7 +1164,7 @@ impl MonitorPanel {
                         let s = &history[idx];
                         let snap_x = (s.collected_at - t0).as_secs_f64();
                         plot_ui.vline(
-                            VLine::new(snap_x)
+                            VLine::new("hover_marker", snap_x)
                                 .color(theme.subtle_line_color())
                                 .width(1.0)
                                 .style(LineStyle::Dotted { spacing: 4.0 }),
@@ -1176,7 +1184,7 @@ impl MonitorPanel {
                             ),
                         ] {
                             plot_ui.points(
-                                Points::new(vec![[snap_x, y]])
+                                Points::new("hover_dot", vec![[snap_x, y]])
                                     .radius(4.0)
                                     .color(color)
                                     .filled(true)
@@ -1226,7 +1234,7 @@ impl MonitorPanel {
                         l15,
                     ),
                 };
-                egui::show_tooltip_text(ui.ctx(), tip_id, tip);
+                egui::Tooltip::for_widget(&pct_resp.response).show(|ui| { ui.label(tip); });
             }
         }
 
@@ -1288,23 +1296,20 @@ impl MonitorPanel {
             .include_x(t_end.max(1.0))
             .include_y(0.0)
             .include_y(load_max)
-            .y_axis_formatter(|value, _digits, _range| format!("{:.1}", value.max(0.0)))
+            .y_axis_formatter(|mark, _range| format!("{:.1}", mark.value.max(0.0)))
             .show(ui, |plot_ui| {
                 plot_ui.line(
-                    Line::new(load1_points)
-                        .name(loc.tr("1 min", "1 分钟"))
+                    Line::new(loc.tr("1 min", "1 分钟"), load1_points)
                         .color(theme.chart_load_1m_color())
                         .width(1.6),
                 );
                 plot_ui.line(
-                    Line::new(load5_points)
-                        .name(loc.tr("5 min", "5 分钟"))
+                    Line::new(loc.tr("5 min", "5 分钟"), load5_points)
                         .color(theme.chart_load_5m_color())
                         .width(1.6),
                 );
                 plot_ui.line(
-                    Line::new(load15_points)
-                        .name(loc.tr("15 min", "15 分钟"))
+                    Line::new(loc.tr("15 min", "15 分钟"), load15_points)
                         .color(theme.chart_load_15m_color())
                         .width(1.6),
                 );
@@ -1371,18 +1376,18 @@ impl MonitorPanel {
                 .include_x(t_end.max(1.0))
                 .include_y(0.0)
                 .include_y(net_max)
-                .y_axis_formatter(|value, _max_chars, _range| {
-                    format_bytes_per_sec(value.max(0.0))
+                .y_axis_formatter(|mark, _range| {
+                    format_bytes_per_sec(mark.value.max(0.0))
                 })
                 .show(ui, |plot_ui| {
                     plot_ui.line(
-                        Line::new(rx_line)
+                        Line::new(loc.tr("RX", "下行"), rx_line)
                             .name(loc.tr("Download", "下行"))
                             .color(theme.chart_net_rx_color())
                             .width(1.6),
                     );
                     plot_ui.line(
-                        Line::new(tx_line)
+                        Line::new(loc.tr("TX", "上行"), tx_line)
                             .name(loc.tr("Upload", "上行"))
                             .color(theme.chart_net_tx_color())
                             .width(1.6),
@@ -1404,22 +1409,22 @@ impl MonitorPanel {
 }
 
 /// 历史趋势图公共配置：统一 Y 轴宽度、交互与边距；仅最下图显示 X 轴。
-fn monitor_hist_plot(
+fn monitor_hist_plot<'a>(
     id: egui::Id,
     width: f32,
     height: f32,
     link_x_id: egui::Id,
     plot_margin: egui::Vec2,
-    y_axis: &[AxisHints],
+    y_axis: &'a [AxisHints<'a>],
     show_x_axis: bool,
-    x_axis_label: &str,
-) -> Plot {
+    x_axis_label: &'a str,
+) -> Plot<'a> {
     Plot::new(id)
         .height(height)
         .width(width)
-        .link_axis(link_x_id, true, false)
-        .allow_zoom(AxisBools::new(true, false))
-        .allow_drag(AxisBools::new(true, false))
+        .link_axis(link_x_id, egui::Vec2b::new(true, false))
+        .allow_zoom(egui::Vec2b::new(true, false))
+        .allow_drag(egui::Vec2b::new(true, false))
         .allow_scroll(false)
         .allow_boxed_zoom(false)
         .set_margin_fraction(plot_margin)
@@ -1427,7 +1432,7 @@ fn monitor_hist_plot(
         .x_axis_label(x_axis_label.to_string())
         .show_axes([show_x_axis, true])
         .show_grid([true, true])
-        .label_formatter(|_name, _value| String::new())
+        .label_formatter(|_pos| None)
 }
 
 fn show_chart_caption(ui: &mut egui::Ui, theme: &Theme, text: &str) {

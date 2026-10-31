@@ -17,7 +17,7 @@ impl UpdateLock {
         std::fs::create_dir_all(dir).map_err(|e| UpdateError::Install(e.to_string()))?;
         let file = OpenOptions::new()
             .create(true)
-            .truncate(false)
+            .truncate(true)
             .read(true)
             .write(true)
             .open(dir.join("update.lock"))

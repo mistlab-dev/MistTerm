@@ -4076,7 +4076,7 @@ impl MistTermApp {
         // 任何 UI TextEdit/IME 优先于「终端仍想要键盘」。
         // 半角 `,` 是广播式 Event::Text；全角 `，` 走 IME Composition，只进当前 IME 目标。
         // 若仍按 terminal_wants 抢键，全角标点会进终端 ime_capture 并被清空。
-        if ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
+        if ctx.egui_wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
             return false;
         }
         let terminal_focused = self
@@ -4100,7 +4100,7 @@ impl MistTermApp {
             && (self.ai_panel.is_draft_input_focused()
                 || ctx.memory(|m| m.has_focus(egui::Id::new("mistterm_ai_draft"))));
         let ui_typing =
-            ai_draft_focused || (ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus());
+            ai_draft_focused || (ctx.egui_wants_keyboard_input() && !self.active_terminal_has_keyboard_focus());
         if !ui_typing {
             return;
         }
@@ -4142,7 +4142,7 @@ impl MistTermApp {
         {
             return false;
         }
-        if ctx.wants_keyboard_input() {
+        if ctx.egui_wants_keyboard_input() {
             return false;
         }
         self.active_tab
@@ -4163,7 +4163,7 @@ impl MistTermApp {
         if ai_draft_focused {
             return false;
         }
-        if ctx.wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
+        if ctx.egui_wants_keyboard_input() && !self.active_terminal_has_keyboard_focus() {
             return false;
         }
         let terminal_focused = self
@@ -6124,7 +6124,7 @@ impl MistTermApp {
 
         let mut close = false;
         let inner = rect.shrink2(egui::vec2(theme.spacing_region_pad_x(), 0.0));
-        ui.allocate_ui_at_rect(inner, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_height(bar_h);
             if ui.input(|i| i.key_pressed(Key::Escape)) {
                 close = true;
@@ -6277,7 +6277,7 @@ impl MistTermApp {
     /// Win/Linux 沉浸式关掉系统标题栏，退出时恢复；macOS 保持系统边框。
     pub(crate) fn sync_window_decorations_for_immersive(
         &mut self,
-        frame: &mut eframe::Frame,
+        ctx: &egui::Context,
         immersive: bool,
     ) {
         if cfg!(target_os = "macos") {
@@ -6287,7 +6287,7 @@ impl MistTermApp {
         if self.window_decorated_applied == Some(want_decorated) {
             return;
         }
-        frame.set_decorations(want_decorated);
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(want_decorated));
         self.window_decorated_applied = Some(want_decorated);
     }
 
@@ -7317,7 +7317,7 @@ impl MistTermApp {
         let Some(text) = self.pending_terminal_copy.take() else {
             return;
         };
-        if ctx.output(|o| o.copied_text != text) {
+        if ctx.output(|o| o.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(t) if *t == text))) {
             log::warn!("terminal copy: clipboard text was overwritten in the same frame; re-applying");
             ctx.copy_text(text);
         }
@@ -7998,39 +7998,40 @@ impl MistTermApp {
     fn show_fragment_panel(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
         dock_col_w: f32,
     ) {
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let fragment_panel = egui::SidePanel::right(layout_util::FRAGMENT_PANEL_ID)
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
-            .resizable(true)
-            .show_separator_line(false)
-            // 仅占布局宽；勿在此绘制内容(CentralPanel 后绘会盖住)。内容在 Foreground Area 重绘。
-            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-            .show(ctx, |ui| {
-                let h = ui.available_height().max(1.0);
-                let w = ui.available_width().max(1.0);
-                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-            });
+        {
+            egui::Panel::right(layout_util::FRAGMENT_PANEL_ID)
+                .default_size(def_w)
+                .min_size(min_w)
+                .max_size(max_w)
+                .resizable(true)
+                .show_separator_line(false)
+                // 仅占布局宽；勿在此绘制内容(CentralPanel 后绘会盖住)。内容在 Foreground Area 重绘。
+                .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
+                .show(ui, |ui| {
+                    let h = ui.available_height().max(1.0);
+                    let w = ui.available_width().max(1.0);
+                    ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                });
+        }
         let dock_inset = theme.spacing_right_dock_screen_inset();
-        let slot = layout_util::side_panel_place_slot(
-            ctx,
-            &fragment_panel.response,
-            dock_col_w,
-            dock_inset,
-        );
-        crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
-        self.fragment_panel_slot_rect = Some(slot);
-        if let Some(slot) = self.fragment_panel_slot_rect {
+        // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
+        let slot = layout_util::side_panel_state_rect(ctx, layout_util::FRAGMENT_PANEL_ID)
+            .map(|r| {
+                let screen = ctx.content_rect();
+                let mut s = r;
+                s.min.x = screen.max.x - s.width();
+                s.max.x = screen.max.x - dock_inset;
+                s
+            });
+        if let Some(slot) = slot {
+            crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
+            self.fragment_panel_slot_rect = Some(slot);
             layout_util::record_right_dock_panel_rect(&slot, &mut self.right_dock_outer_left_x);
-        } else {
-            layout_util::record_right_dock_panel(
-                &fragment_panel.response,
-                &mut self.right_dock_outer_left_x,
-            );
         }
         let _ = theme;
     }
@@ -8044,7 +8045,7 @@ impl MistTermApp {
         if !self.show_fragment_panel {
             return;
         }
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.fragment_panel_slot_rect,
@@ -8642,7 +8643,7 @@ impl MistTermApp {
         let prev_extreme = ui.visuals().extreme_bg_color;
         ui.visuals_mut().extreme_bg_color = theme.color_scroll_extreme_bg();
         egui::ScrollArea::vertical()
-            .id_source("mistterm_fragment_list_scroll")
+            .id_salt("mistterm_fragment_list_scroll")
             .auto_shrink([false, false])
             .max_height(scroll_h)
             .scroll_bar_visibility(egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden)
@@ -8704,6 +8705,7 @@ impl MistTermApp {
                             row_resp.row.rect,
                             theme.radius_card(),
                             egui::Stroke::new(1.5, theme.accent_color()),
+                            egui::StrokeKind::Inside,
                         );
                     }
                     if row_resp.title.clicked() {
@@ -8729,7 +8731,6 @@ impl MistTermApp {
                                 if let Some(item) = self.market_item_for_stats(&frag_clone) {
                                     self.install_market_fragment(ui.ctx(), &item);
                                 }
-                                ui.close_menu();
                             }
                         });
                     }
@@ -9242,10 +9243,11 @@ impl MistTermApp {
     pub(crate) fn show_activity_rail(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
     ) {
         if self.activity_rail_collapsed {
-            self.show_activity_rail_reveal_strip(ctx, theme);
+            self.show_activity_rail_reveal_strip(ctx, ui, theme);
             return;
         }
         let rail_w = theme.activity_rail_width();
@@ -9256,15 +9258,15 @@ impl MistTermApp {
                 None => label.to_string(),
             }
         };
-        egui::SidePanel::left("activity_rail")
-            .exact_width(rail_w)
+        egui::Panel::left("activity_rail")
+            .exact_size(rail_w)
             .resizable(false)
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(theme.chrome_bar_fill())
                     .stroke(egui::Stroke::NONE),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 let full = ui.max_rect();
                 ui.painter().rect_filled(full, 0.0, theme.chrome_bar_fill());
                 ui.painter().vline(
@@ -9388,6 +9390,7 @@ impl MistTermApp {
     pub(crate) fn show_activity_rail_reveal_strip(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
     ) {
         let strip_w = theme.activity_rail_collapsed_strip_width();
@@ -9396,15 +9399,15 @@ impl MistTermApp {
             crate::i18n::menu::labels(crate::i18n::language(ctx)).show_activity_rail,
             crate::platform::accel("B"),
         );
-        egui::SidePanel::left("activity_rail_reveal")
-            .exact_width(strip_w)
+        egui::Panel::left("activity_rail_reveal")
+            .exact_size(strip_w)
             .resizable(false)
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(theme.chrome_bar_fill())
                     .stroke(egui::Stroke::NONE),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 if crate::ui::chrome::activity_rail_reveal_strip(ui, theme, &tip).clicked() {
                     self.activity_rail_collapsed = false;
                 }
@@ -9424,17 +9427,18 @@ impl MistTermApp {
             .map(|f| f.usage_count)
             .sum();
 
-        egui::TopBottomPanel::bottom("bottom_chrome")
-            .exact_height(status_h)
+        ctx.root_ui(|root| {
+        egui::Panel::bottom("bottom_chrome")
+            .exact_size(status_h)
             .frame(theme.frame_chrome_bar())
-            .show(ctx, |ui| {
-                let screen = ui.ctx().screen_rect();
+            .show(root, |ui| {
+                let screen = ui.ctx().content_rect();
                 let inner = ui.max_rect();
                 let m = theme.margin_chrome_bar();
-                let panel_top = inner.min.y - m.top;
+                let panel_top = inner.min.y - m.top as f32;
                 let panel_rect = egui::Rect::from_min_max(
                     egui::pos2(screen.min.x, panel_top),
-                    egui::pos2(screen.max.x, inner.max.y + m.bottom),
+                    egui::pos2(screen.max.x, inner.max.y + m.bottom as f32),
                 );
                 ui.painter()
                     .rect_filled(panel_rect, 0.0, theme.chrome_bar_fill());
@@ -9641,6 +9645,7 @@ impl MistTermApp {
                     },
                 );
             });
+        });
     }
 
     #[cfg(target_os = "macos")]
@@ -9674,7 +9679,7 @@ impl MistTermApp {
                 crate::modules::session_import::SessionImportModule::import_enabled(&self.module_registry),
                 self.sidebar_collapsed,
                 self.activity_rail_collapsed,
-                frame.info().window_info.maximized,
+                ctx.input(|i| i.viewport().maximized.unwrap_or(false)),
                 self.show_sftp_panel,
                 self.show_fragment_panel,
                 self.show_monitor_panel,
@@ -9719,7 +9724,7 @@ impl MistTermApp {
             MacMenuAction::CloseTab => self.request_close_active_tab(),
             MacMenuAction::DisconnectSsh => self.disconnect_ssh_keep_buffer_active(ctx),
             MacMenuAction::ReconnectTab => self.reconnect_active_tab(ctx),
-            MacMenuAction::Quit => frame.close(),
+            MacMenuAction::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             MacMenuAction::CopyTerminal => self.menu_copy_for_context(ctx),
             MacMenuAction::PasteToTerminal => self.menu_paste_for_context(ctx),
             MacMenuAction::SelectAllTerminal => self.menu_select_all_for_context(ctx),
@@ -9733,7 +9738,7 @@ impl MistTermApp {
             }
             MacMenuAction::ToggleActivityRail => self.toggle_activity_rail(),
             MacMenuAction::ToggleMaximize => {
-                frame.set_maximized(!frame.info().window_info.maximized);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!ctx.input(|i| i.viewport().maximized.unwrap_or(false))));
             }
             MacMenuAction::TerminalSearch => self.toggle_terminal_search(),
             MacMenuAction::ToggleSftp => self.toggle_sftp_panel(ctx),
@@ -9907,7 +9912,14 @@ impl eframe::App for MistTermApp {
         crate::platform::arm_quit_watchdog();
     }
 
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    // #206 S1：eframe 0.34+ 把 App::update 拆成 logic（纯状态，无 UI）+ ui（绘制）。
+    // S1 策略：原 update 全身放进 ui（等价旧行为）；logic 空实现。
+    // S2（#207）按梳理 §10「先 logic 调原 update 全身、ui 空」反查脏帧/repaint 行为后再细化拆分。
+    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {}
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+        let ctx = &ctx;
         if let Some(url) = self.pending_ssh_url.take() {
             self.open_ssh_url(ctx, url);
         }
@@ -9989,7 +10001,7 @@ impl eframe::App for MistTermApp {
         self.poll_market_catalog_refresh(ctx);
         self.poll_market_catalog_debounce();
         self.update_tick(ctx);
-        self.update_handle_close(frame);
+        self.update_handle_close(ctx);
 
         #[cfg(target_os = "macos")]
         self.poll_native_menu_bar(ctx, frame);
@@ -10753,7 +10765,7 @@ impl eframe::App for MistTermApp {
             }
         }
 
-        self.render_workspace_shell(ctx, frame, &theme);
+        self.render_workspace_shell(ctx, ui, frame, &theme);
         let output_trigger_enabled = self
             .module_registry
             .is_enabled(crate::modules::output_trigger::MODULE_ID);
@@ -10930,7 +10942,7 @@ impl MistTermApp {
         );
         let rect = egui::Rect::from_min_size(origin, egui::vec2(card_w, card_h));
         ui.allocate_rect(rect, egui::Sense::hover());
-        let mut card = ui.child_ui(rect, egui::Layout::top_down(egui::Align::Center));
+        let mut card = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Center)));
         card.add_space(8.0);
         card.label(
             egui::RichText::new("MistTerm")

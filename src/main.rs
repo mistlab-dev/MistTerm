@@ -57,7 +57,22 @@ fn main() -> eframe::Result<()> {
 
     mistterm::platform::init_runtime_logging();
 
-    mistterm::platform::run_gui();
+    // 事件循环初始化失败（如 headless X11 下 glow/glutin 建窗失败）会让
+    // run_native 内部 panic/abort；默认 panic hook 的 stderr 在 CI 里可能被丢弃。
+    // 包一层 catch_unwind，把 panic 消息落盘成 crash 报告 + 日志，再按原样退出。
+    // #206 S1 诊断用：Xvfb GUI e2e 曾出现「字体加载后静默退出」无任何错误输出。
+    let gui_result = std::panic::catch_unwind(mistterm::platform::run_gui);
+    if let Err(payload) = gui_result {
+        let msg = payload
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "<non-string panic payload>".to_string());
+        log::error!("GUI event loop panicked: {msg}");
+        eprintln!("GUI event loop panicked: {msg}");
+        // 已由 crash_reporter panic hook 写报告；这里只保退出码语义：panic -> 非零。
+        std::process::exit(101);
+    }
     Ok(())
 }
 
