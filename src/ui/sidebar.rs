@@ -6,8 +6,12 @@ use eframe::egui;
 use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 use crate::core::session::SessionManager;
+use crate::core::session_list::{
+    connection_status_label, dedupe_sessions_for_connection_list, session_group_key,
+    sort_sessions_keeping_groups,
+};
 use crate::core::team::TeamServer;
-use crate::core::session_sort::{sort_sessions, SessionSortBy};
+use crate::core::session_sort::SessionSortBy;
 use crate::ui::layout_util;
 use crate::ui::theme::Theme;
 
@@ -190,7 +194,11 @@ impl Sidebar {
                     theme,
                     search_field_id,
                     search_query,
-                    crate::i18n::tr(ui.ctx(), "Search sessions…", "搜索会话…"),
+                    crate::i18n::tr(
+                        ui.ctx(),
+                        "Search server name / IP",
+                        "搜索服务器名称 / IP",
+                    ),
                     width,
                     false,
                 );
@@ -435,7 +443,9 @@ impl Sidebar {
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
                     ui.set_min_width(width);
-                    let mut sessions = session_manager
+                    // #247：先按搜索筛，再按主机 ID / host+port+user 去重，再按在线筛选，
+                    // 最后组内排序且组标签连续（避免「默认（未分组）」重复）。
+                    let searched: Vec<_> = session_manager
                         .list_sessions()
                         .iter()
                         .filter(|s| {
@@ -445,17 +455,19 @@ impl Sidebar {
                             let query = search_query.to_lowercase();
                             s.name.to_lowercase().contains(&query)
                                 || s.host.to_lowercase().contains(&query)
+                                || s.username.to_lowercase().contains(&query)
                                 || s.group.to_lowercase().contains(&query)
                         })
-                        .filter(|s| match filter.as_str() {
-                            "online" => connected_sessions.contains(&s.id),
-                            "offline" => !connected_sessions.contains(&s.id),
-                            _ => true,
-                        })
                         .cloned()
-                        .collect::<Vec<_>>();
-
-                    sort_sessions(&mut sessions, *sort_by);
+                        .collect();
+                    let mut sessions =
+                        dedupe_sessions_for_connection_list(&searched, connected_sessions);
+                    sessions.retain(|s| match filter.as_str() {
+                        "online" => connected_sessions.contains(&s.id),
+                        "offline" => !connected_sessions.contains(&s.id),
+                        _ => true,
+                    });
+                    sort_sessions_keeping_groups(&mut sessions, *sort_by);
                     
                     if sessions.is_empty() {
                         ui.centered_and_justified(|ui| {
@@ -496,14 +508,15 @@ impl Sidebar {
                             }
                         });
                     } else {
-                        let mut current_group = String::new();
+                        let mut current_group_key: Option<String> = None;
                         for session in &sessions {
-                            if session.group != current_group {
-                                current_group = session.group.clone();
+                            let gkey = session_group_key(&session.group);
+                            if current_group_key.as_ref() != Some(&gkey) {
+                                current_group_key = Some(gkey.clone());
                                 ui.add_space(theme.spacing_panel_gap());
                                 let group_label = crate::i18n::session_group_display_name(
                                     ui.ctx(),
-                                    &current_group,
+                                    &session.group,
                                 );
                                 let group_resp = crate::ui::chrome::label_tag_chip(
                                     ui,
@@ -512,10 +525,7 @@ impl Sidebar {
                                     theme.font_size_connection_meta(),
                                     theme.color_section_title(),
                                 );
-                                if current_group.trim().is_empty()
-                                    || current_group == "默认"
-                                    || current_group.eq_ignore_ascii_case("default")
-                                {
+                                if gkey.is_empty() {
                                     group_resp.on_hover_text(crate::i18n::tr(
                                         ui.ctx(),
                                         "Default group for new connections. Rename via Edit host.",
@@ -557,11 +567,18 @@ impl Sidebar {
                                 );
                             }
 
-                            let status_text = if connected_sessions.contains(&session.id) {
-                                relative_last_connected(ui.ctx(), session.last_connected_at)
-                            } else {
-                                crate::i18n::tr(ui.ctx(), "Offline", "离线").to_string()
-                            };
+                            let online = connected_sessions.contains(&session.id);
+                            let zh = crate::i18n::language(ui.ctx()) == crate::i18n::UiLanguage::Zh;
+                            let now_unix = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .map(|d| d.as_secs() as i64)
+                                .unwrap_or(0);
+                            let status_text = connection_status_label(
+                                zh,
+                                online,
+                                session.last_connected_at,
+                                now_unix,
+                            );
                             let mut row_ui = ui.child_ui(
                                 row_rect.shrink2(egui::vec2(
                                     theme.spacing_list_item_x(),
@@ -569,7 +586,6 @@ impl Sidebar {
                                 )),
                                 egui::Layout::left_to_right(egui::Align::Center),
                             );
-                            let online = connected_sessions.contains(&session.id);
                             let connecting = connecting_sessions.contains(&session.id);
                             let accent = theme.session_tab_accent_color(session);
                             // 左侧色条区分会话；圆点仍表示在线状态
@@ -753,22 +769,3 @@ impl Sidebar {
     }
 }
 
-fn relative_last_connected(ctx: &egui::Context, ts: Option<i64>) -> String {
-    let Some(last) = ts else {
-        return crate::i18n::tr(ctx, "Just now", "刚刚").to_string();
-    };
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(last);
-    let diff = now.saturating_sub(last).max(0);
-    if diff < 60 {
-        crate::i18n::tr(ctx, "Just now", "刚刚").to_string()
-    } else if diff < 3600 {
-        format!("{}m", diff / 60)
-    } else if diff < 86_400 {
-        format!("{}h", diff / 3600)
-    } else {
-        format!("{}d", diff / 86_400)
-    }
-}
