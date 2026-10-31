@@ -227,7 +227,7 @@ fn assess_segment(segment: &str) -> Option<DangerHit> {
     if tokens.is_empty() {
         return None;
     }
-    let cmd = tokens[0].to_ascii_lowercase();
+    let cmd = command_basename(&tokens[0]);
     let cmd = cmd.as_str();
 
     match cmd {
@@ -303,6 +303,13 @@ fn assess_segment(segment: &str) -> Option<DangerHit> {
         }),
         _ => None,
     }
+}
+
+/// Normalize argv[0] for rule matching: `/bin/rm` → `rm`, `\\rm` → `rm`.
+fn command_basename(token: &str) -> String {
+    let lower = token.to_ascii_lowercase();
+    let base = lower.rsplit('/').next().unwrap_or(lower.as_str());
+    base.strip_prefix('\\').unwrap_or(base).to_string()
 }
 
 fn strip_leading_noise(segment: &str) -> String {
@@ -635,6 +642,20 @@ mod tests {
         let hit = assess_ai_terminal_danger("rm -rf /tmp/a /tmp/b").unwrap();
         assert!(hit.targets.iter().any(|t| t.contains("/tmp/a")));
         assert!(hit.targets.iter().any(|t| t.contains("/tmp/b")));
+    }
+
+    #[test]
+    fn path_qualified_commands_match_basename() {
+        let hit = assess_ai_terminal_danger("/bin/rm -rf /tmp/x").expect("/bin/rm");
+        assert_eq!(hit.rule_id, "rm");
+        assert!(hit.targets.iter().any(|t| t.contains("/tmp/x")));
+
+        let hit = assess_ai_terminal_danger("sudo /usr/bin/rm -rf /tmp/x").expect("sudo /usr/bin/rm");
+        assert_eq!(hit.rule_id, "rm");
+
+        assert_eq!(ids("/usr/bin/dd if=/dev/zero of=/dev/sda"), Some("dd"));
+        assert_eq!(ids("/sbin/mkfs.ext4 /dev/sdb1"), Some("mkfs"));
+        assert_eq!(ids("/sbin/reboot"), Some("power"));
     }
 
     #[test]
