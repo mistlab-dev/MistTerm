@@ -997,6 +997,7 @@ impl MonitorPanel {
             rect,
             4.0,
             egui::Stroke::new(1.0, theme.border_divider_color()),
+            egui::StrokeKind::Inside,
         );
         // 简易网格示意空图
         let cols = 4;
@@ -1035,6 +1036,7 @@ impl MonitorPanel {
                 r2,
                 4.0,
                 egui::Stroke::new(1.0, theme.border_divider_color()),
+                egui::StrokeKind::Inside,
             );
             ui.add_space(6.0);
         }

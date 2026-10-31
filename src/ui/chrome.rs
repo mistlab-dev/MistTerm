@@ -3958,6 +3958,7 @@ fn paint_activity_rail_badge(ui: &mut Ui, theme: &Theme, icon_rect: egui::Rect, 
             badge_rect.center().y - galley.size().y * 0.5,
         ),
         galley,
+        Color32::WHITE,
     );
 }
 
