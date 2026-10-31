@@ -649,7 +649,7 @@ impl MonitorPanel {
                 .size(theme.font_size_medium())
                 .color(theme.text_secondary()),
         )
-        .id_source("monitor_alert_thresholds_v257")
+        .id_salt("monitor_alert_thresholds_v257")
         .open(Some(self.alert_thresholds_open))
         .show(ui, |ui| {
             layout_util::set_width_to_available(ui);
