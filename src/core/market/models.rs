@@ -78,6 +78,26 @@ pub fn install_into_personal_library(
     item: &MarketFragment,
 ) -> Result<(), String> {
     let source = item.market_source_tag();
+    let mut tags = parse_tags_json(&item.tags);
+    if !tags.iter().any(|t| t.eq_ignore_ascii_case("market")) {
+        tags.push("market".into());
+    }
+    tags.push(source.clone());
+    let category = if item.category.is_empty() {
+        "market".to_string()
+    } else {
+        item.category.clone()
+    };
+    let mut probe = crate::core::fragment::FragmentStats::new(
+        item.id.clone(),
+        item.title.clone(),
+        item.command.clone(),
+        category.clone(),
+    );
+    probe.tags = tags.clone();
+    if crate::core::fragment::is_test_residue_fragment(&probe) {
+        return Err("test_residue".into());
+    }
     if manager.get_all().iter().any(|f| {
         f.tags
             .iter()
@@ -85,19 +105,10 @@ pub fn install_into_personal_library(
     }) {
         return Err("already_installed".into());
     }
-    let mut tags = parse_tags_json(&item.tags);
-    if !tags.iter().any(|t| t.eq_ignore_ascii_case("market")) {
-        tags.push("market".into());
-    }
-    tags.push(source);
     manager.add_fragment_with_all(
         item.title.clone(),
         item.command.clone(),
-        if item.category.is_empty() {
-            "market".to_string()
-        } else {
-            item.category.clone()
-        },
+        category,
         tags,
         parse_variables_json(&item.variables),
     );
