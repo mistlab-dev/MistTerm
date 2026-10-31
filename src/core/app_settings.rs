@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::core::ai_settings::AiSettings;
+use crate::core::monitor_alert::MonitorAlertSettings;
 use crate::core::audit::AuditSettings;
 use crate::core::team::TeamSettings;
 use crate::core::vault::VaultSettings;
@@ -47,6 +48,9 @@ pub struct AppSettings {
     /// #215：自动化规则对话框「一次性短提示」已勾选不再显示。
     #[serde(default)]
     pub rules_intro_dismissed: bool,
+    /// #251：监控告警推送（声音 / 系统通知 / 仅面板）。
+    #[serde(default)]
+    pub monitor_alert: MonitorAlertSettings,
 }
 
 fn default_true() -> bool {
@@ -69,6 +73,7 @@ impl Default for AppSettings {
             disabled_modules: Vec::new(),
             reconnect_on_foreground: false,
             rules_intro_dismissed: false,
+            monitor_alert: MonitorAlertSettings::default(),
         }
     }
 }
@@ -107,5 +112,14 @@ mod tests {
         let s: AppSettings = serde_json::from_str("{}").expect("parse");
         assert!(s.default_local_dir.is_empty());
         assert!(s.remember_paste_history);
+    }
+
+    #[test]
+    fn old_settings_default_monitor_alert_to_system_notify() {
+        let s: AppSettings = serde_json::from_str("{}").expect("parse");
+        assert_eq!(
+            s.monitor_alert.notify_mode,
+            crate::core::AlertNotifyMode::SystemNotify
+        );
     }
 }

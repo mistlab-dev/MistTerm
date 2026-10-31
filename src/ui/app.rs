@@ -5074,10 +5074,12 @@ impl MistTermApp {
         self.tabs.get(idx)?.active_terminal()
     }
 
-    /// 监控侧栏跟随当前标签：重新绑定 SSH 会话上的 exec；未连接或侧栏关闭则清空。
-    fn sync_monitor_panel_to_active_tab(&mut self) {
-        if !self.show_monitor_panel {
-            self.monitor_panel.clear();
+    /// 监控侧栏跟随当前标签：重新绑定 SSH 会话上的 exec。
+    ///
+    /// #251：面板关闭后若已初始化，仍保持后台采集（系统通知 / 角标）；
+    /// 从未打开过且未初始化时不主动开采集。
+    pub(crate) fn sync_monitor_panel_to_active_tab(&mut self) {
+        if !self.show_monitor_panel && !self.monitor_panel.is_initialized() {
             return;
         }
         let Some(tab) = self.active_tab.and_then(|i| self.tabs.get(i)) else {
@@ -6297,6 +6299,88 @@ impl MistTermApp {
             self.open_right_dock_panel(ActiveRightDock::Monitor);
         }
     }
+
+    /// #251：上升沿告警 → 系统通知 / 声音 / 面板内 Toast；权限被拒则降级说明。
+    fn dispatch_monitor_alert_notifications(&mut self, ctx: &egui::Context) {
+        let risen = self.monitor_panel.take_pending_rising_alerts();
+        if risen.is_empty() {
+            return;
+        }
+        let mode = self.app_settings.monitor_alert.notify_mode;
+        let dispatch = crate::core::dispatch_for_mode(mode);
+        let title = crate::i18n::tr(ctx, "Monitor alert", "监控告警").to_string();
+        let mut body = risen.join("\n");
+        let open_label = crate::i18n::tr(ctx, "Open monitor", "打开监控").to_string();
+
+        // 首次系统通知：权限说明并进正文（避免另弹 Toast 抢占告警）。
+        if matches!(dispatch, crate::core::AlertDispatch::TrySystemNotify)
+            && !self.app_settings.monitor_alert.permission_hint_dismissed
+        {
+            self.app_settings.monitor_alert.permission_hint_dismissed = true;
+            let _ = self.app_settings.save();
+            let hint = crate::i18n::tr(
+                ctx,
+                "Tip: allow OS notification permission so alerts reach you when the panel is closed. Change mode in Preferences.",
+                "提示：请允许系统通知权限，面板关闭时也能收到告警。可在偏好中改推送方式。",
+            );
+            body = format!("{body}\n{hint}");
+        }
+
+        match dispatch {
+            crate::core::AlertDispatch::PanelOnly => {
+                if !self.show_monitor_panel {
+                    self.push_monitor_open_toast(&title, &body, &open_label);
+                }
+            }
+            crate::core::AlertDispatch::PlaySound => {
+                crate::platform::desktop_notify::play_alert_sound();
+                if !self.show_monitor_panel {
+                    self.push_monitor_open_toast(&title, &body, &open_label);
+                }
+            }
+            crate::core::AlertDispatch::TrySystemNotify => {
+                let result = crate::platform::desktop_notify::send_desktop_notification(
+                    &title,
+                    &body,
+                    true,
+                );
+                match result {
+                    crate::platform::desktop_notify::DesktopNotifyResult::Sent => {
+                        if !self.show_monitor_panel {
+                            self.push_monitor_open_toast(&title, &body, &open_label);
+                        }
+                    }
+                    crate::platform::desktop_notify::DesktopNotifyResult::DeniedOrUnavailable => {
+                        if !self.app_settings.monitor_alert.permission_denied_explained {
+                            self.app_settings.monitor_alert.permission_denied_explained = true;
+                            let _ = self.app_settings.save();
+                        }
+                        let degrade = crate::i18n::tr(
+                            ctx,
+                            "System notification unavailable — showing in-app alert. Check OS permission or switch mode in Preferences.",
+                            "系统通知不可用，已降级为应用内告警。请检查系统权限，或在偏好中改推送方式。",
+                        );
+                        let text = format!("{body}\n{degrade}");
+                        self.push_monitor_open_toast(&title, &text, &open_label);
+                    }
+                }
+            }
+        }
+    }
+
+    fn push_monitor_open_toast(&mut self, title: &str, body: &str, open_label: &str) {
+        if self.has_pending_action_toast() {
+            return;
+        }
+        self.push_action_toast_titled(
+            ToastKind::Warn,
+            title,
+            body,
+            ToastAction::OpenMonitor,
+            open_label,
+        );
+    }
+
 
     /// 切换右侧端口转发面板。
     pub(crate) fn toggle_port_forward_panel(&mut self, ctx: &egui::Context) {
@@ -9244,13 +9328,22 @@ impl MistTermApp {
                     {
                         self.toggle_port_forward_panel(ctx);
                     }
-                    if crate::ui::chrome::activity_rail_button(
+                    let monitor_badge = {
+                        let n = self.monitor_panel.current_alert_count();
+                        if n > 0 {
+                            Some(n)
+                        } else {
+                            None
+                        }
+                    };
+                    if crate::ui::chrome::activity_rail_button_with_badge(
                         ui,
                         theme,
                         crate::ui::icons::IconId::Monitor,
                         self.show_monitor_panel,
                         &tip(menu.monitor_panel, None),
                         crate::i18n::tr(ctx, "Mon", "监控"),
+                        monitor_badge,
                     )
                     .clicked()
                     {
@@ -9953,6 +10046,7 @@ impl eframe::App for MistTermApp {
 
         // 监控：`exec` 由 shell 泵串行执行，在此处轮询结果并驱动自动刷新
         self.monitor_panel.update(ctx, self.show_monitor_panel);
+        self.dispatch_monitor_alert_notifications(ctx);
         self.poll_team_service(ctx);
         self.poll_port_forward_panel();
         show_team_fragment_editor_modal(
