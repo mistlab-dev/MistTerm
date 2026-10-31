@@ -253,31 +253,17 @@ fn flux_badge_color(theme: &Theme, name: &str, kind: SftpFileKind) -> Color32 {
     }
 }
 
-fn paint_ext_badge(ui: &egui::Ui, icon_rect: egui::Rect, name: &str, fill: Color32, ink: Color32) {
-    let ext = file_ext_lower(name);
-    let label: String = ext.chars().take(2).collect();
-    let label = if label.is_empty() {
-        "·".to_string()
-    } else {
-        label
-    };
-    let side = 16.0;
-    let rect = egui::Rect::from_center_size(icon_rect.center(), egui::vec2(side, side));
-    ui.painter().rect_filled(rect, 3.0, fill);
-    ui.painter().text(
-        rect.center(),
-        egui::Align2::CENTER_CENTER,
-        label,
-        egui::FontId::proportional(9.0),
-        ink,
-    );
-}
+
 
 fn file_kind_icon(kind: SftpFileKind) -> crate::ui::icons::IconId {
     match kind {
         SftpFileKind::Dir => crate::ui::icons::IconId::Folder,
         SftpFileKind::Archive => crate::ui::icons::IconId::Package,
-        _ => crate::ui::icons::IconId::File,
+        SftpFileKind::Image => crate::ui::icons::IconId::Attachment,
+        SftpFileKind::Executable => crate::ui::icons::IconId::Rocket,
+        SftpFileKind::Code | SftpFileKind::Config => crate::ui::icons::IconId::File,
+        SftpFileKind::Document => crate::ui::icons::IconId::File,
+        SftpFileKind::Hidden | SftpFileKind::Plain => crate::ui::icons::IconId::File,
     }
 }
 
@@ -391,11 +377,11 @@ pub(super) struct FileTableCols {
 impl FileTableCols {
     const ICON_W: f32 = 22.0;
     /// 「108.52 KB」这一档的固定宽度，不随面板变宽。
-    const SIZE_W: f32 = 68.0;
+    const SIZE_W: f32 = 64.0;
     /// 「2026-10-14 16:12」的固定宽度。
-    const TIME_W: f32 = 112.0;
+    const TIME_W: f32 = 104.0;
 
-    const PAD_X: f32 = 14.0;
+    const PAD_X: f32 = 10.0;
     const GAP: f32 = 4.0;
 
     fn from_panel_width(panel_w: f32) -> Self {
@@ -403,11 +389,11 @@ impl FileTableCols {
         let icon = Self::ICON_W;
         let mut size = Self::SIZE_W;
         let mut time = Self::TIME_W;
-        // 分屏半栏很窄时先收起时间，再收起大小。这两列宽度不随面板拉伸。
-        if panel_w < 200.0 {
+        // #250：分屏半栏尽量保留「大小」「修改时间」；仅极窄时才收起（文件名可 hover 看全）。
+        if panel_w < 168.0 {
             size = 0.0;
             time = 0.0;
-        } else if panel_w < 260.0 {
+        } else if panel_w < 236.0 {
             time = 0.0;
         }
 
@@ -675,12 +661,8 @@ pub(super) fn paint_file_table_row(
             0 => {
                 let (icon_r, _) =
                     cell.allocate_exact_size(egui::vec2(cols.icon, h), Sense::hover());
-                if modern && file_kind != SftpFileKind::Dir {
-                    let (fill, ink) = flux_badge_fill_ink(theme, name, file_kind);
-                    paint_ext_badge(cell, icon_r, name, fill, ink);
-                } else {
-                    crate::ui::icons::paint_icon(cell, icon_r, icon, icon_color, icon_px);
-                }
+                // #250：用文件类型图标，不再画两字母扩展名角标（ap/ps…）。
+                crate::ui::icons::paint_icon(cell, icon_r, icon, icon_color, icon_px);
             }
             1 => paint_valign_text(cell, name, name_font.clone(), name_color, false),
             2 => paint_valign_text(cell, size_label, meta_font.clone(), meta_color, true),
@@ -729,5 +711,80 @@ mod crumb_tests {
         assert_eq!(parts[0].1, PathBuf::from("/"));
         let parts = crumb_display_parts(&path_crumbs(Path::new("/a/b")));
         assert!(is_crumb_separator(&parts[2]));
+    }
+
+    #[test]
+    fn columns_keep_size_and_time_at_typical_split_width() {
+        let cols = FileTableCols::for_width(320.0);
+        assert!(cols.col_width(2) >= 1.0, "size column visible");
+        assert!(cols.col_width(3) >= 1.0, "mtime column visible");
+        assert!(cols.col_width(1) > cols.col_width(2), "name gets remaining width");
+    }
+
+    #[test]
+    fn columns_drop_time_only_when_very_narrow() {
+        let mid = FileTableCols::for_width(200.0);
+        assert!(mid.col_width(2) >= 1.0);
+        assert!(mid.col_width(3) < 1.0);
+        let tiny = FileTableCols::for_width(150.0);
+        assert!(tiny.col_width(2) < 1.0);
+        assert!(tiny.col_width(3) < 1.0);
+    }
+
+    #[test]
+    fn sort_toggles_size_and_time() {
+        let mut sort = FileSortState::default();
+        sort.toggle_column(FileSortColumn::Size);
+        assert_eq!(sort.column, FileSortColumn::Size);
+        assert!(sort.ascending);
+        sort.toggle_column(FileSortColumn::Size);
+        assert!(!sort.ascending);
+        sort.toggle_column(FileSortColumn::Time);
+        assert_eq!(sort.column, FileSortColumn::Time);
+        assert!(sort.ascending);
+    }
+
+    #[test]
+    fn file_kind_icons_are_not_letter_badges() {
+        assert_eq!(file_kind_icon(SftpFileKind::Dir), crate::ui::icons::IconId::Folder);
+        assert_eq!(file_kind_icon(SftpFileKind::Archive), crate::ui::icons::IconId::Package);
+        assert_eq!(file_kind_icon(SftpFileKind::Image), crate::ui::icons::IconId::Attachment);
+        assert_eq!(file_kind_icon(SftpFileKind::Executable), crate::ui::icons::IconId::Rocket);
+        assert_eq!(file_kind_icon(SftpFileKind::Plain), crate::ui::icons::IconId::File);
+        assert_eq!(classify_file_kind("notes.md", false), SftpFileKind::Document);
+        assert_eq!(classify_file_kind("app.zip", false), SftpFileKind::Archive);
+    }
+
+    #[test]
+    fn sort_local_entries_by_size() {
+        let mut entries = vec![
+            LocalEntry {
+                name: "b.txt".into(),
+                is_dir: false,
+                size: 20,
+                modified: Utc::now(),
+                path: PathBuf::from("/b.txt"),
+            },
+            LocalEntry {
+                name: "a.txt".into(),
+                is_dir: false,
+                size: 10,
+                modified: Utc::now(),
+                path: PathBuf::from("/a.txt"),
+            },
+            LocalEntry {
+                name: "dir".into(),
+                is_dir: true,
+                size: 0,
+                modified: Utc::now(),
+                path: PathBuf::from("/dir"),
+            },
+        ];
+        let mut sort = FileSortState::default();
+        sort.toggle_column(FileSortColumn::Size);
+        sort_local_entries(&mut entries, sort);
+        assert!(entries[0].is_dir);
+        assert_eq!(entries[1].name, "a.txt");
+        assert_eq!(entries[2].name, "b.txt");
     }
 }
