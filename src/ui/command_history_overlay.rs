@@ -320,9 +320,14 @@ impl CommandHistoryOverlay {
                                         if !self.compose_title_customized {
                                             let n = self.checked.len();
                                             if n >= 2 {
+                                                let first_cmd = results
+                                                    .iter()
+                                                    .filter(|e| self.checked.contains(&entry_key(e)))
+                                                    .map(|e| e.command.as_str())
+                                                    .next();
                                                 self.compose_title = default_compose_title(
                                                     ctx,
-                                                    active_session_name,
+                                                    first_cmd,
                                                     n,
                                                 );
                                             } else {
@@ -420,7 +425,7 @@ impl CommandHistoryOverlay {
                                     let title = if self.compose_title.trim().is_empty() {
                                         default_compose_title(
                                             ctx,
-                                            active_session_name,
+                                            commands.first().map(|s| s.as_str()),
                                             commands.len(),
                                         )
                                     } else {
@@ -456,15 +461,27 @@ fn entry_key(e: &HistoryEntry) -> String {
 
 fn default_compose_title(
     ctx: &egui::Context,
-    session_name: Option<&str>,
+    first_command: Option<&str>,
     n: usize,
 ) -> String {
-    let lang = crate::i18n::language(ctx);
-    match (lang, session_name.filter(|s| !s.is_empty())) {
-        (crate::i18n::UiLanguage::Zh, Some(name)) => format!("组合 · {name} · {n} 条"),
-        (crate::i18n::UiLanguage::Zh, None) => format!("组合 · {n} 条"),
-        (_, Some(name)) => format!("Composed · {name} · {n}"),
-        (_, None) => format!("Composed · {n}"),
+    let preview = first_command
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|c| {
+            let joined = c.split_whitespace().collect::<Vec<_>>().join(" ");
+            let mut it = joined.chars();
+            let head: String = it.by_ref().take(40).collect();
+            if it.next().is_some() {
+                format!("{head}…")
+            } else {
+                head
+            }
+        });
+    match (crate::i18n::language(ctx), preview) {
+        (crate::i18n::UiLanguage::Zh, Some(cmd)) => format!("历史命令：{cmd}"),
+        (crate::i18n::UiLanguage::Zh, None) => format!("历史命令：{n} 条"),
+        (_, Some(cmd)) => format!("History: {cmd}"),
+        (_, None) => format!("History: {n} commands"),
     }
 }
 

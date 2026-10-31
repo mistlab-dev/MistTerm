@@ -157,9 +157,34 @@ fn truncate_status(s: &str, max_chars: usize) -> String {
     }
 }
 
+
+fn history_fragment_category_label(_ctx: &egui::Context) -> String {
+    // Canonical store language matches starters (ZH); UI localizes via fragment_display_category.
+    "来自历史记录".to_string()
+}
+
+fn history_command_snippet_title(ctx: &egui::Context, command: &str) -> String {
+    let preview: String = command
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(40)
+        .collect();
+    let preview = if preview.is_empty() { "…".to_string() } else { preview };
+    match crate::i18n::language(ctx) {
+        crate::i18n::UiLanguage::Zh => format!("历史命令：{preview}"),
+        crate::i18n::UiLanguage::En => format!("History: {preview}"),
+    }
+}
+
 /// 设计文档 §5.4：`{次数}次 · {成功率}%成功 · {耗时}s`
 fn format_fragment_stats_line(ctx: &egui::Context, frag: &FragmentStats) -> String {
     if frag.usage_count == 0 {
+        // Built-in starters should not look unused / unfinished.
+        if crate::core::is_starter_fragment(frag) {
+            return String::new();
+        }
         return crate::i18n::tr(ctx, "Not used yet", "尚未使用").to_string();
     }
     let rate = (frag.success_count as f32 / frag.usage_count as f32) * 100.0;
@@ -770,13 +795,11 @@ impl MistTermApp {
             );
             return;
         }
+        let title = history_command_snippet_title(ctx, &cand.command);
         self.fragment_manager.add_fragment(
-            cand.title.clone(),
+            title.clone(),
             cand.command.clone(),
-            match cand.reason {
-                crate::core::FragmentCandidateReason::FailedPath => "from-failure".into(),
-                crate::core::FragmentCandidateReason::SuccessPath => "recommended".into(),
-            },
+            history_fragment_category_label(ctx),
         );
         let _ = self
             .fragment_manager
@@ -785,7 +808,7 @@ impl MistTermApp {
         self.notify_auto(format!(
             "{} {}",
             crate::i18n::tr(ctx, "Snippet saved:", "已保存片段："),
-            cand.title
+            title
         ));
     }
 
@@ -833,13 +856,16 @@ impl MistTermApp {
         let title = {
             let t = title.trim();
             if t.is_empty() {
-                format!("组合 · {} 条", lines.len())
+                history_command_snippet_title(ctx, lines.first().map(|s| s.as_str()).unwrap_or(""))
             } else {
                 t.to_string()
             }
         };
-        self.fragment_manager
-            .add_fragment(title.clone(), body, "from-history".into());
+        self.fragment_manager.add_fragment(
+            title.clone(),
+            body,
+            history_fragment_category_label(ctx),
+        );
         let _ = self
             .fragment_manager
             .save(&FragmentManager::default_config_path());
@@ -8247,14 +8273,63 @@ impl MistTermApp {
             ui.add_space(theme.spacing_dock_control_gap());
         }
 
-        // §5.3：分类筛选 + 右侧排序(与芯片同排，不再单独占「片段列表」行)
+        self.sync_market_catalog_query_fingerprint();
+
+        let search_lower = self.fragment_search_query.to_lowercase();
+        let search_ctx = ui.ctx().clone();
+        let search_match = |f: &FragmentStats| {
+            crate::i18n::fragment_matches_search(&search_ctx, f, &search_lower)
+        };
+
+        let source: Vec<FragmentStats> = match self.fragment_list_scope {
+            FragmentListScope::Personal => self.fragment_manager.get_all().to_vec(),
+            FragmentListScope::Team => self.team_service.team_fragments_as_stats(),
+            FragmentListScope::Market => {
+                if self.market_catalog_refresh_pending && self.market_catalog_refresh_rx.is_none() {
+                    self.start_market_catalog_refresh();
+                }
+                let mut list = self.market_catalog.to_fragment_stats_list();
+                if list.is_empty() {
+                    list = self
+                        .fragment_manager
+                        .get_all()
+                        .iter()
+                        .filter(|f| f.tags.iter().any(|t| t.eq_ignore_ascii_case("market")))
+                        .cloned()
+                        .collect();
+                }
+                list
+            }
+        };
+
+        // §5.3：分类筛选 + 右侧排序；空的 Docker/K8s 标签不显示。
         let ctx_owned = ui.ctx().clone();
-        let chip_defs: [(&str, &str); 4] = [
-            ("frequent", crate::i18n::tr(&ctx_owned, "Pinned", "常用")),
-            ("Docker", "Docker"),
-            ("K8s", "K8s"),
-            ("all", crate::i18n::tr(&ctx_owned, "All", "全部")),
-        ];
+        let has_docker = source.iter().any(|f| f.category == "Docker");
+        let has_k8s = source.iter().any(|f| f.category == "K8s");
+        if (self.fragment_filter_category == "Docker" && !has_docker)
+            || (self.fragment_filter_category == "K8s" && !has_k8s)
+        {
+            self.fragment_filter_category = "all".into();
+        }
+        let mut chip_owned: Vec<(String, String)> = Vec::with_capacity(4);
+        chip_owned.push((
+            "frequent".into(),
+            crate::i18n::tr(&ctx_owned, "Pinned", "常用").to_string(),
+        ));
+        if has_docker {
+            chip_owned.push(("Docker".into(), "Docker".into()));
+        }
+        if has_k8s {
+            chip_owned.push(("K8s".into(), "K8s".into()));
+        }
+        chip_owned.push((
+            "all".into(),
+            crate::i18n::tr(&ctx_owned, "All", "全部").to_string(),
+        ));
+        let chip_defs: Vec<(&str, &str)> = chip_owned
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
         let sort_lbl = crate::i18n::fragment_sort_chip_short(&ctx_owned, self.fragment_sort_by);
         let sort_hover = crate::i18n::filter_sort_cycle_hint_fragments(&ctx_owned);
         let chip_row = crate::ui::chrome::filter_chip_row_with_sort(
@@ -8306,35 +8381,6 @@ impl MistTermApp {
         }
         ui.add_space(theme.spacing_dock_control_gap());
 
-        self.sync_market_catalog_query_fingerprint();
-
-        let search_lower = self.fragment_search_query.to_lowercase();
-        let search_ctx = ui.ctx().clone();
-        let search_match = |f: &FragmentStats| {
-            crate::i18n::fragment_matches_search(&search_ctx, f, &search_lower)
-        };
-
-        let source: Vec<FragmentStats> = match self.fragment_list_scope {
-            FragmentListScope::Personal => self.fragment_manager.get_all().to_vec(),
-            FragmentListScope::Team => self.team_service.team_fragments_as_stats(),
-            FragmentListScope::Market => {
-                if self.market_catalog_refresh_pending && self.market_catalog_refresh_rx.is_none() {
-                    self.start_market_catalog_refresh();
-                }
-                let mut list = self.market_catalog.to_fragment_stats_list();
-                if list.is_empty() {
-                    list = self
-                        .fragment_manager
-                        .get_all()
-                        .iter()
-                        .filter(|f| f.tags.iter().any(|t| t.eq_ignore_ascii_case("market")))
-                        .cloned()
-                        .collect();
-                }
-                list
-            }
-        };
-
         let mut work: Vec<FragmentStats> =
             source.iter().filter(|f| search_match(f)).cloned().collect();
 
@@ -8380,11 +8426,18 @@ impl MistTermApp {
             .show(ui, |ui| {
                 ui.set_max_width(panel_w);
                 if work.is_empty() {
+                    let cat = self.fragment_filter_category.as_str();
                     let empty = if source.is_empty() {
                         crate::i18n::tr(
                             ui.ctx(),
                             "No snippets yet. Tap New above, or open Snippet Library to add one.",
                             "还没有片段。点上方「新建」，或打开命令片段库添加。",
+                        )
+                    } else if cat == "Docker" || cat == "K8s" {
+                        crate::i18n::tr(
+                            ui.ctx(),
+                            "No snippets yet — tap New to add one.",
+                            "暂无片段，点击添加",
                         )
                     } else {
                         crate::i18n::tr(

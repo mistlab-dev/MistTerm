@@ -132,7 +132,7 @@ pub use market::{
 };
 pub use fragment::{
     expand_command_template, expand_fragment_command_stages, list_placeholder_keys,
-    is_archived_status, sort_fragments_with_archived_last, substitute_angle_placeholders,
+    is_archived_status, is_starter_fragment, is_test_residue_fragment, sort_fragments_with_archived_last, substitute_angle_placeholders,
     FragmentManager, FragmentMergeReport, FragmentStats, FragmentVariable, LinkedDoc, SortBy,
 };
 pub use fragment_shortcuts::{
