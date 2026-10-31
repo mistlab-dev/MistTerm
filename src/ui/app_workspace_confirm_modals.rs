@@ -344,6 +344,123 @@ impl MistTermApp {
             }
         }
 
+
+        if let Some(confirm) = self.ai_danger_confirm.clone() {
+            let mut open = true;
+            let mut should_close = false;
+            let mut proceed = false;
+            let zh = matches!(
+                crate::i18n::language(ctx),
+                crate::i18n::UiLanguage::Zh
+            );
+            let reason = if zh {
+                confirm.reason_zh.clone()
+            } else {
+                confirm.reason_en.clone()
+            };
+            let modal_sz = layout_util::modal_confirm_size(ctx);
+            crate::ui::chrome::modal_window("ai_danger_confirm", theme, ctx)
+                .open(&mut open)
+                .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
+                .movable(true)
+                .resizable(false)
+                .fixed_size(modal_sz)
+                .show(ctx, |ui| {
+                    crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
+                        Self::modal_header_title_only(
+                            ui,
+                            theme,
+                            crate::i18n::tr(
+                                ctx,
+                                "Dangerous command — confirm",
+                                "危险命令 — 请确认",
+                            ),
+                            &mut should_close,
+                        );
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr(
+                                ctx,
+                                "This command looks dangerous. Check the targets below before putting it on the terminal input line. Cancel will not send anything.",
+                                "这条命令看起来很危险。把命令放进终端输入行之前，请先核对下面的影响对象。取消/关闭不会发出任何命令。",
+                            ))
+                            .size(theme.font_size_normal())
+                            .color(theme.color_danger_emphasis()),
+                        );
+                        ui.add_space(theme.spacing_sm());
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} {}",
+                                crate::i18n::tr(ctx, "Command:", "命令:"),
+                                command_preview(&confirm.command, 120),
+                            ))
+                            .size(theme.font_size_normal())
+                            .color(theme.color_body_text_muted()),
+                        );
+                        ui.add_space(theme.spacing_xs());
+                        ui.label(
+                            egui::RichText::new(format!(
+                                "{} {}",
+                                crate::i18n::tr(ctx, "Why:", "原因:"),
+                                reason,
+                            ))
+                            .size(theme.font_size_small())
+                            .color(theme.color_danger_emphasis()),
+                        );
+                        if !confirm.targets.is_empty() {
+                            ui.add_space(theme.spacing_sm());
+                            ui.label(
+                                egui::RichText::new(crate::i18n::tr(
+                                    ctx,
+                                    "Affected targets:",
+                                    "影响对象：",
+                                ))
+                                .size(theme.font_size_small())
+                                .strong()
+                                .color(theme.color_danger_emphasis()),
+                            );
+                            for t in &confirm.targets {
+                                ui.label(
+                                    egui::RichText::new(format!("• {t}"))
+                                        .size(theme.font_size_normal())
+                                        .color(theme.color_danger_emphasis()),
+                                );
+                            }
+                        }
+                        ui.add_space(theme.spacing_lg());
+                        crate::ui::chrome::modal_footer_actions(ui, theme, |ui, th| {
+                            if crate::ui::chrome::modal_danger_icon_button(
+                                ui,
+                                th,
+                                crate::ui::icons::IconId::Check,
+                                crate::i18n::tr(ctx, "Confirm run", "确认执行"),
+                            )
+                            .clicked()
+                            {
+                                proceed = true;
+                                should_close = true;
+                            }
+                            if crate::ui::chrome::modal_secondary_icon_button(
+                                ui,
+                                th,
+                                crate::ui::icons::IconId::Cross,
+                                crate::i18n::tr(ctx, "Cancel", "取消"),
+                            )
+                            .clicked()
+                            {
+                                should_close = true;
+                            }
+                        });
+                    });
+                });
+            if should_close {
+                self.confirm_ai_danger(ctx, proceed);
+            }
+            if !open && self.ai_danger_confirm.is_some() {
+                // 关窗 / Esc：不得发出命令
+                self.ai_danger_confirm = None;
+            }
+        }
+
         if let Some(pending_idx) = self.close_tab_confirm_idx {
             if pending_idx >= self.tabs.len() {
                 self.close_tab_confirm_idx = None;
