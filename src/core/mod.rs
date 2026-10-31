@@ -40,6 +40,7 @@ pub mod command_history;
 pub mod paste_history;
 pub mod session_logger;
 pub mod session_sort;
+pub mod session_list;
 pub mod audit;
 pub mod audit_timeline;
 pub mod cmd_audit;
