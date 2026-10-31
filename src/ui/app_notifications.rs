@@ -30,6 +30,8 @@ pub(crate) enum ToastAction {
     ConfirmSaveCandidate,
     /// 有新版本：打开「软件更新」窗口。
     OpenUpdateDialog,
+    /// #251：打开系统监控面板。
+    OpenMonitor,
 }
 
 #[derive(Debug, Clone)]
@@ -578,6 +580,10 @@ impl MistTermApp {
             ToastAction::OpenUpdateDialog => {
                 self.clear_toast();
                 self.update_open_dialog();
+            }
+            ToastAction::OpenMonitor => {
+                self.clear_toast();
+                self.open_right_dock_panel(super::ActiveRightDock::Monitor);
             }
         }
     }

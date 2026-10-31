@@ -130,6 +130,13 @@ impl MistTermApp {
                                         label_color,
                                         &mut should_close,
                                     );
+                                    self.preferences_section_monitor_alert(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        label_color,
+                                        text_low,
+                                    );
                                     self.preferences_section_modules(
                                         ui,
                                         ctx,
@@ -1443,6 +1450,64 @@ impl MistTermApp {
     /// 扩展模块 / 内置能力开关（#118 / #215）。
     /// 为已编进主程序的官方内置模块提供按模块启用/禁用开关；
     /// 主说明不暴露模块 id / 环境变量名；高级折叠里可提示 env 覆盖。
+
+    fn preferences_section_monitor_alert(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+        label_color: egui::Color32,
+        text_low: egui::Color32,
+    ) {
+        Self::preferences_collapsing(
+            ui,
+            theme,
+            "monitor_alert",
+            crate::i18n::tr(ctx, "Monitor alerts", "监控告警"),
+            label_color,
+            false,
+            |ui| {
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "When CPU / memory / disk crosses the threshold: choose how you are notified (default: system notification).",
+                        "CPU / 内存 / 磁盘超出阈值时的推送方式（默认：系统通知）。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(text_low),
+                );
+                ui.add_space(theme.spacing_sm());
+                let lang = crate::i18n::language(ctx);
+                let mut mode = self.app_settings.monitor_alert.notify_mode;
+                for option in crate::core::AlertNotifyMode::ALL {
+                    let label = match lang {
+                        crate::i18n::UiLanguage::Zh => option.as_label_zh(),
+                        crate::i18n::UiLanguage::En => option.as_label_en(),
+                    };
+                    ui.radio_value(&mut mode, option, label);
+                }
+                if mode != self.app_settings.monitor_alert.notify_mode {
+                    self.app_settings.monitor_alert.notify_mode = mode;
+                    // 用户改回系统通知时，允许再次解释降级原因。
+                    if mode == crate::core::AlertNotifyMode::SystemNotify {
+                        self.app_settings.monitor_alert.permission_denied_explained = false;
+                    }
+                    let _ = self.app_settings.save();
+                }
+                ui.add_space(theme.spacing_sm());
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "If the OS denies notification permission, MistTerm falls back to an in-app alert and explains why.",
+                        "若系统拒绝通知权限，将降级为应用内告警并说明原因。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(text_low),
+                );
+            },
+        );
+    }
+
     fn preferences_section_modules(
         &mut self,
         ui: &mut egui::Ui,

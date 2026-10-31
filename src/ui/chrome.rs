@@ -3844,6 +3844,19 @@ pub fn activity_rail_button(
     tooltip: &str,
     caption: &str,
 ) -> Response {
+    activity_rail_button_with_badge(ui, theme, id, selected, tooltip, caption, None)
+}
+
+/// 活动栏按钮；`badge` 为右上角告警数角标（#251）。
+pub fn activity_rail_button_with_badge(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: IconId,
+    selected: bool,
+    tooltip: &str,
+    caption: &str,
+    badge: Option<usize>,
+) -> Response {
     let side = theme.size_activity_rail_btn();
     let label_h = if caption.is_empty() { 0.0 } else { 14.0 };
     let size = egui::vec2(side, side + label_h);
@@ -3875,6 +3888,9 @@ pub fn activity_rail_button(
     let icon_px = theme.size_activity_rail_icon().max(18.0);
     let glyph = egui::Rect::from_center_size(icon_rect.center(), egui::vec2(icon_px, icon_px));
     icons::paint_icon(ui, glyph, id, color, icon_px);
+    if let Some(n) = badge.filter(|n| *n > 0) {
+        paint_activity_rail_badge(ui, theme, icon_rect, n);
+    }
     if !caption.is_empty() {
         let label_color = if selected {
             theme.accent_color()
@@ -3893,6 +3909,34 @@ pub fn activity_rail_button(
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
     response.on_hover_text(tooltip)
+}
+
+fn paint_activity_rail_badge(ui: &mut Ui, theme: &Theme, icon_rect: egui::Rect, count: usize) {
+    let label = if count > 99 {
+        "99+".to_string()
+    } else {
+        count.to_string()
+    };
+    let font = egui::FontId::proportional(9.0);
+    let galley = ui.painter().layout_no_wrap(label, font.clone(), egui::Color32::WHITE);
+    let pad_x = 4.0;
+    let pad_y = 1.5;
+    let bw = (galley.size().x + pad_x * 2.0).max(14.0);
+    let bh = (galley.size().y + pad_y * 2.0).max(12.0);
+    let center = egui::pos2(icon_rect.right() - 2.0, icon_rect.top() + 2.0);
+    let badge_rect = egui::Rect::from_center_size(center, egui::vec2(bw, bh));
+    ui.painter().rect_filled(
+        badge_rect,
+        bh * 0.5,
+        theme.color_status_negative_text(),
+    );
+    ui.painter().galley(
+        egui::pos2(
+            badge_rect.center().x - galley.size().x * 0.5,
+            badge_rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+    );
 }
 
 /// Rail 隐藏时的左缘恢复条：点击显示活动栏。
