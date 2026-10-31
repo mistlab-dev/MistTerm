@@ -487,7 +487,7 @@ pub(super) fn paint_dir_diff(
             "可点「重新对比」再试，或「返回」回文件列表。",
         );
         egui::ScrollArea::vertical()
-            .id_source("sftp_dir_diff_error")
+            .id_salt("sftp_dir_diff_error")
             .auto_shrink([false, false])
             .max_height(list_h)
             .show(ui, |ui| {
