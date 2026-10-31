@@ -118,6 +118,9 @@ pub fn run_gui() {
             Ok(Box::new(crate::ui::MistTermApp::new(cc)))
         }),
     ) {
+        // run_native 失败时 stdout/stderr 可能被重定向丢弃（e2e、GUI 子系统），
+        // 必须同时进日志文件，否则 headless CI 只能看到「进程没了」而没有原因。
+        log::error!("Failed to launch GUI: {e}");
         eprintln!("Failed to launch GUI: {e}");
         // GUI 启动失败也算「没走到正常退出」，不写 stamp（下次启动如果因此有新报告会提示）。
         std::process::exit(1);
