@@ -14,6 +14,8 @@
 //! | `drop table` / `truncate` | SQL，大小写不敏感 |
 //!
 //! 只读命令（`ls`/`df`/`free` 等）不命中。实现为词法/启发式，后续可扩规则表。
+//!
+//! 已知启发式缺口（跟进）：`bash -c 'rm …'` / `eval` / `xargs` 等包装层内的危险命令暂不展开。
 
 /// 一条危险命中：规则 id、给人看的原因、能解析出的影响对象。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,7 +61,8 @@ pub fn assess_ai_terminal_danger(command: &str) -> Option<DangerHit> {
 }
 
 fn assess_sql_danger(cmd: &str) -> Option<DangerHit> {
-    let lower = cmd.to_ascii_lowercase();
+    // 只在引号外扫描，避免 `echo 'DROP TABLE users'` / `grep 'drop table'` 误报。
+    let lower = mask_quoted_for_keyword_scan(cmd).to_ascii_lowercase();
     if let Some(rest) = find_keyword_rest(&lower, "drop table") {
         let table = first_sql_ident(rest);
         return Some(DangerHit {
@@ -115,6 +118,35 @@ fn find_keyword_rest<'a>(hay: &'a str, keyword: &str) -> Option<&'a str> {
     None
 }
 
+/// Replace single/double-quoted spans with spaces (coarse; no nested escapes).
+/// Keeps length so keyword `rest` offsets still align with a lowercased scan string.
+fn mask_quoted_for_keyword_scan(cmd: &str) -> String {
+    let bytes = cmd.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\'' || b == b'"' {
+            let quote = b;
+            out.push(b' ');
+            i += 1;
+            while i < bytes.len() && bytes[i] != quote {
+                out.push(b' ');
+                i += 1;
+            }
+            if i < bytes.len() {
+                out.push(b' ');
+                i += 1;
+            }
+            continue;
+        }
+        out.push(b);
+        i += 1;
+    }
+    // Safety: input is shell text (ASCII-heavy); invalid UTF-8 should not appear.
+    String::from_utf8(out).unwrap_or_else(|_| cmd.to_string())
+}
+
 fn first_sql_ident(rest: &str) -> Option<String> {
     let rest = rest.trim_start();
     let mut out = String::new();
@@ -168,7 +200,9 @@ fn split_shell_segments(cmd: &str) -> Vec<&str> {
         }
         let is_sep = match b {
             b';' | b'\n' => true,
-            b'|' if bytes.get(i + 1) != Some(&b'|') => true,
+            // `>|` is noclobber overwrite, not a pipe
+            b'|' if bytes.get(i + 1) != Some(&b'|')
+                && (i == 0 || bytes[i - 1] != b'>') => true,
             b'|' if bytes.get(i + 1) == Some(&b'|') => {
                 let seg = cmd[start..i].trim();
                 if !seg.is_empty() {
@@ -305,10 +339,11 @@ fn assess_segment(segment: &str) -> Option<DangerHit> {
     }
 }
 
-/// Normalize argv[0] for rule matching: `/bin/rm` → `rm`, `\\rm` → `rm`.
+/// Normalize argv[0] for rule matching: `/bin/rm` → `rm`, path with `\\` → basename, `\\rm` → `rm`.
 fn command_basename(token: &str) -> String {
     let lower = token.to_ascii_lowercase();
     let base = lower.rsplit('/').next().unwrap_or(lower.as_str());
+    let base = base.rsplit('\\').next().unwrap_or(base);
     base.strip_prefix('\\').unwrap_or(base).to_string()
 }
 
@@ -528,6 +563,7 @@ fn first_shell_arg(rest: &str) -> Option<String> {
 }
 
 /// 找出覆盖重定向的目标路径；若无覆盖重定向返回 None。
+/// `n>&m` / `>&m` / `>&-` 等 fd 复制不算覆盖写；空目标列表返回 None。
 fn redirect_overwrite_targets(segment: &str) -> Option<Vec<String>> {
     let bytes = segment.as_bytes();
     let mut targets = Vec::new();
@@ -564,6 +600,27 @@ fn redirect_overwrite_targets(segment: &str) -> Option<Vec<String>> {
             while j < bytes.len() && bytes[j].is_ascii_whitespace() {
                 j += 1;
             }
+            // `>&2` / `2>&1` / `>&-`：fd 复制，不是文件覆盖
+            if bytes.get(j) == Some(&b'&') {
+                let mut k = j + 1;
+                while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                    k += 1;
+                }
+                if k < bytes.len() && (bytes[k].is_ascii_digit() || bytes[k] == b'-') {
+                    // 消费 fd 号或 -
+                    if bytes[k] == b'-' {
+                        k += 1;
+                    } else {
+                        while k < bytes.len() && bytes[k].is_ascii_digit() {
+                            k += 1;
+                        }
+                    }
+                    i = k;
+                    continue;
+                }
+                // `>& file`（目标非数字 fd）：跳过 `&`，按文件路径解析
+                j = k;
+            }
             let start = j;
             while j < bytes.len()
                 && !bytes[j].is_ascii_whitespace()
@@ -579,9 +636,8 @@ fn redirect_overwrite_targets(segment: &str) -> Option<Vec<String>> {
                 let t = &segment[start..j];
                 // /dev/null 等空设备覆盖通常无害，但仍属写；产品规则未豁免，列入目标即可。
                 targets.push(t.to_string());
-            } else {
-                targets.push(String::new());
             }
+            // 无文件目标（且非上面已跳过的 fd 复制）→ 不计入命中
             i = j;
             continue;
         }
@@ -590,13 +646,7 @@ fn redirect_overwrite_targets(segment: &str) -> Option<Vec<String>> {
     if targets.is_empty() {
         None
     } else {
-        // 过滤空占位但保留至少一次命中
-        let cleaned: Vec<String> = targets.into_iter().filter(|t| !t.is_empty()).collect();
-        Some(if cleaned.is_empty() {
-            Vec::new()
-        } else {
-            cleaned
-        })
+        Some(targets)
     }
 }
 
@@ -696,6 +746,31 @@ mod tests {
     }
 
     #[test]
+    fn fd_redirect_is_not_overwrite() {
+        assert!(
+            assess_ai_terminal_danger("ls 2>&1").is_none(),
+            "ls 2>&1 must not trip redirect_overwrite"
+        );
+        assert!(
+            assess_ai_terminal_danger("echo hi >&2").is_none(),
+            "echo hi >&2 must not trip redirect_overwrite"
+        );
+        assert!(assess_ai_terminal_danger("cat a 2>&-").is_none());
+        // 文件覆盖仍拦；stderr 合并到 stdout 的 fd 复制不拦
+        let hit = assess_ai_terminal_danger("cmd >/dev/null 2>&1").expect("file redirect");
+        assert_eq!(hit.rule_id, "redirect_overwrite");
+        assert!(
+            hit.targets.iter().any(|t| t.contains("/dev/null")),
+            "targets={:?}",
+            hit.targets
+        );
+        // `&>` / `>& file`（非数字）仍算覆盖写
+        let hit2 = assess_ai_terminal_danger("cmd &>/tmp/both.log").unwrap();
+        assert_eq!(hit2.rule_id, "redirect_overwrite");
+        assert!(hit2.targets.iter().any(|t| t.contains("/tmp/both.log")));
+    }
+
+    #[test]
     fn sql_drop_and_truncate_case_insensitive() {
         let hit = assess_ai_terminal_danger("DROP TABLE users;").unwrap();
         assert_eq!(hit.rule_id, "drop_table");
@@ -704,6 +779,21 @@ mod tests {
         let hit2 = assess_ai_terminal_danger("truncate table `orders`").unwrap();
         assert_eq!(hit2.rule_id, "truncate");
         assert!(hit2.targets.iter().any(|t| t.contains("orders")));
+    }
+
+    #[test]
+    fn sql_keywords_inside_quotes_are_safe() {
+        assert!(
+            assess_ai_terminal_danger("echo 'DROP TABLE users'").is_none(),
+            "quoted DROP TABLE must not hit"
+        );
+        assert!(
+            assess_ai_terminal_danger("grep 'drop table' log").is_none(),
+            "grep quoted drop table must not hit"
+        );
+        assert!(assess_ai_terminal_danger(r#"echo "TRUNCATE TABLE t""#).is_none());
+        // 引号外的真实 SQL 仍命中
+        assert_eq!(ids("DROP TABLE users;"), Some("drop_table"));
     }
 
     #[test]
