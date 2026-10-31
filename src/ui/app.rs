@@ -530,6 +530,8 @@ pub struct MistTermApp {
     cmd_audit_engine: std::sync::Arc<std::sync::Mutex<CmdAuditEngine>>,
     /// 敏感命令二次确认(标签索引、命令、匹配详情)
     cmd_audit_confirm: Option<CmdAuditConfirmState>,
+    /// AI「用到终端」危险命令红框确认（issue #249）。
+    ai_danger_confirm: Option<AiDangerConfirmState>,
     /// 审计拦截后待插入的合规片段(配合 `ToastAction::InsertSuggestedSnippet`)
     pending_suggested_snippet: Option<(usize, FragmentStats)>,
     /// 命令审计 Agent 列表(用于终端降级横幅)
@@ -555,6 +557,16 @@ pub struct MistTermApp {
     pending_ssh_url: Option<Result<crate::core::ssh_url::SshUrl, String>>,
     /// 设置里「ssh:// 链接」一项的状态（打开设置时查一次）。
     pub(crate) ssh_url_handler_status: Option<crate::platform::url_handler::HandlerStatus>,
+}
+
+/// AI「用到终端」危险命令确认（与 cmd_audit 独立；产品规则表见 agent::danger）。
+#[derive(Clone)]
+struct AiDangerConfirmState {
+    tab_idx: usize,
+    command: String,
+    reason_zh: String,
+    reason_en: String,
+    targets: Vec<String>,
 }
 
 /// 命令确认弹窗状态(本地快捷提示或服务器侧策略)
@@ -1365,6 +1377,7 @@ impl MistTermApp {
             close_tab_confirm_idx: None,
             cmd_audit_engine,
             cmd_audit_confirm: None,
+            ai_danger_confirm: None,
             pending_suggested_snippet: None,
             cmd_audit_agents: Vec::new(),
             cmd_audit_agents_at: None,
@@ -1937,6 +1950,172 @@ impl MistTermApp {
             return CommandSendResult::NotConnected;
         };
         self.send_audited_command_at(ctx, idx, command)
+    }
+
+
+    /// AI「用到终端」：危险命令先红框确认；默认只填入输入行、不自动回车（无自动发送偏好时）。
+    fn handle_ai_apply_to_terminal(&mut self, ctx: &egui::Context, cmd: String) {
+        let Some(idx) = self.active_tab else {
+            self.notify_auto(
+                crate::i18n::tr(
+                    ctx,
+                    "No active terminal tab; cannot run command",
+                    "无活动终端标签，无法执行命令",
+                )
+                .to_string(),
+            );
+            return;
+        };
+        if self.tabs.get(idx).is_none() {
+            self.notify_auto(
+                crate::i18n::tr(
+                    ctx,
+                    "No active terminal tab; cannot run command",
+                    "无活动终端标签，无法执行命令",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        if TerminalView::is_multiline_command(&cmd) {
+            self.notify_multiline_not_inserted(ctx, &cmd);
+            ctx.request_repaint();
+            return;
+        }
+        if let Some(hit) = crate::core::assess_ai_terminal_danger(&cmd) {
+            self.ai_danger_confirm = Some(AiDangerConfirmState {
+                tab_idx: idx,
+                command: cmd,
+                reason_zh: hit.reason_zh.to_string(),
+                reason_en: hit.reason_en.to_string(),
+                targets: hit.targets,
+            });
+            ctx.request_repaint();
+            return;
+        }
+        self.finish_ai_apply_to_terminal(ctx, idx, &cmd);
+    }
+
+    /// 危险确认通过后，或无害命令：再走本地审计；通过后只填入、不回车。
+    fn finish_ai_apply_to_terminal(&mut self, ctx: &egui::Context, idx: usize, cmd: &str) {
+        let audit = self.local_audit_for_send(cmd);
+        match self.insert_audited_command_at(ctx, idx, cmd) {
+            CommandSendResult::Sent => {
+                self.record_cmd_audit_event(
+                    "command.ai_suggested",
+                    cmd,
+                    &audit,
+                    crate::core::AuditOutcome::Success,
+                );
+                self.notify_auto(inserted_command_status_message(ctx, cmd));
+            }
+            CommandSendResult::Blocked(_) | CommandSendResult::NeedsConfirm { .. } => {}
+            CommandSendResult::NotConnected => {
+                self.notify_auto(
+                    crate::i18n::tr(
+                        ctx,
+                        "No active terminal tab; cannot run command",
+                        "无活动终端标签，无法执行命令",
+                    )
+                    .to_string(),
+                );
+            }
+        }
+        ctx.request_repaint();
+    }
+
+    fn confirm_ai_danger(&mut self, ctx: &egui::Context, proceed: bool) {
+        let Some(state) = self.ai_danger_confirm.take() else {
+            return;
+        };
+        if !proceed {
+            return;
+        }
+        // 用户已确认危险：仍尊重本地 Block；Confirm 视为已确认，直接填入。
+        let audit = self.local_audit_for_send(&state.command);
+        if matches!(audit.action, CmdAuditAction::Block) {
+            let hint = audit
+                .matches
+                .first()
+                .map(|m| m.message.as_str())
+                .unwrap_or("");
+            let title = crate::i18n::tr(
+                ctx,
+                "Local check: command blocked",
+                "本地检查：该命令被禁止",
+            )
+            .to_string();
+            let body = format!(
+                "{}{}",
+                command_preview(&state.command, 80),
+                if hint.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {hint}")
+                },
+            );
+            self.record_cmd_audit_event(
+                "command.blocked",
+                &state.command,
+                &audit,
+                AuditOutcome::Denied,
+            );
+            self.notify_block_with_compliant_suggestion(
+                ctx,
+                state.tab_idx,
+                &state.command,
+                title,
+                body,
+            );
+            return;
+        }
+        let pane = self
+            .tabs
+            .get_mut(state.tab_idx)
+            .and_then(|t| t.active_pane_mut());
+        let Some(pane) = pane else {
+            self.notify_auto(
+                crate::i18n::tr(
+                    ctx,
+                    "No active terminal tab; cannot run command",
+                    "无活动终端标签，无法执行命令",
+                )
+                .to_string(),
+            );
+            return;
+        };
+        if !pane.terminal.is_connected() {
+            self.notify_auto(
+                crate::i18n::tr(
+                    ctx,
+                    "No active terminal tab; cannot run command",
+                    "无活动终端标签，无法执行命令",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        match pane.terminal.insert_command_text(&state.command) {
+            Ok(()) => {
+                self.record_cmd_audit_event(
+                    "command.ai_suggested",
+                    &state.command,
+                    &audit,
+                    AuditOutcome::Success,
+                );
+                self.notify_auto(inserted_command_status_message(ctx, &state.command));
+            }
+            Err(e) if e == TerminalView::ERR_INSERT_MULTILINE => {
+                self.notify_multiline_not_inserted(ctx, &state.command);
+            }
+            Err(e) => {
+                self.notify_error(format!(
+                    "{} {}",
+                    crate::i18n::tr(ctx, "Insert failed:", "插入失败："),
+                    localize_terminal_insert_fragment_error(ctx, &e)
+                ));
+            }
+        }
     }
 
     fn confirm_cmd_audit(&mut self, ctx: &egui::Context, proceed: bool) {
@@ -3824,6 +4003,7 @@ impl MistTermApp {
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
             || self.cmd_audit_confirm.is_some()
+            || self.ai_danger_confirm.is_some()
             || self.batch_exec_dialog.open
             || self.quick_selector.open
             || self.command_palette.open
@@ -4807,6 +4987,7 @@ impl MistTermApp {
             || self.delete_session_confirm.is_some()
             || self.close_tab_confirm_idx.is_some()
             || self.cmd_audit_confirm.is_some()
+            || self.ai_danger_confirm.is_some()
             || self.batch_exec_dialog.open
             || self.send_sequence_dialog.open
             || self.rule_manager_dialog.open
@@ -6482,49 +6663,7 @@ impl MistTermApp {
                     }
                 }
                 AppAction::AiExecTerminalCommand(cmd) => {
-                    if let Some(idx) = self.active_tab {
-                        if self.tabs.get_mut(idx).is_some() {
-                            let audit = self.local_audit_for_send(&cmd);
-                            if TerminalView::is_multiline_command(&cmd) {
-                                self.notify_multiline_not_inserted(ctx, &cmd);
-                                ctx.request_repaint();
-                                continue;
-                            }
-                            match self.insert_audited_command_at(ctx, idx, &cmd) {
-                                CommandSendResult::Sent => {
-                                    self.record_cmd_audit_event(
-                                        "command.ai_suggested",
-                                        &cmd,
-                                        &audit,
-                                        crate::core::AuditOutcome::Success,
-                                    );
-                                    self.notify_auto(inserted_command_status_message(ctx, &cmd));
-                                }
-                                CommandSendResult::Blocked(_)
-                                | CommandSendResult::NeedsConfirm { .. } => {}
-                                CommandSendResult::NotConnected => {
-                                    self.notify_auto(
-                                        crate::i18n::tr(
-                                            ctx,
-                                            "No active terminal tab; cannot run command",
-                                            "无活动终端标签，无法执行命令",
-                                        )
-                                        .to_string(),
-                                    );
-                                }
-                            }
-                            ctx.request_repaint();
-                        }
-                    } else {
-                        self.notify_auto(
-                            crate::i18n::tr(
-                                ctx,
-                                "No active terminal tab; cannot run command",
-                                "无活动终端标签，无法执行命令",
-                            )
-                            .to_string(),
-                        );
-                    }
+                    self.handle_ai_apply_to_terminal(ctx, cmd);
                 }
                 AppAction::AttachTerminalSelectionToAi => {
                     self.send_terminal_selection_to_ai(ctx);
@@ -9686,6 +9825,9 @@ impl eframe::App for MistTermApp {
                 }
                 if self.cmd_audit_confirm.is_some() {
                     parts.push("modal.cmd_audit");
+                }
+                if self.ai_danger_confirm.is_some() {
+                    parts.push("modal.ai_danger");
                 }
                 parts.join(",")
             },
