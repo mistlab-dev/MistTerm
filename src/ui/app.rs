@@ -9414,240 +9414,6 @@ impl MistTermApp {
             });
     }
 
-    /// 遗留底栏(已由 Activity Rail + Toast 替代；保留实现供对照，默认不调用)。
-    #[allow(dead_code)]
-    fn show_bottom_chrome(&mut self, ctx: &egui::Context) {
-        let theme = self.theme_manager.current_theme().clone();
-        let status_h = theme.status_bar_height();
-        let fragment_count = self.fragment_manager.get_all().len();
-        let total_runs: u32 = self
-            .fragment_manager
-            .get_all()
-            .iter()
-            .map(|f| f.usage_count)
-            .sum();
-
-        ctx.root_ui(|root| {
-        egui::Panel::bottom("bottom_chrome")
-            .exact_size(status_h)
-            .frame(theme.frame_chrome_bar())
-            .show(root, |ui| {
-                let screen = ui.ctx().content_rect();
-                let inner = ui.max_rect();
-                let m = theme.margin_chrome_bar();
-                let panel_top = inner.min.y - m.top as f32;
-                let panel_rect = egui::Rect::from_min_max(
-                    egui::pos2(screen.min.x, panel_top),
-                    egui::pos2(screen.max.x, inner.max.y + m.bottom as f32),
-                );
-                ui.painter()
-                    .rect_filled(panel_rect, 0.0, theme.chrome_bar_fill());
-                let content_clip = egui::Rect::from_min_max(
-                    egui::pos2(screen.min.x, panel_top + 2.0),
-                    egui::pos2(screen.max.x, inner.max.y),
-                );
-                ui.set_clip_rect(content_clip);
-                let content_h = theme.chrome_bar_content_height(status_h);
-
-                let status_ctx = ui.interact(
-                    inner,
-                    egui::Id::new("status_bar_context"),
-                    egui::Sense::click(),
-                );
-                status_ctx.context_menu(|ui| {
-                    crate::ui::chrome::apply_context_menu_style(ui, &theme);
-                    let import_label = format!(
-                        "{}…",
-                        crate::i18n::menu::labels(crate::i18n::language(ui.ctx())).import_ssh
-                    );
-                    // session-import 模块 gating（#122 review 问题 2）：状态栏右键与应用菜单同口径。
-                    let session_import_enabled = crate::modules::session_import::SessionImportModule::import_enabled(&self.module_registry);
-                    if crate::ui::chrome::popup_menu_button_enabled(
-                        ui,
-                        &theme,
-                        &import_label,
-                        session_import_enabled && self.ssh_config_path.exists(),
-                    )
-                    .clicked()
-                    {
-                        self.open_ssh_import_dialog(ui.ctx());
-                    }
-                    let foreign_label = format!(
-                        "{}…",
-                        crate::i18n::menu::labels(crate::i18n::language(ui.ctx())).import_foreign
-                    );
-                    if crate::ui::chrome::popup_menu_button_enabled(
-                        ui,
-                        &theme,
-                        &foreign_label,
-                        session_import_enabled,
-                    )
-                    .clicked()
-                    {
-                        self.open_foreign_import_dialog();
-                    }
-                });
-
-                let row_w = ui.available_width();
-                ui.allocate_ui_with_layout(
-                    egui::vec2(row_w, content_h),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        ui.set_min_height(content_h);
-                        ui.set_max_height(content_h);
-                        ui.spacing_mut().item_spacing =
-                            egui::vec2(theme.spacing_status_left_gap(), 0.0);
-
-                        self.status_bar_info_cluster(ui, &theme);
-
-                        let remaining_w = ui.available_width().max(0.0);
-                        ui.allocate_ui_with_layout(
-                            egui::vec2(remaining_w, content_h),
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                ui.set_min_height(content_h);
-                                ui.set_max_height(content_h);
-                                ui.spacing_mut().item_spacing =
-                                    egui::vec2(theme.spacing_tool_btn_gap(), 0.0);
-
-                                let fragment_chip = match crate::i18n::language(ctx) {
-                                    crate::i18n::UiLanguage::En => {
-                                        format!("{fragment_count} snippets · {total_runs} runs")
-                                    }
-                                    crate::i18n::UiLanguage::Zh => {
-                                        format!("{fragment_count} 片段 · {total_runs} 次")
-                                    }
-                                };
-                                crate::ui::chrome::status_text_chip(
-                                    ui,
-                                    &theme,
-                                    &fragment_chip,
-                                    theme.text_primary(),
-                                );
-                                ui.label(
-                                    egui::RichText::new("|")
-                                        .size(theme.font_size_status_bar())
-                                        .color(theme.color_caption_text()),
-                                );
-                                ui.add_space(theme.spacing_status_right_gap());
-
-                                let menu = crate::i18n::menu::labels(crate::i18n::language(ctx));
-                                if crate::ui::chrome::status_tool_button(
-                                    ui,
-                                    &theme,
-                                    crate::ui::icons::IconId::Fragment,
-                                    crate::i18n::tr(ctx, "Snippets", "片段"),
-                                    &format!(
-                                        "{} · {}",
-                                        menu.fragment_panel,
-                                        crate::platform::accel("K")
-                                    ),
-                                )
-                                .clicked()
-                                {
-                                    if self.show_fragment_panel {
-                                        self.show_fragment_panel = false;
-                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                        self.open_right_dock_panel(ActiveRightDock::Fragment);
-                                    }
-                                }
-                                if crate::ui::chrome::status_tool_button(
-                                    ui,
-                                    &theme,
-                                    crate::ui::icons::IconId::Folder,
-                                    crate::i18n::tr(ctx, "Files", "文件"),
-                                    crate::i18n::tr(
-                                        ctx,
-                                        "SFTP files · browse / upload / download",
-                                        "SFTP 文件 · 浏览/上传/下载",
-                                    ),
-                                )
-                                .clicked()
-                                {
-                                    if self.show_sftp_panel {
-                                        self.show_sftp_panel = false;
-                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                        self.toggle_sftp_panel(ctx);
-                                    }
-                                }
-                                let fwd_count = self
-                                    .active_tab
-                                    .and_then(|idx| self.tabs.get(idx))
-                                    .and_then(|tab| tab.active_terminal())
-                                    .filter(|t| t.is_connected())
-                                    .and_then(|t| t.ssh_session_id())
-                                    .map(|id| self.port_forward_panel.active_count_for(id))
-                                    .unwrap_or(0);
-                                let fwd_tip = if fwd_count > 0 {
-                                    format!(
-                                        "{} · {}",
-                                        crate::i18n::tr(
-                                            ctx,
-                                            "Port forwarding · active",
-                                            "端口转发 · 运行中",
-                                        ),
-                                        fwd_count
-                                    )
-                                } else {
-                                    crate::i18n::tr(
-                                        ctx,
-                                        "Port forwarding · -L / -R / SOCKS",
-                                        "端口转发 · 本地/远程/SOCKS",
-                                    )
-                                    .to_string()
-                                };
-                                if crate::ui::chrome::status_tool_button(
-                                    ui,
-                                    &theme,
-                                    crate::ui::icons::IconId::Network,
-                                    crate::i18n::tr(ctx, "Forward", "转发"),
-                                    &fwd_tip,
-                                )
-                                .clicked()
-                                {
-                                    if self.show_port_forward_panel {
-                                        self.show_port_forward_panel = false;
-                                        self.port_forward_last_tab = None;
-                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                        self.toggle_port_forward_panel(ctx);
-                                    }
-                                }
-                                if crate::ui::chrome::status_tool_button(
-                                    ui,
-                                    &theme,
-                                    crate::ui::icons::IconId::Monitor,
-                                    crate::i18n::tr(ctx, "Monitor", "监控"),
-                                    menu.monitor_panel,
-                                )
-                                .clicked()
-                                {
-                                    if self.show_monitor_panel {
-                                        self.show_monitor_panel = false;
-                                        self.monitor_last_tab = None;
-                                        self.sync_monitor_panel_to_active_tab();
-                                    } else if self.ensure_right_dock_allowed_or_warn(ctx) {
-                                        self.open_right_dock_panel(ActiveRightDock::Monitor);
-                                    }
-                                }
-                                if crate::ui::chrome::status_tool_button(
-                                    ui,
-                                    &theme,
-                                    crate::ui::icons::IconId::Api,
-                                    "AI",
-                                    menu.ai_panel,
-                                )
-                                .clicked()
-                                {
-                                    self.toggle_ai_panel(ctx);
-                                }
-                            },
-                        );
-                    },
-                );
-            });
-        });
-    }
-
     #[cfg(target_os = "macos")]
     fn poll_native_menu_bar(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if self.native_menu.is_none() {
@@ -9692,6 +9458,26 @@ impl MistTermApp {
         }
         // 系统会反复把首项改回可执行文件名 mistterm，每帧纠正为 MistTerm
         crate::platform::fix_menu_bar_application_title();
+    }
+
+    // macOS Option-as-Alt（#207）：eframe 0.37 下扩展挂不上 egui ViewportBuilder，
+    // 首帧经 `frame.winit_window()` 拿到 winit 窗口后调 `set_option_as_alt(Both)`。
+    // 效果同 0.23 时代 `with_option_as_alt(OptionAsAlt::Both)`：Option 键入终端可编 Meta（ESC 前缀）。
+    #[cfg(target_os = "macos")]
+    fn apply_macos_option_as_alt_once(&mut self, frame: &mut eframe::Frame) {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        static DONE: AtomicBool = AtomicBool::new(false);
+        if DONE.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        if let Some(window) = frame.winit_window() {
+            use eframe::winit::platform::macos::WindowExtMacOS;
+            window.set_option_as_alt(crate::platform::OptionAsAlt::Both);
+            log::debug!("macOS OptionAsAlt::Both applied on first frame");
+        } else {
+            // 首帧拿不到窗口（理论上不应发生）：复位标记，下一帧重试。
+            DONE.store(false, Ordering::SeqCst);
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -9914,12 +9700,24 @@ impl eframe::App for MistTermApp {
 
     // #206 S1：eframe 0.34+ 把 App::update 拆成 logic（纯状态，无 UI）+ ui（绘制）。
     // S1 策略：原 update 全身放进 ui（等价旧行为）；logic 空实现。
-    // S2（#207）按梳理 §10「先 logic 调原 update 全身、ui 空」反查脏帧/repaint 行为后再细化拆分。
-    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {}
+    // S2（#207）补：把非绘制的状态/轮询驱动（无 UI 侧效应）拆进 logic；只把
+    // 「绘制 + 输入驱动的 UI 动作 + 面板/弹窗」留在 ui，轮询调用点同步採到 logic，
+    // 防一帧两跑。
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 监控：`exec` 由 shell 泵串行执行，在此处轮询结果并驱动自动刷新。
+        // 掳出 ui（#207）：无论面板是否可见、无论是否重绘，每帧恰好跑一次。
+        self.monitor_panel.update(ctx, self.show_monitor_panel);
+        self.dispatch_monitor_alert_notifications(ctx);
+        self.poll_team_service(ctx);
+        self.poll_port_forward_panel();
+    }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let ctx = &ctx;
+        // macOS Option-as-Alt（#207）：首帧拿到 winit 窗口后补设一次（once 标记防重复）。
+        #[cfg(target_os = "macos")]
+        self.apply_macos_option_as_alt_once(frame);
         if let Some(url) = self.pending_ssh_url.take() {
             self.open_ssh_url(ctx, url);
         }
@@ -10056,11 +9854,7 @@ impl eframe::App for MistTermApp {
 
         let theme = self.theme_manager.current_theme().clone();
 
-        // 监控：`exec` 由 shell 泵串行执行，在此处轮询结果并驱动自动刷新
-        self.monitor_panel.update(ctx, self.show_monitor_panel);
-        self.dispatch_monitor_alert_notifications(ctx);
-        self.poll_team_service(ctx);
-        self.poll_port_forward_panel();
+        // 监控/团队/端口转发轮询已採到 `logic`（#207）：每帧一次、无重复驱动。
         show_team_fragment_editor_modal(
             ctx,
             &theme,

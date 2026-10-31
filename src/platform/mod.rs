@@ -25,7 +25,7 @@ pub mod macos_menu;
 // eframe 0.37 重新导出了 winit 的 macOS 扩展 trait（经 eframe::winit）。
 // `winit` 直接依赖仍保留：eframe 不重新导出 winit 全部 API，且 [patch] 必须版本对齐。
 #[cfg(target_os = "macos")]
-use eframe::winit::platform::macos::OptionAsAlt;
+pub use eframe::winit::platform::macos::OptionAsAlt;
 
 pub use app_name::APP_DISPLAY_NAME;
 pub use docs::{
@@ -93,9 +93,9 @@ pub fn run_gui() {
     };
 
     // macOS：内容延伸到标题栏，标签和红绿灯同一行(透明标题栏)。
-    // Option 当作 Alt：winit 0.30 的 `window_builder` 钩子收的是 egui ViewportBuilder，
-    // 挂不上 winit WindowAttributes 扩展 → 改为首帧经 `winit_window()` 调
-    // `set_option_as_alt`（见 app.rs `apply_macos_option_as_alt_once`）。
+    // Option 当作 Alt：winit 0.30 的扩展挂不上 egui ViewportBuilder → 已在 S2（#207）
+    // 首帧经 `frame.winit_window()` 实装 `set_option_as_alt(Both)`，
+    // 见 app.rs `apply_macos_option_as_alt_once`。
     #[cfg(target_os = "macos")]
     {
         options.viewport = options
