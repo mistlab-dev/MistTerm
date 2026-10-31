@@ -455,7 +455,7 @@ fn table_cell(
 ) {
     let w = cols.col_width(col);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, row_h), egui::Sense::hover());
-    let mut cell = ui.child_ui(rect, FileTableCols::col_layout(col));
+    let mut cell = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(FileTableCols::col_layout(col)));
     cell.set_clip_rect(cell.clip_rect().intersect(rect));
     cell.set_width(w);
     cell.set_min_width(w);
@@ -499,7 +499,7 @@ fn paint_valign_text(
     align_right: bool,
 ) {
     let max_w = ui.max_rect().width().max(0.0);
-    let galley = ui.fonts(|f| {
+    let galley = ui.ctx().fonts_mut(|f| {
         let full = f.layout_no_wrap(text.to_string(), font.clone(), color);
         if full.size().x <= max_w + 0.5 {
             return full;
@@ -522,7 +522,7 @@ fn paint_valign_text(
     } else {
         ui.max_rect().left()
     };
-    ui.painter().galley(egui::pos2(x, y), galley);
+    ui.painter().galley(egui::pos2(x, y), galley, egui::Color32::WHITE);
 }
 
 pub(super) fn paint_file_table_header(
@@ -547,7 +547,7 @@ pub(super) fn paint_file_table_header(
             egui::Stroke::new(1.0, theme.border.to_color32()),
         );
     }
-    ui.allocate_ui_at_rect(header_rect, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(header_rect), |ui| {
         paint_file_table_row_strip(ui, cols, h, |cell, col| {
             let (base_label, col_enum) = match col {
                 0 => return,
@@ -656,7 +656,7 @@ pub(super) fn paint_file_table_row(
         egui::FontId::proportional(small_px)
     };
 
-    ui.allocate_ui_at_rect(row_rect, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
         paint_file_table_row_strip(ui, cols, h, |cell, col| match col {
             0 => {
                 let (icon_r, _) =

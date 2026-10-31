@@ -177,7 +177,7 @@ pub fn panel_header_new_button_with_label(ui: &mut Ui, theme: &Theme, label: &st
         }
         let (fill, icon_color, _) = primary_control_button_colors(theme, true, hovered, pressed);
         ui.painter()
-            .rect(rect, rounding, fill, egui::Stroke::NONE);
+            .rect(rect, rounding, fill, egui::Stroke::NONE, egui::StrokeKind::Middle);
         icons::paint_icon(
             ui,
             rect,
@@ -266,7 +266,7 @@ pub fn panel_sort_chip(
     } else {
         egui::Stroke::new(1.0, theme.accent_alpha(51))
     };
-    ui.painter().rect(rect, rounding, fill, stroke);
+    ui.painter().rect(rect, rounding, fill, stroke, egui::StrokeKind::Middle);
     let text_color = if theme.uses_modern_palette() {
         if hovered || pressed {
             theme.text_primary()
@@ -385,7 +385,7 @@ pub fn panel_caption_link_with_hover(
         .unwrap_or(font_size * 0.85);
     let baseline_y = rect.bottom() - 2.0;
     let text_pos = egui::pos2(rect.left(), baseline_y - baseline_in_galley);
-    ui.painter().galley(text_pos, galley);
+    ui.painter().galley(text_pos, galley, egui::Color32::WHITE);
     if hovered {
         ui.painter().hline(
             egui::Rangef::new(rect.left(), rect.right()),
@@ -435,8 +435,13 @@ fn text_hit_button(
         egui::Stroke::NONE
     };
     if fill != Color32::TRANSPARENT || stroke != egui::Stroke::NONE {
-        ui.painter()
-            .rect(rect, theme.radius_list_item(), fill, stroke);
+        ui.painter().rect(
+            rect,
+            theme.radius_list_item(),
+            fill,
+            stroke,
+            egui::StrokeKind::Middle,
+        );
     }
     let text_color = if hovered || pressed {
         hover_color
@@ -446,7 +451,7 @@ fn text_hit_button(
     let galley = ui
         .painter()
         .layout_no_wrap(label.to_owned(), font, text_color);
-    ui.painter().galley(rect.min + padding, galley);
+    ui.painter().galley(rect.min + padding, galley, egui::Color32::WHITE);
     if hovered {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
@@ -481,15 +486,11 @@ pub fn sidebar_list_sort_button(
     );
     let short = crate::i18n::session_sort_chip_short(ctx, *sort_by);
     let response = panel_sort_chip(ui, theme, icon, short, &hover);
-    if response.clicked() {
-        ui.memory_mut(|mem| mem.toggle_popup(popup_id));
-    }
-    egui::popup::popup_above_or_below_widget(
-        ui,
-        popup_id,
-        &response,
-        egui::AboveOrBelow::Below,
-        |ui| {
+    // egui 0.37：Popup::from_toggle_button_response 自带点击开合；Below 对应 RectAlign 底部展开。
+    let _ = popup_id;
+    egui::Popup::from_toggle_button_response(&response)
+        .align(egui::RectAlign::BOTTOM_START)
+        .show(|ui| {
             apply_sidebar_menu_popup_style(ui, theme);
             ui.set_min_width(theme.size_sidebar_sort_combo_w());
             for mode in SessionSortBy::ALL {
@@ -502,35 +503,34 @@ pub fn sidebar_list_sort_button(
                     .clicked()
                 {
                     *sort_by = *mode;
-                    ui.memory_mut(|mem| mem.close_popup());
                 }
             }
-        },
-    );
+        });
 }
+// #206 S1: egui 0.37 Popup 自带 close_behavior(点击外部/选中后自动关)，不再手动 close_popup。
 
 /// 下拉 / 右键 / ComboBox 弹出层共用的控件色(含 `widgets.open`，避免子菜单发黑底)。
 ///
 /// 注意：此处的 `selection` 专供弹出层内 SelectableLabel / selectable_value(弱灰选中)，
 /// 与全局主题里的「文本拖选」色分离——弹窗外 TextEdit 仍用 theme_manager 的拖选色。
 pub fn apply_popup_widget_visuals(visuals: &mut egui::Visuals, theme: &Theme) {
-    let rounding = egui::Rounding::same(theme.radius_list_item());
+    let rounding = egui::CornerRadius::same(theme.radius_list_item() as u8);
     let menu_bg = theme.color_menu_popup_fill();
     let hover = theme.list_row_hover_bg();
     let selected = theme.color_list_row_selected_fill();
     let active = theme.color_widget_active_fill();
 
     visuals.window_fill = menu_bg;
-    visuals.menu_rounding = rounding;
+    visuals.menu_corner_radius = rounding;
     visuals.widgets.inactive.bg_fill = menu_bg;
     visuals.widgets.inactive.weak_bg_fill = menu_bg;
-    visuals.widgets.inactive.rounding = rounding;
+    visuals.widgets.inactive.corner_radius = rounding;
     visuals.widgets.hovered.bg_fill = hover;
     visuals.widgets.hovered.weak_bg_fill = hover;
-    visuals.widgets.hovered.rounding = rounding;
+    visuals.widgets.hovered.corner_radius = rounding;
     visuals.widgets.active.bg_fill = active;
     visuals.widgets.active.weak_bg_fill = active;
-    visuals.widgets.active.rounding = rounding;
+    visuals.widgets.active.corner_radius = rounding;
     visuals.widgets.inactive.fg_stroke.color = theme.text_secondary();
     visuals.widgets.hovered.fg_stroke.color = theme.text_primary();
     visuals.widgets.active.fg_stroke.color = theme.text_primary();
@@ -540,7 +540,7 @@ pub fn apply_popup_widget_visuals(visuals: &mut egui::Visuals, theme: &Theme) {
     open.bg_fill = active;
     open.bg_stroke = egui::Stroke::NONE;
     open.fg_stroke.color = theme.text_primary();
-    open.rounding = rounding;
+    open.corner_radius = rounding;
 
     // 菜单选中：与侧栏同一档实色灰，勿用文本拖选的高亮白底
     visuals.selection.bg_fill = selected;
@@ -661,7 +661,7 @@ pub fn right_dock_header_divider(ui: &mut Ui, theme: &Theme) {
 /// 标准弹窗 `Window`：无系统标题栏、不可折叠、统一外框(须再 `.open()` / `.show()` / 尺寸)。
 /// 外框描边来自 [`Theme::modal_stroke`]：暗夜面板线宽为 0，弹窗用 1 物理像素发丝线，避免叠在同色窗口上没有边。
 /// 统一弹窗入口：去掉默认 title_bar / collapse，应用 [`modal_window_frame`]，
-/// 并把约束放宽到整屏(`ctx.screen_rect()`)，否则默认 `constrain(true)` 会把弹窗夹在
+/// 并把约束放宽到整屏(`ctx.content_rect()`)，否则默认 `constrain(true)` 会把弹窗夹在
 /// `ctx.available_rect()` 内，右 dock 打开后无法把弹窗拖到 dock 上方。
 ///
 /// 首次居中请用 [`layout_util::modal_center_pos`] + `.default_pos(...)`，勿 `.anchor(...)`(拖拽会弹回)。
@@ -675,7 +675,7 @@ pub fn modal_window<'a>(
         .collapsible(false)
         .frame(modal_window_frame(theme, ctx))
         // egui 0.27 系列方法名是 `constraint_to`(拼写问题，但 API 就是这样)。
-        .constraint_to(ctx.screen_rect())
+        .constrain_to(ctx.content_rect())
 }
 
 /// 将刚绘制的弹窗提到最前，避免被右 dock Foreground 盖住或误点底层关闭钮。
@@ -699,13 +699,13 @@ pub fn sidebar_panel_frame(theme: &Theme) -> egui::Frame {
 /// 右 dock 左侧让出的 `bg_body` 缝(单 dock 与终端之间、多 dock 之间都看得见)。
 fn right_dock_outer_margin(theme: &Theme) -> egui::Margin {
     let mut m = theme.margin_right_dock_screen_outer();
-    m.left = theme.spacing_dock_gap();
+    m.left = theme.spacing_dock_gap() as i8;
     m
 }
 
 /// 右 `SidePanel` 占位槽(透明，屏右缘留 `bg_body` 缝)。
 pub fn right_dock_placeholder_frame(theme: &Theme) -> egui::Frame {
-    egui::Frame::none().outer_margin(right_dock_outer_margin(theme))
+    egui::Frame::NONE.outer_margin(right_dock_outer_margin(theme))
 }
 
 /// 右 `SidePanel` 可见外框(SFTP / 凭证等直绘 dock)。
@@ -761,7 +761,7 @@ pub fn paint_right_dock_screen_gutter(ctx: &egui::Context, theme: &Theme, top_ch
     if inset < 0.5 || !inset.is_finite() {
         return;
     }
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     let y0 = screen.min.y + top_chrome_height.max(0.0);
     let y1 = screen.max.y - theme.status_bar_height();
     if y1 <= y0 {
@@ -790,16 +790,16 @@ pub fn paint_right_dock_slot_shell(ui: &mut egui::Ui, slot: egui::Rect, theme: &
 
 /// 与 [`paint_right_dock_slot_shell`] 相同，用于在 `Area` 外先铺底色(避免可点层盖住整块槽位)。
 /// 右 dock 壳层圆角：顶角不圆(与终端 Tab 条齐平)；贴底栏时底角也为 0。
-pub fn right_dock_shell_rounding(theme: &Theme, flush_bottom: bool) -> egui::Rounding {
+pub fn right_dock_shell_rounding(theme: &Theme, flush_bottom: bool) -> egui::CornerRadius {
     if flush_bottom {
-        egui::Rounding::ZERO
+        egui::CornerRadius::ZERO
     } else {
         let r = theme.radius_panel();
-        egui::Rounding {
-            nw: 0.0,
-            ne: 0.0,
-            sw: r,
-            se: r,
+        egui::CornerRadius {
+            nw: 0,
+            ne: 0,
+            sw: r as u8,
+            se: r as u8,
         }
     }
 }
@@ -828,7 +828,14 @@ pub fn paint_right_dock_slot_shell_with_painter_ex(
 /// 槽位扣除 region panel 内边距后的内容矩形(须用 `Margin::shrink_rect`，勿 `shrink2(left+right)`)。
 #[inline]
 pub fn right_dock_slot_content_rect(slot: egui::Rect, theme: &Theme) -> egui::Rect {
-    theme.right_dock_content_margin().shrink_rect(slot)
+    // #206 S1: Margin::shrink_rect removed in 0.37; shrink manually via leftf/topf etc.
+    {
+        let m = theme.right_dock_content_margin();
+        egui::Rect::from_min_max(
+            egui::pos2(slot.left() + m.leftf(), slot.top() + m.topf()),
+            egui::pos2(slot.right() - m.rightf(), slot.bottom() - m.bottomf()),
+        )
+    }
 }
 
 /// Central 之后 Foreground 重绘右 dock 用的图层(仅绘制壳层，勿在此注册可点 `Area`)。
@@ -897,7 +904,7 @@ pub fn show_right_dock_foreground_body<R>(
     _profile: crate::ui::layout_util::SidePanelProfile,
     add_body: impl FnOnce(&mut Ui, f32) -> R,
 ) -> egui::InnerResponse<R> {
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     // 正文与壳层用同一块槽位。以前槽位一超过屏宽 55% 就把可点区钉回右侧 42%，
     // 壳层仍铺满拖宽后的区域，终端又被裁掉，中间就剩一块黑。
     let paint = geom.paint.intersect(screen);
@@ -926,7 +933,7 @@ pub fn show_right_dock_foreground_body<R>(
                 ui.min_rect().min + (inner.max.to_vec2() - paint.min.to_vec2()),
             );
             let mut body_ui =
-                ui.child_ui(local_inner, egui::Layout::top_down(egui::Align::Min));
+                ui.new_child(egui::UiBuilder::new().max_rect(local_inner).layout(egui::Layout::top_down(egui::Align::Min)));
             body_ui.set_clip_rect(local_inner);
             let cap = body_ui.available_width().max(48.0).min(body_w);
             let w = crate::ui::layout_util::constrain_ui_to_right_dock_body(&mut body_ui, cap);
@@ -978,11 +985,11 @@ pub fn show_right_dock_resize_grip_layer(
                 let id = egui::Id::new(panel_id);
                 if let Some(mut state) = egui::containers::panel::PanelState::load(ctx, id) {
                     let dx = ui.input(|i| i.pointer.delta().x);
-                    let current_w = state.rect.width();
+                    let current_w = state.outer_rect.width();
                     let (_, min_w, max_w) =
                         crate::ui::layout_util::right_dock_resize_bounds(current_w);
                     let new_w = (current_w - dx).clamp(min_w, max_w);
-                    state.rect.min.x = state.rect.max.x - new_w;
+                    state.outer_rect.min.x = state.outer_rect.max.x - new_w;
                     ctx.data_mut(|d| d.insert_persisted(id, state));
                     ctx.request_repaint();
                 }
@@ -999,7 +1006,7 @@ pub fn show_right_dock_resize_grip_for_slot(
     panel_id: &str,
     profile: crate::ui::layout_util::SidePanelProfile,
 ) {
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     let dock_inset = theme.spacing_right_dock_screen_inset();
     let Some(slot) = crate::ui::layout_util::right_dock_foreground_slot(
         panel_slot, ctx, panel_id, profile, None, dock_inset,
@@ -1082,12 +1089,12 @@ pub fn render_top_chrome_panel(
 
     paint_top_strip(ui, rect, theme);
     let mut out = TitleBarChromeResult::default();
-    ui.allocate_ui_at_rect(rect, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
         ui.set_clip_rect(rect);
         let content_h = h;
         ui.set_min_height(content_h);
         ui.style_mut().spacing.interact_size.y = content_h;
-        egui::menu::bar(ui, |ui| {
+        egui::menu::MenuBar::new().ui(ui, |ui| {
             if show_in_window_menu {
                 ui.spacing_mut().item_spacing.x = theme.spacing_menu_bar_gap();
                 draw_menu(ui);
@@ -1147,7 +1154,7 @@ fn ssh_import_chip_actions(
                             .size(theme.font_size_title_bar_info())
                             .color(theme.amber_color()),
                     )
-                    .rounding(4.0),
+                    .corner_radius(4.0),
                 )
                 .clicked()
             })
@@ -1229,7 +1236,7 @@ pub fn session_tab_chip(
     } else {
         theme.text_tertiary()
     };
-    let label_galley = ui.fonts(|f| {
+    let label_galley = ui.ctx().fonts_mut(|f| {
         f.layout_no_wrap(
             label.to_owned(),
             egui::FontId::proportional(theme.font_size_tab_label()),
@@ -1284,7 +1291,7 @@ pub fn session_tab_chip(
     } else {
         egui::Stroke::new(1.0, theme.color_tab_inactive_stroke())
     };
-    ui.painter().rect(rect, rounding, fill, stroke);
+    ui.painter().rect(rect, rounding, fill, stroke, egui::StrokeKind::Middle);
     // 左侧色条：当前标签实色，未选中变淡，避免连成一片
     if let Some(c) = env_color {
         let bar_w = 3.0;
@@ -1292,11 +1299,11 @@ pub fn session_tab_chip(
             rect.left_top(),
             egui::pos2(rect.left() + bar_w, rect.bottom()),
         );
-        let bar_rounding = egui::Rounding {
+        let bar_rounding = egui::CornerRadius {
             nw: rounding.nw,
-            ne: 0.0,
+            ne: 0,
             sw: rounding.sw,
-            se: 0.0,
+            se: 0,
         };
         let bar_color = if active {
             c.gamma_multiply(0.95)
@@ -1332,8 +1339,11 @@ pub fn session_tab_chip(
         .unwrap_or_else(|| egui::Rect::from_min_size(egui::Pos2::ZERO, label_galley.size()));
     let label_x = inner.min.x + 5.0 + gap_dot;
     let label_w = label_galley.size().x;
-    ui.painter()
-        .galley(egui::pos2(label_x, cy - ink.center().y), label_galley);
+    ui.painter().galley(
+        egui::pos2(label_x, cy - ink.center().y),
+        label_galley,
+        egui::Color32::WHITE,
+    );
     // × 紧跟标题；始终占位，仅切换绘制，避免显隐导致 hover 闪烁。
     let close_visible = show_close || active || tab_hot;
     let close_tooltip = format!(
@@ -1345,7 +1355,7 @@ pub fn session_tab_chip(
         egui::pos2(label_x + label_w + gap_close + close_slot * 0.5, cy),
         egui::vec2(close_slot, close_slot),
     );
-    let mut close_ui = ui.child_ui(close_rect, egui::Layout::left_to_right(egui::Align::Center));
+    let mut close_ui = ui.new_child(egui::UiBuilder::new().max_rect(close_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
     let close_resp = theme_icon_hit_revealed(
         &mut close_ui,
         theme,
@@ -1405,7 +1415,7 @@ fn paint_caption_in_rect_center(
         color,
     );
     let pos = rect.center() - galley.size() * 0.5;
-    ui.painter().galley(pos, galley);
+    ui.painter().galley(pos, galley, egui::Color32::WHITE);
 }
 
 /// `center_row`: 工具按钮等在槽内居中；`false` 时自左 `pad_x` 起排(排序芯片、状态栏)。
@@ -1446,7 +1456,7 @@ fn paint_icon_caption_row_in_rect(
         icon_color,
         icon_px,
     );
-    painter.galley(egui::pos2(text_x, icon_cy - text_h * 0.5), galley);
+    painter.galley(egui::pos2(text_x, icon_cy - text_h * 0.5), galley, egui::Color32::WHITE);
 }
 
 fn control_button_size(
@@ -1595,7 +1605,7 @@ fn paint_control_button(
         }
     };
 
-    ui.painter().rect(rect, rounding, fill, stroke);
+    ui.painter().rect(rect, rounding, fill, stroke, egui::StrokeKind::Middle);
     let pad_x = theme.spacing_control_btn_pad_x();
     if let Some(id) = icon {
         let icon_px = theme.size_icon_glyph();
@@ -1725,7 +1735,7 @@ fn paint_icon_only_button_at(
         }
     };
 
-    ui.painter().rect(rect, rounding, fill, stroke);
+    ui.painter().rect(rect, rounding, fill, stroke, egui::StrokeKind::Middle);
     let icon_px = theme
         .size_icon_glyph()
         .min((size.y - 6.0).max(12.0));
@@ -1746,7 +1756,7 @@ pub fn panel_toolbar_button_widget<'a>(theme: &'a Theme, text: RichText) -> Butt
     Button::new(text)
         .fill(theme.color_control_secondary_fill_idle())
         .stroke(theme.color_control_secondary_stroke(true))
-        .rounding(theme.radius_list_item())
+        .corner_radius(theme.radius_list_item())
 }
 
 fn panel_toolbar_button_size(ui: &Ui, theme: &Theme, label: &str, with_icon: bool) -> egui::Vec2 {
@@ -1808,6 +1818,7 @@ pub fn panel_ghost_action_button(
             rect.center().y - galley.size().y * 0.5,
         ),
         galley,
+        egui::Color32::WHITE,
     );
     response.on_hover_text(label)
 }
@@ -1875,8 +1886,9 @@ pub fn panel_toolbar_button_with_icon_or_busy(
         rounding,
         theme.color_panel_toolbar_btn_fill(),
         theme.divider_stroke(),
+        egui::StrokeKind::Middle,
     );
-    let mut child = ui.child_ui(rect, egui::Layout::left_to_right(egui::Align::Center));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
     child.add_space(6.0);
     child.add(egui::Spinner::new());
     child.add_space(4.0);
@@ -1925,10 +1937,10 @@ pub fn panel_toolbar_icon_button_or_busy(
         rounding,
         theme.color_panel_toolbar_btn_fill(),
         theme.divider_stroke(),
+        egui::StrokeKind::Middle,
     );
-    let mut child = ui.child_ui(
-        rect,
-        egui::Layout::centered_and_justified(egui::Direction::LeftToRight),
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(
+        rect).layout(egui::Layout::centered_and_justified(egui::Direction::LeftToRight)),
     );
     child.add(egui::Spinner::new());
     response.on_hover_text(crate::i18n::tr(ui.ctx(), "Collecting metrics…", "采集中…"))
@@ -2011,11 +2023,11 @@ pub fn settings_elevated_card(ui: &mut Ui, theme: &Theme, body: impl FnOnce(&mut
     ui.set_min_width(outer_w);
     let pad_x = theme.spacing_search_input_x().max(14.0);
     let pad_y = theme.spacing_sm().max(10.0);
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(theme.color_elevated_card_fill())
         .stroke(egui::Stroke::NONE)
-        .rounding(theme.radius_panel())
-        .inner_margin(egui::Margin::symmetric(pad_x, pad_y))
+        .corner_radius(theme.radius_panel())
+        .inner_margin(egui::Margin::symmetric(pad_x as i8, pad_y as i8))
         .show(ui, |ui| {
             let inner_w = crate::ui::layout_util::set_width_to_available(ui);
             ui.set_min_width(inner_w);
@@ -2029,7 +2041,7 @@ pub fn settings_elevated_card(ui: &mut Ui, theme: &Theme, body: impl FnOnce(&mut
 /// 表单标签的占位宽度，用来把两行步进器的数字框对齐。
 pub fn form_label_advance(ui: &Ui, theme: &Theme, text: &str) -> f32 {
     let font = egui::FontId::proportional(theme.font_size_form_label());
-    let galley = ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font, theme.color_form_label()));
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font, theme.color_form_label()));
     galley.size().x.ceil() + 4.0
 }
 
@@ -2038,12 +2050,13 @@ pub fn form_inline_label(ui: &mut Ui, theme: &Theme, text: &str) {
     let h = form_stepper_row_h(theme);
     let font = egui::FontId::proportional(theme.font_size_form_label());
     let color = theme.color_form_label();
-    let galley = ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font, color));
+    let galley = ui.ctx().fonts_mut(|f| f.layout_no_wrap(text.to_owned(), font, color));
     let w = galley.size().x.ceil() + 2.0;
     let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), Sense::hover());
     ui.painter().galley(
         egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5),
         galley,
+        egui::Color32::WHITE,
     );
 }
 
@@ -2074,12 +2087,13 @@ pub fn form_labeled_control_row<R>(
         let h = form_stepper_row_h(theme);
         let font = egui::FontId::proportional(theme.font_size_form_label());
         let color = theme.color_form_label();
-        let galley = ui.fonts(|f| f.layout_no_wrap(label.to_owned(), font, color));
+        let galley = ui.fonts_mut(|f| f.layout_no_wrap(label.to_owned(), font, color));
         let w = label_w.max(galley.size().x.ceil() + 4.0);
         let (rect, _) = ui.allocate_exact_size(egui::vec2(w, h), Sense::hover());
         ui.painter().galley(
             egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5),
             galley,
+            color,
         );
         add(ui)
     })
@@ -2144,13 +2158,14 @@ pub fn form_inline_singleline(
             theme.radius_search_input(),
             theme.color_text_input_fill(),
             stroke,
+            egui::StrokeKind::Middle,
         );
     }
     let inner = egui::Rect::from_min_size(
         egui::pos2(rect.left() + 2.0, rect.top()),
         egui::vec2((width - 4.0).max(8.0), row_h),
     );
-    ui.allocate_ui_at_rect(inner, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
         ui.set_min_size(inner.size());
         ui.set_max_size(inner.size());
         with_underline_field_visuals(ui, theme, |ui| {
@@ -2159,7 +2174,7 @@ pub fn form_inline_singleline(
                 ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
                 let mut edit = egui::TextEdit::singleline(text)
                     .id(id)
-                    .frame(false)
+                    .frame(egui::Frame::NONE)
                     .desired_width((width - 8.0).max(40.0))
                     .margin(egui::vec2(0.0, 0.0))
                     .vertical_align(egui::Align::Center)
@@ -2185,7 +2200,7 @@ pub fn form_inline_singleline(
 pub fn form_inline_checkbox(
     ui: &mut Ui,
     theme: &Theme,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     value: &mut bool,
     text: &str,
 ) -> Response {
@@ -2210,23 +2225,23 @@ pub fn form_checkbox(ui: &mut Ui, theme: &Theme, value: &mut bool, text: &str) -
 pub fn form_checkbox_with_id(
     ui: &mut Ui,
     theme: &Theme,
-    id: impl std::hash::Hash,
+    id: impl std::hash::Hash + std::fmt::Debug,
     value: &mut bool,
     text: &str,
 ) -> Response {
-    ui.push_id(id, |ui| {
-        let rounding = egui::Rounding::same(theme.radius_checkbox());
+    ui.push_id(egui::Id::new(id), |ui| {
+        let rounding = egui::CornerRadius::same(theme.radius_checkbox() as u8);
         let off_border = theme.color_checkbox_off_stroke_color();
         let w = &mut ui.style_mut().visuals.widgets;
         w.inactive.bg_fill = theme.color_checkbox_off_fill();
         w.inactive.bg_stroke = egui::Stroke::new(1.0, off_border);
-        w.inactive.rounding = rounding;
+        w.inactive.corner_radius = rounding;
         w.hovered.bg_fill = theme.color_checkbox_hover_fill();
         w.hovered.bg_stroke = egui::Stroke::new(1.0, theme.accent_dim_color());
-        w.hovered.rounding = rounding;
+        w.hovered.corner_radius = rounding;
         w.active.bg_fill = theme.accent_color();
         w.active.bg_stroke = egui::Stroke::new(1.0, theme.accent_color());
-        w.active.rounding = rounding;
+        w.active.corner_radius = rounding;
         w.active.fg_stroke = egui::Stroke::new(1.8, theme.color_checkbox_checkmark());
         ui.checkbox(value, text)
     })
@@ -2398,12 +2413,12 @@ pub fn filter_chip_row_with_sort(
     let chip_gap = theme.spacing_panel_gap();
     let sort_gap = theme.spacing_filter_sort_gap();
 
-    egui::Frame::none()
+    egui::Frame::NONE
         .outer_margin(egui::Margin {
-            left: 0.0,
-            right: 0.0,
-            top: 2.0,
-            bottom: 4.0,
+            left: 0,
+            right: 0,
+            top: 2,
+            bottom: 4,
         })
         .show(ui, |ui| {
             let row_w = ui.available_width().max(96.0);
@@ -2542,7 +2557,7 @@ pub fn fragment_list_row(
     let tag_col_w = fragment_list_tag_column_width(ui, theme, row.tag_label, content_w);
     let title_col_w = (content_w - gap - tag_col_w).max(0.0);
     // 行高按内容算(标题+命令+统计三行)，保证悬停背景盖住统计行。
-    let (cmd_h, stats_h) = ui.fonts(|f| {
+    let (cmd_h, stats_h) = ui.fonts_mut(|f| {
         (
             f.row_height(&egui::FontId::monospace(theme.font_size_fragment_cmd())),
             f.row_height(&egui::FontId::proportional(theme.font_size_fragment_stats())),
@@ -2560,8 +2575,11 @@ pub fn fragment_list_row(
     };
     ui.painter().rect_filled(row_rect, theme.radius_card(), bg);
 
-    let inner = egui::Margin::symmetric(pad_x, pad_y).shrink_rect(row_rect);
-    let mut row_ui = ui.child_ui(inner, egui::Layout::top_down(egui::Align::LEFT));
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(row_rect.left() + pad_x, row_rect.top() + pad_y),
+        egui::pos2(row_rect.right() - pad_x, row_rect.bottom() - pad_y),
+    );
+    let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::LEFT)));
     row_ui.set_max_width(content_w);
     row_ui.spacing_mut().item_spacing.y = line_gap;
 
@@ -2582,7 +2600,7 @@ pub fn fragment_list_row(
                                         .size(title_px)
                                         .color(theme.accent_color()),
                                 )
-                                .truncate(true)
+                                .truncate()
                                 .sense(egui::Sense::click()),
                             )
                             .on_hover_text(row.command);
@@ -2620,7 +2638,7 @@ pub fn fragment_list_row(
                                     .size(tag_px)
                                     .color(theme.color_fragment_tag_text()),
                             )
-                            .truncate(true),
+                            .truncate(),
                         )
                         .on_hover_text(row.tag_label);
                     },
@@ -2639,7 +2657,7 @@ pub fn fragment_list_row(
                     .monospace()
                     .color(theme.color_status_bar_conn()),
             )
-            .truncate(true),
+            .truncate(),
         )
         .on_hover_text(cmd_trim);
 
@@ -2649,7 +2667,7 @@ pub fn fragment_list_row(
                 .size(theme.font_size_fragment_stats())
                 .color(theme.color_caption_text()),
         )
-        .truncate(true),
+        .truncate(),
     );
 
     FragmentListRowResponse {
@@ -2728,9 +2746,10 @@ pub fn segmented_control_row(
 
     ui.painter().rect(
         track_rect,
-        egui::Rounding::same(theme.radius_segment_track()),
+        egui::CornerRadius::same(theme.radius_segment_track() as u8),
         theme.color_segment_track(),
         Stroke::NONE,
+        egui::StrokeKind::Middle,
     );
 
     let seg_total = if row_width.is_some() {
@@ -2743,7 +2762,7 @@ pub fn segmented_control_row(
     let mut x = track_rect.min.x + track_pad;
     let thumb_inset = 1.0;
     let _thumb_h = track_h - track_pad * 2.0;
-    let thumb_rounding = egui::Rounding::same(theme.radius_segment_thumb());
+    let thumb_rounding = egui::CornerRadius::same(theme.radius_segment_thumb() as u8);
 
     for (idx, (value, label)) in items.iter().enumerate() {
         let seg_w = if row_width.is_some() {
@@ -2764,6 +2783,7 @@ pub fn segmented_control_row(
                 thumb_rounding,
                 theme.color_segment_thumb(),
                 Stroke::NONE,
+                egui::StrokeKind::Middle,
             );
         }
         let text_color = if active {
@@ -2797,7 +2817,7 @@ pub fn button_group_toolbar(
     theme: &Theme,
     actions: &[ButtonGroupAction<'_>],
     expand_width: Option<f32>,
-    id_salt: impl std::hash::Hash,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
 ) -> Option<usize> {
     if actions.is_empty() {
         return None;
@@ -2806,7 +2826,7 @@ pub fn button_group_toolbar(
         return None;
     }
 
-    ui.push_id(id_salt, |ui| {
+    ui.push_id(egui::Id::new(id_salt), |ui| {
         let pad = theme.spacing_button_group_pad();
         let icon_px = theme.size_icon_glyph();
         let gap = 4.0;
@@ -2837,9 +2857,10 @@ pub fn button_group_toolbar(
         let hairline = theme.hairline_width(ui.ctx());
         ui.painter().rect(
             group_rect,
-            egui::Rounding::same(theme.radius_list_item()),
+            egui::CornerRadius::same(theme.radius_list_item() as u8),
             theme.color_button_group_fill(),
             Stroke::NONE,
+            egui::StrokeKind::Middle,
         );
 
         let mut clicked_idx = None;
@@ -2875,9 +2896,10 @@ pub fn button_group_toolbar(
             if resp.hovered() && action.enabled {
                 ui.painter().rect(
                     item_rect.shrink(2.0),
-                    egui::Rounding::same(theme.radius_list_item() - 1.0),
+                    egui::CornerRadius::same((theme.radius_list_item() - 1.0) as u8),
                     theme.color_widget_hover_fill(),
                     Stroke::NONE,
+                    egui::StrokeKind::Middle,
                 );
                 ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
             }
@@ -2949,7 +2971,7 @@ pub fn form_singleline_field_sftp_embedded(
         ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
         let mut edit = egui::TextEdit::singleline(text)
             .id(id)
-            .frame(false)
+            .frame(egui::Frame::NONE)
             .desired_width(w)
             .text_color(theme.text_primary())
             .font(egui::FontId::proportional(theme.font_size_control_input()));
@@ -2989,13 +3011,13 @@ pub fn sftp_toolbar_actions(
     ui: &mut Ui,
     theme: &Theme,
     actions: &[ButtonGroupAction<'_>],
-    id_salt: impl std::hash::Hash,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
 ) -> Option<usize> {
     if !theme.uses_modern_palette() {
         return None;
     }
     let mut clicked = None;
-    ui.push_id(id_salt, |ui| {
+    ui.push_id(egui::Id::new(id_salt), |ui| {
         ui.spacing_mut().item_spacing.x = theme.spacing_xs();
         for (idx, action) in actions.iter().enumerate() {
             let tip = if action.tooltip.is_empty() {
@@ -3056,7 +3078,7 @@ pub fn sftp_nav_toolbar_row(
     ui: &mut Ui,
     theme: &Theme,
     nav_actions: &[ButtonGroupAction<'_>],
-    nav_id_salt: impl std::hash::Hash,
+    nav_id_salt: impl std::hash::Hash + std::fmt::Debug,
 ) -> Option<usize> {
     if !theme.uses_modern_palette() {
         return None;
@@ -3095,9 +3117,9 @@ pub fn filter_chip_button(
         theme.color_filter_chip_inactive_text()
     };
     let rounding = if modern {
-        egui::Rounding::ZERO
+        egui::CornerRadius::ZERO
     } else {
-        egui::Rounding::same(theme.radius_category())
+        egui::CornerRadius::same(theme.radius_category() as u8)
     };
     let (rect, response) = ui.allocate_exact_size(min_size, Sense::click());
     let hovered = response.hovered();
@@ -3112,7 +3134,7 @@ pub fn filter_chip_button(
     } else {
         theme.color_overlay_fill_subtle()
     };
-    ui.painter().rect(rect, rounding, fill, egui::Stroke::NONE);
+    ui.painter().rect(rect, rounding, fill, egui::Stroke::NONE, egui::StrokeKind::Middle);
     if active && modern {
         paint_vscode_tab_bottom_indicator(ui.painter(), ui.ctx(), rect, theme);
     }
@@ -3211,7 +3233,7 @@ pub fn form_singleline_field(
             ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
             let mut edit = egui::TextEdit::singleline(text)
                 .id(id)
-                .frame(false)
+                .frame(egui::Frame::NONE)
                 .desired_width(inner_w)
                 .text_color(theme.color_text_input_text())
                 .font(egui::FontId::proportional(theme.font_size_control_input()));
@@ -3252,7 +3274,7 @@ pub fn form_singleline_field_boxed(
                 ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
                 let mut edit = egui::TextEdit::singleline(text)
                     .id(id)
-                    .frame(false)
+                    .frame(egui::Frame::NONE)
                     .desired_width(inner_w)
                     .text_color(theme.color_text_input_text())
                     .font(egui::FontId::proportional(theme.font_size_control_input()));
@@ -3298,7 +3320,7 @@ pub fn form_multiline_field_with_hint(
     let rows = rows.max(1).min(8);
     let pad_y = 4.0;
     let inner_w = (desired_width - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0);
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(theme.color_text_input_fill())
         .stroke(if focused {
             egui::Stroke::new(theme.stroke_width_panel().max(1.0), theme.accent_color())
@@ -3308,12 +3330,12 @@ pub fn form_multiline_field_with_hint(
                 theme.color_text_input_stroke(),
             )
         })
-        .rounding(theme.radius_search_input())
-        .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), pad_y))
+        .corner_radius(theme.radius_search_input())
+        .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x() as i8, pad_y as i8))
         .show(ui, |ui| {
             let mut edit = egui::TextEdit::multiline(text)
                 .id(id)
-                .frame(false)
+                .frame(egui::Frame::NONE)
                 .desired_width(inner_w)
                 .desired_rows(rows)
                 .text_color(theme.color_text_input_text())
@@ -3333,7 +3355,7 @@ pub fn form_multiline_field_with_hint(
 pub fn form_combo<R>(
     ui: &mut Ui,
     theme: &Theme,
-    id_salt: impl std::hash::Hash,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
     selected_text: impl Into<egui::WidgetText>,
     width: f32,
     add_contents: impl FnOnce(&mut Ui) -> R,
@@ -3345,7 +3367,7 @@ pub fn form_combo<R>(
     ui.style_mut()
         .text_styles
         .insert(egui::TextStyle::Body, font);
-    egui::ComboBox::from_id_source(id_salt)
+    egui::ComboBox::from_id_salt(id_salt)
         .selected_text(selected_text)
         .width(width.max(48.0))
         .show_ui(ui, |ui| {
@@ -3451,7 +3473,7 @@ pub fn selectable_readonly_monospace(
         egui::TextEdit::multiline(&mut text_ref)
             .font(egui::FontId::monospace(font_size))
             .text_color(theme.text_secondary())
-            .frame(false)
+            .frame(egui::Frame::NONE)
             .margin(egui::vec2(0.0, 0.0))
             .desired_width(desired_width.max(1.0))
             .code_editor(),
@@ -3502,7 +3524,7 @@ pub fn search_field(
                         let response = ui.add(
                             egui::TextEdit::singleline(query)
                                 .id(id)
-                                .frame(false)
+                                .frame(egui::Frame::NONE)
                                 .hint_text(hint_rich(theme, hint, font))
                                 .text_color(theme.color_text_input_text())
                                 .font(egui::FontId::proportional(font))
@@ -3530,19 +3552,19 @@ pub fn panel_search_row(
 ) -> Response {
     let margin = if content_w.is_some() {
         egui::Margin {
-            left: 0.0,
-            right: 0.0,
-            top: 4.0,
-            bottom: 6.0,
+            left: 0,
+            right: 0,
+            top: 4,
+            bottom: 6,
         }
     } else {
         theme.spacing_sidebar_search_outer()
     };
-    let inset_x = margin.left + margin.right;
+    let inset_x = margin.left as f32 + margin.right as f32;
     let stroke_pad = theme.stroke_width_panel() * 2.0 + 1.0;
     let cap = content_w.unwrap_or_else(|| crate::ui::layout_util::set_width_to_available(ui));
     let search_w = (cap - inset_x - stroke_pad).max(72.0);
-    egui::Frame::none()
+    egui::Frame::NONE
         .outer_margin(margin)
         .show(ui, |ui| search_field(ui, theme, id, query, hint, search_w))
         .inner
@@ -3613,7 +3635,7 @@ pub fn ssh_import_sidebar_banner(
         crate::i18n::UiLanguage::Zh => format!("检测到 {} 个未导入的 SSH 配置", pending_count,),
     };
     let inner = rect.shrink2(egui::vec2(10.0, 0.0));
-    ui.allocate_ui_at_rect(inner, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
         ui.set_height(BAR_H);
         ui.horizontal_centered(|ui| {
             let (ar, _) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::hover());
@@ -3741,15 +3763,15 @@ pub fn window_caption_buttons(
                 // restore: two overlapping squares
                 let a = rect.translate(egui::vec2(1.5, -1.5));
                 let b = rect.translate(egui::vec2(-1.5, 1.5));
-                ui.painter().rect_stroke(a, 0.0, Stroke::new(1.1, c));
+                ui.painter().rect_stroke(a, 0.0, Stroke::new(1.1, c), egui::StrokeKind::Inside);
                 ui.painter().rect_filled(
                     b,
                     0.0,
                     theme.chrome_bar_fill(),
                 );
-                ui.painter().rect_stroke(b, 0.0, Stroke::new(1.1, c));
+                ui.painter().rect_stroke(b, 0.0, Stroke::new(1.1, c), egui::StrokeKind::Inside);
             } else {
-                ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.1, c));
+                ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.1, c), egui::StrokeKind::Inside);
             }
             if resp.clicked() {
                 out.toggle_maximize = true;
@@ -3780,15 +3802,15 @@ pub fn window_caption_buttons(
 /// 标题栏可拖拽空白区：按住拖动窗口；双击切换最大化。
 pub fn title_bar_drag_region(
     ui: &mut Ui,
-    frame: &mut eframe::Frame,
+    ctx: &egui::Context,
     size: egui::Vec2,
 ) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
     if resp.double_clicked() {
-        let maximized = frame.info().window_info.maximized;
-        frame.set_maximized(!maximized);
+        let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
     } else if resp.is_pointer_button_down_on() {
-        frame.drag_window();
+        ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }
     let _ = rect;
     resp
@@ -3936,6 +3958,7 @@ fn paint_activity_rail_badge(ui: &mut Ui, theme: &Theme, icon_rect: egui::Rect, 
             badge_rect.center().y - galley.size().y * 0.5,
         ),
         galley,
+        Color32::WHITE,
     );
 }
 
@@ -4014,14 +4037,14 @@ pub(crate) fn measure_status_toast_size(
     let title_galley = if title.is_empty() {
         None
     } else {
-        Some(ctx.fonts(|f| {
+        Some(ctx.fonts_mut(|f| {
             f.layout(title.to_owned(), title_font, Color32::WHITE, max_text_w)
         }))
     };
     let body_galley = if text.is_empty() {
         None
     } else {
-        Some(ctx.fonts(|f| {
+        Some(ctx.fonts_mut(|f| {
             f.layout(text.to_owned(), body_font, Color32::WHITE, max_text_w)
         }))
     };
@@ -4113,15 +4136,16 @@ pub(crate) fn paint_status_toast(
         theme.radius_list_item(),
         fill,
         egui::Stroke::new(1.0, stroke),
+        egui::StrokeKind::Middle,
     );
     let mut text_pos = rect.min + pad;
     if let Some(g) = title_galley {
         let h = g.size().y;
-        painter.galley(text_pos, g);
+        painter.galley(text_pos, g, egui::Color32::WHITE);
         text_pos.y += h + gap;
     }
     if let Some(g) = body_galley {
-        painter.galley(text_pos, g);
+        painter.galley(text_pos, g, egui::Color32::WHITE);
     }
 
     if dismiss_only {
@@ -4129,7 +4153,7 @@ pub(crate) fn paint_status_toast(
             egui::pos2(rect.max.x - pad.x - 18.0, rect.min.y + pad.y - 2.0),
             egui::vec2(18.0, 18.0),
         );
-        ui.allocate_ui_at_rect(close_rect, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(close_rect), |ui| {
             if icon_button(ui, theme, IconId::Close, theme.color_caption_text())
                 .on_hover_text(crate::i18n::tr(ui.ctx(), "Dismiss", "关闭"))
                 .clicked()
@@ -4139,11 +4163,11 @@ pub(crate) fn paint_status_toast(
         });
     } else if has_actions {
         let row_y = rect.max.y - pad.y - btn_h;
-        ui.allocate_ui_at_rect(
-            egui::Rect::from_min_max(
+        ui.scope_builder(
+            egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
                 egui::pos2(rect.min.x + pad.x, row_y),
                 egui::pos2(rect.max.x - pad.x, rect.max.y - pad.y),
-            ),
+            )),
             |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if show_dismiss
@@ -4385,10 +4409,10 @@ pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> b
     let band = theme
         .frame_modal_title_band()
         .outer_margin(egui::Margin {
-            left: -mx,
-            right: -mx,
-            top: -my,
-            bottom: 0.0,
+            left: -mx as i8,
+            right: -mx as i8,
+            top: -my as i8,
+            bottom: 0,
         })
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -4688,16 +4712,17 @@ pub fn panel_quick_prompt_chip(ui: &mut Ui, theme: &Theme, label: &str) -> Respo
     );
     ui.painter().rect(
         rect,
-        egui::Rounding::same(theme.radius_category()),
+        egui::CornerRadius::same(theme.radius_category() as u8),
         fill,
         stroke,
+        egui::StrokeKind::Middle,
     );
     // 垂直居中到固定 chip 高，同行多枚文字落在同一条中线。
     let text_pos = egui::pos2(
         rect.center().x - galley.size().x * 0.5,
         rect.center().y - galley.size().y * 0.5,
     );
-    ui.painter().galley(text_pos, galley);
+    ui.painter().galley(text_pos, galley, egui::Color32::WHITE);
     if hovered {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
@@ -4759,13 +4784,14 @@ fn form_stepper_value_field(
         theme.radius_search_input(),
         theme.color_text_input_fill(),
         stroke,
+        egui::StrokeKind::Middle,
     );
     let inner = egui::Rect::from_min_size(
         egui::pos2(rect.left() + 4.0, rect.top()),
         egui::vec2((width - 8.0).max(8.0), row_h),
     );
     let mut edit = ui
-        .allocate_ui_at_rect(inner, |ui| {
+        .scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
             ui.set_min_size(inner.size());
             ui.set_max_size(inner.size());
             // 数字与 ±、表单标签同一档（12px），不要用 13px 正文把矮框撑满。
@@ -4800,6 +4826,7 @@ fn form_stepper_btn(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
         theme.radius_list_item(),
         fill,
         theme.color_control_secondary_stroke(true),
+        egui::StrokeKind::Middle,
     );
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
@@ -4812,6 +4839,7 @@ fn form_stepper_btn(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
             rect.center().y - galley.size().y * 0.5,
         ),
         galley,
+        egui::Color32::WHITE,
     );
     if hovered {
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
@@ -4884,7 +4912,7 @@ pub fn form_u32_stepper(
                     .vertical_align(egui::Align::Center)
                     .margin(egui::vec2(0.0, 0.0))
                     .font(egui::FontId::proportional(theme.font_size_ui_control()))
-                    .frame(false),
+                    .frame(egui::Frame::NONE),
             )
         });
         if edit.has_focus() {
@@ -5016,7 +5044,7 @@ pub fn form_f32_stepper(
                     .vertical_align(egui::Align::Center)
                     .margin(egui::vec2(0.0, 0.0))
                     .font(egui::FontId::proportional(theme.font_size_ui_control()))
-                    .frame(false),
+                    .frame(egui::Frame::NONE),
             )
         });
         if edit.has_focus() {

@@ -520,7 +520,7 @@ impl TerminalView {
     }
 
     fn measure_terminal_line_height(
-        fonts: &egui::text::Fonts,
+        fonts: &mut egui::epaint::text::FontsView<'_>,
         font_size: f32,
         _color: egui::Color32,
     ) -> f32 {
@@ -535,7 +535,7 @@ impl TerminalView {
     }
 
     fn terminal_cell_metrics(ui: &egui::Ui, font_size: f32, color: egui::Color32) -> (f32, f32) {
-        ui.ctx().fonts(|fonts| {
+        ui.ctx().fonts_mut(|fonts| {
             let font_id = egui::FontId::monospace(font_size);
             let width_galley = fonts.layout_no_wrap("M".to_string(), font_id, color);
             let line_height = Self::measure_terminal_line_height(fonts, font_size, color);
@@ -623,12 +623,13 @@ impl TerminalView {
             return (0, 0);
         }
         let cursor = galley.cursor_from_pos(pos - text_draw_pos);
-        let row_i = cursor.rcursor.row.min(galley.rows.len().saturating_sub(1));
-        let mut col = cursor.rcursor.column;
+        let layout = galley.layout_from_cursor(cursor);
+        let row_i = layout.row.min(galley.rows.len().saturating_sub(1));
+        let mut col = layout.column.0;
         if let Some(len) = Self::line_char_len(lines, row_i) {
             col = col.min(len);
         } else if let Some(grow) = galley.rows.get(row_i) {
-            col = col.min(grow.char_count_excluding_newline());
+            col = col.min(grow.char_count_excluding_newline().0);
         }
         (row_i, col)
     }
@@ -642,9 +643,9 @@ impl TerminalView {
     ) -> egui::Rect {
         let row_i = cur.row.min(galley.rows.len().saturating_sub(1));
         let row = &galley.rows[row_i];
-        let y = text_draw_pos.y + row.rect.min.y;
+        let y = text_draw_pos.y + row.rect().min.y;
         let h = row.height().max(1.0);
-        let x = text_draw_pos.x + row.x_offset(cur.col);
+        let x = text_draw_pos.x + row.x_offset(egui::epaint::text::CharIndex(cur.col));
         egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(cell_w, h))
     }
 
@@ -661,11 +662,11 @@ impl TerminalView {
             let Some(grow) = galley.rows.get(row_i) else {
                 continue;
             };
-            let y = text_draw_pos.y + grow.rect.min.y;
+            let y = text_draw_pos.y + grow.rect().min.y;
             let next_y = galley
                 .rows
                 .get(row_i + 1)
-                .map(|r| text_draw_pos.y + r.rect.min.y)
+                .map(|r| text_draw_pos.y + r.rect().min.y)
                 .unwrap_or_else(|| y + grow.height());
             // 与下一行顶留 1px，消除选区底压行观感(不做 expand)。
             let h = (next_y - y - 1.0).max(1.0);
@@ -680,8 +681,8 @@ impl TerminalView {
                 while x1 < row_bgs.len() && row_bgs[x1] == bg {
                     x1 += 1;
                 }
-                let left = text_draw_pos.x + grow.x_offset(x0);
-                let right = (text_draw_pos.x + grow.x_offset(x1)).max(left + cell_w * 0.5);
+                let left = text_draw_pos.x + grow.x_offset(egui::epaint::text::CharIndex(x0));
+                let right = (text_draw_pos.x + grow.x_offset(egui::epaint::text::CharIndex(x1))).max(left + cell_w * 0.5);
                 painter.rect_filled(
                     egui::Rect::from_min_max(egui::pos2(left, y), egui::pos2(right, y + h)),
                     0.0,
@@ -712,7 +713,7 @@ impl TerminalView {
         let mut rect = cursor_rect;
         if !preedit.is_empty() {
             let preedit_w = ui
-                .fonts(|fonts| {
+                .fonts_mut(|fonts| {
                     fonts
                         .layout_no_wrap(
                             preedit.to_owned(),
@@ -741,16 +742,16 @@ impl TerminalView {
         cell_h: f32,
     ) {
         self.last_ime_id = Some(ime_id);
-        ui.allocate_ui_at_rect(ime_rect, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(ime_rect), |ui| {
             ui.set_min_size(egui::vec2(ime_rect.width().max(8.0), ime_rect.height().max(cell_h)));
             ui.visuals_mut().override_text_color = Some(egui::Color32::TRANSPARENT);
             // 勿绘制 TextEdit 竖线光标；终端仅用下方块状光标 + 本框仅向 winit 报告 IME 位置
-            ui.visuals_mut().text_cursor =
+            ui.visuals_mut().text_cursor.stroke =
                 egui::Stroke::new(0.0, egui::Color32::TRANSPARENT);
             ui.add(
                 egui::TextEdit::singleline(&mut self.ime_capture)
                     .id(ime_id)
-                    .frame(false)
+                    .frame(egui::Frame::NONE)
                     .margin(egui::vec2(0.0, 0.0))
                     .lock_focus(true)
                     .desired_width(ime_rect.width().max(8.0)),
@@ -764,7 +765,7 @@ impl TerminalView {
         });
         self.ime_capture.clear();
         if let Some(mut state) = egui::widgets::text_edit::TextEditState::load(ui.ctx(), ime_id) {
-            state.set_ccursor_range(Some(egui::text::CCursorRange::one(
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::one(
                 egui::text::CCursor::new(0),
             )));
             state.store(ui.ctx(), ime_id);
@@ -785,14 +786,14 @@ impl TerminalView {
         }
         let color = theme.text_primary();
         let font_id = egui::FontId::monospace(self.font_size);
-        let galley = ui.fonts(|fonts| fonts.layout_no_wrap(text.to_owned(), font_id, color));
+        let galley = ui.ctx().fonts_mut(|fonts| fonts.layout_no_wrap(text.to_owned(), font_id, color));
         let mut rect = egui::Rect::from_min_size(origin, galley.size());
         // 下划线落在行盒内，避免压到下一行。
         let underline_y = (origin.y + rect.height() - 1.0).min(clip.bottom() - 1.0);
         rect.max.y = underline_y.max(rect.min.y + 1.0);
         let painter = ui.painter().with_clip_rect(clip);
         painter.rect_filled(rect, 0.0, theme.accent_alpha(48));
-        painter.galley(origin, galley);
+        painter.galley(origin, galley, egui::Color32::WHITE);
         painter.hline(
             origin.x..=origin.x + rect.width().max(8.0),
             underline_y,
@@ -898,10 +899,9 @@ impl TerminalView {
         }
         ui.ctx().input(|i| {
             for f in &i.raw.dropped_files {
-                if let Some(p) = &f.path {
-                    if !pending.iter().any(|x| x == p) {
-                        pending.push(p.clone());
-                    }
+                let p = f.path();
+                if !pending.iter().any(|x| x == p) {
+                    pending.push(p.to_path_buf());
                 }
             }
         });
@@ -918,7 +918,7 @@ impl TerminalView {
             .raw
             .dropped_files
             .iter()
-            .filter_map(|f| f.path.clone())
+            .filter_map(|f| Some(f.path().to_path_buf()))
             .collect()
     }
 
@@ -1774,7 +1774,7 @@ impl TerminalView {
 
         // Ctrl + 滚轮：缩放终端字体(不改变 PTY 行列，仅视觉)
         let wheel = ui.ctx().input(|i| {
-            let z = i.scroll_delta.y;
+            let z = i.smooth_scroll_delta().y;
             if self.terminal_focused
                 && (self.connected || self.buffer_input_while_disconnected)
                 && i.modifiers.ctrl
@@ -1832,14 +1832,14 @@ impl TerminalView {
         // 格高被夹到字号×FACTOR 后，首行字形会高出格子顶边；标签栏移到顶栏后(macOS / 沉浸式)
         // 终端上方不再有 tab 行兜住，首行会被裁掉一截。顶边按溢出量补齐。
         let mut content_margin = theme.terminal_content_margin();
-        content_margin.top += ui.ctx().fonts(|f| {
+        content_margin.top += ui.ctx().fonts_mut(|f| {
             let natural = f.row_height(&egui::FontId::monospace(self.font_size));
             let cell = Self::measure_terminal_line_height(f, self.font_size, theme.text_primary());
             // 字体声明的行高不一定罩得住真实字形(macOS 上 Menlo/回退字体)，
             // 再给一个按字号的保底，任何字体/字号首行都不会被顶栏裁到。
-            (natural - cell).max(self.font_size * 0.4).ceil()
+            (natural - cell).max(self.font_size * 0.4).ceil() as i8
         });
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(theme.bg_terminal_color())
             .inner_margin(content_margin)
             .show(ui, |ui| {
@@ -1871,7 +1871,7 @@ impl TerminalView {
                     };
                     let scroll_h = (ui.available_height() - footer_h).max(80.0);
                     // 最后一行贴着裁剪边时，字形会被窗口底边切掉，提示符就像掉下去了。
-                    let bottom_pad = ui.ctx().fonts(|fonts| {
+                    let bottom_pad = ui.ctx().fonts_mut(|fonts| {
                         Self::measure_terminal_line_height(
                             fonts,
                             self.font_size,
@@ -2033,7 +2033,7 @@ impl TerminalView {
                         if let Some(g) = reuse {
                             g
                         } else {
-                            let g = ui.ctx().fonts(|f| f.layout_job(layout_job.clone()));
+                            let g = ui.ctx().fonts_mut(|f| f.layout_job(layout_job.clone()));
                             if let Some(c) = self.visual_layout_cache.as_mut() {
                                 c.galley = Some(g.clone());
                             }
@@ -2041,9 +2041,9 @@ impl TerminalView {
                         }
                     };
 
-                    let prev_scroll_w = ui.spacing().scroll_bar_width;
+                    let prev_scroll_w = ui.spacing().scroll.bar_width;
                     let prev_inactive_fill = ui.visuals().widgets.inactive.bg_fill;
-                    ui.spacing_mut().scroll_bar_width = theme.terminal_scroll_bar_width();
+                    ui.spacing_mut().scroll.bar_width = theme.terminal_scroll_bar_width();
                     ui.visuals_mut().widgets.inactive.bg_fill =
                         theme.terminal_scroll_bar_track_fill();
                     // ScrollArea 在内容不足 max_height 时会收缩，导致提示符浮在中间；外层固定 scroll_h 视口
@@ -2060,11 +2060,9 @@ impl TerminalView {
                                 let overflow =
                                     (painted_galley.size().y - view_content_h).max(0.0);
                                 egui::ScrollArea::vertical()
-                        .id_source(ui.id().with("terminal_scroll"))
+                        .id_salt("terminal_scroll")
                         .auto_shrink([false, false])
                         .vertical_scroll_offset(overflow)
-                        .enable_scrolling(false)
-                        .drag_to_scroll(false)
                         .scroll_bar_visibility(
                             egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden,
                         )
@@ -2091,8 +2089,7 @@ impl TerminalView {
                             let galley_for_layout = painted_galley.clone();
                             // 文本区高度贴齐视口；行高已按 scroll_h/rows 均摊，galley 应≈scroll_h。
                             let te_h = scroll_h;
-                            let mut layouter = |_ui: &egui::Ui, text: &str, _wrap_width: f32| {
-                                let _ = text;
+                            let mut layouter = |_ui: &egui::Ui, _text: &dyn egui::TextBuffer, _wrap_width: f32| {
                                 galley_for_layout.clone()
                             };
                             // 勿让 TextEdit 自带拖选(visuals.selection 灰底)与终端格网选区叠成双色
@@ -2113,7 +2110,7 @@ impl TerminalView {
                                         ui.set_min_height(te_h);
                                         ui.set_max_height(te_h);
                                         egui::TextEdit::multiline(&mut display_view)
-                                            .id_source(ui.id().with("terminal_text_area"))
+                                            .id(ui.id().with("terminal_text_area"))
                                             .margin(egui::vec2(0.0, 0.0))
                                             .horizontal_align(egui::Align::LEFT)
                                             .vertical_align(egui::Align::TOP)
@@ -2124,7 +2121,7 @@ impl TerminalView {
                                             .desired_rows(1)
                                             .code_editor()
                                             .interactive(false)
-                                            .frame(false)
+                                            .frame(egui::Frame::NONE)
                                             .layouter(&mut layouter)
                                             .show(ui)
                                     },
@@ -2132,7 +2129,7 @@ impl TerminalView {
                                 .inner;
                             let response = te_output.response;
                             let galley = te_output.galley;
-                            let text_draw_pos = te_output.text_draw_pos;
+                            let text_draw_pos = te_output.galley_pos;
                             let text_top = text_draw_pos.y;
                             let text_rect = response.rect;
                             let select_id = response.id.with("terminal_select");
@@ -2155,7 +2152,7 @@ impl TerminalView {
                             ui.visuals_mut().selection.stroke.color = prev_sel_fg;
                             {
                                 let mut te_state = te_output.state;
-                                te_state.set_cursor_range(None);
+                                te_state.cursor.set_char_range(None);
                                 te_state.store(ui.ctx(), response.id);
                             }
                             let display_lines: Vec<&str> = display_owned.lines().collect();
@@ -2211,7 +2208,7 @@ impl TerminalView {
                                     shell.terminal_bg,
                                     cell_w,
                                 );
-                                painter.galley(text_draw_pos, galley.clone());
+                                painter.galley(text_draw_pos, galley.clone(), egui::Color32::WHITE);
                             }
                             // 普通提示符没有非默认格子底色，`needs_cell_bg` 为 false。
                             // 探针若只在补绘底色时清掉，第一段输出之后会一直为 Some，
@@ -2266,10 +2263,10 @@ impl TerminalView {
                                         .is_some_and(|(hr, hl)| hr == row_i && hl.text == link.text);
                                     let y = theme.snap_y_to_pixel(
                                         ui.ctx(),
-                                        text_draw_pos.y + grow.rect.min.y + grow.height(),
+                                        text_draw_pos.y + grow.rect().min.y + grow.height(),
                                     );
-                                    let left = text_draw_pos.x + grow.x_offset(s);
-                                    let right = (text_draw_pos.x + grow.x_offset(e)).max(left + 1.0);
+                                    let left = text_draw_pos.x + grow.x_offset(egui::epaint::text::CharIndex(s));
+                                    let right = (text_draw_pos.x + grow.x_offset(egui::epaint::text::CharIndex(e))).max(left + 1.0);
                                     painter.line_segment(
                                         [egui::pos2(left, y), egui::pos2(right, y)],
                                         Self::display_link_underline_stroke(theme, ui.ctx(), hovered),
@@ -2389,9 +2386,9 @@ impl TerminalView {
                             if (select_resp.hovered()
                                 || response.hovered()
                                 || self.terminal_focused)
-                                && ui.input(|i| !i.modifiers.ctrl && i.scroll_delta.y.abs() > 0.5)
+                                && ui.input(|i| !i.modifiers.ctrl && i.smooth_scroll_delta().y.abs() > 0.5)
                             {
-                                let dy = ui.input(|i| i.scroll_delta.y);
+                                let dy = ui.input(|i| i.smooth_scroll_delta().y);
                                 let lines = (dy / cell_h).round().clamp(-64.0, 64.0) as i32;
                                 if lines != 0 {
                                     self.terminal.scroll_display(Scroll::Delta(lines));
@@ -2600,7 +2597,6 @@ impl TerminalView {
                                             } else {
                                                 self.pending_module_menu_action = Some(item.action);
                                             }
-                                            ui.close_menu();
                                         }
                                     }
                                     ui.separator();
@@ -2620,7 +2616,6 @@ impl TerminalView {
                                         if !text.is_empty() {
                                             ui.ctx().copy_text(text);
                                         }
-                                        ui.close_menu();
                                     }
                                     if crate::ui::chrome::popup_menu_button(
                                         ui,
@@ -2633,7 +2628,6 @@ impl TerminalView {
                                         self.pending_send_to_ai_text =
                                             if text.trim().is_empty() { None } else { Some(text) };
                                         self.pending_send_to_ai = true;
-                                        ui.close_menu();
                                     }
                                     ui.separator();
                                 }
@@ -2649,7 +2643,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.pending_send_tail_to_ai = true;
-                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button(
                                     ui,
@@ -2661,7 +2654,6 @@ impl TerminalView {
                                     if let Ok(mut clip) = Clipboard::new() {
                                         let _ = clip.set_text(self.terminal.get_formatted_output());
                                     }
-                                    ui.close_menu();
                                 }
                                 ui.separator();
                                 let block_prev = crate::platform::shortcuts::command_block_prev_accel();
@@ -2680,7 +2672,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.jump_command_block(ui.ctx(), crate::terminal::NavDir::Prev);
-                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button_shortcut(
                                     ui,
@@ -2691,7 +2682,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.jump_command_block(ui.ctx(), crate::terminal::NavDir::Next);
-                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button_shortcut(
                                     ui,
@@ -2706,7 +2696,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.copy_current_command_block(ui.ctx());
-                                    ui.close_menu();
                                 }
                                 let paste_accel = crate::platform::terminal_paste_accel();
                                 if crate::ui::chrome::popup_menu_button_shortcut(
@@ -2722,7 +2711,6 @@ impl TerminalView {
                                             self.paste_text(&text, ui.ctx());
                                         }
                                     }
-                                    ui.close_menu();
                                 }
                                 let paste_history_accel = crate::platform::paste_history_accel();
                                 if crate::ui::chrome::popup_menu_button_shortcut(
@@ -2734,7 +2722,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.pending_open_paste_history = true;
-                                    ui.close_menu();
                                 }
                                 ui.separator();
                                 if crate::ui::chrome::popup_menu_button(
@@ -2745,7 +2732,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.clear_screen();
-                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button(
                                     ui,
@@ -2755,7 +2741,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.set_font_size(self.font_size + 1.0);
-                                    ui.close_menu();
                                 }
                                 if crate::ui::chrome::popup_menu_button(
                                     ui,
@@ -2765,7 +2750,6 @@ impl TerminalView {
                                 .clicked()
                                 {
                                     self.set_font_size(self.font_size - 1.0);
-                                    ui.close_menu();
                                 }
                             });
                         });
@@ -2773,7 +2757,7 @@ impl TerminalView {
                             })
                         .inner;
 
-                    ui.spacing_mut().scroll_bar_width = prev_scroll_w;
+                    ui.spacing_mut().scroll.bar_width = prev_scroll_w;
                     ui.visuals_mut().widgets.inactive.bg_fill = prev_inactive_fill;
 
                     // 离开底部(display_offset>0)则停止自动跟随；滚回最新输出后恢复
@@ -2873,7 +2857,7 @@ impl TerminalView {
         let usable_height = viewport.y.max(48.0);
 
         // 用真实字体测量单字符网格尺寸，避免 80x24 误差
-        let (cell_w, cell_h) = ui.ctx().fonts(|fonts| {
+        let (cell_w, cell_h) = ui.ctx().fonts_mut(|fonts| {
             let font_id = egui::FontId::monospace(self.font_size);
             // 用长串测平均字宽：单个 "M" 的 galley 宽度可能小于实际渲染步进（逐字形像素对齐），导致多算一列、最右列被裁掉
             let width_galley = fonts.layout_no_wrap("M".repeat(64), font_id, theme.text_primary());
@@ -3487,7 +3471,7 @@ impl TerminalView {
             }
             for event in &i.events {
                 match event {
-                    egui::Event::CompositionEnd(text) => {
+                    egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                         if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
                             self.append_offline_bytes(text.as_bytes());
                         }
@@ -3809,16 +3793,16 @@ impl TerminalView {
             for event in &i.events {
                 self.ime_preedit.apply_event(event);
                 match event {
-                    egui::Event::CompositionStart => {
+                    egui::Event::Ime(egui::ImeEvent::Enabled) => {
                         log::debug!(target: "repaint_lag", "ime composition start");
                     }
-                    egui::Event::CompositionUpdate(t) => {
+                    egui::Event::Ime(egui::ImeEvent::Preedit { text: t, .. }) => {
                         log::debug!(target: "repaint_lag", "ime preedit update len={}", t.chars().count());
                     }
                     egui::Event::Text(t) => {
                         log::debug!(target: "repaint_lag", "key text event len={}", t.chars().count());
                     }
-                    egui::Event::CompositionEnd(t) => {
+                    egui::Event::Ime(egui::ImeEvent::Commit(t)) => {
                         log::debug!(target: "repaint_lag", "ime commit len={}", t.chars().count());
                     }
                     _ => {}
@@ -3826,7 +3810,7 @@ impl TerminalView {
             }
             for event in &i.events {
                 match event {
-                    egui::Event::CompositionEnd(text) => {
+                    egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
                         if let Some(text) = Self::ime_committed_text(text, i.modifiers) {
                             self.track_typed_text(text);
                             if let Err(e) = self.send_pty_input(text.as_bytes()) {
@@ -4675,7 +4659,7 @@ impl TerminalView {
         let max_w = (rect.width() - 64.0).clamp(200.0, 420.0);
         // 勿用 centered_and_justified：Frame 会继承 main_justify，首个 label 被撑满整高，
         // 按钮行可用高度被压成 0（dogfood：只见文案不见「取消/重试/编辑/关闭」）。
-        ui.allocate_ui_at_rect(rect, |ui| {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_clip_rect(rect.intersect(ui.clip_rect()));
             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
                 let size_id = ui.id().with("connection_placeholder_block_h");
@@ -4686,10 +4670,10 @@ impl TerminalView {
                 let top_pad = ((ui.available_height() - prev_h) * 0.5).max(0.0);
                 ui.add_space(top_pad);
 
-                let frame_resp = egui::Frame::none()
+                let frame_resp = egui::Frame::NONE
                     .fill(theme.bg_window_color())
-                    .rounding(8.0)
-                    .inner_margin(egui::Margin::symmetric(18.0, 14.0))
+                    .corner_radius(8.0)
+                    .inner_margin(egui::Margin::symmetric(18.0 as i8, 14.0 as i8))
                     .show(ui, |ui| {
                         // Frame 内再次钉死非 justify 的纵向布局，避免继承外层怪异 Layout。
                         ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
@@ -5558,9 +5542,8 @@ mod display_link_stroke_tests {
     #[test]
     fn display_link_underline_is_one_physical_pixel() {
         let ctx = egui::Context::default();
-        let _ = ctx.run(
+        let _ = ctx.run_pass(
             egui::RawInput {
-                pixels_per_point: Some(2.0),
                 ..Default::default()
             },
             |_| {},
@@ -5583,20 +5566,33 @@ mod display_link_stroke_tests {
 mod drop_tests {
     use super::*;
 
+    #[derive(Debug)]
+    struct TestDroppedFile(PathBuf);
+
+    impl egui::DroppedFile for TestDroppedFile {
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+
+        fn bytes(&self) -> Result<Vec<u8>, String> {
+            std::fs::read(&self.0).map_err(|e| e.to_string())
+        }
+    }
+
     fn frame(ctx: &egui::Context, events: Vec<egui::Event>, dropped: &[&str]) -> Vec<PathBuf> {
         let raw = egui::RawInput {
             events,
             dropped_files: dropped
                 .iter()
-                .map(|p| egui::DroppedFile {
-                    path: Some(PathBuf::from(p)),
-                    ..Default::default()
+                .map(|p| {
+                    let f: egui::DroppedFileHandle = std::sync::Arc::new(TestDroppedFile(PathBuf::from(p)));
+                    f
                 })
                 .collect(),
             ..Default::default()
         };
         let mut out = Vec::new();
-        let _ = ctx.run(raw, |ctx| {
+        let _ = ctx.run_pass(raw, |ctx| {
             out = ctx.input(TerminalView::unplaced_dropped_files);
         });
         out
@@ -6260,12 +6256,17 @@ mod idle_cursor_repaint_tests {
             time: Some(time),
             ..Default::default()
         };
-        ctx.run(raw, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                view.show(ui, &theme, 860.0, false, true);
+        let out = ctx.run_pass(raw, |ctx| {
+            ctx.root_ui(|root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    view.show(ui, &theme, 860.0, false, true);
+                });
             });
-        })
-        .repaint_after
+        });
+        out.viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|v| v.repaint_delay)
+            .unwrap_or_default()
     }
 
     fn focused_connected_view() -> TerminalView {

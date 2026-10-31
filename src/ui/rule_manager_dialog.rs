@@ -473,7 +473,7 @@ impl RuleManagerDialog {
             let mut toggles: Vec<(String, bool)> = Vec::new();
             let mut pick: Option<String> = None;
             egui::ScrollArea::vertical()
-                .id_source("output_trigger_rule_list")
+                .id_salt("output_trigger_rule_list")
                 .max_height(340.0)
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
@@ -771,7 +771,7 @@ impl RuleManagerDialog {
             "How a toast shows up",
             "怎样看到 Toast",
         ))
-        .id_source("output_trigger_toast_help")
+        .id_salt("output_trigger_toast_help")
         .default_open(false)
         .show(ui, |ui| {
             ui.label(
@@ -789,7 +789,7 @@ impl RuleManagerDialog {
             "Advanced: import / export JSON",
             "高级: 导入 / 导出 JSON",
         ))
-        .id_source("output_trigger_import_export")
+        .id_salt("output_trigger_import_export")
         .default_open(false)
         .show(ui, |ui| {
             ui.label(
@@ -1190,7 +1190,7 @@ impl RuleManagerDialog {
             let mut toggles: Vec<(String, bool)> = Vec::new();
             let mut pick: Option<String> = None;
             egui::ScrollArea::vertical()
-                .id_source("cmd_personal_rule_list")
+                .id_salt("cmd_personal_rule_list")
                 .max_height(300.0)
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
@@ -1491,7 +1491,7 @@ impl RuleManagerDialog {
         );
         ui.add_space(theme.spacing_xs());
         egui::ScrollArea::vertical()
-            .id_source("cmd_builtin_list")
+            .id_salt("cmd_builtin_list")
             .max_height(220.0)
             .auto_shrink([false; 2])
             .show(ui, |ui| {
@@ -1536,7 +1536,7 @@ impl RuleManagerDialog {
                                 "Pattern",
                                 "正则",
                             ))
-                            .id_source(("cmd_builtin_pat", b.id.as_str()))
+                            .id_salt(("cmd_builtin_pat", b.id.as_str()))
                             .default_open(false)
                             .show(ui, |ui| {
                                 ui.label(
@@ -1624,7 +1624,7 @@ impl RuleManagerDialog {
             "Advanced: import / export JSON",
             "高级: 导入 / 导出 JSON",
         ))
-        .id_source("cmd_personal_import_export")
+        .id_salt("cmd_personal_import_export")
         .default_open(false)
         .show(ui, |ui| {
             ui.label(
@@ -1948,7 +1948,7 @@ impl RuleManagerDialog {
             let mut toggles: Vec<(String, bool)> = Vec::new();
             let mut pick: Option<String> = None;
             egui::ScrollArea::vertical()
-                .id_source("display_link_rule_list")
+                .id_salt("display_link_rule_list")
                 .max_height(340.0)
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
@@ -2244,7 +2244,7 @@ impl RuleManagerDialog {
             "How a link shows up",
             "怎样看到链接",
         ))
-        .id_source("display_link_help")
+        .id_salt("display_link_help")
         .default_open(false)
         .show(ui, |ui| {
             ui.label(
@@ -2262,7 +2262,7 @@ impl RuleManagerDialog {
             "Advanced: import / export JSON",
             "高级: 导入 / 导出 JSON",
         ))
-        .id_source("display_link_import_export")
+        .id_salt("display_link_import_export")
         .default_open(false)
         .show(ui, |ui| {
             ui.label(

@@ -62,7 +62,7 @@ impl MistTermApp {
                             layout_util::set_width_to_available(ui);
                             let inner_h = ui.available_height().max(80.0);
                             egui::ScrollArea::vertical()
-                                .id_source("preferences_modal_scroll")
+                                .id_salt("preferences_modal_scroll")
                                 .auto_shrink([false; 2])
                                 .max_height(inner_h)
                                 .show(ui, |ui| {
@@ -179,7 +179,7 @@ impl MistTermApp {
                     .strong()
                     .color(label_color),
             )
-            .id_source(egui::Id::new(("pref_section", section_id)))
+            .id_salt(("pref_section", section_id))
             .default_open(default_open)
             .show_unindented(ui, |ui| {
                 crate::ui::chrome::settings_elevated_card(ui, theme, body);
@@ -1637,7 +1637,7 @@ impl MistTermApp {
 
                 ui.add_space(theme.spacing_sm());
                 egui::CollapsingHeader::new(crate::i18n::tr(ctx, "Advanced", "高级"))
-                    .id_source("modules_advanced")
+                    .id_salt("modules_advanced")
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(crate::i18n::tr(

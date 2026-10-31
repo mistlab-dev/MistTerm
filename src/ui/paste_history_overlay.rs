@@ -242,7 +242,7 @@ fn panel_anchor(term_rect: egui::Rect, ctx: &egui::Context) -> egui::Pos2 {
             term_rect.top() + ANCHOR_INSET,
         )
     } else {
-        ctx.screen_rect().shrink(ANCHOR_INSET).left_top()
+        ctx.content_rect().shrink(ANCHOR_INSET).left_top()
     }
 }
 
@@ -272,7 +272,7 @@ fn paste_row(
         .unwrap_or_else(|| "—".to_string());
     let preview = entry.preview_oneline(72);
     let mut delete_clicked = false;
-    ui.allocate_ui_at_rect(row_rect.shrink2(egui::vec2(8.0, 4.0)), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect.shrink2(egui::vec2(8.0, 4.0))), |ui| {
         ui.horizontal(|ui| {
             ui.set_width(width - 16.0);
             ui.label(
@@ -286,7 +286,7 @@ fn paste_row(
                         .font(egui::FontId::monospace(theme.font_size_normal()))
                         .color(theme.text_primary()),
                 )
-                .truncate(true),
+                .truncate(),
             );
             if entry.truncated {
                 let cap_kb = PASTE_ENTRY_MAX_BYTES / 1024;

@@ -181,8 +181,7 @@ impl UiIcons {
                 }
             })
             .collect();
-        let color_image =
-            egui::ColorImage { size: [w as usize, h as usize], pixels };
+        let color_image = egui::ColorImage::new([w as usize, h as usize], pixels);
         let texture = ctx.load_texture(
             "mist_ui_atlas",
             color_image,
@@ -741,10 +740,10 @@ fn app_icon_corner_frac() -> f32 {
 }
 
 /// 窗口 / Dock / 任务栏图标(霓虹 `>_` + 底部烟雾)。
-pub fn app_window_icon_data() -> eframe::IconData {
+pub fn app_window_icon_data() -> egui::IconData {
     const SIZE: u32 = 256;
     let img = render_app_icon(SIZE, app_icon_outer_pad_frac(), app_icon_corner_frac());
-    eframe::IconData {
+    egui::IconData {
         rgba: img.into_raw(),
         width: SIZE,
         height: SIZE,

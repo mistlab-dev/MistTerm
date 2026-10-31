@@ -54,7 +54,7 @@ pub fn show_agent_install_modal(
                         step(ui, theme, ctx, "2", "Run the installer", "运行安装脚本", "Run the command below on the audited server with root privileges. The console shows it with your team ID and token filled in. Self-hosted team server: put its API base before the token. (https://mistlab.dev/install is the mist CLI, not this.)", "在被审计服务器上以 root 权限运行下面的命令；控制台生成令牌时会给出填好团队 ID 和令牌的完整命令。自建团队服务器：在令牌前加上它的 API 地址。（https://mistlab.dev/install 是 mist 命令行，不是这个。）",);
                         ui.add_space(theme.spacing_xs());
                         ui.horizontal(|ui| {
-                            ui.add(egui::Label::new(egui::RichText::new(command).monospace()).wrap(true));
+                            ui.add(egui::Label::new(egui::RichText::new(command).monospace()).wrap());
                             if chrome::panel_action_button(
                                 ui,
                                 theme,

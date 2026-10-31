@@ -184,25 +184,34 @@ impl PostmortemDialog {
             return;
         }
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::SidePanel::right("postmortem_draft_panel")
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
-            .resizable(true)
-            .frame(chrome::right_dock_placeholder_frame(theme))
-            .show(ctx, |ui| {
-                let h = ui.available_height().max(1.0);
-                let w = ui.available_width().max(1.0);
-                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-            });
+        ctx.root_ui(|root| {
+            egui::Panel::right("postmortem_draft_panel")
+                .default_size(def_w)
+                .min_size(min_w)
+                .max_size(max_w)
+                .resizable(true)
+                .frame(chrome::right_dock_placeholder_frame(theme))
+                .show(root, |ui| {
+                    let h = ui.available_height().max(1.0);
+                    let w = ui.available_width().max(1.0);
+                    ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                });
+        });
         let dock_inset = theme.spacing_right_dock_screen_inset();
-        let slot = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
+        // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
+        let slot = layout_util::side_panel_state_rect(ctx, "postmortem_draft_panel")
+            .map(|r| {
+                let screen = ctx.content_rect();
+                let mut s = r;
+                s.min.x = screen.max.x - s.width();
+                s.max.x = screen.max.x - dock_inset;
+                s
+            })
+            .unwrap_or(egui::Rect::NOTHING);
         chrome::paint_right_dock_slot_gap(ctx, theme, slot);
         self.last_panel_slot_rect = Some(slot);
         if let Some(slot) = self.last_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
-        } else {
-            layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
         }
     }
 
@@ -218,7 +227,7 @@ impl PostmortemDialog {
         }
         self.poll_save();
 
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let dock_inset = theme.spacing_right_dock_screen_inset();
         let Some(slot) = layout_util::right_dock_foreground_slot(
             self.last_panel_slot_rect,
@@ -295,7 +304,7 @@ impl PostmortemDialog {
                 let body_id = ui.make_persistent_id("postmortem_body_edit");
                 let scroll_h = layout_util::scroll_area_fill_height(ui, 96.0);
                 egui::ScrollArea::vertical()
-                    .id_source("postmortem_body_scroll")
+                    .id_salt("postmortem_body_scroll")
                     .max_height(scroll_h.max(160.0))
                     .show(ui, |ui| {
                         ui.add(

@@ -129,7 +129,7 @@ fn render_plain_markdown_text(ui: &mut egui::Ui, theme: &Theme, text: &str, widt
             }
             ui.add_sized(
                 egui::vec2(width, size * 1.35),
-                egui::Label::new(text).wrap(false),
+                egui::Label::new(text).wrap(),
             );
             ui.add_space(small_gap);
         }
@@ -505,9 +505,9 @@ impl<'a> MarkdownRenderer<'a> {
         let row_w = self.paragraph_wrap_width(ui);
         job.wrap.max_width = row_w;
         if self.in_blockquote {
-            egui::Frame::none()
+            egui::Frame::NONE
                 .fill(self.theme.color_subtle_inset_fill())
-                .rounding(self.theme.radius_list_item())
+                .corner_radius(self.theme.radius_list_item())
                 .inner_margin(egui::vec2(8.0, 6.0))
                 .show(ui, |ui| {
                     let inner_w = layout_util::set_width_to_available(ui).max(24.0);
@@ -524,10 +524,10 @@ impl<'a> MarkdownRenderer<'a> {
 fn paint_layout_job(ui: &mut egui::Ui, mut job: LayoutJob, width: f32) {
     let width = width.max(24.0);
     job.wrap.max_width = width;
-    let galley = ui.ctx().fonts(|f| f.layout_job(job));
+    let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
     let height = galley.size().y.max(1.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::hover());
-    ui.painter().galley(rect.min, galley);
+    ui.painter().galley(rect.min, galley, egui::Color32::WHITE);
 }
 
 fn paint_code_block(
@@ -544,10 +544,10 @@ fn paint_code_block(
     let block_id = egui::Id::new(("mistterm_md_codeblock", *code_block_serial));
     *code_block_serial = code_block_serial.saturating_add(1);
 
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(theme.color_markdown_code_block_fill())
         .stroke(theme.stroke_input())
-        .rounding(theme.radius_list_item())
+        .corner_radius(theme.radius_list_item())
         .inner_margin(egui::vec2(8.0, 6.0))
         .show(ui, |ui| {
             let _ = layout_util::set_width_to_available(ui);
@@ -650,7 +650,7 @@ fn show_selectable_layout_job(ui: &mut egui::Ui, mut job: LayoutJob, width: f32)
     job.wrap.max_width = w;
     job.wrap.break_anywhere = true;
     // 用 Label 展示高亮 galley，避免 TextEdit+code_editor 在窄宽下左缘裁切。
-    ui.add(egui::Label::new(job).wrap(true));
+    ui.add(egui::Label::new(job).wrap());
 }
 
 #[derive(Copy, Clone)]

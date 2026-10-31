@@ -153,7 +153,7 @@ impl SessionLogDialog {
         } else {
             display
         };
-        let r = ctx.screen_rect();
+        let r = ctx.content_rect();
         let sw = r.width().max(360.0);
         let sh = r.height().max(280.0);
         let modal_size = egui::vec2(
@@ -241,18 +241,18 @@ impl SessionLogDialog {
                     ui.add_space(theme.spacing_sm());
                     let log_h = 280.0_f32;
                     // #232：跟模态正文同色，去掉单独灰 inset；发丝描边标出滚动区。
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(theme.color_panel_surface())
                         .stroke(egui::Stroke::new(
                             theme.hairline_width(ui.ctx()),
                             theme.color_panel_header_divider(),
                         ))
-                        .rounding(4.0)
-                        .inner_margin(egui::Margin::symmetric(8.0, 6.0))
+                        .corner_radius(4)
+                        .inner_margin(egui::Margin::symmetric(8, 6))
                         .show(ui, |ui| {
                             ui.set_width(content_w);
                             egui::ScrollArea::vertical()
-                                .id_source("session_log_body_scroll")
+                                .id_salt("session_log_body_scroll")
                                 .max_height(log_h)
                                 .stick_to_bottom(false)
                                 .auto_shrink([true, false])
@@ -288,7 +288,7 @@ impl SessionLogDialog {
                                             "本地录制的终端输出(非实时)。已去除颜色控制符；完整原始内容见日志文件。",
                                         ),
                                     ))
-                                    .wrap(true),
+                                    .wrap(),
                                 );
                             },
                         );

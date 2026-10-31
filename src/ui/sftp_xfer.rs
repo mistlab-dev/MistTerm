@@ -736,11 +736,11 @@ fn paint_flux_xfer_strip(
             let popup_id = ui.make_persistent_id("sftp_flux_policy");
             let just_toggled = gear.clicked();
             if just_toggled {
-                ui.memory_mut(|m| m.toggle_popup(popup_id));
+                egui::Popup::toggle_id(ui.ctx(), popup_id);
             }
-            if ui.memory(|m| m.is_popup_open(popup_id)) {
+            if egui::Popup::is_id_open(ui.ctx(), popup_id) {
                 let popup_w = 196.0;
-                let screen = ui.ctx().screen_rect();
+                let screen = ui.ctx().content_rect();
                 let mut pos = egui::pos2(
                     gear.rect.right() - popup_w,
                     gear.rect.top() - 176.0,
@@ -792,13 +792,13 @@ fn paint_flux_xfer_strip(
                                 .clicked()
                                 {
                                     queue.policy = policy;
-                                    ui.memory_mut(|m| m.close_popup());
+                                    egui::Popup::close_id(ui.ctx(), popup_id);
                                 }
                             }
                         });
                     });
                 if !just_toggled && area.response.clicked_elsewhere() {
-                    ui.memory_mut(|m| m.close_popup());
+                    egui::Popup::close_id(ui.ctx(), popup_id);
                 }
             }
         });

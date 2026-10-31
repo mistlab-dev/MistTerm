@@ -200,7 +200,7 @@ impl CommandPalette {
                     }
                     ui.add_space(theme.spacing_sm());
                     egui::ScrollArea::vertical()
-                        .id_source("mistterm_command_palette_scroll")
+                        .id_salt("mistterm_command_palette_scroll")
                         .max_height(scroll_h)
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
@@ -500,11 +500,11 @@ fn paint_row(
     let title_max = (rect.width() - detail_w - pad * 3.0).max(48.0);
     let title_galley = painter.layout(item.title.clone(), font, title_color, title_max);
     let text_y = rect.center().y - theme.font_size_normal() * 0.5;
-    painter.galley(egui::pos2(rect.left() + pad, text_y), title_galley);
+    painter.galley(egui::pos2(rect.left() + pad, text_y), title_galley, title_color);
     if !item.detail.is_empty() {
         let detail_x = rect.right() - pad - detail_w;
         let detail_y = rect.center().y - detail_galley.size().y * 0.5;
-        painter.galley(egui::pos2(detail_x, detail_y), detail_galley);
+        painter.galley(egui::pos2(detail_x, detail_y), detail_galley, egui::Color32::WHITE);
     }
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -680,6 +680,7 @@ mod tests {
     fn key(key: Key, modifiers: Modifiers) -> Event {
         Event::Key {
             key,
+            physical_key: None,
             pressed: true,
             repeat: false,
             modifiers,
