@@ -28,6 +28,15 @@ const STARTER_FRAGMENT_IDS: &[&str] = &[
 /// Tags that mark GUI/e2e automation leftovers (exact, case-insensitive).
 const TEST_RESIDUE_TAGS: &[&str] = &["e2e", "gui-e2e", "gui-sc-test", "mist-e2e-test"];
 
+/// Bare dangerous-SQL stubs used by gate/block e2e (exact command after trim / `;`).
+/// Only applied together with the exact tag `test`, so user ops notes survive.
+const DANGEROUS_SQL_TEST_CMDS: &[&str] = &[
+    "drop database",
+    "drop table",
+    "truncate table",
+    "truncate",
+];
+
 /// True when this snippet is an embedded starter / built-in example.
 pub fn is_starter_fragment(frag: &FragmentStats) -> bool {
     if frag
@@ -42,18 +51,23 @@ pub fn is_starter_fragment(frag: &FragmentStats) -> bool {
 
 /// Precise detector for e2e / GUI smoke leftovers that must never ship to users.
 ///
-/// Keeps user-authored snippets that merely look similar: only known test title
-/// prefixes, `MIST_FRAG_SC_*` probe commands, exact e2e tags, and the reported
-/// auto-recommended `cqls` residue (title+command both `cqls`, category
-/// `recommended`) are removed.
+/// Keeps user-authored snippets that merely look similar. Matches:
+/// - `gui-sc-test*` titles, `MIST_FRAG_SC_*` probe commands, exact e2e tags
+/// - titles ending in `-block-test` (gate/block e2e naming, e.g. drop-database-block-test)
+/// - exact tag `test` + bare dangerous-SQL stub command (DROP DATABASE / …)
+/// - auto-recommended `cqls` residue (title+command both `cqls`, category `recommended`)
 pub fn is_test_residue_fragment(frag: &FragmentStats) -> bool {
     let title = frag.title.trim();
     let title_l = title.to_ascii_lowercase();
     if title_l.starts_with("gui-sc-test") {
         return true;
     }
+    // Gate/block e2e titles: `*-block-test` (e.g. drop-database-block-test).
+    if title_l.ends_with("-block-test") {
+        return true;
+    }
     let cmd = frag.command.trim();
-    let cmd_l = cmd.to_ascii_lowercase();
+    let cmd_l = cmd.trim_end_matches(';').trim().to_ascii_lowercase();
     if cmd_l.contains("mist_frag_sc_") {
         return true;
     }
@@ -61,6 +75,18 @@ pub fn is_test_residue_fragment(frag: &FragmentStats) -> bool {
         .tags
         .iter()
         .any(|t| TEST_RESIDUE_TAGS.iter().any(|k| t.eq_ignore_ascii_case(k)))
+    {
+        return true;
+    }
+    // Dangerous SQL probe left with the exact tag `test` (trial: DROP DATABASE).
+    let has_exact_test_tag = frag
+        .tags
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case("test"));
+    if has_exact_test_tag
+        && DANGEROUS_SQL_TEST_CMDS
+            .iter()
+            .any(|stub| cmd_l == *stub)
     {
         return true;
     }
@@ -939,6 +965,117 @@ mod tests {
         assert_eq!(m.get_all().len(), 2);
         assert!(m.get_all().iter().any(|f| f.command == "df -h"));
         assert!(m.get_all().iter().any(|f| f.title == "user e2e notes"));
+    }
+
+    #[test]
+    fn test_residue_filter_matches_block_test_title() {
+        let mut f = FragmentStats::new(
+            "drop-id".into(),
+            "drop-database-block-test".into(),
+            "DROP DATABASE".into(),
+            "misc".into(),
+        );
+        f.tags = vec!["test".into()];
+        assert!(is_test_residue_fragment(&f));
+        // Title suffix alone is enough (even without the test tag).
+        f.tags.clear();
+        assert!(is_test_residue_fragment(&f));
+        // User lookalike: similar words but not `-block-test` suffix.
+        f.title = "drop database block notes".into();
+        f.command = "DROP DATABASE mydb; -- after backup".into();
+        f.tags = vec!["ops".into()];
+        assert!(!is_test_residue_fragment(&f));
+        // User title that contains the words but does not end with -block-test.
+        f.title = "my-block-test-runbook".into();
+        f.command = "cat runbook.md".into();
+        assert!(!is_test_residue_fragment(&f));
+    }
+
+    #[test]
+    fn test_residue_filter_dangerous_sql_with_exact_test_tag() {
+        let mut f = FragmentStats::new(
+            "sql-id".into(),
+            "cleanup stub".into(),
+            "DROP DATABASE".into(),
+            "misc".into(),
+        );
+        // No test tag → keep (could be a real ops reminder).
+        assert!(!is_test_residue_fragment(&f));
+        f.tags = vec!["test".into()];
+        assert!(is_test_residue_fragment(&f));
+        f.command = "DROP DATABASE;".into();
+        assert!(is_test_residue_fragment(&f));
+        // Exact tag `test` with a normal command must not match.
+        f.command = "df -h".into();
+        assert!(!is_test_residue_fragment(&f));
+        // Similar tag name is not exact `test`.
+        f.command = "DROP DATABASE".into();
+        f.tags = vec!["testing".into()];
+        assert!(!is_test_residue_fragment(&f));
+    }
+
+    #[test]
+    fn purge_only_block_test_residue_then_load_backfills_starters() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("fragments.json");
+        let mut only_residue = FragmentManager::new();
+        let mut drop = FragmentStats::new(
+            "drop-id".into(),
+            "drop-database-block-test".into(),
+            "DROP DATABASE".into(),
+            "misc".into(),
+        );
+        drop.tags = vec!["test".into()];
+        only_residue.fragments.push(drop);
+        only_residue.rebuild_id_map();
+        only_residue.save(&path).expect("save residue-only library");
+
+        let loaded = FragmentManager::load(&path).expect("load migrates");
+        assert!(
+            loaded
+                .get_all()
+                .iter()
+                .all(|f| !is_test_residue_fragment(f)),
+            "residue must be gone"
+        );
+        assert!(
+            !loaded
+                .get_all()
+                .iter()
+                .any(|f| f.title == "drop-database-block-test"),
+            "drop-database-block-test must not remain"
+        );
+        assert!(
+            loaded.get_all().len() >= 8,
+            "empty-after-purge must backfill starters, got {}",
+            loaded.get_all().len()
+        );
+        assert!(loaded.get_all().iter().any(|f| f.command.trim() == "free -h"));
+        assert!(loaded.get_all().iter().any(|f| f.command.trim() == "df -h"));
+        assert!(loaded.get_all().iter().any(|f| f.command.trim() == "uptime"));
+    }
+
+    #[test]
+    fn purge_residue_keeps_user_when_mixed_then_no_starter_clobber() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("fragments.json");
+        let mut m = FragmentManager::new();
+        let mut drop = FragmentStats::new(
+            "drop-id".into(),
+            "drop-database-block-test".into(),
+            "DROP DATABASE".into(),
+            "misc".into(),
+        );
+        drop.tags = vec!["test".into()];
+        m.fragments.push(drop);
+        m.add_fragment("我的脚本".into(), "echo hello".into(), "个人".into());
+        m.rebuild_id_map();
+        m.save(&path).expect("save mixed");
+
+        let loaded = FragmentManager::load(&path).expect("load");
+        assert_eq!(loaded.get_all().len(), 1);
+        assert_eq!(loaded.get_all()[0].title, "我的脚本");
+        assert!(!loaded.get_all().iter().any(|f| is_starter_fragment(f)));
     }
 
     #[test]
