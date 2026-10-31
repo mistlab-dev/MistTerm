@@ -378,7 +378,7 @@ pub(super) fn show_command_card(
             ui.set_width(row_w);
             // 整宽代码块 + 横向滚动，避免长命令被截断或强制折行难读（#249）。
             egui::ScrollArea::horizontal()
-                .id_source(("ai_cmd_card_scroll", egui::Id::new(&display)))
+                .id_salt(("ai_cmd_card_scroll", egui::Id::new(&display)))
                 .max_height(
                     (theme.font_size_small() * 1.35 * display.lines().count().max(1) as f32)
                         .clamp(theme.font_size_small() * 1.4, theme.font_size_small() * 8.0),
@@ -391,7 +391,7 @@ pub(super) fn show_command_card(
                                 .size(theme.font_size_small())
                                 .color(theme.text_primary()),
                         )
-                        .wrap(false),
+                        .wrap_mode(egui::TextWrapMode::Extend),
                     );
                 });
             ui.add_space(theme.spacing_sm());
