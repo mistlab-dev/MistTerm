@@ -1,6 +1,7 @@
 //! 平台相关能力（字体、快捷键文案、系统 shell、路径、macOS 菜单等）
 
 pub mod app_name;
+pub mod desktop_notify;
 pub mod docs;
 mod font_enum;
 pub mod fonts;

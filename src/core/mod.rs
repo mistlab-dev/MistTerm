@@ -54,6 +54,7 @@ pub mod local_dir;
 pub mod sftp_diff;
 pub mod crash_reporter;
 pub mod hang_reporter;
+pub mod monitor_alert;
 pub mod team;
 pub mod market;
 pub mod vault;
@@ -171,6 +172,9 @@ pub use ai_chat_store::{delete_chat, load_chat, save_chat, StoredAiMessage, Stor
 pub use ai_session_meta::TerminalSessionMeta;
 pub use ai_enhanced::{AiContext, AiContext as EnhancedContext, CommandCompleter, EnhancedPromptBuilder, QuickAction, SshInfo};
 pub use app_settings::AppSettings;
+pub use monitor_alert::{
+    dispatch_for_mode, rising_alert_lines, AlertDispatch, AlertNotifyMode, MonitorAlertSettings,
+};
 pub use hang_reporter::{ensure_hang_report_dir, hang_report_dir, HangReporter, HangSnapshot};
 pub use team::{
     apply_vault_for_team, parse_vault_credential_path, OAuthProvider, TeamAsyncResult,

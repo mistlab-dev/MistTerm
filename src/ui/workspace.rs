@@ -185,18 +185,21 @@ impl MistTermApp {
         }
 
         // 系统监控：切换终端标签时改为采集当前 SSH 会话(与 SFTP 侧栏一致)
-        if self.show_monitor_panel {
+        // #251：面板关闭后仍后台采集（已初始化时），供系统通知 / 角标。
+        if self.show_monitor_panel || self.monitor_panel.is_initialized() {
             if self.monitor_last_tab != self.active_tab {
                 self.monitor_last_tab = self.active_tab;
                 self.sync_monitor_panel_to_active_tab();
             }
-            self.monitor_panel.show_side_panel(
-                ctx,
-                theme,
-                &mut self.show_monitor_panel,
-                &mut self.right_dock_outer_left_x,
-                dock_col_w,
-            );
+            if self.show_monitor_panel {
+                self.monitor_panel.show_side_panel(
+                    ctx,
+                    theme,
+                    &mut self.show_monitor_panel,
+                    &mut self.right_dock_outer_left_x,
+                    dock_col_w,
+                );
+            }
         }
 
         if self.show_port_forward_panel {
