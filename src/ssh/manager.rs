@@ -417,10 +417,15 @@ impl SshManager {
                     return Ok(());
                 }
                 Err(e) => {
+                    // Mid-session channel death: toast the read error, then tear the
+                    // session down like Ok(0). Leaving only Error left `connected=true`
+                    // with a dead shell pump (#258) — monitor then saw
+                    // "shell pump queue disconnected" against a still-green tab.
                     let _ = message_tx.send(SshMessage::Error {
                         session_id,
                         error: format!("Read error: {}", e),
                     });
+                    let _ = message_tx.send(SshMessage::Disconnected { session_id });
                     notify_ui(session_id, "error", 0);
                     return Err(());
                 }
@@ -1898,6 +1903,53 @@ mod tests {
         assert!(
             unblocked,
             "start_interactive_shell held the global sessions lock while opening a channel"
+        );
+    }
+
+    /// #258 回归：打开监控会触发布局 → PTY resize，随后仍应能经 shell 泵 `ExecRemote` 采集。
+    /// 需本地 sshd（`MISTTERM_TEST_SSH_*`，含本机 mock `127.0.0.1:2222`），否则 skip。
+    #[test]
+    fn monitor_collect_survives_pty_resize_against_local_sshd() {
+        let Some(sess) = crate::test_support::ssh_local::skip_without_sshd() else {
+            return;
+        };
+        sess.set_blocking(false);
+        let (mgr, _msg_rx) = SshManager::new();
+        let sid = 258usize;
+        mgr.sessions
+            .lock()
+            .unwrap()
+            .insert(sid, SshClient::with_session_for_test(sess));
+        let handle = mgr
+            .start_interactive_shell(sid, 80, 24)
+            .expect("start_interactive_shell");
+        std::thread::sleep(Duration::from_millis(250));
+        // Simulate opening the monitor dock (narrower terminal → resize).
+        handle.resize_pty(120, 40).expect("resize");
+        std::thread::sleep(Duration::from_millis(200));
+        let rx = handle
+            .enqueue_remote_exec(crate::monitor::Monitor::COLLECT_CMD)
+            .expect("enqueue collect");
+        let raw = rx
+            .recv_timeout(Duration::from_secs(15))
+            .expect("collect reply timed out")
+            .expect("collect exec failed");
+        assert!(
+            raw.contains("---CPU---") && raw.contains("---DF---"),
+            "unexpected collect output: {}",
+            raw.chars().take(200).collect::<String>()
+        );
+        // Pump must still accept work after resize + exec.
+        let rx2 = handle
+            .enqueue_remote_exec("echo pump-alive")
+            .expect("enqueue after collect");
+        let out2 = rx2
+            .recv_timeout(Duration::from_secs(8))
+            .expect("second reply timed out")
+            .expect("second exec failed");
+        assert!(
+            out2.contains("pump-alive"),
+            "pump died after resize/collect: {out2}"
         );
     }
 }

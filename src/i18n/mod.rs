@@ -252,6 +252,12 @@ pub fn localize_backend_error(lang: UiLanguage, err: &str) -> String {
     if s == "SFTP background worker stopped unexpectedly" {
         return "SFTP 后台任务异常中断".to_string();
     }
+    if s.contains("shell pump queue disconnected") {
+        return "SSH shell 通道已断开，请重新连接会话后再试。".to_string();
+    }
+    if s.contains("shell pump queue full") {
+        return "会话正忙，请稍后再试。".to_string();
+    }
     err.to_string()
 }
 
