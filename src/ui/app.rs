@@ -7998,11 +7998,12 @@ impl MistTermApp {
     fn show_fragment_panel(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
         dock_col_w: f32,
     ) {
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        ctx.root_ui(|root| {
+        {
             egui::Panel::right(layout_util::FRAGMENT_PANEL_ID)
                 .default_size(def_w)
                 .min_size(min_w)
@@ -8011,12 +8012,12 @@ impl MistTermApp {
                 .show_separator_line(false)
                 // 仅占布局宽；勿在此绘制内容(CentralPanel 后绘会盖住)。内容在 Foreground Area 重绘。
                 .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-                .show(root, |ui| {
+                .show(ui, |ui| {
                     let h = ui.available_height().max(1.0);
                     let w = ui.available_width().max(1.0);
                     ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
                 });
-        });
+        }
         let dock_inset = theme.spacing_right_dock_screen_inset();
         // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
         let slot = layout_util::side_panel_state_rect(ctx, layout_util::FRAGMENT_PANEL_ID)
@@ -9242,10 +9243,11 @@ impl MistTermApp {
     pub(crate) fn show_activity_rail(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
     ) {
         if self.activity_rail_collapsed {
-            self.show_activity_rail_reveal_strip(ctx, theme);
+            self.show_activity_rail_reveal_strip(ctx, ui, theme);
             return;
         }
         let rail_w = theme.activity_rail_width();
@@ -9256,7 +9258,6 @@ impl MistTermApp {
                 None => label.to_string(),
             }
         };
-        ctx.root_ui(|root| {
         egui::Panel::left("activity_rail")
             .exact_size(rail_w)
             .resizable(false)
@@ -9265,7 +9266,7 @@ impl MistTermApp {
                     .fill(theme.chrome_bar_fill())
                     .stroke(egui::Stroke::NONE),
             )
-            .show(root, |ui| {
+            .show(ui, |ui| {
                 let full = ui.max_rect();
                 ui.painter().rect_filled(full, 0.0, theme.chrome_bar_fill());
                 ui.painter().vline(
@@ -9383,13 +9384,13 @@ impl MistTermApp {
                     }
                 });
             });
-        });
     }
 
     /// Rail 完全隐藏时的左缘窄条(跨平台可视恢复入口；与菜单 / ⌘·Ctrl+B 并存)。
     pub(crate) fn show_activity_rail_reveal_strip(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &crate::ui::theme::Theme,
     ) {
         let strip_w = theme.activity_rail_collapsed_strip_width();
@@ -9398,7 +9399,6 @@ impl MistTermApp {
             crate::i18n::menu::labels(crate::i18n::language(ctx)).show_activity_rail,
             crate::platform::accel("B"),
         );
-        ctx.root_ui(|root| {
         egui::Panel::left("activity_rail_reveal")
             .exact_size(strip_w)
             .resizable(false)
@@ -9407,12 +9407,11 @@ impl MistTermApp {
                     .fill(theme.chrome_bar_fill())
                     .stroke(egui::Stroke::NONE),
             )
-            .show(root, |ui| {
+            .show(ui, |ui| {
                 if crate::ui::chrome::activity_rail_reveal_strip(ui, theme, &tip).clicked() {
                     self.activity_rail_collapsed = false;
                 }
             });
-        });
     }
 
     /// 遗留底栏(已由 Activity Rail + Toast 替代；保留实现供对照，默认不调用)。
@@ -9919,7 +9918,8 @@ impl eframe::App for MistTermApp {
     fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {}
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        let ctx = ui.ctx();
+        let ctx = ui.ctx().clone();
+        let ctx = &ctx;
         if let Some(url) = self.pending_ssh_url.take() {
             self.open_ssh_url(ctx, url);
         }
@@ -10765,7 +10765,7 @@ impl eframe::App for MistTermApp {
             }
         }
 
-        self.render_workspace_shell(ctx, frame, &theme);
+        self.render_workspace_shell(ctx, ui, frame, &theme);
         let output_trigger_enabled = self
             .module_registry
             .is_enabled(crate::modules::output_trigger::MODULE_ID);

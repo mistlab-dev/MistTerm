@@ -10,6 +10,7 @@ impl MistTermApp {
     pub(crate) fn render_workspace_shell(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         frame: &mut eframe::Frame,
         theme: &crate::ui::theme::Theme,
     ) {
@@ -35,12 +36,11 @@ impl MistTermApp {
             theme.top_chrome_total_height()
         };
         if top_chrome_height > 0.0 {
-            ctx.root_ui(|root| {
             egui::Panel::top("top_chrome")
                 .exact_size(top_chrome_height)
                 .frame(theme.frame_top_chrome())
                 .show_separator_line(false)
-                .show(root, |ui| {
+                .show(ui, |ui| {
                     let bar_bg = ui.max_rect();
                     ui.painter()
                         .rect_filled(bar_bg, 0.0, theme.chrome_bar_fill());
@@ -130,18 +130,17 @@ impl MistTermApp {
                         );
                     }
                 });
-            });
         }
 
         // 左侧 Activity Rail(可完全隐藏；隐藏时仍保留左缘窄恢复条)。
-        self.show_activity_rail(ctx, theme);
+        self.show_activity_rail(ctx, ui, theme);
 
         // 右侧单抽屉：须先于 Central 注册(Foreground 重绘依赖)。
         self.right_dock_outer_left_x = None;
         let dock_col_w = layout_util::clamp_sidebar_width(self.sidebar_width);
 
         if self.show_fragment_panel {
-            self.show_fragment_panel(ctx, theme, dock_col_w);
+            self.show_fragment_panel(ctx, ui, theme, dock_col_w);
         }
 
         if self.credential_panel.open {
@@ -227,11 +226,10 @@ impl MistTermApp {
         }
 
         // 主内容区：侧边栏 + 终端
-        ctx.root_ui(|root| {
         egui::CentralPanel::default()
             // 不在 Frame 上铺底色(Central 后绘会盖住右栏)；工作区底色由侧栏/终端列各自 Frame 承担
             .frame(egui::Frame::NONE)
-            .show(root, |ui| {
+            .show(ui, |ui| {
                 layout_util::clip_ui_before_right_dock(ui, self.right_dock_outer_left_x);
                 // Central 后绘制；用 max_rect∩clip + 右栏左缘收紧，避免终端白底盖住命令片段等
                 let status_h = 0.0;
@@ -681,7 +679,6 @@ impl MistTermApp {
                     });
                 });
             });
-        });
 
         self.render_workspace_right_dock_foreground(ctx, theme, top_chrome_height);
         self.sync_ssh_import_action_toast(ctx);
