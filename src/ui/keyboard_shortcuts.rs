@@ -388,7 +388,7 @@ mod tests {
             };
             let mut hit = false;
             let mut comma_left = false;
-            let _ = ctx.run(raw, |ctx| {
+            let _ = ctx.run_pass(raw, |ctx| {
                 if focus_text_input {
                     ctx.memory_mut(|m| m.request_focus(egui::Id::new("some_text_edit")));
                 }

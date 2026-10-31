@@ -1253,9 +1253,11 @@ mod tests {
                 });
                 assert!(hit);
                 ctx.copy_text("selected text".to_string());
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let mut ime = String::new();
-                    ui.add(egui::TextEdit::singleline(&mut ime).id(ime_id));
+                ctx.root_ui(|root| {
+                    egui::CentralPanel::default().show(root, |ui| {
+                        let mut ime = String::new();
+                        ui.add(egui::TextEdit::singleline(&mut ime).id(ime_id));
+                    });
                 });
             });
                         out.platform_output
@@ -1348,7 +1350,7 @@ mod tests {
         // 先跑三帧让 IME 框存在、拿到焦点并锁住焦点(和真实终端一样，按键之前它就已经有焦点)。
         for frame in 0..3 {
             let _ = ctx.run_pass(egui::RawInput::default(), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+                ctx.root_ui(|root| { egui::CentralPanel::default().show(root, |ui| {
                     let mut t = String::new();
                     ui.add(
                         egui::TextEdit::singleline(&mut t)
@@ -1360,12 +1362,14 @@ mod tests {
                 if frame == 0 {
                     ctx.memory_mut(|m| m.request_focus(ime_id));
                 }
-            });
+            }) });;
         }
         let mut ime_text_seen = String::new();
         let mut text_left_for_pty = 0;
+        let handler = std::cell::RefCell::new(Some(handler));
         let out = ctx.run_pass(input, |ctx| {
-            let app_copied = ctx.input_mut(handler);
+            let mut h = handler.borrow_mut().take().unwrap();
+            let app_copied = ctx.input_mut(|i| h(i));
             if app_copied {
                 ctx.copy_text("APP".into());
             }
@@ -1375,7 +1379,7 @@ mod tests {
                     .filter(|e| matches!(e, Event::Text(_)))
                     .count()
             });
-            egui::CentralPanel::default().show(ctx, |ui| {
+            ctx.root_ui(|root| { egui::CentralPanel::default().show(root, |ui| {
                 let mut t = String::new();
                 ui.add(
                     egui::TextEdit::singleline(&mut t)
@@ -1384,7 +1388,7 @@ mod tests {
                 );
                 ime_text_seen = t;
             });
-        });
+        }) });;
         Outcome {
             copied:             out.platform_output
                 .commands

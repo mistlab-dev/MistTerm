@@ -6257,8 +6257,10 @@ mod idle_cursor_repaint_tests {
             ..Default::default()
         };
         let out = ctx.run_pass(raw, |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| {
-                view.show(ui, &theme, 860.0, false, true);
+            ctx.root_ui(|root| {
+                egui::CentralPanel::default().show(root, |ui| {
+                    view.show(ui, &theme, 860.0, false, true);
+                });
             });
         });
         out.viewport_output
