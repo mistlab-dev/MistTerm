@@ -1246,7 +1246,7 @@ impl AiPanel {
                             ui,
                             theme,
                             crate::ui::icons::IconId::Rocket,
-                            i18n::tr(ctx, "AI Assistant", "AI 智控台"),
+                            i18n::tr(ctx, "AI Assistant", "AI 助手"),
                         );
                         if !model_badge.is_empty() {
                             let px = theme.font_size_caption();
@@ -3116,6 +3116,11 @@ impl AiPanel {
                         i18n::tr(ctx, "Copy", "复制"),
                         true,
                     )
+                    .on_hover_text(i18n::tr(
+                        ctx,
+                        "Copy the full assistant reply",
+                        "复制助手回复全文",
+                    ))
                     .clicked()
                     {
                         if let Ok(mut clip) = Clipboard::new() {
@@ -3131,6 +3136,11 @@ impl AiPanel {
                             i18n::tr(ctx, "Regenerate", "重新生成"),
                             true,
                         )
+                        .on_hover_text(i18n::tr(
+                            ctx,
+                            "Ask again for a new reply",
+                            "再问一次，重新生成回复",
+                        ))
                         .clicked()
                     {
                         *msg_action = Some(AiMessageAction::Regenerate(msg_index));

@@ -1,4 +1,7 @@
 //! AI 对话本地持久化（按会话 session_id 分文件）。
+//!
+//! 新装不写入任何示例对话（尤其禁止带 `rm` 等危险命令的演示历史，见 issue #249）。
+//! 若日后要加 starter，只允许无害只读命令（如 `ls`/`df`/`free`）。
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

@@ -2,6 +2,7 @@
 //!
 //! 不对用户暴露 Skill 目录；命令由 Planner 动态提议。
 
+mod danger;
 mod explainer;
 mod gate;
 mod planner;
@@ -9,6 +10,7 @@ mod readonly;
 mod run;
 mod summarize;
 
+pub use danger::{assess_ai_terminal_danger, DangerHit};
 pub use explainer::{explain_policy_decision, PolicyExplanation};
 pub use gate::{gate_decision, looks_like_mutate_command, GateDecision, GateLevel};
 pub use planner::{

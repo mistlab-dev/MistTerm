@@ -376,14 +376,24 @@ pub(super) fn show_command_card(
             let row_w = ui.available_width().max(48.0);
             ui.set_max_width(row_w);
             ui.set_width(row_w);
-            let wrapped = break_shell_command_for_wrap(&display, row_w, theme.font_size_small());
-            paint_ai_text_line(
-                ui,
-                &wrapped,
-                egui::FontId::monospace(theme.font_size_small()),
-                theme.text_primary(),
-                row_w,
-            );
+            // 整宽代码块 + 横向滚动，避免长命令被截断或强制折行难读（#249）。
+            egui::ScrollArea::horizontal()
+                .id_source(("ai_cmd_card_scroll", egui::Id::new(&display)))
+                .max_height(
+                    (theme.font_size_small() * 1.35 * display.lines().count().max(1) as f32)
+                        .clamp(theme.font_size_small() * 1.4, theme.font_size_small() * 8.0),
+                )
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&display)
+                                .monospace()
+                                .size(theme.font_size_small())
+                                .color(theme.text_primary()),
+                        )
+                        .wrap(false),
+                    );
+                });
             ui.add_space(theme.spacing_sm());
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
