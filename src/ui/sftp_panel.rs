@@ -209,6 +209,8 @@ pub struct SftpPanel {
     pending_terminal_cmd: Option<String>,
     flux_details_open: bool,
     diff: DirDiffUi,
+    /// #250：底部「拖到对侧即可传输」一次性提示已关掉。
+    drag_hint_dismissed: bool,
 }
 
 impl Default for SftpPanel {
@@ -2087,7 +2089,7 @@ impl SftpPanel {
             remote_selected: SelectionSet::default(),
             local_cwd: local_root.clone(),
             local_entries: Vec::new(),
-            local_path_edit: local_root.to_string_lossy().into_owned(),
+            local_path_edit: Self::local_path_display(&local_root),
             local_selected: SelectionSet::default(),
             local_filter: String::new(),
             remote_filter: String::new(),
@@ -2133,6 +2135,7 @@ impl SftpPanel {
             pending_terminal_cmd: None,
             flux_details_open: false,
             diff: DirDiffUi::default(),
+            drag_hint_dismissed: false,
         }
     }
 
@@ -2159,7 +2162,7 @@ impl SftpPanel {
         let local_root = crate::core::local_dir::current().dir;
         self.local_cwd = local_root.clone();
         self.local_entries.clear();
-        self.local_path_edit = local_root.to_string_lossy().into_owned();
+        self.local_path_edit = Self::local_path_display(&local_root);
         self.local_selected.clear();
         self.local_filter.clear();
         self.remote_filter.clear();
@@ -2704,19 +2707,39 @@ impl SftpPanel {
         sort_remote_entries(&mut self.entries, self.remote_sort);
     }
 
+    /// 展开 `~` / `~/…` / `~\…` 为本机绝对路径（Win 走 USERPROFILE，不用字面 `~/Downloads`）。
     fn expand_local_path(raw: &str) -> PathBuf {
         let s = raw.trim();
+        let home = crate::platform::home_dir();
         if s == "~" {
-            return std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(s));
+            return home.unwrap_or_else(|| PathBuf::from(s));
         }
-        if let Some(rest) = s.strip_prefix("~/") {
-            if let Some(home) = std::env::var_os("HOME") {
-                return PathBuf::from(home).join(rest);
+        if let Some(rest) = s
+            .strip_prefix("~/")
+            .or_else(|| s.strip_prefix("~\\"))
+        {
+            if let Some(h) = home {
+                return h.join(rest);
             }
         }
         PathBuf::from(s)
+    }
+
+    /// 本机路径栏展示：始终用绝对/盘符形式，不用 `~/…`（#250）。
+    fn local_path_display(path: &Path) -> String {
+        let abs = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        };
+        // 去掉展示里的 `~/` 字面量（万一上游塞了 tilde 字符串路径）
+        let s = abs.to_string_lossy();
+        if s.starts_with("~/") || s.starts_with("~\\") || s == "~" {
+            return Self::expand_local_path(&s).to_string_lossy().into_owned();
+        }
+        s.into_owned()
     }
 
     fn localize_local_list_error(ctx: &egui::Context, msg: &str) -> String {
@@ -2832,7 +2855,7 @@ impl SftpPanel {
     }
 
     fn sync_local_path_from_cwd(&mut self) {
-        self.local_path_edit = self.local_cwd.to_string_lossy().into_owned();
+        self.local_path_edit = Self::local_path_display(&self.local_cwd);
     }
 
     fn sync_remote_path_from_cwd(&mut self) {
@@ -4624,13 +4647,13 @@ impl SftpPanel {
                         ui,
                         theme,
                         crate::ui::icons::IconId::Search,
-                        crate::i18n::tr(ctx, "Compare", "对比"),
+                        crate::i18n::tr(ctx, "Compare folders", "对比目录"),
                         busy,
                     )
                     .on_hover_text(crate::i18n::tr(
                         ctx,
-                        "Compare this local folder with the remote folder",
-                        "对比当前本机目录和远端目录",
+                        "Compare local and remote folder differences",
+                        "对比本机与远端目录差异",
                     ))
                     .clicked()
                     {
@@ -5009,6 +5032,10 @@ impl SftpPanel {
             self.kick_xfer_queue(&handle, ctx);
         }
 
+        if !self.diff.open {
+            self.paint_drag_transfer_hint(ui, ctx, theme);
+        }
+
         let strip_action = paint_xfer_strip(
             ui,
             theme,
@@ -5035,6 +5062,54 @@ impl SftpPanel {
         }
     }
 
+    /// #250：底部一句拖拽提示（可关掉；对齐 #215 一次性短提示）。
+    fn paint_drag_transfer_hint(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+    ) {
+        const PERSIST_ID: &str = "mistterm.sftp.drag_hint_dismissed";
+        if !self.drag_hint_dismissed {
+            if ctx.data_mut(|d| {
+                d.get_persisted::<bool>(egui::Id::new(PERSIST_ID))
+                    .unwrap_or(false)
+            }) {
+                self.drag_hint_dismissed = true;
+            }
+        }
+        if self.drag_hint_dismissed {
+            return;
+        }
+        ui.add_space(theme.spacing_xs());
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(crate::i18n::tr(
+                    ctx,
+                    "Tip: drag files to the other side to transfer.",
+                    "提示：把文件拖到对侧即可传输。",
+                ))
+                .size(theme.font_size_caption())
+                .color(theme.text_tertiary()),
+            );
+            let dismiss = crate::i18n::tr(ctx, "Got it", "知道了");
+            if ui
+                .small_button(dismiss)
+                .on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Hide this tip",
+                    "关闭这条提示",
+                ))
+                .clicked()
+            {
+                self.drag_hint_dismissed = true;
+                ctx.data_mut(|d| {
+                    d.insert_persisted(egui::Id::new(PERSIST_ID), true);
+                });
+            }
+        });
+    }
+
     fn paint_flux_workspace(
         &mut self,
         ui: &mut egui::Ui,
@@ -5043,20 +5118,57 @@ impl SftpPanel {
         handle: &SshSessionHandle,
         content_w: f32,
     ) {
+        // #250：顶部明确「上传」「下载」「对比目录」，小白不用猜图标。
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
+            let can_upload = self.has_local_upload_selection();
+            let can_download = self.has_remote_download_selection();
             let can_compare = !self.busy;
             if crate::ui::chrome::panel_action_button_with_icon_ex(
                 ui,
                 theme,
+                crate::ui::icons::IconId::Upload,
+                crate::i18n::tr(ctx, "Upload", "上传"),
+                can_upload,
+            )
+            .on_hover_text(crate::i18n::tr(
+                ctx,
+                "Upload selected local item(s) to the remote folder",
+                "把所选本机项上传到远端目录",
+            ))
+            .clicked()
+                && can_upload
+            {
+                self.upload_selected_local(handle, ctx);
+            }
+            if crate::ui::chrome::panel_action_button_with_icon_ex(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Download,
+                crate::i18n::tr(ctx, "Download", "下载"),
+                can_download,
+            )
+            .on_hover_text(crate::i18n::tr(
+                ctx,
+                "Download selected remote item(s) to the local folder",
+                "把所选远端项下载到本机目录",
+            ))
+            .clicked()
+                && can_download
+            {
+                self.download_selected_remote(handle, ctx);
+            }
+            if crate::ui::chrome::panel_action_button_with_icon_ex(
+                ui,
+                theme,
                 crate::ui::icons::IconId::Search,
-                crate::i18n::tr(ctx, "Compare", "对比"),
+                crate::i18n::tr(ctx, "Compare folders", "对比目录"),
                 can_compare,
             )
             .on_hover_text(crate::i18n::tr(
                 ctx,
-                "Compare this local folder with the remote folder",
-                "对比当前本机目录和远端目录",
+                "Compare local and remote folder differences",
+                "对比本机与远端目录差异",
             ))
             .clicked()
                 && can_compare
@@ -6018,5 +6130,38 @@ mod tests {
         drop(_g);
         let _g2 = EnvGuard::set("MISTTERM_GUI_AUTOMATION", "true");
         assert!(SftpPanel::gui_automation_enabled());
+    }
+
+    #[test]
+    fn expand_local_path_tilde_uses_platform_home() {
+        let home = crate::platform::home_dir().expect("home");
+        assert_eq!(SftpPanel::expand_local_path("~"), home);
+        assert_eq!(
+            SftpPanel::expand_local_path("~/Downloads"),
+            home.join("Downloads")
+        );
+        assert_eq!(
+            SftpPanel::expand_local_path("~\\Downloads"),
+            home.join("Downloads")
+        );
+        let abs = if cfg!(windows) {
+            r"C:\Users\demo\docs"
+        } else {
+            "/tmp/demo"
+        };
+        assert_eq!(SftpPanel::expand_local_path(abs), PathBuf::from(abs));
+    }
+
+    #[test]
+    fn local_path_display_never_shows_tilde_form() {
+        let home = crate::platform::home_dir().expect("home");
+        let shown = SftpPanel::local_path_display(&home.join("Downloads"));
+        assert!(!shown.starts_with("~/"), "got {shown}");
+        assert!(!shown.starts_with("~\\"), "got {shown}");
+        assert_ne!(shown, "~");
+        assert!(
+            PathBuf::from(&shown).is_absolute() || shown.contains(':'),
+            "expected absolute/drive path, got {shown}"
+        );
     }
 }
