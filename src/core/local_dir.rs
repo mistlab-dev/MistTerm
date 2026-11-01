@@ -24,7 +24,8 @@ pub fn parse_configured(raw: &str) -> Option<PathBuf> {
     if s.is_empty() {
         return None;
     }
-    let home = dirs::home_dir();
+    // Win 优先 USERPROFILE（与 SFTP 路径栏一致），避免留下字面 ~/Downloads。
+    let home = crate::platform::home_dir();
     if s == "~" {
         if let Some(h) = home {
             return Some(h);
@@ -40,7 +41,7 @@ pub fn parse_configured(raw: &str) -> Option<PathBuf> {
 
 /// 系统默认：下载目录 → 主目录 → 临时目录。
 pub fn system_default() -> PathBuf {
-    system_default_from(dirs::download_dir(), dirs::home_dir())
+    system_default_from(dirs::download_dir(), crate::platform::home_dir())
 }
 
 fn system_default_from(download: Option<PathBuf>, home: Option<PathBuf>) -> PathBuf {
@@ -111,9 +112,13 @@ mod tests {
 
     #[test]
     fn tilde_expands_to_home() {
-        let home = dirs::home_dir().expect("home");
+        let home = crate::platform::home_dir().expect("home");
         assert_eq!(parse_configured("~"), Some(home.clone()));
         assert_eq!(parse_configured(" ~/dl "), Some(home.join("dl")));
+        assert_eq!(
+            parse_configured("~/Downloads"),
+            Some(home.join("Downloads"))
+        );
         assert_eq!(parse_configured("/srv/x"), Some(PathBuf::from("/srv/x")));
     }
 
