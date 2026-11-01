@@ -2045,6 +2045,11 @@ impl Theme {
         }
     }
 
+    /// AI 面板底部操作栏纯图标按钮边长(设计稿 28×28)
+    pub fn size_ai_action_btn(&self) -> f32 {
+        28.0
+    }
+
     /// 次要按钮最小宽度(取消、刷新等)
     pub fn size_control_btn_min_w(&self) -> f32 {
         56.0

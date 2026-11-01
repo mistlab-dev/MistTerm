@@ -1831,6 +1831,25 @@ pub fn panel_toolbar_icon_button(
     .on_hover_text(tooltip)
 }
 
+/// AI 面板底部操作栏纯图标按钮(28×28，悬停文案见 `tooltip`)。
+pub fn panel_ai_action_icon_button(
+    ui: &mut Ui,
+    theme: &Theme,
+    icon: IconId,
+    tooltip: &str,
+) -> Response {
+    let side = theme.size_ai_action_btn();
+    paint_icon_only_button_at(
+        ui,
+        theme,
+        icon,
+        ControlButtonVariant::Secondary,
+        egui::vec2(side, side),
+        true,
+    )
+    .on_hover_text(tooltip)
+}
+
 /// 标题行 / 工具栏：图标 + 可见文字。
 pub fn panel_toolbar_button_with_icon(
     ui: &mut Ui,
