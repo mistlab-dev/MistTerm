@@ -102,6 +102,15 @@ impl MonitorPanel {
         std::mem::take(&mut self.pending_rising_alerts)
     }
 
+    /// 偏好设置「监控告警」直接编辑当前会话阈值（CPU / 内存 / 磁盘，%）。
+    pub fn alert_thresholds_mut(&mut self) -> (&mut f32, &mut f32, &mut f32) {
+        (
+            &mut self.alert_cpu_pct,
+            &mut self.alert_mem_pct,
+            &mut self.alert_disk_pct,
+        )
+    }
+
     /// 用给定 locale 重新计算当前告警文案（供通知正文）。
     pub fn current_alert_lines(&self, loc: crate::i18n::Locale) -> Vec<String> {
         let Some(mon) = self.monitor.as_ref() else {

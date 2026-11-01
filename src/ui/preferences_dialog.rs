@@ -9,6 +9,25 @@ enum FontPick {
     Family(String),
 }
 
+/// 左栏分类顺序（「同步与数据」并入「团队与同步」，共 10 类）。
+const PREFERENCES_NAV: [(&str, &str); 10] = [
+    ("General", "常规"),
+    ("Appearance", "外观"),
+    ("Terminal", "终端"),
+    ("Connection", "连接"),
+    ("Terminal logs", "终端日志"),
+    ("Vault", "密码库"),
+    ("Activity audit", "操作审计"),
+    ("Team & sync", "团队与同步"),
+    ("Monitor alerts", "监控告警"),
+    ("Extension modules", "扩展模块"),
+];
+
+/// 选中分类下标（egui 持久化，跨帧保存）。
+const PREFERENCES_NAV_SELECTED_ID: &str = "preferences_nav_selected";
+/// 导航模式标记（temp data）；置位后 `preferences_collapsing` 不再画折叠头。
+const PREFERENCES_NAV_MODE_ID: &str = "preferences_nav_mode";
+
 impl MistTermApp {
     fn workspace_top_chrome_height(&self, theme: &crate::ui::theme::Theme) -> f32 {
         #[cfg(target_os = "macos")]
@@ -55,96 +74,24 @@ impl MistTermApp {
                         );
                         ui.add_space(theme.spacing_sm());
 
-                        let scroll_h = (ui.available_height() - theme.spacing_sm()).max(120.0);
+                        let body_h = (ui.available_height() - theme.spacing_sm()).max(120.0);
 
-                        // 与弹窗表面同色直铺，不再套一层 inset 灰底卡片
-                        ui.allocate_ui(egui::vec2(ui.available_width(), scroll_h), |ui| {
+                        // #279 导航模式：左栏分类 + 右栏详情。
+                        // 用 egui temp data 打标记，让 11 个 section 复用函数在导航模式下只渲染卡片内容。
+                        ui.ctx().data_mut(|d| {
+                            d.insert_temp(egui::Id::new(PREFERENCES_NAV_MODE_ID), true)
+                        });
+
+                        ui.allocate_ui(egui::vec2(ui.available_width(), body_h), |ui| {
                             layout_util::set_width_to_available(ui);
-                            let inner_h = ui.available_height().max(80.0);
-                            egui::ScrollArea::vertical()
-                                .id_source("preferences_modal_scroll")
-                                .auto_shrink([false; 2])
-                                .max_height(inner_h)
-                                .show(ui, |ui| {
-                                    let content_w = layout_util::set_width_to_available(ui);
-                                    ui.set_min_width(content_w);
-                                    ui.spacing_mut().item_spacing.y = theme.spacing_md();
-                                    self.preferences_section_general(
-                                        ui,
-                                        ctx,
-                                        theme,
-                                        label_color,
-                                        text_low,
-                                    );
-                                    self.preferences_section_appearance(
-                                        ui,
-                                        ctx,
-                                        theme,
-                                        label_color,
-                                    );
-                                    self.preferences_section_terminal(
-                                        ui,
-                                        ctx,
-                                        theme,
-                                        label_color,
-                                    );
-                                    self.preferences_section_connection(
-                                        ui,
-                                        ctx,
-                                        theme,
-                                        label_color,
-                                        text_low,
-                                    );
-                                    self.preferences_section_terminal_logs(
-                                        ui,
-                                        ctx,
-                                        theme,
-                                        label_color,
-                                        text_low,
-                                    );
-                                    self.preferences_section_vault(
-                                        ui,
-                                        ctx,
-                                        theme,
-                                        label_color,
-                                        text_low,
-                                    );
-                                    self.preferences_section_audit(
-                                        ui,
-                                        ctx,
-                                        theme,
-                                        label_color,
-                                        text_low,
-                                    );
-                                    self.preferences_section_team(
-                                        ui,
-                                        ctx,
-                                        theme,
-                                        label_color,
-                                        text_low,
-                                    );
-                                    self.preferences_section_sync(
-                                        ui,
-                                        ctx,
-                                        theme,
-                                        label_color,
-                                        &mut should_close,
-                                    );
-                                    self.preferences_section_monitor_alert(
-                                        ui,
-                                        ctx,
-                                        theme,
-                                        label_color,
-                                        text_low,
-                                    );
-                                    self.preferences_section_modules(
-                                        ui,
-                                        ctx,
-                                        theme,
-                                        label_color,
-                                        text_low,
-                                    );
-                                });
+                            self.preferences_nav_and_detail(
+                                ui,
+                                ctx,
+                                theme,
+                                label_color,
+                                text_low,
+                                &mut should_close,
+                            );
                         });
                     });
                 });
@@ -165,6 +112,128 @@ impl MistTermApp {
         crate::ui::chrome::settings_row_divider(ui, theme);
     }
 
+    /// #279 左栏分类 + 右栏详情；右栏独立滚动并铺满可用高度。
+    fn preferences_nav_and_detail(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+        label_color: egui::Color32,
+        text_low: egui::Color32,
+        should_close: &mut bool,
+    ) {
+        let body_h = ui.available_height().max(120.0);
+        let nav_id = egui::Id::new(PREFERENCES_NAV_SELECTED_ID);
+        let mut selected = ui
+            .data_mut(|d| d.get_persisted::<usize>(nav_id))
+            .unwrap_or(0);
+        if selected >= PREFERENCES_NAV.len() {
+            selected = 0;
+        }
+
+        let nav_w = (ui.available_width() * 0.30).clamp(112.0, 168.0);
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+            ui.allocate_ui_with_layout(
+                egui::vec2(nav_w, body_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_size(egui::vec2(nav_w, body_h));
+                    ui.spacing_mut().item_spacing.y = theme.spacing_xs();
+                    egui::ScrollArea::vertical()
+                        .id_source("preferences_nav_scroll")
+                        .auto_shrink([false; 2])
+                        .max_height(body_h)
+                        .show(ui, |ui| {
+                            layout_util::set_width_to_available(ui);
+                            for (idx, (en, zh)) in PREFERENCES_NAV.iter().enumerate() {
+                                let label = crate::i18n::tr(ctx, en, zh);
+                                if crate::ui::chrome::menu_theme_item(
+                                    ui,
+                                    theme,
+                                    idx == selected,
+                                    label,
+                                )
+                                .clicked()
+                                {
+                                    selected = idx;
+                                }
+                            }
+                        });
+                },
+            );
+            ui.add_space(theme.spacing_sm());
+            ui.separator();
+            ui.add_space(theme.spacing_sm());
+
+            let detail_w = ui.available_width().max(80.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(detail_w, body_h),
+                egui::Layout::top_down(egui::Align::Min),
+                |ui| {
+                    ui.set_min_size(egui::vec2(detail_w, body_h));
+                    let (en, zh) = PREFERENCES_NAV[selected];
+                    ui.label(
+                        RichText::new(crate::i18n::tr(ctx, en, zh))
+                            .size(theme.font_size_panel_title())
+                            .strong()
+                            .color(label_color),
+                    );
+                    ui.add_space(theme.spacing_sm());
+                    let detail_h = ui.available_height().max(80.0);
+                    egui::ScrollArea::vertical()
+                        .id_source("preferences_detail_scroll")
+                        .auto_shrink([false; 2])
+                        .max_height(detail_h)
+                        .show(ui, |ui| {
+                            let content_w = layout_util::set_width_to_available(ui);
+                            ui.set_min_width(content_w);
+                            ui.spacing_mut().item_spacing.y = theme.spacing_md();
+                            self.preferences_category_body(
+                                ui,
+                                ctx,
+                                theme,
+                                selected,
+                                label_color,
+                                text_low,
+                                should_close,
+                            );
+                        });
+                },
+            );
+        });
+
+        ui.data_mut(|d| d.insert_persisted(nav_id, selected));
+    }
+
+    /// 按左栏选中项只渲染该类内容；「团队与同步」含团队登录与同步入口两张卡。
+    fn preferences_category_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+        selected: usize,
+        label_color: egui::Color32,
+        text_low: egui::Color32,
+        should_close: &mut bool,
+    ) {
+        match selected {
+            0 => self.preferences_section_general(ui, ctx, theme, label_color, text_low),
+            1 => self.preferences_section_appearance(ui, ctx, theme, label_color),
+            2 => self.preferences_section_terminal(ui, ctx, theme, label_color),
+            3 => self.preferences_section_connection(ui, ctx, theme, label_color, text_low),
+            4 => self.preferences_section_terminal_logs(ui, ctx, theme, label_color, text_low),
+            5 => self.preferences_section_vault(ui, ctx, theme, label_color, text_low),
+            6 => self.preferences_section_audit(ui, ctx, theme, label_color, text_low),
+            7 => {
+                self.preferences_section_team(ui, ctx, theme, label_color, text_low);
+                self.preferences_section_sync(ui, ctx, theme, label_color, should_close);
+            }
+            8 => self.preferences_section_monitor_alert(ui, ctx, theme, label_color, text_low),
+            9 => self.preferences_section_modules(ui, ctx, theme, label_color, text_low),
+            _ => {}
+        }
+    }
+
     /// 分组标题在卡外；卡内抬升底、无描边；子项靠自然间距排列。
     fn preferences_collapsing(
         ui: &mut egui::Ui,
@@ -175,6 +244,17 @@ impl MistTermApp {
         default_open: bool,
         body: impl FnOnce(&mut egui::Ui),
     ) {
+        // #279 导航模式：右栏标题已由左栏选中项给出，这里只渲染卡片内容，不画折叠头。
+        let nav_mode = ui.ctx().data(|d| {
+            d.get_temp::<bool>(egui::Id::new(PREFERENCES_NAV_MODE_ID))
+                .unwrap_or(false)
+        });
+        if nav_mode {
+            ui.push_id(egui::Id::new(("pref_section", section_id)), |ui| {
+                crate::ui::chrome::settings_elevated_card(ui, theme, body);
+            });
+            return;
+        }
         ui.push_id(egui::Id::new(("pref_section", section_id)), |ui| {
             egui::CollapsingHeader::new(
                 RichText::new(title)
@@ -581,7 +661,7 @@ impl MistTermApp {
                     crate::ui::chrome::form_inline_label(
                         ui,
                         theme,
-                        crate::i18n::tr(ctx, "Font size", "字号"),
+                        crate::i18n::tr(ctx, "Font size (px)", "字号 (px)"),
                     );
                     let mut size = self.terminal_font_size;
                     if crate::ui::chrome::form_f32_stepper(
@@ -602,15 +682,29 @@ impl MistTermApp {
                         ctx.request_repaint();
                     }
                 });
-                ui.add_space(theme.spacing_xs());
+                // #279：预览区独立成块，说明文字与预览分离，不再与「预览：」前缀混排。
+                ui.add_space(theme.spacing_sm());
                 ui.label(
-                    RichText::new(format!(
-                        "{}  Ag gjpqy  终端 ABC 123  #!/bin/bash",
-                        crate::i18n::tr(ctx, "Preview:", "预览：")
-                    ))
-                    .font(egui::FontId::monospace(self.terminal_font_size))
-                    .color(theme.text_primary()),
+                    RichText::new(crate::i18n::tr(ctx, "Preview", "字体预览"))
+                        .size(theme.font_size_small())
+                        .color(theme.color_form_hint()),
                 );
+                ui.add_space(theme.spacing_xs());
+                egui::Frame::none()
+                    .fill(theme.color_form_input_fill())
+                    .rounding(theme.radius_search_input())
+                    .inner_margin(egui::Margin::symmetric(
+                        theme.spacing_search_input_x(),
+                        theme.spacing_search_input_y(),
+                    ))
+                    .show(ui, |ui| {
+                        layout_util::set_width_to_available(ui);
+                        ui.label(
+                            RichText::new("Ag gjpqy  终端 ABC 123  #!/bin/bash")
+                                .font(egui::FontId::monospace(self.terminal_font_size))
+                                .color(theme.text_primary()),
+                        );
+                    });
                 ui.label(
                     RichText::new(crate::i18n::tr(
                         ctx,
@@ -723,7 +817,7 @@ impl MistTermApp {
                 }
                 // 窄弹窗里两个步进器挤在一行会折标签；间隔与连续无应答各占一行（#130）。
                 let every = crate::i18n::tr(ctx, "Ping every (s)", "每隔(秒)");
-                let give_up = crate::i18n::tr(ctx, "Give up after", "连续无应答");
+                let give_up = crate::i18n::tr(ctx, "Give up after (times)", "连续无应答(次)");
                 let label_w = crate::ui::chrome::form_label_advance(ui, theme, every)
                     .max(crate::ui::chrome::form_label_advance(ui, theme, give_up));
                 crate::ui::chrome::form_labeled_control_row(ui, theme, every, label_w, |ui| {
@@ -940,6 +1034,17 @@ impl MistTermApp {
             false,
             |ui| {
                 let pref_w = layout_util::finite_content_width(ui);
+                // #279：术语补白话说明，避免只出现产品名。
+                ui.label(
+                    RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Vault (HashiCorp Vault) is a shared password server. Fill in its address and a token, and MistTerm can fetch login credentials from it instead of storing them here.",
+                        "密码库（HashiCorp Vault）是一台集中存放密码的服务器。填好地址和令牌后，MistTerm 可以从那里取登录凭据，不必在本机重复保存。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(text_low),
+                );
+                ui.add_space(theme.spacing_sm());
                 if crate::ui::chrome::form_checkbox(
                     ui,
                     theme,
@@ -1177,6 +1282,17 @@ impl MistTermApp {
             label_color,
             false,
             |ui| {
+                // #279：术语补白话说明。
+                ui.label(
+                    RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Audit log: keeps a local record of what was run and when, so you can trace things afterwards. It only records events — it does not block your actions.",
+                        "操作审计：把执行过什么、什么时候执行的记录下来，便于事后追查。它只记录事件，不会拦截你的操作。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(text_low),
+                );
+                ui.add_space(theme.spacing_sm());
                 if crate::ui::chrome::form_checkbox(
                     ui,
                     theme,
@@ -1420,11 +1536,40 @@ impl MistTermApp {
             label_color,
             false,
             |ui| {
+                // 同步已并入「团队与同步」：卡片内加小节标题，再给出登录状态。
+                ui.label(
+                    RichText::new(crate::i18n::tr(ctx, "Sync & data", "同步与数据"))
+                        .strong()
+                        .size(theme.font_size_small())
+                        .color(label_color),
+                );
+                let status = if self.team_service.is_logged_in() {
+                    match &self.team_service.state.user {
+                        Some(user) => format!(
+                            "{} {}",
+                            crate::i18n::tr(ctx, "Signed in:", "已登录："),
+                            user.email
+                        ),
+                        None => crate::i18n::tr(ctx, "Signed in", "已登录").to_string(),
+                    }
+                } else {
+                    crate::i18n::tr(ctx, "Not signed in", "未登录").to_string()
+                };
+                ui.label(
+                    RichText::new(format!(
+                        "{}{}",
+                        crate::i18n::tr(ctx, "Team sign-in status: ", "团队登录状态："),
+                        status
+                    ))
+                    .size(theme.font_size_small())
+                    .color(theme.color_form_hint()),
+                );
+                ui.add_space(theme.spacing_sm());
                 if crate::ui::chrome::panel_action_primary_icon_button(
                     ui,
                     theme,
                     crate::ui::icons::IconId::Cloud,
-                    crate::i18n::tr(ctx, "Cloud sync", "云同步"),
+                    crate::i18n::tr(ctx, "Open sync panel", "打开同步面板"),
                 )
                 .clicked()
                 {
@@ -1473,13 +1618,68 @@ impl MistTermApp {
                 ui.label(
                     egui::RichText::new(crate::i18n::tr(
                         ctx,
-                        "When CPU / memory / disk crosses the threshold: choose how you are notified (default: system notification).",
-                        "CPU / 内存 / 磁盘超出阈值时的推送方式（默认：系统通知）。",
+                        "Thresholds and how you are notified live together below. Default: system notification.",
+                        "阈值与推送方式都在这里设置（默认：系统通知）。",
                     ))
                     .size(theme.font_size_small())
                     .color(text_low),
                 );
                 ui.add_space(theme.spacing_sm());
+
+                // 阈值：监控面板的会话级字段（当前会话有效），与推送方式同属本分类。
+                crate::ui::chrome::form_field_label(
+                    ui,
+                    theme,
+                    crate::i18n::tr(
+                        ctx,
+                        "Alert thresholds (this session, %)",
+                        "告警阈值（仅当前会话，%）",
+                    ),
+                );
+                let (cpu, mem, disk) = self.monitor_panel.alert_thresholds_mut();
+                let cpu_label = crate::i18n::tr(ctx, "CPU", "CPU");
+                let mem_label = crate::i18n::tr(ctx, "Memory", "内存");
+                let disk_label = crate::i18n::tr(ctx, "Disk", "磁盘");
+                let th_label_w = crate::ui::chrome::form_label_advance(ui, theme, cpu_label)
+                    .max(crate::ui::chrome::form_label_advance(ui, theme, mem_label))
+                    .max(crate::ui::chrome::form_label_advance(ui, theme, disk_label));
+                for (idx, (label, value)) in [
+                    (cpu_label, cpu),
+                    (mem_label, mem),
+                    (disk_label, disk),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    crate::ui::chrome::form_labeled_control_row(
+                        ui,
+                        theme,
+                        label,
+                        th_label_w,
+                        |ui| {
+                            crate::ui::chrome::form_f32_stepper(
+                                ui,
+                                theme,
+                                egui::Id::new(("pref_monitor_alert_th", idx)),
+                                value,
+                                50.0..=100.0,
+                                1.0,
+                                "%",
+                            )
+                        },
+                    );
+                }
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Range 50%–100%. These values apply to the current session and can also be changed in the monitor panel.",
+                        "范围 50%–100%。阈值仅对当前会话生效，也可在监控面板里调整。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(text_low),
+                );
+
+                Self::preferences_row_divider(ui, theme);
                 let lang = crate::i18n::language(ctx);
                 let mut mode = self.app_settings.monitor_alert.notify_mode;
                 for option in crate::core::AlertNotifyMode::ALL {
@@ -1487,7 +1687,21 @@ impl MistTermApp {
                         crate::i18n::UiLanguage::Zh => option.as_label_zh(),
                         crate::i18n::UiLanguage::En => option.as_label_en(),
                     };
-                    ui.radio_value(&mut mode, option, label);
+                    ui.horizontal(|ui| {
+                        ui.radio_value(&mut mode, option, label);
+                        // 降级说明放在对应选项旁，而不是单独一段。
+                        if option == crate::core::AlertNotifyMode::SystemNotify {
+                            ui.label(
+                                egui::RichText::new(crate::i18n::tr(
+                                    ctx,
+                                    "Falls back to an in-app alert if the OS denies permission.",
+                                    "系统拒绝权限时自动降级为应用内告警。",
+                                ))
+                                .size(theme.font_size_small())
+                                .color(text_low),
+                            );
+                        }
+                    });
                 }
                 if mode != self.app_settings.monitor_alert.notify_mode {
                     self.app_settings.monitor_alert.notify_mode = mode;
@@ -1497,16 +1711,51 @@ impl MistTermApp {
                     }
                     let _ = self.app_settings.save();
                 }
-                ui.add_space(theme.spacing_sm());
-                ui.label(
-                    egui::RichText::new(crate::i18n::tr(
+
+                Self::preferences_row_divider(ui, theme);
+                // 复用已有推送入口（系统通知 / 声音 / 应用内提示），不新增依赖。
+                if crate::ui::chrome::panel_action_button(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "Test alert", "测试告警"),
+                )
+                .clicked()
+                {
+                    let title = crate::i18n::tr(ctx, "Monitor alert (test)", "监控告警（测试）");
+                    let body = crate::i18n::tr(
                         ctx,
-                        "If the OS denies notification permission, MistTerm falls back to an in-app alert and explains why.",
-                        "若系统拒绝通知权限，将降级为应用内告警并说明原因。",
-                    ))
-                    .size(theme.font_size_small())
-                    .color(text_low),
-                );
+                        "This is a test alert sent from Preferences.",
+                        "这是从偏好设置发出的测试告警。",
+                    );
+                    match crate::core::dispatch_for_mode(mode) {
+                        crate::core::AlertDispatch::TrySystemNotify => {
+                            match crate::platform::desktop_notify::send_desktop_notification(
+                                title, body, true,
+                            ) {
+                                crate::platform::desktop_notify::DesktopNotifyResult::Sent => {
+                                    self.notify_auto(format!("{title}：{body}"))
+                                }
+                                crate::platform::desktop_notify::DesktopNotifyResult::DeniedOrUnavailable => {
+                                    self.notify_warn(format!(
+                                        "{title}：{body}（{}）",
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "system notification unavailable, shown in-app",
+                                            "系统通知不可用，已改为应用内提示",
+                                        )
+                                    ))
+                                }
+                            }
+                        }
+                        crate::core::AlertDispatch::PlaySound => {
+                            crate::platform::desktop_notify::play_alert_sound();
+                            self.notify_auto(format!("{title}：{body}"));
+                        }
+                        crate::core::AlertDispatch::PanelOnly => {
+                            self.notify_auto(format!("{title}：{body}"));
+                        }
+                    }
+                }
             },
         );
     }
@@ -1527,11 +1776,12 @@ impl MistTermApp {
             label_color,
             false,
             |ui| {
+                // #279：上下结构 —— 上方只列模块开关，选中后在下方统一编辑规则。
                 ui.label(
                     egui::RichText::new(crate::i18n::tr(
                         ctx,
-                        "Turn built-in capabilities on or off. Rules stay editable when off, but they do not run until the module is on.",
-                        "按需开启或关闭内置能力。关闭后相关规则仍可编辑，但运行时不生效。",
+                        "Built-in helpers such as output reminders and clickable links. Turn one off and its rules stay saved but stop running.",
+                        "扩展模块是一些内置小功能（如终端输出提醒、把日志里的路径变成可点链接）。关掉后规则仍保留，但运行时不再生效。",
                     ))
                     .size(theme.font_size_small())
                     .color(text_low),
@@ -1554,7 +1804,20 @@ impl MistTermApp {
                 let lang = crate::i18n::language(ctx);
                 let mut dirty = false;
 
-                for m in modules {
+                let sel_id = egui::Id::new("preferences_module_selected");
+                let stored_id = ui
+                    .data_mut(|d| d.get_persisted::<String>(sel_id))
+                    .unwrap_or_default();
+                let mut selected_id = if modules.iter().any(|m| m.id == stored_id) {
+                    stored_id
+                } else {
+                    modules
+                        .first()
+                        .map(|m| m.id.clone())
+                        .unwrap_or_default()
+                };
+
+                for m in &modules {
                     let is_env_locked = self.module_registry.is_env_disabled(&m.id);
                     let mut enabled = m.enabled;
                     let display_name = if lang == crate::i18n::UiLanguage::Zh {
@@ -1563,7 +1826,7 @@ impl MistTermApp {
                         m.name_en.clone()
                     };
                     let subtitle = module_subtitle(ctx, &m.id);
-                    let manage_label = crate::i18n::tr(ctx, "Manage rules…", "管理规则…");
+                    let is_selected = m.id == selected_id;
 
                     ui.horizontal(|ui| {
                         if is_env_locked {
@@ -1579,11 +1842,14 @@ impl MistTermApp {
                         }
 
                         ui.vertical(|ui| {
-                            ui.label(egui::RichText::new(display_name).color(if is_env_locked {
+                            let name = egui::RichText::new(display_name).color(if is_env_locked {
                                 text_low
                             } else {
                                 label_color
-                            }));
+                            });
+                            if ui.selectable_label(is_selected, name).clicked() {
+                                selected_id = m.id.clone();
+                            }
                             ui.label(
                                 egui::RichText::new(subtitle)
                                     .size(theme.font_size_small())
@@ -1601,37 +1867,90 @@ impl MistTermApp {
                                 );
                             }
                         });
-
-                        // 右栏同一列：「管理规则…」右对齐，避免副标题长短把按钮顶得参差（#266）。
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if m.id == crate::modules::output_trigger::MODULE_ID
-                                && crate::ui::chrome::panel_action_button(ui, theme, manage_label)
-                                    .clicked()
-                            {
-                                self.rule_manager_dialog
-                                    .open_from_preferences(&self.output_trigger_rules);
-                            } else if m.id == crate::modules::display_link::MODULE_ID
-                                && crate::ui::chrome::panel_action_button(ui, theme, manage_label)
-                                    .clicked()
-                            {
-                                self.rule_manager_dialog
-                                    .open_display_link_from_preferences(&self.display_link_rules);
-                            } else if m.id == crate::modules::cmd_audit_local::MODULE_ID
-                                && crate::ui::chrome::panel_action_button(ui, theme, manage_label)
-                                    .clicked()
-                            {
-                                self.rule_manager_dialog
-                                    .open_command_checks_from_preferences(
-                                        &self.cmd_audit_personal_rules,
-                                    );
-                            }
-                        });
                     });
                     ui.add_space(theme.spacing_xs());
                 }
+                ui.data_mut(|d| d.insert_persisted(sel_id, selected_id.clone()));
 
-                // #266：去掉仅一句旁注的「高级」空壳；改主区块底部次要文案 + 文档链接。
-                // 不在主列表露出环境变量名（延续 #215）。
+                // 统一编辑区：不再在每个模块旁放「管理规则」按钮。
+                Self::preferences_row_divider(ui, theme);
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Edit rules for the selected module",
+                        "编辑选中模块的规则",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(theme.accent_color()),
+                );
+                if let Some(m) = modules.iter().find(|m| m.id == selected_id) {
+                    let display_name = if lang == crate::i18n::UiLanguage::Zh {
+                        m.name_zh.clone()
+                    } else {
+                        m.name_en.clone()
+                    };
+                    ui.label(egui::RichText::new(display_name).color(label_color));
+                    ui.label(
+                        egui::RichText::new(module_subtitle(ctx, &m.id))
+                            .size(theme.font_size_small())
+                            .color(text_low),
+                    );
+                    ui.add_space(theme.spacing_xs());
+                    if m.id == crate::modules::output_trigger::MODULE_ID {
+                        if crate::ui::chrome::panel_action_button_with_icon_ex(
+                            ui,
+                            theme,
+                            crate::ui::icons::IconId::Settings,
+                            crate::i18n::tr(ctx, "Edit rules…", "编辑规则…"),
+                            true,
+                        )
+                        .clicked()
+                        {
+                            self.rule_manager_dialog
+                                .open_from_preferences(&self.output_trigger_rules);
+                        }
+                    } else if m.id == crate::modules::display_link::MODULE_ID {
+                        if crate::ui::chrome::panel_action_button_with_icon_ex(
+                            ui,
+                            theme,
+                            crate::ui::icons::IconId::Settings,
+                            crate::i18n::tr(ctx, "Edit rules…", "编辑规则…"),
+                            true,
+                        )
+                        .clicked()
+                        {
+                            self.rule_manager_dialog
+                                .open_display_link_from_preferences(&self.display_link_rules);
+                        }
+                    } else if m.id == crate::modules::cmd_audit_local::MODULE_ID {
+                        if crate::ui::chrome::panel_action_button_with_icon_ex(
+                            ui,
+                            theme,
+                            crate::ui::icons::IconId::Settings,
+                            crate::i18n::tr(ctx, "Edit rules…", "编辑规则…"),
+                            true,
+                        )
+                        .clicked()
+                        {
+                            self.rule_manager_dialog
+                                .open_command_checks_from_preferences(
+                                    &self.cmd_audit_personal_rules,
+                                );
+                        }
+                    } else {
+                        ui.label(
+                            egui::RichText::new(crate::i18n::tr(
+                                ctx,
+                                "This module has no editable rules — the on/off switch is all it needs.",
+                                "这个模块没有可编辑规则，开关即可生效。",
+                            ))
+                            .size(theme.font_size_small())
+                            .color(text_low),
+                        );
+                    }
+                }
+
+                // 保留底部环境变量/文档提示（不是折叠项）。
                 ui.add_space(theme.spacing_sm());
                 ui.horizontal(|ui| {
                     ui.label(
@@ -1713,8 +2032,8 @@ fn module_subtitle(ctx: &egui::Context, module_id: &str) -> &'static str {
         ),
         crate::modules::output_trigger::MODULE_ID => crate::i18n::tr(
             ctx,
-            "Notify or act when terminal output matches",
-            "终端输出匹配时弹提示或执行动作",
+            "Output trigger rules (alert when terminal output matches)",
+            "输出触发规则（终端输出命中时提醒）",
         ),
         crate::modules::display_link::MODULE_ID => crate::i18n::tr(
             ctx,
