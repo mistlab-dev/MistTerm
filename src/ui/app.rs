@@ -5293,9 +5293,6 @@ impl MistTermApp {
                 AppAction::OpenQuickConnectDialog => {
                     self.show_new_session_dialog = true;
                 }
-                AppAction::OpenPreferencesDialog => {
-                    self.show_preferences_dialog = true;
-                }
                 AppAction::OpenSnippetsDialog => {
                     self.show_fragments_dialog = true;
                 }

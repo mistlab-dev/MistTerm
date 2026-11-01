@@ -21,7 +21,7 @@ impl MistTermApp {
 
         egui::menu::menu_button(ui, label(l.terminal_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.new_session).clicked() {
+            if crate::ui::chrome::popup_menu_button_accel(ui, theme, l.new_session, "n").clicked() {
                 self.show_new_session_dialog = true;
                 ui.close_menu();
             }
@@ -214,8 +214,13 @@ impl MistTermApp {
                 ui.close_menu();
             }
             ui.separator();
-            if crate::ui::chrome::menu_toggle_item(ui, theme, self.show_sftp_panel, l.sftp_panel)
-                .clicked()
+            if crate::ui::chrome::popup_menu_button_accel_shift(
+                ui,
+                theme,
+                l.sftp_panel,
+                "s",
+            )
+            .clicked()
             {
                 self.toggle_sftp_panel(ctx);
                 ui.close_menu();
@@ -231,11 +236,11 @@ impl MistTermApp {
                 self.toggle_port_forward_panel(ctx);
                 ui.close_menu();
             }
-            if crate::ui::chrome::menu_toggle_item(
+            if crate::ui::chrome::popup_menu_button_accel(
                 ui,
                 theme,
-                self.show_fragment_panel,
                 l.fragment_panel,
+                "k",
             )
             .clicked()
             {
@@ -253,7 +258,7 @@ impl MistTermApp {
                 self.toggle_monitor_panel(ctx);
                 ui.close_menu();
             }
-            if crate::ui::chrome::menu_toggle_item(ui, theme, self.show_ai_panel, l.ai_panel)
+            if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, l.ai_panel, "i")
                 .clicked()
             {
                 self.toggle_ai_panel(ctx);
@@ -282,7 +287,16 @@ impl MistTermApp {
         });
         egui::menu::menu_button(ui, label(l.tools_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.preferences).clicked() {
+            // 系统类
+            let prefs_accel = crate::platform::accel_literal(",");
+            if crate::ui::chrome::popup_menu_button_shortcut(
+                ui,
+                theme,
+                l.preferences,
+                Some(&prefs_accel),
+            )
+            .clicked()
+            {
                 self.show_preferences_dialog = true;
                 ui.close_menu();
             }
@@ -290,24 +304,6 @@ impl MistTermApp {
                 self.show_ai_settings_dialog = true;
                 ui.close_menu();
             }
-            ui.separator();
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.fragment_library).clicked() {
-                self.fragment_library.open = true;
-                ui.close_menu();
-            }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.quick_fragments).clicked() {
-                self.quick_selector.open = true;
-                ui.close_menu();
-            }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.command_history).clicked() {
-                self.menu_open_command_history(ctx);
-                ui.close_menu();
-            }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.batch_exec).clicked() {
-                self.menu_open_batch_exec(ctx);
-                ui.close_menu();
-            }
-            ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.credentials).clicked() {
                 if self.ensure_right_dock_allowed_or_warn(ctx) {
                     self.open_right_dock_panel(ActiveRightDock::Credential);
@@ -315,6 +311,34 @@ impl MistTermApp {
                 ui.close_menu();
             }
             ui.separator();
+            // 片段类
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.fragment_library).clicked() {
+                self.fragment_library.open = true;
+                ui.close_menu();
+            }
+            if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, l.quick_fragments, "j")
+                .clicked()
+            {
+                self.quick_selector.open = true;
+                ui.close_menu();
+            }
+            ui.separator();
+            // 历史类
+            if crate::ui::chrome::popup_menu_button_shortcut(
+                ui,
+                theme,
+                l.command_history,
+                Some(crate::platform::terminal_history_accel()),
+            )
+            .clicked()
+            {
+                self.menu_open_command_history(ctx);
+                ui.close_menu();
+            }
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.batch_exec).clicked() {
+                self.menu_open_batch_exec(ctx);
+                ui.close_menu();
+            }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.session_logs).clicked() {
                 self.menu_open_session_log_browser(ctx);
                 ui.close_menu();

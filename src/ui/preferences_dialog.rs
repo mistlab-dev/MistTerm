@@ -31,7 +31,7 @@ impl MistTermApp {
         let modal_sz = layout_util::modal_pref_size_in_viewport(ctx, top_inset, bottom_inset);
         let modal_pos =
             layout_util::modal_center_pos_clamped(ctx, modal_sz, top_inset, bottom_inset);
-        crate::ui::chrome::modal_window("preferences_modal", theme, ctx)
+        let modal_resp = crate::ui::chrome::modal_window("preferences_modal", theme, ctx)
             .open(&mut open)
             .default_pos(modal_pos)
             .movable(true)
@@ -129,6 +129,9 @@ impl MistTermApp {
                     });
                 });
             });
+        if let Some(inner) = &modal_resp {
+            crate::ui::chrome::raise_window_response(ctx, &inner.response);
+        }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             should_close = true;
         }

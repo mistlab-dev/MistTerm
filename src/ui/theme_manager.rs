@@ -140,8 +140,9 @@ impl ThemeManager {
         style.visuals.faint_bg_color = theme.surface_elevated();
         // TextEdit / 裸输入框底色(勿用终端色，否则侧栏表单与面板融在一起)
         style.visuals.extreme_bg_color = theme.color_text_input_fill();
-        style.visuals.window_fill = theme.surface_panel();
-        style.visuals.window_stroke = theme.panel_stroke();
+        // 菜单 / 下拉层：亮一档的底 + 1px 描边，便于与主界面区分。
+        style.visuals.window_fill = theme.color_menu_popup_fill();
+        style.visuals.window_stroke = egui::Stroke::new(1.0, theme.color_modal_stroke());
         style.visuals.widgets.noninteractive.weak_bg_fill = theme.surface_body();
 
         // 按钮 / ComboBox：暗夜浅灰实底；其它主题透明底 + 悬停 accent 弱底(裸 checkbox 请用 form_checkbox)

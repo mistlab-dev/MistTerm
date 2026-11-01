@@ -267,10 +267,14 @@ impl Theme {
         self.bg_tab_bar_color()
     }
 
-    /// 菜单 / 下拉弹出层底色(与弹窗面板同色，避免多层灰阶)
+    /// 菜单 / 下拉弹出层底色：暗夜比面板再亮一档，与主界面区分。
     #[inline]
     pub fn color_menu_popup_fill(&self) -> Color32 {
-        self.color_panel_surface()
+        if self.uses_modern_palette() {
+            Color32::from_rgb(0x2d, 0x2d, 0x30)
+        } else {
+            self.color_panel_surface()
+        }
     }
 
     /// 终端区 / 激活 Tab(= `bg_terminal`)

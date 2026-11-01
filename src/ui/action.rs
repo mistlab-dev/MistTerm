@@ -36,8 +36,6 @@ pub enum AppAction {
     AttachRecentFailureToAi,
     /// 触发快速连接对话框
     OpenQuickConnectDialog,
-    /// 触发设置对话框
-    OpenPreferencesDialog,
     /// 触发命令片段管理对话框
     OpenSnippetsDialog,
 }
