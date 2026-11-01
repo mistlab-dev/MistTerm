@@ -55,9 +55,9 @@ impl TeamMembersDialog {
         chrome::modal_window("team_members_dialog", theme, ctx)
             .open(&mut open)
             .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
-            .default_size(modal_sz)
             .movable(true)
-            .resizable(true)
+            .resizable(false)
+            .fixed_size(modal_sz)
             .show(ctx, |ui| {
                 chrome::modal_content_frame(theme).show(ui, |ui| {
                     if chrome::modal_header(
@@ -152,13 +152,29 @@ impl TeamMembersDialog {
 
                     ui.add_space(theme.spacing_sm());
                     // #282：未登录时刷新按钮直接置灰，不等到点击后再报错。
-                    if chrome::panel_action_button_ex(
+                    let can_refresh = logged_in && !service.is_busy();
+                    let refresh_reason = if !logged_in {
+                        crate::i18n::tr(
+                            ctx,
+                            "Sign in to refresh team members",
+                            "先登录，再刷新成员列表",
+                        )
+                    } else {
+                        crate::i18n::tr(
+                            ctx,
+                            "Loading members, please wait",
+                            "正在加载成员，请稍候",
+                        )
+                    };
+                    if chrome::panel_action_button_ex_with_reason(
                         ui,
                         theme,
                         crate::i18n::tr(ctx, "Refresh", "刷新"),
-                        logged_in && !service.is_busy(),
+                        can_refresh,
+                        refresh_reason,
                     )
                     .clicked()
+                        && can_refresh
                     {
                         service.spawn_list_team_members();
                         self.requested_fetch = true;

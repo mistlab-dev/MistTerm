@@ -665,6 +665,12 @@ pub fn right_dock_header_divider(ui: &mut Ui, theme: &Theme) {
 /// `ctx.available_rect()` 内，右 dock 打开后无法把弹窗拖到 dock 上方。
 ///
 /// 首次居中请用 [`layout_util::modal_center_pos`] + `.default_pos(...)`，勿 `.anchor(...)`(拖拽会弹回)。
+///
+/// 尺寸策略：本函数**不**设置 `resizable`，由各调用点显式决定。
+/// - 固定尺寸弹窗：一律 `.resizable(false).fixed_size(sz)`，不得开 resize，否则内容会把宽/高
+///   钉回原值，出现「看起来能拖但拖不动」的假手柄。
+/// - 允许拖动缩放的弹窗：内容必须尺寸弹性(不要 `set_min_width`/`set_min_size` 钉死，
+///   滚动区不要用 `available_height` 反向撑满窗口)。
 pub fn modal_window<'a>(
     window_id: &'a str,
     theme: &Theme,
@@ -4571,6 +4577,42 @@ pub fn panel_action_button(ui: &mut Ui, theme: &Theme, label: &str) -> Response 
 /// 带启用态的面板次要按钮
 pub fn panel_action_button_ex(ui: &mut Ui, theme: &Theme, label: &str, enabled: bool) -> Response {
     panel_action_button_ex_min_w(ui, theme, label, enabled, theme.size_control_btn_min_w())
+}
+
+/// 把已绘制的按钮标记为「禁用」并挂上「为什么点不动」的悬停说明。
+/// 自绘按钮用 `Sense::click()` 分配、悬停仍可达，`Response::enabled` 默认是 `true`；
+/// 不显式置 false 的话 [`egui::Response::on_disabled_hover_text`] 永远不会触发。
+/// 只在 `enabled == false` 时挂提示，避免无差别给所有按钮加 tooltip。
+pub fn disabled_action_with_reason(mut response: Response, enabled: bool, reason: &str) -> Response {
+    if !enabled {
+        response.enabled = false;
+        response = response.on_disabled_hover_text(reason);
+    }
+    response
+}
+
+/// 常显的灰字「为什么禁用」提示(命令历史 / 粘贴历史底栏等需要一眼可见的场合)。
+pub fn disabled_reason_hint(ui: &mut Ui, theme: &Theme, text: &str) {
+    ui.label(
+        egui::RichText::new(text)
+            .size(theme.font_size_small())
+            .color(theme.text_tertiary()),
+    );
+}
+
+/// 带禁用原因的次要按钮；`reason_when_disabled` 仅在 `enabled == false` 时显示。
+pub fn panel_action_button_ex_with_reason(
+    ui: &mut Ui,
+    theme: &Theme,
+    label: &str,
+    enabled: bool,
+    reason_when_disabled: &str,
+) -> Response {
+    disabled_action_with_reason(
+        panel_action_button_ex(ui, theme, label, enabled),
+        enabled,
+        reason_when_disabled,
+    )
 }
 
 /// 指定最小宽度的次要按钮(通栏 / 等分列用)。

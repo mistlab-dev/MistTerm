@@ -178,7 +178,7 @@ impl MistTermApp {
             }
             ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.preferences).clicked() {
-                self.show_preferences_dialog = true;
+                self.open_preferences_dialog();
                 ui.close_menu();
             }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.ai_settings).clicked() {
@@ -313,7 +313,7 @@ impl MistTermApp {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
             // 1. 片段与发送
             if crate::ui::chrome::popup_menu_button(ui, theme, l.fragment_library).clicked() {
-                self.fragment_library.open = true;
+                self.open_snippet_library_dialog();
                 ui.close_menu();
             }
             if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, l.quick_fragments, "j")

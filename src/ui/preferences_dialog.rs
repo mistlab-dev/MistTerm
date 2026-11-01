@@ -32,7 +32,7 @@ impl MistTermApp {
     /// #282：打开偏好设置并定位「团队与同步」分类（左导航 index 7）。
     /// 供团队成员弹窗「去登录」等入口复用，保持单一入口。
     pub(crate) fn open_preferences_team_sync(&mut self, ctx: &egui::Context) {
-        self.show_preferences_dialog = true;
+        self.open_preferences_dialog();
         let nav_id = egui::Id::new(PREFERENCES_NAV_SELECTED_ID);
         ctx.data_mut(|d| d.insert_persisted(nav_id, 7usize));
     }

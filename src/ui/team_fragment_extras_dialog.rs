@@ -30,6 +30,8 @@ pub struct FragmentVersionsState {
     pub versions: Vec<FragmentVersion>,
     pub loaded: bool,
     pub error: String,
+    /// 中性成功提示(与 `error` 分开，避免成功文案用红色)。
+    pub status: String,
 }
 
 pub fn open_versions(state: &mut FragmentVersionsState, fragment_id: &str, title: &str) {
@@ -39,6 +41,7 @@ pub fn open_versions(state: &mut FragmentVersionsState, fragment_id: &str, title
     state.versions.clear();
     state.loaded = false;
     state.error.clear();
+    state.status.clear();
 }
 
 pub fn show_fragment_versions_modal(
@@ -67,7 +70,7 @@ pub fn show_fragment_versions_modal(
     let can_edit = service.state.current_role().can_edit();
     let mut restore_revision: Option<i64> = None;
 
-    let modal_sz = layout_util::modal_edit_size(ctx);
+    let modal_sz = layout_util::modal_team_fragment_versions_size(ctx, state.versions.len());
     chrome::modal_window("team_fragment_versions", theme, ctx)
         .open(&mut open)
         .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
@@ -93,6 +96,11 @@ pub fn show_fragment_versions_modal(
                         ui.label(
                             chrome::rich_caption(theme, &state.error).color(theme.red_color()),
                         );
+                    } else if !state.status.is_empty() {
+                        ui.label(
+                            chrome::rich_caption(theme, &state.status)
+                                .color(theme.text_secondary()),
+                        );
                     } else if state.versions.is_empty() {
                         ui.label(chrome::rich_caption(
                             theme,
@@ -101,7 +109,7 @@ pub fn show_fragment_versions_modal(
                     }
 
                     egui::ScrollArea::vertical()
-                        .max_height(300.0)
+                        .max_height((modal_sz.y - 150.0).max(48.0))
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             for v in &state.versions {
@@ -184,15 +192,19 @@ pub fn show_fragment_versions_modal(
                             .with_resource(&updated.id)
                             .with_detail(serde_json::json!({ "revision": rev })),
                         );
-                        state.error = i18n::tr(
+                        state.status = i18n::tr(
                             ctx,
                             "Version restored",
                             "已恢复到所选版本",
                         )
                         .to_string();
+                        state.error.clear();
                         state.loaded = false;
                     }
-                    Err(e) => state.error = e.message,
+                    Err(e) => {
+                        state.error = e.message;
+                        state.status.clear();
+                    }
                 }
             }
         }
@@ -451,6 +463,8 @@ pub struct TeamSettingsState {
     pub open: bool,
     pub loaded: bool,
     pub error: String,
+    /// 中性成功提示(与 `error` 分开，避免成功文案用红色)。
+    pub status: String,
     pub audit_retention_days_str: String,
     pub allow_guest_access: bool,
     pub require_mfa: bool,
@@ -468,6 +482,7 @@ pub fn open_team_settings(state: &mut TeamSettingsState) {
     state.agents_loaded = false;
     state.storage_loaded = false;
     state.error.clear();
+    state.status.clear();
     state.agents_error.clear();
     state.storage_error.clear();
 }
@@ -795,6 +810,12 @@ pub fn show_team_settings_modal(
                         ui.label(
                             chrome::rich_caption(theme, &state.error).color(theme.red_color()),
                         );
+                    } else if !state.status.is_empty() {
+                        ui.add_space(theme.spacing_xs());
+                        ui.label(
+                            chrome::rich_caption(theme, &state.status)
+                                .color(theme.text_secondary()),
+                        );
                     }
 
                     ui.add_space(theme.spacing_sm());
@@ -838,9 +859,13 @@ pub fn show_team_settings_modal(
                 state.audit_retention_days_str = saved.audit_retention_days.to_string();
                 state.allow_guest_access = saved.allow_guest_access;
                 state.require_mfa = saved.require_mfa;
-                state.error = i18n::tr(ctx, "Settings saved", "设置已保存").to_string();
+                state.status = i18n::tr(ctx, "Settings saved", "设置已保存").to_string();
+                state.error.clear();
             }
-            Err(e) => state.error = e,
+            Err(e) => {
+                state.error = e;
+                state.status.clear();
+            }
         }
     }
 

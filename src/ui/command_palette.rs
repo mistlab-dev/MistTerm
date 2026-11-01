@@ -138,9 +138,9 @@ impl CommandPalette {
         let scroll_h = crate::ui::layout_util::dialog_scroll_max_height(ctx, 168.0);
         let shown = crate::ui::chrome::modal_window("mistterm_command_palette", theme, ctx)
             .movable(true)
-            .resizable(true)
+            .resizable(false)
             .default_pos(crate::ui::layout_util::modal_center_pos(ctx, sz_v))
-            .default_size(sz)
+            .fixed_size(sz)
             .show(ctx, |ui| {
                 let mut outcome = PaletteOutcome::Idle;
                 let mut should_close = false;

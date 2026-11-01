@@ -67,10 +67,9 @@ impl SendSequenceDialog {
         let modal_sz = egui::vec2(760.0, 560.0);
         crate::ui::chrome::modal_window("send_sequence_dialog", theme, ctx)
             .open(&mut keep_open)
-            .default_size(modal_sz)
-            .min_width(560.0)
             .movable(true)
-            .resizable(true)
+            .resizable(false)
+            .fixed_size(modal_sz)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                     if crate::ui::chrome::modal_header(

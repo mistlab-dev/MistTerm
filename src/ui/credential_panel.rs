@@ -837,16 +837,19 @@ impl CredentialPanel {
                             }
                         });
                     chrome::modal_footer_actions(ui, theme, |ui, th| {
-                        if chrome::modal_primary_icon_button_ex(
+                        let save_resp = chrome::modal_primary_icon_button_ex(
                             ui,
                             th,
                             crate::ui::icons::IconId::Check,
                             i18n::tr(ctx, "Save", "保存"),
                             can_save,
-                        )
-                        .clicked()
-                            && can_save
-                        {
+                        );
+                        let save_resp = chrome::disabled_action_with_reason(
+                            save_resp,
+                            can_save,
+                            i18n::tr(ctx, "Enter a credential name first", "先填写凭证名称"),
+                        );
+                        if save_resp.clicked() && can_save {
                             do_save = true;
                             should_close = true;
                         }
@@ -906,6 +909,11 @@ impl CredentialPanel {
         if !open || should_close {
             self.form_open = false;
         }
+    }
+
+    /// #280：其它业务弹窗打开前收起凭证编辑表单，避免多层弹窗叠加。
+    pub(crate) fn close_form(&mut self) {
+        self.form_open = false;
     }
 
     /// 仅占右栏布局槽(正文在 Central 之后 [`show_foreground_panel`] 绘制)。
@@ -1035,14 +1043,13 @@ impl CredentialPanel {
                     self.status_msg.clear();
                 }
                 ui.add_space(theme.spacing_sm());
-                chrome::form_singleline_field_boxed(
+                chrome::search_field(
                     ui,
                     theme,
                     egui::Id::new("credential_panel_search"),
                     &mut self.search,
                     i18n::tr(ui.ctx(), "Search credentials…", "搜索凭证…"),
                     row_w,
-                    false,
                 );
                 ui.add_space(theme.spacing_md());
 

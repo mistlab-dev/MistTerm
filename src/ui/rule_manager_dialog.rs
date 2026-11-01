@@ -201,10 +201,9 @@ impl RuleManagerDialog {
         let modal_sz = egui::vec2(860.0, 620.0);
         crate::ui::chrome::modal_window("rule_manager_dialog", theme, ctx)
             .open(&mut keep_open)
-            .default_size(modal_sz)
-            .min_width(640.0)
             .movable(true)
-            .resizable(true)
+            .resizable(false)
+            .fixed_size(modal_sz)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                     if crate::ui::chrome::modal_header(

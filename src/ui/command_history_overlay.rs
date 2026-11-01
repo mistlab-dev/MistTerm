@@ -413,21 +413,26 @@ impl CommandHistoryOverlay {
                                 );
                                 if !can_compose {
                                     // 禁用态旁给出可见引导，而不是只靠 tooltip。
-                                    ui.label(
-                                        egui::RichText::new(crate::i18n::tr(
+                                    crate::ui::chrome::disabled_reason_hint(
+                                        ui,
+                                        theme,
+                                        crate::i18n::tr(
                                             ctx,
                                             "Check at least 2 to compose",
                                             "勾选 2 条以上可组成片段",
-                                        ))
-                                        .size(theme.font_size_small())
-                                        .color(theme.text_tertiary()),
+                                        ),
                                     );
-                                    compose_resp.on_hover_text(crate::i18n::tr(
+                                }
+                                let compose_resp = crate::ui::chrome::disabled_action_with_reason(
+                                    compose_resp,
+                                    can_compose,
+                                    crate::i18n::tr(
                                         ctx,
                                         "Select at least 2 commands to compose a snippet",
                                         "至少勾选 2 条命令才能组成片段",
-                                    ));
-                                } else if compose_resp.clicked() {
+                                    ),
+                                );
+                                if can_compose && compose_resp.clicked() {
                                     let mut picked: Vec<HistoryEntry> = results
                                         .iter()
                                         .filter(|e| self.checked.contains(&entry_key(e)))

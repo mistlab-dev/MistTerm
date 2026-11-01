@@ -25,9 +25,9 @@ impl MistTermApp {
         crate::ui::chrome::modal_window("crash_notice_modal", theme, ctx)
             .open(&mut open)
             .default_pos(crate::ui::layout_util::modal_center_pos(ctx, sz))
-            .default_size(sz)
             .movable(true)
-            .resizable(true)
+            .resizable(false)
+            .fixed_size(sz)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                     Self::modal_header(ui, theme, title, &mut should_close);
