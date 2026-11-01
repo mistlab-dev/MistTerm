@@ -49,6 +49,27 @@ fn main() {
         orbital_platform: { redox },
     }
 
+    // Upstream winit #3682: cfg_aliases creates real custom cfgs (cargo:rustc-cfg),
+    // but rustc 1.80+ also requires listing them via rustc-check-cfg. Without that,
+    // every #[cfg(x11_platform)] is reported as an unknown/typo cfg.
+    // This is registration of intentional build flags — not #[allow(unexpected_cfgs)].
+    for name in [
+        "android_platform",
+        "wasm_platform",
+        "macos_platform",
+        "ios_platform",
+        "windows_platform",
+        "apple",
+        "free_unix",
+        "redox",
+        "x11_platform",
+        "wayland_platform",
+        "orbital_platform",
+        "docsrs",
+    ] {
+        println!("cargo:rustc-check-cfg=cfg({name})");
+    }
+
     // XXX aliases are not available for the build script itself.
     #[cfg(all(
         any(

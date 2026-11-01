@@ -102,11 +102,11 @@ impl<T> EventLoopBuilder<T> {
     ///
     /// [`platform`]: crate::platform
     #[cfg_attr(
-        android,
+        target_os = "android",
         doc = "[`.with_android_app(app)`]: crate::platform::android::EventLoopBuilderExtAndroid::with_android_app"
     )]
     #[cfg_attr(
-        not(android),
+        not(target_os = "android"),
         doc = "[`.with_android_app(app)`]: #only-available-on-android"
     )]
     #[inline]
