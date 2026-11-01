@@ -146,6 +146,7 @@ impl MistTermApp {
         if self.credential_panel.open {
             self.credential_panel.show_side_panel(
                 ctx,
+                ui,
                 theme,
                 &mut self.right_dock_outer_left_x,
                 dock_col_w,
@@ -155,6 +156,7 @@ impl MistTermApp {
         if self.cloud_sync_panel.open {
             self.cloud_sync_panel.show_side_panel(
                 ctx,
+                ui,
                 theme,
                 &mut self.right_dock_outer_left_x,
                 dock_col_w,
@@ -164,6 +166,7 @@ impl MistTermApp {
         if self.postmortem_dialog.open {
             self.postmortem_dialog.show_side_panel(
                 ctx,
+                ui,
                 theme,
                 &mut self.right_dock_outer_left_x,
                 dock_col_w,
@@ -179,6 +182,7 @@ impl MistTermApp {
             }
             self.sftp_panel.show_side_panel(
                 ctx,
+                ui,
                 theme,
                 &mut self.right_dock_outer_left_x,
                 dock_col_w,
@@ -195,6 +199,7 @@ impl MistTermApp {
             if self.show_monitor_panel {
                 self.monitor_panel.show_side_panel(
                     ctx,
+                    ui,
                     theme,
                     &mut self.show_monitor_panel,
                     &mut self.right_dock_outer_left_x,
@@ -209,6 +214,7 @@ impl MistTermApp {
             }
             self.port_forward_panel.show_side_panel(
                 ctx,
+                ui,
                 theme,
                 &mut self.right_dock_outer_left_x,
                 dock_col_w,
@@ -218,6 +224,7 @@ impl MistTermApp {
         if self.show_ai_panel {
             self.ai_panel.show_side_panel(
                 ctx,
+                ui,
                 theme,
                 &mut self.show_ai_panel,
                 &mut self.right_dock_outer_left_x,
