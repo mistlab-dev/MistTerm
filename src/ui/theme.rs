@@ -705,10 +705,12 @@ impl Theme {
     /// 表单说明、占位提示(输入框 hint，须明显弱于 [`color_text_input_text`])
     #[inline]
     pub fn color_form_hint(&self) -> Color32 {
-        if self.uses_solid_fg_palette() {
+        if self.uses_modern_palette() {
+            // 暗夜 ≈ #999：占位/说明须与已输入正文明显区分，又不能再暗到看不见
+            self.fg_high_alpha(136)
+        } else if self.uses_solid_fg_palette() {
             self.fg_low_color()
         } else {
-            // 暗夜：弱于正文，仍满足 hint 在输入框底上的可读对比
             self.fg_high_alpha(88)
         }
     }
@@ -904,6 +906,26 @@ impl Theme {
             self.stroke_input_color()
         } else {
             Color32::from_rgb(70, 70, 88)
+        }
+    }
+
+    /// 表单实心输入框底色(凭证/表单弹窗统一)：暗夜 #1e1e1e，其它主题沿用输入框底
+    #[inline]
+    pub fn color_form_input_fill(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgb(0x1e, 0x1e, 0x1e)
+        } else {
+            self.color_text_input_fill()
+        }
+    }
+
+    /// 表单实心输入框描边(§10.2：1px)：暗夜 #3c3c3c，其它主题沿用输入框描边
+    #[inline]
+    pub fn color_form_input_stroke(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgb(0x3c, 0x3c, 0x3c)
+        } else {
+            self.color_text_input_stroke()
         }
     }
 

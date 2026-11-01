@@ -3209,6 +3209,66 @@ pub fn form_singleline_field(
     shown.inner
 }
 
+/// 表单实心单行输入框(凭证库 / 表单弹窗用)：暗夜 #1e1e1e 底 + 1px #3c3c3c 描边，
+/// 不走 [`form_singleline_field`] 的下划线样式，便于和同高的按钮并排对齐。
+pub fn form_singleline_field_boxed(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: egui::Id,
+    text: &mut String,
+    hint: &str,
+    desired_width: f32,
+    password: bool,
+) -> Response {
+    let focused = ui.memory(|m| m.has_focus(id));
+    let row_h = theme.size_control_btn_h().max(28.0);
+    let width = desired_width.max(96.0);
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
+    let stroke = if focused {
+        egui::Stroke::new(1.0, theme.accent_color())
+    } else {
+        egui::Stroke::new(1.0, theme.color_form_input_stroke())
+    };
+    ui.painter().rect(
+        rect,
+        theme.radius_search_input(),
+        theme.color_form_input_fill(),
+        stroke,
+    );
+    let pad_x = theme.spacing_search_input_x();
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(rect.left() + pad_x, rect.top()),
+        egui::pos2(rect.right() - pad_x, rect.bottom()),
+    );
+    ui.allocate_ui_at_rect(inner, |ui| {
+        ui.set_min_size(inner.size());
+        ui.set_max_size(inner.size());
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            let prev_override = ui.style_mut().visuals.override_text_color;
+            ui.style_mut().visuals.override_text_color = Some(theme.color_form_hint());
+            let mut edit = egui::TextEdit::singleline(text)
+                .id(id)
+                .frame(false)
+                .desired_width(inner.width().max(40.0))
+                .margin(egui::vec2(0.0, 0.0))
+                .vertical_align(egui::Align::Center)
+                .text_color(theme.color_text_input_text())
+                .font(egui::FontId::proportional(theme.font_size_control_input()));
+            if !hint.is_empty() {
+                edit = edit.hint_text(hint_rich(theme, hint, theme.font_size_control_input()));
+            }
+            if password {
+                edit = edit.password(true);
+            }
+            let response = ui.add(edit);
+            ui.style_mut().visuals.override_text_color = prev_override;
+            response
+        })
+        .inner
+    })
+    .inner
+}
+
 /// 多行输入框：始终用有底边框(不下划线)，避免「上面光标、下面一根线」的假高行。
 pub fn form_multiline_field(
     ui: &mut Ui,
@@ -3238,14 +3298,11 @@ pub fn form_multiline_field_with_hint(
     let pad_y = 4.0;
     let inner_w = (desired_width - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0);
     egui::Frame::none()
-        .fill(theme.color_text_input_fill())
+        .fill(theme.color_form_input_fill())
         .stroke(if focused {
-            egui::Stroke::new(theme.stroke_width_panel().max(1.0), theme.accent_color())
+            egui::Stroke::new(1.0, theme.accent_color())
         } else {
-            egui::Stroke::new(
-                theme.stroke_width_panel().max(1.0),
-                theme.color_text_input_stroke(),
-            )
+            egui::Stroke::new(1.0, theme.color_form_input_stroke())
         })
         .rounding(theme.radius_search_input())
         .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x(), pad_y))
