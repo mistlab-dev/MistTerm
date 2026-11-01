@@ -563,7 +563,8 @@ fn feature_sections() -> Vec<FeatureSection> {
         },
         FeatureSection {
             icon: "⌨️",
-            title: "Send Sequences",
+            title_en: "Send Sequences",
+            title_zh: "发送序列",
             desc_en: "Tools → Send Sequences stores named lines and sends them, in order, to the current connected pane. Optional fixed delay. It does not wait for a prompt, does not broadcast, and is not a snippet.",
             desc_zh: "工具 → 发送序列：把命名的几行按顺序发进当前已连接窗格。可选固定间隔。不等提示符，不广播，也不是命令片段。",
         },
