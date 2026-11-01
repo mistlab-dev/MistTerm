@@ -1060,6 +1060,18 @@ impl MistTermApp {
     }
 }
 
+/// 同一时刻最多保留一层的业务弹窗；打开任一层前先收起其它层。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BusinessDialog {
+    Preferences,
+    SnippetLibrary,
+    CommandHistory,
+    PasteHistory,
+    RuleManager,
+    TeamFragmentEditor,
+    CredentialEditor,
+}
+
 impl MistTermApp {
     /// FUNCTIONAL_SPEC §8.2：窗口宽度 ≥ 此值视为「宽屏」，左侧可自动展开、右侧 dock 可打开
     const RESP_LAYOUT_WIDE_MIN_PX: f32 = 1200.0;
@@ -4642,9 +4654,9 @@ impl MistTermApp {
             PaletteAction::Monitor => self.toggle_monitor_panel(ctx),
             PaletteAction::Ai => self.toggle_ai_panel(ctx),
             PaletteAction::PortForward => self.toggle_port_forward_panel(ctx),
-            PaletteAction::Preferences => self.show_preferences_dialog = true,
+            PaletteAction::Preferences => self.open_preferences_dialog(),
             PaletteAction::CommandHistory => self.menu_open_command_history(ctx),
-            PaletteAction::SnippetLibrary => self.fragment_library.open = true,
+            PaletteAction::SnippetLibrary => self.open_snippet_library_dialog(),
             PaletteAction::SnippetPanel => self.toggle_fragment_sidebar(ctx),
             PaletteAction::QuickSnippets => self.quick_selector.open = true,
             PaletteAction::FindInTerminal => self.toggle_terminal_search(),
@@ -4656,9 +4668,7 @@ impl MistTermApp {
                 }
             }
             PaletteAction::CloudSync => {
-                if self.ensure_right_dock_allowed_or_warn(ctx) {
-                    self.open_right_dock_panel(ActiveRightDock::CloudSync);
-                }
+                self.open_cloud_sync_panel(ctx);
             }
             PaletteAction::Disconnect => self.disconnect_ssh_keep_buffer_active(ctx),
             PaletteAction::Reconnect => self.reconnect_active_tab(ctx),
@@ -4667,8 +4677,7 @@ impl MistTermApp {
                 self.send_sequence_dialog.open_manager(&self.send_sequences);
             }
             PaletteAction::RuleManager => {
-                self.rule_manager_dialog
-                    .open_output_trigger(&self.output_trigger_rules);
+                self.open_rule_manager_dialog();
             }
         }
     }
@@ -6787,9 +6796,6 @@ impl MistTermApp {
                 AppAction::OpenQuickConnectDialog => {
                     self.show_new_session_dialog = true;
                 }
-                AppAction::OpenPreferencesDialog => {
-                    self.show_preferences_dialog = true;
-                }
                 AppAction::OpenSnippetsDialog => {
                     self.show_fragments_dialog = true;
                 }
@@ -7215,7 +7221,49 @@ impl MistTermApp {
         self.ai_panel.sync_tab_session_key(key, persist);
     }
 
+    /// 同一时刻最多保留一层的业务弹窗；打开任一层前先收起其它层。
+    fn close_competing_business_dialogs_for(&mut self, target: BusinessDialog) {
+        if target != BusinessDialog::Preferences {
+            self.show_preferences_dialog = false;
+        }
+        if target != BusinessDialog::SnippetLibrary {
+            self.fragment_library.open = false;
+        }
+        if target != BusinessDialog::CommandHistory {
+            self.command_history_overlay.open = false;
+        }
+        if target != BusinessDialog::PasteHistory {
+            self.paste_history_overlay.open = false;
+        }
+        if target != BusinessDialog::RuleManager {
+            self.rule_manager_dialog.open = false;
+        }
+        if target != BusinessDialog::TeamFragmentEditor {
+            self.team_fragment_editor.open = false;
+        }
+        if target != BusinessDialog::CredentialEditor {
+            self.credential_panel.close_form();
+        }
+    }
+
+    pub(crate) fn open_preferences_dialog(&mut self) {
+        self.close_competing_business_dialogs_for(BusinessDialog::Preferences);
+        self.show_preferences_dialog = true;
+    }
+
+    pub(crate) fn open_snippet_library_dialog(&mut self) {
+        self.close_competing_business_dialogs_for(BusinessDialog::SnippetLibrary);
+        self.fragment_library.open = true;
+    }
+
+    pub(crate) fn open_rule_manager_dialog(&mut self) {
+        self.close_competing_business_dialogs_for(BusinessDialog::RuleManager);
+        self.rule_manager_dialog
+            .open_output_trigger(&self.output_trigger_rules);
+    }
+
     pub(crate) fn menu_open_paste_history(&mut self, ctx: &egui::Context) {
+        self.close_competing_business_dialogs_for(BusinessDialog::PasteHistory);
         self.paste_history_overlay.open_new();
         if let Some(idx) = self.active_tab {
             if let Some(pane) = self.tabs.get_mut(idx).and_then(|t| t.active_pane_mut()) {
@@ -7260,6 +7308,7 @@ impl MistTermApp {
             .map(|t| t.is_connected())
             .unwrap_or(false)
         {
+            self.close_competing_business_dialogs_for(BusinessDialog::CommandHistory);
             self.command_history_overlay.open_new();
         } else {
             self.notify_auto(
@@ -8133,7 +8182,7 @@ impl MistTermApp {
             )
             .clicked()
             {
-                self.fragment_library.open = true;
+                self.open_snippet_library_dialog();
             }
             if crate::ui::chrome::panel_outlined_toolbar_button_with_icon_ex(
                 ui,
@@ -9204,7 +9253,7 @@ impl MistTermApp {
             });
         });
         if resp.response.on_hover_text(hover).clicked() {
-            self.show_preferences_dialog = true;
+            self.open_preferences_dialog();
         }
     }
 
@@ -9378,7 +9427,7 @@ impl MistTermApp {
                     )
                     .clicked()
                     {
-                        self.show_preferences_dialog = true;
+                        self.open_preferences_dialog();
                     }
                 });
             });
@@ -9715,7 +9764,7 @@ impl MistTermApp {
             }
             MacMenuAction::MergeSplit => self.merge_active_split(ctx),
             MacMenuAction::ToggleBroadcast => self.toggle_broadcast_input(ctx),
-            MacMenuAction::Preferences => self.show_preferences_dialog = true,
+            MacMenuAction::Preferences => self.open_preferences_dialog(),
             MacMenuAction::CloseTab => self.request_close_active_tab(),
             MacMenuAction::DisconnectSsh => self.disconnect_ssh_keep_buffer_active(ctx),
             MacMenuAction::ReconnectTab => self.reconnect_active_tab(ctx),
@@ -9750,13 +9799,12 @@ impl MistTermApp {
                     ctx.request_repaint();
                 }
             }
-            MacMenuAction::FragmentLibrary => self.fragment_library.open = true,
+            MacMenuAction::FragmentLibrary => self.open_snippet_library_dialog(),
             MacMenuAction::SendSequences => {
                 self.send_sequence_dialog.open_manager(&self.send_sequences);
             }
             MacMenuAction::RuleManager => {
-                self.rule_manager_dialog
-                    .open_output_trigger(&self.output_trigger_rules);
+                self.open_rule_manager_dialog();
             }
             MacMenuAction::QuickFragmentSelector => self.quick_selector.open = true,
             MacMenuAction::CredentialPanel => {
@@ -9765,15 +9813,13 @@ impl MistTermApp {
                 }
             }
             MacMenuAction::TeamAccount => {
-                self.show_preferences_dialog = true;
+                self.open_preferences_team_sync(ctx);
             }
             MacMenuAction::TeamMembers => {
                 self.team_members_dialog.open(&mut self.team_service);
             }
             MacMenuAction::CloudSync => {
-                if self.ensure_right_dock_allowed_or_warn(ctx) {
-                    self.open_right_dock_panel(ActiveRightDock::CloudSync);
-                }
+                self.open_cloud_sync_panel(ctx);
             }
             MacMenuAction::HelpUserGuide => {
                 self.help_docs_dialog.open_page(HelpPage::QuickStart);
@@ -10161,8 +10207,12 @@ impl eframe::App for MistTermApp {
         if replay_deleted {
             self.stop_send_sequence(ctx, false);
         }
-        self.team_members_dialog
+        let go_to_login = self
+            .team_members_dialog
             .show_modal(ctx, &theme, &mut self.team_service);
+        if go_to_login {
+            self.open_preferences_team_sync(ctx);
+        }
         self.try_flush_pending_fragment_insert(ctx);
         if self.command_history.poll_background_load() {
             ctx.request_repaint();
@@ -10661,6 +10711,7 @@ impl eframe::App for MistTermApp {
                             .len();
                         self.command_history_overlay.cycle_match(n);
                     } else {
+                        self.close_competing_business_dialogs_for(BusinessDialog::CommandHistory);
                         self.command_history_overlay.open_new();
                     }
                 } else {
@@ -10677,7 +10728,7 @@ impl eframe::App for MistTermApp {
             }
             let overrides_terminal = ctx.input(|i| self.app_shortcut_overrides_terminal(i));
             if crate::ui::keyboard_shortcuts::consume_preferences_shortcut(ctx, overrides_terminal) {
-                self.show_preferences_dialog = true;
+                self.open_preferences_dialog();
             }
             let primary_tab_cycle = ctx.input(|i| {
                 if self.app_tab_navigation_enabled()

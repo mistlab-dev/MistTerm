@@ -676,9 +676,9 @@ impl MistTermApp {
         crate::ui::chrome::modal_window("update_modal", theme, ctx)
             .open(&mut open)
             .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
-            .default_size(modal_sz)
             .movable(true)
-            .resizable(true)
+            .resizable(false)
+            .fixed_size(modal_sz)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                     if crate::ui::chrome::modal_header(ui, theme, title, theme.font_size_modal_title()) {
