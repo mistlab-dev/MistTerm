@@ -1447,9 +1447,9 @@ impl MistTermApp {
         );
     }
 
-    /// 扩展模块 / 内置能力开关（#118 / #215）。
+    /// 扩展模块 / 内置能力开关（#118 / #215 / #266）。
     /// 为已编进主程序的官方内置模块提供按模块启用/禁用开关；
-    /// 主说明不暴露模块 id / 环境变量名；高级折叠里可提示 env 覆盖。
+    /// 主说明不暴露模块 id / 环境变量名；区块底部次要文案提示 env 覆盖并可跳文档。
 
     fn preferences_section_monitor_alert(
         &mut self,
@@ -1560,6 +1560,7 @@ impl MistTermApp {
                         m.name_en.clone()
                     };
                     let subtitle = module_subtitle(ctx, &m.id);
+                    let manage_label = crate::i18n::tr(ctx, "Manage rules…", "管理规则…");
 
                     ui.horizontal(|ui| {
                         if is_env_locked {
@@ -1598,57 +1599,57 @@ impl MistTermApp {
                             }
                         });
 
-                        if m.id == crate::modules::output_trigger::MODULE_ID
-                            && crate::ui::chrome::panel_action_button(
-                                ui,
-                                theme,
-                                crate::i18n::tr(ctx, "Manage rules…", "管理规则…"),
-                            )
-                            .clicked()
-                        {
-                            self.rule_manager_dialog
-                                .open_from_preferences(&self.output_trigger_rules);
-                        }
-                        if m.id == crate::modules::display_link::MODULE_ID
-                            && crate::ui::chrome::panel_action_button(
-                                ui,
-                                theme,
-                                crate::i18n::tr(ctx, "Manage rules…", "管理规则…"),
-                            )
-                            .clicked()
-                        {
-                            self.rule_manager_dialog
-                                .open_display_link_from_preferences(&self.display_link_rules);
-                        }
-                        if m.id == crate::modules::cmd_audit_local::MODULE_ID
-                            && crate::ui::chrome::panel_action_button(
-                                ui,
-                                theme,
-                                crate::i18n::tr(ctx, "Manage rules…", "管理规则…"),
-                            )
-                            .clicked()
-                        {
-                            self.rule_manager_dialog
-                                .open_command_checks_from_preferences(&self.cmd_audit_personal_rules);
-                        }
+                        // 右栏同一列：「管理规则…」右对齐，避免副标题长短把按钮顶得参差（#266）。
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if m.id == crate::modules::output_trigger::MODULE_ID
+                                && crate::ui::chrome::panel_action_button(ui, theme, manage_label)
+                                    .clicked()
+                            {
+                                self.rule_manager_dialog
+                                    .open_from_preferences(&self.output_trigger_rules);
+                            } else if m.id == crate::modules::display_link::MODULE_ID
+                                && crate::ui::chrome::panel_action_button(ui, theme, manage_label)
+                                    .clicked()
+                            {
+                                self.rule_manager_dialog
+                                    .open_display_link_from_preferences(&self.display_link_rules);
+                            } else if m.id == crate::modules::cmd_audit_local::MODULE_ID
+                                && crate::ui::chrome::panel_action_button(ui, theme, manage_label)
+                                    .clicked()
+                            {
+                                self.rule_manager_dialog
+                                    .open_command_checks_from_preferences(
+                                        &self.cmd_audit_personal_rules,
+                                    );
+                            }
+                        });
                     });
                     ui.add_space(theme.spacing_xs());
                 }
 
+                // #266：去掉仅一句旁注的「高级」空壳；改主区块底部次要文案 + 文档链接。
+                // 不在主列表露出环境变量名（延续 #215）。
                 ui.add_space(theme.spacing_sm());
-                egui::CollapsingHeader::new(crate::i18n::tr(ctx, "Advanced", "高级"))
-                    .id_source("modules_advanced")
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(crate::i18n::tr(
-                                ctx,
-                                "Advanced: an environment variable can also override the UI switches (see docs).",
-                                "高级：也可用环境变量覆盖界面开关（见文档）。",
-                            ))
-                            .size(theme.font_size_small())
-                            .color(text_low),
-                        );
-                    });
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            ctx,
+                            "An environment variable can also override the UI switches.",
+                            "也可用环境变量覆盖界面开关。",
+                        ))
+                        .size(theme.font_size_small())
+                        .color(text_low),
+                    );
+                    if crate::ui::chrome::panel_caption_link(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "See docs", "见文档"),
+                    )
+                    .clicked()
+                    {
+                        let _ = crate::platform::open_url(crate::platform::DOCS_INDEX_URL);
+                    }
+                });
 
                 if dirty {
                     self.module_registry.sync_effective_disabled(&self.app_settings.disabled_modules);
