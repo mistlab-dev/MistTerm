@@ -625,6 +625,71 @@ impl TeamClient {
     }
 }
 
+/// `GET`/`PUT /v1/sync/*` 的原始响应。版本在 `ETag`，不在正文里发明第二套字段。
+#[derive(Debug, Clone)]
+pub struct RawSyncResponse {
+    pub status: u16,
+    pub etag: Option<String>,
+    pub body: String,
+}
+
+impl TeamClient {
+    pub fn sync_get(&self, path: &str, bearer: &str) -> Result<RawSyncResponse, TeamApiError> {
+        self.sync_exchange(reqwest::Method::GET, path, bearer, None, None)
+    }
+
+    pub fn sync_put(
+        &self,
+        path: &str,
+        bearer: &str,
+        if_match: Option<&str>,
+        body: &serde_json::Value,
+    ) -> Result<RawSyncResponse, TeamApiError> {
+        let bytes = serde_json::to_vec(body).map_err(|e| TeamApiError {
+            status: 0,
+            message: e.to_string(),
+            conflict_fragment: None,
+        })?;
+        self.sync_exchange(reqwest::Method::PUT, path, bearer, if_match, Some(bytes))
+    }
+
+    fn sync_exchange(
+        &self,
+        method: reqwest::Method,
+        path: &str,
+        bearer: &str,
+        if_match: Option<&str>,
+        body: Option<Vec<u8>>,
+    ) -> Result<RawSyncResponse, TeamApiError> {
+        let mut req = self
+            .http
+            .request(method, self.url(path))
+            .bearer_auth(bearer);
+        if let Some(etag) = if_match {
+            req = req.header(reqwest::header::IF_MATCH, etag);
+        }
+        if let Some(bytes) = body {
+            req = req
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .body(bytes);
+        }
+        let resp = req.send().map_err(|e| TeamApiError {
+            status: 0,
+            message: e.to_string(),
+            conflict_fragment: None,
+        })?;
+        let status = resp.status().as_u16();
+        let etag = resp
+            .headers()
+            .get(reqwest::header::ETAG)
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let body = resp.text().unwrap_or_default();
+        Ok(RawSyncResponse { status, etag, body })
+    }
+}
+
 // ---- Pure helpers extracted from decode_response / decode_error.
 //      Taking status as plain u16 + &str body means no reqwest Response is
 //      needed for unit tests; TeamClient methods just delegate.

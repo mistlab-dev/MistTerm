@@ -35,6 +35,7 @@ MistTerm is an **SSH terminal client** that helps you:
 - Save multiple server connections and open terminals with one click
 - Upload and download files via a graphical interface (SFTP)
 - Save frequently used command templates (snippets) to avoid repetitive typing
+- Save the lines you always type after connecting as a send sequence and replay them in the current session
 - Monitor server CPU, memory, disk, and more
 - Optional: AI-assisted command explanation, team-shared snippets
 
@@ -108,7 +109,8 @@ Do not edit these files manually; use the in-app interface to make changes.
 | New/Edit connection | **Ctrl+N** / select in sidebar then **Ctrl+E** |
 | Open SFTP | **View → SFTP** or bottom bar **Files** |
 | View CPU/Memory | **View → Monitor** or bottom bar **Monitor** |
-| Command snippets | **Ctrl+K** when the terminal is not focused, or bottom bar **Snippets** |
+| Command palette | **Ctrl+K** when the terminal is not focused (Mac: **⌘K**). Fuzzy-search sessions, snippets, history, and app actions |
+| Command snippets | Bottom bar **Snippets**, or type a snippet name in the command palette |
 | AI Assistant | **Ctrl+Shift+A** or bottom bar **AI** |
 | Preferences | **Ctrl+,** |
 | Help & shortcuts | **Help → Quick Start / Keyboard Shortcuts** or **Ctrl+H** |
@@ -120,6 +122,21 @@ Do not edit these files manually; use the in-app interface to make changes.
 ![View menu](screenshots/12-menu-view.png)
 
 *Fig 4-2: View menu — toggle side panels*
+
+### 4.3 Command palette
+
+When the terminal is **not** focused, **Ctrl+K** (macOS: **⌘K**) opens the command palette. Type to fuzzy-search and run:
+
+- **Sessions**: focus an open tab, or connect if none is open
+- **Snippets**: same as the quick snippet picker — choosing one runs it (variables are filled in first)
+- **Command history**: fill the command into the terminal input without pressing Enter
+- **App actions**: open SFTP, Monitor, AI, port forwarding, Preferences, the command history window, a new session, and similar menu actions
+
+Keys: type to filter, Up/Down to move, Enter to run, Esc to close. While the panel is open, keystrokes are not sent to the terminal.
+
+**Why not Ctrl+Shift+K:** unfocused Ctrl+K / ⌘K does not conflict with the OS, so Windows and Linux keep Ctrl+K and macOS keeps ⌘K. When the terminal is focused, Ctrl+K is still sent to the shell and deletes to the end of the line (readline kill-to-EOL). The palette does not take that key.
+
+The quick snippet picker is still **Ctrl+Shift+J**, and it also opens only when the terminal is not focused.
 
 ---
 
@@ -134,7 +151,7 @@ Do not edit these files manually; use the in-app interface to make changes.
    - **Port**: usually 22
    - **Username**
    - **Password** or **private key file path**
-3. Optional: uncheck "Use SSH Agent" if using password-only login
+3. Optional: uncheck "Use SSH Agent" if using password-only login. For a hardware key, set authentication to **FIDO2 / security key (OpenSSH)** (see 5.2.1)
 4. Click **Save & Connect**
 
 ![Import SSH Config](screenshots/18-import-ssh-config.png)
@@ -148,7 +165,34 @@ Do not edit these files manually; use the in-app interface to make changes.
 | Password | Server allows password login |
 | Private key file | Local `.pem` / `id_ed25519`, etc. |
 | SSH Agent | ssh-agent / Pageant running with key loaded |
+| FIDO2 / security key (OpenSSH) | An `ecdsa-sk` or `ed25519-sk` key loaded with `ssh-add`. Touch and PIN use the system prompt |
 | Jump host | Configure ProxyJump in advanced options (same as OpenSSH) |
+
+### 5.2.1 FIDO2 / security key
+
+Choose **FIDO2 / security key (OpenSSH)** as the session authentication type. MistTerm does not ship a FIDO stack; the system OpenSSH agent signs with `ecdsa-sk` / `ed25519-sk`. While connecting, the window tells you to touch the key or enter the PIN in the system prompt. Cancelling the touch, a rejected PIN, an empty agent, or a missing key file is a visible failure — the session is not marked logged in. Password and non-sk keys are not used on this path.
+
+Shortest steps differ by OS. All three can complete a login. This covers security keys OpenSSH can drive (commonly a FIDO2 key with ed25519-sk / ecdsa-sk, such as some YubiKey 5 models). It is not a promise that every hardware model works.
+
+**Windows**
+
+1. Install the OpenSSH client and start the **OpenSSH Authentication Agent** service (`ssh-agent`), set to Automatic. Pageant cannot sign sk keys.
+2. In PowerShell: `ssh-keygen -t ed25519-sk -f $env:USERPROFILE\.ssh\id_ed25519_sk` (`-t ecdsa-sk` is fine too). Touch the key when asked; enter the PIN in the system prompt if the key requires one.
+3. `ssh-add $env:USERPROFILE\.ssh\id_ed25519_sk`. For a resident key, use `ssh-add -K`.
+4. In MistTerm select FIDO2 / security key. Leave the path empty to use any sk key in the agent, or point at the file above. Save and connect, then touch the key or enter the PIN in the Windows prompt.
+
+**macOS**
+
+1. ssh-agent is already provided by the system. In Terminal: `ssh-keygen -t ed25519-sk -f ~/.ssh/id_ed25519_sk`.
+2. `ssh-add --apple-use-keychain ~/.ssh/id_ed25519_sk` (or `ssh-add ~/.ssh/id_ed25519_sk`).
+3. In MistTerm select FIDO2 / security key and connect. Touch the key when it blinks; enter the PIN in the macOS prompt when one appears.
+
+**Linux**
+
+1. OpenSSH 8.2 or newer (`ssh -V`). Start OpenSSH's ssh-agent in the **same graphical session** that launches MistTerm so the process inherits `SSH_AUTH_SOCK`. The desktop keyring's SSH component may not sign sk keys; use OpenSSH's ssh-agent.
+2. `ssh-keygen -t ed25519-sk -f ~/.ssh/id_ed25519_sk`, then `ssh-add ~/.ssh/id_ed25519_sk`.
+3. If the key asks for a PIN on every use and the agent has no terminal, set `SSH_ASKPASS` (for example `ssh-askpass`) and `SSH_ASKPASS_REQUIRE=force` before starting the agent so the PIN dialog is graphical.
+4. In MistTerm select FIDO2 / security key and connect, then touch the key or enter the PIN in the system prompt.
 
 ### 5.3 Connecting & Reconnecting
 
@@ -169,7 +213,7 @@ Passwords and session info are **encrypted locally**. When switching computers, 
 
 - After connecting, type commands in the terminal area and press **Enter** to execute
 - **Ctrl+C** always interrupts the foreground program (SIGINT), including when text is selected. Copy the selection with **Ctrl+Shift+C** on Windows/Linux, or **⌘C** on Mac. Paste with **Ctrl+Shift+V** (Mac: **⌘V**)
-- **Ctrl+K** (terminal focused): sent to the shell; deletes to the end of the line. **Ctrl+J** (terminal focused): sent to the shell (line feed, same as readline). Connection search (Ctrl+J) and snippet search (Ctrl+K) run only when the terminal is not focused. The quick snippet picker is **Ctrl+Shift+J**, and it also opens only when the terminal is not focused
+- **Ctrl+K** (terminal focused): sent to the shell; deletes to the end of the line. **Ctrl+J** (terminal focused): sent to the shell (line feed, same as readline). Connection search (Ctrl+J) and the command palette (Ctrl+K, Mac: ⌘K) run only when the terminal is not focused. Unfocused Ctrl+K does not conflict with the OS, so Ctrl+Shift+K is not used. The quick snippet picker is **Ctrl+Shift+J**, and it also opens only when the terminal is not focused
 - **Alt** (macOS: **Option**) is Meta while the terminal is focused: **Alt+B** / **Alt+F** move by word, **Alt+D** / **Alt+Backspace** delete a word, and **Alt+.** inserts the last argument of the previous command (repeat to cycle earlier arguments). MistTerm UI shortcuts do not swallow these keys
 - **Select across several screens**: click the start, scroll with the wheel to the end, then **Shift+click** to extend the selection. While drag-selecting, move the pointer past the top/bottom edge of the terminal to auto-scroll (faster the farther you go). Then right-click → Copy selection or **Ctrl+Shift+C** (Mac: **⌘C**) copies all of it
 - **Chinese IME**: while composing, the preedit string is drawn at the cursor. The candidate list stays on the system IME panel. Ctrl chords such as Ctrl+C and Ctrl+R are still sent to the terminal during composition
@@ -190,6 +234,7 @@ Passwords and session info are **encrypted locally**. When switching computers, 
 
 - **Ctrl+R** (terminal focused): sent to the shell as reverse-i-search. Mist does not open the command history panel
 - **Tools → Command History**: open Mist's command history panel to search and re-run recent commands. When the terminal is not focused, **Ctrl+R** also opens that panel
+- **Ctrl+Shift+P** (Mac: **⌘⇧P**) or **Tools → Paste History**: open paste history and send a recent successful paste again (the last 20 are kept). One-shot paste stays **Ctrl+Shift+V** (Mac: **⌘V**). Private keys, common tokens, and password prompts are skipped on a best-effort basis; the filter is not complete. Turn off "Remember recent pastes" in Preferences to stop saving new ones
 
 ![Command history](screenshots/17-command-history.png)
 
@@ -213,6 +258,48 @@ The mouse in the terminal is for **selecting text** and **scrolling**. The follo
 
 - **Alt+click does not move the cursor** to the clicked cell (the shell line does not jump there)
 - **MistTerm does not send the xterm mouse protocol to the PTY.** tmux and vim mouse modes therefore do not work: clicks and drags are not reported to the remote program
+
+### 6.5 Command blocks
+
+One command and its output can be one block: jump to the previous or next block, or copy the command plus its output in one step. Boundaries come only from shell integration **OSC 133** (VS Code **OSC 633** is recognized the same way). Without those markers MistTerm does not guess from Enter or from the prompt, and a vim / less / htop fullscreen frame is not a block.
+
+**Shortest way to turn it on**
+
+- If **iTerm2** or **VS Code** shell integration is already enabled, leave it on.
+- bash, in `~/.bashrc`:
+
+```bash
+__mist_cmd_block() {
+  local ec=$?
+  printf '\e]133;D;%s\a' "$ec"
+  printf '\e]133;A\a'
+}
+PROMPT_COMMAND="__mist_cmd_block${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+PS1="${PS1}"'\[\e]133;B\a\]'
+```
+
+- zsh, in `~/.zshrc` (if `precmd` / `preexec` already exist, add the `printf` lines to those functions):
+
+```zsh
+precmd() {
+  local ec=$?
+  printf '\e]133;D;%s\a' "$ec"
+  printf '\e]133;A\a'
+}
+preexec() { printf '\e]133;C\a'; }
+PS1="${PS1}"'%{\e]133;B\a%}'
+```
+
+`C` (command submitted) is optional. `A` / `B` / `D` alone still form a block after the command finishes. Open a new terminal tab so the shell reloads.
+
+**Using it** (the terminal must be focused; Windows / Linux use Ctrl+Shift, macOS uses ⌘⇧)
+
+- **Ctrl+Shift+↑**: previous command block
+- **Ctrl+Shift+↓**: next command block. Past the last block, this returns to the latest output
+- **Ctrl+Shift+O**: copy the current command block (from the end of the prompt through the end of the command; a command that is still running is copied up to the cursor)
+- The terminal context menu has the same three items. Without shell integration they show a hint pointing at this section. The view does not scroll, and the shortcut is not sent to the shell
+
+A copy keeps at most the first **4000** lines and **200000** characters. Longer output is truncated and marked. The command that entered vim or less is still one block; the copy does not include the fullscreen frame.
 
 ---
 
@@ -266,11 +353,13 @@ MistTerm will automatically handle the transfer and show progress. If transfers 
 
 Save frequently used commands as **snippets** for one-click insertion. Supports `<variable>` placeholders.
 
+A snippet is one searchable command. To send several lines, in order, into the one session you already have open, use **Tools → Send Sequences** (see [13.5](#135-send-sequences)). Do not store that as a snippet.
+
 ### 8.1 Opening Snippets
 
 | Method | Description |
 |--------|-------------|
-| **Ctrl+K** | Focus snippet search (only when the terminal is not focused; when it is, the key goes to the shell and deletes to the end of the line) |
+| **Ctrl+K** | Open the command palette and run a snippet (only when the terminal is not focused; when it is, the key goes to the shell and deletes to the end of the line. Mac: **⌘K**) |
 | **Ctrl+Shift+J** | Quick snippet selector (only when the terminal is not focused) |
 | Bottom bar **Snippets** | Open the snippet side panel |
 | **Tools → Snippet Library** | Manage, create, and edit snippets |
@@ -395,7 +484,7 @@ MistTerm has two layers of command safety checks: local checks provide fast feed
 | Confirm | A dialog asks "Are you sure?" |
 | Alert | Execution allowed but a warning is logged |
 
-Local checks cover snippet runs, batch runs, commands inserted by AI, `mist exec`, and **commands you type directly in the terminal**: while a local policy is active, pressing Enter first checks the current line (including text placed by “Apply to terminal” and single-line pastes). A blocked line is not sent and stays on the prompt; a line that needs confirmation runs only after you click **Confirm send**. Typed commands are not checked locally (Enter is sent as usual) inside full-screen programs such as vim/less/top, on password or passphrase prompts, and during rz/sz transfers. Lines edited with arrow keys, Tab completion or shell history recall are checked only by the characters you actually typed; rely on the server-side policy for those.
+Local checks cover snippet runs, batch runs, commands inserted by AI, `mist exec`, **each non-empty line of a send sequence**, and **commands you type directly in the terminal**: while a local policy is active, pressing Enter first checks the current line (including text placed by “Apply to terminal” and single-line pastes). A blocked line is not sent and stays on the prompt; a line that needs confirmation runs only after you click **Confirm send**. Typed commands are not checked locally (Enter is sent as usual) inside full-screen programs such as vim/less/top, on password or passphrase prompts, and during rz/sz transfers. Lines edited with arrow keys, Tab completion or shell history recall are checked only by the characters you actually typed; rely on the server-side policy for those.
 
 View or adjust local rules in **Preferences**. When joining a team, admin-pushed policies sync to your machine. Server-side decisions are returned through the terminal connection and use the **“Server policy”** prefix.
 
@@ -426,6 +515,12 @@ MistTerm periodically checks the current host's Agent heartbeat. If the Agent is
 
 Enable **Session Logging** in Preferences to automatically save terminal interaction records for later auditing. View via **Tools → Browse Session Logs**.
 
+### 13.2.1 Crash and hang reports
+
+On panic, MistTerm writes a report under `logs/crash-reports/` in the config directory (next to `logs/hang-reports/`). The next launch shows a one-time summary (version, time, first panic line) when that report is newer than the last clean exit, or when the last exit was not clean and a report is already on disk. You can open the folder or copy the full report. The first install does not prompt. After that, a forced quit or a native crash with no new report (for example SIGSEGV) still prompts once, saying no new crash report was written. A later clean exit does not prompt.
+
+**Help → Diagnostics** opens the crash-reports and hang-reports folders at any time. Rust panics are captured; a native SIGSEGV still has no local report file.
+
 ### 13.3 Preferences & Themes
 
 - **Ctrl+,** opens Preferences: interface language, theme, font, audit, logging, etc.
@@ -446,6 +541,26 @@ Enable **Session Logging** in Preferences to automatically save terminal interac
 
 **Tools → Batch Execute**: select multiple saved hosts, enter a command, and execute it in parallel across all selected hosts. Useful for inspections (results are shown per host; overly long output is auto-truncated).
 
+### 13.5 Send sequences
+
+**Tools → Send Sequences** (a separate “Send sequences” group in the command palette, not “Snippets”) sends lines, in order, into the **one connected pane** you are using.
+
+1. Create one and name it
+2. Put one send per line. A blank line presses Enter
+3. Optional delay between lines, in milliseconds. `0` sends the next line immediately. The wait is fixed. MistTerm does **not** wait for a remote prompt
+4. Save
+5. Connect a session, then click **Send to this session**
+
+Even if broadcast input is on for the tab, a send sequence stays in the current pane. It is not sent to other panes or other tabs.
+
+While a local command policy is active, each non-empty line is checked the same way as pressing Enter. A blocked line is not sent, and the rest of the sequence stops. If a line needs confirmation, later lines wait until you confirm.
+
+| | Command snippets | `mist exec` | AI batch | Send sequences |
+|---|---|---|---|---|
+| When | One searchable command, often with `<placeholders>`, kept in the snippet library | Run from the CLI on one or many hosts, without a terminal tab | Describe a task, confirm, then run it on the hosts in the plan | The lines you always type, in order, after this session is connected |
+| Where it goes | The current terminal, after variables are filled in | A separate SSH connection; output comes back | The hosts in the plan | Only the one connected pane |
+| What it does not do | Does not replay several lines on a fixed delay | Does not type into an interactive session that is already open | Is not a fixed key sequence | Does not wait for a remote prompt, and does not broadcast |
+
 ---
 
 ## 14. Keyboard Shortcuts
@@ -461,11 +576,14 @@ The following uses **Windows** keys; on macOS, replace **Ctrl** with **⌘** (e.
 | **Ctrl+Tab** / **Ctrl+Shift+Tab** | Next / previous tab |
 | **Ctrl+1 … Ctrl+9** | Switch to tab N |
 | **Ctrl+J** | Focus connection search (only when the terminal is not focused; when it is, the key goes to the shell as a line feed) |
-| **Ctrl+K** | Focus snippet search (only when the terminal is not focused; when it is, the key goes to the shell and deletes to the end of the line) |
+| **Ctrl+K** | Open the command palette (only when the terminal is not focused; search sessions, snippets, history, and actions. When focused, the key goes to the shell and deletes to the end of the line. Mac: **⌘K**. Ctrl+Shift+K is not used) |
 | **Ctrl+Shift+J** | Quick snippet selector (only when the terminal is not focused) |
 | **Ctrl+F** / **F3** | Find in terminal |
 | **Ctrl+C** | Interrupt the foreground program (SIGINT), even with a selection. Copy with **Ctrl+Shift+C** (Mac: **⌘C**) |
 | **Ctrl+Shift+V** (Mac: **⌘V**) | Paste into the terminal |
+| **Ctrl+Shift+↑** / **Ctrl+Shift+↓** (Mac: **⌘⇧↑** / **⌘⇧↓**) | Previous / next command block (needs shell integration; see [6.5](#65-command-blocks)) |
+| **Ctrl+Shift+O** (Mac: **⌘⇧O**) | Copy the current command block (command and output; long output is truncated) |
+| **Ctrl+Shift+P** (Mac: **⌘⇧P**) | Paste history. Also under **Tools → Paste History**. One-shot paste stays **Ctrl+Shift+V** (Mac: **⌘V**). Private-key and password filtering is best-effort, not complete |
 | **Ctrl+R** | When the terminal is focused, goes to the shell (reverse-i-search). When it is not, opens Mist command history. The panel is also under **Tools → Command History** |
 | **Ctrl+Shift+A** | AI assistant panel |
 | **Ctrl+Shift+L** | Send terminal selection to AI |

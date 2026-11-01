@@ -29,6 +29,8 @@ pub struct SftpEntry {
     pub name: String,
     /// 是否为目录
     pub is_dir: bool,
+    /// 是否为正规文件。fifo、套接字、设备为 false。
+    pub is_file: bool,
     /// 文件大小（字节）
     pub size: u64,
     /// 权限字符串（如 "-rwxr-xr-x"）
@@ -46,6 +48,8 @@ pub enum WriteMode {
     Overwrite,
     /// 从已有目标大小继续写（断点续传）。
     Resume,
+    /// 只在目标不存在时创建。已存在则失败，不截断、不跟随符号链接。
+    Create,
 }
 
 /// 带进度/取消的传输结果。
@@ -137,7 +141,9 @@ impl SftpClient {
                     return None;
                 }
 
-                let is_dir = stat.is_dir();
+                let ft = stat.file_type();
+                let is_dir = ft.is_dir();
+                let is_file = ft.is_file() || matches!(ft, ssh2::FileType::Other(_));
                 let size = stat.size.unwrap_or(0);
                 
                 // 格式化权限
@@ -151,6 +157,7 @@ impl SftpClient {
                 Some(SftpEntry {
                     name,
                     is_dir,
+                    is_file,
                     size,
                     permissions: perms,
                     modified,
@@ -240,6 +247,7 @@ impl SftpClient {
             WriteMode::Overwrite,
             None,
             &mut |_| {},
+            None,
         )? {
             TransferResult::Completed { bytes } => Ok(bytes),
             TransferResult::Cancelled { bytes_done } => {
@@ -257,6 +265,7 @@ impl SftpClient {
             WriteMode::Overwrite,
             None,
             &mut |_| {},
+            None,
         )? {
             TransferResult::Completed { bytes } => Ok(bytes),
             TransferResult::Cancelled { bytes_done } => {
@@ -267,6 +276,8 @@ impl SftpClient {
     }
 
     /// 带进度 / 取消 / 续传的下载。
+    ///
+    /// `local_root` 仅用于 [`WriteMode::Create`]：逐段 `symlink_metadata`，拒绝写出对比根。
     pub fn download_ex(
         &self,
         remote_path: &Path,
@@ -274,12 +285,31 @@ impl SftpClient {
         mode: WriteMode,
         cancel: Option<&AtomicBool>,
         on_progress: &mut dyn FnMut(TransferProgress),
+        local_root: Option<&Path>,
     ) -> Result<TransferResult, String> {
         let remote_stat = self
             .sftp
             .stat(remote_path)
             .map_err(|e| format!("Failed to stat remote {}: {e}", remote_path.display()))?;
         let total = remote_stat.size.unwrap_or(0);
+        if mode == WriteMode::Create {
+            let root = local_root.ok_or_else(|| {
+                "Sync download is missing its local root".to_string()
+            })?;
+            let rel = crate::core::sftp_diff::rel_under_local(root, local_path)?;
+            let mut local_file = crate::core::sftp_diff::create_local_file_nofollow(root, &rel)?;
+            let mut remote_file = self.sftp.open(remote_path).map_err(|e| {
+                format!("Failed to open remote file {}: {e}", remote_path.display())
+            })?;
+            return copy_remote_to_local(
+                &mut remote_file,
+                &mut local_file,
+                0,
+                total,
+                cancel,
+                on_progress,
+            );
+        }
         let existing = if local_path.exists() {
             std::fs::metadata(local_path)
                 .map(|m| m.len())
@@ -289,7 +319,7 @@ impl SftpClient {
         };
 
         let resume_from = match mode {
-            WriteMode::Overwrite => 0,
+            WriteMode::Overwrite | WriteMode::Create => 0,
             WriteMode::Resume => {
                 if existing >= total && total > 0 {
                     on_progress(TransferProgress {
@@ -355,6 +385,8 @@ impl SftpClient {
     }
 
     /// 带进度 / 取消 / 续传的上传。
+    ///
+    /// `remote_root` 仅用于 [`WriteMode::Create`]：逐段 `lstat`，拒绝跟随远端符号链接。
     pub fn upload_ex(
         &self,
         local_path: &Path,
@@ -362,6 +394,7 @@ impl SftpClient {
         mode: WriteMode,
         cancel: Option<&AtomicBool>,
         on_progress: &mut dyn FnMut(TransferProgress),
+        remote_root: Option<&Path>,
     ) -> Result<TransferResult, String> {
         let mut local_file = std::fs::File::open(local_path)
             .map_err(|e| format!("Failed to open local file {}: {e}", local_path.display()))?;
@@ -369,6 +402,35 @@ impl SftpClient {
             .metadata()
             .map(|m| m.len())
             .map_err(|e| format!("Failed to stat local file: {e}"))?;
+
+        if mode == WriteMode::Create {
+            let root = remote_root.ok_or_else(|| {
+                "Sync upload is missing its remote root".to_string()
+            })?;
+            self.prepare_remote_file(root, remote_path)?;
+            let mut remote_file = self
+                .sftp
+                .open_mode(
+                    remote_path,
+                    OpenFlags::WRITE | OpenFlags::EXCLUSIVE,
+                    0o644,
+                    OpenType::File,
+                )
+                .map_err(|e| {
+                    format!(
+                        "Failed to create remote file {}: {e}",
+                        remote_path.display()
+                    )
+                })?;
+            return copy_local_to_remote(
+                &mut local_file,
+                &mut remote_file,
+                0,
+                total,
+                cancel,
+                on_progress,
+            );
+        }
 
         let existing = self
             .sftp
@@ -378,7 +440,7 @@ impl SftpClient {
             .unwrap_or(0);
 
         let resume_from = match mode {
-            WriteMode::Overwrite => 0,
+            WriteMode::Overwrite | WriteMode::Create => 0,
             WriteMode::Resume => {
                 if existing >= total && total > 0 {
                     on_progress(TransferProgress {
@@ -447,6 +509,75 @@ impl SftpClient {
             .map_err(|e| format!("Failed to close remote file: {e}"))?;
 
         Ok(TransferResult::Completed { bytes: done })
+    }
+
+    /// 不跟随符号链接的远端节点类型。
+    pub fn lstat_node(&self, path: &Path) -> Result<RemoteNode, String> {
+        match self.sftp.lstat(path) {
+            Ok(stat) => Ok(remote_node_from_stat(&stat)),
+            Err(e) if is_sftp_missing(&e) => Ok(RemoteNode::Missing),
+            Err(e) => Err(format!("Failed to lstat {}: {e}", path.display())),
+        }
+    }
+
+    /// 在 `root` 下逐段创建 `path`。某一段是符号链接或非目录则失败，不用会跟随链接的 `stat`。
+    pub fn mkdir_p_nofollow(&self, root: &Path, path: &Path) -> Result<(), String> {
+        let rel = remote_rel(root, path)?;
+        if rel.is_empty() {
+            return Ok(());
+        }
+        let root_s = root.to_string_lossy().replace('\\', "/");
+        let mut acc = String::new();
+        for (i, part) in rel.split('/').enumerate() {
+            if i > 0 {
+                acc.push('/');
+            }
+            acc.push_str(part);
+            let cur = crate::core::sftp_diff::join_remote(&root_s, &acc)
+                .ok_or_else(|| format!("Invalid path: {acc}"))?;
+            let cur_path = Path::new(&cur);
+            match self.lstat_node(cur_path)? {
+                RemoteNode::Missing => self.mkdir(cur_path)?,
+                RemoteNode::Dir => {}
+                RemoteNode::Symlink => {
+                    return Err(format!("Refusing to follow remote symlink: {cur}"));
+                }
+                RemoteNode::File | RemoteNode::Other => {
+                    return Err(format!("Remote path is not a directory: {cur}"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// 确认文件的每一段都不是符号链接，且文件本身还不存在，然后由调用方独占创建。
+    pub fn prepare_remote_file(&self, root: &Path, path: &Path) -> Result<(), String> {
+        let rel = remote_rel(root, path)?;
+        if rel.is_empty() {
+            return Err(format!(
+                "Refusing to replace compare root {}",
+                path.display()
+            ));
+        }
+        if let Some(parent) = crate::core::sftp_diff::parent_rel(&rel) {
+            if !parent.is_empty() {
+                let root_s = root.to_string_lossy().replace('\\', "/");
+                let parent_path = crate::core::sftp_diff::join_remote(&root_s, &parent)
+                    .ok_or_else(|| format!("Invalid path: {parent}"))?;
+                self.mkdir_p_nofollow(root, Path::new(&parent_path))?;
+            }
+        }
+        match self.lstat_node(path)? {
+            RemoteNode::Missing => Ok(()),
+            RemoteNode::Symlink => Err(format!(
+                "Refusing to follow remote symlink: {}",
+                path.display()
+            )),
+            _ => Err(format!(
+                "Refusing to overwrite existing remote path: {}",
+                path.display()
+            )),
+        }
     }
 
     /// 远端文件是否存在（用于覆盖/续传决策）。
@@ -600,9 +731,11 @@ impl SftpClient {
             .and_then(|t| Utc.timestamp_opt(t as i64, 0).single())
             .unwrap_or_else(Utc::now);
 
+        let ft = stat.file_type();
         Ok(SftpEntry {
             name,
-            is_dir: stat.is_dir(),
+            is_dir: ft.is_dir(),
+            is_file: ft.is_file() || matches!(ft, ssh2::FileType::Other(_)),
             size: stat.size.unwrap_or(0),
             permissions: format_permissions(stat.perm.unwrap_or(0)),
             modified,
@@ -616,6 +749,114 @@ impl SftpClient {
         // 尝试从 ssh 会话获取，或者使用默认路径
         Ok(PathBuf::from("/"))
     }
+}
+
+/// `lstat` 看到的远端节点。`Missing` 表示路径不存在。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteNode {
+    Missing,
+    Dir,
+    File,
+    Symlink,
+    Other,
+}
+
+fn remote_node_from_stat(stat: &ssh2::FileStat) -> RemoteNode {
+    let ft = stat.file_type();
+    if ft.is_symlink() {
+        RemoteNode::Symlink
+    } else if ft.is_dir() {
+        RemoteNode::Dir
+    } else if ft.is_file() {
+        RemoteNode::File
+    } else {
+        RemoteNode::Other
+    }
+}
+
+fn is_sftp_missing(err: &ssh2::Error) -> bool {
+    match err.code() {
+        ssh2::ErrorCode::SFTP(2) => true,
+        _ => {
+            let msg = err.to_string().to_lowercase();
+            msg.contains("no such file") || msg.contains("not found")
+        }
+    }
+}
+
+fn remote_rel(root: &Path, path: &Path) -> Result<String, String> {
+    let root_s = root.to_string_lossy().replace('\\', "/");
+    let path_s = path.to_string_lossy().replace('\\', "/");
+    crate::core::sftp_diff::rel_under_root(&root_s, &path_s)
+        .ok_or_else(|| format!("Path {path_s} is outside {root_s}"))
+}
+
+fn copy_remote_to_local(
+    remote_file: &mut ssh2::File,
+    local_file: &mut std::fs::File,
+    mut done: u64,
+    total: u64,
+    cancel: Option<&AtomicBool>,
+    on_progress: &mut dyn FnMut(TransferProgress),
+) -> Result<TransferResult, String> {
+    const CHUNK: usize = 256 * 1024;
+    let mut buf = [0u8; CHUNK];
+    on_progress(TransferProgress { done, total });
+    loop {
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            return Ok(TransferResult::Cancelled { bytes_done: done });
+        }
+        let n = remote_file
+            .read(&mut buf)
+            .map_err(|e| format!("Failed to read remote file: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        local_file
+            .write_all(&buf[..n])
+            .map_err(|e| format!("Failed to write local file: {e}"))?;
+        done += n as u64;
+        on_progress(TransferProgress { done, total });
+    }
+    Ok(TransferResult::Completed { bytes: done })
+}
+
+fn copy_local_to_remote(
+    local_file: &mut std::fs::File,
+    remote_file: &mut ssh2::File,
+    mut done: u64,
+    total: u64,
+    cancel: Option<&AtomicBool>,
+    on_progress: &mut dyn FnMut(TransferProgress),
+) -> Result<TransferResult, String> {
+    const CHUNK: usize = 256 * 1024;
+    let mut buf = [0u8; CHUNK];
+    on_progress(TransferProgress { done, total });
+    loop {
+        if cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            let _ = remote_file.flush();
+            let _ = remote_file.close();
+            return Ok(TransferResult::Cancelled { bytes_done: done });
+        }
+        let n = local_file
+            .read(&mut buf)
+            .map_err(|e| format!("Failed to read local file: {e}"))?;
+        if n == 0 {
+            break;
+        }
+        remote_file
+            .write_all(&buf[..n])
+            .map_err(|e| format!("Failed to write remote file: {e}"))?;
+        done += n as u64;
+        on_progress(TransferProgress { done, total });
+    }
+    remote_file
+        .flush()
+        .map_err(|e| format!("Failed to flush remote file: {e}"))?;
+    remote_file
+        .close()
+        .map_err(|e| format!("Failed to close remote file: {e}"))?;
+    Ok(TransferResult::Completed { bytes: done })
 }
 
 /// 格式化权限位为 Unix 风格字符串
@@ -699,6 +940,7 @@ mod tests {
         let entry = SftpEntry {
             name: "test.txt".to_string(),
             is_dir: false,
+            is_file: true,
             size: 1024,
             permissions: "-rw-r--r--".to_string(),
             modified: Utc::now(),
@@ -709,6 +951,7 @@ mod tests {
         let large_entry = SftpEntry {
             name: "large.bin".to_string(),
             is_dir: false,
+            is_file: true,
             size: 1024 * 1024 * 1024, // 1 GB
             permissions: "-rw-r--r--".to_string(),
             modified: Utc::now(),

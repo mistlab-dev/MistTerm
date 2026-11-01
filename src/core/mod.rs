@@ -17,29 +17,34 @@ pub mod fragment_usage_log;
 pub mod fragment_recommendations;
 pub mod knowledge;
 pub mod runbook_recall;
-pub mod display_link;
 pub mod postmortem;
 pub mod agent;
 pub mod batch_exec;
 pub mod controlplane;
 pub mod exec_history;
+pub mod interactive_exec;
 pub mod ssh_build;
 pub mod ssh_keygen;
 pub mod fragment_expr;
 pub mod fragment_command;
+pub mod send_sequence;
 pub mod credential;
 pub mod cloud_sync;
+pub mod host_sync;
 pub mod reconnect;
 pub mod upload_policy;
 pub mod ssh_config_importer;
 pub mod ssh_url;
 pub mod foreign_import;
 pub mod command_history;
+pub mod paste_history;
 pub mod session_logger;
 pub mod session_sort;
+pub mod session_list;
 pub mod audit;
 pub mod audit_timeline;
 pub mod cmd_audit;
+pub mod cmd_audit_personal;
 pub mod ai_settings;
 pub mod ai_client;
 pub mod ai_chat_store;
@@ -47,7 +52,10 @@ pub mod ai_session_meta;
 pub mod ai_enhanced;
 pub mod app_settings;
 pub mod local_dir;
+pub mod sftp_diff;
+pub mod crash_reporter;
 pub mod hang_reporter;
+pub mod monitor_alert;
 pub mod team;
 pub mod market;
 pub mod vault;
@@ -63,7 +71,7 @@ pub use session::{
     format_dynamic_forward_line, format_local_forward_line, format_remote_forward_line,
     parse_dynamic_forwards_text, parse_local_forwards_text, parse_remote_forwards_text,
     remove_dynamic_forward_line, remove_local_forward_line, remove_remote_forward_line,
-    SessionConfig, SessionManager,
+    SessionAuthMode, SessionConfig, SessionManager,
     SESSION_COLOR_TAGS,
     session_color_tag_accent_rgb, session_color_tag_rgb, session_tab_label,
 };
@@ -72,6 +80,7 @@ pub use ssh_config_importer::{
     parse_ssh_config_str, pending_imports, SshConfigCandidate, SshConfigParseResult,
 };
 pub use command_history::{CommandHistory, HistoryEntry};
+pub use paste_history::{PasteHistory, PasteHistoryNote};
 pub use session_logger::{
     cleanup_old_logs, default_log_base_dir, list_session_log_files, log_text_for_display,
     read_log_tail, spawn_cleanup_old_logs, SessionLogSettings, SessionLogWriter,
@@ -101,10 +110,10 @@ pub use runbook_recall::{
     runbooks_from_items, sanitize_runbook_url, RunbookRecall, RunbookSearchContext,
 };
 pub use agent::{
-    build_planner_system_prompt, first_useful_line, gate_decision, host_result_summary,
-    looks_like_host_ops_intent, parse_llm_plan_response, propose_step,
+    assess_ai_terminal_danger, build_planner_system_prompt, first_useful_line, gate_decision,
+    host_result_summary, looks_like_host_ops_intent, parse_llm_plan_response, propose_step,
     propose_step_with_context, summarize_batch_rows, truncate_chars, AgentPhase, AgentRunSnapshot,
-    GateDecision, GateLevel, HostExecutionSummary, LastBatchContext, StepProposal,
+    DangerHit, GateDecision, GateLevel, HostExecutionSummary, LastBatchContext, StepProposal,
 };
 pub use batch_exec::{
     batch_endpoint_key, format_batch_results_for_clipboard, push_unique_batch_target,
@@ -112,8 +121,9 @@ pub use batch_exec::{
     TEAM_TARGET_PREFIX,
 };
 pub use exec_history::{
-    append_record, extract_sop_markdown, get_log_file_path, read_recent_records, record_batch_rows,
-    truncate_output_summary, ExecLogRecord,
+    append_record, append_record_at, extract_sop_markdown, get_log_file_path, read_recent_records,
+    read_records_at, record_batch_rows, truncate_output_summary, ExecLogRecord,
+    OUTPUT_SUMMARY_MAX_CHARS,
 };
 pub use ssh_build::{
     build_ssh_config, keepalive_from_session, resolve_proxy_jump_hops, session_to_ssh_config,
@@ -124,7 +134,7 @@ pub use market::{
 };
 pub use fragment::{
     expand_command_template, expand_fragment_command_stages, list_placeholder_keys,
-    is_archived_status, sort_fragments_with_archived_last, substitute_angle_placeholders,
+    is_archived_status, is_starter_fragment, is_test_residue_fragment, sort_fragments_with_archived_last, substitute_angle_placeholders,
     FragmentManager, FragmentMergeReport, FragmentStats, FragmentVariable, LinkedDoc, SortBy,
 };
 pub use fragment_shortcuts::{
@@ -132,6 +142,10 @@ pub use fragment_shortcuts::{
 };
 pub use fragment_expr::{expand_rhai_blocks, merge_rhai_context};
 pub use fragment_command::{build_fragment_command_preview, finalize_fragment_command_text};
+pub use send_sequence::{
+    alloc_replay_mark, line_payload, replay_schedule, sequence_lines, SendSequence,
+    SendSequenceStore, SequenceError, MAX_DELAY_MS,
+};
 pub use credential::{
     Credential, CredentialAuthKind, CredentialCategory, CredentialVault, SecretBackend,
 };
@@ -159,6 +173,9 @@ pub use ai_chat_store::{delete_chat, load_chat, save_chat, StoredAiMessage, Stor
 pub use ai_session_meta::TerminalSessionMeta;
 pub use ai_enhanced::{AiContext, AiContext as EnhancedContext, CommandCompleter, EnhancedPromptBuilder, QuickAction, SshInfo};
 pub use app_settings::AppSettings;
+pub use monitor_alert::{
+    dispatch_for_mode, rising_alert_lines, AlertDispatch, AlertNotifyMode, MonitorAlertSettings,
+};
 pub use hang_reporter::{ensure_hang_report_dir, hang_report_dir, HangReporter, HangSnapshot};
 pub use team::{
     apply_vault_for_team, parse_vault_credential_path, OAuthProvider, TeamAsyncResult,
@@ -172,8 +189,9 @@ pub use vault::{
 pub use secret_resolver::{ResolvedSshSecrets, ResolveError, SecretResolver, TempKeyFile};
 pub use cloud_sync::CloudSyncSettings;
 pub use reconnect::{
-    cleared_schedule, collect_tabs_due_for_reconnect, schedule_after_unexpected_disconnect,
-    TabReconnectSchedule, ReconnectStatus, DEFAULT_MAX_RECONNECT_ATTEMPTS,
+    cleared_schedule, collect_tabs_due_for_reconnect, disconnect_banner_kind,
+    schedule_after_unexpected_disconnect, DisconnectBannerKind, TabReconnectSchedule,
+    ReconnectStatus, DEFAULT_MAX_RECONNECT_ATTEMPTS,
 };
 pub use upload_policy::{
     decide_upload_dispatch, format_bytes_short, UploadDispatch, LARGE_UPLOAD_THRESHOLD_BYTES,

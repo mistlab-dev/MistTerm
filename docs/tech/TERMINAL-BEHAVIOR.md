@@ -17,7 +17,7 @@
 - `Backspace` sends `0x7f`.
 - `Delete` sends `\x1b[3~` (xterm-compatible forward delete).
 - `Ctrl+C` sends `0x03`, `Ctrl+D` sends `0x04`. A selection does not turn Ctrl+C into copy.
-- `Ctrl+J` (`0x0a`) and `Ctrl+K` (`0x0b`) go to the PTY while the terminal pane is focused. Connection search and snippet search use those chords only when the terminal is not focused. The snippet picker remains `Ctrl+Shift+J` / `⌘⇧J`, and only when the terminal is not focused.
+- `Ctrl+J` (`0x0a`) and `Ctrl+K` (`0x0b`) go to the PTY while the terminal pane is focused. Connection search (`Ctrl/⌘+J`) and the command palette (`Ctrl/⌘+K`) use those chords only when the terminal is not focused. Chord decision: unfocused Ctrl+K does not conflict with the OS, so Windows/Linux stay on Ctrl+K and macOS stays on ⌘K; Ctrl+Shift+K is not used. While the palette is open it is a blocking modal, so keys are not forwarded to the PTY. The quick snippet picker remains `Ctrl+Shift+J` / `⌘⇧J`, and only when the terminal is not focused.
 - `Ctrl+R` goes to the PTY while the terminal is focused (shell reverse-i-search). When the terminal is not focused it opens Mist command history.
 - While the terminal pane is focused, Alt (macOS: Option) plus a letter, digit, or ASCII punctuation is a Meta sequence: ESC then that character. `Alt+B` / `Alt+F` move by word, `Alt+D` deletes the next word, `Alt+.` inserts the previous command's last argument. `Alt+Backspace` is ESC DEL (`0x1b 0x7f`), readline backward-kill-word. Ctrl+Alt and ⌘⌥ are not Meta (AltGr, local shell, pane focus).
 - On macOS the window uses winit `OptionAsAlt::Both`, so Option delivers the base character with Alt set. The terminal prefixes ESC. There is no key-rebinding UI.
@@ -35,14 +35,43 @@
 - **Known limitation:** Alt+click does not move the cursor. MistTerm does not send xterm mouse-tracking reports to the PTY, so tmux mouse mode (and click-to-position inside the shell) is unavailable. Mouse input is selection and scrolling only.
 - Copy uses the selection plus macOS `⌘C` or Windows/Linux `Ctrl+Shift+C`, or the context menu. A selection does not turn `Ctrl+C` into copy.
 - Paste is macOS `⌘V` or Windows/Linux `Ctrl+Shift+V`, or the context menu. Raw text goes to the PTY.
+- Paste history is macOS `⌘⇧P` or Windows/Linux `Ctrl+Shift+P`, or **Tools → Paste History** (also the terminal context menu). It re-sends a stored paste through the same `build_paste_payload` / chunk path. It does not replace one-shot paste. Private-key blocks, well-known token prefixes (including `ghp_`/`ghu_`/`ghs_`/`ghr_`, `sk-`/`sk-proj-`, Slack `xoxc-`, AWS `AKIA`/`ASIA`), env-style `*_SECRET*=` / `*_API_KEY=` assignments, and pastes at a password prompt are skipped on a best-effort basis. The filter is not exhaustive and only scans the stored prefix. Preferences can turn remembering off.
 - Paste does **not** auto-append newline; pasted content is not auto-executed.
 - Command fragments use explicit `send_command` path and may execute with newline by design.
+- Send sequences (**Tools → Send Sequences**, also a separate command-palette group from snippets) replay named lines into the **active pane only**. Each line is text plus CR via `send_line`. `send_line` sets `broadcast_suppress` for that write, so split-pane broadcast input does not fan the sequence out to other panes. There is no multi-session broadcast entry for sequences. An optional delay is a fixed wait between lines (`0`–`10000` ms). The client does not wait for a remote prompt and does not run an expect loop. A blank line is a bare CR. Non-empty lines use the same local command check as other audited sends. This is not the snippet library, not `mist exec`, and not AI batch.
+
+## Command blocks (OSC 133)
+
+Shell integration markers divide scrollback into command blocks. The UI does not guess a block from Enter or from a prompt line. Without these markers, previous/next and “copy this command block” do nothing to the viewport and do not invent a range around vim, less, or htop.
+
+Parsed subset (BEL `0x07` or ST `ESC \`):
+
+| Marker | Sequence | Meaning |
+|--------|----------|---------|
+| A | `OSC 133 ; A` or `OSC 633 ; A` | Prompt start |
+| B | `OSC 133 ; B` or `OSC 633 ; B` | Prompt end, command input starts |
+| C | `OSC 133 ; C` or `OSC 633 ; C` | Command submitted, output starts (optional) |
+| D | `OSC 133 ; D [; exit]` or `OSC 633 ; D [; exit]` | Command finished. First decimal parameter is the exit code; extra parameters such as `aid=` are ignored |
+
+Not parsed: OSC 1337 (iTerm properties), `OSC 133 ; P`, title OSC 0/2. OSC 633 is included because VS Code shell integration uses the same A/B/C/D letters. The interactive-exec audit (#156) may still read a `D` exit code; that path is not a UI block boundary.
+
+A block is navigable only after `C` or `D`. A bare prompt (`A`, or `A`+`B` waiting for input) is not a command, so “previous” does not land on the empty prompt. Copy starts at `B` when present (so the prompt is left out) and ends at `D`, or at the cursor while the command is still running. The next `A` closes an open block without marking it finished.
+
+Coordinates live on the primary grid and shift when rows enter scrollback. The alternate screen is not sampled. A command that enters the alternate screen (`CSI ?1049 h`, vim/less/htop) is one block flagged fullscreen; its copy is the command on the primary grid, not the fullscreen frame. Column resize drops stored coordinates (integration stays “seen”). Clearing history drops blocks that end above the new top line.
+
+Copy is bounded: at most **4000** grid lines and **200000** characters, keeping the head. The suffixes are `\n… [truncated]` (line cap) and `\n… [truncated, N chars omitted]` (character cap).
+
+Keyboard (consumed before the key is forwarded to the PTY): previous **Ctrl+Shift+↑** (macOS **⌘⇧↑**), next **Ctrl+Shift+↓** (macOS **⌘⇧↓**), copy **Ctrl+Shift+O** (macOS **⌘⇧O**). The terminal context menu shows the same three actions even when integration is off, so the degrade is discoverable: a toast points at the manual and the shortcut is not sent to the shell. The shortest enable path is in the user manual, section “Command blocks”.
 
 ## Refresh Behavior
 
-- Connected terminal requests periodic repaint for live TUI/CLI (`top`, `vim`, …).
-- Live repaint interval: **~33ms (30 FPS)** (`TERMINAL_LIVE_REPAINT_MS`) — common for desktop terminals when content is dirty; not 60 FPS continuous (wastes CPU) and not ≤20 FPS (feels sluggish).
-- Cursor blink period: **~530ms** (xterm-like).
+- Connected terminal requests a fast repaint for live TUI/CLI (`top`, `vim`, `yes`, …) **only while the VTE is dirty or SSH output from this frame has not been painted yet**.
+- Live repaint interval: **~33ms (30 FPS)** (`TERMINAL_LIVE_REPAINT_MS`) — common for desktop terminals when content is dirty; not 60 FPS continuous (wastes CPU) and not ≤20 FPS (feels sluggish). A quiet prompt does not stay on this timer.
+- SSH output also calls `request_repaint()` from the shell pump as soon as bytes are queued, so new output is not waiting on the cursor timer. Ctrl+C during `top` / `yes` still wakes on that path.
+- ZMODEM upload PTY capture requests an immediate repaint each frame so the UI-side `mpsc` bypass does not stall waiting for ZACK. Transfer progress events also request a repaint when they arrive.
+- Idle + focused + connected, with no selection and no IME preedit: the block cursor schedules `request_repaint_after` for the **time until the next blink phase**, not a fixed 60ms (~16 FPS).
+- Each blink phase lasts `TERMINAL_CURSOR_BLINK_PERIOD_SECS` (**0.53s**, xterm-like). The cursor is drawn on even phases and hidden on odd phases. The idle wait is whatever remains in the current phase (about **0–530ms**). Halfway through a phase that is about **265ms**. Just after a flip it is about **530ms** plus a few milliseconds of slack so the timer lands in the new phase.
+- The output-to-frame probe is cleared once that frame has painted the terminal, including a plain prompt with no non-default cell background. Leaving the probe set used to keep the 33ms path running after the screen went quiet.
 - SSH shell pump poll: **~8ms** non-blocking timeout (latency-oriented; fine for interactive SSH).
 - UI hang watchdog: **~3s** stale heartbeat threshold (2–5s is typical for desktop diagnostics).
 - Toast auto-dismiss: Info/Success **5s**, Warn **7s**, Error **8s** (readable without lingering).

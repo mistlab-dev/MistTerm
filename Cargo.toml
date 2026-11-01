@@ -1,6 +1,6 @@
 [package]
 name = "mistterm"
-version = "1.2.31"
+version = "1.3.3"
 edition = "2021"
 autobins = false
 default-run = "Mist"
@@ -15,7 +15,7 @@ default = ["file-dialogs"]
 # 桌面版的系统文件选择框（rfd，Linux 上依赖 GTK3）。只编命令行 `mist` 的静态版本（musl）时关掉，
 # 见 docs/release/CLI_STATIC.md。
 file-dialogs = ["dep:rfd"]
-# 让 ssh2 / openssl-sys 自带源码编译 OpenSSL，便于 CI 跨平台构建（macOS universal 等）。
+# 让 ssh2 / openssl-sys 自带源码编译 OpenSSL，便于 CI 跨平台构建（macOS 单架构交叉编译等）。
 vendored-openssl = ["ssh2/vendored-openssl"]
 # 仅用于自动更新的端到端测试：信任编译时传入的临时测试公钥、允许 http://127.0.0.1 假服务器、
 # 允许用 MIST_BUILD_VERSION 覆盖版本号。正式发布构建禁止开启（build.rs 会报错）。
@@ -101,6 +101,8 @@ rand = "0.8"
 base64 = "0.21"
 hkdf = "0.12"
 sha2 = "0.10"
+# 跨设备凭证信封的口令派生。参数写在 kdf_hint 里，服务器只存密文。
+argon2 = "0.5"
 # 导入 FinalShell 会话时解开它保存的密码（DES）
 des = "0.8"
 # 读 Xshell 会话文件（UTF-16 / GBK）

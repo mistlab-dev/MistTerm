@@ -1,4 +1,4 @@
-//! egui 中文字体：内置 Noto 优先，各平台系统字体回退；终端等宽字体预设。
+//! egui 中文字体：内置 Noto 优先，各平台系统字体回退；终端等宽字体预设与本机枚举。
 
 use eframe::egui;
 use serde::{Deserialize, Serialize};
@@ -8,6 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 pub const DEFAULT_TERMINAL_FONT_SIZE: f32 = 13.0;
 pub const TERMINAL_FONT_SIZE_MIN: f32 = 10.0;
 pub const TERMINAL_FONT_SIZE_MAX: f32 = 24.0;
+
+/// 选中的字体文件超过这个大小就不再 `read` 进内存。
+const MAX_SELECTED_FONT_BYTES: u64 = 32 * 1024 * 1024;
 
 /// 限制终端字号在可渲染范围内。
 pub fn clamp_terminal_font_size(size: f32) -> f32 {
@@ -33,6 +36,106 @@ impl TerminalFontPreset {
         Self::JetBrainsMono,
     ];
 }
+
+/// 偏好里选中的终端字体。`family` 非空时覆盖预设，身份是家族名（跨机器可移植）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TerminalFontSelection {
+    pub preset: TerminalFontPreset,
+    family: String,
+}
+
+impl Default for TerminalFontSelection {
+    fn default() -> Self {
+        Self::preset(TerminalFontPreset::Default)
+    }
+}
+
+impl TerminalFontSelection {
+    pub fn preset(preset: TerminalFontPreset) -> Self {
+        Self {
+            preset,
+            family: String::new(),
+        }
+    }
+
+    pub fn family(family: impl Into<String>) -> Self {
+        Self {
+            preset: TerminalFontPreset::Default,
+            family: family.into(),
+        }
+    }
+
+    /// 用户选中的本机家族名。空表示走 [`TerminalFontPreset`]。
+    pub fn family_name(&self) -> Option<&str> {
+        let name = self.family.trim();
+        if name.is_empty() {
+            None
+        } else {
+            Some(name)
+        }
+    }
+}
+
+/// 预设在下拉里的家族名。`Default` 没有固定家族。
+pub fn terminal_preset_family_name(preset: TerminalFontPreset) -> Option<&'static str> {
+    match preset {
+        TerminalFontPreset::Default => None,
+        TerminalFontPreset::Consolas => Some("Consolas"),
+        TerminalFontPreset::CascadiaMono => Some("Cascadia Mono"),
+        TerminalFontPreset::JetBrainsMono => Some("JetBrains Mono"),
+    }
+}
+
+/// 预设是否能在本机点到。系统默认始终可选；其余看枚举到的家族名，
+/// 再用严格文件名兜底（不含 DejaVu / Menlo 这类回退）。
+pub fn terminal_preset_installed(preset: TerminalFontPreset) -> bool {
+    match terminal_preset_family_name(preset) {
+        None => true,
+        Some(name) => {
+            let from_scan = super::font_enum::system_mono_fonts_if_ready().is_some_and(|fonts| {
+                fonts
+                    .iter()
+                    .any(|f| super::font_enum::family_eq(&f.family, name))
+            });
+            from_scan || preset_strict_paths(preset).iter().any(|p| p.is_file())
+        }
+    }
+}
+
+/// 本机等宽家族（已去重、已排序）。
+///
+/// 阻塞到扫描结束。偏好下拉用 [`system_mono_fonts_if_ready`]。
+pub fn list_system_mono_fonts() -> &'static [super::font_enum::SystemMonoFont] {
+    super::font_enum::list_system_mono_fonts()
+}
+
+/// 在后台开始枚举。已经在扫、或已经扫完，则直接返回。
+pub fn start_system_mono_font_scan() {
+    super::font_enum::start_system_mono_font_scan();
+}
+
+/// 枚举完成则返回缓存；否则 `None`，并确保后台扫描已启动。
+pub fn system_mono_fonts_if_ready() -> Option<&'static [SystemMonoFont]> {
+    super::font_enum::system_mono_fonts_if_ready()
+}
+
+/// 已保存的家族名还在等后台枚举，启动时先用了系统默认。
+pub fn terminal_font_apply_deferred() -> bool {
+    DEFERRED_FAMILY_APPLY.load(Ordering::Acquire)
+}
+
+/// 后台枚举完成后返回 `true` 一次。调用方应再跑 [`configure_terminal_font`]。
+pub fn take_deferred_terminal_font_apply() -> bool {
+    if !terminal_font_apply_deferred() || !super::font_enum::system_mono_fonts_ready() {
+        return false;
+    }
+    DEFERRED_FAMILY_APPLY.swap(false, Ordering::AcqRel)
+}
+
+/// 家族名已选定，但枚举还没结束，先画系统默认，扫完再换。
+static DEFERRED_FAMILY_APPLY: AtomicBool = AtomicBool::new(false);
+
+pub use super::font_enum::{family_eq as font_family_eq, SystemMonoFont};
 
 static CJK_FONT_LOADED: AtomicBool = AtomicBool::new(false);
 
@@ -61,14 +164,23 @@ pub fn ui_caption_font_id(size: f32) -> egui::FontId {
 
 /// 为 egui 注册字体：界面比例字体统一为 CJK（含拉丁）；终端等宽仍用预设 + CJK 回退。
 pub fn configure_egui_fonts(ctx: &egui::Context, terminal_preset: TerminalFontPreset) -> bool {
+    configure_terminal_font(ctx, &TerminalFontSelection::preset(terminal_preset))
+}
+
+/// 同 [`configure_egui_fonts`]，但可以选本机枚举到的家族名。
+pub fn configure_terminal_font(ctx: &egui::Context, selection: &TerminalFontSelection) -> bool {
     let ppp = ctx.pixels_per_point();
     log::info!("egui pixels_per_point = {ppp:.2} (HiDPI reference)");
 
     let mut fonts = egui::FontDefinitions::default();
-    if let Some(bytes) = load_terminal_preset_font(terminal_preset) {
+    if let Some((bytes, index)) = load_selected_terminal_font(selection) {
         let mono_name = "mistterm-terminal-mono".to_string();
         // 行高已用 FACTOR 收紧，勿再大幅 y_offset，否则字下移而块光标仍贴格顶，看起来光标偏低。
-        let mono_data = egui::FontData::from_owned(bytes).tweak(egui::FontTweak {
+        // 字节已在 load_selected_terminal_font 里确认有轮廓且 ab_glyph 能解析。
+        // epaint 对解析失败的字体会在下一帧 Fonts::new 里 panic，set_fonts 本身只排队。
+        let mut mono_data = egui::FontData::from_owned(bytes);
+        mono_data.index = index;
+        let mono_data = mono_data.tweak(egui::FontTweak {
             y_offset_factor: 0.02,
             baseline_offset_factor: -0.02,
             ..Default::default()
@@ -136,6 +248,114 @@ pub fn configure_egui_fonts(ctx: &egui::Context, terminal_preset: TerminalFontPr
     loaded
 }
 
+fn load_selected_terminal_font(selection: &TerminalFontSelection) -> Option<(Vec<u8>, u32)> {
+    if let Some(family) = selection.family_name() {
+        if super::font_enum::terminal_family_rejected(family) {
+            log::warn!(
+                "terminal font family {family:?} is unsupported (bitmap-only or non-outline); using system default"
+            );
+            DEFERRED_FAMILY_APPLY.store(false, Ordering::Release);
+            return load_terminal_preset_font(TerminalFontPreset::Default).map(|bytes| (bytes, 0));
+        }
+        if !super::font_enum::system_mono_fonts_ready() {
+            super::font_enum::start_system_mono_font_scan();
+            DEFERRED_FAMILY_APPLY.store(true, Ordering::Release);
+            log::info!(
+                "terminal font family {family:?} waiting for monospace scan; using system default until then"
+            );
+            return load_terminal_preset_font(TerminalFontPreset::Default).map(|bytes| (bytes, 0));
+        }
+        DEFERRED_FAMILY_APPLY.store(false, Ordering::Release);
+        if let Some(face) = super::font_enum::resolve_mono_family(family) {
+            match read_font_file_capped(&face.path) {
+                FontRead::Ok(bytes) => {
+                    if let Some(loaded) = accept_terminal_font(bytes, face.index) {
+                        log::info!(
+                            "Loaded terminal font family {family:?}: {} (face {})",
+                            face.path.display(),
+                            face.index
+                        );
+                        return Some(loaded);
+                    }
+                    log::warn!(
+                        "terminal font family {family:?} at {} cannot be rasterized by egui; using system default",
+                        face.path.display()
+                    );
+                }
+                FontRead::TooLarge(len) => {
+                    log::warn!(
+                        "terminal font family {family:?} at {} is {len} bytes, over the {MAX_SELECTED_FONT_BYTES} byte limit; using system default",
+                        face.path.display()
+                    );
+                }
+                FontRead::Failed(e) => {
+                    log::warn!(
+                        "Terminal font family {family:?} at {} unreadable: {e}",
+                        face.path.display()
+                    );
+                }
+            }
+        } else {
+            log::warn!("Terminal font family {family:?} is not installed; using system default");
+        }
+        return load_terminal_preset_font(TerminalFontPreset::Default).map(|bytes| (bytes, 0));
+    }
+    DEFERRED_FAMILY_APPLY.store(false, Ordering::Release);
+    load_terminal_preset_font(selection.preset).map(|bytes| (bytes, 0))
+}
+
+#[derive(Debug)]
+enum FontRead {
+    Ok(Vec<u8>),
+    TooLarge(u64),
+    Failed(std::io::Error),
+}
+
+/// 有轮廓且 ab_glyph 能解析才采用。失败时调用方回退系统默认，避免 epaint panic。
+fn accept_terminal_font(bytes: Vec<u8>, index: u32) -> Option<(Vec<u8>, u32)> {
+    if terminal_font_bytes_usable(&bytes, index) {
+        Some((bytes, index))
+    } else {
+        None
+    }
+}
+
+fn terminal_font_bytes_usable(bytes: &[u8], index: u32) -> bool {
+    if !super::font_enum::font_bytes_have_outline(bytes, index) {
+        return false;
+    }
+    egui_can_parse_font(bytes, index)
+}
+
+/// 与 epaint `ab_glyph_font_from_font_data` 同一条解析路径。
+/// 解析失败时 epaint 会 `panic!("Error parsing {name:?} TTF/OTF font file")`。
+fn egui_can_parse_font(bytes: &[u8], index: u32) -> bool {
+    use ab_glyph::Font as _;
+    match ab_glyph::FontRef::try_from_slice_and_index(bytes, index) {
+        Ok(font) => font.units_per_em().is_some(),
+        Err(_) => false,
+    }
+}
+
+fn read_font_file_capped(path: &std::path::Path) -> FontRead {
+    match std::fs::metadata(path) {
+        Ok(meta) => {
+            let len = meta.len();
+            if len > MAX_SELECTED_FONT_BYTES {
+                return FontRead::TooLarge(len);
+            }
+        }
+        Err(e) => return FontRead::Failed(e),
+    }
+    match std::fs::read(path) {
+        Ok(bytes) if bytes.len() as u64 > MAX_SELECTED_FONT_BYTES => {
+            FontRead::TooLarge(bytes.len() as u64)
+        }
+        Ok(bytes) => FontRead::Ok(bytes),
+        Err(e) => FontRead::Failed(e),
+    }
+}
+
 fn load_terminal_preset_font(preset: TerminalFontPreset) -> Option<Vec<u8>> {
     let candidates = match preset {
         // Default：优先系统 Regular 等宽（与 Windows Terminal / 常见终端观感接近），
@@ -145,7 +365,7 @@ fn load_terminal_preset_font(preset: TerminalFontPreset) -> Option<Vec<u8>> {
     };
     for path in candidates {
         match std::fs::read(&path) {
-            Ok(bytes) => {
+            Ok(bytes) if terminal_font_bytes_usable(&bytes, 0) => {
                 log::info!(
                     "Loaded terminal font preset {:?}: {}",
                     preset,
@@ -153,6 +373,10 @@ fn load_terminal_preset_font(preset: TerminalFontPreset) -> Option<Vec<u8>> {
                 );
                 return Some(bytes);
             }
+            Ok(_) => log::warn!(
+                "Skipped terminal font {} (no outline egui can rasterize)",
+                path.display()
+            ),
             Err(e) => log::debug!("Skipped terminal font {}: {e}", path.display()),
         }
     }
@@ -292,12 +516,10 @@ fn jetbrains_mono_font_candidates() -> Vec<std::path::PathBuf> {
     {
         if let Ok(home) = std::env::var("HOME") {
             paths.push(
-                std::path::PathBuf::from(&home)
-                    .join("Library/Fonts/JetBrainsMono-Regular.ttf"),
+                std::path::PathBuf::from(&home).join("Library/Fonts/JetBrainsMono-Regular.ttf"),
             );
             paths.push(
-                std::path::PathBuf::from(&home)
-                    .join("Library/Fonts/JetBrains Mono Regular.ttf"),
+                std::path::PathBuf::from(&home).join("Library/Fonts/JetBrains Mono Regular.ttf"),
             );
         }
         paths.push(std::path::PathBuf::from(
@@ -317,9 +539,64 @@ fn jetbrains_mono_font_candidates() -> Vec<std::path::PathBuf> {
         );
         if let Ok(home) = std::env::var("HOME") {
             paths.push(
-                std::path::PathBuf::from(home)
-                    .join(".local/share/fonts/JetBrainsMono-Regular.ttf"),
+                std::path::PathBuf::from(home).join(".local/share/fonts/JetBrainsMono-Regular.ttf"),
             );
+        }
+    }
+    paths
+}
+
+/// 预设「真的装了」才算，不含 Default 那条 DejaVu / Menlo 回退链。
+fn preset_strict_paths(preset: TerminalFontPreset) -> Vec<std::path::PathBuf> {
+    match preset {
+        TerminalFontPreset::Default => Vec::new(),
+        TerminalFontPreset::Consolas => consolas_strict_paths(),
+        TerminalFontPreset::CascadiaMono => cascadia_mono_font_candidates()
+            .into_iter()
+            .filter(|p| {
+                p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    n.eq_ignore_ascii_case("CascadiaMono.ttf")
+                        || n.eq_ignore_ascii_case("CascadiaMono.otf")
+                })
+            })
+            .collect(),
+        TerminalFontPreset::JetBrainsMono => jetbrains_mono_font_candidates(),
+    }
+}
+
+fn consolas_strict_paths() -> Vec<std::path::PathBuf> {
+    let mut paths = Vec::new();
+    #[cfg(target_os = "windows")]
+    {
+        paths.extend(consolas_font_candidates());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        paths.push(std::path::PathBuf::from("/Library/Fonts/Consolas.ttf"));
+        paths.push(std::path::PathBuf::from("/Library/Fonts/consola.ttf"));
+        if let Ok(home) = std::env::var("HOME") {
+            let home = std::path::PathBuf::from(home);
+            paths.push(home.join("Library/Fonts/Consolas.ttf"));
+            paths.push(home.join("Library/Fonts/consola.ttf"));
+        }
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        for dir in [
+            "/usr/share/fonts/truetype/consolas",
+            "/usr/local/share/fonts",
+            "/usr/share/fonts",
+        ] {
+            let dir = std::path::PathBuf::from(dir);
+            paths.push(dir.join("consola.ttf"));
+            paths.push(dir.join("Consolas.ttf"));
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let home = std::path::PathBuf::from(home);
+            for rel in [".local/share/fonts", ".fonts"] {
+                paths.push(home.join(rel).join("consola.ttf"));
+                paths.push(home.join(rel).join("Consolas.ttf"));
+            }
         }
     }
     paths
@@ -354,7 +631,10 @@ fn load_embedded_cjk_font() -> Option<egui::FontData> {
     if BYTES.is_empty() {
         return None;
     }
-    log::info!("Loaded embedded CJK font NotoSansSC-Regular.otf ({} bytes)", BYTES.len());
+    log::info!(
+        "Loaded embedded CJK font NotoSansSC-Regular.otf ({} bytes)",
+        BYTES.len()
+    );
     Some(egui::FontData::from_static(BYTES))
 }
 
@@ -420,10 +700,7 @@ mod tests {
 
     #[test]
     fn terminal_font_preset_defaults_to_default() {
-        assert_eq!(
-            TerminalFontPreset::default(),
-            TerminalFontPreset::Default
-        );
+        assert_eq!(TerminalFontPreset::default(), TerminalFontPreset::Default);
     }
 
     #[test]
@@ -438,5 +715,89 @@ mod tests {
         let json = serde_json::to_string(&TerminalFontPreset::CascadiaMono).unwrap();
         let parsed: TerminalFontPreset = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, TerminalFontPreset::CascadiaMono);
+    }
+
+    #[test]
+    fn family_selection_overrides_preset_identity() {
+        let preset = TerminalFontSelection::preset(TerminalFontPreset::CascadiaMono);
+        assert!(preset.family_name().is_none());
+        assert_eq!(preset.preset, TerminalFontPreset::CascadiaMono);
+
+        let family = TerminalFontSelection::family("  DejaVu Sans Mono  ");
+        assert_eq!(family.family_name(), Some("DejaVu Sans Mono"));
+        assert_eq!(family.preset, TerminalFontPreset::Default);
+    }
+
+    #[test]
+    fn preset_family_names_are_exact() {
+        assert_eq!(
+            terminal_preset_family_name(TerminalFontPreset::JetBrainsMono),
+            Some("JetBrains Mono")
+        );
+        assert_eq!(
+            terminal_preset_family_name(TerminalFontPreset::Default),
+            None
+        );
+    }
+
+    #[test]
+    fn oversized_font_file_is_rejected_before_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("huge.ttf");
+        let len = MAX_SELECTED_FONT_BYTES + 1;
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(len).unwrap();
+        drop(file);
+        match read_font_file_capped(&path) {
+            FontRead::TooLarge(n) => assert_eq!(n, len),
+            other => panic!("expected size rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bitmap_only_font_is_not_applied_and_real_outline_is() {
+        let bitmap = pack_sfnt(&[
+            (b"bdat", vec![1, 2, 3, 4]),
+            (b"bloc", vec![1, 2, 3, 4]),
+            (b"bhed", vec![1, 2, 3, 4]),
+        ]);
+        assert!(!terminal_font_bytes_usable(&bitmap, 0));
+        assert!(accept_terminal_font(bitmap, 0).is_none());
+
+        let geist = include_bytes!("../../assets/fonts/Geist-Regular.ttf");
+        assert!(terminal_font_bytes_usable(geist, 0));
+        assert!(accept_terminal_font(geist.to_vec(), 0).is_some());
+    }
+
+    #[test]
+    fn glyf_tag_without_a_parseable_face_falls_back() {
+        let bogus = pack_sfnt(&[(b"glyf", vec![0, 0, 0, 0])]);
+        assert!(super::super::font_enum::font_bytes_have_outline(&bogus, 0));
+        assert!(!terminal_font_bytes_usable(&bogus, 0));
+        assert!(accept_terminal_font(bogus, 0).is_none());
+    }
+
+    fn pack_sfnt(tables: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
+        let n = tables.len() as u16;
+        let mut out = Vec::new();
+        out.extend_from_slice(&0x00010000u32.to_be_bytes());
+        out.extend_from_slice(&n.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&0u16.to_be_bytes());
+        let dir_at = out.len();
+        out.resize(dir_at + tables.len() * 16, 0);
+        for (i, (tag, data)) in tables.iter().enumerate() {
+            while out.len() % 4 != 0 {
+                out.push(0);
+            }
+            let offset = out.len() as u32;
+            let rec = dir_at + i * 16;
+            out[rec..rec + 4].copy_from_slice(tag.as_slice());
+            out[rec + 8..rec + 12].copy_from_slice(&offset.to_be_bytes());
+            out[rec + 12..rec + 16].copy_from_slice(&(data.len() as u32).to_be_bytes());
+            out.extend_from_slice(data);
+        }
+        out
     }
 }

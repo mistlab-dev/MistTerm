@@ -37,6 +37,13 @@ pub struct MonitorPanel {
     /// 本帧 `SidePanel` 槽位矩形(`ui.max_rect()`，与布局占位一致)
     last_panel_slot_rect: Option<egui::Rect>,
     pending_send_to_ai: bool,
+    /// 上一批告警文案（上升沿去重）。
+    last_alert_lines: Vec<String>,
+    /// 待应用层处理的新告警（上升沿）。
+    pending_rising_alerts: Vec<String>,
+    /// #257：告警阈值折叠区开关。显式状态默认展开，不受 egui 持久化记忆影响；
+    /// 用户手动收起后本会话内记住。
+    alert_thresholds_open: bool,
 }
 
 impl Default for MonitorPanel {
@@ -59,6 +66,9 @@ impl MonitorPanel {
             pending_raw: None,
             last_panel_slot_rect: None,
             pending_send_to_ai: false,
+            last_alert_lines: Vec::new(),
+            pending_rising_alerts: Vec::new(),
+            alert_thresholds_open: true,
         }
     }
 
@@ -66,6 +76,38 @@ impl MonitorPanel {
         let v = self.pending_send_to_ai;
         self.pending_send_to_ai = false;
         v
+    }
+
+    /// 当前告警条数（无效快照为 0）。
+    pub fn current_alert_count(&self) -> usize {
+        let Some(mon) = self.monitor.as_ref() else {
+            return 0;
+        };
+        let loc = crate::i18n::Locale {
+            lang: crate::i18n::UiLanguage::En,
+        };
+        // 计数不依赖文案语言；用英文 locale 仅走 collect 路径。
+        Self::collect_alerts_with(
+            loc,
+            self.alert_cpu_pct,
+            self.alert_mem_pct,
+            self.alert_disk_pct,
+            mon.last_stats(),
+        )
+        .len()
+    }
+
+    /// 取出上升沿新告警（应用层发系统通知 / 声音 / Toast）。
+    pub fn take_pending_rising_alerts(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.pending_rising_alerts)
+    }
+
+    /// 用给定 locale 重新计算当前告警文案（供通知正文）。
+    pub fn current_alert_lines(&self, loc: crate::i18n::Locale) -> Vec<String> {
+        let Some(mon) = self.monitor.as_ref() else {
+            return Vec::new();
+        };
+        self.collect_alerts(loc, mon.last_stats())
     }
 
     pub fn snapshot_for_ai(&self) -> Option<String> {
@@ -95,9 +137,19 @@ impl MonitorPanel {
         ssh_handle: crate::ssh::SshSessionHandle,
         ssh_manager: crate::ssh::SshManager,
     ) {
+        let same_session = self
+            .monitor
+            .as_ref()
+            .is_some_and(|m| m.session_id() == ssh_handle.session_id);
+        if same_session {
+            return;
+        }
         self.pending_raw = None;
         self.monitor = Some(Monitor::new(ssh_handle, ssh_manager));
         self.last_error = None;
+        // 换会话后旧告警指纹作废，避免误触发上升沿通知。
+        self.last_alert_lines.clear();
+        self.pending_rising_alerts.clear();
         self.begin_async_collect();
     }
 
@@ -106,6 +158,8 @@ impl MonitorPanel {
         self.pending_raw = None;
         self.monitor = None;
         self.last_error = None;
+        self.last_alert_lines.clear();
+        self.pending_rising_alerts.clear();
     }
 
     /// 若当前无进行中的采集,则向 shell 泵排队一次 `exec`(不得另开线程,以免与 PTY 争用 `Session`)。
@@ -125,9 +179,49 @@ impl MonitorPanel {
                 self.pending_raw = Some(rx);
             }
             Err(e) => {
-                self.last_error = Some(e);
+                self.last_error = Some(Self::humanize_collect_error_static(&e));
             }
         }
+    }
+
+    /// 将 shell 泵技术串换成面板可读错误 + 下一步（#258）。
+    fn humanize_collect_error(ctx: &egui::Context, raw: &str) -> String {
+        if Self::is_pump_disconnect_err(raw) {
+            return i18n::tr(
+                ctx,
+                "Monitor collection stopped: the SSH shell channel closed. Reconnect this session, then open Monitor again.",
+                "监控采集已停止：SSH shell 通道已断开。请重新连接此会话，再打开系统监控。",
+            )
+            .to_string();
+        }
+        if Self::is_pump_full_err(raw) {
+            return i18n::tr(
+                ctx,
+                "Monitor collection delayed: the session is busy. Wait a moment and tap Refresh.",
+                "监控采集被推迟：当前会话正忙。请稍候再点「刷新」。",
+            )
+            .to_string();
+        }
+        raw.to_string()
+    }
+
+    fn humanize_collect_error_static(raw: &str) -> String {
+        // init / begin_async_collect may run without egui ctx; keep bilingual fallback.
+        if Self::is_pump_disconnect_err(raw) {
+            return "监控采集已停止：SSH shell 通道已断开。请重新连接此会话，再打开系统监控。 / Monitor collection stopped: the SSH shell channel closed. Reconnect this session, then open Monitor again.".to_string();
+        }
+        if Self::is_pump_full_err(raw) {
+            return "监控采集被推迟：当前会话正忙。请稍候再点「刷新」。 / Monitor collection delayed: the session is busy. Wait a moment and tap Refresh.".to_string();
+        }
+        raw.to_string()
+    }
+
+    fn is_pump_disconnect_err(err: &str) -> bool {
+        err.contains("shell pump queue disconnected")
+    }
+
+    fn is_pump_full_err(err: &str) -> bool {
+        err.contains("shell pump queue full")
     }
 
     fn poll_bg_collect(&mut self, ctx: &egui::Context) {
@@ -142,7 +236,10 @@ impl MonitorPanel {
                 self.last_ui_refresh = ctx.input(|i| i.time);
                 if let Some(monitor) = &mut self.monitor {
                     match monitor.ingest_remote_output(&raw) {
-                        Ok(_) => self.last_error = None,
+                        Ok(_) => {
+                            self.last_error = None;
+                            self.refresh_rising_alerts(ctx);
+                        }
                         Err(e) => self.last_error = Some(e),
                     }
                 }
@@ -151,11 +248,16 @@ impl MonitorPanel {
             Some(Ok(Err(e))) => {
                 self.pending_raw = None;
                 self.last_ui_refresh = ctx.input(|i| i.time);
-                self.last_error = Some(format!(
-                    "{}{}",
-                    i18n::tr(ctx, "Monitor collection failed: ", "监控采集失败："),
-                    e
-                ));
+                let detail = Self::humanize_collect_error(ctx, &e);
+                self.last_error = Some(if Self::is_pump_disconnect_err(&e) || Self::is_pump_full_err(&e) {
+                    detail
+                } else {
+                    format!(
+                        "{}{}",
+                        i18n::tr(ctx, "Monitor collection failed: ", "监控采集失败："),
+                        detail
+                    )
+                });
                 ctx.request_repaint();
             }
             Some(Err(TryRecvError::Empty)) => {
@@ -165,8 +267,12 @@ impl MonitorPanel {
                 self.pending_raw = None;
                 self.last_ui_refresh = ctx.input(|i| i.time);
                 self.last_error = Some(
-                    i18n::tr(ctx, "Collection channel disconnected", "采集结果通道已断开")
-                        .to_string(),
+                    i18n::tr(
+                        ctx,
+                        "Monitor collection stopped: the result channel closed. Tap Refresh, or reconnect the session.",
+                        "监控采集已停止：结果通道已断开。可点「刷新」重试，或重新连接会话。",
+                    )
+                    .to_string(),
                 );
                 ctx.request_repaint();
             }
@@ -264,10 +370,25 @@ impl MonitorPanel {
         )
     }
 
+
+    fn refresh_rising_alerts(&mut self, ctx: &egui::Context) {
+        let loc = i18n::locale(ctx);
+        let current = match self.monitor.as_ref() {
+            Some(mon) => self.collect_alerts(loc, mon.last_stats()),
+            None => Vec::new(),
+        };
+        let risen = crate::core::rising_alert_lines(&self.last_alert_lines, &current);
+        if !risen.is_empty() {
+            self.pending_rising_alerts.extend(risen);
+        }
+        self.last_alert_lines = current;
+    }
+
     /// 每帧更新:拉取 shell 泵返回的采集结果,并在开启自动刷新时排队下一次采集。
-    pub fn update(&mut self, ctx: &egui::Context, panel_open: bool) {
-        if !panel_open {
-            self.pending_raw = None;
+    ///
+    /// #251：面板关闭后若已初始化仍继续后台采集，以便系统通知 / 角标。
+    pub fn update(&mut self, ctx: &egui::Context, _panel_open: bool) {
+        if self.monitor.is_none() {
             return;
         }
 
@@ -515,25 +636,28 @@ impl MonitorPanel {
         });
         ui.add_space(theme.spacing_dock_control_gap());
 
-        egui::CollapsingHeader::new(
+        // #257：面板自有 open 状态默认展开；`.open(Some(..))` 覆盖 egui 持久化记忆。
+        // 新 id_source 避免旧版「曾收起」记忆继续压住 default_open。
+        let thresholds = egui::CollapsingHeader::new(
             egui::RichText::new(i18n::tr(ui.ctx(), "Alert thresholds", "告警阈值"))
                 .size(theme.font_size_medium())
                 .color(theme.text_secondary()),
         )
-        .default_open(false)
+        .id_source("monitor_alert_thresholds_v257")
+        .open(Some(self.alert_thresholds_open))
         .show(ui, |ui| {
             layout_util::set_width_to_available(ui);
             ui.label(
                 egui::RichText::new(i18n::tr(
                     ui.ctx(),
-                    "When exceeded, show alerts in header and below (this session only).",
-                    "超出阈值时在标题与下方显示告警(仅当前会话)。",
+                    "When exceeded, notify per Preferences (this session thresholds).",
+                    "超出阈值时按偏好推送告警（阈值仅当前会话）。",
                 ))
                     .size(theme.font_size_small())
                     .color(theme.text_tertiary()),
             );
             ui.add_space(4.0);
-            for (pct, label) in [
+            for (idx, (pct, label)) in [
                 (
                     &mut self.alert_cpu_pct,
                     i18n::tr(ui.ctx(), "CPU alert %", "CPU 告警 %"),
@@ -546,17 +670,34 @@ impl MonitorPanel {
                     &mut self.alert_disk_pct,
                     i18n::tr(ui.ctx(), "Disk alert %", "磁盘告警 %"),
                 ),
-            ] {
-                crate::ui::chrome::labeled_slider_f32(
-                    ui,
-                    theme,
-                    pct,
-                    50.0..=100.0,
-                    label,
-                    "%",
-                );
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(label)
+                            .size(theme.font_size_ui_control())
+                            .color(theme.text_secondary()),
+                    );
+                    ui.add_space(8.0);
+                    let _ = crate::ui::chrome::form_f32_stepper(
+                        ui,
+                        theme,
+                        egui::Id::new(("monitor_alert_th", idx)),
+                        pct,
+                        50.0..=100.0,
+                        1.0,
+                        "%",
+                    );
+                });
+                ui.add_space(4.0);
             }
         });
+        // `.open(Some(_))` 时 egui 不再自己响应点击；由我们翻转本地面板状态。
+        if thresholds.header_response.clicked() {
+            self.alert_thresholds_open = !self.alert_thresholds_open;
+        }
         ui.add_space(theme.spacing_md());
 
         if let Some(ref monitor) = self.monitor {
@@ -729,17 +870,20 @@ impl MonitorPanel {
             });
         }
 
-        // 显示错误信息
+        // #258：采集失败时在面板内给出可读原因与下一步，避免只有底栏技术串 / 静默全 0。
         if let Some(ref err) = self.last_error {
             ui.add_space(8.0);
-            crate::ui::icons::icon_label_row(
-                ui,
-                crate::ui::icons::IconId::Warning,
-                err,
-                theme.font_size_small(),
-                6.0,
-                |t| t.size(theme.font_size_small()).color(theme.color_status_negative_text()),
-            );
+            theme.frame_monitor_alert().show(ui, |ui| {
+                layout_util::set_width_to_available(ui);
+                crate::ui::icons::icon_label_row(
+                    ui,
+                    crate::ui::icons::IconId::Warning,
+                    err,
+                    theme.font_size_small(),
+                    6.0,
+                    |t| t.size(theme.font_size_small()).color(theme.color_status_negative_text()),
+                );
+            });
         }
     }
 
@@ -819,6 +963,77 @@ impl MonitorPanel {
             });
     }
 
+
+    /// #251：历史趋势首次空态——空图骨架 +「数据采集中…」。
+    fn show_history_empty_skeleton(
+        ui: &mut egui::Ui,
+        theme: &Theme,
+        width: f32,
+        chart_height: f32,
+    ) {
+        ui.label(
+            egui::RichText::new(i18n::tr(
+                ui.ctx(),
+                "Collecting data…",
+                "数据采集中…",
+            ))
+            .size(theme.font_size_medium())
+            .color(theme.text_secondary()),
+        );
+        ui.add_space(6.0);
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(width, chart_height),
+            egui::Sense::hover(),
+        );
+        let painter = ui.painter();
+        painter.rect_filled(rect, 4.0, theme.metric_bar_track_fill());
+        painter.rect_stroke(
+            rect,
+            4.0,
+            egui::Stroke::new(1.0, theme.border_divider_color()),
+        );
+        // 简易网格示意空图
+        let cols = 4;
+        let rows = 3;
+        for i in 1..cols {
+            let x = rect.left() + rect.width() * (i as f32 / cols as f32);
+            painter.line_segment(
+                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                egui::Stroke::new(1.0, theme.border_divider_color().gamma_multiply(0.55)),
+            );
+        }
+        for i in 1..rows {
+            let y = rect.top() + rect.height() * (i as f32 / rows as f32);
+            painter.line_segment(
+                [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                egui::Stroke::new(1.0, theme.border_divider_color().gamma_multiply(0.55)),
+            );
+        }
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            i18n::tr(ui.ctx(), "Chart will appear after two samples", "至少两次采样后显示曲线"),
+            egui::FontId::proportional(theme.font_size_small()),
+            theme.text_tertiary(),
+        );
+        ui.add_space(8.0);
+        // 再画两块矮骨架，呼应多图布局
+        for _ in 0..2 {
+            let (r2, _) = ui.allocate_exact_size(
+                egui::vec2(width, chart_height * 0.55),
+                egui::Sense::hover(),
+            );
+            ui.painter()
+                .rect_filled(r2, 4.0, theme.metric_bar_track_fill());
+            ui.painter().rect_stroke(
+                r2,
+                4.0,
+                egui::Stroke::new(1.0, theme.border_divider_color()),
+            );
+            ui.add_space(6.0);
+        }
+    }
+
     /// 历史趋势:`egui_plot` 展示 CPU/内存/磁盘(%)、负载与网络速率(B/s),横轴为相对时间并联动。
     fn show_history_plots(
         &self,
@@ -838,15 +1053,8 @@ impl MonitorPanel {
         let tip_id = ui.id().with("monitor_history_tooltip");
 
         if history.len() < 2 {
-            ui.label(
-                egui::RichText::new(i18n::tr(
-                    ui.ctx(),
-                    "Waiting for samples… (curve needs at least two refreshes)",
-                    "等待数据采集…(至少两次刷新后显示曲线)",
-                ))
-                    .size(theme.font_size_menu_item())
-                    .color(theme.text_tertiary()),
-            );
+            // #251：首次空图骨架 +「数据采集中…」，避免整片灰字空白。
+            Self::show_history_empty_skeleton(ui, theme, width, CHART_HEIGHT);
             return;
         }
 
@@ -1054,7 +1262,7 @@ impl MonitorPanel {
         show_chart_caption(
             ui,
             theme,
-            loc.tr("Load average", "负载 (load average)"),
+            loc.tr("Load average", "系统负载"),
         );
         show_chart_legend(
             ui,
@@ -1315,4 +1523,87 @@ fn show_dock_frame<R>(
 /// 格式化每秒字节数
 fn format_bytes_per_sec(bytes_per_sec: f64) -> String {
     format!("{}/s", format_bytes(bytes_per_sec as u64))
+}
+
+#[cfg(test)]
+mod alert_threshold_tests {
+    use super::MonitorPanel;
+    use crate::i18n::{Locale, UiLanguage};
+    use crate::monitor::ServerStats;
+
+    fn stats(cpu: f32, mem_used: u64, mem_total: u64, disk_used: u64, disk_total: u64) -> ServerStats {
+        let mut s = ServerStats::default();
+        s.cpu_percent = cpu;
+        s.memory_total = mem_total;
+        s.memory_used = mem_used;
+        s.disk_total = disk_total;
+        s.disk_used = disk_used;
+        s.uptime_secs = 1;
+        s
+    }
+
+    #[test]
+    fn disk_over_threshold_fires_alert() {
+        let loc = Locale {
+            lang: UiLanguage::Zh,
+        };
+        // 885/1000 = 88.5%
+        let alerts = MonitorPanel::collect_alerts_with(
+            loc,
+            80.0,
+            90.0,
+            85.0,
+            &stats(10.0, 10, 100, 885, 1000),
+        );
+        assert_eq!(alerts.len(), 1);
+        assert!(alerts[0].contains("磁盘"));
+        assert!(alerts[0].contains("88.5"));
+    }
+
+    #[test]
+    fn under_threshold_no_alerts() {
+        let loc = Locale {
+            lang: UiLanguage::En,
+        };
+        let alerts = MonitorPanel::collect_alerts_with(loc, 80.0, 90.0, 85.0, &stats(10.0, 10, 100, 50, 100));
+        assert!(alerts.is_empty());
+    }
+
+    #[test]
+    fn invalid_zero_snapshot_skipped() {
+        let loc = Locale {
+            lang: UiLanguage::En,
+        };
+        let alerts = MonitorPanel::collect_alerts_with(
+            loc,
+            1.0,
+            1.0,
+            1.0,
+            &ServerStats::default(),
+        );
+        assert!(alerts.is_empty());
+    }
+
+    #[test]
+    fn pump_disconnect_error_is_humanized() {
+        let raw = "shell pump queue disconnected, dropped cmd variant=ExecRemote";
+        assert!(MonitorPanel::is_pump_disconnect_err(raw));
+        let msg = MonitorPanel::humanize_collect_error_static(raw);
+        assert!(msg.contains("重新连接") || msg.contains("Reconnect"));
+        assert!(!msg.contains("variant="));
+    }
+
+    #[test]
+    fn pump_full_error_is_humanized() {
+        let raw = "shell pump queue full (cap=512), dropped cmd variant=ExecRemote";
+        assert!(MonitorPanel::is_pump_full_err(raw));
+        let msg = MonitorPanel::humanize_collect_error_static(raw);
+        assert!(msg.contains("刷新") || msg.contains("Refresh"));
+    }
+
+    #[test]
+    fn alert_thresholds_default_open() {
+        let panel = MonitorPanel::new();
+        assert!(panel.alert_thresholds_open);
+    }
 }

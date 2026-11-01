@@ -56,13 +56,24 @@ mist ssh web-prod-01
 
 # 通过快速地址连接（user@host:port）
 mist ssh root@192.168.1.50:2202
+
+# 把本次交互里回车提交的命令写成 JSONL
+# 默认 ~/.mist/logs/ssh-<会话>-<UTC时间>.jsonl
+mist ssh web-prod-01 --log-session
+
+# 写到指定文件
+mist ssh web-prod-01 --log-session=/tmp/web-prod-01.jsonl
 ```
+
+不加 `--log-session` 时不写这个文件。字段与桌面终端的 `exec_history`（#156）相同：`target`、`command`、`timestamp`；`exit_code` 能取到才写；`output_summary` 有上界。
 
 ---
 
 ### 3. 命令执行与批量运维 (`mist exec`)
 
 在单台或多台机器上快速执行命令，完整透传远端退出码并保护复杂引号命令。
+
+`mist exec` 会另开连接执行并收回输出，不往已经打开的交互终端里敲键。若只是连上当前会话后按顺序发几行，用桌面版 **工具 → 发送序列**（可选固定行间间隔，不等待远端提示符，也不广播到其它会话）。和命令片段、AI 批量的差别见《操作手册》「发送序列」。
 
 #### 单机执行
 ```bash

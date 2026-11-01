@@ -90,18 +90,27 @@ impl MistTermApp {
                 self.merge_active_split(ctx);
                 ui.close_menu();
             }
+            // session-import 模块 gating（#122）：关闭后导入入口不可用；已导入会话数据不受影响。
+            let session_import_enabled = crate::modules::session_import::SessionImportModule::import_enabled(&self.module_registry);
             if crate::ui::chrome::popup_menu_button_enabled(
                 ui,
                 theme,
                 l.import_ssh,
-                ssh_import_enabled,
+                ssh_import_enabled && session_import_enabled,
             )
             .clicked()
             {
                 self.open_ssh_import_dialog(ctx);
                 ui.close_menu();
             }
-            if crate::ui::chrome::popup_menu_button(ui, theme, &format!("{}…", l.import_foreign)).clicked() {
+            if crate::ui::chrome::popup_menu_button_enabled(
+                ui,
+                theme,
+                &format!("{}…", l.import_foreign),
+                session_import_enabled,
+            )
+            .clicked()
+            {
                 self.open_foreign_import_dialog();
                 ui.close_menu();
             }
@@ -125,6 +134,11 @@ impl MistTermApp {
             }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.reconnect).clicked() {
                 self.reconnect_active_tab(ctx);
+                ui.close_menu();
+            }
+            ui.separator();
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.batch_exec).clicked() {
+                self.menu_open_batch_exec(ctx);
                 ui.close_menu();
             }
             ui.separator();
@@ -160,6 +174,15 @@ impl MistTermApp {
             if crate::ui::chrome::popup_menu_button_accel(ui, theme, l.find_in_terminal, "f").clicked()
             {
                 self.toggle_terminal_search();
+                ui.close_menu();
+            }
+            ui.separator();
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.preferences).clicked() {
+                self.show_preferences_dialog = true;
+                ui.close_menu();
+            }
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.ai_settings).clicked() {
+                self.show_ai_settings_dialog = true;
                 ui.close_menu();
             }
         });
@@ -285,33 +308,10 @@ impl MistTermApp {
                 }
             });
         });
+        // 工具四段（#198）：片段与发送 / 历史 / 规则 / 账号与数据；偏好不进工具。
         egui::menu::menu_button(ui, label(l.tools_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
-            // 系统类
-            let prefs_accel = crate::platform::accel_literal(",");
-            if crate::ui::chrome::popup_menu_button_shortcut(
-                ui,
-                theme,
-                l.preferences,
-                Some(&prefs_accel),
-            )
-            .clicked()
-            {
-                self.show_preferences_dialog = true;
-                ui.close_menu();
-            }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.ai_settings).clicked() {
-                self.show_ai_settings_dialog = true;
-                ui.close_menu();
-            }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.credentials).clicked() {
-                if self.ensure_right_dock_allowed_or_warn(ctx) {
-                    self.open_right_dock_panel(ActiveRightDock::Credential);
-                }
-                ui.close_menu();
-            }
-            ui.separator();
-            // 片段类
+            // 1. 片段与发送
             if crate::ui::chrome::popup_menu_button(ui, theme, l.fragment_library).clicked() {
                 self.fragment_library.open = true;
                 ui.close_menu();
@@ -322,8 +322,12 @@ impl MistTermApp {
                 self.quick_selector.open = true;
                 ui.close_menu();
             }
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.send_sequences).clicked() {
+                self.send_sequence_dialog.open_manager(&self.send_sequences);
+                ui.close_menu();
+            }
             ui.separator();
-            // 历史类
+            // 2. 历史
             if crate::ui::chrome::popup_menu_button_shortcut(
                 ui,
                 theme,
@@ -335,8 +339,25 @@ impl MistTermApp {
                 self.menu_open_command_history(ctx);
                 ui.close_menu();
             }
-            if crate::ui::chrome::popup_menu_button(ui, theme, l.batch_exec).clicked() {
-                self.menu_open_batch_exec(ctx);
+            if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, l.paste_history, "P")
+                .clicked()
+            {
+                self.menu_open_paste_history(ctx);
+                ui.close_menu();
+            }
+            ui.separator();
+            // 3. 规则与检查
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.rule_manager).clicked() {
+                self.rule_manager_dialog
+                    .open_output_trigger(&self.output_trigger_rules);
+                ui.close_menu();
+            }
+            ui.separator();
+            // 4. 账号与数据
+            if crate::ui::chrome::popup_menu_button(ui, theme, l.credentials).clicked() {
+                if self.ensure_right_dock_allowed_or_warn(ctx) {
+                    self.open_right_dock_panel(ActiveRightDock::Credential);
+                }
                 ui.close_menu();
             }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.session_logs).clicked() {
@@ -402,6 +423,32 @@ impl MistTermApp {
                 ui.close_menu();
             }
             ui.menu_button(
+                crate::i18n::tr(ctx, "Diagnostics", "诊断"),
+                |ui| {
+                    crate::ui::chrome::apply_menu_popup_style(ui, theme);
+                    if crate::ui::chrome::popup_menu_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Open crash reports folder", "打开崩溃报告目录"),
+                    )
+                    .clicked()
+                    {
+                        self.open_crash_report_folder(ctx);
+                        ui.close_menu();
+                    }
+                    if crate::ui::chrome::popup_menu_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Open hang reports folder", "打开卡顿报告目录"),
+                    )
+                    .clicked()
+                    {
+                        self.open_hang_report_folder(ctx);
+                        ui.close_menu();
+                    }
+                },
+            );
+            ui.menu_button(
                 crate::i18n::tr(ctx, "Advanced", "高级"),
                 |ui| {
                     crate::ui::chrome::apply_menu_popup_style(ui, theme);
@@ -416,6 +463,17 @@ impl MistTermApp {
                         ui.close_menu();
                     }
                     ui.separator();
+                    ui.separator();
+                    if crate::ui::chrome::popup_menu_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Open crash reports folder", "打开崩溃报告目录"),
+                    )
+                    .clicked()
+                    {
+                        self.open_crash_report_folder(ctx);
+                        ui.close_menu();
+                    }
                     ui.menu_button(
                         crate::i18n::tr(ctx, "Freeze diagnostics", "卡顿诊断"),
                         |ui| {

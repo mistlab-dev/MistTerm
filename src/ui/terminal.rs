@@ -13,6 +13,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
+use crate::core::exec_history::ExecLogRecord;
+use crate::core::interactive_exec::{apply_interactive_outcome, InteractiveExecDraft};
 use crate::core::{ServerAuditEvent, ServerAuditProbe};
 use crate::local_shell::LocalShellHandle;
 use crate::ssh::{SshManager, SshConfig, SshMessage, SshSessionHandle, LrzszTransfer, TransferEvent, format_ssh_connect_error};
@@ -21,7 +23,8 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::viewport_to_point;
 use crate::terminal::{Terminal as VtTerminal, TerminalShellStyle};
 use crate::terminal::style::{
-    format_user_error_line, format_user_info_line, format_user_success_line, format_user_warn_line,
+    cursor_blink_phase, duration_until_next_cursor_blink_phase, format_user_error_line,
+    format_user_info_line, format_user_success_line, format_user_warn_line,
 };
 use crate::i18n::UiLanguage;
 use crate::ui::layout_util;
@@ -61,8 +64,10 @@ struct TerminalVisualLayoutCache {
     formatted: String,
     /// 已排版的 galley；避免 TextEdit layouter 每帧 `layout_job` 打满 CPU。
     galley: Option<std::sync::Arc<egui::Galley>>,
-    /// display-link 命中：`(行号, 链接)`，与 layout 同键缓存（#90）。
-    display_links: Vec<(usize, crate::core::display_link::DisplayLink)>,
+    /// display-link 是否启用。关掉后下一帧重扫，不再出新装饰（已画下划线随缓存失效）。
+    display_link_on: bool,
+    /// display-link 命中：`(行号, 可点区间)`，与 layout 同键缓存（#90 / #120）。
+    display_links: Vec<(usize, DisplaySpan)>,
 }
 
 impl TerminalVisualLayoutCache {
@@ -77,6 +82,7 @@ impl TerminalVisualLayoutCache {
         fg: egui::Color32,
         bg: egui::Color32,
         selection: Option<(i32, usize, i32, usize)>,
+        display_link_on: bool,
     ) -> bool {
         self.vt_gen == vt_gen
             && self.content_epoch == content_epoch
@@ -87,6 +93,62 @@ impl TerminalVisualLayoutCache {
             && self.fg == fg
             && self.bg == bg
             && self.selection == selection
+            && self.display_link_on == display_link_on
+    }
+}
+
+/// Host 侧可点区间，来自 `ModuleAction::DecorateLink`。渲染与点击都认它，模块不碰 egui。
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct DisplaySpan {
+    start: usize,
+    end: usize,
+    action: String,
+    text: String,
+}
+
+impl DisplaySpan {
+    fn from_action(act: crate::capability::ModuleAction) -> Option<Self> {
+        match act {
+            crate::capability::ModuleAction::DecorateLink {
+                start,
+                end,
+                action,
+                text,
+            } => Some(Self {
+                start,
+                end,
+                action,
+                text,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// 左键点击分发。非 http(s) 的 browser-open 忽略，与迁入前一致。
+enum DisplayLinkClick {
+    Copy,
+    Browser,
+    Runbook,
+    Sftp,
+}
+
+fn classify_display_link_click(action: &str, text: &str) -> Option<DisplayLinkClick> {
+    use crate::modules::display_link::{
+        ACTION_BROWSER_OPEN, ACTION_COPY_OR_CONNECT, ACTION_RUNBOOK_RECALL, ACTION_SFTP_OPEN,
+    };
+    match action {
+        ACTION_COPY_OR_CONNECT => Some(DisplayLinkClick::Copy),
+        ACTION_BROWSER_OPEN => {
+            if text.starts_with("http://") || text.starts_with("https://") {
+                Some(DisplayLinkClick::Browser)
+            } else {
+                None
+            }
+        }
+        ACTION_RUNBOOK_RECALL => Some(DisplayLinkClick::Runbook),
+        ACTION_SFTP_OPEN => Some(DisplayLinkClick::Sftp),
+        _ => None,
     }
 }
 
@@ -231,6 +293,8 @@ pub enum ConnectionPlaceholderAction {
     Retry,
     EditHost,
     DismissTab,
+    /// Write the new host key into known_hosts, then reconnect.
+    TrustHostKey,
 }
 
 /// 终端连接类型：远端 SSH 或本机 PTY shell。
@@ -269,6 +333,8 @@ pub struct TerminalView {
     
     /// 连接错误信息
     error_message: Option<String>,
+    /// 本次连接走 FIDO2 / sk：连接中显示触摸或系统 PIN 提示。
+    connecting_fido2: bool,
     
     /// 终端尺寸
     cols: u32,
@@ -309,12 +375,29 @@ pub struct TerminalView {
     paste_next_chunk_at: Option<Instant>,
     /// 粘贴分片因输入队列满连续重试的次数
     paste_retries: u32,
+    /// 按 payload 字节记账；整段写进 PTY 后才进入 [`paste_history_ready`]。
+    paste_ledger: crate::core::paste_history::PasteDeliveryLedger,
+    /// 已完整送入 PTY、待宿主写入粘贴历史的正文（已截断，不含界面标注）。
+    paste_history_ready: Vec<crate::core::paste_history::PasteHistoryNote>,
+    /// 右键「粘贴历史」请求宿主打开面板。
+    pending_open_paste_history: bool,
     /// 「仅断开 SSH 保留画面」后为 true：键盘输入写入 [`Self::disconnected_input_buffer`] 而非 PTY(FUNCTIONAL_SPEC §2.4)。
     buffer_input_while_disconnected: bool,
+    /// 意外断开时 `ssh_rx` 仍被本帧借用，排空后再丢掉。
+    release_ssh_rx_after_drain: bool,
+    /// 断开态键入提示的节流时刻（约 3 秒一次）。
+    disconnect_input_toast_at: Option<Instant>,
+    /// 本帧有键入写入了离线缓冲，待有 `Context` 时发节流 Toast。
+    disconnect_input_toast_armed: bool,
     /// 断线期间缓存的待发送字节(上限 [`Self::OFFLINE_INPUT_CAP`])。
     disconnected_input_buffer: Vec<u8>,
     /// 重连且 shell 就绪后，若缓存非空则弹出是否重发。
     resend_offline_input_dialog_open: bool,
+    /// 连接后恢复命令（#177）：由会话配置注入，shell 就绪后延迟执行一次。
+    /// None = 未配置；Some(空串) 视为未配置。执行后清空，断线时清空。
+    pending_post_connect_command: Option<String>,
+    /// 恢复命令的定时执行时刻（连接成功后短暂延迟，等 shell 提示符就绪）。
+    post_connect_fire_at: Option<Instant>,
     /// 整屏替换 VTE 或清屏时递增，与 [`VtTerminal::content_epoch`] 一并参与布局缓存键(FUNCTIONAL_SPEC §2.3.1)。
     vt_visual_generation: u64,
     visual_layout_cache: Option<TerminalVisualLayoutCache>,
@@ -327,6 +410,9 @@ pub struct TerminalView {
     local_disconnect_intent: bool,
     /// 本轮 `process_ssh_messages` 后若曾为「非主动」断开则置位；由宿主 `take()` 后清除。
     unexpected_disconnect_notified: bool,
+    /// #201 复审：粘性「本断线为意外」标记。在 `hold_ssh_after_unexpected_disconnect`
+    /// 置位；重连成功或用户主动断开时清除。前台重连判定读这里，不抢退避用的一次性信号。
+    last_disconnect_unexpected: bool,
     /// #93：意外断开会话 → 未聚焦标签提示（与重连用的 `unexpected_disconnect_notified` 分通道）。
     pending_attention_ended: bool,
     /// 连接成功/失败待宿主写入审计(`take_connect_audit` 取走)
@@ -341,8 +427,12 @@ pub struct TerminalView {
     agent_audit_banner_dismissed: bool,
     /// 连接失败待宿主 Toast(`take_pending_toast_error` 取走)
     pending_toast_error: Option<String>,
+    /// 命令块导航 / 复制的提示（未启用 OSC 133、已经到头）。宿主用 Info toast 显示。
+    pending_toast_info: Option<String>,
     /// Connect placeholder button (`take_connection_placeholder_action`)
     pending_connection_placeholder_action: ConnectionPlaceholderAction,
+    /// Host-key-changed offer: (host, port, new fingerprint) for 「信任并继续」.
+    pending_host_key_trust: Option<(String, u16, String)>,
     /// 拖入终端区域、待宿主处理的上传路径(§4.3.2)。
     pending_drop_upload_paths: Vec<PathBuf>,
     /// 大文件上传：用户选 ZMODEM 后先发 `rz -y`，握手检测到后再用此路径 `start_rz_upload`。
@@ -366,6 +456,8 @@ pub struct TerminalView {
     pending_startup_cd: Option<String>,
     broadcast_targets: Vec<BroadcastTarget>,
     broadcast_suppress: bool,
+    /// 进行中的发送序列标记。0 表示没有。用来在标签换位后仍只写这一个窗格。
+    replay_mark: u64,
     /// 最近写入 PTY 的当前行(自动化可能无 egui Text 事件，仍可从出站字节识别 `rz`)
     pty_outbound_line_buffer: String,
     /// Enter 提交后待取走的整行命令(供命令历史 / 会话日志)
@@ -374,6 +466,14 @@ pub struct TerminalView {
     typed_enter_gate: bool,
     /// 手敲行按了回车但尚未发 `\r`，等宿主审计(`take_typed_enter_request` 取走)。
     typed_enter_request: Option<String>,
+    /// 偏好与审计生效时，把回车提交的命令写成 exec_history JSONL。
+    interactive_capture_on: bool,
+    capture_session_id: String,
+    capture_target: String,
+    /// 下一次提交使用的结论（allowed / alert / confirmed）。空则按 allowed。
+    pending_capture_outcome: String,
+    open_capture: Option<InteractiveExecDraft>,
+    pending_exec_records: Vec<ExecLogRecord>,
     /// 待写入会话日志的命令(片段执行、Enter 提交等)
     pending_log_commands: Vec<String>,
     /// 待写入会话日志的 PTY 输出块
@@ -388,16 +488,23 @@ pub struct TerminalView {
     ime_preedit: crate::ui::terminal_keys::ImePreedit,
     /// 最近一帧终端 IME 框的 egui Id；UI 输入(含中文全角)抢焦点时须 surrender，否则 Composition 仍进终端。
     last_ime_id: Option<egui::Id>,
-    /// display-link 规则引擎（#90）：加载一次，输出行匹配复用。
-    display_link_engine: crate::core::display_link::DisplayLinkEngine,
     /// 点击 display-link 后待宿主处理的动作（SFTP 跳转需要宿主开面板）。
     pending_display_link_sftp: Option<String>,
     /// 点击错误码链接后待宿主处理的自动召回请求（#90 后续：attach + 自动发送触发 #66 召回）。
     pending_display_link_runbook: Option<String>,
     /// 右键 IP 链接后待宿主处理的「新开连接」请求（#90 后续）。
     pending_display_link_connect: Option<String>,
-    /// 右键打开菜单时缓存的 display-link（菜单跨帧时 `interact_pointer_pos` 会丢，需自持）。
-    context_menu_display_link: Option<crate::core::display_link::DisplayLink>,
+    /// 右键按下帧缓存的可点区间（菜单跨帧时 `interact_pointer_pos` 会丢，需自持，#111）。
+    context_menu_display_link: Option<DisplaySpan>,
+    /// 扩展模块注册表（#117 / #119 / #120）：Host 接线，PTY 完整行分发与右键菜单贡献。
+    /// output-trigger 经此注册表的 `on_output_line` 产出 Notify，不再自带引擎。
+    module_registry: std::sync::Arc<crate::capability::ModuleRegistry>,
+    /// 未完成行缓冲（供 module on_output_line 跨 chunk 拼行，#117）。
+    module_output_line_acc: String,
+    /// 模块产出的动作缓存（#117 分发骨架）。
+    pending_module_actions: Vec<crate::capability::ModuleAction>,
+    /// 模块右键菜单点击产生的 action key，待宿主或外界取走。
+    pending_module_menu_action: Option<String>,
 }
 
 impl TerminalView {
@@ -441,30 +548,34 @@ impl TerminalView {
         lines.get(line).map(|s| s.chars().count())
     }
 
-    /// display-link 命中扫描（#90）：对整屏可见文本逐行匹配，返回 `(行号, 链接)`。
-    /// 仅在 layout 缓存重建时跑一次，随 galley 复用，不影响逐帧开销。
+    /// display-link 命中扫描（#90 / #120）：视口每一行走 `on_output_line` → `DecorateLink`。
+    /// 只问 display-link 这一个模块，避免把重扫发给 trigger。禁用时返回空（≈ 模块不存在）。
+    /// 仅在 layout 缓存重建时跑一次，随 galley 复用。
     fn scan_display_links(
-        engine: &crate::core::display_link::DisplayLinkEngine,
+        registry: &crate::capability::ModuleRegistry,
         formatted: &str,
-    ) -> Vec<(usize, crate::core::display_link::DisplayLink)> {
-        if engine.is_empty() {
+    ) -> Vec<(usize, DisplaySpan)> {
+        if !registry.is_enabled(crate::modules::display_link::MODULE_ID) {
             return Vec::new();
         }
         formatted
             .lines()
             .enumerate()
             .flat_map(|(row, line)| {
-                engine
-                    .scan(line)
+                registry
+                    .on_output_line_for(
+                        crate::modules::display_link::MODULE_ID,
+                        &crate::capability::OutputLineCtx::viewport(line),
+                    )
                     .into_iter()
-                    .map(move |link| (row, link))
+                    .filter_map(move |act| DisplaySpan::from_action(act).map(|span| (row, span)))
             })
             .collect()
     }
 
     /// 链接字节区间 → 字符列区间（egui 光标/绘制都是列粒度）。
     /// 字节偏移落在字符边界外时返回 `None`（防御性，扫描层不会产生这种偏移）。
-    fn display_link_char_range(line: &str, link: &crate::core::display_link::DisplayLink) -> Option<(usize, usize)> {
+    fn display_link_char_range(line: &str, link: &DisplaySpan) -> Option<(usize, usize)> {
         let start = line.get(..link.start)?.chars().count();
         let end = line.get(..link.end)?.chars().count();
         Some((start, end))
@@ -472,12 +583,12 @@ impl TerminalView {
 
     /// 指针位置命中的 display-link（行号 + 克隆链接）。
     fn display_link_at(
-        display_links: &[(usize, crate::core::display_link::DisplayLink)],
+        display_links: &[(usize, DisplaySpan)],
         galley: &egui::Galley,
         text_draw_pos: egui::Pos2,
         pos: egui::Pos2,
         lines: &[&str],
-    ) -> Option<(usize, crate::core::display_link::DisplayLink)> {
+    ) -> Option<(usize, DisplaySpan)> {
         let (row_i, col) = Self::terminal_pointer_row_col(text_draw_pos, pos, galley, lines);
         let line = lines.get(row_i)?;
         display_links.iter().find_map(|(r, link)| {
@@ -689,6 +800,12 @@ impl TerminalView {
         );
     }
 
+    /// 面板或命令填入之后，下一帧把键盘交回终端。
+    pub fn request_keyboard_focus(&mut self) {
+        self.terminal_wants_keyboard = true;
+        self.pending_focus_terminal = true;
+    }
+
     /// 把键盘/IME 让给 UI TextEdit(AI 草稿、偏好等)。
     /// 半角 ASCII 的 `Event::Text` 可被多个监听者看到；全角标点走 IME Composition，只进「当前 IME 目标」。
     /// 若不 surrender 终端 IME 框，全角 `，。` 会进已隐藏的 ime_capture 并被清空，AI 框像「打不出来」。
@@ -710,11 +827,11 @@ impl TerminalView {
 
     #[inline]
     fn is_terminal_token_char(ch: char) -> bool {
-        ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '\\' | '@' | '+')
+        ch.is_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '\\' | '@' | '+' | '=')
     }
 
     /// 双击时按终端 token 规则选中一个词元。
-    /// 字母数字与 `_-.\/@+` 算同一个词。冒号是边界（`host:path`、提示符末尾的 `:` 不会被带上）。
+    /// 字母数字与 `_-.\/@+=` 算同一个词（含 base64 padding）。冒号是边界（`host:path`、提示符末尾的 `:` 不会被带上）。
     fn terminal_token_range_at(line: &str, col: usize) -> Option<(usize, usize)> {
         let chars: Vec<char> = line.chars().collect();
         if chars.is_empty() {
@@ -847,6 +964,7 @@ impl TerminalView {
             terminal: VtTerminal::new(80, 24),
             connected: false,
             error_message: None,
+            connecting_fido2: false,
             cols: 80,
             rows: 24,
             lrzsz: LrzszTransfer::new(&download_dir.to_string_lossy()),
@@ -869,9 +987,17 @@ impl TerminalView {
             paste_pending: Vec::new(),
             paste_next_chunk_at: None,
             paste_retries: 0,
+            paste_ledger: crate::core::paste_history::PasteDeliveryLedger::default(),
+            paste_history_ready: Vec::new(),
+            pending_open_paste_history: false,
             buffer_input_while_disconnected: false,
+            release_ssh_rx_after_drain: false,
+            disconnect_input_toast_at: None,
+            disconnect_input_toast_armed: false,
             disconnected_input_buffer: Vec::new(),
             resend_offline_input_dialog_open: false,
+            pending_post_connect_command: None,
+            post_connect_fire_at: None,
             vt_visual_generation: 0,
             visual_layout_cache: None,
             repaint_probe_received_us: None,
@@ -880,6 +1006,7 @@ impl TerminalView {
             repaint_probe_epoch: 0,
             local_disconnect_intent: false,
             unexpected_disconnect_notified: false,
+            last_disconnect_unexpected: false,
             pending_attention_ended: false,
             pending_connect_audit: None,
             server_audit_probe: ServerAuditProbe::new(),
@@ -887,7 +1014,9 @@ impl TerminalView {
             agent_audit_degraded: false,
             agent_audit_banner_dismissed: false,
             pending_toast_error: None,
+            pending_toast_info: None,
             pending_connection_placeholder_action: ConnectionPlaceholderAction::None,
+            pending_host_key_trust: None,
             pending_drop_upload_paths: Vec::new(),
             zmodem_upload_after_rz_path: None,
             selection: Selection::default(),
@@ -900,11 +1029,18 @@ impl TerminalView {
             pending_startup_cd: None,
             broadcast_targets: Vec::new(),
             broadcast_suppress: false,
+            replay_mark: 0,
             zmodem_pty_detect_tail: Vec::new(),
             pty_outbound_line_buffer: String::new(),
             submitted_line: None,
             typed_enter_gate: false,
             typed_enter_request: None,
+            interactive_capture_on: false,
+            capture_session_id: String::new(),
+            capture_target: String::new(),
+            pending_capture_outcome: String::new(),
+            open_capture: None,
+            pending_exec_records: Vec::new(),
             pending_log_commands: Vec::new(),
             pending_log_output: Vec::new(),
             search_highlight: None,
@@ -912,11 +1048,14 @@ impl TerminalView {
             ime_capture: String::new(),
             ime_preedit: crate::ui::terminal_keys::ImePreedit::default(),
             last_ime_id: None,
-            display_link_engine: crate::core::display_link::DisplayLinkEngine::new(),
             pending_display_link_sftp: None,
             pending_display_link_runbook: None,
             pending_display_link_connect: None,
             context_menu_display_link: None,
+            module_registry: std::sync::Arc::new(crate::capability::ModuleRegistry::builtin()),
+            module_output_line_acc: String::new(),
+            pending_module_actions: Vec::new(),
+            pending_module_menu_action: None,
         }
     }
 
@@ -936,6 +1075,24 @@ impl TerminalView {
         self.submitted_line.take()
     }
 
+    /// 取走本帧已经完整写入 PTY 的粘贴，供粘贴历史入库。
+    pub fn take_paste_history_notes(&mut self) -> Vec<crate::core::paste_history::PasteHistoryNote> {
+        std::mem::take(&mut self.paste_history_ready)
+    }
+
+    pub fn take_open_paste_history(&mut self) -> bool {
+        let open = self.pending_open_paste_history;
+        self.pending_open_paste_history = false;
+        open
+    }
+
+    /// 打开粘贴历史等浮层时让出终端键盘，避免方向键和回车继续进 PTY。
+    pub(crate) fn release_keyboard_for_overlay(&mut self) {
+        self.terminal_wants_keyboard = false;
+        self.terminal_focused = false;
+        self.pending_focus_terminal = false;
+    }
+
     /// 取走待写入会话日志的命令
     pub fn take_pending_log_command(&mut self) -> Option<String> {
         if self.pending_log_commands.is_empty() {
@@ -948,6 +1105,124 @@ impl TerminalView {
     /// 宿主设置：本地命令审计策略是否生效。关闭时回车行为与以往完全一致。
     pub fn set_typed_enter_gate(&mut self, on: bool) {
         self.typed_enter_gate = on;
+    }
+
+    pub fn interactive_capture_is_on(&self) -> bool {
+        self.interactive_capture_on
+    }
+
+    /// 本窗格是否把回车提交的命令写入 exec_history。关掉时不再攒输出。
+    pub fn set_interactive_capture(&mut self, on: bool, session_id: &str, target: &str) {
+        if self.capture_session_id != session_id {
+            self.capture_session_id = session_id.to_string();
+        }
+        if self.capture_target != target {
+            self.capture_target = target.to_string();
+        }
+        if self.interactive_capture_on && !on {
+            self.seal_open_capture();
+        }
+        self.interactive_capture_on = on;
+    }
+
+    /// 审计放行前标明这条记录的结论。须在 [`Self::release_typed_enter`] 之前调用。
+    pub fn set_pending_capture_outcome(&mut self, outcome: &str) {
+        self.pending_capture_outcome = outcome.to_string();
+    }
+
+    /// 服务器事后改结论。`blocked` / `cancelled` 立刻封口，避免再等提示符。
+    pub fn note_server_audit_outcome(&mut self, command: &str, outcome: &str) {
+        let matches_cmd = |cmd: &str| command.is_empty() || cmd == command;
+        let open_matches = self
+            .open_capture
+            .as_ref()
+            .map(|draft| matches_cmd(draft.command()))
+            .unwrap_or(false);
+        if open_matches {
+            if let Some(draft) = self.open_capture.as_mut() {
+                draft.set_outcome(outcome);
+            }
+            if matches!(outcome, "blocked" | "cancelled") {
+                if let Some(draft) = self.open_capture.take() {
+                    self.pending_exec_records.push(draft.into_record());
+                }
+            }
+            return;
+        }
+        if let Some(rec) = self
+            .pending_exec_records
+            .iter_mut()
+            .rev()
+            .find(|rec| matches_cmd(&rec.command))
+        {
+            apply_interactive_outcome(rec, outcome);
+        }
+    }
+
+    /// 取走已结束、尚未落盘的交互式记录。
+    pub fn take_interactive_exec_records(&mut self) -> Vec<ExecLogRecord> {
+        std::mem::take(&mut self.pending_exec_records)
+    }
+
+    fn seal_open_capture(&mut self) {
+        if let Some(draft) = self.open_capture.take() {
+            self.pending_exec_records.push(draft.into_record());
+        }
+    }
+
+    fn flush_interactive_to_disk(&mut self) {
+        self.seal_open_capture();
+        for rec in self.pending_exec_records.drain(..) {
+            crate::core::exec_history::append_record(&rec);
+        }
+    }
+
+    fn begin_interactive_capture(&mut self, command: &str) {
+        // 用掉这次提交的结论，避免口令行 / 捕获关闭时把标签留到下一条命令。
+        let outcome = if self.pending_capture_outcome.is_empty() {
+            "allowed".to_string()
+        } else {
+            std::mem::take(&mut self.pending_capture_outcome)
+        };
+        if !self.interactive_capture_on || !self.connected {
+            return;
+        }
+        let command = command.trim();
+        if command.is_empty() {
+            return;
+        }
+        if self.terminal.is_alt_screen()
+            || self.lrzsz.is_active()
+            || self.transfer_progress.is_some()
+        {
+            return;
+        }
+        if Self::looks_like_secret_prompt(&self.terminal.cursor_line_text()) {
+            return;
+        }
+        self.seal_open_capture();
+        self.open_capture = Some(InteractiveExecDraft::start(
+            &self.capture_session_id,
+            &self.capture_target,
+            command,
+            &outcome,
+        ));
+    }
+
+    fn observe_interactive_output(&mut self, data: &[u8]) {
+        if self.open_capture.is_none() || data.is_empty() {
+            return;
+        }
+        let finished = self
+            .open_capture
+            .as_mut()
+            .map(|draft| draft.feed(data))
+            .unwrap_or(false);
+        if finished {
+            if let Some(draft) = self.open_capture.take() {
+                self.pending_exec_records.push(draft.into_record());
+            }
+        }
     }
 
     /// 取走等待审计的手敲行。宿主须随后调用 [`Self::release_typed_enter`](放行)或丢弃(拦截/取消)。
@@ -1019,7 +1294,8 @@ impl TerminalView {
             self.note_sz_shell_command_submitted();
         }
         self.submitted_line = Some(line.clone());
-        self.pending_log_commands.push(line);
+        self.pending_log_commands.push(line.clone());
+        self.begin_interactive_capture(&line);
     }
 
     fn expect_rz_upload_active(&self) -> bool {
@@ -1244,6 +1520,14 @@ impl TerminalView {
         self.broadcast_targets.clear();
     }
 
+    pub(crate) fn replay_mark(&self) -> u64 {
+        self.replay_mark
+    }
+
+    pub(crate) fn set_replay_mark(&mut self, mark: u64) {
+        self.replay_mark = mark;
+    }
+
     /// SSH 分屏：等提示符出现后再 `cd` 到源窗格目录。
     pub(crate) fn arm_startup_directory(&mut self, cwd: &str) {
         let cwd = cwd.trim();
@@ -1307,6 +1591,17 @@ impl TerminalView {
     }
 
     /// 连接到 SSH 服务器
+    /// #177：注入连接后恢复命令（来自会话配置；空串 = 不执行）。
+    /// 每次 connect 前调用一次，避免上个会话的命令残留。
+    pub fn set_post_connect_command(&mut self, cmd: &str) {
+        self.pending_post_connect_command = if cmd.trim().is_empty() {
+            None
+        } else {
+            Some(cmd.to_string())
+        };
+        self.post_connect_fire_at = None;
+    }
+
     pub fn connect(
         &mut self,
         _theme: &Theme,
@@ -1316,6 +1611,7 @@ impl TerminalView {
         password: &str,
         private_key_path: &str,
         use_ssh_agent: bool,
+        auth_mode: crate::core::session::SessionAuthMode,
         keepalive_enabled: bool,
         keepalive_interval_secs: u32,
         keepalive_count_max: u8,
@@ -1337,7 +1633,8 @@ impl TerminalView {
             username: username.to_string(),
             password: password.to_string(),
             private_key_path: private_key_path.to_string(),
-            use_ssh_agent,
+            use_ssh_agent: use_ssh_agent || auth_mode.is_fido2(),
+            auth_mode,
             keepalive_interval_secs: interval,
             keepalive_count_max: keepalive_count_max.max(1),
             proxy_jump: proxy_jump.to_string(),
@@ -1353,6 +1650,9 @@ impl TerminalView {
         match manager.create_session_async(config) {
             Ok(session_id) => {
                 self.buffer_input_while_disconnected = false;
+                self.release_ssh_rx_after_drain = false;
+                self.disconnect_input_toast_at = None;
+                self.disconnect_input_toast_armed = false;
                 self.disconnected_input_buffer.clear();
                 self.resend_offline_input_dialog_open = false;
                 self.connection_kind = ConnectionKind::Ssh;
@@ -1362,6 +1662,8 @@ impl TerminalView {
                 self.ssh_rx = Some(rx);
                 self.connected = false;
                 self.error_message = None;
+                self.pending_host_key_trust = None;
+                self.connecting_fido2 = auth_mode.is_fido2();
                 self.terminal = VtTerminal::new(self.cols as usize, self.rows as usize);
                 self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
                 self.visual_layout_cache = None;
@@ -1376,6 +1678,7 @@ impl TerminalView {
                     self.ui_lang_last,
                     &format!("Failed to create session: {}", e),
                 );
+                self.connecting_fido2 = false;
                 self.pending_toast_error = Some(msg.clone());
                 self.error_message = Some(msg);
             }
@@ -1406,6 +1709,7 @@ impl TerminalView {
         self.ssh_rx = Some(rx);
         self.connected = false;
         self.error_message = None;
+        self.connecting_fido2 = false;
         self.terminal = VtTerminal::new(self.cols as usize, self.rows as usize);
         self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
         self.visual_layout_cache = None;
@@ -1434,6 +1738,10 @@ impl TerminalView {
         // 先处理网络与键盘，再绘制，避免输入/输出滞后一帧
         crate::ssh::set_repaint_context(ui.ctx());
         let terminal_dirty = self.process_ssh_messages(theme);
+        if self.shows_persistent_disconnect_banner() {
+            // 横幅在本帧 show() 之前已排过版，再要一帧才能画出来。
+            ui.ctx().request_repaint();
+        }
         self.flush_paste_queue(ui.ctx());
         self.process_transfer_events(theme, ui.ctx());
 
@@ -1484,6 +1792,7 @@ impl TerminalView {
         }
 
         if capture_pty_keyboard {
+            self.handle_command_block_shortcuts(ui);
             self.capture_inline_input(ui);
         }
         if self.connected {
@@ -1491,7 +1800,9 @@ impl TerminalView {
             if self.lrzsz.is_upload_pty_capture() {
                 ui.ctx().request_repaint();
             } else if terminal_dirty || self.repaint_probe_received_us.is_some() {
-                // 仅有输出/队列未排空时拉高帧率(top/vim 等)；空闲靠光标闪烁或用户输入触发重绘，避免单核打满。
+                // 仅有输出、队列未排空、或本帧输出还没画出来时拉高帧率(top/vim/yes、ZMODEM 以外的脏屏)。
+                // 探针在画完这一帧后清掉（见下方），空闲不再停在 33ms。
+                // 空闲聚焦靠光标下一相位重绘；egui 取本帧最短的 request，故这里的 33ms 短于相位等待。
                 ui.ctx().request_repaint_after(Duration::from_millis(
                     crate::terminal::style::TERMINAL_LIVE_REPAINT_MS,
                 ));
@@ -1601,6 +1912,9 @@ impl TerminalView {
                             theme.color_terminal_selection_fg(),
                         )
                     });
+                    let display_link_on = self
+                        .module_registry
+                        .is_enabled(crate::modules::display_link::MODULE_ID);
                     let cache_key = (
                         self.vt_visual_generation,
                         self.terminal.content_epoch(),
@@ -1611,6 +1925,7 @@ impl TerminalView {
                         shell.default_fg,
                         shell.terminal_bg,
                         selection_key,
+                        display_link_on,
                     );
                     self.repaint_probe_cache_hit = false;
                     let (layout_job, cell_bgs, display_owned) =
@@ -1625,6 +1940,7 @@ impl TerminalView {
                                 cache_key.6,
                                 cache_key.7,
                                 cache_key.8,
+                                cache_key.9,
                             ) {
                                 self.repaint_probe_cache_hit = true;
                                 (
@@ -1643,7 +1959,7 @@ impl TerminalView {
                                 );
                                 let formatted = self.terminal.get_formatted_output();
                                 let display_links =
-                                    Self::scan_display_links(&self.display_link_engine, &formatted);
+                                    Self::scan_display_links(&self.module_registry, &formatted);
                                 self.visual_layout_cache = Some(TerminalVisualLayoutCache {
                                     vt_gen: cache_key.0,
                                     content_epoch: cache_key.1,
@@ -1654,6 +1970,7 @@ impl TerminalView {
                                     fg: cache_key.6,
                                     bg: cache_key.7,
                                     selection: cache_key.8,
+                                    display_link_on: cache_key.9,
                                     layout_job: layout_job.clone(),
                                     cell_bgs: cell_bgs.clone(),
                                     formatted: formatted.clone(),
@@ -1673,7 +1990,7 @@ impl TerminalView {
                             );
                             let formatted = self.terminal.get_formatted_output();
                             let display_links =
-                                Self::scan_display_links(&self.display_link_engine, &formatted);
+                                Self::scan_display_links(&self.module_registry, &formatted);
                             self.visual_layout_cache = Some(TerminalVisualLayoutCache {
                                 vt_gen: cache_key.0,
                                 content_epoch: cache_key.1,
@@ -1684,6 +2001,7 @@ impl TerminalView {
                                 fg: cache_key.6,
                                 bg: cache_key.7,
                                 selection: cache_key.8,
+                                display_link_on: cache_key.9,
                                 layout_job: layout_job.clone(),
                                 cell_bgs: cell_bgs.clone(),
                                 formatted: formatted.clone(),
@@ -1705,6 +2023,7 @@ impl TerminalView {
                                 cache_key.6,
                                 cache_key.7,
                                 cache_key.8,
+                                cache_key.9,
                             ) {
                                 c.galley.clone()
                             } else {
@@ -1893,13 +2212,16 @@ impl TerminalView {
                                     cell_w,
                                 );
                                 painter.galley(text_draw_pos, galley.clone());
-                                if let Some(t) = self.repaint_probe_received_us.take() {
-                                    let ms = crate::ssh::probe_now_us().saturating_sub(t) as f64 / 1000.0;
-                                    if ms > 200.0 {
-                                        log::warn!(target: "repaint_lag", "SLOW output->frame {:.1} ms (>200ms)", ms);
-                                    } else {
-                                        log::debug!(target: "repaint_lag", "frame drawn after output {:.1} ms", ms);
-                                    }
+                            }
+                            // 普通提示符没有非默认格子底色，`needs_cell_bg` 为 false。
+                            // 探针若只在补绘底色时清掉，第一段输出之后会一直为 Some，
+                            // 空闲也被上面的 33ms 路径拉着走。这一帧已经把终端画出来，就清掉。
+                            if let Some(t) = self.repaint_probe_received_us.take() {
+                                let ms = crate::ssh::probe_now_us().saturating_sub(t) as f64 / 1000.0;
+                                if ms > 200.0 {
+                                    log::warn!(target: "repaint_lag", "SLOW output->frame {:.1} ms (>200ms)", ms);
+                                } else {
+                                    log::debug!(target: "repaint_lag", "frame drawn after output {:.1} ms", ms);
                                 }
                             }
                             // display-link（#90）：命中区间画下划线，悬停变手型。
@@ -1989,18 +2311,16 @@ impl TerminalView {
 
                             // 块状闪烁光标(UI 层绘制，勿再用 │ 字符占位)。
                             // 预编辑叠在同一格上，实心块会盖住第一个字形。
+                            // 空闲（无选区、无 IME）只等到下一相位，禁止固定 60ms。
+                            // VTE 脏数据 / ZMODEM 在本帧更早请求了更短的间隔，egui 取最短值。
                             if self.terminal_focused
                                 && !terminal_search_open
                                 && self.selection.is_empty()
                                 && self.ime_preedit.is_empty()
                             {
-                                if let Some(cur) = self.terminal.viewport_cursor() {
-                                    let t = ui.input(|i| i.time);
-                                    let phase = (t
-                                        / crate::terminal::style::TERMINAL_CURSOR_BLINK_PERIOD_SECS)
-                                        .floor() as i64
-                                        % 2;
-                                    if phase == 0 {
+                                let t = ui.input(|i| i.time);
+                                if cursor_blink_phase(t) == 0 {
+                                    if let Some(cur) = self.terminal.viewport_cursor() {
                                         let cursor_rect = Self::terminal_block_cursor_rect(
                                             text_draw_pos,
                                             &galley,
@@ -2017,7 +2337,7 @@ impl TerminalView {
                                     }
                                 }
                                 ui.ctx().request_repaint_after(
-                                    std::time::Duration::from_millis(60),
+                                    duration_until_next_cursor_blink_phase(t),
                                 );
                             }
 
@@ -2075,6 +2395,7 @@ impl TerminalView {
                                 let lines = (dy / cell_h).round().clamp(-64.0, 64.0) as i32;
                                 if lines != 0 {
                                     self.terminal.scroll_display(Scroll::Delta(lines));
+                                    self.terminal.clear_command_block_parked();
                                     self.visual_layout_cache = None;
                                 }
                             }
@@ -2200,6 +2521,7 @@ impl TerminalView {
                                                 self.select_autoscroll_acc -= whole;
                                                 self.terminal
                                                     .scroll_display(Scroll::Delta(whole as i32));
+                                                self.terminal.clear_command_block_parked();
                                                 self.visual_layout_cache = None;
                                             }
                                             ui.ctx().request_repaint();
@@ -2246,30 +2568,44 @@ impl TerminalView {
                             }
                             select_resp.context_menu(|ui| {
                                 crate::ui::chrome::apply_context_menu_style(ui, theme);
-                                // display-link 右键（#90 后续）：IP 可「新开连接」，预填到新建连接弹窗。
-                                if let Some(link) = &self.context_menu_display_link {
-                                    if matches!(
-                                        link.action,
-                                        crate::core::display_link::DisplayLinkAction::Copy
-                                    ) {
-                                        if crate::ui::chrome::popup_menu_button(
-                                            ui,
-                                            theme,
-                                            crate::i18n::tr(
-                                                ui.ctx(),
-                                                "New connection to this IP",
-                                                "新开连接到此 IP",
-                                            ),
-                                        )
-                                        .clicked()
-                                        {
-                                            self.pending_display_link_connect =
-                                                Some(link.text.clone());
-                                            self.context_menu_display_link = None;
+                                // 模块只贡献条目（#117 / #120）。「新开连接」由 display-link 在
+                                // 按下帧缓存到 IP 时贡献；菜单跨帧仍读这份缓存，不读已经丢掉的指针（#111）。
+                                // 选区项仍在下面，不跟链接命中绑在一起。
+                                let cached_link = self.context_menu_display_link.clone();
+                                let menu_ctx = crate::capability::MenuCtx {
+                                    link_action: cached_link.as_ref().map(|l| l.action.as_str()),
+                                    link_text: cached_link.as_ref().map(|l| l.text.as_str()),
+                                };
+                                let mod_items = self.module_registry.context_menu_items(&menu_ctx);
+                                if !mod_items.is_empty() {
+                                    let lang = crate::i18n::language(ui.ctx());
+                                    for item in mod_items {
+                                        let label = if lang == crate::i18n::UiLanguage::Zh {
+                                            &item.label_zh
+                                        } else {
+                                            &item.label_en
+                                        };
+                                        if crate::ui::chrome::popup_menu_button(ui, theme, label).clicked() {
+                                            if item.action
+                                                == crate::modules::display_link::ACTION_NEW_CONNECTION
+                                            {
+                                                if cached_link.as_ref().is_some_and(|l| {
+                                                    l.action
+                                                        == crate::modules::display_link::ACTION_COPY_OR_CONNECT
+                                                }) {
+                                                    self.pending_display_link_connect =
+                                                        cached_link.as_ref().map(|l| l.text.clone());
+                                                }
+                                                self.context_menu_display_link = None;
+                                            } else {
+                                                self.pending_module_menu_action = Some(item.action);
+                                            }
                                             ui.close_menu();
                                         }
                                     }
+                                    ui.separator();
                                 }
+
                                 if !self.selection.is_empty() {
                                     let copy_accel = crate::platform::terminal_copy_accel();
                                     if crate::ui::chrome::popup_menu_button_shortcut(
@@ -2327,6 +2663,51 @@ impl TerminalView {
                                     }
                                     ui.close_menu();
                                 }
+                                ui.separator();
+                                let block_prev = crate::platform::shortcuts::command_block_prev_accel();
+                                let block_next = crate::platform::shortcuts::command_block_next_accel();
+                                let block_copy = crate::platform::shortcuts::command_block_copy_accel();
+                                if crate::ui::chrome::popup_menu_button_shortcut(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(
+                                        ui.ctx(),
+                                        "Previous command block",
+                                        "上一条命令块",
+                                    ),
+                                    Some(&block_prev),
+                                )
+                                .clicked()
+                                {
+                                    self.jump_command_block(ui.ctx(), crate::terminal::NavDir::Prev);
+                                    ui.close_menu();
+                                }
+                                if crate::ui::chrome::popup_menu_button_shortcut(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(ui.ctx(), "Next command block", "下一条命令块"),
+                                    Some(&block_next),
+                                )
+                                .clicked()
+                                {
+                                    self.jump_command_block(ui.ctx(), crate::terminal::NavDir::Next);
+                                    ui.close_menu();
+                                }
+                                if crate::ui::chrome::popup_menu_button_shortcut(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(
+                                        ui.ctx(),
+                                        "Copy command block",
+                                        "复制本命令块",
+                                    ),
+                                    Some(&block_copy),
+                                )
+                                .clicked()
+                                {
+                                    self.copy_current_command_block(ui.ctx());
+                                    ui.close_menu();
+                                }
                                 let paste_accel = crate::platform::terminal_paste_accel();
                                 if crate::ui::chrome::popup_menu_button_shortcut(
                                     ui,
@@ -2341,6 +2722,18 @@ impl TerminalView {
                                             self.paste_text(&text, ui.ctx());
                                         }
                                     }
+                                    ui.close_menu();
+                                }
+                                let paste_history_accel = crate::platform::paste_history_accel();
+                                if crate::ui::chrome::popup_menu_button_shortcut(
+                                    ui,
+                                    theme,
+                                    crate::i18n::tr(ui.ctx(), "Paste History", "粘贴历史"),
+                                    Some(&paste_history_accel),
+                                )
+                                .clicked()
+                                {
+                                    self.pending_open_paste_history = true;
                                     ui.close_menu();
                                 }
                                 ui.separator();
@@ -2427,11 +2820,12 @@ impl TerminalView {
                             percent
                         );
                         let bar_w = Self::text_width_in_scroll_viewport(ui.available_width().max(1.0));
-                        ui.add(
-                            egui::ProgressBar::new(percent / 100.0)
-                                .fill(theme.accent_color())
-                                .desired_width(bar_w)
-                                .text(egui::RichText::new(detail).color(theme.text_primary())),
+                        crate::ui::chrome::progress_bar_labeled(
+                            ui,
+                            theme,
+                            percent / 100.0,
+                            &detail,
+                            Some(bar_w),
                         );
                         ui.horizontal(|ui| {
                             if crate::ui::chrome::modal_danger_button(
@@ -2470,6 +2864,7 @@ impl TerminalView {
                 ui.visuals_mut().extreme_bg_color = prev_extreme;
             });
         self.render_resend_offline_dialog(ui.ctx(), theme);
+        self.fire_post_connect_command(ui.ctx());
     }
 
     /// `viewport`：ScrollArea **内容区**(inner)的宽 × 可视区高度(与 `max_height(scroll_h)` 一致)，已不含 Frame inner_margin 与纵向滚动条占位。
@@ -2519,9 +2914,7 @@ impl TerminalView {
             if !self.paste_pending.is_empty() {
                 log::warn!("paste aborted: connection gone, {} bytes unsent", self.paste_pending.len());
             }
-            self.paste_pending.clear();
-            self.paste_next_chunk_at = None;
-            self.paste_retries = 0;
+            self.clear_unsent_paste();
             return;
         }
 
@@ -2537,6 +2930,8 @@ impl TerminalView {
         let chunk: Vec<u8> = self.paste_pending[..n].to_vec();
         match self.send_pty_input(&chunk) {
             Ok(()) => {
+                let notes = self.paste_ledger.on_written(n);
+                self.paste_history_ready.extend(notes);
                 self.paste_pending.drain(..n);
                 self.paste_retries = 0;
                 if self.paste_pending.is_empty() {
@@ -2563,11 +2958,17 @@ impl TerminalView {
                     self.paste_pending.len(),
                     e
                 ));
-                self.paste_pending.clear();
-                self.paste_next_chunk_at = None;
-                self.paste_retries = 0;
+                self.clear_unsent_paste();
             }
         }
+    }
+
+    /// 丢掉还没写完的粘贴队列。已完整写入的历史笔记保留。
+    fn clear_unsent_paste(&mut self) {
+        self.paste_pending.clear();
+        self.paste_next_chunk_at = None;
+        self.paste_retries = 0;
+        self.paste_ledger.abandon();
     }
 
     /// 处理 SSH 消息；若终端缓冲有更新则返回 `true`。
@@ -2612,6 +3013,8 @@ impl TerminalView {
                         if self.is_local_shell() {
                             if !data.is_empty() {
                                 self.pending_log_output.push(data.clone());
+                                self.observe_interactive_output(&data);
+                                self.dispatch_output_to_modules(&data);
                                 self.terminal.feed(&data);
                                 vte_dirty = true;
                             }
@@ -2791,6 +3194,8 @@ impl TerminalView {
                         }
                         if !display_data.is_empty() {
                             self.pending_log_output.push(display_data.clone());
+                            self.observe_interactive_output(&display_data);
+                            self.dispatch_output_to_modules(&display_data);
                             self.terminal.feed(&display_data);
                             vte_dirty = true;
                             self.note_cwd_from_screen();
@@ -2802,11 +3207,14 @@ impl TerminalView {
                             self.pending_connect_audit = Some((true, host.clone()));
                         }
                         self.connected = true;
+                        self.connecting_fido2 = false;
                         self.connected_at = Some(Instant::now());
                         self.terminal_wants_keyboard = true;
                         self.terminal_focused = true;
                         self.pending_focus_terminal = true;
                         self.auto_follow_output = true;
+                        // #201：重连成功，清除粘性「意外断线」标记。
+                        self.last_disconnect_unexpected = false;
 
                         if self.is_local_shell() {
                             // local_handle 已在 connect_local_shell 挂好
@@ -2818,6 +3226,17 @@ impl TerminalView {
                                         self.ssh_handle = Some(handle);
                                         if !self.disconnected_input_buffer.is_empty() {
                                             self.resend_offline_input_dialog_open = true;
+                                        }
+                                        // #177：连接/重连成功后排队恢复命令。
+                                        // 延迟 ~600ms 等 shell 提示符就绪，避免命令
+                                        // 被 shell 初始化输出吞掉；仅对显式配置生效。
+                                        if let Some(cmd) = self.pending_post_connect_command.take() {
+                                            if !cmd.trim().is_empty() {
+                                                self.post_connect_fire_at =
+                                                    Some(Instant::now() + Duration::from_millis(600));
+                                                // 暂存回 pending，到点再真正取走执行
+                                                self.pending_post_connect_command = Some(cmd);
+                                            }
                                         }
                                     }
                                     Err(e) => {
@@ -2833,6 +3252,13 @@ impl TerminalView {
                         }
                     }
                     SshMessage::Error { error, .. } => {
+                        self.connecting_fido2 = false;
+                        if let Some(changed) = crate::ssh::parse_host_key_changed(&error) {
+                            self.pending_host_key_trust =
+                                Some((changed.host, changed.port, changed.got));
+                        } else {
+                            self.pending_host_key_trust = None;
+                        }
                         let msg = format_ssh_connect_error(self.ui_lang_last, &error);
                         if let Some((_, host)) = &self.connection_target {
                             self.pending_connect_audit = Some((false, host.clone()));
@@ -2843,6 +3269,7 @@ impl TerminalView {
                         self.auto_follow_output = true;
                     }
                     SshMessage::Disconnected { .. } => {
+                        let unexpected = !self.local_disconnect_intent;
                         if self.local_disconnect_intent {
                             self.local_disconnect_intent = false;
                         } else {
@@ -2851,17 +3278,29 @@ impl TerminalView {
                             self.pending_attention_ended = true;
                         }
                         self.connected = false;
-                        self.terminal_wants_keyboard = false;
-                        self.terminal_focused = false;
                         self.connected_at = None;
                         self.auto_follow_output = true;
                         self.resend_offline_input_dialog_open = false;
+                        self.seal_open_capture();
+                        // 意外 EOF 不能再留着 ssh_manager，否则 is_connecting() 仍为真，
+                        // 标签/侧栏绿点不灭，还会盖上一层「正在连接」。
+                        if unexpected && !self.is_local_shell() {
+                            self.hold_ssh_after_unexpected_disconnect();
+                            vte_dirty = true;
+                        } else {
+                            self.terminal_wants_keyboard = false;
+                            self.terminal_focused = false;
+                        }
                     }
                     SshMessage::UserCommand { command, .. } => {
                         *self.command_usage.entry(command).or_insert(0) += 1;
                     }
                 }
             }
+        }
+        if self.release_ssh_rx_after_drain {
+            self.release_ssh_rx_after_drain = false;
+            self.ssh_rx = None;
         }
         vte_dirty || more_pending
     }
@@ -2973,6 +3412,7 @@ impl TerminalView {
         if data.is_empty() {
             return;
         }
+        self.disconnect_input_toast_armed = true;
         self.scroll_to_bottom_on_user_input();
         let cap = Self::OFFLINE_INPUT_CAP;
         if self.disconnected_input_buffer.len() >= cap {
@@ -3142,7 +3582,30 @@ impl TerminalView {
             let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
             self.append_offline_bytes(normalized.as_bytes());
         }
+        self.flush_disconnect_input_toast(ui.ctx());
         ui.ctx().request_repaint_after(Duration::from_millis(50));
+    }
+
+    /// #177：到点执行连接后恢复命令（会话显式配置，默认空不执行）。
+    /// 执行一次即清空；断线时由 disconnect 路径清空，避免旧命令跨会话泄漏。
+    fn fire_post_connect_command(&mut self, ctx: &egui::Context) {
+        let Some(fire_at) = self.post_connect_fire_at else {
+            return;
+        };
+        if Instant::now() < fire_at {
+            ctx.request_repaint_after(Duration::from_millis(100));
+            return;
+        }
+        self.post_connect_fire_at = None;
+        let Some(cmd) = self.pending_post_connect_command.take() else {
+            return;
+        };
+        if cmd.trim().is_empty() || !self.connected || !self.has_pty_writer() {
+            // shell 未就绪 / 已断开：丢弃，不跨连接执行
+            return;
+        }
+        log::info!("post-connect restore command firing ({} runes)", cmd.chars().count());
+        self.send_command(&cmd);
     }
 
     fn render_resend_offline_dialog(&mut self, ctx: &egui::Context, theme: &Theme) {
@@ -3523,14 +3986,44 @@ impl TerminalView {
         }
     }
 
+    /// 发送序列的一行：正文加回车。空行就是单独的 Enter。
+    /// 发送期间关掉分屏「同时输入」，避免这一行被广播到其它窗格。
+    pub fn send_line(&mut self, line: &str) {
+        if !self.connected {
+            return;
+        }
+        self.typed_line_buffer.clear();
+        if !line.is_empty() {
+            self.enqueue_log_command(line);
+            if crate::ui::terminal_shell_command::is_rz_shell_command(line) {
+                self.note_rz_shell_command_submitted();
+            }
+            if crate::ui::terminal_shell_command::is_sz_shell_command(line) {
+                self.note_sz_shell_command_submitted();
+            }
+        }
+        if !self.has_pty_writer() {
+            return;
+        }
+        let payload = crate::core::line_payload(line);
+        self.broadcast_suppress = true;
+        if let Err(e) = self.send_pty_input(&payload) {
+            log::error!("PTY write (send sequence): {}", e);
+        }
+        self.broadcast_suppress = false;
+    }
+
     /// 粘贴文本到终端：不自动补回车；远端开了 bracketed paste 时包上 200~/201~；
     /// 一律进分片队列发送(FUNCTIONAL_SPEC §2.4)，写失败不丢片。
     fn paste_text(&mut self, text: &str, ctx: &egui::Context) {
-        use crate::ui::terminal_paste::{build_paste_payload, exceeds_canon_line_limit, TTY_CANON_LINE_MAX};
-        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        use crate::ui::terminal_paste::{
+            build_paste_payload, exceeds_canon_line_limit, normalize_paste_newlines, TTY_CANON_LINE_MAX,
+        };
+        let normalized = normalize_paste_newlines(text);
         if !self.connected {
             if self.buffer_input_while_disconnected {
                 self.append_offline_bytes(normalized.as_bytes());
+                self.flush_disconnect_input_toast(ctx);
                 ctx.request_repaint_after(Duration::from_millis(50));
             }
             return;
@@ -3550,9 +4043,28 @@ impl TerminalView {
                 TTY_CANON_LINE_MAX
             ));
         }
-        self.paste_pending
-            .extend_from_slice(&build_paste_payload(&normalized, bracketed));
+        let payload = build_paste_payload(&normalized, bracketed);
+        self.observe_paste_for_history(&normalized, payload.len());
+        self.paste_pending.extend_from_slice(&payload);
         self.flush_paste_queue(ctx);
+    }
+
+    /// 整段 payload 写完才入库。密钥、密码提示和空粘贴只占字节空洞，避免打乱后续记账。
+    fn observe_paste_for_history(&mut self, normalized: &str, payload_len: usize) {
+        if payload_len == 0 {
+            return;
+        }
+        let cursor = self.terminal.cursor_line_text();
+        if let Some(note) = crate::core::paste_history::note_for_payload(normalized, &cursor) {
+            self.paste_ledger.push_entry(note, payload_len);
+        } else {
+            self.paste_ledger.push_gap(payload_len);
+        }
+    }
+
+    /// 把粘贴历史里的正文再送进当前 PTY（与菜单粘贴同一条 `paste_text` 路径）。
+    pub(crate) fn paste_from_history(&mut self, text: &str, ctx: &egui::Context) {
+        self.paste_text(text, ctx);
     }
 
     pub fn clear_screen(&mut self) {
@@ -3588,6 +4100,89 @@ impl TerminalView {
         self.copy_to_clipboard(ctx, true).is_some()
     }
 
+    /// 终端聚焦时：上一条 / 下一条命令块，以及复制当前块。
+    /// 在方向键转发给 PTY 之前消费，避免 Ctrl+Shift+↑ 变成 xterm 修饰序列。
+    fn handle_command_block_shortcuts(&mut self, ui: &egui::Ui) {
+        let (prev, next, copy) = ui.input_mut(|i| {
+            let prev =
+                crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::ArrowUp);
+            let next =
+                crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::ArrowDown);
+            let copy = crate::ui::keyboard_shortcuts::consume_primary_shift_key(i, egui::Key::O);
+            (prev, next, copy)
+        });
+        if prev {
+            self.jump_command_block(ui.ctx(), crate::terminal::NavDir::Prev);
+        }
+        if next {
+            self.jump_command_block(ui.ctx(), crate::terminal::NavDir::Next);
+        }
+        if copy {
+            self.copy_current_command_block(ui.ctx());
+        }
+    }
+
+    fn jump_command_block(&mut self, ctx: &egui::Context, dir: crate::terminal::NavDir) {
+        use crate::terminal::{BlockNav, NavDir};
+        match self.terminal.navigate_command_block(dir) {
+            BlockNav::ScrollTo(line) => {
+                self.terminal
+                    .scroll_line_to_top(alacritty_terminal::index::Line(line));
+                self.auto_follow_output = self.terminal.is_scrolled_to_bottom();
+                self.visual_layout_cache = None;
+                self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
+            }
+            BlockNav::Bottom => {
+                self.terminal.scroll_to_bottom();
+                self.auto_follow_output = true;
+                self.visual_layout_cache = None;
+                self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
+            }
+            BlockNav::NoIntegration => {
+                self.pending_toast_info = Some(
+                    crate::i18n::tr(
+                        ctx,
+                        "Command blocks need shell integration (OSC 133). See the manual: Terminal → Command blocks.",
+                        "命令块需要 shell integration (OSC 133). 见手册「使用终端 → 命令块」.",
+                    )
+                    .to_string(),
+                );
+            }
+            BlockNav::AtEdge => {
+                let (en, zh) = match dir {
+                    NavDir::Prev => ("Already at the first command block", "已经是第一条命令块"),
+                    NavDir::Next => ("Already at the latest output", "已经在最新输出"),
+                };
+                self.pending_toast_info = Some(crate::i18n::tr(ctx, en, zh).to_string());
+            }
+        }
+    }
+
+    fn copy_current_command_block(&mut self, ctx: &egui::Context) {
+        use crate::terminal::CopyBlock;
+        match self.terminal.copy_command_block_text() {
+            CopyBlock::Text(text) => {
+                ctx.copy_text(text);
+            }
+            CopyBlock::NoIntegration => {
+                self.pending_toast_info = Some(
+                    crate::i18n::tr(
+                        ctx,
+                        "Command blocks need shell integration (OSC 133). See the manual: Terminal → Command blocks.",
+                        "命令块需要 shell integration (OSC 133). 见手册「使用终端 → 命令块」.",
+                    )
+                    .to_string(),
+                );
+            }
+            CopyBlock::Empty => {
+                self.pending_toast_info = Some(
+                    crate::i18n::tr(ctx, "No command block to copy", "没有可复制的命令块")
+                        .to_string(),
+                );
+            }
+        }
+    }
+
     /// 快捷键 Ctrl+Shift+C：仅复制选区；无选区时不复制。
     /// 返回放进剪贴板的文字(无选区为 `None`)，供调用方在帧末核对是否被别的控件覆盖。
     pub(crate) fn shortcut_copy_to_clipboard(&self, ctx: &egui::Context) -> Option<String> {
@@ -3617,33 +4212,28 @@ impl TerminalView {
     }
 
     /// display-link 点击分发（#90）：
-    /// - Copy：直接复制
-    /// - BrowserOpen：系统浏览器（http/https 才放行）
-    /// - RunbookRecall：把错误码作为上下文发到 AI 面板（团队 Runbook 召回链路）
-    /// - SftpOpen：置 pending，由宿主开 SFTP 面板并跳转
-    fn handle_display_link_click(
-        &mut self,
-        ctx: &egui::Context,
-        link: &crate::core::display_link::DisplayLink,
-    ) {
-        match link.action {
-            crate::core::display_link::DisplayLinkAction::Copy => {
+    /// - copy-or-connect：直接复制
+    /// - browser-open：系统浏览器（http/https 才放行）
+    /// - runbook-recall：把错误码交给宿主自动召回
+    /// - sftp-open：置 pending，由宿主开 SFTP 面板并跳转
+    fn handle_display_link_click(&mut self, ctx: &egui::Context, link: &DisplaySpan) {
+        match classify_display_link_click(&link.action, &link.text) {
+            Some(DisplayLinkClick::Copy) => {
                 ctx.copy_text(link.text.clone());
             }
-            crate::core::display_link::DisplayLinkAction::BrowserOpen => {
-                if link.text.starts_with("http://") || link.text.starts_with("https://") {
-                    let _ = crate::platform::open_url(&link.text);
-                }
+            Some(DisplayLinkClick::Browser) => {
+                let _ = crate::platform::open_url(&link.text);
             }
-            crate::core::display_link::DisplayLinkAction::RunbookRecall => {
+            Some(DisplayLinkClick::Runbook) => {
                 // #90 review 后续：不再走「发送到 AI」的 attach 路径（用户还得手发），
                 // 改走自动召回：宿主取走后 attach 错误码 + 预填问题自动发送，
                 // send_message 内部 schedule_runbook_recall 直接出卡片。
                 self.pending_display_link_runbook = Some(link.text.clone());
             }
-            crate::core::display_link::DisplayLinkAction::SftpOpen => {
+            Some(DisplayLinkClick::Sftp) => {
                 self.pending_display_link_sftp = Some(link.text.clone());
             }
+            None => {}
         }
     }
 
@@ -3660,6 +4250,104 @@ impl TerminalView {
     /// 宿主取走待新开连接的 IP（右键 display-link 产生，#90 后续）。
     pub fn take_pending_display_link_connect(&mut self) -> Option<String> {
         self.pending_display_link_connect.take()
+    }
+
+    /// 设置或共享 ModuleRegistry（#117）。换表后丢掉布局缓存，避免沿用另一份模块状态下的装饰。
+    pub fn set_module_registry(&mut self, reg: std::sync::Arc<crate::capability::ModuleRegistry>) {
+        self.module_registry = reg;
+        self.visual_layout_cache = None;
+    }
+
+    /// 获取当前持有的 ModuleRegistry 引用。
+    pub fn module_registry(&self) -> &std::sync::Arc<crate::capability::ModuleRegistry> {
+        &self.module_registry
+    }
+
+    /// 取走模块产生的未消费动作（#117 分发骨架）。
+    pub fn take_pending_module_actions(&mut self) -> Vec<crate::capability::ModuleAction> {
+        std::mem::take(&mut self.pending_module_actions)
+    }
+
+    /// 取走模块右键菜单点击项（#117）。
+    pub fn take_pending_module_menu_action(&mut self) -> Option<String> {
+        self.pending_module_menu_action.take()
+    }
+
+    /// 扫描 PTY 输出中的完整行，在 UI/编排线程分发给各 enabled 模块的 on_output_line（#117）。
+    /// 注意：仅在 UI 线程处理收到的 SshMessage::Output 时调用，绝不在 SSH 泵线程运行。
+    fn dispatch_output_to_modules(&mut self, chunk: &[u8]) {
+        if chunk.is_empty() {
+            return;
+        }
+        let lines =
+            crate::capability::split_pty_output_lines(&mut self.module_output_line_acc, chunk);
+        for line in lines {
+            let ctx = crate::capability::OutputLineCtx::pty(&line);
+            let actions = self.module_registry.on_output_line(&ctx);
+            // Notify 入队给宿主。DecorateLink 不从这条 PTY 流画到格子上：
+            // 原始行的字节区间对不齐视口，display-link 只在 Viewport 重扫时产出装饰（#120）。
+            // 流式 DecorateLink 若入队，会把 Notify 挤出下面的上限。
+            for act in actions {
+                if let crate::capability::ModuleAction::Notify {
+                    severity,
+                    text,
+                    attention,
+                    ..
+                } = &act
+                {
+                    log::debug!(
+                        target: "capability",
+                        "module notify: sev={:?} att={} text={}",
+                        severity,
+                        attention,
+                        text
+                    );
+                }
+                if !matches!(act, crate::capability::ModuleAction::DecorateLink { .. }) {
+                    self.pending_module_actions.push(act);
+                }
+            }
+            const CAP: usize = 32;
+            if self.pending_module_actions.len() > CAP {
+                let drain = self.pending_module_actions.len() - CAP;
+                self.pending_module_actions.drain(0..drain);
+            }
+        }
+        // 与 #112 pending trigger 队列一致：Notify 最多留 8 条，丢掉最早的，避免 Toast 风暴。
+        self.cap_pending_notifies(8);
+    }
+
+    fn cap_pending_notifies(&mut self, cap: usize) {
+        let notify_count = self
+            .pending_module_actions
+            .iter()
+            .filter(|a| matches!(a, crate::capability::ModuleAction::Notify { .. }))
+            .count();
+        if notify_count <= cap {
+            return;
+        }
+        let mut drop_n = notify_count - cap;
+        self.pending_module_actions.retain(|a| {
+            if drop_n > 0 && matches!(a, crate::capability::ModuleAction::Notify { .. }) {
+                drop_n -= 1;
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    /// 取走 Notify。其它动作留在队列里（PTY 路径不入队 DecorateLink，见 #120）。
+    pub fn take_pending_notifies(&mut self) -> Vec<crate::capability::ModuleAction> {
+        let pending = std::mem::take(&mut self.pending_module_actions);
+        let mut notifies = Vec::new();
+        for act in pending {
+            match act {
+                n @ crate::capability::ModuleAction::Notify { .. } => notifies.push(n),
+                other => self.pending_module_actions.push(other),
+            }
+        }
+        notifies
     }
 
     pub fn take_pending_send_to_ai(&mut self) -> bool {
@@ -4014,43 +4702,101 @@ impl TerminalView {
                                         .color(theme.red_color()),
                                 );
                                 ui.add_space(theme.spacing_md());
+                                let offer_trust = self.pending_host_key_trust.is_some();
                                 // 按钮组整体居中，与上方文案同轴（勿贴左/贴右）。
                                 let gap = theme.spacing_sm().max(8.0);
-                                let row_w = theme.size_modal_footer_btn_min_w_secondary() * 2.0
-                                    + theme.size_modal_footer_btn_min_w_primary()
-                                    + gap * 2.0;
-                                let pad = ((max_w - row_w) * 0.5).max(0.0);
-                                ui.horizontal(|ui| {
-                                    ui.add_space(pad);
-                                    ui.spacing_mut().item_spacing.x = gap;
-                                    if crate::ui::chrome::modal_secondary_button(
-                                        ui,
-                                        theme,
-                                        crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
-                                    )
-                                    .clicked()
-                                    {
-                                        action = ConnectionPlaceholderAction::DismissTab;
-                                    }
-                                    if crate::ui::chrome::modal_secondary_button(
-                                        ui,
-                                        theme,
-                                        crate::i18n::tr(ui.ctx(), "Edit host", "编辑主机"),
-                                    )
-                                    .clicked()
-                                    {
-                                        action = ConnectionPlaceholderAction::EditHost;
-                                    }
-                                    if crate::ui::chrome::modal_primary_button(
-                                        ui,
-                                        theme,
-                                        crate::i18n::tr(ui.ctx(), "Retry", "重试"),
-                                    )
-                                    .clicked()
-                                    {
-                                        action = ConnectionPlaceholderAction::Retry;
-                                    }
-                                });
+                                if offer_trust {
+                                    // Host-key change: keep Close/Edit/Retry, put Trust as the clear primary CTA.
+                                    let row_w = theme.size_modal_footer_btn_min_w_secondary() * 3.0
+                                        + gap * 2.0;
+                                    let pad = ((max_w - row_w) * 0.5).max(0.0);
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(pad);
+                                        ui.spacing_mut().item_spacing.x = gap;
+                                        if crate::ui::chrome::modal_secondary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::DismissTab;
+                                        }
+                                        if crate::ui::chrome::modal_secondary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(ui.ctx(), "Edit host", "编辑主机"),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::EditHost;
+                                        }
+                                        if crate::ui::chrome::modal_secondary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(ui.ctx(), "Retry", "重试"),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::Retry;
+                                        }
+                                    });
+                                    ui.add_space(theme.spacing_sm());
+                                    let trust_w = theme.size_modal_footer_btn_min_w_primary().max(160.0);
+                                    let pad_t = ((max_w - trust_w) * 0.5).max(0.0);
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(pad_t);
+                                        if crate::ui::chrome::modal_primary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(
+                                                ui.ctx(),
+                                                "Trust and continue",
+                                                "信任并继续",
+                                            ),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::TrustHostKey;
+                                        }
+                                    });
+                                } else {
+                                    let row_w = theme.size_modal_footer_btn_min_w_secondary() * 2.0
+                                        + theme.size_modal_footer_btn_min_w_primary()
+                                        + gap * 2.0;
+                                    let pad = ((max_w - row_w) * 0.5).max(0.0);
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(pad);
+                                        ui.spacing_mut().item_spacing.x = gap;
+                                        if crate::ui::chrome::modal_secondary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(ui.ctx(), "Close tab", "关闭标签"),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::DismissTab;
+                                        }
+                                        if crate::ui::chrome::modal_secondary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(ui.ctx(), "Edit host", "编辑主机"),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::EditHost;
+                                        }
+                                        if crate::ui::chrome::modal_primary_button(
+                                            ui,
+                                            theme,
+                                            crate::i18n::tr(ui.ctx(), "Retry", "重试"),
+                                        )
+                                        .clicked()
+                                        {
+                                            action = ConnectionPlaceholderAction::Retry;
+                                        }
+                                    });
+                                }
                             } else if is_connecting {
                                 let host = self.connection_server_text();
                                 let text = if self.is_local_shell() {
@@ -4072,6 +4818,16 @@ impl TerminalView {
                                         .size(theme.font_size_body())
                                         .color(theme.text_secondary()),
                                 );
+                                if self.connecting_fido2 {
+                                    ui.add_space(theme.spacing_sm());
+                                    ui.label(
+                                        egui::RichText::new(crate::ssh::fido2_connect_hint(
+                                            crate::i18n::language(ui.ctx()),
+                                        ))
+                                        .size(theme.font_size_body())
+                                        .color(theme.text_primary()),
+                                    );
+                                }
                                 ui.add_space(theme.spacing_md());
                                 let btn_w = theme.size_modal_footer_btn_min_w_secondary();
                                 let pad = ((max_w - btn_w) * 0.5).max(0.0);
@@ -4117,9 +4873,15 @@ impl TerminalView {
             )
         } else if self.is_connecting() {
             (
-                self.locale_last()
-                    .tr("Connecting…", "正在连接…")
-                    .to_string(),
+                if self.connecting_fido2 {
+                    self.locale_last()
+                        .tr("Touch key or enter PIN…", "请触摸密钥或输入 PIN…")
+                        .to_string()
+                } else {
+                    self.locale_last()
+                        .tr("Connecting…", "正在连接…")
+                        .to_string()
+                },
                 theme.accent_color(),
             )
         } else {
@@ -4243,7 +5005,10 @@ impl TerminalView {
 
     /// 断开连接(关闭 SSH 并清空本地终端网格，用于移除标签等场景)
     pub fn disconnect(&mut self) {
+        self.flush_interactive_to_disk();
         self.local_disconnect_intent = true;
+        // #201 复审：用户主动断开 → 清粘性「意外断线」标记。
+        self.clear_last_disconnect_unexpected();
         if let Some(ref h) = self.local_handle {
             h.request_stop();
         }
@@ -4264,22 +5029,32 @@ impl TerminalView {
         self.vt_visual_generation = self.vt_visual_generation.wrapping_add(1);
         self.visual_layout_cache = None;
         self.error_message = None;
+        self.pending_host_key_trust = None;
+        self.connecting_fido2 = false;
         self.transfer_progress = None;
         self.transfer_outgoing = false;
         self.pending_focus_terminal = false;
         self.connected_at = None;
         self.terminal_wants_keyboard = false;
         self.terminal_focused = false;
-        self.paste_pending.clear();
-        self.paste_next_chunk_at = None;
+        self.clear_unsent_paste();
         self.buffer_input_while_disconnected = false;
+        self.release_ssh_rx_after_drain = false;
+        self.disconnect_input_toast_at = None;
+        self.disconnect_input_toast_armed = false;
         self.disconnected_input_buffer.clear();
         self.resend_offline_input_dialog_open = false;
+        // #177：断线丢弃未执行的恢复命令，避免旧命令跨会话泄漏
+        self.pending_post_connect_command = None;
+        self.post_connect_fire_at = None;
     }
 
     /// 仅断开 SSH，保留当前屏幕与滚动缓冲(FUNCTIONAL_SPEC §1.3.5：Tab 保留、输出冻结、不可再输入)
     pub fn disconnect_ssh_keep_buffer(&mut self) {
+        self.flush_interactive_to_disk();
         self.local_disconnect_intent = true;
+        // #201 复审：用户主动断开 → 清粘性「意外断线」标记。
+        self.clear_last_disconnect_unexpected();
         if let Some(ref h) = self.local_handle {
             h.request_stop();
         }
@@ -4297,16 +5072,48 @@ impl TerminalView {
         self.ssh_rx = None;
         self.session_id = None;
         self.error_message = None;
+        self.pending_host_key_trust = None;
+        self.connecting_fido2 = false;
         self.transfer_progress = None;
         self.transfer_outgoing = false;
         self.pending_focus_terminal = false;
         self.connected_at = None;
         self.terminal_wants_keyboard = false;
         self.terminal_focused = false;
-        self.paste_pending.clear();
-        self.paste_next_chunk_at = None;
+        self.clear_unsent_paste();
         self.buffer_input_while_disconnected = true;
+        self.disconnect_input_toast_at = None;
+        self.disconnect_input_toast_armed = false;
         self.resend_offline_input_dialog_open = false;
+        self.feed_ssh_disconnected_notice();
+    }
+
+    /// 意外断开：保留画面与键盘，输入改走本地缓冲。清掉 SSH 句柄，避免仍被当成「正在连接」。
+    fn hold_ssh_after_unexpected_disconnect(&mut self) {
+        // #201 复审：粘性标记——本断线为意外。前台重连判定读这里，
+        // 不抢退避用的一次性信号；重连成功/主动断开时清除。
+        self.last_disconnect_unexpected = true;
+        self.buffer_input_while_disconnected = true;
+        self.disconnect_input_toast_at = None;
+        self.disconnect_input_toast_armed = false;
+        self.terminal_wants_keyboard = true;
+        self.pending_focus_terminal = true;
+        if let Some(ref h) = self.ssh_handle {
+            self.lrzsz.unregister_shell_pump_upload_feed(h);
+        }
+        self.pending_rz_upload = false;
+        self.end_rz_handshake_capture();
+        self.clear_rz_control_mode();
+        self.ssh_handle = None;
+        self.ssh_manager = None;
+        self.release_ssh_rx_after_drain = true;
+        self.connecting_fido2 = false;
+        self.transfer_progress = None;
+        self.transfer_outgoing = false;
+        self.feed_ssh_disconnected_notice();
+    }
+
+    fn feed_ssh_disconnected_notice(&mut self) {
         let disconnected_banner = match self.ui_lang_last {
             UiLanguage::Zh => concat!(
                 "\r\n\x1b[33m[已断开 SSH；键盘输入将暂存，重连后可选择是否发送到远端]",
@@ -4318,6 +5125,43 @@ impl TerminalView {
             ),
         };
         self.terminal.feed(disconnected_banner.as_bytes());
+    }
+
+    /// 活动 SSH 标签应显示常驻断开条：已进入离线缓冲，且不是正在连接或连接失败占位。
+    pub fn shows_persistent_disconnect_banner(&self) -> bool {
+        !self.is_local_shell()
+            && self.buffer_input_while_disconnected
+            && !self.connected
+            && !self.is_connecting()
+            && self.error_message.is_none()
+    }
+
+    /// 断开态键入提示，约 3 秒一次，避免按住按键刷屏。
+    fn flush_disconnect_input_toast(&mut self, ctx: &egui::Context) {
+        if !self.disconnect_input_toast_armed {
+            return;
+        }
+        self.disconnect_input_toast_armed = false;
+        if !self.shows_persistent_disconnect_banner() {
+            return;
+        }
+        const GAP: Duration = Duration::from_secs(3);
+        let now = Instant::now();
+        if self
+            .disconnect_input_toast_at
+            .is_some_and(|t| now.saturating_duration_since(t) < GAP)
+        {
+            return;
+        }
+        self.disconnect_input_toast_at = Some(now);
+        self.pending_toast_info = Some(
+            crate::i18n::tr(
+                ctx,
+                "Disconnected. Keystrokes are buffered locally and can be resent after reconnect.",
+                "已断开，输入已暂存，重连后可确认重发",
+            )
+            .to_string(),
+        );
     }
 
     pub const ERR_FRAGMENT_NOT_CONNECTED: &'static str = "__mistterm_fragment_not_connected";
@@ -4391,6 +5235,16 @@ impl TerminalView {
         std::mem::take(&mut self.unexpected_disconnect_notified)
     }
 
+    /// #201：粘性「本断线为意外」标记（前台重连判定用；不清除，重连成功才消）。
+    pub fn last_disconnect_was_unexpected(&self) -> bool {
+        self.last_disconnect_unexpected
+    }
+
+    /// #201：清除粘性标记（用户主动断开路径调用）。
+    fn clear_last_disconnect_unexpected(&mut self) {
+        self.last_disconnect_unexpected = false;
+    }
+
     /// #93：VTE BEL（响铃），宿主聚合到未聚焦标签。
     pub fn take_pending_bell(&mut self) -> bool {
         self.terminal.take_pending_bell()
@@ -4434,6 +5288,29 @@ impl TerminalView {
 
     pub fn take_pending_toast_error(&mut self) -> Option<String> {
         self.pending_toast_error.take()
+    }
+
+    /// 命令块提示（未集成、已经到头、没有可复制的块）。
+    pub fn take_pending_toast_info(&mut self) -> Option<String> {
+        self.pending_toast_info.take()
+    }
+
+    /// Persist the offered new host key into known_hosts after explicit user trust.
+    pub fn apply_pending_host_key_trust(&mut self) -> Result<(), String> {
+        let Some((host, port, fingerprint)) = self.pending_host_key_trust.take() else {
+            return Err(
+                self.locale_last()
+                    .tr(
+                        "No host-key change to trust",
+                        "没有可信任的主机密钥变更",
+                    )
+                    .to_string(),
+            );
+        };
+        crate::ssh::replace_host_key(&host, port, &fingerprint)?;
+        self.error_message = None;
+        self.pending_toast_error = None;
+        Ok(())
     }
 
     pub fn take_connection_placeholder_action(&mut self) -> ConnectionPlaceholderAction {
@@ -4858,6 +5735,90 @@ mod typed_enter_gate_tests {
 }
 
 #[cfg(test)]
+mod interactive_exec_terminal_tests {
+    use super::*;
+
+    fn capturing_view(line: &str) -> TerminalView {
+        let mut v = TerminalView::new();
+        v.connected = true;
+        v.set_interactive_capture(true, "sess-9", "10.1.2.3");
+        v.track_typed_text(line);
+        v
+    }
+
+    #[test]
+    fn interactive_exec_capture_off_does_not_record() {
+        let mut v = capturing_view("echo hi");
+        v.set_interactive_capture(false, "sess-9", "10.1.2.3");
+        v.release_typed_enter();
+        v.observe_interactive_output(b"\r\nhi\r\nuser@host:~$ ");
+        assert!(v.take_interactive_exec_records().is_empty());
+    }
+
+    #[test]
+    fn interactive_exec_typed_command_becomes_one_record() {
+        let mut v = capturing_view("echo hi");
+        v.set_pending_capture_outcome("allowed");
+        v.release_typed_enter();
+        assert!(
+            v.take_interactive_exec_records().is_empty(),
+            "still waiting for the prompt"
+        );
+        v.observe_interactive_output(b"\r\nhi\r\nuser@host:~$ ");
+        let rows = v.take_interactive_exec_records();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].target, "10.1.2.3");
+        assert_eq!(rows[0].command, "echo hi");
+        assert!(rows[0].timestamp.contains('T'));
+        assert!(rows[0].output_summary.contains("hi"));
+        assert!(rows[0].tags.iter().any(|t| t == "allowed"));
+        v.observe_interactive_output(b"user@host:~$ ");
+        assert!(v.take_interactive_exec_records().is_empty());
+    }
+
+    #[test]
+    fn interactive_exec_skips_secret_prompt_and_alt_screen() {
+        let mut v = capturing_view("hunter2");
+        v.terminal.feed(b"[sudo] password for tian: ");
+        v.release_typed_enter();
+        v.observe_interactive_output(b"\r\nuser@host:~$ ");
+        assert!(v.take_interactive_exec_records().is_empty());
+
+        let mut v = capturing_view("dd");
+        v.terminal.feed(b"\x1b[?1049h");
+        v.release_typed_enter();
+        v.observe_interactive_output(b"\r\nuser@host:~$ ");
+        assert!(v.take_interactive_exec_records().is_empty());
+    }
+
+    #[test]
+    fn interactive_exec_server_block_closes_open_command() {
+        let mut v = capturing_view("rm -rf /");
+        v.release_typed_enter();
+        v.note_server_audit_outcome("rm -rf /", "blocked");
+        let rows = v.take_interactive_exec_records();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].command, "rm -rf /");
+        assert!(rows[0].tags.iter().any(|t| t == "blocked"));
+        assert!(!rows[0].ok);
+        assert!(rows[0].exit_code.is_none());
+    }
+
+    #[test]
+    fn interactive_exec_server_block_retags_record_already_closed_by_prompt() {
+        let mut v = capturing_view("rm -rf /");
+        v.release_typed_enter();
+        v.observe_interactive_output(b"\r\nuser@host:~$ ");
+        v.note_server_audit_outcome("rm -rf /", "blocked");
+        let rows = v.take_interactive_exec_records();
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].tags.iter().any(|t| t == "blocked"));
+        assert!(!rows[0].tags.iter().any(|t| t == "allowed"));
+        assert!(!rows[0].ok);
+    }
+}
+
+#[cfg(test)]
 mod selection_extend_tests {
     use super::*;
 
@@ -4873,6 +5834,28 @@ mod selection_extend_tests {
         let colon = line.find(':').unwrap();
         let (start, end) = TerminalView::terminal_token_range_at(line, colon).unwrap();
         assert_eq!(&line[start..end], "root@host");
+    }
+
+    #[test]
+    fn double_click_includes_base64_padding() {
+        let line = "echo YWJjZA== done";
+        let letter = line.find('Y').unwrap();
+        let (start, end) = TerminalView::terminal_token_range_at(line, letter).unwrap();
+        assert_eq!(&line[start..end], "YWJjZA==");
+
+        let pad = line.find('=').unwrap();
+        let (start, end) = TerminalView::terminal_token_range_at(line, pad).unwrap();
+        assert_eq!(&line[start..end], "YWJjZA==");
+        let (start, end) = TerminalView::terminal_token_range_at(line, pad + 1).unwrap();
+        assert_eq!(&line[start..end], "YWJjZA==");
+
+        let line_single = "tok YQ= end";
+        let letter = line_single.find('Y').unwrap();
+        let (start, end) = TerminalView::terminal_token_range_at(line_single, letter).unwrap();
+        assert_eq!(&line_single[start..end], "YQ=");
+        let pad = line_single.find('=').unwrap();
+        let (start, end) = TerminalView::terminal_token_range_at(line_single, pad).unwrap();
+        assert_eq!(&line_single[start..end], "YQ=");
     }
 
     #[test]
@@ -5003,5 +5986,427 @@ mod cwd_tests {
         assert!(win.contains("O''Brien"));
         let posix = String::from_utf8(startup_cd_payload("/tmp/a b")).unwrap();
         assert!(posix.starts_with("cd -- "));
+    }
+}
+
+#[cfg(test)]
+mod host_wiring_tests {
+    use super::*;
+    use crate::capability::{
+        BeforeSendCtx, DockContribution, MenuCtx, MenuItem, MistModule, ModuleAction, ModuleId,
+        ModuleRegistry, OutputLineCtx, SendVerdict, Severity,
+    };
+    use std::sync::{Arc, Mutex};
+
+    struct TestOutputModule {
+        lines: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl MistModule for TestOutputModule {
+        fn id(&self) -> ModuleId {
+            "test-output"
+        }
+        fn name_zh(&self) -> &str {
+            "测试输出模块"
+        }
+        fn name_en(&self) -> &str {
+            "Test Output Module"
+        }
+        fn on_output_line(&self, ctx: &OutputLineCtx<'_>) -> Vec<ModuleAction> {
+            self.lines.lock().unwrap().push(ctx.line.to_string());
+            vec![ModuleAction::Notify {
+                severity: Severity::Info,
+                text: format!("got: {}", ctx.line),
+                attention: true,
+                dedupe_key: String::new(),
+            }]
+        }
+        fn contribute_context_menu(&self, _ctx: &MenuCtx<'_>) -> Vec<MenuItem> {
+            vec![MenuItem {
+                action: "test.action".into(),
+                label_zh: "测试菜单项".into(),
+                label_en: "Test Menu Item".into(),
+            }]
+        }
+    }
+
+    #[test]
+    fn test_dispatch_output_to_modules_complete_lines() {
+        let mut view = TerminalView::new();
+        let lines_received = Arc::new(Mutex::new(Vec::new()));
+        let reg = ModuleRegistry::with_modules(vec![Box::new(TestOutputModule {
+            lines: lines_received.clone(),
+        })]);
+        view.set_module_registry(Arc::new(reg));
+
+        // 写入不完整行
+        view.dispatch_output_to_modules(b"hello ");
+        assert!(lines_received.lock().unwrap().is_empty());
+        assert!(view.take_pending_module_actions().is_empty());
+
+        // 补全换行符（CRLF）
+        view.dispatch_output_to_modules(b"world\r\n");
+        assert_eq!(*lines_received.lock().unwrap(), vec!["hello world".to_string()]);
+        
+        let actions = view.take_pending_module_actions();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            ModuleAction::Notify { text, .. } => assert_eq!(text, "got: hello world"),
+            _ => panic!("unexpected action"),
+        }
+    }
+
+    #[test]
+    fn test_disabled_module_in_host_gets_no_events() {
+        let mut view = TerminalView::new();
+        let lines_received = Arc::new(Mutex::new(Vec::new()));
+        let reg = ModuleRegistry::with_modules(vec![Box::new(TestOutputModule {
+            lines: lines_received.clone(),
+        })]);
+        reg.set_enabled("test-output", false);
+        view.set_module_registry(Arc::new(reg));
+
+        view.dispatch_output_to_modules(b"line 1\n");
+        assert!(lines_received.lock().unwrap().is_empty());
+        assert!(view.take_pending_module_actions().is_empty());
+    }
+
+    fn view_with_builtin_modules() -> TerminalView {
+        let mut view = TerminalView::new();
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(
+            crate::core::CmdAuditEngine::new(),
+        ));
+        view.set_module_registry(Arc::new(ModuleRegistry::with_modules(
+            crate::modules::builtin_modules(engine),
+        )));
+        view
+    }
+
+    #[test]
+    fn output_trigger_module_notifies_on_complete_line() {
+        let mut view = view_with_builtin_modules();
+        view.dispatch_output_to_modules(b"noise\nECONNREFUSED here\r\npartial");
+        let actions = view.take_pending_notifies();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            ModuleAction::Notify {
+                severity,
+                text,
+                attention,
+                dedupe_key,
+            } => {
+                assert_eq!(*severity, Severity::Error);
+                assert!(text.contains("ECONNREFUSED"));
+                assert!(*attention);
+                assert_eq!(dedupe_key, "TR-ERR-001");
+            }
+            other => panic!("expected notify, got {other:?}"),
+        }
+        // 半行还没换行，不应再产出。
+        assert!(view.take_pending_notifies().is_empty());
+        view.dispatch_output_to_modules(b" WARNING: disk almost full\n");
+        let actions = view.take_pending_notifies();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            ModuleAction::Notify {
+                severity,
+                dedupe_key,
+                ..
+            } => {
+                assert_eq!(*severity, Severity::Warn);
+                assert_eq!(dedupe_key, "TR-WARN-001");
+            }
+            other => panic!("expected warn notify, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn output_trigger_disabled_yields_no_notify() {
+        let mut view = view_with_builtin_modules();
+        view.module_registry
+            .sync_effective_disabled(&["output-trigger".to_string()]);
+        view.dispatch_output_to_modules(b"ECONNREFUSED\nBuild succeeded\nWARNING: x\n");
+        assert!(view.take_pending_notifies().is_empty());
+
+        view.module_registry.sync_effective_disabled(&[]);
+        view.dispatch_output_to_modules(b"Build succeeded in 1s\n");
+        let actions = view.take_pending_notifies();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            ModuleAction::Notify {
+                severity,
+                dedupe_key,
+                attention,
+                ..
+            } => {
+                assert_eq!(*severity, Severity::Success);
+                assert_eq!(dedupe_key, "TR-OK-001");
+                assert!(*attention);
+            }
+            other => panic!("expected success notify, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn output_trigger_notify_queue_keeps_newest_eight() {
+        let mut view = view_with_builtin_modules();
+        let mut buf = Vec::new();
+        for _ in 0..10 {
+            buf.extend_from_slice(b"ECONNREFUSED\n");
+        }
+        view.dispatch_output_to_modules(&buf);
+        assert_eq!(view.take_pending_notifies().len(), 8);
+    }
+}
+
+#[cfg(test)]
+mod display_link_host_tests {
+    use super::*;
+    use crate::capability::{MenuCtx, ModuleRegistry};
+    use std::sync::Arc;
+    use crate::modules::display_link::{
+        ACTION_BROWSER_OPEN, ACTION_COPY_OR_CONNECT, ACTION_NEW_CONNECTION, ACTION_RUNBOOK_RECALL,
+        ACTION_SFTP_OPEN, MODULE_ID,
+    };
+
+    fn official_registry() -> ModuleRegistry {
+        ModuleRegistry::with_modules(crate::modules::builtin_modules(std::sync::Arc::new(
+            std::sync::Mutex::new(crate::core::CmdAuditEngine::new()),
+        )))
+    }
+
+    #[test]
+    fn pty_dispatch_does_not_enqueue_display_link_decorations() {
+        let mut view = TerminalView::new();
+        view.set_module_registry(Arc::new(official_registry()));
+        view.dispatch_output_to_modules(b"ECONNREFUSED 10.1.2.3\n");
+        let _notifies = view.take_pending_notifies();
+        assert!(
+            view.take_pending_module_actions().is_empty(),
+            "PTY 行不应把装饰留在动作队列"
+        );
+    }
+
+    #[test]
+    fn viewport_scan_respects_enabled_flag() {
+        let reg = official_registry();
+        let formatted = "failed to open /var/log/nginx/error.log\nECONNREFUSED 10.0.0.8\n";
+        let hits = TerminalView::scan_display_links(&reg, formatted);
+        assert!(hits.iter().any(|(_, s)| s.action == ACTION_SFTP_OPEN));
+        assert!(hits
+            .iter()
+            .any(|(_, s)| s.text == "ECONNREFUSED" && s.action == ACTION_RUNBOOK_RECALL));
+        assert!(hits
+            .iter()
+            .any(|(_, s)| s.text == "10.0.0.8" && s.action == ACTION_COPY_OR_CONNECT));
+
+        let items = reg.context_menu_items(&MenuCtx {
+            link_action: Some(ACTION_COPY_OR_CONNECT),
+            link_text: Some("10.0.0.8"),
+        });
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].action, ACTION_NEW_CONNECTION);
+        assert!(reg
+            .context_menu_items(&MenuCtx {
+                link_action: None,
+                link_text: None,
+            })
+            .is_empty());
+
+        reg.set_enabled(MODULE_ID, false);
+        assert!(TerminalView::scan_display_links(&reg, formatted).is_empty());
+        assert!(reg
+            .context_menu_items(&MenuCtx {
+                link_action: Some(ACTION_COPY_OR_CONNECT),
+                link_text: Some("10.0.0.8"),
+            })
+            .is_empty());
+    }
+
+    #[test]
+    fn classify_click_keeps_http_guard() {
+        assert!(matches!(
+            classify_display_link_click(ACTION_COPY_OR_CONNECT, "1.2.3.4"),
+            Some(DisplayLinkClick::Copy)
+        ));
+        assert!(matches!(
+            classify_display_link_click(ACTION_BROWSER_OPEN, "https://a.example"),
+            Some(DisplayLinkClick::Browser)
+        ));
+        assert!(classify_display_link_click(ACTION_BROWSER_OPEN, "ftp://a.example").is_none());
+        assert!(matches!(
+            classify_display_link_click(ACTION_RUNBOOK_RECALL, "EACCES"),
+            Some(DisplayLinkClick::Runbook)
+        ));
+        assert!(matches!(
+            classify_display_link_click(ACTION_SFTP_OPEN, "/var/log"),
+            Some(DisplayLinkClick::Sftp)
+        ));
+        assert!(classify_display_link_click("nope", "x").is_none());
+    }
+}
+
+#[cfg(test)]
+mod idle_cursor_repaint_tests {
+    use super::*;
+
+    fn pump(ctx: &egui::Context, view: &mut TerminalView, time: f64) -> Duration {
+        let theme = Theme::dark();
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(900.0, 600.0),
+            )),
+            time: Some(time),
+            ..Default::default()
+        };
+        ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                view.show(ui, &theme, 860.0, false, true);
+            });
+        })
+        .repaint_after
+    }
+
+    fn focused_connected_view() -> TerminalView {
+        let mut view = TerminalView::new();
+        view.connected = true;
+        view.pending_focus_terminal = true;
+        view
+    }
+
+    #[test]
+    fn focused_idle_waits_for_blink_phase_and_plain_frame_clears_probe() {
+        let ctx = egui::Context::default();
+        let mut view = focused_connected_view();
+        // egui 启动时多画一帧，那一帧的等待是 0，不是光标定时器。
+        let _ = pump(&ctx, &mut view, 0.0);
+        assert!(view.terminal_focused, "pending focus should stick");
+
+        let idle = pump(&ctx, &mut view, 0.0);
+        let idle_s = idle.as_secs_f64();
+        assert!(
+            idle_s > 0.40 && idle_s < 0.60,
+            "idle focused cursor should wait for the next blink phase, got {idle_s}s ({idle:?})"
+        );
+        assert_ne!(idle, Duration::from_millis(60));
+        assert!(idle > Duration::from_millis(crate::terminal::style::TERMINAL_LIVE_REPAINT_MS));
+
+        view.repaint_probe_received_us = Some(1);
+        let live = pump(&ctx, &mut view, 0.0);
+        assert!(
+            view.repaint_probe_received_us.is_none(),
+            "a painted plain prompt must clear the output probe"
+        );
+        let live_ms = live.as_millis();
+        assert!(
+            (30u128..=40).contains(&live_ms),
+            "unpainted output stays on the live interval, got {live:?}"
+        );
+
+        let idle_again = pump(&ctx, &mut view, 0.0);
+        assert!(
+            idle_again.as_secs_f64() > 0.40,
+            "after the probe is cleared, idle returns to the blink phase, got {idle_again:?}"
+        );
+
+        view.selection.set_from_viewport(0, 0, 0, 0, 4);
+        assert!(!view.selection.is_empty());
+        let selected = pump(&ctx, &mut view, 0.0);
+        assert!(
+            selected > Duration::from_secs(1),
+            "a selection is not the idle blink timer, got {selected:?}"
+        );
+    }
+
+    #[test]
+    fn zmodem_upload_capture_still_repaints_immediately() {
+        let ctx = egui::Context::default();
+        let mut view = focused_connected_view();
+        let _ = pump(&ctx, &mut view, 0.0);
+        view.lrzsz.begin_rz_handshake_capture();
+        assert!(view.lrzsz.is_upload_pty_capture());
+        let dt = pump(&ctx, &mut view, 0.0);
+        assert!(
+            dt.is_zero(),
+            "ZMODEM upload capture must keep the immediate repaint path, got {dt:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod disconnect_banner_tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::ssh::SshManager;
+
+    #[test]
+    fn banner_follows_ssh_hold_not_connecting_failure_or_local() {
+        let mut view = TerminalView::new();
+        assert!(!view.shows_persistent_disconnect_banner());
+
+        view.disconnect_ssh_keep_buffer();
+        assert!(view.shows_persistent_disconnect_banner());
+
+        view.error_message = Some("auth failed".into());
+        assert!(
+            !view.shows_persistent_disconnect_banner(),
+            "connect failure keeps its own placeholder"
+        );
+        view.error_message = None;
+        assert!(view.shows_persistent_disconnect_banner());
+
+        let (mgr, _rx) = SshManager::new();
+        view.ssh_manager = Some(mgr);
+        assert!(view.is_connecting());
+        assert!(!view.shows_persistent_disconnect_banner());
+        view.ssh_manager = None;
+        assert!(view.shows_persistent_disconnect_banner());
+
+        view.connection_kind = ConnectionKind::Local;
+        assert!(!view.shows_persistent_disconnect_banner());
+
+        view.connection_kind = ConnectionKind::Ssh;
+        view.disconnect();
+        assert!(!view.shows_persistent_disconnect_banner());
+    }
+
+    #[test]
+    fn unexpected_hold_drops_connecting_and_buffers_keys() {
+        let mut view = TerminalView::new();
+        let (mgr, rx) = SshManager::new();
+        view.ssh_manager = Some(mgr);
+        view.ssh_rx = Some(rx);
+        view.connected = true;
+        view.connection_target = Some(("root".into(), "host".into()));
+        view.hold_ssh_after_unexpected_disconnect();
+        view.connected = false;
+        assert!(view.buffer_input_while_disconnected);
+        assert!(view.terminal_wants_keyboard);
+        assert!(view.ssh_manager.is_none());
+        assert!(!view.is_connecting());
+        assert!(view.shows_persistent_disconnect_banner());
+        assert!(view.release_ssh_rx_after_drain);
+        assert!(view.connection_target.is_some());
+    }
+
+    #[test]
+    fn disconnect_keystroke_toast_is_throttled_to_about_three_seconds() {
+        let ctx = egui::Context::default();
+        let mut view = TerminalView::new();
+        view.disconnect_ssh_keep_buffer();
+        view.append_offline_bytes(b"ls");
+        view.flush_disconnect_input_toast(&ctx);
+        assert!(view.take_pending_toast_info().is_some());
+
+        view.append_offline_bytes(b"\r");
+        view.flush_disconnect_input_toast(&ctx);
+        assert!(view.take_pending_toast_info().is_none());
+
+        view.disconnect_input_toast_at = Some(Instant::now() - Duration::from_secs(4));
+        view.append_offline_bytes(b"x");
+        view.flush_disconnect_input_toast(&ctx);
+        assert!(view.take_pending_toast_info().is_some());
     }
 }

@@ -5,7 +5,7 @@
 //! - **编辑**：终端剪贴板 + 搜索（无系统预置复制/粘贴，避免重复项）
 //! - **视图**：布局、右侧面板、主题
 //! - **团队**：登录、成员、云端同步
-//! - **工具**：片段、历史、凭证与日志
+//! - **工具**：片段与发送、历史、自动化规则、账号与数据（四段）
 //! - **帮助**：内嵌文档与关于
 
 use super::macos_app_name::APP_DISPLAY_NAME;
@@ -45,7 +45,10 @@ pub enum MacMenuAction {
     Theme(usize),
     FragmentLibrary,
     QuickFragmentSelector,
+    SendSequences,
+    RuleManager,
     CommandHistory,
+    PasteHistory,
     BatchExec,
     CredentialPanel,
     TeamAccount,
@@ -59,6 +62,8 @@ pub enum MacMenuAction {
     AuditTimeline,
     InstallAuditAgent,
     HelpReportIssue,
+    OpenCrashReports,
+    OpenHangReports,
     About,
     CheckForUpdates,
 }
@@ -103,7 +108,10 @@ pub struct NativeAppMenu {
     theme_items: Vec<CheckMenuItem>,
     fragments: MenuItem,
     quick_fragments: MenuItem,
+    send_sequences: MenuItem,
+    rule_manager: MenuItem,
     command_history: MenuItem,
+    paste_history: MenuItem,
     batch_exec: MenuItem,
     credentials: MenuItem,
     team_sign_in: MenuItem,
@@ -117,6 +125,9 @@ pub struct NativeAppMenu {
     audit_timeline: MenuItem,
     install_audit_agent: MenuItem,
     help_report_issue: MenuItem,
+    diagnostics_menu: Submenu,
+    open_crash_reports: MenuItem,
+    open_hang_reports: MenuItem,
     help_about: MenuItem,
     last_lang: Option<UiLanguage>,
 }
@@ -233,6 +244,12 @@ impl NativeAppMenu {
         );
         let reconnect =
             MenuItem::with_id("mistterm.terminal.reconnect", l.reconnect, true, None);
+        let batch_exec = MenuItem::with_id(
+            "mistterm.terminal.batch_exec",
+            l.batch_exec,
+            true,
+            None,
+        );
         terminal_menu.append(&new_session)?;
         terminal_menu.append(&new_tab)?;
         terminal_menu.append(&local_shell)?;
@@ -248,6 +265,8 @@ impl NativeAppMenu {
         terminal_menu.append(&PredefinedMenuItem::separator())?;
         terminal_menu.append(&disconnect)?;
         terminal_menu.append(&reconnect)?;
+        terminal_menu.append(&PredefinedMenuItem::separator())?;
+        terminal_menu.append(&batch_exec)?;
 
         // ── 编辑 ──
         // 勿使用 PredefinedMenuItem::copy/paste/select_all：与下方终端项重复，
@@ -354,7 +373,7 @@ impl NativeAppMenu {
         team_menu.append(&PredefinedMenuItem::separator())?;
         team_menu.append(&cloud)?;
 
-        // ── 工具 ──
+        // ── 工具（四段：片段与发送 / 历史 / 规则 / 账号与数据）──
         let tools = Submenu::new(l.tools_menu, true);
         let fragments =
             MenuItem::with_id("mistterm.tools.fragments", l.fragment_library, true, None);
@@ -364,25 +383,47 @@ impl NativeAppMenu {
             true,
             None,
         );
+        let send_sequences = MenuItem::with_id(
+            "mistterm.tools.send_sequences",
+            l.send_sequences,
+            true,
+            None,
+        );
         let command_history = MenuItem::with_id(
             "mistterm.tools.command_history",
             l.command_history,
             true,
             None,
         );
-        let batch_exec =
-            MenuItem::with_id("mistterm.tools.batch_exec", l.batch_exec, true, None);
+        let paste_history = MenuItem::with_id(
+            "mistterm.tools.paste_history",
+            l.paste_history,
+            true,
+            Some(Accelerator::new(
+                Some(Modifiers::SUPER | Modifiers::SHIFT),
+                Code::KeyP,
+            )),
+        );
+        let rule_manager =
+            MenuItem::with_id("mistterm.tools.rule_manager", l.rule_manager, true, None);
         let credentials =
             MenuItem::with_id("mistterm.tools.credentials", l.credentials, true, None);
         let session_logs =
             MenuItem::with_id("mistterm.tools.session_logs", l.session_logs, true, None);
+        // 1. 片段与发送
         tools.append(&fragments)?;
         tools.append(&quick_fragments)?;
+        tools.append(&send_sequences)?;
+        tools.append(&PredefinedMenuItem::separator())?;
+        // 2. 历史
         tools.append(&command_history)?;
-        tools.append(&batch_exec)?;
+        tools.append(&paste_history)?;
         tools.append(&PredefinedMenuItem::separator())?;
+        // 3. 规则与检查
+        tools.append(&rule_manager)?;
+        tools.append(&PredefinedMenuItem::separator())?;
+        // 4. 账号与数据
         tools.append(&credentials)?;
-        tools.append(&PredefinedMenuItem::separator())?;
         tools.append(&session_logs)?;
 
         // ── 帮助 ──
@@ -403,6 +444,19 @@ impl NativeAppMenu {
         );
         let help_report_issue =
             MenuItem::with_id("mistterm.help.report_issue", l.help_report_issue, true, None);
+        let diagnostics_menu = Submenu::new(l.diagnostics, true);
+        let open_crash_reports = MenuItem::with_id(
+            "mistterm.help.crash_reports",
+            l.open_crash_reports,
+            true,
+            None,
+        );
+        let open_hang_reports = MenuItem::with_id(
+            "mistterm.help.hang_reports",
+            l.open_hang_reports,
+            true,
+            None,
+        );
         let help_about = MenuItem::with_id("mistterm.help.about", l.help_about, true, None);
         help.append(&help_guide)?;
         help.append(&help_keys)?;
@@ -414,6 +468,10 @@ impl NativeAppMenu {
         help.append(&install_audit_agent)?;
         help.append(&PredefinedMenuItem::separator())?;
         help.append(&help_report_issue)?;
+        help.append(&PredefinedMenuItem::separator())?;
+        diagnostics_menu.append(&open_crash_reports)?;
+        diagnostics_menu.append(&open_hang_reports)?;
+        help.append(&diagnostics_menu)?;
         help.append(&PredefinedMenuItem::separator())?;
         help.append(&help_about)?;
 
@@ -468,7 +526,10 @@ impl NativeAppMenu {
             theme_items,
             fragments,
             quick_fragments,
+            send_sequences,
+            rule_manager,
             command_history,
+            paste_history,
             batch_exec,
             credentials,
             team_sign_in,
@@ -482,6 +543,9 @@ impl NativeAppMenu {
             audit_timeline,
             install_audit_agent,
             help_report_issue,
+            diagnostics_menu,
+            open_crash_reports,
+            open_hang_reports,
             help_about,
             last_lang: Some(lang),
         })
@@ -517,9 +581,12 @@ impl NativeAppMenu {
         let _ = self.monitor_panel.set_text(l.monitor_panel);
         let _ = self.theme_submenu.set_text(l.theme_menu);
         let _ = self._tools_menu.set_text(l.tools_menu);
+        let _ = self.rule_manager.set_text(l.rule_manager);
         let _ = self.fragments.set_text(l.fragment_library);
         let _ = self.quick_fragments.set_text(l.quick_fragments);
+        let _ = self.send_sequences.set_text(l.send_sequences);
         let _ = self.command_history.set_text(l.command_history);
+        let _ = self.paste_history.set_text(l.paste_history);
         let _ = self.batch_exec.set_text(l.batch_exec);
         let _ = self.credentials.set_text(l.credentials);
         let _ = self.team_sign_in.set_text(l.team_sign_in);
@@ -534,6 +601,9 @@ impl NativeAppMenu {
         let _ = self.audit_timeline.set_text(l.audit_timeline);
         let _ = self.install_audit_agent.set_text(l.install_audit_agent);
         let _ = self.help_report_issue.set_text(l.help_report_issue);
+        let _ = self.diagnostics_menu.set_text(l.diagnostics);
+        let _ = self.open_crash_reports.set_text(l.open_crash_reports);
+        let _ = self.open_hang_reports.set_text(l.open_hang_reports);
         let _ = self.help_about.set_text(l.help_about);
     }
 
@@ -542,6 +612,7 @@ impl NativeAppMenu {
         ctx: &eframe::egui::Context,
         lang: UiLanguage,
         ssh_import_enabled: bool,
+        foreign_import_enabled: bool,
         sidebar_collapsed: bool,
         activity_rail_collapsed: bool,
         window_maximized: bool,
@@ -562,6 +633,8 @@ impl NativeAppMenu {
         }
         let l = menu::labels(lang);
         let _ = self.import_ssh.set_enabled(ssh_import_enabled);
+        // foreign 只依赖 session-import 模块开关，与 ssh_config 文件是否存在解耦（#139 review 问题 2）。
+        let _ = self.import_foreign.set_enabled(foreign_import_enabled);
         let _ = self.sftp_panel.set_checked(show_sftp_panel);
         let _ = self.fragment_panel.set_checked(show_fragment_panel);
         let _ = self.monitor_panel.set_checked(show_monitor_panel);
@@ -642,10 +715,13 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.view.panel.sftp" | "mistterm.view.sftp" => Some(MacMenuAction::ToggleSftp),
         "mistterm.view.panel.fragments" => Some(MacMenuAction::ToggleFragmentSidebar),
         "mistterm.view.panel.monitor" => Some(MacMenuAction::ToggleMonitorPanel),
+        "mistterm.tools.rule_manager" => Some(MacMenuAction::RuleManager),
         "mistterm.tools.fragments" => Some(MacMenuAction::FragmentLibrary),
         "mistterm.tools.quick_fragments" => Some(MacMenuAction::QuickFragmentSelector),
+        "mistterm.tools.send_sequences" => Some(MacMenuAction::SendSequences),
         "mistterm.tools.command_history" => Some(MacMenuAction::CommandHistory),
-        "mistterm.tools.batch_exec" => Some(MacMenuAction::BatchExec),
+        "mistterm.tools.paste_history" => Some(MacMenuAction::PasteHistory),
+        "mistterm.terminal.batch_exec" | "mistterm.tools.batch_exec" => Some(MacMenuAction::BatchExec),
         "mistterm.tools.credentials" => Some(MacMenuAction::CredentialPanel),
         "mistterm.team.sign_in" | "mistterm.tools.team_account" => Some(MacMenuAction::TeamAccount),
         "mistterm.team.members" => Some(MacMenuAction::TeamMembers),
@@ -658,6 +734,8 @@ fn action_for_id(id: &str) -> Option<MacMenuAction> {
         "mistterm.help.audit_timeline" => Some(MacMenuAction::AuditTimeline),
         "mistterm.help.install_audit_agent" => Some(MacMenuAction::InstallAuditAgent),
         "mistterm.help.report_issue" => Some(MacMenuAction::HelpReportIssue),
+        "mistterm.help.crash_reports" => Some(MacMenuAction::OpenCrashReports),
+        "mistterm.help.hang_reports" => Some(MacMenuAction::OpenHangReports),
         _ if id.starts_with("mistterm.view.theme.") => {
             id.strip_prefix("mistterm.view.theme.")
                 .and_then(|n| n.parse().ok())

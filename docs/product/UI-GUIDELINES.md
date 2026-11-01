@@ -233,7 +233,7 @@
 | ⌘T / Ctrl+Shift+T | 新建Tab | `open_new_tab_from_selection()` |
 | ⌘W / Ctrl+Shift+W | 关闭当前Tab | `request_close_active_tab()` |
 | ⌘J | 定位到左侧搜索框 | `focus_sidebar_connection_search(ctx)` |
-| ⌘K | 打开片段面板搜索 | `focus_fragment_panel_search(ctx)` |
+| ⌘K | 终端失焦时打开命令面板（Win/Linux 为 Ctrl+K；聚焦时 Ctrl+K 仍删到行尾） | `open_command_palette(ctx)` |
 | ⌘E | 编辑当前选中会话 | `open_edit_session_dialog(sid)` |
 | ⌘H | 打开关于 | `show_about_dialog = true` |
 | ⌘, | 偏好设置 | `show_preferences_dialog = true` |
@@ -550,7 +550,10 @@ pub struct MonitorPanel {
 | 属性 | 值 |
 |------|-----|
 | 开关 | `cloud_sync_panel.open` |
-| 处理 | `cloud_sync_panel.show(ctx, theme)` |
+| 处理 | `cloud_sync_panel.show_side_panel` + `show_foreground_panel` |
+| 主入口 | 团队 → 云端同步 |
+
+**账号同步（面板内，不放进偏好正文）：** 主机列表开关、凭证同步开关（默认关）、同步口令、恢复码、立即同步、冲突提示。偏好「同步与数据」只跳转到这里。导出/导入仍在本面板：`hosts.json` 不含密码；勾选凭证时另写口令信封。
 
 ### 7.6 命令片段侧栏 (`fragment_panel`)
 
@@ -558,7 +561,7 @@ pub struct MonitorPanel {
 |------|-----|
 | 开关 | `show_fragment_panel` |
 | 宽度 | `side_panel_widths(ctx, SidePanelProfile::Fragment)` |
-| 触发 | 底部「命令片段」按钮 / 快捷键 ⌘K |
+| 触发 | 活动栏「片段」/ 视图菜单。失焦 ⌘K / Ctrl+K 打开命令面板（面板里可以执行片段），不再直接聚焦本搜索框 |
 
 **标题栏**:
 - "命令片段" 标题
@@ -710,6 +713,22 @@ egion_panel_frame | 侧栏、面板区域 |
 - [ ] 输入框文字上下有余量，不顶满
 - [ ] 同排 chip/按钮同高，文字在一条横线上
 - [ ] 新面板复用 chrome 助手，不复制幽灵样式
+- [ ] 进度条走 `chrome::progress_bar`，百分比在填充色上可读
+
+### 10.8 进度条
+
+软件更新、SFTP 传输、终端 rz/sz 用 `chrome::progress_bar` / `progress_bar_labeled`，不要裸 `egui::ProgressBar`。
+
+裸进度条不设填充时会拿文本拖选的 `selection.bg_fill` 当槽内颜色，百分比再走白字。暗夜下就是浅灰底上的白「32%」。修进度条不要去改 `color_text_selection_bg`，那会破坏文字拖选。
+
+| 角色 | 令牌 |
+|------|------|
+| 填充 | `color_progress_fill()` |
+| 轨道 | `color_progress_track()` |
+| 条内标签 | `color_progress_label()` |
+| 高度 | `progress_bar_height()`（带标签时助手会抬到能放下正文，避免百分比被裁切） |
+
+SFTP 文件类型色用 `color_sftp_file_name` / `color_sftp_badge`（`theme_sftp`）。暗夜、晨曦、海洋、森林各有一档，不要在面板里写死 flux RGB。
 
 ---
 

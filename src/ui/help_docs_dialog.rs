@@ -34,8 +34,8 @@ fn quick_steps(ctx: &egui::Context) -> Vec<QuickStep> {
             title: crate::i18n::tr(ctx, "Command snippets", "命令片段"),
             detail: crate::i18n::tr(
                 ctx,
-                "Activity Rail → Command snippets (or View menu) to open the library. Ctrl+K focuses snippet search only when the terminal is not focused. Click to send to terminal.",
-                "活动栏 → 命令片段(或「视图」菜单)打开片段库。Ctrl+K 只在终端失焦时聚焦片段搜索。点击即发送到终端。",
+                "Activity Rail → Command snippets (or View menu) to open the library. When the terminal is not focused, Ctrl+K (macOS ⌘K) opens the command palette; pick a snippet there to run it the same way as the quick picker. Click a snippet in the library to send it.",
+                "活动栏 → 命令片段(或「视图」菜单)打开片段库。终端失焦时 Ctrl+K (macOS 为 ⌘K) 打开命令面板, 在里面选片段会按快速选择器同样的方式执行。在片段库里点击也会发送到终端。",
             ),
             keys: vec![shortcuts::accel("K")],
         },
@@ -348,8 +348,8 @@ fn render_onboarding(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status: On
             title: crate::i18n::tr(ctx, "Understand command audit", "了解命令审计").to_string(),
             detail: crate::i18n::tr(
                 ctx,
-                "Covers snippets, batch exec, AI-planned ops, and command history — not free-form typing in the interactive terminal yet. Server-side agent audit applies only to documented root / ssh-command paths.",
-                "覆盖片段、批量执行、AI 规划运维与命令历史 — 交互式终端里随手键入的内容尚未纳入。服务端 Agent 审计仅覆盖文档化的 root / ssh-command 路径。",
+                "Covers snippets, batch exec, AI-planned ops, command history, and commands submitted with Enter in the interactive terminal when team audit is on. Turn that off under Preferences → Activity audit. Full-screen programs, password prompts, and multi-line paste are not captured. Server-side agent audit still applies only to documented root / ssh-command paths.",
+                "覆盖片段、批量执行、AI 规划运维、命令历史, 以及团队审计开启时在交互式终端用回车提交的命令。可在偏好设置的操作审计里关掉。全屏程序、口令提示和多行粘贴不记录。服务端 Agent 审计仍只覆盖文档化的 root / ssh-command 路径。",
             )
             .to_string(),
             done: false,
@@ -560,6 +560,12 @@ fn feature_sections() -> Vec<FeatureSection> {
             title_zh: "命令片段",
             desc_en: "Personal snippet library + marketplace with 60+ pre-built templates for Linux, Docker, Kubernetes, networking, databases, and more. Click to execute.",
             desc_zh: "个人片段库 + 市场，内置 60+ 运维模板(Linux、Docker、K8s、网络、数据库等)，点击即执行。",
+        },
+        FeatureSection {
+            icon: "⌨️",
+            title: "Send Sequences",
+            desc_en: "Tools → Send Sequences stores named lines and sends them, in order, to the current connected pane. Optional fixed delay. It does not wait for a prompt, does not broadcast, and is not a snippet.",
+            desc_zh: "工具 → 发送序列：把命名的几行按顺序发进当前已连接窗格。可选固定间隔。不等提示符，不广播，也不是命令片段。",
         },
         FeatureSection {
             icon: "📊",

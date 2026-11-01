@@ -12,6 +12,24 @@ use crate::core::credential::SecretBackend;
 use crate::security::device_key;
 use crate::security::encrypted_file;
 
+/// 会话认证路径。旧会话没有该字段时按 [`SessionAuthMode::Standard`] 处理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionAuthMode {
+    /// 指定私钥、ssh-agent、密码、默认 `~/.ssh/id_*`，顺序与既有行为一致。
+    #[default]
+    Standard,
+    /// OpenSSH 安全密钥（`ecdsa-sk` / `ed25519-sk`），只经系统 ssh-agent 签名。
+    #[serde(alias = "fido2", alias = "security_key", alias = "sk")]
+    Fido2SecurityKey,
+}
+
+impl SessionAuthMode {
+    pub fn is_fido2(self) -> bool {
+        matches!(self, SessionAuthMode::Fido2SecurityKey)
+    }
+}
+
 /// 会话配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
@@ -27,10 +45,16 @@ pub struct SessionConfig {
     /// 尝试 ssh-agent / Pageant 认证(在指定密钥之后、密码之前)。
     #[serde(default = "default_use_ssh_agent")]
     pub use_ssh_agent: bool,
+    /// 显式认证类型。FIDO2 不回落到密码或非 sk 密钥。
+    #[serde(default)]
+    pub auth_mode: SessionAuthMode,
     pub last_connected_at: Option<i64>,
     /// 创建时间(排序用)
     #[serde(default)]
     pub created_at: Option<i64>,
+    /// 主机元数据最近修改时间（秒）。跨设备同步按它决定新旧；连接成功不更新。
+    #[serde(default)]
+    pub updated_at: Option<i64>,
     /// 已从 ~/.ssh/config 导入的标记 `Host|HostName|Port`
     #[serde(default)]
     pub ssh_config_marker: Option<String>,
@@ -63,6 +87,11 @@ pub struct SessionConfig {
     /// 动态 SOCKS 转发(每行 `port` 或 `bind:port`，例 `1080`)
     #[serde(default)]
     pub dynamic_forwards_text: String,
+    /// 连接后恢复命令（#177）：连接/自动重连成功后自动执行一次。
+    /// 用户显式配置；默认空 = 不执行任何命令（不自动猜 attach）。
+    /// 典型值：`tmux attach -t main` / `screen -r`。
+    #[serde(default)]
+    pub post_connect_command: String,
 }
 
 fn default_keepalive_enabled() -> bool {
@@ -143,8 +172,10 @@ impl Default for SessionConfig {
             password: String::new(),
             private_key_path: String::new(),
             use_ssh_agent: default_use_ssh_agent(),
+            auth_mode: SessionAuthMode::Standard,
             last_connected_at: None,
             created_at: None,
+            updated_at: None,
             ssh_config_marker: None,
             proxy_jump: String::new(),
             proxy_command: String::new(),
@@ -153,6 +184,7 @@ impl Default for SessionConfig {
             keepalive_interval_secs: default_keepalive_interval(),
             keepalive_count_max: default_keepalive_count_max(),
             keepalive_auto_reconnect: default_keepalive_auto_reconnect(),
+            post_connect_command: String::new(),
             secret_backend: SecretBackend::default(),
             local_forwards_text: String::new(),
             remote_forwards_text: String::new(),
@@ -423,9 +455,13 @@ struct StoredSessionConfig {
     #[serde(default = "default_use_ssh_agent")]
     use_ssh_agent: bool,
     #[serde(default)]
+    auth_mode: SessionAuthMode,
+    #[serde(default)]
     last_connected_at: Option<i64>,
     #[serde(default)]
     created_at: Option<i64>,
+    #[serde(default)]
+    updated_at: Option<i64>,
     #[serde(default)]
     ssh_config_marker: Option<String>,
     #[serde(default)]
@@ -450,6 +486,8 @@ struct StoredSessionConfig {
     remote_forwards_text: String,
     #[serde(default)]
     dynamic_forwards_text: String,
+    #[serde(default)]
+    post_connect_command: String,
 }
 
 fn default_group() -> String {
@@ -510,8 +548,10 @@ impl SessionManager {
                 password,
                 private_key_path: cfg.private_key_path,
                 use_ssh_agent: cfg.use_ssh_agent,
+                auth_mode: cfg.auth_mode,
                 last_connected_at: cfg.last_connected_at,
                 created_at: cfg.created_at,
+                updated_at: cfg.updated_at,
                 ssh_config_marker: cfg.ssh_config_marker,
                 proxy_jump: cfg.proxy_jump,
                 proxy_command: cfg.proxy_command,
@@ -520,6 +560,7 @@ impl SessionManager {
                 keepalive_interval_secs: cfg.keepalive_interval_secs,
                 keepalive_count_max: cfg.keepalive_count_max,
                 keepalive_auto_reconnect: cfg.keepalive_auto_reconnect,
+                post_connect_command: cfg.post_connect_command,
                 secret_backend: cfg.secret_backend,
                 local_forwards_text: cfg.local_forwards_text,
                 remote_forwards_text: cfg.remote_forwards_text,
@@ -728,8 +769,10 @@ impl SessionManager {
                 password_nonce: String::new(),
                 private_key_path: cfg.private_key_path.clone(),
                 use_ssh_agent: cfg.use_ssh_agent,
+                auth_mode: cfg.auth_mode,
                 last_connected_at: cfg.last_connected_at,
                 created_at: cfg.created_at,
+                updated_at: cfg.updated_at,
                 ssh_config_marker: cfg.ssh_config_marker.clone(),
                 proxy_jump: cfg.proxy_jump.clone(),
                 proxy_command: cfg.proxy_command.clone(),
@@ -742,6 +785,7 @@ impl SessionManager {
                 local_forwards_text: cfg.local_forwards_text.clone(),
                 remote_forwards_text: cfg.remote_forwards_text.clone(),
                 dynamic_forwards_text: cfg.dynamic_forwards_text.clone(),
+                post_connect_command: cfg.post_connect_command.clone(),
             });
         }
 
@@ -753,7 +797,10 @@ impl SessionManager {
     }
 
     /// 添加会话
-    pub fn add_session(&mut self, config: SessionConfig) {
+    pub fn add_session(&mut self, mut config: SessionConfig) {
+        if config.updated_at.is_none() {
+            config.updated_at = Some(chrono::Utc::now().timestamp());
+        }
         self.sessions.push(config);
         self.save();
     }
@@ -810,7 +857,9 @@ impl SessionManager {
         config.password = password.to_string();
         config.group = if group.trim().is_empty() { "默认".to_string() } else { group.trim().to_string() };
         config.private_key_path = private_key_path.to_string();
-        config.created_at = Some(chrono::Utc::now().timestamp());
+        let now = chrono::Utc::now().timestamp();
+        config.created_at = Some(now);
+        config.updated_at = Some(now);
         self.sessions.push(config.clone());
         self.save();
         config
@@ -844,6 +893,7 @@ impl SessionManager {
             session.password = password.to_string();
             session.group = if group.trim().is_empty() { "默认".to_string() } else { group.trim().to_string() };
             session.private_key_path = private_key_path.to_string();
+            session.updated_at = Some(chrono::Utc::now().timestamp());
             self.save();
             return true;
         }
@@ -861,10 +911,17 @@ impl SessionManager {
     pub fn patch_session(&mut self, id: &str, patch: impl FnOnce(&mut SessionConfig)) -> bool {
         if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
             patch(session);
+            session.updated_at = Some(chrono::Utc::now().timestamp());
             self.save();
             return true;
         }
         false
+    }
+
+    /// 用同步结果替换会话列表（密码等字段由调用方先合并好）。
+    pub fn replace_sessions(&mut self, sessions: Vec<SessionConfig>) {
+        self.sessions = sessions;
+        self.save();
     }
 
     /// 获取会话数量

@@ -12,6 +12,7 @@ use crate::core::credential::{CredentialAuthKind, CredentialCategory};
 use crate::core::fragment::SortBy;
 use crate::core::session_sort::SessionSortBy;
 
+pub mod builtin_rules;
 pub mod menu;
 
 /// User-facing UI language (persisted in `settings.json`).
@@ -270,6 +271,12 @@ pub fn localize_backend_error(lang: UiLanguage, err: &str) -> String {
     if s == "SFTP background worker stopped unexpectedly" {
         return "SFTP 后台任务异常中断".to_string();
     }
+    if s.contains("shell pump queue disconnected") {
+        return "SSH shell 通道已断开，请重新连接会话后再试。".to_string();
+    }
+    if s.contains("shell pump queue full") {
+        return "会话正忙，请稍后再试。".to_string();
+    }
     err.to_string()
 }
 
@@ -360,10 +367,12 @@ pub fn fragment_display_title(ctx: &egui::Context, frag: &crate::core::fragment:
 pub fn fragment_display_category(ctx: &egui::Context, frag: &crate::core::fragment::FragmentStats) -> String {
     match language(ctx) {
         UiLanguage::Zh => {
-            if frag.category.trim().is_empty() {
-                "—".to_string()
-            } else {
-                frag.category.clone()
+            match frag.category.trim() {
+                "" => "—".to_string(),
+                "from-history" | "From history" => "来自历史记录".to_string(),
+                "recommended" => "推荐".to_string(),
+                "from-failure" => "来自失败命令".to_string(),
+                other => other.to_string(),
             }
         }
         UiLanguage::En => {
@@ -382,6 +391,11 @@ pub fn fragment_display_category(ctx: &egui::Context, frag: &crate::core::fragme
                 "日志" | "Logs" => tr(ctx, "Logs", "日志").to_string(),
                 "进程管理" | "Processes" => tr(ctx, "Processes", "进程管理").to_string(),
                 "Docker" => "Docker".to_string(),
+                "来自历史记录" | "From history" | "from-history" => {
+                    tr(ctx, "From history", "来自历史记录").to_string()
+                }
+                "recommended" => tr(ctx, "Recommended", "推荐").to_string(),
+                "from-failure" => tr(ctx, "From failures", "来自失败命令").to_string(),
                 other => other.to_string(),
             }
         }

@@ -10,11 +10,18 @@ mod sftp_bookmarks;
 mod sftp_tree;
 #[path = "sftp_select.rs"]
 mod sftp_select;
+#[path = "sftp_diff_ui.rs"]
+mod sftp_diff_ui;
 
+use crate::core::sftp_diff::{
+    check_dest_rel, check_local_rel, compare_snapshots, directory_rels, join_local, join_remote,
+    mkdir_local_nofollow, plan_sync, walk_local_diff, DestCheck, FsNode, SyncDirection, WalkOutcome,
+};
 use crate::core::{AuditCategory, AuditEvent, AuditLogger, AuditOutcome};
 use crate::i18n::UiLanguage;
 use crate::ssh::{
-    SftpClient, SftpEntry, SshSessionHandle, TransferProgress, TransferResult, WriteMode,
+    RemoteNode, SftpClient, SftpEntry, SshSessionHandle, TransferProgress, TransferResult,
+    WriteMode,
 };
 use crate::ui::layout_util;
 use crate::ui::terminal::TerminalView;
@@ -25,18 +32,22 @@ use crate::ui::file_dialog::FileDialog;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use sftp_file_table::{
-    FileSortState, FileTableCols, LocalEntry, classify_file_kind, format_file_mtime,
-    paint_file_table_header, paint_file_table_row, sort_local_entries, sort_remote_entries,
-    system_time_to_utc,
+    FileSortState, FileTableCols, LocalEntry, classify_file_kind, file_row_tooltip,
+    format_file_mtime, format_file_mtime_compact, paint_file_table_header, paint_file_table_row,
+    sort_local_entries, sort_remote_entries, system_time_to_utc,
 };
 use sftp_bookmarks::SftpBookmarkStore;
+use sftp_diff_ui::{
+    collect_remote_diff, default_checks, format_existing_note, format_skip_note, paint_dir_diff,
+    DiffPhase, DiffPrepOutcome, DiffScanOutcome, DiffUiAction, DirDiffUi,
+};
 use sftp_select::SelectionSet;
 use sftp_tree::{collect_local_tree, looks_like_text_name, preview_needs_confirm};
 use sftp_xfer::{
     format_bytes, paint_xfer_strip, resolve_write_mode_mtime, OverwritePolicy,
     XferKind, XferQueue, XferState, XferStripAction,
 };
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -65,6 +76,14 @@ enum SftpJobResult {
         files: Vec<(PathBuf, PathBuf)>,
     },
     TreeCollectErr(String),
+    DiffScan {
+        gen: u64,
+        outcome: DiffScanOutcome,
+    },
+    DiffPrep {
+        gen: u64,
+        outcome: DiffPrepOutcome,
+    },
     RemoveMany(Result<String, String>),
     ChmodDone(Result<String, String>),
     EditPrepared {
@@ -189,6 +208,9 @@ pub struct SftpPanel {
     remote_path_editing: bool,
     pending_terminal_cmd: Option<String>,
     flux_details_open: bool,
+    diff: DirDiffUi,
+    /// #250：底部「拖到对侧即可传输」一次性提示已关掉。
+    drag_hint_dismissed: bool,
 }
 
 impl Default for SftpPanel {
@@ -508,6 +530,488 @@ impl SftpPanel {
         }
     }
 
+    fn open_dir_diff(&mut self, handle: &SshSessionHandle, ctx: &egui::Context) {
+        if self.busy || self.rx.is_some() {
+            self.pending_status_warn = Some(
+                crate::i18n::tr(
+                    ctx,
+                    "Please wait for the current SFTP operation to finish.",
+                    "请等待当前 SFTP 操作完成后再试。",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        if !self.local_cwd.is_dir() {
+            self.pending_status_err = Some(
+                crate::i18n::tr(ctx, "Local path is not a folder.", "本机路径不是文件夹。")
+                    .to_string(),
+            );
+            return;
+        }
+        self.diff.open = true;
+        self.diff.local_root = self.local_cwd.clone();
+        self.diff.remote_root = self.cwd.clone();
+        self.diff.error = None;
+        self.diff.skip_note = None;
+        self.start_dir_diff_scan(handle, ctx);
+    }
+
+    fn start_dir_diff_scan(&mut self, handle: &SshSessionHandle, ctx: &egui::Context) {
+        if self.busy || self.rx.is_some() {
+            self.pending_status_warn = Some(
+                crate::i18n::tr(
+                    ctx,
+                    "Please wait for the current SFTP operation to finish.",
+                    "请等待当前 SFTP 操作完成后再试。",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        self.diff.scan_gen = self.diff.scan_gen.wrapping_add(1);
+        let gen = self.diff.scan_gen;
+        let local_root = self.diff.local_root.clone();
+        let remote_root = self.diff.remote_root.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let scanned = Arc::new(AtomicU64::new(0));
+        self.diff.cancel = Some(cancel.clone());
+        self.diff.scanned = scanned.clone();
+        self.diff.phase = DiffPhase::Scanning;
+        self.diff.rows.clear();
+        self.diff.checked.clear();
+        self.diff.error = None;
+        self.diff.skip_note = None;
+        self.diff.batch_ids.clear();
+        self.diff.prep_inflight = false;
+        self.busy = true;
+        let ctx2 = ctx.clone();
+        let ticks = Arc::new(AtomicU64::new(0));
+        self.enqueue(handle, ctx, move |session| {
+            let tick = {
+                let ticks = ticks.clone();
+                let ctx2 = ctx2.clone();
+                move || {
+                    let n = ticks.fetch_add(1, Ordering::Relaxed);
+                    if n % 32 == 0 {
+                        ctx2.request_repaint();
+                    }
+                }
+            };
+            let local = match walk_local_diff(&local_root, &cancel, &scanned, tick) {
+                Ok(WalkOutcome::Cancelled) => {
+                    return SftpJobResult::DiffScan {
+                        gen,
+                        outcome: DiffScanOutcome::Cancelled,
+                    };
+                }
+                Ok(WalkOutcome::Done(entries)) => entries,
+                Err(e) => {
+                    return SftpJobResult::DiffScan {
+                        gen,
+                        outcome: DiffScanOutcome::Failed(e),
+                    };
+                }
+            };
+            // tick was moved; rebuild for the remote walk.
+            let tick = {
+                let ticks = ticks.clone();
+                let ctx2 = ctx2.clone();
+                move || {
+                    let n = ticks.fetch_add(1, Ordering::Relaxed);
+                    if n % 32 == 0 {
+                        ctx2.request_repaint();
+                    }
+                }
+            };
+            let client = match SftpClient::new(session) {
+                Ok(client) => client,
+                Err(e) => {
+                    return SftpJobResult::DiffScan {
+                        gen,
+                        outcome: DiffScanOutcome::Failed(e),
+                    };
+                }
+            };
+            let remote_resolved = match client.realpath(&remote_root) {
+                Ok(path) => Self::normalize_remote_path(path),
+                Err(e) => {
+                    return SftpJobResult::DiffScan {
+                        gen,
+                        outcome: DiffScanOutcome::Failed(e),
+                    };
+                }
+            };
+            let remote =
+                match collect_remote_diff(&client, &remote_resolved, &cancel, &scanned, tick) {
+                    Ok(WalkOutcome::Cancelled) => {
+                        return SftpJobResult::DiffScan {
+                            gen,
+                            outcome: DiffScanOutcome::Cancelled,
+                        };
+                    }
+                    Ok(WalkOutcome::Done(entries)) => entries,
+                    Err(e) => {
+                        return SftpJobResult::DiffScan {
+                            gen,
+                            outcome: DiffScanOutcome::Failed(e),
+                        };
+                    }
+                };
+            let rows = compare_snapshots(&local, &remote);
+            SftpJobResult::DiffScan {
+                gen,
+                outcome: DiffScanOutcome::Done {
+                    rows,
+                    remote_root: remote_resolved,
+                },
+            }
+        });
+        // #242：入队失败时 enqueue 会清空 rx；不可落到 Ready+空行+无 error（会假报「两边一样」）。
+        if self.rx.is_none() {
+            let lang = crate::i18n::language(ctx);
+            let raw = self.pending_status_err.clone().unwrap_or_default();
+            let msg = Self::present_diff_channel_or_scan_failure(lang, &raw);
+            self.fail_dir_diff_open(msg);
+        }
+    }
+
+    fn start_dir_sync(
+        &mut self,
+        handle: &SshSessionHandle,
+        ctx: &egui::Context,
+        direction: SyncDirection,
+        all: bool,
+    ) {
+        if self.busy || self.rx.is_some() {
+            self.pending_status_warn = Some(
+                crate::i18n::tr(
+                    ctx,
+                    "Please wait for the current SFTP operation to finish.",
+                    "请等待当前 SFTP 操作完成后再试。",
+                )
+                .to_string(),
+            );
+            return;
+        }
+        if self.diff.phase != DiffPhase::Ready {
+            return;
+        }
+        let plan = if all {
+            plan_sync(&self.diff.rows, None, direction)
+        } else {
+            plan_sync(&self.diff.rows, Some(&self.diff.checked), direction)
+        };
+        let lang = crate::i18n::language(ctx);
+        if !plan.skipped_conflicts.is_empty() {
+            let note = format_skip_note(lang, &plan.skipped_conflicts);
+            self.diff.skip_note = Some(note.clone());
+            self.pending_status_warn = Some(note);
+        } else {
+            self.diff.skip_note = None;
+        }
+        if plan.copy.is_empty() && plan.mkdirs.is_empty() {
+            if plan.skipped_conflicts.is_empty() {
+                self.pending_status_warn = Some(
+                    crate::i18n::tr(
+                        ctx,
+                        "Nothing to sync in this direction.",
+                        "这个方向没有需要同步的差异。",
+                    )
+                    .to_string(),
+                );
+            }
+            return;
+        }
+        let remote_root = self.diff.remote_root.to_string_lossy().replace('\\', "/");
+        let mut copies = Vec::with_capacity(plan.copy.len());
+        for item in &plan.copy {
+            let Some(local) = join_local(&self.diff.local_root, &item.rel) else {
+                self.pending_status_err = Some(format!(
+                    "{}: {}",
+                    crate::i18n::Locale::from(lang).tr("Sync failed", "同步失败"),
+                    item.rel
+                ));
+                return;
+            };
+            let Some(remote) = join_remote(&remote_root, &item.rel) else {
+                self.pending_status_err = Some(format!(
+                    "{}: {}",
+                    crate::i18n::Locale::from(lang).tr("Sync failed", "同步失败"),
+                    item.rel
+                ));
+                return;
+            };
+            copies.push((local, PathBuf::from(remote), item.size, item.rel.clone()));
+        }
+        let dirs = directory_rels(&plan);
+        let upload = matches!(direction, SyncDirection::LocalToRemote);
+        self.diff.prep_gen = self.diff.prep_gen.wrapping_add(1);
+        let gen = self.diff.prep_gen;
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.diff.cancel = Some(cancel.clone());
+        self.diff.phase = DiffPhase::Syncing;
+        self.diff.prep_inflight = true;
+        self.diff.batch_ids.clear();
+        self.diff.error = None;
+        self.busy = true;
+        let local_root = self.diff.local_root.clone();
+        let remote_root_path = self.diff.remote_root.clone();
+        self.enqueue(handle, ctx, move |session| {
+            enum Prep {
+                Ok {
+                    copies: Vec<(PathBuf, PathBuf, u64, String)>,
+                    skipped_existing: Vec<String>,
+                },
+                Cancelled,
+                Failed(String),
+            }
+            let prep = (|| -> Prep {
+                let mut skipped_existing = Vec::new();
+                let mut kept = Vec::new();
+                if upload {
+                    let client = match SftpClient::new(session) {
+                        Ok(client) => client,
+                        Err(e) => return Prep::Failed(e),
+                    };
+                    for rel in &dirs {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Prep::Cancelled;
+                        }
+                        let Some(remote) = join_remote(&remote_root, rel) else {
+                            return Prep::Failed(format!("Invalid path: {rel}"));
+                        };
+                        if let Err(e) =
+                            client.mkdir_p_nofollow(&remote_root_path, Path::new(&remote))
+                        {
+                            return Prep::Failed(e);
+                        }
+                    }
+                    for (local, remote, size, rel) in copies {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Prep::Cancelled;
+                        }
+                        let check = match check_dest_rel(&rel, |prefix| {
+                            let path = join_remote(&remote_root, prefix)
+                                .ok_or_else(|| format!("Invalid path: {prefix}"))?;
+                            Ok(match client.lstat_node(Path::new(&path))? {
+                                RemoteNode::Missing => FsNode::Missing,
+                                RemoteNode::Dir => FsNode::Dir,
+                                RemoteNode::File => FsNode::File,
+                                RemoteNode::Symlink => FsNode::Symlink,
+                                RemoteNode::Other => FsNode::Other,
+                            })
+                        }) {
+                            Ok(check) => check,
+                            Err(e) => return Prep::Failed(e),
+                        };
+                        match check {
+                            DestCheck::Absent => kept.push((local, remote, size, rel)),
+                            DestCheck::PresentDir | DestCheck::PresentOther => {
+                                skipped_existing.push(rel);
+                            }
+                            DestCheck::Symlink { at } => {
+                                return Prep::Failed(format!("Refusing to follow symlink: {at}"));
+                            }
+                            DestCheck::Blocked { at } => {
+                                return Prep::Failed(format!("Parent is not a directory: {at}"));
+                            }
+                        }
+                    }
+                } else {
+                    for rel in &dirs {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Prep::Cancelled;
+                        }
+                        if let Err(e) = mkdir_local_nofollow(&local_root, rel) {
+                            return Prep::Failed(e);
+                        }
+                    }
+                    for (local, remote, size, rel) in copies {
+                        if cancel.load(Ordering::Relaxed) {
+                            return Prep::Cancelled;
+                        }
+                        let check = match check_local_rel(&local_root, &rel) {
+                            Ok(check) => check,
+                            Err(e) => return Prep::Failed(e),
+                        };
+                        match check {
+                            DestCheck::Absent => kept.push((local, remote, size, rel)),
+                            DestCheck::PresentDir | DestCheck::PresentOther => {
+                                skipped_existing.push(rel);
+                            }
+                            DestCheck::Symlink { at } => {
+                                return Prep::Failed(format!("Refusing to follow symlink: {at}"));
+                            }
+                            DestCheck::Blocked { at } => {
+                                return Prep::Failed(format!("Parent is not a directory: {at}"));
+                            }
+                        }
+                    }
+                }
+                Prep::Ok {
+                    copies: kept,
+                    skipped_existing,
+                }
+            })();
+            match prep {
+                Prep::Ok {
+                    copies,
+                    skipped_existing,
+                } => SftpJobResult::DiffPrep {
+                    gen,
+                    outcome: DiffPrepOutcome::Ready {
+                        upload,
+                        copies,
+                        skipped_existing,
+                    },
+                },
+                Prep::Cancelled => SftpJobResult::DiffPrep {
+                    gen,
+                    outcome: DiffPrepOutcome::Cancelled,
+                },
+                Prep::Failed(e) => SftpJobResult::DiffPrep {
+                    gen,
+                    outcome: DiffPrepOutcome::Failed(e),
+                },
+            }
+        });
+        // #242：同步预备入队失败同扫描 — 禁止无 error 的空 Ready。
+        if self.rx.is_none() {
+            let lang = crate::i18n::language(ctx);
+            let raw = self.pending_status_err.clone().unwrap_or_default();
+            let msg = Self::present_diff_channel_or_sync_failure(lang, &raw);
+            self.fail_dir_diff_open(msg);
+        }
+    }
+
+    fn cancel_dir_diff_activity(&mut self, ctx: &egui::Context) {
+        let phase = self.diff.phase;
+        let prep = self.diff.prep_inflight;
+        self.diff.request_cancel();
+        self.xfer.cancel_ids(&self.diff.batch_ids);
+        let running = self.diff.batch_ids.iter().any(|id| {
+            self.xfer
+                .items
+                .iter()
+                .any(|item| item.id == *id && item.state == XferState::Running)
+        });
+        if phase == DiffPhase::Syncing && !prep && !running {
+            self.pending_status_ok =
+                Some(crate::i18n::tr(ctx, "Sync cancelled", "同步已取消").to_string());
+            self.settle_dir_sync();
+        }
+    }
+
+    fn close_dir_diff(&mut self, ctx: &egui::Context) {
+        let active = matches!(
+            self.diff.phase,
+            DiffPhase::Scanning | DiffPhase::Syncing
+        );
+        self.diff.open = false;
+        if active {
+            self.cancel_dir_diff_activity(ctx);
+        }
+    }
+
+    fn present_diff_failure(
+        lang: UiLanguage,
+        head_en: &'static str,
+        head_zh: &'static str,
+        err: &str,
+    ) -> String {
+        format!(
+            "{}: {err}",
+            crate::i18n::Locale::from(lang).tr(head_en, head_zh)
+        )
+    }
+
+    /// shell 泵队列满/断开等：技术串对小白无意义，换成人话（#242）。
+    fn is_pump_channel_err(err: &str) -> bool {
+        err.contains("shell pump queue") || err.contains("SessionJob")
+    }
+
+    fn plain_diff_channel_failure(lang: UiLanguage) -> String {
+        crate::i18n::Locale::from(lang)
+            .tr(
+                "Compare couldn't finish — the session or transfer channel dropped. Tap Compare again, or Back to the file list.",
+                "对比没做完：会话或传输通道断了。可点「重新对比」再试，或「返回」回文件列表。",
+            )
+            .to_string()
+    }
+
+    fn present_diff_channel_or_scan_failure(lang: UiLanguage, raw: &str) -> String {
+        if raw.is_empty() || Self::is_pump_channel_err(raw) {
+            Self::plain_diff_channel_failure(lang)
+        } else {
+            Self::present_diff_failure(lang, "Compare failed", "对比失败", raw)
+        }
+    }
+
+    fn present_diff_channel_or_sync_failure(lang: UiLanguage, raw: &str) -> String {
+        if raw.is_empty() || Self::is_pump_channel_err(raw) {
+            crate::i18n::Locale::from(lang)
+                .tr(
+                    "Sync couldn't start — the session or transfer channel dropped. Tap Compare again, or Back to the file list.",
+                    "同步没开始：会话或传输通道断了。可点「重新对比」再试，或「返回」回文件列表。",
+                )
+                .to_string()
+        } else {
+            Self::present_diff_failure(lang, "Sync failed", "同步失败", raw)
+        }
+    }
+
+    /// 对比视图仍打开时：清空结果、写入 error、回到 Ready，避免假报无差异（#242）。
+    fn fail_dir_diff_open(&mut self, msg: String) {
+        self.diff.rows.clear();
+        self.diff.checked.clear();
+        self.diff.error = Some(msg.clone());
+        self.diff.prep_inflight = false;
+        self.diff.cancel = None;
+        if self.diff.open {
+            self.diff.phase = DiffPhase::Ready;
+        } else {
+            self.diff.phase = DiffPhase::Idle;
+        }
+        self.pending_status_err = Some(msg);
+    }
+
+    fn settle_dir_sync(&mut self) {
+        if self.diff.phase != DiffPhase::Syncing || self.diff.prep_inflight {
+            return;
+        }
+        let alive = self.diff.batch_ids.iter().any(|id| {
+            self.xfer.items.iter().any(|item| {
+                item.id == *id && matches!(item.state, XferState::Queued | XferState::Running)
+            })
+        });
+        if !alive {
+            self.diff.phase = if self.diff.open {
+                DiffPhase::Ready
+            } else {
+                DiffPhase::Idle
+            };
+            self.diff.batch_ids.clear();
+            self.diff.cancel = None;
+        }
+    }
+
+    fn handle_diff_ui_action(
+        &mut self,
+        action: DiffUiAction,
+        handle: &SshSessionHandle,
+        ctx: &egui::Context,
+    ) {
+        match action {
+            DiffUiAction::Close => self.close_dir_diff(ctx),
+            DiffUiAction::Rescan => self.start_dir_diff_scan(handle, ctx),
+            DiffUiAction::Cancel => self.cancel_dir_diff_activity(ctx),
+            DiffUiAction::Sync { direction, all } => {
+                self.start_dir_sync(handle, ctx, direction, all)
+            }
+        }
+    }
+
     /// 双击或「打开」：小文件直接下到临时目录再打开；大文件先问。
     fn request_open_remote_file(
         &mut self,
@@ -552,6 +1056,7 @@ impl SftpPanel {
                     WriteMode::Overwrite,
                     None,
                     &mut |_| {},
+                    None,
                 )?;
                 Ok((local, size, mtime))
             })();
@@ -1584,7 +2089,7 @@ impl SftpPanel {
             remote_selected: SelectionSet::default(),
             local_cwd: local_root.clone(),
             local_entries: Vec::new(),
-            local_path_edit: local_root.to_string_lossy().into_owned(),
+            local_path_edit: Self::local_path_display(&local_root),
             local_selected: SelectionSet::default(),
             local_filter: String::new(),
             remote_filter: String::new(),
@@ -1629,6 +2134,8 @@ impl SftpPanel {
             remote_path_editing: false,
             pending_terminal_cmd: None,
             flux_details_open: false,
+            diff: DirDiffUi::default(),
+            drag_hint_dismissed: false,
         }
     }
 
@@ -1655,7 +2162,7 @@ impl SftpPanel {
         let local_root = crate::core::local_dir::current().dir;
         self.local_cwd = local_root.clone();
         self.local_entries.clear();
-        self.local_path_edit = local_root.to_string_lossy().into_owned();
+        self.local_path_edit = Self::local_path_display(&local_root);
         self.local_selected.clear();
         self.local_filter.clear();
         self.remote_filter.clear();
@@ -1695,6 +2202,8 @@ impl SftpPanel {
         self.remote_path_editing = false;
         self.pending_terminal_cmd = None;
         self.flux_details_open = false;
+        self.diff.request_cancel();
+        self.diff = DirDiffUi::default();
     }
 
     /// 轮询 SFTP 后台任务；面板未显示时也需调用以便 GUI 自动化下载完成。
@@ -1862,7 +2371,10 @@ impl SftpPanel {
                         self.record_sftp_audit(audit, false, Some(&e));
                         self.xfer
                             .finish(id, XferState::Failed, 0, Some(e.clone()));
-                        self.pending_status_err = Some(e);
+                        self.pending_status_err = Some(e.clone());
+                        if self.diff.batch_ids.contains(&id) {
+                            self.diff.error = Some(e);
+                        }
                     }
                 }
                 self.busy = false;
@@ -1875,6 +2387,10 @@ impl SftpPanel {
                 self.xfer_progress_rx = None;
                 self.tree_busy = false;
                 self.tree_cancel = None;
+                self.diff.request_cancel();
+                self.diff.prep_inflight = false;
+                let diff_busy =
+                    matches!(self.diff.phase, DiffPhase::Scanning | DiffPhase::Syncing);
                 // #94 P0：worker 断开时收尾进行中的传输，避免卡在 Running。
                 if self.abort_in_flight_transfers(lang) {
                     // toast 已由 abort 写入 pending_status_err
@@ -1887,6 +2403,13 @@ impl SftpPanel {
                             )
                             .to_string(),
                     );
+                }
+                // #242：扫描/同步中断开必须写入 diff.error，禁止假报「两边一样」。
+                if diff_busy {
+                    let msg = Self::plain_diff_channel_failure(lang);
+                    self.fail_dir_diff_open(msg);
+                } else {
+                    self.diff.cancel = None;
                 }
             }
             Ok(SftpJobResult::UploadTreeReady { files }) => {
@@ -1993,7 +2516,153 @@ impl SftpPanel {
                     Err(e) => self.pending_status_err = Some(e),
                 }
             }
+            Ok(SftpJobResult::DiffScan { gen, outcome }) => {
+                self.busy = false;
+                self.rx = None;
+                self.diff.cancel = None;
+                if gen == self.diff.scan_gen {
+                    match outcome {
+                        DiffScanOutcome::Done { rows, remote_root } => {
+                            if self.diff.open {
+                                self.diff.remote_root = remote_root;
+                                self.diff.checked = default_checks(&rows);
+                                self.diff.rows = rows;
+                                self.diff.phase = DiffPhase::Ready;
+                                self.diff.error = None;
+                            } else {
+                                self.diff.phase = DiffPhase::Idle;
+                                self.diff.rows.clear();
+                                self.diff.checked.clear();
+                            }
+                        }
+                        DiffScanOutcome::Cancelled => {
+                            self.diff.rows.clear();
+                            self.diff.checked.clear();
+                            self.diff.phase = if self.diff.open {
+                                DiffPhase::Ready
+                            } else {
+                                DiffPhase::Idle
+                            };
+                            if self.diff.open {
+                                // #242：取消后空列表不可走「两边一样」；写入可重试说明。
+                                let msg = crate::i18n::Locale::from(lang)
+                                    .tr(
+                                        "Compare cancelled. Tap Compare again to retry, or Back to the file list.",
+                                        "对比已取消。可点「重新对比」再试，或「返回」回文件列表。",
+                                    )
+                                    .to_string();
+                                self.diff.error = Some(msg.clone());
+                                self.pending_status_ok = Some(
+                                    crate::i18n::Locale::from(lang)
+                                        .tr("Compare cancelled", "对比已取消")
+                                        .to_string(),
+                                );
+                            }
+                        }
+                        DiffScanOutcome::Failed(e) => {
+                            let msg =
+                                Self::present_diff_failure(lang, "Compare failed", "对比失败", &e);
+                            self.diff.rows.clear();
+                            self.diff.checked.clear();
+                            self.diff.error = Some(msg.clone());
+                            self.diff.phase = if self.diff.open {
+                                DiffPhase::Ready
+                            } else {
+                                DiffPhase::Idle
+                            };
+                            self.pending_status_err = Some(msg);
+                        }
+                    }
+                }
+            }
+            Ok(SftpJobResult::DiffPrep { gen, outcome }) => {
+                self.busy = false;
+                self.rx = None;
+                self.diff.cancel = None;
+                self.diff.prep_inflight = false;
+                if gen == self.diff.prep_gen {
+                    match outcome {
+                        DiffPrepOutcome::Ready {
+                            upload,
+                            copies,
+                            skipped_existing,
+                        } => {
+                            if !skipped_existing.is_empty() {
+                                let note = format_existing_note(lang, &skipped_existing);
+                                match self.diff.skip_note.as_mut() {
+                                    Some(cur) => {
+                                        cur.push('\n');
+                                        cur.push_str(&note);
+                                    }
+                                    None => self.diff.skip_note = Some(note.clone()),
+                                }
+                                self.pending_status_warn = Some(note);
+                            }
+                            if copies.is_empty() {
+                                self.diff.phase = if self.diff.open {
+                                    DiffPhase::Ready
+                                } else {
+                                    DiffPhase::Idle
+                                };
+                                if skipped_existing.is_empty() {
+                                    self.pending_status_ok = Some(
+                                        crate::i18n::Locale::from(lang)
+                                            .tr("Folders created", "目录已创建")
+                                            .to_string(),
+                                    );
+                                }
+                                self.pending_refresh_after_op = true;
+                            } else {
+                                let kind = if upload {
+                                    XferKind::Upload
+                                } else {
+                                    XferKind::Download
+                                };
+                                let local_root = self.diff.local_root.clone();
+                                let remote_root = self.diff.remote_root.clone();
+                                self.diff.batch_ids.clear();
+                                for (local, remote, size, _rel) in copies {
+                                    let id = self.xfer.push_sync(
+                                        kind,
+                                        local,
+                                        remote,
+                                        size,
+                                        local_root.clone(),
+                                        remote_root.clone(),
+                                    );
+                                    self.diff.batch_ids.push(id);
+                                }
+                                self.diff.phase = DiffPhase::Syncing;
+                            }
+                        }
+                        DiffPrepOutcome::Cancelled => {
+                            self.diff.phase = if self.diff.open {
+                                DiffPhase::Ready
+                            } else {
+                                DiffPhase::Idle
+                            };
+                            self.pending_status_ok = Some(
+                                crate::i18n::Locale::from(lang)
+                                    .tr("Sync cancelled", "同步已取消")
+                                    .to_string(),
+                            );
+                        }
+                        DiffPrepOutcome::Failed(e) => {
+                            let msg =
+                                Self::present_diff_failure(lang, "Sync failed", "同步失败", &e);
+                            self.diff.error = Some(msg.clone());
+                            self.diff.phase = if self.diff.open {
+                                DiffPhase::Ready
+                            } else {
+                                DiffPhase::Idle
+                            };
+                            self.pending_status_err = Some(msg);
+                        }
+                    }
+                }
+            }
         }
+        self.settle_dir_sync();
     }
 
     fn list_local_dir(path: &Path) -> Result<Vec<LocalEntry>, String> {
@@ -2038,19 +2707,52 @@ impl SftpPanel {
         sort_remote_entries(&mut self.entries, self.remote_sort);
     }
 
+    /// 展开 `~` / `~/…` / `~\…` 为本机绝对路径（Win 走 USERPROFILE，不用字面 `~/Downloads`）。
     fn expand_local_path(raw: &str) -> PathBuf {
         let s = raw.trim();
+        let home = crate::platform::home_dir();
         if s == "~" {
-            return std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(s));
+            return home.unwrap_or_else(|| PathBuf::from(s));
         }
-        if let Some(rest) = s.strip_prefix("~/") {
-            if let Some(home) = std::env::var_os("HOME") {
-                return PathBuf::from(home).join(rest);
+        if let Some(rest) = s
+            .strip_prefix("~/")
+            .or_else(|| s.strip_prefix("~\\"))
+        {
+            if let Some(h) = home {
+                return h.join(rest);
             }
         }
         PathBuf::from(s)
+    }
+
+    /// 把可能含字面 `~/…` 的 Path 收成绝对/盘符路径（#269：先展开 tilde，再拼 cwd）。
+    ///
+    /// `PathBuf::from("~/Downloads")` 在 Win/Unix 都不是 absolute；若先 `cwd.join` 会变成
+    /// `C:\…\~/Downloads`，路径栏仍露出字面 tilde。
+    fn absolute_local_path(path: &Path) -> PathBuf {
+        let raw = path.to_string_lossy();
+        let expanded = if raw == "~" || raw.starts_with("~/") || raw.starts_with("~\\") {
+            Self::expand_local_path(&raw)
+        } else {
+            path.to_path_buf()
+        };
+        if expanded.is_absolute() {
+            expanded
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(&expanded))
+                .unwrap_or(expanded)
+        }
+    }
+
+    /// 本机路径栏展示：始终用绝对/盘符形式，不用 `~/…`（#250/#269）。
+    fn local_path_display(path: &Path) -> String {
+        let abs = Self::absolute_local_path(path);
+        let s = abs.to_string_lossy().into_owned();
+        if s == "~" || s.starts_with("~/") || s.starts_with("~\\") {
+            return Self::expand_local_path(&s).to_string_lossy().into_owned();
+        }
+        s
     }
 
     fn localize_local_list_error(ctx: &egui::Context, msg: &str) -> String {
@@ -2143,8 +2845,9 @@ impl SftpPanel {
             self.last_local_by_host.clear();
         }
         if let Some(p) = self.last_local_by_host.get(&self.host_key) {
-            if p.is_dir() {
-                return p.clone();
+            let abs = Self::absolute_local_path(p);
+            if abs.is_dir() {
+                return abs;
             }
         }
         let resolved = t.download_dir();
@@ -2162,11 +2865,12 @@ impl SftpPanel {
                 ),
             });
         }
-        resolved.dir
+        Self::absolute_local_path(&resolved.dir)
     }
 
     fn sync_local_path_from_cwd(&mut self) {
-        self.local_path_edit = self.local_cwd.to_string_lossy().into_owned();
+        self.local_cwd = Self::absolute_local_path(&self.local_cwd);
+        self.local_path_edit = Self::local_path_display(&self.local_cwd);
     }
 
     fn sync_remote_path_from_cwd(&mut self) {
@@ -2228,16 +2932,33 @@ impl SftpPanel {
 
     /// 会话不可用（门闩 Disconnected / 无 handle）时收尾传输与 busy 态。
     fn on_session_unavailable(&mut self, lang: UiLanguage) {
-        if !(self.xfer.has_work() || self.busy || self.rx.is_some() || self.tree_busy) {
+        let diff_busy = matches!(self.diff.phase, DiffPhase::Scanning | DiffPhase::Syncing);
+        if !(self.xfer.has_work() || self.busy || self.rx.is_some() || self.tree_busy || diff_busy)
+        {
             return;
         }
+        self.diff.request_cancel();
         self.rx = None;
         self.xfer_progress_rx = None;
         self.busy = false;
         self.tree_busy = false;
         self.tree_cancel = None;
+        self.diff.prep_inflight = false;
         let _ = self.abort_in_flight_transfers(lang);
+        // #242：会话不可用时扫描/同步中断 → error 态，禁止假报无差异。
+        if diff_busy {
+            let msg = crate::i18n::Locale::from(lang)
+                .tr(
+                    "Compare couldn't finish — the session is unavailable. Tap Compare again after reconnecting, or Back to the file list.",
+                    "对比没做完：当前会话不可用。重连后可点「重新对比」，或「返回」回文件列表。",
+                )
+                .to_string();
+            self.fail_dir_diff_open(msg);
+        } else {
+            self.diff.cancel = None;
+        }
     }
+
 
     /// 地址栏 Enter / Go：busy 时提示，不静默吞掉（#94 P2）。
     fn try_spawn_list_from_path_edit(&mut self, handle: &SshSessionHandle, ctx: &egui::Context) {
@@ -2395,6 +3116,8 @@ impl SftpPanel {
         let local = item.local.clone();
         let remote = item.remote.clone();
         let mode = item.mode;
+        let guard_local = item.guard_local.clone();
+        let guard_remote = item.guard_remote.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         self.xfer.cancel = Some(cancel.clone());
         let (prog_tx, prog_rx) = mpsc::sync_channel::<XferProgressEvent>(16);
@@ -2425,12 +3148,22 @@ impl SftpPanel {
                     }
                 };
                 match kind {
-                    XferKind::Upload => {
-                        client.upload_ex(&local, &remote, mode, Some(&cancel), &mut on_progress)
-                    }
-                    XferKind::Download => {
-                        client.download_ex(&remote, &local, mode, Some(&cancel), &mut on_progress)
-                    }
+                    XferKind::Upload => client.upload_ex(
+                        &local,
+                        &remote,
+                        mode,
+                        Some(&cancel),
+                        &mut on_progress,
+                        guard_remote.as_deref(),
+                    ),
+                    XferKind::Download => client.download_ex(
+                        &remote,
+                        &local,
+                        mode,
+                        Some(&cancel),
+                        &mut on_progress,
+                        guard_local.as_deref(),
+                    ),
                 }
             })();
             let _ = tx.send(SftpJobResult::TransferDone {
@@ -3241,7 +3974,11 @@ impl SftpPanel {
 
         let (local_list_h, remote_list_h) = Self::split_file_list_heights(ui, theme);
 
-        if theme.uses_modern_palette() {
+        if self.diff.open {
+            if let Some(action) = paint_dir_diff(ui, ctx, theme, &mut self.diff, self.busy) {
+                self.handle_diff_ui_action(action, &handle, ctx);
+            }
+        } else if theme.uses_modern_palette() {
             self.paint_flux_workspace(ui, ctx, theme, &handle, content_w);
         } else {
         Self::paint_browser_section_frame(theme).show(ui, |ui| {
@@ -3562,8 +4299,18 @@ impl SftpPanel {
                             let sel = self.local_selected.contains(&e.path);
                             let size_lbl =
                                 if e.is_dir { "—".to_string() } else { e.size_human() };
-                            let time_lbl = format_file_mtime(e.modified);
+                            let time_lbl = if table_cols.use_compact_mtime() {
+                                format_file_mtime_compact(e.modified)
+                            } else {
+                                format_file_mtime(e.modified)
+                            };
                             let kind = classify_file_kind(&e.name, e.is_dir);
+                            let tip = file_row_tooltip(
+                                &e.name,
+                                &size_lbl,
+                                &time_lbl,
+                                &e.path.display().to_string(),
+                            );
                             let resp = paint_file_table_row(
                                 ui,
                                 theme,
@@ -3573,7 +4320,7 @@ impl SftpPanel {
                                 &time_lbl,
                                 kind,
                                 sel,
-                                &e.path.display().to_string(),
+                                &tip,
                             );
                             if resp.double_clicked() && e.is_dir {
                                 enter_local = Some(e.path.clone());
@@ -3924,6 +4671,22 @@ impl SftpPanel {
                     if crate::ui::chrome::panel_action_button_with_icon_ex(
                         ui,
                         theme,
+                        crate::ui::icons::IconId::Search,
+                        crate::i18n::tr(ctx, "Compare folders", "对比目录"),
+                        busy,
+                    )
+                    .on_hover_text(crate::i18n::tr(
+                        ctx,
+                        "Compare local and remote folder differences",
+                        "对比本机与远端目录差异",
+                    ))
+                    .clicked()
+                    {
+                        self.open_dir_diff(&handle, ctx);
+                    }
+                    if crate::ui::chrome::panel_action_button_with_icon_ex(
+                        ui,
+                        theme,
                         crate::ui::icons::IconId::SortName,
                         rename_lbl,
                         can_rename,
@@ -4240,9 +5003,14 @@ impl SftpPanel {
                             let sel = self.remote_selected.contains(&e.path);
                             let size_lbl =
                                 if e.is_dir { "—".to_string() } else { e.size_human() };
-                            let time_lbl = format_file_mtime(e.modified);
+                            let time_lbl = if table_cols.use_compact_mtime() {
+                                format_file_mtime_compact(e.modified)
+                            } else {
+                                format_file_mtime(e.modified)
+                            };
                             let kind = classify_file_kind(&e.name, e.is_dir);
-                            let tip = format!("{}  {}", e.path.to_string_lossy(), e.permissions);
+                            let extra = format!("{}  {}", e.path.to_string_lossy(), e.permissions);
+                            let tip = file_row_tooltip(&e.name, &size_lbl, &time_lbl, &extra);
                             let resp = paint_file_table_row(
                                 ui,
                                 theme,
@@ -4294,6 +5062,10 @@ impl SftpPanel {
             self.kick_xfer_queue(&handle, ctx);
         }
 
+        if !self.diff.open {
+            self.paint_drag_transfer_hint(ui, ctx, theme);
+        }
+
         let strip_action = paint_xfer_strip(
             ui,
             theme,
@@ -4320,6 +5092,54 @@ impl SftpPanel {
         }
     }
 
+    /// #250：底部一句拖拽提示（可关掉；对齐 #215 一次性短提示）。
+    fn paint_drag_transfer_hint(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &Theme,
+    ) {
+        const PERSIST_ID: &str = "mistterm.sftp.drag_hint_dismissed";
+        if !self.drag_hint_dismissed {
+            if ctx.data_mut(|d| {
+                d.get_persisted::<bool>(egui::Id::new(PERSIST_ID))
+                    .unwrap_or(false)
+            }) {
+                self.drag_hint_dismissed = true;
+            }
+        }
+        if self.drag_hint_dismissed {
+            return;
+        }
+        ui.add_space(theme.spacing_xs());
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(crate::i18n::tr(
+                    ctx,
+                    "Tip: drag files to the other side to transfer.",
+                    "提示：把文件拖到对侧即可传输。",
+                ))
+                .size(theme.font_size_caption())
+                .color(theme.text_tertiary()),
+            );
+            let dismiss = crate::i18n::tr(ctx, "Got it", "知道了");
+            if ui
+                .small_button(dismiss)
+                .on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Hide this tip",
+                    "关闭这条提示",
+                ))
+                .clicked()
+            {
+                self.drag_hint_dismissed = true;
+                ctx.data_mut(|d| {
+                    d.insert_persisted(egui::Id::new(PERSIST_ID), true);
+                });
+            }
+        });
+    }
+
     fn paint_flux_workspace(
         &mut self,
         ui: &mut egui::Ui,
@@ -4328,6 +5148,64 @@ impl SftpPanel {
         handle: &SshSessionHandle,
         content_w: f32,
     ) {
+        // #250：顶部明确「上传」「下载」「对比目录」，小白不用猜图标。
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = theme.spacing_panel_gap();
+            let can_upload = self.has_local_upload_selection();
+            let can_download = self.has_remote_download_selection();
+            let can_compare = !self.busy;
+            if crate::ui::chrome::panel_action_button_with_icon_ex(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Upload,
+                crate::i18n::tr(ctx, "Upload", "上传"),
+                can_upload,
+            )
+            .on_hover_text(crate::i18n::tr(
+                ctx,
+                "Upload selected local item(s) to the remote folder",
+                "把所选本机项上传到远端目录",
+            ))
+            .clicked()
+                && can_upload
+            {
+                self.upload_selected_local(handle, ctx);
+            }
+            if crate::ui::chrome::panel_action_button_with_icon_ex(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Download,
+                crate::i18n::tr(ctx, "Download", "下载"),
+                can_download,
+            )
+            .on_hover_text(crate::i18n::tr(
+                ctx,
+                "Download selected remote item(s) to the local folder",
+                "把所选远端项下载到本机目录",
+            ))
+            .clicked()
+                && can_download
+            {
+                self.download_selected_remote(handle, ctx);
+            }
+            if crate::ui::chrome::panel_action_button_with_icon_ex(
+                ui,
+                theme,
+                crate::ui::icons::IconId::Search,
+                crate::i18n::tr(ctx, "Compare folders", "对比目录"),
+                can_compare,
+            )
+            .on_hover_text(crate::i18n::tr(
+                ctx,
+                "Compare local and remote folder differences",
+                "对比本机与远端目录差异",
+            ))
+            .clicked()
+                && can_compare
+            {
+                self.open_dir_diff(handle, ctx);
+            }
+        });
         let avail_h = ui.available_height().max(160.0);
         let reserve = if self.pending_overwrite.is_some()
             || self.pending_delete.is_some()
@@ -4718,16 +5596,27 @@ impl SftpPanel {
                     } else {
                         e.size_human()
                     };
+                    let time_lbl = if table_cols.use_compact_mtime() {
+                        format_file_mtime_compact(e.modified)
+                    } else {
+                        format_file_mtime(e.modified)
+                    };
+                    let tip = file_row_tooltip(
+                        &e.name,
+                        &size_lbl,
+                        &time_lbl,
+                        &e.path.display().to_string(),
+                    );
                     let resp = paint_file_table_row(
                         ui,
                         theme,
                         table_cols,
                         &e.name,
                         &size_lbl,
-                        &format_file_mtime(e.modified),
+                        &time_lbl,
                         classify_file_kind(&e.name, e.is_dir),
                         sel,
-                        &e.path.display().to_string(),
+                        &tip,
                     );
                     if resp.double_clicked() && e.is_dir {
                         enter_local = Some(e.path.clone());
@@ -4901,14 +5790,20 @@ impl SftpPanel {
                     } else {
                         e.size_human()
                     };
-                    let tip = format!("{}  {}", e.path.to_string_lossy(), e.permissions);
+                    let time_lbl = if table_cols.use_compact_mtime() {
+                        format_file_mtime_compact(e.modified)
+                    } else {
+                        format_file_mtime(e.modified)
+                    };
+                    let extra = format!("{}  {}", e.path.to_string_lossy(), e.permissions);
+                    let tip = file_row_tooltip(&e.name, &size_lbl, &time_lbl, &extra);
                     let resp = paint_file_table_row(
                         ui,
                         theme,
                         table_cols,
                         &e.name,
                         &size_lbl,
-                        &format_file_mtime(e.modified),
+                        &time_lbl,
                         classify_file_kind(&e.name, e.is_dir),
                         sel,
                         &tip,
@@ -5245,6 +6140,7 @@ mod tests {
         let entries = vec![SftpEntry {
             name: "gui_e2e_upload.txt".to_string(),
             is_dir: false,
+            is_file: true,
             size: 12,
             permissions: "-rw-r--r--".to_string(),
             modified: Utc::now(),
@@ -5281,5 +6177,62 @@ mod tests {
         drop(_g);
         let _g2 = EnvGuard::set("MISTTERM_GUI_AUTOMATION", "true");
         assert!(SftpPanel::gui_automation_enabled());
+    }
+
+    #[test]
+    fn expand_local_path_tilde_uses_platform_home() {
+        let home = crate::platform::home_dir().expect("home");
+        assert_eq!(SftpPanel::expand_local_path("~"), home);
+        assert_eq!(
+            SftpPanel::expand_local_path("~/Downloads"),
+            home.join("Downloads")
+        );
+        assert_eq!(
+            SftpPanel::expand_local_path("~\\Downloads"),
+            home.join("Downloads")
+        );
+        let abs = if cfg!(windows) {
+            r"C:\Users\demo\docs"
+        } else {
+            "/tmp/demo"
+        };
+        assert_eq!(SftpPanel::expand_local_path(abs), PathBuf::from(abs));
+    }
+
+    #[test]
+    fn local_path_display_never_shows_tilde_form() {
+        let home = crate::platform::home_dir().expect("home");
+        let shown = SftpPanel::local_path_display(&home.join("Downloads"));
+        assert!(!shown.starts_with("~/"), "got {shown}");
+        assert!(!shown.starts_with("~\\"), "got {shown}");
+        assert_ne!(shown, "~");
+        assert!(
+            PathBuf::from(&shown).is_absolute() || shown.contains(':'),
+            "expected absolute/drive path, got {shown}"
+        );
+    }
+
+
+    #[test]
+    fn local_path_display_expands_literal_tilde_pathbuf() {
+        // 模拟偏好/旧状态把 "~/Downloads" 塞进 PathBuf（非 absolute）的情况。
+        let shown = SftpPanel::local_path_display(Path::new("~/Downloads"));
+        assert!(!shown.contains("~/"), "got {shown}");
+        assert!(!shown.starts_with('~'), "got {shown}");
+        let home = crate::platform::home_dir().expect("home");
+        assert!(
+            shown.starts_with(&*home.to_string_lossy()) || PathBuf::from(&shown).is_absolute(),
+            "expected expanded home path, got {shown}"
+        );
+        let shown2 = SftpPanel::local_path_display(Path::new("~\\Downloads"));
+        assert!(!shown2.contains("~/") && !shown2.starts_with('~'), "got {shown2}");
+    }
+
+    #[test]
+    fn absolute_local_path_does_not_cwd_join_tilde() {
+        let p = SftpPanel::absolute_local_path(Path::new("~/Downloads"));
+        let s = p.to_string_lossy();
+        assert!(!s.contains("~/"), "got {s}");
+        assert!(p.is_absolute(), "got {s}");
     }
 }

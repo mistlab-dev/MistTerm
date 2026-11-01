@@ -1,7 +1,9 @@
 //! 平台相关能力（字体、快捷键文案、系统 shell、路径、macOS 菜单等）
 
 pub mod app_name;
+pub mod desktop_notify;
 pub mod docs;
+mod font_enum;
 pub mod fonts;
 pub mod logging;
 pub mod paths;
@@ -31,9 +33,12 @@ pub use docs::{
     GITHUB_ISSUES_URL,
 };
 pub use fonts::{
-    cjk_font_loaded, clamp_terminal_font_size, configure_egui_fonts, ui_caption_font_id, ui_font_id,
-    TerminalFontPreset, CJK_UI_FONT_NAME, DEFAULT_TERMINAL_FONT_SIZE, TERMINAL_FONT_SIZE_MAX,
-    TERMINAL_FONT_SIZE_MIN,
+    cjk_font_loaded, clamp_terminal_font_size, configure_egui_fonts, configure_terminal_font,
+    font_family_eq, list_system_mono_fonts, start_system_mono_font_scan,
+    system_mono_fonts_if_ready, take_deferred_terminal_font_apply, terminal_font_apply_deferred,
+    terminal_preset_family_name, terminal_preset_installed, ui_caption_font_id, ui_font_id,
+    SystemMonoFont, TerminalFontPreset, TerminalFontSelection, CJK_UI_FONT_NAME,
+    DEFAULT_TERMINAL_FONT_SIZE, TERMINAL_FONT_SIZE_MAX, TERMINAL_FONT_SIZE_MIN,
 };
 pub use logging::init_runtime_logging;
 pub use paths::{default_ssh_config_path, home_dir, home_dir_display_hint};
@@ -45,6 +50,7 @@ pub use shortcuts::{
     local_shell_accel, local_shell_help_line, new_tab_accel, new_tab_help_line,
     primary_modifier_label, split_pane_focus_accel, split_pane_focus_help_line,
     terminal_copy_accel, terminal_history_accel, terminal_interrupt_accel, terminal_paste_accel,
+    paste_history_accel,
 };
 #[cfg(target_os = "macos")]
 pub use macos_launch::activate_gui_application;
@@ -68,6 +74,10 @@ pub fn run_gui() {
     {
         set_application_display_name();
         activate_gui_application();
+        // #188: after drawRect catch_unwind, annotate crash-reports as caught-in-FFI.
+        winit::platform::macos::set_caught_draw_rect_panic_hook(|| {
+            crate::core::crash_reporter::write_caught_ffi_note("drawRect");
+        });
     }
 
     apply_preferred_english_input_source();
@@ -108,6 +118,9 @@ pub fn run_gui() {
         }),
     ) {
         eprintln!("Failed to launch GUI: {e}");
+        // GUI 启动失败也算「没走到正常退出」，不写 stamp（下次启动如果因此有新报告会提示）。
         std::process::exit(1);
     }
+    // 正常返回（含 on_exit 后拆卸完成）：stamp 兕底，覆盖所有正常退出路径。
+    crate::core::crash_reporter::mark_clean_exit();
 }

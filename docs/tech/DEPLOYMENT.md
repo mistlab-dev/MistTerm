@@ -305,18 +305,20 @@ cargo build --release --target x86_64-apple-darwin
 cargo build --release --target aarch64-apple-darwin
 ```
 
-#### 通用二进制
+#### 发布包是单架构
+
+CI 分别发布 `Mist-macos-aarch64`（主下载）和 `Mist-macos-x86_64`（可选），不再 `lipo` 成 universal。见 [docs/release/PACKAGE_SIZE.md](../release/PACKAGE_SIZE.md)。
+
+本地若仍要做一个通用二进制（不进发布）：
 
 ```bash
-# 编译两个架构
 cargo build --release --target x86_64-apple-darwin
 cargo build --release --target aarch64-apple-darwin
-
-# 合并
+mkdir -p target/universal2-release
 lipo -create \
-    -output target/universal2-release/mistterm \
-    target/x86_64-apple-darwin/release/mistterm \
-    target/aarch64-apple-darwin/release/mistterm
+    -output target/universal2-release/Mist \
+    target/x86_64-apple-darwin/release/Mist \
+    target/aarch64-apple-darwin/release/Mist
 ```
 
 ### 4.3 Linux 编译

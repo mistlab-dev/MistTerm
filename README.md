@@ -33,8 +33,9 @@
 | Platform | Package |
 |----------|---------|
 | **Windows** | `MistTerm-*-windows-x86_64-setup.exe` (installer) or `.zip` |
-| **macOS** | `Mist-macos-universal.tar.gz` / `.dmg` when published |
-| **Linux** | `Mist-linux-x86_64.tar.gz` |
+| **macOS (Apple Silicon, primary)** | `Mist-macos-aarch64.dmg` (or `.tar.gz`) |
+| **macOS (Intel, optional)** | `Mist-macos-x86_64.dmg` (or `.tar.gz`) |
+| **Linux desktop** | `Mist-linux-x86_64.tar.gz` (GUI `Mist` only) |
 | **Linux CLI only** (static, any distro, x86_64 / ARM64; 1.2.1+) | `mist-cli-linux-x86_64.tar.gz` / `mist-cli-linux-aarch64.tar.gz`, or `curl -fsSL https://mistlab.dev/install \| bash` |
 
 **From source** (developers):
@@ -60,7 +61,7 @@ Details: [docs/en/INSTALL.md](docs/en/INSTALL.md).
 | **CLI** | `mist` headless CLI sharing the same session store — `ls` / `exec` (single + `--group` / `--all` batch) / `ssh` / `rls` / `get` / `put` / `fwd` / `frag` / `import-ssh-config` / `sop extract`. See [docs/tech/CLI-DESIGN.md](docs/tech/CLI-DESIGN.md) |
 | **Team** | Free hosted sync at [mistlab.dev](https://mistlab.dev); short-lived certs for small teams; command records |
 | **AI** | Multi-host disk/memory/log plans **without** an API key; optional BYO model for chat |
-| **Audit** | Records snippets / history / AI / batch (interactive PTY typing not covered yet) |
+| **Audit** | Records snippets / history / AI / batch, and commands submitted with Enter in the interactive terminal when team audit is on (Preferences → Activity audit can turn that off) |
 | **UX** | English / 简体中文; first-launch onboarding; themes; **Activity Rail** (hide with ⌘/Ctrl+B) |
 
 ### Quick start
@@ -71,13 +72,13 @@ Running the GUI binary `Mist` with **no arguments** launches the desktop UI dire
 2. Launch **Mist** — onboarding opens once; starter commands are already in the library
 3. **⌘N / Ctrl+N** — new session; connect; run a starter snippet (disk / memory)
 4. Optional: sign in at mistlab.dev for team certs & audit; try AI “check disk on all servers” (no API key)
-5. **⌘K / Ctrl+K** — snippets; Activity Rail — SFTP / Monitor / AI / Forward
+5. **⌘K / Ctrl+K** — command palette when the terminal is not focused (sessions, snippets, history, SFTP / Monitor / AI). Focused Ctrl+K still deletes to the end of the line
 
 Community: [Discussions](https://github.com/mistlab-dev/MistTerm/discussions) · Stories: [mistlab.dev/stories](https://mistlab.dev/stories/)
 
 ### Updates & privacy
 
-Mist checks for a new version shortly after it starts and then once a day. It only tells you about it: installing waits for your click, and Mist never restarts on its own. On Linux and Windows you can update with one click; on macOS Mist shows you how to update by hand. From the terminal: `mist update --check`, `mist update` (same as `mist self-update`), and `mist update --rollback`.
+Mist checks for a new version shortly after it starts and then once a day. It only tells you about it: installing waits for your click, and Mist never restarts on its own. Linux, Windows, and current single-arch macOS builds can update with one click. An older universal Mac app needs one manual download of `Mist-macos-aarch64.dmg` or `Mist-macos-x86_64.dmg`. From the terminal: `mist update` (static CLI) or `Mist update` (desktop binary); also `--check` and `--rollback`.
 
 The check is a single request to mistlab.dev and GitHub that carries only the Mist version and system type, with no account or device information. As with any website, those servers can see your IP address. Updates are signed and checked before anything is installed. To turn checks off, clear **Preferences → General → Check for updates automatically**, or set `MIST_DISABLE_UPDATE_CHECK=1`, which also blocks manual checks. Details: [docs/release/AUTO_UPDATE.md](docs/release/AUTO_UPDATE.md).
 
@@ -117,8 +118,9 @@ Issues and PRs: [github.com/mistlab-dev/MistTerm](https://github.com/mistlab-dev
 | 平台 | 包名 |
 |------|------|
 | **Windows** | `MistTerm-*-windows-x86_64-setup.exe`（安装包）或 `.zip` 便携版 |
-| **macOS** | `Mist-macos-universal.tar.gz` / 发布页中的 `.dmg` |
-| **Linux** | `Mist-linux-x86_64.tar.gz` |
+| **macOS（Apple Silicon，主下载）** | `Mist-macos-aarch64.dmg`（或 `.tar.gz`） |
+| **macOS（Intel，可选）** | `Mist-macos-x86_64.dmg`（或 `.tar.gz`） |
+| **Linux 桌面** | `Mist-linux-x86_64.tar.gz`（只有 GUI `Mist`） |
 | **Linux 只要命令行**（静态版，任意发行版，x86_64 / ARM64；1.2.1 起） | `mist-cli-linux-x86_64.tar.gz` / `mist-cli-linux-aarch64.tar.gz`，或 `curl -fsSL https://mistlab.dev/install \| bash` |
 
 **从源码构建**（开发者）：
@@ -144,7 +146,7 @@ cargo build --release --bin Mist
 | **命令行** | `mist` 无头 CLI，与 GUI 共享同一份会话库——`ls` / `exec`（单机 + `--group` / `--all` 批量）/ `ssh` / `rls` / `get` / `put` / `fwd` / `frag` / `import-ssh-config` / `sop extract`。详见 [docs/tech/CLI-DESIGN.md](docs/tech/CLI-DESIGN.md) |
 | **团队** | [mistlab.dev](https://mistlab.dev) 免费托管同步；小团队短时证书；命令记录 |
 | **AI** | 多机磁盘/内存/日志计划**无需** API Key；对话可自带模型 |
-| **审计** | 覆盖常用命令 / 历史 / AI / 批量（终端手输暂未覆盖） |
+| **审计** | 覆盖片段 / 历史 / AI / 批量，以及团队审计开启时在交互式终端回车提交的命令（可在偏好设置 → 操作审计里关掉） |
 | **体验** | 中/英界面；首次新手引导；主题；**活动栏**（⌘/Ctrl+B 可隐藏） |
 
 ### 快速上手
@@ -155,13 +157,13 @@ GUI 二进制 `Mist` **不带任何参数**运行即直接拉起桌面界面（v
 2. 启动 **Mist**——首次弹出新手引导，命令库已有示例
 3. **⌘N / Ctrl+N** 新建会话并连接，跑一条示例命令（磁盘/内存）
 4. 可选：在 mistlab.dev 登录团队开证书与审计；AI 侧栏试「查所有服务器磁盘」（无需 Key）
-5. **⌘K / Ctrl+K** 片段；活动栏打开 SFTP / 监控 / AI / 转发
+5. **⌘K / Ctrl+K** 在终端失焦时打开命令面板（会话、片段、历史、SFTP / 监控 / AI）。终端聚焦时 Ctrl+K 仍是删到行尾
 
 社区：[Discussions](https://github.com/mistlab-dev/MistTerm/discussions) · 案例：[mistlab.dev/stories](https://mistlab.dev/stories/)
 
 ### 更新与隐私
 
-Mist 启动后过一会儿检查一次有没有新版本，之后每天检查一次。有新版本只会提醒你，装不装由你点按钮决定，Mist 也不会自己重启。Linux 和 Windows 可以一键更新；macOS 上会告诉你怎么手动更新。命令行里可以用 `mist update --check`、`mist update`（也可以写 `mist self-update`）和 `mist update --rollback`（退回上一个版本）。
+Mist 启动后过一会儿检查一次有没有新版本，之后每天检查一次。有新版本只会提醒你，装不装由你点按钮决定，Mist 也不会自己重启。Linux、Windows 和现在的 macOS 单架构包可以一键更新。以前装的 universal 版需要先手动换一次 `Mist-macos-aarch64.dmg` 或 `Mist-macos-x86_64.dmg`。终端里静态命令行用 `mist update`，桌面程序用 `Mist update`；也可以加 `--check`，或用 `--rollback` 退回上一版。
 
 检查更新只会向 mistlab.dev 和 GitHub 发一次请求，只带 Mist 版本号和系统类型，不带账号或设备信息。和访问任何网站一样，对方能看到你的 IP 地址。新版本都有签名，安装前会先核对。不想检查的话，可以在 **偏好设置 → 常规** 里取消「自动检查更新」；或者设置环境变量 `MIST_DISABLE_UPDATE_CHECK=1`，这样连手动检查也会关掉。详见 [docs/release/AUTO_UPDATE.md](docs/release/AUTO_UPDATE.md)。
 

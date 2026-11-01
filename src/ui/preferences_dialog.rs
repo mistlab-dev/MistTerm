@@ -3,6 +3,12 @@
 use super::*;
 use eframe::egui::RichText;
 
+#[derive(Clone, PartialEq, Eq)]
+enum FontPick {
+    Preset(crate::platform::TerminalFontPreset),
+    Family(String),
+}
+
 impl MistTermApp {
     fn workspace_top_chrome_height(&self, theme: &crate::ui::theme::Theme) -> f32 {
         #[cfg(target_os = "macos")]
@@ -124,6 +130,20 @@ impl MistTermApp {
                                         label_color,
                                         &mut should_close,
                                     );
+                                    self.preferences_section_monitor_alert(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        label_color,
+                                        text_low,
+                                    );
+                                    self.preferences_section_modules(
+                                        ui,
+                                        ctx,
+                                        theme,
+                                        label_color,
+                                        text_low,
+                                    );
                                 });
                         });
                     });
@@ -134,6 +154,9 @@ impl MistTermApp {
         }
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             should_close = true;
+        }
+        if self.rule_manager_dialog.take_close_preferences() {
+            open = false;
         }
         self.show_preferences_dialog = open && !should_close;
     }
@@ -400,7 +423,6 @@ impl MistTermApp {
                 );
                 ui.add_space(theme.spacing_panel_gap());
 
-                let mut preset = self.terminal_font_preset;
                 let preset_label =
                     |ctx: &egui::Context, p: crate::platform::TerminalFontPreset| match p {
                         crate::platform::TerminalFontPreset::Default => {
@@ -410,21 +432,148 @@ impl MistTermApp {
                         crate::platform::TerminalFontPreset::CascadiaMono => "Cascadia Mono",
                         crate::platform::TerminalFontPreset::JetBrainsMono => "JetBrains Mono",
                     };
+                let scanned = crate::platform::system_mono_fonts_if_ready();
+                let fonts_ready = scanned.is_some();
+                let system_fonts = scanned.unwrap_or(&[]);
+                let mut pick = if self.terminal_font_family.trim().is_empty() {
+                    FontPick::Preset(self.terminal_font_preset)
+                } else {
+                    FontPick::Family(self.terminal_font_family.clone())
+                };
+                let selected_text = match &pick {
+                    FontPick::Preset(p) => preset_label(ctx, *p).to_string(),
+                    FontPick::Family(name) => name.clone(),
+                };
+                let prev_combo_h = ui.spacing().combo_height;
+                ui.spacing_mut().combo_height = 320.0;
                 crate::ui::chrome::form_combo(
                     ui,
                     theme,
                     "preferences_terminal_font_preset",
-                    preset_label(ctx, preset),
+                    selected_text,
                     layout_util::finite_content_width(ui),
                     |ui| {
-                        for p in crate::platform::TerminalFontPreset::ALL {
-                            ui.selectable_value(&mut preset, p, preset_label(ctx, p));
+                        let default_selected = matches!(
+                            pick,
+                            FontPick::Preset(crate::platform::TerminalFontPreset::Default)
+                        );
+                        if ui
+                            .selectable_label(
+                                default_selected,
+                                preset_label(ctx, crate::platform::TerminalFontPreset::Default),
+                            )
+                            .clicked()
+                        {
+                            pick = FontPick::Preset(crate::platform::TerminalFontPreset::Default);
+                        }
+                        let named_presets = [
+                            crate::platform::TerminalFontPreset::Consolas,
+                            crate::platform::TerminalFontPreset::CascadiaMono,
+                            crate::platform::TerminalFontPreset::JetBrainsMono,
+                        ];
+                        for p in named_presets {
+                            let family = crate::platform::terminal_preset_family_name(p);
+                            let selected_now = match &pick {
+                                FontPick::Preset(cur) => *cur == p,
+                                FontPick::Family(name) => family.is_some_and(|preset_name| {
+                                    crate::platform::font_family_eq(name, preset_name)
+                                }),
+                            };
+                            if !crate::platform::terminal_preset_installed(p) && !selected_now {
+                                continue;
+                            }
+                            if ui
+                                .selectable_label(selected_now, preset_label(ctx, p))
+                                .clicked()
+                            {
+                                pick = FontPick::Preset(p);
+                            }
+                        }
+                        let extras: Vec<_> = system_fonts
+                            .iter()
+                            .filter(|font| {
+                                !named_presets.iter().any(|p| {
+                                    crate::platform::terminal_preset_family_name(*p).is_some_and(
+                                        |name| crate::platform::font_family_eq(&font.family, name),
+                                    )
+                                })
+                            })
+                            .collect();
+                        if !extras.is_empty() {
+                            ui.separator();
+                        }
+                        for font in extras {
+                            let selected = matches!(
+                                &pick,
+                                FontPick::Family(name)
+                                    if crate::platform::font_family_eq(name, &font.family)
+                            );
+                            if ui
+                                .selectable_label(selected, font.family.as_str())
+                                .clicked()
+                            {
+                                pick = FontPick::Family(font.family.clone());
+                            }
+                        }
+                        if let FontPick::Family(name) = &pick {
+                            let listed = system_fonts
+                                .iter()
+                                .any(|font| crate::platform::font_family_eq(&font.family, name))
+                                || named_presets.iter().any(|p| {
+                                    crate::platform::terminal_preset_family_name(*p).is_some_and(
+                                        |preset_name| {
+                                            crate::platform::font_family_eq(name, preset_name)
+                                        },
+                                    )
+                                });
+                            if !fonts_ready {
+                                ui.separator();
+                                let _ = ui.selectable_label(true, name.as_str());
+                            } else if !listed {
+                                ui.separator();
+                                let missing = format!(
+                                    "{name} ({})",
+                                    crate::i18n::tr(ctx, "not installed", "未安装")
+                                );
+                                let _ = ui.selectable_label(true, missing);
+                            }
                         }
                     },
                 );
-                if preset != self.terminal_font_preset {
-                    self.terminal_font_preset = preset;
+                ui.spacing_mut().combo_height = prev_combo_h;
+                let (next_preset, next_family) = match &pick {
+                    FontPick::Preset(p) => (*p, String::new()),
+                    FontPick::Family(name) => {
+                        (crate::platform::TerminalFontPreset::Default, name.clone())
+                    }
+                };
+                if next_preset != self.terminal_font_preset
+                    || next_family != self.terminal_font_family
+                {
+                    self.terminal_font_preset = next_preset;
+                    self.terminal_font_family = next_family;
                     self.apply_terminal_font_preferences(ctx);
+                }
+                ui.label(
+                    RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Lists monospace fonts installed on this computer. Presets that are not installed are hidden. Newly installed fonts appear after a restart.",
+                        "列出本机已安装的等宽字体；没安装的预设不显示。新安装的字体需重启后出现。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(theme.color_form_hint()),
+                );
+                if !fonts_ready {
+                    ui.label(
+                        RichText::new(crate::i18n::tr(
+                            ctx,
+                            "Reading installed fonts…",
+                            "正在读取本机字体…",
+                        ))
+                        .size(theme.font_size_small())
+                        .color(theme.color_form_hint()),
+                    );
+                    ctx.request_repaint_after(std::time::Duration::from_millis(200));
                 }
 
                 Self::preferences_row_divider(ui, theme);
@@ -471,6 +620,28 @@ impl MistTermApp {
                     .size(theme.font_size_small())
                     .color(theme.color_form_hint()),
                 );
+                Self::preferences_row_divider(ui, theme);
+                let mut remember_paste = self.app_settings.remember_paste_history;
+                if crate::ui::chrome::form_checkbox(
+                    ui,
+                    theme,
+                    &mut remember_paste,
+                    crate::i18n::tr(
+                        ctx,
+                        "Remember recent pastes (last 20, stored on this computer)",
+                        "记住最近的粘贴（最多 20 条，只存在这台电脑上）",
+                    ),
+                )
+                .on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Off: new pastes are not saved. Paste history can still show what was saved before. Private keys, common tokens, and password prompts are skipped on a best-effort basis; the filter is not complete.",
+                    "关闭后，新的粘贴不再写入。面板里仍能看到之前保存的内容。私钥、常见令牌和密码/口令提示会尽量不记住，这是尽力过滤，并不完备。",
+                ))
+                .changed()
+                {
+                    self.app_settings.remember_paste_history = remember_paste;
+                    let _ = self.app_settings.save();
+                }
             },
         );
     }
@@ -512,6 +683,29 @@ impl MistTermApp {
                     self.auto_reconnect_enabled = ar;
                 }
                 Self::preferences_row_divider(ui, theme);
+                // #201：窗口/标签回到前台时自动重连（默认关）。
+                let mut fg = self.app_settings.reconnect_on_foreground;
+                if crate::ui::chrome::form_checkbox(
+                    ui,
+                    theme,
+                    &mut fg,
+                    crate::i18n::tr(
+                        ctx,
+                        "Reconnect when the window or tab becomes active again",
+                        "回到窗口/标签时自动重连",
+                    ),
+                )
+                .on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Off by default. Only for unexpected drops (timeout / network) — not when you click Disconnect. Output and scrollback are kept.",
+                    "默认关闭。仅对意外断线（超时/网络）生效；你手动点「断开」不会重连。终端输出与滚动缓冲保留。",
+                ))
+                .changed()
+                {
+                    self.app_settings.reconnect_on_foreground = fg;
+                    let _ = self.app_settings.save();
+                }
+                Self::preferences_row_divider(ui, theme);
                 let mut ka = self.default_keepalive_enabled;
                 if crate::ui::chrome::form_checkbox(
                     ui,
@@ -527,12 +721,12 @@ impl MistTermApp {
                 {
                     self.default_keepalive_enabled = ka;
                 }
-                crate::ui::chrome::form_control_row(ui, theme, |ui| {
-                    crate::ui::chrome::form_inline_label(
-                        ui,
-                        theme,
-                        crate::i18n::tr(ctx, "Ping every (s)", "每隔(秒)"),
-                    );
+                // 窄弹窗里两个步进器挤在一行会折标签；间隔与连续无应答各占一行（#130）。
+                let every = crate::i18n::tr(ctx, "Ping every (s)", "每隔(秒)");
+                let give_up = crate::i18n::tr(ctx, "Give up after", "连续无应答");
+                let label_w = crate::ui::chrome::form_label_advance(ui, theme, every)
+                    .max(crate::ui::chrome::form_label_advance(ui, theme, give_up));
+                crate::ui::chrome::form_labeled_control_row(ui, theme, every, label_w, |ui| {
                     crate::ui::chrome::form_u32_stepper(
                         ui,
                         theme,
@@ -540,13 +734,9 @@ impl MistTermApp {
                         &mut self.default_keepalive_interval_secs,
                         5..=300,
                         5,
-                    );
-                    ui.add_space(theme.spacing_md());
-                    crate::ui::chrome::form_inline_label(
-                        ui,
-                        theme,
-                        crate::i18n::tr(ctx, "Give up after", "连续无应答"),
-                    );
+                    )
+                });
+                crate::ui::chrome::form_labeled_control_row(ui, theme, give_up, label_w, |ui| {
                     crate::ui::chrome::form_u8_stepper(
                         ui,
                         theme,
@@ -554,7 +744,7 @@ impl MistTermApp {
                         &mut self.default_keepalive_count_max,
                         1..=20,
                         1,
-                    );
+                    )
                 });
                 ui.label(
                     RichText::new(crate::i18n::tr(
@@ -708,17 +898,24 @@ impl MistTermApp {
                     self.session_log_settings.include_ansi = ansi;
                 }
                 let mb = self.session_log_settings.max_file_bytes / (1024 * 1024);
-                let path = self.session_log_settings.base_dir.display();
-                let log_dir_hint = match crate::i18n::language(ctx) {
-                    crate::i18n::UiLanguage::En => {
-                        format!("Directory: {path} (max {mb} MB per file)")
-                    }
-                    crate::i18n::UiLanguage::Zh => {
-                        format!("目录：{path}(单文件上限 {mb} MB)")
-                    }
+                let full_path = self.session_log_settings.base_dir.display().to_string();
+                let shown_path = ellipsize_middle(&full_path, 42);
+                let dir_line = match crate::i18n::language(ctx) {
+                    crate::i18n::UiLanguage::En => format!("Directory: {shown_path}"),
+                    crate::i18n::UiLanguage::Zh => format!("目录：{shown_path}"),
+                };
+                let cap_line = match crate::i18n::language(ctx) {
+                    crate::i18n::UiLanguage::En => format!("Max {mb} MB per file"),
+                    crate::i18n::UiLanguage::Zh => format!("单文件上限 {mb} MB"),
                 };
                 ui.label(
-                    RichText::new(log_dir_hint)
+                    RichText::new(dir_line)
+                        .size(theme.font_size_small())
+                        .color(text_low),
+                )
+                .on_hover_text(full_path);
+                ui.label(
+                    RichText::new(cap_line)
                         .size(theme.font_size_small())
                         .color(text_low),
                 );
@@ -875,7 +1072,7 @@ impl MistTermApp {
                 crate::ui::chrome::form_field_label(
                     ui,
                     theme,
-                    crate::i18n::tr(ctx, "Token", "Token"),
+                    crate::i18n::tr(ctx, "Token", "令牌"),
                 );
                 crate::ui::chrome::form_singleline_field(
                     ui,
@@ -885,7 +1082,7 @@ impl MistTermApp {
                     crate::i18n::tr(
                         ctx,
                         "Enter token, then click Save",
-                        "输入 Token 后点「保存」",
+                        "输入令牌后点「保存」",
                     ),
                     pref_w,
                     true,
@@ -910,7 +1107,7 @@ impl MistTermApp {
                             crate::i18n::tr(
                                 ctx,
                                 "Vault token saved to keychain",
-                                "Token 已保存到钥匙串",
+                                "令牌已保存到钥匙串",
                             )
                             .to_string(),
                         );
@@ -980,7 +1177,6 @@ impl MistTermApp {
             label_color,
             false,
             |ui| {
-                let pref_w = layout_util::finite_content_width(ui);
                 if crate::ui::chrome::form_checkbox(
                     ui,
                     theme,
@@ -1023,6 +1219,30 @@ impl MistTermApp {
                         "记录执行过的命令摘要",
                     ),
                 );
+                Self::preferences_row_divider(ui, theme);
+                if crate::ui::chrome::form_checkbox(
+                    ui,
+                    theme,
+                    &mut self.app_settings.audit.interactive_pty_capture,
+                    crate::i18n::tr(
+                        ctx,
+                        "Check and record commands typed in the terminal",
+                        "检查并记录终端里手输的命令",
+                    ),
+                )
+                .changed()
+                {
+                    let _ = self.app_settings.save();
+                }
+                ui.label(
+                    RichText::new(crate::i18n::tr(
+                        ctx,
+                        "When team audit is on, Enter uses the same local block/confirm/allow check as snippets and records one local audit entry. Off: Enter is sent immediately. Without a team login, typing is unchanged.",
+                        "团队审计生效时，回车与片段一样先做本地拦截/确认/放行，并记一条本地审计。关闭后回车立即发出。未登录团队时，打字行为不变。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(text_low),
+                );
                 // 团队 HTTP 上报由登录后的 configure_team_audit_sink 自动配置
                 // (URL / Bearer / team_id)，用户无需在偏好里手动维护。
                 Self::preferences_row_divider(ui, theme);
@@ -1032,43 +1252,55 @@ impl MistTermApp {
                     &mut self.app_settings.audit.syslog.enabled,
                     crate::i18n::tr(ctx, "Also send to a Syslog server", "同时发送到 Syslog 服务器"),
                 );
-                crate::ui::chrome::form_control_row(ui, theme, |ui| {
-                    crate::ui::chrome::form_inline_label(
+                let host_label = crate::i18n::tr(ctx, "Host", "主机");
+                let port_label = crate::i18n::tr(ctx, "Port", "端口");
+                let syslog_label_w = crate::ui::chrome::form_label_advance(ui, theme, host_label)
+                    .max(crate::ui::chrome::form_label_advance(
                         ui,
                         theme,
-                        crate::i18n::tr(ctx, "Host", "主机"),
-                    );
-                    let host_w = (pref_w * 0.45).max(120.0);
-                    crate::ui::chrome::form_inline_singleline(
-                        ui,
-                        theme,
-                        egui::Id::new("pref_audit_syslog_host"),
-                        &mut self.app_settings.audit.syslog.host,
-                        "127.0.0.1",
-                        host_w,
-                        false,
-                    );
-                    crate::ui::chrome::form_inline_label(
-                        ui,
-                        theme,
-                        crate::i18n::tr(ctx, "Port", "端口"),
-                    );
-                    crate::ui::chrome::form_u16_stepper(
-                        ui,
-                        theme,
-                        egui::Id::new("pref_audit_syslog_port"),
-                        &mut self.app_settings.audit.syslog.port,
-                        1..=65535,
-                        1,
-                    );
-                    crate::ui::chrome::form_inline_checkbox(
-                        ui,
-                        theme,
-                        "pref_audit_syslog_tcp",
-                        &mut self.app_settings.audit.syslog.use_tcp,
-                        "TCP",
-                    );
-                });
+                        port_label,
+                    ));
+                crate::ui::chrome::form_labeled_control_row(
+                    ui,
+                    theme,
+                    host_label,
+                    syslog_label_w,
+                    |ui| {
+                        let host_w = (ui.available_width() - 4.0).max(120.0);
+                        crate::ui::chrome::form_inline_singleline(
+                            ui,
+                            theme,
+                            egui::Id::new("pref_audit_syslog_host"),
+                            &mut self.app_settings.audit.syslog.host,
+                            "127.0.0.1",
+                            host_w,
+                            false,
+                        )
+                    },
+                );
+                crate::ui::chrome::form_labeled_control_row(
+                    ui,
+                    theme,
+                    port_label,
+                    syslog_label_w,
+                    |ui| {
+                        crate::ui::chrome::form_u16_stepper(
+                            ui,
+                            theme,
+                            egui::Id::new("pref_audit_syslog_port"),
+                            &mut self.app_settings.audit.syslog.port,
+                            1..=65535,
+                            1,
+                        );
+                        crate::ui::chrome::form_inline_checkbox(
+                            ui,
+                            theme,
+                            "pref_audit_syslog_tcp",
+                            &mut self.app_settings.audit.syslog.use_tcp,
+                            "TCP",
+                        );
+                    },
+                );
                 ui.horizontal(|ui| {
                     if crate::ui::chrome::panel_action_primary_icon_button(
                         ui,
@@ -1208,13 +1440,292 @@ impl MistTermApp {
                 ui.label(
                     RichText::new(crate::i18n::tr(
                         ctx,
-                        "Use the menu bar for View / Tools / Help.",
-                        "其余项请用顶部菜单：视图、工具、帮助。",
+                        "Host list, credential sync, passphrase, conflicts, and export/import are in Cloud Sync. This page only opens that panel.",
+                        "主机列表、凭证同步、同步口令、冲突和导出/导入都在云端同步里。这里只负责打开那个面板。",
                     ))
                     .size(theme.font_size_small())
                     .color(theme.color_form_hint()),
                 );
             },
         );
+    }
+
+    /// 扩展模块 / 内置能力开关（#118 / #215 / #266）。
+    /// 为已编进主程序的官方内置模块提供按模块启用/禁用开关；
+    /// 主说明不暴露模块 id / 环境变量名；区块底部次要文案提示 env 覆盖并可跳文档。
+
+    fn preferences_section_monitor_alert(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+        label_color: egui::Color32,
+        text_low: egui::Color32,
+    ) {
+        Self::preferences_collapsing(
+            ui,
+            theme,
+            "monitor_alert",
+            crate::i18n::tr(ctx, "Monitor alerts", "监控告警"),
+            label_color,
+            false,
+            |ui| {
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "When CPU / memory / disk crosses the threshold: choose how you are notified (default: system notification).",
+                        "CPU / 内存 / 磁盘超出阈值时的推送方式（默认：系统通知）。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(text_low),
+                );
+                ui.add_space(theme.spacing_sm());
+                let lang = crate::i18n::language(ctx);
+                let mut mode = self.app_settings.monitor_alert.notify_mode;
+                for option in crate::core::AlertNotifyMode::ALL {
+                    let label = match lang {
+                        crate::i18n::UiLanguage::Zh => option.as_label_zh(),
+                        crate::i18n::UiLanguage::En => option.as_label_en(),
+                    };
+                    ui.radio_value(&mut mode, option, label);
+                }
+                if mode != self.app_settings.monitor_alert.notify_mode {
+                    self.app_settings.monitor_alert.notify_mode = mode;
+                    // 用户改回系统通知时，允许再次解释降级原因。
+                    if mode == crate::core::AlertNotifyMode::SystemNotify {
+                        self.app_settings.monitor_alert.permission_denied_explained = false;
+                    }
+                    let _ = self.app_settings.save();
+                }
+                ui.add_space(theme.spacing_sm());
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "If the OS denies notification permission, MistTerm falls back to an in-app alert and explains why.",
+                        "若系统拒绝通知权限，将降级为应用内告警并说明原因。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(text_low),
+                );
+            },
+        );
+    }
+
+    fn preferences_section_modules(
+        &mut self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        theme: &crate::ui::theme::Theme,
+        label_color: egui::Color32,
+        text_low: egui::Color32,
+    ) {
+        Self::preferences_collapsing(
+            ui,
+            theme,
+            "modules",
+            crate::i18n::tr(ctx, "Extension Modules", "扩展模块 / 内置能力"),
+            label_color,
+            false,
+            |ui| {
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Turn built-in capabilities on or off. Rules stay editable when off, but they do not run until the module is on.",
+                        "按需开启或关闭内置能力。关闭后相关规则仍可编辑，但运行时不生效。",
+                    ))
+                    .size(theme.font_size_small())
+                    .color(text_low),
+                );
+                ui.add_space(theme.spacing_sm());
+
+                let modules = self.module_registry.snapshot();
+                if modules.is_empty() {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            ctx,
+                            "No modular capabilities registered currently.",
+                            "当前尚无已注册的模块化能力。",
+                        ))
+                        .color(text_low),
+                    );
+                    return;
+                }
+
+                let lang = crate::i18n::language(ctx);
+                let mut dirty = false;
+
+                for m in modules {
+                    let is_env_locked = self.module_registry.is_env_disabled(&m.id);
+                    let mut enabled = m.enabled;
+                    let display_name = if lang == crate::i18n::UiLanguage::Zh {
+                        m.name_zh.clone()
+                    } else {
+                        m.name_en.clone()
+                    };
+                    let subtitle = module_subtitle(ctx, &m.id);
+                    let manage_label = crate::i18n::tr(ctx, "Manage rules…", "管理规则…");
+
+                    ui.horizontal(|ui| {
+                        if is_env_locked {
+                            let mut dummy = false;
+                            ui.add_enabled(false, egui::Checkbox::new(&mut dummy, ""));
+                        } else if ui.checkbox(&mut enabled, "").changed() {
+                            if enabled {
+                                self.app_settings.disabled_modules.retain(|id| id != &m.id);
+                            } else if !self.app_settings.disabled_modules.contains(&m.id) {
+                                self.app_settings.disabled_modules.push(m.id.clone());
+                            }
+                            dirty = true;
+                        }
+
+                        ui.vertical(|ui| {
+                            ui.label(egui::RichText::new(display_name).color(if is_env_locked {
+                                text_low
+                            } else {
+                                label_color
+                            }));
+                            ui.label(
+                                egui::RichText::new(subtitle)
+                                    .size(theme.font_size_small())
+                                    .color(text_low),
+                            );
+                            if is_env_locked {
+                                ui.label(
+                                    egui::RichText::new(crate::i18n::tr(
+                                        ctx,
+                                        "[Disabled by advanced override]",
+                                        "[已由高级覆盖强制禁用]",
+                                    ))
+                                    .size(theme.font_size_small())
+                                    .color(theme.accent_color()),
+                                );
+                            }
+                        });
+
+                        // 右栏同一列：「管理规则…」右对齐，避免副标题长短把按钮顶得参差（#266）。
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if m.id == crate::modules::output_trigger::MODULE_ID
+                                && crate::ui::chrome::panel_action_button(ui, theme, manage_label)
+                                    .clicked()
+                            {
+                                self.rule_manager_dialog
+                                    .open_from_preferences(&self.output_trigger_rules);
+                            } else if m.id == crate::modules::display_link::MODULE_ID
+                                && crate::ui::chrome::panel_action_button(ui, theme, manage_label)
+                                    .clicked()
+                            {
+                                self.rule_manager_dialog
+                                    .open_display_link_from_preferences(&self.display_link_rules);
+                            } else if m.id == crate::modules::cmd_audit_local::MODULE_ID
+                                && crate::ui::chrome::panel_action_button(ui, theme, manage_label)
+                                    .clicked()
+                            {
+                                self.rule_manager_dialog
+                                    .open_command_checks_from_preferences(
+                                        &self.cmd_audit_personal_rules,
+                                    );
+                            }
+                        });
+                    });
+                    ui.add_space(theme.spacing_xs());
+                }
+
+                // #266：去掉仅一句旁注的「高级」空壳；改主区块底部次要文案 + 文档链接。
+                // 不在主列表露出环境变量名（延续 #215）。
+                ui.add_space(theme.spacing_sm());
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(crate::i18n::tr(
+                            ctx,
+                            "An environment variable can also override the UI switches.",
+                            "也可用环境变量覆盖界面开关。",
+                        ))
+                        .size(theme.font_size_small())
+                        .color(text_low),
+                    );
+                    if crate::ui::chrome::panel_caption_link(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "See docs", "见文档"),
+                    )
+                    .clicked()
+                    {
+                        let _ = crate::platform::open_url(crate::platform::DOCS_INDEX_URL);
+                    }
+                });
+
+                if dirty {
+                    self.module_registry.sync_effective_disabled(&self.app_settings.disabled_modules);
+                    let _ = self.app_settings.save();
+                }
+            },
+        );
+    }
+
+}
+
+/// 路径中间省略，悬停仍给出全文。`max_chars` 含省略号。
+fn ellipsize_middle(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if max_chars == 0 || count <= max_chars {
+        return text.to_string();
+    }
+    if max_chars == 1 {
+        return "…".to_string();
+    }
+    let keep = max_chars - 1;
+    let head = keep / 2;
+    let tail = keep - head;
+    let h: String = text.chars().take(head).collect();
+    let t: String = text
+        .chars()
+        .rev()
+        .take(tail)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{h}…{t}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ellipsize_middle;
+
+    #[test]
+    fn ellipsize_middle_keeps_both_ends() {
+        assert_eq!(ellipsize_middle("short", 10), "short");
+        let out = ellipsize_middle("/home/user/.local/share/mistterm/logs", 16);
+        assert!(out.starts_with("/home"));
+        assert!(out.ends_with("logs") || out.ends_with("/logs") || out.contains('…'));
+        assert!(out.chars().count() <= 16);
+        assert!(out.contains('…'));
+    }
+}
+
+
+fn module_subtitle(ctx: &egui::Context, module_id: &str) -> &'static str {
+    match module_id {
+        crate::modules::cmd_audit_local::MODULE_ID => crate::i18n::tr(
+            ctx,
+            "Confirm or block risky commands before they run",
+            "执行危险命令前先确认或拦截",
+        ),
+        crate::modules::output_trigger::MODULE_ID => crate::i18n::tr(
+            ctx,
+            "Notify or act when terminal output matches",
+            "终端输出匹配时弹提示或执行动作",
+        ),
+        crate::modules::display_link::MODULE_ID => crate::i18n::tr(
+            ctx,
+            "Turn paths/URLs in output into links",
+            "把日志里的路径/URL 变成可点链接",
+        ),
+        crate::modules::session_import::MODULE_ID => crate::i18n::tr(
+            ctx,
+            "Import sessions/hosts from other terminals",
+            "从其它终端导入会话/主机",
+        ),
+        _ => "",
     }
 }

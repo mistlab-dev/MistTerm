@@ -27,10 +27,20 @@ enum Cmd {
         group: Option<String>,
     },
 
-    /// 交互式连接并打开 Shell：mist ssh <target>
+    /// 交互式连接并打开 Shell：mist ssh <target> [--log-session[=PATH]]
     Ssh {
         /// 目标：会话名/id/host，或 user@host[:port]
         target: String,
+
+        /// 把回车提交的命令写成 JSONL（字段同 GUI exec_history / #156：target、command、timestamp；exit_code 能取则取；output_summary 有界）。默认 ~/.mist/logs/ssh-<会话>-<UTC时间>.jsonl。不加此选项不写文件。
+        #[arg(
+            long = "log-session",
+            num_args = 0..=1,
+            default_missing_value = "",
+            require_equals = true,
+            value_name = "PATH"
+        )]
+        log_session: Option<String>,
     },
 
     /// 在目标上执行命令
@@ -250,7 +260,7 @@ fn cli_locale_is_chinese() -> bool {
 const EN_ABOUT: &[(&str, &str)] = &[
     ("", "MistTerm CLI — command-line SSH that reuses your GUI session settings"),
     ("ls", "List saved sessions"),
-    ("ssh", "Connect and open an interactive shell: mist ssh <target>"),
+    ("ssh", "Connect and open an interactive shell: mist ssh <target> [--log-session[=PATH]]"),
     ("exec", "Run a command on a target"),
     ("rls", "List a remote directory: mist rls <target>:<path>"),
     ("get", "Download a file: mist get <target>:<remote> <local>"),
@@ -276,6 +286,7 @@ const EN_ARG: &[(&str, &str, &str)] = &[
     ("", "verbose", "More log detail (-v info, -vv debug)"),
     ("ls", "group", "Filter by group"),
     ("ssh", "target", "Target: session name/id/host, or user@host[:port]"),
+    ("ssh", "log_session", "Record each command submitted with Enter as JSONL (same fields as GUI exec_history / #156: target, command, timestamp; exit_code when known; bounded output_summary). Default: ~/.mist/logs/ssh-<session>-<UTC time>.jsonl. Without this flag, nothing is written."),
     ("exec", "target", "Target: session name/id/host, or user@host[:port]"),
     ("exec", "command", "Command to run"),
     ("exec", "group", "Run on every session in a group"),
@@ -429,7 +440,9 @@ fn main() {
     };
     let code = match cmd {
         Cmd::Ls { group } => ls::run(&ctx, group.as_deref(), cli.json).map(|_| 0),
-        Cmd::Ssh { target } => mistterm::cli::ssh_cmd::run_ssh(&mut ctx, target),
+        Cmd::Ssh { target, log_session } => {
+            mistterm::cli::ssh_cmd::run_ssh(&mut ctx, target, log_session.as_deref())
+        }
         Cmd::Exec {
             target,
             command,
@@ -608,5 +621,66 @@ mod help_i18n_tests {
     fn chinese_help_unchanged() {
         let help = Cli::command().render_help().to_string();
         assert!(help.contains("列出已保存会话"));
+    }
+
+    #[test]
+    fn ssh_help_shows_log_session_default_path() {
+        let zh = Cli::command()
+            .find_subcommand("ssh")
+            .unwrap()
+            .clone()
+            .render_help()
+            .to_string();
+        assert!(zh.contains("--log-session"), "{zh}");
+        assert!(
+            zh.contains("~/.mist/logs/ssh-<会话>-<UTC时间>.jsonl"),
+            "{zh}"
+        );
+
+        let en = localize_help_en(Cli::command())
+            .find_subcommand("ssh")
+            .unwrap()
+            .clone()
+            .render_help()
+            .to_string();
+        assert!(en.contains("--log-session"), "{en}");
+        assert!(
+            en.contains("~/.mist/logs/ssh-<session>-<UTC time>.jsonl"),
+            "{en}"
+        );
+        assert!(!has_han(&en), "{en}");
+    }
+
+    #[test]
+    fn log_session_flag_parse() {
+        fn ssh(args: &[&str]) -> (String, Option<String>) {
+            let matches = Cli::command()
+                .try_get_matches_from(args)
+                .unwrap_or_else(|err| panic!("{err}"));
+            let cli = Cli::from_arg_matches(&matches).expect("parse");
+            match cli.cmd.expect("subcommand") {
+                Cmd::Ssh {
+                    target,
+                    log_session,
+                } => (target, log_session),
+                _ => panic!("expected ssh"),
+            }
+        }
+
+        let (target, log) = ssh(&["mist", "ssh", "web-01"]);
+        assert_eq!(target, "web-01");
+        assert!(log.is_none());
+
+        let (target, log) = ssh(&["mist", "ssh", "web-01", "--log-session"]);
+        assert_eq!(target, "web-01");
+        assert_eq!(log.as_deref(), Some(""));
+
+        let (target, log) = ssh(&["mist", "ssh", "--log-session", "web-01"]);
+        assert_eq!(target, "web-01");
+        assert_eq!(log.as_deref(), Some(""));
+
+        let (target, log) = ssh(&["mist", "ssh", "--log-session=/tmp/a.jsonl", "web-01"]);
+        assert_eq!(target, "web-01");
+        assert_eq!(log.as_deref(), Some("/tmp/a.jsonl"));
     }
 }

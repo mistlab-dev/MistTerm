@@ -12,7 +12,18 @@ Mist is the SSH terminal GUI built from this repository (`cargo` binary name: **
 
 The prebuilt Linux release is built on Ubuntu 24.04 and needs glibc 2.39 or newer (for example Ubuntu 24.04+, Debian 13+, Fedora 40+). Check yours with `ldd --version`; on older systems, build from source as described below.
 
-Only need the `mist` command line (typical on servers)? From 1.2.1, releases also ship static builds, `mist-cli-linux-x86_64.tar.gz` and `mist-cli-linux-aarch64.tar.gz`, that need no glibc and run on CentOS 7, Rocky 8/9, Ubuntu 20.04/22.04, Debian 12 and ARM servers; `curl -fsSL https://mistlab.dev/install | bash` picks the right one. See [docs/release/CLI_STATIC.md](../release/CLI_STATIC.md).
+Prebuilt packages ([GitHub Releases](https://github.com/mistlab-dev/MistTerm/releases/latest)):
+
+| You want | Download |
+| --- | --- |
+| Mac (Apple Silicon, primary) | `Mist-macos-aarch64.dmg` |
+| Mac (Intel, optional) | `Mist-macos-x86_64.dmg` |
+| Linux desktop | `Mist-linux-x86_64.tar.gz` (`Mist` only; glibc 2.39+) |
+| `mist` command line only | `mist-cli-linux-x86_64.tar.gz` or `mist-cli-linux-aarch64.tar.gz` |
+
+`Mist-macos-universal` is no longer published. The Linux desktop archive no longer includes `mist`; desktop and CLI are separate downloads. Sizes: [docs/release/PACKAGE_SIZE.md](../release/PACKAGE_SIZE.md).
+
+Only need the `mist` command line (typical on servers)? From 1.2.1, the static builds need no glibc and run on CentOS 7, Rocky 8/9, Ubuntu 20.04/22.04, Debian 12 and ARM servers; `curl -fsSL https://mistlab.dev/install | bash` picks the right one. See [docs/release/CLI_STATIC.md](../release/CLI_STATIC.md).
 
 UI defaults to **English**. Switch to Simplified Chinese in **Preferences → Language** (saved in `~/.config/mistterm/settings.json` on Unix).
 
@@ -60,7 +71,7 @@ chmod +x scripts/run-macos-gui.sh
 
 Same as `scripts/bundle-macos.sh` then `open target/release/Mist.app`.
 
-GitHub Release macOS archives include **`Mist.app`**: run `open Mist.app`, or drag it to Applications. The companion raw `Mist` binary is for CLI debugging only — do not double-click it in Finder.
+GitHub Release macOS archives include **`Mist.app`** (`Mist-macos-aarch64` on Apple Silicon, `Mist-macos-x86_64` on Intel): run `open Mist.app`, or drag it to Applications. Do not double-click the raw `Mist` binary in Finder. The command-line tool in that archive is `mist-cli`.
 
 On macOS, `./scripts/install.sh` also copies `Mist.app` to `~/Applications` for Spotlight / Dock launch.
 

@@ -100,8 +100,8 @@ pub fn show_ask_knowledge_modal(
                             ui.label(
                                 egui::RichText::new(crate::i18n::tr(
                                     ctx,
-                                    "No team alternative yet.",
-                                    "暂无团队替代",
+                                    "Nothing matched in the team library. Try another question, or ask AI below.",
+                                    "团队库里没有匹配。换个问法，或点下方「改用 AI」。",
                                 ))
                                 .color(theme.text_tertiary()),
                             );

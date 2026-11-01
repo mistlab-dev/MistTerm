@@ -185,18 +185,21 @@ impl MistTermApp {
         }
 
         // 系统监控：切换终端标签时改为采集当前 SSH 会话(与 SFTP 侧栏一致)
-        if self.show_monitor_panel {
+        // #251：面板关闭后仍后台采集（已初始化时），供系统通知 / 角标。
+        if self.show_monitor_panel || self.monitor_panel.is_initialized() {
             if self.monitor_last_tab != self.active_tab {
                 self.monitor_last_tab = self.active_tab;
                 self.sync_monitor_panel_to_active_tab();
             }
-            self.monitor_panel.show_side_panel(
-                ctx,
-                theme,
-                &mut self.show_monitor_panel,
-                &mut self.right_dock_outer_left_x,
-                dock_col_w,
-            );
+            if self.show_monitor_panel {
+                self.monitor_panel.show_side_panel(
+                    ctx,
+                    theme,
+                    &mut self.show_monitor_panel,
+                    &mut self.right_dock_outer_left_x,
+                    dock_col_w,
+                );
+            }
         }
 
         if self.show_port_forward_panel {
@@ -467,16 +470,54 @@ impl MistTermApp {
                                     } else {
                                         0.0
                                     };
-                                    let term_body_h =
-                                        (ui.available_height() - search_h - agent_banner_h).max(1.0);
+                                    let disconnect_open = self
+                                        .active_ssh_disconnect_banner(std::time::Instant::now())
+                                        .is_some();
+                                    let disconnect_t = ctx.animate_bool_with_time(
+                                        egui::Id::new("ssh_disconnect_banner"),
+                                        disconnect_open,
+                                        0.18,
+                                    );
+                                    let disconnect_banner_h =
+                                        Self::ssh_disconnect_banner_full_h(theme) * disconnect_t;
+                                    let term_body_h = (ui.available_height()
+                                        - search_h
+                                        - agent_banner_h
+                                        - disconnect_banner_h)
+                                        .max(1.0);
                                     let terminal_search_open = self.show_terminal_search;
                                     ui.allocate_ui_with_layout(
-                                        egui::vec2(term_col_w, term_body_h + agent_banner_h),
+                                        egui::vec2(
+                                            term_col_w,
+                                            term_body_h + agent_banner_h + disconnect_banner_h,
+                                        ),
                                         egui::Layout::top_down(egui::Align::LEFT),
                                         |ui| {
-                                            ui.set_min_height(term_body_h + agent_banner_h);
-                                            ui.set_max_height(term_body_h + agent_banner_h);
+                                            ui.set_min_height(
+                                                term_body_h + agent_banner_h + disconnect_banner_h,
+                                            );
+                                            ui.set_max_height(
+                                                term_body_h + agent_banner_h + disconnect_banner_h,
+                                            );
                                             ui.set_max_width(term_col_w);
+                                            if disconnect_banner_h > 0.5 {
+                                                if disconnect_open {
+                                                    self.paint_ssh_disconnect_banner(
+                                                        ui,
+                                                        theme,
+                                                        ctx,
+                                                        disconnect_banner_h,
+                                                    );
+                                                } else {
+                                                    ui.allocate_exact_size(
+                                                        egui::vec2(
+                                                            ui.available_width(),
+                                                            disconnect_banner_h,
+                                                        ),
+                                                        egui::Sense::hover(),
+                                                    );
+                                                }
+                                            }
                                             if agent_banner_h > 0.0 {
                                                 Self::paint_agent_audit_degraded_banner(
                                                     ui, &theme, ctx, self,
@@ -728,6 +769,54 @@ impl MistTermApp {
         }
 
         self.render_new_session_modal(ctx, theme);
+
+        let mut open_paste_history = false;
+        for tab in &mut self.tabs {
+            for pane in tab.panes.iter_mut() {
+                if pane.terminal.take_open_paste_history() {
+                    open_paste_history = true;
+                }
+            }
+        }
+        if open_paste_history {
+            self.menu_open_paste_history(ctx);
+        }
+        if self.paste_history_overlay.open {
+            let term_rect = self
+                .active_tab
+                .and_then(|i| self.tabs.get(i))
+                .and_then(|t| t.active_pane())
+                .map(|pane| pane.last_term_rect)
+                .unwrap_or(egui::Rect::NOTHING);
+            let remembering = self.app_settings.remember_paste_history;
+            match self.paste_history_overlay.show(
+                ctx,
+                theme,
+                &self.paste_history,
+                term_rect,
+                remembering,
+            ) {
+                PasteHistoryAction::Close => {
+                    self.paste_history_overlay.open = false;
+                }
+                PasteHistoryAction::Apply(text) => {
+                    self.paste_history_text_to_active(ctx, &text);
+                    self.paste_history_overlay.open = false;
+                }
+                PasteHistoryAction::Delete(id) => {
+                    self.paste_history.remove_id(id);
+                    if self.paste_history_overlay.selected > 0 {
+                        self.paste_history_overlay.selected -= 1;
+                    }
+                }
+                PasteHistoryAction::None => {}
+            }
+        }
+
+        // #189：启动检测到未提示过的崩溃 → 弹一次提示窗（版本/时间/panic 首行）。
+        if self.crash_notice.is_some() {
+            self.render_crash_notice_dialog(ctx, theme);
+        }
 
         if self.show_about_dialog {
             let mut open = self.show_about_dialog;
@@ -985,45 +1074,18 @@ impl MistTermApp {
                                 });
                             });
 
-                            Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "SSH private key path", "SSH 私钥路径"));
-                            Self::ui_form_singleline(
+                            super::session_auth_form::show_auth_fields(
                                 ui,
+                                ctx,
                                 theme,
-                                "edit_session_private_key_path",
-                                &mut self.edit_session_private_key_path,
-                                crate::i18n::tr(
-                                    ctx,
-                                    "~/.ssh/id_rsa (empty = password or default keys)",
-                                    "~/.ssh/id_rsa(留空则用密码或系统默认密钥)",
-                                ),
+                                "edit_session",
                                 form_w,
-                                false,
-                            );
-                            crate::ui::chrome::form_checkbox(
-                                ui,
-                                theme,
+                                &mut self.edit_session_auth_mode,
                                 &mut self.edit_session_use_ssh_agent,
-                                {
-                                    #[cfg(target_os = "windows")]
-                                    {
-                                        crate::i18n::tr(
-                                            ctx,
-                                            "Use SSH agent (Pageant / ssh-agent)",
-                                            "使用 SSH Agent（Pageant / ssh-agent）",
-                                        )
-                                    }
-                                    #[cfg(not(target_os = "windows"))]
-                                    {
-                                        crate::i18n::tr(
-                                            ctx,
-                                            "Use SSH agent (ssh-agent)",
-                                            "使用 SSH Agent（ssh-agent）",
-                                        )
-                                    }
-                                },
+                                &mut self.edit_session_private_key_path,
                             );
 
-                            Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "ProxyJump", "跳板 ProxyJump"));
+                            Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Jump host", "跳板机"));
                             Self::ui_form_singleline(
                                 ui,
                                 theme,
@@ -1031,14 +1093,14 @@ impl MistTermApp {
                                 &mut self.edit_session_proxy_jump,
                                 crate::i18n::tr(
                                     ctx,
-                                    "bastion or user@bastion:22 (comma-separated hops)",
-                                    "bastion 或 user@bastion:22(多跳逗号分隔；匹配已保存会话名)",
+                                    "bastion or user@bastion:22 (comma-separated hops; OpenSSH ProxyJump)",
+                                    "跳板主机或 user@bastion:22（多跳逗号分隔；可填已保存会话名）",
                                 ),
                                 form_w,
                                 false,
                             );
 
-                            Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "ProxyCommand", "代理命令 ProxyCommand"));
+                            Self::ui_field_label(ui, theme, crate::i18n::tr(ctx, "Proxy command", "代理命令"));
                             Self::ui_form_singleline(
                                 ui,
                                 theme,
@@ -1046,8 +1108,8 @@ impl MistTermApp {
                                 &mut self.edit_session_proxy_command,
                                 crate::i18n::tr(
                                     ctx,
-                                    "e.g. ssh -W %h:%p jump",
-                                    "例：ssh -W %h:%p jump",
+                                    "e.g. ssh -W %h:%p jump (OpenSSH ProxyCommand)",
+                                    "例：ssh -W %h:%p jump（自定义代理命令）",
                                 ),
                                 form_w,
                                 false,
@@ -1058,8 +1120,8 @@ impl MistTermApp {
                                 theme,
                                 crate::i18n::tr(
                                     ctx,
-                                    "Local forwards (-L)",
-                                    "本地端口转发 (-L)",
+                                    "Local port forwards",
+                                    "本机端口转发",
                                 ),
                             );
                             crate::ui::chrome::form_multiline_field_with_hint(
@@ -1082,8 +1144,8 @@ impl MistTermApp {
                                 theme,
                                 crate::i18n::tr(
                                     ctx,
-                                    "Remote forwards (-R)",
-                                    "远程端口转发 (-R)",
+                                    "Remote port forwards",
+                                    "远端端口转发",
                                 ),
                             );
                             crate::ui::chrome::form_multiline_field_with_hint(
@@ -1106,8 +1168,8 @@ impl MistTermApp {
                                 theme,
                                 crate::i18n::tr(
                                     ctx,
-                                    "Dynamic forwards (-D / SOCKS5)",
-                                    "动态转发 (-D / SOCKS5)",
+                                    "Dynamic forwards (SOCKS)",
+                                    "动态转发（SOCKS）",
                                 ),
                             );
                             crate::ui::chrome::form_multiline_field_with_hint(
@@ -1119,6 +1181,27 @@ impl MistTermApp {
                                     ctx,
                                     "1080 or 0.0.0.0:1080 (one per line)",
                                     "1080 或 0.0.0.0:1080(每行一条)",
+                                ),
+                                form_w,
+                                2,
+                                false,
+                            );
+
+                            // #177：连接后恢复命令（可选，默认空 = 不执行）
+                            Self::ui_field_label(
+                                ui,
+                                theme,
+                                crate::i18n::tr(ctx, "Post-connect restore command (optional)", "连接后恢复命令（可选）"),
+                            );
+                            crate::ui::chrome::form_multiline_field_with_hint(
+                                ui,
+                                theme,
+                                egui::Id::new("edit_session_post_connect_command"),
+                                &mut self.edit_session_post_connect_command,
+                                crate::i18n::tr(
+                                    ctx,
+                                    "e.g. tmux attach -t main | empty = off; runs once after connect/reconnect",
+                                    "如 tmux attach -t main | 留空不执行；连接/重连成功后执行一次",
                                 ),
                                 form_w,
                                 2,
@@ -1179,35 +1262,47 @@ impl MistTermApp {
                                 crate::i18n::tr(ctx, "Enable keepalive pings", "空闲时发送心跳，防止被断开"),
                             );
                             if self.edit_session_keepalive_enabled {
-                                crate::ui::chrome::form_control_row(ui, theme, |ui| {
-                                    crate::ui::chrome::form_inline_label(
+                                // 与偏好设置一致：两个步进器各占一行，窄表单不把标签折断（#130）。
+                                let every = crate::i18n::tr(ctx, "Interval (s)", "每隔(秒)");
+                                let give_up = crate::i18n::tr(ctx, "Max timeouts", "连续无应答");
+                                let label_w = crate::ui::chrome::form_label_advance(ui, theme, every)
+                                    .max(crate::ui::chrome::form_label_advance(
                                         ui,
                                         theme,
-                                        crate::i18n::tr(ctx, "Interval (s)", "每隔(秒)"),
-                                    );
-                                    crate::ui::chrome::form_u32_stepper(
-                                        ui,
-                                        theme,
-                                        egui::Id::new("edit_sess_ka_interval"),
-                                        &mut self.edit_session_keepalive_interval_secs,
-                                        5..=300,
-                                        5,
-                                    );
-                                    ui.add_space(theme.spacing_md());
-                                    crate::ui::chrome::form_inline_label(
-                                        ui,
-                                        theme,
-                                        crate::i18n::tr(ctx, "Max timeouts", "连续无应答"),
-                                    );
-                                    crate::ui::chrome::form_u8_stepper(
-                                        ui,
-                                        theme,
-                                        egui::Id::new("edit_sess_ka_count"),
-                                        &mut self.edit_session_keepalive_count_max,
-                                        1..=20,
-                                        1,
-                                    );
-                                });
+                                        give_up,
+                                    ));
+                                crate::ui::chrome::form_labeled_control_row(
+                                    ui,
+                                    theme,
+                                    every,
+                                    label_w,
+                                    |ui| {
+                                        crate::ui::chrome::form_u32_stepper(
+                                            ui,
+                                            theme,
+                                            egui::Id::new("edit_sess_ka_interval"),
+                                            &mut self.edit_session_keepalive_interval_secs,
+                                            5..=300,
+                                            5,
+                                        )
+                                    },
+                                );
+                                crate::ui::chrome::form_labeled_control_row(
+                                    ui,
+                                    theme,
+                                    give_up,
+                                    label_w,
+                                    |ui| {
+                                        crate::ui::chrome::form_u8_stepper(
+                                            ui,
+                                            theme,
+                                            egui::Id::new("edit_sess_ka_count"),
+                                            &mut self.edit_session_keepalive_count_max,
+                                            1..=20,
+                                            1,
+                                        )
+                                    },
+                                );
                             }
                             crate::ui::chrome::form_checkbox_with_id(
                                 ui,
@@ -1576,25 +1671,49 @@ impl MistTermApp {
                             .show(ui, |ui| {
                                 let fragments: Vec<_> = self.fragment_manager.list().to_vec();
                                 let search_lower = self.quick_selector.search_query.to_lowercase();
+                                let matched: Vec<_> = fragments
+                                    .iter()
+                                    .filter(|fragment| {
+                                        crate::i18n::fragment_matches_search(
+                                            ui.ctx(),
+                                            fragment,
+                                            &search_lower,
+                                        )
+                                    })
+                                    .collect();
 
-                                for (idx, fragment) in fragments.iter().enumerate() {
-                                    // 搜索过滤（含 starter 英/中标题）
-                                    if !crate::i18n::fragment_matches_search(
-                                        ui.ctx(),
-                                        fragment,
-                                        &search_lower,
-                                    ) {
-                                        continue;
-                                    }
+                                if matched.is_empty() {
+                                    let empty = if fragments.is_empty() {
+                                        crate::i18n::tr(
+                                            ui.ctx(),
+                                            "No snippets to pick. Add one in Snippet Library first.",
+                                            "还没有片段可选用。先去「命令片段库」新建一条。",
+                                        )
+                                    } else {
+                                        crate::i18n::tr(
+                                            ui.ctx(),
+                                            "No matching snippets. Try another search.",
+                                            "没有匹配的片段。换个关键词试试。",
+                                        )
+                                    };
+                                    ui.label(
+                                        egui::RichText::new(empty)
+                                            .size(theme.font_size_caption())
+                                            .color(theme.text_tertiary()),
+                                    );
+                                } else {
+                                    for (idx, fragment) in matched.iter().enumerate() {
+                                        let is_selected =
+                                            idx == self.quick_selector.selected_index;
+                                        let title = crate::i18n::fragment_display_title(
+                                            ui.ctx(),
+                                            fragment,
+                                        );
 
-                                    let is_selected = idx == self.quick_selector.selected_index;
-                                    let title =
-                                        crate::i18n::fragment_display_title(ui.ctx(), fragment);
-
-                                    if ui.selectable_label(is_selected, title).clicked() {
-                                        // 点击执行
-                                        self.execute_fragment(ctx, fragment);
-                                        self.quick_selector.open = false;
+                                        if ui.selectable_label(is_selected, title).clicked() {
+                                            self.execute_fragment(ctx, fragment);
+                                            self.quick_selector.open = false;
+                                        }
                                     }
                                 }
                             });
@@ -1849,6 +1968,181 @@ impl MistTermApp {
                 egui::Id::new("mistterm_fragment_variable_dialog"),
             ));
         }
+
+        self.show_command_palette(ctx, theme);
+    }
+
+    fn ssh_disconnect_banner_full_h(theme: &crate::ui::theme::Theme) -> f32 {
+        theme.size_control_btn_h() + theme.spacing_sm() * 2.0
+    }
+
+    /// 活动窗格的 SSH 断开条阶段。正在连接、连接失败占位、本机终端都不占用这条。
+    fn active_ssh_disconnect_banner(
+        &self,
+        now: std::time::Instant,
+    ) -> Option<crate::core::DisconnectBannerKind> {
+        let tab = self.tabs.get(self.active_tab?)?;
+        let pane = tab.active_pane()?;
+        if !pane.terminal.shows_persistent_disconnect_banner() {
+            return None;
+        }
+        let auto = self.tab_auto_reconnect_enabled(&tab.primary_session_id());
+        Some(crate::core::disconnect_banner_kind(
+            auto,
+            pane.ssh_auto_reconnect_attempts,
+            pane.ssh_auto_reconnect_next,
+            now,
+            crate::core::DEFAULT_MAX_RECONNECT_ATTEMPTS,
+        ))
+    }
+
+    fn disconnect_banner_text(
+        ctx: &egui::Context,
+        kind: crate::core::DisconnectBannerKind,
+    ) -> String {
+        use crate::core::DisconnectBannerKind;
+        use crate::i18n::{language, UiLanguage};
+        match (language(ctx), kind) {
+            (UiLanguage::En, DisconnectBannerKind::Held) => {
+                "Connection lost · input is buffered locally".to_string()
+            }
+            (UiLanguage::Zh, DisconnectBannerKind::Held) => "连接已断开 · 输入暂存本地".to_string(),
+            (
+                UiLanguage::En,
+                DisconnectBannerKind::Scheduled {
+                    attempt,
+                    max_attempts,
+                    delay_secs,
+                },
+            ) => {
+                if delay_secs == 0 {
+                    format!(
+                        "Auto-reconnect {attempt}/{max_attempts} · retrying now · input buffered locally"
+                    )
+                } else {
+                    format!(
+                        "Auto-reconnect {attempt}/{max_attempts} · retry in {delay_secs}s · input buffered locally"
+                    )
+                }
+            }
+            (
+                UiLanguage::Zh,
+                DisconnectBannerKind::Scheduled {
+                    attempt,
+                    max_attempts,
+                    delay_secs,
+                },
+            ) => {
+                if delay_secs == 0 {
+                    format!("正在自动重连 {attempt}/{max_attempts} · 即将重试 · 输入暂存本地")
+                } else {
+                    format!(
+                        "正在自动重连 {attempt}/{max_attempts} · {delay_secs} 秒后重试 · 输入暂存本地"
+                    )
+                }
+            }
+            (UiLanguage::En, DisconnectBannerKind::GaveUp { max_attempts }) => format!(
+                "Auto-reconnect stopped after {max_attempts} attempts · input buffered locally"
+            ),
+            (UiLanguage::Zh, DisconnectBannerKind::GaveUp { max_attempts }) => {
+                format!("自动重连已达 {max_attempts} 次上限 · 输入暂存本地")
+            }
+        }
+    }
+
+    /// 终端区顶部常驻断开条。消失与否只看连接状态，不另存一份「已提示」标记。
+    fn paint_ssh_disconnect_banner(
+        &mut self,
+        ui: &mut egui::Ui,
+        theme: &crate::ui::theme::Theme,
+        ctx: &egui::Context,
+        banner_h: f32,
+    ) {
+        let now = std::time::Instant::now();
+        let Some(kind) = self.active_ssh_disconnect_banner(now) else {
+            ui.allocate_exact_size(
+                egui::vec2(ui.available_width(), banner_h),
+                egui::Sense::hover(),
+            );
+            return;
+        };
+        let scheduled = matches!(kind, crate::core::DisconnectBannerKind::Scheduled { .. });
+        let text = Self::disconnect_banner_text(ctx, kind);
+        let w = ui.available_width();
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(w, banner_h), egui::Sense::hover());
+        let warn = theme.color_status_warning_text();
+        let fill = theme.color_status_selected_fill(theme.amber_color());
+        ui.painter().rect_filled(rect, 0.0, fill);
+        ui.painter().hline(
+            rect.x_range(),
+            rect.bottom(),
+            egui::Stroke::new(1.0, warn.gamma_multiply(0.55)),
+        );
+        let pad = theme.spacing_sm();
+        let buttons_ok = banner_h + 1.0 >= theme.size_control_btn_h();
+        let mut reconnect = false;
+        let mut close_tab = false;
+        let mut text_right = rect.right() - pad;
+        if buttons_ok {
+            let mut row = ui.child_ui(rect, egui::Layout::right_to_left(egui::Align::Center));
+            row.set_clip_rect(rect);
+            row.spacing_mut().item_spacing.x = theme.spacing_sm();
+            row.add_space(pad);
+            let close_label = crate::i18n::tr(ctx, "Close tab", "关闭标签");
+            let reconnect_label = crate::i18n::tr(ctx, "Reconnect", "重连");
+            if crate::ui::chrome::panel_action_button(&mut row, theme, close_label).clicked() {
+                close_tab = true;
+            }
+            let reconnect_resp =
+                crate::ui::chrome::panel_action_primary_button(&mut row, theme, reconnect_label);
+            if reconnect_resp.clicked() {
+                reconnect = true;
+            }
+            text_right = reconnect_resp.rect.left() - theme.spacing_sm();
+        }
+        let icon_px = theme.size_icon_glyph();
+        let icon_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.left() + pad + icon_px * 0.5, rect.center().y),
+            egui::vec2(icon_px, icon_px),
+        );
+        crate::ui::icons::paint_icon(
+            ui,
+            icon_rect,
+            crate::ui::icons::IconId::Warning,
+            warn,
+            icon_px,
+        );
+        let text_rect = egui::Rect::from_min_max(
+            egui::pos2(icon_rect.right() + theme.spacing_xs(), rect.top()),
+            egui::pos2(text_right, rect.bottom()),
+        );
+        if text_rect.width() > 8.0 {
+            let galley = ui.fonts(|f| {
+                f.layout_no_wrap(
+                    text,
+                    egui::FontId::proportional(theme.font_size_ui_control()),
+                    warn,
+                )
+            });
+            let painter = ui.painter().with_clip_rect(text_rect.intersect(rect));
+            painter.galley(
+                egui::pos2(
+                    text_rect.left(),
+                    rect.center().y - galley.size().y * 0.5,
+                ),
+                galley,
+            );
+        }
+        if scheduled {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+        if reconnect {
+            if let Some(idx) = self.active_tab {
+                self.reconnect_tab_at(ctx, idx);
+            }
+        } else if close_tab {
+            self.request_close_active_tab();
+        }
     }
 
     pub(crate) fn paint_agent_audit_degraded_banner(
@@ -1998,8 +2292,8 @@ impl MistTermApp {
                             theme,
                             crate::i18n::tr(
                                 ctx,
-                                "Open another tab",
-                                "再开一个标签",
+                                "Duplicate Tab",
+                                "复制标签",
                             ),
                         )
                         .clicked()
@@ -2017,8 +2311,8 @@ impl MistTermApp {
                             theme,
                             crate::i18n::tr(
                                 ctx,
-                                "Disconnect SSH (keep output)",
-                                "断开 SSH(保留输出)",
+                                "Disconnect (Keep Output)",
+                                "断开连接（保留输出）",
                             ),
                         )
                         .clicked()
@@ -2031,8 +2325,8 @@ impl MistTermApp {
                         theme,
                         crate::i18n::tr(
                             ctx,
-                            "Reconnect this tab",
-                            "重连此标签",
+                            "Reconnect",
+                            "重新连接",
                         ),
                     )
                     .clicked()
@@ -2075,9 +2369,9 @@ impl MistTermApp {
                     }
                     if tab.is_split() {
                         let broadcast_label = if tab.broadcast_input {
-                            crate::i18n::tr(ctx, "✓ Broadcast input", "✓ 同时输入")
+                            crate::i18n::tr(ctx, "✓ Broadcast Input", "✓ 广播输入")
                         } else {
-                            crate::i18n::tr(ctx, "Broadcast input", "同时输入")
+                            crate::i18n::tr(ctx, "Broadcast Input", "广播输入")
                         };
                         if crate::ui::chrome::popup_menu_button_accel_shift(
                             ui,
@@ -2286,13 +2580,13 @@ impl MistTermApp {
                         .any(|t| t.primary_session_id() == session.id);
                     let again = match (crate::i18n::language(ctx), has_tab) {
                         (crate::i18n::UiLanguage::En, true) => {
-                            format!("Another tab · {}", session.name)
+                            format!("Duplicate Tab · {}", session.name)
                         }
                         (crate::i18n::UiLanguage::En, false) => {
                             format!("Open · {}", session.name)
                         }
                         (crate::i18n::UiLanguage::Zh, true) => {
-                            format!("再开一个「{}」", session.name)
+                            format!("复制「{}」标签", session.name)
                         }
                         (crate::i18n::UiLanguage::Zh, false) => {
                             format!("打开「{}」", session.name)

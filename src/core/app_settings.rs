@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::core::ai_settings::AiSettings;
+use crate::core::monitor_alert::MonitorAlertSettings;
 use crate::core::audit::AuditSettings;
 use crate::core::team::TeamSettings;
 use crate::core::vault::VaultSettings;
@@ -34,6 +35,22 @@ pub struct AppSettings {
     /// 默认本地目录：SFTP 本机侧初始目录与 ZMODEM `sz` 保存目录共用；空 = 系统「下载」目录。
     #[serde(default)]
     pub default_local_dir: String,
+    /// 记住最近成功送入 PTY 的粘贴。关闭后不再写入粘贴历史。
+    #[serde(default = "default_true")]
+    pub remember_paste_history: bool,
+    /// 用户显式禁用的内置模块列表（#118）。
+    /// 注意：若环境变量 `MISTTERM_DISABLE_MODULES` 同时存在，env 中的模块强制禁用（优先级更高）。
+    #[serde(default)]
+    pub disabled_modules: Vec<String>,
+    /// #201：窗口/标签回到前台时自动重连（默认关；仅意外断开，保留输出）。
+    #[serde(default)]
+    pub reconnect_on_foreground: bool,
+    /// #215：自动化规则对话框「一次性短提示」已勾选不再显示。
+    #[serde(default)]
+    pub rules_intro_dismissed: bool,
+    /// #251：监控告警推送（声音 / 系统通知 / 仅面板）。
+    #[serde(default)]
+    pub monitor_alert: MonitorAlertSettings,
 }
 
 fn default_true() -> bool {
@@ -52,6 +69,11 @@ impl Default for AppSettings {
             onboarding_help_shown: false,
             control_plane_plans: true,
             default_local_dir: String::new(),
+            remember_paste_history: true,
+            disabled_modules: Vec::new(),
+            reconnect_on_foreground: false,
+            rules_intro_dismissed: false,
+            monitor_alert: MonitorAlertSettings::default(),
         }
     }
 }
@@ -89,5 +111,15 @@ mod tests {
     fn old_settings_without_local_dir_default_to_system_downloads() {
         let s: AppSettings = serde_json::from_str("{}").expect("parse");
         assert!(s.default_local_dir.is_empty());
+        assert!(s.remember_paste_history);
+    }
+
+    #[test]
+    fn old_settings_default_monitor_alert_to_system_notify() {
+        let s: AppSettings = serde_json::from_str("{}").expect("parse");
+        assert_eq!(
+            s.monitor_alert.notify_mode,
+            crate::core::AlertNotifyMode::SystemNotify
+        );
     }
 }

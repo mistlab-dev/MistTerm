@@ -14,6 +14,10 @@ pub fn format_ssh_connect_error(lang: UiLanguage, message: &str) -> String {
         }
     };
 
+    if let Some(fido2) = fido2_user_message(lang, s) {
+        return fido2;
+    }
+
     if lower.contains("authentication failed")
         || (lower.contains("password") && lower.contains("publickey"))
         || lower.contains("all configured authentication methods failed")
@@ -75,6 +79,35 @@ pub fn format_ssh_connect_error(lang: UiLanguage, message: &str) -> String {
         );
     }
 
+    if lower.contains("host_key_changed")
+        || lower.starts_with("host_key_changed|")
+        || lower.contains("host key changed")
+    {
+        // Prefer short beginner copy; do not dump English protocol text as the primary line.
+        let mut new_fp = String::new();
+        if let Some(changed) = super::known_hosts::parse_host_key_changed(s) {
+            new_fp = changed.got;
+        }
+        let en = if new_fp.is_empty() {
+            "This host's key changed (common after a reinstall). If you expected that, tap Trust and continue.".to_string()
+        } else {
+            format!(
+                "This host's key changed (common after a reinstall). New fingerprint: {new_fp}. If you expected that, tap Trust and continue."
+            )
+        };
+        let zh = if new_fp.is_empty() {
+            "这台主机的密钥变了（常见于重装系统）。确认是你本人改过之后，点「信任并继续」即可连上。".to_string()
+        } else {
+            format!(
+                "这台主机的密钥变了（常见于重装系统）。新指纹：{new_fp}。确认是你本人改过之后，点「信任并继续」即可连上。"
+            )
+        };
+        return match lang {
+            UiLanguage::En => en,
+            UiLanguage::Zh => zh,
+        };
+    }
+
     if lower.contains("banner") || lower.contains("handshake") || lower.contains("kex") {
         return pick(
             "Could not talk to this SSH server. Check the address, port, and that SSH is running.",
@@ -100,6 +133,83 @@ pub fn format_ssh_connect_error(lang: UiLanguage, message: &str) -> String {
         UiLanguage::En => format!("Connection failed: {s}"),
         UiLanguage::Zh => format!("连接失败：{s}"),
     }
+}
+
+/// 连接过程中显示的触摸 / PIN 提示。三端都走系统 OpenSSH agent，不在 MistTerm 里收集 PIN。
+pub fn fido2_connect_hint(lang: UiLanguage) -> &'static str {
+    match lang {
+        UiLanguage::En => {
+            #[cfg(windows)]
+            {
+                "Touch the security key, or enter its PIN in the Windows prompt. MistTerm signs with the OpenSSH Authentication Agent (ecdsa-sk / ed25519-sk), not Pageant, and does not ask for the PIN here."
+            }
+            #[cfg(target_os = "macos")]
+            {
+                "Touch the security key when it blinks, or enter its PIN in the macOS prompt. MistTerm signs with the system ssh-agent (ecdsa-sk / ed25519-sk) and does not ask for the PIN here."
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                "Touch the security key, or enter its PIN in the system prompt. MistTerm signs with OpenSSH ssh-agent in this session (ecdsa-sk / ed25519-sk) and does not ask for the PIN here."
+            }
+            #[cfg(not(any(windows, unix)))]
+            {
+                "Touch the security key, or enter its PIN in the system prompt. MistTerm signs with the OpenSSH agent (ecdsa-sk / ed25519-sk) and does not ask for the PIN here."
+            }
+        }
+        UiLanguage::Zh => {
+            #[cfg(windows)]
+            {
+                "请触摸安全密钥，或在 Windows 提示里输入 PIN。MistTerm 通过 OpenSSH Authentication Agent 使用 ecdsa-sk / ed25519-sk（不是 Pageant），不会在这里索要 PIN。"
+            }
+            #[cfg(target_os = "macos")]
+            {
+                "请在安全密钥闪烁时触摸，或在 macOS 提示里输入 PIN。MistTerm 通过系统 ssh-agent 使用 ecdsa-sk / ed25519-sk，不会在这里索要 PIN。"
+            }
+            #[cfg(all(unix, not(target_os = "macos")))]
+            {
+                "请触摸安全密钥，或在系统提示里输入 PIN。MistTerm 通过本会话的 OpenSSH ssh-agent 使用 ecdsa-sk / ed25519-sk，不会在这里索要 PIN。"
+            }
+            #[cfg(not(any(windows, unix)))]
+            {
+                "请触摸安全密钥，或在系统提示里输入 PIN。MistTerm 通过 OpenSSH agent 使用 ecdsa-sk / ed25519-sk，不会在这里索要 PIN。"
+            }
+        }
+    }
+}
+
+fn fido2_user_message(lang: UiLanguage, message: &str) -> Option<String> {
+    let code = message.split(':').next()?.trim();
+    let (en, zh) = match code {
+        "FIDO2_AGENT_UNAVAILABLE" => (
+            "SSH agent is not available, so the security key cannot sign. Windows: start the OpenSSH Authentication Agent service (Pageant cannot sign sk keys). macOS: the system ssh-agent should already be running. Linux: start OpenSSH ssh-agent in this session, export SSH_AUTH_SOCK, then run ssh-add. Login did not succeed.",
+            "连不上 SSH 代理，安全密钥无法签名。Windows 请启动 OpenSSH Authentication Agent 服务 (Pageant 不能签 sk 密钥)。macOS 使用系统 ssh-agent。Linux 请在本会话启动 OpenSSH 的 ssh-agent 并设置 SSH_AUTH_SOCK，然后执行 ssh-add。这次没有登录成功。",
+        ),
+        "FIDO2_NO_SECURITY_KEY" => (
+            "No OpenSSH security key (ecdsa-sk / ed25519-sk) is available. Plug the key in and load it with ssh-add, then retry. Login did not succeed.",
+            "没有可用的 OpenSSH 安全密钥 (ecdsa-sk / ed25519-sk)。请插入密钥并执行 ssh-add，然后重试。这次没有登录成功。",
+        ),
+        "FIDO2_KEY_FILE_MISSING" => (
+            "Security key file was not found. Check the path (for example ~/.ssh/id_ed25519_sk), or leave it empty to use any sk key already loaded in the agent. Login did not succeed.",
+            "找不到安全密钥文件。请检查路径 (例如 ~/.ssh/id_ed25519_sk)，或留空以使用代理里已加载的 sk 密钥。这次没有登录成功。",
+        ),
+        "FIDO2_TOUCH_CANCELLED" => (
+            "Security key touch was cancelled or timed out. Touch the key when it blinks, or confirm the system prompt, then retry. Login did not succeed.",
+            "安全密钥触摸已取消或等待超时。请在密钥闪烁时触摸，或确认系统提示后重试。这次没有登录成功。",
+        ),
+        "FIDO2_PIN_INCORRECT" => (
+            "Security key PIN was rejected. Enter the FIDO2 PIN in the system prompt and retry. Too many failures can lock the key. Login did not succeed.",
+            "安全密钥 PIN 不正确。请在系统提示里重新输入 FIDO2 PIN。连续错误可能会锁住密钥。这次没有登录成功。",
+        ),
+        "FIDO2_SIGN_FAILED" => (
+            "Security key sign-in failed and login did not succeed. If you dismissed the touch prompt, the touch was cancelled — touch the key and retry. If the system prompt said the PIN was wrong, retry with the FIDO2 PIN. If the key never blinked and there was no prompt, it is missing or not loaded — plug it in and run ssh-add -l.",
+            "安全密钥登录失败，没有登录成功。若你关掉了触摸提示，这是取消触摸，请触摸密钥后重试。若系统提示 PIN 错误，请用正确的 FIDO2 PIN 重试。若密钥没有闪烁且没有任何提示，说明密钥未插入或未加载，请插入后执行 ssh-add -l。",
+        ),
+        _ => return None,
+    };
+    Some(match lang {
+        UiLanguage::En => en.to_string(),
+        UiLanguage::Zh => zh.to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -155,11 +265,73 @@ mod tests {
     }
 
     #[test]
+    fn maps_fido2_failures_without_claiming_success() {
+        let pin = format_ssh_connect_error(
+            UiLanguage::Zh,
+            "FIDO2_PIN_INCORRECT: incorrect PIN",
+        );
+        assert!(pin.contains("PIN"));
+        assert!(pin.contains("没有登录成功"));
+        assert!(!pin.contains("FIDO2_"));
+
+        let touch = format_ssh_connect_error(
+            UiLanguage::En,
+            "FIDO2_TOUCH_CANCELLED: user presence check timed out",
+        );
+        assert!(touch.to_lowercase().contains("touch"));
+        assert!(touch.to_lowercase().contains("did not succeed"));
+
+        let missing = format_ssh_connect_error(
+            UiLanguage::Zh,
+            "FIDO2_NO_SECURITY_KEY: no sk key",
+        );
+        assert!(missing.contains("安全密钥"));
+
+        let generic = format_ssh_connect_error(
+            UiLanguage::En,
+            "FIDO2_SIGN_FAILED: agent refused operation",
+        );
+        assert!(generic.to_lowercase().contains("touch"));
+        assert!(generic.to_lowercase().contains("pin"));
+        assert!(generic.to_lowercase().contains("not loaded"));
+
+        let agent = format_ssh_connect_error(
+            UiLanguage::Zh,
+            "FIDO2_AGENT_UNAVAILABLE: socket",
+        );
+        assert!(agent.contains("Windows"));
+        assert!(agent.contains("macOS"));
+        assert!(agent.contains("Linux"));
+
+        let file = format_ssh_connect_error(
+            UiLanguage::En,
+            "FIDO2_KEY_FILE_MISSING: nope",
+        );
+        assert!(file.to_lowercase().contains("not found"));
+    }
+
+    #[test]
     fn maps_connection_refused() {
         let s = format_ssh_connect_error(
             UiLanguage::Zh,
             "TCP connection failed: Connection refused (os error 61)",
         );
         assert!(s.contains("拒绝"));
+    }
+
+    #[test]
+    fn maps_host_key_changed_without_english_protocol_dump() {
+        let raw = "HOST_KEY_CHANGED|127.0.0.1|2222|SHA256:old|SHA256:newfp";
+        let zh = format_ssh_connect_error(UiLanguage::Zh, raw);
+        assert!(zh.contains("密钥变了"));
+        assert!(zh.contains("信任并继续"));
+        assert!(zh.contains("SHA256:newfp"));
+        assert!(!zh.contains("HOST_KEY_CHANGED"));
+        assert!(!zh.contains("Refusing to connect"));
+
+        let en = format_ssh_connect_error(UiLanguage::En, raw);
+        assert!(en.to_lowercase().contains("key changed"));
+        assert!(en.to_lowercase().contains("trust and continue"));
+        assert!(!en.contains("HOST_KEY_CHANGED"));
     }
 }

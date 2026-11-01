@@ -103,7 +103,11 @@ impl TeamMembersDialog {
                         ui.label(
                             chrome::rich_caption(
                                 theme,
-                                crate::i18n::tr(ctx, "No members returned.", "暂无成员数据。"),
+                                crate::i18n::tr(
+                                    ctx,
+                                    "No members yet. Sign in to a team that already has members, then tap Refresh.",
+                                    "还没有成员。请登录已有成员的团队，再点「刷新」。",
+                                ),
                             )
                             .color(theme.text_tertiary()),
                         );
@@ -143,10 +147,11 @@ impl TeamMembersDialog {
 
 fn localize_members_error(ctx: &egui::Context, msg: &str) -> String {
     if msg.contains("404") || msg.contains("Not Found") {
+        // #233：主文白话，不摊 REST 路径。
         return crate::i18n::tr(
             ctx,
-            "Member list API is not available on the server yet.",
-            "服务端尚未提供成员列表接口(GET /v1/teams/{id}/members)。",
+            "This team server does not offer a member list yet.",
+            "这个团队服务器暂时还没有成员列表。",
         )
         .to_string();
     }

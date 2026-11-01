@@ -48,6 +48,10 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — interrupt the foreground program (SIGINT), even if text is selected\n\
              {} — copy the terminal selection\n\
              {} — paste into the terminal\n\
+             {} — previous command block (needs shell integration, OSC 133)\n\
+             {} — next command block\n\
+             {} — copy the current command block (command and output; long output is truncated)\n\
+             {} — paste history (pick a recent successful paste and send it again; one-shot paste is unchanged). Also Tools → Paste History\n\
              {} — Select all (terminal)\n\
              {} — AI assistant panel\n\
              {} — send terminal selection to AI\n\
@@ -66,13 +70,10 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
                 "J",
                 "Focus connection search (terminal not focused; focused Ctrl+J goes to the shell)",
             ),
-            s::help_line(
-                "K",
-                "Focus snippet search (terminal not focused; focused Ctrl+K goes to the shell)",
-            ),
+            s::help_line("K", crate::ui::command_palette::PALETTE_SHORTCUT_HELP_EN),
             s::help_line("B", "Immersive mode (hide rail & menus, tabs in title bar)"),
             format!(
-                "{} — Quick snippet picker (terminal not focused)",
+                "{} — Quick Snippets (terminal not focused)",
                 s::accel_shift("J")
             ),
             s::accel("F"),
@@ -82,6 +83,10 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::terminal_interrupt_accel(),
             s::terminal_copy_accel(),
             s::terminal_paste_accel(),
+            s::command_block_prev_accel(),
+            s::command_block_next_accel(),
+            s::command_block_copy_accel(),
+            s::paste_history_accel(),
             s::accel_shift("A"),
             s::accel_shift("I"),
             s::accel_shift("L"),
@@ -110,6 +115,10 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
              {} — 中断前台程序 (SIGINT), 有选区也一样\n\
              {} — 复制终端选区\n\
              {} — 粘贴到终端\n\
+             {} — 上一条命令块 (需要 shell integration, OSC 133)\n\
+             {} — 下一条命令块\n\
+             {} — 复制当前命令块 (命令和输出; 过长会截断)\n\
+             {} — 粘贴历史（从最近成功粘贴里再选一条贴上；一次粘贴的快捷键不变）。菜单在「工具 → 粘贴历史」\n\
              {} — 全选(终端)\n\
              {} — AI 助手面板\n\
              {} — 终端选区发送到 AI\n\
@@ -125,9 +134,9 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::accel_literal("1–9"),
             s::accel_literal("Tab"),
             s::help_line("J", "聚焦连接搜索 (终端失焦时; 聚焦时 Ctrl+J 发给 shell)",),
-            s::help_line("K", "聚焦片段搜索 (终端失焦时; 聚焦时 Ctrl+K 发给 shell)",),
+            s::help_line("K", crate::ui::command_palette::PALETTE_SHORTCUT_HELP_ZH),
             s::help_line("B", "沉浸式模式 (藏活动栏与菜单, 标签进顶栏)"),
-            s::accel_shift("J").to_owned() + " — 快速片段选择器 (终端失焦时)",
+            s::accel_shift("J").to_owned() + " — 快速片段 (终端失焦时)",
             s::accel("F"),
             s::accel_literal(","),
             s::accel("H"),
@@ -135,6 +144,10 @@ pub(crate) fn mistterm_functional_spec_shortcuts(ctx: &egui::Context) -> String 
             s::terminal_interrupt_accel(),
             s::terminal_copy_accel(),
             s::terminal_paste_accel(),
+            s::command_block_prev_accel(),
+            s::command_block_next_accel(),
+            s::command_block_copy_accel(),
+            s::paste_history_accel(),
             s::accel_shift("A"),
             s::accel_shift("I"),
             s::accel_shift("L"),

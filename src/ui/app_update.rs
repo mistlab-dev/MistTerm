@@ -315,6 +315,14 @@ impl MistTermApp {
             .name("mist-update-check".into())
             .spawn(move || {
                 let mut state = UpdateState::load();
+                // #149：匿名使用统计 ping，搭版本检查的车（同线程、失败静默）。
+                let cid_new = state.client_id.is_none();
+                let cid = updater::ping::ensure_client_id(&mut state);
+                updater::ping::send_startup_ping(&cid);
+                if cid_new {
+                    // 首次生成的 cid 立即落盘：即便本次检查失败，实例 ID 也保持稳定。
+                    let _ = state.save();
+                }
                 let opts = CheckOptions::for_current_build(channel);
                 let result = updater::check_for_update(&opts, &mut state);
                 if result.is_ok() {
@@ -925,7 +933,7 @@ impl MistTermApp {
                             ui.add_space(theme.spacing_sm());
                             match fraction {
                                 Some(f) => {
-                                    ui.add(egui::ProgressBar::new(f.clamp(0.0, 1.0)).show_percentage());
+                                    crate::ui::chrome::progress_bar(ui, theme, f);
                                 }
                                 None => {
                                     ui.spinner();
@@ -1117,9 +1125,18 @@ impl MistTermApp {
         if disabled_by_env {
             small(ui, crate::i18n::tr(
                 ctx,
-                "Update checks are turned off on this computer (MIST_DISABLE_UPDATE_CHECK).",
-                "这台电脑关闭了检查更新（MIST_DISABLE_UPDATE_CHECK）。",
+                "Update checks are turned off on this computer with an advanced setting.",
+                "这台电脑用高级方式关闭了检查更新。",
             ));
+            egui::CollapsingHeader::new(crate::i18n::tr(ctx, "Advanced", "高级"))
+                .id_source("update_prefs_disabled_by_env_advanced")
+                .show(ui, |ui| {
+                    small(ui, crate::i18n::tr(
+                        ctx,
+                        "Environment variable: MIST_DISABLE_UPDATE_CHECK.",
+                        "环境变量：MIST_DISABLE_UPDATE_CHECK。",
+                    ));
+                });
         }
         small(ui, crate::i18n::tr(
             ctx,

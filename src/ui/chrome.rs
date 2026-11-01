@@ -1223,7 +1223,9 @@ pub fn session_tab_chip(
     let label_color = if active {
         theme.text_primary()
     } else if theme.uses_modern_palette() {
-        theme.text_secondary().gamma_multiply(0.55)
+        // #130 实机巡检：暗夜未选中 0.55 仅 ~3.07:1，小字偏暗；抬到 0.72
+        // （仍低于选中态 text_primary），晨曦/浅色路径不动。
+        theme.text_secondary().gamma_multiply(0.72)
     } else {
         theme.text_tertiary()
     };
@@ -2017,13 +2019,21 @@ pub fn settings_elevated_card(ui: &mut Ui, theme: &Theme, body: impl FnOnce(&mut
         .show(ui, |ui| {
             let inner_w = crate::ui::layout_util::set_width_to_available(ui);
             ui.set_min_width(inner_w);
-            ui.spacing_mut().item_spacing.y = theme.spacing_xs();
+            // 分隔线已拿掉。行距走主题 token，现代 / 经典同一节奏（#130）。
+            ui.spacing_mut().item_spacing.y = theme.spacing_card_row();
             body(ui);
         });
     ui.add_space(theme.spacing_md().max(10.0));
 }
 
-/// 与步进器/数字框同一行时用：占位高度对齐控件，文字垂直居中。
+/// 表单标签的占位宽度，用来把两行步进器的数字框对齐。
+pub fn form_label_advance(ui: &Ui, theme: &Theme, text: &str) -> f32 {
+    let font = egui::FontId::proportional(theme.font_size_form_label());
+    let galley = ui.fonts(|f| f.layout_no_wrap(text.to_owned(), font, theme.color_form_label()));
+    galley.size().x.ceil() + 4.0
+}
+
+/// 与步进器/数字框同一行时用：占位高度对齐行盒，文字垂直居中。
 pub fn form_inline_label(ui: &mut Ui, theme: &Theme, text: &str) {
     let h = form_stepper_row_h(theme);
     let font = egui::FontId::proportional(theme.font_size_form_label());
@@ -2075,20 +2085,27 @@ pub fn form_labeled_control_row<R>(
     })
 }
 
-/// 步进器统一行高(偏好表单与标签对齐用)。
-pub fn form_stepper_row_h_for_layout(theme: &Theme) -> f32 {
-    form_stepper_row_h(theme)
+/// 步进器方钮 / 数字框 / 步进器自身行高（20px）。
+///
+/// 与 12px 表单标签对齐，取 #130 目标区间 20–22 的下沿，比标注截图里约 26px 的 ± 和数字框明显矮一档。
+/// 不是通用表单行高。表单行盒仍约 26px（与通用按钮同高），方钮在行内垂直居中。
+/// `form_control_row` 用 `set_height` 锁死行高；若把 26px 按钮塞进 20px 行盒会被裁切。
+pub fn form_stepper_control_h(theme: &Theme) -> f32 {
+    stepper_control_h_from_btn(theme.size_control_btn_h())
 }
 
+/// 表单行盒高度（约 26px），与通用按钮同高。
+///
+/// 步进器方钮和数字框用 [`form_stepper_control_h`]（20px），在这个行盒里垂直居中。
 fn form_stepper_row_h(theme: &Theme) -> f32 {
     24.0_f32.max(theme.size_control_btn_h().min(26.0))
 }
 
 fn form_stepper_btn_side(theme: &Theme) -> f32 {
-    form_stepper_row_h(theme)
+    form_stepper_control_h(theme)
 }
 
-/// 控件行内的单行输入：高度与步进器一致，文字垂直居中。
+/// 控件行内的单行输入：高度与表单行盒一致，文字垂直居中。
 pub fn form_inline_singleline(
     ui: &mut Ui,
     theme: &Theme,
@@ -2575,8 +2592,14 @@ pub fn fragment_list_row(
                                 "archived" => theme.text_tertiary(),
                                 _ => theme.accent_color(),
                             };
+                            let status_text = match status {
+                                "draft" => crate::i18n::tr(ui.ctx(), "Draft", "草稿"),
+                                "archived" => crate::i18n::tr(ui.ctx(), "Archived", "已归档"),
+                                "published" => crate::i18n::tr(ui.ctx(), "Published", "已发布"),
+                                other => other,
+                            };
                             ui.label(
-                                RichText::new(format!("[{}]", status))
+                                RichText::new(format!("[{}]", status_text))
                                     .size(tag_px * 0.85)
                                     .color(badge_color),
                             );
@@ -3350,6 +3373,50 @@ pub fn form_combo<R>(
         })
 }
 
+/// 主题进度条，条内显示百分比。
+///
+/// 裸 `egui::ProgressBar` 不设 `fill` 时用 `selection.bg_fill`（文本拖选底）。
+/// 暗夜那是半透明白，百分比又走 `override_text_color`（白字），于是「32%」落在浅灰填充上。
+/// 这里强制填充、轨道和标签色，不改 `selection.bg_fill`。
+pub fn progress_bar(ui: &mut Ui, theme: &Theme, fraction: f32) -> Response {
+    let fraction = fraction.clamp(0.0, 1.0);
+    let pct = (fraction * 100.0) as usize;
+    progress_bar_labeled(ui, theme, fraction, &format!("{pct}%"), None)
+}
+
+/// 主题进度条，条内使用调用方文案（SFTP 传输、rz/sz）。
+///
+/// `desired_width` 为 `None` 时占满当前行。高度取 [`Theme::progress_bar_height`] 与正文行高的较大值：
+/// egui 把标签裁在条内，8px 的监控细条会把百分比切掉。
+pub fn progress_bar_labeled(
+    ui: &mut Ui,
+    theme: &Theme,
+    fraction: f32,
+    label: &str,
+    desired_width: Option<f32>,
+) -> Response {
+    let fraction = fraction.clamp(0.0, 1.0);
+    let prev_extreme = ui.visuals().extreme_bg_color;
+    // 轨道没有单独的 setter，egui 用 extreme_bg_color 画未填充部分。只改这一笔，画完还原。
+    ui.visuals_mut().extreme_bg_color = theme.color_progress_track();
+    let height = theme
+        .progress_bar_height()
+        .max(theme.font_size_body() + 6.0);
+    let text = egui::RichText::new(label)
+        .color(theme.color_progress_label())
+        .size(theme.font_size_body());
+    let mut bar = egui::ProgressBar::new(fraction)
+        .desired_height(height)
+        .fill(theme.color_progress_fill())
+        .text(text);
+    if let Some(width) = desired_width {
+        bar = bar.desired_width(width);
+    }
+    let response = ui.add(bar);
+    ui.visuals_mut().extreme_bg_color = prev_extreme;
+    response
+}
+
 /// 只读多行文本：支持鼠标拖选与 Ctrl/Cmd+C(`&str` 缓冲不可编辑)。
 /// 带可见滑轨的水平滑块(全局 `inactive.bg_fill` 为透明时仍绘制轨道)。
 pub fn labeled_slider_f32(
@@ -3796,6 +3863,19 @@ pub fn activity_rail_button(
     tooltip: &str,
     caption: &str,
 ) -> Response {
+    activity_rail_button_with_badge(ui, theme, id, selected, tooltip, caption, None)
+}
+
+/// 活动栏按钮；`badge` 为右上角告警数角标（#251）。
+pub fn activity_rail_button_with_badge(
+    ui: &mut Ui,
+    theme: &Theme,
+    id: IconId,
+    selected: bool,
+    tooltip: &str,
+    caption: &str,
+    badge: Option<usize>,
+) -> Response {
     let side = theme.size_activity_rail_btn();
     let label_h = if caption.is_empty() { 0.0 } else { 14.0 };
     let size = egui::vec2(side, side + label_h);
@@ -3827,6 +3907,9 @@ pub fn activity_rail_button(
     let icon_px = theme.size_activity_rail_icon().max(18.0);
     let glyph = egui::Rect::from_center_size(icon_rect.center(), egui::vec2(icon_px, icon_px));
     icons::paint_icon(ui, glyph, id, color, icon_px);
+    if let Some(n) = badge.filter(|n| *n > 0) {
+        paint_activity_rail_badge(ui, theme, icon_rect, n);
+    }
     if !caption.is_empty() {
         let label_color = if selected {
             theme.accent_color()
@@ -3845,6 +3928,34 @@ pub fn activity_rail_button(
         ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
     }
     response.on_hover_text(tooltip)
+}
+
+fn paint_activity_rail_badge(ui: &mut Ui, theme: &Theme, icon_rect: egui::Rect, count: usize) {
+    let label = if count > 99 {
+        "99+".to_string()
+    } else {
+        count.to_string()
+    };
+    let font = egui::FontId::proportional(9.0);
+    let galley = ui.painter().layout_no_wrap(label, font.clone(), egui::Color32::WHITE);
+    let pad_x = 4.0;
+    let pad_y = 1.5;
+    let bw = (galley.size().x + pad_x * 2.0).max(14.0);
+    let bh = (galley.size().y + pad_y * 2.0).max(12.0);
+    let center = egui::pos2(icon_rect.right() - 2.0, icon_rect.top() + 2.0);
+    let badge_rect = egui::Rect::from_center_size(center, egui::vec2(bw, bh));
+    ui.painter().rect_filled(
+        badge_rect,
+        bh * 0.5,
+        theme.color_status_negative_text(),
+    );
+    ui.painter().galley(
+        egui::pos2(
+            badge_rect.center().x - galley.size().x * 0.5,
+            badge_rect.center().y - galley.size().y * 0.5,
+        ),
+        galley,
+    );
 }
 
 /// Rail 隐藏时的左缘恢复条：点击显示活动栏。
@@ -4191,8 +4302,8 @@ pub fn show_right_dock_ssh_gate(
             ui.label(
                 RichText::new(crate::i18n::tr(
                     ctx,
-                    "SSH disconnected. Reconnect the tab to use this panel.",
-                    "SSH 已断开。请重连当前标签后再使用此面板。",
+                    "SSH disconnected. Reconnect to use this panel.",
+                    "SSH 已断开。请重新连接后再使用此面板。",
                 ))
                 .color(theme.amber_color()),
             );
@@ -4284,7 +4395,7 @@ pub fn modal_header_title_only(ui: &mut Ui, theme: &Theme, title: &str, title_px
     modal_header(ui, theme, title, title_px)
 }
 
-/// 弹窗标题行(标题 + 右侧 ×，用于仅通过标题栏关闭的弹窗)。
+/// 弹窗标题行(标题文字 + 右侧 ×)。#216：去掉左侧无语义「+」装饰，不换成其它凑数图标。
 pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> bool {
     let _ = title_px;
     let mx = theme.spacing_modal_content_x();
@@ -4300,7 +4411,8 @@ pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> b
         })
         .show(ui, |ui| {
             ui.horizontal(|ui| {
-                panel_header_title_leading(ui, theme, IconId::Plus, title);
+                // 标题文字可点选区域留给 egui Window 拖移；不要再放无语义图标。
+                ui.label(rich_modal_title(theme, title));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if close_icon_button(ui, theme).clicked() {
                         closed = true;
@@ -4680,7 +4792,7 @@ fn form_stepper_value_field(
     add_field: impl FnOnce(&mut Ui) -> Response,
 ) -> Response {
     let focused = ui.memory(|m| m.has_focus(id));
-    let row_h = form_stepper_row_h(theme);
+    let row_h = form_stepper_control_h(theme);
     let stroke = if focused {
         egui::Stroke::new(theme.stroke_width_panel().max(1.0), theme.accent_color())
     } else {
@@ -4704,7 +4816,8 @@ fn form_stepper_value_field(
         .allocate_ui_at_rect(inner, |ui| {
             ui.set_min_size(inner.size());
             ui.set_max_size(inner.size());
-            let font = egui::FontId::proportional(theme.font_size_control_input());
+            // 数字与 ±、表单标签同一档（12px），不要用 13px 正文把矮框撑满。
+            let font = egui::FontId::proportional(theme.font_size_ui_control());
             ui.style_mut()
                 .text_styles
                 .insert(egui::TextStyle::Body, font.clone());
@@ -4738,7 +4851,7 @@ fn form_stepper_btn(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
     );
     let galley = ui.painter().layout_no_wrap(
         label.to_owned(),
-        egui::FontId::proportional(theme.font_size_body()),
+        egui::FontId::proportional(theme.font_size_ui_control()),
         text_c,
     );
     ui.painter().galley(
@@ -4760,7 +4873,7 @@ fn form_stepper_row<R>(
     field_w: f32,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> R {
-    let row_h = form_stepper_row_h(theme);
+    let row_h = form_stepper_control_h(theme);
     let btn = form_stepper_btn_side(theme);
     let gap = theme.spacing_xs();
     let total_w = btn + gap + field_w + gap + btn;
@@ -4818,6 +4931,7 @@ pub fn form_u32_stepper(
                     .horizontal_align(egui::Align::Center)
                     .vertical_align(egui::Align::Center)
                     .margin(egui::vec2(0.0, 0.0))
+                    .font(egui::FontId::proportional(theme.font_size_ui_control()))
                     .frame(false),
             )
         });
@@ -4949,6 +5063,7 @@ pub fn form_f32_stepper(
                     .horizontal_align(egui::Align::Center)
                     .vertical_align(egui::Align::Center)
                     .margin(egui::vec2(0.0, 0.0))
+                    .font(egui::FontId::proportional(theme.font_size_ui_control()))
                     .frame(false),
             )
         });
@@ -4995,6 +5110,14 @@ pub fn form_f32_stepper(
     response
 }
 
+/// 与 12px 标签齐的步进器边长。高于此的通用按钮收到 20px；更矮的按钮不再被步进器撑高。
+pub(crate) fn stepper_control_h_from_btn(control_btn_h: f32) -> f32 {
+    FORM_STEPPER_CONTROL_H.min(control_btn_h)
+}
+
+/// #130：步进器方钮 / 数字框目标高度（规格 20–22px 的下沿）。
+const FORM_STEPPER_CONTROL_H: f32 = 20.0;
+
 fn format_stepper_f32(v: f32, suffix: &str) -> String {
     let num = if (v - v.round()).abs() < 0.05 {
         format!("{}", v.round() as i32)
@@ -5005,5 +5128,55 @@ fn format_stepper_f32(v: f32, suffix: &str) -> String {
         num
     } else {
         format!("{num}{suffix}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stepper_control_h_from_btn;
+
+    #[test]
+    fn stepper_control_is_20px_beside_12px_labels() {
+        assert_eq!(stepper_control_h_from_btn(26.0), 20.0);
+        assert_eq!(stepper_control_h_from_btn(28.0), 20.0);
+        assert_eq!(stepper_control_h_from_btn(24.0), 20.0);
+        assert_eq!(stepper_control_h_from_btn(18.0), 18.0);
+        assert!(stepper_control_h_from_btn(26.0) < 22.0);
+        assert!((20.0..=22.0).contains(&stepper_control_h_from_btn(26.0)));
+    }
+
+    #[test]
+    fn stepper_control_matches_12px_labels_on_every_palette() {
+        for theme in [
+            crate::ui::theme::Theme::dark(),
+            crate::ui::theme::Theme::light(),
+            crate::ui::theme::Theme::ocean(),
+            crate::ui::theme::Theme::forest(),
+        ] {
+            let h = super::form_stepper_control_h(&theme);
+            assert_eq!(h, 20.0, "stepper side");
+            assert!(h + 4.0 <= theme.size_control_btn_h());
+            assert_eq!(theme.font_size_ui_control(), 12.0);
+            assert_eq!(theme.font_size_form_label(), theme.font_size_ui_control());
+            assert!(h < super::form_stepper_row_h(&theme));
+        }
+    }
+
+    #[test]
+    fn settings_card_row_spacing_matches_across_palettes() {
+        let modern = crate::ui::theme::Theme::dark();
+        let classic = crate::ui::theme::Theme::light();
+        assert!(modern.uses_modern_palette());
+        assert!(!classic.uses_modern_palette());
+        assert_eq!(modern.spacing_card_row(), 4.0);
+        assert_eq!(classic.spacing_card_row(), modern.spacing_card_row());
+        assert_eq!(
+            crate::ui::theme::Theme::ocean().spacing_card_row(),
+            modern.spacing_card_row()
+        );
+        assert_eq!(
+            crate::ui::theme::Theme::forest().spacing_card_row(),
+            modern.spacing_card_row()
+        );
     }
 }

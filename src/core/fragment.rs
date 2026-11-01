@@ -11,6 +11,95 @@ use super::session::SessionConfig;
 
 const STARTER_FRAGMENTS_JSON: &str = include_str!("../../assets/starter_fragments.json");
 
+/// Known starter snippet IDs embedded in `assets/starter_fragments.json`.
+const STARTER_FRAGMENT_IDS: &[&str] = &[
+    "384781c1-2ae5-44b4-ba69-e0cfcea999e4",
+    "351fe9f9-41b1-4e01-a272-3566c41dccee",
+    "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+    "c3d4e5f6-a7b8-9012-cdef-123456789012",
+    "bee657c6-b09f-4e9b-8869-7e2a04a6d9b6",
+    "103494ee-6839-4755-8342-b80e391c8563",
+    "d4e5f6a7-b8c9-0123-def0-234567890123",
+    "e5f6a7b8-c9d0-1234-ef01-345678901234",
+    "f6a7b8c9-d0e1-2345-f012-456789012345",
+];
+
+/// Tags that mark GUI/e2e automation leftovers (exact, case-insensitive).
+const TEST_RESIDUE_TAGS: &[&str] = &["e2e", "gui-e2e", "gui-sc-test", "mist-e2e-test"];
+
+/// Bare dangerous-SQL stubs used by gate/block e2e (exact command after trim / `;`).
+/// Only applied together with the exact tag `test`, so user ops notes survive.
+const DANGEROUS_SQL_TEST_CMDS: &[&str] = &[
+    "drop database",
+    "drop table",
+    "truncate table",
+    "truncate",
+];
+
+/// True when this snippet is an embedded starter / built-in example.
+pub fn is_starter_fragment(frag: &FragmentStats) -> bool {
+    if frag
+        .tags
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case("starter"))
+    {
+        return true;
+    }
+    STARTER_FRAGMENT_IDS.iter().any(|id| frag.id == *id)
+}
+
+/// Precise detector for e2e / GUI smoke leftovers that must never ship to users.
+///
+/// Keeps user-authored snippets that merely look similar. Matches:
+/// - `gui-sc-test*` titles, `MIST_FRAG_SC_*` probe commands, exact e2e tags
+/// - titles ending in `-block-test` (gate/block e2e naming, e.g. drop-database-block-test)
+/// - exact tag `test` + bare dangerous-SQL stub command (DROP DATABASE / …)
+/// - auto-recommended `cqls` residue (title+command both `cqls`, category `recommended`)
+pub fn is_test_residue_fragment(frag: &FragmentStats) -> bool {
+    let title = frag.title.trim();
+    let title_l = title.to_ascii_lowercase();
+    if title_l.starts_with("gui-sc-test") {
+        return true;
+    }
+    // Gate/block e2e titles: `*-block-test` (e.g. drop-database-block-test).
+    if title_l.ends_with("-block-test") {
+        return true;
+    }
+    let cmd = frag.command.trim();
+    let cmd_l = cmd.trim_end_matches(';').trim().to_ascii_lowercase();
+    if cmd_l.contains("mist_frag_sc_") {
+        return true;
+    }
+    if frag
+        .tags
+        .iter()
+        .any(|t| TEST_RESIDUE_TAGS.iter().any(|k| t.eq_ignore_ascii_case(k)))
+    {
+        return true;
+    }
+    // Dangerous SQL probe left with the exact tag `test` (trial: DROP DATABASE).
+    let has_exact_test_tag = frag
+        .tags
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case("test"));
+    if has_exact_test_tag
+        && DANGEROUS_SQL_TEST_CMDS
+            .iter()
+            .any(|stub| cmd_l == *stub)
+    {
+        return true;
+    }
+    // Trial feedback: auto-saved "cqls" + category "recommended".
+    if title_l == "cqls"
+        && cmd_l == "cqls"
+        && frag.category.trim().eq_ignore_ascii_case("recommended")
+    {
+        return true;
+    }
+    false
+}
+
 /// 命令片段变量定义
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FragmentVariable {
@@ -412,6 +501,9 @@ impl FragmentManager {
                     }
                     frag.tags.push(format!("mkt:{}", item.id));
                     frag.variables = crate::core::team::parse_variables_json(&item.variables);
+                    if is_test_residue_fragment(&frag) {
+                        continue;
+                    }
                     manager.fragments.push(frag);
                 }
                 manager.rebuild_id_map();
@@ -445,7 +537,28 @@ impl FragmentManager {
             return Ok(manager);
         }
         manager.rebuild_id_map();
+        // Upgrade migration: strip e2e/GUI smoke leftovers from existing user DBs.
+        let purged = manager.purge_test_residue();
+        if purged > 0 {
+            if manager.fragments.is_empty() {
+                manager = Self::from_starter_fragments();
+            }
+            manager.save(path)?;
+            tracing::info!("purged {purged} test-residue snippet(s) from {}", path.display());
+        }
         Ok(manager)
+    }
+
+    /// Remove e2e/GUI smoke leftovers. Returns how many were deleted.
+    pub fn purge_test_residue(&mut self) -> usize {
+        let before = self.fragments.len();
+        self.fragments
+            .retain(|f| !is_test_residue_fragment(f));
+        let removed = before.saturating_sub(self.fragments.len());
+        if removed > 0 {
+            self.rebuild_id_map();
+        }
+        removed
     }
 
     /// 保存到文件
@@ -651,6 +764,9 @@ impl FragmentManager {
     pub fn merge_from_other(&mut self, other: &FragmentManager) -> FragmentMergeReport {
         let mut report = FragmentMergeReport::default();
         for f in &other.fragments {
+            if is_test_residue_fragment(f) {
+                continue;
+            }
             if self.id_map.contains_key(&f.id) {
                 report.skipped_duplicate_id += 1;
                 continue;
@@ -691,16 +807,20 @@ impl FragmentManager {
             .map_err(|e| format!("JSON导出失败: {}", e))
     }
 
-    /// 从 JSON 字符串导入片段（合并模式，跳过重复 ID）
+    /// 从 JSON 字符串导入片段（合并模式，跳过重复 ID 与测试残留）
     pub fn import_from_json(&mut self, json: &str) -> Result<usize, String> {
         let fragments: Vec<FragmentStats> = serde_json::from_str(json)
             .map_err(|e| format!("JSON导入失败: {}", e))?;
         
         let mut added = 0;
         for fragment in fragments {
+            if is_test_residue_fragment(&fragment) {
+                continue;
+            }
             if !self.id_map.contains_key(&fragment.id) {
-                self.fragments.push(fragment.clone());
-                self.id_map.insert(fragment.id, self.fragments.len() - 1);
+                let id = fragment.id.clone();
+                self.fragments.push(fragment);
+                self.id_map.insert(id, self.fragments.len() - 1);
                 added += 1;
             }
         }
@@ -760,6 +880,202 @@ mod tests {
         assert_eq!(df.title_en.as_deref(), Some("Disk usage"));
         assert_eq!(df.category, "系统监控");
         assert_eq!(df.category_en.as_deref(), Some("System monitoring"));
+        assert!(m.fragments.iter().all(|f| is_starter_fragment(f)));
+        assert!(m.fragments.iter().all(|f| !is_test_residue_fragment(f)));
+        assert!(m.fragments.iter().any(|f| f.command.trim() == "free -h"));
+        assert!(m.fragments.iter().any(|f| f.command.trim() == "uptime"));
+        assert!(m
+            .fragments
+            .iter()
+            .any(|f| f.command.contains("top")));
+    }
+
+    #[test]
+    fn test_residue_filter_matches_gui_sc_and_probe_echo() {
+        let mut sc = FragmentStats::new(
+            "x".into(),
+            "gui-sc-test-57888".into(),
+            "echo MIST_FRAG_SC_1791557888".into(),
+            "misc".into(),
+        );
+        assert!(is_test_residue_fragment(&sc));
+        sc.title = "My gui helper".into();
+        sc.command = "echo hello".into();
+        assert!(!is_test_residue_fragment(&sc));
+    }
+
+    #[test]
+    fn test_residue_filter_matches_e2e_tag_only() {
+        let mut f = FragmentStats::new(
+            "y".into(),
+            "useful ops".into(),
+            "df -h".into(),
+            "系统监控".into(),
+        );
+        assert!(!is_test_residue_fragment(&f));
+        f.tags = vec!["e2e".into()];
+        assert!(is_test_residue_fragment(&f));
+        f.tags = vec!["my-e2e-runbook".into()]; // not an exact tag
+        assert!(!is_test_residue_fragment(&f));
+    }
+
+    #[test]
+    fn test_residue_filter_cqls_recommended_only() {
+        let mut f = FragmentStats::new(
+            "z".into(),
+            "cqls".into(),
+            "cqls".into(),
+            "recommended".into(),
+        );
+        assert!(is_test_residue_fragment(&f));
+        // User-created cqls under a normal category must survive.
+        f.category = "数据库".into();
+        assert!(!is_test_residue_fragment(&f));
+        // Similar title must not be deleted.
+        f.category = "recommended".into();
+        f.title = "cqls helper".into();
+        f.command = "cqls --help".into();
+        assert!(!is_test_residue_fragment(&f));
+    }
+
+    #[test]
+    fn purge_test_residue_keeps_user_snippets() {
+        let mut m = FragmentManager::new();
+        m.add_fragment(
+            "gui-sc-test-58014".into(),
+            "echo MIST_FRAG_SC_1791558014".into(),
+            "misc".into(),
+        );
+        m.add_fragment("磁盘使用".into(), "df -h".into(), "系统监控".into());
+        m.add_fragment_with_tags(
+            "user e2e notes".into(),
+            "cat notes.txt".into(),
+            "docs".into(),
+            vec!["personal".into()],
+        );
+        let cqls = FragmentStats::new(
+            "cqls-id".into(),
+            "cqls".into(),
+            "cqls".into(),
+            "recommended".into(),
+        );
+        m.fragments.push(cqls);
+        m.rebuild_id_map();
+        assert_eq!(m.purge_test_residue(), 2);
+        assert_eq!(m.get_all().len(), 2);
+        assert!(m.get_all().iter().any(|f| f.command == "df -h"));
+        assert!(m.get_all().iter().any(|f| f.title == "user e2e notes"));
+    }
+
+    #[test]
+    fn test_residue_filter_matches_block_test_title() {
+        let mut f = FragmentStats::new(
+            "drop-id".into(),
+            "drop-database-block-test".into(),
+            "DROP DATABASE".into(),
+            "misc".into(),
+        );
+        f.tags = vec!["test".into()];
+        assert!(is_test_residue_fragment(&f));
+        // Title suffix alone is enough (even without the test tag).
+        f.tags.clear();
+        assert!(is_test_residue_fragment(&f));
+        // User lookalike: similar words but not `-block-test` suffix.
+        f.title = "drop database block notes".into();
+        f.command = "DROP DATABASE mydb; -- after backup".into();
+        f.tags = vec!["ops".into()];
+        assert!(!is_test_residue_fragment(&f));
+        // User title that contains the words but does not end with -block-test.
+        f.title = "my-block-test-runbook".into();
+        f.command = "cat runbook.md".into();
+        assert!(!is_test_residue_fragment(&f));
+    }
+
+    #[test]
+    fn test_residue_filter_dangerous_sql_with_exact_test_tag() {
+        let mut f = FragmentStats::new(
+            "sql-id".into(),
+            "cleanup stub".into(),
+            "DROP DATABASE".into(),
+            "misc".into(),
+        );
+        // No test tag → keep (could be a real ops reminder).
+        assert!(!is_test_residue_fragment(&f));
+        f.tags = vec!["test".into()];
+        assert!(is_test_residue_fragment(&f));
+        f.command = "DROP DATABASE;".into();
+        assert!(is_test_residue_fragment(&f));
+        // Exact tag `test` with a normal command must not match.
+        f.command = "df -h".into();
+        assert!(!is_test_residue_fragment(&f));
+        // Similar tag name is not exact `test`.
+        f.command = "DROP DATABASE".into();
+        f.tags = vec!["testing".into()];
+        assert!(!is_test_residue_fragment(&f));
+    }
+
+    #[test]
+    fn purge_only_block_test_residue_then_load_backfills_starters() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("fragments.json");
+        let mut only_residue = FragmentManager::new();
+        let mut drop = FragmentStats::new(
+            "drop-id".into(),
+            "drop-database-block-test".into(),
+            "DROP DATABASE".into(),
+            "misc".into(),
+        );
+        drop.tags = vec!["test".into()];
+        only_residue.fragments.push(drop);
+        only_residue.rebuild_id_map();
+        only_residue.save(&path).expect("save residue-only library");
+
+        let loaded = FragmentManager::load(&path).expect("load migrates");
+        assert!(
+            loaded
+                .get_all()
+                .iter()
+                .all(|f| !is_test_residue_fragment(f)),
+            "residue must be gone"
+        );
+        assert!(
+            !loaded
+                .get_all()
+                .iter()
+                .any(|f| f.title == "drop-database-block-test"),
+            "drop-database-block-test must not remain"
+        );
+        assert!(
+            loaded.get_all().len() >= 8,
+            "empty-after-purge must backfill starters, got {}",
+            loaded.get_all().len()
+        );
+        assert!(loaded.get_all().iter().any(|f| f.command.trim() == "free -h"));
+        assert!(loaded.get_all().iter().any(|f| f.command.trim() == "df -h"));
+        assert!(loaded.get_all().iter().any(|f| f.command.trim() == "uptime"));
+    }
+
+    #[test]
+    fn purge_residue_keeps_user_when_mixed_then_no_starter_clobber() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("fragments.json");
+        let mut m = FragmentManager::new();
+        let mut drop = FragmentStats::new(
+            "drop-id".into(),
+            "drop-database-block-test".into(),
+            "DROP DATABASE".into(),
+            "misc".into(),
+        );
+        drop.tags = vec!["test".into()];
+        m.fragments.push(drop);
+        m.add_fragment("我的脚本".into(), "echo hello".into(), "个人".into());
+        m.rebuild_id_map();
+        m.save(&path).expect("save mixed");
+
+        let loaded = FragmentManager::load(&path).expect("load");
+        assert_eq!(loaded.get_all().len(), 1);
+        assert_eq!(loaded.get_all()[0].title, "我的脚本");
+        assert!(!loaded.get_all().iter().any(|f| is_starter_fragment(f)));
     }
 
     #[test]
