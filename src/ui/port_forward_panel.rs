@@ -313,7 +313,11 @@ impl PortForwardPanel {
         self.prune_stopped(ssh_session_id);
 
         self.show_active_list(ui, ctx, theme, ssh_session_id, session_profile);
-        ui.add_space(theme.spacing_dock_section_gap());
+        // #284：运行列表与下方新建表单之间加 1px 发丝分隔线。
+        let gap = theme.spacing_dock_section_gap();
+        ui.add_space(gap);
+        paint_section_hairline(ui, theme);
+        ui.add_space(gap);
         self.show_add_form(
             ui,
             ctx,
@@ -379,10 +383,16 @@ impl PortForwardPanel {
                         .color(theme.text_primary()),
                 );
                 if !stoppable {
-                    ui.label(
-                        egui::RichText::new(crate::i18n::tr(ctx, "profile", "配置"))
-                            .small()
-                            .color(theme.text_tertiary()),
+                    // #284：灰色文字「配置」改为小齿轮图标按钮，悬停说明来自会话配置。
+                    crate::ui::chrome::panel_toolbar_icon_button(
+                        ui,
+                        theme,
+                        crate::ui::icons::IconId::Settings,
+                        crate::i18n::tr(
+                            ctx,
+                            "Profile forward · edit the session profile to change it",
+                            "配置转发 · 需在会话配置里修改",
+                        ),
                     );
                 }
                 if stoppable {
@@ -697,6 +707,18 @@ fn section_title(ui: &mut egui::Ui, theme: &Theme, text: impl AsRef<str>) {
         egui::RichText::new(text.as_ref())
             .strong()
             .color(theme.text_secondary()),
+    );
+}
+
+/// 1 物理像素发丝分隔线(运行列表 / 新建表单之间)。
+fn paint_section_hairline(ui: &mut egui::Ui, theme: &Theme) {
+    let w = ui.available_width().max(1.0);
+    let hairline = theme.hairline_width(ui.ctx());
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(w, hairline), egui::Sense::hover());
+    ui.painter().hline(
+        rect.x_range(),
+        theme.snap_y_to_pixel(ui.ctx(), rect.center().y),
+        egui::Stroke::new(hairline, theme.color_dock_header_divider()),
     );
 }
 

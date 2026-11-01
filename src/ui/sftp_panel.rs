@@ -5112,6 +5112,8 @@ impl SftpPanel {
             return;
         }
         ui.add_space(theme.spacing_xs());
+        let hide_tip = crate::i18n::tr(ctx, "Hide this tip", "关闭这条提示");
+        let mut dismissed = false;
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(crate::i18n::tr(
@@ -5123,21 +5125,19 @@ impl SftpPanel {
                 .color(theme.text_tertiary()),
             );
             let dismiss = crate::i18n::tr(ctx, "Got it", "知道了");
-            if ui
-                .small_button(dismiss)
-                .on_hover_text(crate::i18n::tr(
-                    ctx,
-                    "Hide this tip",
-                    "关闭这条提示",
-                ))
-                .clicked()
-            {
-                self.drag_hint_dismissed = true;
-                ctx.data_mut(|d| {
-                    d.insert_persisted(egui::Id::new(PERSIST_ID), true);
-                });
+            if ui.small_button(dismiss).on_hover_text(hide_tip).clicked() {
+                dismissed = true;
+            }
+            if ui.small_button("×").on_hover_text(hide_tip).clicked() {
+                dismissed = true;
             }
         });
+        if dismissed {
+            self.drag_hint_dismissed = true;
+            ctx.data_mut(|d| {
+                d.insert_persisted(egui::Id::new(PERSIST_ID), true);
+            });
+        }
     }
 
     fn paint_flux_workspace(
