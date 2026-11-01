@@ -229,6 +229,7 @@ fn help_tab_button(ui: &mut Ui, theme: &Theme, label: &str, selected: bool) -> e
             rect.top() + 2.0,
         ),
         galley,
+        color,
     );
     if selected {
         let y = rect.bottom() - underline * 0.5;

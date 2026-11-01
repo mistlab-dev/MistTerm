@@ -3304,13 +3304,14 @@ pub fn form_singleline_field_boxed(
         theme.radius_search_input(),
         theme.color_form_input_fill(),
         stroke,
+        egui::StrokeKind::Inside,
     );
     let pad_x = theme.spacing_search_input_x();
     let inner = egui::Rect::from_min_max(
         egui::pos2(rect.left() + pad_x, rect.top()),
         egui::pos2(rect.right() - pad_x, rect.bottom()),
     );
-    ui.allocate_new_ui(
+    ui.scope_builder(
         egui::UiBuilder::new().max_rect(inner),
         |ui| {
             ui.set_min_size(inner.size());
@@ -3338,10 +3339,6 @@ pub fn form_singleline_field_boxed(
             .inner
         },
     )
-    .inner
-        })
-        .inner
-    })
     .inner
 }
 
@@ -4489,10 +4486,10 @@ pub fn modal_header_plain(ui: &mut Ui, theme: &Theme, title: &str) -> bool {
     let band = theme
         .frame_modal_title_band()
         .outer_margin(egui::Margin {
-            left: -mx,
-            right: -mx,
-            top: -my,
-            bottom: 0.0,
+            left: -mx as i8,
+            right: -mx as i8,
+            top: -my as i8,
+            bottom: 0,
         })
         .show(ui, |ui| {
             ui.horizontal(|ui| {
@@ -4615,7 +4612,9 @@ pub fn panel_action_button_ex(ui: &mut Ui, theme: &Theme, label: &str, enabled: 
 /// 只在 `enabled == false` 时挂提示，避免无差别给所有按钮加 tooltip。
 pub fn disabled_action_with_reason(mut response: Response, enabled: bool, reason: &str) -> Response {
     if !enabled {
-        response.enabled = false;
+        // 0.37 Response 不再暴露 enabled 字段/setter：自绘按钮用 Sense::hover()
+        // 即可同时达成「不响应点击 + 悬停 tooltip 可达」，与原语义一致。
+        response = response.interact(egui::Sense::hover());
         response = response.on_disabled_hover_text(reason);
     }
     response

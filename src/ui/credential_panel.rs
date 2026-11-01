@@ -500,7 +500,7 @@ impl CredentialPanel {
             ),
             theme.color_section_title(),
         ))
-        .id_source(format!(
+        .id_salt(format!(
             "credential_form_advanced_{}",
             panel.selected_id.as_deref().unwrap_or("new")
         ))
@@ -821,7 +821,7 @@ impl CredentialPanel {
                     let field_w = (ui.available_width() - 4.0).max(160.0);
                     let body_h = (ui.available_height() - footer_h).max(80.0);
                     egui::ScrollArea::vertical()
-                        .id_source("credential_form_scroll")
+                        .id_salt("credential_form_scroll")
                         .max_height(body_h)
                         .auto_shrink([false; 2])
                         .show(ui, |ui| {
@@ -1126,7 +1126,7 @@ impl CredentialPanel {
                         i18n::tr(ui.ctx(), "Browse Vault (advanced)", "浏览 Vault（高级）"),
                         theme.color_section_title(),
                     ))
-                    .id_source("credential_vault_browse_section")
+                    .id_salt("credential_vault_browse_section")
                     .default_open(false)
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {

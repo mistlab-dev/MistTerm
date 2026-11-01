@@ -161,7 +161,7 @@ impl MistTermApp {
             ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.preferences).clicked() {
                 self.open_preferences_dialog();
-                ui.close_menu();
+                ui.close();
             }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.ai_settings).clicked() {
                 self.show_ai_settings_dialog = true;
@@ -286,7 +286,7 @@ impl MistTermApp {
             // 1. 片段与发送
             if crate::ui::chrome::popup_menu_button(ui, theme, l.fragment_library).clicked() {
                 self.open_snippet_library_dialog();
-                ui.close_menu();
+                ui.close();
             }
             if crate::ui::chrome::popup_menu_button_accel_shift(ui, theme, l.quick_fragments, "j")
                 .clicked()
@@ -317,7 +317,7 @@ impl MistTermApp {
             // 3. 规则与检查
             if crate::ui::chrome::popup_menu_button(ui, theme, l.rule_manager).clicked() {
                 self.open_rule_manager_dialog();
-                ui.close_menu();
+                ui.close();
             }
             ui.separator();
             // 4. 账号与数据
@@ -334,7 +334,7 @@ impl MistTermApp {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
             if crate::ui::chrome::popup_menu_button(ui, theme, l.team_sign_in).clicked() {
                 self.open_preferences_team_sync(ctx);
-                ui.close_menu();
+                ui.close();
             }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.team_members).clicked() {
                 self.team_members_dialog.open(&mut self.team_service);
@@ -343,7 +343,7 @@ impl MistTermApp {
             if crate::ui::chrome::popup_menu_button(ui, theme, l.cloud_sync).clicked() {
                 // #282：与偏好设置「团队与同步 → 打开同步面板」共用同一入口。
                 self.open_cloud_sync_panel(ctx);
-                ui.close_menu();
+                ui.close();
             }
         });
         ui.menu_button(label(l.help_menu), |ui| {

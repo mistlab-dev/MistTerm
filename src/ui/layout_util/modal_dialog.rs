@@ -266,7 +266,7 @@ pub fn modal_team_members_size(
     logged_in: bool,
     member_count: usize,
 ) -> egui::Vec2 {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let sw = r.width().max(360.0);
     let sh = r.height().max(280.0);
     let w = (sw * 0.36).clamp(340.0, 520.0);
@@ -284,7 +284,7 @@ pub fn modal_team_members_size(
 /// 列表区最大高度 = 返回值高 - 150(标题/说明/底栏占位)。
 #[inline]
 pub fn modal_team_fragment_versions_size(ctx: &egui::Context, version_count: usize) -> egui::Vec2 {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let sw = r.width().max(360.0);
     let sh = r.height().max(280.0);
     let w = (sw * 0.40).clamp(420.0, 620.0);
@@ -300,7 +300,7 @@ pub fn modal_team_fragment_versions_size(ctx: &egui::Context, version_count: usi
 /// 列表区最大高度 = 返回值高 - 190(标题/提示/搜索行/底栏占位)。
 #[inline]
 pub fn modal_ask_knowledge_size(ctx: &egui::Context, searched: bool, hit_count: usize) -> egui::Vec2 {
-    let r = ctx.screen_rect();
+    let r = ctx.content_rect();
     let sw = r.width().max(360.0);
     let sh = r.height().max(280.0);
     let w = (sw * 0.44).clamp(480.0, 680.0);

@@ -148,7 +148,7 @@ impl MistTermApp {
                     ui.set_min_size(egui::vec2(nav_w, body_h));
                     ui.spacing_mut().item_spacing.y = theme.spacing_xs();
                     egui::ScrollArea::vertical()
-                        .id_source("preferences_nav_scroll")
+                        .id_salt("preferences_nav_scroll")
                         .auto_shrink([false; 2])
                         .max_height(body_h)
                         .show(ui, |ui| {
@@ -189,7 +189,7 @@ impl MistTermApp {
                     ui.add_space(theme.spacing_sm());
                     let detail_h = ui.available_height().max(80.0);
                     egui::ScrollArea::vertical()
-                        .id_source("preferences_detail_scroll")
+                        .id_salt("preferences_detail_scroll")
                         .auto_shrink([false; 2])
                         .max_height(detail_h)
                         .show(ui, |ui| {
@@ -698,13 +698,10 @@ impl MistTermApp {
                         .color(theme.color_form_hint()),
                 );
                 ui.add_space(theme.spacing_xs());
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(theme.color_form_input_fill())
-                    .rounding(theme.radius_search_input())
-                    .inner_margin(egui::Margin::symmetric(
-                        theme.spacing_search_input_x(),
-                        theme.spacing_search_input_y(),
-                    ))
+                    .corner_radius(theme.radius_search_input())
+                    .inner_margin(egui::Margin::symmetric(theme.spacing_search_input_x() as i8, theme.spacing_search_input_y() as i8))
                     .show(ui, |ui| {
                         layout_util::set_width_to_available(ui);
                         ui.label(

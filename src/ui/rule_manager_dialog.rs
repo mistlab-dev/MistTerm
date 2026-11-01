@@ -314,14 +314,11 @@ impl RuleManagerDialog {
         ctx: &egui::Context,
         app_settings: &mut crate::core::app_settings::AppSettings,
     ) {
-        egui::Frame::none()
+        egui::Frame::NONE
             .fill(theme.surface_elevated())
             .stroke(egui::Stroke::new(1.0, theme.color_form_input_stroke()))
-            .rounding(theme.radius_search_input())
-            .inner_margin(egui::Margin::symmetric(
-                theme.spacing_xs(),
-                theme.spacing_xs(),
-            ))
+            .corner_radius(theme.radius_search_input())
+            .inner_margin(egui::Margin::symmetric(theme.spacing_xs() as i8, theme.spacing_xs() as i8))
             .show(ui, |ui| {
                 ui.set_min_width(crate::ui::layout_util::finite_content_width(ui));
                 ui.label(
@@ -2839,13 +2836,10 @@ fn rule_count_label(ctx: &egui::Context, used: usize, max: usize) -> String {
 
 /// #283：规则分区背景块，用于区分个人 / 内置 / 团队。
 fn rule_section_frame(theme: &Theme, fill: egui::Color32) -> egui::Frame {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(fill)
-        .rounding(theme.radius_search_input())
-        .inner_margin(egui::Margin::symmetric(
-            theme.spacing_sm(),
-            theme.spacing_sm(),
-        ))
+        .corner_radius(theme.radius_search_input())
+        .inner_margin(egui::Margin::symmetric(theme.spacing_sm() as i8, theme.spacing_sm() as i8))
 }
 
 /// #283：简单 / 高级模式切换。简单模式用关键词列表，高级模式直接写正则。
