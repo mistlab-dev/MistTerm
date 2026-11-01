@@ -5,10 +5,9 @@ use std::collections::{HashMap, HashSet};
 use eframe::egui;
 
 use crate::core::{
-    parse_dynamic_forwards_text, parse_local_forwards_text, parse_remote_forwards_text,
     parse_forward_form, ForwardFormInput, ForwardFormKind, PortForwardKind, SessionConfig,
 };
-use crate::ssh::{ForwardControl, SshManager, SshSessionId};
+use crate::ssh::{ForwardControl, ProfileForward, SshManager, SshSessionId};
 use crate::ui::layout_util;
 use crate::ui::terminal::TerminalView;
 use crate::ui::theme::Theme;
@@ -20,8 +19,8 @@ pub struct PortForwardSaveRequest {
     pub kind: PortForwardKind,
 }
 
-/// 停止运行时转发后同步会话配置：从 profile 的转发文本里删掉该行，
-/// 否则重连时被停止的转发会复活（#91）。
+/// 删除转发配置：从 profile 的转发文本里删掉该行（#268 Delete；承接 #91 重连复活问题）。
+/// 「停止」只关监听，不发本请求。
 pub struct PortForwardRemoveRequest {
     pub session_profile_id: String,
     pub kind: PortForwardKind,
@@ -35,14 +34,42 @@ pub struct PortForwardAuditRequest {
 }
 
 enum ForwardEntry {
-    /// 连接时按会话配置启动，停止需重连。
-    Profile { label: String },
-    /// 面板内运行时添加，可单独停止。
+    /// 连接时按会话配置启动（带控制柄，可停止/删除，#268）。
+    Profile {
+        label: String,
+        kind: PortForwardKind,
+        control: ForwardControl,
+    },
+    /// 面板内运行时添加。
     Runtime {
         label: String,
         kind: PortForwardKind,
         control: ForwardControl,
     },
+}
+
+impl ForwardEntry {
+    fn label(&self) -> &str {
+        match self {
+            Self::Profile { label, .. } | Self::Runtime { label, .. } => label.as_str(),
+        }
+    }
+
+    fn kind(&self) -> &PortForwardKind {
+        match self {
+            Self::Profile { kind, .. } | Self::Runtime { kind, .. } => kind,
+        }
+    }
+
+    fn control(&self) -> &ForwardControl {
+        match self {
+            Self::Profile { control, .. } | Self::Runtime { control, .. } => control,
+        }
+    }
+
+    fn from_profile(&self) -> bool {
+        matches!(self, Self::Profile { .. })
+    }
 }
 
 pub struct PortForwardPanel {
@@ -98,10 +125,7 @@ impl PortForwardPanel {
             .get(&ssh_session_id)
             .map(|list| {
                 list.iter()
-                    .filter(|entry| match entry {
-                        ForwardEntry::Profile { .. } => true,
-                        ForwardEntry::Runtime { control, .. } => !control.is_stopped(),
-                    })
+                    .filter(|entry| !entry.control().is_stopped())
                     .count()
             })
             .unwrap_or(0)
@@ -120,38 +144,43 @@ impl PortForwardPanel {
         }
     }
 
-    /// 每帧：登记会话配置转发并剔除已停止的运行时转发。
-    pub fn tick_active_session(&mut self, ssh_session_id: SshSessionId, profile: &SessionConfig) {
-        self.register_profile_forwards(ssh_session_id, profile);
+    /// 每帧：登记会话配置转发并剔除已停止的转发。
+    pub fn tick_active_session(
+        &mut self,
+        ssh_session_id: SshSessionId,
+        profile: &SessionConfig,
+        mgr: &SshManager,
+    ) {
+        self.register_profile_forwards(ssh_session_id, profile, mgr);
         self.prune_stopped(ssh_session_id);
     }
 
     /// 会话连接成功后登记配置中的转发(仅一次/ssh 会话)。
+    /// 控制柄来自 `SshManager::take_profile_forwards`（连接时保留，#268）。
+    /// 会话尚未进入管理器时不置位，下一帧再试。
     pub fn register_profile_forwards(
         &mut self,
         ssh_session_id: SshSessionId,
         profile: &SessionConfig,
+        mgr: &SshManager,
     ) {
-        if !self.profile_registered.insert(ssh_session_id) {
+        if self.profile_registered.contains(&ssh_session_id) {
             return;
         }
-        let mut kinds: Vec<PortForwardKind> = parse_local_forwards_text(&profile.local_forwards_text)
-            .into_iter()
-            .map(PortForwardKind::Local)
-            .collect();
-        kinds.extend(
-            parse_remote_forwards_text(&profile.remote_forwards_text)
-                .into_iter()
-                .map(PortForwardKind::Remote),
-        );
-        kinds.extend(
-            parse_dynamic_forwards_text(&profile.dynamic_forwards_text)
-                .into_iter()
-                .map(PortForwardKind::Dynamic),
-        );
-        for kind in kinds {
+        let Some(spawned) = mgr.take_profile_forwards(ssh_session_id) else {
+            return;
+        };
+        self.profile_registered.insert(ssh_session_id);
+        for pf in spawned {
+            let (kind, control) = match pf {
+                ProfileForward::Local { fwd, control } => (PortForwardKind::Local(fwd), control),
+                ProfileForward::Remote { fwd, control } => (PortForwardKind::Remote(fwd), control),
+                ProfileForward::Dynamic { fwd, control } => {
+                    (PortForwardKind::Dynamic(fwd), control)
+                }
+            };
             let label = kind.display_label();
-            self.push_profile(ssh_session_id, label);
+            self.push_profile(ssh_session_id, label, kind.clone(), control);
             self.pending_audits.push(PortForwardAuditRequest {
                 session_profile_id: Some(profile.id.clone()),
                 host: Some(profile.host.clone()),
@@ -165,15 +194,14 @@ impl PortForwardPanel {
         self.profile_registered.remove(&ssh_session_id);
         if let Some(list) = self.by_ssh_session.remove(&ssh_session_id) {
             for entry in list {
-                if let ForwardEntry::Runtime { kind, control, .. } = entry {
-                    control.stop();
-                    self.pending_audits.push(PortForwardAuditRequest {
-                        session_profile_id: None,
-                        host: None,
-                        kind,
-                        started: false,
-                    });
-                }
+                let kind = entry.kind().clone();
+                entry.control().stop();
+                self.pending_audits.push(PortForwardAuditRequest {
+                    session_profile_id: None,
+                    host: None,
+                    kind,
+                    started: false,
+                });
             }
         }
     }
@@ -318,7 +346,7 @@ impl PortForwardPanel {
         };
 
         if let Some(profile) = session_profile {
-            self.register_profile_forwards(ssh_session_id, profile);
+            self.register_profile_forwards(ssh_session_id, profile, &mgr);
         }
         self.prune_stopped(ssh_session_id);
 
@@ -377,62 +405,93 @@ impl PortForwardPanel {
         }
 
         let mut stop_idx: Option<usize> = None;
+        let mut delete_idx: Option<usize> = None;
         for (i, entry) in list.iter().enumerate() {
             ui.horizontal(|ui| {
-                let (label, stoppable) = match entry {
-                    ForwardEntry::Profile { label, .. } => (label.as_str(), false),
-                    ForwardEntry::Runtime { label, .. } => (label.as_str(), true),
-                };
                 ui.label(
-                    egui::RichText::new(label)
+                    egui::RichText::new(entry.label())
                         .small()
                         .color(theme.text_primary()),
                 );
-                if !stoppable {
+                if entry.from_profile() {
                     ui.label(
                         egui::RichText::new(crate::i18n::tr(ctx, "profile", "配置"))
                             .small()
                             .color(theme.text_tertiary()),
                     );
                 }
-                if stoppable {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::ui::chrome::chrome_small_button(
-                            ui,
-                            theme,
-                            crate::i18n::tr(ctx, "Stop", "停止"),
-                        )
-                        .clicked()
-                        {
-                            stop_idx = Some(i);
-                        }
-                    });
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // RTL: Delete then Stop → visual Stop | Delete
+                    if crate::ui::chrome::chrome_small_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Delete", "删除"),
+                    )
+                    .on_hover_text(crate::i18n::tr(
+                        ctx,
+                        "Remove this forward from the session profile (stops it first if running)",
+                        "从会话配置中去掉该条（若在运行会先停止）",
+                    ))
+                    .clicked()
+                    {
+                        delete_idx = Some(i);
+                    }
+                    if crate::ui::chrome::chrome_small_button(
+                        ui,
+                        theme,
+                        crate::i18n::tr(ctx, "Stop", "停止"),
+                    )
+                    .on_hover_text(crate::i18n::tr(
+                        ctx,
+                        "Stop this forward now; profile line is kept (reconnect may restore it)",
+                        "停止当前转发；保留配置（重连可能再拉起）",
+                    ))
+                    .clicked()
+                    {
+                        stop_idx = Some(i);
+                    }
+                });
             });
         }
 
-        if let Some(i) = stop_idx {
-            if let Some(list) = self.by_ssh_session.get_mut(&ssh_session_id) {
-                if let Some(ForwardEntry::Runtime { kind, control, .. }) = list.get(i) {
-                    control.stop();
-                    if let Some(profile) = session_profile {
-                        // 同步会话配置：把该转发从 profile 文本里删掉，
-                        // 否则重连时（terminal_connect_session 重新解析文本）会复活。
-                        self.pending_remove = Some(PortForwardRemoveRequest {
-                            session_profile_id: profile.id.clone(),
-                            kind: kind.clone(),
-                        });
-                    }
-                    self.pending_audits.push(PortForwardAuditRequest {
-                        session_profile_id: None,
-                        host: None,
-                        kind: kind.clone(),
-                        started: false,
-                    });
-                }
-                list.remove(i);
+        // Prefer Delete if both somehow set (same row click races); Delete includes stop.
+        if let Some(i) = delete_idx.or(stop_idx) {
+            let remove_config = delete_idx.is_some();
+            self.apply_row_action(ssh_session_id, i, session_profile, remove_config);
+        }
+    }
+
+    /// `remove_config`: false = 停止；true = 删除（先停再删配置）。
+    fn apply_row_action(
+        &mut self,
+        ssh_session_id: SshSessionId,
+        index: usize,
+        session_profile: Option<&SessionConfig>,
+        remove_config: bool,
+    ) {
+        let Some(list) = self.by_ssh_session.get_mut(&ssh_session_id) else {
+            return;
+        };
+        if index >= list.len() {
+            return;
+        }
+        let entry = list.remove(index);
+        let kind = entry.kind().clone();
+        entry.control().stop();
+        if remove_config {
+            if let Some(profile) = session_profile {
+                self.pending_remove = Some(PortForwardRemoveRequest {
+                    session_profile_id: profile.id.clone(),
+                    kind: kind.clone(),
+                });
             }
         }
+        self.pending_audits.push(PortForwardAuditRequest {
+            session_profile_id: session_profile.map(|p| p.id.clone()),
+            host: session_profile.map(|p| p.host.clone()),
+            kind,
+            started: false,
+        });
     }
 
     fn show_add_form(
@@ -668,11 +727,21 @@ impl PortForwardPanel {
         Ok(())
     }
 
-    fn push_profile(&mut self, ssh_session_id: SshSessionId, label: String) {
+    fn push_profile(
+        &mut self,
+        ssh_session_id: SshSessionId,
+        label: String,
+        kind: PortForwardKind,
+        control: ForwardControl,
+    ) {
         self.by_ssh_session
             .entry(ssh_session_id)
             .or_default()
-            .push(ForwardEntry::Profile { label });
+            .push(ForwardEntry::Profile {
+                label,
+                kind,
+                control,
+            });
     }
 
     fn push_runtime(
@@ -694,10 +763,7 @@ impl PortForwardPanel {
 
     fn prune_stopped(&mut self, ssh_session_id: SshSessionId) {
         if let Some(list) = self.by_ssh_session.get_mut(&ssh_session_id) {
-            list.retain(|entry| match entry {
-                ForwardEntry::Profile { .. } => true,
-                ForwardEntry::Runtime { control, .. } => !control.is_stopped(),
-            });
+            list.retain(|entry| !entry.control().is_stopped());
         }
     }
 }
@@ -713,36 +779,90 @@ fn section_title(ui: &mut egui::Ui, theme: &Theme, text: impl AsRef<str>) {
 #[cfg(test)]
 mod panel_tests {
     use super::*;
+    use crate::ssh::{DynamicPortForward, LocalPortForward, RemotePortForward};
+
+    fn sample_local_kind() -> PortForwardKind {
+        PortForwardKind::Local(LocalPortForward {
+            local_port: 8080,
+            remote_host: "127.0.0.1".into(),
+            remote_port: 80,
+            bind_address: "127.0.0.1".into(),
+        })
+    }
+
+    fn push_sample_profile(panel: &mut PortForwardPanel, ssh_id: SshSessionId) {
+        let kind = sample_local_kind();
+        let label = kind.display_label();
+        panel
+            .profile_registered
+            .insert(ssh_id);
+        panel.push_profile(ssh_id, label, kind, ForwardControl::new());
+    }
 
     #[test]
-    fn register_profile_once() {
+    fn profile_row_stop_does_not_pending_remove() {
         let mut panel = PortForwardPanel::new();
+        push_sample_profile(&mut panel, 1);
         let mut profile = SessionConfig::default();
-        profile.local_forwards_text = "8080:127.0.0.1:80\n".into();
-        panel.register_profile_forwards(1, &profile);
-        panel.register_profile_forwards(1, &profile);
+        profile.id = "sess-1".into();
+        profile.local_forwards_text = "127.0.0.1:8080:127.0.0.1:80\n".into();
         assert_eq!(panel.active_count_for(1), 1);
+        panel.apply_row_action(1, 0, Some(&profile), false);
+        assert_eq!(panel.active_count_for(1), 0);
+        assert!(panel.take_pending_remove().is_none());
         assert_eq!(panel.take_pending_audits().len(), 1);
     }
 
     #[test]
-    fn clear_session_drops_profile_flag() {
+    fn profile_row_delete_pending_removes_config() {
         let mut panel = PortForwardPanel::new();
-        let profile = SessionConfig::default();
-        panel.register_profile_forwards(2, &profile);
-        panel.clear_ssh_session(2);
-        panel.register_profile_forwards(2, &profile);
+        push_sample_profile(&mut panel, 1);
+        let mut profile = SessionConfig::default();
+        profile.id = "sess-1".into();
+        panel.apply_row_action(1, 0, Some(&profile), true);
+        let remove = panel.take_pending_remove().expect("delete should queue remove");
+        assert_eq!(remove.session_profile_id, "sess-1");
+        assert!(matches!(remove.kind, PortForwardKind::Local(_)));
+        assert_eq!(panel.active_count_for(1), 0);
+    }
+
+    #[test]
+    fn runtime_stop_keeps_config_delete_removes() {
+        let mut panel = PortForwardPanel::new();
+        let kind = sample_local_kind();
+        let label = kind.display_label();
+        panel.push_runtime(1, label, kind, ForwardControl::new());
+        let mut profile = SessionConfig::default();
+        profile.id = "sess-2".into();
+
+        panel.apply_row_action(1, 0, Some(&profile), false);
+        assert!(panel.take_pending_remove().is_none());
+
+        let kind = sample_local_kind();
+        let label = kind.display_label();
+        panel.push_runtime(1, label, kind, ForwardControl::new());
+        panel.apply_row_action(1, 0, Some(&profile), true);
+        assert!(panel.take_pending_remove().is_some());
+    }
+
+    #[test]
+    fn clear_session_stops_profile_and_drops_flag() {
+        let mut panel = PortForwardPanel::new();
+        push_sample_profile(&mut panel, 2);
         assert!(panel.profile_registered.contains(&2));
+        panel.clear_ssh_session(2);
+        assert!(!panel.profile_registered.contains(&2));
+        assert_eq!(panel.active_count_for(2), 0);
+        // start + stop audits: push had no audit; clear emits stop
+        assert_eq!(panel.take_pending_audits().len(), 1);
     }
 
     #[test]
     fn retain_live_sessions_drops_stale() {
         use std::collections::HashSet;
         let mut panel = PortForwardPanel::new();
-        let mut profile = SessionConfig::default();
-        profile.local_forwards_text = "8080:127.0.0.1:80\n".into();
-        panel.register_profile_forwards(1, &profile);
-        panel.register_profile_forwards(2, &profile);
+        push_sample_profile(&mut panel, 1);
+        push_sample_profile(&mut panel, 2);
         assert_eq!(panel.active_count_for(1), 1);
         assert_eq!(panel.active_count_for(2), 1);
         let mut live = HashSet::new();
@@ -750,5 +870,31 @@ mod panel_tests {
         panel.retain_live_sessions(&live);
         assert_eq!(panel.active_count_for(1), 0);
         assert_eq!(panel.active_count_for(2), 1);
+    }
+
+    #[test]
+    fn prune_stopped_drops_profile_and_runtime() {
+        let mut panel = PortForwardPanel::new();
+        let kind = sample_local_kind();
+        let control = ForwardControl::new();
+        control.stop();
+        panel.push_profile(3, kind.display_label(), kind, control);
+        let kind = PortForwardKind::Dynamic(DynamicPortForward {
+            local_port: 1080,
+            bind_address: "127.0.0.1".into(),
+        });
+        let control = ForwardControl::new();
+        control.stop();
+        panel.push_runtime(3, kind.display_label(), kind, control);
+        // also one still running
+        let kind = PortForwardKind::Remote(RemotePortForward {
+            remote_port: 9000,
+            target_host: "127.0.0.1".into(),
+            target_port: 3000,
+            remote_bind_address: None,
+        });
+        panel.push_profile(3, kind.display_label(), kind, ForwardControl::new());
+        panel.prune_stopped(3);
+        assert_eq!(panel.active_count_for(3), 1);
     }
 }

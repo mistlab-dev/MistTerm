@@ -712,6 +712,18 @@ impl SshManager {
         String::from_utf8(output).map_err(|e| format!("输出非 UTF-8: {}", e))
     }
 
+    /// 取出连接时启动的会话配置转发控制柄（每会话一次）。
+    /// `None` = 会话尚未进入管理器（仍在连接中）；`Some(vec)` = 已连接（可能为空）。
+    pub fn take_profile_forwards(
+        &self,
+        session_id: SshSessionId,
+    ) -> Option<Vec<super::client::ProfileForward>> {
+        let mut sessions = self.sessions.lock().unwrap();
+        sessions
+            .get_mut(&session_id)
+            .map(|c| c.take_profile_forwards())
+    }
+
     pub fn spawn_local_forward(
         &self,
         session_id: SshSessionId,

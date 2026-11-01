@@ -29,13 +29,27 @@ fn default_bind() -> String {
     "127.0.0.1".into()
 }
 
-pub fn spawn_dynamic_forwards(session: &Session, forwards: &[DynamicPortForward]) {
+/// 返回成功启动的 `(规则, 控制柄)`，供面板停止/删除（#268）。
+pub fn spawn_dynamic_forwards(
+    session: &Session,
+    forwards: &[DynamicPortForward],
+) -> Vec<(DynamicPortForward, ForwardControl)> {
+    let mut out = Vec::new();
     for fwd in forwards {
         if fwd.local_port == 0 {
             continue;
         }
-        let _ = spawn_dynamic_forward_controllable(session.clone(), fwd.clone());
+        match spawn_dynamic_forward_controllable(session.clone(), fwd.clone()) {
+            Ok(control) => out.push((fwd.clone(), control)),
+            Err(e) => log::warn!(
+                "dynamic forward {}:{} failed to start: {}",
+                fwd.bind_address,
+                fwd.local_port,
+                e
+            ),
+        }
     }
+    out
 }
 
 pub fn spawn_dynamic_forward_controllable(
