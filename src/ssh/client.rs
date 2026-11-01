@@ -246,10 +246,28 @@ pub fn open_shell_channel(session: &Session, cols: u32, rows: u32) -> Result<ssh
     Ok(channel)
 }
 
+/// 连接时按会话配置拉起的转发及其控制柄（面板停止/删除用，#268）。
+pub enum ProfileForward {
+    Local {
+        fwd: super::port_forward::LocalPortForward,
+        control: super::port_forward::ForwardControl,
+    },
+    Remote {
+        fwd: super::port_forward::RemotePortForward,
+        control: super::port_forward::ForwardControl,
+    },
+    Dynamic {
+        fwd: super::socks_proxy::DynamicPortForward,
+        control: super::port_forward::ForwardControl,
+    },
+}
+
 /// SSH 客户端
 pub struct SshClient {
     session: Option<Session>,
     config: SshConfig,
+    /// 配置转发控制柄；面板登记后 `take_profile_forwards` 取走。
+    profile_forwards: Vec<ProfileForward>,
 }
 
 impl SshClient {
@@ -258,7 +276,13 @@ impl SshClient {
         Self {
             session: None,
             config,
+            profile_forwards: Vec::new(),
         }
+    }
+
+    /// 取出连接时启动的配置转发控制柄（每会话一次；无则空）。
+    pub fn take_profile_forwards(&mut self) -> Vec<ProfileForward> {
+        std::mem::take(&mut self.profile_forwards)
     }
 
     /// 连接到 SSH 服务器
@@ -267,15 +291,30 @@ impl SshClient {
         log::info!("Connecting to {}...", addr);
 
         let session = jump::connect_ssh_session(&self.config)?;
+        let mut profile_forwards = Vec::new();
         if !self.config.local_forwards.is_empty() {
-            super::port_forward::spawn_local_forwards(&session, &self.config.local_forwards);
+            for (fwd, control) in
+                super::port_forward::spawn_local_forwards(&session, &self.config.local_forwards)
+            {
+                profile_forwards.push(ProfileForward::Local { fwd, control });
+            }
         }
         if !self.config.remote_forwards.is_empty() {
-            super::port_forward::spawn_remote_forwards(&session, &self.config.remote_forwards);
+            for (fwd, control) in
+                super::port_forward::spawn_remote_forwards(&session, &self.config.remote_forwards)
+            {
+                profile_forwards.push(ProfileForward::Remote { fwd, control });
+            }
         }
         if !self.config.dynamic_forwards.is_empty() {
-            super::socks_proxy::spawn_dynamic_forwards(&session, &self.config.dynamic_forwards);
+            for (fwd, control) in super::socks_proxy::spawn_dynamic_forwards(
+                &session,
+                &self.config.dynamic_forwards,
+            ) {
+                profile_forwards.push(ProfileForward::Dynamic { fwd, control });
+            }
         }
+        self.profile_forwards = profile_forwards;
         self.session = Some(session);
         log::info!("SSH connected successfully");
         Ok(())
@@ -370,6 +409,7 @@ impl SshClient {
         Self {
             session: Some(session),
             config: SshConfig::default(),
+            profile_forwards: Vec::new(),
         }
     }
 
