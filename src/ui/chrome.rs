@@ -4256,6 +4256,35 @@ pub fn modal_header(ui: &mut Ui, theme: &Theme, title: &str, title_px: f32) -> b
     closed
 }
 
+/// 弹窗标题行(标题 + 右侧 ×，无前置图标)。
+/// 用于「帮助」等无需通用加号图标、避免标题前出现误导读致的弹窗。
+pub fn modal_header_plain(ui: &mut Ui, theme: &Theme, title: &str) -> bool {
+    let mx = theme.spacing_modal_content_x();
+    let my = theme.spacing_modal_content_y();
+    let mut closed = false;
+    let band = theme
+        .frame_modal_title_band()
+        .outer_margin(egui::Margin {
+            left: -mx,
+            right: -mx,
+            top: -my,
+            bottom: 0.0,
+        })
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(rich_panel_header_title(theme, title));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if close_icon_button(ui, theme).clicked() {
+                        closed = true;
+                    }
+                });
+            });
+        });
+    paint_modal_header_bottom_divider(ui, theme, band.response.rect);
+    ui.add_space(theme.spacing_modal_header_after_sep());
+    closed
+}
+
 fn paint_modal_header_bottom_divider(ui: &mut Ui, theme: &Theme, band: egui::Rect) {
     let hairline = theme.hairline_width(ui.ctx());
     let y = theme.snap_y_to_pixel(ui.ctx(), band.bottom() - hairline * 0.5);
