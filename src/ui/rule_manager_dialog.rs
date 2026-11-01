@@ -64,6 +64,12 @@ pub struct RuleManagerDialog {
     intro_dont_show_again: bool,
     /// 本轮对话框打开期间是否已尝试弹出短提示（避免关闭后每帧重弹）。
     intro_offered_this_open: bool,
+    /// #283 输出触发页：简单模式（关键词列表）还是高级模式（正则）。
+    ot_simple_mode: bool,
+    ot_keywords: String,
+    /// #283 可点击链接页：同上。
+    link_simple_mode: bool,
+    link_keywords: String,
 }
 
 impl Default for RuleManagerDialog {
@@ -102,6 +108,10 @@ impl Default for RuleManagerDialog {
             intro_open: false,
             intro_dont_show_again: false,
             intro_offered_this_open: false,
+            ot_simple_mode: true,
+            ot_keywords: String::new(),
+            link_simple_mode: true,
+            link_keywords: String::new(),
         }
     }
 }
@@ -191,10 +201,9 @@ impl RuleManagerDialog {
         let modal_sz = egui::vec2(860.0, 620.0);
         crate::ui::chrome::modal_window("rule_manager_dialog", theme, ctx)
             .open(&mut keep_open)
-            .default_size(modal_sz)
-            .min_width(640.0)
             .movable(true)
-            .resizable(true)
+            .resizable(false)
+            .fixed_size(modal_sz)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                     if crate::ui::chrome::modal_header(
@@ -269,6 +278,10 @@ impl RuleManagerDialog {
                             .size(theme.font_size_caption())
                             .color(theme.text_tertiary()),
                     );
+                    // #283：首次短提示改为对话框内嵌引导，不再弹独立窗口。
+                    if self.intro_open {
+                        self.paint_intro_banner(ui, theme, ctx, app_settings);
+                    }
                     ui.separator();
                     match self.tab {
                         RuleManagerTab::OutputTrigger => {
@@ -284,14 +297,7 @@ impl RuleManagerDialog {
                 });
             });
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-            if self.intro_open {
-                self.intro_open = false;
-            } else {
-                should_close = true;
-            }
-        }
-        if self.intro_open && self.open {
-            self.paint_rules_intro(ctx, theme, app_settings);
+            should_close = true;
         }
         self.open = keep_open && !should_close;
         if !self.open {
@@ -300,42 +306,38 @@ impl RuleManagerDialog {
         }
     }
 
-    fn paint_rules_intro(
+    /// #283：首次短提示内嵌在对话框顶部，用背景块 + 「知道了」就地关闭。
+    fn paint_intro_banner(
         &mut self,
-        ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &Theme,
+        ctx: &egui::Context,
         app_settings: &mut crate::core::app_settings::AppSettings,
     ) {
-        let mut keep = self.intro_open;
-        crate::ui::chrome::modal_window("rules_intro_tip", theme, ctx)
-            .open(&mut keep)
-            .default_size(egui::vec2(520.0, 280.0))
-            .resizable(false)
-            .collapsible(false)
-            .show(ctx, |ui| {
-                crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
-                    if crate::ui::chrome::modal_header(
-                        ui,
-                        theme,
-                        crate::i18n::tr(ctx, "About automation rules", "关于自动化规则"),
-                        theme.font_size_modal_title(),
-                    ) {
-                        self.intro_open = false;
-                    }
-                    ui.label(
-                        egui::RichText::new(crate::i18n::tr(
-                            ctx,
-                            "Automation rules notify, block, or ask for confirmation when a command is about to run or when output matches. Tabs: Output triggers, Clickable links, Local command check. Personal rules are editable; Built-in and Team rules are read-only. Edit rules anytime; turn the module on in Preferences for them to run.",
-                            "自动化规则用来在命令发出前或输出出现时自动提示、拦截或要求确认。三个标签页：输出触发、可点击链接、本地命令检查。上方「个人规则」可新建；「内置规则」「团队规则」只读。可先改规则，再在偏好里打开对应模块。",
-                        ))
-                        .size(theme.font_size_body()),
-                    );
-                    ui.add_space(theme.spacing_sm());
+        egui::Frame::none()
+            .fill(theme.surface_elevated())
+            .stroke(egui::Stroke::new(1.0, theme.color_form_input_stroke()))
+            .rounding(theme.radius_search_input())
+            .inner_margin(egui::Margin::symmetric(
+                theme.spacing_xs(),
+                theme.spacing_xs(),
+            ))
+            .show(ui, |ui| {
+                ui.set_min_width(crate::ui::layout_util::finite_content_width(ui));
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Automation rules react when a command is about to run or when output matches. Personal rules are editable; Built-in and Team rules are read-only. Turn the module on in Preferences for rules to run.",
+                        "自动化规则在命令发出前或输出出现时自动处理。个人规则可编辑；内置规则、团队规则只读。规则要在偏好里打开对应模块后才会生效。",
+                    ))
+                    .size(theme.font_size_body()),
+                );
+                ui.add_space(theme.spacing_xs());
+                ui.horizontal(|ui| {
                     ui.checkbox(
                         &mut self.intro_dont_show_again,
                         crate::i18n::tr(ctx, "Don't show again", "不再显示"),
                     );
-                    ui.add_space(theme.spacing_sm());
                     if crate::ui::chrome::panel_action_primary_button(
                         ui,
                         theme,
@@ -351,9 +353,7 @@ impl RuleManagerDialog {
                     }
                 });
             });
-        if !keep {
-            self.intro_open = false;
-        }
+        ui.add_space(theme.spacing_sm());
     }
 
     fn ensure_selection(&mut self, store: &OutputTriggerStore) {
@@ -417,9 +417,9 @@ impl RuleManagerDialog {
         let content_w = crate::ui::layout_util::finite_content_width(ui);
         ui.set_min_width(content_w);
         ui.horizontal(|ui| {
-            self.paint_list(ui, theme, ctx, store, content_w * 0.38);
+            self.paint_list(ui, theme, ctx, store, content_w * 0.32);
             ui.separator();
-            self.paint_editor(ui, theme, ctx, store, content_w * 0.58);
+            self.paint_editor(ui, theme, ctx, store, content_w * 0.64);
         });
         if !self.error.is_empty() {
             ui.add_space(theme.spacing_sm());
@@ -462,7 +462,7 @@ impl RuleManagerDialog {
                     self.confirm_reset = false;
                 }
                 ui.label(
-                    egui::RichText::new(format!("{}/{}", store.rules().len(), MAX_RULES))
+                    egui::RichText::new(rule_count_label(ctx, store.rules().len(), MAX_RULES))
                         .size(theme.font_size_caption())
                         .color(theme.text_tertiary()),
                 );
@@ -575,25 +575,7 @@ impl RuleManagerDialog {
         ui.vertical(|ui| {
             let width = width.max(280.0);
             ui.set_width(width);
-            let id_line = if self.creating || self.selected_id.is_none() {
-                crate::i18n::tr(
-                    ctx,
-                    "A new id is assigned when you save.",
-                    "保存时会生成规则 ID.",
-                )
-                .to_string()
-            } else {
-                format!(
-                    "{} {}",
-                    crate::i18n::tr(ctx, "Rule id", "规则 ID"),
-                    self.selected_id.as_deref().unwrap_or("")
-                )
-            };
-            ui.label(
-                egui::RichText::new(id_line)
-                    .size(theme.font_size_caption())
-                    .color(theme.text_tertiary()),
-            );
+            // #283：规则 ID 收进详情，默认不占版面。
             ui.add_space(theme.spacing_xs());
             let mut enabled = self.enabled;
             if ui
@@ -604,27 +586,67 @@ impl RuleManagerDialog {
                 self.confirm_reset = false;
             }
             ui.add_space(theme.spacing_sm());
-            crate::ui::chrome::form_field_label(
+            paint_simple_mode_switch(
                 ui,
                 theme,
-                crate::i18n::tr(ctx, "Pattern (regular expression)", "匹配模式 (正则)"),
-            );
-            crate::ui::chrome::form_multiline_field_with_hint(
-                ui,
-                theme,
-                egui::Id::new("output_trigger_pattern"),
+                ctx,
+                &mut self.ot_simple_mode,
+                &mut self.ot_keywords,
                 &mut self.pattern,
-                crate::i18n::tr(ctx, "HELLO_MIST", "HELLO_MIST"),
-                width,
-                4,
-                false,
             );
-            if let Some(message) = live_pattern_error(ctx, &self.pattern) {
-                ui.label(
-                    egui::RichText::new(message)
-                        .size(theme.font_size_caption())
-                        .color(theme.color_danger_emphasis()),
+            ui.add_space(theme.spacing_xs());
+            if self.ot_simple_mode {
+                crate::ui::chrome::form_field_label(
+                    ui,
+                    theme,
+                    crate::i18n::tr(
+                        ctx,
+                        "Keywords (comma or newline separated)",
+                        "关键词（逗号或换行分隔）",
+                    ),
                 );
+                crate::ui::chrome::form_multiline_field_with_hint(
+                    ui,
+                    theme,
+                    egui::Id::new("output_trigger_keywords"),
+                    &mut self.ot_keywords,
+                    crate::i18n::tr(ctx, "ERROR, failed, timeout", "ERROR, 失败, 超时"),
+                    width,
+                    4,
+                    false,
+                );
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Any keyword appearing in the output triggers this rule. No regular expression needed.",
+                        "输出里出现任意一个关键词就会触发这条规则，不需要写正则。",
+                    ))
+                    .size(theme.font_size_caption())
+                    .color(theme.text_tertiary()),
+                );
+            } else {
+                crate::ui::chrome::form_field_label(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "Pattern (regular expression)", "匹配模式 (正则)"),
+                );
+                crate::ui::chrome::form_multiline_field_with_hint(
+                    ui,
+                    theme,
+                    egui::Id::new("output_trigger_pattern"),
+                    &mut self.pattern,
+                    crate::i18n::tr(ctx, "HELLO_MIST", "HELLO_MIST"),
+                    width,
+                    4,
+                    false,
+                );
+                if let Some(message) = live_pattern_error(ctx, &self.pattern) {
+                    ui.label(
+                        egui::RichText::new(message)
+                            .size(theme.font_size_caption())
+                            .color(theme.color_danger_emphasis()),
+                    );
+                }
             }
             ui.add_space(theme.spacing_sm());
             let combo_w = (width * 0.48).clamp(140.0, 240.0);
@@ -724,6 +746,28 @@ impl RuleManagerDialog {
                     }
                 }
             });
+            // #283：内置规则可复制内容新建个人规则，避免直接改内置条目。
+            if !self.creating
+                && self
+                    .selected_id
+                    .as_deref()
+                    .is_some_and(|id| is_builtin_trigger_rule(id))
+            {
+                if crate::ui::chrome::panel_action_button(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "Copy and edit as a new personal rule", "复制并编辑为个人规则"),
+                )
+                .on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Built-in rules are read-only conceptually. This loads a copy; saving creates a new personal rule.",
+                    "内置规则不建议直接改。这里载入一份副本，保存后会新建一条个人规则。",
+                ))
+                .clicked()
+                {
+                    self.copy_trigger_as_new(ctx, store);
+                }
+            }
         });
     }
 
@@ -772,7 +816,7 @@ impl RuleManagerDialog {
             "怎样看到 Toast",
         ))
         .id_salt("output_trigger_toast_help")
-        .default_open(false)
+        .default_open(true)
         .show(ui, |ui| {
             ui.label(
                 egui::RichText::new(crate::i18n::tr(
@@ -827,7 +871,22 @@ impl RuleManagerDialog {
 
     fn save_editor(&mut self, ctx: &egui::Context, store: &OutputTriggerStore) {
         self.confirm_reset = false;
-        if let Err(err) = check_pattern(&self.pattern) {
+        // #283：简单模式把关键词列表转成「任一关键词出现即命中」的正则。
+        let pattern = if self.ot_simple_mode {
+            let converted = keywords_to_pattern(&self.ot_keywords);
+            if converted.is_empty() {
+                self.set_error(crate::i18n::tr(
+                    ctx,
+                    "Add at least one keyword. Nothing was saved.",
+                    "请至少填写一个关键词. 没有保存.",
+                ));
+                return;
+            }
+            converted
+        } else {
+            self.pattern.clone()
+        };
+        if let Err(err) = check_pattern(&pattern) {
             self.set_error(explain_rule_error(ctx, &err));
             return;
         }
@@ -837,7 +896,7 @@ impl RuleManagerDialog {
             } else {
                 self.selected_id.clone()
             },
-            pattern: self.pattern.clone(),
+            pattern,
             severity: self.severity,
             action: self.action,
             enabled: self.enabled,
@@ -952,6 +1011,17 @@ impl RuleManagerDialog {
         self.creating = false;
         self.selected_id = Some(rule.id.clone());
         self.pattern = rule.pattern.clone();
+        // #283：纯字面量并列的正则回填到简单模式，其余留在高级模式。
+        match pattern_to_keywords(&rule.pattern) {
+            Some(keywords) => {
+                self.ot_simple_mode = true;
+                self.ot_keywords = keywords;
+            }
+            None => {
+                self.ot_simple_mode = false;
+                self.ot_keywords.clear();
+            }
+        }
         self.severity = rule.severity;
         self.action = rule.action;
         self.priority = u32::from(rule.priority);
@@ -962,12 +1032,36 @@ impl RuleManagerDialog {
         self.creating = true;
         self.selected_id = None;
         self.pattern.clear();
+        self.ot_simple_mode = true;
+        self.ot_keywords.clear();
         self.severity = TriggerSeverity::Info;
         self.action = TriggerAction::Notify;
         self.priority = 100;
         self.enabled = true;
         self.error.clear();
         self.status.clear();
+    }
+
+    /// #283：内置规则 → 以原内容新建个人规则（不覆盖内置 id）。
+    fn copy_trigger_as_new(&mut self, ctx: &egui::Context, store: &OutputTriggerStore) {
+        let Some(id) = self.selected_id.clone() else {
+            return;
+        };
+        let Some(rule) = store.rules().into_iter().find(|rule| rule.id == id) else {
+            return;
+        };
+        let pattern = rule.pattern.clone();
+        self.load_rule(&rule);
+        self.creating = true;
+        self.selected_id = None;
+        // 复制过来的是正则内容，默认落高级模式，避免误当关键词再转义一次。
+        self.pattern = pattern;
+        self.ot_simple_mode = false;
+        self.set_status(crate::i18n::tr(
+            ctx,
+            "Loaded a copy. Saving creates a new personal rule.",
+            "已载入副本. 保存后会新建一条个人规则.",
+        ));
     }
 
     fn set_error(&mut self, message: impl Into<String>) {
@@ -980,6 +1074,7 @@ impl RuleManagerDialog {
         self.error.clear();
     }
 
+    /// #283：规则 ID 收进折叠详情，默认不显示。
     // --- 可点击链接（#186）：复制 #185 布局节奏，字段独立不串台 ---
 
     fn ensure_cmd_selection(&mut self, personal: &CmdAuditPersonalStore) {
@@ -1048,38 +1143,78 @@ impl RuleManagerDialog {
             ui.add_space(theme.spacing_xs());
         }
 
-        // 方案 §7 三段式之一：个人规则（可 CRUD）——主交付。
-        ui.heading(egui::RichText::new(crate::i18n::tr(
-            ctx,
-            "Personal rules",
-            "个人规则",
-        ))
-        .size(theme.font_size_section_title()));
-        let enable_label = if self.cmd_personal_enabled {
-            crate::i18n::tr(
-                ctx,
-                "Personal checks are ON: they run even without a team policy.",
-                "个人检查已开启: 没有团队策略时也会生效.",
-            )
-        } else {
-            crate::i18n::tr(
-                ctx,
-                "Personal checks are OFF: they only run when a team policy is active.",
-                "个人检查已关闭: 仅在团队策略激活时生效.",
-            )
-        };
-        ui.label(
-            egui::RichText::new(enable_label)
-                .size(theme.font_size_caption())
-                .color(theme.text_tertiary()),
-        );
-        ui.add_space(theme.spacing_xs());
+        // #283：个人检查开关放到页签顶部，并配一句白话说明。
         let content_w = crate::ui::layout_util::finite_content_width(ui);
         ui.set_min_width(content_w);
-        ui.horizontal(|ui| {
-            self.paint_cmd_list(ui, theme, ctx, personal, engine, content_w * 0.34);
-            ui.separator();
-            self.paint_cmd_editor(ui, theme, ctx, personal, engine, content_w * 0.62);
+        rule_section_frame(theme, theme.surface_elevated()).show(ui, |ui| {
+            let inner_w = crate::ui::layout_util::finite_content_width(ui);
+            ui.set_min_width(inner_w);
+            let mut on = self.cmd_personal_enabled;
+            if ui
+                .checkbox(
+                    &mut on,
+                    crate::i18n::tr(
+                        ctx,
+                        "Use my personal command checks on this machine",
+                        "在本机启用我的个人命令检查",
+                    ),
+                )
+                .changed()
+            {
+                self.cmd_personal_enabled = on;
+                personal.set_personal_enabled(on, engine);
+                self.set_status(crate::i18n::tr(
+                    ctx,
+                    "Saved. Takes effect on the next command.",
+                    "已保存, 下一条命令即生效.",
+                ));
+            }
+            ui.label(
+                egui::RichText::new(crate::i18n::tr(
+                    ctx,
+                    "When this is on, your own rules run even without a team policy. When it is off, checks only run while a team policy is active.",
+                    "打开后，即使没有团队策略，你写的个人规则也会在命令发出前检查；关闭时只有存在团队策略才会检查。",
+                ))
+                .size(theme.font_size_caption())
+                .color(theme.text_tertiary()),
+            );
+        });
+
+        // 方案 §7 三段式之一：个人规则（可 CRUD）——主交付。
+        ui.add_space(theme.spacing_sm());
+        rule_section_frame(theme, theme.surface_elevated()).show(ui, |ui| {
+            let inner_w = crate::ui::layout_util::finite_content_width(ui);
+            ui.set_min_width(inner_w);
+            ui.heading(egui::RichText::new(crate::i18n::tr(
+                ctx,
+                "Personal rules",
+                "个人规则",
+            ))
+            .size(theme.font_size_section_title()));
+            let enable_label = if self.cmd_personal_enabled {
+                crate::i18n::tr(
+                    ctx,
+                    "Personal checks are ON: they run even without a team policy.",
+                    "个人检查已开启: 没有团队策略时也会生效.",
+                )
+            } else {
+                crate::i18n::tr(
+                    ctx,
+                    "Personal checks are OFF: they only run when a team policy is active.",
+                    "个人检查已关闭: 仅在团队策略激活时生效.",
+                )
+            };
+            ui.label(
+                egui::RichText::new(enable_label)
+                    .size(theme.font_size_caption())
+                    .color(theme.text_tertiary()),
+            );
+            ui.add_space(theme.spacing_xs());
+            ui.horizontal(|ui| {
+                self.paint_cmd_list(ui, theme, ctx, personal, engine, inner_w * 0.34);
+                ui.separator();
+                self.paint_cmd_editor(ui, theme, ctx, personal, engine, inner_w * 0.62);
+            });
         });
         if !self.error.is_empty() {
             ui.add_space(theme.spacing_sm());
@@ -1096,58 +1231,67 @@ impl RuleManagerDialog {
                     .color(theme.text_secondary()),
             );
         }
-        ui.add_space(theme.spacing_sm());
 
         // 方案 §7 三段式之二：内置规则（只读 + 本地启停）。
-        ui.separator();
-        ui.heading(egui::RichText::new(crate::i18n::tr(
-            ctx,
-            "Built-in rules (read-only)",
-            "内置规则 (只读)",
-        ))
-        .size(theme.font_size_section_title()));
-        self.paint_cmd_builtin(ui, theme, ctx, personal, engine);
+        ui.add_space(theme.spacing_sm());
+        rule_section_frame(theme, theme.surface_body()).show(ui, |ui| {
+            let inner_w = crate::ui::layout_util::finite_content_width(ui);
+            ui.set_min_width(inner_w);
+            ui.heading(egui::RichText::new(crate::i18n::tr(
+                ctx,
+                "Built-in rules (read-only)",
+                "内置规则 (只读)",
+            ))
+            .size(theme.font_size_section_title()));
+            self.paint_cmd_builtin(ui, theme, ctx, personal, engine);
+        });
 
         // 方案 §7 三段式之三：团队规则（只读说明 + 生效条数）。
-        ui.separator();
-        ui.heading(egui::RichText::new(crate::i18n::tr(
-            ctx,
-            "Team rules (read-only)",
-            "团队规则 (只读)",
-        ))
-        .size(theme.font_size_section_title()));
-        let team = match engine.lock() {
-            Ok(e) => {
-                if e.team_policy_active() {
-                    let count = e.team_rule_count();
-                    let base = crate::i18n::tr(
+        // #283：没有团队策略时不占位，避免空标题。
+        let team = engine
+            .lock()
+            .ok()
+            .map(|e| (e.team_policy_active(), e.team_rule_count()));
+        match team {
+            Some((true, count)) => {
+                ui.add_space(theme.spacing_sm());
+                rule_section_frame(theme, theme.color_menu_popup_fill()).show(ui, |ui| {
+                    let inner_w = crate::ui::layout_util::finite_content_width(ui);
+                    ui.set_min_width(inner_w);
+                    ui.heading(egui::RichText::new(crate::i18n::tr(
                         ctx,
-                        "Team policy is active. Team rules are managed on the server; the desktop cannot change them.",
-                        "团队策略已激活. 团队规则在服务端管理, 桌面端不能修改.",
+                        "Team rules (read-only)",
+                        "团队规则 (只读)",
+                    ))
+                    .size(theme.font_size_section_title()));
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "({count}) {}",
+                            crate::i18n::tr(
+                                ctx,
+                                "Team policy is active. Team rules are managed on the server; the desktop cannot change them.",
+                                "团队策略已激活. 团队规则在服务端管理, 桌面端不能修改.",
+                            )
+                        ))
+                        .size(theme.font_size_caption())
+                        .color(theme.text_tertiary()),
                     );
-                    // #187 复审：把生效条数贴进文案，避免 dead binding。
-                    format!("({count}) {base}")
-                } else {
-                    crate::i18n::tr(
-                        ctx,
-                        "No team policy. Team rules are managed on the server; the desktop cannot change them.",
-                        "没有团队策略. 团队规则在服务端管理, 桌面端不能修改.",
-                    )
-                    .to_string()
-                }
+                });
             }
-            Err(_) => crate::i18n::tr(
-                ctx,
-                "Team rule status is unavailable.",
-                "团队规则状态不可用.",
-            )
-            .to_string(),
-        };
-        ui.label(
-            egui::RichText::new(team)
-                .size(theme.font_size_caption())
-                .color(theme.text_tertiary()),
-        );
+            Some((false, _)) => {}
+            None => {
+                ui.add_space(theme.spacing_sm());
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Team rule status is unavailable.",
+                        "团队规则状态不可用.",
+                    ))
+                    .size(theme.font_size_caption())
+                    .color(theme.text_tertiary()),
+                );
+            }
+        }
         ui.add_space(theme.spacing_sm());
         self.paint_cmd_footer(ui, theme, ctx, personal, engine);
     }
@@ -1175,10 +1319,10 @@ impl RuleManagerDialog {
                     self.confirm_reset = false;
                 }
                 ui.label(
-                    egui::RichText::new(format!(
-                        "{}/{}",
+                    egui::RichText::new(rule_count_label(
+                        ctx,
                         personal.rules().len(),
-                        MAX_PERSONAL_RULES
+                        MAX_PERSONAL_RULES,
                     ))
                     .size(theme.font_size_caption())
                     .color(theme.text_tertiary()),
@@ -1195,26 +1339,16 @@ impl RuleManagerDialog {
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
                     if rules.is_empty() {
+                        // #283：只保留列表上方的「新建规则」入口，去掉重复按钮。
                         ui.label(
                             egui::RichText::new(crate::i18n::tr(
                                 ctx,
-                                "No personal rules yet. Create one to confirm, block, or notify when something matches.",
-                                "还没有个人规则。新建一条，在匹配到危险命令或目标输出时按你的动作处理。",
+                                "No personal rules yet. Use New rule above to add one.",
+                                "还没有个人规则。用上方的「新建规则」添加一条。",
                             ))
                             .size(theme.font_size_caption())
                             .color(theme.text_tertiary()),
                         );
-                        ui.add_space(theme.spacing_xs());
-                        if crate::ui::chrome::panel_action_primary_button(
-                            ui,
-                            theme,
-                            crate::i18n::tr(ctx, "+ New rule", "+ 新建规则"),
-                        )
-                        .clicked()
-                        {
-                            self.clear_cmd_form();
-                            self.confirm_reset = false;
-                        }
                         return;
                     }
                     for rule in &rules {
@@ -1281,25 +1415,7 @@ impl RuleManagerDialog {
         ui.vertical(|ui| {
             let width = width.max(280.0);
             ui.set_width(width);
-            let id_line = if self.cmd_creating || self.cmd_selected_id.is_none() {
-                crate::i18n::tr(
-                    ctx,
-                    "A new id is assigned when you save.",
-                    "保存时会生成规则 ID.",
-                )
-                .to_string()
-            } else {
-                format!(
-                    "{} {}",
-                    crate::i18n::tr(ctx, "Rule id", "规则 ID"),
-                    self.cmd_selected_id.as_deref().unwrap_or("")
-                )
-            };
-            ui.label(
-                egui::RichText::new(id_line)
-                    .size(theme.font_size_caption())
-                    .color(theme.text_tertiary()),
-            );
+            // #283：规则 ID 收进详情，默认不占版面。
             ui.add_space(theme.spacing_xs());
             crate::ui::chrome::form_field_label(
                 ui,
@@ -1523,7 +1639,12 @@ impl RuleManagerDialog {
                             if disabled {
                                 title_rt = title_rt.color(theme.text_tertiary());
                             }
-                            ui.label(title_rt);
+                            // #283：悬停即可预览匹配模式，不必展开。
+                            ui.label(title_rt).on_hover_text(
+                                egui::RichText::new(&b.pattern).monospace().size(
+                                    theme.font_size_caption(),
+                                ),
+                            );
                             if !hint.is_empty() {
                                 ui.label(
                                     egui::RichText::new(hint)
@@ -1537,7 +1658,7 @@ impl RuleManagerDialog {
                                 "正则",
                             ))
                             .id_salt(("cmd_builtin_pat", b.id.as_str()))
-                            .default_open(false)
+                            .default_open(true)
                             .show(ui, |ui| {
                                 ui.label(
                                     egui::RichText::new(&b.pattern)
@@ -1560,29 +1681,7 @@ impl RuleManagerDialog {
         personal: &CmdAuditPersonalStore,
         engine: &std::sync::Arc<std::sync::Mutex<crate::core::cmd_audit::CmdAuditEngine>>,
     ) {
-        ui.horizontal(|ui| {
-            let mut on = self.cmd_personal_enabled;
-            if ui
-                .checkbox(
-                    &mut on,
-                    crate::i18n::tr(
-                        ctx,
-                        "Run personal checks even without a team policy",
-                        "没有团队策略时也运行个人检查",
-                    ),
-                )
-                .changed()
-            {
-                self.cmd_personal_enabled = on;
-                personal.set_personal_enabled(on, engine);
-                self.set_status(crate::i18n::tr(
-                    ctx,
-                    "Saved. Takes effect on the next command.",
-                    "已保存, 下一条命令即生效.",
-                ));
-            }
-        });
-        ui.add_space(theme.spacing_sm());
+        // #283：个人检查开关已移到页签顶部，这里只留清空与导入导出。
         let reset_label = if self.confirm_reset {
             crate::i18n::tr(
                 ctx,
@@ -1830,6 +1929,17 @@ impl RuleManagerDialog {
         self.link_creating = false;
         self.link_selected_id = Some(rule.id.clone());
         self.link_pattern = rule.pattern.clone();
+        // #283：纯字面量并列的正则回填到简单模式，其余留在高级模式。
+        match pattern_to_keywords(&rule.pattern) {
+            Some(keywords) => {
+                self.link_simple_mode = true;
+                self.link_keywords = keywords;
+            }
+            None => {
+                self.link_simple_mode = false;
+                self.link_keywords.clear();
+            }
+        }
         self.link_category = if rule.category.is_empty() {
             "path".to_string()
         } else {
@@ -1844,10 +1954,34 @@ impl RuleManagerDialog {
         self.link_creating = true;
         self.link_selected_id = None;
         self.link_pattern.clear();
+        self.link_simple_mode = true;
+        self.link_keywords.clear();
         self.link_category = "path".to_string();
         self.link_action = "sftp-open".to_string();
         self.link_priority = 100;
         self.link_enabled = true;
+    }
+
+    /// #283：内置链接规则 → 以原内容新建个人规则。
+    fn copy_link_as_new(&mut self, ctx: &egui::Context, store: &DisplayLinkStore) {
+        let Some(id) = self.link_selected_id.clone() else {
+            return;
+        };
+        let Some(rule) = store.rules().into_iter().find(|rule| rule.id == id) else {
+            return;
+        };
+        let pattern = rule.pattern.clone();
+        self.load_link_rule(&rule);
+        self.link_creating = true;
+        self.link_selected_id = None;
+        // 复制过来的是正则内容，默认落高级模式。
+        self.link_pattern = pattern;
+        self.link_simple_mode = false;
+        self.set_status(crate::i18n::tr(
+            ctx,
+            "Loaded a copy. Saving creates a new personal rule.",
+            "已载入副本. 保存后会新建一条个人规则.",
+        ));
     }
 
     fn paint_display_link(
@@ -1937,7 +2071,7 @@ impl RuleManagerDialog {
                     self.confirm_reset = false;
                 }
                 ui.label(
-                    egui::RichText::new(format!("{}/{}", store.rules().len(), MAX_RULES))
+                    egui::RichText::new(rule_count_label(ctx, store.rules().len(), MAX_RULES))
                         .size(theme.font_size_caption())
                         .color(theme.text_tertiary()),
                 );
@@ -2051,25 +2185,7 @@ impl RuleManagerDialog {
         ui.vertical(|ui| {
             let width = width.max(280.0);
             ui.set_width(width);
-            let id_line = if self.link_creating || self.link_selected_id.is_none() {
-                crate::i18n::tr(
-                    ctx,
-                    "A new id is assigned when you save.",
-                    "保存时会生成规则 ID.",
-                )
-                .to_string()
-            } else {
-                format!(
-                    "{} {}",
-                    crate::i18n::tr(ctx, "Rule id", "规则 ID"),
-                    self.link_selected_id.as_deref().unwrap_or("")
-                )
-            };
-            ui.label(
-                egui::RichText::new(id_line)
-                    .size(theme.font_size_caption())
-                    .color(theme.text_tertiary()),
-            );
+            // #283：规则 ID 收进详情，默认不占版面。
             ui.add_space(theme.spacing_xs());
             let mut enabled = self.link_enabled;
             if ui
@@ -2080,27 +2196,67 @@ impl RuleManagerDialog {
                 self.confirm_reset = false;
             }
             ui.add_space(theme.spacing_sm());
-            crate::ui::chrome::form_field_label(
+            paint_simple_mode_switch(
                 ui,
                 theme,
-                crate::i18n::tr(ctx, "Pattern (regular expression)", "匹配模式 (正则)"),
-            );
-            crate::ui::chrome::form_multiline_field_with_hint(
-                ui,
-                theme,
-                egui::Id::new("display_link_pattern"),
+                ctx,
+                &mut self.link_simple_mode,
+                &mut self.link_keywords,
                 &mut self.link_pattern,
-                "https?://\\S+",
-                width,
-                4,
-                false,
             );
-            if let Some(message) = live_link_pattern_error(ctx, &self.link_pattern) {
-                ui.label(
-                    egui::RichText::new(message)
-                        .size(theme.font_size_caption())
-                        .color(theme.color_danger_emphasis()),
+            ui.add_space(theme.spacing_xs());
+            if self.link_simple_mode {
+                crate::ui::chrome::form_field_label(
+                    ui,
+                    theme,
+                    crate::i18n::tr(
+                        ctx,
+                        "Keywords (comma or newline separated)",
+                        "关键词（逗号或换行分隔）",
+                    ),
                 );
+                crate::ui::chrome::form_multiline_field_with_hint(
+                    ui,
+                    theme,
+                    egui::Id::new("display_link_keywords"),
+                    &mut self.link_keywords,
+                    crate::i18n::tr(ctx, "/var/log, 10.0.0, https://", "/var/log, 10.0.0, https://"),
+                    width,
+                    4,
+                    false,
+                );
+                ui.label(
+                    egui::RichText::new(crate::i18n::tr(
+                        ctx,
+                        "Any keyword appearing in the output becomes a link. No regular expression needed.",
+                        "输出里出现任意一个关键词就会变成链接，不需要写正则。",
+                    ))
+                    .size(theme.font_size_caption())
+                    .color(theme.text_tertiary()),
+                );
+            } else {
+                crate::ui::chrome::form_field_label(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "Pattern (regular expression)", "匹配模式 (正则)"),
+                );
+                crate::ui::chrome::form_multiline_field_with_hint(
+                    ui,
+                    theme,
+                    egui::Id::new("display_link_pattern"),
+                    &mut self.link_pattern,
+                    "https?://\\S+",
+                    width,
+                    4,
+                    false,
+                );
+                if let Some(message) = live_link_pattern_error(ctx, &self.link_pattern) {
+                    ui.label(
+                        egui::RichText::new(message)
+                            .size(theme.font_size_caption())
+                            .color(theme.color_danger_emphasis()),
+                    );
+                }
             }
             ui.add_space(theme.spacing_sm());
             let combo_w = (width * 0.48).clamp(140.0, 240.0);
@@ -2197,6 +2353,28 @@ impl RuleManagerDialog {
                     }
                 }
             });
+            // #283：内置规则可复制内容新建个人规则。
+            if !self.link_creating
+                && self
+                    .link_selected_id
+                    .as_deref()
+                    .is_some_and(|id| is_builtin_link_rule(id))
+            {
+                if crate::ui::chrome::panel_action_button(
+                    ui,
+                    theme,
+                    crate::i18n::tr(ctx, "Copy and edit as a new personal rule", "复制并编辑为个人规则"),
+                )
+                .on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Built-in rules are read-only conceptually. This loads a copy; saving creates a new personal rule.",
+                    "内置规则不建议直接改。这里载入一份副本，保存后会新建一条个人规则。",
+                ))
+                .clicked()
+                {
+                    self.copy_link_as_new(ctx, store);
+                }
+            }
         });
     }
 
@@ -2245,7 +2423,7 @@ impl RuleManagerDialog {
             "怎样看到链接",
         ))
         .id_salt("display_link_help")
-        .default_open(false)
+        .default_open(true)
         .show(ui, |ui| {
             ui.label(
                 egui::RichText::new(crate::i18n::tr(
@@ -2300,7 +2478,22 @@ impl RuleManagerDialog {
 
     fn save_link_editor(&mut self, ctx: &egui::Context, store: &DisplayLinkStore) {
         self.confirm_reset = false;
-        if let Err(err) = check_link_pattern(&self.link_pattern) {
+        // #283：简单模式把关键词列表转成「任一关键词出现即命中」的正则。
+        let pattern = if self.link_simple_mode {
+            let converted = keywords_to_pattern(&self.link_keywords);
+            if converted.is_empty() {
+                self.set_error(crate::i18n::tr(
+                    ctx,
+                    "Add at least one keyword. Nothing was saved.",
+                    "请至少填写一个关键词. 没有保存.",
+                ));
+                return;
+            }
+            converted
+        } else {
+            self.link_pattern.clone()
+        };
+        if let Err(err) = check_link_pattern(&pattern) {
             self.set_error(explain_link_rule_error(ctx, &err));
             return;
         }
@@ -2310,7 +2503,7 @@ impl RuleManagerDialog {
             } else {
                 self.link_selected_id.clone()
             },
-            pattern: self.link_pattern.clone(),
+            pattern,
             category: self.link_category.clone(),
             action: self.link_action.clone(),
             enabled: self.link_enabled,
@@ -2634,6 +2827,174 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     }
     let head: String = text.chars().take(max_chars.saturating_sub(1)).collect();
     format!("{}…", head.replace('\n', " "))
+}
+
+/// #283：计数旁的可读说明，数值随规则条数变化。
+fn rule_count_label(ctx: &egui::Context, used: usize, max: usize) -> String {
+    match crate::i18n::language(ctx) {
+        crate::i18n::UiLanguage::Zh => format!("已用 {used} 条 / 上限 {max} 条"),
+        crate::i18n::UiLanguage::En => format!("{used} used / {max} max"),
+    }
+}
+
+/// #283：规则分区背景块，用于区分个人 / 内置 / 团队。
+fn rule_section_frame(theme: &Theme, fill: egui::Color32) -> egui::Frame {
+    egui::Frame::none()
+        .fill(fill)
+        .rounding(theme.radius_search_input())
+        .inner_margin(egui::Margin::symmetric(
+            theme.spacing_sm(),
+            theme.spacing_sm(),
+        ))
+}
+
+/// #283：简单 / 高级模式切换。简单模式用关键词列表，高级模式直接写正则。
+/// 切换时把已有的关键词转成正则（反之能转就回填），都不丢已填内容。
+fn paint_simple_mode_switch(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    ctx: &egui::Context,
+    simple: &mut bool,
+    keywords: &mut String,
+    pattern: &mut String,
+) {
+    ui.horizontal(|ui| {
+        let mut want_simple = *simple;
+        ui.selectable_value(
+            &mut want_simple,
+            true,
+            crate::i18n::tr(ctx, "Simple mode", "简单模式"),
+        );
+        ui.selectable_value(
+            &mut want_simple,
+            false,
+            crate::i18n::tr(ctx, "Advanced mode", "高级模式"),
+        );
+        if want_simple == *simple {
+            return;
+        }
+        if want_simple {
+            // 高级 → 简单：只有纯字面量并列的正则能回到关键词，其余保留在正则缓冲里。
+            if let Some(converted) = pattern_to_keywords(pattern) {
+                *keywords = converted;
+            }
+        } else if !keywords.trim().is_empty() {
+            // 简单 → 高级：把关键词列表转成等价正则，便于继续细调。
+            *pattern = keywords_to_pattern(keywords);
+        }
+        *simple = want_simple;
+    });
+    ui.label(
+        egui::RichText::new(if *simple {
+            crate::i18n::tr(
+                ctx,
+                "Simple mode treats each keyword as plain text; any one of them matching is enough.",
+                "简单模式把每个关键词当普通文本，命中任意一个即可。",
+            )
+        } else {
+            crate::i18n::tr(
+                ctx,
+                "Advanced mode uses a regular expression. Switching to simple keeps plain keywords only.",
+                "高级模式直接写正则；切到简单模式只保留纯关键词。",
+            )
+        })
+        .size(theme.font_size_caption())
+        .color(theme.text_tertiary()),
+    );
+}
+
+/// 关键词列表 → 「任一命中」等价正则。逗号 / 中文逗号 / 换行分隔，字面量整体转义。
+fn keywords_to_pattern(keywords: &str) -> String {
+    let parts: Vec<String> = keywords
+        .split(|c: char| c == ',' || c == '，' || c == '\n' || c == '\r')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(regex::escape)
+        .collect();
+    match parts.len() {
+        0 => String::new(),
+        1 => parts[0].clone(),
+        _ => format!("(?:{})", parts.join("|")),
+    }
+}
+
+/// 反向：纯字面量并列的正则 → 关键词列表；复杂正则返回 `None`（留在高级模式）。
+fn pattern_to_keywords(pattern: &str) -> Option<String> {
+    let body = match pattern.strip_prefix("(?:") {
+        Some(rest) => rest.strip_suffix(')')?,
+        None => pattern,
+    };
+    let mut keywords = Vec::new();
+    for token in split_alternation(body)? {
+        let literal = literal_token(&token)?;
+        if literal.is_empty() {
+            return None;
+        }
+        keywords.push(literal);
+    }
+    if keywords.is_empty() {
+        None
+    } else {
+        Some(keywords.join("\n"))
+    }
+}
+
+/// 按顶层 `|` 拆分，`\|` 保持为一个转义字符。
+fn split_alternation(body: &str) -> Option<Vec<String>> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+    for c in body.chars() {
+        if escaped {
+            current.push('\\');
+            current.push(c);
+            escaped = false;
+            continue;
+        }
+        match c {
+            '\\' => escaped = true,
+            '|' => tokens.push(std::mem::take(&mut current)),
+            _ => current.push(c),
+        }
+    }
+    if escaped {
+        return None;
+    }
+    tokens.push(current);
+    Some(tokens)
+}
+
+/// 只有「普通字符 + 可还原的转义」才算字面量；出现正则元字符就放弃反向转换。
+fn literal_token(token: &str) -> Option<String> {
+    const ESCAPABLE: &str = "\\\\.+*?()|[]{}^$#&-~";
+    let mut out = String::new();
+    let mut chars = token.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            let escaped = chars.next()?;
+            if !ESCAPABLE.contains(escaped) {
+                return None;
+            }
+            out.push(escaped);
+        } else if ".*+?()[]{}|^$".contains(c) {
+            return None;
+        } else {
+            out.push(c);
+        }
+    }
+    Some(out)
+}
+
+fn is_builtin_trigger_rule(id: &str) -> bool {
+    crate::modules::output_trigger::builtin_rules()
+        .iter()
+        .any(|rule| rule.id == id)
+}
+
+fn is_builtin_link_rule(id: &str) -> bool {
+    crate::modules::display_link::builtin_link_rules()
+        .iter()
+        .any(|rule| rule.id == id)
 }
 
 fn severity_label(ctx: &egui::Context, severity: TriggerSeverity) -> &'static str {

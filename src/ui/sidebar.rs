@@ -189,7 +189,7 @@ impl Sidebar {
                 // 与命令片段面板一致：分隔线后留出一段呼吸空间，再进入搜索区
                 ui.add_space(theme.spacing_dock_section_gap());
 
-                crate::ui::chrome::form_singleline_field(
+                crate::ui::chrome::search_field(
                     ui,
                     theme,
                     search_field_id,
@@ -200,7 +200,6 @@ impl Sidebar {
                         "搜索服务器名称 / IP",
                     ),
                     width,
-                    false,
                 );
                 ui.add_space(theme.spacing_dock_control_gap());
                 let sort_icon = match *sort_by {

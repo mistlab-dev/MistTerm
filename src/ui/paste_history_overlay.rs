@@ -201,16 +201,25 @@ impl PasteHistoryOverlay {
                         );
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let can = results.get(self.selected).is_some();
-                            if ui
-                                .add(
-                                    crate::ui::chrome::modal_primary_button_widget(
-                                        theme,
-                                        crate::i18n::tr(ctx, "Paste again", "再次粘贴"),
+                            let reason = crate::i18n::tr(
+                                ctx,
+                                "Select an entry first",
+                                "先选一条记录",
+                            );
+                            let resp = ui.add(
+                                crate::ui::chrome::modal_primary_button_widget(
+                                    theme,
+                                    crate::i18n::tr(ctx, "Paste again", "再次粘贴"),
                                     )
                                     .can_activate(can),
-                                )
-                                .clicked()
-                            {
+                            );
+                            if !can {
+                                crate::ui::chrome::disabled_reason_hint(ui, theme, reason);
+                            }
+                            let resp = crate::ui::chrome::disabled_action_with_reason(
+                                resp, can, reason,
+                            );
+                            if resp.clicked() {
                                 if let Some(entry) = results.get(self.selected) {
                                     action = PasteHistoryAction::Apply(entry.text.clone());
                                 }

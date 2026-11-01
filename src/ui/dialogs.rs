@@ -55,8 +55,8 @@ impl NewSessionDialog {
         crate::ui::chrome::modal_window("legacy_new_session", theme, ctx)
             .open(&mut open)
             .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
-            .resizable(true)
-            .default_size(modal_sz)
+            .resizable(false)
+            .fixed_size(modal_sz)
             .show(ctx, |ui| {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                     if crate::ui::chrome::modal_header(

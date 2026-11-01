@@ -467,8 +467,14 @@ impl MistTermApp {
         }
         let margin = theme.toast_screen_margin();
         let screen = ctx.content_rect();
+        // #282：右 dock(云同步/团队面板)占位时把通知移到 dock 左侧，避免盖住底部操作区。
+        let mut toast_left = screen.max.x - size.x - margin;
+        if let Some(dock_left) = self.right_dock_outer_left_x {
+            toast_left = toast_left.min(dock_left - size.x - margin);
+        }
+        toast_left = toast_left.max(screen.min.x + margin);
         let pos = egui::pos2(
-            screen.max.x - size.x - margin,
+            toast_left,
             screen.max.y - size.y - margin,
         );
         // 必须 fixed_pos + 限制尺寸：否则 Area 默认可点区会铺满从原点到右下，左侧菜单全部点不穿。

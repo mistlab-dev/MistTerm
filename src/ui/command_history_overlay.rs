@@ -7,8 +7,8 @@ use crate::ui::theme::Theme;
 use eframe::egui;
 use std::collections::HashSet;
 
-const PANEL_W: f32 = 540.0;
-const PANEL_H: f32 = 420.0;
+const PANEL_W: f32 = 720.0;
+const PANEL_H: f32 = 520.0;
 const ANCHOR_INSET: f32 = 12.0;
 
 pub struct CommandHistoryOverlay {
@@ -147,7 +147,6 @@ impl CommandHistoryOverlay {
         });
 
         let content_w = PANEL_W - 32.0;
-        let cols = HistoryTableCols::from_content_w(content_w);
         let mut open = self.open;
         let checked_count = results
             .iter()
@@ -165,6 +164,11 @@ impl CommandHistoryOverlay {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                     ui.set_width(content_w);
                     ui.set_max_width(content_w);
+                    // 会话列宽按结果里的最长会话名测量，避免名称被截断。
+                    let cols = HistoryTableCols::from_content_w(
+                        content_w,
+                        measure_session_width(ui, theme, &results),
+                    );
                     if crate::ui::chrome::modal_header(
                         ui,
                         theme,
@@ -189,8 +193,8 @@ impl CommandHistoryOverlay {
                                 " 继续 · Esc 关闭 · 勾选≥2 条组成片段)",
                             ),
                         ))
-                        .size(theme.font_size_small())
-                        .color(theme.text_tertiary()),
+                        .size(theme.font_size_panel_title())
+                        .color(theme.text_secondary()),
                     );
                     ui.add_space(theme.spacing_sm());
 
@@ -408,12 +412,27 @@ impl CommandHistoryOverlay {
                                     .can_activate(can_compose),
                                 );
                                 if !can_compose {
-                                    compose_resp.on_hover_text(crate::i18n::tr(
+                                    // 禁用态旁给出可见引导，而不是只靠 tooltip。
+                                    crate::ui::chrome::disabled_reason_hint(
+                                        ui,
+                                        theme,
+                                        crate::i18n::tr(
+                                            ctx,
+                                            "Check at least 2 to compose",
+                                            "勾选 2 条以上可组成片段",
+                                        ),
+                                    );
+                                }
+                                let compose_resp = crate::ui::chrome::disabled_action_with_reason(
+                                    compose_resp,
+                                    can_compose,
+                                    crate::i18n::tr(
                                         ctx,
                                         "Select at least 2 commands to compose a snippet",
                                         "至少勾选 2 条命令才能组成片段",
-                                    ));
-                                } else if compose_resp.clicked() {
+                                    ),
+                                );
+                                if can_compose && compose_resp.clicked() {
                                     let mut picked: Vec<HistoryEntry> = results
                                         .iter()
                                         .filter(|e| self.checked.contains(&entry_key(e)))
@@ -453,6 +472,21 @@ impl CommandHistoryOverlay {
 
         action
     }
+}
+
+/// 按当前结果中最长的会话名估算列宽(加左右留白，上限 [`HistoryTableCols::SESSION_MAX_W`])。
+fn measure_session_width(ui: &egui::Ui, theme: &Theme, results: &[HistoryEntry]) -> f32 {
+    let font = egui::FontId::proportional(theme.font_size_small());
+    let mut w = HistoryTableCols::SESSION_W;
+    for entry in results {
+        if let Some(name) = entry.session_name.as_deref().filter(|n| !n.is_empty()) {
+            let galley =
+                ui.painter()
+                    .layout_no_wrap(name.to_owned(), font.clone(), theme.text_secondary());
+            w = w.max(galley.size().x + 12.0);
+        }
+    }
+    w.min(HistoryTableCols::SESSION_MAX_W)
 }
 
 fn entry_key(e: &HistoryEntry) -> String {
@@ -497,16 +531,17 @@ struct HistoryTableCols {
 
 impl HistoryTableCols {
     const MARKER_W: f32 = 28.0;
-    const SESSION_W: f32 = 72.0;
+    const SESSION_W: f32 = 64.0;
+    const SESSION_MAX_W: f32 = 180.0;
     const STATUS_W: f32 = 48.0;
     const ACTIONS_W: f32 = 28.0;
     const ROW_H: f32 = 28.0;
     const COLS: usize = 5;
 
-    fn from_content_w(w: f32) -> Self {
+    fn from_content_w(w: f32, session_w: f32) -> Self {
         let w = w.max(1.0);
         let marker = Self::MARKER_W;
-        let session = Self::SESSION_W;
+        let session = session_w.clamp(Self::SESSION_W, Self::SESSION_MAX_W);
         let status = Self::STATUS_W;
         let actions = Self::ACTIONS_W;
         let command = (w - marker - session - status - actions).max(96.0);
@@ -702,7 +737,7 @@ fn history_row(
                 }
             }
             1 => {
-                cell.add(
+                let resp = cell.add(
                     egui::Label::new(
                         egui::RichText::new(entry.display_command())
                             .font(egui::FontId::monospace(theme.font_size_normal()))
@@ -710,9 +745,11 @@ fn history_row(
                     )
                     .truncate(),
                 );
+                // 列内放不下时，悬停可看完整命令。
+                resp.on_hover_text(&entry.command);
             }
             2 => {
-                cell.add(
+                let resp = cell.add(
                     egui::Label::new(
                         egui::RichText::new(session_label)
                             .size(theme.font_size_small())
@@ -720,6 +757,9 @@ fn history_row(
                     )
                     .truncate(),
                 );
+                if session_label != "—" {
+                    resp.on_hover_text(session_label);
+                }
             }
             3 => {
                 cell.label(

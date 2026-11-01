@@ -38,8 +38,8 @@ pub fn show_fragment_analytics_modal(
         .open(&mut dialog_open)
         .default_pos(crate::ui::layout_util::modal_center_pos(ctx, modal_sz))
         .movable(true)
-        .resizable(true)
-        .default_size(modal_sz)
+        .resizable(false)
+        .fixed_size(modal_sz)
         .show(ctx, |ui| {
             crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                 if crate::ui::chrome::modal_header(

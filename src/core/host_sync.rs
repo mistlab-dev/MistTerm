@@ -54,20 +54,20 @@ impl UnlockError {
     pub fn text(self, zh: bool) -> String {
         match (self, zh) {
             (Self::WrongPassphrase, true) => {
-                "同步口令不正确，云端凭证未改写。请重试，或改用恢复码。".into()
+                "加密密码不正确，云端凭证未改写。请重试，或改用备用解锁码。".into()
             }
             (Self::WrongPassphrase, false) => {
-                "Sync passphrase is wrong. Cloud credentials were not overwritten. Try again, or use the recovery code.".into()
+                "Encryption password is wrong. Cloud credentials were not overwritten. Try again, or use the backup unlock code.".into()
             }
-            (Self::WrongRecoveryCode, true) => "恢复码不正确，云端凭证未改写。".into(),
+            (Self::WrongRecoveryCode, true) => "备用解锁码不正确，云端凭证未改写。".into(),
             (Self::WrongRecoveryCode, false) => {
-                "Recovery code is wrong. Cloud credentials were not overwritten.".into()
+                "Backup unlock code is wrong. Cloud credentials were not overwritten.".into()
             }
             (Self::NoRecoveryCode, true) => {
-                "这份凭证没有恢复码，只能用当初设置的同步口令解封。".into()
+                "这份凭证没有备用解锁码，只能用当初设置的加密密码解封。".into()
             }
             (Self::NoRecoveryCode, false) => {
-                "This credential envelope has no recovery code. Only the original sync passphrase can unwrap it.".into()
+                "This credential envelope has no backup unlock code. Only the original encryption password can unwrap it.".into()
             }
             (Self::CorruptEnvelope, true) => {
                 "云端凭证信封无法识别或已损坏，本机数据未改写。".into()
@@ -121,22 +121,22 @@ pub fn format_notes(notes: &[SyncNote], zh: bool) -> String {
                 format!("Credential \"{label}\" differs with the same timestamp. Local and cloud copies were both kept.")
             }
             (SyncNote::CredPassphraseRejected, true) => {
-                "同步口令不正确。已用恢复码把云端凭证应用到本机，未改写云端信封。".into()
+                "加密密码不正确。已用备用解锁码把云端凭证应用到本机，未改写云端信封。".into()
             }
             (SyncNote::CredPassphraseRejected, false) => {
-                "Sync passphrase was wrong. Cloud credentials were applied locally with the recovery code and the cloud envelope was not rewritten.".into()
+                "Encryption password was wrong. Cloud credentials were applied locally with the backup unlock code and the cloud envelope was not rewritten.".into()
             }
             (SyncNote::CredRecoveryReadOnly, true) => {
-                "已用恢复码解封并应用到本机。要上传本机改动，请再设置同步口令。".into()
+                "已用备用解锁码解封并应用到本机。要上传本机改动，请再设置加密密码。".into()
             }
             (SyncNote::CredRecoveryReadOnly, false) => {
-                "Unwrapped with the recovery code and applied locally. Set a sync passphrase before uploading local changes.".into()
+                "Unwrapped with the backup unlock code and applied locally. Set an encryption password before uploading local changes.".into()
             }
             (SyncNote::CredSkippedNoKey, true) => {
-                "已开启凭证同步，但还没有同步口令或恢复码，本次没有上传或下载凭证。".into()
+                "已开启凭证同步，但还没有加密密码或备用解锁码，本次没有上传或下载凭证。".into()
             }
             (SyncNote::CredSkippedNoKey, false) => {
-                "Credential sync is on, but no sync passphrase or recovery code is set. Credentials were not uploaded or downloaded.".into()
+                "Credential sync is on, but no encryption password or backup unlock code is set. Credentials were not uploaded or downloaded.".into()
             }
             (SyncNote::HostsUploaded, true) => "主机列表已写回云端。".into(),
             (SyncNote::HostsUploaded, false) => "Host list uploaded.".into(),
@@ -2023,9 +2023,9 @@ pub fn write_export_files(
 ) -> Result<Vec<String>, String> {
     if include_credentials && passphrase.is_empty() {
         return Err(if zh {
-            "导出凭证需要同步口令。云端和导出包都不用本机 device_key 加密。".into()
+            "导出凭证需要加密密码。云端和导出包都不用本机 device_key 加密。".into()
         } else {
-            "Exporting credentials needs a sync passphrase. The cloud and the pack do not use this machine's device_key.".into()
+            "Exporting credentials needs an encryption password. The cloud and the pack do not use this machine's device_key.".into()
         });
     }
     let mut wrote = Vec::new();
@@ -2294,7 +2294,7 @@ mod tests {
         assert_eq!(opened.session_secrets[0].password, "pw-1");
         let err = open_credentials(&env, "nope", "").unwrap_err();
         assert_eq!(err, UnlockError::WrongPassphrase);
-        assert!(err.text(true).contains("同步口令不正确"));
+        assert!(err.text(true).contains("加密密码不正确"));
         assert!(err.text(true).contains("未改写"));
         let via_recovery = open_credentials(&env, "nope", "abcd-ef01").unwrap();
         assert_eq!(via_recovery.session_secrets[0].password, "pw-1");
@@ -2322,7 +2322,7 @@ mod tests {
         );
         assert!(UnlockError::WrongRecoveryCode
             .text(true)
-            .contains("恢复码不正确"));
+            .contains("备用解锁码不正确"));
     }
 
     #[test]
@@ -2465,7 +2465,7 @@ mod tests {
         assert_eq!(imported.sessions[0].host, "10.0.0.8");
         assert_eq!(imported.sessions[0].password, "pack-secret");
         let bad = import_portable_pack(dir.path(), &[], &[], "wrong", "", true, true).unwrap_err();
-        assert!(bad.contains("同步口令不正确"));
+        assert!(bad.contains("加密密码不正确"));
     }
 
     #[test]

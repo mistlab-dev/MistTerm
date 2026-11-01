@@ -156,9 +156,13 @@ impl SessionLogDialog {
         let r = ctx.content_rect();
         let sw = r.width().max(360.0);
         let sh = r.height().max(280.0);
+        // 高度按内容行数自适应：内容少时不留大段空白，内容多时仍保证可读区域。
+        let line_h = theme.font_size_small() + 4.0;
+        let log_h = ((display_for_view.lines().count().max(1) as f32) * line_h + 16.0)
+            .clamp(120.0, (sh * 0.55).clamp(200.0, 460.0));
         let modal_size = egui::vec2(
             (sw * 0.52).clamp(520.0, 860.0),
-            (sh * 0.60).clamp(420.0, 700.0),
+            (log_h + 250.0).clamp(320.0, 700.0).min(sh * 0.85),
         );
         let default_pos = egui::pos2(
             r.min.x + (sw - modal_size.x) * 0.5,
@@ -225,11 +229,12 @@ impl SessionLogDialog {
                                     }
                                 },
                             );
-                            if chrome::panel_action_icon_button(
+                            if chrome::panel_action_button_with_icon_ex(
                                 ui,
                                 theme,
                                 crate::ui::icons::IconId::Refresh,
                                 crate::i18n::tr(ctx, "Refresh", "刷新"),
+                                true,
                             )
                                 .clicked() {
                                 self.log_files =
@@ -240,34 +245,26 @@ impl SessionLogDialog {
                     }
                     ui.add_space(theme.spacing_sm());
                     let log_h = 280.0_f32;
-                    // #232：跟模态正文同色，去掉单独灰 inset；发丝描边标出滚动区。
-                    egui::Frame::NONE
-                        .fill(theme.color_panel_surface())
-                        .stroke(egui::Stroke::new(
-                            theme.hairline_width(ui.ctx()),
-                            theme.color_panel_header_divider(),
-                        ))
-                        .corner_radius(4)
-                        .inner_margin(egui::Margin::symmetric(8, 6))
-                        .show(ui, |ui| {
-                            ui.set_width(content_w);
-                            egui::ScrollArea::vertical()
-                                .id_salt("session_log_body_scroll")
-                                .max_height(log_h)
-                                .stick_to_bottom(false)
-                                .auto_shrink([true, false])
-                                .show(ui, |ui| {
-                                    let w = layout_util::textedit_width_in_parent(ui, 12.0);
-                                    ui.set_width(w);
-                                    chrome::selectable_readonly_monospace(
-                                        ui,
-                                        theme,
-                                        display_for_view.as_str(),
-                                        theme.font_size_small(),
-                                        w,
-                                    );
-                                });
-                        });
+                    // 与右 dock 卡片统一：内嵌区底色/圆角/内边距走主题 token。
+                    theme.frame_inset_section().show(ui, |ui| {
+                        ui.set_width(content_w);
+                        egui::ScrollArea::vertical()
+                            .id_salt("session_log_body_scroll")
+                            .max_height(log_h)
+                            .stick_to_bottom(false)
+                            .auto_shrink([true, false])
+                            .show(ui, |ui| {
+                                let w = layout_util::textedit_width_in_parent(ui, 12.0);
+                                ui.set_width(w);
+                                chrome::selectable_readonly_monospace(
+                                    ui,
+                                    theme,
+                                    display_for_view.as_str(),
+                                    theme.font_size_small(),
+                                    w,
+                                );
+                            });
+                    });
                     ui.add_space(theme.spacing_md());
                     ui.horizontal(|ui| {
                         ui.set_width(content_w);
@@ -280,14 +277,15 @@ impl SessionLogDialog {
                             |ui| {
                                 ui.set_max_width(caption_w);
                                 ui.add(
-                                    egui::Label::new(chrome::rich_caption(
-                                        theme,
-                                        crate::i18n::tr(
+                                    egui::Label::new(
+                                        egui::RichText::new(crate::i18n::tr(
                                             ctx,
                                             "Locally recorded terminal output (not live). Color codes are stripped; see the log file for raw content.",
                                             "本地录制的终端输出(非实时)。已去除颜色控制符；完整原始内容见日志文件。",
-                                        ),
-                                    ))
+                                        ))
+                                        .size(theme.font_size_panel_title())
+                                        .color(theme.text_secondary()),
+                                    )
                                     .wrap(),
                                 );
                             },
