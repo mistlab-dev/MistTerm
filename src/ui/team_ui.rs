@@ -164,17 +164,28 @@ pub fn paint_team_controls(
                 ui.label(chrome::rich_caption(theme, &service.status_line));
             }
         } else {
-            ui.label(
-                chrome::rich_caption(
-                    theme,
-                    i18n::tr(
-                        ctx,
-                        "Sign in with Google / GitHub in the browser tab MistTerm opens (wait for the success page), or use email/password below.",
-                        "用 Google / GitHub 时请在 MistTerm 打开的浏览器页完成授权(直到「登录成功」)；或下方用邮箱/密码。",
-                    ),
-                )
-                .color(theme.color_form_hint()),
-            );
+            // #279：授权说明改步骤式（1/2/3），避免一整段说明。
+            for line in [
+                i18n::tr(
+                    ctx,
+                    "1. Choose Google or GitHub below.",
+                    "1. 在下方选择 Google 或 GitHub。",
+                ),
+                i18n::tr(
+                    ctx,
+                    "2. Finish the authorization in the browser tab MistTerm opens, until you see the success page.",
+                    "2. 在 MistTerm 打开的浏览器页完成授权，直到看见「登录成功」页面。",
+                ),
+                i18n::tr(
+                    ctx,
+                    "3. Or sign in with email/password directly in the form below.",
+                    "3. 也可以直接用下方的邮箱/密码登录。",
+                ),
+            ] {
+                ui.label(
+                    chrome::rich_caption(theme, line).color(theme.color_form_hint()),
+                );
+            }
             ui.add_space(theme.spacing_xs());
 
             let oauth_busy = service.is_busy();
@@ -183,9 +194,11 @@ pub fn paint_team_controls(
             let half = ((pref_w.min(ui.available_width()) - gap) * 0.5).max(72.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = gap;
-                if chrome::panel_action_button_ex_min_w(
+                // #279：第三方登录按钮带品牌图标（复用 icons.rs 既有图标，不引新依赖）。
+                if chrome::panel_action_button_with_icon_ex_min_w(
                     ui,
                     theme,
+                    crate::ui::icons::IconId::Search,
                     i18n::tr(ctx, "Google", "Google"),
                     !oauth_busy,
                     half,
@@ -195,9 +208,10 @@ pub fn paint_team_controls(
                     service.spawn_oauth_login(OAuthProvider::Google);
                     action = TeamUiAction::LoginRequested;
                 }
-                if chrome::panel_action_button_ex_min_w(
+                if chrome::panel_action_button_with_icon_ex_min_w(
                     ui,
                     theme,
+                    crate::ui::icons::IconId::GitBranch,
                     i18n::tr(ctx, "GitHub", "GitHub"),
                     !oauth_busy,
                     half,
@@ -243,13 +257,30 @@ pub fn paint_team_controls(
             );
             ui.add_space(theme.spacing_xs());
 
-            chrome::form_checkbox_with_id(
+            // #279：账号类型改下拉（去掉反向复选框「关闭则用用户名」）。
+            chrome::form_field_label(
                 ui,
                 theme,
-                "use_email",
-                &mut form.use_email,
-                i18n::tr(ctx, "Sign in with email (off = username)", "使用邮箱登录(关闭则用用户名)"),
+                i18n::tr(ctx, "Account type", "账号类型"),
             );
+            let mut use_email = form.use_email;
+            let kind_text = if use_email {
+                i18n::tr(ctx, "Email", "邮箱")
+            } else {
+                i18n::tr(ctx, "Username", "用户名")
+            };
+            chrome::form_combo(
+                ui,
+                theme,
+                "login_account_kind",
+                kind_text,
+                pref_w.min(ui.available_width()),
+                |ui| {
+                    ui.selectable_value(&mut use_email, true, i18n::tr(ctx, "Email", "邮箱"));
+                    ui.selectable_value(&mut use_email, false, i18n::tr(ctx, "Username", "用户名"));
+                },
+            );
+            form.use_email = use_email;
             chrome::form_field_label(
                 ui,
                 theme,
@@ -279,14 +310,30 @@ pub fn paint_team_controls(
                 true,
             );
 
-            let login_w = pref_w.min(ui.available_width()).max(theme.size_control_btn_min_w());
-            if chrome::panel_action_primary_button_with_icon_ex_min_w(
+            // #279：「保持登录状态」底层没有单独字段：团队会话本来就由加密的
+            // team_state.json + 系统钥匙串令牌持久化，这里只做 UI 态（默认勾选），
+            // 不影响登录请求；如日后需要「退出后清除令牌」再补底层字段。
+            let keep_id = ui.make_persistent_id("team_keep_signed_in");
+            let mut keep_signed_in = ui
+                .data_mut(|d| d.get_persisted::<bool>(keep_id))
+                .unwrap_or(true);
+            if ui
+                .checkbox(
+                    &mut keep_signed_in,
+                    i18n::tr(ctx, "Stay signed in on this computer", "保持登录状态（这台电脑）"),
+                )
+                .changed()
+            {
+                ui.data_mut(|d| d.insert_persisted(keep_id, keep_signed_in));
+            }
+
+            // #279：登录按钮不再通栏。
+            if chrome::panel_action_primary_button_with_icon_ex(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Check,
                 i18n::tr(ctx, "Sign in", "登录"),
                 !oauth_busy,
-                login_w,
             )
             .clicked()
             {

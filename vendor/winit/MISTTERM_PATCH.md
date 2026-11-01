@@ -9,6 +9,9 @@ Changed files:
 - `src/platform_impl/ime_bypass.rs` (shared Control-chord policy, used by macOS; unit-tested on every OS)
 - `src/platform_impl/redraw_guard.rs` (shared illegal-size predicate for #188; unit-tested on every OS)
 - `src/platform/macos.rs` (`set_caught_draw_rect_panic_hook` for #188)
+- `build.rs` — same as upstream winit #3682: register cfg_aliases custom cfgs with `rustc-check-cfg` (required since rustc 1.80; not an `allow`)
+- `src/lib.rs` — drop obsolete `feature = "cargo-clippy"` gate (not a real Cargo feature)
+- `src/event_loop.rs` — use `target_os = "android"` instead of undeclared `cfg(android)`
 
 ## Why
 

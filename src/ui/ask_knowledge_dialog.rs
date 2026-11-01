@@ -30,15 +30,15 @@ pub fn show_ask_knowledge_modal(
     *action = AskKnowledgeUiAction::None;
     let mut dialog_open = *open;
     let mut should_close = false;
-    let modal_sz = egui::vec2(640.0, 520.0);
+    let modal_sz = layout_util::modal_ask_knowledge_size(ctx, searched, hits.len());
     let title = crate::i18n::tr(ctx, "Ask: how do we…", "问：我们怎么……");
 
     chrome::modal_window("ask_knowledge", theme, ctx)
         .open(&mut dialog_open)
         .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
         .movable(true)
-        .resizable(true)
-        .default_size(modal_sz)
+        .resizable(false)
+        .fixed_size(modal_sz)
         .show(ctx, |ui| {
             chrome::modal_content_frame(theme).show(ui, |ui| {
                 if chrome::modal_header(ui, theme, title, theme.font_size_modal_title()) {
@@ -85,7 +85,7 @@ pub fn show_ask_knowledge_modal(
                 ui.add_space(theme.spacing_sm());
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .max_height(layout_util::dialog_scroll_max_height(ctx, 280.0))
+                    .max_height((modal_sz.y - 190.0).max(48.0))
                     .show(ui, |ui| {
                         if !searched {
                             ui.label(

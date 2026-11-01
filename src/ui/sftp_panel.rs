@@ -4120,10 +4120,13 @@ impl SftpPanel {
                     ) {
                         self.upload_selected_local(&handle, ctx);
                     }
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.local_filter)
-                            .hint_text(crate::i18n::tr(ctx, "Filter by name", "按名字找"))
-                            .desired_width(ui.available_width().max(48.0)),
+                    crate::ui::chrome::search_field(
+                        ui,
+                        theme,
+                        egui::Id::new("sftp_local_filter_toolbar"),
+                        &mut self.local_filter,
+                        crate::i18n::tr(ctx, "Filter by name", "按名字找"),
+                        ui.available_width().max(48.0),
                     );
                 });
             } else {
@@ -4225,10 +4228,13 @@ impl SftpPanel {
                             .small()
                             .color(theme.text_tertiary()),
                     );
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.local_filter)
-                            .hint_text(crate::i18n::tr(ctx, "Name…", "文件名…"))
-                            .desired_width(ui.available_width().max(80.0)),
+                    crate::ui::chrome::search_field(
+                        ui,
+                        theme,
+                        egui::Id::new("sftp_local_filter_below"),
+                        &mut self.local_filter,
+                        crate::i18n::tr(ctx, "Name…", "文件名…"),
+                        ui.available_width().max(80.0),
                     );
                 });
             }
@@ -4593,10 +4599,13 @@ impl SftpPanel {
                     ) {
                         self.begin_rename_selected();
                     }
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.remote_filter)
-                            .hint_text(crate::i18n::tr(ctx, "Filter by name", "按名字找"))
-                            .desired_width(ui.available_width().max(48.0)),
+                    crate::ui::chrome::search_field(
+                        ui,
+                        theme,
+                        egui::Id::new("sftp_remote_filter_toolbar"),
+                        &mut self.remote_filter,
+                        crate::i18n::tr(ctx, "Filter by name", "按名字找"),
+                        ui.available_width().max(48.0),
                     );
                 });
             } else {
@@ -4711,10 +4720,13 @@ impl SftpPanel {
                             .small()
                             .color(theme.text_tertiary()),
                     );
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.remote_filter)
-                            .hint_text(crate::i18n::tr(ctx, "Name…", "文件名…"))
-                            .desired_width(ui.available_width().max(80.0)),
+                    crate::ui::chrome::search_field(
+                        ui,
+                        theme,
+                        egui::Id::new("sftp_remote_filter_below"),
+                        &mut self.remote_filter,
+                        crate::i18n::tr(ctx, "Name…", "文件名…"),
+                        ui.available_width().max(80.0),
                     );
                 });
             }
@@ -5112,6 +5124,8 @@ impl SftpPanel {
             return;
         }
         ui.add_space(theme.spacing_xs());
+        let hide_tip = crate::i18n::tr(ctx, "Hide this tip", "关闭这条提示");
+        let mut dismissed = false;
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(crate::i18n::tr(
@@ -5123,21 +5137,19 @@ impl SftpPanel {
                 .color(theme.text_tertiary()),
             );
             let dismiss = crate::i18n::tr(ctx, "Got it", "知道了");
-            if ui
-                .small_button(dismiss)
-                .on_hover_text(crate::i18n::tr(
-                    ctx,
-                    "Hide this tip",
-                    "关闭这条提示",
-                ))
-                .clicked()
-            {
-                self.drag_hint_dismissed = true;
-                ctx.data_mut(|d| {
-                    d.insert_persisted(egui::Id::new(PERSIST_ID), true);
-                });
+            if ui.small_button(dismiss).on_hover_text(hide_tip).clicked() {
+                dismissed = true;
+            }
+            if ui.small_button("×").on_hover_text(hide_tip).clicked() {
+                dismissed = true;
             }
         });
+        if dismissed {
+            self.drag_hint_dismissed = true;
+            ctx.data_mut(|d| {
+                d.insert_persisted(egui::Id::new(PERSIST_ID), true);
+            });
+        }
     }
 
     fn paint_flux_workspace(
@@ -5154,55 +5166,85 @@ impl SftpPanel {
             let can_upload = self.has_local_upload_selection();
             let can_download = self.has_remote_download_selection();
             let can_compare = !self.busy;
-            if crate::ui::chrome::panel_action_button_with_icon_ex(
+            let upload_resp = crate::ui::chrome::panel_action_button_with_icon_ex(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Upload,
                 crate::i18n::tr(ctx, "Upload", "上传"),
                 can_upload,
-            )
-            .on_hover_text(crate::i18n::tr(
-                ctx,
-                "Upload selected local item(s) to the remote folder",
-                "把所选本机项上传到远端目录",
-            ))
-            .clicked()
-                && can_upload
-            {
+            );
+            let upload_resp = if can_upload {
+                upload_resp.on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Upload selected local item(s) to the remote folder",
+                    "把所选本机项上传到远端目录",
+                ))
+            } else {
+                crate::ui::chrome::disabled_action_with_reason(
+                    upload_resp,
+                    false,
+                    crate::i18n::tr(
+                        ctx,
+                        "Select local file(s) to upload first",
+                        "先在本机列表勾选要上传的文件",
+                    ),
+                )
+            };
+            if upload_resp.clicked() && can_upload {
                 self.upload_selected_local(handle, ctx);
             }
-            if crate::ui::chrome::panel_action_button_with_icon_ex(
+            let download_resp = crate::ui::chrome::panel_action_button_with_icon_ex(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Download,
                 crate::i18n::tr(ctx, "Download", "下载"),
                 can_download,
-            )
-            .on_hover_text(crate::i18n::tr(
-                ctx,
-                "Download selected remote item(s) to the local folder",
-                "把所选远端项下载到本机目录",
-            ))
-            .clicked()
-                && can_download
-            {
+            );
+            let download_resp = if can_download {
+                download_resp.on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Download selected remote item(s) to the local folder",
+                    "把所选远端项下载到本机目录",
+                ))
+            } else {
+                crate::ui::chrome::disabled_action_with_reason(
+                    download_resp,
+                    false,
+                    crate::i18n::tr(
+                        ctx,
+                        "Select remote file(s) to download first",
+                        "先在远端列表勾选要下载的文件",
+                    ),
+                )
+            };
+            if download_resp.clicked() && can_download {
                 self.download_selected_remote(handle, ctx);
             }
-            if crate::ui::chrome::panel_action_button_with_icon_ex(
+            let compare_resp = crate::ui::chrome::panel_action_button_with_icon_ex(
                 ui,
                 theme,
                 crate::ui::icons::IconId::Search,
                 crate::i18n::tr(ctx, "Compare folders", "对比目录"),
                 can_compare,
-            )
-            .on_hover_text(crate::i18n::tr(
-                ctx,
-                "Compare local and remote folder differences",
-                "对比本机与远端目录差异",
-            ))
-            .clicked()
-                && can_compare
-            {
+            );
+            let compare_resp = if can_compare {
+                compare_resp.on_hover_text(crate::i18n::tr(
+                    ctx,
+                    "Compare local and remote folder differences",
+                    "对比本机与远端目录差异",
+                ))
+            } else {
+                crate::ui::chrome::disabled_action_with_reason(
+                    compare_resp,
+                    false,
+                    crate::i18n::tr(
+                        ctx,
+                        "Another file operation is running, try again when it finishes",
+                        "正在执行其他文件操作，完成后再对比",
+                    ),
+                )
+            };
+            if compare_resp.clicked() && can_compare {
                 self.open_dir_diff(handle, ctx);
             }
         });
@@ -5366,7 +5408,7 @@ impl SftpPanel {
         );
         let inner = rect.shrink2(egui::vec2(8.0, 4.0));
         let mut child = ui.child_ui(inner, egui::Layout::left_to_right(egui::Align::Center));
-        crate::ui::chrome::form_singleline_field(&mut child, theme, id, text, hint, inner.width(), false);
+        crate::ui::chrome::search_field(&mut child, theme, id, text, hint, inner.width());
     }
 
     fn paint_flux_crumbs(

@@ -3352,7 +3352,7 @@ impl AiPanel {
             ui.spacing_mut().item_spacing.x = 6.0;
             if ui
                 .add_enabled_ui(can_type, |ui| {
-                    crate::ui::chrome::panel_toolbar_icon_button(
+                    crate::ui::chrome::panel_ai_action_icon_button(
                         ui,
                         theme,
                         IconId::TerminalPrompt,
@@ -3366,7 +3366,7 @@ impl AiPanel {
             }
             if ui
                 .add_enabled_ui(can_type, |ui| {
-                    crate::ui::chrome::panel_toolbar_icon_button(
+                    crate::ui::chrome::panel_ai_action_icon_button(
                         ui,
                         theme,
                         IconId::Attachment,
@@ -3381,7 +3381,7 @@ impl AiPanel {
             let mut attach_failure_clicked = false;
             if ui
                 .add_enabled_ui(can_type, |ui| {
-                    crate::ui::chrome::panel_toolbar_icon_button(
+                    crate::ui::chrome::panel_ai_action_icon_button(
                         ui,
                         theme,
                         IconId::Warning,
@@ -3399,7 +3399,7 @@ impl AiPanel {
             let mut postmortem_clicked = false;
             if ui
                 .add_enabled_ui(can_type, |ui| {
-                    crate::ui::chrome::panel_toolbar_icon_button(
+                    crate::ui::chrome::panel_ai_action_icon_button(
                         ui,
                         theme,
                         IconId::File,

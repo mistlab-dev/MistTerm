@@ -48,7 +48,7 @@ pub struct CloudSyncPanel {
     last_panel_slot_rect: Option<egui::Rect>,
     passphrase_input: String,
     recovery_input: String,
-    /// 刚生成、需要用户抄走的恢复码。本机另有 device_key 副本，云端没有。
+    /// 刚生成、需要用户抄走的备用解锁码。本机另有 device_key 副本，云端没有。
     recovery_reveal: String,
     sync_rx: Option<Receiver<SyncOutcome>>,
     login_sync_armed: bool,
@@ -195,9 +195,9 @@ impl CloudSyncPanel {
         let pass = self.passphrase_input.trim().to_string();
         if pass.is_empty() {
             self.push_toast_error(if zh {
-                "请先输入同步口令。口令不会上传，云端只保存密文。".into()
+                "请先输入加密密码。密码不会上传，云端只保存密文。".into()
             } else {
-                "Enter a sync passphrase first. It is not uploaded; the cloud stores ciphertext only.".into()
+                "Enter the encryption password first. It is not uploaded; the cloud stores ciphertext only.".into()
             });
             return;
         }
@@ -212,14 +212,14 @@ impl CloudSyncPanel {
         key.save();
         self.message = if zh {
             if rotated {
-                "同步口令已更新。恢复码未变；请保管下面的恢复码。云端解封不依赖本机密钥。".into()
+                "加密密码已更新。备用解锁码未变；请保管下面的备用解锁码。云端解封不依赖本机密钥。".into()
             } else {
-                "已保存同步口令，并生成恢复码。请立即抄下恢复码。丢失口令和恢复码后，云端凭证无法解开，本机数据不会被删。".into()
+                "已保存加密密码，并生成备用解锁码。请立即抄下备用解锁码。两者都丢失后，云端凭证无法解开，本机数据不会被删。".into()
             }
         } else if rotated {
-            "Sync passphrase updated. The recovery code is unchanged. Cloud unwrap does not use this machine's local key.".into()
+            "Encryption password updated. The backup unlock code is unchanged. Cloud unwrap does not use this machine's local key.".into()
         } else {
-            "Sync passphrase saved and a recovery code generated. Copy the recovery code now. If both are lost, cloud credentials cannot be unwrapped. Local data is not deleted.".into()
+            "Encryption password saved and a backup unlock code generated. Copy the backup unlock code now. If both are lost, cloud credentials cannot be unwrapped. Local data is not deleted.".into()
         };
     }
 
@@ -227,17 +227,17 @@ impl CloudSyncPanel {
         let key = SyncKeyMaterial::load().for_user(user_id);
         if key.recovery_code.is_empty() {
             self.message = if zh {
-                "还没有恢复码。先设置同步口令。".into()
+                "还没有备用解锁码。先设置加密密码。".into()
             } else {
-                "No recovery code yet. Set a sync passphrase first.".into()
+                "No backup unlock code yet. Set an encryption password first.".into()
             };
             return;
         }
         self.recovery_reveal = key.recovery_code;
         self.message = if zh {
-            "恢复码只存在本机加密存储和你抄下的副本里，服务器没有。".into()
+            "备用解锁码只存在本机加密存储和你抄下的副本里，服务器没有。".into()
         } else {
-            "The recovery code exists only in this machine's encrypted local store and in the copy you saved. The server does not have it.".into()
+            "The backup unlock code exists only in this machine's encrypted local store and in the copy you saved. The server does not have it.".into()
         };
     }
 
@@ -329,15 +329,28 @@ impl CloudSyncPanel {
                 &mut self.settings.sync_credentials,
                 loc.tr("Sync credentials (off by default)", "同步凭证（默认关闭）"),
             );
-            ui.label(
-                chrome::rich_caption(
-                    theme,
-                    loc.tr(
-                        "Off by default. When on, session passwords and vault secrets are sealed with your sync passphrase before upload. The server stores ciphertext only. You keep the passphrase and recovery code; if both are lost, cloud credentials cannot be opened and local data is not deleted. A wrong passphrase is reported and does not overwrite the cloud copy.",
-                        "默认关闭。开启后，会话密码和凭证库秘密先用同步口令加密再上传。服务器只存密文。口令和恢复码由你保管；两者都丢失时，云端凭证无法打开，本机数据不会被删。口令错误会提示，且不会覆盖云端副本。",
+            paint_bullet_list(
+                ui,
+                theme,
+                loc,
+                &[
+                    (
+                        "Credentials are off by default. Turn this on only if you want them uploaded.",
+                        "凭证默认不同步；只有你手动开启才会上传。",
                     ),
-                )
-                .color(theme.color_form_hint()),
+                    (
+                        "When on, session passwords and vault secrets are sealed with your encryption password before upload. The server stores ciphertext only.",
+                        "开启后，会话密码和凭证库秘密先用加密密码加封再上传，服务器只保存密文。",
+                    ),
+                    (
+                        "Keep the encryption password and backup unlock code yourself. If both are lost, cloud credentials cannot be opened; local data is not deleted.",
+                        "加密密码和备用解锁码由你自己保管。两者都丢失时，云端凭证打不开，本机数据不受影响。",
+                    ),
+                    (
+                        "A wrong password is reported and never overwrites the cloud copy.",
+                        "密码错误会提示，且不会覆盖云端副本。",
+                    ),
+                ],
             );
             egui::CollapsingHeader::new(loc.tr("Advanced", "高级"))
                 .id_source("cloud_sync_credentials_advanced")
@@ -354,7 +367,7 @@ impl CloudSyncPanel {
                     );
                 });
             ui.add_space(theme.spacing_xs());
-            chrome::form_field_label(ui, theme, loc.tr("Sync passphrase", "同步口令"));
+            chrome::form_field_label(ui, theme, loc.tr("Encryption password", "加密密码"));
             chrome::form_singleline_field(
                 ui,
                 theme,
@@ -365,7 +378,7 @@ impl CloudSyncPanel {
                 true,
             );
             ui.add_space(theme.spacing_xs());
-            chrome::form_field_label(ui, theme, loc.tr("Recovery code", "恢复码"));
+            chrome::form_field_label(ui, theme, loc.tr("Backup unlock code", "备用解锁码"));
             chrome::form_singleline_field(
                 ui,
                 theme,
@@ -396,7 +409,7 @@ impl CloudSyncPanel {
                     ui,
                     theme,
                     crate::ui::icons::IconId::Check,
-                    loc.tr("Save passphrase", "保存口令"),
+                    loc.tr("Save password", "保存密码"),
                     true,
                     half,
                 )
@@ -450,7 +463,7 @@ impl CloudSyncPanel {
                 ui,
                 theme,
                 crate::ui::icons::IconId::Key,
-                loc.tr("Show recovery code", "显示恢复码"),
+                loc.tr("Show backup unlock code", "显示备用解锁码"),
                 true,
                 ui.available_width(),
             )
@@ -469,8 +482,8 @@ impl CloudSyncPanel {
                     chrome::rich_caption(
                         theme,
                         loc.tr(
-                            "Copy this recovery code and store it outside this machine.",
-                            "请抄下恢复码，并保管在这台机器之外。",
+                            "Copy this backup unlock code and store it outside this machine.",
+                            "请抄下备用解锁码，并保管在这台机器之外。",
                         ),
                     )
                     .color(theme.red_color()),
@@ -495,23 +508,28 @@ impl CloudSyncPanel {
                     .strong()
                     .color(theme.green_color()),
             );
-            ui.label(chrome::rich_caption(
+            paint_bullet_list(
+                ui,
                 theme,
-                loc.tr(
-                    "Signed-in host list sync, optional end-to-end credentials, and an encrypted export pack.",
-                    "登录后同步主机列表，凭证可选手动端到端同步，另有加密导出包。",
-                ),
-            ));
-            chrome::settings_row_divider(ui, theme);
-            ui.label(
-                chrome::rich_caption(
-                    theme,
-                    loc.tr(
-                        "Local SSH does not require an account. Team sign-in tokens are never exported.",
-                        "未登录时本机 SSH 与原来一样。同步包不含团队登录令牌。",
+                loc,
+                &[
+                    (
+                        "Sync the host list after sign-in.",
+                        "登录后同步主机列表。",
                     ),
-                )
-                .color(theme.color_form_hint()),
+                    (
+                        "Optional end-to-end credential sync.",
+                        "凭证可选端到端同步。",
+                    ),
+                    (
+                        "Encrypted export/import pack.",
+                        "加密导出/导入同步包。",
+                    ),
+                    (
+                        "Local SSH works without an account; team tokens are never exported.",
+                        "未登录时本机 SSH 与原来一样；同步包不含团队登录令牌。",
+                    ),
+                ],
             );
         });
     }
@@ -834,8 +852,8 @@ impl CloudSyncPanel {
                         imported_portable_creds = true;
                         parts.push(
                             loc.tr(
-                                "Credentials: unwrapped from the pack passphrase",
-                                "凭证：已用同步口令从导出包解封",
+                                "Credentials: unwrapped with the pack encryption password",
+                                "凭证：已用加密密码从导出包解封",
                             )
                             .to_string(),
                         );
@@ -1247,15 +1265,20 @@ impl CloudSyncPanel {
                                 );
                             });
                             chrome::settings_row_divider(ui, theme);
-                            ui.label(
-                                chrome::rich_caption(
-                                    theme,
-                                    loc.tr(
-                                        "Hosts are exported without passwords or private key files. Credentials, if checked, are sealed with the sync passphrase—not this machine's local key.",
-                                        "主机会导出，不含密码和私钥文件。勾选凭证时用同步口令加密，不用本机密钥。",
+                            paint_bullet_list(
+                                ui,
+                                theme,
+                                loc,
+                                &[
+                                    (
+                                        "Hosts are exported without passwords or private key files.",
+                                        "主机会导出，不含密码和私钥文件。",
                                     ),
-                                )
-                                .color(theme.color_form_hint()),
+                                    (
+                                        "Credentials, if checked, are sealed with the encryption password—not this machine's local key.",
+                                        "勾选凭证时用加密密码加封，不用本机密钥。",
+                                    ),
+                                ],
                             );
                         });
 
@@ -1284,15 +1307,20 @@ impl CloudSyncPanel {
                                     loc.tr("0 = manual only", "填 0 表示仅手动同步"),
                                 ));
                             });
-                            ui.label(
-                                chrome::rich_caption(
-                                    theme,
-                                    loc.tr(
-                                        "Interval applies to host-list sync and team fragment sync while signed in. 0 = manual only. Export/import stays manual.",
-                                        "登录后，间隔用于主机列表同步和团队片段同步。填 0 表示仅手动。导出/导入始终手动。",
+                            paint_bullet_list(
+                                ui,
+                                theme,
+                                loc,
+                                &[
+                                    (
+                                        "Interval applies to host-list and team-fragment sync while signed in.",
+                                        "登录后，间隔用于主机列表同步和团队片段同步。",
                                     ),
-                                )
-                                .color(theme.color_form_hint()),
+                                    (
+                                        "0 = manual only; export/import always stays manual.",
+                                        "填 0 表示仅手动；导出/导入始终手动。",
+                                    ),
+                                ],
                             );
                             chrome::settings_row_divider(ui, theme);
                             chrome::form_checkbox(
@@ -1464,5 +1492,20 @@ impl CloudSyncPanel {
         }
 
         team_action
+    }
+}
+
+/// #282：说明文字统一为要点列表，每条单独一行。
+fn paint_bullet_list(
+    ui: &mut egui::Ui,
+    theme: &Theme,
+    loc: i18n::Locale,
+    items: &[(&'static str, &'static str)],
+) {
+    for (en, zh) in items {
+        ui.label(
+            chrome::rich_caption(theme, &format!("• {}", loc.tr(*en, *zh)))
+                .color(theme.color_form_hint()),
+        );
     }
 }
