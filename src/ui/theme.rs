@@ -444,6 +444,56 @@ impl Theme {
         self.amber.to_color32()
     }
 
+    /// 监控指标常态基色：CPU(暗夜蓝，其它主题绿)
+    #[inline]
+    pub fn metric_cpu_base_color(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgb(0x4a, 0x9e, 0xff) // #4a9eff
+        } else {
+            self.green_color()
+        }
+    }
+
+    /// 监控指标常态基色：内存(暗夜紫，其它主题 accent)
+    #[inline]
+    pub fn metric_mem_base_color(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgb(0xb4, 0x8e, 0xad) // #b48ead
+        } else {
+            self.accent_color()
+        }
+    }
+
+    /// 监控指标常态基色：磁盘(暗夜青绿，其它主题 accent)
+    #[inline]
+    pub fn metric_disk_base_color(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgb(0x4e, 0xc9, 0xb0) // #4ec9b0
+        } else {
+            self.accent_color()
+        }
+    }
+
+    /// 监控告警黄(暗夜 #dcb67a，其它主题 amber)
+    #[inline]
+    pub fn metric_warn_color(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgb(0xdc, 0xb6, 0x7a) // #dcb67a
+        } else {
+            self.amber_color()
+        }
+    }
+
+    /// 监控告警红(暗夜 #e05c5c，其它主题 red)
+    #[inline]
+    pub fn metric_alert_color(&self) -> Color32 {
+        if self.uses_modern_palette() {
+            Color32::from_rgb(0xe0, 0x5c, 0x5c) // #e05c5c
+        } else {
+            self.red_color()
+        }
+    }
+
     /// 监控进度条轨道底(暗夜用 inset，彩色主题用 border)
     #[inline]
     pub fn metric_bar_track_fill(&self) -> Color32 {
@@ -454,10 +504,16 @@ impl Theme {
         }
     }
 
-    /// CPU 使用率进度条 / 图例色
+    /// CPU 使用率进度条 / 图例色(暗夜基色 + 70/90 阶梯，其它主题沿用旧阶梯)
     pub fn metric_cpu_bar_color(&self, pct: f32) -> Color32 {
         if self.uses_modern_palette() {
-            self.metric_stress_bar_color(pct)
+            if pct >= 90.0 {
+                self.metric_alert_color()
+            } else if pct >= 70.0 {
+                self.metric_warn_color()
+            } else {
+                self.metric_cpu_base_color()
+            }
         } else if pct < 50.0 {
             self.green_color()
         } else if pct < 80.0 {
@@ -467,10 +523,16 @@ impl Theme {
         }
     }
 
-    /// 内存使用率进度条 / 图例色
+    /// 内存使用率进度条 / 图例色(暗夜基色 + 85/95 阶梯，其它主题沿用旧阶梯)
     pub fn metric_mem_bar_color(&self, pct: f32) -> Color32 {
         if self.uses_modern_palette() {
-            self.metric_stress_bar_color(pct)
+            if pct >= 95.0 {
+                self.metric_alert_color()
+            } else if pct >= 85.0 {
+                self.metric_warn_color()
+            } else {
+                self.metric_mem_base_color()
+            }
         } else if pct < 70.0 {
             self.accent_color()
         } else if pct < 90.0 {
@@ -480,10 +542,16 @@ impl Theme {
         }
     }
 
-    /// 磁盘使用率进度条 / 图例色
+    /// 磁盘使用率进度条 / 图例色(暗夜基色 + 85/95 阶梯，其它主题沿用旧阶梯)
     pub fn metric_disk_bar_color(&self, pct: f32) -> Color32 {
         if self.uses_modern_palette() {
-            self.metric_stress_bar_color(pct)
+            if pct >= 95.0 {
+                self.metric_alert_color()
+            } else if pct >= 85.0 {
+                self.metric_warn_color()
+            } else {
+                self.metric_disk_base_color()
+            }
         } else if pct < 70.0 {
             self.accent_color()
         } else if pct < 90.0 {
@@ -493,57 +561,42 @@ impl Theme {
         }
     }
 
-    /// 暗夜：常态 accent，高负载才 amber/red
-    fn metric_stress_bar_color(&self, pct: f32) -> Color32 {
-        if pct >= 90.0 {
-            self.red_color()
-        } else if pct >= 70.0 {
-            self.amber_color()
-        } else {
-            self.accent_alpha(180)
-        }
-    }
-
-    /// 历史图 CPU 折线
+    /// 历史图 CPU 折线(与进度条同源，避免图例/曲线双色系)
     #[inline]
     pub fn chart_cpu_color(&self) -> Color32 {
+        self.metric_cpu_base_color()
+    }
+
+    /// 历史图内存折线(与进度条同源)
+    #[inline]
+    pub fn chart_mem_color(&self) -> Color32 {
+        self.metric_mem_base_color()
+    }
+
+    /// 历史图磁盘折线(与进度条同源)
+    #[inline]
+    pub fn chart_disk_color(&self) -> Color32 {
+        self.metric_disk_base_color()
+    }
+
+    /// 历史图网络下行(暗夜蓝，其它主题绿)
+    #[inline]
+    pub fn chart_net_rx_color(&self) -> Color32 {
         if self.uses_modern_palette() {
-            self.accent_color()
+            Color32::from_rgb(0x4a, 0x9e, 0xff) // #4a9eff
         } else {
             self.green_color()
         }
     }
 
-    /// 历史图内存折线
+    /// 历史图网络上行(暗夜绿，其它主题 accent)
     #[inline]
-    pub fn chart_mem_color(&self) -> Color32 {
+    pub fn chart_net_tx_color(&self) -> Color32 {
         if self.uses_modern_palette() {
-            self.amber_color()
+            self.green_color()
         } else {
             self.accent_color()
         }
-    }
-
-    /// 历史图磁盘折线
-    #[inline]
-    pub fn chart_disk_color(&self) -> Color32 {
-        if self.uses_modern_palette() {
-            self.text_primary()
-        } else {
-            self.metric_disk_bar_color(72.0)
-        }
-    }
-
-    /// 历史图网络下行
-    #[inline]
-    pub fn chart_net_rx_color(&self) -> Color32 {
-        self.green_color()
-    }
-
-    /// 历史图网络上行
-    #[inline]
-    pub fn chart_net_tx_color(&self) -> Color32 {
-        self.accent_color()
     }
 
     /// 负载图 1 分钟
@@ -747,7 +800,9 @@ impl Theme {
     /// Slider 滑轨底色(egui 用 `widgets.inactive.bg_fill` 绘制轨道)
     #[inline]
     pub fn color_slider_rail_fill(&self) -> Color32 {
-        if self.is_light_theme() {
+        if self.uses_modern_palette() {
+            Color32::from_rgb(0x3c, 0x3c, 0x3c) // #3c3c3c
+        } else if self.is_light_theme() {
             Color32::from_rgba_unmultiplied(0, 0, 0, 52)
         } else if self.uses_solid_fg_palette() {
             Color32::from_rgba_unmultiplied(255, 255, 255, 28)
@@ -1063,13 +1118,13 @@ impl Theme {
         self.divider_stroke_color()
     }
 
-    /// 无边框 inset 卡片底(比面板亮 3~5%)
+    /// 无边框 inset 卡片底(暗夜用实色 bg_window，与连接列表同档；其它主题保持叠加)
     #[inline]
     pub fn color_inset_section_fill(&self) -> Color32 {
         if self.is_light_theme() {
             Color32::from_rgba_unmultiplied(0, 0, 0, 10)
         } else if self.uses_modern_palette() {
-            self.fg_high_alpha(14)
+            self.bg_window_color()
         } else {
             self.color_subtle_inset_fill()
         }

@@ -790,12 +790,12 @@ impl MonitorPanel {
 
     /// 显示负载标签
     fn load_chip(&self, ui: &mut egui::Ui, theme: &Theme, label: &str, value: f32) {
-        let color = if value < 1.0 {
-            theme.green_color()
+        let color = if value < 2.0 {
+            theme.text_primary()
         } else if value < 4.0 {
-            theme.amber_color()
+            theme.metric_warn_color()
         } else {
-            theme.red_color()
+            theme.metric_alert_color()
         };
 
         egui::Frame::none()
