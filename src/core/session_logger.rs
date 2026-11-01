@@ -32,6 +32,14 @@ impl Default for SessionLogSettings {
     }
 }
 
+/// 日志注解文案跟随 UI 语言(写盘时取进程级语言，无 egui Context)。
+fn log_tr(en: &'static str, zh: &'static str) -> &'static str {
+    match crate::i18n::current_language() {
+        crate::i18n::UiLanguage::Zh => zh,
+        crate::i18n::UiLanguage::En => en,
+    }
+}
+
 pub fn default_log_base_dir() -> PathBuf {
     let mut p = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
     p.push("mistterm");
@@ -171,7 +179,7 @@ impl SessionLogWriter {
     }
 
     pub fn write_connected(&mut self) {
-        self.write_system_line("<- session connected");
+        self.write_system_line(log_tr("<- session connected", "<- 会话已连接"));
         if !self.host_line.is_empty() {
             let line = format!(
                 "[MistTerm {}] {}\n",
@@ -225,7 +233,10 @@ impl SessionLogWriter {
             + count_subsequence(raw, b"\x1b8");
         for _ in 0..enters {
             if self.alt_screen_depth == 0 {
-                self.write_system_line("[fullscreen TUI started — screen refresh omitted from log]");
+                self.write_system_line(log_tr(
+                    "[fullscreen TUI started — screen refresh omitted from log]",
+                    "[全屏 TUI 开始 — 屏幕刷新不写入日志]",
+                ));
             }
             self.alt_screen_depth = self.alt_screen_depth.saturating_add(1);
         }
@@ -233,7 +244,7 @@ impl SessionLogWriter {
             if self.alt_screen_depth > 0 {
                 self.alt_screen_depth -= 1;
                 if self.alt_screen_depth == 0 {
-                    self.write_system_line("[fullscreen TUI ended]");
+                    self.write_system_line(log_tr("[fullscreen TUI ended]", "[全屏 TUI 结束]"));
                 }
             }
         }
@@ -246,10 +257,18 @@ impl SessionLogWriter {
         if self.tilde_pad_run == 1 {
             // 单条 `~` 多为 shell 行尾碎片，不落盘（避免每条命令后出现孤立 ~）
         } else {
+            let msg = match crate::i18n::current_language() {
+                crate::i18n::UiLanguage::Zh => {
+                    format!("[已跳过 {} 行 vim 波浪填充]", self.tilde_pad_run)
+                }
+                crate::i18n::UiLanguage::En => {
+                    format!("[skipped vim tilde padding x{}]", self.tilde_pad_run)
+                }
+            };
             let line = format!(
-                "[MistTerm {}] [skipped vim tilde padding x{}]\n",
+                "[MistTerm {}] {}\n",
                 Local::now().format("%Y-%m-%d %H:%M:%S"),
-                self.tilde_pad_run
+                msg
             );
             self.write_bytes(line.as_bytes());
         }
@@ -262,10 +281,18 @@ impl SessionLogWriter {
             self.dedupe_count = 0;
             return;
         }
+        let msg = match crate::i18n::current_language() {
+            crate::i18n::UiLanguage::Zh => {
+                format!("[已跳过 {} 行重复内容]", self.dedupe_count)
+            }
+            crate::i18n::UiLanguage::En => {
+                format!("[skipped duplicate lines x{}]", self.dedupe_count)
+            }
+        };
         let line = format!(
-            "[MistTerm {}] [skipped duplicate lines x{}]\n",
+            "[MistTerm {}] {}\n",
             Local::now().format("%Y-%m-%d %H:%M:%S"),
-            self.dedupe_count
+            msg
         );
         self.write_bytes(line.as_bytes());
         self.dedupe_line.clear();
@@ -478,7 +505,7 @@ impl SessionLogWriter {
         self.flush_pty_buffer(true);
         self.flush_line_compress_state();
         self.alt_screen_depth = 0;
-        self.write_system_line("<- session disconnected");
+        self.write_system_line(log_tr("<- session disconnected", "<- 会话已断开"));
         if let Some(ref mut w) = self.writer {
             let _ = w.flush();
         }
