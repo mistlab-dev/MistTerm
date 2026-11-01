@@ -6443,11 +6443,13 @@ impl MistTermApp {
         self.port_forward_panel.retain_live_sessions(&live_ssh);
         if let Some(t) = self.current_terminal() {
             if t.is_connected() {
-                if let (Some(ssh_id), Some(profile)) =
-                    (t.ssh_session_id(), self.active_tab_session_profile())
-                {
+                if let (Some(ssh_id), Some(profile), Some(mgr)) = (
+                    t.ssh_session_id(),
+                    self.active_tab_session_profile(),
+                    t.ssh_manager_clone(),
+                ) {
                     self.port_forward_panel
-                        .tick_active_session(ssh_id, &profile);
+                        .tick_active_session(ssh_id, &profile, &mgr);
                 }
             }
         }
@@ -6493,9 +6495,7 @@ impl MistTermApp {
             });
     }
 
-    /// 停止运行时转发后，把该转发从会话配置文本中删除（#91）：
-    /// 否则重连时 `terminal_connect_session` 重新解析 profile 文本，
-    /// 被用户停止的转发会静默复活。
+    /// 删除转发配置行（#268 Delete；#91 重连复活由删除而非「停止」承担）。
     fn apply_port_forward_remove(
         &mut self,
         remove: crate::ui::port_forward_panel::PortForwardRemoveRequest,

@@ -68,7 +68,7 @@ mod pty_write_drain_tests;
 pub mod zmodem_pty_prefix;
 pub mod sftp;
 
-pub use client::{SshClient, SshConfig};
+pub use client::{ProfileForward, SshClient, SshConfig};
 pub use port_forward::{
     spawn_local_forward_controllable, spawn_remote_forward_controllable, ForwardControl,
     LocalPortForward, RemotePortForward,
