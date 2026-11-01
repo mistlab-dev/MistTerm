@@ -4656,9 +4656,7 @@ impl MistTermApp {
                 }
             }
             PaletteAction::CloudSync => {
-                if self.ensure_right_dock_allowed_or_warn(ctx) {
-                    self.open_right_dock_panel(ActiveRightDock::CloudSync);
-                }
+                self.open_cloud_sync_panel(ctx);
             }
             PaletteAction::Disconnect => self.disconnect_ssh_keep_buffer_active(ctx),
             PaletteAction::Reconnect => self.reconnect_active_tab(ctx),
@@ -9762,15 +9760,13 @@ impl MistTermApp {
                 }
             }
             MacMenuAction::TeamAccount => {
-                self.show_preferences_dialog = true;
+                self.open_preferences_team_sync(ctx);
             }
             MacMenuAction::TeamMembers => {
                 self.team_members_dialog.open(&mut self.team_service);
             }
             MacMenuAction::CloudSync => {
-                if self.ensure_right_dock_allowed_or_warn(ctx) {
-                    self.open_right_dock_panel(ActiveRightDock::CloudSync);
-                }
+                self.open_cloud_sync_panel(ctx);
             }
             MacMenuAction::HelpUserGuide => {
                 self.help_docs_dialog.open_page(HelpPage::QuickStart);
@@ -10158,8 +10154,12 @@ impl eframe::App for MistTermApp {
         if replay_deleted {
             self.stop_send_sequence(ctx, false);
         }
-        self.team_members_dialog
+        let go_to_login = self
+            .team_members_dialog
             .show_modal(ctx, &theme, &mut self.team_service);
+        if go_to_login {
+            self.open_preferences_team_sync(ctx);
+        }
         self.try_flush_pending_fragment_insert(ctx);
         if self.command_history.poll_background_load() {
             ctx.request_repaint();

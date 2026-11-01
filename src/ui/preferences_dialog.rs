@@ -29,6 +29,14 @@ const PREFERENCES_NAV_SELECTED_ID: &str = "preferences_nav_selected";
 const PREFERENCES_NAV_MODE_ID: &str = "preferences_nav_mode";
 
 impl MistTermApp {
+    /// #282：打开偏好设置并定位「团队与同步」分类（左导航 index 7）。
+    /// 供团队成员弹窗「去登录」等入口复用，保持单一入口。
+    pub(crate) fn open_preferences_team_sync(&mut self, ctx: &egui::Context) {
+        self.show_preferences_dialog = true;
+        let nav_id = egui::Id::new(PREFERENCES_NAV_SELECTED_ID);
+        ctx.data_mut(|d| d.insert_persisted(nav_id, 7usize));
+    }
+
     fn workspace_top_chrome_height(&self, theme: &crate::ui::theme::Theme) -> f32 {
         #[cfg(target_os = "macos")]
         {
@@ -1574,19 +1582,14 @@ impl MistTermApp {
                 .clicked()
                 {
                     *should_close = true;
-                    if Self::right_dock_open_allowed(Self::layout_window_width(ctx)) {
-                        self.open_right_dock_panel(ActiveRightDock::CloudSync);
-                    } else {
-                        let w = Self::layout_window_width(ctx);
-                        self.notify_warn(Self::narrow_window_right_dock_hint(ctx, w));
-                    }
+                    self.open_cloud_sync_panel(ctx);
                 }
                 Self::preferences_row_divider(ui, theme);
                 ui.label(
                     RichText::new(crate::i18n::tr(
                         ctx,
-                        "Host list, credential sync, passphrase, conflicts, and export/import are in Cloud Sync. This page only opens that panel.",
-                        "主机列表、凭证同步、同步口令、冲突和导出/导入都在云端同步里。这里只负责打开那个面板。",
+                        "Host list, credential sync, encryption password, conflicts, and export/import are in Cloud Sync. This page only opens that panel.",
+                        "主机列表、凭证同步、加密密码、冲突和导出/导入都在云端同步里。这里只负责打开那个面板。",
                     ))
                     .size(theme.font_size_small())
                     .color(theme.color_form_hint()),

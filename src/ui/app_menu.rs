@@ -368,7 +368,7 @@ impl MistTermApp {
         egui::menu::menu_button(ui, label(l.team_menu), |ui| {
             crate::ui::chrome::apply_menu_popup_style(ui, theme);
             if crate::ui::chrome::popup_menu_button(ui, theme, l.team_sign_in).clicked() {
-                self.show_preferences_dialog = true;
+                self.open_preferences_team_sync(ctx);
                 ui.close_menu();
             }
             if crate::ui::chrome::popup_menu_button(ui, theme, l.team_members).clicked() {
@@ -377,9 +377,8 @@ impl MistTermApp {
             }
             ui.separator();
             if crate::ui::chrome::popup_menu_button(ui, theme, l.cloud_sync).clicked() {
-                if self.ensure_right_dock_allowed_or_warn(ctx) {
-                    self.open_right_dock_panel(ActiveRightDock::CloudSync);
-                }
+                // #282：与偏好设置「团队与同步 → 打开同步面板」共用同一入口。
+                self.open_cloud_sync_panel(ctx);
                 ui.close_menu();
             }
         });

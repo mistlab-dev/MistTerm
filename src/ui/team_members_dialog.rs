@@ -33,11 +33,11 @@ impl TeamMembersDialog {
         ctx: &egui::Context,
         theme: &Theme,
         service: &mut TeamService,
-    ) {
+    ) -> bool {
         if !self.open {
-            return;
+            return false;
         }
-        if !self.requested_fetch && !service.is_busy() {
+        if !self.requested_fetch && service.is_logged_in() && !service.is_busy() {
             service.spawn_list_team_members();
             self.requested_fetch = true;
         }
@@ -45,7 +45,13 @@ impl TeamMembersDialog {
         let title = crate::i18n::tr(ctx, "Team Members", "团队成员");
         let mut open = self.open;
         let mut should_close = false;
-        let modal_sz = egui::vec2(420.0, 420.0);
+        let mut go_to_login = false;
+        let logged_in = service.is_logged_in();
+        let modal_sz = layout_util::modal_team_members_size(
+            ctx,
+            logged_in,
+            service.team_members.len(),
+        );
         chrome::modal_window("team_members_dialog", theme, ctx)
             .open(&mut open)
             .default_pos(layout_util::modal_center_pos(ctx, modal_sz))
@@ -62,30 +68,54 @@ impl TeamMembersDialog {
                     ) {
                         should_close = true;
                     }
-                    ui.label(
-                        chrome::rich_caption(
-                            theme,
-                            &format!(
-                                "{}: {}",
-                                crate::i18n::tr(ctx, "Team", "团队"),
-                                service.current_team_name()
+                    // #282：未登录时不再显示占位团队名「Team」。
+                    if logged_in {
+                        ui.label(
+                            chrome::rich_caption(
+                                theme,
+                                &format!(
+                                    "{}: {}",
+                                    crate::i18n::tr(ctx, "Team", "团队"),
+                                    service.current_team_name()
+                                ),
                             ),
-                        ),
-                    );
+                        );
+                    } else {
+                        ui.label(
+                            chrome::rich_caption(
+                                theme,
+                                crate::i18n::tr(ctx, "Not signed in", "未登录"),
+                            )
+                            .color(theme.text_tertiary()),
+                        );
+                    }
                     ui.add_space(theme.spacing_sm());
 
-                    if !service.is_logged_in() {
+                    if !logged_in {
+                        // #282：未登录是中性状态，不是红色错误。
                         ui.label(
                             chrome::rich_caption(
                                 theme,
                                 crate::i18n::tr(
                                     ctx,
-                                    "Sign in under Preferences → Team to view members.",
-                                    "请先在「偏好设置 → 团队平台」登录后再查看成员。",
+                                    "Sign in under Preferences → Team & sync to view members.",
+                                    "请先在「偏好设置 → 团队与同步」登录后再查看成员。",
                                 ),
                             )
-                            .color(theme.red_color()),
+                            .color(theme.color_form_hint()),
                         );
+                        ui.add_space(theme.spacing_sm());
+                        if chrome::panel_action_primary_button_with_icon_ex(
+                            ui,
+                            theme,
+                            crate::ui::icons::IconId::Check,
+                            crate::i18n::tr(ctx, "Go to sign-in", "去登录"),
+                            true,
+                        )
+                        .clicked()
+                        {
+                            go_to_login = true;
+                        }
                     } else if service.is_busy() && service.team_members.is_empty() {
                         ui.label(
                             chrome::rich_caption(
@@ -121,11 +151,12 @@ impl TeamMembersDialog {
                     }
 
                     ui.add_space(theme.spacing_sm());
+                    // #282：未登录时刷新按钮直接置灰，不等到点击后再报错。
                     if chrome::panel_action_button_ex(
                         ui,
                         theme,
                         crate::i18n::tr(ctx, "Refresh", "刷新"),
-                        service.is_logged_in() && !service.is_busy(),
+                        logged_in && !service.is_busy(),
                     )
                     .clicked()
                     {
@@ -138,10 +169,11 @@ impl TeamMembersDialog {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             should_close = true;
         }
-        self.open = open && !should_close;
+        self.open = open && !should_close && !go_to_login;
         if !self.open {
             self.requested_fetch = false;
         }
+        go_to_login
     }
 }
 

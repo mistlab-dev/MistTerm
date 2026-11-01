@@ -258,6 +258,28 @@ pub fn modal_clone_size(ctx: &egui::Context) -> egui::Vec2 {
     )
 }
 
+/// 团队成员弹窗：按登录态与成员数量估算内容高度。
+/// 未登录只有状态/提示/按钮，收成小确认框尺寸；登录后按行数增长，并夹在视口内。
+#[inline]
+pub fn modal_team_members_size(
+    ctx: &egui::Context,
+    logged_in: bool,
+    member_count: usize,
+) -> egui::Vec2 {
+    let r = ctx.screen_rect();
+    let sw = r.width().max(360.0);
+    let sh = r.height().max(280.0);
+    let w = (sw * 0.36).clamp(340.0, 520.0);
+    if !logged_in {
+        let h = (sh * 0.24).clamp(170.0, 230.0);
+        return egui::vec2(w.min(420.0), h);
+    }
+    let rows = member_count.max(1) as f32;
+    let list_h = (rows * 36.0).clamp(88.0, 280.0);
+    let h = (214.0 + list_h).clamp(300.0, (sh - 96.0).max(300.0));
+    egui::vec2(w, h)
+}
+
 /// 删除确认等小弹窗(§8.4.6)。
 #[inline]
 pub fn modal_confirm_size(ctx: &egui::Context) -> egui::Vec2 {
