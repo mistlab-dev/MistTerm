@@ -39,6 +39,11 @@ pub struct ForwardControl {
 }
 
 impl ForwardControl {
+    /// 面板单测与内部构造用。
+    pub(crate) fn new() -> Self {
+        new_control()
+    }
+
     pub fn stop(&self) {
         self.shutdown.store(true, Ordering::Relaxed);
     }
@@ -55,13 +60,29 @@ fn new_control() -> ForwardControl {
 }
 
 /// 在克隆的 `Session` 上启动本地转发（每规则一线程）。
-pub fn spawn_local_forwards(session: &Session, forwards: &[LocalPortForward]) {
+/// 返回成功启动的 `(规则, 控制柄)`，供面板停止/删除会话配置转发（#268）。
+pub fn spawn_local_forwards(
+    session: &Session,
+    forwards: &[LocalPortForward],
+) -> Vec<(LocalPortForward, ForwardControl)> {
+    let mut out = Vec::new();
     for fwd in forwards {
         if fwd.local_port == 0 || fwd.remote_host.is_empty() {
             continue;
         }
-        let _ = spawn_local_forward_controllable(session.clone(), fwd.clone());
+        match spawn_local_forward_controllable(session.clone(), fwd.clone()) {
+            Ok(control) => out.push((fwd.clone(), control)),
+            Err(e) => log::warn!(
+                "local forward {}:{} -> {}:{} failed to start: {}",
+                fwd.bind_address,
+                fwd.local_port,
+                fwd.remote_host,
+                fwd.remote_port,
+                e
+            ),
+        }
     }
+    out
 }
 
 pub fn spawn_local_forward_controllable(
@@ -130,13 +151,28 @@ fn run_local_forward(
 }
 
 /// 在克隆的 `Session` 上启动远程转发（每规则一线程）。
-pub fn spawn_remote_forwards(session: &Session, forwards: &[RemotePortForward]) {
+/// 返回成功启动的 `(规则, 控制柄)`，供面板停止/删除（#268）。
+pub fn spawn_remote_forwards(
+    session: &Session,
+    forwards: &[RemotePortForward],
+) -> Vec<(RemotePortForward, ForwardControl)> {
+    let mut out = Vec::new();
     for fwd in forwards {
         if fwd.remote_port == 0 || fwd.target_host.is_empty() {
             continue;
         }
-        let _ = spawn_remote_forward_controllable(session.clone(), fwd.clone());
+        match spawn_remote_forward_controllable(session.clone(), fwd.clone()) {
+            Ok(control) => out.push((fwd.clone(), control)),
+            Err(e) => log::warn!(
+                "remote forward :{} -> {}:{} failed to start: {}",
+                fwd.remote_port,
+                fwd.target_host,
+                fwd.target_port,
+                e
+            ),
+        }
     }
+    out
 }
 
 pub fn spawn_remote_forward_controllable(

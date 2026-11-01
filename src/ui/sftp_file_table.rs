@@ -99,6 +99,32 @@ pub(super) fn format_file_mtime(dt: DateTime<Utc>) -> String {
     dt.format("%Y-%m-%d %H:%M").to_string()
 }
 
+/// 窄半栏用的紧凑时间（仍可辨日/时）。
+pub(super) fn format_file_mtime_compact(dt: DateTime<Utc>) -> String {
+    dt.format("%m-%d %H:%M").to_string()
+}
+
+/// 行 hover：文件名优先，附带大小/时间与额外路径信息（列被挤窄时仍可读全名）。
+pub(super) fn file_row_tooltip(name: &str, size_label: &str, time_label: &str, extra: &str) -> String {
+    let mut out = name.to_string();
+    let meta = match (size_label.is_empty(), time_label.is_empty()) {
+        (true, true) => String::new(),
+        (false, true) => size_label.to_string(),
+        (true, false) => time_label.to_string(),
+        (false, false) => format!("{size_label}  ·  {time_label}"),
+    };
+    if !meta.is_empty() {
+        out.push('\n');
+        out.push_str(&meta);
+    }
+    let extra = extra.trim();
+    if !extra.is_empty() && extra != name {
+        out.push('\n');
+        out.push_str(extra);
+    }
+    out
+}
+
 /// SFTP 文件列表行类型(用于文件名/图标前景色)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum SftpFileKind {
@@ -376,12 +402,14 @@ pub(super) struct FileTableCols {
 
 impl FileTableCols {
     const ICON_W: f32 = 22.0;
-    /// 「108.52 KB」这一档的固定宽度，不随面板变宽。
-    const SIZE_W: f32 = 64.0;
-    /// 「2026-10-14 16:12」的固定宽度。
-    const TIME_W: f32 = 104.0;
+    /// 「108.52 KB」这一档；略收以给文件名更多空间。
+    const SIZE_W: f32 = 54.0;
+    /// 「2026-10-14 16:12」全宽。
+    const TIME_W: f32 = 96.0;
+    /// 「10-14 16:12」窄半栏紧凑宽。
+    const TIME_COMPACT_W: f32 = 68.0;
 
-    const PAD_X: f32 = 10.0;
+    const PAD_X: f32 = 6.0;
     const GAP: f32 = 4.0;
 
     fn from_panel_width(panel_w: f32) -> Self {
@@ -389,12 +417,16 @@ impl FileTableCols {
         let icon = Self::ICON_W;
         let mut size = Self::SIZE_W;
         let mut time = Self::TIME_W;
-        // #250：分屏半栏尽量保留「大小」「修改时间」；仅极窄时才收起（文件名可 hover 看全）。
-        if panel_w < 168.0 {
+        // #269：常规 flux 半栏约 200–280px，须稳定露出大小+修改时间；仅极窄才收。
+        // 预算约：icon+size+time+pad+gap ≈ 22+54+96+12+12 = 196（全宽时间）
+        // 紧凑时间：≈ 22+54+68+12+12 = 168；仅大小：≈ 22+54+12+8 = 96。
+        if panel_w < 130.0 {
             size = 0.0;
             time = 0.0;
-        } else if panel_w < 236.0 {
+        } else if panel_w < 170.0 {
             time = 0.0;
+        } else if panel_w < 250.0 {
+            time = Self::TIME_COMPACT_W;
         }
 
         let gaps = |size: f32, time: f32| -> f32 {
@@ -426,6 +458,11 @@ impl FileTableCols {
     pub(super) fn for_list_ui(ui: &mut egui::Ui, body_cap: f32) -> Self {
         layout_util::set_width_to_available(ui);
         Self::from_panel_width(layout_util::dock_scroll_viewport_width(ui, body_cap))
+    }
+
+    /// 窄半栏时用紧凑「月-日 时:分」，避免时间列被挤成省略号像「没了」。
+    pub(super) fn use_compact_mtime(self) -> bool {
+        self.time >= 1.0 && self.time + 0.5 < Self::TIME_W
     }
 
     fn col_width(self, col: usize) -> f32 {
@@ -498,11 +535,37 @@ fn paint_valign_text(
     color: Color32,
     align_right: bool,
 ) {
+    paint_valign_text_ex(ui, text, font, color, align_right, false);
+}
+
+/// `prefer_name_tail`：文件名优先保留后缀（扩展名），中间插省略号，便于辨认。
+fn paint_valign_text_ex(
+    ui: &mut egui::Ui,
+    text: &str,
+    font: egui::FontId,
+    color: Color32,
+    align_right: bool,
+    prefer_name_tail: bool,
+) {
     let max_w = ui.max_rect().width().max(0.0);
     let galley = ui.ctx().fonts_mut(|f| {
         let full = f.layout_no_wrap(text.to_string(), font.clone(), color);
         if full.size().x <= max_w + 0.5 {
             return full;
+        }
+        if prefer_name_tail {
+            // 尽量保住末尾（含扩展名），前面用 … 省略，长名更易辨认。
+            let chars: Vec<char> = text.chars().collect();
+            let mut tail = chars.len().min(18);
+            while tail > 0 {
+                let suffix: String = chars[chars.len() - tail..].iter().collect();
+                let candidate = format!("…{suffix}");
+                let g = f.layout_no_wrap(candidate, font.clone(), color);
+                if g.size().x <= max_w {
+                    return g;
+                }
+                tail -= 1;
+            }
         }
         let mut keep = text.chars().count();
         while keep > 0 {
@@ -664,7 +727,7 @@ pub(super) fn paint_file_table_row(
                 // #250：用文件类型图标，不再画两字母扩展名角标（ap/ps…）。
                 crate::ui::icons::paint_icon(cell, icon_r, icon, icon_color, icon_px);
             }
-            1 => paint_valign_text(cell, name, name_font.clone(), name_color, false),
+            1 => paint_valign_text_ex(cell, name, name_font.clone(), name_color, false, true),
             2 => paint_valign_text(cell, size_label, meta_font.clone(), meta_color, true),
             _ => paint_valign_text(cell, time_label, meta_font.clone(), meta_color, true),
         });
@@ -718,17 +781,42 @@ mod crumb_tests {
         let cols = FileTableCols::for_width(320.0);
         assert!(cols.col_width(2) >= 1.0, "size column visible");
         assert!(cols.col_width(3) >= 1.0, "mtime column visible");
+        assert!(!cols.use_compact_mtime());
         assert!(cols.col_width(1) > cols.col_width(2), "name gets remaining width");
     }
 
     #[test]
+    fn columns_keep_both_at_flux_half_pane() {
+        // 常规右栏对切半栏约 200–240；须仍见大小+时间（可紧凑）；文件名靠 tooltip/尾缀省略可读。
+        for w in [200.0_f32, 210.0, 240.0] {
+            let cols = FileTableCols::for_width(w);
+            assert!(cols.col_width(2) >= 1.0, "size @ {w}");
+            assert!(cols.col_width(3) >= 1.0, "mtime @ {w}");
+            assert!(cols.col_width(1) >= 20.0, "name still usable @ {w}");
+        }
+        let compact = FileTableCols::for_width(200.0);
+        assert!(compact.use_compact_mtime());
+        let wide = FileTableCols::for_width(260.0);
+        assert!(!wide.use_compact_mtime());
+    }
+
+    #[test]
     fn columns_drop_time_only_when_very_narrow() {
-        let mid = FileTableCols::for_width(200.0);
+        let mid = FileTableCols::for_width(160.0);
         assert!(mid.col_width(2) >= 1.0);
         assert!(mid.col_width(3) < 1.0);
-        let tiny = FileTableCols::for_width(150.0);
+        let tiny = FileTableCols::for_width(120.0);
         assert!(tiny.col_width(2) < 1.0);
         assert!(tiny.col_width(3) < 1.0);
+    }
+
+    #[test]
+    fn file_row_tooltip_leads_with_name() {
+        let tip = file_row_tooltip("long-name.tar.gz", "1.2 MB", "10-31 12:00", "/tmp/long-name.tar.gz");
+        assert!(tip.starts_with("long-name.tar.gz"));
+        assert!(tip.contains("1.2 MB"));
+        assert!(tip.contains("10-31 12:00"));
+        assert!(tip.contains("/tmp/long-name.tar.gz"));
     }
 
     #[test]

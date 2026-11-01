@@ -32,9 +32,9 @@ use crate::ui::file_dialog::FileDialog;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use sftp_file_table::{
-    FileSortState, FileTableCols, LocalEntry, classify_file_kind, format_file_mtime,
-    paint_file_table_header, paint_file_table_row, sort_local_entries, sort_remote_entries,
-    system_time_to_utc,
+    FileSortState, FileTableCols, LocalEntry, classify_file_kind, file_row_tooltip,
+    format_file_mtime, format_file_mtime_compact, paint_file_table_header, paint_file_table_row,
+    sort_local_entries, sort_remote_entries, system_time_to_utc,
 };
 use sftp_bookmarks::SftpBookmarkStore;
 use sftp_diff_ui::{
@@ -2717,21 +2717,34 @@ impl SftpPanel {
         PathBuf::from(s)
     }
 
-    /// 本机路径栏展示：始终用绝对/盘符形式，不用 `~/…`（#250）。
-    fn local_path_display(path: &Path) -> String {
-        let abs = if path.is_absolute() {
+    /// 把可能含字面 `~/…` 的 Path 收成绝对/盘符路径（#269：先展开 tilde，再拼 cwd）。
+    ///
+    /// `PathBuf::from("~/Downloads")` 在 Win/Unix 都不是 absolute；若先 `cwd.join` 会变成
+    /// `C:\…\~/Downloads`，路径栏仍露出字面 tilde。
+    fn absolute_local_path(path: &Path) -> PathBuf {
+        let raw = path.to_string_lossy();
+        let expanded = if raw == "~" || raw.starts_with("~/") || raw.starts_with("~\\") {
+            Self::expand_local_path(&raw)
+        } else {
             path.to_path_buf()
+        };
+        if expanded.is_absolute() {
+            expanded
         } else {
             std::env::current_dir()
-                .map(|cwd| cwd.join(path))
-                .unwrap_or_else(|_| path.to_path_buf())
-        };
-        // 去掉展示里的 `~/` 字面量（万一上游塞了 tilde 字符串路径）
-        let s = abs.to_string_lossy();
-        if s.starts_with("~/") || s.starts_with("~\\") || s == "~" {
+                .map(|cwd| cwd.join(&expanded))
+                .unwrap_or(expanded)
+        }
+    }
+
+    /// 本机路径栏展示：始终用绝对/盘符形式，不用 `~/…`（#250/#269）。
+    fn local_path_display(path: &Path) -> String {
+        let abs = Self::absolute_local_path(path);
+        let s = abs.to_string_lossy().into_owned();
+        if s == "~" || s.starts_with("~/") || s.starts_with("~\\") {
             return Self::expand_local_path(&s).to_string_lossy().into_owned();
         }
-        s.into_owned()
+        s
     }
 
     fn localize_local_list_error(ctx: &egui::Context, msg: &str) -> String {
@@ -2824,8 +2837,9 @@ impl SftpPanel {
             self.last_local_by_host.clear();
         }
         if let Some(p) = self.last_local_by_host.get(&self.host_key) {
-            if p.is_dir() {
-                return p.clone();
+            let abs = Self::absolute_local_path(p);
+            if abs.is_dir() {
+                return abs;
             }
         }
         let resolved = t.download_dir();
@@ -2843,10 +2857,11 @@ impl SftpPanel {
                 ),
             });
         }
-        resolved.dir
+        Self::absolute_local_path(&resolved.dir)
     }
 
     fn sync_local_path_from_cwd(&mut self) {
+        self.local_cwd = Self::absolute_local_path(&self.local_cwd);
         self.local_path_edit = Self::local_path_display(&self.local_cwd);
     }
 
@@ -4282,8 +4297,18 @@ impl SftpPanel {
                             let sel = self.local_selected.contains(&e.path);
                             let size_lbl =
                                 if e.is_dir { "—".to_string() } else { e.size_human() };
-                            let time_lbl = format_file_mtime(e.modified);
+                            let time_lbl = if table_cols.use_compact_mtime() {
+                                format_file_mtime_compact(e.modified)
+                            } else {
+                                format_file_mtime(e.modified)
+                            };
                             let kind = classify_file_kind(&e.name, e.is_dir);
+                            let tip = file_row_tooltip(
+                                &e.name,
+                                &size_lbl,
+                                &time_lbl,
+                                &e.path.display().to_string(),
+                            );
                             let resp = paint_file_table_row(
                                 ui,
                                 theme,
@@ -4293,7 +4318,7 @@ impl SftpPanel {
                                 &time_lbl,
                                 kind,
                                 sel,
-                                &e.path.display().to_string(),
+                                &tip,
                             );
                             if resp.double_clicked() && e.is_dir {
                                 enter_local = Some(e.path.clone());
@@ -4976,9 +5001,14 @@ impl SftpPanel {
                             let sel = self.remote_selected.contains(&e.path);
                             let size_lbl =
                                 if e.is_dir { "—".to_string() } else { e.size_human() };
-                            let time_lbl = format_file_mtime(e.modified);
+                            let time_lbl = if table_cols.use_compact_mtime() {
+                                format_file_mtime_compact(e.modified)
+                            } else {
+                                format_file_mtime(e.modified)
+                            };
                             let kind = classify_file_kind(&e.name, e.is_dir);
-                            let tip = format!("{}  {}", e.path.to_string_lossy(), e.permissions);
+                            let extra = format!("{}  {}", e.path.to_string_lossy(), e.permissions);
+                            let tip = file_row_tooltip(&e.name, &size_lbl, &time_lbl, &extra);
                             let resp = paint_file_table_row(
                                 ui,
                                 theme,
@@ -5571,16 +5601,27 @@ impl SftpPanel {
                     } else {
                         e.size_human()
                     };
+                    let time_lbl = if table_cols.use_compact_mtime() {
+                        format_file_mtime_compact(e.modified)
+                    } else {
+                        format_file_mtime(e.modified)
+                    };
+                    let tip = file_row_tooltip(
+                        &e.name,
+                        &size_lbl,
+                        &time_lbl,
+                        &e.path.display().to_string(),
+                    );
                     let resp = paint_file_table_row(
                         ui,
                         theme,
                         table_cols,
                         &e.name,
                         &size_lbl,
-                        &format_file_mtime(e.modified),
+                        &time_lbl,
                         classify_file_kind(&e.name, e.is_dir),
                         sel,
-                        &e.path.display().to_string(),
+                        &tip,
                     );
                     if resp.double_clicked() && e.is_dir {
                         enter_local = Some(e.path.clone());
@@ -5754,14 +5795,20 @@ impl SftpPanel {
                     } else {
                         e.size_human()
                     };
-                    let tip = format!("{}  {}", e.path.to_string_lossy(), e.permissions);
+                    let time_lbl = if table_cols.use_compact_mtime() {
+                        format_file_mtime_compact(e.modified)
+                    } else {
+                        format_file_mtime(e.modified)
+                    };
+                    let extra = format!("{}  {}", e.path.to_string_lossy(), e.permissions);
+                    let tip = file_row_tooltip(&e.name, &size_lbl, &time_lbl, &extra);
                     let resp = paint_file_table_row(
                         ui,
                         theme,
                         table_cols,
                         &e.name,
                         &size_lbl,
-                        &format_file_mtime(e.modified),
+                        &time_lbl,
                         classify_file_kind(&e.name, e.is_dir),
                         sel,
                         &tip,
@@ -6162,5 +6209,29 @@ mod tests {
             PathBuf::from(&shown).is_absolute() || shown.contains(':'),
             "expected absolute/drive path, got {shown}"
         );
+    }
+
+
+    #[test]
+    fn local_path_display_expands_literal_tilde_pathbuf() {
+        // 模拟偏好/旧状态把 "~/Downloads" 塞进 PathBuf（非 absolute）的情况。
+        let shown = SftpPanel::local_path_display(Path::new("~/Downloads"));
+        assert!(!shown.contains("~/"), "got {shown}");
+        assert!(!shown.starts_with('~'), "got {shown}");
+        let home = crate::platform::home_dir().expect("home");
+        assert!(
+            shown.starts_with(&*home.to_string_lossy()) || PathBuf::from(&shown).is_absolute(),
+            "expected expanded home path, got {shown}"
+        );
+        let shown2 = SftpPanel::local_path_display(Path::new("~\\Downloads"));
+        assert!(!shown2.contains("~/") && !shown2.starts_with('~'), "got {shown2}");
+    }
+
+    #[test]
+    fn absolute_local_path_does_not_cwd_join_tilde() {
+        let p = SftpPanel::absolute_local_path(Path::new("~/Downloads"));
+        let s = p.to_string_lossy();
+        assert!(!s.contains("~/"), "got {s}");
+        assert!(p.is_absolute(), "got {s}");
     }
 }
