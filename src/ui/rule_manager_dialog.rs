@@ -319,8 +319,8 @@ impl RuleManagerDialog {
             .stroke(egui::Stroke::new(1.0, theme.color_form_input_stroke()))
             .rounding(theme.radius_search_input())
             .inner_margin(egui::Margin::symmetric(
-                theme.spacing_sm(),
-                theme.spacing_sm(),
+                theme.spacing_xs(),
+                theme.spacing_xs(),
             ))
             .show(ui, |ui| {
                 ui.set_min_width(crate::ui::layout_util::finite_content_width(ui));
@@ -417,9 +417,9 @@ impl RuleManagerDialog {
         let content_w = crate::ui::layout_util::finite_content_width(ui);
         ui.set_min_width(content_w);
         ui.horizontal(|ui| {
-            self.paint_list(ui, theme, ctx, store, content_w * 0.38);
+            self.paint_list(ui, theme, ctx, store, content_w * 0.32);
             ui.separator();
-            self.paint_editor(ui, theme, ctx, store, content_w * 0.58);
+            self.paint_editor(ui, theme, ctx, store, content_w * 0.64);
         });
         if !self.error.is_empty() {
             ui.add_space(theme.spacing_sm());
@@ -576,7 +576,6 @@ impl RuleManagerDialog {
             let width = width.max(280.0);
             ui.set_width(width);
             // #283：规则 ID 收进详情，默认不占版面。
-            self.paint_rule_details(ui, theme, ctx, "output_trigger_details", self.selected_id.as_deref(), self.creating);
             ui.add_space(theme.spacing_xs());
             let mut enabled = self.enabled;
             if ui
@@ -1076,41 +1075,6 @@ impl RuleManagerDialog {
     }
 
     /// #283：规则 ID 收进折叠详情，默认不显示。
-    fn paint_rule_details(
-        &self,
-        ui: &mut egui::Ui,
-        theme: &Theme,
-        ctx: &egui::Context,
-        id_salt: &str,
-        id: Option<&str>,
-        creating: bool,
-    ) {
-        egui::CollapsingHeader::new(crate::i18n::tr(ctx, "Details", "详情"))
-            .id_source(id_salt)
-            .default_open(false)
-            .show(ui, |ui| {
-                let line = if creating || id.is_none() {
-                    crate::i18n::tr(
-                        ctx,
-                        "A new id is assigned when you save.",
-                        "保存时会生成规则 ID.",
-                    )
-                    .to_string()
-                } else {
-                    format!(
-                        "{} {}",
-                        crate::i18n::tr(ctx, "Rule id", "规则 ID"),
-                        id.unwrap_or("")
-                    )
-                };
-                ui.label(
-                    egui::RichText::new(line)
-                        .size(theme.font_size_caption())
-                        .color(theme.text_tertiary()),
-                );
-            });
-    }
-
     // --- 可点击链接（#186）：复制 #185 布局节奏，字段独立不串台 ---
 
     fn ensure_cmd_selection(&mut self, personal: &CmdAuditPersonalStore) {
@@ -1452,7 +1416,6 @@ impl RuleManagerDialog {
             let width = width.max(280.0);
             ui.set_width(width);
             // #283：规则 ID 收进详情，默认不占版面。
-            self.paint_rule_details(ui, theme, ctx, "cmd_rule_details", self.cmd_selected_id.as_deref(), self.cmd_creating);
             ui.add_space(theme.spacing_xs());
             crate::ui::chrome::form_field_label(
                 ui,
@@ -2223,7 +2186,6 @@ impl RuleManagerDialog {
             let width = width.max(280.0);
             ui.set_width(width);
             // #283：规则 ID 收进详情，默认不占版面。
-            self.paint_rule_details(ui, theme, ctx, "display_link_details", self.link_selected_id.as_deref(), self.link_creating);
             ui.add_space(theme.spacing_xs());
             let mut enabled = self.link_enabled;
             if ui

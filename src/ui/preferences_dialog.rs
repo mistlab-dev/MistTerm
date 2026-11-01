@@ -139,7 +139,7 @@ impl MistTermApp {
             selected = 0;
         }
 
-        let nav_w = (ui.available_width() * 0.30).clamp(112.0, 168.0);
+        let nav_w = (ui.available_width() * 0.18).clamp(80.0, 120.0);
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
             ui.allocate_ui_with_layout(
                 egui::vec2(nav_w, body_h),
@@ -169,9 +169,9 @@ impl MistTermApp {
                         });
                 },
             );
-            ui.add_space(theme.spacing_sm());
+            ui.add_space(theme.spacing_xs());
             ui.separator();
-            ui.add_space(theme.spacing_sm());
+            ui.add_space(theme.spacing_xs());
 
             let detail_w = ui.available_width().max(80.0);
             ui.allocate_ui_with_layout(
@@ -1845,11 +1845,14 @@ impl MistTermApp {
                         }
 
                         ui.vertical(|ui| {
-                            let name = egui::RichText::new(display_name).color(if is_env_locked {
+                            let name_color = if is_selected {
+                                theme.accent_color()
+                            } else if is_env_locked {
                                 text_low
                             } else {
                                 label_color
-                            });
+                            };
+                            let name = egui::RichText::new(display_name).color(name_color);
                             if ui.selectable_label(is_selected, name).clicked() {
                                 selected_id = m.id.clone();
                             }
@@ -1877,15 +1880,6 @@ impl MistTermApp {
 
                 // 统一编辑区：不再在每个模块旁放「管理规则」按钮。
                 Self::preferences_row_divider(ui, theme);
-                ui.label(
-                    egui::RichText::new(crate::i18n::tr(
-                        ctx,
-                        "Edit rules for the selected module",
-                        "编辑选中模块的规则",
-                    ))
-                    .size(theme.font_size_small())
-                    .color(theme.accent_color()),
-                );
                 if let Some(m) = modules.iter().find(|m| m.id == selected_id) {
                     let display_name = if lang == crate::i18n::UiLanguage::Zh {
                         m.name_zh.clone()
@@ -1898,7 +1892,7 @@ impl MistTermApp {
                             .size(theme.font_size_small())
                             .color(text_low),
                     );
-                    ui.add_space(theme.spacing_xs());
+                    ui.add_space(theme.spacing_md());
                     if m.id == crate::modules::output_trigger::MODULE_ID {
                         if crate::ui::chrome::panel_action_button_with_icon_ex(
                             ui,

@@ -448,7 +448,7 @@ impl MistTermApp {
                 },
             );
             ui.menu_button(
-                crate::i18n::tr(ctx, "Advanced", "高级"),
+                crate::i18n::tr(ctx, "Advanced", "高级功能"),
                 |ui| {
                     crate::ui::chrome::apply_menu_popup_style(ui, theme);
                     if crate::ui::chrome::popup_menu_button(ui, theme, l.audit_timeline).clicked() {

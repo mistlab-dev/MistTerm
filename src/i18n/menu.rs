@@ -138,7 +138,7 @@ pub fn labels(lang: UiLanguage) -> MacMenuLabels {
         audit_timeline: loc.tr("Audit Timeline", "审计时间线"),
         install_audit_agent: loc.tr("Install Audit Agent", "安装审计探针"),
         help_report_issue: loc.tr("Report an Issue", "问题反馈"),
-        diagnostics: loc.tr("Diagnostics", "诊断"),
+        diagnostics: loc.tr("Diagnostics", "诊断工具"),
         open_crash_reports: loc.tr("Open crash reports folder", "打开崩溃报告目录"),
         open_hang_reports: loc.tr("Open hang reports folder", "打开卡顿报告目录"),
         help_about: loc.tr("About MistTerm", "关于 MistTerm"),

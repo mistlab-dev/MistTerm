@@ -538,7 +538,6 @@ fn render_shortcuts(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, raw: &str) 
 // ── Feature guide page ─────────────────────────────────────────────
 
 struct FeatureSection {
-    icon: &'static str,
     title_en: &'static str,
     title_zh: &'static str,
     desc_en: &'static str,
@@ -548,91 +547,78 @@ struct FeatureSection {
 fn feature_sections() -> Vec<FeatureSection> {
     vec![
         FeatureSection {
-            icon: "📁",
             title_en: "File transfer (SFTP)",
             title_zh: "文件传输(SFTP)",
             desc_en: "Built-in SFTP file browser. Drag & drop upload, right-click download, navigate remote filesystem side by side with the terminal.",
             desc_zh: "内置 SFTP 文件浏览器。拖拽上传、右键下载，终端旁浏览远程文件系统。",
         },
         FeatureSection {
-            icon: "🔧",
             title_en: "Command snippets",
             title_zh: "命令片段",
             desc_en: "Personal snippet library + marketplace with 60+ pre-built templates for Linux, Docker, Kubernetes, networking, databases, and more. Click to execute.",
             desc_zh: "个人片段库 + 市场，内置 60+ 运维模板(Linux、Docker、K8s、网络、数据库等)，点击即执行。",
         },
         FeatureSection {
-            icon: "⌨️",
             title_en: "Send Sequences",
             title_zh: "发送序列",
             desc_en: "Tools → Send Sequences stores named lines and sends them, in order, to the current connected pane. Optional fixed delay. It does not wait for a prompt, does not broadcast, and is not a snippet.",
             desc_zh: "工具 → 发送序列：把命名的几行按顺序发进当前已连接窗格。可选固定间隔。不等提示符，不广播，也不是命令片段。",
         },
         FeatureSection {
-            icon: "📊",
             title_en: "System monitor",
             title_zh: "系统监控",
             desc_en: "Real-time CPU, memory, disk, and network monitoring for connected hosts. No agent required — uses standard SSH commands.",
             desc_zh: "实时查看远程主机 CPU、内存、磁盘、网络状态。无需安装代理，通过 SSH 命令获取。",
         },
         FeatureSection {
-            icon: "🔀",
             title_en: "Port forwarding",
             title_zh: "端口转发",
             desc_en: "Local (-L), remote (-R), and dynamic SOCKS (-D) forwards from the Port Forward panel or `mist fwd` in the CLI — no second SSH window.",
             desc_zh: "端口转发面板或 CLI `mist fwd` 支持本地 (-L)、远程 (-R) 与动态 SOCKS (-D)，无需另开 SSH 窗口。",
         },
         FeatureSection {
-            icon: "👥",
             title_en: "Team platform",
             title_zh: "团队平台",
             desc_en: "Connect to MistLab team server for shared sessions, credential management, fragment analytics, and role-based access control.",
             desc_zh: "连接 MistLab 团队服务器，共享会话、凭证管理、片段使用分析、角色权限控制。",
         },
         FeatureSection {
-            icon: "☁️",
             title_en: "Cloud sync",
             title_zh: "云同步",
             desc_en: "Sync sessions, snippets, and credentials across devices via the team server. Tools → Cloud Sync to set up.",
             desc_zh: "通过团队服务器跨设备同步会话、片段和凭证。菜单「工具」→ 云端同步。",
         },
         FeatureSection {
-            icon: "🔐",
             title_en: "Vault SSH CA",
             title_zh: "证书签发(Vault SSH CA)",
             desc_en: "Team server issues short-lived SSH certificates via HashiCorp Vault SSH CA (server-side). The desktop app reads credentials from Vault KV for team servers.",
             desc_zh: "团队服务端通过 HashiCorp Vault SSH CA 签发短期 SSH 证书(服务端职责)。桌面端从 Vault KV 读取团队服务器凭证。",
         },
         FeatureSection {
-            icon: "🤖",
             title_en: "AI assistant",
             title_zh: "AI 助手",
             desc_en: "Multi-host read-only ops work without an API key (built-in planner). Add an OpenAI-compatible key in Tools → AI Settings for chat, explanations, and LLM-assisted planning.",
             desc_zh: "多机只读运维无需 API Key（内置规划器）。对话、解释与 LLM 规划需在「工具 → AI 设置」配置 OpenAI 兼容 Key。",
         },
         FeatureSection {
-            icon: "📤",
             title_en: "File transfer (ZMODEM)",
             title_zh: "文件传输(ZMODEM)",
             desc_en: "Native ZMODEM support — use rz/sz commands directly in the terminal for file transfers with progress indication.",
             desc_zh: "原生 ZMODEM 支持，终端内直接使用 rz/sz 命令传输文件，带进度显示。",
         },
         FeatureSection {
-            icon: "📝",
             title_en: "Batch execution",
             title_zh: "批量执行",
             desc_en: "Execute commands across multiple servers simultaneously. Select sessions, write your command, and run in parallel.",
             desc_zh: "批量在多台服务器并行执行命令。选择会话，输入命令，一键并行执行。",
         },
         FeatureSection {
-            icon: "📋",
             title_en: "Session logs",
             title_zh: "会话日志",
             desc_en: "Automatic session logging with searchable history. Audit trails for compliance and review.",
             desc_zh: "自动会话记录，可搜索历史。满足审计合规和操作回溯需求。",
         },
         FeatureSection {
-            icon: "🛡️",
             title_en: "Command audit",
             title_zh: "命令审计",
             desc_en: "Team policy on snippets, batch runs, AI-planned ops, and command history. Interactive PTY typing is not audited yet; server agent coverage is limited to documented root / ssh-command paths.",
@@ -657,13 +643,7 @@ fn render_features(ui: &mut Ui, theme: &Theme, ctx: &egui::Context) {
     ui.add_space(theme.spacing_md());
 
     for section in feature_sections() {
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = theme.spacing_md();
-            ui.label(
-                RichText::new(section.icon)
-                    .size(theme.font_size_connection_name()),
-            );
-            ui.vertical(|ui| {
+        ui.vertical(|ui| {
                 ui.set_min_width(ui.available_width());
                 ui.label(
                     RichText::new(if is_en { section.title_en } else { section.title_zh })
@@ -677,7 +657,6 @@ fn render_features(ui: &mut Ui, theme: &Theme, ctx: &egui::Context) {
                         .size(theme.font_size_panel_title())
                         .color(theme.color_form_label()),
                 );
-            });
         });
         ui.add_space(theme.spacing_md());
     }

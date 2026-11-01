@@ -384,15 +384,19 @@ pub(super) fn show_command_card(
                         .clamp(theme.font_size_small() * 1.4, theme.font_size_small() * 8.0),
                 )
                 .show(ui, |ui| {
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(&display)
-                                .monospace()
-                                .size(theme.font_size_small())
-                                .color(theme.text_primary()),
-                        )
-                        .wrap(false),
-                    );
+                    // 简单 shell 语法高亮：命令名蓝、参数灰、字符串绿、管道符黄
+                    let parts = highlight_shell_command(&display, theme);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        for (text, color) in parts {
+                            ui.label(
+                                egui::RichText::new(text)
+                                    .monospace()
+                                    .size(theme.font_size_small())
+                                    .color(color),
+                            );
+                        }
+                    });
                 });
             ui.add_space(theme.spacing_sm());
             ui.horizontal(|ui| {
@@ -414,4 +418,41 @@ pub(super) fn show_command_card(
             });
         });
     clicked
+}
+
+/// 简单 shell 命令语法高亮：命令名蓝、参数灰、字符串绿、管道符黄
+fn highlight_shell_command(cmd: &str, theme: &Theme) -> Vec<(String, egui::Color32)> {
+    let mut parts = Vec::new();
+    let parts_str: Vec<&str> = cmd.split_whitespace().collect();
+    let mut prev_was_pipe = false;
+
+    for token in parts_str.iter() {
+        let token = *token;
+        // 管道符
+        if token == "|" || token == "&&" || token == "||" || token == ";" {
+            parts.push((token.to_string(), egui::Color32::from_rgb(220, 180, 80)));
+            prev_was_pipe = true;
+            continue;
+        }
+        // 字符串（带引号或$开头）
+        if token.starts_with('\'') || token.starts_with('"') || token.starts_with('$') {
+            parts.push((token.to_string(), egui::Color32::from_rgb(80, 200, 120)));
+            prev_was_pipe = false;
+            continue;
+        }
+        // 第一个 token 或管道后面是命令名
+        if parts.is_empty() || prev_was_pipe {
+            parts.push((token.to_string(), egui::Color32::from_rgb(80, 160, 240)));
+            prev_was_pipe = false;
+            continue;
+        }
+        // 参数（-开头）
+        if token.starts_with('-') {
+            parts.push((token.to_string(), theme.text_tertiary()));
+            continue;
+        }
+        // 普通参数
+        parts.push((token.to_string(), theme.text_primary()));
+    }
+    parts
 }
