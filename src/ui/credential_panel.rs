@@ -818,6 +818,7 @@ impl CredentialPanel {
     pub fn show_side_panel(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &Theme,
         right_dock_outer_left: &mut Option<f32>,
         dock_col_w: f32,
@@ -829,19 +830,19 @@ impl CredentialPanel {
 
         let (def_w, min_w, max_w) =
             crate::ui::layout_util::right_dock_resize_bounds(dock_col_w);
-        ctx.root_ui(|root| {
+        {
             egui::Panel::right("credential_panel")
                 .default_size(def_w)
                 .min_size(min_w)
                 .max_size(max_w)
                 .resizable(true)
                 .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-                .show(root, |ui| {
+                .show(ui, |ui| {
                     let h = ui.available_height().max(1.0);
                     let w = ui.available_width().max(1.0);
                     ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
                 });
-        });
+        }
         let dock_inset = theme.spacing_right_dock_screen_inset();
         // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
         let slot = layout_util::side_panel_state_rect(ctx, "credential_panel")
