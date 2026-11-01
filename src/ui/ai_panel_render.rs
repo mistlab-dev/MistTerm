@@ -384,10 +384,11 @@ pub(super) fn show_command_card(
                         .clamp(theme.font_size_small() * 1.4, theme.font_size_small() * 8.0),
                 )
                 .show(ui, |ui| {
-                    // 简单 shell 语法高亮：命令名蓝、参数灰、字符串绿、管道符黄
+                    // 简单 shell 语法高亮：命令名蓝、参数灰、字符串绿、管道符黄。
+                    // 用 horizontal（非 wrapped）保留横向滚动；parts 保留原文空格。
                     let parts = highlight_shell_command(&display, theme);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing.x = 2.0;
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
                         for (text, color) in parts {
                             ui.label(
                                 egui::RichText::new(text)
@@ -420,39 +421,127 @@ pub(super) fn show_command_card(
     clicked
 }
 
-/// 简单 shell 命令语法高亮：命令名蓝、参数灰、字符串绿、管道符黄
+/// 简单 shell 命令语法高亮：命令名蓝、参数灰、字符串绿、管道符黄。
+/// 按 shell 词法切分（保留引号内空格与原文分隔空白），避免 `echo "a b"` 显示失真。
 fn highlight_shell_command(cmd: &str, theme: &Theme) -> Vec<(String, egui::Color32)> {
+    let tokens = tokenize_shell_command(cmd);
     let mut parts = Vec::new();
-    let parts_str: Vec<&str> = cmd.split_whitespace().collect();
-    let mut prev_was_pipe = false;
+    let mut prev_was_op = false;
+    let mut saw_command = false;
 
-    for token in parts_str.iter() {
-        let token = *token;
-        // 管道符
+    for (token, is_ws) in tokens {
+        if is_ws {
+            parts.push((token, theme.text_primary()));
+            continue;
+        }
         if token == "|" || token == "&&" || token == "||" || token == ";" {
-            parts.push((token.to_string(), egui::Color32::from_rgb(220, 180, 80)));
-            prev_was_pipe = true;
+            parts.push((token, egui::Color32::from_rgb(220, 180, 80)));
+            prev_was_op = true;
+            saw_command = false;
             continue;
         }
-        // 字符串（带引号或$开头）
         if token.starts_with('\'') || token.starts_with('"') || token.starts_with('$') {
-            parts.push((token.to_string(), egui::Color32::from_rgb(80, 200, 120)));
-            prev_was_pipe = false;
+            parts.push((token, egui::Color32::from_rgb(80, 200, 120)));
+            prev_was_op = false;
             continue;
         }
-        // 第一个 token 或管道后面是命令名
-        if parts.is_empty() || prev_was_pipe {
-            parts.push((token.to_string(), egui::Color32::from_rgb(80, 160, 240)));
-            prev_was_pipe = false;
+        if !saw_command || prev_was_op {
+            parts.push((token, egui::Color32::from_rgb(80, 160, 240)));
+            prev_was_op = false;
+            saw_command = true;
             continue;
         }
-        // 参数（-开头）
         if token.starts_with('-') {
-            parts.push((token.to_string(), theme.text_tertiary()));
+            parts.push((token, theme.text_tertiary()));
             continue;
         }
-        // 普通参数
-        parts.push((token.to_string(), theme.text_primary()));
+        parts.push((token, theme.text_primary()));
     }
     parts
+}
+
+/// `(text, is_whitespace)`；引号串作为整段，空白单独保留以便还原原文。
+fn tokenize_shell_command(cmd: &str) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    let chars: Vec<char> = cmd.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_whitespace() {
+            let start = i;
+            while i < chars.len() && chars[i].is_whitespace() {
+                i += 1;
+            }
+            out.push((chars[start..i].iter().collect(), true));
+            continue;
+        }
+        // 双字符运算符优先
+        if i + 1 < chars.len() {
+            let two: String = chars[i..i + 2].iter().collect();
+            if two == "&&" || two == "||" {
+                out.push((two, false));
+                i += 2;
+                continue;
+            }
+        }
+        if chars[i] == '|' || chars[i] == ';' {
+            out.push((chars[i].to_string(), false));
+            i += 1;
+            continue;
+        }
+        if chars[i] == '\'' || chars[i] == '"' {
+            let quote = chars[i];
+            let start = i;
+            i += 1;
+            while i < chars.len() && chars[i] != quote {
+                // 简单转义：\" 在双引号内跳过结束判定
+                if quote == '"' && chars[i] == '\\' && i + 1 < chars.len() {
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            if i < chars.len() {
+                i += 1; // 吞掉收尾引号
+            }
+            out.push((chars[start..i].iter().collect(), false));
+            continue;
+        }
+        let start = i;
+        while i < chars.len() {
+            if chars[i].is_whitespace() || chars[i] == '|' || chars[i] == ';' {
+                break;
+            }
+            if i + 1 < chars.len() && chars[i] == '&' && chars[i + 1] == '&' {
+                break;
+            }
+            i += 1;
+        }
+        out.push((chars[start..i].iter().collect(), false));
+    }
+    out
+}
+
+#[cfg(test)]
+mod highlight_tests {
+    use super::tokenize_shell_command;
+
+    #[test]
+    fn tokenize_preserves_quoted_spaces_and_separators() {
+        let parts = tokenize_shell_command(r#"echo "hello world" | wc -l"#);
+        let joined: String = parts.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(joined, r#"echo "hello world" | wc -l"#);
+        assert!(parts.iter().any(|(t, ws)| !ws && t == r#""hello world""#));
+        assert!(parts.iter().any(|(t, ws)| !ws && t == "|"));
+    }
+
+    #[test]
+    fn tokenize_keeps_and_or_ops() {
+        let parts = tokenize_shell_command("true && echo ok || echo fail");
+        let tokens: Vec<&str> = parts
+            .iter()
+            .filter(|(_, ws)| !ws)
+            .map(|(t, _)| t.as_str())
+            .collect();
+        assert_eq!(tokens, vec!["true", "&&", "echo", "ok", "||", "echo", "fail"]);
+    }
 }

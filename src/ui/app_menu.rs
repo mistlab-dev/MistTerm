@@ -348,8 +348,7 @@ impl MistTermApp {
             ui.separator();
             // 3. 规则与检查
             if crate::ui::chrome::popup_menu_button(ui, theme, l.rule_manager).clicked() {
-                self.rule_manager_dialog
-                    .open_output_trigger(&self.output_trigger_rules);
+                self.open_rule_manager_dialog();
                 ui.close_menu();
             }
             ui.separator();

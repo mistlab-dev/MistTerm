@@ -700,14 +700,15 @@ impl CredentialPanel {
     }
 
     /// 保存当前表单（原内联「保存」按钮逻辑）；失败时只更新 `status_msg`。
+    /// 成功返回 `true`（调用方可关弹窗）；失败时保留表单并写状态文案。
     fn save_current(
         &mut self,
         ctx: &egui::Context,
         vault_settings: &VaultSettings,
         audit: &AuditLogger,
-    ) {
+    ) -> bool {
         if self.form_name.trim().is_empty() {
-            return;
+            return false;
         }
         let now = chrono::Utc::now().timestamp();
         let id = self
@@ -750,14 +751,17 @@ impl CredentialPanel {
             self.status_msg = i18n::tr(ctx, "Saved", "已保存").to_string();
             self.selected_id = Some(id);
             self.reload_vault();
+            true
         } else {
             self.status_msg = i18n::tr(ctx, "Save failed", "保存失败").to_string();
+            false
         }
     }
 
-    fn delete_selected(&mut self, ctx: &egui::Context, audit: &AuditLogger) {
+    /// 成功删除返回 `true`（可关弹窗）。
+    fn delete_selected(&mut self, ctx: &egui::Context, audit: &AuditLogger) -> bool {
         let Some(id) = self.selected_id.clone() else {
-            return;
+            return false;
         };
         if self.vault.remove(&id).unwrap_or(false) {
             audit.record(
@@ -770,6 +774,10 @@ impl CredentialPanel {
             );
             self.clear_form();
             self.status_msg = i18n::tr(ctx, "Deleted", "已删除").to_string();
+            true
+        } else {
+            self.status_msg = i18n::tr(ctx, "Delete failed", "删除失败").to_string();
+            false
         }
     }
 
@@ -851,7 +859,6 @@ impl CredentialPanel {
                         );
                         if save_resp.clicked() && can_save {
                             do_save = true;
-                            should_close = true;
                         }
                         if editing {
                             if chrome::modal_secondary_icon_button(
@@ -863,7 +870,6 @@ impl CredentialPanel {
                             .clicked()
                             {
                                 do_delete = true;
-                                should_close = true;
                             }
                             if chrome::modal_secondary_icon_button(
                                 ui,
@@ -893,11 +899,11 @@ impl CredentialPanel {
         if let Some(inner) = &resp {
             chrome::raise_window_response(ctx, &inner.response);
         }
-        if do_save {
-            self.save_current(ctx, vault_settings, audit);
+        if do_save && self.save_current(ctx, vault_settings, audit) {
+            should_close = true;
         }
-        if do_delete {
-            self.delete_selected(ctx, audit);
+        if do_delete && self.delete_selected(ctx, audit) {
+            should_close = true;
         }
         if do_use {
             if let Some(id) = &self.selected_id {

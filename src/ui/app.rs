@@ -4677,9 +4677,7 @@ impl MistTermApp {
                 self.send_sequence_dialog.open_manager(&self.send_sequences);
             }
             PaletteAction::RuleManager => {
-                self.close_competing_business_dialogs_for(BusinessDialog::RuleManager);
-                self.rule_manager_dialog
-                    .open_output_trigger(&self.output_trigger_rules);
+                self.open_rule_manager_dialog();
             }
         }
     }
@@ -7258,6 +7256,12 @@ impl MistTermApp {
         self.fragment_library.open = true;
     }
 
+    pub(crate) fn open_rule_manager_dialog(&mut self) {
+        self.close_competing_business_dialogs_for(BusinessDialog::RuleManager);
+        self.rule_manager_dialog
+            .open_output_trigger(&self.output_trigger_rules);
+    }
+
     pub(crate) fn menu_open_paste_history(&mut self, ctx: &egui::Context) {
         self.close_competing_business_dialogs_for(BusinessDialog::PasteHistory);
         self.paste_history_overlay.open_new();
@@ -9800,8 +9804,7 @@ impl MistTermApp {
                 self.send_sequence_dialog.open_manager(&self.send_sequences);
             }
             MacMenuAction::RuleManager => {
-                self.rule_manager_dialog
-                    .open_output_trigger(&self.output_trigger_rules);
+                self.open_rule_manager_dialog();
             }
             MacMenuAction::QuickFragmentSelector => self.quick_selector.open = true,
             MacMenuAction::CredentialPanel => {

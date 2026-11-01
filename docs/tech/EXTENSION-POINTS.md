@@ -158,7 +158,7 @@ fn builtin_modules() -> Vec<&'static dyn MistModule> { ... }
 | 资产 | 位置 | 变更方式 |
 |------|------|----------|
 | 模块代码 | `src/modules/<id>/`（迁入后） | 发版 |
-| 规则 JSON | `assets/<id>-patterns.json` | 发版；P1 可叠加用户/团队覆盖 |
+| 规则 JSON | `assets/<id>-patterns.json` 为内置默认。`output-trigger` 用户规则在配置目录 `mistterm/output-trigger-rules.json`（未自定义时不写文件） | 内置随发版；用户在「工具 → 规则管理」里改，下一行输出立即生效 |
 
 已有资产直接对上：
 
@@ -166,7 +166,9 @@ fn builtin_modules() -> Vec<&'static dyn MistModule> { ... }
 - `assets/output-trigger-patterns.json` → 模块 `output-trigger`  
 - `assets/cmd-audit-patterns/*` → 模块 `cmd-audit-local`（**不**吞服务器 `MIST_AUDIT` 通道）
 
-### 4.3 目录演进（建议，分 PR）
+### 4.3 目录演进
+
+`src/modules/cmd_audit_local.rs`（#121）、`src/modules/output_trigger.rs`（#119）、`src/modules/display_link.rs`（#120）与 `src/modules/session_import.rs`（#122）已落地。Host 用 `modules::builtin_modules` 注册，不在 `capability` 里反向依赖具体模块。
 
 ```
 src/
@@ -235,7 +237,7 @@ src/
 | **R1 脚手架** | `capability` crate 区 + registry + 偏好开关 UI（可先隐藏） | 空模块可注册；开关测通 |
 | **R2 迁 trigger** | output-trigger 只经 `on_output_line` | 行为与 #112 一致；关闭模块无 Toast |
 | **R3 迁 display-link** | 装饰 + 右键贡献走 API | #74 验收项不回退 |
-| **R4 迁本地审计** | `on_before_send` | 与服务器审计双通道用例仍过 |
+| **R4 迁本地审计** | `on_before_send` | **已落地（#121）**：模块 `cmd-audit-local`；关闭后本地规则不再拦截/确认/告警；`MIST_AUDIT` 服务器通道仍走原解析 |
 | **R5 文档** | 更新 `ARCHITECTURE.md` 引用本文 | 新人按图能找到该加代码的位置 |
 
 **并行约束**：R1–R4 期间不接「插件市场」需求；有人提第三方脚本，一律指向 P2 安全票。
@@ -260,7 +262,7 @@ src/
 
 1. **P0 是否只做同进程内置模块**（本文推荐：是）  
 2. **第一批钩子是否就这 5 个**（可先落地 2 个：`on_output_line` + `contribute_context_menu`）  
-3. **偏好里是否暴露模块开关**（推荐：R1 用环境变量，R4 后再做 UI）  
+3. **偏好里是否暴露模块开关**（拍板决定：提供官方内置模块用户向开关，详见 #118；同时 MISTTERM_DISABLE_MODULES 环境变量具备最高优先级）  
 4. **`src/modules/` 物理拆分是否本季度做**（推荐：R2 起按模块迁，不先大搬目录）  
 5. **P2 WASM 是否立项**（推荐：不立，直到有明确企业第三方需求）  
 
@@ -270,5 +272,5 @@ src/
 
 - 现状分层：[`ARCHITECTURE.md`](./ARCHITECTURE.md)  
 - 产品红线：[`CONVERSATIONAL-TERMINAL.md`](../product/CONVERSATIONAL-TERMINAL.md)  
-- 已解耦样例：`core/display_link.rs`、`core/output_trigger.rs`、`core/cmd_audit.rs`  
+- 已解耦样例：`modules/display_link.rs`、`modules/output_trigger.rs`（均已迁入 MistModule）、`core/cmd_audit.rs`  
 - 规划票：MistTerm #113  
