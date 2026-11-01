@@ -3618,18 +3618,6 @@ pub fn panel_search_row(
 }
 
 /// 侧栏搜索框([`panel_search_row`] 别名)
-pub fn sidebar_search_field(
-    ui: &mut Ui,
-    theme: &Theme,
-    id: egui::Id,
-    query: &mut String,
-    hint: &str,
-    desired_width: f32,
-) -> Response {
-    let _ = desired_width;
-    panel_search_row(ui, theme, id, query, hint, None)
-}
-
 /// 左栏顶部 SSH 配置导入提示条(§4.2，约 34px，弱提示)
 pub struct SshImportBannerAction {
     pub import: bool,
