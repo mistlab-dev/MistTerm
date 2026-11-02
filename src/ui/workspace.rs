@@ -138,6 +138,8 @@ impl MistTermApp {
         // 右侧单抽屉：须先于 Central 注册(Foreground 重绘依赖)。
         self.right_dock_outer_left_x = None;
         let dock_col_w = layout_util::clamp_sidebar_width(self.sidebar_width);
+        // #287: egui 0.37 PanelState is keyed by this parent Ui's scope_id().with(salt).
+        layout_util::remember_right_dock_panel_parent_scope(ctx, ui);
 
         if self.show_fragment_panel {
             self.show_fragment_panel(ctx, ui, theme, dock_col_w);

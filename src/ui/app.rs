@@ -8016,31 +8016,30 @@ impl MistTermApp {
         dock_col_w: f32,
     ) {
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        {
-            egui::Panel::right(layout_util::FRAGMENT_PANEL_ID)
-                .default_size(def_w)
-                .min_size(min_w)
-                .max_size(max_w)
-                .resizable(true)
-                .show_separator_line(false)
-                // 仅占布局宽；勿在此绘制内容(CentralPanel 后绘会盖住)。内容在 Foreground Area 重绘。
-                .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-                .show(ui, |ui| {
-                    let h = ui.available_height().max(1.0);
-                    let w = ui.available_width().max(1.0);
-                    ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-                });
-        }
-        let dock_inset = theme.spacing_right_dock_screen_inset();
-        // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
-        let slot = layout_util::side_panel_state_rect(ctx, layout_util::FRAGMENT_PANEL_ID)
-            .map(|r| {
-                let screen = ctx.content_rect();
-                let mut s = r;
-                s.min.x = screen.max.x - s.width();
-                s.max.x = screen.max.x - dock_inset;
-                s
+        let panel = egui::Panel::right(layout_util::FRAGMENT_PANEL_ID)
+            .default_size(def_w)
+            .min_size(min_w)
+            .max_size(max_w)
+            .resizable(true)
+            .show_separator_line(false)
+            // 仅占布局宽；勿在此绘制内容(CentralPanel 后绘会盖住)。内容在 Foreground Area 重绘。
+            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
+            .show(ui, |ui| {
+                let h = ui.available_height().max(1.0);
+                let w = ui.available_width().max(1.0);
+                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
             });
+        let dock_inset = theme.spacing_right_dock_screen_inset();
+        // #287: egui 0.37 Panel::show still returns InnerResponse; prefer response.rect.
+        // PanelState is keyed by parent_scope.with(salt), not Id::unique (see side_panel_state_rect).
+        let slot = {
+            let placed = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
+            if placed.is_positive() && placed.width() >= 48.0 {
+                Some(placed)
+            } else {
+                None
+            }
+        };
         if let Some(slot) = slot {
             crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
             self.fragment_panel_slot_rect = Some(slot);
