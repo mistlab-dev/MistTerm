@@ -141,7 +141,7 @@ impl FragmentLibraryState {
         let mut close_via_header = false;
         let lib_sz = egui::vec2(lib_def[0], lib_def[1]);
         crate::ui::chrome::modal_window("fragment_library_modal", theme, ctx)
-            .id(egui::Id::new("mistterm_fragment_library_window"))
+            .id(egui::Id::unique("mistterm_fragment_library_window"))
             .open(&mut win_open)
             .default_pos(modal_center_pos(ctx, lib_sz))
             .resizable(false)
@@ -188,7 +188,7 @@ impl FragmentLibraryState {
                     crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("fragment_lib_search"),
+                        egui::Id::unique("fragment_lib_search"),
                         &mut self.search_query,
                         i18n::tr(ctx, "Title / command / tags", "标题 / 命令 / 标签"),
                         search_w,
@@ -438,7 +438,7 @@ impl FragmentLibraryState {
                                 let title_resp = crate::ui::chrome::form_singleline_field(
                                     ui,
                                     theme,
-                                    egui::Id::new("fragment_library_form_title"),
+                                    egui::Id::unique("fragment_library_form_title"),
                                     &mut self.form_title,
                                     i18n::tr(ui.ctx(), "e.g. disk usage", "例如：查看磁盘占用"),
                                     edit_w,
@@ -456,7 +456,7 @@ impl FragmentLibraryState {
                                 crate::ui::chrome::form_singleline_field(
                                     ui,
                                     theme,
-                                    egui::Id::new("fragment_library_form_category"),
+                                    egui::Id::unique("fragment_library_form_category"),
                                     &mut self.form_category,
                                     i18n::tr(ui.ctx(), "e.g. ops · host", "例如：运维 · 主机"),
                                     edit_w,
@@ -470,7 +470,7 @@ impl FragmentLibraryState {
                                 crate::ui::chrome::form_singleline_field(
                                     ui,
                                     theme,
-                                    egui::Id::new("fragment_library_form_tags"),
+                                    egui::Id::unique("fragment_library_form_tags"),
                                     &mut self.form_tags,
                                     i18n::tr(ui.ctx(), "e.g. prod, nginx", "例如：prod, nginx"),
                                     edit_w,
@@ -492,7 +492,7 @@ impl FragmentLibraryState {
                                 crate::ui::chrome::form_multiline_field(
                                     ui,
                                     theme,
-                                    egui::Id::new("fragment_library_form_command"),
+                                    egui::Id::unique("fragment_library_form_command"),
                                     &mut self.form_command,
                                     edit_w,
                                     5,
@@ -609,7 +609,7 @@ impl FragmentLibraryState {
                                         crate::ui::chrome::form_singleline_field(
                                             ui,
                                             theme,
-                                            egui::Id::new(("frag_var_name", idx)),
+                                            egui::Id::unique(("frag_var_name", idx)),
                                             name,
                                             "",
                                             edit_w,
@@ -623,7 +623,7 @@ impl FragmentLibraryState {
                                         crate::ui::chrome::form_singleline_field(
                                             ui,
                                             theme,
-                                            egui::Id::new(("frag_var_desc", idx)),
+                                            egui::Id::unique(("frag_var_desc", idx)),
                                             desc,
                                             "",
                                             edit_w,
@@ -634,7 +634,7 @@ impl FragmentLibraryState {
                                             crate::ui::chrome::form_singleline_field(
                                                 ui,
                                                 theme,
-                                                egui::Id::new(("frag_var_default", idx)),
+                                                egui::Id::unique(("frag_var_default", idx)),
                                                 default,
                                                 "",
                                                 (edit_w - 56.0).max(72.0),

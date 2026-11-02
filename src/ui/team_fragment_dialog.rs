@@ -150,7 +150,7 @@ pub fn show_team_fragment_editor_modal(
                     chrome::form_singleline_field(
                         ui,
                         theme,
-                        egui::Id::new("team_frag_title"),
+                        egui::Id::unique("team_frag_title"),
                         &mut editor.title,
                         "",
                         form_w,
@@ -160,7 +160,7 @@ pub fn show_team_fragment_editor_modal(
                     chrome::form_multiline_field(
                         ui,
                         theme,
-                        egui::Id::new("team_frag_command"),
+                        egui::Id::unique("team_frag_command"),
                         &mut editor.command,
                         form_w,
                         4,
@@ -170,7 +170,7 @@ pub fn show_team_fragment_editor_modal(
                     chrome::form_singleline_field(
                         ui,
                         theme,
-                        egui::Id::new("team_frag_cat"),
+                        egui::Id::unique("team_frag_cat"),
                         &mut editor.category,
                         "",
                         form_w,

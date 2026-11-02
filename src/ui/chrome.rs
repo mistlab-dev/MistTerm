@@ -733,7 +733,7 @@ pub fn paint_right_dock_slot_gap(ctx: &egui::Context, theme: &Theme, slot: egui:
     }
     let layer_id = egui::LayerId::new(
         egui::Order::Background,
-        egui::Id::new("mistterm_right_dock_slot_bg"),
+        egui::Id::unique("mistterm_right_dock_slot_bg"),
     );
     let painter = ctx.layer_painter(layer_id);
     painter.rect_filled(bg, 0.0, theme.bg_body_color());
@@ -753,7 +753,7 @@ pub fn paint_right_dock_left_gap(ui: &egui::Ui, theme: &Theme) {
     }
     let layer_id = egui::LayerId::new(
         egui::Order::Background,
-        egui::Id::new("mistterm_right_dock_slot_bg"),
+        egui::Id::unique("mistterm_right_dock_slot_bg"),
     );
     let painter = ui.ctx().layer_painter(layer_id);
     painter.rect_filled(bg, 0.0, theme.bg_body_color());
@@ -780,7 +780,7 @@ pub fn paint_right_dock_screen_gutter(ctx: &egui::Context, theme: &Theme, top_ch
     let gutter = egui::Rect::from_min_max(egui::pos2(x0, y0), screen.max);
     let layer_id = egui::LayerId::new(
         egui::Order::Background,
-        egui::Id::new("mistterm_right_dock_gutter"),
+        egui::Id::unique("mistterm_right_dock_gutter"),
     );
     ctx.layer_painter(layer_id)
         .rect_filled(gutter, 0.0, theme.bg_body_color());
@@ -847,12 +847,12 @@ pub fn right_dock_slot_content_rect(slot: egui::Rect, theme: &Theme) -> egui::Re
 /// Central 之后 Foreground 重绘右 dock 用的图层(仅绘制壳层，勿在此注册可点 `Area`)。
 #[inline]
 pub fn right_dock_foreground_layer_id(id: &'static str) -> egui::LayerId {
-    egui::LayerId::new(egui::Order::Middle, egui::Id::new(id))
+    egui::LayerId::new(egui::Order::Middle, egui::Id::unique(id))
 }
 
 /// 右 dock Foreground `Area`(可点层)；正文仍在 `inner` 子区域布局。
 pub fn right_dock_foreground_body_area(id: &'static str) -> egui::Area {
-    egui::Area::new(egui::Id::new(id))
+    egui::Area::new(egui::Id::unique(id))
         .order(egui::Order::Middle)
         .movable(false)
         .interactable(true)
@@ -968,7 +968,7 @@ pub fn show_right_dock_resize_grip_layer(
     if !gutter.is_positive() {
         return;
     }
-    egui::Area::new(egui::Id::new((area_id, "resize_grip_layer")))
+    egui::Area::new(egui::Id::unique((area_id, "resize_grip_layer")))
         .order(egui::Order::Foreground)
         .movable(false)
         .interactable(true)
@@ -976,7 +976,7 @@ pub fn show_right_dock_resize_grip_layer(
         .show(ctx, |ui| {
             ui.set_min_size(gutter.size());
             ui.set_max_size(gutter.size());
-            let response = ui.interact(gutter, ui.id(), egui::Sense::drag());
+            let response = ui.interact(gutter, ui.scope_id(), egui::Sense::drag());
             if response.hovered() || response.dragged() {
                 ctx.set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                 let stroke = if response.dragged() {
@@ -988,7 +988,7 @@ pub fn show_right_dock_resize_grip_layer(
                 ui.painter().vline(x, gutter.y_range(), stroke);
             }
             if response.dragged() {
-                let id = egui::Id::new(panel_id);
+                let id = egui::Id::unique(panel_id);
                 if let Some(mut state) = egui::containers::panel::PanelState::load(ctx, id) {
                     let dx = ui.input(|i| i.pointer.delta().x);
                     let current_w = state.outer_rect.width();
@@ -1403,7 +1403,6 @@ pub fn paint_sidebar_selection_accent(
 #[derive(Clone, Copy, PartialEq)]
 enum ControlButtonVariant {
     Primary,
-    ToolbarPrimary,
     Secondary,
     Danger,
 }
@@ -1551,21 +1550,6 @@ fn primary_control_button_colors(
     (theme.color_modal_primary_fill(), c, c)
 }
 
-/// 面板命令栏「强调次要」：暗夜与 Secondary 同族；彩色主题可走实心主色。
-/// 真正的主操作请用 [`ControlButtonVariant::Primary`] / `panel_solid_primary_*` / `panel_action_primary_*`。
-fn toolbar_primary_control_button_colors(
-    theme: &Theme,
-    can_activate: bool,
-    hovered: bool,
-    pressed: bool,
-) -> (Color32, Color32, Color32) {
-    if theme.uses_modern_palette() {
-        secondary_control_button_colors(theme, can_activate, hovered, pressed)
-    } else {
-        primary_control_button_colors(theme, can_activate, hovered, pressed)
-    }
-}
-
 fn paint_control_button(
     ui: &mut Ui,
     theme: &Theme,
@@ -1586,13 +1570,6 @@ fn paint_control_button(
 
     let stroke = match variant {
         ControlButtonVariant::Primary => egui::Stroke::NONE,
-        ControlButtonVariant::ToolbarPrimary => {
-            if theme.uses_modern_palette() {
-                theme.color_control_secondary_stroke(can_activate)
-            } else {
-                egui::Stroke::NONE
-            }
-        }
         ControlButtonVariant::Secondary => theme.color_control_secondary_stroke(can_activate),
         ControlButtonVariant::Danger => egui::Stroke::new(1.0, theme.color_text_input_stroke()),
     };
@@ -1602,9 +1579,6 @@ fn paint_control_button(
         }
         ControlButtonVariant::Primary => {
             primary_control_button_colors(theme, can_activate, hovered, pressed)
-        }
-        ControlButtonVariant::ToolbarPrimary => {
-            toolbar_primary_control_button_colors(theme, can_activate, hovered, pressed)
         }
         ControlButtonVariant::Secondary => {
             secondary_control_button_colors(theme, can_activate, hovered, pressed)
@@ -1695,13 +1669,6 @@ fn paint_icon_only_button_at(
 
     let stroke = match variant {
         ControlButtonVariant::Primary => egui::Stroke::NONE,
-        ControlButtonVariant::ToolbarPrimary => {
-            if theme.uses_modern_palette() {
-                theme.color_control_secondary_stroke(can_activate)
-            } else {
-                egui::Stroke::NONE
-            }
-        }
         ControlButtonVariant::Secondary => theme.color_control_secondary_stroke(can_activate),
         ControlButtonVariant::Danger => egui::Stroke::new(1.0, theme.color_text_input_stroke()),
     };
@@ -1709,12 +1676,6 @@ fn paint_icon_only_button_at(
         ControlButtonVariant::Primary => {
             let (fill, text, icon) =
                 primary_control_button_colors(theme, can_activate, hovered, pressed);
-            let _ = text;
-            (fill, icon)
-        }
-        ControlButtonVariant::ToolbarPrimary => {
-            let (fill, text, icon) =
-                toolbar_primary_control_button_colors(theme, can_activate, hovered, pressed);
             let _ = text;
             (fill, icon)
         }
@@ -2202,7 +2163,7 @@ pub fn form_inline_singleline(
                     .frame(egui::Frame::NONE)
                     .desired_width((width - 8.0).max(40.0))
                     .margin(egui::vec2(0.0, 0.0))
-                    .vertical_align(egui::Align::Center)
+                    .align(egui::Align2::CENTER_CENTER)
                     .text_color(theme.color_text_input_text())
                     .font(egui::FontId::proportional(theme.font_size_control_input()));
                 if !hint.is_empty() {
@@ -2254,7 +2215,7 @@ pub fn form_checkbox_with_id(
     value: &mut bool,
     text: &str,
 ) -> Response {
-    ui.push_id(egui::Id::new(id), |ui| {
+    ui.push_id(egui::Id::unique(id), |ui| {
         let rounding = egui::CornerRadius::same(theme.radius_checkbox() as u8);
         let off_border = theme.color_checkbox_off_stroke_color();
         let w = &mut ui.style_mut().visuals.widgets;
@@ -2816,7 +2777,7 @@ pub fn segmented_control_row(
         } else {
             theme.color_segment_idle_text()
         };
-        let resp = ui.interact(seg_rect, ui.id().with(("seg", idx)), Sense::click());
+        let resp = ui.interact(seg_rect, ui.scope_id().with(("seg", idx)), Sense::click());
         paint_caption_in_rect_center(
             ui,
             seg_rect,
@@ -2851,7 +2812,7 @@ pub fn button_group_toolbar(
         return None;
     }
 
-    ui.push_id(egui::Id::new(id_salt), |ui| {
+    ui.push_id(egui::Id::unique(id_salt), |ui| {
         let pad = theme.spacing_button_group_pad();
         let icon_px = theme.size_icon_glyph();
         let gap = 4.0;
@@ -2907,7 +2868,7 @@ pub fn button_group_toolbar(
             } else {
                 Sense::hover()
             };
-            let resp = ui.interact(item_rect, ui.id().with(("bgrp", idx)), sense);
+            let resp = ui.interact(item_rect, ui.scope_id().with(("bgrp", idx)), sense);
             let text_color = if action.enabled {
                 if resp.hovered() {
                     theme.text_primary()
@@ -3042,7 +3003,7 @@ pub fn sftp_toolbar_actions(
         return None;
     }
     let mut clicked = None;
-    ui.push_id(egui::Id::new(id_salt), |ui| {
+    ui.push_id(egui::Id::unique(id_salt), |ui| {
         ui.spacing_mut().item_spacing.x = theme.spacing_xs();
         for (idx, action) in actions.iter().enumerate() {
             let tip = if action.tooltip.is_empty() {
@@ -3057,7 +3018,7 @@ pub fn sftp_toolbar_actions(
                 action.label,
                 tip,
                 action.enabled,
-                ui.id().with(idx),
+                ui.scope_id().with(idx),
             )
             .clicked()
                 && action.enabled
@@ -3323,7 +3284,7 @@ pub fn form_singleline_field_boxed(
                     .id(id)
                     .frame(egui::Frame::NONE)
                     .desired_width(inner.width().max(40.0))
-                    .vertical_align(egui::Align::Center)
+                    .align(egui::Align2::CENTER_CENTER)
                     .text_color(theme.color_text_input_text())
                     .font(egui::FontId::proportional(theme.font_size_control_input()));
                 if !hint.is_empty() {
@@ -5010,8 +4971,8 @@ pub fn form_u32_stepper(
                 egui::TextEdit::singleline(&mut text)
                     .id(id)
                     .desired_width(field_w - 8.0)
-                    .horizontal_align(egui::Align::Center)
-                    .vertical_align(egui::Align::Center)
+                    .align(egui::Align2::CENTER_CENTER)
+                    .align(egui::Align2::CENTER_CENTER)
                     .margin(egui::vec2(0.0, 0.0))
                     .font(egui::FontId::proportional(theme.font_size_ui_control()))
                     .frame(egui::Frame::NONE),
@@ -5142,8 +5103,8 @@ pub fn form_f32_stepper(
                 egui::TextEdit::singleline(&mut text)
                     .id(id)
                     .desired_width(field_w - 8.0)
-                    .horizontal_align(egui::Align::Center)
-                    .vertical_align(egui::Align::Center)
+                    .align(egui::Align2::CENTER_CENTER)
+                    .align(egui::Align2::CENTER_CENTER)
                     .margin(egui::vec2(0.0, 0.0))
                     .font(egui::FontId::proportional(theme.font_size_ui_control()))
                     .frame(egui::Frame::NONE),

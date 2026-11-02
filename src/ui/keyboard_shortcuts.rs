@@ -390,7 +390,7 @@ mod tests {
             let mut comma_left = false;
             let _ = ctx.run_pass(raw, |ctx| {
                 if focus_text_input {
-                    ctx.memory_mut(|m| m.request_focus(egui::Id::new("some_text_edit")));
+                    ctx.memory_mut(|m| m.request_focus(egui::Id::unique("some_text_edit")));
                 }
                 hit = consume_preferences_shortcut(ctx, true);
                 comma_left = ctx.input(|i| {

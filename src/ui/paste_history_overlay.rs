@@ -119,7 +119,7 @@ impl PasteHistoryOverlay {
                     let search = crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("paste_history_search"),
+                        egui::Id::unique("paste_history_search"),
                         &mut self.query,
                         crate::i18n::tr(ctx, "Search paste history…", "搜索粘贴历史…"),
                         content_w,

@@ -1336,7 +1336,7 @@ impl SftpPanel {
                 }
             };
             let widest = ui.ctx().fonts_mut(|mut f| {
-                let mut measure = |f: &mut egui::epaint::text::FontsView<'_>, text: &str, size: f32| {
+                let measure = |f: &mut egui::epaint::text::FontsView<'_>, text: &str, size: f32| {
                     f.layout_no_wrap(
                         text.to_string(),
                         egui::FontId::proportional(size),
@@ -3337,7 +3337,7 @@ impl SftpPanel {
         let mut open = true;
         let mut should_close = false;
         let mut do_create = false;
-        let mkdir_id = egui::Id::new("sftp_mkdir_modal_name");
+        let mkdir_id = egui::Id::unique("sftp_mkdir_modal_name");
         let mkdir_hint = crate::i18n::tr(ctx, "New folder name", "新建目录名");
         let can_create = !self.busy && !self.mkdir_name.trim().is_empty();
         let modal_sz = layout_util::modal_confirm_size(ctx);
@@ -3433,7 +3433,7 @@ impl SftpPanel {
         let mut open = true;
         let mut should_close = false;
         let mut do_rename = false;
-        let rename_id = egui::Id::new("sftp_rename_modal_name");
+        let rename_id = egui::Id::unique("sftp_rename_modal_name");
         let rename_hint = crate::i18n::tr(ctx, "New name", "新名称");
         let can_rename = !self.busy && !self.rename_name.trim().is_empty();
         let modal_sz = layout_util::modal_confirm_size(ctx);
@@ -3549,7 +3549,7 @@ impl SftpPanel {
         let mut open = true;
         let mut should_close = false;
         let mut do_apply = false;
-        let oct_id = egui::Id::new("sftp_chmod_octal");
+        let oct_id = egui::Id::unique("sftp_chmod_octal");
         let modal_sz = layout_util::modal_confirm_size(ctx);
         let resp = crate::ui::chrome::modal_window("sftp_chmod_modal", theme, ctx)
             .open(&mut open)
@@ -3995,7 +3995,7 @@ impl SftpPanel {
                 ui.add_space(theme.spacing_sm());
                 Self::paint_selection_chip(ui, theme, ctx, self.local_selected.len());
             });
-            let local_path_id = egui::Id::new("sftp_local_path");
+            let local_path_id = egui::Id::unique("sftp_local_path");
             let home_hint = crate::platform::home_dir_display_hint();
             let go_lbl = crate::i18n::tr(ui.ctx(), "Go", "前往");
             let up_lbl = crate::i18n::tr(ui.ctx(), "Up", "上级");
@@ -4122,7 +4122,7 @@ impl SftpPanel {
                     crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("sftp_local_filter_toolbar"),
+                        egui::Id::unique("sftp_local_filter_toolbar"),
                         &mut self.local_filter,
                         crate::i18n::tr(ctx, "Filter by name", "按名字找"),
                         ui.available_width().max(48.0),
@@ -4230,7 +4230,7 @@ impl SftpPanel {
                     crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("sftp_local_filter_below"),
+                        egui::Id::unique("sftp_local_filter_below"),
                         &mut self.local_filter,
                         crate::i18n::tr(ctx, "Name…", "文件名…"),
                         ui.available_width().max(80.0),
@@ -4427,7 +4427,7 @@ impl SftpPanel {
                 ui.add_space(theme.spacing_sm());
                 Self::paint_selection_chip(ui, theme, ctx, self.remote_selected.len());
             });
-            let remote_path_id = egui::Id::new("sftp_path_edit");
+            let remote_path_id = egui::Id::unique("sftp_path_edit");
             let remote_path_hint = crate::i18n::tr(ui.ctx(), "/home/user", "/home/user");
             let go_lbl = crate::i18n::tr(ui.ctx(), "Go", "前往");
             let up_lbl = crate::i18n::tr(ui.ctx(), "Up", "上级");
@@ -4601,7 +4601,7 @@ impl SftpPanel {
                     crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("sftp_remote_filter_toolbar"),
+                        egui::Id::unique("sftp_remote_filter_toolbar"),
                         &mut self.remote_filter,
                         crate::i18n::tr(ctx, "Filter by name", "按名字找"),
                         ui.available_width().max(48.0),
@@ -4722,7 +4722,7 @@ impl SftpPanel {
                     crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("sftp_remote_filter_below"),
+                        egui::Id::unique("sftp_remote_filter_below"),
                         &mut self.remote_filter,
                         crate::i18n::tr(ctx, "Name…", "文件名…"),
                         ui.available_width().max(80.0),
@@ -5113,7 +5113,7 @@ impl SftpPanel {
         const PERSIST_ID: &str = "mistterm.sftp.drag_hint_dismissed";
         if !self.drag_hint_dismissed {
             if ctx.data_mut(|d| {
-                d.get_persisted::<bool>(egui::Id::new(PERSIST_ID))
+                d.get_persisted::<bool>(egui::Id::unique(PERSIST_ID))
                     .unwrap_or(false)
             }) {
                 self.drag_hint_dismissed = true;
@@ -5146,7 +5146,7 @@ impl SftpPanel {
         if dismissed {
             self.drag_hint_dismissed = true;
             ctx.data_mut(|d| {
-                d.insert_persisted(egui::Id::new(PERSIST_ID), true);
+                d.insert_persisted(egui::Id::unique(PERSIST_ID), true);
             });
         }
     }
@@ -5426,10 +5426,10 @@ impl SftpPanel {
         rect: egui::Rect,
     ) -> Option<PathBuf> {
         let _ = ui.allocate_rect(rect, egui::Sense::hover());
-        if ui.interact(rect, ui.id().with(scroll_id), egui::Sense::click()).double_clicked() {
+        if ui.interact(rect, ui.scope_id().with(scroll_id), egui::Sense::click()).double_clicked() {
             *editing = true;
         }
-        let response = ui.interact(rect, ui.id().with((scroll_id, "path")), egui::Sense::click());
+        let response = ui.interact(rect, ui.scope_id().with((scroll_id, "path")), egui::Sense::click());
         let crumbs = sftp_file_table::path_crumbs(path);
         let mono = egui::FontId::monospace(theme.font_size_caption());
         let color = theme.text_secondary();
@@ -5520,7 +5520,7 @@ impl SftpPanel {
         let pane_w = Self::clip_flux_pane(ui);
         let local_cwd = self.local_cwd.clone();
         let local_hint = crate::platform::home_dir_display_hint();
-        let local_edit_id = egui::Id::new("sftp_flux_local_path");
+        let local_edit_id = egui::Id::unique("sftp_flux_local_path");
         let mut jump_local = Self::paint_flux_head_bar(
             ui,
             theme,
@@ -5604,7 +5604,7 @@ impl SftpPanel {
         Self::paint_flux_filter_bar(
             ui,
             theme,
-            egui::Id::new("sftp_flux_local_filter"),
+            egui::Id::unique("sftp_flux_local_filter"),
             &mut self.local_filter,
             crate::i18n::tr(ctx, "Filter by name", "按名字找"),
             pane_w,
@@ -5704,7 +5704,7 @@ impl SftpPanel {
         ui.spacing_mut().item_spacing.y = 0.0;
         let pane_w = Self::clip_flux_pane(ui);
         let remote_cwd = self.cwd.clone();
-        let remote_edit_id = egui::Id::new("sftp_flux_remote_path");
+        let remote_edit_id = egui::Id::unique("sftp_flux_remote_path");
         let mut jump_remote = Self::paint_flux_head_bar(
             ui,
             theme,
@@ -5785,7 +5785,7 @@ impl SftpPanel {
         Self::paint_flux_filter_bar(
             ui,
             theme,
-            egui::Id::new("sftp_flux_remote_filter"),
+            egui::Id::unique("sftp_flux_remote_filter"),
             &mut self.remote_filter,
             crate::i18n::tr(ctx, "Filter by name", "按名字找"),
             pane_w,

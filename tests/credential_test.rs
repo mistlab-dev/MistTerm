@@ -7,6 +7,7 @@ use mistterm::core::credential::{
 };
 
 #[test]
+#[allow(deprecated)]
 fn credential_category_labels() {
     assert_eq!(CredentialCategory::Server.label_zh(), "服务器账号");
     assert_eq!(CredentialCategory::Database.label_zh(), "数据库");
@@ -16,6 +17,7 @@ fn credential_category_labels() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn credential_category_all_variants() {
     let categories = vec![
         CredentialCategory::Server,
@@ -31,12 +33,14 @@ fn credential_category_all_variants() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn secret_backend_default() {
     let backend = SecretBackend::default();
     assert!(matches!(backend, SecretBackend::LocalEncrypted));
 }
 
 #[test]
+#[allow(deprecated)]
 fn secret_backend_is_vault() {
     let local = SecretBackend::LocalEncrypted;
     assert!(!local.is_vault());
@@ -51,6 +55,7 @@ fn secret_backend_is_vault() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn secret_backend_vault_kv_serde() {
     let vault = SecretBackend::VaultKv {
         mount: "secret".into(),
@@ -66,6 +71,7 @@ fn secret_backend_vault_kv_serde() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn secret_backend_local_encrypted_serde() {
     let local = SecretBackend::LocalEncrypted;
 
@@ -76,6 +82,7 @@ fn secret_backend_local_encrypted_serde() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn credential_auth_kind_labels() {
     assert_eq!(CredentialAuthKind::Password.label_zh(), "密码");
     assert_eq!(CredentialAuthKind::SshKey.label_zh(), "SSH 密钥");
@@ -83,12 +90,14 @@ fn credential_auth_kind_labels() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn credential_auth_kind_default() {
     let auth = CredentialAuthKind::default();
     assert!(matches!(auth, CredentialAuthKind::Password));
 }
 
 #[test]
+#[allow(deprecated)]
 fn credential_auth_kind_all_variants() {
     let kinds = vec![
         CredentialAuthKind::Password,
@@ -102,6 +111,7 @@ fn credential_auth_kind_all_variants() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn credential_auth_kind_serde() {
     let kinds = vec![
         CredentialAuthKind::Password,
@@ -117,6 +127,7 @@ fn credential_auth_kind_serde() {
 }
 
 #[test]
+#[allow(deprecated)]
 fn credential_category_serde() {
     let categories = vec![
         CredentialCategory::Server,

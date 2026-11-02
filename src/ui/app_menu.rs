@@ -6,7 +6,7 @@ impl MistTermApp {
         ui: &mut egui::Ui,
         ctx: &egui::Context,
         theme: &crate::ui::theme::Theme,
-        frame: &mut eframe::Frame,
+        _frame: &mut eframe::Frame,
     ) {
         if self.uses_native_menu_bar() {
             return;

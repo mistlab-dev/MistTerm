@@ -1022,7 +1022,7 @@ mod tests {
     #[test]
     fn ime_preedit_tracks_updates_and_clears_on_commit() {
         let mut preedit = ImePreedit::default();
-        preedit.apply_event(&Event::Ime(egui::ImeEvent::Disabled));
+        preedit.apply_event(&Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None })); // 0.37: Disabled 已弃用，空 Preedit 表示 IME 关闭
         assert!(preedit.is_empty());
         preedit.apply_event(&Event::Ime(egui::ImeEvent::Preedit { text: "ni".into(), active_range_chars: None }));
         assert_eq!(preedit.text(), "ni");
@@ -1046,7 +1046,7 @@ mod tests {
                     ctrl: true,
                     ..Default::default()
                 };
-                i.events.push(Event::Ime(egui::ImeEvent::Disabled));
+                i.events.push(Event::Ime(egui::ImeEvent::Preedit { text: String::new(), active_range_chars: None })); // 0.37: Disabled 已弃用
                 i.events.push(Event::Ime(egui::ImeEvent::Preedit { text: "nihao".into(), active_range_chars: None }));
                 i.events.push(key_press(Key::C, ctrl));
                 let mut preedit = ImePreedit::default();
@@ -1228,7 +1228,7 @@ mod tests {
     fn copy_shortcut_survives_focused_empty_ime_box() {
         fn run(consume: bool) -> String {
             let ctx = egui::Context::default();
-            let ime_id = egui::Id::new("ime_capture_test");
+            let ime_id = egui::Id::unique("ime_capture_test");
             let mut input = egui::RawInput::default();
             input.events = vec![
                 Event::ModifiersChanged(terminal_clipboard_modifiers()),
@@ -1346,7 +1346,7 @@ mod tests {
     /// 再画终端那个有焦点的空 IME 框；看剪贴板、焦点、IME 框里有没有被塞东西、还剩多少 Text 会进 PTY。
     fn one_frame(input: egui::RawInput, handler: impl FnOnce(&mut InputState) -> bool) -> Outcome {
         let ctx = egui::Context::default();
-        let ime_id = egui::Id::new("ime_capture_audit");
+        let ime_id = egui::Id::unique("ime_capture_audit");
         // 先跑三帧让 IME 框存在、拿到焦点并锁住焦点(和真实终端一样，按键之前它就已经有焦点)。
         for frame in 0..3 {
             let _ = ctx.run_pass(egui::RawInput::default(), |ctx| {
@@ -1362,13 +1362,13 @@ mod tests {
                 if frame == 0 {
                     ctx.memory_mut(|m| m.request_focus(ime_id));
                 }
-            }) });;
+            }) });
         }
         let mut ime_text_seen = String::new();
         let mut text_left_for_pty = 0;
         let handler = std::cell::RefCell::new(Some(handler));
         let out = ctx.run_pass(input, |ctx| {
-            let mut h = handler.borrow_mut().take().unwrap();
+            let h = handler.borrow_mut().take().unwrap();
             let app_copied = ctx.input_mut(|i| h(i));
             if app_copied {
                 ctx.copy_text("APP".into());
@@ -1388,7 +1388,7 @@ mod tests {
                 );
                 ime_text_seen = t;
             });
-        }) });;
+        }) });
         Outcome {
             copied:             out.platform_output
                 .commands

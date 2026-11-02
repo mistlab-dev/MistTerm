@@ -14,7 +14,7 @@ use crate::modules::display_link::{
 };
 use crate::modules::output_trigger::{
     check_pattern, ImportReport, OutputTriggerRule, OutputTriggerStore, RuleDraft, RuleError,
-    TriggerAction, TriggerSeverity, MAX_RULES as OT_MAX_RULES,
+    TriggerAction, TriggerSeverity,
 };
 use crate::ui::theme::Theme;
 
@@ -605,7 +605,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_multiline_field_with_hint(
                     ui,
                     theme,
-                    egui::Id::new("output_trigger_keywords"),
+                    egui::Id::unique("output_trigger_keywords"),
                     &mut self.ot_keywords,
                     crate::i18n::tr(ctx, "ERROR, failed, timeout", "ERROR, 失败, 超时"),
                     width,
@@ -630,7 +630,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_multiline_field_with_hint(
                     ui,
                     theme,
-                    egui::Id::new("output_trigger_pattern"),
+                    egui::Id::unique("output_trigger_pattern"),
                     &mut self.pattern,
                     crate::i18n::tr(ctx, "HELLO_MIST", "HELLO_MIST"),
                     width,
@@ -714,7 +714,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_u32_stepper(
                     ui,
                     theme,
-                    egui::Id::new("output_trigger_priority"),
+                    egui::Id::unique("output_trigger_priority"),
                     &mut self.priority,
                     0..=255,
                     1,
@@ -1422,7 +1422,7 @@ impl RuleManagerDialog {
             crate::ui::chrome::form_singleline_field(
                 ui,
                 theme,
-                egui::Id::new("cmd_rule_name"),
+                egui::Id::unique("cmd_rule_name"),
                 &mut self.cmd_name,
                 crate::i18n::tr(ctx, "e.g. Protect production DB", "例如：保护生产库"),
                 width,
@@ -1446,7 +1446,7 @@ impl RuleManagerDialog {
             crate::ui::chrome::form_multiline_field_with_hint(
                 ui,
                 theme,
-                egui::Id::new("cmd_rule_pattern"),
+                egui::Id::unique("cmd_rule_pattern"),
                 &mut self.cmd_pattern,
                 "rm\\s+-rf\\s+/",
                 width,
@@ -1547,7 +1547,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_u32_stepper(
                     ui,
                     theme,
-                    egui::Id::new("cmd_rule_priority"),
+                    egui::Id::unique("cmd_rule_priority"),
                     &mut prio,
                     0..=255,
                     1,
@@ -2215,7 +2215,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_multiline_field_with_hint(
                     ui,
                     theme,
-                    egui::Id::new("display_link_keywords"),
+                    egui::Id::unique("display_link_keywords"),
                     &mut self.link_keywords,
                     crate::i18n::tr(ctx, "/var/log, 10.0.0, https://", "/var/log, 10.0.0, https://"),
                     width,
@@ -2240,7 +2240,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_multiline_field_with_hint(
                     ui,
                     theme,
-                    egui::Id::new("display_link_pattern"),
+                    egui::Id::unique("display_link_pattern"),
                     &mut self.link_pattern,
                     "https?://\\S+",
                     width,
@@ -2321,7 +2321,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_u32_stepper(
                     ui,
                     theme,
-                    egui::Id::new("display_link_priority"),
+                    egui::Id::unique("display_link_priority"),
                     &mut self.link_priority,
                     0..=255,
                     1,

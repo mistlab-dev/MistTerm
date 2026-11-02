@@ -461,6 +461,7 @@ mod tests {
 
     // ------------------------------------------------------ enums + labels
     #[test]
+    #[allow(deprecated)]
     fn category_all_variants_have_distinct_non_empty_labels() {
         use CredentialCategory::*;
         let all = [Server, Database, SshKey, Api, Other];
@@ -488,6 +489,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn auth_kind_default_and_labels_are_distinct() {
         assert_eq!(CredentialAuthKind::default(), CredentialAuthKind::Password);
         use CredentialAuthKind::*;

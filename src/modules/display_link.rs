@@ -238,7 +238,7 @@ fn is_system_binary_path(text: &str) -> bool {
 
 /// 从输出行中识别出的可点击片段。
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct DisplayLink {
+pub(crate) struct DisplayLink {
     start: usize,
     end: usize,
     rule_id: String,
@@ -247,20 +247,13 @@ struct DisplayLink {
 }
 
 impl DisplayLink {
+    #[cfg(test)]
     pub fn rule_id(&self) -> &str {
         &self.rule_id
     }
-
+    #[cfg(test)]
     pub fn action_str(&self) -> &'static str {
         self.action.as_str()
-    }
-
-    pub fn text(&self) -> &str {
-        &self.text
-    }
-
-    pub fn range(&self) -> (usize, usize) {
-        (self.start, self.end)
     }
 }
 
@@ -310,6 +303,7 @@ struct DisplayLinkEngine {
 }
 
 impl DisplayLinkEngine {
+    #[cfg(test)]
     /// 解析失败返回空引擎（功能关闭）。
     fn from_json(json: &str) -> Self {
         Self::from_rules(&parse_rules_lenient(json))
@@ -341,7 +335,7 @@ impl DisplayLinkEngine {
             max_hits_per_line: 16,
         }
     }
-
+    #[cfg(test)]
     fn is_empty(&self) -> bool {
         self.patterns.is_empty()
     }
@@ -512,7 +506,7 @@ impl DisplayLinkStore {
     }
 
     /// 对一行视口文本做匹配。引擎为空或行长超限返回空（与现网一致）。
-    pub fn scan(&self, line: &str) -> Vec<DisplayLink> {
+    pub(crate) fn scan(&self, line: &str) -> Vec<DisplayLink> {
         self.read(|inner| inner.engine.scan(line))
     }
 

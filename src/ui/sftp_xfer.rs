@@ -306,6 +306,7 @@ impl XferQueue {
 }
 
 /// 根据源/目标大小决定默认写模式（策略非 Ask 时）。
+#[cfg(test)]
 pub(super) fn resolve_write_mode(
     policy: OverwritePolicy,
     dest_exists: bool,
@@ -647,7 +648,7 @@ fn paint_flux_xfer_strip(
         fill.set_width((track.width() * p).max(0.0));
         ui.painter().rect_filled(fill, 1.0, theme.accent_color());
     }
-    let bar_resp = ui.interact(bar_hit, ui.id().with("flux_xfer_bar"), egui::Sense::hover());
+    let bar_resp = ui.interact(bar_hit, ui.scope_id().with("flux_xfer_bar"), egui::Sense::hover());
     bar_resp.on_hover_ui(|ui| {
         ui.set_min_width(220.0);
         ui.label(

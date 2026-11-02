@@ -475,13 +475,6 @@ mod tests {
             }
         }
 
-        fn calls(&self) -> (usize, usize, usize) {
-            (
-                *self.output_calls.lock().unwrap(),
-                *self.send_calls.lock().unwrap(),
-                *self.session_calls.lock().unwrap(),
-            )
-        }
     }
 
     impl MistModule for FakeModule {
@@ -587,7 +580,7 @@ mod tests {
 
     #[test]
     fn disabled_module_hooks_never_called() {
-        let m = Box::new(FakeModule::new("fake-b", true));
+        let _m = Box::new(FakeModule::new("fake-b", true));
         // 借 registry 分发前先保存假模块引用不可行——用包装在 trait 内计数，
         // 这里改用快照前后调用对比：禁用 → 分发 → 计数不变。
         struct SharedFake {
@@ -621,7 +614,7 @@ mod tests {
             }
         }
         let counter = Arc::new(Mutex::new(0));
-        let mut reg = ModuleRegistry::with_modules(vec![Box::new(SharedFake {
+        let reg = ModuleRegistry::with_modules(vec![Box::new(SharedFake {
             inner: Box::new(FakeModule::new("shared", true)),
             calls: counter.clone(),
         })]);
@@ -659,7 +652,7 @@ mod tests {
     #[test]
     fn block_short_circuits_and_confirm_collected() {
         // Block 短路：即使还有其它模块，整体 Block。
-        let mut reg = ModuleRegistry::with_modules(vec![
+        let reg = ModuleRegistry::with_modules(vec![
             Box::new(BlockingModule),
             Box::new(FakeModule::new("other", true)),
         ]);
@@ -776,7 +769,7 @@ mod tests {
     #[test]
     fn env_disable_respects_ids() {
         // 直接测解析逻辑：构造后手动写入 disabled（避免环境变量跨测试污染）。
-        let mut reg =
+        let reg =
             ModuleRegistry::with_modules(vec![Box::new(FakeModule::new("env-mod", true))]);
         reg.disabled.borrow_mut().insert("env-mod".to_string());
         assert!(!reg.is_enabled("env-mod"));

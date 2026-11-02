@@ -700,7 +700,7 @@ impl MonitorPanel {
                     let _ = crate::ui::chrome::form_f32_stepper(
                         ui,
                         theme,
-                        egui::Id::new(("monitor_alert_th", idx)),
+                        egui::Id::unique(("monitor_alert_th", idx)),
                         pct,
                         50.0..=100.0,
                         1.0,
@@ -1066,9 +1066,9 @@ impl MonitorPanel {
         let width = layout_util::dock_scroll_content_width(ui, content_w);
         ui.set_max_width(width);
         let plot_margin = egui::vec2(0.05, 0.0);
-        let y_axis = vec![AxisHints::new_y().max_digits(Y_AXIS_DIGITS)];
-        let link_x_id = ui.id().with("monitor_hist_time_axis");
-        let tip_id = ui.id().with("monitor_history_tooltip");
+        let y_axis = vec![AxisHints::new_y().min_thickness(12.0 * Y_AXIS_DIGITS as f32)];
+        let link_x_id = ui.scope_id().with("monitor_hist_time_axis");
+        let _tip_id = ui.scope_id().with("monitor_history_tooltip");
 
         if history.len() < 2 {
             // #251：首次空图骨架 +「数据采集中…」，避免整片灰字空白。
@@ -1146,7 +1146,7 @@ impl MonitorPanel {
         let mut hover_idx: Option<usize> = None;
 
         let pct_resp = monitor_hist_plot(
-            ui.id().with("mist_monitor_pct"),
+            ui.scope_id().with("mist_monitor_pct"),
             width,
             CHART_HEIGHT,
             link_x_id,
@@ -1293,7 +1293,7 @@ impl MonitorPanel {
         );
 
         monitor_hist_plot(
-            ui.id().with("mist_monitor_load"),
+            ui.scope_id().with("mist_monitor_load"),
             width,
             CHART_HEIGHT,
             link_x_id,
@@ -1373,7 +1373,7 @@ impl MonitorPanel {
             let net_max = net_y_max(&rx_line, &tx_line);
 
             monitor_hist_plot(
-                ui.id().with("mist_monitor_net"),
+                ui.scope_id().with("mist_monitor_net"),
                 width,
                 CHART_HEIGHT,
                 link_x_id,

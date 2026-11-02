@@ -117,7 +117,7 @@ impl CommandHistoryOverlay {
             self.selected = 0;
         }
 
-        let title_id = egui::Id::new("cmd_history_compose_title");
+        let title_id = egui::Id::unique("cmd_history_compose_title");
         let title_focused = ctx.memory(|m| m.has_focus(title_id));
         let mut action = CommandHistoryAction::None;
 
@@ -233,7 +233,7 @@ impl CommandHistoryOverlay {
                     let search_resp = crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("cmd_history_search"),
+                        egui::Id::unique("cmd_history_search"),
                         &mut self.query,
                         crate::i18n::tr(ctx, "Search history…", "搜索历史命令…"),
                         content_w,
@@ -726,7 +726,7 @@ fn history_row(
         HistoryTableCols::paint_row_strip(ui, cols, row_h, |cell, col| match col {
             0 => {
                 let before = *checked;
-                let id = egui::Id::new(("cmd_hist_check", entry.executed_at, &entry.command));
+                let id = egui::Id::unique(("cmd_hist_check", entry.executed_at, &entry.command));
                 if crate::ui::chrome::form_checkbox_with_id(cell, theme, id, checked, "")
                     .changed()
                 {

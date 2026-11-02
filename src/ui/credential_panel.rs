@@ -290,7 +290,7 @@ impl CredentialPanel {
         chrome::form_singleline_field_boxed(
             ui,
             theme,
-            egui::Id::new("cred_form_name"),
+            egui::Id::unique("cred_form_name"),
             &mut panel.form_name,
             "",
             field_w,
@@ -350,7 +350,7 @@ impl CredentialPanel {
         chrome::form_singleline_field_boxed(
             ui,
             theme,
-            egui::Id::new("cred_form_host"),
+            egui::Id::unique("cred_form_host"),
             &mut panel.form_host,
             "example.com",
             field_w,
@@ -361,7 +361,7 @@ impl CredentialPanel {
             chrome::form_u16_stepper(
                 ui,
                 theme,
-                egui::Id::new("cred_form_port"),
+                egui::Id::unique("cred_form_port"),
                 &mut panel.form_port,
                 1..=65535,
                 1,
@@ -375,7 +375,7 @@ impl CredentialPanel {
         chrome::form_singleline_field_boxed(
             ui,
             theme,
-            egui::Id::new("cred_form_username"),
+            egui::Id::unique("cred_form_username"),
             &mut panel.form_username,
             i18n::tr(ui.ctx(), "e.g. root", "如 root"),
             field_w,
@@ -458,7 +458,7 @@ impl CredentialPanel {
             chrome::form_multiline_field(
                 ui,
                 theme,
-                egui::Id::new("cred_form_secret"),
+                egui::Id::unique("cred_form_secret"),
                 &mut panel.form_secret,
                 field_w,
                 3,
@@ -473,7 +473,7 @@ impl CredentialPanel {
         chrome::form_singleline_field_boxed(
             ui,
             theme,
-            egui::Id::new("cred_form_tags"),
+            egui::Id::unique("cred_form_tags"),
             &mut panel.form_tags,
             "prod, web",
             field_w,
@@ -483,7 +483,7 @@ impl CredentialPanel {
         chrome::form_multiline_field(
             ui,
             theme,
-            egui::Id::new("cred_form_notes"),
+            egui::Id::unique("cred_form_notes"),
             &mut panel.form_notes,
             field_w,
             2,
@@ -526,7 +526,7 @@ impl CredentialPanel {
             chrome::form_singleline_field_boxed(
                 ui,
                 theme,
-                egui::Id::new("cred_vault_mount"),
+                egui::Id::unique("cred_vault_mount"),
                 &mut panel.form_vault_mount,
                 "secret",
                 field_w,
@@ -540,7 +540,7 @@ impl CredentialPanel {
             chrome::form_singleline_field_boxed(
                 ui,
                 theme,
-                egui::Id::new("cred_vault_path"),
+                egui::Id::unique("cred_vault_path"),
                 &mut panel.form_vault_path,
                 "ssh/prod",
                 field_w,
@@ -554,7 +554,7 @@ impl CredentialPanel {
             chrome::form_singleline_field_boxed(
                 ui,
                 theme,
-                egui::Id::new("cred_vault_field"),
+                egui::Id::unique("cred_vault_field"),
                 &mut panel.form_vault_field,
                 "password",
                 field_w,
@@ -1062,7 +1062,7 @@ impl CredentialPanel {
                 chrome::search_field(
                     ui,
                     theme,
-                    egui::Id::new("credential_panel_search"),
+                    egui::Id::unique("credential_panel_search"),
                     &mut self.search,
                     i18n::tr(ui.ctx(), "Search credentials…", "搜索凭证…"),
                     row_w,
@@ -1139,7 +1139,7 @@ impl CredentialPanel {
                             chrome::form_singleline_field_boxed(
                                 ui,
                                 theme,
-                                egui::Id::new("cred_vault_prefix"),
+                                egui::Id::unique("cred_vault_prefix"),
                                 &mut self.vault_list_prefix,
                                 "secret/",
                                 prefix_w,

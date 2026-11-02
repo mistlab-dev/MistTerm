@@ -40,6 +40,7 @@ pub struct ForwardControl {
 
 impl ForwardControl {
     /// 面板单测与内部构造用。
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         new_control()
     }

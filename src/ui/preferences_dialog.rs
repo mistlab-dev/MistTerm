@@ -33,7 +33,7 @@ impl MistTermApp {
     /// 供团队成员弹窗「去登录」等入口复用，保持单一入口。
     pub(crate) fn open_preferences_team_sync(&mut self, ctx: &egui::Context) {
         self.open_preferences_dialog();
-        let nav_id = egui::Id::new(PREFERENCES_NAV_SELECTED_ID);
+        let nav_id = egui::Id::unique(PREFERENCES_NAV_SELECTED_ID);
         ctx.data_mut(|d| d.insert_persisted(nav_id, 7usize));
     }
 
@@ -87,7 +87,7 @@ impl MistTermApp {
                         // #279 导航模式：左栏分类 + 右栏详情。
                         // 用 egui temp data 打标记，让 11 个 section 复用函数在导航模式下只渲染卡片内容。
                         ui.ctx().data_mut(|d| {
-                            d.insert_temp(egui::Id::new(PREFERENCES_NAV_MODE_ID), true)
+                            d.insert_temp(egui::Id::unique(PREFERENCES_NAV_MODE_ID), true)
                         });
 
                         ui.allocate_ui(egui::vec2(ui.available_width(), body_h), |ui| {
@@ -131,7 +131,7 @@ impl MistTermApp {
         should_close: &mut bool,
     ) {
         let body_h = ui.available_height().max(120.0);
-        let nav_id = egui::Id::new(PREFERENCES_NAV_SELECTED_ID);
+        let nav_id = egui::Id::unique(PREFERENCES_NAV_SELECTED_ID);
         let mut selected = ui
             .data_mut(|d| d.get_persisted::<usize>(nav_id))
             .unwrap_or(0);
@@ -254,16 +254,16 @@ impl MistTermApp {
     ) {
         // #279 导航模式：右栏标题已由左栏选中项给出，这里只渲染卡片内容，不画折叠头。
         let nav_mode = ui.ctx().data(|d| {
-            d.get_temp::<bool>(egui::Id::new(PREFERENCES_NAV_MODE_ID))
+            d.get_temp::<bool>(egui::Id::unique(PREFERENCES_NAV_MODE_ID))
                 .unwrap_or(false)
         });
         if nav_mode {
-            ui.push_id(egui::Id::new(("pref_section", section_id)), |ui| {
+            ui.push_id(egui::Id::unique(("pref_section", section_id)), |ui| {
                 crate::ui::chrome::settings_elevated_card(ui, theme, body);
             });
             return;
         }
-        ui.push_id(egui::Id::new(("pref_section", section_id)), |ui| {
+        ui.push_id(egui::Id::unique(("pref_section", section_id)), |ui| {
             egui::CollapsingHeader::new(
                 RichText::new(title)
                     .size(theme.font_size_panel_title())
@@ -361,7 +361,7 @@ impl MistTermApp {
             let resp = crate::ui::chrome::form_singleline_field(
                 ui,
                 theme,
-                egui::Id::new("pref_default_local_dir"),
+                egui::Id::unique("pref_default_local_dir"),
                 &mut draft,
                 &system_default.to_string_lossy(),
                 field_w,
@@ -675,7 +675,7 @@ impl MistTermApp {
                     if crate::ui::chrome::form_f32_stepper(
                         ui,
                         theme,
-                        egui::Id::new("pref_terminal_font_size"),
+                        egui::Id::unique("pref_terminal_font_size"),
                         &mut size,
                         crate::platform::TERMINAL_FONT_SIZE_MIN
                             ..=crate::platform::TERMINAL_FONT_SIZE_MAX,
@@ -829,7 +829,7 @@ impl MistTermApp {
                     crate::ui::chrome::form_u32_stepper(
                         ui,
                         theme,
-                        egui::Id::new("pref_ka_interval"),
+                        egui::Id::unique("pref_ka_interval"),
                         &mut self.default_keepalive_interval_secs,
                         5..=300,
                         5,
@@ -839,7 +839,7 @@ impl MistTermApp {
                     crate::ui::chrome::form_u8_stepper(
                         ui,
                         theme,
-                        egui::Id::new("pref_ka_count"),
+                        egui::Id::unique("pref_ka_count"),
                         &mut self.default_keepalive_count_max,
                         1..=20,
                         1,
@@ -978,7 +978,7 @@ impl MistTermApp {
                     crate::ui::chrome::form_u32_stepper(
                         ui,
                         theme,
-                        egui::Id::new("pref_log_retention"),
+                        egui::Id::unique("pref_log_retention"),
                         &mut self.session_log_settings.retention_days,
                         1..=365,
                         1,
@@ -1089,7 +1089,7 @@ impl MistTermApp {
                 let vault_addr = crate::ui::chrome::form_singleline_field(
                     ui,
                     theme,
-                    egui::Id::new("pref_vault_addr"),
+                    egui::Id::unique("pref_vault_addr"),
                     &mut self.app_settings.vault.address,
                     "https://vault.example.com:8200",
                     pref_w,
@@ -1108,7 +1108,7 @@ impl MistTermApp {
                 let vault_ns = crate::ui::chrome::form_singleline_field(
                     ui,
                     theme,
-                    egui::Id::new("pref_vault_ns"),
+                    egui::Id::unique("pref_vault_ns"),
                     &mut self.app_settings.vault.namespace,
                     "",
                     pref_w,
@@ -1126,7 +1126,7 @@ impl MistTermApp {
                 let vault_mount = crate::ui::chrome::form_singleline_field(
                     ui,
                     theme,
-                    egui::Id::new("pref_vault_mount"),
+                    egui::Id::unique("pref_vault_mount"),
                     &mut self.app_settings.vault.default_mount,
                     "secret",
                     pref_w,
@@ -1187,7 +1187,7 @@ impl MistTermApp {
                 crate::ui::chrome::form_singleline_field(
                     ui,
                     theme,
-                    egui::Id::new("pref_vault_token_buf"),
+                    egui::Id::unique("pref_vault_token_buf"),
                     &mut self.pref_vault_token_draft,
                     crate::i18n::tr(
                         ctx,
@@ -1320,7 +1320,7 @@ impl MistTermApp {
                     let r = crate::ui::chrome::form_u32_stepper(
                         ui,
                         theme,
-                        egui::Id::new("pref_audit_retention"),
+                        egui::Id::unique("pref_audit_retention"),
                         &mut self.app_settings.audit.retention_days,
                         1..=3650,
                         1,
@@ -1391,7 +1391,7 @@ impl MistTermApp {
                         crate::ui::chrome::form_inline_singleline(
                             ui,
                             theme,
-                            egui::Id::new("pref_audit_syslog_host"),
+                            egui::Id::unique("pref_audit_syslog_host"),
                             &mut self.app_settings.audit.syslog.host,
                             "127.0.0.1",
                             host_w,
@@ -1408,7 +1408,7 @@ impl MistTermApp {
                         crate::ui::chrome::form_u16_stepper(
                             ui,
                             theme,
-                            egui::Id::new("pref_audit_syslog_port"),
+                            egui::Id::unique("pref_audit_syslog_port"),
                             &mut self.app_settings.audit.syslog.port,
                             1..=65535,
                             1,
@@ -1660,7 +1660,7 @@ impl MistTermApp {
                             crate::ui::chrome::form_f32_stepper(
                                 ui,
                                 theme,
-                                egui::Id::new(("pref_monitor_alert_th", idx)),
+                                egui::Id::unique(("pref_monitor_alert_th", idx)),
                                 value,
                                 50.0..=100.0,
                                 1.0,
@@ -1804,7 +1804,7 @@ impl MistTermApp {
                 let lang = crate::i18n::language(ctx);
                 let mut dirty = false;
 
-                let sel_id = egui::Id::new("preferences_module_selected");
+                let sel_id = egui::Id::unique("preferences_module_selected");
                 let stored_id = ui
                     .data_mut(|d| d.get_persisted::<String>(sel_id))
                     .unwrap_or_default();

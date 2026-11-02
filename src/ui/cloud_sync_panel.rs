@@ -371,7 +371,7 @@ impl CloudSyncPanel {
             chrome::form_singleline_field(
                 ui,
                 theme,
-                egui::Id::new("mistterm_sync_passphrase"),
+                egui::Id::unique("mistterm_sync_passphrase"),
                 &mut self.passphrase_input,
                 loc.tr("Not uploaded", "不会上传"),
                 ui.available_width(),
@@ -382,7 +382,7 @@ impl CloudSyncPanel {
             chrome::form_singleline_field(
                 ui,
                 theme,
-                egui::Id::new("mistterm_sync_recovery"),
+                egui::Id::unique("mistterm_sync_recovery"),
                 &mut self.recovery_input,
                 loc.tr("Optional, to unwrap", "可选，用于解封"),
                 ui.available_width(),
@@ -1307,7 +1307,7 @@ impl CloudSyncPanel {
                                 chrome::form_u32_stepper(
                                     ui,
                                     theme,
-                                    egui::Id::new("cloud_sync_freq_min"),
+                                    egui::Id::unique("cloud_sync_freq_min"),
                                     &mut self.settings.frequency_minutes,
                                     0..=24 * 60,
                                     5,

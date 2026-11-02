@@ -2110,10 +2110,10 @@ impl TerminalView {
                                         ui.set_min_height(te_h);
                                         ui.set_max_height(te_h);
                                         egui::TextEdit::multiline(&mut display_view)
-                                            .id(ui.id().with("terminal_text_area"))
+                                            .id(ui.scope_id().with("terminal_text_area"))
                                             .margin(egui::vec2(0.0, 0.0))
-                                            .horizontal_align(egui::Align::LEFT)
-                                            .vertical_align(egui::Align::TOP)
+                                            .align(egui::Align2::LEFT_CENTER)
+                                            .align(egui::Align2::LEFT_TOP)
                                             .font(egui::TextStyle::Monospace)
                                             .desired_width(edit_w)
                                             // 勿用 desired_rows：egui 按 style 行高估算，常大于 LayoutJob 行高，
@@ -3793,9 +3793,6 @@ impl TerminalView {
             for event in &i.events {
                 self.ime_preedit.apply_event(event);
                 match event {
-                    egui::Event::Ime(egui::ImeEvent::Enabled) => {
-                        log::debug!(target: "repaint_lag", "ime composition start");
-                    }
                     egui::Event::Ime(egui::ImeEvent::Preedit { text: t, .. }) => {
                         log::debug!(target: "repaint_lag", "ime preedit update len={}", t.chars().count());
                     }
@@ -4662,7 +4659,7 @@ impl TerminalView {
         ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
             ui.set_clip_rect(rect.intersect(ui.clip_rect()));
             ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                let size_id = ui.id().with("connection_placeholder_block_h");
+                let size_id = ui.scope_id().with("connection_placeholder_block_h");
                 let prev_h = ui
                     .ctx()
                     .data(|d| d.get_temp::<f32>(size_id))
@@ -5989,8 +5986,8 @@ mod cwd_tests {
 mod host_wiring_tests {
     use super::*;
     use crate::capability::{
-        BeforeSendCtx, DockContribution, MenuCtx, MenuItem, MistModule, ModuleAction, ModuleId,
-        ModuleRegistry, OutputLineCtx, SendVerdict, Severity,
+        MenuCtx, MenuItem, MistModule, ModuleAction, ModuleId,
+        ModuleRegistry, OutputLineCtx, Severity,
     };
     use std::sync::{Arc, Mutex};
 

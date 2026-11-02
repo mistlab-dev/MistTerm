@@ -113,7 +113,7 @@ impl Default for CommandPalette {
 
 impl CommandPalette {
     pub fn search_id() -> egui::Id {
-        egui::Id::new("mistterm_command_palette_search")
+        egui::Id::unique("mistterm_command_palette_search")
     }
 
     pub fn open_fresh(&mut self) {

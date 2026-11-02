@@ -606,7 +606,7 @@ impl PortForwardPanel {
                     crate::ui::chrome::form_inline_singleline(
                         ui,
                         theme,
-                        egui::Id::new("pf_bind_address"),
+                        egui::Id::unique("pf_bind_address"),
                         &mut self.form.bind_address,
                         "127.0.0.1",
                         100.0,
@@ -620,7 +620,7 @@ impl PortForwardPanel {
                     crate::ui::chrome::form_inline_singleline(
                         ui,
                         theme,
-                        egui::Id::new("pf_local_port_ld"),
+                        egui::Id::unique("pf_local_port_ld"),
                         &mut self.form.local_port,
                         "8080",
                         64.0,
@@ -638,7 +638,7 @@ impl PortForwardPanel {
                     crate::ui::chrome::form_inline_singleline(
                         ui,
                         theme,
-                        egui::Id::new("pf_local_port_r"),
+                        egui::Id::unique("pf_local_port_r"),
                         &mut self.form.local_port,
                         "8080",
                         64.0,
@@ -658,7 +658,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
-                    egui::Id::new("pf_remote_host_l"),
+                    egui::Id::unique("pf_remote_host_l"),
                     &mut self.form.remote_host,
                     "127.0.0.1",
                     120.0,
@@ -668,7 +668,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
-                    egui::Id::new("pf_remote_port_l"),
+                    egui::Id::unique("pf_remote_port_l"),
                     &mut self.form.remote_port,
                     "80",
                     64.0,
@@ -685,7 +685,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
-                    egui::Id::new("pf_remote_host_r"),
+                    egui::Id::unique("pf_remote_host_r"),
                     &mut self.form.remote_host,
                     "127.0.0.1",
                     120.0,
@@ -695,7 +695,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
-                    egui::Id::new("pf_remote_port_r"),
+                    egui::Id::unique("pf_remote_port_r"),
                     &mut self.form.remote_port,
                     "3000",
                     64.0,

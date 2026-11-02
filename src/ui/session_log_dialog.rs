@@ -174,7 +174,7 @@ impl SessionLogDialog {
             self.session_name
         );
         chrome::modal_window("session_log_viewer", theme, ctx)
-            .id(egui::Id::new("session_log_viewer_window"))
+            .id(egui::Id::unique("session_log_viewer_window"))
             .open(&mut self.open)
             .default_pos(default_pos)
             .movable(true)
@@ -191,7 +191,7 @@ impl SessionLogDialog {
                     crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("session_log_search"),
+                        egui::Id::unique("session_log_search"),
                         &mut self.search_query,
                         crate::i18n::tr(ctx, "Filter log…", "过滤日志内容…"),
                         search_w,

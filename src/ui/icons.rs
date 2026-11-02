@@ -119,11 +119,11 @@ pub struct UiIcons {
 }
 
 fn icons_store_id() -> egui::Id {
-    egui::Id::new("mist_ui_icons")
+    egui::Id::unique("mist_ui_icons")
 }
 
 fn icons_ppp_id() -> egui::Id {
-    egui::Id::new("mist_ui_icons_ppp")
+    egui::Id::unique("mist_ui_icons_ppp")
 }
 
 impl UiIcons {

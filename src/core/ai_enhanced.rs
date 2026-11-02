@@ -235,7 +235,6 @@ impl AiContext {
 /// 基于历史命令的智能补全
 pub struct CommandCompleter {
     history: Vec<String>,
-    cache: HashMap<String, Vec<CompletionCandidate>>,
 }
 
 impl CommandCompleter {
@@ -244,10 +243,7 @@ impl CommandCompleter {
             .entries_newest_first()
             .map(|e| e.command.clone())
             .collect();
-        Self {
-            history: cmds,
-            cache: HashMap::new(),
-        }
+        Self { history: cmds }
     }
 
     /// 模糊匹配补全

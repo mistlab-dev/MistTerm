@@ -2,7 +2,7 @@ use crate::ssh::SftpEntry;
 use crate::ui::layout_util;
 use crate::ui::theme::{SftpFileTone, Theme};
 use chrono::{DateTime, Utc};
-use eframe::egui::{self, Color32, RichText, Sense};
+use eframe::egui::{self, Color32, Sense};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -635,7 +635,7 @@ pub(super) fn paint_file_table_header(
             let resp = cell.interact(
                 cell.max_rect(),
                 // 本机/远端两张表的表头 cell 在 egui 里会派生出相同 id，须按面板加盐区分。
-                egui::Id::new(("sftp_col_header", id_salt, col)),
+                egui::Id::unique(("sftp_col_header", id_salt, col)),
                 Sense::click(),
             );
             if resp.clicked() {

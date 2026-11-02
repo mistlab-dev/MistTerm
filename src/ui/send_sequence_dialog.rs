@@ -206,7 +206,7 @@ impl SendSequenceDialog {
             crate::ui::chrome::form_singleline_field(
                 ui,
                 theme,
-                egui::Id::new("send_sequence_name"),
+                egui::Id::unique("send_sequence_name"),
                 &mut self.name,
                 crate::i18n::tr(ctx, "After login", "登录后"),
                 width,
@@ -222,7 +222,7 @@ impl SendSequenceDialog {
                 crate::ui::chrome::form_u32_stepper(
                     ui,
                     theme,
-                    egui::Id::new("send_sequence_delay"),
+                    egui::Id::unique("send_sequence_delay"),
                     &mut self.delay_ms,
                     0..=MAX_DELAY_MS,
                     50,
@@ -246,7 +246,7 @@ impl SendSequenceDialog {
             crate::ui::chrome::form_multiline_field_with_hint(
                 ui,
                 theme,
-                egui::Id::new("send_sequence_body"),
+                egui::Id::unique("send_sequence_body"),
                 &mut self.body,
                 crate::i18n::tr(
                     ctx,

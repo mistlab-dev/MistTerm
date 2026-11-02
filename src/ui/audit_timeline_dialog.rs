@@ -58,7 +58,7 @@ pub fn show_audit_timeline_modal(
                     chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("audit_timeline_host_filter"),
+                        egui::Id::unique("audit_timeline_host_filter"),
                         host_filter,
                         crate::i18n::tr(ctx, "Filter host…", "筛选主机…"),
                         190.0,
