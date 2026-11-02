@@ -501,16 +501,35 @@ impl Terminal {
     /// - 选区从 `WIDE_CHAR_SPACER` 起笔时，它前面的 `WIDE_CHAR` 不在选区内。alacritty
     ///   会把起点回退一格把那个字拷进来；这里把起点移到占位格之后。
     pub fn text_in_point_range(&self, start: Point, end: Point) -> String {
+        let columns = self.width;
+        if columns == 0 {
+            return String::new();
+        }
+        // #289: 右栏拖宽后终端列数缩小，UI 选区仍可能带着旧列号；
+        // alacritty `bounds_to_string` / `line_to_string` 对越界列直接索引 panic。
+        // 终点列是开区间，合法范围为 0..=columns；起点是闭区间，须 < columns。
+        let start = Point::new(start.line, Column(start.column.0.min(columns)));
+        let end = Point::new(end.line, Column(end.column.0.min(columns)));
         let (mut start, end) = if (start.line.0, start.column.0) <= (end.line.0, end.column.0) {
             (start, end)
         } else {
             (end, start)
         };
-        let Some(mut inclusive_end) = inclusive_end_from_exclusive(start, end, self.width) else {
+        if start.column.0 >= columns {
+            // 起点已越过当前行宽：折到下一行行首，否则交给 alacritty 仍会 OOB。
+            if start.line.0 == i32::MAX {
+                return String::new();
+            }
+            start = Point::new(Line(start.line.0 + 1), Column(0));
+        }
+        let Some(mut inclusive_end) = inclusive_end_from_exclusive(start, end, columns) else {
             return String::new();
         };
+        if inclusive_end.column.0 >= columns {
+            inclusive_end = Point::new(inclusive_end.line, Column(columns - 1));
+        }
         while self.cell_flags(inclusive_end).contains(Flags::LEADING_WIDE_CHAR_SPACER) {
-            let Some(prev) = point_before(inclusive_end, self.width) else {
+            let Some(prev) = point_before(inclusive_end, columns) else {
                 return String::new();
             };
             inclusive_end = prev;
@@ -519,13 +538,16 @@ impl Terminal {
             }
         }
         while self.cell_flags(start).contains(Flags::WIDE_CHAR_SPACER) {
-            let Some(next) = point_after(start, self.width) else {
+            let Some(next) = point_after(start, columns) else {
                 return String::new();
             };
             start = next;
             if (start.line.0, start.column.0) > (inclusive_end.line.0, inclusive_end.column.0) {
                 return String::new();
             }
+        }
+        if start.column.0 >= columns || inclusive_end.column.0 >= columns {
+            return String::new();
         }
         self.term.bounds_to_string(start, inclusive_end)
     }
@@ -1202,6 +1224,39 @@ mod tests {
         assert_eq!(t.text_in_point_range(start, end), "needle");
         // 反向端点仍应得到相同文本
         assert_eq!(t.text_in_point_range(end, start), "needle");
+    }
+
+    /// #289: 列宽缩窄后选区仍带着旧列号时，读取不得 panic。
+    #[test]
+    fn text_in_point_range_survives_stale_columns_after_narrowing() {
+        use alacritty_terminal::index::{Column, Line, Point};
+        let mut t = Terminal::new(180, 8);
+        t.feed(b"hello world from a wide terminal\r\n");
+        t.resize(20, 8);
+        assert_eq!(t.width, 20);
+        // 旧宽列号：不得 panic（折行后 Line(0) 内容可能已变，故不断言前缀）。
+        let _ = t.text_in_point_range(
+            Point::new(Line(0), Column(0)),
+            Point::new(Line(0), Column(180)),
+        );
+        let oob = t.text_in_point_range(
+            Point::new(Line(0), Column(100)),
+            Point::new(Line(0), Column(180)),
+        );
+        assert_eq!(oob, "");
+        let _ = t.text_in_point_range(
+            Point::new(Line(0), Column(180)),
+            Point::new(Line(0), Column(50)),
+        );
+        // 缩窄后按搜索命中的绝对坐标仍可读。
+        let hits = t.search_all("hello", false);
+        assert!(!hits.is_empty(), "expected hello after reflow");
+        let hit = &hits[0];
+        let got = t.text_in_point_range(
+            Point::new(hit.line, Column(hit.column)),
+            Point::new(hit.line, Column(hit.column + 5)),
+        );
+        assert_eq!(got, "hello");
     }
 
     /// 拖选越过行尾空单元格时，复制不应带上网格补齐的空格。
