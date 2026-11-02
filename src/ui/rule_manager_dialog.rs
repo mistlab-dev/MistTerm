@@ -598,6 +598,7 @@ impl RuleManagerDialog {
                 ui,
                 theme,
                 ctx,
+                "ot_simple_mode",
                 &mut self.ot_simple_mode,
                 &mut self.ot_keywords,
                 &mut self.pattern,
@@ -2235,6 +2236,7 @@ impl RuleManagerDialog {
                 ui,
                 theme,
                 ctx,
+                "link_simple_mode",
                 &mut self.link_simple_mode,
                 &mut self.link_keywords,
                 &mut self.link_pattern,
@@ -2880,41 +2882,53 @@ fn rule_section_frame(theme: &Theme, fill: egui::Color32) -> egui::Frame {
         .inner_margin(egui::Margin::symmetric(theme.spacing_sm() as i8, theme.spacing_sm() as i8))
 }
 
+/// #283：把简单/高级偏好落到表单缓冲。返回是否真的切了模式。
+/// 简单→高级：关键词合成正则；高级→简单：仅纯字面量并列可回填关键词。
+fn apply_simple_mode_preference(
+    simple: &mut bool,
+    keywords: &mut String,
+    pattern: &mut String,
+    want_simple: bool,
+) -> bool {
+    if want_simple == *simple {
+        return false;
+    }
+    if want_simple {
+        // 高级 → 简单：只有纯字面量并列的正则能回到关键词，其余保留在正则缓冲里。
+        if let Some(converted) = pattern_to_keywords(pattern) {
+            *keywords = converted;
+        }
+    } else if !keywords.trim().is_empty() {
+        // 简单 → 高级：把关键词列表转成等价正则，便于继续细调。
+        *pattern = keywords_to_pattern(keywords);
+    }
+    *simple = want_simple;
+    true
+}
+
 /// #283：简单 / 高级模式切换。简单模式用关键词列表，高级模式直接写正则。
-/// 切换时把已有的关键词转成正则（反之能转就回填），都不丢已填内容。
+/// 使用 chrome 胶囊分段（显式 click pick），避免本地 bool + selectable_value 在
+/// 透明 inactive / selection=文本拖选色 下「看起来能点、状态不落库」。
 fn paint_simple_mode_switch(
     ui: &mut egui::Ui,
     theme: &Theme,
     ctx: &egui::Context,
+    id_salt: &str,
     simple: &mut bool,
     keywords: &mut String,
     pattern: &mut String,
 ) {
-    ui.horizontal(|ui| {
-        let mut want_simple = *simple;
-        ui.selectable_value(
-            &mut want_simple,
-            true,
-            crate::i18n::tr(ctx, "Simple mode", "简单模式"),
-        );
-        ui.selectable_value(
-            &mut want_simple,
-            false,
-            crate::i18n::tr(ctx, "Advanced mode", "高级模式"),
-        );
-        if want_simple == *simple {
-            return;
+    let simple_label = crate::i18n::tr(ctx, "Simple mode", "简单模式");
+    let advanced_label = crate::i18n::tr(ctx, "Advanced mode", "高级模式");
+    let items = [("simple", simple_label), ("advanced", advanced_label)];
+    let active = if *simple { "simple" } else { "advanced" };
+    ui.push_id(id_salt, |ui| {
+        if let Some(picked) =
+            crate::ui::chrome::segmented_control_row(ui, theme, &items, active, None)
+        {
+            let want_simple = picked == "simple";
+            apply_simple_mode_preference(simple, keywords, pattern, want_simple);
         }
-        if want_simple {
-            // 高级 → 简单：只有纯字面量并列的正则能回到关键词，其余保留在正则缓冲里。
-            if let Some(converted) = pattern_to_keywords(pattern) {
-                *keywords = converted;
-            }
-        } else if !keywords.trim().is_empty() {
-            // 简单 → 高级：把关键词列表转成等价正则，便于继续细调。
-            *pattern = keywords_to_pattern(keywords);
-        }
-        *simple = want_simple;
     });
     ui.label(
         egui::RichText::new(if *simple {
@@ -3160,4 +3174,78 @@ fn import_status(ctx: &egui::Context, report: &ImportReport) -> String {
         });
     }
     parts.join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        apply_simple_mode_preference, keywords_to_pattern, pattern_to_keywords,
+    };
+
+    #[test]
+    fn keywords_round_trip_single_and_multi() {
+        assert_eq!(keywords_to_pattern("ERROR"), "ERROR");
+        assert_eq!(
+            keywords_to_pattern("ERROR, 失败\ntimeout"),
+            "(?:ERROR|失败|timeout)"
+        );
+        assert_eq!(
+            pattern_to_keywords("(?:ERROR|失败|timeout)").as_deref(),
+            Some("ERROR\n失败\ntimeout")
+        );
+        assert_eq!(pattern_to_keywords(r"err\d+"), None);
+    }
+
+    #[test]
+    fn switching_simple_to_advanced_writes_pattern_and_flips_flag() {
+        let mut simple = true;
+        let mut keywords = String::from("ERROR, timeout");
+        let mut pattern = String::new();
+        assert!(apply_simple_mode_preference(
+            &mut simple,
+            &mut keywords,
+            &mut pattern,
+            false
+        ));
+        assert!(!simple);
+        assert_eq!(pattern, "(?:ERROR|timeout)");
+        // 再点一次高级：不应反复改写。
+        assert!(!apply_simple_mode_preference(
+            &mut simple,
+            &mut keywords,
+            &mut pattern,
+            false
+        ));
+    }
+
+    #[test]
+    fn switching_advanced_to_simple_backfills_literal_alternation() {
+        let mut simple = false;
+        let mut keywords = String::new();
+        let mut pattern = String::from("(?:foo|bar)");
+        assert!(apply_simple_mode_preference(
+            &mut simple,
+            &mut keywords,
+            &mut pattern,
+            true
+        ));
+        assert!(simple);
+        assert_eq!(keywords, "foo\nbar");
+    }
+
+    #[test]
+    fn empty_keywords_still_enter_advanced_mode() {
+        // 新建规则：关键词为空时点「高级模式」也必须切到正则表单。
+        let mut simple = true;
+        let mut keywords = String::new();
+        let mut pattern = String::new();
+        assert!(apply_simple_mode_preference(
+            &mut simple,
+            &mut keywords,
+            &mut pattern,
+            false
+        ));
+        assert!(!simple);
+        assert!(pattern.is_empty());
+    }
 }
