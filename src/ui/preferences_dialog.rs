@@ -1831,8 +1831,24 @@ impl MistTermApp {
                     ui.horizontal(|ui| {
                         if is_env_locked {
                             let mut dummy = false;
-                            ui.add_enabled(false, egui::Checkbox::new(&mut dummy, ""));
-                        } else if ui.checkbox(&mut enabled, "").changed() {
+                            ui.add_enabled_ui(false, |ui| {
+                                let _ = crate::ui::chrome::form_checkbox_with_id(
+                                    ui,
+                                    theme,
+                                    ("pref_module_locked", m.id.as_str()),
+                                    &mut dummy,
+                                    "",
+                                );
+                            });
+                        } else if crate::ui::chrome::form_checkbox_with_id(
+                            ui,
+                            theme,
+                            ("pref_module_enabled", m.id.as_str()),
+                            &mut enabled,
+                            "",
+                        )
+                        .changed()
+                        {
                             if enabled {
                                 self.app_settings.disabled_modules.retain(|id| id != &m.id);
                             } else if !self.app_settings.disabled_modules.contains(&m.id) {

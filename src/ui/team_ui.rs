@@ -317,12 +317,13 @@ pub fn paint_team_controls(
             let mut keep_signed_in = ui
                 .data_mut(|d| d.get_persisted::<bool>(keep_id))
                 .unwrap_or(true);
-            if ui
-                .checkbox(
-                    &mut keep_signed_in,
-                    i18n::tr(ctx, "Stay signed in on this computer", "保持登录状态（这台电脑）"),
-                )
-                .changed()
+            if chrome::form_checkbox(
+                ui,
+                theme,
+                &mut keep_signed_in,
+                i18n::tr(ctx, "Stay signed in on this computer", "保持登录状态（这台电脑）"),
+            )
+            .changed()
             {
                 ui.data_mut(|d| d.insert_persisted(keep_id, keep_signed_in));
             }
