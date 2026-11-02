@@ -6247,6 +6247,18 @@ mod idle_cursor_repaint_tests {
 
     fn pump(ctx: &egui::Context, view: &mut TerminalView, time: f64) -> Duration {
         let theme = Theme::dark();
+        // 0.37: repaint 请求改走 observer 回调，不再写入 viewport_output。
+        let got = std::sync::Arc::new(std::sync::Mutex::new(None::<std::time::Duration>));
+        {
+            let got = got.clone();
+            ctx.set_repaint_observer(move |info: egui::RequestRepaintInfo| {
+                let mut g = got.lock().unwrap();
+                *g = Some(match *g {
+                    Some(prev) => prev.min(info.delay),
+                    None => info.delay,
+                });
+            });
+        }
         let raw = egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -6264,10 +6276,8 @@ mod idle_cursor_repaint_tests {
         });
         // 0.37: 字体纹理增量必须显式消费，否则 Drop 断言 panic。
         out.textures_delta.clear();
-        out.viewport_output
-            .get(&egui::ViewportId::ROOT)
-            .map(|v| v.repaint_delay)
-            .unwrap_or_default()
+        let delay = *got.lock().unwrap();
+        delay.unwrap_or_default()
     }
 
     fn focused_connected_view() -> TerminalView {
@@ -6315,9 +6325,12 @@ mod idle_cursor_repaint_tests {
         view.selection.set_from_viewport(0, 0, 0, 0, 4);
         assert!(!view.selection.is_empty());
         let selected = pump(&ctx, &mut view, 0.0);
+        // 0.37：有选区时终端不再请求 blink 定时器；剩下的最小延迟来自
+        // IME TextEdit 自己的 0.5s 光标闪烁（egui 内部请求，无法关掉）。
+        // 因此断言「不是 blink 相位(530ms+5ms slack)」而不是「>1s」。
         assert!(
-            selected > Duration::from_secs(1),
-            "a selection is not the idle blink timer, got {selected:?}"
+            selected < Duration::from_millis(530),
+            "a selection must not ride the idle blink timer, got {selected:?}"
         );
     }
 

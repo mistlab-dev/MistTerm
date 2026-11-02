@@ -244,6 +244,20 @@ pub fn forward_ctrl_keys(i: &mut egui::InputState, mut send: impl FnMut(u8)) -> 
         ctrl: true,
         ..Modifiers::NONE
     };
+    // 0.37 的 matches_logically 会忽略多余的 Shift，Ctrl+Shift+C/A 会被误当成 Ctrl+C/A
+    // 转发进 PTY；这些组合留给剪贴板/应用快捷键。
+    // 注意：shift 状态既可能在 InputState 级（ModifiersChanged），也可能只挂在事件上
+    // （winit 偶发不带 ModifiersChanged），两处都要查。
+    let event_has_shifted_key = i.events.iter().any(|e| {
+        matches!(
+            e,
+            Event::Key { key: k, modifiers: m, pressed: true, .. }
+                if m.shift && m.ctrl
+        )
+    });
+    if i.modifiers.shift || event_has_shifted_key {
+        return false;
+    }
     let mut any = false;
     for key in CTRL_KEYS {
         if i.consume_key(mods, key) {
@@ -1270,11 +1284,12 @@ mod tests {
                 })
                 .unwrap_or_default()
         }
-        // 只吞 Key、不吞 Event::Copy(旧行为)：被 IME 框覆盖成空串。
-        assert_eq!(run(false), "");
-        // 修好后：选区保留。
+        // 0.37：空 IME 框收到 Event::Copy 不再往剪贴板写空串，两种行为选区都保留。
+        // 该回归测试保留为守护：确认 Copy 路径不会把剪贴板改成空串。
+        assert_eq!(run(false), "selected text");
         assert_eq!(run(true), "selected text");
     }
+
 
     #[test]
     fn paste_shortcut_drops_paste_event() {
@@ -1425,11 +1440,12 @@ mod tests {
 
     #[test]
     fn audit_copy_and_paste_shortcuts() {
-        // Ctrl+Shift+C：修好前(只吞 Key)剪贴板被 IME 框改成空串；修好后保留。
+        // Ctrl+Shift+C。0.37：空 IME TextEdit 收到 Event::Copy 不再把空串写入剪贴板，
+        // 「旧行为被覆盖」断言过时；改为守护只吞 Key 的路径也不丢/不改写剪贴板内容。
         let before = one_frame(winit_like(Key::C, cs(), None), |i| {
             consume_terminal_clipboard_key(i, Key::C)
         });
-        assert_eq!(before.copied, "", "旧行为：被覆盖");
+        assert_eq!(before.copied, "APP");
         let after = one_frame(
             winit_like(Key::C, cs(), None),
             consume_terminal_copy_shortcut,
@@ -1613,8 +1629,8 @@ mod tests {
 
     #[test]
     fn audit_snippet_cut_without_drop_would_clobber() {
-        // 证明 drop_clipboard_events 有必要：Ctrl+Shift+X 的 Cut 留给 IME 框会把本帧剪贴板改成空串。
+        // 0.37：IME 框不再覆盖剪贴板；此测试守护 Cut 路径不会把 "APP" 之外的内容放进剪贴板。
         let o = one_frame(winit_like(Key::X, cs(), None), |_| true);
-        assert_eq!(o.copied, "");
+        assert_eq!(o.copied, "APP");
     }
 }
