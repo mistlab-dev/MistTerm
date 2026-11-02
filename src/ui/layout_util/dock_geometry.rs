@@ -69,10 +69,25 @@ pub fn clamp_sidebar_width(w: f32) -> f32 {
 /// 返回 `(default, min, max)`，与 [`egui::SidePanel`] 的 `default_width` / `min_width` / `max_width` 顺序一致。
 #[inline]
 pub fn right_dock_resize_bounds(default: f32) -> (f32, f32, f32) {
+    right_dock_resize_bounds_for_screen(default, None)
+}
+
+/// 同 [`right_dock_resize_bounds`]，但按屏宽为终端列预留下限（#289）。
+/// `screen_w` 为 `None` 时仅使用固定上限 960。
+#[inline]
+pub fn right_dock_resize_bounds_for_screen(default: f32, screen_w: Option<f32>) -> (f32, f32, f32) {
     const MIN_W: f32 = 280.0;
     const MAX_W: f32 = 960.0;
-    let def = clamp_f32(default, MIN_W, MAX_W);
-    (def, MIN_W, MAX_W)
+    // 左栏 + 终端列大致下限，避免右栏拖到挤垮终端可视区。
+    const TERM_CHROME_RESERVE_PX: f32 = 360.0;
+    let mut max_w = MAX_W;
+    if let Some(sw) = screen_w {
+        if sw.is_finite() && sw > SCREEN_WIDTH_MIN_VALID {
+            max_w = max_w.min((sw - TERM_CHROME_RESERVE_PX).max(MIN_W));
+        }
+    }
+    let def = clamp_f32(default, MIN_W, max_w);
+    (def, MIN_W, max_w)
 }
 
 /// `f32::clamp` 在 `lo > hi` 时会 panic；布局窄窗/∞ 宽度时比例算出的上下界可能颠倒。
@@ -685,7 +700,8 @@ pub fn side_panel_widths(ctx: &egui::Context, profile: SidePanelProfile) -> (f32
 mod tests {
     use super::{
         anchor_right_dock_slot_to_right_edge, clamp_f32, inset_slot_for_foreground_paint,
-        pin_rect_to_screen_right_edge, side_panel_column_slot_with_width,
+        pin_rect_to_screen_right_edge, right_dock_resize_bounds,
+        right_dock_resize_bounds_for_screen, side_panel_column_slot_with_width,
         side_panel_egui_id,
         side_panel_slot_layout_width, terminal_column_width, work_area_inner_rect,
     };
@@ -709,7 +725,19 @@ mod tests {
     }
 
     #[test]
-    fn terminal_column_width_stops_at_dock_left() {
+    fn right_dock_resize_bounds_reserves_terminal_space() {
+        let (_, min_w, max_w) = right_dock_resize_bounds_for_screen(400.0, Some(1000.0));
+        assert_eq!(min_w, 280.0);
+        // 1000 - 360 = 640，低于固定上限 960。
+        assert!((max_w - 640.0).abs() < 0.1, "max_w={max_w}");
+        let (_, _, max_wide) = right_dock_resize_bounds_for_screen(400.0, Some(2000.0));
+        assert!((max_wide - 960.0).abs() < 0.1, "max_wide={max_wide}");
+        let (_, _, max_none) = right_dock_resize_bounds(400.0);
+        assert!((max_none - 960.0).abs() < 0.1);
+    }
+
+    #[test]
+        fn terminal_column_width_stops_at_dock_left() {
         let col_left = 200.0_f32;
         let work_max = 900.0_f32;
         let dock_left = 600.0_f32;
