@@ -1439,7 +1439,7 @@ impl RuleManagerDialog {
                 theme,
                 crate::i18n::tr(ctx, "Rule name", "规则名称"),
             );
-            crate::ui::chrome::form_singleline_field(
+            crate::ui::chrome::form_singleline_field_boxed(
                 ui,
                 theme,
                 egui::Id::unique("cmd_rule_name"),

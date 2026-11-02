@@ -673,6 +673,8 @@ pub struct MonitorPanel {
 
 数字字段用 orm_drag_value_field（同底同字号），禁止裸 DragValue 贴在小标签旁造成「标签小、数字巨大」。
 
+下拉用 `form_combo`（与 `form_singleline_field_boxed` / `form_multiline_field` 同套底+描边）；禁止裸 `ComboBox`。整数步进用 `form_u32_stepper`（± 为次要方钮，勿再画圆形）。弹窗/偏好主路径单行优先 `form_singleline_field_boxed`。
+
 ### 10.3 表单标签与说明
 
 | 用途 | 字号 | API |

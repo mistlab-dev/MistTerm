@@ -2111,6 +2111,9 @@ fn form_stepper_btn_side(theme: &Theme) -> f32 {
 }
 
 /// 控件行内的单行输入：高度与表单行盒一致，文字垂直居中。
+///
+/// 始终走表单实心底+描边（与 [`form_singleline_field_boxed`] 同套），不走 modern 下划线，
+/// 以便端口转发等同排控件与下拉/按钮描边成套。
 pub fn form_inline_singleline(
     ui: &mut Ui,
     theme: &Theme,
@@ -2124,34 +2127,18 @@ pub fn form_inline_singleline(
     let focused = ui.memory(|m| m.has_focus(id));
     let width = desired_width.max(48.0);
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
-    let underline = theme.uses_underline_inputs();
-    if underline {
-        let w = theme.hairline_width(ui.ctx());
-        let line_y = theme.snap_y_to_pixel(ui.ctx(), rect.bottom() - w * 0.5);
-        let line_color = if focused {
-            theme.color_input_underline_focus()
-        } else {
-            theme.color_input_underline_idle()
-        };
-        ui.painter()
-            .hline(rect.x_range(), line_y, Stroke::new(w, line_color));
+    let stroke = if focused {
+        egui::Stroke::new(1.0, theme.accent_color())
     } else {
-        let stroke = if focused {
-            egui::Stroke::new(theme.stroke_width_panel().max(1.0), theme.accent_color())
-        } else {
-            egui::Stroke::new(
-                theme.stroke_width_panel().max(1.0),
-                theme.color_text_input_stroke(),
-            )
-        };
-        ui.painter().rect(
-            rect,
-            theme.radius_search_input(),
-            theme.color_text_input_fill(),
-            stroke,
-            egui::StrokeKind::Middle,
-        );
-    }
+        egui::Stroke::new(1.0, theme.color_form_input_stroke())
+    };
+    ui.painter().rect(
+        rect,
+        theme.radius_search_input(),
+        theme.color_form_input_fill(),
+        stroke,
+        egui::StrokeKind::Middle,
+    );
     let inner = egui::Rect::from_min_size(
         egui::pos2(rect.left() + 2.0, rect.top()),
         egui::vec2((width - 4.0).max(8.0), row_h),
@@ -3324,6 +3311,8 @@ pub fn form_multiline_field(
 }
 
 /// 带占位提示的多行输入。
+///
+/// 底/描边/圆角与 [`form_singleline_field_boxed`] / [`form_combo`] 同套（`color_form_input_*`）。
 pub fn form_multiline_field_with_hint(
     ui: &mut Ui,
     theme: &Theme,
@@ -3339,7 +3328,7 @@ pub fn form_multiline_field_with_hint(
     let pad_y = 4.0;
     let inner_w = (desired_width - theme.spacing_search_input_x() * 2.0 - 4.0).max(48.0);
     egui::Frame::NONE
-        .fill(theme.color_text_input_fill())
+        .fill(theme.color_form_input_fill())
         .stroke(if focused {
             egui::Stroke::new(1.0, theme.accent_color())
         } else {
@@ -3366,7 +3355,54 @@ pub fn form_multiline_field_with_hint(
         .inner
 }
 
-/// 统一下拉：控件字号与表单输入一致，弹出层走 [`apply_menu_popup_style`]。
+/// 给 ComboBox 按钮套上与表单输入相同的底+描边（modern 全局 inactive 透明时裸下拉几乎看不见框）。
+fn apply_form_combo_button_visuals(visuals: &mut egui::Visuals, theme: &Theme) {
+    let fill = theme.color_form_input_fill();
+    let stroke = egui::Stroke::new(1.0, theme.color_form_input_stroke());
+    let focus_stroke = egui::Stroke::new(1.0, theme.accent_color());
+    let radius = egui::CornerRadius::same(theme.radius_search_input() as u8);
+    let fg = egui::Stroke::new(1.0, theme.color_text_input_text());
+    let hover_fill = Color32::from_rgb(
+        fill.r().saturating_add(14),
+        fill.g().saturating_add(14),
+        fill.b().saturating_add(14),
+    );
+
+    let idle = &mut visuals.widgets.inactive;
+    idle.bg_fill = fill;
+    idle.weak_bg_fill = fill;
+    idle.bg_stroke = stroke;
+    idle.corner_radius = radius;
+    idle.fg_stroke = fg;
+    idle.expansion = 0.0;
+
+    let hovered = &mut visuals.widgets.hovered;
+    hovered.bg_fill = hover_fill;
+    hovered.weak_bg_fill = hover_fill;
+    hovered.bg_stroke = stroke;
+    hovered.corner_radius = radius;
+    hovered.fg_stroke = fg;
+    hovered.expansion = 0.0;
+
+    let active = &mut visuals.widgets.active;
+    active.bg_fill = hover_fill;
+    active.weak_bg_fill = hover_fill;
+    active.bg_stroke = focus_stroke;
+    active.corner_radius = radius;
+    active.fg_stroke = fg;
+    active.expansion = 0.0;
+
+    let open = &mut visuals.widgets.open;
+    open.bg_fill = hover_fill;
+    open.weak_bg_fill = hover_fill;
+    open.bg_stroke = focus_stroke;
+    open.corner_radius = radius;
+    open.fg_stroke = fg;
+    open.expansion = 0.0;
+}
+
+/// 统一下拉：与 [`form_singleline_field_boxed`] / [`form_multiline_field`] 同套底+描边+圆角，高度贴近控件按钮。
+/// 弹出层仍走 [`apply_menu_popup_style`]。产品表单禁止裸 `ComboBox`（modern 下无框）。
 pub fn form_combo<R>(
     ui: &mut Ui,
     theme: &Theme,
@@ -3375,20 +3411,42 @@ pub fn form_combo<R>(
     width: f32,
     add_contents: impl FnOnce(&mut Ui) -> R,
 ) -> egui::InnerResponse<Option<R>> {
-    let font = egui::FontId::proportional(theme.font_size_control_input());
+    let font_size = theme.font_size_control_input();
+    let font = egui::FontId::proportional(font_size);
     ui.style_mut()
         .text_styles
         .insert(egui::TextStyle::Button, font.clone());
     ui.style_mut()
         .text_styles
         .insert(egui::TextStyle::Body, font);
-    egui::ComboBox::from_id_salt(id_salt)
+
+    let prev_inactive = ui.visuals().widgets.inactive;
+    let prev_hovered = ui.visuals().widgets.hovered;
+    let prev_active = ui.visuals().widgets.active;
+    let prev_open = ui.visuals().widgets.open;
+    let prev_pad = ui.spacing().button_padding;
+
+    apply_form_combo_button_visuals(ui.visuals_mut(), theme);
+    // 字号 + 上下 padding ≈ size_control_btn_h，与同行主/次按钮齐高。
+    let pad_y = ((theme.size_control_btn_h() - font_size) * 0.5)
+        .max(4.0)
+        .min(theme.spacing_search_input_y().max(4.0));
+    ui.spacing_mut().button_padding = egui::vec2(theme.spacing_search_input_x(), pad_y);
+
+    let response = egui::ComboBox::from_id_salt(id_salt)
         .selected_text(selected_text)
         .width(width.max(48.0))
         .show_ui(ui, |ui| {
             apply_menu_popup_style(ui, theme);
             add_contents(ui)
-        })
+        });
+
+    ui.visuals_mut().widgets.inactive = prev_inactive;
+    ui.visuals_mut().widgets.hovered = prev_hovered;
+    ui.visuals_mut().widgets.active = prev_active;
+    ui.visuals_mut().widgets.open = prev_open;
+    ui.spacing_mut().button_padding = prev_pad;
+    response
 }
 
 /// 主题进度条，条内显示百分比。
@@ -4840,19 +4898,17 @@ fn form_stepper_value_field(
 ) -> Response {
     let focused = ui.memory(|m| m.has_focus(id));
     let row_h = form_stepper_control_h(theme);
+    // 与表单输入同套 token，避免步进数字框和正则/下拉各画一套描边。
     let stroke = if focused {
-        egui::Stroke::new(theme.stroke_width_panel().max(1.0), theme.accent_color())
+        egui::Stroke::new(1.0, theme.accent_color())
     } else {
-        egui::Stroke::new(
-            theme.stroke_width_panel().max(1.0),
-            theme.color_text_input_stroke(),
-        )
+        egui::Stroke::new(1.0, theme.color_form_input_stroke())
     };
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, row_h), Sense::hover());
     ui.painter().rect(
         rect,
-        theme.radius_search_input(),
-        theme.color_text_input_fill(),
+        theme.radius_card(),
+        theme.color_form_input_fill(),
         stroke,
         egui::StrokeKind::Middle,
     );
@@ -4891,9 +4947,10 @@ fn form_stepper_btn(ui: &mut Ui, theme: &Theme, label: &str) -> Response {
     let hovered = response.hovered();
     let pressed = response.is_pointer_button_down_on();
     let (fill, text_c, _) = secondary_control_button_colors(theme, true, hovered, pressed);
+    // 与 panel_action 次要按钮同用 radius_card；勿用 list_item 圆角（20px 方钮上会像圆形）。
     ui.painter().rect(
         rect,
-        theme.radius_list_item(),
+        theme.radius_card(),
         fill,
         theme.color_control_secondary_stroke(true),
         egui::StrokeKind::Middle,
