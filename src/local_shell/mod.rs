@@ -54,6 +54,7 @@ pub fn default_shell_program() -> String {
     }
 }
 
+#[cfg(windows)]
 fn lookup_on_path(name: &str) -> Option<PathBuf> {
     let path = std::env::var_os("PATH")?;
     for dir in std::env::split_paths(&path) {

@@ -309,7 +309,7 @@ mod tests {
 // testability*. The real pipeline would call it each time before choosing
 // a phase; keeping it module-level lets us cover the exact byte patterns
 // that force a Handshake -> Binary transition without needing a task.
-
+#[cfg(test)]
 /// 当入站缓冲内出现首个 ZDATA（Header.Type == 0x15 == ZDATA 的 ZRINIT header
 /// 之前的典型 4B ZPAD ZDLE + Binary 的 marker）时视为握手结束，切换到 Binary 阶段。
 ///

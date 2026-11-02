@@ -18,7 +18,7 @@ struct LsRow {
 }
 
 pub fn run(ctx: &CliContext, group: Option<&str>, json: bool) -> Result<()> {
-    let mut sessions: Vec<_> = ctx.sessions.get_sessions().to_vec();
+    let mut sessions: Vec<_> = ctx.sessions.list_sessions().to_vec();
     sessions.sort_by(|a, b| {
         // 按 group 再按 name 排
         a.group.cmp(&b.group).then(a.name.cmp(&b.name))

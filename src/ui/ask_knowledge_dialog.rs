@@ -59,7 +59,7 @@ pub fn show_ask_knowledge_modal(
                     chrome::form_singleline_field(
                         ui,
                         theme,
-                        egui::Id::new("ask_knowledge_query"),
+                        egui::Id::unique("ask_knowledge_query"),
                         query,
                         crate::i18n::tr(
                             ctx,

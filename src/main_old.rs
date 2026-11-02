@@ -310,9 +310,9 @@ impl eframe::App for MistTermApp {
                     ui.add_space(10.0);
                     
                     // 终端输出区域 - 占据剩余空间
-                    egui::Frame::none()
+                    egui::Frame::NONE
                         .fill(egui::Color32::from_rgb(30, 30, 30))
-                        .inner_margin(egui::Margin::same(10.0))
+                        .inner_margin(egui::Margin::same((10.0) as i8))
                         .show(ui, |ui| {
                             egui::ScrollArea::vertical()
                                 .stick_to_bottom(true)
@@ -328,7 +328,7 @@ impl eframe::App for MistTermApp {
                                         egui::RichText::new(&output_text)
                                             .family(egui::FontFamily::Monospace)
                                             .color(egui::Color32::LIGHT_GREEN)
-                                    ).wrap(false));
+                                    ).wrap());
                                 });
                         });
                     

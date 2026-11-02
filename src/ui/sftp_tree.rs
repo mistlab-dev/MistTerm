@@ -138,6 +138,7 @@ pub(super) fn looks_like_text_name(name: &str) -> bool {
 }
 
 /// 名字像文本文件（可走远程编辑）；过大或明显二进制则否。
+#[cfg(test)]
 pub(super) fn looks_like_editable_text(name: &str, size: u64) -> bool {
     !preview_needs_confirm(size) && looks_like_text_name(name)
 }

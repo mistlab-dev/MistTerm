@@ -56,7 +56,7 @@ impl CliContext {
     pub fn find_session(&self, target: &str) -> Option<SessionConfig> {
         let t = target.trim();
         self.sessions
-            .get_sessions()
+            .list_sessions()
             .iter()
             .find(|s| s.name == t || s.id == t || s.host == t)
             .cloned()

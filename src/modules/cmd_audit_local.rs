@@ -65,7 +65,7 @@ pub(crate) fn allow_audit() -> CmdAuditResult {
         matches: Vec::new(),
     }
 }
-
+#[cfg(test)]
 /// 手敲回车是否要先扣住 `\r`。模块关闭时与「策略未生效」一样，回车照旧直接发出。
 pub(crate) fn typed_enter_should_gate(module_enabled: bool, engine_active: bool) -> bool {
     module_enabled && engine_active

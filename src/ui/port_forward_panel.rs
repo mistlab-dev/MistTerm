@@ -214,30 +214,40 @@ impl PortForwardPanel {
     pub fn show_side_panel(
         &mut self,
         ctx: &egui::Context,
+        ui: &mut egui::Ui,
         theme: &Theme,
         right_dock_outer_left: &mut Option<f32>,
         dock_col_w: f32,
     ) {
         let (def_w, min_w, max_w) = layout_util::right_dock_resize_bounds(dock_col_w);
-        let panel = egui::SidePanel::right("port_forward_panel")
-            .default_width(def_w)
-            .min_width(min_w)
-            .max_width(max_w)
-            .resizable(true)
-            .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
-            .show(ctx, |ui| {
-                let h = ui.available_height().max(1.0);
-                let w = ui.available_width().max(1.0);
-                ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
-            });
+        {
+            egui::Panel::right("port_forward_panel")
+                .default_size(def_w)
+                .min_size(min_w)
+                .max_size(max_w)
+                .resizable(true)
+                .frame(crate::ui::chrome::right_dock_placeholder_frame(theme))
+                .show(ui, |ui| {
+                    let h = ui.available_height().max(1.0);
+                    let w = ui.available_width().max(1.0);
+                    ui.allocate_exact_size(egui::vec2(w, h), egui::Sense::hover());
+                });
+        }
         let dock_inset = theme.spacing_right_dock_screen_inset();
-        let slot = layout_util::side_panel_place_slot(ctx, &panel.response, dock_col_w, dock_inset);
+        // #206 S1：Panel::show 不再返回 response；槽位改由 PanelState 落盘矩形推得。
+        let slot = layout_util::side_panel_state_rect(ctx, "port_forward_panel")
+            .map(|r| {
+                let screen = ctx.content_rect();
+                let mut s = r;
+                s.min.x = screen.max.x - s.width();
+                s.max.x = screen.max.x - dock_inset;
+                s
+            })
+            .unwrap_or(egui::Rect::NOTHING);
         crate::ui::chrome::paint_right_dock_slot_gap(ctx, theme, slot);
         self.last_panel_slot_rect = Some(slot);
         if let Some(slot) = self.last_panel_slot_rect {
             layout_util::record_right_dock_panel_rect(&slot, right_dock_outer_left);
-        } else {
-            layout_util::record_right_dock_panel(&panel.response, right_dock_outer_left);
         }
     }
 
@@ -259,7 +269,7 @@ impl PortForwardPanel {
         ) else {
             return;
         };
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let geom = crate::ui::chrome::prepare_right_dock_foreground_geom(slot, screen, theme);
         let layer_id = crate::ui::chrome::right_dock_foreground_layer_id("mistterm_port_fwd_fg");
         crate::ui::chrome::paint_right_dock_foreground_shell(ctx, layer_id, geom.paint, theme);
@@ -596,7 +606,7 @@ impl PortForwardPanel {
                     crate::ui::chrome::form_inline_singleline(
                         ui,
                         theme,
-                        egui::Id::new("pf_bind_address"),
+                        egui::Id::unique("pf_bind_address"),
                         &mut self.form.bind_address,
                         "127.0.0.1",
                         100.0,
@@ -610,7 +620,7 @@ impl PortForwardPanel {
                     crate::ui::chrome::form_inline_singleline(
                         ui,
                         theme,
-                        egui::Id::new("pf_local_port_ld"),
+                        egui::Id::unique("pf_local_port_ld"),
                         &mut self.form.local_port,
                         "8080",
                         64.0,
@@ -628,7 +638,7 @@ impl PortForwardPanel {
                     crate::ui::chrome::form_inline_singleline(
                         ui,
                         theme,
-                        egui::Id::new("pf_local_port_r"),
+                        egui::Id::unique("pf_local_port_r"),
                         &mut self.form.local_port,
                         "8080",
                         64.0,
@@ -648,7 +658,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
-                    egui::Id::new("pf_remote_host_l"),
+                    egui::Id::unique("pf_remote_host_l"),
                     &mut self.form.remote_host,
                     "127.0.0.1",
                     120.0,
@@ -658,7 +668,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
-                    egui::Id::new("pf_remote_port_l"),
+                    egui::Id::unique("pf_remote_port_l"),
                     &mut self.form.remote_port,
                     "80",
                     64.0,
@@ -675,7 +685,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
-                    egui::Id::new("pf_remote_host_r"),
+                    egui::Id::unique("pf_remote_host_r"),
                     &mut self.form.remote_host,
                     "127.0.0.1",
                     120.0,
@@ -685,7 +695,7 @@ impl PortForwardPanel {
                 crate::ui::chrome::form_inline_singleline(
                     ui,
                     theme,
-                    egui::Id::new("pf_remote_port_r"),
+                    egui::Id::unique("pf_remote_port_r"),
                     &mut self.form.remote_port,
                     "3000",
                     64.0,

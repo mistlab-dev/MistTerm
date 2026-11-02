@@ -117,7 +117,7 @@ impl CommandHistoryOverlay {
             self.selected = 0;
         }
 
-        let title_id = egui::Id::new("cmd_history_compose_title");
+        let title_id = egui::Id::unique("cmd_history_compose_title");
         let title_focused = ctx.memory(|m| m.has_focus(title_id));
         let mut action = CommandHistoryAction::None;
 
@@ -233,7 +233,7 @@ impl CommandHistoryOverlay {
                     let search_resp = crate::ui::chrome::search_field(
                         ui,
                         theme,
-                        egui::Id::new("cmd_history_search"),
+                        egui::Id::unique("cmd_history_search"),
                         &mut self.query,
                         crate::i18n::tr(ctx, "Search history…", "搜索历史命令…"),
                         content_w,
@@ -616,7 +616,7 @@ fn panel_anchor(term_rect: egui::Rect, ctx: &egui::Context) -> egui::Pos2 {
             term_rect.top() + ANCHOR_INSET,
         )
     } else {
-        ctx.screen_rect().shrink(ANCHOR_INSET).left_top()
+        ctx.content_rect().shrink(ANCHOR_INSET).left_top()
     }
 }
 
@@ -668,7 +668,7 @@ fn fuzzy_suggestion_row(
         ui.painter()
             .rect_filled(row_rect, rounding, theme.list_row_hover_bg());
     }
-    ui.allocate_ui_at_rect(row_rect.shrink2(egui::vec2(8.0, 4.0)), |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect.shrink2(egui::vec2(8.0, 4.0))), |ui| {
         ui.label(
             egui::RichText::new(format!(
                 "{} {}",
@@ -722,11 +722,11 @@ fn history_row(
 
     let mut delete_clicked = false;
     let mut check_clicked = false;
-    ui.allocate_ui_at_rect(row_rect, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
         HistoryTableCols::paint_row_strip(ui, cols, row_h, |cell, col| match col {
             0 => {
                 let before = *checked;
-                let id = egui::Id::new(("cmd_hist_check", entry.executed_at, &entry.command));
+                let id = egui::Id::unique(("cmd_hist_check", entry.executed_at, &entry.command));
                 if crate::ui::chrome::form_checkbox_with_id(cell, theme, id, checked, "")
                     .changed()
                 {
@@ -743,7 +743,7 @@ fn history_row(
                             .font(egui::FontId::monospace(theme.font_size_normal()))
                             .color(cmd_color),
                     )
-                    .truncate(true),
+                    .truncate(),
                 );
                 // 列内放不下时，悬停可看完整命令。
                 resp.on_hover_text(&entry.command);
@@ -755,7 +755,7 @@ fn history_row(
                             .size(theme.font_size_small())
                             .color(theme.text_secondary()),
                     )
-                    .truncate(true),
+                    .truncate(),
                 );
                 if session_label != "—" {
                     resp.on_hover_text(session_label);

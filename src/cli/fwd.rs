@@ -194,7 +194,7 @@ pub fn run_fwd(
     println!("==============================================================");
 
     let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
+    let _r = running.clone();
 
     #[cfg(unix)]
     {

@@ -78,10 +78,6 @@ pub struct CommandBlock {
 }
 
 impl CommandBlock {
-    pub(crate) fn start_line(&self) -> i32 {
-        self.start_point().line
-    }
-
     fn start_point(&self) -> GridPoint {
         self.command.or(self.output).unwrap_or(self.origin)
     }
@@ -160,10 +156,11 @@ impl CommandBlockIndex {
         self.saw_integration
     }
 
+#[cfg(test)]
     pub fn navigable_count(&self) -> usize {
         self.blocks.iter().filter(|b| b.is_navigable()).count()
     }
-
+    #[cfg(test)]
     pub fn exit_codes(&self) -> Vec<Option<i32>> {
         self.blocks
             .iter()
@@ -171,7 +168,7 @@ impl CommandBlockIndex {
             .map(|b| b.exit_code)
             .collect()
     }
-
+    #[cfg(test)]
     pub fn fullscreen_flags(&self) -> Vec<bool> {
         self.blocks
             .iter()

@@ -31,7 +31,7 @@ impl MistTermApp {
                 crate::ui::chrome::modal_content_frame(theme).show(ui, |ui| {
                     Self::modal_header_title_only(ui, theme, title, &mut should_close);
                     let font = egui::FontId::monospace(theme.font_size_small());
-                    let row_height = ui.fonts(|f| f.row_height(&font));
+                    let row_height = ui.fonts_mut(|f| f.row_height(&font));
                     let lines = third_party_license_lines();
                     egui::ScrollArea::both()
                         .auto_shrink([false; 2])
@@ -43,7 +43,7 @@ impl MistTermApp {
                                             .font(font.clone())
                                             .color(theme.color_body_text_muted()),
                                     )
-                                    .wrap(false),
+                                    .wrap(),
                                 );
                             }
                         });
