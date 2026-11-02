@@ -235,7 +235,7 @@ pub fn run_fwd(
         std::thread::sleep(Duration::from_millis(200));
     }
 
-    println!("\n正在关闭所有端口转发...");
+    println!("\n正在关闭所有端口转发…");
     for ctrl in controls {
         ctrl.stop();
     }

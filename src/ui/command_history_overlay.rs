@@ -189,8 +189,8 @@ impl CommandHistoryOverlay {
                             crate::platform::terminal_history_accel(),
                             crate::i18n::tr(
                                 ctx,
-                                " next · Esc close · check ≥2 to compose)",
-                                " 继续 · Esc 关闭 · 勾选≥2 条组成片段)",
+                                " next · Esc close · select ≥2 to compose)",
+                                " 继续 · Esc 关闭 · 勾选 ≥2 条组成片段)",
                             ),
                         ))
                         .size(theme.font_size_panel_title())

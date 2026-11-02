@@ -821,7 +821,7 @@ mod shell_pump {
                 let __gap = __last_beat.elapsed();
                 if __gap.as_millis() as u64 >= 1_000 {
                     log::warn!(
-                        "PUMP_STUCK session={} gap_ms={} (泵线程上一轮耗时异常)",
+                        "PUMP_STUCK session={} gap_ms={}（泵线程上一轮耗时异常）",
                         session_id,
                         __gap.as_millis()
                     );

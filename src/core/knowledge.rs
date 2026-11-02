@@ -42,7 +42,7 @@ impl KnowledgeSource {
             Self::TeamFragment => "团队片段",
             Self::PersonalFragment => "个人片段",
             Self::TeamDoc => "团队文档",
-            Self::Model => "模型 (非团队知识)",
+            Self::Model => "模型（非团队知识）",
         }
     }
 }

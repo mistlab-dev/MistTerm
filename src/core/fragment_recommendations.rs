@@ -567,7 +567,7 @@ pub fn build_efficiency_report_markdown(
         ));
     }
     if !dash.member_rows.is_empty() {
-        out.push_str("\n## 团队成员(本机)\n\n");
+        out.push_str("\n## 团队成员（本机）\n\n");
         for m in &dash.member_rows {
             let rate = if m.run_count == 0 {
                 0.0
@@ -584,7 +584,7 @@ pub fn build_efficiency_report_markdown(
         out.push_str("\n## 建议添加到片段库\n\n");
         for r in recommendations {
             out.push_str(&format!(
-                "- `{}`({} 次，来源：{})\n",
+                "- `{}`（{} 次，来源：{}）\n",
                 r.command, r.count, r.source
             ));
         }

@@ -500,7 +500,7 @@ chmod +x check_domain.sh
         assert!(super::is_retryable_transport_error("网络错误：connection refused"));
         assert!(!super::is_retryable_transport_error("API 401：unauthorized"));
         assert!(!super::is_retryable_transport_error(
-            "请求超时(已配置 60 秒)。可在 AI 设置中增大「超时 (秒)」后点「重新生成」。"
+            "请求超时(已配置 60 秒)。可在 AI 设置中增大「超时（秒）」后点「重新生成」。"
         ));
         assert!(!super::is_retryable_transport_error("网络错误：operation timed out"));
     }
@@ -622,7 +622,7 @@ fn http_client_timeout(timeout_secs: u64) -> Result<reqwest::blocking::Client, S
 }
 
 fn format_timeout_error(secs: u64) -> String {
-    format!("请求超时(已配置 {secs} 秒)。可在 AI 设置中增大「超时 (秒)」后点「重新生成」。")
+    format!("请求超时(已配置 {secs} 秒)。可在 AI 设置中增大「超时（秒）」后点「重新生成」。")
 }
 
 fn looks_like_timeout_error(err: &str) -> bool {

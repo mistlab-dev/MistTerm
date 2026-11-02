@@ -42,7 +42,7 @@ fn main() {
     let test_file = "/tmp/test_upload.csv";
     let test_content = "id,name,value,timestamp\n1,test1,100,2026-04-29\n2,test2,200,2026-04-29\n3,test3,300,2026-04-29\n";
     
-    println!("📝 创建测试文件...");
+    println!("📝 创建测试文件…");
     let mut channel = session.channel_session().unwrap();
     channel.exec(&format!("cat > {} && echo '{}'", test_file, test_content)).unwrap();
     let mut data = test_content.as_bytes();
@@ -52,8 +52,8 @@ fn main() {
     println!("✅ 测试文件已创建 ({} bytes)", test_content.len());
     
     // 现在测试 rz 接收
-    println!("\n📥 测试 ZMODEM 接收...");
-    println!("   请等待服务器发送文件...");
+    println!("\n📥 测试 ZMODEM 接收…");
+    println!("   请等待服务器发送文件…");
     
     // 模拟 rz 接收流程
     let download_dir = "/tmp/zmodem_download_test";
@@ -67,14 +67,14 @@ fn main() {
     let mut chan = session.channel_session().unwrap();
     
     // 1. 等待 ZRQINIT
-    println!("   等待 ZRQINIT...");
+    println!("   等待 ZRQINIT…");
     let mut buffer = [0u8; 8192];
     let mut zrinit_sent = false;
     
     for i in 0..100 {
         match chan.read(&mut buffer) {
             Ok(0) => {
-                println!("   等待中... ({}s)", i);
+                println!("   等待中… ({}s)", i);
                 thread::sleep(Duration::from_millis(100));
                 continue;
             }
@@ -104,7 +104,7 @@ fn main() {
                         chan.flush().unwrap();
                         
                         // 开始接收数据
-                        println!("   开始接收文件数据...");
+                        println!("   开始接收文件数据…");
                         let mut file = fs::File::create(format!("{}/{}", download_dir, filename)).unwrap();
                         let mut total_received = 0u64;
                         
@@ -141,7 +141,7 @@ fn main() {
     }
     
     // 验证文件
-    println!("\n🔍 验证文件...");
+    println!("\n🔍 验证文件…");
     let downloaded_path = format!("{}/test_upload.csv", download_dir);
     if let Ok(downloaded) = fs::read_to_string(&downloaded_path) {
         if downloaded == test_content {

@@ -35,7 +35,7 @@ fn quick_steps(ctx: &egui::Context) -> Vec<QuickStep> {
             detail: crate::i18n::tr(
                 ctx,
                 "Activity Rail → Command snippets (or View menu) to open the library. When the terminal is not focused, Ctrl+K (macOS ⌘K) opens the command palette; pick a snippet there to run it the same way as the quick picker. Click a snippet in the library to send it.",
-                "活动栏 → 命令片段(或「视图」菜单)打开片段库。终端失焦时 Ctrl+K (macOS 为 ⌘K) 打开命令面板, 在里面选片段会按快速选择器同样的方式执行。在片段库里点击也会发送到终端。",
+                "活动栏 → 命令片段（或「视图」菜单）打开片段库。终端失焦时 Ctrl+K (macOS 为 ⌘K) 打开命令面板，在里面选片段会按快速选择器同样的方式执行。在片段库里点击也会发送到终端。",
             ),
             keys: vec![shortcuts::accel("K")],
         },
@@ -350,7 +350,7 @@ fn render_onboarding(ui: &mut Ui, theme: &Theme, ctx: &egui::Context, status: On
             detail: crate::i18n::tr(
                 ctx,
                 "Covers snippets, batch exec, AI-planned ops, command history, and commands submitted with Enter in the interactive terminal when team audit is on. Turn that off under Preferences → Activity audit. Full-screen programs, password prompts, and multi-line paste are not captured. Server-side agent audit still applies only to documented root / ssh-command paths.",
-                "覆盖片段、批量执行、AI 规划运维、命令历史, 以及团队审计开启时在交互式终端用回车提交的命令。可在偏好设置的操作审计里关掉。全屏程序、口令提示和多行粘贴不记录。服务端 Agent 审计仍只覆盖文档化的 root / ssh-command 路径。",
+                "覆盖片段、批量执行、AI 规划运维、命令历史，以及团队审计开启时在交互式终端用回车提交的命令。可在偏好设置的操作审计里关掉。全屏程序、口令提示和多行粘贴不记录。服务端 Agent 审计仍只覆盖文档化的 root / ssh-command 路径。",
             )
             .to_string(),
             done: false,
@@ -593,7 +593,7 @@ fn feature_sections() -> Vec<FeatureSection> {
             title_en: "Vault SSH CA",
             title_zh: "证书签发(Vault SSH CA)",
             desc_en: "Team server issues short-lived SSH certificates via HashiCorp Vault SSH CA (server-side). The desktop app reads credentials from Vault KV for team servers.",
-            desc_zh: "团队服务端通过 HashiCorp Vault SSH CA 签发短期 SSH 证书(服务端职责)。桌面端从 Vault KV 读取团队服务器凭证。",
+            desc_zh: "团队服务端通过 HashiCorp Vault SSH CA 签发短期 SSH 证书（服务端职责）。桌面端从 Vault KV 读取团队服务器凭证。",
         },
         FeatureSection {
             title_en: "AI assistant",

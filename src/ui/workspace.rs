@@ -1139,7 +1139,7 @@ impl MistTermApp {
                                 crate::i18n::tr(
                                     ctx,
                                     "8080:127.0.0.1:80 (one per line)",
-                                    "8080:127.0.0.1:80(每行一条)",
+                                    "8080:127.0.0.1:80（每行一条）",
                                 ),
                                 form_w,
                                 2,
@@ -1163,7 +1163,7 @@ impl MistTermApp {
                                 crate::i18n::tr(
                                     ctx,
                                     "8080:127.0.0.1:3000 (one per line)",
-                                    "8080:127.0.0.1:3000(每行一条)",
+                                    "8080:127.0.0.1:3000（每行一条）",
                                 ),
                                 form_w,
                                 2,
@@ -1187,7 +1187,7 @@ impl MistTermApp {
                                 crate::i18n::tr(
                                     ctx,
                                     "1080 or 0.0.0.0:1080 (one per line)",
-                                    "1080 或 0.0.0.0:1080(每行一条)",
+                                    "1080 或 0.0.0.0:1080（每行一条）",
                                 ),
                                 form_w,
                                 2,
@@ -1270,7 +1270,7 @@ impl MistTermApp {
                             );
                             if self.edit_session_keepalive_enabled {
                                 // 与偏好设置一致：两个步进器各占一行，窄表单不把标签折断（#130）。
-                                let every = crate::i18n::tr(ctx, "Interval (s)", "每隔(秒)");
+                                let every = crate::i18n::tr(ctx, "Interval (s)", "每隔（秒）");
                                 let give_up = crate::i18n::tr(ctx, "Max timeouts", "连续无应答");
                                 let label_w = crate::ui::chrome::form_label_advance(ui, theme, every)
                                     .max(crate::ui::chrome::form_label_advance(
@@ -1501,7 +1501,7 @@ impl MistTermApp {
                             crate::ui::chrome::form_field_label(
                                 ui,
                                 theme,
-                                crate::i18n::tr(ctx, "Command to run (editable)", "将要执行(可编辑)"),
+                                crate::i18n::tr(ctx, "Command to run (editable)", "将要执行（可编辑）"),
                             );
                             crate::ui::chrome::form_multiline_field(
                                 ui,
@@ -1843,7 +1843,7 @@ impl MistTermApp {
                                             crate::i18n::tr(
                                                 ui.ctx(),
                                                 "Command to run (editable)",
-                                                "将要执行的命令(可编辑)",
+                                                "将要执行的命令（可编辑）",
                                             ),
                                         );
                                         crate::ui::chrome::form_multiline_field(
@@ -1943,7 +1943,7 @@ impl MistTermApp {
                                             crate::i18n::tr(
                                                 ctx,
                                                 "Snippet no longer exists (removed from library?)",
-                                                "找不到该片段(可能已从库中删除)",
+                                                "找不到该片段（可能已从库中删除）",
                                             )
                                             .to_string(),
                                         );

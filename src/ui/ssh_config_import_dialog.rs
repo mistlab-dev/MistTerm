@@ -172,7 +172,7 @@ impl SshConfigImportDialog {
                                             egui::RichText::new(crate::i18n::tr(
                                                 ctx,
                                                 "(already imported)",
-                                                "(已导入)",
+                                                "（已导入）",
                                             ))
                                                 .size(theme.font_size_small())
                                                 .color(theme.text_tertiary()),

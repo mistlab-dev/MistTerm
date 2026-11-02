@@ -740,7 +740,7 @@ pub fn show_team_settings_modal(
                             chrome::form_inline_label(
                                 ui,
                                 theme,
-                                i18n::tr(ctx, "Audit retention (days)", "审计保留(天)"),
+                                i18n::tr(ctx, "Audit retention (days)", "审计保留（天）"),
                             );
                             chrome::form_inline_singleline(
                                 ui,

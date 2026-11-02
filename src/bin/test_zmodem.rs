@@ -39,7 +39,7 @@ fn main() {
     let test_dir = "/tmp/zmodem_test_local".to_string();
     let remote_dir = format!("/tmp/zmodem_remote_{}", std::process::id());
     
-    println!("📝 准备测试环境...");
+    println!("📝 准备测试环境…");
     let _ = fs::create_dir_all(&test_dir);
     let _ = execute_command(&session, &format!("mkdir -p {} {}", test_dir, remote_dir));
     

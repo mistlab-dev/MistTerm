@@ -398,13 +398,13 @@ impl RuleManagerDialog {
             crate::i18n::tr(
                 ctx,
                 "Using your saved rules. Changes apply on the next output line. No restart.",
-                "正在使用已保存的规则. 改完后下一行输出立即生效, 不用重启.",
+                "正在使用已保存的规则。改完后下一行输出立即生效，不用重启。",
             )
         } else {
             crate::i18n::tr(
                 ctx,
                 "Built-in rules are in effect until you edit them. Changes apply on the next output line. No restart.",
-                "尚未自定义, 正在使用内置规则. 改完后下一行输出立即生效, 不用重启.",
+                "尚未自定义，正在使用内置规则。改完后下一行输出立即生效，不用重启。",
             )
         };
         ui.label(
@@ -534,7 +534,7 @@ impl RuleManagerDialog {
                                 egui::RichText::new(crate::i18n::tr(
                                     ctx,
                                     "Invalid regular expression. This rule will not match.",
-                                    "正则无效, 这条规则不会命中.",
+                                    "正则无效，这条规则不会命中。",
                                 ))
                                 .size(theme.font_size_caption())
                                 .color(theme.color_danger_emphasis()),
@@ -552,7 +552,7 @@ impl RuleManagerDialog {
                     self.set_status(crate::i18n::tr(
                         ctx,
                         "Saved. Takes effect on the next output line.",
-                        "已保存, 下一行输出立即生效.",
+                        "已保存，下一行输出立即生效。",
                     ));
                     if self.selected_id.as_deref() == Some(id.as_str()) {
                         self.enabled = enabled;
@@ -619,7 +619,7 @@ impl RuleManagerDialog {
                     theme,
                     egui::Id::unique("output_trigger_keywords"),
                     &mut self.ot_keywords,
-                    crate::i18n::tr(ctx, "ERROR, failed, timeout", "ERROR, 失败, 超时"),
+                    crate::i18n::tr(ctx, "ERROR, failed, timeout", "ERROR, 失败，超时"),
                     width,
                     4,
                     false,
@@ -637,7 +637,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_field_label(
                     ui,
                     theme,
-                    crate::i18n::tr(ctx, "Pattern (regular expression)", "匹配模式 (正则)"),
+                    crate::i18n::tr(ctx, "Pattern (regular expression)", "匹配模式（正则）"),
                 );
                 crate::ui::chrome::form_multiline_field_with_hint(
                     ui,
@@ -791,7 +791,7 @@ impl RuleManagerDialog {
             crate::i18n::tr(
                 ctx,
                 "Click again to restore built-in rules",
-                "再点一次, 确认恢复内置规则",
+                "再点一次，确认恢复内置规则",
             )
         } else {
             crate::i18n::tr(ctx, "Restore built-in rules", "恢复内置规则")
@@ -807,7 +807,7 @@ impl RuleManagerDialog {
                         self.set_status(crate::i18n::tr(
                             ctx,
                             "Built-in rules restored. Takes effect on the next output line.",
-                            "已恢复内置规则, 下一行输出立即生效.",
+                            "已恢复内置规则，下一行输出立即生效。",
                         ));
                     }
                     Err(err) => self.set_error(save_failed(ctx, &err)),
@@ -831,7 +831,7 @@ impl RuleManagerDialog {
                 egui::RichText::new(crate::i18n::tr(
                     ctx,
                     "Save a rule whose pattern is HELLO_MIST, severity Info, action Notify. In a connected terminal run: sleep 2; echo HELLO_MIST. Switch to another tab before it prints. The toast title is Output notice. The same rule will not toast again for 5 seconds. The tab you are looking at does not toast (same as the built-in rules).",
-                    "保存一条模式为 HELLO_MIST, 严重级别为「提示」, 动作为「通知」的规则. 在已连接的终端执行 sleep 2; echo HELLO_MIST, 打印前先切到另一个标签. Toast 标题是「输出提示」. 同一条规则 5 秒内不会再弹. 你正在看的标签不弹 Toast (和内置规则一样).",
+                    "保存一条模式为 HELLO_MIST, 严重级别为「提示」, 动作为「通知」的规则。在已连接的终端执行 sleep 2; echo HELLO_MIST, 打印前先切到另一个标签. Toast 标题是「输出提示」. 同一条规则 5 秒内不会再弹。你正在看的标签不弹 Toast（和内置规则一样）.",
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.text_tertiary()),
@@ -849,7 +849,7 @@ impl RuleManagerDialog {
                 egui::RichText::new(crate::i18n::tr(
                     ctx,
                     "Import replaces every current rule. Invalid patterns are kept but do not match. A broken file leaves the current rules untouched.",
-                    "导入会替换当前全部规则. 无效正则会留下但不会命中. 文件损坏时不会改掉现有规则.",
+                    "导入会替换当前全部规则。无效正则会留下但不会命中。文件损坏时不会改掉现有规则。",
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.text_tertiary()),
@@ -887,7 +887,7 @@ impl RuleManagerDialog {
                 self.set_error(crate::i18n::tr(
                     ctx,
                     "Add at least one keyword. Nothing was saved.",
-                    "请至少填写一个关键词. 没有保存.",
+                    "请至少填写一个关键词。没有保存。",
                 ));
                 return;
             }
@@ -922,7 +922,7 @@ impl RuleManagerDialog {
                 self.set_status(crate::i18n::tr(
                     ctx,
                     "Saved. Takes effect on the next output line.",
-                    "已保存, 下一行输出立即生效.",
+                    "已保存，下一行输出立即生效。",
                 ));
             }
             Err(err) => self.set_error(explain_rule_error(ctx, &err)),
@@ -944,7 +944,7 @@ impl RuleManagerDialog {
             self.set_status(crate::i18n::tr(
                 ctx,
                 "Deleted. Takes effect on the next output line.",
-                "已删除, 下一行输出立即生效.",
+                "已删除，下一行输出立即生效。",
             ));
         }
         self.creating = false;
@@ -1069,7 +1069,7 @@ impl RuleManagerDialog {
         self.set_status(crate::i18n::tr(
             ctx,
             "Loaded a copy. Saving creates a new personal rule.",
-            "已载入副本. 保存后会新建一条个人规则.",
+            "已载入副本。保存后会新建一条个人规则。",
         ));
     }
 
@@ -1176,7 +1176,7 @@ impl RuleManagerDialog {
                 self.set_status(crate::i18n::tr(
                     ctx,
                     "Saved. Takes effect on the next command.",
-                    "已保存, 下一条命令即生效.",
+                    "已保存，下一条命令即生效。",
                 ));
             }
             ui.label(
@@ -1205,13 +1205,13 @@ impl RuleManagerDialog {
                 crate::i18n::tr(
                     ctx,
                     "Personal checks are ON: they run even without a team policy.",
-                    "个人检查已开启: 没有团队策略时也会生效.",
+                    "个人检查已开启: 没有团队策略时也会生效。",
                 )
             } else {
                 crate::i18n::tr(
                     ctx,
                     "Personal checks are OFF: they only run when a team policy is active.",
-                    "个人检查已关闭: 仅在团队策略激活时生效.",
+                    "个人检查已关闭: 仅在团队策略激活时生效。",
                 )
             };
             ui.label(
@@ -1250,7 +1250,7 @@ impl RuleManagerDialog {
             ui.heading(egui::RichText::new(crate::i18n::tr(
                 ctx,
                 "Built-in rules (read-only)",
-                "内置规则 (只读)",
+                "内置规则（只读）",
             ))
             .size(theme.font_size_section_title()));
             self.paint_cmd_builtin(ui, theme, ctx, personal, engine);
@@ -1271,7 +1271,7 @@ impl RuleManagerDialog {
                     ui.heading(egui::RichText::new(crate::i18n::tr(
                         ctx,
                         "Team rules (read-only)",
-                        "团队规则 (只读)",
+                        "团队规则（只读）",
                     ))
                     .size(theme.font_size_section_title()));
                     ui.label(
@@ -1280,7 +1280,7 @@ impl RuleManagerDialog {
                             crate::i18n::tr(
                                 ctx,
                                 "Team policy is active. Team rules are managed on the server; the desktop cannot change them.",
-                                "团队策略已激活. 团队规则在服务端管理, 桌面端不能修改.",
+                                "团队策略已激活。团队规则在服务端管理，桌面端不能修改。",
                             )
                         ))
                         .size(theme.font_size_caption())
@@ -1295,7 +1295,7 @@ impl RuleManagerDialog {
                     egui::RichText::new(crate::i18n::tr(
                         ctx,
                         "Team rule status is unavailable.",
-                        "团队规则状态不可用.",
+                        "团队规则状态不可用。",
                     ))
                     .size(theme.font_size_caption())
                     .color(theme.text_tertiary()),
@@ -1565,7 +1565,7 @@ impl RuleManagerDialog {
                     crate::i18n::tr(
                         ctx,
                         "Priority (lower matches first)",
-                        "优先级 (越小越先匹配)",
+                        "优先级（越小越先匹配）",
                     ),
                 );
                 let mut prio = self.cmd_priority.max(0).min(255) as u32;
@@ -1622,7 +1622,7 @@ impl RuleManagerDialog {
             egui::RichText::new(crate::i18n::tr(
                 ctx,
                 "Bundled with the app. You can disable individual rules on this machine; the patterns themselves cannot be edited here.",
-                "随应用内置. 可以在本机停用某条规则; 规则正文不能在这里修改.",
+                "随应用内置。可以在本机停用某条规则; 规则正文不能在这里修改。",
             ))
             .size(theme.font_size_caption())
             .color(theme.text_tertiary()),
@@ -1658,7 +1658,7 @@ impl RuleManagerDialog {
                             self.set_status(crate::i18n::tr(
                                 ctx,
                                 "Saved. Takes effect on the next command.",
-                                "已保存, 下一条命令即生效.",
+                                "已保存，下一条命令即生效。",
                             ));
                         }
                         ui.vertical(|ui| {
@@ -1713,7 +1713,7 @@ impl RuleManagerDialog {
             crate::i18n::tr(
                 ctx,
                 "Click again to clear personal rules and re-enable all built-in rules",
-                "再点一次, 确认清空个人规则并恢复全部内置规则",
+                "再点一次，确认清空个人规则并恢复全部内置规则",
             )
         } else {
             crate::i18n::tr(
@@ -1734,7 +1734,7 @@ impl RuleManagerDialog {
                         self.set_status(crate::i18n::tr(
                             ctx,
                             "Personal rules cleared. Takes effect on the next command.",
-                            "已清空个人规则, 下一条命令即生效.",
+                            "已清空个人规则，下一条命令即生效。",
                         ));
                     }
                     Err(err) => self.set_error(save_failed(ctx, &err)),
@@ -1757,7 +1757,7 @@ impl RuleManagerDialog {
                 egui::RichText::new(crate::i18n::tr(
                     ctx,
                     "Import replaces every current personal rule. A broken file leaves the current rules untouched.",
-                    "导入会替换当前全部个人规则. 文件损坏时不会改掉现有规则.",
+                    "导入会替换当前全部个人规则。文件损坏时不会改掉现有规则。",
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.text_tertiary()),
@@ -1819,7 +1819,7 @@ impl RuleManagerDialog {
                 self.set_status(crate::i18n::tr(
                     ctx,
                     "Saved. Takes effect on the next command.",
-                    "已保存, 下一条命令即生效.",
+                    "已保存，下一条命令即生效。",
                 ));
             }
             Err(err) => self.set_error(err.explain(
@@ -1850,7 +1850,7 @@ impl RuleManagerDialog {
             self.set_status(crate::i18n::tr(
                 ctx,
                 "Deleted. Takes effect on the next command.",
-                "已删除, 下一条命令即生效.",
+                "已删除，下一条命令即生效。",
             ));
         }
         self.cmd_creating = false;
@@ -1920,7 +1920,7 @@ impl RuleManagerDialog {
                 self.ensure_cmd_selection(personal);
                 self.set_status(match crate::i18n::language(ctx) {
                     crate::i18n::UiLanguage::Zh => {
-                        format!("已导入 {count} 条, 下一条命令即生效.")
+                        format!("已导入 {count} 条，下一条命令即生效。")
                     }
                     crate::i18n::UiLanguage::En => format!(
                         "Imported {count} rules. Takes effect on the next command."
@@ -2007,7 +2007,7 @@ impl RuleManagerDialog {
         self.set_status(crate::i18n::tr(
             ctx,
             "Loaded a copy. Saving creates a new personal rule.",
-            "已载入副本. 保存后会新建一条个人规则.",
+            "已载入副本。保存后会新建一条个人规则。",
         ));
     }
 
@@ -2035,13 +2035,13 @@ impl RuleManagerDialog {
             crate::i18n::tr(
                 ctx,
                 "Using your saved rules. Changes apply to the next redrawn screen. No restart.",
-                "正在使用已保存的规则. 改完后终端重绘即生效, 不用重启.",
+                "正在使用已保存的规则。改完后终端重绘即生效，不用重启。",
             )
         } else {
             crate::i18n::tr(
                 ctx,
                 "Built-in rules are in effect until you edit them. Changes apply to the next redrawn screen. No restart.",
-                "尚未自定义, 正在使用内置规则. 改完后终端重绘即生效, 不用重启.",
+                "尚未自定义，正在使用内置规则。改完后终端重绘即生效，不用重启。",
             )
         };
         ui.label(
@@ -2172,7 +2172,7 @@ impl RuleManagerDialog {
                                 egui::RichText::new(crate::i18n::tr(
                                     ctx,
                                     "Invalid regular expression. This rule will not match.",
-                                    "正则无效, 这条规则不会命中.",
+                                    "正则无效，这条规则不会命中。",
                                 ))
                                 .size(theme.font_size_caption())
                                 .color(theme.color_danger_emphasis()),
@@ -2190,7 +2190,7 @@ impl RuleManagerDialog {
                     self.set_status(crate::i18n::tr(
                         ctx,
                         "Saved. Takes effect on the next redrawn screen.",
-                        "已保存, 终端重绘即生效.",
+                        "已保存，终端重绘即生效。",
                     ));
                     if self.link_selected_id.as_deref() == Some(id.as_str()) {
                         self.link_enabled = enabled;
@@ -2275,7 +2275,7 @@ impl RuleManagerDialog {
                 crate::ui::chrome::form_field_label(
                     ui,
                     theme,
-                    crate::i18n::tr(ctx, "Pattern (regular expression)", "匹配模式 (正则)"),
+                    crate::i18n::tr(ctx, "Pattern (regular expression)", "匹配模式（正则）"),
                 );
                 crate::ui::chrome::form_multiline_field_with_hint(
                     ui,
@@ -2355,7 +2355,7 @@ impl RuleManagerDialog {
                     crate::i18n::tr(
                         ctx,
                         "Priority (lower matches first)",
-                        "优先级 (越小越先匹配)",
+                        "优先级（越小越先匹配）",
                     ),
                 );
                 crate::ui::chrome::form_u32_stepper(
@@ -2426,7 +2426,7 @@ impl RuleManagerDialog {
             crate::i18n::tr(
                 ctx,
                 "Click again to restore built-in rules",
-                "再点一次, 确认恢复内置规则",
+                "再点一次，确认恢复内置规则",
             )
         } else {
             crate::i18n::tr(ctx, "Restore built-in rules", "恢复内置规则")
@@ -2442,7 +2442,7 @@ impl RuleManagerDialog {
                         self.set_status(crate::i18n::tr(
                             ctx,
                             "Built-in rules restored. Takes effect on the next redrawn screen.",
-                            "已恢复内置规则, 终端重绘即生效.",
+                            "已恢复内置规则，终端重绘即生效。",
                         ));
                     }
                     Err(err) => self.set_error(save_failed(ctx, &err)),
@@ -2466,7 +2466,7 @@ impl RuleManagerDialog {
                 egui::RichText::new(crate::i18n::tr(
                     ctx,
                     "Built-in rules already highlight paths, error codes, IPs, and URLs in terminal output. Hover or right-click a hit to use the click action. Path hits inside system binary directories (/usr/bin etc.) are never linked. A line shows at most 16 links.",
-                    "内置规则已经在终端输出里识别路径/错误码/IP/URL. 悬停或右键命中片段即可使用对应动作. 系统二进制目录 (/usr/bin 等) 下的路径不画链接. 单行最多 16 个链接.",
+                    "内置规则已经在终端输出里识别路径/错误码/IP/URL. 悬停或右键命中片段即可使用对应动作。系统二进制目录 (/usr/bin 等) 下的路径不画链接。单行最多 16 个链接。",
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.text_tertiary()),
@@ -2484,7 +2484,7 @@ impl RuleManagerDialog {
                 egui::RichText::new(crate::i18n::tr(
                     ctx,
                     "Import replaces every current rule. Invalid patterns are kept but do not match. A broken file leaves the current rules untouched.",
-                    "导入会替换当前全部规则. 无效正则会留下但不会命中. 文件损坏时不会改掉现有规则.",
+                    "导入会替换当前全部规则。无效正则会留下但不会命中。文件损坏时不会改掉现有规则。",
                 ))
                 .size(theme.font_size_caption())
                 .color(theme.text_tertiary()),
@@ -2522,7 +2522,7 @@ impl RuleManagerDialog {
                 self.set_error(crate::i18n::tr(
                     ctx,
                     "Add at least one keyword. Nothing was saved.",
-                    "请至少填写一个关键词. 没有保存.",
+                    "请至少填写一个关键词。没有保存。",
                 ));
                 return;
             }
@@ -2557,7 +2557,7 @@ impl RuleManagerDialog {
                 self.set_status(crate::i18n::tr(
                     ctx,
                     "Saved. Takes effect on the next redrawn screen.",
-                    "已保存, 终端重绘即生效.",
+                    "已保存，终端重绘即生效。",
                 ));
             }
             Err(err) => self.set_error(explain_link_rule_error(ctx, &err)),
@@ -2579,7 +2579,7 @@ impl RuleManagerDialog {
             self.set_status(crate::i18n::tr(
                 ctx,
                 "Deleted. Takes effect on the next redrawn screen.",
-                "已删除, 终端重绘即生效.",
+                "已删除，终端重绘即生效。",
             ));
         }
         self.link_creating = false;
@@ -2773,13 +2773,13 @@ fn explain_link_rule_error(ctx: &egui::Context, err: &LinkRuleError) -> String {
         LinkRuleError::EmptyPattern => crate::i18n::tr(
             ctx,
             "Enter a regular expression. Nothing was saved.",
-            "请填写正则表达式. 没有保存.",
+            "请填写正则表达式。没有保存。",
         )
         .to_string(),
         LinkRuleError::PatternTooLong => crate::i18n::tr(
             ctx,
             "That pattern is too long. Nothing was saved.",
-            "这条正则太长. 没有保存.",
+            "这条正则太长。没有保存。",
         )
         .to_string(),
         LinkRuleError::InvalidRegex(message) => format!(
@@ -2787,32 +2787,32 @@ fn explain_link_rule_error(ctx: &egui::Context, err: &LinkRuleError) -> String {
             crate::i18n::tr(
                 ctx,
                 "Invalid regular expression. Nothing was saved:",
-                "正则表达式无效, 没有保存:",
+                "正则表达式无效，没有保存:",
             )
         ),
         LinkRuleError::NotFound => {
-            crate::i18n::tr(ctx, "That rule no longer exists.", "这条规则已经不在了.").to_string()
+            crate::i18n::tr(ctx, "That rule no longer exists.", "这条规则已经不在了。").to_string()
         }
         LinkRuleError::TooMany => {
             crate::i18n::tr(ctx, "The rule list is full (64).", "规则已满 (最多 64 条).")
                 .to_string()
         }
         LinkRuleError::EmptyId => {
-            crate::i18n::tr(ctx, "Rule id is empty.", "规则 ID 为空.").to_string()
+            crate::i18n::tr(ctx, "Rule id is empty.", "规则 ID 为空。").to_string()
         }
         LinkRuleError::IdTooLong => {
-            crate::i18n::tr(ctx, "Rule id is too long.", "规则 ID 太长.").to_string()
+            crate::i18n::tr(ctx, "Rule id is too long.", "规则 ID 太长。").to_string()
         }
         LinkRuleError::BadAction => crate::i18n::tr(
             ctx,
             "Unknown click action. Use sftp-open, runbook-recall, copy-or-connect, or browser-open.",
-            "无法识别的点击动作. 请用 sftp-open, runbook-recall, copy-or-connect 或 browser-open.",
+            "无法识别的点击动作。请用 sftp-open, runbook-recall, copy-or-connect 或 browser-open.",
         )
         .to_string(),
         LinkRuleError::EmptyFile => crate::i18n::tr(
             ctx,
             "That file has no rules. Current rules were not changed.",
-            "文件里没有规则. 当前规则没有改动.",
+            "文件里没有规则。当前规则没有改动。",
         )
         .to_string(),
         LinkRuleError::InvalidFile(message) => format!(
@@ -2820,7 +2820,7 @@ fn explain_link_rule_error(ctx: &egui::Context, err: &LinkRuleError) -> String {
             crate::i18n::tr(
                 ctx,
                 "Could not import that file. Current rules were not changed:",
-                "无法导入这个文件, 当前规则没有改动:",
+                "无法导入这个文件，当前规则没有改动:",
             )
         ),
     }
@@ -2829,7 +2829,7 @@ fn explain_link_rule_error(ctx: &egui::Context, err: &LinkRuleError) -> String {
 fn link_import_status(ctx: &egui::Context, report: &LinkImportReport) -> String {
     let mut parts = vec![match crate::i18n::language(ctx) {
         crate::i18n::UiLanguage::Zh => {
-            format!("已导入 {} 条, 终端重绘即生效.", report.imported)
+            format!("已导入 {} 条，终端重绘即生效。", report.imported)
         }
         crate::i18n::UiLanguage::En => format!(
             "Imported {} rules. Takes effect on the next redrawn screen.",
@@ -2839,7 +2839,7 @@ fn link_import_status(ctx: &egui::Context, report: &LinkImportReport) -> String 
     if !report.invalid_pattern_ids.is_empty() {
         parts.push(match crate::i18n::language(ctx) {
             crate::i18n::UiLanguage::Zh => format!(
-                "这些规则正则无效, 已保留但不会命中: {}",
+                "这些规则正则无效，已保留但不会命中: {}",
                 report.invalid_pattern_ids.join(", ")
             ),
             crate::i18n::UiLanguage::En => format!(
@@ -3074,13 +3074,13 @@ fn explain_rule_error(ctx: &egui::Context, err: &RuleError) -> String {
         RuleError::EmptyPattern => crate::i18n::tr(
             ctx,
             "Enter a regular expression. Nothing was saved.",
-            "请填写正则表达式. 没有保存.",
+            "请填写正则表达式。没有保存。",
         )
         .to_string(),
         RuleError::PatternTooLong => crate::i18n::tr(
             ctx,
             "That pattern is too long. Nothing was saved.",
-            "这条正则太长. 没有保存.",
+            "这条正则太长。没有保存。",
         )
         .to_string(),
         RuleError::InvalidRegex(message) => format!(
@@ -3088,38 +3088,38 @@ fn explain_rule_error(ctx: &egui::Context, err: &RuleError) -> String {
             crate::i18n::tr(
                 ctx,
                 "Invalid regular expression. Nothing was saved:",
-                "正则表达式无效, 没有保存:",
+                "正则表达式无效，没有保存:",
             )
         ),
         RuleError::NotFound => {
-            crate::i18n::tr(ctx, "That rule no longer exists.", "这条规则已经不在了.").to_string()
+            crate::i18n::tr(ctx, "That rule no longer exists.", "这条规则已经不在了。").to_string()
         }
         RuleError::TooMany => {
             crate::i18n::tr(ctx, "The rule list is full (64).", "规则已满 (最多 64 条).")
                 .to_string()
         }
         RuleError::EmptyId => {
-            crate::i18n::tr(ctx, "Rule id is empty.", "规则 ID 为空.").to_string()
+            crate::i18n::tr(ctx, "Rule id is empty.", "规则 ID 为空。").to_string()
         }
         RuleError::IdTooLong => {
-            crate::i18n::tr(ctx, "Rule id is too long.", "规则 ID 太长.").to_string()
+            crate::i18n::tr(ctx, "Rule id is too long.", "规则 ID 太长。").to_string()
         }
         RuleError::BadSeverity => crate::i18n::tr(
             ctx,
             "Unknown severity. Use error, warn, success, or info.",
-            "无法识别的严重级别. 请用 error, warn, success 或 info.",
+            "无法识别的严重级别。请用 error, warn, success 或 info.",
         )
         .to_string(),
         RuleError::BadAction => crate::i18n::tr(
             ctx,
             "Unknown notify action. Use notify.",
-            "无法识别的通知动作. 请用 notify.",
+            "无法识别的通知动作。请用 notify.",
         )
         .to_string(),
         RuleError::EmptyFile => crate::i18n::tr(
             ctx,
             "That file has no rules. Current rules were not changed.",
-            "文件里没有规则. 当前规则没有改动.",
+            "文件里没有规则。当前规则没有改动。",
         )
         .to_string(),
         RuleError::InvalidFile(message) => format!(
@@ -3127,7 +3127,7 @@ fn explain_rule_error(ctx: &egui::Context, err: &RuleError) -> String {
             crate::i18n::tr(
                 ctx,
                 "Could not import that file. Current rules were not changed:",
-                "无法导入这个文件, 当前规则没有改动:",
+                "无法导入这个文件，当前规则没有改动:",
             )
         ),
     }
@@ -3139,7 +3139,7 @@ fn save_failed(ctx: &egui::Context, err: &str) -> String {
         crate::i18n::tr(
             ctx,
             "The change is active in this session, but it could not be written to the config file:",
-            "这次运行里已经生效, 但没能写入配置文件:",
+            "这次运行里已经生效，但没能写入配置文件:",
         )
     )
 }
@@ -3147,7 +3147,7 @@ fn save_failed(ctx: &egui::Context, err: &str) -> String {
 fn import_status(ctx: &egui::Context, report: &ImportReport) -> String {
     let mut parts = vec![match crate::i18n::language(ctx) {
         crate::i18n::UiLanguage::Zh => {
-            format!("已导入 {} 条, 下一行输出立即生效.", report.imported)
+            format!("已导入 {} 条，下一行输出立即生效。", report.imported)
         }
         crate::i18n::UiLanguage::En => format!(
             "Imported {} rules. Takes effect on the next output line.",
@@ -3157,7 +3157,7 @@ fn import_status(ctx: &egui::Context, report: &ImportReport) -> String {
     if !report.invalid_pattern_ids.is_empty() {
         parts.push(match crate::i18n::language(ctx) {
             crate::i18n::UiLanguage::Zh => format!(
-                "这些规则正则无效, 已保留但不会命中: {}",
+                "这些规则正则无效，已保留但不会命中: {}",
                 report.invalid_pattern_ids.join(", ")
             ),
             crate::i18n::UiLanguage::En => format!(

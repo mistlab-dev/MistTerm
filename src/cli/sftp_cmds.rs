@@ -93,7 +93,7 @@ pub fn run_get(ctx: &mut CliContext, spec: &str, local: &str) -> Result<i32> {
     let n = sftp
         .download(Path::new(&remote), &local_path)
         .map_err(|e| anyhow::anyhow!("下载失败 {name}:{remote} → {}: {e}", local_path.display()))?;
-    println!("{} → {} ({} 字节)", remote, local_path.display(), n);
+    println!("{} → {}（{} 字节）", remote, local_path.display(), n);
     Ok(0)
 }
 
@@ -121,6 +121,6 @@ pub fn run_put(ctx: &mut CliContext, local: &str, spec: &str) -> Result<i32> {
     let n = sftp
         .upload(&local_path, Path::new(&remote_path))
         .map_err(|e| anyhow::anyhow!("上传失败 {local} → {name}:{remote_path}: {e}"))?;
-    println!("{} → {} ({} 字节)", local_path.display(), remote_path, n);
+    println!("{} → {}（{} 字节）", local_path.display(), remote_path, n);
     Ok(0)
 }
