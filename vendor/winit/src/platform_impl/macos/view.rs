@@ -2,6 +2,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::ptr;
+use std::sync::OnceLock;
 
 use objc2::rc::{Retained, WeakId};
 use objc2::runtime::{AnyObject, Sel};
@@ -29,8 +30,21 @@ use crate::event::{
     DeviceEvent, ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase,
     WindowEvent,
 };
-use crate::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, NamedKey};
+use crate::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, NamedKey, PhysicalKey};
 use crate::platform::macos::OptionAsAlt;
+
+
+/// MistTerm #188: optional app hook after a panic inside `drawRect:` was caught.
+static CAUGHT_DRAW_RECT_PANIC_HOOK: OnceLock<fn()> = OnceLock::new();
+
+/// Register a hook invoked after `drawRect:` catch_unwind observes a panic.
+///
+/// The Rust panic hook usually already wrote `crash-*.log`; MistTerm uses this
+/// to append a caught-in-FFI note so startup notice / logs show the path.
+pub(crate) fn set_caught_draw_rect_panic_hook(hook: fn()) {
+    let _ = CAUGHT_DRAW_RECT_PANIC_HOOK.set(hook);
+}
+
 
 #[derive(Debug)]
 struct CursorState {
@@ -131,6 +145,11 @@ pub struct ViewState {
     /// to the application, even during IME
     forward_key_to_app: Cell<bool>,
 
+    /// MistTerm: a Control chord skipped `interpretKeyEvents` and dropped
+    /// `ime_state` to Ground so `keyUp` is reported. Marked text was kept.
+    /// `key_up` sets this back to Preedit when the preedit is still there.
+    restore_preedit_after_key_up: Cell<bool>,
+
     marked_text: RefCell<Retained<NSMutableAttributedString>>,
     accepts_first_mouse: bool,
 
@@ -196,16 +215,64 @@ declare_class!(
             // 2. Even when a window resize does occur on a new tabbed window, it contains the wrong size (includes tab height).
             let logical_size = LogicalSize::new(rect.size.width as f64, rect.size.height as f64);
             let size = logical_size.to_physical::<u32>(self.scale_factor());
-            self.queue_event(WindowEvent::Resized(size));
+            // MistTerm #188: drop illegal Resized during tile-resize / lock-screen wake.
+            if crate::platform_impl::redraw_guard::is_sane_redraw_physical_size(
+                size.width,
+                size.height,
+            ) {
+                self.queue_event(WindowEvent::Resized(size));
+            } else {
+                tracing::warn!(
+                    "MistTerm #188: dropping Resized with illegal physical size {}x{}",
+                    size.width,
+                    size.height
+                );
+            }
         }
 
         #[method(drawRect:)]
         fn draw_rect(&self, _rect: NSRect) {
             trace_scope!("drawRect:");
 
+            // MistTerm #188: size gate + catch_unwind so tile-resize / lock-screen
+            // wake panics inside glow/eframe do not cross the ObjC FFI boundary and
+            // abort via panic_cannot_unwind. See vendor/winit/MISTTERM_PATCH.md.
+            //
             // It's a workaround for https://github.com/rust-windowing/winit/issues/2640, don't replace with `self.window_id()`.
             if let Some(window) = self.ivars()._ns_window.load() {
-                self.ivars().app_delegate.handle_redraw(window.id());
+                let window_id = window.id();
+                let physical = {
+                    let frame = self.frame();
+                    let logical =
+                        LogicalSize::new(frame.size.width as f64, frame.size.height as f64);
+                    logical.to_physical::<u32>(self.scale_factor())
+                };
+
+                if !crate::platform_impl::redraw_guard::is_sane_redraw_physical_size(
+                    physical.width,
+                    physical.height,
+                ) {
+                    tracing::warn!(
+                        "MistTerm #188: skipping RedrawRequested for illegal physical size {}x{} (tile-resize/lock-screen?)",
+                        physical.width,
+                        physical.height
+                    );
+                    self.ivars().app_delegate.queue_redraw(window_id);
+                } else {
+                    let app_delegate = self.ivars().app_delegate.clone();
+                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        app_delegate.handle_redraw(window_id);
+                    }));
+                    if result.is_err() {
+                        tracing::error!(
+                            "MistTerm #188: drawRect/handle_redraw panicked at ObjC FFI boundary (caught); frame skipped, requesting redraw"
+                        );
+                        if let Some(hook) = CAUGHT_DRAW_RECT_PANIC_HOOK.get() {
+                            hook();
+                        }
+                        self.ivars().app_delegate.queue_redraw(window_id);
+                    }
+                }
             }
 
             // This is a direct subclass of NSView, no need to call superclass' drawRect:
@@ -457,13 +524,38 @@ declare_class!(
             self.ivars().forward_key_to_app.set(false);
             let event = replace_event(event, self.option_as_alt());
 
+            // MistTerm: SCIM (简体拼音) clears marked text on Ctrl+C/Ctrl+R
+            // inside `interpretKeyEvents` without `doCommandBySelector`. That
+            // sets `had_ime_input` and drops `KeyboardInput`, so SIGINT never
+            // reaches the PTY. Skip the interpreter for Control chords while
+            // preedit is showing. Do not clear marked text and do not emit an
+            // empty Preedit — the composition stays, matching the X11 patch.
+            // Letters, Space, Backspace, and arrows (no Control) still go
+            // through `interpretKeyEvents`. See MISTTERM_PATCH.md.
+            let scancode = unsafe { event.keyCode() };
+            let keycode = match scancode_to_physicalkey(scancode as u32) {
+                PhysicalKey::Code(code) => Some(code),
+                PhysicalKey::Unidentified(_) => None,
+            };
+            let composing = self.ivars().ime_state.get() == ImeState::Preedit
+                || unsafe { self.hasMarkedText() };
+            let skip_ime = crate::platform_impl::ime_bypass::macos_skip_interpret_key_events(
+                self.ivars().ime_allowed.get(),
+                composing,
+                event_mods(&event).state().control_key(),
+                keycode,
+            );
+            if skip_ime {
+                self.ivars().forward_key_to_app.set(true);
+            }
+
             // The `interpretKeyEvents` function might call
             // `setMarkedText`, `insertText`, and `doCommandBySelector`.
             // It's important that we call this before queuing the KeyboardInput, because
             // we must send the `KeyboardInput` event during IME if it triggered
             // `doCommandBySelector`. (doCommandBySelector means that the keyboard input
             // is not handled by IME and should be handled by the application)
-            if self.ivars().ime_allowed.get() {
+            if self.ivars().ime_allowed.get() && !skip_ime {
                 let events_for_nsview = NSArray::from_slice(&[&*event]);
                 unsafe { self.interpretKeyEvents(&events_for_nsview) };
 
@@ -495,6 +587,15 @@ declare_class!(
                     is_synthetic: false,
                 });
             }
+
+            // `keyUp` only emits while Ground/Disabled. Drop out of Preedit
+            // after the keyDown is queued, without clearing marked text.
+            if skip_ime && unsafe { self.hasMarkedText() } {
+                if self.ivars().ime_state.get() == ImeState::Preedit {
+                    self.ivars().ime_state.set(ImeState::Ground);
+                }
+                self.ivars().restore_preedit_after_key_up.set(true);
+            }
         }
 
         #[method(keyUp:)]
@@ -514,6 +615,15 @@ declare_class!(
                     event: create_key_event(&event, false, false),
                     is_synthetic: false,
                 });
+            }
+
+            if self.ivars().restore_preedit_after_key_up.get() {
+                self.ivars().restore_preedit_after_key_up.set(false);
+                if unsafe { self.hasMarkedText() }
+                    && self.ivars().ime_state.get() == ImeState::Ground
+                {
+                    self.ivars().ime_state.set(ImeState::Preedit);
+                }
             }
         }
 
@@ -803,6 +913,7 @@ impl WinitView {
             input_source: Default::default(),
             ime_allowed: Default::default(),
             forward_key_to_app: Default::default(),
+            restore_preedit_after_key_up: Default::default(),
             marked_text: Default::default(),
             accepts_first_mouse,
             _ns_window: WeakId::new(&window.retain()),

@@ -15,6 +15,8 @@ mod view;
 mod window;
 mod window_delegate;
 
+pub(crate) use self::view::set_caught_draw_rect_panic_hook;
+
 use std::fmt;
 
 pub(crate) use self::event::{physicalkey_to_scancode, scancode_to_physicalkey, KeyEventExtra};

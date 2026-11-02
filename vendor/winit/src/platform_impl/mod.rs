@@ -1,6 +1,14 @@
 use crate::monitor::{MonitorHandle as RootMonitorHandle, VideoModeHandle as RootVideoModeHandle};
 use crate::window::Fullscreen as RootFullscreen;
 
+/// MistTerm: shared Control-chord vs IME policy. macOS calls it from `view.rs`.
+/// X11 keeps its own XKeyEvent helper (keycode 0 / modifier map) with the same rule.
+mod ime_bypass;
+
+/// MistTerm #188: illegal physical-size guard for macOS drawRect / Resized.
+mod redraw_guard;
+
+
 #[cfg(android_platform)]
 mod android;
 #[cfg(ios_platform)]

@@ -185,10 +185,11 @@ winit = { version = "0.30.13", default-features = false }
 libc = "0.2"
 
 [patch.crates-io]
-# X11: deliver Control chords during IME preedit. See vendor/winit/MISTTERM_PATCH.md.
+# IME Control bypass (X11/macOS) + #188 drawRect size gate/catch_unwind.
+# See vendor/winit/MISTTERM_PATCH.md.
 winit = { path = "vendor/winit" }
-# X11 preedit end (`Preedit("", None)`) must clear the overlay. See vendor/egui-winit/MISTTERM_PATCH.md.
-egui-winit = { path = "vendor/egui-winit" }
+# egui-winit: stock 0.37 already forwards empty Preedit → egui ImeEvent::Preedit("")
+# which clears MistTerm's overlay; no path patch (S4 / #209).
 
 [profile.release]
 opt-level = 3
