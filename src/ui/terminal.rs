@@ -205,6 +205,15 @@ impl Selection {
         self.click_anchor = None;
     }
 
+    /// #289: 终端列数缩窄后，把绝对选区列钳到开区间合法范围 `0..=columns`。
+    fn clamp_columns(&mut self, columns: usize) {
+        self.start_col = self.start_col.min(columns);
+        self.end_col = self.end_col.min(columns);
+        if let Some((_, col)) = self.click_anchor.as_mut() {
+            *col = (*col).min(columns);
+        }
+    }
+
     /// 普通单击：清掉旧选区，只记锚点(不显示选区)。
     fn set_anchor_from_viewport(&mut self, display_offset: usize, row: usize, col: usize) {
         let p = viewport_to_point(display_offset, Point::new(row, Column(col)));
@@ -4947,9 +4956,15 @@ impl TerminalView {
 
     /// 调整终端尺寸
     pub fn resize(&mut self, cols: u32, rows: u32) {
+        let cols_changed = cols != self.cols;
         self.cols = cols;
         self.rows = rows;
         self.terminal.resize(cols as usize, rows as usize);
+        if cols_changed {
+            // #289: 缩窄后旧选区列号可能越过新网格，AI 上下文每帧读选区会触发 OOB panic。
+            self.selection.clamp_columns(cols as usize);
+            self.visual_layout_cache = None;
+        }
 
         if self.is_local_shell() {
             if let Some(ref handle) = self.local_handle {
@@ -5864,6 +5879,18 @@ mod selection_extend_tests {
         assert_eq!((sel.end_line, sel.end_col), (-50, 1));
         assert_eq!(sel.normalize(), (-50, 1, 2, 3));
         assert!(!sel.is_empty());
+    }
+
+    #[test]
+    fn clamp_columns_caps_stale_selection_after_narrowing() {
+        let mut sel = Selection::default();
+        sel.set_from_viewport(0, 0, 10, 0, 180);
+        sel.click_anchor = Some((0, 150));
+        sel.clamp_columns(20);
+        assert_eq!(sel.start_col, 10);
+        assert_eq!(sel.end_col, 20);
+        assert_eq!(sel.click_anchor, Some((0, 20)));
+        assert_eq!(sel.normalize(), (0, 10, 0, 20));
     }
 
     #[test]

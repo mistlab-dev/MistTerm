@@ -993,8 +993,12 @@ pub fn show_right_dock_resize_grip_layer(
                 if let Some(mut state) = egui::containers::panel::PanelState::load(ctx, id) {
                     let dx = ui.input(|i| i.pointer.delta().x);
                     let current_w = state.outer_rect.width();
+                    let screen_w = ctx.content_rect().width();
                     let (_, min_w, max_w) =
-                        crate::ui::layout_util::right_dock_resize_bounds(current_w);
+                        crate::ui::layout_util::right_dock_resize_bounds_for_screen(
+                            current_w,
+                            Some(screen_w),
+                        );
                     let new_w = (current_w - dx).clamp(min_w, max_w);
                     state.outer_rect.min.x = state.outer_rect.max.x - new_w;
                     ctx.data_mut(|d| d.insert_persisted(id, state));
